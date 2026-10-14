@@ -258,7 +258,7 @@ function buildDoc() {
   return win;
 }
 
-function observe() {
+function snapshot() {
   const overlay = els['command-palette'] || null;
   const search = els['palette-search'] || null;
   const list = els['palette-list'] || null;
@@ -266,6 +266,7 @@ function observe() {
     label: c.dataset.label || c.textContent,
     sub: c.dataset.sub || null,
     id: c.id,
+    entryId: c.dataset.entryId || null,
     selected: c.attrs['aria-selected'] === 'true',
     disabled: c.attrs['aria-disabled'] === 'true',
   })) : [];
@@ -288,8 +289,13 @@ function observe() {
     otValue: els['ot-search-input'] ? els['ot-search-input'].value : null,
     otEvents,
     otFocused: els['ot-search-input'] ? doc.activeElement === els['ot-search-input'] : null,
-    observations,
   };
+}
+
+function observe() {
+  // snapshot() carries no self-reference, so pushing it into observations
+  // stays JSON-serializable.
+  return Object.assign(snapshot(), { observations });
 }
 
 function run() {
@@ -305,10 +311,13 @@ function run() {
   }
   // Snapshots are module-local in the real page (app.js top-level `let`); the
   // harness appends them to the evaluated source so the closure sees them.
+  // Merge (not replace) so a partial poll keeps the other half of the state.
   if (fixture.snapshots) {
     paletteSrc += '\n;var lastState = ' + JSON.stringify(fixture.snapshots.state || null) + ';'
       + 'var lastKpi = ' + JSON.stringify(fixture.snapshots.kpi || null) + ';'
-      + 'globalThis.__setSnapshot = function (state, kpi) { lastState = state; lastKpi = kpi; };';
+      + 'globalThis.__setSnapshot = function (state, kpi) {'
+      + ' lastState = Object.assign({}, lastState || {}, state || {});'
+      + ' lastKpi = Object.assign({}, lastKpi || {}, kpi || {}); };';
   }
   let protoMod = { exports: {} };
   if (fixture.withPrototype) {
@@ -334,7 +343,7 @@ function run() {
             'state' in a ? a.state : (fixture.snapshots && fixture.snapshots.state),
             'kpi' in a ? a.kpi : (fixture.snapshots && fixture.snapshots.kpi));
         }
-      } else if (a.type === 'observe') observations.push(observe());
+      } else if (a.type === 'observe') observations.push(snapshot());
     });
     process.stdout.write(JSON.stringify(observe()));
   } catch (err) {

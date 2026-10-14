@@ -221,8 +221,13 @@ def test_arrows_move_highlight_and_stop_at_ends():
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_no_matches_row_and_enter_does_nothing():
-    """No match → one inert row; Enter activates nothing."""
-    res = _run({"withPrototype": True}, _open() + [{"type": "input", "value": "zzzz"}, _key("Enter")])
+    """No match → one inert row; Enter activates nothing. (Snapshots present
+    but empty: with no snapshots at all the row would read "No markets
+    loaded yet." instead — that case has its own test.)"""
+    res = _run(
+        {"withPrototype": True, "snapshots": {"kpi": {"by_market": {}}, "state": {}}},
+        _open() + [{"type": "input", "value": "zzzz"}, _key("Enter")],
+    )
     assert [r["label"] for r in res["rows"]] == ["No matches."]
     assert res["rows"][0]["disabled"] is True
     assert res["syncClicks"] == 0
@@ -270,3 +275,115 @@ def test_reset_entry_opens_confirm_without_resetting():
     assert res["active"] != "opener-btn"
     sub = [r for r in _run({"withPrototype": True}, _open())["rows"] if r["label"] == "RESET"][0]["sub"]
     assert sub == "Opens the typed confirmation."
+
+
+# ── Market search from the loaded state (harness) ──
+
+MARKET_FIXTURE = {
+    "withPrototype": True,
+    "otSearch": True,
+    "stored": "strategy",  # start on Strategy so navigating home is observable
+    "snapshots": {
+        "kpi": {"by_market": {
+            "0xabc123def456": {"title": "Will BTC close above 100k?"},
+            "0xdef456abc123": {"title": "Fed rate decision"},
+        }},
+        "state": {
+            "orders": [
+                {"condition_id": "0xabc123def456"},  # also in by_market → dedupe
+                {"condition_id": "0xghi789ghi789"},  # pairs-only → label via pairs
+            ],
+            "pairs": [
+                {"pair_id": "p1", "condition_id": "0xghi789ghi789",
+                 "market": {"condition_id": "0xghi789ghi789", "title": "Election market"}},
+                {"condition_id": "0xjkl000jkl000",
+                 "market": {"condition_id": "0xjkl000jkl000"}},  # untitled
+            ],
+        },
+    },
+}
+
+
+def _market_rows(res: dict) -> list:
+    return [r for r in res["rows"] if str(r["entryId"]).startswith("market:")]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_market_search_matches_title_case_insensitively():
+    res = _run(MARKET_FIXTURE, _open() + [{"type": "input", "value": "BTC"}])
+    assert [r["label"] for r in _market_rows(res)] == ["Will BTC close above 100k?"]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_market_search_matches_full_condition_id():
+    """The full condition id finds the market even though the row shows the
+    title, not the id."""
+    res = _run(MARKET_FIXTURE, _open() + [{"type": "input", "value": "0xdef456abc123"}])
+    rows = _market_rows(res)
+    assert [r["label"] for r in rows] == ["Fed rate decision"]
+    assert rows[0]["entryId"] == "market:0xdef456abc123"
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_market_search_removes_duplicates():
+    """A market present in by_market AND orders, and one in orders AND pairs,
+    each appears once."""
+    res = _run(MARKET_FIXTURE, _open() + [{"type": "input", "value": "0x"}])
+    assert len(_market_rows(res)) == 4
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_market_search_needs_two_characters_and_caps_at_eight():
+    """One character is not a search; more than eight matches is a scroll."""
+    res = _run(MARKET_FIXTURE, _open() + [{"type": "input", "value": "0"}])
+    assert _market_rows(res) == []
+    big = {
+        "snapshots": {"kpi": {"by_market": {
+            "0xid%02dlongmarket" % i: {"title": "Market %d" % i} for i in range(10)
+        }}, "state": {}},
+    }
+    res = _run(big, _open() + [{"type": "input", "value": "market"}])
+    assert len(_market_rows(res)) == 8
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_market_search_without_snapshots_shows_not_loaded_row():
+    """Before the first poll there is no loaded state — say so, inertly."""
+    res = _run({"withPrototype": True}, _open() + [{"type": "input", "value": "btc"}, _key("Enter")])
+    assert [r["label"] for r in res["rows"]] == ["No markets loaded yet."]
+    assert res["rows"][0]["disabled"] is True
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_choosing_market_filters_orders_and_trades():
+    """[PROPOSED default — the issue specifies search, not the result action]
+    Choosing a market goes to the Dashboard page and prefills the existing
+    Orders & Trades filter with the row's own label."""
+    res = _run(MARKET_FIXTURE, _open() + [{"type": "input", "value": "BTC"}, _key("Enter")])
+    assert res["visiblePages"] == ["page-home"]
+    assert res["otValue"] == "Will BTC close above 100k?"
+    assert res["otEvents"] == 1
+    assert res["otFocused"] is True
+    # an untitled market puts the visible ten-character prefix in the box,
+    # exactly what the Orders & Trades table shows
+    res = _run(MARKET_FIXTURE, _open() + [{"type": "input", "value": "0xjkl000jkl000"}, _key("Enter")])
+    assert res["otValue"] == "0xjkl000jk"
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_snapshot_change_does_not_rebuild_open_list():
+    """Market rows are computed on input only: a poll arriving while the
+    palette is open must not disturb rows, query, or highlight."""
+    res = _run(MARKET_FIXTURE, _open() + [
+        {"type": "input", "value": "0x"},
+        {"type": "observe"},
+        {"type": "snapshot", "state": {"orders": [{"condition_id": "0xnewnewnewnew"}]}},
+        {"type": "observe"},
+        {"type": "input", "value": "0x"},
+        {"type": "observe"},
+    ])
+    before, mid, after = res["observations"]
+    assert mid["rows"] == before["rows"]
+    assert len(before["rows"]) == 4
+    assert len(after["rows"]) == 5  # rebuilt on the next input, new market included
+

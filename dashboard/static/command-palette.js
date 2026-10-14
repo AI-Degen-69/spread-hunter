@@ -14,6 +14,9 @@
 (function () {
   'use strict';
 
+  var MARKET_MIN_CHARS = 2;
+  var MARKET_MAX_ROWS = 8;
+
   var doc = null;
   var overlay = null;
   var search = null;
@@ -102,6 +105,90 @@
     return out;
   }
 
+  /* ── Market search from the loaded state ── */
+
+  function snapshots() {
+    // lastState/lastKpi are app.js top-level bindings — present in the page,
+    // absent in the offline harness (no throw either way thanks to typeof).
+    var state = (typeof lastState !== 'undefined' && lastState) ? lastState : null;
+    var kpi = (typeof lastKpi !== 'undefined' && lastKpi) ? lastKpi : null;
+    return { state: state, kpi: kpi };
+  }
+
+  function marketLabel(market, cid) {
+    var m = market || {};
+    // The tables show title || name || slug, else the ten-character prefix.
+    return String(m.title || m.name || m.slug || String(cid).slice(0, 10));
+  }
+
+  function resolveMarket(cid, byMarket, state) {
+    // Mirrors orderGroupMarket (app.js:6202-6210) so a palette label is the
+    // label the operator already sees in the tables.
+    if (byMarket[cid]) return byMarket[cid];
+    var pairs = (state && state.pairs) || [];
+    for (var i = 0; i < pairs.length; i++) {
+      var p = pairs[i];
+      if (p && p.market && p.market.condition_id === cid) return p.market;
+    }
+    return { condition_id: cid };
+  }
+
+  function marketEntries(state, kpi, query) {
+    var q = String(query || '').trim().toLowerCase();
+    if (q.length < MARKET_MIN_CHARS) return [];
+    var byMarket = (kpi && kpi.by_market) || {};
+    var seen = {};
+    var out = [];
+    function consider(cid, market) {
+      if (!cid || seen[cid]) return;
+      var label = marketLabel(market, cid);
+      if (label.toLowerCase().indexOf(q) === -1
+          && String(cid).toLowerCase().indexOf(q) === -1) return;
+      seen[cid] = true;
+      out.push({
+        id: 'market:' + cid,
+        label: label,
+        group: 'Markets',
+        market: true,
+        run: function () { runMarket(label); },
+      });
+    }
+    Object.keys(byMarket).forEach(function (cid) { consider(cid, byMarket[cid]); });
+    var orders = (state && state.orders) || [];
+    orders.forEach(function (o) {
+      if (o && o.condition_id) {
+        consider(o.condition_id, resolveMarket(o.condition_id, byMarket, state));
+      }
+    });
+    var pairs = (state && state.pairs) || [];
+    pairs.forEach(function (p) {
+      if (p && p.market && p.market.condition_id) consider(p.market.condition_id, p.market);
+    });
+    return out.slice(0, MARKET_MAX_ROWS);
+  }
+
+  function runMarket(label) {
+    // [PROPOSED default — the issue specifies search, not the result action]
+    // Close first (the focus trap must not see the next focus), then go to
+    // the Dashboard page and prefill the existing Orders & Trades filter;
+    // its own input listener (app.js:8108) does the filtering.
+    closePalette({ restoreFocus: false });
+    var home = null;
+    var navs = doc.querySelectorAll('.proto-nav-btn[data-page]') || [];
+    for (var i = 0; i < navs.length; i++) {
+      if (navs[i].dataset && navs[i].dataset.page === 'home') { home = navs[i]; break; }
+    }
+    if (home) home.click();
+    var input = doc.getElementById('ot-search-input');
+    if (input) {
+      input.value = label;
+      if (typeof input.dispatchEvent === 'function') {
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      if (typeof input.focus === 'function') input.focus();
+    }
+  }
+
   /* ── Entry filtering ── */
 
   function filterEntries(list, query) {
@@ -138,6 +225,7 @@
     rowId += 1;
     row.setAttribute('role', 'option');
     row.dataset.label = entry.label;
+    row.dataset.entryId = entry.id;
     if (entry.sub) row.dataset.sub = entry.sub;
     if (entry.disabled || entry.inert) row.setAttribute('aria-disabled', 'true');
     var label = doc.createElement('div');
@@ -197,7 +285,19 @@
   }
 
   function refreshList() {
-    visible = filterEntries(entries, search ? search.value : '');
+    var q = String((search && search.value) || '');
+    var base = filterEntries(entries, q);
+    var markets = [];
+    if (q.trim().length >= MARKET_MIN_CHARS) {
+      var snap = snapshots();
+      if (!snap.state && !snap.kpi) {
+        // Nothing has polled yet — say so instead of an empty result.
+        if (base.length === 0) markets = [inertEntry('No markets loaded yet.')];
+      } else {
+        markets = marketEntries(snap.state, snap.kpi, q);
+      }
+    }
+    visible = base.concat(markets);
     if (visible.length === 0) visible = [inertEntry('No matches.')];
     renderRows();
   }
@@ -253,7 +353,9 @@
     if (opts.focusEl && canFocus(opts.focusEl)) target = opts.focusEl;
     else if (opts.restoreFocus !== false) target = pickFocus(null);
     if (target && typeof target.focus === 'function') target.focus();
-    else if (doc.body && typeof doc.body.focus === 'function') doc.body.focus();
+    else if (opts.restoreFocus !== false && doc.body && typeof doc.body.focus === 'function') {
+      doc.body.focus();
+    }
   }
 
   function isPaletteOpen() {
@@ -339,6 +441,7 @@
       isPaletteOpen: isPaletteOpen,
       buildEntries: buildEntries,
       filterEntries: filterEntries,
+      marketEntries: marketEntries,
       moveHighlight: moveHighlight,
       activateHighlighted: activateHighlighted,
     };

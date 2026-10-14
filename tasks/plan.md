@@ -117,7 +117,7 @@ T1 (shell + keyboard + a11y) → T2 (entries + filter + arrows) → T3 (market s
   restore.
 - Depends on: T1.
 
-### T3 [M] [UX/UI] Market search from the loaded state
+### T3 [x] [M] [UX/UI] Market search from the loaded state
 - Files: `dashboard/static/command-palette.js`,
   `tests/js/command_palette_harness.cjs`,
   `tests/test_dashboard_command_palette.py`
