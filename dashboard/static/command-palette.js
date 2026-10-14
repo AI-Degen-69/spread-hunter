@@ -280,15 +280,20 @@
       icon.appendChild(entry.icon);
       row.appendChild(icon);
     }
+    // Label and sub share one text container so the flex row keeps the icon
+    // left of the word and the sub under the label (#566).
+    var text = doc.createElement('div');
+    text.className = 'palette-text';
     var label = doc.createElement('div');
     label.textContent = entry.label;
-    row.appendChild(label);
+    text.appendChild(label);
     if (entry.sub) {
       var sub = doc.createElement('div');
       sub.className = 'palette-sub';
       sub.textContent = entry.sub;
-      row.appendChild(sub);
+      text.appendChild(sub);
     }
+    row.appendChild(text);
     row.addEventListener('click', function () { activate(entry); });
     return row;
   }

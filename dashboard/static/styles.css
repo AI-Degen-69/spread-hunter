@@ -806,13 +806,13 @@ header {
 .palette-input { margin-bottom: 12px; }
 .palette-list { max-height: 320px; overflow-y: auto; margin-bottom: 8px; }
 .palette-group { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); padding: 8px 4px 4px; }
-.palette-row { padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.palette-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.palette-row:not(:last-child) { border-bottom: 1px solid var(--border-subtle); }
 .palette-row[aria-selected="true"] { background: var(--bg-surface-raised); }
 .palette-row[aria-disabled="true"] { opacity: 0.5; cursor: default; }
-.palette-icon { display: inline-block; vertical-align: -3px; margin-right: 8px; color: var(--text-secondary); }
+.palette-icon { flex: none; color: var(--text-secondary); }
 .palette-icon svg { width: 16px; height: 16px; display: block; }
-.palette-row[aria-selected="true"] { background: var(--bg-surface-raised); }
-.palette-row[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.palette-text { flex: 1; min-width: 0; }
 .palette-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
 .palette-hint { font-size: 11px; color: var(--text-muted); }
 
