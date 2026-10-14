@@ -23,6 +23,7 @@ import pytest
 
 from core_brain import kpi as kpi_mod
 from core_brain.kpi import compute_trade_analytics, report
+from core_brain.statistical_analytics import ci_critical_value, ci_z
 from core_brain.order_registry import SCHEMA, CloseRecord, OrderRegistry
 
 RUN = "run-trade-analytics"
@@ -129,7 +130,7 @@ def test_win_rate_ci_is_null_when_there_are_no_closes():
 
 
 def test_expectancy_ci_uses_90_percent_one_sided_lower_bound():
-    """The lower bound is mean - 1.645*se, the paper run's positivity gate."""
+    """The lower bound is mean - t*se: Student-t while n is small (#541)."""
     closes = [
         dict(realized_pnl=1.5, cost_basis=5.0, ts=100.0),   # +30%
         dict(realized_pnl=0.5, cost_basis=5.0, ts=200.0),   # +10%
@@ -140,9 +141,11 @@ def test_expectancy_ci_uses_90_percent_one_sided_lower_bound():
     mean = ta["mean_return_pct"]
     stdev = ta["stdev_return_pct"]
     se = stdev / (3 ** 0.5)
-    assert ta["ci90_lower_pct"] == pytest.approx(mean - 1.645 * se)
-    assert ta["ci95_return_pct"]["lower"] == pytest.approx(mean - 1.96 * se)
-    assert ta["ci95_return_pct"]["upper"] == pytest.approx(mean + 1.96 * se)
+    t90 = ci_critical_value(90, 3, ci_z(90))
+    t95 = ci_critical_value(95, 3, ci_z(95))
+    assert ta["ci90_lower_pct"] == pytest.approx(mean - t90 * se)
+    assert ta["ci95_return_pct"]["lower"] == pytest.approx(mean - t95 * se)
+    assert ta["ci95_return_pct"]["upper"] == pytest.approx(mean + t95 * se)
 
 
 def test_single_close_has_no_ci_or_sharpe():
@@ -452,3 +455,15 @@ def test_report_payload_carries_a_payload_version(temp_db, tmp_path, monkeypatch
     payload = report(db_path=temp_db, run_id=RUN)
     assert payload["payload_version"] == kpi_mod.KPI_PAYLOAD_VERSION
     assert isinstance(payload["payload_version"], int)
+
+
+def test_all_unmeasured_closes_expectancy_is_none():
+    """All-None realized_pnl run: expectancy NULL, no StatisticsError (#552)."""
+    closes = [
+        dict(realized_pnl=None, cost_basis=5.0, ts=100.0, market_slug="a"),
+        dict(realized_pnl=None, cost_basis=4.0, ts=200.0, market_slug="b"),
+    ]
+    ta = compute_trade_analytics(closes, starting_capital=100.0,
+                                 equity_series=[], float_marks=[])
+    assert ta["n_closes"] == 2
+    assert ta["expectancy_usd"] is None

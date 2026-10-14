@@ -7,6 +7,7 @@ regenerates this file exactly once with per-stat deltas logged in the findings d
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from core_brain.kpi import report as kpi_report
@@ -44,9 +45,9 @@ def test_payload_matches_golden(tmp_path):
     db = build_fixed_run(tmp_path / "golden.db")
     payload = kpi_report(db, run_id=RUN_ID_541)
     live = stats_slice(payload)
-    if not GOLDEN.exists():
+    if os.environ.get("REGEN_541_GOLDEN") == "1":
         GOLDEN.write_text(json.dumps(live, indent=2, sort_keys=True), encoding="utf-8")
-        return  # bootstrap run: golden written, next run compares
+    assert GOLDEN.exists(), "golden file missing; set REGEN_541_GOLDEN=1 to create it"
     assert live == json.loads(GOLDEN.read_text(encoding="utf-8"))
 
 

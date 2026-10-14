@@ -403,7 +403,9 @@ def compute_trade_analytics(
     win_rate = (n_wins / n) if n else None
     win_rate_ci95 = _wilson_ci(n_wins, n) if n else None
 
-    expectancy_usd = statistics.mean(wins + losses) if n else None
+    # All-None run: n > 0 but nothing measured — mean([]) would raise (#552).
+    measured_pnls = wins + losses
+    expectancy_usd = statistics.mean(measured_pnls) if measured_pnls else None
     mean_return_pct = statistics.mean(return_pcts) if return_pcts else None
     # Companion fields (display-only, never gate inputs): how many closes the
     # percent mean actually sees, and the dollar-weighted percent over the same
@@ -438,10 +440,10 @@ def compute_trade_analytics(
             "upper": ci95_upper,
         }
 
-    mean_pnl_ci = _mean_pnl_ci(wins + losses)
+    mean_pnl_ci = _mean_pnl_ci(measured_pnls)
 
     # Issue #443 & Issue #448: Sample size sufficiency per confidence level & status
-    pnls = wins + losses
+    pnls = measured_pnls
     std_dev_usd: Optional[float] = None
     if n > 1:
         try:

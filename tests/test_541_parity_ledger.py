@@ -1,14 +1,13 @@
-"""#541 T1: page<->report parity (GROUP 1, green today) + ledger REDs (GROUP 2, red today).
+"""#541 T1: page<->report parity (GROUP 1, green today) + ledger checks (GROUP 2, green after T3).
 
 GROUP 1 freezes today's page<->report agreement on the shared fixture
 (tests/stat_541_fixture.py) so the Station III consolidation cannot silently
 drift a number. Every expected string is derived from running code
 (`kpi_report` + the report's own `_fmt`/`_pct`), never hand-written.
 
-GROUP 2 is the ledger for T3 and MUST FAIL today:
-  2a. `required_observations` is rendered at two sites (decisionGatesRows and
-      renderAnalyticsSurface); T3 removes one, no test edit needed.
-  2b. stat-card titles without a unit symbol; T3 adds units, no test edit needed.
+GROUP 2 records the completed T3 invariants:
+  2a. `required_observations` is rendered at one site.
+  2b. stat-card titles carry a unit symbol unless listed in `_BARE_541`.
 
 Tests only — no production-code change in this file's commit.
 """
@@ -197,15 +196,14 @@ def _stat_card_titles() -> list[str]:
 
 
 class TestLedgerRed541:
-    """GROUP 2 — ledger REDs. Both MUST FAIL today, green after T3 untouched."""
+    """GROUP 2 — ledger checks for the completed T3 state."""
 
     def test_2a_required_observations_single_render_site(self):
         lines = [
             ln for ln in APP_JS.read_text(encoding="utf-8").splitlines()
             if "required_observations" in ln and "ta." in ln
         ]
-        # Today: decisionGatesRows (~4136) + renderAnalyticsSurface (~5171).
-        # T3 removes one site; this line-count then reads 1 with no test edit.
+        # T3 leaves one required_observations render site.
         assert len(lines) == 1, (
             f"required_observations rendered at {len(lines)} sites, want 1: {lines}"
         )
