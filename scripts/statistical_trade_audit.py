@@ -7,7 +7,7 @@ statistical_trade_audit.py
 import sqlite3
 import math
 import sys
-from typing import List, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any
 
 # ערכי z קריטיים עבור רמות סמך של 95%, 98% ו-99%
 Z_CRITICAL: Dict[str, float] = {
@@ -34,10 +34,15 @@ def mean_confidence_interval(mean: float, std_dev: float, n: int, z: float) -> T
     margin = z * (std_dev / math.sqrt(n))
     return mean - margin, mean + margin, margin
 
-def proportion_confidence_interval(successes: int, n: int, z: float) -> Tuple[float, float, float]:
-    """מחשב רווח סמך לפרופורציה (Wilson Score Interval)."""
-    if n == 0:
-        return 0.0, 0.0, 0.0
+def proportion_confidence_interval(successes: int, n: int, z: float) -> Optional[Tuple[float, float, float]]:
+    """מחשב רווח סמך לפרופורציה (Wilson Score Interval).
+
+    Returns None ("no estimate is possible") when the count is impossible:
+    `n <= 0`, `successes < 0`, or `successes > n`. Callers print a named
+    unavailable line instead of a fraction in that case.
+    """
+    if n <= 0 or successes < 0 or successes > n:
+        return None
     p = successes / n
     denominator = 1.0 + (z ** 2) / n
     center = (p + (z ** 2) / (2.0 * n)) / denominator
@@ -58,6 +63,27 @@ def fetch_table_rows(cursor: sqlite3.Cursor, table_name: str) -> List[Dict[str, 
     columns = [col[1] for col in cursor.fetchall()]
     cursor.execute(f"SELECT * FROM {table_name};")
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+def _print_proportion_block(label: str, successes: int, n: int) -> None:
+    """Print one proportion section: fraction plus Wilson CI per level.
+
+    When the count is impossible the interval is None and a single named
+    unavailable line is printed instead — never an x/y fraction, never a
+    traceback. The valid path prints byte-identical lines to the old inline
+    blocks.
+    """
+    if proportion_confidence_interval(successes, n, Z_CRITICAL["95%"]) is None:
+        print(f"{label}: rate unavailable (success count is outside 0..N)")
+        return
+    print(f"{label}: {successes}/{n} ({(successes/n)*100:.2f}%)")
+    for cl, z in Z_CRITICAL.items():
+        interval = proportion_confidence_interval(successes, n, z)
+        if interval is None:  # guarded above; kept so a future edit cannot re-crash here
+            print(f"{label}: rate unavailable (success count is outside 0..N)")
+            return
+        low, high, margin = interval
+        print(f"  [{cl} CL]: [{low*100:.2f}%, {high*100:.2f}%] | Margin: +/- {margin*100:.2f}%")
+
 
 def run_analysis(db_path: str):
     print(f"Opening database: {db_path}...")
@@ -133,15 +159,9 @@ def run_analysis(db_path: str):
     print("\n" + "=" * 75)
     print(" 2. PROPORTIONS: STOP LOSS RATE & MERGE RATE")
     print("=" * 75)
-    print(f"Stop Loss Exits: {stop_loss_count}/{total_closed} ({(stop_loss_count/total_closed)*100:.2f}%)")
-    for cl, z in Z_CRITICAL.items():
-        low, high, margin = proportion_confidence_interval(stop_loss_count, total_closed, z)
-        print(f"  [{cl} CL]: [{low*100:.2f}%, {high*100:.2f}%] | Margin: +/- {margin*100:.2f}%")
-
-    print(f"\nMerged Positions: {merge_count}/{total_closed} ({(merge_count/total_closed)*100:.2f}%)")
-    for cl, z in Z_CRITICAL.items():
-        low, high, margin = proportion_confidence_interval(merge_count, total_closed, z)
-        print(f"  [{cl} CL]: [{low*100:.2f}%, {high*100:.2f}%] | Margin: +/- {margin*100:.2f}%")
+    _print_proportion_block("Stop Loss Exits", stop_loss_count, total_closed)
+    print()
+    _print_proportion_block("Merged Positions", merge_count, total_closed)
 
     if holding_times:
         mean_hold, std_hold = calculate_mean_and_std(holding_times)
