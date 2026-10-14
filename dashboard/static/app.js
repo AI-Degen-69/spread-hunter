@@ -1822,7 +1822,15 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
 
   const head = `<div class="services-dropdown-head"><span>Service Telemetry</span><span>${activeCount} active${overallState ? ' · ' + esc(overallState.toUpperCase()) : ''}</span></div>`;
   const foot = `<div class="services-dropdown-foot">Full controls on the Live Operations tab</div>`;
+  const telemetryPillIds = ['hud-guardrail-pill', 'market-scan-pill', 'scan-state-pill', 'hud-shadow-pill'];
+  const existingTelemetryPills = telemetryPillIds
+    .map(id => [id, panel.querySelector ? panel.querySelector(`#${id}`) : null])
+    .filter(([, node]) => node);
   panel.innerHTML = head + rows + foot;
+  for (const [id, node] of existingTelemetryPills) {
+    const repl = panel.querySelector ? panel.querySelector(`#${id}`) : null;
+    if (repl && typeof repl.replaceWith === 'function') repl.replaceWith(node);
+  }
 
   // The pill stays the summary; the caret flips with the open state. The pill
   // classes are owned by renderServiceHeader, so only aria-expanded is set here.
