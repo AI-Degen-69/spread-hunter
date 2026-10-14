@@ -94,3 +94,9 @@ follows unchanged.
 1. After T1: one-line diagnosis report (serving source + live result). If the
    cause is operational and fixed by restart/pull, T2 still builds the button.
 2. After T3: suite green, branch ready for Station IV.
+
+## Build status (Station III)
+
+- [x] T1 — diagnosis proven: operator stack serves pre-#561 page, no code defect
+- [x] T2 — trigger button + hint committed
+- [x] T3 — 31 passed palette suite + 387 dashboard selection + served-bytes proof

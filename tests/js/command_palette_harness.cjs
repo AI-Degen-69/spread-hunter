@@ -188,6 +188,14 @@ function buildFixture() {
   els['btn-reset'] = makeEl('btn-reset', { tagName: 'BUTTON', textContent: 'RESET' });
   els['btn-reset'].addEventListener('click', () => { resetClicks += 1; });
 
+  // Nav trigger (#562): production binds it by id in initPalette. Absent only
+  // when the fixture says so, pinning the guard for pages without the button.
+  if (fixture.paletteTrigger !== false) {
+    const trigger = makeEl('btn-command-palette', { tagName: 'BUTTON' });
+    els['btn-command-palette'] = trigger;
+    if (fixture.triggerFocused) doc.activeElement = trigger;
+  }
+
   const resetModal = makeEl('reset-modal');
   if (fixture.resetModalShown) resetModal.classList.add('show');
   els['reset-modal'] = resetModal;

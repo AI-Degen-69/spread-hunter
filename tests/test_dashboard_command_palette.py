@@ -396,3 +396,49 @@ def test_snapshot_change_does_not_rebuild_open_list():
     assert len(before["rows"]) == 4
     assert len(after["rows"]) == 5  # rebuilt on the next input, new market included
 
+
+# ── Nav trigger button (#562: mouse entry + discoverable hotkeys) ──
+
+def _click_trigger() -> list:
+    return [{"type": "click", "target": "btn-command-palette"}]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_nav_markup_has_trigger_button():
+    """The top nav carries a labelled trigger; the hint names the hotkeys."""
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    assert 'id="btn-command-palette"' in html
+    assert 'aria-label="Open command palette search"' in html
+    assert "<kbd>Ctrl K</kbd>" in html
+    assert "Ctrl+K or /" in html
+    assert "Press Escape to close." in html
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_trigger_click_opens_and_focuses_search():
+    """Mouse entry: one trigger click opens the palette, focus in search."""
+    res = _run({}, _click_trigger())
+    assert res["threw"] is None
+    assert res["open"] is True
+    assert res["show"] is True
+    assert res["active"] == "palette-search"
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_trigger_close_restores_focus_to_trigger():
+    """Closing returns focus to the trigger through the opener path."""
+    res = _run({"triggerFocused": True},
+               _click_trigger() + [{"type": "observe"}, _key("Escape")])
+    assert res["threw"] is None
+    assert res["observations"][0]["open"] is True  # the click really opened it
+    assert res["open"] is False
+    assert res["active"] == "btn-command-palette"
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_init_without_trigger_keeps_hotkeys_working():
+    """The trigger binding is guarded: pages without the button keep Ctrl+K."""
+    res = _run({"paletteTrigger": False}, _open())
+    assert res["threw"] is None
+    assert res["open"] is True
+
