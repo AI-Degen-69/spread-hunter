@@ -1,0 +1,1701 @@
+{
+  "portfolio": {
+    "account": {
+      "account_value_usd": 103.1,
+      "closed_positions_count": null,
+      "collateral_usd": null,
+      "committed_usd": null,
+      "measured": true,
+      "open_positions_count": null,
+      "pnl_closed_usd": null,
+      "pnl_pct": null,
+      "pnl_series_usd": null,
+      "pnl_usd": 3.0999999999999943,
+      "positions_value_usd": null,
+      "source": "venue",
+      "ts": 1700008050.0,
+      "unrealized_usd": null
+    },
+    "closes_count": 8,
+    "markets_count": 1,
+    "open_committed_usd": 0.0,
+    "pnl_pct": 6.300000000000001,
+    "realized_pnl": 6.300000000000001,
+    "starting_capital": 100.0,
+    "starting_capital_ts": 1700000050.0,
+    "total_pnl": 6.300000000000001,
+    "total_value": 106.3,
+    "total_value_basis": "registry",
+    "unrealized_measured": true,
+    "unrealized_usd": 0.0,
+    "venue_realized_pnl": 0
+  },
+  "scalars": {
+    "active_quoting_markets": 0,
+    "avg_edge_cents": null,
+    "avg_loss": -0.8999999999999999,
+    "avg_win": 1.62,
+    "cost": 3.84,
+    "crossed_shares": 0,
+    "fill_rate": 1.0,
+    "filled_shares": 8.0,
+    "fills": 8,
+    "losses": 2,
+    "markets_filled": 1,
+    "markets_quoted": 1,
+    "markets_settled": 8,
+    "median_queue_ahead": null,
+    "median_seconds_to_fill": null,
+    "posted_shares": 8.0,
+    "quotes": 4,
+    "realized_pnl": 6.300000000000001,
+    "roi_on_cost": 1.6406250000000002,
+    "spread_capture": null,
+    "spread_capture_per_share": null,
+    "taker_fees_paid": 0.0,
+    "win_rate": 0.625,
+    "wins": 5
+  },
+  "statistical_analytics": {
+    "capital_risk": {
+      "drawdown_recovery": {
+        "deepest_pct": 2.5,
+        "deepest_recovered": true,
+        "deepest_usd": 2.5,
+        "drawdown_recovery_sec": {
+          "median": 6000.0,
+          "n": 1,
+          "p90": 6000.0
+        },
+        "drawdown_recovery_trades": {
+          "median": 3.0,
+          "n": 1,
+          "p90": 3.0
+        },
+        "episodes": 1,
+        "open": 0,
+        "skipped": 0,
+        "units": "curve_points_and_seconds"
+      },
+      "pnl_skewness": {
+        "band": "average",
+        "meaning": "roughly symmetric -- no dominant tail",
+        "n": 6,
+        "pnl_skewness": -0.281695
+      },
+      "sortino_ratio": {
+        "band": "average",
+        "meaning": "returns merely match the downside pain",
+        "n": 6,
+        "risk_free_pct_per_close": 0.0,
+        "sortino_ratio": 1.057672
+      },
+      "units": "percent_per_close_and_curve_points"
+    },
+    "closed_positions": [
+      {
+        "condition_id": "0xabc",
+        "market_slug": "fake-market",
+        "method": "merge",
+        "pnl_pct": -24.0,
+        "pnl_usd": -1.2,
+        "spread_cost": 2.5,
+        "ts": 1700001000.0,
+        "type": "MERGED_PAIR"
+      },
+      {
+        "condition_id": "0xabc",
+        "market_slug": "fake-market",
+        "method": "single_buy_exit",
+        "pnl_pct": -15.0,
+        "pnl_usd": -0.6,
+        "spread_cost": null,
+        "ts": 1700001100.0,
+        "type": "UNWIND"
+      },
+      {
+        "condition_id": "0xabc",
+        "market_slug": "fake-market",
+        "method": "merge",
+        "pnl_pct": 42.0,
+        "pnl_usd": 2.1,
+        "spread_cost": 2.5,
+        "ts": 1700001200.0,
+        "type": "MERGED_PAIR"
+      },
+      {
+        "condition_id": "0xabc",
+        "market_slug": "fake-market",
+        "method": "naked_exit",
+        "pnl_pct": 30.0,
+        "pnl_usd": 0.9,
+        "spread_cost": null,
+        "ts": 1700001300.0,
+        "type": "UNWIND"
+      },
+      {
+        "condition_id": "0xabc",
+        "market_slug": "fake-market",
+        "method": "shadow_merge",
+        "pnl_pct": 30.0,
+        "pnl_usd": 1.5,
+        "spread_cost": 2.5,
+        "ts": 1700001400.0,
+        "type": "MERGED_PAIR"
+      },
+      {
+        "condition_id": "0xabc",
+        "market_slug": "fake-market",
+        "method": "ladder_exit",
+        "pnl_pct": null,
+        "pnl_usd": 0.4,
+        "spread_cost": null,
+        "ts": 1700001600.0,
+        "type": "UNWIND"
+      },
+      {
+        "condition_id": "0xabc",
+        "market_slug": "fake-market",
+        "method": "merge",
+        "pnl_pct": 64.0,
+        "pnl_usd": 3.2,
+        "spread_cost": 2.5,
+        "ts": 1700001700.0,
+        "type": "MERGED_PAIR"
+      }
+    ],
+    "fill_path_edge": {
+      "bands": {
+        "break_even_rescue_rate": "unmeasured",
+        "merge_expectancy": "good",
+        "net_expectancy": "good",
+        "rescue_expectancy": "good",
+        "rescue_rate": "unmeasured"
+      },
+      "break_even_rescue_rate": null,
+      "break_even_status": "rescue_not_losing",
+      "excluded_count": 0,
+      "merge_count": 4,
+      "merge_expectancy_usd": 1.4,
+      "merge_pnl_usd": 5.6,
+      "net_expectancy_usd": 0.9,
+      "other_count": 0,
+      "other_pnl_usd": 0.0,
+      "rescue_count": 3,
+      "rescue_expectancy_usd": 0.233333,
+      "rescue_pnl_usd": 0.7,
+      "rescue_rate": 0.428571,
+      "skipped_count": 1,
+      "units": "usd_per_close"
+    },
+    "markout": {
+      "intervals": []
+    },
+    "monte_carlo": {
+      "paths": 1000,
+      "prob_positive_return": 100.0,
+      "samples_count": 7,
+      "steps": [
+        {
+          "cycle": 0,
+          "p01": 100.0,
+          "p10": 100.0,
+          "p50": 100.0,
+          "p90": 100.0,
+          "p99": 100.0
+        },
+        {
+          "cycle": 1,
+          "p01": 98.8,
+          "p10": 98.8,
+          "p50": 100.9,
+          "p90": 103.2,
+          "p99": 103.2
+        },
+        {
+          "cycle": 2,
+          "p01": 97.6,
+          "p10": 99.2,
+          "p50": 101.8,
+          "p90": 104.7,
+          "p99": 106.4
+        },
+        {
+          "cycle": 3,
+          "p01": 97.0,
+          "p10": 99.2,
+          "p50": 102.8,
+          "p90": 105.8,
+          "p99": 108.5
+        },
+        {
+          "cycle": 4,
+          "p01": 97.4,
+          "p10": 100.0,
+          "p50": 103.5,
+          "p90": 107.2,
+          "p99": 110.5
+        },
+        {
+          "cycle": 5,
+          "p01": 97.3,
+          "p10": 100.5,
+          "p50": 104.4,
+          "p90": 108.3,
+          "p99": 111.6
+        },
+        {
+          "cycle": 6,
+          "p01": 97.3,
+          "p10": 101.0,
+          "p50": 105.4,
+          "p90": 110.0,
+          "p99": 113.0
+        },
+        {
+          "cycle": 7,
+          "p01": 98.0,
+          "p10": 101.3,
+          "p50": 106.3,
+          "p90": 111.2,
+          "p99": 114.7
+        },
+        {
+          "cycle": 8,
+          "p01": 98.5,
+          "p10": 101.8,
+          "p50": 107.2,
+          "p90": 112.4,
+          "p99": 116.6
+        },
+        {
+          "cycle": 9,
+          "p01": 99.0,
+          "p10": 102.7,
+          "p50": 108.1,
+          "p90": 113.7,
+          "p99": 117.8
+        },
+        {
+          "cycle": 10,
+          "p01": 99.5,
+          "p10": 103.3,
+          "p50": 109.1,
+          "p90": 114.8,
+          "p99": 119.3
+        },
+        {
+          "cycle": 11,
+          "p01": 99.4,
+          "p10": 104.1,
+          "p50": 109.7,
+          "p90": 115.9,
+          "p99": 121.3
+        },
+        {
+          "cycle": 12,
+          "p01": 99.4,
+          "p10": 104.5,
+          "p50": 110.7,
+          "p90": 117.1,
+          "p99": 121.7
+        },
+        {
+          "cycle": 13,
+          "p01": 100.8,
+          "p10": 105.0,
+          "p50": 112.0,
+          "p90": 118.3,
+          "p99": 123.3
+        },
+        {
+          "cycle": 14,
+          "p01": 101.0,
+          "p10": 105.4,
+          "p50": 112.7,
+          "p90": 119.4,
+          "p99": 125.3
+        },
+        {
+          "cycle": 15,
+          "p01": 102.0,
+          "p10": 106.4,
+          "p50": 113.6,
+          "p90": 120.6,
+          "p99": 125.9
+        },
+        {
+          "cycle": 16,
+          "p01": 101.7,
+          "p10": 107.4,
+          "p50": 114.6,
+          "p90": 121.7,
+          "p99": 127.3
+        },
+        {
+          "cycle": 17,
+          "p01": 102.3,
+          "p10": 108.0,
+          "p50": 115.4,
+          "p90": 123.2,
+          "p99": 129.8
+        },
+        {
+          "cycle": 18,
+          "p01": 102.7,
+          "p10": 108.6,
+          "p50": 116.4,
+          "p90": 124.0,
+          "p99": 130.9
+        },
+        {
+          "cycle": 19,
+          "p01": 102.2,
+          "p10": 109.4,
+          "p50": 117.0,
+          "p90": 125.1,
+          "p99": 132.9
+        },
+        {
+          "cycle": 20,
+          "p01": 103.7,
+          "p10": 110.2,
+          "p50": 118.0,
+          "p90": 126.3,
+          "p99": 134.6
+        },
+        {
+          "cycle": 21,
+          "p01": 103.9,
+          "p10": 110.8,
+          "p50": 119.1,
+          "p90": 127.7,
+          "p99": 136.7
+        },
+        {
+          "cycle": 22,
+          "p01": 104.0,
+          "p10": 111.7,
+          "p50": 120.0,
+          "p90": 128.6,
+          "p99": 136.9
+        },
+        {
+          "cycle": 23,
+          "p01": 104.9,
+          "p10": 112.1,
+          "p50": 120.9,
+          "p90": 129.8,
+          "p99": 138.4
+        },
+        {
+          "cycle": 24,
+          "p01": 105.7,
+          "p10": 112.9,
+          "p50": 121.9,
+          "p90": 130.5,
+          "p99": 139.3
+        },
+        {
+          "cycle": 25,
+          "p01": 106.7,
+          "p10": 113.6,
+          "p50": 122.8,
+          "p90": 132.0,
+          "p99": 141.6
+        },
+        {
+          "cycle": 26,
+          "p01": 106.9,
+          "p10": 114.4,
+          "p50": 123.7,
+          "p90": 133.3,
+          "p99": 141.8
+        },
+        {
+          "cycle": 27,
+          "p01": 107.0,
+          "p10": 115.5,
+          "p50": 124.6,
+          "p90": 134.3,
+          "p99": 143.8
+        },
+        {
+          "cycle": 28,
+          "p01": 107.1,
+          "p10": 115.8,
+          "p50": 125.4,
+          "p90": 134.9,
+          "p99": 144.5
+        },
+        {
+          "cycle": 29,
+          "p01": 107.9,
+          "p10": 116.5,
+          "p50": 126.1,
+          "p90": 136.0,
+          "p99": 145.4
+        },
+        {
+          "cycle": 30,
+          "p01": 108.2,
+          "p10": 117.4,
+          "p50": 127.3,
+          "p90": 137.0,
+          "p99": 146.7
+        },
+        {
+          "cycle": 31,
+          "p01": 109.1,
+          "p10": 118.1,
+          "p50": 128.2,
+          "p90": 138.2,
+          "p99": 147.3
+        },
+        {
+          "cycle": 32,
+          "p01": 110.2,
+          "p10": 119.0,
+          "p50": 129.0,
+          "p90": 139.8,
+          "p99": 148.1
+        },
+        {
+          "cycle": 33,
+          "p01": 110.6,
+          "p10": 119.8,
+          "p50": 130.0,
+          "p90": 140.8,
+          "p99": 149.6
+        },
+        {
+          "cycle": 34,
+          "p01": 111.7,
+          "p10": 120.6,
+          "p50": 130.9,
+          "p90": 141.9,
+          "p99": 151.5
+        },
+        {
+          "cycle": 35,
+          "p01": 112.0,
+          "p10": 121.1,
+          "p50": 132.1,
+          "p90": 142.9,
+          "p99": 152.9
+        },
+        {
+          "cycle": 36,
+          "p01": 112.8,
+          "p10": 122.2,
+          "p50": 133.2,
+          "p90": 144.0,
+          "p99": 153.1
+        },
+        {
+          "cycle": 37,
+          "p01": 113.2,
+          "p10": 122.4,
+          "p50": 134.0,
+          "p90": 145.0,
+          "p99": 154.5
+        },
+        {
+          "cycle": 38,
+          "p01": 114.1,
+          "p10": 123.2,
+          "p50": 134.7,
+          "p90": 146.3,
+          "p99": 155.4
+        },
+        {
+          "cycle": 39,
+          "p01": 114.5,
+          "p10": 124.6,
+          "p50": 135.7,
+          "p90": 147.1,
+          "p99": 157.6
+        },
+        {
+          "cycle": 40,
+          "p01": 115.4,
+          "p10": 125.0,
+          "p50": 136.5,
+          "p90": 148.3,
+          "p99": 157.6
+        },
+        {
+          "cycle": 41,
+          "p01": 116.6,
+          "p10": 125.6,
+          "p50": 137.3,
+          "p90": 149.5,
+          "p99": 160.2
+        },
+        {
+          "cycle": 42,
+          "p01": 116.4,
+          "p10": 126.1,
+          "p50": 138.2,
+          "p90": 150.6,
+          "p99": 161.8
+        },
+        {
+          "cycle": 43,
+          "p01": 117.6,
+          "p10": 127.1,
+          "p50": 139.2,
+          "p90": 151.5,
+          "p99": 162.3
+        },
+        {
+          "cycle": 44,
+          "p01": 119.4,
+          "p10": 127.6,
+          "p50": 140.1,
+          "p90": 152.4,
+          "p99": 163.9
+        },
+        {
+          "cycle": 45,
+          "p01": 120.1,
+          "p10": 128.4,
+          "p50": 141.1,
+          "p90": 153.4,
+          "p99": 165.2
+        },
+        {
+          "cycle": 46,
+          "p01": 120.5,
+          "p10": 129.5,
+          "p50": 142.0,
+          "p90": 154.6,
+          "p99": 166.1
+        },
+        {
+          "cycle": 47,
+          "p01": 121.4,
+          "p10": 129.7,
+          "p50": 142.7,
+          "p90": 155.7,
+          "p99": 167.8
+        },
+        {
+          "cycle": 48,
+          "p01": 121.8,
+          "p10": 130.4,
+          "p50": 143.6,
+          "p90": 156.7,
+          "p99": 168.2
+        },
+        {
+          "cycle": 49,
+          "p01": 122.4,
+          "p10": 131.1,
+          "p50": 144.9,
+          "p90": 158.0,
+          "p99": 170.3
+        },
+        {
+          "cycle": 50,
+          "p01": 123.3,
+          "p10": 132.0,
+          "p50": 145.7,
+          "p90": 158.7,
+          "p99": 170.0
+        },
+        {
+          "cycle": 51,
+          "p01": 123.1,
+          "p10": 132.6,
+          "p50": 146.3,
+          "p90": 159.5,
+          "p99": 171.0
+        },
+        {
+          "cycle": 52,
+          "p01": 124.8,
+          "p10": 133.1,
+          "p50": 147.5,
+          "p90": 160.6,
+          "p99": 172.0
+        },
+        {
+          "cycle": 53,
+          "p01": 124.9,
+          "p10": 133.9,
+          "p50": 148.4,
+          "p90": 162.1,
+          "p99": 173.3
+        },
+        {
+          "cycle": 54,
+          "p01": 125.7,
+          "p10": 134.8,
+          "p50": 149.1,
+          "p90": 162.9,
+          "p99": 174.3
+        },
+        {
+          "cycle": 55,
+          "p01": 126.4,
+          "p10": 135.8,
+          "p50": 150.2,
+          "p90": 163.7,
+          "p99": 175.4
+        },
+        {
+          "cycle": 56,
+          "p01": 127.3,
+          "p10": 136.4,
+          "p50": 151.0,
+          "p90": 164.8,
+          "p99": 176.3
+        },
+        {
+          "cycle": 57,
+          "p01": 127.6,
+          "p10": 137.4,
+          "p50": 151.9,
+          "p90": 165.9,
+          "p99": 177.6
+        },
+        {
+          "cycle": 58,
+          "p01": 129.1,
+          "p10": 138.1,
+          "p50": 152.7,
+          "p90": 166.6,
+          "p99": 179.6
+        },
+        {
+          "cycle": 59,
+          "p01": 129.7,
+          "p10": 139.6,
+          "p50": 153.9,
+          "p90": 167.9,
+          "p99": 181.1
+        },
+        {
+          "cycle": 60,
+          "p01": 130.2,
+          "p10": 140.0,
+          "p50": 155.0,
+          "p90": 168.8,
+          "p99": 180.6
+        },
+        {
+          "cycle": 61,
+          "p01": 130.2,
+          "p10": 140.7,
+          "p50": 155.4,
+          "p90": 169.9,
+          "p99": 182.1
+        },
+        {
+          "cycle": 62,
+          "p01": 131.2,
+          "p10": 141.5,
+          "p50": 156.4,
+          "p90": 171.0,
+          "p99": 182.6
+        },
+        {
+          "cycle": 63,
+          "p01": 132.1,
+          "p10": 142.5,
+          "p50": 157.5,
+          "p90": 172.1,
+          "p99": 184.4
+        },
+        {
+          "cycle": 64,
+          "p01": 133.3,
+          "p10": 143.6,
+          "p50": 158.3,
+          "p90": 172.7,
+          "p99": 185.1
+        },
+        {
+          "cycle": 65,
+          "p01": 133.5,
+          "p10": 144.1,
+          "p50": 159.0,
+          "p90": 173.8,
+          "p99": 186.7
+        },
+        {
+          "cycle": 66,
+          "p01": 134.2,
+          "p10": 144.9,
+          "p50": 159.9,
+          "p90": 174.8,
+          "p99": 187.0
+        },
+        {
+          "cycle": 67,
+          "p01": 134.6,
+          "p10": 145.7,
+          "p50": 160.7,
+          "p90": 176.6,
+          "p99": 188.2
+        },
+        {
+          "cycle": 68,
+          "p01": 135.5,
+          "p10": 146.7,
+          "p50": 161.7,
+          "p90": 177.5,
+          "p99": 189.7
+        },
+        {
+          "cycle": 69,
+          "p01": 136.0,
+          "p10": 147.3,
+          "p50": 162.3,
+          "p90": 178.6,
+          "p99": 189.9
+        },
+        {
+          "cycle": 70,
+          "p01": 136.3,
+          "p10": 148.1,
+          "p50": 163.3,
+          "p90": 179.2,
+          "p99": 191.8
+        },
+        {
+          "cycle": 71,
+          "p01": 136.7,
+          "p10": 148.9,
+          "p50": 164.2,
+          "p90": 179.9,
+          "p99": 193.6
+        },
+        {
+          "cycle": 72,
+          "p01": 136.6,
+          "p10": 150.0,
+          "p50": 165.3,
+          "p90": 181.8,
+          "p99": 195.1
+        },
+        {
+          "cycle": 73,
+          "p01": 137.8,
+          "p10": 150.4,
+          "p50": 166.0,
+          "p90": 182.9,
+          "p99": 195.5
+        },
+        {
+          "cycle": 74,
+          "p01": 138.0,
+          "p10": 151.4,
+          "p50": 166.9,
+          "p90": 183.1,
+          "p99": 196.4
+        },
+        {
+          "cycle": 75,
+          "p01": 140.0,
+          "p10": 151.9,
+          "p50": 167.9,
+          "p90": 184.2,
+          "p99": 197.6
+        },
+        {
+          "cycle": 76,
+          "p01": 140.1,
+          "p10": 152.4,
+          "p50": 168.8,
+          "p90": 184.7,
+          "p99": 199.4
+        },
+        {
+          "cycle": 77,
+          "p01": 141.3,
+          "p10": 153.2,
+          "p50": 169.4,
+          "p90": 185.6,
+          "p99": 200.7
+        },
+        {
+          "cycle": 78,
+          "p01": 140.6,
+          "p10": 154.4,
+          "p50": 170.5,
+          "p90": 186.9,
+          "p99": 201.4
+        },
+        {
+          "cycle": 79,
+          "p01": 141.3,
+          "p10": 155.4,
+          "p50": 171.8,
+          "p90": 188.0,
+          "p99": 202.9
+        },
+        {
+          "cycle": 80,
+          "p01": 143.0,
+          "p10": 156.7,
+          "p50": 172.5,
+          "p90": 189.0,
+          "p99": 203.3
+        },
+        {
+          "cycle": 81,
+          "p01": 142.4,
+          "p10": 157.2,
+          "p50": 173.2,
+          "p90": 190.3,
+          "p99": 204.7
+        },
+        {
+          "cycle": 82,
+          "p01": 144.3,
+          "p10": 158.4,
+          "p50": 173.9,
+          "p90": 191.3,
+          "p99": 205.8
+        },
+        {
+          "cycle": 83,
+          "p01": 145.5,
+          "p10": 159.0,
+          "p50": 174.9,
+          "p90": 192.4,
+          "p99": 206.6
+        },
+        {
+          "cycle": 84,
+          "p01": 146.2,
+          "p10": 159.5,
+          "p50": 175.7,
+          "p90": 193.4,
+          "p99": 207.9
+        },
+        {
+          "cycle": 85,
+          "p01": 146.6,
+          "p10": 160.8,
+          "p50": 176.4,
+          "p90": 194.6,
+          "p99": 208.1
+        },
+        {
+          "cycle": 86,
+          "p01": 147.5,
+          "p10": 161.7,
+          "p50": 177.4,
+          "p90": 195.3,
+          "p99": 210.6
+        },
+        {
+          "cycle": 87,
+          "p01": 147.7,
+          "p10": 162.0,
+          "p50": 178.5,
+          "p90": 196.6,
+          "p99": 210.0
+        },
+        {
+          "cycle": 88,
+          "p01": 148.2,
+          "p10": 162.9,
+          "p50": 179.2,
+          "p90": 197.1,
+          "p99": 211.6
+        },
+        {
+          "cycle": 89,
+          "p01": 149.5,
+          "p10": 163.8,
+          "p50": 180.0,
+          "p90": 198.4,
+          "p99": 213.2
+        },
+        {
+          "cycle": 90,
+          "p01": 149.7,
+          "p10": 164.2,
+          "p50": 181.1,
+          "p90": 199.3,
+          "p99": 214.7
+        },
+        {
+          "cycle": 91,
+          "p01": 151.9,
+          "p10": 165.4,
+          "p50": 181.9,
+          "p90": 199.7,
+          "p99": 215.9
+        },
+        {
+          "cycle": 92,
+          "p01": 152.1,
+          "p10": 166.4,
+          "p50": 182.6,
+          "p90": 201.2,
+          "p99": 217.4
+        },
+        {
+          "cycle": 93,
+          "p01": 152.9,
+          "p10": 167.6,
+          "p50": 183.5,
+          "p90": 202.2,
+          "p99": 217.6
+        },
+        {
+          "cycle": 94,
+          "p01": 153.1,
+          "p10": 167.6,
+          "p50": 184.8,
+          "p90": 202.7,
+          "p99": 217.9
+        },
+        {
+          "cycle": 95,
+          "p01": 153.9,
+          "p10": 168.6,
+          "p50": 185.9,
+          "p90": 204.2,
+          "p99": 219.4
+        },
+        {
+          "cycle": 96,
+          "p01": 153.7,
+          "p10": 169.7,
+          "p50": 186.7,
+          "p90": 204.9,
+          "p99": 220.9
+        },
+        {
+          "cycle": 97,
+          "p01": 154.6,
+          "p10": 170.0,
+          "p50": 187.7,
+          "p90": 206.0,
+          "p99": 222.0
+        },
+        {
+          "cycle": 98,
+          "p01": 156.9,
+          "p10": 171.5,
+          "p50": 188.4,
+          "p90": 206.7,
+          "p99": 222.6
+        },
+        {
+          "cycle": 99,
+          "p01": 156.7,
+          "p10": 171.7,
+          "p50": 189.2,
+          "p90": 207.9,
+          "p99": 224.5
+        },
+        {
+          "cycle": 100,
+          "p01": 157.3,
+          "p10": 172.6,
+          "p50": 190.2,
+          "p90": 208.5,
+          "p99": 225.5
+        }
+      ],
+      "worst_case_drawdown_pct": -8.3
+    },
+    "pair_costs": {
+      "bins": [
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.900",
+          "max": 0.9083,
+          "min": 0.9,
+          "status": "profit"
+        },
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.908",
+          "max": 0.9167,
+          "min": 0.9083,
+          "status": "profit"
+        },
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.917",
+          "max": 0.925,
+          "min": 0.9167,
+          "status": "profit"
+        },
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.925",
+          "max": 0.9333,
+          "min": 0.925,
+          "status": "profit"
+        },
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.933",
+          "max": 0.9417,
+          "min": 0.9333,
+          "status": "profit"
+        },
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.942",
+          "max": 0.95,
+          "min": 0.9417,
+          "status": "profit"
+        },
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.950",
+          "max": 0.9583,
+          "min": 0.95,
+          "status": "profit"
+        },
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.958",
+          "max": 0.9667,
+          "min": 0.9583,
+          "status": "profit"
+        },
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.967",
+          "max": 0.975,
+          "min": 0.9667,
+          "status": "profit"
+        },
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.975",
+          "max": 0.9833,
+          "min": 0.975,
+          "status": "profit"
+        },
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.983",
+          "max": 0.9917,
+          "min": 0.9833,
+          "status": "profit"
+        },
+        {
+          "count": 0,
+          "density": 0.0,
+          "label": "$0.992",
+          "max": 1.0,
+          "min": 0.9917,
+          "status": "profit"
+        },
+        {
+          "count": 5,
+          "density": 1.0,
+          "label": "$1.00+",
+          "max": null,
+          "min": 1.0,
+          "status": "loss"
+        }
+      ],
+      "ci_critical": {
+        "90": 2.132,
+        "95": 2.776
+      },
+      "mean": 2.5,
+      "median": 2.5,
+      "min_observed": 2.5,
+      "samples_count": 5,
+      "stdev": 0.0
+    },
+    "position_returns": {
+      "ci_critical_pct": {
+        "90": 2.015,
+        "95": 2.571
+      },
+      "ci_critical_usd": {
+        "90": 1.943,
+        "95": 2.447
+      },
+      "mean_pnl_pct": 21.166667,
+      "mean_pnl_usd": 0.9,
+      "positions": [
+        {
+          "condition_id": "0xabc",
+          "market_slug": "fake-market",
+          "method": "merge",
+          "pnl_pct": -24.0,
+          "pnl_usd": -1.2,
+          "spread_cost": 2.5,
+          "ts": 1700001000.0,
+          "type": "MERGED_PAIR"
+        },
+        {
+          "condition_id": "0xabc",
+          "market_slug": "fake-market",
+          "method": "single_buy_exit",
+          "pnl_pct": -15.0,
+          "pnl_usd": -0.6,
+          "spread_cost": null,
+          "ts": 1700001100.0,
+          "type": "UNWIND"
+        },
+        {
+          "condition_id": "0xabc",
+          "market_slug": "fake-market",
+          "method": "merge",
+          "pnl_pct": 42.0,
+          "pnl_usd": 2.1,
+          "spread_cost": 2.5,
+          "ts": 1700001200.0,
+          "type": "MERGED_PAIR"
+        },
+        {
+          "condition_id": "0xabc",
+          "market_slug": "fake-market",
+          "method": "naked_exit",
+          "pnl_pct": 30.0,
+          "pnl_usd": 0.9,
+          "spread_cost": null,
+          "ts": 1700001300.0,
+          "type": "UNWIND"
+        },
+        {
+          "condition_id": "0xabc",
+          "market_slug": "fake-market",
+          "method": "shadow_merge",
+          "pnl_pct": 30.0,
+          "pnl_usd": 1.5,
+          "spread_cost": 2.5,
+          "ts": 1700001400.0,
+          "type": "MERGED_PAIR"
+        },
+        {
+          "condition_id": "0xabc",
+          "market_slug": "fake-market",
+          "method": "ladder_exit",
+          "pnl_pct": null,
+          "pnl_usd": 0.4,
+          "spread_cost": null,
+          "ts": 1700001600.0,
+          "type": "UNWIND"
+        },
+        {
+          "condition_id": "0xabc",
+          "market_slug": "fake-market",
+          "method": "merge",
+          "pnl_pct": 64.0,
+          "pnl_usd": 3.2,
+          "spread_cost": 2.5,
+          "ts": 1700001700.0,
+          "type": "MERGED_PAIR"
+        }
+      ],
+      "sem_pnl_pct": 13.871834,
+      "sem_pnl_usd": 0.57735,
+      "stdev_pnl_pct": 33.978915,
+      "stdev_pnl_usd": 1.527525
+    },
+    "probability_bell": {
+      "bins": [
+        {
+          "bin": 0.0278,
+          "empirical_count": 0,
+          "in_sweet_spot": false,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.0833,
+          "empirical_count": 0,
+          "in_sweet_spot": false,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.1389,
+          "empirical_count": 0,
+          "in_sweet_spot": false,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.1944,
+          "empirical_count": 0,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.25,
+          "empirical_count": 0,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.3056,
+          "empirical_count": 0,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.3611,
+          "empirical_count": 0,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.4167,
+          "empirical_count": 0,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.4722,
+          "empirical_count": 8,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.5278,
+          "empirical_count": 0,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.5833,
+          "empirical_count": 0,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.6389,
+          "empirical_count": 0,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.6944,
+          "empirical_count": 0,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.75,
+          "empirical_count": 0,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.8056,
+          "empirical_count": 0,
+          "in_sweet_spot": true,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.8611,
+          "empirical_count": 0,
+          "in_sweet_spot": false,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.9167,
+          "empirical_count": 0,
+          "in_sweet_spot": false,
+          "theoretical_pdf": null
+        },
+        {
+          "bin": 0.9722,
+          "empirical_count": 0,
+          "in_sweet_spot": false,
+          "theoretical_pdf": null
+        }
+      ],
+      "ci_critical": {
+        "90": 1.895,
+        "95": 2.365
+      },
+      "mean": 0.48,
+      "samples_count": 8,
+      "stdev": 0.0,
+      "sweet_spot_pct": 100.0
+    },
+    "queue_realism": {
+      "cleared_fill_count": 0,
+      "fill_latency": {
+        "count": 0,
+        "excluded": 0,
+        "median_sec": null,
+        "p90_sec": null
+      },
+      "trade_through_depth": {
+        "band": "unmeasured",
+        "count": 0,
+        "median_cents": null,
+        "missing": 0,
+        "not_trade_through": 0,
+        "p75_cents": null
+      }
+    },
+    "rescue_friction": {
+      "assumed_reference_count": 3,
+      "assumed_stop_offset": 0.04,
+      "bands": {
+        "execution": "unmeasured",
+        "latency": "unmeasured",
+        "overshoot": "good",
+        "sled": "good",
+        "tcdr": "unmeasured"
+      },
+      "fee_measured_count": 0,
+      "mean_execution_drag_cents": null,
+      "mean_latency_drag_cents": null,
+      "mean_overshoot_ratio": -3.916667,
+      "mean_sled_cents": -15.666667,
+      "mean_tcdr": null,
+      "measured_count": 3,
+      "non_rescue_count": 5,
+      "recorded_reference_count": 0,
+      "rescue_count": 3,
+      "units": "cents_per_share"
+    },
+    "robustness": {
+      "mae": {
+        "exit_fill": 0,
+        "measured": 0,
+        "median_cents": null,
+        "no_marks_in_window": 0,
+        "not_recorded": 0,
+        "open": 0,
+        "p90_cents": null,
+        "units": "cents_per_share"
+      },
+      "markout": {
+        "intervals": []
+      },
+      "mean_pnl_ci": {
+        "band": "average",
+        "level": 95,
+        "lower_cents": -51.277611,
+        "mean_cents": 90.0,
+        "meaning": "zero is inside the band -- suggestive, not proven",
+        "n": 7,
+        "upper_cents": 231.277611
+      },
+      "sqn": {
+        "band": "bad",
+        "mean_usd": 0.9,
+        "meaning": "noise -- the results could be luck",
+        "n": 7,
+        "sqn": 1.558846,
+        "stdev_usd": 1.527525
+      },
+      "units": "cents_per_share"
+    }
+  },
+  "trade_analytics": {
+    "avg_loss_usd": -0.8999999999999999,
+    "avg_win_usd": 1.62,
+    "ci90_lower_pct": -1.6525002191140494,
+    "ci95_return_pct": {
+      "lower": -6.0221279206465255,
+      "upper": 48.35546125397986
+    },
+    "cvar_95_usd": null,
+    "dollar_weighted_return_pct": 21.85185185185185,
+    "expectancy_usd": 0.9,
+    "half_kelly": 0.20833333333333334,
+    "kelly_fraction": 0.4166666666666667,
+    "losses": 2,
+    "max_drawdown_pct": 1.7999999999999972,
+    "max_drawdown_usd": 1.7999999999999972,
+    "max_naked_exposure_usd": 0.0,
+    "mean_pnl_ci": {
+      "levels": [
+        {
+          "includes_negative": true,
+          "level": 90,
+          "lower": -0.22179157303544283,
+          "negative_depth_usd": 0.22179157303544283,
+          "upper": 2.021791573035443
+        },
+        {
+          "includes_negative": true,
+          "level": 95,
+          "lower": -0.5127761087070143,
+          "negative_depth_usd": 0.5127761087070143,
+          "upper": 2.3127761087070144
+        }
+      ],
+      "mean_usd": 0.9,
+      "n": 7,
+      "verdict": "spans_zero"
+    },
+    "mean_return_pct": 21.166666666666668,
+    "n_closes": 8,
+    "n_measured_returns": 6,
+    "payoff_ratio": 1.8000000000000003,
+    "pnl_by_fill_path": {
+      "by_path": {
+        "maker_merged": 5.6000000000000005,
+        "single_buy_exit": 0.7000000000000001,
+        "taker_completed": 0.0
+      },
+      "pct": {
+        "maker_merged": 0.8888888888888888,
+        "single_buy_exit": 0.1111111111111111,
+        "taker_completed": 0.0
+      },
+      "total": 6.300000000000001
+    },
+    "pnl_distribution": [
+      {
+        "condition_id": "0xabc",
+        "cost_basis": 5.0,
+        "market_slug": "fake-market",
+        "method": "merge",
+        "realized_pnl": -1.2,
+        "return_pct": -24.0,
+        "ts": 1700001000.0
+      },
+      {
+        "condition_id": "0xabc",
+        "cost_basis": 4.0,
+        "market_slug": "fake-market",
+        "method": "single_buy_exit",
+        "realized_pnl": -0.6,
+        "return_pct": -15.0,
+        "ts": 1700001100.0
+      },
+      {
+        "condition_id": "0xabc",
+        "cost_basis": 5.0,
+        "market_slug": "fake-market",
+        "method": "merge",
+        "realized_pnl": 2.1,
+        "return_pct": 42.0,
+        "ts": 1700001200.0
+      },
+      {
+        "condition_id": "0xabc",
+        "cost_basis": 3.0,
+        "market_slug": "fake-market",
+        "method": "naked_exit",
+        "realized_pnl": 0.9,
+        "return_pct": 30.0,
+        "ts": 1700001300.0
+      },
+      {
+        "condition_id": "0xabc",
+        "cost_basis": 5.0,
+        "market_slug": "fake-market",
+        "method": "shadow_merge",
+        "realized_pnl": 1.5,
+        "return_pct": 30.0,
+        "ts": 1700001400.0
+      },
+      {
+        "condition_id": "0xabc",
+        "cost_basis": 5.0,
+        "market_slug": "fake-market",
+        "method": "merge",
+        "realized_pnl": null,
+        "return_pct": null,
+        "ts": 1700001500.0
+      },
+      {
+        "condition_id": "0xabc",
+        "cost_basis": 0.0,
+        "market_slug": "fake-market",
+        "method": "ladder_exit",
+        "realized_pnl": 0.4,
+        "return_pct": null,
+        "ts": 1700001600.0
+      },
+      {
+        "condition_id": "0xabc",
+        "cost_basis": 5.0,
+        "market_slug": "fake-market",
+        "method": "merge",
+        "realized_pnl": 3.2,
+        "return_pct": 64.0,
+        "ts": 1700001700.0
+      }
+    ],
+    "profit_factor": 4.5,
+    "risk_reward_ratio": 1.8000000000000003,
+    "sample_size_sufficiency": {
+      "current_n": 8,
+      "effect_size_d": 0.2,
+      "levels": [
+        {
+          "confidence_pct": 95,
+          "progress_pct": 8,
+          "remaining_n": 89,
+          "required_n": 97,
+          "z": 1.95996
+        },
+        {
+          "confidence_pct": 98,
+          "progress_pct": 6,
+          "remaining_n": 128,
+          "required_n": 136,
+          "z": 2.32635
+        },
+        {
+          "confidence_pct": 99,
+          "progress_pct": 5,
+          "remaining_n": 158,
+          "required_n": 166,
+          "z": 2.57583
+        }
+      ],
+      "statuses": {
+        "fill_rate": {
+          "base": "orders",
+          "current_n": 8,
+          "label": "Fill Rate",
+          "levels": [
+            {
+              "confidence_pct": 95,
+              "progress_pct": 2,
+              "remaining_n": 377,
+              "required_n": 385,
+              "z": 1.95996
+            },
+            {
+              "confidence_pct": 98,
+              "progress_pct": 1,
+              "remaining_n": 534,
+              "required_n": 542,
+              "z": 2.32635
+            },
+            {
+              "confidence_pct": 99,
+              "progress_pct": 1,
+              "remaining_n": 656,
+              "required_n": 664,
+              "z": 2.57583
+            }
+          ],
+          "target_margin": 0.05,
+          "type": "proportion"
+        },
+        "merge_rate": {
+          "base": "closes",
+          "current_n": 8,
+          "label": "Merge Rate",
+          "levels": [
+            {
+              "confidence_pct": 95,
+              "progress_pct": 2,
+              "remaining_n": 377,
+              "required_n": 385,
+              "z": 1.95996
+            },
+            {
+              "confidence_pct": 98,
+              "progress_pct": 1,
+              "remaining_n": 534,
+              "required_n": 542,
+              "z": 2.32635
+            },
+            {
+              "confidence_pct": 99,
+              "progress_pct": 1,
+              "remaining_n": 656,
+              "required_n": 664,
+              "z": 2.57583
+            }
+          ],
+          "target_margin": 0.05,
+          "type": "proportion"
+        },
+        "pnl_expectancy": {
+          "base": "closes",
+          "current_n": 8,
+          "effect_size_d": 0.2,
+          "label": "PnL Expectancy",
+          "levels": [
+            {
+              "confidence_pct": 95,
+              "progress_pct": 8,
+              "remaining_n": 89,
+              "required_n": 97,
+              "z": 1.95996
+            },
+            {
+              "confidence_pct": 98,
+              "progress_pct": 6,
+              "remaining_n": 128,
+              "required_n": 136,
+              "z": 2.32635
+            },
+            {
+              "confidence_pct": 99,
+              "progress_pct": 5,
+              "remaining_n": 158,
+              "required_n": 166,
+              "z": 2.57583
+            }
+          ],
+          "type": "continuous"
+        },
+        "stop_loss_rate": {
+          "base": "closes",
+          "current_n": 8,
+          "label": "Stop Loss Rate",
+          "levels": [
+            {
+              "confidence_pct": 95,
+              "progress_pct": 2,
+              "remaining_n": 377,
+              "required_n": 385,
+              "z": 1.95996
+            },
+            {
+              "confidence_pct": 98,
+              "progress_pct": 1,
+              "remaining_n": 534,
+              "required_n": 542,
+              "z": 2.32635
+            },
+            {
+              "confidence_pct": 99,
+              "progress_pct": 1,
+              "remaining_n": 656,
+              "required_n": 664,
+              "z": 2.57583
+            }
+          ],
+          "target_margin": 0.05,
+          "type": "proportion"
+        }
+      },
+      "std_dev_usd": 1.5275252316519468,
+      "target_margin_usd": 0.02
+    },
+    "sharpe_ratio": 0.6229353305576062,
+    "sortino_ratio": 1.0576724944719378,
+    "stdev_return_pct": 33.97891503074615,
+    "var_95_usd": null,
+    "win_rate": 0.625,
+    "win_rate_ci95": {
+      "lower": 0.30573785458380187,
+      "upper": 0.863158240538479
+    },
+    "wins": 5
+  }
+}

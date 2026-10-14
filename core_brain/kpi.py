@@ -366,14 +366,17 @@ def compute_trade_analytics(
     _measured_pairs: list[tuple[float, float]] = []
 
     for c in closes:
-        pnl = float(c.get("realized_pnl") or 0.0)
+        raw_pnl = c.get("realized_pnl")
+        pnl = float(raw_pnl) if raw_pnl is not None else None
         cost = c.get("cost_basis")
         cost_f = float(cost) if cost is not None else None
-        return_pct = (100.0 * pnl / cost_f) if (cost_f is not None and cost_f > 0) else None
+        return_pct = (100.0 * pnl / cost_f) if (pnl is not None and cost_f is not None and cost_f > 0) else None
         if return_pct is not None:
             return_pcts.append(return_pct)
             _measured_pairs.append((pnl, cost_f))
-        if pnl > 0:
+        if pnl is None:
+            pass  # unmeasured outcome: not a win, not a loss, still a close
+        elif pnl > 0:
             wins.append(pnl)
         else:
             losses.append(pnl)
@@ -1623,8 +1626,9 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # Realized PnL from closes
     realized_from_closes = sum(float(c.get("realized_pnl") or 0.0) for c in closes)
     realized_pnl = realized_from_closes
-    wins = [float(c["realized_pnl"]) for c in closes if float(c.get("realized_pnl") or 0.0) > 0]
-    losses = [float(c["realized_pnl"]) for c in closes if float(c.get("realized_pnl") or 0.0) <= 0]
+    measured_pnls = [float(c["realized_pnl"]) for c in closes if c.get("realized_pnl") is not None]
+    wins = [p for p in measured_pnls if p > 0]
+    losses = [p for p in measured_pnls if p <= 0]
 
     # Time span
     all_ts = [float(q["ts"]) for q in quotes if q.get("ts")] + [float(f.get("venue_ts", 0))/1000 for f in fills if f.get("venue_ts")]
