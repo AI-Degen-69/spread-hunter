@@ -169,6 +169,10 @@ def position_returns(closes: Sequence[dict]) -> dict[str, Any]:
     close with no cost basis contributes its dollar figure and no percentage --
     dividing by zero to fill a column would put a fabricated number in the
     distribution the operator judges the strategy on.
+
+    `spread_cost` is the per-share assembly price of a merged pair, the same
+    population and the same division `pair_costs` densifies: an unwind never
+    assembled a pair at a price, so it carries none (#538).
     """
     positions: list[dict[str, Any]] = []
     for row in closes or []:
@@ -178,12 +182,17 @@ def position_returns(closes: Sequence[dict]) -> dict[str, Any]:
         cost = _finite(row.get("cost_basis"))
         pnl_pct = (100.0 * pnl_usd / cost) if cost and cost > 0 else None
         method = str(row.get("method") or "").lower()
+        shares = _finite(row.get("shares"))
+        spread_cost = (cost / shares
+                       if method in MERGE_METHODS and cost and cost > 0
+                       and shares and shares > 0 else None)
         positions.append({
             "ts": _finite(row.get("ts")),
             "condition_id": row.get("condition_id"),
             "market_slug": row.get("market_slug"),
             "pnl_usd": round(pnl_usd, 6),
             "pnl_pct": None if pnl_pct is None else round(pnl_pct, 6),
+            "spread_cost": None if spread_cost is None else round(spread_cost, 6),
             "type": "MERGED_PAIR" if method in MERGE_METHODS else "UNWIND",
             "method": method or None,
         })

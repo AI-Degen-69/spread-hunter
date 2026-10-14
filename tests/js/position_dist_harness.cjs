@@ -40,15 +40,19 @@ global.EventSource = function EventSource() {
   return { addEventListener: noop, close: noop, onerror: null, onmessage: null };
 };
 
-const source = fs.readFileSync(
+// The renderer's metric and CI level live as `let` bindings inside the
+// evaluated source, so setting a property on the exports object never
+// reaches them. The assignments are appended to the source itself, inside
+// the same scope the render function reads.
+let source = fs.readFileSync(
   path.resolve(__dirname, '..', '..', 'dashboard', 'static', 'app.js'), 'utf8');
+if (input.metric != null) source += `\n;currentDistMetric = ${JSON.stringify(input.metric)};`;
+if (input.ciLevel != null) source += `\n;currentCiLevel = ${input.ciLevel};`;
+
 const mod = { exports: {} };
 new Function('module', 'exports', 'document', 'window', 'localStorage', 'EventSource', source)(
   mod, mod.exports, global.document, global.window, global.localStorage, global.EventSource);
 const app = mod.exports;
-
-if (input.metric != null) app.distMetric = input.metric;
-if (input.ciLevel != null) app.distCiLevel = input.ciLevel;
 
 app.renderPositionDistributionChart(input.statistical_analytics || {});
 
@@ -63,4 +67,7 @@ process.stdout.write(JSON.stringify({
   // Counts the drawn envelope, not the gradient definition it references:
   // 1 when the renderer put a shaded band on the chart, 0 when it did not.
   ciZones: (stubElement('position-dist-svg-container').innerHTML.match(/url\(#ciZoneGrad\)/g) || []).length,
+  // The raw markup, so a test can assert on elements (dot circles, curve
+  // paths) that tag-stripping would erase.
+  chart: stubElement('position-dist-svg-container').innerHTML,
 }));
