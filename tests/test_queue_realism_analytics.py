@@ -317,10 +317,12 @@ def _quote(local_id: str = "q1", ts: float | None = 1000.0,
 
 
 def _fill_row(order_uuid: str = "q1", venue_ts: int | None = 1_005_000,
-              recorded_ts: int | None = 1_005_000, size: float = 5.0) -> dict:
+              recorded_ts: int | None = 1_005_000, size: float = 5.0,
+              clearing_price: float | None = None) -> dict:
     """One `fills` row, in the shape `get_all_fills()` returns."""
     return {"trade_id": "t", "order_uuid": order_uuid, "size": size,
-            "price": 0.50, "venue_ts": venue_ts, "recorded_ts": recorded_ts}
+            "price": 0.50, "venue_ts": venue_ts, "recorded_ts": recorded_ts,
+            "clearing_price": clearing_price}
 
 
 def test_cleared_fills_joins_a_quote_to_its_earliest_fill_in_seconds():
@@ -335,8 +337,31 @@ def test_cleared_fills_joins_a_quote_to_its_earliest_fill_in_seconds():
     # Earliest fill, milliseconds -> seconds: the wait is measured from placement to the
     # first credit, and averaging the last partial in would shorten every reading.
     assert records[0].filled_ts == 1005.0
-    # Nothing records the print that cleared the level, so no builder can supply it.
+    # Rows from stores that never recorded a print keep None — a measurement
+    # nobody took, not a depth of zero.
     assert records[0].clearing_price is None
+
+
+def test_cleared_fills_reads_the_print_from_the_earliest_fill_row():
+    """Latency and depth describe the same fill event (#531)."""
+    records = cleared_fills(
+        [_quote("q1", ts=1000.0)],
+        [_fill_row("q1", venue_ts=1_015_000, clearing_price=0.47),
+         _fill_row("q1", venue_ts=1_005_000, size=2.0,
+                    clearing_price=0.48)])
+
+    assert records[0].filled_ts == 1005.0
+    assert records[0].clearing_price == 0.48
+    assert trade_through_depth(records)["median_cents"] == 2.0
+
+
+def test_cleared_fills_keeps_a_missing_print_missing():
+    records = cleared_fills([_quote("q1", ts=1000.0)],
+                            [_fill_row("q1", clearing_price=None)])
+
+    assert records[0].clearing_price is None
+    depth = trade_through_depth(records)
+    assert depth["count"] == 0 and depth["missing"] == 1
 
 
 def test_cleared_fills_leaves_out_a_quote_that_never_filled():

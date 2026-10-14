@@ -973,11 +973,11 @@ def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFi
       millisecond number. The earliest fill is the one the wait is measured to: averaging
       the last partial in would shorten every reading.
     * `order_price` -- `quotes.price`, in dollars.
-    * `clearing_price` -- `None`, and that is the honest state rather than a placeholder.
-      The trade-through rule proves the level cleared by a print strictly below our price;
-      the crediting path sees that print and drops it, and no writer stores it. So every
-      depth figure reads `missing` until one does -- a measurement nobody took, which is
-      not the same as a depth of zero.
+    * `clearing_price` -- the closest print strictly below our price, read off
+      the fill ROW that supplies the earliest usable timestamp (#531), so
+      latency and depth describe the same fill event. Rows from stores that
+      never recorded a print (or fills with no print) keep `None` -- a
+      measurement nobody took, which is not the same as a depth of zero.
 
     A quote that never filled is left out instead of carried as an unmeasurable wait: it did
     not wait for a fill, it was cancelled or expired, and counting it in `excluded` would
@@ -988,6 +988,7 @@ def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFi
     """
     credited: set[str] = set()
     first_fill_ms: dict[str, float] = {}
+    first_fill_print: dict[str, Optional[float]] = {}
     for fill in fills or []:
         order_uuid = _close_field(fill, "order_uuid")
         if order_uuid is None:
@@ -998,7 +999,15 @@ def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFi
         if stamp is None:
             stamp = _finite(_close_field(fill, "recorded_ts"))
         if stamp is not None:
-            first_fill_ms[key] = min(stamp, first_fill_ms.get(key, stamp))
+            if key not in first_fill_ms or stamp < first_fill_ms[key]:
+                first_fill_ms[key] = stamp
+                first_fill_print[key] = _finite(
+                    _close_field(fill, "clearing_price"))
+        elif key not in first_fill_ms:
+            # No usable timestamp anywhere yet: keep the first row's print so
+            # a timestamp-less fill still carries its depth evidence.
+            first_fill_print.setdefault(
+                key, _finite(_close_field(fill, "clearing_price")))
 
     records: list[ClearedFill] = []
     for quote in quotes or []:
@@ -1012,7 +1021,7 @@ def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFi
         records.append(ClearedFill(
             order_id=key,
             order_price=_finite(_close_field(quote, "price")),
-            clearing_price=None,
+            clearing_price=first_fill_print.get(key),
             placed_ts=_finite(_close_field(quote, "ts")),
             filled_ts=None if stamp is None else stamp / 1000.0,
         ))
