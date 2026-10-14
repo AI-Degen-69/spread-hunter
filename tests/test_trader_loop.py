@@ -434,10 +434,10 @@ class TestPlanOrders:
 
 
 class FakeMarket:
-    def __init__(self, cid="0xabc"):
+    def __init__(self, cid="0xabc", up_token="tok-up", down_token="tok-dn"):
         self.condition_id = cid
-        self.up_token = "tok-up"
-        self.down_token = "tok-dn"
+        self.up_token = up_token
+        self.down_token = down_token
         self.market_slug = "fake-market"
         self.tick_size = 0.01
         self.neg_risk = False
@@ -3045,3 +3045,232 @@ class TestQuietTail:
         assert all(r.getMessage().startswith("[QUOTING]")
                    and r.getMessage().endswith("\n")
                    for r in infos)
+
+class TestHeldFirstRotation:
+    """Each rotation visits held markets before flat quoting-only ones (#505).
+
+    Naked first, then balanced, then flat -- stable, deterministic, every
+    market exactly once per rotation. The fake clock advances only inside
+    `fetch_market`, by a fixed per-visit cost `c`, so a visit's clock minus the
+    rotation-start stamp measures pure ordering delay. `markets_fn` stamps the
+    rotation start; `sleep_fn` stops the loop after a fixed rotation count.
+    Nothing patches `time.time`.
+    """
+
+    C = 10.0  # per-visit fake-clock cost
+
+    def _build(self, cids, inventory_script, decide=None, rotations=3):
+        """Return (run_loop, visits, starts, submissions).
+
+        `inventory_script(cid, rotation)` -> `Inventory` (may raise).
+        `decide(cfg, up, dn, inv, t_rem, wf)` -> (intents, why); default
+        declines, so only ordering is exercised.
+        """
+        state = {"rotation": 0, "clock": 0.0}
+        visits = []        # (rotation, cid, clock) in fetch order
+        starts = []        # clock at each rotation start (markets_fn)
+        submissions = []   # (rotation, cid, token_id, side, price, size)
+
+        markets = [FakeMarket(c, up_token=f"{c}-up", down_token=f"{c}-dn")
+                   for c in cids]
+        by_cid = {m.condition_id: m for m in markets}
+
+        def markets_fn():
+            state["rotation"] += 1
+            starts.append(state["clock"])
+            return list(markets)
+
+        def fetch_market(cid):
+            visits.append((state["rotation"], cid, state["clock"]))
+            state["clock"] += self.C
+            return by_cid[cid]
+
+        def fetch_books(host, token):
+            return {"token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                    "bids": {0.59: 100}, "asks": {0.61: 100}}
+
+        def default_decide(cfg, up, dn, inv, t_rem, wf):
+            return [], "declined"
+
+        def submit_fn(client, registry, market, intents, cfg):
+            for i in intents:
+                submissions.append((
+                    state["rotation"], market.condition_id, i.token_id,
+                    i.side, i.price, i.size))
+            return len(intents)
+
+        def inventory_fn(market):
+            return inventory_script(market.condition_id, state["rotation"])
+
+        sleeps = {"n": 0}
+
+        def sleep_stop(s):
+            sleeps["n"] += 1
+            if sleeps["n"] >= rotations:
+                raise KeyboardInterrupt()
+
+        seam = VenueSeam(
+            client=object(),
+            fetch_market=fetch_market,
+            fetch_books=fetch_books,
+            decide=decide or default_decide,
+            submit_fn=submit_fn,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+            inventory_fn=inventory_fn,
+        )
+
+        def run_loop(live=False):
+            run(seam, interval=0.0, once=False, live=live,
+                markets_fn=markets_fn, sleep_fn=sleep_stop)
+
+        return run_loop, visits, starts, submissions
+
+    @staticmethod
+    def _visits_by_rotation(visits):
+        out = {}
+        for rotation, cid, _clock in visits:
+            out.setdefault(rotation, []).append(cid)
+        return out
+
+    def test_rotation_visits_held_markets_first(self):
+        def inv(cid, rotation):
+            if cid == "0xn1":
+                return Inventory(up_shares=7, down_shares=0)   # naked
+            if cid == "0xb1":
+                return Inventory(up_shares=5, down_shares=5)   # balanced
+            return Inventory()
+
+        run_loop, visits, starts, _ = self._build(
+            ["0xf1", "0xf2", "0xb1", "0xf3", "0xn1"], inv, rotations=3)
+        run_loop()
+        by_rotation = self._visits_by_rotation(visits)
+        # Rotation 1 has no snapshot yet: feed order is correct and safe.
+        assert by_rotation[1] == ["0xf1", "0xf2", "0xb1", "0xf3", "0xn1"]
+        assert by_rotation[2] == ["0xn1", "0xb1", "0xf1", "0xf2", "0xf3"]
+        assert by_rotation[3] == ["0xn1", "0xb1", "0xf1", "0xf2", "0xf3"]
+
+    def test_held_visit_delay_does_not_grow_with_flat_markets(self):
+        def held_offsets(flat_count):
+            def inv(cid, rotation):
+                if cid == "0xh1":
+                    return Inventory(up_shares=7, down_shares=0)   # naked
+                if cid == "0xh2":
+                    return Inventory(up_shares=5, down_shares=5)   # balanced
+                return Inventory()
+
+            # Held markets sit LAST in feed order, so a feed-order loop makes
+            # their delay grow with the number of flat markets.
+            cids = [f"0xflat{i}" for i in range(flat_count)] + ["0xh1", "0xh2"]
+            run_loop, visits, starts, _ = self._build(cids, inv, rotations=3)
+            run_loop()
+            offsets = {}
+            for rotation in sorted({r for r, _, _ in visits}):
+                if rotation < 2:
+                    continue
+                held_clocks = [clock for r, cid, clock in visits
+                               if r == rotation and cid in ("0xh1", "0xh2")]
+                offsets[rotation] = [clock - starts[rotation - 1]
+                                     for clock in held_clocks]
+            return offsets
+
+        few, many = held_offsets(2), held_offsets(20)
+        assert few == many                       # flat count must not matter
+        for offsets in (few, many):
+            for rotation, offs in offsets.items():
+                assert len(offs) == 2
+                for k, off in enumerate(offs):   # k-th held (from 0) <= k * c
+                    assert off <= k * self.C
+
+    def test_newly_held_market_is_promoted_next_rotation(self):
+        def inv(cid, rotation):
+            # f2 acquires exposure from rotation 2 on.
+            if cid == "0xf2" and rotation >= 2:
+                return Inventory(up_shares=7, down_shares=0)
+            return Inventory()
+
+        run_loop, visits, starts, _ = self._build(
+            ["0xf1", "0xf2", "0xf3"], inv, rotations=3)
+        run_loop()
+        by_rotation = self._visits_by_rotation(visits)
+        assert by_rotation[1] == ["0xf1", "0xf2", "0xf3"]
+        assert by_rotation[2] == ["0xf1", "0xf2", "0xf3"]  # promoted next rot
+        assert by_rotation[3] == ["0xf2", "0xf1", "0xf3"]
+
+    def test_market_that_goes_flat_returns_to_feed_position(self):
+        def inv(cid, rotation):
+            # n1 is naked only during rotation 1 (e.g. merged away mid-run).
+            if cid == "0xn1" and rotation == 1:
+                return Inventory(up_shares=7, down_shares=0)
+            return Inventory()
+
+        run_loop, visits, starts, _ = self._build(
+            ["0xf1", "0xn1", "0xf2"], inv, rotations=3)
+        run_loop()
+        by_rotation = self._visits_by_rotation(visits)
+        assert by_rotation[1] == ["0xf1", "0xn1", "0xf2"]
+        assert by_rotation[2] == ["0xn1", "0xf1", "0xf2"]
+        assert by_rotation[3] == ["0xf1", "0xn1", "0xf2"]  # back in feed spot
+
+    def test_failed_inventory_read_keeps_last_known_rank(self):
+        def inv(cid, rotation):
+            if cid == "0xn1":
+                if rotation == 2:
+                    raise RuntimeError("registry read failed")
+                return Inventory(up_shares=7, down_shares=0)
+            return Inventory()
+
+        run_loop, visits, starts, _ = self._build(
+            ["0xf1", "0xn1", "0xf2"], inv, rotations=3)
+        run_loop()
+        by_rotation = self._visits_by_rotation(visits)
+        # The failed read must not skip the visit nor look like "flat".
+        assert by_rotation[2] == ["0xn1", "0xf1", "0xf2"]
+        assert by_rotation[3] == ["0xn1", "0xf1", "0xf2"]
+
+    def test_flat_market_submissions_unchanged_by_ordering(self, monkeypatch):
+        import core_brain.trader_loop as trader_loop_module
+
+        def inv(cid, rotation):
+            if cid == "0xn1":
+                return Inventory(up_shares=7, down_shares=0)   # naked
+            if cid == "0xb1":
+                return Inventory(up_shares=5, down_shares=5)   # balanced
+            return Inventory()
+
+        def decide(cfg, up, dn, inv_, t_rem, wf):
+            return ([_intent("UP", up["token_id"], 0.60, 5),
+                     _intent("DOWN", dn["token_id"], 0.40, 5)], "")
+
+        cids = ["0xf1", "0xb1", "0xf2", "0xn1", "0xf3"]
+        flat = {"0xf1", "0xf2", "0xf3"}
+
+        run_a, visits_a, _, subs_a = self._build(cids, inv, decide=decide)
+        run_a(live=True)
+
+        run_b, visits_b, _, subs_b = self._build(cids, inv, decide=decide)
+        monkeypatch.setattr(
+            trader_loop_module, "order_by_exposure",
+            lambda specs, snapshot, cid_of: list(specs))
+        run_b(live=True)
+
+        # The monkeypatch really ran feed order; the normal run really did not.
+        order_a = self._visits_by_rotation(visits_a)
+        order_b = self._visits_by_rotation(visits_b)
+        assert order_b[2] == cids
+        assert order_a[2] != order_b[2]
+
+        def flat_subs(subs):
+            out = {}
+            for rotation, cid, token, side, price, size in subs:
+                if cid in flat:
+                    out.setdefault(rotation, set()).add(
+                        (cid, token, side, price, size))
+            return out
+
+        assert flat_subs(subs_a) == flat_subs(subs_b)
+        # Every flat market is still visited exactly once per rotation.
+        for rotation, order in order_a.items():
+            for cid in flat:
+                assert order.count(cid) == 1
