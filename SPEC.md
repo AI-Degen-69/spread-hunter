@@ -1,44 +1,27 @@
-# SPEC — #586: Unify top-nav pill grammar across header, services dropdown, and DB switcher
+# SPEC — #573: Unify one-sided stop-loss (shadow == live, one mode per run)
 
-Branch: `i586/unify-top-nav-pill-grammar-across-header` | Tier: Small | Type: Design/UI + Code
+## Goal
+A one-sided position (one leg filled, the other never did — a naked directional
+bet) gets exactly ONE stop rule per run, in ONE unit, chosen by a mode selector.
+Shadow and live apply it identically (only the fill source differs).
 
-Follow-up to #504 (shipped as #575, merge `942a8e9`). Operator review of the live header found four inconsistencies; this spec freezes the single grammar that resolves all four.
+## The two modes (parallel, human whole-number units)
+- `stop_loss_trigger_pct` = 10  → sell when the leg is down 10% from entry.
+- `stop_loss_trigger_usd_cents` = 4 → sell when the leg is down 4c ($0.04) from entry.
+- Example: buy at 0.50, willing to lose 5c → Stop-Loss Trigger ($) = 5.
+- `single_buy_stop_mode` selects which is active ("usd" | "pct"); default "usd".
 
-## Goals
+## Acceptance criteria
+- A run activates exactly one stop mode (usd XOR pct) — never both.
+- Shadow and live make the same stop decision for a given run (identical except fills).
+- The dollar trigger is tunable from config/env (iterated in tests/tournaments).
+- The percent trigger runs in isolation (its own run) and still works.
+- `python -m pytest -q tests/test_dual_stop_loss.py tests/test_single_buy_saver.py` passes.
 
-1. **One grammar, three surfaces**:
-   - Every pill/row reads as `label` + `value` + `detail`:
-     - `label`: service or mode name — gray (`--text-muted`), 9px, weight 700, uppercase, letter-spacing 0.05em. Never colored.
-     - `value`: state only (`RUNNING / STOPPED / DOWN / DEGRADED / UNKNOWN`, plus `FINISHED / ENDED` in the switcher) — 11px, weight 700, colored by state: green `#34d399` / gray `var(--text-secondary)` / red `#fca5a5` / amber `#fbbf24` / muted.
-     - `detail`: meta only — muted 9px, `max-width` with ellipsis, never a sentence.
-   - Surfaces: header pills (`#master-status-indicator`, `#db-mode-badge`, `#hud-services-pill`), SERVICES dropdown rows (`renderServicesDropdown`), DB run-switcher rows (`renderRunSwitcher`, `demoSwitcherRow`).
-
-2. **Mode rides on tint, not text**:
-   - `mode-live` (emerald wash) vs `mode-shadow` (amber wash) stays as background/border on the pill shell; the *text* color carries state only.
-   - Resolves the double-meaning amber: `SHADOW STOPPED` reads as label SHADOW (gray) + value STOPPED (gray) on an amber-wash shell; `DB SHADOW` reads as label DB (gray) + value SHADOW-mode on amber-wash shell with filename detail. Shell = where the numbers come from; text = whether it is running.
-   - Applies to header pills, dropdown row pills, and switcher row pills alike.
-
-3. **Fixed meta vocabulary**:
-   - Allowed detail values: `pid <n> · <uptime>`, `N alerts`, `auto-watch`, `stopped`, `rehearsal ended`, filename (`demo_orders.db`), heartbeat age (`· 12s`). Nothing else.
-   - The `live only (shadow uses in-process client)` / `shadow only (live uses venue engine)` explanations move from the meta slot to the row's `title` tooltip. Guardrail keeps `N alerts` / `auto-watch` / `telemetry down`.
-
-4. **Dropdown rows become a grid**:
-   - `pill (fixed 150px) | name (flex, ellipsis) | meta (fixed 140px, right-aligned, ellipsis)`.
-   - Long meta can never squeeze names into truncation or wrap to two lines. Panel width 340px → 380px to fit the fixed columns.
-
-5. **Dot spacing**:
-   - Dropdown row pills go through `renderPillHtml` (or equivalent gap) so dot/label/value spacing matches header pills. Fixes ENGINE dot touching the D.
-
-## Out of Scope
-
-- No change to which services exist (`SERVICE_DEFS`), to state computation (`stateKey`, `processState`, `aggregateServiceState`, worst-state aggregation), or to panel placement/dismissal (`placePanel`, `placeRunSwitcher`, outside-click/Escape).
-- No changes to Python backend (`dashboard/server.py`), JSON/database schemas, or trading execution logic.
-- No modifications to `data/orders.db` (production registry).
-- Do not press the live START button.
-- No framework migrations or external npm runtime dependencies.
-
-## Resolved Open Questions (from issue & code)
-
-1. **DB value wording**: keeps `SHADOW`/`LIVE` (registry mode) as the value; disambiguation comes from the shell tint + filename detail + tooltip, not a rename. Renaming to `REHEARSAL` would break `renderDbMode`/`dbModeVerdict` consumers and the `test_db_badge_renders_grammar` pin.
-2. **Switcher FINISHED/ENDED**: kept as values (they are run states, not service states); they reuse the stopped gray tone, never a new hue.
-3. **Demo row**: adopts the same pill grammar (`DEMO` label + `LOADED`/`AVAILABLE` value) rather than staying a bare button row.
+## Out of scope
+- The user-facing mode-selector config surface (later follow-up; the logic lands here).
+- Changing the dollar level itself (tournament tuning, #569).
+- The grace period, aged-out rescue, and the non-ladder lifecycle fixed floor
+  (`single_leg_lifecycle.transition` `hard_stop_bid = 0.15`) — separate rules,
+  untouched [see the scope question in the plan].
+- Any live trading.

@@ -1677,7 +1677,7 @@ def _ladder525_cfg():
     return SimpleNamespace(
         ladder_mode=True, ladder_exit_sec=60.0,
         single_buy_grace_sec=0.0, pairs_exit_window_sec=900.0,
-        single_buy_max_loss_pct=0.10, single_buy_max_loss_usd=0.045,
+        stop_loss_trigger_pct=10.0, stop_loss_trigger_usd_cents=4.5,
         max_pair_cost=MAX_PAIR_COST, max_order_usd=100.0,
     )
 
@@ -1842,8 +1842,8 @@ def test_shadow_ladder_adverse_drift_records_trigger_bid(tmp_path):
     cfg = MakerConfig(
         enable_pairs_rule=True, pairs_exit_window_sec=900.0,
         max_pair_cost=MAX_PAIR_COST, ladder_mode=True, ladder_exit_sec=60.0,
-        single_buy_grace_sec=45.0, single_buy_max_loss_pct=0.10,
-        single_buy_max_loss_usd=0.045,
+        single_buy_grace_sec=45.0, stop_loss_trigger_pct=10.0,
+        stop_loss_trigger_usd_cents=4.5,
     )
 
     results = lp.manage_single_leg_positions(

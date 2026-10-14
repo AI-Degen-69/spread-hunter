@@ -145,7 +145,7 @@ def build_arm_view(plan: dict, arm: dict, reachable_map: Optional[dict[int, bool
         "dashboard_reachable": dashboard_reachable,
         "db_path": str(db_path),
         "db_exists": db_path.exists(),
-        "stop_loss_usd": env.get("HUNTER_SINGLE_BUY_MAX_LOSS_USD"),
+        "stop_loss_usd_cents": env.get("HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"),
         "dynamic_offset": env.get("HUNTER_DYNAMIC_OFFSET"),
         "offset_min_cents": env.get("HUNTER_DYNAMIC_OFFSET_MIN_CENTS"),
         "offset_max_cents": env.get("HUNTER_DYNAMIC_OFFSET_MAX_CENTS"),

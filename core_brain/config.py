@@ -1032,11 +1032,16 @@ class MakerConfig:
     pairs_complete_gain_cents: float = 3.68
     pairs_exit_cost_cents: float = 3.67
 
-    # --- dual-trigger single-buy stop-loss ---------------------------------
+    # --- single-buy stop-loss (ONE mode per run) ---------------------------
+    # Which stop mode is active for a run: "usd" (Stop-Loss Trigger $) or
+    # "pct" (Stop-Loss Trigger %). Exactly one fires per run; shadow and live
+    # apply the same mode (only the fill source differs).
+    single_buy_stop_mode: str = "usd"
     # Grace period (seconds) to allow the missing maker leg to fill naturally (0.0 default for test baseline; 45.0 in .env for live)
     single_buy_grace_sec: float = 0.0
-    # Max adverse price move from fill price before triggering immediate stop-loss exit
-    single_buy_max_loss_pct: float = 0.10
+    # Stop-Loss Trigger (%): sell the naked leg when it is down this many
+    # PERCENT from entry (10 = 10% drawdown).
+    stop_loss_trigger_pct: float = 10.0
 
     # --- stranded leg exposure resolution (#453) ---------------------------
     # Governs unhedged positions when no working maker hedge is active.
@@ -1046,11 +1051,10 @@ class MakerConfig:
     # Max seconds to wait for a maker quote before forcing stop-loss exit on stranded legs.
     stranded_max_wait_sec: float = 300.0
 
-    # Single-leg stop: max dollar loss per share before the naked leg is
-    # force-exited. THE SYSTEM DEFAULT (promoted 2026-10-12): $0.04 flat (4c).
-    # The legacy $0.045 carried a fractional half-cent that made no sense on a
-    # whole-cent book and caused precision drift in the trigger comparison.
-    single_buy_max_loss_usd: float = 0.04
+    # Stop-Loss Trigger ($): sell the naked leg when it is down this many
+    # CENTS from entry (4 = 4c = $0.04 loss/share). Float allows the
+    # tournament's fractional-cent arms (e.g. 4.5).
+    stop_loss_trigger_usd_cents: float = 4.0
     # Optional sizing ceiling per quote (None for standard mode; set via .env / CLI)
     max_quote_shares: float | None = None
 
@@ -1204,8 +1208,8 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 5,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "single_buy_max_loss_usd": 0.030,
-        "description": "Wider safety buffer in volatile swings (2¢–5¢) with queue hold; stop $0.030",
+        "stop_loss_trigger_usd_cents": 3.0,
+        "description": "Wider safety buffer in volatile swings (2¢–5¢) with queue hold; stop 3.0c",
     },
     "balanced": {
         "dynamic_offset_enabled": True,
@@ -1214,8 +1218,8 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 4,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "single_buy_max_loss_usd": 0.050,
-        "description": "Proportional volatility tracking (2¢–4¢) with queue hold; stop $0.050",
+        "stop_loss_trigger_usd_cents": 5.0,
+        "description": "Proportional volatility tracking (2¢–4¢) with queue hold; stop 5.0c",
     },
     "aggressive": {
         "dynamic_offset_enabled": True,
@@ -1224,8 +1228,8 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 3,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "single_buy_max_loss_usd": 0.065,
-        "description": "Tight queue priority capturing fast fills (2¢–3¢) with queue hold; stop $0.065",
+        "stop_loss_trigger_usd_cents": 6.5,
+        "description": "Tight queue priority capturing fast fills (2¢–3¢) with queue hold; stop 6.5c",
     },
     "prudent": {
         "dynamic_offset_enabled": True,
@@ -1234,8 +1238,8 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 4,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "single_buy_max_loss_usd": 0.038,
-        "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x) with queue hold; stop $0.038",
+        "stop_loss_trigger_usd_cents": 3.8,
+        "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x) with queue hold; stop 3.8c",
     },
     "hybrid": {
         "dynamic_offset_enabled": False,
@@ -1243,7 +1247,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
         "single_buy_grace_sec": 45.0,
-        "single_buy_max_loss_usd": 0.045,
+        "stop_loss_trigger_usd_cents": 4.5,
         "description": "Empirical Winner Hybrid: control edge + Deadband-Wide queue stability (6c deadband, 45s grace)",
     },
     # THE LOOSE BASELINE. The wide, unconstrained benchmark we observe first and
@@ -1265,8 +1269,8 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "apply_widen_gate": False,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "single_buy_max_loss_usd": 0.045,
-        "description": "Loose baseline: raw dynamic offset (0.5x range), 1c floor, 20c ceiling, no widen snap-back, 15c score window; stop $0.045",
+        "stop_loss_trigger_usd_cents": 4.5,
+        "description": "Loose baseline: raw dynamic offset (0.5x range), 1c floor, 20c ceiling, no widen snap-back, 15c score window; stop 4.5c",
     },
 }
 
@@ -1618,18 +1622,33 @@ def load(*, for_display: bool = False) -> MakerConfig:
         if not math.isfinite(val) or val < 0:
             raise ValueError(f"HUNTER_SINGLE_BUY_GRACE_SEC must be finite and non-negative, got: {val}")
         kw["single_buy_grace_sec"] = val
-    sblp = os.environ.get("HUNTER_SINGLE_BUY_MAX_LOSS_PCT")
+    sbsm = os.environ.get("HUNTER_SINGLE_BUY_STOP_MODE")
+    if sbsm and sbsm.strip():
+        mode = sbsm.strip().lower()
+        if mode not in ("usd", "pct"):
+            raise ValueError(f"HUNTER_SINGLE_BUY_STOP_MODE must be 'usd' or 'pct', got: {sbsm}")
+        kw["single_buy_stop_mode"] = mode
+    sblp = os.environ.get("HUNTER_STOP_LOSS_TRIGGER_PCT")
     if sblp and sblp.strip():
         val = float(sblp)
-        if not math.isfinite(val) or not (0.0 <= val <= 1.0):
-            raise ValueError(f"HUNTER_SINGLE_BUY_MAX_LOSS_PCT must be between 0.0 and 1.0, got: {val}")
-        kw["single_buy_max_loss_pct"] = val
-    sblu = os.environ.get("HUNTER_SINGLE_BUY_MAX_LOSS_USD")
+        if not math.isfinite(val) or not (0.0 <= val <= 100.0):
+            raise ValueError(f"HUNTER_STOP_LOSS_TRIGGER_PCT must be between 0.0 and 100.0, got: {val}")
+        kw["stop_loss_trigger_pct"] = val
+    sblu = os.environ.get("HUNTER_STOP_LOSS_TRIGGER_USD_CENTS")
     if sblu and sblu.strip():
         val = float(sblu)
         if not math.isfinite(val) or val < 0:
-            raise ValueError(f"HUNTER_SINGLE_BUY_MAX_LOSS_USD must be finite and non-negative, got: {val}")
-        kw["single_buy_max_loss_usd"] = val
+            raise ValueError(f"HUNTER_STOP_LOSS_TRIGGER_USD_CENTS must be finite and non-negative, got: {val}")
+        kw["stop_loss_trigger_usd_cents"] = val
+    # Deprecation: the pre-#573 env names were renamed AND rescaled (pct is now
+    # percent, usd is now cents). Warn if a stale old var is set so the operator
+    # is not silently running on defaults.
+    for _old_env in ("HUNTER_SINGLE_BUY_MAX_LOSS_PCT", "HUNTER_SINGLE_BUY_MAX_LOSS_USD"):
+        if os.environ.get(_old_env):
+            logging.getLogger(__name__).warning(
+                "%s is deprecated and ignored (#573 renamed it); set "
+                "HUNTER_STOP_LOSS_TRIGGER_PCT (percent) or "
+                "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS (cents) instead.", _old_env)
     aorl = os.environ.get("HUNTER_AGED_OUT_RESCUE_LEAD_SEC")
     if aorl and aorl.strip():
         val = float(aorl)

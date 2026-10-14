@@ -164,7 +164,7 @@ def main():
                 print(f"  FILL? up bid {up_q:.2f} {up_hit} / dn bid {dn_q:.2f} {dn_hit} "
                       f"(window lo {tape['lo']:.2f})")
             # Stop illustration off the UP resting quote.
-            stop = cfg.single_buy_max_loss_usd
+            stop = cfg.stop_loss_trigger_usd_cents / 100.0
             trig = (int(up_q * 100) - int(round(stop * 100))) / 100.0
             print(f"  STOP  if up fills {up_q:.2f}, naked-leg cut at bid <= {trig:.2f} "
                   f"(${stop:.2f})")

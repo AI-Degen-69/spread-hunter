@@ -228,8 +228,8 @@ def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
         env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"] = str(int(preset["dynamic_offset_max_cents"]))
     # HUNTER_REWARD_OFFSET wiring removed 2026-10-12: the override was purged
     # (synthetic sub-cent touch-reach). No preset sets reward_offset any more.
-    if "single_buy_max_loss_usd" in preset:
-        env["HUNTER_SINGLE_BUY_MAX_LOSS_USD"] = str(preset["single_buy_max_loss_usd"])
+    if "stop_loss_trigger_usd_cents" in preset:
+        env["HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"] = str(preset["stop_loss_trigger_usd_cents"])
     # Loose-baseline knobs. These three let an arm quote the raw dynamic
     # offset with no upper clamp and no WIDENED snap-back, without touching
     # the shipped defaults or any other arm.

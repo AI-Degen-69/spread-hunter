@@ -89,13 +89,15 @@ def _ladder_pair(registry: OrderRegistry, when: int) -> None:
     ))
 
 
-def _cfg():
-    return SimpleNamespace(
+def _cfg(**kw):
+    base = dict(
         ladder_mode=True, ladder_exit_sec=60.0,
         single_buy_grace_sec=0.0, pairs_exit_window_sec=900.0,
-        single_buy_max_loss_pct=0.10, single_buy_max_loss_usd=0.045,
+        stop_loss_trigger_pct=10.0, stop_loss_trigger_usd_cents=4.5,
         max_pair_cost=MAX_PAIR_COST, max_order_usd=100.0,
     )
+    base.update(kw)
+    return SimpleNamespace(**base)
 
 
 def test_ladder_exit_close_subtracts_inventory(registry):
@@ -166,3 +168,75 @@ def test_young_ladder_leg_holds_past_single_grace(registry):
                             now_s=NOW / 1000.0 + 10.0)
     assert routed["action"] == "holding_grace"
     assert not any(c.startswith("sell:") for c in venue.calls)
+
+
+def test_usd_mode_holds_when_only_the_pct_trigger_would_fire(registry):
+    """usd mode ignores the pct trigger: a 4c drop on a 0.60 fill is 6.7%
+    (>= a 5% pct stop) but under the 4.5c dollar stop, so usd mode holds.
+    The retired OR'd dual-trigger would have exited here."""
+    _ladder_pair(registry, NOW)
+    venue = FakeVenue(best_ask=0.40, best_bid=0.56)  # loss 0.04
+    cfg = _cfg(single_buy_stop_mode="usd", stop_loss_trigger_pct=5.0,
+               stop_loss_trigger_usd_cents=4.5)
+    routed = lp._route_pair(venue, registry, lp.load_pair(registry, PAIR),
+                            MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
+                            cfg=cfg, last_ms=NOW, now_s=NOW / 1000.0 + 10.0)
+    assert routed["action"] == "holding_grace"
+    assert registry.get_all_closes() == []
+
+
+def test_pct_mode_holds_when_only_the_usd_trigger_would_fire(registry):
+    """pct mode ignores the usd trigger: a 5c drop on a 0.60 fill exceeds the
+    4.5c dollar stop but is only 8.3% (< the 10% pct stop), so pct mode holds."""
+    _ladder_pair(registry, NOW)
+    venue = FakeVenue(best_ask=0.40, best_bid=0.55)  # loss 0.05
+    cfg = _cfg(single_buy_stop_mode="pct", stop_loss_trigger_pct=10.0,
+               stop_loss_trigger_usd_cents=4.5)
+    routed = lp._route_pair(venue, registry, lp.load_pair(registry, PAIR),
+                            MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
+                            cfg=cfg, last_ms=NOW, now_s=NOW / 1000.0 + 10.0)
+    assert routed["action"] == "holding_grace"
+    assert registry.get_all_closes() == []
+
+
+def test_shadow_and_live_make_the_same_stop_decision(registry, tmp_path):
+    """Shadow (live=False) and live (live=True) reach the same adverse-drift
+    decision -- only the order placement differs."""
+    shadow_reg = OrderRegistry(db_path=tmp_path / "shadow_parity.db")
+    _ladder_pair(registry, NOW)
+    _ladder_pair(shadow_reg, NOW)
+    cfg = _cfg(single_buy_stop_mode="usd")
+    live_res = lp._route_pair(FakeVenue(best_ask=0.40, best_bid=0.50),
+                              registry, lp.load_pair(registry, PAIR),
+                              MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
+                              cfg=cfg, last_ms=NOW, now_s=NOW / 1000.0 + 10.0)
+    shadow_res = lp._route_pair(FakeVenue(best_ask=0.40, best_bid=0.50),
+                                shadow_reg, lp.load_pair(shadow_reg, PAIR),
+                                MAX_PAIR_COST, False, {TOK_UP: 10.0, TOK_DN: 0.0},
+                                cfg=cfg, last_ms=NOW, now_s=NOW / 1000.0 + 10.0)
+    # Same stop DECISION (adverse_drift); the action string differs only by
+    # fill method (live "exited" places the order, shadow "would_exit"
+    # simulates) -- that is the excluded fill-method, not a behavioral split.
+    assert live_res["reason"] == shadow_res["reason"] == "adverse_drift"
+
+
+def test_dollar_trigger_is_tunable(registry, tmp_path):
+    """The dollar stop value moves the trigger point: 4.5c exits on a 5c drop,
+    6.0c holds it."""
+    _ladder_pair(registry, NOW)
+    tight = lp._route_pair(FakeVenue(best_ask=0.40, best_bid=0.55),
+                           registry, lp.load_pair(registry, PAIR),
+                           MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
+                           cfg=_cfg(single_buy_stop_mode="usd",
+                                    stop_loss_trigger_usd_cents=4.5),
+                           last_ms=NOW, now_s=NOW / 1000.0 + 10.0)
+    assert tight["action"] == "exited"
+    wide_reg = OrderRegistry(db_path=tmp_path / "wide.db")
+    _ladder_pair(wide_reg, NOW)
+    wide = lp._route_pair(FakeVenue(best_ask=0.40, best_bid=0.55),
+                          wide_reg, lp.load_pair(wide_reg, PAIR),
+                          MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
+                          cfg=_cfg(single_buy_stop_mode="usd",
+                                   stop_loss_trigger_usd_cents=6.0),
+                          last_ms=NOW, now_s=NOW / 1000.0 + 10.0)
+    assert wide["action"] == "holding_grace"

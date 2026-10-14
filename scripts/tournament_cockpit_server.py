@@ -49,10 +49,10 @@ ARMS_CONFIG_484 = [
         "db": "data/i484_tournament_control-1.db",
         "run_id": "i484_tournament_control-1",
         "color": "#00e676",
-        "desc": "Baseline fixed 2c offset, $0.045 single-buy loss stop",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.045 static)",
+        "desc": "Baseline fixed 2c offset, 4.5c single-buy loss stop",
+        "worst_catalyst": "stop_loss_trigger_usd_cents (4.5c static)",
         "worst_catalyst_desc": "Fixed stop dumped 56 trades on temporary 4.5c noise (-$15.16 in rescue/stop haircuts)",
-        "hypothesized_tweak": "single_buy_max_loss_usd -> $0.060",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents -> 6.0c",
         "tweak_rationale": "Widen stop from 4.5c to 6.0c to absorb noise and prevent premature panic exits while keeping adverse limit intact",
     },
     {
@@ -63,10 +63,10 @@ ARMS_CONFIG_484 = [
         "db": "data/i484_tournament_conservative-1.db",
         "run_id": "i484_tournament_conservative-1",
         "color": "#00b0ff",
-        "desc": "Dynamic offset 0.75x (2-5c), tighter $0.030 single-buy stop",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.030 tight)",
+        "desc": "Dynamic offset 0.75x (2-5c), tighter 3.0c single-buy stop",
+        "worst_catalyst": "stop_loss_trigger_usd_cents (3.0c tight)",
         "worst_catalyst_desc": "Hair-trigger 3c stop panic-sold 28 trades via aged_out_rescue (-$15.43, -$0.55/tr)",
-        "hypothesized_tweak": "single_buy_max_loss_usd -> $0.045",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents -> 4.5c",
         "tweak_rationale": "Relax hair-trigger 3c stop to standard 4.5c so normal maker variance does not force emergency bailouts",
     },
     {
@@ -77,7 +77,7 @@ ARMS_CONFIG_484 = [
         "db": "data/i484_tournament_balanced-1.db",
         "run_id": "i484_tournament_balanced-1",
         "color": "#e040fb",
-        "desc": "Dynamic offset 0.50x (2-4c), standard $0.045 single-buy stop",
+        "desc": "Dynamic offset 0.50x (2-4c), standard 4.5c single-buy stop",
         "worst_catalyst": "dynamic_offset_multiplier (0.50x / 2-4c)",
         "worst_catalyst_desc": "No-man's land offset missed tight volume; lowest merge revenue in tournament (+$28.69)",
         "hypothesized_tweak": "dynamic_offset_multiplier -> 0.25x (2-3c)",
@@ -91,10 +91,10 @@ ARMS_CONFIG_484 = [
         "db": "data/i484_tournament_aggressive-1.db",
         "run_id": "i484_tournament_aggressive-1",
         "color": "#ffd600",
-        "desc": "Dynamic offset 0.25x (2-3c), wider $0.060 single-buy stop",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.065 wide)",
+        "desc": "Dynamic offset 0.25x (2-3c), wider 6.0c single-buy stop",
+        "worst_catalyst": "stop_loss_trigger_usd_cents (6.5c wide)",
         "worst_catalyst_desc": "Wide 6.5c leash allowed adverse single buys to bleed deeper (-$0.32 avg loss per stop)",
-        "hypothesized_tweak": "single_buy_max_loss_usd -> $0.045",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents -> 4.5c",
         "tweak_rationale": "Reign in excessive 6.5c stop to standard 4.5c to cap catastrophic single-leg drawdown",
     },
     {
@@ -105,7 +105,7 @@ ARMS_CONFIG_484 = [
         "db": "data/i484_tournament_prudent-1.db",
         "run_id": "i484_tournament_prudent-1",
         "color": "#ff6d00",
-        "desc": "Fixed 3c offset, conservative $0.035 single-buy stop",
+        "desc": "Fixed 3c offset, conservative 3.5c single-buy stop",
         "worst_catalyst": "dynamic_offset_multiplier (0.60x / 2-4c)",
         "worst_catalyst_desc": "Wide resting distance caused asymmetric fills; leg 2 failed to fill before settlement (-$15.28)",
         "hypothesized_tweak": "dynamic_offset_multiplier -> 0.30x (2-3c)",
@@ -120,7 +120,7 @@ ARMS_CONFIG_484 = [
         "db": "data/i485_tournament_stickhold-1.db",
         "run_id": "i485_tournament_stickhold-1",
         "color": "#69f0ae",
-        "desc": "Dynamic offset 0.25x, 45s single grace, $0.065 loss cap",
+        "desc": "Dynamic offset 0.25x, 45s single grace, 6.5c loss cap",
         "worst_catalyst": "requote_hold_queue_shares (0 / no hold)",
         "worst_catalyst_desc": "Zero queue hold surrendered priority on every tick; forced 57 single-buy exits (-$20.56)",
         "hypothesized_tweak": "requote_hold_queue_shares -> 500",
@@ -176,7 +176,7 @@ ARMS_CONFIG_484 = [
         "db": "data/i485_tournament_snapstop-1.db",
         "run_id": "i485_tournament_snapstop-1",
         "color": "#b388ff",
-        "desc": "Fast 30s single buy grace, tight $0.040 loss cap",
+        "desc": "Fast 30s single buy grace, tight 4.0c loss cap",
         "worst_catalyst": "single_buy_grace_sec (0s / zero patience)",
         "worst_catalyst_desc": "0s grace gave leg 2 zero time as maker; rushed taker hedge failed, wiping out -$14.82 at settlement",
         "hypothesized_tweak": "single_buy_grace_sec -> 45s",
@@ -194,10 +194,10 @@ ARMS_CONFIG_487 = [
         "db": "data/i487_tournament_control-2.db",
         "run_id": "i487_tournament_control-2",
         "color": "#00e676",
-        "desc": "Control baseline with adverse noise stop relaxed to $0.060 (absorbs micro-volatility)",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.045 static)",
+        "desc": "Control baseline with adverse noise stop relaxed to 6.0c (absorbs micro-volatility)",
+        "worst_catalyst": "stop_loss_trigger_usd_cents (4.5c static)",
         "worst_catalyst_desc": "Baseline dumped 56 trades prematurely on 4.5c noise (-$15.16 haircut losses)",
-        "hypothesized_tweak": "single_buy_max_loss_usd = 0.060",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents = 6.0",
         "tweak_rationale": "Relaxed stop threshold to 6.0c to absorb noise and prevent premature panic exits while keeping adverse limit intact",
     },
     {
@@ -208,10 +208,10 @@ ARMS_CONFIG_487 = [
         "db": "data/i487_tournament_conservative-2.db",
         "run_id": "i487_tournament_conservative-2",
         "color": "#00b0ff",
-        "desc": "Conservative profile with hair-trigger stop widened from $0.030 to standard $0.045",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.030 tight)",
+        "desc": "Conservative profile with hair-trigger stop widened from 3.0c to standard 4.5c",
+        "worst_catalyst": "stop_loss_trigger_usd_cents (3.0c tight)",
         "worst_catalyst_desc": "Hair-trigger 3c stop panic-sold 28 trades via aged_out_rescue (-$15.43, -$0.55/tr)",
-        "hypothesized_tweak": "single_buy_max_loss_usd = 0.045",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents = 4.5",
         "tweak_rationale": "Relaxed hair-trigger 3c stop to standard 4.5c so normal maker variance does not force emergency bailouts",
     },
     {
@@ -236,10 +236,10 @@ ARMS_CONFIG_487 = [
         "db": "data/i487_tournament_aggressive-2.db",
         "run_id": "i487_tournament_aggressive-2",
         "color": "#ffd600",
-        "desc": "Aggressive tight offset with loose stop reigned in from $0.065 to standard $0.045",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.065 wide)",
+        "desc": "Aggressive tight offset with loose stop reigned in from 6.5c to standard 4.5c",
+        "worst_catalyst": "stop_loss_trigger_usd_cents (6.5c wide)",
         "worst_catalyst_desc": "Wide 6.5c leash allowed adverse single buys to bleed deeper (-$0.32 avg loss per stop)",
-        "hypothesized_tweak": "single_buy_max_loss_usd = 0.045",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents = 4.5",
         "tweak_rationale": "Reigned in excessive 6.5c stop to standard 4.5c to cap catastrophic single-leg drawdown",
     },
     {
@@ -344,7 +344,7 @@ ARMS_CONFIG_492 = [
         "db": "data/i492_tournament-1_control-1.db",
         "run_id": "shadow-492-tournament-1-control-1",
         "color": "#00e676",
-        "desc": "Baseline fixed 2c offset, $0.045 single-buy loss stop",
+        "desc": "Baseline fixed 2c offset, 4.5c single-buy loss stop",
         "worst_catalyst": "",
         "worst_catalyst_desc": "",
         "hypothesized_tweak": "",
@@ -358,7 +358,7 @@ ARMS_CONFIG_492 = [
         "db": "data/i492_tournament-1_conservative-1.db",
         "run_id": "shadow-492-tournament-1-conservative-1",
         "color": "#00b0ff",
-        "desc": "Dynamic offset 0.75x (2-5c), tighter $0.030 single-buy stop",
+        "desc": "Dynamic offset 0.75x (2-5c), tighter 3.0c single-buy stop",
         "worst_catalyst": "",
         "worst_catalyst_desc": "",
         "hypothesized_tweak": "",
@@ -372,7 +372,7 @@ ARMS_CONFIG_492 = [
         "db": "data/i492_tournament-1_balanced-1.db",
         "run_id": "shadow-492-tournament-1-balanced-1",
         "color": "#e040fb",
-        "desc": "Dynamic offset 0.50x (2-4c), standard $0.045 single-buy stop",
+        "desc": "Dynamic offset 0.50x (2-4c), standard 4.5c single-buy stop",
         "worst_catalyst": "",
         "worst_catalyst_desc": "",
         "hypothesized_tweak": "",
@@ -386,7 +386,7 @@ ARMS_CONFIG_492 = [
         "db": "data/i492_tournament-1_aggressive-1.db",
         "run_id": "shadow-492-tournament-1-aggressive-1",
         "color": "#ffd600",
-        "desc": "Dynamic offset 0.25x (2-3c), wider $0.060 single-buy stop",
+        "desc": "Dynamic offset 0.25x (2-3c), wider 6.0c single-buy stop",
         "worst_catalyst": "",
         "worst_catalyst_desc": "",
         "hypothesized_tweak": "",
@@ -400,7 +400,7 @@ ARMS_CONFIG_492 = [
         "db": "data/i492_tournament-1_prudent-1.db",
         "run_id": "shadow-492-tournament-1-prudent-1",
         "color": "#ff6d00",
-        "desc": "Fixed 3c offset, conservative $0.035 single-buy stop",
+        "desc": "Fixed 3c offset, conservative 3.5c single-buy stop",
         "worst_catalyst": "",
         "worst_catalyst_desc": "",
         "hypothesized_tweak": "",
@@ -414,7 +414,7 @@ ARMS_CONFIG_492 = [
         "db": "data/i492_tournament-1_stickhold-1.db",
         "run_id": "shadow-492-tournament-1-stickhold-1",
         "color": "#69f0ae",
-        "desc": "Dynamic offset 0.25x, 45s single grace, $0.065 loss cap",
+        "desc": "Dynamic offset 0.25x, 45s single grace, 6.5c loss cap",
         "worst_catalyst": "",
         "worst_catalyst_desc": "",
         "hypothesized_tweak": "",
@@ -470,7 +470,7 @@ ARMS_CONFIG_492 = [
         "db": "data/i492_tournament-1_snapstop-1.db",
         "run_id": "shadow-492-tournament-1-snapstop-1",
         "color": "#b388ff",
-        "desc": "Fast 30s single buy grace, tight $0.040 loss cap",
+        "desc": "Fast 30s single buy grace, tight 4.0c loss cap",
         "worst_catalyst": "",
         "worst_catalyst_desc": "",
         "hypothesized_tweak": "",
@@ -1387,7 +1387,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         <tr>
           <td><strong>Single-Buy Stop Cap</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>$0.045 (4.5¢)</strong></td>
-          <td><code>HUNTER_SINGLE_BUY_MAX_LOSS_USD</code></td>
+          <td><code>HUNTER_STOP_LOSS_TRIGGER_USD_CENTS</code></td>
           <td><span class="badge badge-green">#484 control</span></td>
           <td>Hard loss stop on orphan legs. If one leg fills and second leg drifts beyond safety cap, exits before adverse drift exceeds 4.5¢. Prevented catastrophic directional tail loss.</td>
         </tr>
@@ -1455,7 +1455,7 @@ HUNTER_TOURNAMENT_PRESET=hybrid
 HUNTER_DYNAMIC_OFFSET=0
 HUNTER_REWARD_OFFSET=0.02
 HUNTER_REQUOTE_DEAD_BAND=0.06
-HUNTER_SINGLE_BUY_MAX_LOSS_USD=0.045
+HUNTER_STOP_LOSS_TRIGGER_USD_CENTS=4.5
 HUNTER_SINGLE_BUY_GRACE_SEC=45
 HUNTER_REQUOTE_HOLD_QUEUE=500
 HUNTER_REQUOTE_HOLD_BELOW=0.08
@@ -1535,7 +1535,7 @@ HUNTER_REQUOTE_HOLD_BELOW=0.08
       <ul>
         <li><strong>Primary Winner: <code>control</code> (Issue #484)</strong> — Highest realized PnL in initial run (+$18.38), highest win rate (65%), controlled drawdown ($7.66), and robust EV per trade.</li>
         <li><strong>Best Execution Mechanic: <code>deadband-wide</code> (Issue #485)</strong> — Outperformed tight deadbands by +$26.65 PnL difference! Why: A 2-cent requote deadband avoids burning queue priority on micro-fluctuations.</li>
-        <li><strong>The Optimal Hybrid Synthesis:</strong> Combine <code>control</code> baseline pricing (fixed 2c offset, $0.045 single-buy loss cap) with <code>deadband-wide</code> (2c requote deadband) for maximum order stability and minimum queue churn.</li>
+        <li><strong>The Optimal Hybrid Synthesis:</strong> Combine <code>control</code> baseline pricing (fixed 2c offset, 4.5c single-buy loss cap) with <code>deadband-wide</code> (2c requote deadband) for maximum order stability and minimum queue churn.</li>
       </ul>
     </div>
     <div class="decision-box" style="border-left: 4px solid var(--red);">

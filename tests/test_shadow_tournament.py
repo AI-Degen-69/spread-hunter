@@ -594,7 +594,7 @@ def test_hybrid_preset_configuration():
     # reward_offset was purged from the preset (HUNTER_REWARD_OFFSET retired).
     assert "reward_offset" not in preset
     assert preset["requote_dead_band"] == 0.060
-    assert preset["single_buy_max_loss_usd"] == 0.045
+    assert preset["stop_loss_trigger_usd_cents"] == 4.5
     assert preset["single_buy_grace_sec"] == 45.0
 
     cfg = apply_tournament_preset(MakerConfig(), "hybrid")
@@ -602,7 +602,7 @@ def test_hybrid_preset_configuration():
     # longer touches it.
     assert cfg.reward_offset == 0.020
     assert cfg.requote_dead_band == 0.060
-    assert cfg.single_buy_max_loss_usd == 0.045
+    assert cfg.stop_loss_trigger_usd_cents == 4.5
     assert cfg.single_buy_grace_sec == 45.0
     assert cfg.dynamic_offset_enabled is False
 

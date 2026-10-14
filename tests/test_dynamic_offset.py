@@ -212,13 +212,13 @@ def test_tournament_presets_distinct_stop_loss_usd():
     # The tournament arms (control purged 2026-10-12) carry distinct stops
     # ordered by fill patience:
     tournament_arms = ["conservative", "balanced", "aggressive", "prudent"]
-    stops = {name: TOURNAMENT_PRESETS[name]["single_buy_max_loss_usd"]
+    stops = {name: TOURNAMENT_PRESETS[name]["stop_loss_trigger_usd_cents"]
              for name in tournament_arms}
     assert set(stops.values()).__len__() == len(stops)  # all distinct
     assert stops["conservative"] < stops["prudent"] < stops["balanced"] < stops["aggressive"]
     # none disable the rule (0 disables) and none exceed a sensible bound
     for name, v in stops.items():
-        assert 0.0 < v < 1.0, name
+        assert 0.0 < v < 100.0, name
 
 
 def test_tournament_preset_stop_flows_to_env_and_config():
@@ -228,16 +228,16 @@ def test_tournament_preset_stop_flows_to_env_and_config():
     from scripts.shadow_tournament import _preset_to_env
 
     for name, expected in [
-        ("conservative", 0.030),
-        ("balanced", 0.050),
-        ("aggressive", 0.065),
+        ("conservative", 3.0),
+        ("balanced", 5.0),
+        ("aggressive", 6.5),
     ]:
         env = _preset_to_env({"name": name, **TOURNAMENT_PRESETS[name]})
-        assert env["HUNTER_SINGLE_BUY_MAX_LOSS_USD"] == str(expected)
+        assert env["HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"] == str(expected)
 
         with mock.patch.dict(os.environ, {"HUNTER_TOURNAMENT_PRESET": name}):
             cfg = load()
-        assert cfg.single_buy_max_loss_usd == expected
+        assert cfg.stop_loss_trigger_usd_cents == expected
 
 
 def test_load_config_with_preset_and_env_overrides():

@@ -1,6 +1,6 @@
-# Todo — #586
+# Todo — #573
 
-- [x] T1: Dropdown rows — pill-helper pills, service labels, fixed meta vocabulary, tooltip move
-- [x] T2: Mode-tint refactor + dropdown grid + meta ellipsis
-- [x] T3: DB switcher rows + demo row adopt pill grammar
-- [x] T4: New consistency suite + full regression
+- [x] T1: config mode selector + parallel trigger vars (`stop_loss_trigger_pct` / `stop_loss_trigger_usd_cents`)
+- [x] T2: `_route_pair` one-mode-per-run, shadow==live
+- [x] T3: tests pin one-mode / shadow==live / tunable / %-isolated
+- [ ] IV: review + PR

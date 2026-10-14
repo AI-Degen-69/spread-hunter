@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Top Bar Cleanup â€” What Changed</title>
+<style>
+  :root{
+    --bg:#0b0f16; --panel:#111826; --panel2:#0e1522; --line:#1f2a3a;
+    --ink:#e6edf6; --muted:#8b9bb4; --faint:#5c6b84;
+    --green:#34d399; --green-bg:rgba(52,211,153,.12); --green-br:rgba(52,211,153,.4);
+    --amber:#fbbf24; --amber-bg:rgba(251,191,36,.12); --amber-br:rgba(251,191,36,.4);
+    --red:#fca5a5; --red-bg:rgba(248,113,113,.12); --red-br:rgba(248,113,113,.4);
+    --gray-bg:rgba(100,116,139,.22); --gray-br:rgba(100,116,139,.4); --gray-tx:#94a3b8;
+    --accent:#38bdf8;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 700px at 70% -10%,#132033 0%,var(--bg) 55%);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.5}
+  .wrap{max-width:1040px;margin:0 auto;padding:40px 22px 70px}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:15px;margin:0 0 28px;max-width:640px}
+  .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--accent);background:rgba(56,189,248,.1);border:1px solid rgba(56,189,248,.3);
+    padding:4px 10px;border-radius:999px;margin-bottom:14px}
+  .switch{display:inline-flex;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px;gap:4px;margin:6px 0 22px}
+  .switch button{border:0;background:transparent;color:var(--muted);font-weight:700;font-size:13px;
+    padding:9px 18px;border-radius:9px;cursor:pointer;transition:.15s}
+  .switch button.on{background:var(--accent);color:#04222e}
+  .switch button:not(.on):hover{color:var(--ink)}
+  .stage{background:var(--panel2);border:1px solid var(--line);border-radius:16px;overflow:hidden;
+    box-shadow:0 20px 50px rgba(0,0,0,.4)}
+  .bar{display:flex;align-items:center;gap:10px;padding:14px 16px;background:#0c1320;border-bottom:1px solid var(--line);flex-wrap:nowrap;overflow-x:auto}
+  .brand{display:flex;align-items:center;gap:8px;flex-shrink:0}
+  .brand .bolt{width:18px;height:18px;fill:#f5c542}
+  .brand b{font-size:13px;letter-spacing:.04em}
+  .brand .wallet{font-size:10px;color:var(--faint);font-family:var(--mono)}
+  .divider{width:1px;height:26px;background:var(--line);flex-shrink:0;margin:0 4px}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:999px;
+    font-size:11px;font-weight:600;white-space:nowrap;border:1px solid transparent;font-family:var(--mono)}
+  .pill .lab{font-size:9px;font-weight:700;letter-spacing:.05em;color:var(--muted)}
+  .pill .val{font-weight:700}
+  .pill .det{font-size:9px;color:var(--muted)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex-shrink:0;display:inline-block}
+  .dot.on{background:var(--green)}
+  .dot.warn{background:var(--amber)}
+  .s-running{background:var(--green-bg);color:var(--green);border-color:var(--green-br)}
+  .s-degraded{background:var(--amber-bg);color:var(--amber);border-color:var(--amber-br)}
+  .s-down{background:var(--red-bg);color:var(--red);border-color:var(--red-br)}
+  .s-stopped{background:var(--gray-bg);color:var(--gray-tx);border-color:var(--gray-br)}
+  .s-unknown{background:var(--gray-bg);color:var(--faint);border-color:var(--gray-br)}
+  .m-shadow{box-shadow:inset 0 0 0 1px var(--amber-br);background:var(--amber-bg)}
+  .m-live{box-shadow:inset 0 0 0 1px var(--green-br);background:var(--green-bg)}
+  .caret{font-size:9px;opacity:.6}
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:8px;font-size:11px;
+    font-weight:800;letter-spacing:.03em;border:1px solid transparent;white-space:nowrap}
+  .btn-start{background:var(--green-bg);color:var(--green);border-color:var(--green-br)}
+  .btn-sec{background:transparent;color:var(--ink);border-color:#33415a}
+  .panel-wrap{position:relative;padding:0 16px 16px}
+  .panel{position:absolute;top:6px;right:16px;width:400px;background:var(--panel);border:1px solid #2a3850;
+    border-radius:10px;box-shadow:0 18px 40px rgba(0,0,0,.55);padding:10px;font-family:var(--mono);z-index:5}
+  .p-head{display:flex;justify-content:space-between;color:var(--muted);font-size:9px;text-transform:uppercase;
+    letter-spacing:.08em;padding:2px 6px 8px;border-bottom:1px solid var(--line);margin-bottom:6px}
+  .row{display:grid;grid-template-columns:150px 1fr 140px;align-items:center;gap:8px;padding:6px;border-radius:5px}
+  .row:hover{background:rgba(255,255,255,.03)}
+  .row .nm{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .meta{color:var(--faint);font-size:10px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .pill{justify-self:start;min-width:0;overflow:hidden}
+  .p-foot{margin-top:6px;padding:6px;border-top:1px solid var(--line);color:var(--faint);font-size:10px}
+  .hint{position:absolute;left:16px;top:10px;color:var(--faint);font-size:11px;font-family:var(--mono)}
+  .fixes{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:26px}
+  .fix{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .fix .n{width:24px;height:24px;border-radius:7px;background:var(--accent);color:#04222e;font-weight:800;
+    display:grid;place-items:center;font-size:12px;margin-bottom:10px}
+  .fix h3{margin:0 0 4px;font-size:15px}
+  .fix p{margin:0;color:var(--muted);font-size:13px}
+  .fix .was{color:var(--red);text-decoration:line-through;opacity:.7}
+  .fix .now{color:var(--green);font-weight:600}
+  .foot{margin-top:30px;color:var(--faint);font-size:12px;display:flex;gap:18px;flex-wrap:wrap}
+  .foot b{color:var(--muted)}
+  @media(max-width:720px){.fixes{grid-template-columns:1fr}.panel{position:static;width:auto;margin:10px 0}}
+</style>
+</head>
+
+<body>
+<div class="wrap">
+  <span class="tag">Top bar cleanup Â· now live</span>
+  <h1>One clean, consistent strip at the top</h1>
+  <p class="sub">The row of status lights above the trading screen used to mix colors, layouts, and wording in ways that were easy to misread. It now follows one simple rule everywhere. Flip the switch to see before and after.</p>
+
+  <div class="switch">
+    <button id="bBefore" class="on" onclick="show('before')">Before</button>
+    <button id="bAfter" onclick="show('after')">After</button>
+  </div>
+
+  <div class="stage">
+    <div class="bar" id="bar"></div>
+    <div class="panel-wrap" id="panelWrap">
+      <span class="hint">â€œServicesâ€ opens the detail list â†“</span>
+      <div class="panel" id="panel"></div>
+    </div>
+  </div>
+
+  <div class="fixes">
+    <div class="fix"><div class="n">1</div><h3>Yellow now means one thing</h3>
+      <p>The same yellow used to mark both <span class="was">â€œweâ€™re in practice modeâ€</span> and <span class="was">â€œsomethingâ€™s wrong.â€</span> Now the <b>outline</b> says the mode and the <b>text color</b> says whether itâ€™s running â€” <span class="now">no more guessing.</span></p></div>
+    <div class="fix"><div class="n">2</div><h3>Long explanations moved out of the way</h3>
+      <p>Sentences used to spill across rows and squish the names. Each row is now a neat 3-column line, and the extra detail appears when you <b>hover</b> â€” <span class="now">tidy, never cut off.</span></p></div>
+    <div class="fix"><div class="n">3</div><h3>Every row reads the same</h3>
+      <p>The â€œpick a data storeâ€ list spoke a different visual language than everything else. It now uses the <span class="now">exact same pill style</span> as the rest.</p></div>
+    <div class="fix"><div class="n">4</div><h3>The blinking dot has room to breathe</h3>
+      <p>On the â€œEngineâ€ light the dot was jammed against the letter. It now sits with a <span class="now">proper gap</span>, matching every other light.</p></div>
+  </div>
+
+  <div class="foot">
+    <span><b>The rule now:</b> name â†’ state â†’ extra detail, same shape everywhere.</span>
+    <span><b>Color only means state:</b> green running Â· grey stopped Â· red down Â· yellow warning.</span>
+  </div>
+</div>
+
+<script>
+function pill(label,value,state,detail,mode,dot){
+  const dc = dot==='on'?'dot on':dot==='warn'?'dot warn':'dot';
+  const d = dot?`<span class="${dc}"></span>`:'';
+  const det = detail?` <span class="det">${detail}</span>`:'';
+  const m = mode?(' '+mode):'';
+  return `<span class="pill s-${state}${m}">${d}<span class="lab">${label}</span> <span class="val">${value}</span>${det}</span>`;
+}
+function btnStart(){return `<span class="btn btn-start">â–¶ START</span>`}
+function btnSec(t){return `<span class="btn btn-sec">${t}</span>`}
+
+const bar = `
+  <div class="brand"><svg class="bolt" viewBox="0 0 24 24"><path d="M13 2 4.5 13.5h5L10 22l8.5-11.5h-5L13 2z"/></svg><div><b>SPREAD HUNTER</b><div class="wallet">0xeE3Bâ€¦1624</div></div></div>
+  <div class="divider"></div>
+  ${pill('SHADOW','STOPPED','stopped','','m-shadow','warn')}
+  ${pill('DB','SHADOW','stopped','Â· demo_orders.db','m-shadow')}
+  <div class="divider"></div>
+  ${pill('SERVICES','STOPPED','stopped','all stopped')}<span class="caret">â–¾</span>
+  <div class="divider"></div>
+  ${btnStart()}${btnSec('RESET')}`;
+
+const rowsData=[
+  {tag:'WATCHDOG',state:'stopped',nm:'Guardrail Risk Watchdog',meta:'0 alerts',title:'Guardrail Risk Watchdog'},
+  {tag:'SCAN',state:'down',nm:'Market Filter',meta:'stopped',title:'Market Filter'},
+  {tag:'ENGINE',state:'down',nm:'Venue Engine & Order Poller',meta:'stopped',title:'Venue Engine & Order Poller â€” live only (shadow uses in-process client)'},
+  {tag:'SHADOW',state:'unknown',nm:'Shadow Rehearsal Quoter',meta:'stopped',title:'Shadow Rehearsal Quoter'},
+];
+function beforeRows(){
+  return rowsData.map(r=>`<div class="row">
+    <span class="pill s-${r.state}"><span class="dot"></span><span class="lab">${r.tag}</span></span>
+    <span class="nm">${r.nm}</span>
+    <span class="meta">${r.tag==='ENGINE'?'live only (shadow uses in-process client)':r.meta}</span>
+  </div>`).join('');
+}
+function afterRows(){
+  const dotmap={down:'warn',stopped:'',unknown:''};
+  return rowsData.map(r=>`<div class="row" title="${r.title}">
+    <span class="pill s-${r.state}"><span class="dot ${dotmap[r.state]||''}"></span> <span class="lab">${r.tag}</span> <span class="val">${r.state.toUpperCase()}</span></span>
+    <span class="nm">${r.nm}</span>
+    <span class="meta">${r.meta}</span>
+  </div>`).join('');
+}
+function render(mode){
+  document.getElementById('bar').innerHTML = bar;
+  const head=`<div class="p-head"><span>Service telemetry</span><span>0 active Â· stopped</span></div>`;
+  const foot=`<div class="p-foot">Full controls on the Live Operations tab</div>`;
+  document.getElementById('panel').innerHTML = head + (mode==='before'?beforeRows():afterRows()) + foot;
+}
+function show(mode){
+  document.getElementById('bBefore').classList.toggle('on',mode==='before');
+  document.getElementById('bAfter').classList.toggle('on',mode==='after');
+  render(mode);
+}
+render('before');
+</script>
+</body>
+</html>
