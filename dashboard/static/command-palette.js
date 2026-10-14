@@ -48,6 +48,60 @@
     return canFocus(fallback) ? fallback : null;
   }
 
+  /* ── Entry building ── */
+
+  function inertEntry(label) {
+    return { id: 'inert:' + label, label: label, group: null, inert: true, disabled: true, run: function () {} };
+  }
+
+  function buildEntries() {
+    var out = [];
+    // Pages come from the DOM, never a hardcoded list: the rail owns which
+    // pages exist (six today). External rail links carry .proto-nav-btn
+    // without data-page — the [data-page] selector keeps them out.
+    var navs = doc.querySelectorAll('.proto-nav-btn[data-page]') || [];
+    Array.prototype.forEach.call(navs, function (btn) {
+      var page = btn.dataset && btn.dataset.page;
+      if (!page) return;
+      out.push({
+        id: 'page:' + page,
+        label: String(btn.textContent || '').trim() || page,
+        group: 'Pages',
+        run: function () {
+          btn.click(); // the real sidebar click: persistence, aria-current, drawer
+          closePalette({ focusEl: pickFocus(btn) });
+        },
+      });
+    });
+    var sync = doc.getElementById('btn-sync');
+    if (sync) {
+      out.push({
+        id: 'action:sync',
+        label: 'SYNC VENUE',
+        group: 'Actions',
+        disabled: !!sync.disabled,
+        run: function () {
+          sync.click();
+          closePalette({ focusEl: pickFocus(sync) });
+        },
+      });
+    }
+    var reset = doc.getElementById('btn-reset');
+    if (reset) {
+      out.push({
+        id: 'action:reset',
+        label: 'RESET',
+        sub: 'Opens the typed confirmation.',
+        group: 'Actions',
+        run: function () {
+          closePalette({ restoreFocus: false }); // the modal takes focus itself
+          reset.click();
+        },
+      });
+    }
+    return out;
+  }
+
   /* ── Entry filtering ── */
 
   function filterEntries(list, query) {
@@ -144,6 +198,7 @@
 
   function refreshList() {
     visible = filterEntries(entries, search ? search.value : '');
+    if (visible.length === 0) visible = [inertEntry('No matches.')];
     renderRows();
   }
 
@@ -177,6 +232,7 @@
     overlay.hidden = false;
     overlay.classList.add('show');
     search.value = '';
+    entries = buildEntries();
     refreshList();
     if (typeof search.focus === 'function') search.focus();
   }
@@ -268,6 +324,7 @@
     initialized = true;
     overlay.addEventListener('click', onOverlayClick);
     doc.addEventListener('focusin', onFocusIn);
+    search.addEventListener('input', refreshList);
     window.addEventListener('keydown', onKeydown, true);
   }
 
@@ -280,6 +337,7 @@
       openPalette: openPalette,
       closePalette: closePalette,
       isPaletteOpen: isPaletteOpen,
+      buildEntries: buildEntries,
       filterEntries: filterEntries,
       moveHighlight: moveHighlight,
       activateHighlighted: activateHighlighted,

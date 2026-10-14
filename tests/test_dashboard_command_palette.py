@@ -178,3 +178,95 @@ def test_closed_palette_is_hidden_and_has_no_options():
     res = _run({}, _open() + [_key("Escape")])
     assert res["open"] is False
     assert res["rows"] == []
+
+
+# ── Entries: pages, actions, filtering, arrow navigation (harness) ──
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_palette_lists_six_pages_and_two_actions():
+    """Every rail page (six today — the list is built from the DOM, never
+    hardcoded) plus the two actions; the external Polymarket link, which
+    shares the .proto-nav-btn class without data-page, is excluded."""
+    res = _run({"withPrototype": True, "externalLink": True}, _open())
+    labels = [r["label"] for r in res["rows"]]
+    assert labels == [
+        "Dashboard", "Data & Markets", "Strategy", "Trades & Positions",
+        "Reports & Analytics", "Data Analysis", "SYNC VENUE", "RESET",
+    ]
+    assert "Polymarket" not in labels
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_typing_filters_entries():
+    """Trimmed, case-insensitive substring match on the label."""
+    res = _run({"withPrototype": True}, _open() + [{"type": "input", "value": "rep"}])
+    assert [r["label"] for r in res["rows"]] == ["Reports & Analytics"]
+    res = _run({"withPrototype": True}, _open() + [{"type": "input", "value": "REP"}])
+    assert [r["label"] for r in res["rows"]] == ["Reports & Analytics"]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_arrows_move_highlight_and_stop_at_ends():
+    """One row carries aria-selected; aria-activedescendant points at it; the
+    highlight stops at the first and last rows."""
+    res = _run({"withPrototype": True}, _open() + [_key("ArrowDown"), _key("ArrowDown")])
+    selected = [i for i, r in enumerate(res["rows"]) if r["selected"]]
+    assert selected == [2]
+    assert res["activeDescendant"] == res["rows"][2]["id"]
+    res = _run({"withPrototype": True}, _open() + [_key("ArrowUp")])
+    assert [i for i, r in enumerate(res["rows"]) if r["selected"]] == [0]
+    res = _run({"withPrototype": True}, _open() + [_key("ArrowDown")] * 9)
+    assert [i for i, r in enumerate(res["rows"]) if r["selected"]] == [7]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_no_matches_row_and_enter_does_nothing():
+    """No match → one inert row; Enter activates nothing."""
+    res = _run({"withPrototype": True}, _open() + [{"type": "input", "value": "zzzz"}, _key("Enter")])
+    assert [r["label"] for r in res["rows"]] == ["No matches."]
+    assert res["rows"][0]["disabled"] is True
+    assert res["syncClicks"] == 0
+    assert res["resetClicks"] == 0
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_page_entry_navigates_like_the_sidebar():
+    """Choosing a page runs the real sidebar click: page visibility,
+    aria-current, and the sh-proto-page persistence all move."""
+    res = _run(
+        {"withPrototype": True, "stored": "strategy"},
+        _open() + [{"type": "input", "value": "reports"}, _key("Enter")],
+    )
+    assert res["visiblePages"] == ["page-reports"]
+    assert res["currentPage"] == "reports"
+    assert res["stored"] == "reports"
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_sync_entry_clicks_btn_sync_once():
+    """SYNC VENUE triggers the existing #btn-sync click — once, and never
+    while the button is disabled."""
+    res = _run({"withPrototype": True}, _open() + [{"type": "input", "value": "sync"}, _key("Enter")])
+    assert res["syncClicks"] == 1
+    res = _run(
+        {"withPrototype": True, "syncDisabled": True},
+        _open() + [{"type": "input", "value": "sync"}, _key("Enter")],
+    )
+    assert res["syncClicks"] == 0
+    rows = _run({"withPrototype": True, "syncDisabled": True}, _open())["rows"]
+    sync_row = [r for r in rows if r["label"] == "SYNC VENUE"][0]
+    assert sync_row["disabled"] is True
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_reset_entry_opens_confirm_without_resetting():
+    """RESET opens the existing typed-confirm modal: one click on the reset
+    button, zero fetch calls, no focus pulled back to the opener."""
+    res = _run({"withPrototype": True, "opener": "opener-btn"},
+               _open() + [{"type": "input", "value": "reset"}, _key("Enter")])
+    assert res["resetClicks"] == 1
+    assert res["fetchCalls"] == 0
+    assert res["open"] is False
+    assert res["active"] != "opener-btn"
+    sub = [r for r in _run({"withPrototype": True}, _open())["rows"] if r["label"] == "RESET"][0]["sub"]
+    assert sub == "Opens the typed confirmation."
