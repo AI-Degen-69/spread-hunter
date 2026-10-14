@@ -8966,8 +8966,10 @@ function renderScanStatePill(scanState, opts) {
     }
   } else {
     // No scan-state payload: the loop's state is unknown, not stopped.
+    // Status only (#602): no ENGINE label — the dropdown row's name column
+    // identifies the service.
     headerPill.className = 'pill state-unknown mono';
-    headerPill.innerHTML = renderPillHtml({ label: 'ENGINE', value: 'UNKNOWN' });
+    headerPill.innerHTML = renderPillHtml({ value: 'UNKNOWN', dotState: 'unknown' });
     headerPill.title = backendStale
       ? 'Quote engine state unknown: current read did not land and the backend contact is lost.'
       : 'Quote engine state unknown: no heartbeat payload';

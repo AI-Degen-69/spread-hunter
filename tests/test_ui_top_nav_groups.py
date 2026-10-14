@@ -272,6 +272,17 @@ def test_engine_and_elsewhere_renders_grammar():
 
 
 @requires_node
+def test_engine_no_payload_is_status_only():
+    # CodeRabbit on #605: the no-payload branch rendered ENGINE UNKNOWN,
+    # duplicating the row's name. Status-only per #602: just UNKNOWN.
+    eng = _harness("topnav")["engineNoPayload"]
+    assert {"pill", "state-unknown", "mono"}.issubset(set(eng["className"].split()))
+    assert 'class="pill-label"' not in eng["stateHtml"]
+    assert 'class="pill-value"' in eng["stateHtml"]
+    assert eng["stateText"] == "UNKNOWN"
+
+
+@requires_node
 def test_db_badge_renders_grammar():
     data = _harness("topnav")["dbProd"]
     assert {"pill", "mode-live", "mono"}.issubset(set(data["className"].split()))

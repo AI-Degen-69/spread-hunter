@@ -596,6 +596,15 @@ function topNavVerdicts() {
     elsewhereText: elsewhereTag.textContent,
   };
 
+  // #602: no scan-state payload renders UNKNOWN, status-only (no ENGINE
+  // label — the dropdown row's name column identifies the service).
+  app.renderScanStatePill(null);
+  const engineNoPayload = {
+    className: enginePill.className,
+    stateHtml: enginePill.innerHTML,
+    stateText: enginePill.textContent,
+  };
+
   app.renderDbMode({ db_mode: 'LIVE', db_is_production: true });
   const dbProd = {
     className: dbBadge.className,
@@ -708,6 +717,7 @@ function topNavVerdicts() {
     scan,
     engineRunning,
     engineStalledElsewhere,
+    engineNoPayload,
     dbProd,
     dbLiveWithName,
     masterRunning,
