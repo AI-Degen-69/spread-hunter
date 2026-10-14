@@ -166,6 +166,27 @@ header {
 }
 .top-meta.is-scrollable.is-end::after { content: none; }
 
+/* ── Top navigation groups (#504) ── */
+.top-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+.top-group > * {
+  flex-shrink: 0;
+}
+.top-group + .top-group {
+  border-left: 1px solid var(--border-subtle);
+  padding-left: 12px;
+  margin-left: 6px;
+}
+.top-group.top-group-controls {
+  border-left: 1px solid var(--border-strong, rgba(255, 255, 255, 0.2));
+  padding-left: 14px;
+  margin-left: 8px;
+}
+
 /* One compact operational language across the header. Every status uses the
    same pill shell and the canonical state classes below; labels add context,
    not a second visual vocabulary. */
@@ -174,6 +195,9 @@ header {
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.05em;
+}
+.pill-value {
+  font-weight: 700;
 }
 .pill-detail {
   color: var(--text-muted);
@@ -229,11 +253,11 @@ header {
 /* ── Tab switcher (DT4: text-only, no emoji) ── */
 .tab-switcher {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  padding: 4px;
+  border-radius: 12px;
+  padding: 6px;
 }
 .tab-btn {
   padding: 8px 16px;
@@ -241,8 +265,10 @@ header {
   background: var(--tab-inactive-bg);
   color: var(--tab-inactive-color);
   font-family: 'IBM Plex Sans', sans-serif;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -252,9 +278,37 @@ header {
 }
 .tab-btn:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
 .tab-btn.active {
-  background: var(--tab-active-bg);
+  background: var(--tab-active-bg, rgba(255, 255, 255, 0.08));
   color: var(--text-primary);
   border-bottom: 2px solid var(--tab-active-border);
+}
+
+/* ── Unified Control Buttons (#504) ── */
+.ctrl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 12px;
+  min-height: var(--touch-min, 44px);
+  min-width: var(--touch-min, 44px);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ctrl-btn-primary {
+  font-weight: 800;
+  padding: 8px 16px;
+}
+
+.ctrl-btn-secondary {
+  font-weight: 700;
+  padding: 8px 14px;
 }
 
 /* ── Sync button (read-only venue refresh) ── */
@@ -385,28 +439,36 @@ header {
   white-space: nowrap;
 }
 .pill.mode-live { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
+.pill.mode-live.state-running { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
+.pill.mode-live.state-stopped { background: rgba(52, 211, 153, 0.08); color: #10b981; border: 1px solid rgba(52, 211, 153, 0.25); }
 .pill.mode-shadow { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
+.pill.mode-shadow.state-running { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
+.pill.mode-shadow.state-stopped { background: rgba(251, 191, 36, 0.08); color: #f59e0b; border: 1px solid rgba(251, 191, 36, 0.25); }
 /* The store this page reads has no run writing it while another one is live.
    Red, not amber: nothing on the page is updating, and the operator has to be
    told that before they read the rest of the dashboard. */
 .pill.mode-stale { background: var(--red-bg); color: #f87171; border: 1px solid var(--red-border); }
 
-/* The run switcher dropdown. Anchored under the DB badge by renderDbMode();
-   the badge is the only opener, and a click anywhere else closes it. */
-.db-run-switcher {
+/* ── Header Panels (#504) ──
+   Both panels are direct children of <header> positioned below their triggers.
+   Moving them out of .top-meta prevents clipping by the horizontal scrollport. */
+.header-panel {
   position: absolute;
   top: calc(100% - 6px);
   left: 0;
   z-index: 60;
-  width: 380px;
   max-width: calc(100vw - 32px);
   padding: 8px;
-  display: block;
   background: var(--bg-card);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   font-size: 11px;
+}
+
+.db-run-switcher {
+  width: 380px;
+  display: block;
 }
 .db-run-head {
   padding: 2px 6px 8px;
@@ -428,7 +490,6 @@ header {
 /* The SERVICES pill dropdown (terminal-redesign pattern): the summary pill in
    the top bar doubles as the trigger; a child of <header>, NOT of .top-meta,
    so the scrollport of .top-meta can never clip the open panel. */
-.services-pill-host { position: relative; display: inline-flex; }
 .services-pill-trigger {
   cursor: pointer;
   font: inherit;
@@ -441,19 +502,8 @@ header {
 .services-caret { font-size: 9px; opacity: 0.7; transition: transform 0.15s; }
 .services-pill-trigger[aria-expanded="true"] .services-caret { transform: rotate(180deg); }
 .services-dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 60;
   width: 340px;
-  max-width: calc(100vw - 32px);
-  padding: 8px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
 }
 .services-dropdown-head {
   display: flex;
@@ -1177,16 +1227,21 @@ td { font-size: 13px; }
   gap: 6px;
   line-height: 1.25;
 }
-.kanban-bucket-hero.raw .hero-critical-val { color: var(--open); }
-.kanban-bucket-hero.identity .hero-critical-val { color: #38bdf8; }
-.kanban-bucket-hero.volume .hero-critical-val { color: #fbbf24; }
-.kanban-bucket-hero.depth .hero-critical-val { color: #a78bfa; }
-.kanban-bucket-hero.spread .hero-critical-val { color: #fb923c; }
-.kanban-bucket-hero.horizon .hero-critical-val { color: #f472b6; }
-.kanban-bucket-hero.passed .hero-critical-val { color: var(--signal); }
+/* Neutral slate/ink chip styling for kanban bucket heroes (#504 Consolidated #479)
+   Retires categorical hues (#a78bfa, #fb923c, #f472b6, #38bdf8, #fbbf24) so
+   green/amber/red/gray remain strictly reserved for live execution status. */
+.kanban-bucket-hero.raw .hero-critical-val,
+.kanban-bucket-hero.identity .hero-critical-val,
+.kanban-bucket-hero.volume .hero-critical-val,
+.kanban-bucket-hero.depth .hero-critical-val,
+.kanban-bucket-hero.spread .hero-critical-val,
+.kanban-bucket-hero.horizon .hero-critical-val,
+.kanban-bucket-hero.passed .hero-critical-val {
+  color: var(--text-primary);
+}
 .kanban-bucket-hero.passed {
-  border-color: rgba(52, 211, 153, 0.3);
-  background: rgba(16, 185, 129, 0.06);
+  border-color: var(--border-subtle);
+  background: rgba(255, 255, 255, 0.04);
 }
 .kanban-header-flow {
   font-family: 'JetBrains Mono', monospace;
@@ -1371,6 +1426,16 @@ td { font-size: 13px; }
 @media (max-width: 900px) {
   header { align-items: flex-start; }
   .top-meta { justify-content: flex-start; flex-wrap: wrap; overflow-x: visible; }
+  .top-group {
+    flex-wrap: wrap;
+    flex-shrink: 1;
+    max-width: 100%;
+  }
+  .top-group + .top-group {
+    border-left: none;
+    padding-left: 0;
+    margin-left: 0;
+  }
 }
 @media (max-width: 768px) {
   body { padding: 12px 12px 60px; }
@@ -2611,19 +2676,13 @@ th[aria-sort] .ot-sort-btn {
   border-radius: 4px;
   border: 1px dashed var(--border-strong);
 }
+.svc-scope-pill.svc-scope-shadow {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+}
 #scan-engine-elsewhere,
 .engine-elsewhere-pill {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  letter-spacing: 0.04em;
   color: var(--text-muted);
-  background: transparent;
-  padding: 2px 6px;
-  margin-top: 2px;
-  margin-left: 4px;
-  display: inline-block;
-  border-radius: 4px;
-  border: 1px dashed var(--border-strong);
 }
 /* Why a trade closed. Provenance, not state: an aged-out rescue and a grace
    expiry are both finished trades, and DESIGN.md reserves every saturated hue

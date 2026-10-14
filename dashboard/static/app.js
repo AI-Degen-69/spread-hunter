@@ -169,6 +169,18 @@ function processState(running, unknown) {
   return running ? 'running' : 'stopped';
 }
 
+/* ── Worst-state-wins aggregation (#504 Consolidated #479) ──
+ * Collapses individual service states to a single summary:
+ * DOWN > DEGRADED > UNKNOWN > RUNNING > STOPPED */
+function aggregateServiceState(states) {
+  if (!states || states.length === 0) return 'unknown';
+  if (states.includes('down')) return 'down';
+  if (states.includes('degraded')) return 'degraded';
+  if (states.includes('unknown')) return 'unknown';
+  if (states.includes('running')) return 'running';
+  return 'stopped';
+}
+
 /* Rotation takes ~45-55s on shadow public CLOB queries; calibrated so a normal
  * rotation stays RUNNING without a false DEGRADED at the 15s default. */
 const SCAN_PILL_THRESHOLDS = { degraded: 60, down: 120 };
@@ -276,17 +288,47 @@ function marketScanState(status, kpi, opts) {
            title: 'The Market Filter is running and its snapshot is fresh.' + heldNote };
 }
 
+/* ── Shared status pill markup helper (#504) ── */
+function renderPillHtml(labelOrOpts, value, detail, dotState) {
+  let label, val, det, dot;
+  if (typeof labelOrOpts === 'object' && labelOrOpts !== null) {
+    label = labelOrOpts.label;
+    val = labelOrOpts.value;
+    det = labelOrOpts.detail;
+    dot = labelOrOpts.dotState || labelOrOpts.dot;
+  } else {
+    label = labelOrOpts;
+    val = value;
+    det = detail;
+    dot = dotState;
+  }
+  let dotHtml = '';
+  if (dot === 'running' || dot === 'active') {
+    dotHtml = '<span class="pulse-dot active"></span>';
+  } else if (dot === 'degraded' || dot === 'down' || dot === 'pulse') {
+    dotHtml = '<span class="pulse-dot"></span>';
+  }
+  let out = dotHtml;
+  if (label) {
+    out += '<span class="pill-label">' + esc(label) + '</span> ';
+  }
+  if (val !== undefined && val !== null && val !== '') {
+    out += '<span class="pill-value">' + esc(val) + '</span>';
+  }
+  if (det !== undefined && det !== null && det !== '') {
+    out += ' <span class="pill-detail">' + esc(det) + '</span>';
+  }
+  return out;
+}
+
 function renderMarketScanPill(status, kpi, opts) {
   const el = document.getElementById('market-scan-pill');
   if (!el) return;
   const v = marketScanState(status, kpi, opts);
-  el.className = 'pill state-' + v.state;
+  el.className = 'pill state-' + v.state + ' mono';
   el.title = v.title;
-  const dot = (v.state === 'running') ? '<span class="pulse-dot active"></span>'
-    : (v.state === 'degraded' || v.state === 'down') ? '<span class="pulse-dot"></span>'
-    : '';
-  const age = (v.ageSec !== null && v.ageSec !== undefined) ? ' · ' + fmtAge(v.ageSec) : '';
-  el.innerHTML = dot + esc(v.label + age);
+  const age = (v.ageSec !== null && v.ageSec !== undefined) ? '· ' + fmtAge(v.ageSec) : '';
+  el.innerHTML = renderPillHtml('SCAN', v.state.toUpperCase(), age, v.state);
 }
 
 /* ── Backend-contact watchdog (DESIGN.md Risk 2) ──
@@ -1441,18 +1483,30 @@ function closeRunSwitcher() {
   if (sw) sw.style.display = 'none';
 }
 
-/* Sit the dropdown under the badge that opened it. The switcher is positioned
- * against <header>, and the badge's x moves with every pill above it (a fresh
- * SCAN age, a longer store name), so the offset is measured rather than
- * hard-coded. */
-function placeRunSwitcher(sw, badge) {
-  const host = (badge.closest && badge.closest('header')) || badge.parentElement;
-  if (!host || typeof badge.getBoundingClientRect !== 'function') return;
-  const b = badge.getBoundingClientRect();
+function closeServicesDropdown() {
+  const panel = document.getElementById('services-dropdown');
+  const trigger = document.getElementById('hud-services-pill');
+  if (panel) panel.style.display = 'none';
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+}
+
+/* Anchors a header panel below its trigger element, clamped within the header.
+ * Clamps the panel's left edge to >= 4px and <= (host.width - panel.width - 4px)
+ * so it never bleeds past the viewport edges. */
+function placePanel(trigger, panel) {
+  if (!trigger || !panel) return;
+  const host = (trigger.closest && trigger.closest('header')) || trigger.parentElement;
+  if (!host || typeof trigger.getBoundingClientRect !== 'function') return;
+  const t = trigger.getBoundingClientRect();
   const h = host.getBoundingClientRect();
-  const width = sw.offsetWidth || 380;
-  const left = b.left - h.left - 40;
-  sw.style.left = Math.round(Math.max(4, Math.min(left, h.width - width - 4))) + 'px';
+  const width = panel.offsetWidth || (panel.id === 'services-dropdown' ? 340 : 380);
+  const left = t.left - h.left;
+  panel.style.left = Math.round(Math.max(4, Math.min(left, h.width - width - 4))) + 'px';
+}
+
+/* Sit the dropdown under the badge that opened it. Delegated to placePanel. */
+function placeRunSwitcher(sw, badge) {
+  placePanel(badge, sw);
 }
 
 function runSwitcherLabel(run) {
@@ -1606,7 +1660,7 @@ function renderDbMode(status) {
 
   if (!mode) {
     el.className = 'pill state-unknown mono';
-    el.textContent = 'DB: UNKNOWN';
+    el.innerHTML = renderPillHtml('DB', 'UNKNOWN');
     el.title = 'Active registry unknown: the status endpoint did not answer.';
     return;
   }
@@ -1614,14 +1668,18 @@ function renderDbMode(status) {
   const path = status.db_path || '';
   if (lastDbIsProduction) {
     el.className = 'pill mode-live mono';
-    el.textContent = 'DB: LIVE';
+    el.innerHTML = renderPillHtml('DB', 'LIVE');
     el.title = `Reading the production registry: ${path}`;
   } else {
     // Not a cosmetic state. Every number on the page is a rehearsal, and START
     // is refused while this shows.
+    const fileName = path.split(/[\\/]/).pop();
+    let detail = fileName ? `· ${fileName}` : '';
+    if (verdict.stale) {
+      detail += (detail ? ' · ' : '') + 'NO LIVE RUN';
+    }
     el.className = 'pill mode-shadow mono' + (verdict.stale ? ' mode-stale' : '');
-    el.textContent = `DB: ${mode} · ${path.split(/[\\/]/).pop()}`
-      + (verdict.stale ? ' · NO LIVE RUN' : '');
+    el.innerHTML = renderPillHtml('DB', mode, detail);
     el.title = `Reading ${path}, not the production registry. `
       + (verdict.stale
         // The whole point: say what IS running, and where, instead of leaving
@@ -1642,6 +1700,7 @@ function renderDbMode(status) {
       const sw = document.getElementById('db-run-switcher');
       if (!sw) return;
       if (sw.style.display === 'block') { closeRunSwitcher(); return; }
+      closeServicesDropdown();
       renderRunSwitcher();
     });
     document.addEventListener('click', (e) => {
@@ -1649,6 +1708,12 @@ function renderDbMode(status) {
       if (!sw || sw.style.display !== 'block') return;
       if (sw.contains(e.target) || (el.contains && el.contains(e.target))) return;
       closeRunSwitcher();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeRunSwitcher();
+        closeServicesDropdown();
+      }
     });
   }
 }
@@ -1675,6 +1740,11 @@ const SERVICE_DEFS = [
     tag: 'SPREAD QUOTER',
     desc: 'Runs the trading loop (dual-sided maker quotes -> merge execution) every 5s across approved markets.',
     liveOnly: true },
+  { key: 'shadow', name: 'Shadow Rehearsal Quoter', cmd: 'python -m core_brain.shadow_run',
+    tag: 'REHEARSAL ENGINE',
+    desc: 'In-process paper arbitrage loop executing zero-cost dual-sided quotes against live book.',
+    shadowOnly: true,
+    readOnly: true },
 ];
 
 /* Global top-nav status: stack pill, ENGINE/WATCHDOG pills, START/STOP
@@ -1691,10 +1761,12 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
   const trigger = document.getElementById('hud-services-pill');
   const panel = document.getElementById('services-dropdown');
   if (!trigger || !panel) return;
+  const isShadow = isShadowMode(status);
 
   const rows = SERVICE_DEFS.map(def => {
-    let state, meta, pid;
+    let state, meta, pid, pillId = '';
     if (def.key === 'guardrail') {
+      pillId = ' id="hud-guardrail-pill"';
       const running = guardrailHealth?.running || false;
       pid = guardrailHealth?.pid;
       const telemetryError = guardrailHealth?.telemetry_error;
@@ -1707,30 +1779,65 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       const alertsTotal = guardrailHealth?.alerts_total || 0;
       meta = telemetryError ? 'telemetry down'
         : (hasAlert ? `${alertsTotal} alert${alertsTotal === 1 ? '' : 's'}` : 'auto-watch');
+    } else if (def.key === 'shadow') {
+      pillId = ' id="hud-shadow-pill"';
+      const sr = status?.shadow_run;
+      const running = Boolean(sr?.running && !sr?.ended);
+      pid = sr?.pid;
+      if (!isShadow) {
+        state = 'stopped';
+        meta = 'shadow only (live uses venue engine)';
+      } else if (running) {
+        state = 'running';
+        const elapsed = sr?.elapsed_sec ? fmtStopwatch(sr.elapsed_sec) : '';
+        meta = pid ? `pid ${pid}${elapsed ? ` · ${elapsed}` : ''}` : (elapsed || 'running');
+      } else {
+        state = 'stopped';
+        meta = sr?.ended ? 'rehearsal ended' : 'stopped';
+      }
     } else {
+      if (def.key === 'filter') pillId = ' id="market-scan-pill"';
+      else if (def.key === 'query') pillId = ' id="scan-state-pill"';
       const svc = status?.services?.[def.key];
       const running = svc?.running || false;
       pid = svc?.pid;
       state = running ? 'running' : 'stopped';
-      meta = def.liveOnly ? 'live only' : (pid ? `pid ${pid}` : 'stopped');
+      const uptime = typeof svc?.uptime_sec === 'number' ? `${Math.round(svc.uptime_sec)}s up` : '';
+      if (def.liveOnly && isShadow) {
+        meta = 'live only (shadow uses in-process client)';
+      } else if (running) {
+        meta = uptime ? (pid ? `pid ${pid} · ${uptime}` : uptime) : (pid ? `pid ${pid}` : 'running');
+      } else {
+        meta = 'stopped';
+      }
     }
     const dot = `<span class="pulse-dot ${state === 'running' ? 'active' : ''}"></span>`;
     const label = state.toUpperCase();
-    const liveCls = state === 'running' ? ' services-dropdown-live' : '';
     return `<div class="services-dropdown-row">
-      <span class="pill state-${state}">${dot}${label}</span>
+      <span class="pill state-${state}"${pillId}>${dot}<span class="pill-label">${esc(label)}</span></span>
       <span class="services-dropdown-name" title="${esc(def.name)}">${esc(def.name)}</span>
       <span class="services-dropdown-meta">${esc(meta)}</span>
     </div>`;
   }).join('');
 
-  const head = `<div class="services-dropdown-head"><span>Service Telemetry</span><span>${activeCount} active</span></div>`;
+  const head = `<div class="services-dropdown-head"><span>Service Telemetry</span><span>${activeCount} active${overallState ? ' · ' + esc(overallState.toUpperCase()) : ''}</span></div>`;
   const foot = `<div class="services-dropdown-foot">Full controls on the Live Operations tab</div>`;
+  const telemetryPillIds = ['hud-guardrail-pill', 'market-scan-pill', 'scan-state-pill', 'hud-shadow-pill'];
+  const existingTelemetryPills = telemetryPillIds
+    .map(id => [id, panel.querySelector ? panel.querySelector(`#${id}`) : null])
+    .filter(([, node]) => node);
   panel.innerHTML = head + rows + foot;
+  for (const [id, node] of existingTelemetryPills) {
+    const repl = panel.querySelector ? panel.querySelector(`#${id}`) : null;
+    if (repl && typeof repl.replaceWith === 'function') repl.replaceWith(node);
+  }
 
   // The pill stays the summary; the caret flips with the open state. The pill
   // classes are owned by renderServiceHeader, so only aria-expanded is set here.
   trigger.setAttribute('aria-expanded', panel.style.display === 'block' ? 'true' : 'false');
+  if (panel.style.display === 'block') {
+    placePanel(trigger, panel);
+  }
 }
 
 /* Open/close the services dropdown. A click anywhere else closes it, and Esc
@@ -1745,21 +1852,34 @@ function bindServicesDropdown() {
   trigger.addEventListener('click', (e) => {
     e.stopPropagation();
     const open = panel.style.display === 'block';
-    panel.style.display = open ? 'none' : 'block';
-    trigger.setAttribute('aria-expanded', open ? 'false' : 'true');
+    if (open) {
+      closeServicesDropdown();
+    } else {
+      closeRunSwitcher();
+      panel.style.display = 'block';
+      trigger.setAttribute('aria-expanded', 'true');
+      placePanel(trigger, panel);
+    }
   });
   document.addEventListener('click', (e) => {
     if (panel.style.display !== 'block') return;
     if (panel.contains(e.target) || trigger.contains(e.target)) return;
-    panel.style.display = 'none';
-    trigger.setAttribute('aria-expanded', 'false');
+    closeServicesDropdown();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && panel.style.display === 'block') {
-      panel.style.display = 'none';
-      trigger.setAttribute('aria-expanded', 'false');
+    if (e.key === 'Escape') {
+      if (panel.style.display === 'block') closeServicesDropdown();
+      closeRunSwitcher();
     }
   });
+}
+
+function getMasterToggleClasses(action, isShadow) {
+  const isStop = action === 'stop';
+  const modeClass = isStop
+    ? (isShadow ? 'btn-stop-run btn-stop-shadow' : 'btn-stop-run')
+    : (isShadow ? 'btn-start-run btn-start-shadow' : 'btn-start-run');
+  return `ctrl-btn ctrl-btn-primary ${modeClass}`;
 }
 
 function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
@@ -1785,56 +1905,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     activeCount = executionServiceKeys.filter(k => Boolean(status.services[k]?.running)).length;
   }
   if (guardrailHealth?.running) activeCount++;
-
-  const servicesState = processState(isRunning, status?.registry_unreadable);
-
-  renderServicesDropdown(status, guardrailHealth, guardrailAlerts, activeCount, servicesState);
-
-  if (masterIndicator) {
-    if (isStopping) {
-      masterIndicator.className = 'pill state-degraded font-display';
-      const stopText = isShadow ? 'SHADOW STOPPING' : 'STACK STOPPING';
-      masterIndicator.textContent = stopText;
-      masterIndicator.setAttribute('aria-label', stopText);
-    } else if (isShadow) {
-      if (isShadowStartPending()) {
-        // A launch was accepted but the run has not reported back yet: say
-        // STARTING, not STOPPED, so the operator can tell booting from dead.
-        masterIndicator.className = 'pill state-degraded font-display';
-        masterIndicator.textContent = 'SHADOW STARTING';
-        masterIndicator.setAttribute('aria-label', 'SHADOW STARTING');
-      } else {
-        const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
-        const shadowState = shadowRunning ? 'running' : 'stopped';
-        const shadowLabel = 'SHADOW ' + shadowState.toUpperCase();
-        masterIndicator.className = `pill state-${shadowState} font-display`;
-        masterIndicator.innerHTML = (shadowState === 'running' ? '<span class="pulse-dot active"></span>' : '')
-          + esc(shadowLabel);
-        masterIndicator.setAttribute('aria-label', shadowLabel);
-      }
-    } else {
-      // Canonical live-state vocabulary (DESIGN.md): the stack pill carries
-      // the blinking liveness dot rather than unicode glyphs. textContent is
-      // kept in step for readers that take the text, not the markup.
-      const stackState = processState(isRunning, status?.registry_unreadable);
-      const stackLabel = 'STACK ' + stackState.toUpperCase();
-      masterIndicator.className = `pill state-${stackState} font-display`;
-      masterIndicator.innerHTML = (stackState === 'running' ? '<span class="pulse-dot active"></span>' : '')
-        + esc(stackLabel);
-      // aria-label, not textContent: overwriting textContent would delete the
-      // pulse-dot span the line above just created.
-      masterIndicator.setAttribute('aria-label', stackLabel);
-    }
-  }
-  // Status pills use the same live-state vocabulary as every service card.
-  const hudServicesState = document.getElementById('hud-services-state');
-  const hudServicesSub = document.getElementById('hud-services-sub');
-  const hudGuardrailState = document.getElementById('hud-guardrail-state');
-  const hudGuardrailSub = document.getElementById('hud-guardrail-sub');
-
-  if (servicesPill) servicesPill.className = `pill state-${servicesState} mono`;
-  if (hudServicesState) hudServicesState.textContent = servicesState.toUpperCase();
-  if (hudServicesSub) hudServicesSub.textContent = isRunning ? `${activeCount} active` : 'all stopped';
+  if (isShadow && status?.shadow_run?.running && !status?.shadow_run?.ended) activeCount++;
 
   const alertsCount = guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
   const guardrailTelemetryError = guardrailHealth?.telemetry_error || guardrailAlerts?.telemetry_error;
@@ -1851,6 +1922,95 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       ? 'degraded'
       : livenessState;
   }
+
+  // Aggregate status across individual services (#504 Consolidated #479)
+  const subStates = [];
+  subStates.push(guardrailState);
+  for (const def of SERVICE_DEFS) {
+    if (def.key === 'guardrail') continue;
+    if (isShadow && def.liveOnly) continue;
+    if (!isShadow && def.shadowOnly) continue;
+    if (def.key === 'shadow') {
+      const srRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
+      if (status?.registry_unreadable) {
+        subStates.push('unknown');
+      } else if (srRunning) {
+        subStates.push('running');
+      } else if (status?.shadow_run?.ended) {
+        subStates.push('stopped');
+      } else {
+        subStates.push('stopped');
+      }
+      continue;
+    }
+    const svc = status?.services?.[def.key];
+    if (status?.registry_unreadable) {
+      subStates.push('unknown');
+    } else if (svc?.running) {
+      subStates.push('running');
+    } else if (isRunning) {
+      subStates.push('down');
+    } else {
+      subStates.push('stopped');
+    }
+  }
+
+  const servicesState = status?.registry_unreadable ? 'unknown' : aggregateServiceState(subStates);
+
+  renderServicesDropdown(status, guardrailHealth, guardrailAlerts, activeCount, servicesState);
+
+  if (masterIndicator) {
+    if (isStopping) {
+      masterIndicator.className = 'pill state-degraded mono' + (isShadow ? ' mode-shadow' : ' mode-live');
+      const stopText = isShadow ? 'SHADOW STOPPING' : 'STACK STOPPING';
+      masterIndicator.innerHTML = renderPillHtml(isShadow ? 'SHADOW' : 'STACK', 'STOPPING', '', 'degraded');
+      masterIndicator.setAttribute('aria-label', stopText);
+    } else if (isShadow) {
+      if (isShadowStartPending()) {
+        // A launch was accepted but the run has not reported back yet: say
+        // STARTING, not STOPPED, so the operator can tell booting from dead.
+        masterIndicator.className = 'pill state-degraded mono mode-shadow';
+        masterIndicator.innerHTML = renderPillHtml('SHADOW', 'STARTING', '', 'degraded');
+        masterIndicator.setAttribute('aria-label', 'SHADOW STARTING');
+      } else {
+        const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
+        const shadowState = shadowRunning ? 'running' : 'stopped';
+        const shadowLabel = 'SHADOW ' + shadowState.toUpperCase();
+        masterIndicator.className = `pill state-${shadowState} mono mode-shadow`;
+        masterIndicator.innerHTML = renderPillHtml('SHADOW', shadowState.toUpperCase(), '', shadowState);
+        masterIndicator.setAttribute('aria-label', shadowLabel);
+      }
+    } else {
+      // Canonical live-state vocabulary (DESIGN.md): the stack pill carries
+      // the blinking liveness dot rather than unicode glyphs. textContent is
+      // kept in step for readers that take the text, not the markup.
+      const stackState = processState(isRunning, status?.registry_unreadable);
+      const stackLabel = 'STACK ' + stackState.toUpperCase();
+      masterIndicator.className = `pill state-${stackState} mono mode-live`;
+      masterIndicator.innerHTML = renderPillHtml('STACK', stackState.toUpperCase(), '', stackState);
+      // aria-label, not textContent: overwriting textContent would delete the
+      // pulse-dot span the line above just created.
+      masterIndicator.setAttribute('aria-label', stackLabel);
+    }
+  }
+  // Status pills use the same live-state vocabulary as every service card.
+  const hudServicesState = document.getElementById('hud-services-state');
+  const hudServicesSub = document.getElementById('hud-services-sub');
+  const hudGuardrailState = document.getElementById('hud-guardrail-state');
+  const hudGuardrailSub = document.getElementById('hud-guardrail-sub');
+
+  if (servicesPill) servicesPill.className = `pill state-${servicesState} mono services-pill-trigger`;
+  if (hudServicesState) hudServicesState.textContent = servicesState.toUpperCase();
+  if (hudServicesSub) {
+    if (servicesState === 'down') {
+      hudServicesSub.textContent = 'fault detected';
+    } else if (servicesState === 'degraded') {
+      hudServicesSub.textContent = `${activeCount} active · degraded`;
+    } else {
+      hudServicesSub.textContent = isRunning ? `${activeCount} active` : 'all stopped';
+    }
+  }
+
   if (guardrailPill) guardrailPill.className = `pill state-${guardrailState} mono`;
   if (hudGuardrailState) hudGuardrailState.textContent = guardrailState.toUpperCase();
   if (hudGuardrailSub) {
@@ -1865,9 +2025,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     if (isStarting || isStopping || shadowPending) {
       // Busy overrides status: no second click while a request is in flight.
       const busyLabel = isStopping ? 'STOPPING…' : 'STARTING…';
-      masterToggle.className = isStopping
-        ? (isShadow ? 'btn-stop-run btn-stop-shadow' : 'btn-stop-run')
-        : (isShadow ? 'btn-start-run btn-start-shadow' : 'btn-start-run');
+      masterToggle.className = getMasterToggleClasses(isStopping ? 'stop' : 'start', isShadow);
       masterToggle.disabled = true;
       masterToggle.setAttribute('aria-busy', 'true');
       masterToggle.style.opacity = '0.6';
@@ -1882,7 +2040,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
         masterToggle.dataset.mode = 'shadow';
         const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
         if (shadowRunning) {
-          masterToggle.className = 'btn-stop-run btn-stop-shadow';
+          masterToggle.className = getMasterToggleClasses('stop', true);
           masterToggle.setAttribute('aria-label', 'Stop shadow rehearsal');
           masterToggle.dataset.action = 'stop';
           masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>STOP SHADOW`;
@@ -1891,7 +2049,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
           masterToggle.style.cursor = 'pointer';
           masterToggle.title = 'Stop shadow rehearsal for this database';
         } else {
-          masterToggle.className = 'btn-start-run btn-start-shadow';
+          masterToggle.className = getMasterToggleClasses('start', true);
           masterToggle.setAttribute('aria-label', 'Start shadow rehearsal');
           masterToggle.dataset.action = 'start';
           masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>START SHADOW`;
@@ -1902,7 +2060,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
         }
       } else if (anyExecutionServiceRunning) {
         masterToggle.dataset.mode = 'live';
-        masterToggle.className = 'btn-stop-run';
+        masterToggle.className = getMasterToggleClasses('stop', false);
         masterToggle.setAttribute('aria-label', 'Stop bot execution stack');
         masterToggle.dataset.action = 'stop';
         masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>STOP RUN`;
@@ -1912,7 +2070,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
         masterToggle.title = '';
       } else {
         masterToggle.dataset.mode = 'live';
-        masterToggle.className = 'btn-start-run';
+        masterToggle.className = getMasterToggleClasses('start', false);
         masterToggle.setAttribute('aria-label', 'Start bot execution stack');
         masterToggle.dataset.action = 'start';
         masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>START RUN`;
@@ -1941,6 +2099,9 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
     if (def.key === 'guardrail') {
       running = guardrailHealth?.running || false;
       pid = guardrailHealth?.pid;
+    } else if (def.key === 'shadow') {
+      running = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
+      pid = status?.shadow_run?.pid;
     } else {
       svc = status?.services?.[def.key];
       running = svc?.running || false;
@@ -1970,12 +2131,21 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
         // looking like a healthy watcher in the operator surface.
         pill = `<span class="pill state-unknown" title="Telemetry unavailable: ${esc(telemetryError.error || 'cycle ring read failed')}">UNKNOWN</span>`;
       }
+    } else if (def.key === 'shadow') {
+      const isShadow = isShadowMode(status);
+      if (!isShadow) {
+        pill = `<span class="pill state-stopped">STOPPED</span>`;
+      } else {
+        pill = statePillHtml(running ? 'running' : 'stopped');
+      }
     } else {
       pill = statePillHtml(running ? 'running' : 'stopped');
     }
 
     let toggleHtml = '';
-    if (!def.readOnly) {
+    if (def.key === 'shadow') {
+      toggleHtml = `<span style="font-size:10px;font-weight:700;color:var(--text-muted);font-family:'JetBrains Mono',monospace">REHEARSAL</span>`;
+    } else if (!def.readOnly) {
       toggleHtml = `<button class="toggle ${running ? 'on' : ''}" data-svc="${def.key}" role="switch" aria-checked="${running}" aria-label="Toggle ${def.name}" tabindex="0"></button>`;
     } else {
       toggleHtml = `<span style="font-size:10px;font-weight:700;color:var(--text-muted);font-family:'JetBrains Mono',monospace">AUTO-WATCH</span>`;
@@ -1988,7 +2158,8 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
             <div>
               <div class="font-display" style="font-size:14px;letter-spacing:0.02em;color:var(--text-primary)">${def.name}</div>
               <span class="param-code-pill" style="margin-top:2px;display:inline-block">${def.tag}</span>${def.liveOnly ? `
-              <span class="svc-scope-pill" title="Live stack only. A shadow rehearsal runs this same code inside python -m core_brain.shadow_run, so this card stays STOPPED during a rehearsal by design.">LIVE ONLY</span>` : ''}
+              <span class="svc-scope-pill" title="Live stack only. A shadow rehearsal runs this same code inside python -m core_brain.shadow_run, so this card stays STOPPED during a rehearsal by design.">LIVE ONLY</span>` : ''}${def.shadowOnly ? `
+              <span class="svc-scope-pill svc-scope-shadow" title="Shadow rehearsal only. Uses an in-process client with a zero-cost fake signer.">SHADOW ONLY</span>` : ''}
             </div>
             <span class="service-pill-slot">${pill}</span>
           </div>
@@ -2150,9 +2321,9 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
       if (isShadow) clearPendingShadowStart();
       const pill = document.getElementById('master-status-indicator');
       if (pill) {
-        pill.className = 'pill state-degraded font-display';
+        pill.className = 'pill state-degraded mono';
+        pill.innerHTML = renderPillHtml(isShadow ? 'SHADOW' : 'STACK', 'STOPPING', '', 'degraded');
         const stopText = isShadow ? 'SHADOW STOPPING' : 'STACK STOPPING';
-        pill.textContent = stopText;
         pill.setAttribute('aria-label', stopText);
       }
     } else {
@@ -2381,6 +2552,7 @@ if (paramGridBtn && paramTableBtn) {
 /* ── Render: Exposure Bar (DT3) ── */
 function renderExposure(kpi) {
   const bar = document.getElementById('exposure-bar');
+  if (!bar) return;
   const text = document.getElementById('exposure-text');
   const fill = document.getElementById('exposure-fill');
 
@@ -7789,6 +7961,14 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
   return `<tr><td colspan="7" style="text-align:center;color:#64748b;padding:20px;font-family:'JetBrains Mono',monospace;">No execution details available.</td></tr>`;
 }
 
+/* The basis of everything a market CLOSED, summed from its settlements. KPI's
+ * `total_cost` is the residual open-inventory cost, so a closed market carries
+ * dust or 0 there and must never be measured by it (#579). Both the Total Cost
+ * column and the column sort read this one number. */
+function closedTradeCostBasis(m) {
+  return (m.settlements || []).reduce((acc, s) => acc + (Number(s.cost_basis) || 0), 0);
+}
+
 function stitchClosedTradesRows(kpi, state, sort) {
   const entries = closedTradesEntries(kpi, state);
   if (!entries.length) {
@@ -7803,7 +7983,7 @@ function stitchClosedTradesRows(kpi, state, sort) {
       case 0: return closeTsOf(m);
       case 1: return String(m.title || m.name || m.slug || '');
       case 2: return marketCategory(m);
-      case 3: return otNum(m.total_cost || 0);
+      case 3: return otNum(closedTradeCostBasis(m));
       case 4: return otNum(m.realized_pnl || 0);
       case 5: return (m.settlements || []).length;
       case 6: return 'FINISHED';
@@ -7844,7 +8024,12 @@ function stitchClosedTradesRows(kpi, state, sort) {
       }
     }
 
-    const totalCost = Number(m.total_cost || 0) || settlements.reduce((acc, s) => acc + (Number(s.cost_basis) || 0), 0);
+    // Total Cost is the basis of what CLOSED in this market, summed from the
+    // settlements — never `m.total_cost`, which KPI keeps as residual
+    // open-inventory cost (fills minus what the closes removed). On a closed
+    // market that residual is dust or 0; reading it here divides realized PnL
+    // by the wrong number and prints impossible percentages (#579).
+    const totalCost = closedTradeCostBasis(m);
     const realizedPnl = Number(m.realized_pnl || 0);
     const pnlPct = totalCost > 0 ? (realizedPnl / totalCost) * 100 : 0;
     const pnlCls = realizedPnl > 0 ? 'pos' : (realizedPnl < 0 ? 'neg' : 'flat');
@@ -8704,7 +8889,7 @@ function renderScanStatePill(scanState, opts) {
       ? hbAge + ageOffsetSec : hbAge;
     const telemetryError = scanState.telemetry_error;
     const state = telemetryError ? 'unknown' : scanPillState(raw, effHbAge, scanState.cadence_sec, scanState.stall_reason);
-    headerPill.className = 'pill state-' + state;
+    headerPill.className = 'pill state-' + state + ' mono';
     const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
       : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
       : '';
@@ -8713,6 +8898,7 @@ function renderScanStatePill(scanState, opts) {
       ? ' · ' + formattedAge : '';
     // Write the verdict into the inner state span only: overwriting the pill's
     // own innerHTML would erase the ENGINE label that names this measurement.
+    stateText.className = 'pill-value';
     stateText.innerHTML = dot + esc(state.toUpperCase() + age);
     const rawSec = (effHbAge !== null && effHbAge !== undefined) ? Math.max(0, Math.round(effHbAge)) : null;
     if (telemetryError) {
@@ -8750,8 +8936,9 @@ function renderScanStatePill(scanState, opts) {
     if (elsewhereTag) {
       if (otherRuns.length > 0 && state !== 'running') {
         elsewhereTag.style.display = '';
-        const countText = otherRuns.length === 1 ? '1 RUN LIVE ON ANOTHER STORE' : `${otherRuns.length} RUNS LIVE ON ANOTHER STORE`;
-        elsewhereTag.textContent = countText;
+        const countLabel = otherRuns.length === 1 ? '1 RUN' : `${otherRuns.length} RUNS`;
+        elsewhereTag.className = 'pill engine-elsewhere-pill mono';
+        elsewhereTag.innerHTML = renderPillHtml(countLabel, 'LIVE ON ANOTHER STORE');
         const details = otherRuns.map(r => `${r.run_id || 'unnamed'} (${r.db_path || 'unknown store'}, ${r.heartbeat_file || 'unknown file'})`).join('; ');
         elsewhereTag.title = `${details} — its numbers are not shown on this page`;
       } else {
@@ -8760,7 +8947,8 @@ function renderScanStatePill(scanState, opts) {
     }
   } else {
     // No scan-state payload: the loop's state is unknown, not stopped.
-    headerPill.className = 'pill state-unknown';
+    headerPill.className = 'pill state-unknown mono';
+    stateText.className = 'pill-value';
     stateText.textContent = 'UNKNOWN';
     headerPill.title = backendStale
       ? 'Quote engine state unknown: current read did not land and the backend contact is lost.'
@@ -9134,11 +9322,26 @@ function initKanbanCarousel() {
   window.addEventListener('resize', updateKanbanNavButtons, { passive: true });
 }
 
+/* Re-anchors any open header panels (services dropdown or DB run switcher)
+ * when the status strip scrolls horizontally or the viewport resizes. */
+function repositionHeaderPanels() {
+  const servicesPanel = document.getElementById('services-dropdown');
+  const servicesTrigger = document.getElementById('hud-services-pill');
+  if (servicesPanel && servicesPanel.style.display === 'block' && servicesTrigger) {
+    placePanel(servicesTrigger, servicesPanel);
+  }
+  const runSwitcher = document.getElementById('db-run-switcher');
+  const badge = document.getElementById('db-mode-badge');
+  if (runSwitcher && runSwitcher.style.display === 'block' && badge) {
+    placePanel(badge, runSwitcher);
+  }
+}
+
 /* ── Issue #278: status-strip scroll cue ── */
 // Adds .is-scrollable to .top-meta exactly when the desktop row overflows
 // (drives the edge cue in styles.css) and .is-end once scrolled fully
 // right so the cue retires at the end. No-ops on mobile, where the strip
-// wraps instead of scrolling.
+// wraps instead of scrolling. Also repositions open header panels (#504).
 function updateTopMetaScrollCue() {
   const strip = document.querySelector('.top-meta');
   if (!strip) return;
@@ -9146,6 +9349,7 @@ function updateTopMetaScrollCue() {
   strip.classList.toggle('is-scrollable', canScroll);
   strip.classList.toggle('is-end',
     canScroll && (strip.scrollLeft + strip.clientWidth >= strip.scrollWidth - 1));
+  repositionHeaderPanels();
 }
 
 function initTopMetaScrollCue() {
@@ -9369,6 +9573,10 @@ if (typeof module !== 'undefined' && module.exports) {
     set distCiLevel(v) { currentCiLevel = v; },
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState, resolveHeldRead,
     engineReasonText, engineProvenanceText, renderScanStatePill,
+    renderMarketScanPill, renderPillHtml, renderDbMode, renderServiceHeader,
+    getMasterToggleClasses,
+    aggregateServiceState,
+    placePanel, closeServicesDropdown, closeRunSwitcher, bindServicesDropdown, repositionHeaderPanels,
     get setBackendContact() { return setBackendContact; },
     get renderBackendContact() { return renderBackendContact; },
     get backendStale() { return backendStale; },

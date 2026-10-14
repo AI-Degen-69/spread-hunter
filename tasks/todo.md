@@ -19,3 +19,11 @@
 - [x] T2: app.js EXIT_METHODS pinned to the leaf (pin test + documented scan exclusion)
 - [x] IV: guard GREEN (15 passed); 63 touched-scripts regression green; PR #584 open (stacked on #581)
 - [ ] V: stack merge — #578 → #581 → #584 (tip #584 green; intermediates red by stack shape, owner override)
+
+# Todo — #504
+
+- [x] T1: Semantic groups, accessibility landmarks & tab-row styling alignment
+- [x] T2: Status pill grammar normalization, escaped helper & fake DOM harness updates
+- [x] T3: Shared button hierarchy (`.ctrl-btn`), touch targets & master-toggle handler
+- [x] T4: Panel anchoring, unified placement (`placePanel`) & click/escape dismissal
+- [x] T5: Live state aggregation & neutral kanban hero palette (Consolidated #479)

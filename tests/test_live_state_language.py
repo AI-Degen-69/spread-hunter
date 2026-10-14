@@ -565,7 +565,7 @@ def test_engine_provenance_text_names_source_run_and_store():
 @requires_node
 def test_engine_pill_renders_running_with_provenance():
     rendered = _harness("enginepill")["rendered"]["shadowFresh"]
-    assert rendered["pillClass"] == "pill state-running"
+    assert set(rendered["pillClass"].split()) >= {"pill", "state-running", "mono"}
     assert "RUNNING · 3s" in rendered["stateHtml"]
     assert "pulse-dot active" in rendered["stateHtml"]
     assert "Quote engine heartbeat: SCANNING (3s ago)" in rendered["pillTitle"]
@@ -576,7 +576,7 @@ def test_engine_pill_renders_running_with_provenance():
 @requires_node
 def test_engine_pill_renders_finished_as_stopped_and_hides_elsewhere_tag():
     rendered = _harness("enginepill")["rendered"]["shadowFinished"]
-    assert rendered["pillClass"] == "pill state-stopped"
+    assert set(rendered["pillClass"].split()) >= {"pill", "state-stopped", "mono"}
     assert "STOPPED" in rendered["stateHtml"]
     assert "pulse-dot" not in rendered["stateHtml"]
     assert "STALLED — run finished cleanly" in rendered["pillTitle"]
@@ -586,7 +586,7 @@ def test_engine_pill_renders_finished_as_stopped_and_hides_elsewhere_tag():
 @requires_node
 def test_engine_pill_renders_down_and_reveals_neutral_elsewhere_tag_when_other_run_live():
     rendered = _harness("enginepill")["rendered"]["shadowDeadOtherLive"]
-    assert rendered["pillClass"] == "pill state-down"
+    assert set(rendered["pillClass"].split()) >= {"pill", "state-down", "mono"}
     assert "DOWN" in rendered["stateHtml"]
     assert "STALLED — process gone (pid 1234 not running)" in rendered["pillTitle"]
     assert rendered["elsewhereDisplay"] == ""
@@ -598,7 +598,9 @@ def test_engine_pill_renders_down_and_reveals_neutral_elsewhere_tag_when_other_r
 def test_the_served_page_carries_the_engine_elsewhere_tag():
     html = (_STATIC / "index.html").read_text(encoding="utf-8")
     assert 'id="scan-engine-elsewhere"' in html
-    assert 'class="engine-elsewhere-pill mono"' in html
+    tag = html.split('id="scan-engine-elsewhere"', 1)[0].rsplit("<span", 1)[-1] + html.split('id="scan-engine-elsewhere"', 1)[1].split(">", 1)[0]
+    classes = set(tag.split('class="', 1)[1].split('"', 1)[0].split())
+    assert {"pill", "engine-elsewhere-pill", "mono"}.issubset(classes)
 
 
 # ── a failed read holds the last verdict instead of collapsing it (#348) ───
@@ -628,9 +630,9 @@ def test_a_pill_that_never_read_and_a_lost_backend_hold_nothing():
 @requires_node
 def test_a_failed_engine_read_keeps_its_verdict_and_ages():
     v = _harness("enginehold")
-    assert v["fresh"]["pillClass"] == "pill state-running"
+    assert set(v["fresh"]["pillClass"].split()) >= {"pill", "state-running", "mono"}
     # The held pill is not gray: it keeps the verdict and its age advances.
-    assert v["held"]["pillClass"] == "pill state-running"
+    assert set(v["held"]["pillClass"].split()) >= {"pill", "state-running", "mono"}
     assert "RUNNING · 11s" in v["held"]["stateHtml"]
     assert "did not land" in v["held"]["pillTitle"]
     assert "SCANNING" in v["held"]["pillTitle"]
@@ -639,13 +641,13 @@ def test_a_failed_engine_read_keeps_its_verdict_and_ages():
 @requires_node
 def test_a_held_engine_verdict_still_ages_out_through_the_ramp():
     v = _harness("enginehold")
-    assert v["heldPastThreshold"]["pillClass"] == "pill state-down"
+    assert set(v["heldPastThreshold"]["pillClass"].split()) >= {"pill", "state-down", "mono"}
 
 
 @requires_node
 def test_an_engine_that_never_read_is_unknown_not_held():
     v = _harness("enginehold")["neverRead"]
-    assert v["pillClass"] == "pill state-unknown"
+    assert set(v["pillClass"].split()) >= {"pill", "state-unknown", "mono"}
     assert v["stateHtml"] == "UNKNOWN"
 
 
