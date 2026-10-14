@@ -2,6 +2,8 @@
 statistical_trade_audit.py
 סקריפט לניתוח סטטיסטי מותאם למבנה מסד הנתונים של הבוט.
 שואב נתונים מהטבלאות: closes, single_leg_lifecycle, shadow_merge_legs.
+שיעור המיזוג נספר משדה method של רשומת הסגירה (closes.method); שורות
+shadow_merge_legs הן מטמון פר-רגל לעלות, לא סגירות, ואינן נספרות כשיעור.
 """
 
 import sqlite3
@@ -15,6 +17,13 @@ Z_CRITICAL: Dict[str, float] = {
     "98%": 2.32635,
     "99%": 2.57583,
 }
+
+# Close methods that mean the pair was merged back into $1.00 of USDC.
+# Pinned copy of `core_brain/registry_state.py:41 MERGE_CLOSE_METHODS` (kept
+# local, not imported: `python scripts/...` puts `scripts/` first on the
+# import path, so a `core_brain` import may fail). The pin is enforced by
+# `tests/test_statistical_trade_audit.py::test_merge_methods_pinned_to_registry`.
+MERGE_CLOSE_METHODS = ("merge", "shadow_merge")
 
 def calculate_mean_and_std(values: List[float]) -> Tuple[float, float]:
     """מחשב ממוצע וסטיית תקן מדגמית."""
@@ -111,7 +120,6 @@ def run_analysis(db_path: str):
     pnl_values: List[float] = []
     holding_times: List[float] = []
     stop_loss_count = 0
-    merge_count = 0
 
     for r in closes:
         # 1. חילוץ PnL
@@ -124,8 +132,6 @@ def run_analysis(db_path: str):
         reason = str(r.get("exit_reason", "") or r.get("close_reason", "") or r.get("reason", "")).lower()
         if "stop" in reason:
             stop_loss_count += 1
-        if "merge" in reason or "paired" in reason:
-            merge_count += 1
 
         # 3. חילוץ זמן החזקה
         hold = r.get("hold_duration_sec") or r.get("duration_sec") or r.get("duration")
@@ -137,9 +143,12 @@ def run_analysis(db_path: str):
             except (ValueError, TypeError):
                 pass
 
-    # במקרה שבו נתוני המיזוג נשמרו בטבלה נפרדת
-    if merge_count == 0 and len(merge_legs) > 0:
-        merge_count = len(merge_legs)
+    # שיעור המיזוג נספר מרשומת הסגירה עצמה (שדה method), שורה אחת = סגירה
+    # אחת לכל היותר. בלי עמודת method אין מקור — שורות shadow_merge_legs
+    # הן מטמון פר-רגל, לא סגירות, ואינן מחליפות את הספירה.
+    merge_count: Optional[int] = None
+    if closes and "method" in closes[0]:
+        merge_count = sum(1 for r in closes if r.get("method") in MERGE_CLOSE_METHODS)
 
     # חישוב מדדי PnL
     mean_pnl, std_pnl = calculate_mean_and_std(pnl_values)
@@ -161,7 +170,10 @@ def run_analysis(db_path: str):
     print("=" * 75)
     _print_proportion_block("Stop Loss Exits", stop_loss_count, total_closed)
     print()
-    _print_proportion_block("Merged Positions", merge_count, total_closed)
+    if merge_count is None:
+        print("Merged Positions: merge rate unavailable from this database (closes has no method column)")
+    else:
+        _print_proportion_block("Merged Positions", merge_count, total_closed)
 
     if holding_times:
         mean_hold, std_hold = calculate_mean_and_std(holding_times)
