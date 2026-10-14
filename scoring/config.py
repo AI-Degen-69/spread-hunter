@@ -250,14 +250,12 @@ class MakerConfig:
     gate_state: str = "NORMAL"
 
     # --- profit taking ----------------------------------------------------
-    # Nothing in this strategy ever closed a position: every fill rode to
-    # settlement in 2027, so a filled pair immobilised capital that had been
-    # earning daily rent. Selling a pair that has appreciated converts locked
-    # capital back into working capital.
-    #
-    # Selling means crossing the spread, so BOTH legs pay the taker fee. The
-    # move therefore has to clear two fees before it clears anything else.
-    profit_take_fee_per_share: float = 0.017
+    # RETIRED 2026-10-14 (operator directive): the profit-take sale was never
+    # a real path -- no close is ever booked by selling a pair (the #520
+    # writers table records `sell` as a dataclass default with no writer, and
+    # the #569 observation run booked 12 closes with zero sales). Both
+    # profit_take_* fields are deleted; do not reintroduce them without a
+    # writer to match.
 
     # MERGE (U2). There is no `merge_gas_usd` here, and that is the point.
     #
@@ -542,11 +540,6 @@ class MakerConfig:
     # Re-rank cadence. runtime/markets.json was frozen from 2026-07-29 01:39 while
     # the fleet ran against it for a day and a half.
     rerank_interval_sec: float = 600.0
-    # Required profit per share AFTER both fees. Set at roughly one fee's
-    # width again, so a close is only taken on a move clearly larger than the
-    # cost of taking it -- at 1c the threshold sits inside the noise of a
-    # one-tick book flicker and would close positions on nothing.
-    profit_take_net_threshold: float = 0.020
 
     # OPPORTUNITY COST. The threshold above prices a close against zero -- it
     # asks "is closing better than holding?", never "is this dollar better
