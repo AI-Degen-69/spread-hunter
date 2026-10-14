@@ -14,6 +14,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Callable
 
+from core_brain.close_methods import MERGE_METHODS, RESCUE_METHODS
 from core_brain.order_registry import get_connection
 from core_brain.market_lifecycle import resolved_condition_ids
 
@@ -736,9 +737,9 @@ def _paired_inventory(
             return None, f"close {row['id']} has invalid shares"
         if not math.isfinite(shares) or shares <= 0:
             return None, f"close {row['id']} has invalid shares"
-        if method in {"shadow_merge", "merge"}:
+        if method in MERGE_METHODS:
             legs = ("UP", "DOWN")
-        elif method in {"single_buy_exit", "naked_exit", "ladder_exit"}:
+        elif method in RESCUE_METHODS:
             if row["up_price"] is not None and row["dn_price"] is None:
                 legs = ("UP",)
             elif row["dn_price"] is not None and row["up_price"] is None:

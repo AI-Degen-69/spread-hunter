@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Literal, Optional
 
+from core_brain.close_methods import MERGE_METHODS, RESCUE_METHODS
 from core_brain.runtime_paths import resolve_runtime_file, runtime_file
 
 LIVE_ROOT = Path(__file__).resolve().parent.parent
@@ -2424,7 +2425,7 @@ def inventory_from_registry(
             sh = float(cr["shares"] or 0.0)
             up_c = cr["up_cost_removed"]
             dn_c = cr["dn_cost_removed"]
-            if method in ("single_buy_exit", "naked_exit", "ladder_exit"):
+            if method in RESCUE_METHODS:
                 if cr["up_price"] is not None:
                     inv.up_shares = max(0.0, inv.up_shares - sh)
                     if up_c is not None:
@@ -2445,7 +2446,7 @@ def inventory_from_registry(
             # can contain it. Relabelling a rehearsal close as `merge` instead
             # would make it indistinguishable from a venue one, which is the
             # row-level labelling invariant this repo keeps.
-            if method in ("merge", "shadow_merge"):
+            if method in MERGE_METHODS:
                 inv.up_shares = max(0.0, inv.up_shares - sh)
                 inv.down_shares = max(0.0, inv.down_shares - sh)
                 if up_c is not None:
