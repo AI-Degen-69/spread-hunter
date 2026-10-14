@@ -79,7 +79,7 @@ checks alone never count).
   Helper: `test-driven-development`. Depends on: T1. Verify: goldens regenerated once
   with per-stat t-deltas logged; non-CI values byte-identical; focused suites incl.
   `test_shadow_run` boundary green.
-- [ ] T3 (L) [Design/UI] NEW "Data Analysis" tab (tab-2 frozen, operator override).
+- [x] T3 (L) [Design/UI] NEW "Data Analysis" tab (tab-2 frozen, operator override).
   Legacy tab-2 renderers/markup stay byte-identical; all work lands in new
   `dashboard/static/data_analysis.js` + a tab-4 panel. Contents, copied or redesigned
   from the legacy components: (a) registry `{id, producer, block, view, unit, aliasOf?}`

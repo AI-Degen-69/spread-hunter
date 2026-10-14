@@ -2,7 +2,7 @@
 
 - [x] T1: Goldens freeze today's values pre-switch; ledger test RED (no prod change)
 - [x] T2: Shared math + Student's-t switch in `core_brain`; deltas logged (no DOM change)
-- [ ] T3: NEW Data Analysis tab on the registry (charts, unit audit, card restyle); ledger GREEN
+- [x] T3: NEW Data Analysis tab on the registry (charts, unit audit, card restyle); ledger GREEN
 - [ ] T4: Findings doc (t-deltas + disagreements) + report-only registry; coverage test green
 - [ ] Focused suites green: `test_statistical_analytics`, `test_account_kpi`,
   `test_analytics_api`, `test_analytics_surface_mount`, `test_statistics_report`
