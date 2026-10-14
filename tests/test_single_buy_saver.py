@@ -1693,3 +1693,56 @@ def test_ladder_timer_exit_without_decision_bid_keeps_trigger_null(
     assert len(closes) == 1
     assert closes[0]["trigger_bid"] is None
     assert closes[0]["fresh_bid"] == pytest.approx(0.56)
+
+
+def test_shadow_ladder_adverse_drift_records_trigger_bid(tmp_path):
+    """Forced adverse drift through the shadow client books the trigger bid."""
+    from core_brain.config import MakerConfig
+    from core_brain.order_registry import init_db
+    from core_brain.shadow_exec import (
+        ShadowExecutionClient, ensure_shadow_tables, write_queue_mark,
+    )
+
+    db = tmp_path / "shadow525.db"
+    init_db(db)
+    reg = OrderRegistry(db_path=db)
+    ensure_shadow_tables(db)
+
+    _ladder525_pair(reg, LADDER525_NOW)
+    # Non-hard-stop shadow sells fill against the queue-mark snapshot.
+    write_queue_mark(
+        db, ts=LADDER525_NOW / 1000.0, condition_id=LADDER525_COND,
+        market_slug="fake-market", token_id=TOK_UP, price=0.51,
+        level_size=10.0, traded=0.0, cancel_decay=None, queue_minutes=None,
+        run_id=reg._run_id(), best_bid=0.49, best_bid_size=20.0,
+    )
+
+    heavy_reads = {"n": 0}
+
+    def book_fn(host, token_id):
+        if token_id == TOK_DN:
+            return {"bids": {0.38: 100.0}, "asks": {0.40: 100.0}}
+        heavy_reads["n"] += 1
+        bid = 0.50 if heavy_reads["n"] == 1 else 0.49
+        return {"bids": {bid: 100.0}, "asks": {0.65: 100.0}}
+
+    client = ShadowExecutionClient(reg, db, book_fn=book_fn)
+    cfg = MakerConfig(
+        enable_pairs_rule=True, pairs_exit_window_sec=900.0,
+        max_pair_cost=MAX_PAIR_COST, ladder_mode=True, ladder_exit_sec=60.0,
+        single_buy_grace_sec=45.0, single_buy_max_loss_pct=0.10,
+        single_buy_max_loss_usd=0.045,
+    )
+
+    results = lp.manage_single_leg_positions(
+        client, reg, cfg, live=True,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+        now=LADDER525_NOW / 1000.0 + 10.0,
+    )
+
+    assert any(r.get("reason") == "adverse_drift" for r in results)
+    closes = [c for c in reg.get_all_closes()
+              if c.get("method") == "ladder_exit"]
+    assert len(closes) == 1
+    assert closes[0]["reason"] == "adverse_drift"
+    assert closes[0]["trigger_bid"] == pytest.approx(0.50)
