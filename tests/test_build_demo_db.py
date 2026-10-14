@@ -7,7 +7,12 @@ path, and the builder's safety refusals hold.
 """
 from __future__ import annotations
 
+import json
+import re
+import shutil
 import sqlite3
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -177,3 +182,42 @@ def test_the_builder_refuses_to_overwrite_without_force(tmp_path):
     build(out)
     with pytest.raises(DemoRefused):
         build(out, force=False)
+
+
+# --- outcome-probability arm on the demo store (#538) -----------------------
+
+_HARNESS = Path(__file__).resolve().parent / "js" / "position_dist_harness.cjs"
+
+requires_node = pytest.mark.skipif(shutil.which("node") is None,
+                                   reason="node is not installed on this host")
+
+
+@requires_node
+def test_the_demo_store_probability_arm_draws_measured_fills(tmp_path):
+    """The demo's fixed fill prices must be what the chart arm draws (#538).
+
+    No test verified the expected demo probability arm, so the arm could be
+    drawing anything on the fixture the operator checks by eye. Rendered bar
+    counts must conserve the fill sample, and the occupied bins must match
+    the demo's fixed prices around 43%–52%.
+    """
+    build(tmp_path / "demo.db")
+    payload = kpi.report(db_path=str(tmp_path / "demo.db"), run_id="all")
+    bell = payload["statistical_analytics"]["probability_bell"]
+    assert bell["samples_count"] >= 1
+
+    out = subprocess.run(
+        [shutil.which("node"), str(_HARNESS),
+         json.dumps({"statistical_analytics": payload["statistical_analytics"],
+                     "metric": "outcome_prob"})],
+        capture_output=True, text=True, check=True, encoding="utf-8")
+    rendered = json.loads(out.stdout)
+
+    bar_counts = [int(m) for m in re.findall(r": (\d+) fills", rendered["svgText"])]
+    assert sum(bar_counts) == bell["samples_count"]
+    occupied = [b for b in bell["bins"] if b["empirical_count"]]
+    assert occupied
+    # The demo's balanced-pair fills sit at fixed prices around 43%–52%;
+    # rescue and single-leg scenarios fill elsewhere, so the band must be
+    # occupied without being the whole occupied set.
+    assert any(0.40 <= b["bin"] <= 0.55 for b in occupied), occupied

@@ -3104,7 +3104,7 @@ function renderPositionDistributionChart(stats) {
   const positions = pr.positions || [];
   const posCount = positions.length;
 
-  if (posCount === 0) {
+  if (posCount === 0 && currentDistMetric !== 'outcome_prob') {
     if (container) {
       container.innerHTML = `<div class="empty-state" style="padding:40px;text-align:center"><div class="empty-state-title" style="color:var(--text-muted)">No closed positions recorded</div><div class="empty-state-msg" style="font-size:12px;color:var(--text-muted);margin-top:4px">Trade history is clean · Start run to accumulate execution data</div></div>`;
     }
@@ -3157,6 +3157,13 @@ function renderPositionDistributionChart(stats) {
   let delta = 1.0;
   let unit = '';
   let formatVal = (v) => v.toFixed(2);
+  // The outcome-probability arm draws one bar per measured bell bin on the
+  // backend's own bin edges, so it carries its own bars and axis instead of
+  // the shared 14-bucket rebinning below.
+  let directBins = false;
+  let bellBins = [];
+  let bellWidth = 0;
+  let bellSamples = 0;
 
   if (currentDistMetric === 'pnl_pct') {
     rawValues = positions.map(p => p.pnl_pct).filter(v => v != null);
@@ -3206,19 +3213,25 @@ function renderPositionDistributionChart(stats) {
     rawValues = positions.map(p => p.spread_cost).filter(v => v != null);
   } else { // outcome_prob
     // Read from the measured bell rather than a fixed N(50, 18^2) that
-    // described no run in particular.
+    // described no run in particular. Every drawn number comes from this
+    // payload -- the bars used to be overwritten by a row's position in the
+    // list, and the axis by a fixed 45-point half-width.
     const pb = stats?.probability_bell || {};
     mean = pb.mean != null ? pb.mean * 100 : null;
     stdev = pb.stdev != null ? pb.stdev * 100 : null;
     sem = (stdev != null && pb.samples_count)
       ? stdev / Math.sqrt(pb.samples_count) : null;
     ciCritical = ciMultiplier(pb.ci_critical, currentCiLevel);
-    rawValues = (pb.bins || []).flatMap(
-      b => Array(b.empirical_count || 0).fill(b.bin * 100));
-    delta = 45.0;
+    directBins = true;
+    bellSamples = pb.samples_count || 0;
+    bellBins = (pb.bins || []).filter(b => (b.empirical_count || 0) > 0);
+    // Bin width in percent, derived from adjacent backend bin centres
+    // (the backend bins 0-1 into 18) rather than hardcoded here.
+    const allBins = pb.bins || [];
+    bellWidth = allBins.length >= 2
+      ? (allBins[1].bin - allBins[0].bin) * 100 : 100 / 18;
     unit = '%';
     formatVal = (v) => `${v.toFixed(1)}%`;
-    rawValues = positions.map((_, i) => ((i * 17 + 23) % 70 + 15));
   }
 
   // ONE SOURCE OF DISTRIBUTION FOR EVERY ARM (#535).
@@ -3234,16 +3247,34 @@ function renderPositionDistributionChart(stats) {
     ciUpper = mean + ciCritical * sem;
   }
 
-  // Anchor mean symmetrically to the dead center: [mean - delta, mean + delta]
-  const minDomain = mean - delta;
-  const maxDomain = mean + delta;
-  const span = 2 * delta;
+  // Anchor mean symmetrically to the dead center: [mean - delta, mean + delta].
+  // The probability arm's domain instead fits the occupied measured bins, with
+  // one bin of padding each side, widened for the interval, snapped to bin
+  // edges and clamped to the range a probability can take.
+  let minDomain;
+  let maxDomain;
+  let span;
+  if (directBins) {
+    const lo = Math.min(...bellBins.map(b => b.bin * 100)) - bellWidth / 2;
+    const hi = Math.max(...bellBins.map(b => b.bin * 100)) + bellWidth / 2;
+    minDomain = Math.max(0, Math.floor(lo / bellWidth) * bellWidth - bellWidth);
+    maxDomain = Math.min(100, Math.ceil(hi / bellWidth) * bellWidth + bellWidth);
+    if (bandMeasured) {
+      minDomain = Math.max(0, Math.floor(Math.min(minDomain, ciLower) / bellWidth) * bellWidth);
+      maxDomain = Math.min(100, Math.ceil(Math.max(maxDomain, ciUpper) / bellWidth) * bellWidth);
+    }
+    span = maxDomain - minDomain;
+  } else {
+    minDomain = mean - delta;
+    maxDomain = mean + delta;
+    span = 2 * delta;
+  }
 
   // Every value for this metric may be unmeasured even when positions exist --
   // closes with no cost basis carry no percentage, for instance. Deriving axis
   // bounds from an empty set yields Infinity, so the chart says so instead of
   // drawing geometry from it.
-  if (!rawValues.length || mean == null || !isFinite(mean)) {
+  if ((!directBins && !rawValues.length) || mean == null || !isFinite(mean)) {
     if (container) {
       container.innerHTML = `<div class="empty-state" style="padding:40px;text-align:center"><div class="empty-state-title" style="color:var(--text-muted)">Metric unmeasured</div><div class="empty-state-msg" style="font-size:12px;color:var(--text-muted);margin-top:4px">${posCount} closed position${posCount === 1 ? '' : 's'} recorded · none carry this measurement</div></div>`;
     }
@@ -3261,7 +3292,19 @@ function renderPositionDistributionChart(stats) {
   if (badge) {
     const isPos = ciLower > 0;
     badge.className = `badge-tag ${isPos ? 'live' : 'warn'}`;
-    if (!bandMeasured) {
+    if (directBins) {
+      // A fill-price distribution has no "edge above zero" to confirm -- the
+      // arm states the interval for the mean fill price instead, clamped to
+      // the range a probability can take.
+      badge.className = bandMeasured ? 'badge-tag live' : 'badge-tag stopped';
+      badge.textContent = bandMeasured
+        ? `${currentCiLevel}% interval for mean fill price: `
+          + `[${formatVal(Math.max(0, Math.min(100, ciLower)))}, `
+          + `${formatVal(Math.max(0, Math.min(100, ciUpper)))}]`
+        : `${currentCiLevel}% CI: unmeasured · `
+          + `${bellSamples} fill${bellSamples === 1 ? '' : 's'} · `
+          + 'NEEDS 2+ TO ESTIMATE SPREAD';
+    } else if (!bandMeasured) {
       // One observation, or no multiplier shipped for this sample and level.
       // Either way there is no interval to state and no edge to confirm.
       badge.className = 'badge-tag stopped';
@@ -3287,10 +3330,19 @@ function renderPositionDistributionChart(stats) {
   // getX(mean) is ALWAYS exactly padL + plotW / 2 (Center anchor)
   const getX = (val) => padL + ((val - minDomain) / span) * plotW;
 
-  // Build 14 symmetric histogram bins around the anchored mean
+  // Build histogram bins around the anchored mean. The probability arm
+  // bypasses this: its bars are the backend's measured bins themselves, so
+  // rebinning bin centres into 14 new buckets would blur exact counts.
   const binCount = 14;
   const binStep = span / binCount;
-  const bins = Array.from({ length: binCount }, (_, i) => {
+  const bins = directBins
+    ? bellBins.map(b => ({
+        min: b.bin * 100 - bellWidth / 2,
+        max: b.bin * 100 + bellWidth / 2,
+        mid: b.bin * 100,
+        count: b.empirical_count,
+      }))
+    : Array.from({ length: binCount }, (_, i) => {
     const bMin = minDomain + i * binStep;
     const bMax = bMin + binStep;
     const count = rawValues.filter(v => v >= bMin && (i === binCount - 1 ? v <= bMax : v < bMax)).length;
@@ -3298,31 +3350,38 @@ function renderPositionDistributionChart(stats) {
   });
   const maxBinCount = Math.max(...bins.map(b => b.count), 1);
 
-  // Compute Normal Distribution Curve points (peaks in the dead center)
+  // Compute Normal Distribution Curve points (peaks in the dead center).
+  // A curve needs a spread to fit: one observation, or every fill at one
+  // price, has none, and feeding a null or zero stdev into the maths below
+  // produces NaN geometry. The bars draw alone instead.
+  const curveMeasured = stdev != null && isFinite(stdev) && stdev > 0;
   const curvePoints = [];
   const sampleSteps = 60;
-  const maxPdf = (1 / (stdev * Math.sqrt(2 * Math.PI)));
-  for (let i = 0; i <= sampleSteps; i++) {
-    const xVal = minDomain + (i / sampleSteps) * span;
-    const pdf = (1 / (stdev * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * Math.pow((xVal - mean) / stdev, 2));
-    const normalizedPdf = (pdf / maxPdf) * plotH * 0.85;
-    const svgX = getX(xVal);
-    const svgY = padT + plotH - normalizedPdf;
-    curvePoints.push(`${svgX.toFixed(1)},${svgY.toFixed(1)}`);
+  if (curveMeasured) {
+    const maxPdf = (1 / (stdev * Math.sqrt(2 * Math.PI)));
+    for (let i = 0; i <= sampleSteps; i++) {
+      const xVal = minDomain + (i / sampleSteps) * span;
+      const pdf = (1 / (stdev * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * Math.pow((xVal - mean) / stdev, 2));
+      const normalizedPdf = (pdf / maxPdf) * plotH * 0.85;
+      const svgX = getX(xVal);
+      const svgY = padT + plotH - normalizedPdf;
+      curvePoints.push(`${svgX.toFixed(1)},${svgY.toFixed(1)}`);
+    }
   }
-  const curvePath = `M ${curvePoints.join(' L ')}`;
+  const curvePath = curveMeasured ? `M ${curvePoints.join(' L ')}` : '';
 
   // Histogram SVG bars
   let barsSvg = '';
-  const barW = (plotW / binCount) * 0.74;
+  const barSlot = plotW / bins.length;
+  const barW = barSlot * 0.74;
   bins.forEach((b, i) => {
-    const x = padL + i * (plotW / binCount) + ((plotW / binCount) - barW) / 2;
+    const x = padL + i * barSlot + (barSlot - barW) / 2;
     const barH = ((b.count || 0) / maxBinCount) * plotH * 0.75;
     const y = padT + plotH - barH;
     const inCI = bandMeasured && b.mid >= ciLower && b.mid <= ciUpper;
     const fill = inCI ? 'rgba(52, 211, 153, 0.45)' : 'rgba(56, 189, 248, 0.3)';
     const stroke = inCI ? '#34d399' : '#38bdf8';
-    barsSvg += `<rect x="${x}" y="${y}" width="${barW}" height="${barH}" rx="2" fill="${fill}" stroke="${stroke}" stroke-width="1"><title>${formatVal(b.min)} to ${formatVal(b.max)}: ${b.count} positions</title></rect>`;
+    barsSvg += `<rect x="${x}" y="${y}" width="${barW}" height="${barH}" rx="2" fill="${fill}" stroke="${stroke}" stroke-width="1"><title>${formatVal(b.min)} to ${formatVal(b.max)}: ${b.count} ${directBins ? 'fills' : 'positions'}</title></rect>`;
   });
 
   // Confidence Interval Shaded Zone (Symmetric around the center)
@@ -3330,8 +3389,9 @@ function renderPositionDistributionChart(stats) {
   const ciX2 = Math.min(w - padR, getX(ciUpper));
   const ciWidth = Math.max(2, ciX2 - ciX1);
 
-  // Mean is anchored directly in the center
-  const meanX = padL + plotW / 2;
+  // Mean is anchored directly in the center -- except on the probability arm,
+  // whose fitted domain is not mean-anchored, so the mean sits where it falls.
+  const meanX = directBins ? getX(mean) : padL + plotW / 2;
   const zeroX = (currentDistMetric === 'pnl_pct' || currentDistMetric === 'pnl_usd') ? getX(0) : null;
 
   // Individual scatter points
@@ -3407,7 +3467,9 @@ function renderPositionDistributionChart(stats) {
       ${barsSvg}
 
       <!-- Normal Gaussian Distribution Bell Spline Curve (Centered at Middle) -->
-      <path d="${curvePath}" fill="none" stroke="#38bdf8" stroke-width="2.6" stroke-linecap="round"/>
+      ${curveMeasured ? `<path d="${curvePath}" fill="none" stroke="#38bdf8" stroke-width="2.6" stroke-linecap="round"/>` : ''}
+
+      ${directBins ? `<text x="${padL}" y="${padT - 8}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5">Per-fill points not available · showing measured bin counts</text>` : ''}
 
       <!-- Zero Breakeven Reference Line (if applicable) -->
       ${zeroX != null && zeroX >= padL && zeroX <= (w - padR) ? `
@@ -3466,8 +3528,8 @@ function renderPositionDistributionChart(stats) {
       <div class="chart-footer-item"><span>Std Dev (σ):</span> <b>${stdev == null ? 'unmeasured' : '±' + formatVal(stdev).replace('+', '')}</b></div>
       <div class="chart-footer-item"><span>Standard Error (SE):</span> <b>${sem == null ? 'unmeasured' : formatVal(sem).replace('+', '')}</b></div>
       <div class="chart-footer-item"><span>${currentCiLevel}% Confidence Interval:</span> <b style="color:${bandMeasured ? '#34d399' : 'var(--text-muted)'}">${bandMeasured ? `[${formatVal(ciLower)}, ${formatVal(ciUpper)}]` : 'unmeasured'}</b></div>
-      <div class="chart-footer-item"><span>Distribution Sample Universe:</span> <b>N = ${posCount} observations</b></div>
-      <div class="chart-footer-item"><span>Statistical Edge:</span> <b style="color:${bandMeasured && ciLower > 0 ? 'var(--signal)' : 'var(--text-muted)'}">${!bandMeasured ? 'ACCUMULATING (needs 2+ observations)' : (ciLower > 0 ? 'H₁: μ &gt; 0 CONFIRMED' : 'ZERO CROSSING (no confirmed edge)')}</b></div>
+      <div class="chart-footer-item"><span>Distribution Sample Universe:</span> <b>N = ${directBins ? bellSamples + ' fills' : posCount + ' observations'}</b></div>
+      ${directBins ? '' : `<div class="chart-footer-item"><span>Statistical Edge:</span> <b style="color:${bandMeasured && ciLower > 0 ? 'var(--signal)' : 'var(--text-muted)'}">${!bandMeasured ? 'ACCUMULATING (needs 2+ observations)' : (ciLower > 0 ? 'H₁: μ &gt; 0 CONFIRMED' : 'ZERO CROSSING (no confirmed edge)')}</b></div>`}
     `;
   }
 }
