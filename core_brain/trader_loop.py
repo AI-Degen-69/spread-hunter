@@ -37,6 +37,7 @@ from core_brain.quotes import (
     Inventory, QuoteIntent, dynamic_offset_for, evaluate_market_quote,
     mid_price,
 )
+from core_brain.rotation_priority import order_by_exposure
 from core_brain.cycle_stream import emit as _emit_cycle_event
 from core_brain.market_lifecycle import (
     LifecycleStop, classify_refusal, resolved_condition_ids,
@@ -570,6 +571,26 @@ def _cid(spec: Any) -> str:
     return str(getattr(spec, "cid", None) or getattr(spec, "condition_id", ""))
 
 
+def _recording_inventory(read, recorder, cid):
+    """Wrap the inventory port so each successful read is recorded (#505).
+
+    Recorded only on success, keyed exactly as
+    `rotation_priority.order_by_exposure` looks the market up (`_cid(spec)`,
+    lowercased). A raising read records nothing and propagates unchanged: the
+    last recorded value stands and the visit keeps its existing error
+    handling. `recorder=None` returns the read unwrapped.
+    """
+    if recorder is None:
+        return read
+
+    def wrapped(market):
+        inv = read(market)
+        recorder(str(cid).lower(), inv)
+        return inv
+
+    return wrapped
+
+
 def _market_cfg(base, spec: Any):
     """Per-market config carried through one rotation of the Trader.
 
@@ -725,6 +746,10 @@ def run(
     # terminal cancel, or an error resets the count; a restart resets it too
     # (safe direction: a fresh loop holds, never wipes).
     refused_streaks: dict[str, int] = {}
+    # Latest `Inventory` each visit read, keyed by lowercased condition id
+    # (#505). Recorded from reads the visits already perform, so ordering the
+    # next rotation's visits costs no extra database or venue call.
+    inventory_by_cid: dict[str, Inventory] = {}
     # Last lifecycle-stop code per market for on-change-only rows (#402). A
     # quote clears the entry, so the next stop is news again.
     stop_memory: dict[str, str] = {}
@@ -830,7 +855,15 @@ def run(
             # guard reads the in-memory universe, so a stale feed retaining
             # the market, a reappearing feed, and a restart all stay quiet.
             resolved = resolved_condition_ids(registry)
-            for spec in list(current_markets or []):
+            # Held markets first (#505): naked, then balanced, then flat
+            # quoting-only -- stable within each rank, every market exactly
+            # once. `current_markets` itself is untouched: dropped-market
+            # cancellation and empty-refresh retention must keep seeing the
+            # original universe. Ordering changes only visit order; each visit
+            # still reads fresh inventory.
+            visit_list = order_by_exposure(
+                list(current_markets or []), inventory_by_cid, _cid)
+            for spec in visit_list:
                 cid = _cid(spec)
                 if cid and cid.lower() in resolved:
                     title = (spec.get("title", "")
@@ -849,6 +882,7 @@ def run(
                     refused_streak=refused_streaks.get(cid, 0),
                     stop_memory=stop_memory,
                     tail_memory=tail_memory,
+                    inventory_recorder=inventory_by_cid.__setitem__,
                 )
                 if res.status == "ERROR" and "book fetch error" in (res.error or ""):
                     rotation_suspects.add(cid)
@@ -1755,6 +1789,8 @@ def _visit_one(
     refused_streak: int = 0,
     stop_memory: Optional[dict] = None,
     tail_memory: Optional[dict] = None,
+    *,
+    inventory_recorder: Optional[Callable[[str, Inventory], None]] = None,
 ) -> LiveFleetResult:
     """One poll of one market: fetch -> decide -> plan -> submit/cancel.
 
@@ -1767,6 +1803,11 @@ def _visit_one(
     `tail_memory` is the loop's (condition-id, line-kind) -> last-signature
     map for the quiet terminal tail (`_tail_note`); None keeps the old
     always-INFO tail for callers that own no loop.
+
+    `inventory_recorder` (#505), when set, receives `(lowercased condition id,
+    Inventory)` after each successful inventory read so `run` can order the
+    next rotation's visits; None (every caller that owns no loop) reads the
+    inventory exactly as before.
     """
     cid = _cid(spec)
     if emit_fn is None:
@@ -1869,7 +1910,9 @@ def _visit_one(
             # step, which owns the books -> inventory -> decide sequence.
             fetch_market=lambda c: market,
             fetch_books=seam.fetch_books,
-            inventory_for=seam.inventory_fn or (lambda m: Inventory()),
+            inventory_for=_recording_inventory(
+                seam.inventory_fn or (lambda m: Inventory()),
+                inventory_recorder, cid),
             decide=seam.decide,
             lifecycle_context_for=lifecycle_context_for,
         )
