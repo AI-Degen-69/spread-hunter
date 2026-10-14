@@ -1,31 +1,125 @@
-# Plan - #569: Run a loose baseline so every later test has something to compare against
+# Plan — #504: Reorganize the top nav bar with consistent grouping and clear hierarchy
 
-Branch: i569/loose-baseline-reference-run | Issue: #569
+Branch: i504/improve-reorganize-the-top-nav-bar-with-consistent | Issue: #504
 
 ## Why (issue summary)
-The `baseline` tournament preset (wide, loose quoting) has never been run. This issue runs one short practice arm with it and records the numbers, giving every later tightening test a fixed "before" picture. No code changes, no setting changes, no real money.
 
-## Size & type
-- **Tier: Small** — run-only; existing launcher, existing reports, no code edits.
-- **Task type: Research** — a rehearsal run producing evidence. Domain tag: `[Research]`. Verification mode: run artifacts (plan JSON, results JSON, DB, heartbeat) + existing pytest selection.
+The top status strip (`.top-meta`) mixes seven status pills, exposure bar, and three buttons in an unstructured row with no grouping. `#services-dropdown` is nested inside `.services-pill-host` causing scroll clipping on desktop. Status pills lack a consistent HTML grammar, run buttons duplicate geometry without a shared base class, and kanban bucket heroes dilute the live-state color vocabulary with five categorical hues. Consolidated #479 collapses individual service pills into a single worst-state aggregate pill with a detail popover and neutralizes hero card hues.
 
-## Step 0A intake (CodeRabbit plan — adopted / rejected / resolved)
-- **Adopted:** one-arm `baseline` arms file with stable naming (`--issue 569 --run-number 1`); short isolated practice run (clean env, fresh DB, preset via env only, no signer); completion proved by results file + arm exit code + DB + heartbeat; reference recorded in a `docs/runs/` note.
-- **Rejected (with reason):** extending `read_arm_results` with a per-market `markets` list. The issue asks for per-market numbers *in the report*, and `scripts/pair_fill_report.py` already reports per-arm/per-market from the DB — a launcher code change is scope expansion for a reporting need existing tooling covers.
-- **Resolved from code:** `read_arm_results` exists (`scripts/shadow_tournament.py`); `pair_fill_report.py` exists; `shadow_run` takes `--minutes/--db/--run-id`; `docs/runs/` exists; `/runtime/*` logs are gitignored. Still open for Station III: which universe file the arm reads when no `--markets-path` is passed, and whether `data/*.db` is gitignored (decides if the DB path is referenced or committed).
+## Tier: Standard (5 code files + 4 test files, cohesive UI architecture overhaul)
 
-## Spec (embedded — Small, no SPEC.md ceremony)
-- Goal: a finished 5-minute practice run of the baseline preset with a results report showing fills, merges, exits, and PnL overall and per market.
-- Out of scope: #492's old-arm rerun, any setting-value change, any code change, live trading, `data/orders.db`.
-- Edge cases: arm exits non-zero (read the log, fix the invocation, never the strategy); zero fills in 5 minutes (report it as measured, not as failure — the reference is an observation); stale universe file (use the shared filter output, copy it fixed for the run).
+## Type: Design/UI + Code + UX/Copy
 
-## Improvement proposal (adopted — simplification)
-Use the existing `pair_fill_report.py` for the per-market breakdown instead of adding a `markets` list to the launcher's results reader. Evidence: `scripts/pair_fill_report.py` exists and is the established per-arm reporter (cited by #492 for the same job); the issue's acceptance asks for report numbers, not launcher features.
+- [Design/UI] T1 — Semantic groups, accessibility landmarks & tab-row styling alignment.
+- [Code] T2 — Status pill grammar normalization, escaped helper & fake DOM harness updates.
+- [Design/UI] T3 — Shared button hierarchy (`.ctrl-btn`), touch targets & master-toggle handler.
+- [Design/UI] T4 — Panel anchoring, unified placement (`placePanel`) & click/escape dismissal.
+- [Design/UI] T5 — Live state aggregation & neutral kanban hero palette (Consolidated #479).
+
+## CodeRabbit plan intake (2026-10-14)
+
+- **Adopted**:
+  - Semantic child groups inside `.top-meta` (`Live state`, `Data source`, `Run controls`) removing mixed outer group role/aria-label while keeping `tabindex="0"` for keyboard scrolling (#278).
+  - Normalizing status pills to `.pill mono` base with `.pill-label`, space, and `.pill-value` spans.
+  - Adding `textContent` derivation to fake DOMs (`live_state_harness.cjs`, `master_toggle_harness.cjs`, `start_toggle_harness.cjs`) by stripping tags and decoding basic entities.
+  - Shared `.ctrl-btn` base with `.ctrl-btn-primary` and `.ctrl-btn-secondary` variants; updating exact class equality in tests to token checks.
+  - Moving `#services-dropdown` to direct child of `<header>` and unifying placement logic.
+- **Rejected/Modified**:
+  - CodeRabbit initially flagged #479 as independent due to 401 credential error; #479 was actually closed as consolidated into #504 by the issue owner. Scope includes T5 for aggregate pill + neutral kanban hero recolor.
+  - Maintained `#btn-command-palette` (added in #563) inside `.top-group-controls`.
+
+## Resolved questions (from issue, code & operator)
+
+- **Degraded services count**: Aggregate pill displays worst single state only (DOWN > DEGRADED > RUNNING); individual counts and breakdown live in the detail popover.
+- **Kanban bucket icons**: Keep existing text labels, remove categorical colors, no new icon set.
+- **Search button placement**: `#btn-command-palette` remains adjacent to run controls inside `.top-group-controls`.
+
+## Improvement proposal (evidence-based, adopted by default)
+
+- **Unified Header Panel Geometry & Auto-Dismissal**:
+  - *Evidence*: `dashboard/static/index.html:78-81` nests `#services-dropdown` in `.services-pill-host`, while `#db-run-switcher` sits as a direct child of `<header>` (`index.html:111`).
+  - *Improvement*: Both panels share `.header-panel` base class and a single `placePanel(trigger, panel)` helper with viewport left-clamping (margin >= 4px), dynamic repositioning on strip scroll and resize, and mutual exclusivity (opening one closes the other; Escape closes both).
 
 ## Dependency graph
-T1 (arms file + dry-run proof) → T2 (short run + completion proof) → T3 (per-market report + reference note + evidence).
+
+```
+T1 (Groups & Landmarks)
+├── T2 (Pill Grammar)
+│   └── T5 (State Aggregation & Kanban Colors [Consolidated #479])
+├── T3 (Button Hierarchy)
+└── T4 (Panel Anchoring & Dismissal)
+```
+
+- T1 has no dependencies (establishes DOM group structure).
+- T2 and T3 depend on T1 (styles and markup operate within groups).
+- T4 depends on T1 and T2 (anchors to normalized service and DB triggers).
+- T5 depends on T2 and T4 (leverages pill grammar and panel popover).
+
+---
 
 ## Tasks
-- [x] **T1 [Research] (S): one-arm baseline arms file + dry-run.** Write the single-arm arms file (preset `baseline`, shared universe), print the plan with `--dry-run`, confirm fixed paths (`i569_tournament-1.json`, `control-1`-style slug, `data/i569_tournament-1_<slug>-1.db`). Depends on: none. Verify: dry-run exits clean and the plan JSON names the expected files.
-- [x] **T2 [Research] (M): short isolated practice run.** Run the arm ~5 min with a clean env (`HUNTER_TOURNAMENT_PRESET=baseline`), fresh DB, no dashboards. Depends on: T1. Verify: arm exit code 0, results JSON exists, DB exists with closes/fills tables, heartbeat finished. CHECKPOINT: run works end-to-end.
-- [x] **T3 [Research] (S): per-market report + reference note.** Run `pair_fill_report.py` on the DB, write the `docs/runs/` reference note (paths, preset, totals, per-market table), post the numbers as an issue comment. Depends on: T2. Verify: note exists, numbers match the results JSON, `python -m pytest -q tests/test_shadow_tournament.py` green.
+
+### T1 [x] [Design/UI] Semantic Groups, Accessibility Landmarks & Tab Row Alignment — M
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `tests/test_ui_top_nav_groups.py`, `tests/test_dashboard_server.py`.
+- **What**:
+  - Keep `.brand` as first header child.
+  - Inside `.top-meta`, introduce 3 direct child groups:
+    - `.top-group.top-group-state` with `role="group"` and `aria-label="Live state"`.
+    - `.top-group.top-group-source` with `role="group"` and `aria-label="Data source"`.
+    - `.top-group.top-group-controls` with `role="group"` and `aria-label="Run controls"`.
+  - Remove mixed `role="group"` and `aria-label` from `.top-meta`, preserving `tabindex="0"`.
+  - Add inline-flex `.top-group` rules with 6px item gap, group dividers, and responsive wrapping for `<=900px`.
+  - Align tab-row styling with header (radius, padding, uppercase font, active tint).
+  - Create `tests/test_ui_top_nav_groups.py` with element tree assertions and update `test_dashboard_server.py` group check.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_ui_278_status_strip.py tests/test_sidebar_prototype.py -q`.
+
+### T2 [x] [Code] Status Pill Grammar Normalization & Fake DOM Harnesses — M
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/js/live_state_harness.cjs`, `tests/js/master_toggle_harness.cjs`, `tests/js/start_toggle_harness.cjs`, `tests/test_live_state_language.py`, `tests/test_ui_top_nav_groups.py`.
+- **What**:
+  - Normalize pill markup in `index.html` to `.pill mono` base with `.pill-label` and `.pill-value` spans.
+  - Add `.pill-value` style in `styles.css`. Reduce `#scan-engine-elsewhere` to color modifier only.
+  - Add `renderPillHtml(label, value, detail, options)` helper in `app.js`.
+  - Update `renderMarketScanPill`, `renderServiceHeader`, master indicator branches, `renderDbMode`, and elsewhere renderers to use helper.
+  - Update Node fake DOM harnesses to strip HTML tags and decode entities (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`) on `innerHTML` setter.
+  - Update elsewhere assertion in `tests/test_live_state_language.py`.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_live_state_language.py -q`.
+
+### T3 [x] [Design/UI] Unified Button Hierarchy & Master Toggle State Handler — S
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/test_dashboard_server.py`, `tests/test_ui_top_nav_groups.py`, `tests/test_ui_277_touch_targets.py`.
+- **What**:
+  - Add `.ctrl-btn` base class, `.ctrl-btn-primary` (weight 800, 16px pad), and `.ctrl-btn-secondary` (weight 700, 14px pad).
+  - Strip redundant geometry from existing button rules while preserving colors and hover states.
+  - Update markup in `index.html` for `#btn-master-toggle`, `#btn-sync`, `#btn-reset`, and `#btn-command-palette`.
+  - Add helper in `app.js` for master toggle class assignment (`getMasterToggleClasses`).
+  - Update `tests/test_dashboard_server.py` to use token checks instead of exact string equality.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_ui_277_touch_targets.py -q`.
+
+### T4 [x] [Design/UI] Panel Anchoring, Unified Positioning & Dismissal — M
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/test_ui_top_nav_groups.py`, `tests/test_live_state_language.py`.
+- **What**:
+  - Move `#services-dropdown` to direct child of `<header>` alongside `#db-run-switcher`. Add `.header-panel` class to both.
+  - Add `.header-panel` shared absolute styling (safe top default, `z-index: 60`, max-width clamp).
+  - Extract `placePanel(trigger, panel)` helper in `app.js` with left-edge margin clamp (>=4px).
+  - Reposition panels on strip scroll and window resize.
+  - Implement outside click and Escape key dismissal; opening one panel closes the other.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_live_state_language.py -q`.
+
+### T5 [x] [Design/UI] Live State Aggregation & Neutral Kanban Hero Palette (Consolidated #479) — M
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/test_ui_top_nav_groups.py`.
+- **What**:
+  - Implement summary aggregate status pill in live state group computing worst-state-wins (`DOWN` > `DEGRADED` > `RUNNING`) via `stateKey`.
+  - Clicking aggregate pill opens services popover detailing individual service states and heartbeat age.
+  - Neutralize kanban bucket hero styling in `styles.css`: remove categorical hues (`#a78bfa`, `#fb923c`, `#f472b6`, `#38bdf8`, `#fbbf24`), replacing with neutral slate/ink chip styling.
+  - Confirm green/amber/red/gray are strictly reserved for live execution status.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_dashboard_server.py -q` and `npm run build`.
+
+### T6 [x] [Design/UI + UX] Station III-B Iteration: Streamline Top Nav, Mode-DB Pairing, Shadow Telemetry & Sync Removal — M
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/test_ui_top_nav_groups.py`, `tests/test_dashboard_server.py`.
+- **What**:
+  - Pair `#master-status-indicator` and `#db-mode-badge` directly inside `.top-group-source` (Data source).
+  - Clean up `.top-group-state`: remove standalone pills (`SCAN`, `ENGINE`, `WATCHDOG`), leaving single consolidated `#hud-services-pill`.
+  - Add `Shadow Rehearsal Quoter` (`shadow`) to `SERVICE_DEFS` and render distinct contextual status in `#services-dropdown` (`live only (shadow uses in-process client)` / `shadow only (live uses venue engine)`).
+  - Permanently remove unused `#btn-sync` button from `.top-group-controls`.
+  - Permanently remove `#exposure-bar` from `.top-group-source` and guard `renderExposure`.
+  - Add distinct `.mode-shadow` (amber) vs `.mode-live` (emerald) styling for master indicator and service cards.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_dashboard_server.py tests/test_live_state_language.py tests/test_dashboard_command_palette.py -q`.

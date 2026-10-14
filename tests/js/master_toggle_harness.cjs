@@ -28,6 +28,16 @@ function fakeClassList() {
   };
 }
 
+function stripHtml(html) {
+  return String(html)
+    .replace(/<[^>]*>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
 class FakeEl {
   constructor(id) {
     this.id = id;
@@ -45,6 +55,7 @@ class FakeEl {
   }
   set innerHTML(v) {
     this._html = String(v);
+    this.textContent = stripHtml(v);
     if (this.id === 'event-ticker' && v) global.__tickerWrites.push(String(v));
   }
   get innerHTML() { return this._html; }

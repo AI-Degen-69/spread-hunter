@@ -84,7 +84,10 @@ class MiniEl {
   }
   get childNodes() { return this.children; }
   get firstChild() { return this.children[0] || null; }
-  set innerHTML(v) { this._html = String(v); }
+  set innerHTML(v) {
+    this._html = String(v);
+    this.textContent = String(v).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
   get innerHTML() { return this._html; }
   setAttribute(k, v) { this.attrs[String(k)] = String(v); }
   getAttribute(k) {

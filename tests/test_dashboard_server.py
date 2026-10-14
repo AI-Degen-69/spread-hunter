@@ -403,7 +403,8 @@ def test_milestone8_html_contains_required_sections():
     dashboard orders table superseded it), so it is asserted ABSENT here.
     """
     assert "kpi-grid" in _read_static("index.html")
-    assert "exposure-bar" in _read_static("index.html")
+    # Issue #504 / Operator Directive: exposure-bar retired from top-nav
+    assert "exposure-bar" not in _read_static("index.html")
     assert "service-cards" in _read_static("index.html")
     assert "event-ticker" in _read_static("index.html")
     assert "cancel-modal" not in _read_static("index.html")
@@ -1465,7 +1466,10 @@ def test_operational_statuses_share_one_top_nav_bar():
     # The former second-row console is gone; the top nav owns the at-a-glance
     # operational status surface instead.
     assert 'class="live-ops-console"' not in header
-    assert 'role="group" aria-label="Dashboard status and controls"' in top_meta
+    assert 'role="group" aria-label="Live state"' in top_meta
+    assert 'role="group" aria-label="Data source"' in top_meta
+    assert 'role="group" aria-label="Run controls"' in top_meta
+    assert 'role="group" aria-label="Dashboard status and controls"' not in top_meta
     assert 'id="master-status-indicator" class="pill state-unknown' in top_meta
     assert 'id="hud-services-pill"' in top_meta
     assert 'id="hud-guardrail-pill"' in top_meta
@@ -1492,10 +1496,10 @@ def test_operational_statuses_share_one_top_nav_bar():
         assert html.count(f'id="{element_id}"') == 1
     # The two old buttons must be gone, not merely unrendered.
     assert "btn-master-start" not in html
-    assert "btn-master-stop" not in html
-
-    assert 'id="btn-sync"' in top_meta
-    assert ">SYNC VENUE<" in top_meta
+    # Issue #504 / Operator Directive: btn-sync permanently removed
+    assert 'id="btn-sync"' not in top_meta
+    assert "btn-sync" not in html
+    assert ">SYNC VENUE<" not in html
     assert "btn-live-sync" not in html
     assert "live-ops-master-card" not in html
     assert "hud-db-mode" not in html
@@ -2558,29 +2562,29 @@ def test_master_toggle_renders_every_state():
     out = json.loads(res.stdout)
 
     stop_look = out["running"]
-    assert stop_look["className"] == "btn-stop-run"
+    assert "btn-stop-run" in stop_look["className"]
     assert "STOP RUN" in stop_look["text"]
     assert stop_look["ariaLabel"] == "Stop bot execution stack"
     assert stop_look["action"] == "stop"
     assert stop_look["disabled"] is False
 
     # A partial stack is still "running": the STOP look, not START.
-    assert out["partial"]["className"] == "btn-stop-run"
+    assert "btn-stop-run" in out["partial"]["className"]
     assert out["partial"]["action"] == "stop"
 
     start_look = out["stopped"]
-    assert start_look["className"] == "btn-start-run"
+    assert "btn-start-run" in start_look["className"]
     assert "START RUN" in start_look["text"]
     assert start_look["ariaLabel"] == "Start bot execution stack"
     assert start_look["action"] == "start"
 
     # UNKNOWN reads as stopped to the operator: START look, no crash.
-    assert out["unknown"]["className"] == "btn-start-run"
+    assert "btn-start-run" in out["unknown"]["className"]
     assert out["unknown"]["action"] == "start"
 
     # A null service entry is not a crash and is not a running service.
     assert "error" not in out["nullEntry"]
-    assert out["nullEntry"]["className"] == "btn-stop-run"  # query still runs
+    assert "btn-stop-run" in out["nullEntry"]["className"]  # query still runs
 
     # Double click: exactly one POST, busy state while in flight.
     assert out["doubleClick"]["posts"] == 1
@@ -2592,7 +2596,7 @@ def test_master_toggle_renders_every_state():
 
     # After a confirmed stop, the button is back to START and clickable.
     after = out["doubleClick"]["afterStop"]
-    assert after["className"] == "btn-start-run"
+    assert "btn-start-run" in after["className"]
     assert after["disabled"] is False
     assert after["ariaBusy"] is None
 

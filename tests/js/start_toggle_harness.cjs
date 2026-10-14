@@ -22,6 +22,16 @@ function fakeClassList() {
   };
 }
 
+function stripHtml(html) {
+  return String(html)
+    .replace(/<[^>]*>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
 class FakeEl {
   constructor(id) {
     this.id = id;
@@ -35,7 +45,10 @@ class FakeEl {
     this.disabled = false;
     this._listeners = {};
   }
-  set innerHTML(v) { this._html = String(v); }
+  set innerHTML(v) {
+    this._html = String(v);
+    this.textContent = stripHtml(v);
+  }
   get innerHTML() { return this._html; }
   addEventListener(ev, fn) {
     if (!this._listeners[ev]) this._listeners[ev] = [];
