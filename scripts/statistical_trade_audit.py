@@ -2,12 +2,14 @@
 statistical_trade_audit.py
 סקריפט לניתוח סטטיסטי מותאם למבנה מסד הנתונים של הבוט.
 שואב נתונים מהטבלאות: closes, single_leg_lifecycle, shadow_merge_legs.
+שיעור המיזוג נספר משדה method של רשומת הסגירה (closes.method); שורות
+shadow_merge_legs הן מטמון פר-רגל לעלות, לא סגירות, ואינן נספרות כשיעור.
 """
 
 import sqlite3
 import math
 import sys
-from typing import List, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any
 
 # ערכי z קריטיים עבור רמות סמך של 95%, 98% ו-99%
 Z_CRITICAL: Dict[str, float] = {
@@ -15,6 +17,13 @@ Z_CRITICAL: Dict[str, float] = {
     "98%": 2.32635,
     "99%": 2.57583,
 }
+
+# Close methods that mean the pair was merged back into $1.00 of USDC.
+# Pinned copy of `core_brain/registry_state.py:41 MERGE_CLOSE_METHODS` (kept
+# local, not imported: `python scripts/...` puts `scripts/` first on the
+# import path, so a `core_brain` import may fail). The pin is enforced by
+# `tests/test_statistical_trade_audit.py::test_merge_methods_pinned_to_registry`.
+MERGE_CLOSE_METHODS = ("merge", "shadow_merge")
 
 def calculate_mean_and_std(values: List[float]) -> Tuple[float, float]:
     """מחשב ממוצע וסטיית תקן מדגמית."""
@@ -34,10 +43,15 @@ def mean_confidence_interval(mean: float, std_dev: float, n: int, z: float) -> T
     margin = z * (std_dev / math.sqrt(n))
     return mean - margin, mean + margin, margin
 
-def proportion_confidence_interval(successes: int, n: int, z: float) -> Tuple[float, float, float]:
-    """מחשב רווח סמך לפרופורציה (Wilson Score Interval)."""
-    if n == 0:
-        return 0.0, 0.0, 0.0
+def proportion_confidence_interval(successes: int, n: int, z: float) -> Optional[Tuple[float, float, float]]:
+    """מחשב רווח סמך לפרופורציה (Wilson Score Interval).
+
+    Returns None ("no estimate is possible") when the count is impossible:
+    `n <= 0`, `successes < 0`, or `successes > n`. Callers print a named
+    unavailable line instead of a fraction in that case.
+    """
+    if n <= 0 or successes < 0 or successes > n:
+        return None
     p = successes / n
     denominator = 1.0 + (z ** 2) / n
     center = (p + (z ** 2) / (2.0 * n)) / denominator
@@ -59,6 +73,27 @@ def fetch_table_rows(cursor: sqlite3.Cursor, table_name: str) -> List[Dict[str, 
     cursor.execute(f"SELECT * FROM {table_name};")
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
+def _print_proportion_block(label: str, successes: int, n: int) -> None:
+    """Print one proportion section: fraction plus Wilson CI per level.
+
+    When the count is impossible the interval is None and a single named
+    unavailable line is printed instead — never an x/y fraction, never a
+    traceback. The valid path prints byte-identical lines to the old inline
+    blocks.
+    """
+    if proportion_confidence_interval(successes, n, Z_CRITICAL["95%"]) is None:
+        print(f"{label}: rate unavailable (success count is outside 0..N)")
+        return
+    print(f"{label}: {successes}/{n} ({(successes/n)*100:.2f}%)")
+    for cl, z in Z_CRITICAL.items():
+        interval = proportion_confidence_interval(successes, n, z)
+        if interval is None:  # guarded above; kept so a future edit cannot re-crash here
+            print(f"{label}: rate unavailable (success count is outside 0..N)")
+            return
+        low, high, margin = interval
+        print(f"  [{cl} CL]: [{low*100:.2f}%, {high*100:.2f}%] | Margin: +/- {margin*100:.2f}%")
+
+
 def run_analysis(db_path: str):
     print(f"Opening database: {db_path}...")
     try:
@@ -68,11 +103,24 @@ def run_analysis(db_path: str):
         print(f"Error connecting to database: {e}")
         return
 
-    # שליפת רשומות מהטבלאות הרלוונטיות
-    closes = fetch_table_rows(cursor, "closes")
-    single_legs = fetch_table_rows(cursor, "single_leg_lifecycle")
-    merge_legs = fetch_table_rows(cursor, "shadow_merge_legs")
-    conn.close()
+    try:
+        # All three tables are required; a missing one gets a naming sentence, not a traceback.
+        existing = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        required = ("closes", "single_leg_lifecycle", "shadow_merge_legs")
+        missing = [t for t in required if t not in existing]
+        if missing:
+            names = ", ".join(f"'{t}'" for t in missing)
+            noun = "Table" if len(missing) == 1 else "Tables"
+            print(f"{noun} {names} not found in {db_path}. "
+                  f"This audit needs closes, single_leg_lifecycle, and shadow_merge_legs.")
+            return
+
+        # שליפת רשומות מהטבלאות הרלוונטיות
+        closes = fetch_table_rows(cursor, "closes")
+        single_legs = fetch_table_rows(cursor, "single_leg_lifecycle")
+        merge_legs = fetch_table_rows(cursor, "shadow_merge_legs")
+    finally:
+        conn.close()
 
     total_closed = len(closes)
     print(f"Found {total_closed} records in 'closes' table.\n")
@@ -85,7 +133,6 @@ def run_analysis(db_path: str):
     pnl_values: List[float] = []
     holding_times: List[float] = []
     stop_loss_count = 0
-    merge_count = 0
 
     for r in closes:
         # 1. חילוץ PnL
@@ -98,8 +145,6 @@ def run_analysis(db_path: str):
         reason = str(r.get("exit_reason", "") or r.get("close_reason", "") or r.get("reason", "")).lower()
         if "stop" in reason:
             stop_loss_count += 1
-        if "merge" in reason or "paired" in reason:
-            merge_count += 1
 
         # 3. חילוץ זמן החזקה
         hold = r.get("hold_duration_sec") or r.get("duration_sec") or r.get("duration")
@@ -111,9 +156,12 @@ def run_analysis(db_path: str):
             except (ValueError, TypeError):
                 pass
 
-    # במקרה שבו נתוני המיזוג נשמרו בטבלה נפרדת
-    if merge_count == 0 and len(merge_legs) > 0:
-        merge_count = len(merge_legs)
+    # שיעור המיזוג נספר מרשומת הסגירה עצמה (שדה method), שורה אחת = סגירה
+    # אחת לכל היותר. בלי עמודת method אין מקור — שורות shadow_merge_legs
+    # הן מטמון פר-רגל, לא סגירות, ואינן מחליפות את הספירה.
+    merge_count: Optional[int] = None
+    if closes and "method" in closes[0]:
+        merge_count = sum(1 for r in closes if r.get("method") in MERGE_CLOSE_METHODS)
 
     # חישוב מדדי PnL
     mean_pnl, std_pnl = calculate_mean_and_std(pnl_values)
@@ -133,15 +181,12 @@ def run_analysis(db_path: str):
     print("\n" + "=" * 75)
     print(" 2. PROPORTIONS: STOP LOSS RATE & MERGE RATE")
     print("=" * 75)
-    print(f"Stop Loss Exits: {stop_loss_count}/{total_closed} ({(stop_loss_count/total_closed)*100:.2f}%)")
-    for cl, z in Z_CRITICAL.items():
-        low, high, margin = proportion_confidence_interval(stop_loss_count, total_closed, z)
-        print(f"  [{cl} CL]: [{low*100:.2f}%, {high*100:.2f}%] | Margin: +/- {margin*100:.2f}%")
-
-    print(f"\nMerged Positions: {merge_count}/{total_closed} ({(merge_count/total_closed)*100:.2f}%)")
-    for cl, z in Z_CRITICAL.items():
-        low, high, margin = proportion_confidence_interval(merge_count, total_closed, z)
-        print(f"  [{cl} CL]: [{low*100:.2f}%, {high*100:.2f}%] | Margin: +/- {margin*100:.2f}%")
+    _print_proportion_block("Stop Loss Exits", stop_loss_count, total_closed)
+    print()
+    if merge_count is None:
+        print("Merged Positions: merge rate unavailable from this database (closes has no method column)")
+    else:
+        _print_proportion_block("Merged Positions", merge_count, total_closed)
 
     if holding_times:
         mean_hold, std_hold = calculate_mean_and_std(holding_times)
