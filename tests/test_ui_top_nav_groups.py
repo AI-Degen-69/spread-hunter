@@ -350,3 +350,51 @@ def test_place_panel_clamping():
     assert placement["leftClampMin"] == "4px"
     assert placement["leftClampMax"] == "656px"
 
+
+# ── Task 5: Live State Aggregation & Neutral Kanban Hero Palette (Consolidated #479) ──
+
+def test_kanban_bucket_hero_palette_neutralized(css: str):
+    """Categorical colors in kanban bucket heroes are retired to neutral slate/ink chip styling."""
+    match_hero = re.search(r"/\* Neutral slate/ink chip styling for kanban bucket heroes[^*]*\*/([^}]+})", css)
+    assert match_hero, "Neutral kanban bucket hero rule comment not found in styles.css"
+    block = match_hero.group(1)
+    assert "color: var(--text-primary);" in block
+
+    # Ensure none of the categorical hues are used for kanban heroes
+    for hue in ("#a78bfa", "#fb923c", "#f472b6", "#38bdf8", "#fbbf24"):
+        pattern = rf"\.kanban-bucket-hero[^{{]*\{{[^}}]*{re.escape(hue)}"
+        assert not re.search(pattern, css), f"Categorical hue {hue} found in .kanban-bucket-hero rule"
+
+    match_passed = re.search(r"\.kanban-bucket-hero\.passed\s*\{([^}]*)\}", css)
+    assert match_passed, ".kanban-bucket-hero.passed rule not found"
+    assert "var(--border-subtle)" in match_passed.group(1)
+
+
+@requires_node
+def test_aggregate_service_state_hierarchy():
+    """Worst-state-wins: DOWN > DEGRADED > UNKNOWN > RUNNING > STOPPED."""
+    agg = _harness("topnav")["aggregation"]
+    assert agg["allRunning"] == "running"
+    assert agg["degradedAlert"] == "degraded"
+    assert agg["worstWinsDown"] == "down"
+    assert agg["allStopped"] == "stopped"
+    assert agg["unknownPresence"] == "unknown"
+    assert agg["emptyState"] == "unknown"
+
+
+@requires_node
+def test_services_pill_reflects_worst_state_wins():
+    """#hud-services-pill reflects worst-state-wins when individual services degrade or fault."""
+    top = _harness("topnav")
+
+    degraded = top["servicesDegradedByAlert"]
+    assert "state-degraded" in degraded["className"]
+    assert degraded["stateText"] == "DEGRADED"
+    assert "degraded" in degraded["subText"]
+
+    down = top["servicesDownByStaleHeartbeat"]
+    assert "state-down" in down["className"]
+    assert down["stateText"] == "DOWN"
+    assert down["subText"] == "fault detected"
+
+

@@ -1219,16 +1219,21 @@ td { font-size: 13px; }
   gap: 6px;
   line-height: 1.25;
 }
-.kanban-bucket-hero.raw .hero-critical-val { color: var(--open); }
-.kanban-bucket-hero.identity .hero-critical-val { color: #38bdf8; }
-.kanban-bucket-hero.volume .hero-critical-val { color: #fbbf24; }
-.kanban-bucket-hero.depth .hero-critical-val { color: #a78bfa; }
-.kanban-bucket-hero.spread .hero-critical-val { color: #fb923c; }
-.kanban-bucket-hero.horizon .hero-critical-val { color: #f472b6; }
-.kanban-bucket-hero.passed .hero-critical-val { color: var(--signal); }
+/* Neutral slate/ink chip styling for kanban bucket heroes (#504 Consolidated #479)
+   Retires categorical hues (#a78bfa, #fb923c, #f472b6, #38bdf8, #fbbf24) so
+   green/amber/red/gray remain strictly reserved for live execution status. */
+.kanban-bucket-hero.raw .hero-critical-val,
+.kanban-bucket-hero.identity .hero-critical-val,
+.kanban-bucket-hero.volume .hero-critical-val,
+.kanban-bucket-hero.depth .hero-critical-val,
+.kanban-bucket-hero.spread .hero-critical-val,
+.kanban-bucket-hero.horizon .hero-critical-val,
+.kanban-bucket-hero.passed .hero-critical-val {
+  color: var(--text-primary);
+}
 .kanban-bucket-hero.passed {
-  border-color: rgba(52, 211, 153, 0.3);
-  background: rgba(16, 185, 129, 0.06);
+  border-color: var(--border-subtle);
+  background: rgba(255, 255, 255, 0.04);
 }
 .kanban-header-flow {
   font-family: 'JetBrains Mono', monospace;

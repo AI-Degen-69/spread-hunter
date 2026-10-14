@@ -627,7 +627,55 @@ function topNavVerdicts() {
 
   const panelPlacement = { leftNormal, leftClampMin, leftClampMax };
 
-  return { scan, engineRunning, engineStalledElsewhere, dbProd, masterRunning, toggleClasses, panelPlacement };
+  // Live state aggregation tests (#504 Consolidated #479)
+  const aggregation = {
+    allRunning: app.aggregateServiceState(['running', 'running', 'running']),
+    degradedAlert: app.aggregateServiceState(['running', 'running', 'degraded']),
+    worstWinsDown: app.aggregateServiceState(['running', 'degraded', 'down']),
+    allStopped: app.aggregateServiceState(['stopped', 'stopped']),
+    unknownPresence: app.aggregateServiceState(['stopped', 'unknown']),
+    emptyState: app.aggregateServiceState([]),
+  };
+
+  // Test renderServiceHeader with degraded / down states
+  // 1. Guardrail alert causes SERVICES pill to become degraded
+  app.renderServiceHeader({
+    services: { filter: { running: true }, query: { running: true }, decide: { running: true } },
+    bot_state: 'RUNNING',
+    db_mode: 'LIVE',
+    db_is_production: true,
+  }, { running: true, age_s: 2, alerts_total: 1 }, { alerts: [{ alert_id: 'a1' }] });
+  const servicesDegradedByAlert = {
+    className: servicesPill.className,
+    stateText: (document.getElementById('hud-services-state') || {}).textContent,
+    subText: (document.getElementById('hud-services-sub') || {}).textContent,
+  };
+
+  // 2. Guardrail down (heartbeat stale > 60s) causes SERVICES pill to become down
+  app.renderServiceHeader({
+    services: { filter: { running: true }, query: { running: true }, decide: { running: true } },
+    bot_state: 'RUNNING',
+    db_mode: 'LIVE',
+    db_is_production: true,
+  }, { running: true, age_s: 90, alerts_total: 0 }, { alerts: [] });
+  const servicesDownByStaleHeartbeat = {
+    className: servicesPill.className,
+    stateText: (document.getElementById('hud-services-state') || {}).textContent,
+    subText: (document.getElementById('hud-services-sub') || {}).textContent,
+  };
+
+  return {
+    scan,
+    engineRunning,
+    engineStalledElsewhere,
+    dbProd,
+    masterRunning,
+    toggleClasses,
+    panelPlacement,
+    aggregation,
+    servicesDegradedByAlert,
+    servicesDownByStaleHeartbeat,
+  };
 }
 
 let out;

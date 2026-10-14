@@ -169,6 +169,18 @@ function processState(running, unknown) {
   return running ? 'running' : 'stopped';
 }
 
+/* ── Worst-state-wins aggregation (#504 Consolidated #479) ──
+ * Collapses individual service states to a single summary:
+ * DOWN > DEGRADED > UNKNOWN > RUNNING > STOPPED */
+function aggregateServiceState(states) {
+  if (!states || states.length === 0) return 'unknown';
+  if (states.includes('down')) return 'down';
+  if (states.includes('degraded')) return 'degraded';
+  if (states.includes('unknown')) return 'unknown';
+  if (states.includes('running')) return 'running';
+  return 'stopped';
+}
+
 /* Rotation takes ~45-55s on shadow public CLOB queries; calibrated so a normal
  * rotation stays RUNNING without a false DEGRADED at the 15s default. */
 const SCAN_PILL_THRESHOLDS = { degraded: 60, down: 120 };
@@ -1765,7 +1777,10 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       const running = svc?.running || false;
       pid = svc?.pid;
       state = running ? 'running' : 'stopped';
-      meta = def.liveOnly ? 'live only' : (pid ? `pid ${pid}` : 'stopped');
+      const uptime = typeof svc?.uptime_sec === 'number' ? `${Math.round(svc.uptime_sec)}s up` : '';
+      meta = def.liveOnly && status?.db_mode === 'SHADOW'
+        ? 'live only'
+        : (running ? (uptime ? (pid ? `pid ${pid} · ${uptime}` : uptime) : (pid ? `pid ${pid}` : 'running')) : 'stopped');
     }
     const dot = `<span class="pulse-dot ${state === 'running' ? 'active' : ''}"></span>`;
     const label = state.toUpperCase();
@@ -1777,7 +1792,7 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
     </div>`;
   }).join('');
 
-  const head = `<div class="services-dropdown-head"><span>Service Telemetry</span><span>${activeCount} active</span></div>`;
+  const head = `<div class="services-dropdown-head"><span>Service Telemetry</span><span>${activeCount} active${overallState ? ' · ' + esc(overallState.toUpperCase()) : ''}</span></div>`;
   const foot = `<div class="services-dropdown-foot">Full controls on the Live Operations tab</div>`;
   panel.innerHTML = head + rows + foot;
 
@@ -1855,7 +1870,41 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   }
   if (guardrailHealth?.running) activeCount++;
 
-  const servicesState = processState(isRunning, status?.registry_unreadable);
+  const alertsCount = guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
+  const guardrailTelemetryError = guardrailHealth?.telemetry_error || guardrailAlerts?.telemetry_error;
+  const guardrailKnown = guardrailHealth !== null && guardrailHealth !== undefined;
+  let guardrailState = 'unknown';
+  if (guardrailKnown && !guardrailTelemetryError) {
+    const age = Number.isFinite(guardrailHealth.age_s) ? guardrailHealth.age_s : null;
+    const livenessState = stateKey(
+      guardrailHealth.running,
+      age,
+      cadenceThresholds(5),
+    );
+    guardrailState = livenessState === 'running' && alertsCount > 0
+      ? 'degraded'
+      : livenessState;
+  }
+
+  // Aggregate status across individual services (#504 Consolidated #479)
+  const subStates = [];
+  subStates.push(guardrailState);
+  for (const def of SERVICE_DEFS) {
+    if (def.key === 'guardrail') continue;
+    if (isShadow && def.liveOnly) continue;
+    const svc = status?.services?.[def.key];
+    if (status?.registry_unreadable) {
+      subStates.push('unknown');
+    } else if (svc?.running) {
+      subStates.push('running');
+    } else if (isRunning) {
+      subStates.push('down');
+    } else {
+      subStates.push('stopped');
+    }
+  }
+
+  const servicesState = status?.registry_unreadable ? 'unknown' : aggregateServiceState(subStates);
 
   renderServicesDropdown(status, guardrailHealth, guardrailAlerts, activeCount, servicesState);
 
@@ -1901,23 +1950,16 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
 
   if (servicesPill) servicesPill.className = `pill state-${servicesState} mono services-pill-trigger`;
   if (hudServicesState) hudServicesState.textContent = servicesState.toUpperCase();
-  if (hudServicesSub) hudServicesSub.textContent = isRunning ? `${activeCount} active` : 'all stopped';
-
-  const alertsCount = guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
-  const guardrailTelemetryError = guardrailHealth?.telemetry_error || guardrailAlerts?.telemetry_error;
-  const guardrailKnown = guardrailHealth !== null && guardrailHealth !== undefined;
-  let guardrailState = 'unknown';
-  if (guardrailKnown && !guardrailTelemetryError) {
-    const age = Number.isFinite(guardrailHealth.age_s) ? guardrailHealth.age_s : null;
-    const livenessState = stateKey(
-      guardrailHealth.running,
-      age,
-      cadenceThresholds(5),
-    );
-    guardrailState = livenessState === 'running' && alertsCount > 0
-      ? 'degraded'
-      : livenessState;
+  if (hudServicesSub) {
+    if (servicesState === 'down') {
+      hudServicesSub.textContent = 'fault detected';
+    } else if (servicesState === 'degraded') {
+      hudServicesSub.textContent = `${activeCount} active · degraded`;
+    } else {
+      hudServicesSub.textContent = isRunning ? `${activeCount} active` : 'all stopped';
+    }
   }
+
   if (guardrailPill) guardrailPill.className = `pill state-${guardrailState} mono`;
   if (hudGuardrailState) hudGuardrailState.textContent = guardrailState.toUpperCase();
   if (hudGuardrailSub) {
@@ -9455,6 +9497,7 @@ if (typeof module !== 'undefined' && module.exports) {
     engineReasonText, engineProvenanceText, renderScanStatePill,
     renderMarketScanPill, renderPillHtml, renderDbMode, renderServiceHeader,
     getMasterToggleClasses,
+    aggregateServiceState,
     placePanel, closeServicesDropdown, closeRunSwitcher, bindServicesDropdown, repositionHeaderPanels,
     get setBackendContact() { return setBackendContact; },
     get renderBackendContact() { return renderBackendContact; },
