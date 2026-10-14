@@ -3126,12 +3126,12 @@ function renderPositionDistributionChart(stats) {
       banner.innerHTML = `
         <div class="dist-power-stat">
           <span class="label">Sample Universe:</span>
-          <span class="val">0 Observations</span>
+          <span class="val">0</span>
           <span class="sub">(0 Merged · 0 Unwind)</span>
         </div>
         <div class="dist-power-stat">
           <span class="label">Statistical Power Target:</span>
-          <span class="val">0 / 120 Obs</span>
+          <span class="val">0 / 120</span>
           <span class="sub">(0% Power · Sequential SPRT Active)</span>
         </div>
         <div class="dist-progress-wrap">
@@ -3427,12 +3427,12 @@ function renderPositionDistributionChart(stats) {
     banner.innerHTML = `
       <div class="dist-power-stat">
         <span class="label">Sample Universe:</span>
-        <span class="val">${posCount} Observations</span>
+        <span class="val">${posCount}</span>
         <span class="sub">(${mergedCount} Merged · ${unwindCount} Unwind)</span>
       </div>
       <div class="dist-power-stat">
         <span class="label">Statistical Power Target:</span>
-        <span class="val ${posCount >= requiredObs ? 'positive' : ''}">${posCount} / ${requiredObs} Obs</span>
+        <span class="val ${posCount >= requiredObs ? 'positive' : ''}">${posCount} / ${requiredObs}</span>
         <span class="sub">(${powerPct}% Power · Sequential SPRT Active)</span>
       </div>
       <div class="dist-progress-wrap">
