@@ -85,7 +85,7 @@ let lastStatusAtMs = null;
  * envelope; anything lower (or missing) means this page is newer than the
  * process answering it. Keep EXPECTED_PAYLOAD_VERSION matched with
  * KPI_PAYLOAD_VERSION in core_brain/kpi.py. */
-const EXPECTED_PAYLOAD_VERSION = 256;
+const EXPECTED_PAYLOAD_VERSION = 257;
 let payloadVersionWarned = false;
 
 // True when the payload is absent, malformed, or predates this page.

@@ -30,6 +30,7 @@ from core_brain.statistical_analytics import (
     RISK_FREE_PCT_PER_CLOSE,
     SKEWNESS_BAND_WORDS,
     SORTINO_BAND_WORDS,
+    capital_risk,
     drawdown_episodes,
     drawdown_recovery,
     pnl_skewness,
@@ -342,6 +343,47 @@ def test_the_two_deliberate_differences_from_the_kpi_walk():
 # ---------------------------------------------------------------------------
 # The module's promises
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# The section the page reads
+# ---------------------------------------------------------------------------
+
+def test_the_section_is_present_and_unmeasured_on_a_run_with_nothing_in_it():
+    out = capital_risk([], ())
+
+    assert out["units"] == "percent_per_close_and_curve_points"
+    assert set(out) == {"units", "pnl_skewness", "sortino_ratio", "drawdown_recovery"}
+    assert out["pnl_skewness"]["pnl_skewness"] is None
+    assert out["pnl_skewness"]["band"] == "unmeasured"
+    assert out["sortino_ratio"]["sortino_ratio"] is None
+    assert out["sortino_ratio"]["band"] == "unmeasured"
+    assert out["drawdown_recovery"]["deepest_usd"] is None
+    assert json.loads(json.dumps(out, allow_nan=False))["units"] == out["units"]
+
+
+def test_the_section_bands_the_two_readings_and_leaves_the_recovery_descriptive():
+    out = capital_risk([-1.0, -1.0, -1.0, -1.0, 10.0], RECOVERY)
+
+    assert out["pnl_skewness"]["band"] == "good"        # one large win, small losses
+    assert out["sortino_ratio"]["band"] == "average"    # 1.2: returns match the downside pain
+    assert out["drawdown_recovery"]["episodes"] == 1
+    # The recovery half carries no band key at all: "recovered in three points" has no verdict
+    # until it can be compared against how fast this strategy normally compounds.
+    assert "band" not in out["drawdown_recovery"]
+    assert "meaning" not in out["drawdown_recovery"]
+
+
+def test_one_unmeasured_half_does_not_blank_the_other():
+    """The closes and the curve arrive from different writers, so each half stands alone."""
+    returns_only = capital_risk([1.0, 1.0, 1.0, 1.0, -10.0])
+    assert returns_only["pnl_skewness"]["band"] == "bad"
+    assert returns_only["drawdown_recovery"]["deepest_usd"] is None
+
+    curve_only = capital_risk([], _curve(1000.0, 900.0))
+    assert curve_only["drawdown_recovery"]["deepest_usd"] == pytest.approx(100.0)
+    assert curve_only["pnl_skewness"]["band"] == "unmeasured"
+    assert curve_only["sortino_ratio"]["risk_free_pct_per_close"] == RISK_FREE_PCT_PER_CLOSE
+
 
 def test_importing_this_module_pulls_in_neither_the_registry_nor_kpi():
     """The pure module's promise: no import side effects."""

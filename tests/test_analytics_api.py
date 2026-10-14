@@ -176,9 +176,10 @@ def test_the_payload_version_is_pinned_on_both_sides(app_js, kpi_module):
     # payload field (active_quoting_markets); #443 added sample_size_sufficiency;
     # #448 redesigned sample size sufficiency with Cohen's d & statuses;
     # #535 shipped the per-distribution `ci_critical*` multipliers the
-    # distribution chart now reads instead of its own constants: both sides sit
-    # at 256.
-    assert backend.group(1) == "256"
+    # distribution chart now reads instead of its own constants; #517 added the
+    # capital-risk section (`pnl_skewness`, `sortino_ratio`, `drawdown_recovery`)
+    # the new card reads: both sides sit at 257.
+    assert backend.group(1) == "257"
 
 
 def test_a_stale_backend_shows_a_restart_note(app_js, index_html, styles_css):

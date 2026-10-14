@@ -300,6 +300,15 @@ def test_build_populates_every_section_it_has_input_for():
     assert robustness["mean_pnl_ci"]["n"] == 1
     assert robustness["mean_pnl_ci"]["band"] == "unmeasured"
     assert robustness["sqn"]["band"] == "unmeasured"
+    # The capital-risk section (#517) reads those same closes as percentages, and takes its equity
+    # curve from the caller. This call passes no curve, so the drawdown half measures nothing; one
+    # close is a single observation, so both banded readings say unmeasured rather than a verdict.
+    capital = payload["capital_risk"]
+    assert capital["pnl_skewness"]["n"] == 1
+    assert capital["pnl_skewness"]["band"] == "unmeasured"
+    assert capital["sortino_ratio"]["band"] == "unmeasured"
+    assert capital["drawdown_recovery"]["deepest_usd"] is None
+    assert capital["drawdown_recovery"]["episodes"] == 0
 
 
 def test_build_on_an_empty_run_synthesises_nothing():
@@ -349,6 +358,45 @@ def test_build_on_an_empty_run_synthesises_nothing():
     assert robustness["sqn"]["n"] == 0
     assert robustness["sqn"]["sqn"] is None
     assert robustness["sqn"]["band"] == "unmeasured"
+    # And the capital-risk section (#517), shape-frozen the same way: present, every reading
+    # unmeasured, and the seconds key absent because there was no drawdown to time.
+    assert payload["capital_risk"] == {
+        "units": "percent_per_close_and_curve_points",
+        "pnl_skewness": {"pnl_skewness": None, "band": "unmeasured",
+                         "meaning": "fewer than three closes, or no spread to divide by", "n": 0},
+        "sortino_ratio": {"sortino_ratio": None, "risk_free_pct_per_close": 0.0,
+                          "band": "unmeasured",
+                          "meaning": "fewer than two closes, no spread, or no downside to measure",
+                          "n": 0},
+        "drawdown_recovery": {
+            "units": "curve_points_and_seconds", "episodes": 0, "open": 0, "skipped": 0,
+            "deepest_usd": None, "deepest_pct": None, "deepest_recovered": None,
+            "drawdown_recovery_trades": {"median": None, "p90": None, "n": 0},
+        },
+    }
+
+
+def test_the_equity_curve_moves_only_the_capital_risk_section():
+    """`build()` gains one keyword and one key; every sibling section keeps its own shape."""
+    # Arrange — a curve that fell 200 and regained the old peak, and one close to read.
+    points = [{"v": v} for v in (1100.0, 900.0, 950.0, 1100.0, 1200.0)]
+    closes = [_close(0.30)]
+
+    # Act
+    bare = build(closes, [], [], 100.0)
+    loaded = build(closes, [], [], 100.0, equity_curve=points)
+
+    # Assert — the new half reads the curve...
+    assert bare["capital_risk"]["drawdown_recovery"]["deepest_usd"] is None
+    assert loaded["capital_risk"]["drawdown_recovery"]["deepest_usd"] == pytest.approx(200.0)
+    assert loaded["capital_risk"]["drawdown_recovery"]["deepest_pct"] == pytest.approx(18.181818,
+                                                                                       abs=1e-6)
+    # ...and only the new half moved: the closes half is identical, and so is every sibling.
+    assert loaded["capital_risk"]["pnl_skewness"] == bare["capital_risk"]["pnl_skewness"]
+    for section in ("position_returns", "closed_positions", "pair_costs", "fill_path_edge",
+                    "rescue_friction", "queue_realism", "robustness", "probability_bell",
+                    "markout"):
+        assert bare[section] == loaded[section], section
 
 
 def test_build_reads_waits_from_the_quotes_it_is_given():

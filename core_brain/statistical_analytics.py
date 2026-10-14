@@ -51,6 +51,17 @@ quality number. The last two look like the same question from different angles, 
 not merged into one verdict: a run can have a proven positive mean on too few trades to call
 the edge stable, and a single combined word would hide which half said so.
 
+The fifth section is the same question at the level of the capital. `capital_risk` (#517) reads the
+closes as percentages for two banded readings -- the skewness of the per-close returns, which says
+whether the swings come from upside surges or from downside tails, and a Sortino against an explicit
+risk-free rate, which says whether the return is worth the downside pain -- and reads a
+caller-supplied equity curve for the third: how deep the worst drawdown ran and how long the
+drawdowns that came back took to do it, in curve points and in seconds. That one carries no band on
+purpose. A duration has nothing to be judged against until it can be compared with how fast this
+strategy normally compounds, and a chip on a guess is a confident lie. The confidence-interval
+helper and the system quality number above are the ones this section's card links to, reused rather
+than copied, so the page holds one definition of each.
+
 This builds the payload, and it builds it only from what the registry actually
 holds. The rule throughout: **a section with no input is omitted, not
 synthesised.** A chart saying "unmeasured" is information; a chart drawing a
@@ -1848,6 +1859,35 @@ def drawdown_recovery(points: Sequence[Any],
     return out
 
 
+def capital_risk(return_pcts: Sequence[float],
+                 curve: Sequence[Any] = ()) -> dict[str, Any]:
+    """The capital-level readings the Reports & Analytics card mounts (#517).
+
+    Always present, like `robustness` and the three sections before it, and for the same reason: a
+    caller must never have to branch on whether a reading exists. A run with nothing recorded
+    reports `None` and `unmeasured`, which say "nothing to measure", never "no risk" and never
+    "no edge".
+
+    Two halves that read different sources and are deliberately independent. The banded readings --
+    `pnl_skewness` and `sortino_ratio` -- read the per-close percentage returns the caller hands
+    over; the descriptive `drawdown_recovery` reads the equity curve. One unrecorded writer must not
+    blank the other half, and the drawdown half carries NO band: the ticket settles that a recovery
+    duration has no intrinsic good or bad, because it has nothing to be judged against.
+
+    Each band is computed here, from the same rounded figure it ships with, so the chip a reader
+    sees cannot disagree with the number beside it. The confidence-interval helper and the system
+    quality number are the module's own (`robustness`), reused rather than restated.
+    """
+    sample = [value for value in (_finite(value) for value in return_pcts or [])
+              if value is not None]
+    return {
+        "units": "percent_per_close_and_curve_points",
+        "pnl_skewness": pnl_skewness(sample),
+        "sortino_ratio": sortino(sample),
+        "drawdown_recovery": drawdown_recovery(curve),
+    }
+
+
 def probability_bell(fills: Sequence[dict]) -> dict[str, Any]:
     """Where our executions landed across the probability range.
 
@@ -1971,18 +2011,24 @@ def monte_carlo(returns_usd: Sequence[float], starting_capital: float,
 
 def build(closes: Sequence[dict], fills: Sequence[dict],
           markouts: Sequence[dict], starting_capital: float,
-          quotes: Optional[Sequence[Any]] = None) -> dict[str, Any]:
+          quotes: Optional[Sequence[Any]] = None,
+          equity_curve: Optional[Sequence[Any]] = None) -> dict[str, Any]:
     """The whole `statistical_analytics` payload the analytics tab reads.
 
     The charts come and go with their input; `fill_path_edge`, `rescue_friction`,
-    `queue_realism` and `robustness` are always present, because they summarise the closes, the
-    fills and the quotes this call already holds and a caller must never have to branch on
-    whether a reading exists.
+    `queue_realism`, `robustness` and `capital_risk` are always present, because they summarise the
+    closes, the fills, the quotes and the curve this call already holds and a caller must never have
+    to branch on whether a reading exists.
 
     `quotes` is optional and additive. The queue-realism section reads the placement price
     and timestamp a close never carries, so a caller without quotes gets that section at
     zero counts rather than a missing key -- and a caller with them gets the one part of it
     the registry can answer today, the wait between placement and the first credited fill.
+
+    `equity_curve` is optional and additive for the same reason. The capital-risk section reads a
+    curve this call cannot assemble (realised closes stacked with the venue's own float marks), so a
+    caller without one gets every drawdown figure `None` rather than a curve invented from the
+    closes it happens to hold. `kpi.report` supplies the venue account-value curve it already emits.
     """
     returns = position_returns(closes)
     records = cleared_fills(quotes or [], fills)
@@ -2000,6 +2046,13 @@ def build(closes: Sequence[dict], fills: Sequence[dict],
         # The robustness gates (#516) read the closes and the markout rows, both of which this
         # call already holds -- no new parameter, and no section above it changes.
         "robustness": robustness(closes, markouts),
+        # The capital-level readings (#517) take the per-close percentages the distribution above
+        # already measured -- one definition of a close's return, never a second -- and the equity
+        # curve from the caller. No section above them changes.
+        "capital_risk": capital_risk(
+            [position["pnl_pct"] for position in returns["positions"]
+             if position["pnl_pct"] is not None],
+            equity_curve or ()),
         "probability_bell": probability_bell(fills),
         "markout": markout(markouts),
     }
