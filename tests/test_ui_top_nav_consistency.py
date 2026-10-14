@@ -122,8 +122,19 @@ def test_dropdown_row_is_grid_with_fixed_columns():
     css = _css()
     m = re.search(r"\.services-dropdown-row\s*\{([^}]*)\}", css, re.DOTALL)
     assert m, ".services-dropdown-row rule missing"
-    assert "grid-template-columns: 150px 1fr 140px" in m.group(1), \
-        "dropdown row must be a 150px / 1fr / 140px grid"
+    assert "grid-template-columns: 140px 1fr 120px" in m.group(1), \
+        "dropdown row must be a 140px / 1fr / 120px grid (#600)"
+
+
+def test_dropdown_pills_share_one_width():
+    # #600: every pill box fills the fixed 140px column so WATCHDOG/SCAN/ENGINE/
+    # DECIDE/SHADOW share one right edge and stack in a clean aligned column.
+    css = _css()
+    m = re.search(r"\.services-dropdown-row \.pill\s*\{([^}]*)\}", css, re.DOTALL)
+    assert m, ".services-dropdown-row .pill rule missing"
+    assert "width: 100%" in m.group(1), \
+        "dropdown pill must fill its column so all pills are the same width"
+
 
 def test_switcher_row_is_grid():
     css = _css()
@@ -138,7 +149,7 @@ def test_meta_slot_ellipsized():
     body = m.group(1)
     assert "text-overflow: ellipsis" in body, "meta slot must ellipsize"
     assert "white-space: nowrap" in body, "meta slot must not wrap"
-    assert "max-width: 140px" in body, "meta slot must be width-bounded"
+    assert "max-width: 120px" in body, "meta slot must be width-bounded"
 
 def test_mode_stopped_value_uses_state_gray():
     css = _css()

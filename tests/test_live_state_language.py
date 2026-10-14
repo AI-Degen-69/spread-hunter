@@ -595,10 +595,10 @@ def test_engine_provenance_text_names_source_run_and_store():
 def test_engine_pill_renders_running_with_provenance():
     rendered = _harness("enginepill")["rendered"]["shadowFresh"]
     assert set(rendered["pillClass"].split()) >= {"pill", "state-running", "mono"}
-    # Single template: gray ENGINE label, RUNNING value with heartbeat age,
-    # leading live dot — the dot never sits mid-pill beside the verdict.
+    # Single template: gray ENGINE label, RUNNING value, leading live dot. No
+    # age in the pill (#600) — freshness lives in the tooltip.
     assert ">ENGINE<" in rendered["stateHtml"]
-    assert _plain(rendered["stateHtml"]) == "ENGINE RUNNING · 3s"
+    assert _plain(rendered["stateHtml"]) == "ENGINE RUNNING"
     assert "pulse-dot active" in rendered["stateHtml"]
     assert rendered["stateHtml"].index("pill-label") < rendered["stateHtml"].index("pill-value")
     assert "Quote engine heartbeat: SCANNING (3s ago)" in rendered["pillTitle"]
@@ -668,7 +668,7 @@ def test_a_failed_engine_read_keeps_its_verdict_and_ages():
     assert set(v["fresh"]["pillClass"].split()) >= {"pill", "state-running", "mono"}
     # The held pill is not gray: it keeps the verdict and its age advances.
     assert set(v["held"]["pillClass"].split()) >= {"pill", "state-running", "mono"}
-    assert _plain(v["held"]["stateHtml"]) == "ENGINE RUNNING · 11s"
+    assert _plain(v["held"]["stateHtml"]) == "ENGINE RUNNING"
     assert ">ENGINE<" in v["held"]["stateHtml"]
     assert "did not land" in v["held"]["pillTitle"]
     assert "SCANNING" in v["held"]["pillTitle"]

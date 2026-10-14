@@ -327,8 +327,9 @@ function renderMarketScanPill(status, kpi, opts) {
   const v = marketScanState(status, kpi, opts);
   el.className = 'pill state-' + v.state + ' mono';
   el.title = v.title;
-  const age = (v.ageSec !== null && v.ageSec !== undefined) ? '· ' + fmtAge(v.ageSec) : '';
-  el.innerHTML = renderPillHtml('SCAN', v.state.toUpperCase(), age, v.state);
+  // No snapshot age in the pill (#600): it widens the pill and breaks the
+  // aligned column; freshness already reads in the tooltip.
+  el.innerHTML = renderPillHtml('SCAN', v.state.toUpperCase(), '', v.state);
 }
 
 /* ── Backend-contact watchdog (DESIGN.md Risk 2) ──
@@ -1669,8 +1670,12 @@ function renderDbMode(status) {
 
   const path = status.db_path || '';
   if (lastDbIsProduction) {
+    // The store name is significant information (#600): show it here exactly as
+    // the SHADOW branch does, so LIVE and SHADOW badges are consistent.
+    const fileName = path.split(/[\\/]/).pop();
+    const detail = fileName ? `· ${fileName}` : '';
     el.className = 'pill mode-live mono';
-    el.innerHTML = renderPillHtml('DB', 'LIVE');
+    el.innerHTML = renderPillHtml('DB', 'LIVE', detail);
     el.title = `Reading the production registry: ${path}`;
   } else {
     // Not a cosmetic state. Every number on the page is a rehearsal, and START
@@ -8916,12 +8921,10 @@ function renderScanStatePill(scanState, opts) {
     const telemetryError = scanState.telemetry_error;
     const state = telemetryError ? 'unknown' : scanPillState(raw, effHbAge, scanState.cadence_sec, scanState.stall_reason);
     headerPill.className = 'pill state-' + state + ' mono';
-    const formattedAge = formatHeartbeatAge(effHbAge);
-    const age = (state !== 'stopped' && state !== 'unknown' && formattedAge)
-      ? '· ' + formattedAge : '';
-    // Canonical template: leading dot + gray label + value, identical to every
-    // other pill. Never hand-place the dot inside the value span.
-    headerPill.innerHTML = renderPillHtml({ label: 'ENGINE', value: state.toUpperCase(), detail: age, dotState: state });
+    // Canonical template: leading dot + gray label + value. The heartbeat age
+    // is NOT shown in the pill (#600): it widens the pill and reads as total
+    // runtime rather than freshness, and it already lives in the tooltip.
+    headerPill.innerHTML = renderPillHtml({ label: 'ENGINE', value: state.toUpperCase(), dotState: state });
     const rawSec = (effHbAge !== null && effHbAge !== undefined) ? Math.max(0, Math.round(effHbAge)) : null;
     if (telemetryError) {
       headerPill.title = `Telemetry unavailable: ${telemetryError.error || 'cycle ring read failed'}`;
