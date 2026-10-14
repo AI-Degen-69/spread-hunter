@@ -103,7 +103,7 @@ checks alone never count).
   `incremental-implementation`. Depends on: T2. Verify: ledger
   test GREEN; harness + `test_analytics_surface_mount` green; rendered-DOM sample (incl.
   chart values) + served-asset grep.
-- [ ] T4 (S) [Docs] Findings + report-only registry. Findings doc: pre/post-switch t-deltas
+- [x] T4 (S) [Docs] Findings + report-only registry. Findings doc: pre/post-switch t-deltas
   per stat plus remaining disagreements with both numbers (interp-vs-nearest-rank,
   equity-vs-account drawdown, ci90/sensitivity if differ). Registry covers every rendered
   id; report-only + research-only entries listed with producer + reason. PR names removed
