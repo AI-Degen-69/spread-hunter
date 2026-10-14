@@ -854,6 +854,16 @@
   </div>
 </div>
 
+<!-- ── Command Palette (#477): keyboard entry to pages, actions, markets ── -->
+<div id="command-palette" class="modal-overlay palette-overlay" role="dialog" aria-labelledby="palette-title" aria-modal="true" hidden>
+  <div class="modal palette-modal">
+    <div class="modal-title" id="palette-title">Command palette</div>
+    <input id="palette-search" class="modal-input palette-input" type="text" placeholder="Search pages, actions, markets…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="palette-list" aria-label="Command palette search">
+    <div id="palette-list" class="palette-list" role="listbox" aria-label="Commands"></div>
+    <div class="palette-hint">Use arrow keys to move. Press Enter to choose. Press Escape to close.</div>
+  </div>
+</div>
+
 <script>
   const CONTROL_TOKEN = "__LIVE_DASH_CONTROL_TOKEN__";
 </script>
@@ -862,6 +872,10 @@
 <!-- Runs after app.js has bound every panel, and only on /prototype: it moves
      those same nodes into the sidebar pages rather than re-rendering them. -->
 <script src="/static/prototype.js?v=6"></script>
+<!-- After prototype.js: the palette clicks the sidebar buttons the rail wires,
+     and its capture-phase key listener must exist after every document-level
+     handler it silences. -->
+<script src="/static/command-palette.js?v=1"></script>
 <script src="/static/reporting_launcher.js?v=1"></script>
 </body>
 </html>
