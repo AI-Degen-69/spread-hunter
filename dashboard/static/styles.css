@@ -809,6 +809,10 @@ header {
 .palette-row { padding: 8px 10px; border-radius: 6px; cursor: pointer; }
 .palette-row[aria-selected="true"] { background: var(--bg-surface-raised); }
 .palette-row[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.palette-icon { display: inline-block; vertical-align: -3px; margin-right: 8px; color: var(--text-secondary); }
+.palette-icon svg { width: 16px; height: 16px; display: block; }
+.palette-row[aria-selected="true"] { background: var(--bg-surface-raised); }
+.palette-row[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 .palette-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
 .palette-hint { font-size: 11px; color: var(--text-muted); }
 
