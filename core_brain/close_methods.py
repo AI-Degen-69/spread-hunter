@@ -72,9 +72,8 @@ METHODS: tuple[CloseMethod, ...] = (
                 "written through the method parameter default"),
     CloseMethod(NAKED_EXIT, RESCUE_BUCKET, None, True,
                 "legacy U35 single-leg exit shape; no current writer"),
-    CloseMethod(LADDER_EXIT, RESCUE_BUCKET,
-                "core_brain.single_buy_saver._route_pair", False,
-                "written through the conditional exit_method assignment"),
+    CloseMethod(LADDER_EXIT, RESCUE_BUCKET, None, True,
+                "legacy short-window ladder exit shape; no current writer"),
     # settlement: a leg held until the market resolves.
     CloseMethod(SHADOW_SETTLEMENT, SETTLEMENT_BUCKET,
                 "core_brain.market_resolution.book_shadow_settlement", False),
