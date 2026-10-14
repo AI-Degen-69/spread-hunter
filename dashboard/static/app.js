@@ -4965,12 +4965,29 @@ function renderRobustness(stats) {
  * it is symmetric. The 95% interval and the system quality number are the robustness card's own
  * figures above, computed once in the analytics module -- this card points at them instead of
  * restating them in a second place. A payload served before this section existed renders no chips
- * at all rather than inventing a verdict. */
+ * at all rather than inventing a verdict -- and no counts either: a store that never measured a
+ * curve must not be told it regained zero of zero drawdowns with every point usable. */
 function renderCapitalRisk(stats) {
   const host = document.getElementById('capital-risk-readout');
   if (!host) return;
 
   const section = (stats || {}).capital_risk || {};
+  /* The section names its own units when it is there at all, which is the one thing a payload from
+   * before #517 cannot fake. Saying the reading is missing beats four tiles of zeroes over a curve
+   * nobody measured -- `0 / 0 drawdowns regained` and `every curve point usable` are claims about
+   * capital, and this card does not get to make them up. The page's own stale-backend note explains
+   * the restart; this says what is missing until it happens. */
+  if (!section.units) {
+    host.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-title">Capital risk unmeasured</div>
+        <div class="empty-state-msg">The backend answering this page carries no capital-risk
+        section, so the drawdown, skewness and Sortino readings are missing rather than zero.
+        Restart it against this build to read them.</div>
+      </div>`;
+    return;
+  }
+
   const skew = section.pnl_skewness || {};
   const sortino = section.sortino_ratio || {};
   const recovery = section.drawdown_recovery || {};

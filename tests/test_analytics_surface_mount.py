@@ -872,6 +872,12 @@ def test_a_store_from_before_this_section_reads_as_unmeasured_without_chips():
     assert "analytics-chip" not in html
     text = _visible(html)
     assert "unmeasured" in text
+    assert "Capital risk unmeasured" in text
+    # A count nobody took is not a count of zero. `0 / 0` regained and `every curve point usable`
+    # are claims about capital, and a store that never carried this section never measured either.
+    assert "0 / 0" not in text
+    assert "every curve point usable" not in text
+    assert "0 closes" not in text
     for leak in ("NaN", "undefined", "null"):
         assert leak not in text
 
