@@ -70,11 +70,31 @@ class FakeEl {
     return null;
   }
   querySelectorAll() { return []; }
-  appendChild(c) { this.children.push(c); }
-  insertBefore(c) { this.children.unshift(c); }
+  appendChild(c) {
+    c.parentElement = this;
+    this.children.push(c);
+  }
+  insertBefore(c) {
+    c.parentElement = this;
+    this.children.unshift(c);
+  }
   removeChild(c) {
     const idx = this.children.indexOf(c);
-    if (idx !== -1) this.children.splice(idx, 1);
+    if (idx !== -1) {
+      this.children[idx].parentElement = null;
+      this.children.splice(idx, 1);
+    }
+  }
+  closest(sel) {
+    let curr = this;
+    while (curr) {
+      if (curr.tagName && curr.tagName.toLowerCase() === sel.toLowerCase()) return curr;
+      curr = curr.parentElement;
+    }
+    return null;
+  }
+  getBoundingClientRect() {
+    return this._rect || { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
   }
   get firstChild() { return this.children[0] || null; }
   get lastChild() { return this.children[this.children.length - 1] || null; }
@@ -582,7 +602,32 @@ function topNavVerdicts() {
     renderedLiveRunning: masterToggle.className,
   };
 
-  return { scan, engineRunning, engineStalledElsewhere, dbProd, masterRunning, toggleClasses };
+  // Header panel placement & clamping (#504 T4)
+  const header = new FakeEl('header');
+  header._rect = { left: 0, top: 0, width: 1000, height: 60 };
+  const trig = new FakeEl('button');
+  header.appendChild(trig);
+  const pnl = new FakeEl('div');
+  pnl.offsetWidth = 340;
+
+  // 1. In-bounds placement: left aligns with trigger
+  trig._rect = { left: 200, top: 10, width: 80, height: 32 };
+  app.placePanel(trig, pnl);
+  const leftNormal = pnl.style.left;
+
+  // 2. Minimum margin clamp (>= 4px)
+  trig._rect = { left: -50, top: 10, width: 80, height: 32 };
+  app.placePanel(trig, pnl);
+  const leftClampMin = pnl.style.left;
+
+  // 3. Maximum margin clamp (<= header.width - panel.width - 4px = 1000 - 340 - 4 = 656px)
+  trig._rect = { left: 950, top: 10, width: 80, height: 32 };
+  app.placePanel(trig, pnl);
+  const leftClampMax = pnl.style.left;
+
+  const panelPlacement = { leftNormal, leftClampMin, leftClampMax };
+
+  return { scan, engineRunning, engineStalledElsewhere, dbProd, masterRunning, toggleClasses, panelPlacement };
 }
 
 let out;

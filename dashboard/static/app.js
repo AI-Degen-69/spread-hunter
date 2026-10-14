@@ -1471,18 +1471,30 @@ function closeRunSwitcher() {
   if (sw) sw.style.display = 'none';
 }
 
-/* Sit the dropdown under the badge that opened it. The switcher is positioned
- * against <header>, and the badge's x moves with every pill above it (a fresh
- * SCAN age, a longer store name), so the offset is measured rather than
- * hard-coded. */
-function placeRunSwitcher(sw, badge) {
-  const host = (badge.closest && badge.closest('header')) || badge.parentElement;
-  if (!host || typeof badge.getBoundingClientRect !== 'function') return;
-  const b = badge.getBoundingClientRect();
+function closeServicesDropdown() {
+  const panel = document.getElementById('services-dropdown');
+  const trigger = document.getElementById('hud-services-pill');
+  if (panel) panel.style.display = 'none';
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+}
+
+/* Anchors a header panel below its trigger element, clamped within the header.
+ * Clamps the panel's left edge to >= 4px and <= (host.width - panel.width - 4px)
+ * so it never bleeds past the viewport edges. */
+function placePanel(trigger, panel) {
+  if (!trigger || !panel) return;
+  const host = (trigger.closest && trigger.closest('header')) || trigger.parentElement;
+  if (!host || typeof trigger.getBoundingClientRect !== 'function') return;
+  const t = trigger.getBoundingClientRect();
   const h = host.getBoundingClientRect();
-  const width = sw.offsetWidth || 380;
-  const left = b.left - h.left - 40;
-  sw.style.left = Math.round(Math.max(4, Math.min(left, h.width - width - 4))) + 'px';
+  const width = panel.offsetWidth || (panel.id === 'services-dropdown' ? 340 : 380);
+  const left = t.left - h.left;
+  panel.style.left = Math.round(Math.max(4, Math.min(left, h.width - width - 4))) + 'px';
+}
+
+/* Sit the dropdown under the badge that opened it. Delegated to placePanel. */
+function placeRunSwitcher(sw, badge) {
+  placePanel(badge, sw);
 }
 
 function runSwitcherLabel(run) {
@@ -1676,6 +1688,7 @@ function renderDbMode(status) {
       const sw = document.getElementById('db-run-switcher');
       if (!sw) return;
       if (sw.style.display === 'block') { closeRunSwitcher(); return; }
+      closeServicesDropdown();
       renderRunSwitcher();
     });
     document.addEventListener('click', (e) => {
@@ -1683,6 +1696,12 @@ function renderDbMode(status) {
       if (!sw || sw.style.display !== 'block') return;
       if (sw.contains(e.target) || (el.contains && el.contains(e.target))) return;
       closeRunSwitcher();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeRunSwitcher();
+        closeServicesDropdown();
+      }
     });
   }
 }
@@ -1765,6 +1784,9 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
   // The pill stays the summary; the caret flips with the open state. The pill
   // classes are owned by renderServiceHeader, so only aria-expanded is set here.
   trigger.setAttribute('aria-expanded', panel.style.display === 'block' ? 'true' : 'false');
+  if (panel.style.display === 'block') {
+    placePanel(trigger, panel);
+  }
 }
 
 /* Open/close the services dropdown. A click anywhere else closes it, and Esc
@@ -1779,19 +1801,24 @@ function bindServicesDropdown() {
   trigger.addEventListener('click', (e) => {
     e.stopPropagation();
     const open = panel.style.display === 'block';
-    panel.style.display = open ? 'none' : 'block';
-    trigger.setAttribute('aria-expanded', open ? 'false' : 'true');
+    if (open) {
+      closeServicesDropdown();
+    } else {
+      closeRunSwitcher();
+      panel.style.display = 'block';
+      trigger.setAttribute('aria-expanded', 'true');
+      placePanel(trigger, panel);
+    }
   });
   document.addEventListener('click', (e) => {
     if (panel.style.display !== 'block') return;
     if (panel.contains(e.target) || trigger.contains(e.target)) return;
-    panel.style.display = 'none';
-    trigger.setAttribute('aria-expanded', 'false');
+    closeServicesDropdown();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && panel.style.display === 'block') {
-      panel.style.display = 'none';
-      trigger.setAttribute('aria-expanded', 'false');
+    if (e.key === 'Escape') {
+      if (panel.style.display === 'block') closeServicesDropdown();
+      closeRunSwitcher();
     }
   });
 }
@@ -9175,11 +9202,26 @@ function initKanbanCarousel() {
   window.addEventListener('resize', updateKanbanNavButtons, { passive: true });
 }
 
+/* Re-anchors any open header panels (services dropdown or DB run switcher)
+ * when the status strip scrolls horizontally or the viewport resizes. */
+function repositionHeaderPanels() {
+  const servicesPanel = document.getElementById('services-dropdown');
+  const servicesTrigger = document.getElementById('hud-services-pill');
+  if (servicesPanel && servicesPanel.style.display === 'block' && servicesTrigger) {
+    placePanel(servicesTrigger, servicesPanel);
+  }
+  const runSwitcher = document.getElementById('db-run-switcher');
+  const badge = document.getElementById('db-mode-badge');
+  if (runSwitcher && runSwitcher.style.display === 'block' && badge) {
+    placePanel(badge, runSwitcher);
+  }
+}
+
 /* ── Issue #278: status-strip scroll cue ── */
 // Adds .is-scrollable to .top-meta exactly when the desktop row overflows
 // (drives the edge cue in styles.css) and .is-end once scrolled fully
 // right so the cue retires at the end. No-ops on mobile, where the strip
-// wraps instead of scrolling.
+// wraps instead of scrolling. Also repositions open header panels (#504).
 function updateTopMetaScrollCue() {
   const strip = document.querySelector('.top-meta');
   if (!strip) return;
@@ -9187,6 +9229,7 @@ function updateTopMetaScrollCue() {
   strip.classList.toggle('is-scrollable', canScroll);
   strip.classList.toggle('is-end',
     canScroll && (strip.scrollLeft + strip.clientWidth >= strip.scrollWidth - 1));
+  repositionHeaderPanels();
 }
 
 function initTopMetaScrollCue() {
@@ -9412,6 +9455,7 @@ if (typeof module !== 'undefined' && module.exports) {
     engineReasonText, engineProvenanceText, renderScanStatePill,
     renderMarketScanPill, renderPillHtml, renderDbMode, renderServiceHeader,
     getMasterToggleClasses,
+    placePanel, closeServicesDropdown, closeRunSwitcher, bindServicesDropdown, repositionHeaderPanels,
     get setBackendContact() { return setBackendContact; },
     get renderBackendContact() { return renderBackendContact; },
     get backendStale() { return backendStale; },

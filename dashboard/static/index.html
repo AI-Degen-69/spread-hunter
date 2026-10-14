@@ -76,10 +76,7 @@
              opens #services-dropdown, which app.js fills with a row per service.
              A child of <header>, NOT of .top-meta: that row is a scroll container,
              and a dropdown anchored inside it gets clipped by its own scrollport. -->
-        <div class="services-pill-host">
-          <button id="hud-services-pill" class="pill state-unknown mono services-pill-trigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="services-dropdown" title="Stack services liveness: how many of the stack's services (and the watchdog) are running. The quote engine's own heartbeat is the ENGINE pill beside this."><span class="pill-label">SERVICES</span> <span id="hud-services-state" class="pill-value">UNKNOWN</span> <span id="hud-services-sub" class="pill-detail">--</span> <span class="services-caret" aria-hidden="true">▾</span></button>
-          <div id="services-dropdown" class="services-dropdown" role="menu" aria-label="Stack services telemetry" style="display:none"></div>
-        </div>
+        <button id="hud-services-pill" class="pill state-unknown mono services-pill-trigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="services-dropdown" title="Stack services liveness: how many of the stack's services (and the watchdog) are running. The quote engine's own heartbeat is the ENGINE pill beside this."><span class="pill-label">SERVICES</span> <span id="hud-services-state" class="pill-value">UNKNOWN</span> <span id="hud-services-sub" class="pill-detail">--</span> <span class="services-caret" aria-hidden="true">▾</span></button>
         <span id="hud-guardrail-pill" class="pill state-unknown mono" title="Risk watchdog status"><span class="pill-label">WATCHDOG</span> <span id="hud-guardrail-state" class="pill-value">UNKNOWN</span> <span id="hud-guardrail-sub" class="pill-detail">--</span></span>
       </div>
 
@@ -112,11 +109,9 @@
         </button>
       </div>
     </div>
-    <!-- The run switcher: which rehearsal is writing this store, and one click
-         to re-point the page at a live one. Populated by renderDbMode().
-         A child of <header>, NOT of .top-meta: that row is a scroll container,
-         and a dropdown anchored inside it gets clipped by its own scrollport. -->
-    <div id="db-run-switcher" class="db-run-switcher" style="display:none"></div>
+    <!-- Header panels: children of <header>, NOT of .top-meta to prevent scrollport clipping -->
+    <div id="services-dropdown" class="services-dropdown header-panel" role="menu" aria-label="Stack services telemetry" style="display:none"></div>
+    <div id="db-run-switcher" class="db-run-switcher header-panel" role="menu" aria-label="Shadow run switcher" style="display:none"></div>
   </header>
 
   <!-- ── Backend-contact watchdog (DESIGN.md): shown when the poll loop

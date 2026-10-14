@@ -445,22 +445,26 @@ header {
    told that before they read the rest of the dashboard. */
 .pill.mode-stale { background: var(--red-bg); color: #f87171; border: 1px solid var(--red-border); }
 
-/* The run switcher dropdown. Anchored under the DB badge by renderDbMode();
-   the badge is the only opener, and a click anywhere else closes it. */
-.db-run-switcher {
+/* ── Header Panels (#504) ──
+   Both panels are direct children of <header> positioned below their triggers.
+   Moving them out of .top-meta prevents clipping by the horizontal scrollport. */
+.header-panel {
   position: absolute;
   top: calc(100% - 6px);
   left: 0;
   z-index: 60;
-  width: 380px;
   max-width: calc(100vw - 32px);
   padding: 8px;
-  display: block;
   background: var(--bg-card);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   font-size: 11px;
+}
+
+.db-run-switcher {
+  width: 380px;
+  display: block;
 }
 .db-run-head {
   padding: 2px 6px 8px;
@@ -482,7 +486,6 @@ header {
 /* The SERVICES pill dropdown (terminal-redesign pattern): the summary pill in
    the top bar doubles as the trigger; a child of <header>, NOT of .top-meta,
    so the scrollport of .top-meta can never clip the open panel. */
-.services-pill-host { position: relative; display: inline-flex; }
 .services-pill-trigger {
   cursor: pointer;
   font: inherit;
@@ -495,19 +498,8 @@ header {
 .services-caret { font-size: 9px; opacity: 0.7; transition: transform 0.15s; }
 .services-pill-trigger[aria-expanded="true"] .services-caret { transform: rotate(180deg); }
 .services-dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 60;
   width: 340px;
-  max-width: calc(100vw - 32px);
-  padding: 8px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
 }
 .services-dropdown-head {
   display: flex;

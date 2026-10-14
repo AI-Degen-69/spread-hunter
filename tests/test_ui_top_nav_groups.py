@@ -303,3 +303,50 @@ def test_master_toggle_helper_classes():
     assert t["startShadow"] == "ctrl-btn ctrl-btn-primary btn-start-run btn-start-shadow"
     assert t["stopShadow"] == "ctrl-btn ctrl-btn-primary btn-stop-run btn-stop-shadow"
     assert t["renderedLiveRunning"] == "ctrl-btn ctrl-btn-primary btn-stop-run"
+
+
+# ── Task 4: Panel Anchoring, Unified Positioning & Dismissal ──
+
+def test_header_panels_direct_children_of_header(dom: DOMNode):
+    header = dom.find_one("header")
+    assert header is not None
+
+    services = dom.find_one(id="services-dropdown")
+    assert services is not None, "#services-dropdown must exist in DOM"
+    assert services.parent == header, "#services-dropdown must be a direct child of <header>"
+    assert "header-panel" in services.classes, "#services-dropdown must carry .header-panel"
+    assert "services-dropdown" in services.classes
+
+    switcher = dom.find_one(id="db-run-switcher")
+    assert switcher is not None, "#db-run-switcher must exist in DOM"
+    assert switcher.parent == header, "#db-run-switcher must be a direct child of <header>"
+    assert "header-panel" in switcher.classes, "#db-run-switcher must carry .header-panel"
+    assert "db-run-switcher" in switcher.classes
+
+    top_meta = dom.find_one(cls="top-meta")
+    assert top_meta is not None
+    assert top_meta.find_one(id="services-dropdown") is None, "#services-dropdown must not be inside .top-meta"
+    assert top_meta.find_one(id="db-run-switcher") is None, "#db-run-switcher must not be inside .top-meta"
+
+    assert dom.find_one(cls="services-pill-host") is None, ".services-pill-host must be removed from DOM"
+
+
+def test_header_panel_css_rules(css: str):
+    match_panel = re.search(r"\.header-panel\s*\{([^}]*)\}", css)
+    assert match_panel, ".header-panel rule not found in styles.css"
+    body = match_panel.group(1)
+    assert "position: absolute" in body
+    assert "z-index: 60" in body
+    assert "border-radius" in body
+    assert "box-shadow" in body
+
+    assert ".services-pill-host" not in css, ".services-pill-host rule must be removed from styles.css"
+
+
+@requires_node
+def test_place_panel_clamping():
+    placement = _harness("topnav")["panelPlacement"]
+    assert placement["leftNormal"] == "200px"
+    assert placement["leftClampMin"] == "4px"
+    assert placement["leftClampMax"] == "656px"
+
