@@ -1534,7 +1534,9 @@ function demoSwitcherRow() {
     ? 'Return this page to the live store (the demo registry is bogus data).'
     : 'Load the demo registry: bogus orders, trades and metrics to eyeball '
       + 'every table and card. Read-only -- START stays disabled while it is loaded.';
+  const demoState = readingDemo ? 'LOADED' : 'AVAILABLE';
   return `<div class="db-run-row db-demo-row">
+      <span class="pill state-stopped"><span class="pill-label">DEMO</span> <span class="pill-value">${demoState}</span></span>
       <span class="db-run-name">Demo registry (bogus data)</span>
       <button class="db-run-switch db-demo-load" title="${esc(title)}">${label}</button>
     </div>`;
@@ -1611,9 +1613,9 @@ async function renderRunSwitcher() {
     const btn = isThis
       ? `<span class="db-run-current">THIS PAGE</span>`
       : `<button class="db-run-switch" data-db="${esc(r.db_path)}">SWITCH</button>`;
+    const runState = r.running === true ? 'running' : 'stopped';
     return `<div class="db-run-row${isThis ? ' current' : ''}">
-        <span class="db-run-name mono">${esc(label)}</span>${portLink}
-        <span class="db-run-state state-${r.running === true ? 'running' : 'stopped'}">${state}${age ? ' · ' + age : ''}</span>
+        <span class="pill state-${runState}"><span class="pill-label">${esc(label)}</span> <span class="pill-value">${state}</span>${age ? ` <span class="pill-detail">${age}</span>` : ''}</span>${portLink}
         ${btn}
       </div>`;
   });

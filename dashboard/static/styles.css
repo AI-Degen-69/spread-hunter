@@ -477,7 +477,8 @@ header {
   letter-spacing: 0.08em;
 }
 .db-run-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 150px 1fr auto;
   align-items: center;
   gap: 8px;
   padding: 5px 6px;
@@ -485,7 +486,8 @@ header {
 }
 .db-run-row:hover { background: rgba(255, 255, 255, 0.04); }
 .db-run-row.current { background: rgba(255, 255, 255, 0.06); }
-.db-run-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-run-row .pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-run-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 
 /* The SERVICES pill dropdown (terminal-redesign pattern): the summary pill in
    the top bar doubles as the trigger; a child of <header>, NOT of .top-meta,
