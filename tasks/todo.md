@@ -1,33 +1,40 @@
-# Todo — #516 post-fill markout and statistical robustness analytics
+# Todo — #517 capital risk analytics for expectancy, drawdown and downside risk
 
-Branch: `i516/add-post-fill-markout-and-statistical-robustness` | Issue: #516
+Branch: `i517/add-capital-risk-analytics-for-expectancy-drawdown` | Issue: #517
 Plan: `tasks/plan.md` · Guardrails: `CONSTRAINTS.md` · Spec: `SPEC.md`
 
-- [x] T1 `[Backend/Logic]` S: move the CI helper into `core_brain/statistical_analytics.py`
-      (`CI_Z_BY_LEVEL`, `CI_T_BY_DF`, `ci_critical_value`, `mean_pnl_ci`); `kpi.py` imports
-      `mean_pnl_ci as _mean_pnl_ci` and drops its four definitions; new
-      `tests/test_markout_robustness_analytics.py` with the CI cases, the identity pin and the
-      subprocess import-side-effect check
-- [x] T2 `[Backend/Logic]` M: shared per-horizon loop with a per-row direction; `markout()`
-      output pinned unchanged; `MARKOUT_GOOD_AT_OR_ABOVE_CENTS`, `MARKOUT_AVERAGE_ABOVE_CENTS`,
-      `MARKOUT_BAND_WORDS`, `markout_cents_band()`, `signed_markout()` (median · cents · signed)
-- [x] CHKPT A: helper in one place, `tests/test_mean_pnl_ci.py` + `tests/test_trade_analytics.py`
-      green unchanged; `git status --short` limited to the planned files
-- [x] T3 `[Backend/Logic]` M: `HeldMark`, `MARKOUT_HORIZON_SECONDS`,
-      `max_adverse_excursion()`, `excursion_summary()` (window bounded by the close; every row in
-      exactly one bucket), `SQN_NOISE_BELOW`, `SQN_STABLE_EDGE_ABOVE`, `sqn_band()`,
-      `SQN_BAND_WORDS`, `system_quality_number()`; horizon-seconds pin against
-      `core_brain.config.load().markout_horizons`
-- [x] CHKPT B: the ticket's focused file green with the RED output recorded per task;
-      `tests/test_statistical_analytics.py` untouched and green so far
-- [x] T4 `[Backend/Logic]` + `[Design/UI]` L: `robustness()` always-present section + the
-      additive `build()` key; `#robustness-readout` card, `renderRobustness` and its call in
-      `renderAnalyticsSurface`, `module.exports`; harness stub + printed HTML; mount cases
-      (6 chips, MAE unbanded, no-section payload renders none); demo-store seeding +
-      `tests/test_build_demo_db.py` pin; `tests/test_statistical_analytics.py` additions only
-- [x] CHKPT C: focused suites green (`tests/test_markout_robustness_analytics.py`,
-      `tests/test_statistical_analytics.py`, `tests/test_mean_pnl_ci.py`,
-      `tests/test_trade_analytics.py`, `tests/test_analytics_surface_mount.py`,
-      `tests/test_build_demo_db.py`, `tests/test_queue_realism_analytics.py`, `tests/test_kpi.py`);
-      the card read back from the running dashboard on the demo store
-- [ ] Handoff to `/iv-review-build-and-pr`
+- [x] T1 `[Backend/Logic]` M: `drawdown_episodes()` + `drawdown_recovery()` in
+      `core_brain/statistical_analytics.py` (`starting_value`, `_finite`-skipped points counted in
+      `skipped`, `v >= peak` regains, open episodes excluded from the medians, `_percentile` for
+      median/p90, `drawdown_recovery_sec` omitted without timestamps); new
+      `tests/test_capital_risk_analytics.py` with the recovery, no-recovery, rising-only, empty,
+      zero-peak and bad-point cases plus the `kpi.compute_trade_analytics` oracle
+- [x] T2 `[Backend/Logic]` M: `pnl_skewness()`, `skewness_band()`, `sortino_ratio()`, `sortino()`,
+      `sortino_band()` and the settled band tables/words; the skewness, Sortino and band-edge vectors;
+      the `kpi` Sortino oracle at `risk_free=0.0`; the reuse pins (`kpi._mean_pnl_ci is
+      sa.mean_pnl_ci`, one `system_quality_number`) and the "no CI/SQN formula in this file" scan
+- [x] T3 `[Backend/Logic]` S/M: `capital_risk()` and `build(..., equity_curve=None)` in
+      `statistical_analytics.py`; `kpi.py`'s three edits (`KPI_PAYLOAD_VERSION = 257`, hoisted
+      `account_series`, `equity_curve=account_series`); `EXPECTED_PAYLOAD_VERSION = 257` in
+      `dashboard/static/app.js`; additions to the two `build()` cases in
+      `tests/test_statistical_analytics.py`; one new demo-store pin in `tests/test_build_demo_db.py`
+- [x] T4 `[Design/UI]` M: the `#capital-risk-readout` card in `dashboard/static/index.html`,
+      `renderCapitalRisk` + its call in `renderAnalyticsSurface` + the `module.exports` entry in
+      `dashboard/static/app.js`, the harness's stub id / direct call / printed HTML in
+      `tests/js/analytics_surface_harness.cjs`, and the new mount cases in
+      `tests/test_analytics_surface_mount.py` (two chips, four unbanded tiles, absent-section
+      back-compat, band-follows-payload)
+- [x] **CHKPT A** after T1+T2 — pure layer green in the focused file, RED captured for each
+- [x] **CHKPT B** after T4 — payload carries `capital_risk`, card renders on the demo store, every
+      focused suite in `CONSTRAINTS.md` green
+- [x] The operator's hands-on "How to verify" walkthrough (demo store → dashboard → the new card)
+
+## Notes carried into Station IV
+
+- `tests/test_analytics_api.py`'s payload-version literal moved `256` → `257` with #517 appended to
+  its bump chain. That is where this repo records a payload field shipping; the pin itself is not
+  relaxed (added to `CONSTRAINTS.md`'s target files).
+- The local shell exports `PORT=0`, and `tests/test_account_kpi.py` imports the server module at
+  collection, so the focused suites were run with `unset PORT`. Environmental, not this branch.
+- `docs/issues/517-noticed-but-not-touching.md` carries one `open` candidate (a paint-schedule race
+  that can leave all five analytics readouts blank) — recorded, not touched.

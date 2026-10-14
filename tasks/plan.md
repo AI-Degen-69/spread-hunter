@@ -1,429 +1,360 @@
-# Plan — #516 [ADD] Post-fill markout and statistical robustness analytics
+# Plan — #517 [ADD] Capital risk analytics for expectancy drawdown and downside risk
 
-Branch: i516/add-post-fill-markout-and-statistical-robustness | Issue: #516
-Size: **Standard** (2 source modules + 2 dashboard files + the demo builder; internal-only, no
-new dependency, no schema change, no public API change) | Type: **Code + UX/Copy**
-Tags: `enhancement`, `ready-for-agent`, `family:execution-telemetry` · Related: #513, #514, #515, #517 · Part of #513
-Spec: [`SPEC.md`](../SPEC.md) (Standard tier). Guardrails: [`CONSTRAINTS.md`](../CONSTRAINTS.md), rewritten for this branch — the #515 text it replaced is branch-scoped by its own header and stays in git.
+Branch: `i517/add-capital-risk-analytics-for-expectancy-drawdown` | Issue: #517
+Size: **Standard** (2 source modules + 2 dashboard files + the JS harness; internal-only, no new
+dependency, no schema change, no new module file, no public API change) | Type: **Code + UX/Copy**
+Tags: `enhancement`, `ready-for-agent`, `family:execution-telemetry` · Related: #513, #514, #515, #516,
+#527, #535, #537 · Part of #513
+Spec: [`SPEC.md`](../SPEC.md) (Standard tier). Guardrails: [`CONSTRAINTS.md`](../CONSTRAINTS.md),
+rewritten for this branch — the #516 text it replaced is branch-scoped by its own header and stays in git.
 
 ## Pipeline bookkeeping
 
 1. Tree was clean and on `main`, synced with `origin/main` (verified at planning time).
-2. `gh issue edit 516 --add-assignee @me` — claimed.
-3. Branch from HEAD: `i516/add-post-fill-markout-and-statistical-robustness`. Slug derivation:
-   title → `add-post-fill-markout-and-statistical-robustness-analytics` (57 chars) exceeds the
-   50-char cap, so it is cut at a word boundary (`...-robustness`, 47 chars) rather than mid-word.
-4. `tasks/plan.md` and `tasks/todo.md` held #515's merged plan. This issue has no prior plan, so
-   both are replaced, not appended to (Step 6.7 reconciliation applies per-issue only). `SPEC.md`
-   is Standard-tier and supersedes #514's spec in this branch (kept in git).
-5. Step 0C: #516 carries no `quick-fix` label (labels read live from the tracker this session:
-   `enhancement`, `ready-for-agent`, `family:execution-telemetry`) → no gate run, no lane
-   offered, no gate text printed.
-6. Step 6.6 sub-issue mapping: **skipped, recorded.** The family tickets are plain issues under
-   `family:execution-telemetry`, not a `wayfinder:map` with child tickets; four sub-issues for a
-   plan that touches two source modules is the bloat the tracker already avoids here. #515 took
-   the same route for the same reason.
-7. Step 0A `code-explorer` persona and Step 4 `type-design-analyzer` persona: **skipped,
-   recorded.** Neither exists under `~/.agents/agents/` in this environment; the seams they would
-   trace were read directly in the tree this session (every citation below is repository-confirmed).
-8. Step 1 domain skill routing (verified against what is actually installed): loaded and applied
-   `frontend-ui-engineering` (the readout card: accessible names, the theme's existing chip
-   classes, no new colour vocabulary), `humanizer` (the card's copy — band words are operator
-   prose, not jargon), and `incremental-implementation` (the four task-sized increments below).
-   `constraint-driven-development` governs `CONSTRAINTS.md`. **Recorded as absent from this
-   environment**, so the repo's own bar applies instead: `test-driven-development`,
-   `spec-driven-development`, `planning-and-task-breakdown`, `performance-optimization`,
-   `security-and-hardening`. TDD here means the AGENTS.md / `docs/agents/verifying.md` rule — a
-   test that fails without the change, run by the agent — which T1–T4 each carry.
+2. `gh issue edit 517 --add-assignee @me` — claimed (assignee `AI-Degen-69`).
+3. Branch created from `main`'s HEAD: `git switch -c i517/add-capital-risk-analytics-for-expectancy-drawdown`
+   (issue-title slug, lowercased, `[ADD]` stripped, truncated to 50 chars — the settled rule).
+4. Labels read fresh from the API: `enhancement`, `ready-for-agent`, `family:execution-telemetry`.
+5. CodeRabbit plan comment present (posted after `@coderabbitai plan`), mined once in § CodeRabbit
+   intake below. Stations III–V never re-read it.
+6. This file replaced the merged #516 plan, which is this repo's convention for these branch-scoped
+   root files (`SPEC.md`, `CONSTRAINTS.md`, `tasks/*`, each previous version left readable in git).
+   Nothing from #516 is still open, so no `[x]` marks needed reconciling; the #516 plan is in git at
+   commit `6ce7f93`.
 
-## CodeRabbit intake note (read once; the `<!-- <rawResChunk><planningResult> -->` echo was skipped)
+## Step 0C — quick-fix gate
 
-**Adopted**
+The issue does **not** carry the `quick-fix` label, so Step 0C's 7-box gate is not run and no lane is
+offered (skill Step 0C outcome 1). The tier is Standard regardless: a dashboard card, a payload field
+and a payload-version bump are more than "docs/typo/comment-level".
 
-- **Design Choice 1** — move the interval math into the pure module and import it back into
-  `kpi.py`. It satisfies the ticket's AC line "Existing CI helper reused, not duplicated" and the
-  module's own declare-don't-import-over-a-cycle rule (`RESCUE_METHODS` is declared, not imported,
-  for exactly this reason).
-- **Design Choices 2, 3, 5** — `MARKOUT_HORIZONS` as the default with a `horizons` parameter; raw
-  signed displacement with **no** peer subtraction (the stored baselines are unsigned:
-  `markout.py:139` computes `total += (reference - price) * direction * size` and the sampler
-  passes `direction=1.0` for both sides, so signing them is a new contract); uncapped `n` with
-  `None` for fewer than two samples or zero variance.
-- **Design Choice 6, partly** — round each new figure like its nearest sibling (markout/displacement
-  4 decimals, the percentile and SQN figures 6), and classify the SQN band **on the rounded value**
-  so the 1.6 / 2.5 boundaries are deterministic.
-- **Its seam list, spot-checked against the tree — and its `statistical_analytics.py` line
-  numbers were STALE, so they are corrected here rather than carried:** `MARKOUT_HORIZONS` is at
-  `:129-130` (it said `:55-56`), `_finite` at `:133` (it said `:59-66`), `markout` at `:1026-1058`
-  (it said `:219-252`), `build` at `:1105` (it said `:299-314`). Its `kpi.py` seams are right:
-  `:94` (`_CI_Z_BY_LEVEL`), `:103` (`_CI_T_BY_DF`), `:122` (`_ci_critical_value`), `:132`
-  (`_mean_pnl_ci`), `:496` (its only call), `:21` (the existing `statistical_analytics` import it
-  extends). Also confirmed: `order_registry.py:736-754` (`MarkoutRecord.side` = BUY/SELL, not
-  UP/DOWN), `order_registry.py:260-282` (the `markouts` table, columns `mid_h0`..`mid_h3`),
-  `statistical_analytics.py:379` (`fill_path_edge`), `:677` (`rescue_friction_summary`), `:779`
-  (`_percentile`).
-  **Lesson recorded for Stations III–V: do not trust a line number this plan does not re-derive.**
-- **Its three `[UNVERIFIED]` items are now resolved, not carried:** df=9 row is
-  `{90: 1.833, 95: 2.262}` (`kpi.py:108`) — so the N=10 t-multiplier in its expected values is
-  real; `side` is the upper-cased `"BUY"`/`"SELL"` pair (`markout.py:272` comment; the demo
-  builder writes `side="BUY"` at `scripts/build_demo_db.py:597`); markout rows do carry `side` and
-  `token_id` (`order_registry.py:260-282`).
+## Step 0 — stack, tier, task type
 
-**Rejected**
+- Stack: Python 3.12 (`pytest`, stdlib-only analytics module) + vanilla browser JS
+  (`dashboard/static/*.js`, exercised by a Node stub-DOM harness under `tests/js/`).
+- Tier: **Standard**; Task type: **Code** (primary) + **UX/Copy** (the card's labels and disclosure lines).
+- Domain skills loaded for planning: `test-driven-development`, `incremental-implementation` (Core),
+  plus `api-and-interface-design` for the frozen contract and `humanizer` for the card copy. Verified
+  present in this environment; no skill was named that does not resolve.
 
-- **Its Design Choice 7 — "Do not change `build()` or the dashboard."** This contradicts the
-  ticket's own acceptance criterion: *"All four metrics are visible on the Reports & Analytics
-  page with their band chips (MAE unbanded, as settled) — a calculation-only or CLI-only
-  implementation fails this issue."* Its own Scope line repeats it. The dashboard half is in
-  scope; the card is `#robustness-readout`, mounted after `#queue-realism-readout`, on the same
-  `page-reports` surface as the #513/#514/#515 readouts (`prototype.js:73` defines that page;
-  the reference mounts are `app.js:4517` and `app.js:4626`).
-- **Its bps output for `signed_markout` and its `intervals` return shape.** The ticket's field
-  vocabulary is `markout_cents` and its band table is in cents, while `payload.markout` already
-  ships size-weighted **bps** and the chart reads `intervals[].displacement_bps`
-  (`app.js:3830`). A second bps number in an `intervals` key under the name "markout" is precisely
-  the one-word-two-numbers failure #515's plan fought over percentiles.
-- **Its per-horizon loop refactor as a standalone deliverable.** The shared loop is kept (T2), but
-  it is a means, not a task: the deliverable is the banded median figure, with `markout()`'s output
-  pinned unchanged.
-- **Its MAE case list as the whole MAE story.** The pure function and its cases are kept verbatim
-  in spirit; the plan adds the **population** the ticket's dashboard AC needs, per the operator's
-  2026-10-14 decision (see "Operator decisions resolved below").
-- **Its "no `build()` key" for the payload** — the section must reach the page; `build()` gains
-  exactly one additive key and keeps every existing key and value.
-- **Its Task 1 case spelling `levels == []` / `mean_usd == 1.0` for one sample** — kept as written;
-  verified against `kpi.py:132-140` (n < 2 returns the mean and no levels).
-- **Its Task 4 verification text**, which hands the operator `python -c` and pytest steps. This
-  repo forbids that: the operator's verification block is hands-on (see the block at the end), and
-  pytest is agent-run background only.
+## Step 0A — CodeRabbit plan intake (non-binding; simplicity enforced)
 
-**[UNVERIFIED] remaining:** none. Every seam cited in this plan was read in the tree this session.
+`@coderabbitai plan` returned three tasks with five design choices. What this plan did with it:
 
-## Step 0A — open questions resolved from code (planning input, not questions for the operator)
+| # | CodeRabbit position | Verdict | Why |
+|---|---|---|---|
+| 1 | **Standalone pure functions in `core_brain/statistical_analytics.py`; `kpi` used as a cross-check oracle in tests; do not refactor `kpi.py`** (Design Choice 2, option 3) | **ADOPTED** | This is the ticket's own operator-settled mechanism ("implement standalone pure functions … use `kpi` values as cross-check oracles in tests. Do not refactor `kpi.py`"). The "second implementation" it worries about is sanctioned and pinned by test. |
+| 2 | `sortino_ratio(returns, risk_free=0.0)`: mean excess return over the RMS of **negative excess returns over their own count**; `None` for N<2, zero variance, no negative return, invalid `risk_free`; percent-per-trade, never annualized | **ADOPTED** | Matches #516's sibling naming and reproduces `kpi`'s own denominator (`kpi.py:556-559`) exactly at `risk_free=0.0`, so the oracle holds. |
+| 3 | `pnl_skewness(values)` = third standardized moment with **population** moments; `None` for N<3 or zero variance; `_finite`-filtered | **ADOPTED** | Hand-verified: `[-1,-1,-1,-1,10]` → `1.5`, `[1,1,1,1,-10]` → `-1.5`, `[-1,0,1]` → `0.0`. On two values the moment is 0 by construction, which would read `average` — `None` is the honest answer. |
+| 4 | `drawdown_recovery(equity_points, starting_value=None)`: read points in the order given, never sort, `_finite` on `v` and `ts`, return the largest-dollar episode, skip invalid points, `recovery_seconds = None` when the peak is the starting value | **ADOPTED, reshaped** | The shape and the reading order are adopted. Reshaped: one scalar "recovery" cannot carry the settled *median/p90* vocabulary, so the function enumerates the episodes and summarises them (below). Nothing in this branch passes a `starting_value`, so that `None` rule never fires in the payload. |
+| 5 | **Do not touch `kpi.py`, `build()`, the dashboard or `/api/kpi`** | **REJECTED** | Directly contradicts the ticket's hardest acceptance criterion: *"All three new metrics are visible on the Reports & Analytics page with their band chips … A calculation-only or CLI-script implementation does not satisfy this issue."* CodeRabbit planned the calculation half and dropped the half the operator made mandatory. |
+| 6 | Design Choice 1 + Task 1.3: hold for #516, or look up "the #516 symbol" by name and `pytest.skip` with reason `"#516 SQN not landed"`; "the module and the name of the symbol are [UNVERIFIED]" | **REJECTED as obsolete** | #516 merged as PR #533. `core_brain/statistical_analytics.py` already exports `system_quality_number` (line 1441), `sqn_band` (1426), `SQN_NOISE_BELOW`/`SQN_STABLE_EDGE_ABOVE` (1415-1416) and `mean_pnl_ci` (1079, with `kpi.py:21` importing it back as `_mean_pnl_ci`). Nothing is skipped; the reuse is pinned as an identity assertion instead (`kpi._mean_pnl_ci is sa.mean_pnl_ci`). |
+| 7 | "reuse the existing CI helper (`kpi._mean_pnl_ci`)" and drawdown logic at `kpi.compute_trade_analytics` (:621-627, :631-646) | **PARTLY REJECTED (stale)** | `_mean_pnl_ci` no longer lives in `kpi.py` — #516 moved it to the analytics module and `kpi` imports it back; the line numbers it cites are pre-#516. Also, `kpi`'s drawdown reads a **different curve** (`equity_series`: realized closes + float marks) from the capital-level curve this ticket measures (see below), so it is an algorithm oracle on a synthetic curve, not a value oracle on the account curve. |
+| 8 | CodeRabbit's 3-task split (1.1 drawdown / 1.2 skewness+sortino / 1.3 CI reuse + regression) | **MERGED** | Re-split into 2 pure-function tasks + wiring + card, risk-first. Two of its tasks were test-writing for tests it had already described; those collapse into their tasks' verification. |
+| 9 | Assumption 5's "proposed behaviours" (skewness `None` under three values, invalid points skipped, `None` percentage when the peak ≤ 0, "recovery" = at-or-above the old peak, no-drop → `None` durations, percent-per-trade unit, absent from `build`) | **ADOPTED** | It independently flagged exactly the differences this plan freezes. They are recorded as the ticket's "clean N<2 / zero-variance handling" being made explicit, and the two `kpi` differences (invalid point, non-positive peak) are pinned in a test so the divergence is deliberate. |
 
-- **CI decision** — the ticket says the helper lives in `statistical_analytics.py`; it actually
-  lives in `kpi.py:94-174`, and `kpi` imports `statistical_analytics`, so a reverse module-level
-  import is a cycle and a function-level import drags in config plus a session file. **Resolved:
-  move it** (one source of truth, dependency direction preserved).
-- **Horizons** — the ticket's idea mentions 1s/5s/30s; the schema holds `mid_h0`–`mid_h3` and
-  config pins `markout_horizons = (300.0, 3600.0, 21600.0, 900.0)` seconds. **Resolved: reuse the
-  configured four**, sub-minute out of scope.
-- **Peer baselines** — stored unsigned. **Resolved: raw signed displacement**, no subtraction.
-- **Unified verdict** — the ticket's Background mentions one, its Scope does not list one, and no
-  combination rule exists. **Resolved: not built**; each gate keeps its own band and the card
-  shows them side by side with a single shared `n`.
-- **Chart vs backend multiplier mismatch** (`app.js:3091-3130` normal vs the Student-t table) —
-  out of scope on this ticket; not reconciled, not mentioned on the card.
-- **CI vs SQN disagreement** on a zero-variance positive sample (CI `good`, SQN `unmeasured`) —
-  intentional: a band nobody could judge reads `unmeasured`, never `bad`.
-- **MAE population** — the ticket's input shape is a caller-supplied series and DB/tape ingestion
-  is out of scope, but the dashboard AC needs numbers. The only recorded post-fill prices in
-  `orders.db` are the `markouts` rows (`mid_h0`..`mid_h3`, `order_registry.py:260-282`).
-  **Operator decision 2026-10-14: marks bounded by the position's close** — a mark counts only when
-  `markouts.ts + MARKOUT_HORIZON_SECONDS[N] <= close.ts` for that condition, so MAE measures the
-  holding window the ticket defines. A position still open, or one that closed before its first
-  mark, is counted and disclosed rather than folded in as a zero.
+Nothing from that comment stays `[UNVERIFIED]`: every path, symbol and line it cited was re-checked
+against the working tree above, and the only genuinely unknown item — the remote state of #516 — is now
+resolved locally (PR #533 merged, #516 closed 2026-10-13).
 
-## Step 5 — one improvement proposal (evidence-first, adopt-by-default: hardening)
+## Step 0A.2 — open questions resolved from code (the operator was asked nothing)
 
-Evidence, verbatim from the ticket: *"Markout, **median** post-fill mid-price displacement across
-fills, **in cents** — how the tape moved after we were filled"* and *"**Field vocabulary:** new
-fields named `markout_cents` (per horizon)"*. Against the live module: `markout()`'s own docstring
-is *"Post-fill price displacement per horizon, **size-weighted, in bps**"*
-(`statistical_analytics.py:1027`), and the dashboard chart reads that figure as
-`displacement_bps` (`app.js:3830`) and labels it `+xB bps`.
+The issue carries no `needs-answers` label and no Open-questions section, but four questions had to be
+answered before the contract could freeze. Each was resolved from the repository, never assumed:
 
-Two different numbers would therefore live on one screen under one word: a size-weighted **mean in
-bps, unsigned, unbanded**, and a **median in cents, signed by side, banded**. That is the same trap
-#515's plan called out ("one word, two numbers, in one repo, on the value that carries the colour")
-— and here one of the two carries a chip.
+1. **Do the #516 CI/SQN symbols exist to reuse?** Yes — `core_brain/statistical_analytics.py`
+   (`mean_pnl_ci`, `ci_critical_value`, `system_quality_number`, `sqn_band`), with `kpi.py:21-22`
+   importing `mean_pnl_ci as _mean_pnl_ci`. #516 is closed; PR #533 merged. The ticket's "reuse only"
+   rule is satisfiable today, so no sequencing blocker and no skip-marked test.
+2. **Which curve does the recovery metric read?** The caller supplies one (settled: "pure functions over
+   a caller-supplied equity series … Curve assembly is out of scope"). This payload passes the **venue
+   account-value curve** `kpi.report` already computes (`kpi.py:2220-2226`, `account_series`), because
+   (a) the ticket's Relevant-files row names `core_brain/account.py:read_account` the "venue value curve
+   source" and `tests/test_account_kpi.py:166` the curve's own pin; (b) the ticket is *capital*-level,
+   and the account curve is the capital while `equity_series` is run-scoped realized + float; (c) the
+   merged #516 demo builder already seeds exactly this curve for these metrics
+   (`scripts/build_demo_db.py:672-707`, "so the capital-risk metrics have a real series"), and the
+   measured closes curve on that store is deeply underwater and never recovers — a card that can only
+   ever read `unmeasured` cannot be verified on the screen. The rejected alternative (the close-stepped
+   realized curve, which makes the field name `drawdown_recovery_trades` literally true in production)
+   is recorded in § Rejected, with its reason.
+3. **Which series do skewness and Sortino read?** The per-close percent returns `kpi` already builds
+   (`100 × realized_pnl / cost_basis`, `kpi.py:369-380`), restricted to closes with a positive cost
+   basis. `build()` already holds that exact population as `position_returns(closes)["positions"]`
+   (`statistical_analytics.py:153-201`), so `build()` passes `p["pnl_pct"]` and no second percent
+   formula is written. Same population ⇒ `kpi`'s Sortino is a real oracle.
+4. **Does the payload version move?** Yes — `KPI_PAYLOAD_VERSION` is documented "Bump this whenever new
+   payload fields ship" (`kpi.py:45-49`, currently 256) and the page pins it equal to
+   `EXPECTED_PAYLOAD_VERSION` (`dashboard/static/app.js:88`, asserted by
+   `tests/test_analytics_api.py:170-171`). Both move to 257 in the same commit.
 
-**Proposal:** the new figure never wears the bare `markout` name. It ships as
-`statistical_analytics.robustness.markout.intervals[].markout_cents` (median · cents · signed ·
-banded) while the existing chart keeps `statistical_analytics.markout.intervals[].displacement_bps`
-(mean · bps · unsigned · unbanded), and the card's subtitle plus the module docstring say which is
-which ("median · signed by side" against "the chart above: mean · bps"). Classification:
-**hardening / simplification — adopted by default**, folded into T2's section and T4's copy.
+## Persona application
 
-Rejection path recorded here so it does not resurface: if the Owner ever wants the *chart* in
-cents, that is a change to a shipped chart's contract and belongs in its own issue, not this one.
+- **`code-explorer`** (applied inline — this host exposes no sub-agent spawn other than web research, and
+  the persona's method was followed by hand rather than simulated):
+  entry points = `/api/kpi` (`dashboard/server.py:3156`) → `kpi.report` (`kpi.py:1230`) →
+  `statistical_analytics.build` (`kpi.py:2300`) → the payload's `statistical_analytics` key →
+  `renderAnalyticsSurface` (`app.js:5005-5008`) → the five sibling cards in `index.html:470-522`. One
+  production caller of `build()`; one renderer per card; 15 closes and 45 account marks on the demo
+  store; the harness `tests/js/analytics_surface_harness.cjs` mounts each renderer directly. Shared
+  utilities worth reusing: `_finite`, `_close_field`, `_percentile`, `ci_critical_value`,
+  `mean_pnl_ci`, `system_quality_number`.
+- **`type-design-analyzer`** (applied to the frozen contract): encapsulation — the section is a plain
+  dict built by one function, and the renderer receives band *names*, never thresholds (enforced by the
+  mount test that changes a band in the payload and asserts the chip changes). Invariant expression —
+  `good`/`average`/`bad`/`unmeasured` is a closed vocabulary and every band function returns `unmeasured`
+  rather than a verdict nobody could make. Invariant usefulness — the two settled tables are the
+  operator's own thresholds, and `None` (never `0`) is the module's existing missing-value contract.
+  Enforcement — score: strong on the two bands, deliberately absent on recovery (an unbanded metric is
+  the honest encoding of "no intrinsic good/bad exists"); the improvement suggestion was to keep the
+  recovery half out of the band vocabulary entirely, which the operator had already settled.
 
-## Frozen interface contract
+## Step 5 — one improvement proposal (evidence-based)
 
-All functions are pure: values in, values out. No clock, no socket, no SQLite, no signer, no
-`random`. No input is mutated. No value is ever `NaN`/`Infinity`; every float is rounded and the
-result is `json.dumps(..., allow_nan=False)`-safe. Missing stays missing — never `0`, never clamped.
+**Adopted by default (simplification):** create **no** new demo fixture. Evidence, verbatim from the
+merged #516 demo builder, `scripts/build_demo_db.py:672-676`:
+
+> `def scenario_account_curve(reg, t, out) -> str:` … `"""An equity curve with a drawdown and recovery and asymmetric`
+> `returns, so the capital-risk metrics have a real series: mostly small`
+> `wins with a few large losses (negative skew), one deep drawdown that`
+> `recovers to a new high, one shallower drawdown still open."""`
+
+Measured on that store (this planning session, `scripts.build_demo_db.build` into a temp path, then
+`kpi.report(run_id="all")`): 15 closes → `pnl_skewness = -1.504061` (band `bad`), `sortino_ratio(0.0) =
+-0.23345` matching `kpi`'s `-0.23344982…`, and 45 account marks → 3 regained drawdowns, deepest
+`14.60` usd / `11.9574` % of its `122.10` peak, median `4` marks / `4800` s, p90 `7.2` marks / `8640` s.
+So the demo store is already a populated, checkable fixture for all three metrics; this branch writes no
+demo rows and instead **pins those numbers in a new `tests/test_build_demo_db.py` case**.
+
+**Recorded rejection (do not resurface):** unifying the Sortino/drawdown math by having `kpi.py` import
+the new functions from the analytics module. Rejected on the operator's own settled decisions —
+"implement standalone pure functions in `core_brain/statistical_analytics.py`; use `kpi` values as
+cross-check oracles in tests. **Do not refactor `kpi.py`**" — and because `kpi`'s drawdown reads a
+different curve than this section's. The tests pin the two implementations together instead.
+
+## Frozen interface contract (Step 4) — `core_brain/statistical_analytics.py`
 
 ```python
-# core_brain/statistical_analytics.py   (moved in from kpi.py, names public here)
+# --- Capital risk (#517) -----------------------------------------------------
+# The settled skewness table: a right tail is good, a left tail is the
+# catastrophic-loss scenario, and the closed band between is "no dominant tail".
+SKEWNESS_AVERAGE_AT_OR_ABOVE = -0.5
+SKEWNESS_BAND_WORDS = {"good": "upside tails -- losses stay small, wins occasionally large",
+                       "average": "roughly symmetric -- no dominant tail",
+                       "bad": "downside tails -- the catastrophic-loss shape",
+                       "unmeasured": "fewer than three closes, or every close identical"}
+# The settled Sortino table, on return per unit of downside pain.
+SORTINO_GOOD_AT_OR_ABOVE = 2.0
+SORTINO_AVERAGE_AT_OR_ABOVE = 1.0
+SORTINO_BAND_WORDS = {"good": "returns are twice the downside pain",
+                      "average": "returns merely match the downside pain",
+                      "bad": "the downside pain outweighs the returns",
+                      "unmeasured": "fewer than two closes, or no spread to measure"}
+# The shipped risk-free assumption, percent per close -- the unit every return is in.
+RISK_FREE_PCT_PER_CLOSE = 0.0
 
-CI_Z_BY_LEVEL = ((90, 1.645), (95, 1.96))          # was kpi._CI_Z_BY_LEVEL
-CI_T_BY_DF: dict[int, dict[int, float]] = {...}    # was kpi._CI_T_BY_DF, df 1..30
-def ci_critical_value(level: int, n: int, z: float) -> float     # was kpi._ci_critical_value
-def mean_pnl_ci(pnls: Sequence[float]) -> dict      # was kpi._mean_pnl_ci, behaviour identical
-#   -> {"mean_usd", "n", "levels": [{"level","lower","upper","includes_negative",
-#      "negative_depth_usd"}], "verdict"}   (unchanged shape; n < 2 -> levels == [], verdict None)
-
-# --- Robustness gates (#516) -------------------------------------------------
-
-MARKOUT_GOOD_AT_OR_ABOVE_CENTS = 0.0     # ticket: good [0, inf)
-MARKOUT_AVERAGE_ABOVE_CENTS = -1.0       # ticket: average (-1.0, 0), bad (-inf, -1.0]
-SQN_NOISE_BELOW = 1.6                    # ticket-fixed
-SQN_STABLE_EDGE_ABOVE = 2.5              # ticket-fixed
-
-# mid_hN -> SECONDS after the fill, mirroring config.markout_horizons (300, 3600, 21600, 900)
-# and the columns markout.py writes. Declared, not imported: core_brain.markout loads config at
-# import and pulls in the order registry, and this module's promise is no import side effects.
-# Pinned against the live config in tests/test_markout_robustness_analytics.py.
-MARKOUT_HORIZON_SECONDS = {"mid_h0": 300.0, "mid_h1": 3600.0,
-                           "mid_h2": 21600.0, "mid_h3": 900.0}
-
-# Band words ship as data with the band, so the renderer holds no numeral and no verdict:
-MARKOUT_BAND_WORDS = {"good": "mid held or moved in our favour after the fill",
-                      "average": "mid drifted against us by less than a tick",
-                      "bad": "the tape moved a full cent or more against us after the fill",
-                      "unmeasured": "no matured post-fill mark to measure"}
-SQN_BAND_WORDS = {"good": "stable edge -- signal dominates noise",
-                  "average": "promising but unproven",
-                  "bad": "noise -- the results could be luck",
-                  "unmeasured": "fewer than two closes, or no spread to measure"}
-CI_BAND_WORDS = {"good": "zero is outside the band -- the edge is statistically proven",
-                 "average": "zero is inside the band -- suggestive, not proven",
-                 "bad": "zero is outside the band on the wrong side -- the edge is negative",
-                 "unmeasured": "fewer than two closes -- no band exists"}
-# Corrected during T4: the `average` word first read "the mean is positive but zero is still
-# inside the band", which is false whenever the mean is negative -- and on the demo store it is
-# (-41.4c). A band word must be true for every sample that reaches it, so it names only what the
-# band itself says: zero is inside it.
-
-@dataclass(frozen=True)
-class HeldMark:
-    """One entry fill and the recorded post-fill marks inside its holding window."""
-    side: str                              # "BUY" / "SELL", the order book's side
-    entry_price: Optional[float] = None    # markouts.fill_price, dollars
-    marks: tuple[float, ...] = ()          # in-window matured mid_hN values, dollars
-
-def markout_cents_band(median_cents: Optional[float]) -> str    # good/average/bad/unmeasured
-def signed_markout(rows: Sequence[Any],
-                   horizons: Sequence[tuple[str, str]] = MARKOUT_HORIZONS) -> dict
-#   rows: markout dicts/records (fill_price, size, side, mid_h*) -> {"intervals": [...]}
-#   BUY +1, SELL -1 (matching peer_markout); unknown side skipped; a NEGATIVE size is skipped and
-#   a missing/zero size takes unit weight, mirroring markout()'s `_finite(size) or 1.0` (corrected
-#   during T2: the plan first said "size <= 0 is skipped", which the sibling never did); size
-#   carries no WEIGHT in the figure itself, because it is a median across fills, not a
-#   size-weighted mean; non-finite/None marks skipped.
-#   Per horizon: the MEDIAN of the per-fill signed displacement in cents, linearly interpolated
-#   (so p50 IS statistics.median). Unmatured horizons omitted.
-#   -> [{"horizon", "samples", "markout_cents", "band", "meaning"}]
-def max_adverse_excursion(entry_price: Optional[float], side: Optional[str],
-                          prices: Sequence[float]) -> dict
-#   BUY: mae = entry - min(prices); SELL: mae = max(prices) - entry; clamped at 0.
-#   Non-finite prices dropped. -> {"mae_cents", "worst_price", "samples"}
-#   None/None/0 when the series has no usable price, the entry is not > 0, or the side is not
-#   BUY/SELL. Reads no tape, no registry, no clock.
-def excursion_summary(closes: Sequence[Any], markouts: Sequence[Any]) -> dict
-#   Builds the HeldMark population from the rows it is handed, then aggregates. Every markout row
-#   lands in exactly one bucket, and the buckets partition the input:
-#     measured  (a BUY fill with >= 1 in-window mark) | exit_fill (side != BUY) |
-#     open (no close at/after the row for that condition) | no_marks_in_window (window closed,
-#     no mark inside it) | not_recorded (fill_price/bucket unusable)
-#   Window: mark mid_hN counts when row.ts + MARKOUT_HORIZON_SECONDS[N] <= close.ts, the close
-#   being the EARLIEST one for that condition with ts >= row.ts.
-#   -> {"measured", "open", "exit_fill", "no_marks_in_window", "not_recorded",
-#       "median_cents", "p90_cents", "units": "cents_per_share"}
-#   Refined during T3: the `count` key was dropped, because it was always equal to `measured`
-#   and two names for one number is how a payload starts disagreeing with itself. The five
-#   buckets partition the input: measured + open + exit_fill + no_marks_in_window + not_recorded
-#   == len(markouts). `exit_fill` is any row whose side is not BUY, our own exits included.
-#   Descriptive only: NO band key at all (a chip on a guess is a confident lie).
-def sqn_band(sqn: Optional[float]) -> str        # good/average/bad/unmeasured
-def system_quality_number(pnls: Sequence[float]) -> dict
-#   _finite-filtered sample; sqn = sqrt(n) * mean / statistics.stdev(sample), rounded to 6;
-#   band classified on the ROUNDED value (< 1.6 noise, > 2.5 stable edge, [1.6, 2.5] marginal).
-#   n < 2 or stdev == 0 -> sqn None, band "unmeasured".
-#   -> {"sqn", "band", "meaning", "n", "mean_usd", "stdev_usd"}
-def pnl_ci_band(lower_cents: Optional[float], upper_cents: Optional[float]) -> str
-#   good: lower > 0 | bad: upper < 0 | average: contains 0 | unmeasured: either is None.
-def robustness(closes: Sequence[Any], markouts: Sequence[Any]) -> dict
-#   ALWAYS present, like fill_path_edge / rescue_friction / queue_realism, and for the same
-#   reason: a caller must never branch on whether the section exists. Every band is computed
-#   from the rounded figure it ships with.
-#   -> {"units": "cents_per_share",
-#       "markout": {"intervals": [...]},
-#       "mae": {...},                                    # excursion_summary(...)
-#       "mean_pnl_ci": {"level": 95, "mean_cents", "lower_cents", "upper_cents", "n",
-#                       "band", "meaning"},
-#       "sqn": {"sqn", "band", "meaning", "n", "mean_usd", "stdev_usd"}}
+def skewness_band(value: Optional[float]) -> str            # good | average | bad | unmeasured
+def pnl_skewness(return_pcts: Sequence[float]) -> dict      # {"pnl_skewness","band","meaning","n"}
+def sortino_band(value: Optional[float]) -> str
+def sortino_ratio(return_pcts, risk_free=RISK_FREE_PCT_PER_CLOSE) -> Optional[float]
+def sortino(return_pcts, risk_free=RISK_FREE_PCT_PER_CLOSE) -> dict
+        # {"sortino_ratio","risk_free_pct_per_close","band","meaning","n"}
+def drawdown_episodes(points, starting_value=None) -> list[dict]
+        # curve order; {"peak","trough","depth_usd","depth_pct","recovered","points","seconds"}
+def drawdown_recovery(points, starting_value=None) -> dict
+def capital_risk(return_pcts, curve=()) -> dict
+        # {"units","pnl_skewness","sortino_ratio","drawdown_recovery"}
 ```
 
-The CI half reads the level whose `"level" == 95` explicitly (not `levels[-1]`), and a test pins
-that the helper's last level IS 95 — so a future reorder of `CI_Z_BY_LEVEL` fails loudly instead of
-silently relabelling the 90% band as 95%. With one close or none, the band is `unmeasured` and every
-cent figure is `None`.
+- **`drawdown_recovery` return (shape-frozen):**
+  `{"units": "curve_points_and_seconds", "episodes": int, "open": int, "skipped": int,
+   "deepest_usd": float|None, "deepest_pct": float|None, "deepest_recovered": bool|None,
+   "drawdown_recovery_trades": {"median": float|None, "p90": float|None, "n": int},
+   "drawdown_recovery_sec": {"median": float|None, "p90": float|None, "n": int}}`
+  — `drawdown_recovery_sec` is **omitted entirely** when no regained episode carried both endpoint
+  timestamps (the ticket's "when timestamps are supplied"; a zero would read as "instant recovery").
+- **Reading the curve (frozen semantics):** points are read in the order given and never sorted; a point
+  whose `v` fails `_finite` is skipped and counted in `skipped`, its neighbours stay in order; the peak
+  starts at `starting_value` when supplied and otherwise at the first usable point; a point with
+  `v >= peak` **regains** the old peak and closes the open episode (`points` = index distance from the
+  peak, `seconds` = `ts` distance when both stamps are finite), then the peak updates; `v < peak` opens
+  or deepens the episode's trough. An episode still open at the end of the curve is counted in `open`,
+  gets **no** length and never enters the medians. A curve with no drop at all reports
+  `deepest_usd == 0.0` (a real measurement: nothing dropped), `deepest_recovered is None`, `episodes == 0`
+  and `None` medians; an empty curve reports every figure `None`. The medians are over the **regained**
+  episodes and are read off the module's existing `_percentile`, so `median` IS `statistics.median`.
+- **Documented, deliberate differences from `kpi.compute_trade_analytics`** (pinned by a test so the
+  divergence stays deliberate): a point with an unusable `v` is skipped here and counted as `0.0` there;
+  a peak at or below zero gives `deepest_pct is None` here and `0.0` there; the two functions read
+  different curves by design, so no value-level oracle is claimed for the payload.
+- **Band tables (settled, inclusive edges):** skewness `good` when `> 0`, `average` when
+  `>= -0.5`, `bad` otherwise; Sortino `good` when `>= 2.0`, `average` when `>= 1.0`, `bad` otherwise;
+  `unmeasured` for `None`/non-finite in both.
+- **`build()` change:** `build(closes, fills, markouts, starting_capital, quotes=None, equity_curve=None)`.
+  All existing positional parameters keep their positions; `equity_curve` is additive and keyword-only by
+  position. The payload gains one key:
+  `"capital_risk": capital_risk([p["pnl_pct"] for p in returns["positions"]], equity_curve or ())`.
+  `capital_risk` receives only plain numbers and a curve — never registry rows — so it stays unit-testable
+  without a store, and it holds no CI or SQN math of its own.
+- **`kpi.py` edits (frozen):** `KPI_PAYLOAD_VERSION = 257`; the account-value comprehension hoisted into
+  `account_series` before the return dict; `build_statistical_analytics(closes, fills, markouts,
+  starting_capital, quotes, equity_curve=account_series)`. The `account_series` payload value is
+  byte-identical.
+- **Card copy (frozen):** title `CAPITAL RISK — DRAWDOWN RECOVERY, SKEWNESS & SORTINO`, right-hand note
+  `Per Close & Per Curve Point · Percent · Descriptive & Banded`, host `#capital-risk-readout` mounted
+  directly after `#robustness-readout`. Tiles, in order:
+  `Deepest DD ($)` · `Recovery median (marks)` · `Recovery p90 (marks)` · `Drawdowns regained` — all four
+  with **no chip** — then `PnL skewness` and `Sortino` with their payload chips. Disclosure lines name
+  the curve the numbers were read off ("the venue account-value curve, one point per sweep") and state
+  that `CI`/`SQN` are the robustness card's own single definition, reused rather than restated.
+- **Renderer rule (frozen):** `BAND_CHIP = {good: 'live', average: 'warn', bad: 'bad'}`; the same
+  `chip()` guard the sibling renderers use, so a payload with no band key (and a payload from before this
+  section existed) renders **no chips**, and `unmeasured` names itself without a colour.
 
-`build(closes, fills, markouts, starting_capital, quotes=None)` gains **one** line:
-`payload["robustness"] = robustness(closes, markouts)`. Its signature does not change, and no
-existing key or value moves. `kpi.py` needs no call-site change (it already passes `closes` and
-`markouts`).
-
-## Dependency graph
+## Dependency graph (Step 6)
 
 ```
-T1 (CI helper moved)  ──┬─→ T4 (payload section + card + demo seeding)
-                        │
-T2 (signed markout)  ───┤
-                        │
-T3 (MAE + SQN)  ────────┘
+T1 drawdown_recovery ─┐
+T2 skewness + sortino ┴─► T3 payload wiring ─► T4 dashboard card
 ```
-`Depends on:` — T2: T1 (shares the module file and `_finite`/`_percentile`; sequential edits avoid
-conflicts). T3: T1 (same file, and T3's SQN reads the same PnL sample the CI half documents).
-T4: T1, T2, T3 (it ships what they compute). T2 and T3 are functionally independent; they are
-serialised because they write the same file.
+
+T1 and T2 are independent of each other (different functions, one shared test file created by T1 and
+appended to by T2 — so T2's file write depends on T1 having created it; that is a file-order dependency,
+not a logic one). T3 consumes T1 + T2's exports. T4 consumes T3's payload shape. Risk-first: T1 carries
+the only genuinely new semantics (episode enumeration over a caller-supplied curve), so it lands first.
 
 ## Tasks
 
-Status (the plan is the source of truth for completion):
+### [x] T1 — Drawdown recovery over a caller-supplied equity curve · size M · `[Backend/Logic]`
+**Files:** `core_brain/statistical_analytics.py`, `tests/test_capital_risk_analytics.py` (NEW).
+**Builds:** `drawdown_episodes()`, `drawdown_recovery()`, the `# Capital risk (#517)` section header
+comment and the module docstring paragraph's first half, exactly per the frozen contract.
+**Depends on:** nothing.
+**Verification (agent-run, `python -m pytest -q tests/test_capital_risk_analytics.py`):**
+- Recovery curve, `starting_value=1000`: `v = 1100, 900, 950, 1100, 1200`, `ts = 100..500` →
+  `deepest_usd == 200`, `deepest_pct ≈ 18.181818` (`pytest.approx`), `deepest_recovered is True`,
+  `episodes == 1`, `open == 0`, `drawdown_recovery_trades == {"median": 3.0, "p90": 3.0, "n": 1}`,
+  `drawdown_recovery_sec == {"median": 300.0, "p90": 300.0, "n": 1}` — the episode spans the three
+  points from the peak to the recovery (`900`, `950`, the `1100` that equals the old peak and is a
+  recovery rather than a new peak, pinned on purpose), so 3 points and the `ts` gap `100 → 400`.
+- Same curve without `ts`: identical lengths in points, `"drawdown_recovery_sec" not in out`.
+- No recovery: `starting_value=1000`, points `1200, 1000, 1100` → `deepest_usd == 200`,
+  `deepest_pct ≈ 16.666667`, `deepest_recovered is False`, `episodes == 0`, `open == 1`, both medians
+  `None`.
+- Rising only `1000, 1100, 1200` → `deepest_usd == 0.0`, `deepest_recovered is None`, `episodes == 0`.
+- `[]` → every figure `None`, `episodes == 0`, no exception. Peak at zero (`starting_value=0`, points
+  `0, -50, 0`) → `deepest_usd == 50`, `deepest_pct is None`.
+- Bad points (`v` = `float("nan")`, `None`, `"abc"`, `float("inf")` interleaved) → same figures as the
+  clean curve, `skipped == 4`, no exception; a point with a bad `ts` keeps its point length and yields no
+  seconds.
+- `json.dumps(out, allow_nan=False)` round-trips on every one of the above.
+- **Oracle:** `kpi.compute_trade_analytics([], 1000.0, [{"v": v} for v in (1100, 900, 950, 1100, 1200)], [])`
+  reports `max_drawdown_usd == 200` and `max_drawdown_pct ≈ 18.181818` — asserted equal to
+  `deepest_usd`/`deepest_pct` with `pytest.approx`. Excluded on purpose: the zero-peak and bad-point
+  curves, where the two differ (§ Frozen contract).
+- **RED:** `ImportError: cannot import name 'drawdown_recovery' from 'core_brain.statistical_analytics'`.
 
-- [x] **T1** — Share the confidence interval helper, in the pure module · S · `[Backend/Logic]`
-- [x] **T2** — Signed post-fill markout, in cents, with the ticket's band · M · `[Backend/Logic]`
-- [x] **T3** — Maximum adverse excursion over the holding window, and SQN · M · `[Backend/Logic]`
-- [x] **T4** — Payload section, the readout card, and the operator's demo store · L · `[Backend/Logic]` + `[Design/UI]`
+### [x] T2 — PnL skewness and risk-free Sortino · size M · `[Backend/Logic]`
+**Files:** `core_brain/statistical_analytics.py`, `tests/test_capital_risk_analytics.py`.
+**Builds:** `pnl_skewness()`, `skewness_band()`, `sortino_ratio()`, `sortino()`, `sortino_band()`, the
+band constants/tables and the docstring paragraph's second half.
+**Depends on:** T1 (creates the test file it appends to).
+**Verification (agent-run, same file):**
+- Skewness vectors: `[1,1,1,1,-10]` → `-1.5`; `[-1,-1,-1,-1,10]` → `1.5`; `[-1,0,1]` → `0.0` (band
+  `average`); `[1,2]`, `[2,2,2]`, `[]`, `[5]` → `None` with band `unmeasured` — never `bad`.
+- Band edges on the rounded figure: `skewness_band(0.0) == "average"`, `skewness_band(-0.5) == "average"`,
+  `skewness_band(-0.500001) == "bad"`, `skewness_band(0.000001) == "good"`,
+  `skewness_band(None) == "unmeasured"`.
+- Sortino: `[-1,-1,-1,-1,10]` → `1.2` at `risk_free=0`, `0.1` at `1`, `-0.91227` at `11`
+  (`pytest.approx`); `[2,2,2,2,-5]` → `0.12`; `[]`, `[3]`, `[2,2,2]`, `[1,2,3]` → `None`; `risk_free=float("nan")`
+  → `None`.
+- Band edges: `sortino_band(2.0) == "good"`, `sortino_band(1.999999) == "average"`,
+  `sortino_band(1.0) == "average"`, `sortino_band(0.999999) == "bad"`, `sortino_band(-0.23) == "bad"`.
+- **Oracle:** for both datasets, with closes built as `{"realized_pnl": r, "cost_basis": 100.0}`,
+  `kpi.compute_trade_analytics(closes, 100.0, [], [])["sortino_ratio"]` equals
+  `sortino_ratio([...], 0.0)` within `abs=1e-6` (the module rounds to 6 places; `kpi` does not).
+  `[-1,-1,-1,-1,10]` also asserts `sortino_ratio(...) > kpi …["sharpe_ratio"]` and `[2,2,2,2,-5]`
+  asserts the reverse — the asymmetry the ticket asks the card to expose.
+- **Reuse pins (no fork):** `kpi._mean_pnl_ci is sa.mean_pnl_ci`; `sa.system_quality_number` is the SQN
+  the #516 card reads (same object, `band` vocabulary unchanged); the new test file contains no
+  confidence-interval and no SQN formula (source-scan assertion over its own text, the way
+  `tests/test_ci_critical_source.py` pins a single critical-value source).
+- **RED:** `ImportError: cannot import name 'pnl_skewness' from 'core_brain.statistical_analytics'`.
 
-### T1 — Share the confidence interval helper, in the pure module · size S · `[Backend/Logic]`
-- Files: `core_brain/statistical_analytics.py`, `core_brain/kpi.py`,
-  `tests/test_markout_robustness_analytics.py` (NEW).
-- Build: move `_CI_Z_BY_LEVEL`, `_CI_T_BY_DF`, `_ci_critical_value`, `_mean_pnl_ci` into the pure
-  module under their public names (`CI_Z_BY_LEVEL`, `CI_T_BY_DF`, `ci_critical_value`,
-  `mean_pnl_ci`), behaviour byte-for-byte identical. In `kpi.py`, extend the existing
-  `statistical_analytics` import line with `mean_pnl_ci as _mean_pnl_ci` and delete the four
-  definitions; the call at `kpi.py:496` stays as it is.
-- Verification (automated): the new file's T1 cases —
-  N=10 `range(1, 11)` → `mean_usd == 5.5`, `lower ≈ 3.334300`, `upper ≈ 7.665700` (abs 1e-5, the
-  df=9 t=2.262 row), `verdict == "positive"`; N=10 adverse `[1, -1] * 5` → `lower ≈ -0.754`,
-  `verdict == "spans_zero"`, `negative_depth_usd ≈ 0.754`; N=100 `[1.0, -0.5] * 50` →
-  `mean_usd == 0.25`, `lower ≈ 0.102259`, `upper ≈ 0.397741` (abs 1e-6, z=1.96);
-  low variance `[0.99, 1.01] * 5` → `lower ≈ 0.99246`, `upper ≈ 1.00754`; zero variance
-  `[2.0] * 5` → `lower == upper == 2.0`; one sample → `levels == []`, `verdict is None`,
-  `mean_usd == 1.0`; zero samples → `{"mean_usd": None, "n": 0, "levels": [], "verdict": None}`;
-  identity `kpi._mean_pnl_ci is statistical_analytics.mean_pnl_ci`; and a subprocess check that
-  `import core_brain.statistical_analytics` leaves `core_brain.kpi` and `core_brain.order_registry`
-  out of `sys.modules`. Regression: `tests/test_mean_pnl_ci.py` and `tests/test_trade_analytics.py`,
-  untouched.
-- RED expectation: `ImportError: cannot import name 'mean_pnl_ci' from 'core_brain.statistical_analytics'`.
+### [x] T3 — Payload wiring: `capital_risk` on `statistical_analytics` · size S/M · `[Backend/Logic]`
+**Files:** `core_brain/statistical_analytics.py` (module docstring paragraph + `capital_risk` +
+`build()`'s new keyword and key), `core_brain/kpi.py` (3 edits), `tests/test_statistical_analytics.py`,
+`tests/test_build_demo_db.py`, `dashboard/static/app.js` (the version constant only).
+**Depends on:** T1, T2.
+**Verification (agent-run):**
+`python -m pytest -q tests/test_capital_risk_analytics.py tests/test_statistical_analytics.py tests/test_build_demo_db.py tests/test_kpi.py tests/test_analytics_api.py tests/test_trade_analytics.py tests/test_markout_robustness_analytics.py`
+- `build([], [], [], 100.0)["capital_risk"]` is present, shape-frozen, every figure `None` /
+  `unmeasured`, and `drawdown_recovery_sec` omitted.
+- `build(closes, [], [], 100.0, equity_curve=points)["capital_risk"]["drawdown_recovery"]["deepest_usd"]`
+  moves with the curve while every sibling section keeps its exact previous shape (the #516
+  `set(bare[section]) == set(loaded[section])` idiom, extended).
+- `kpi.report` on the demo store: `statistical_analytics["capital_risk"]` reads `pnl_skewness ≈ -1.504061`
+  (band `bad`), `sortino_ratio ≈ -0.23345` (band `bad`), `deepest_usd == 14.6`, `deepest_pct ≈ 11.9574`,
+  `episodes == 3`, `open == 0`, `median 4` marks / `4800` s, `p90 7.2` marks / `8640` s — and
+  `payload["account_series"]` is unchanged in length and values.
+- `KPI_PAYLOAD_VERSION == 257 == EXPECTED_PAYLOAD_VERSION` (the existing pin in
+  `tests/test_analytics_api.py` covers the pair).
+- **RED:** `KeyError: 'capital_risk'` on the payload, and the version pin failing at 256.
 
-### T2 — Signed post-fill markout, in cents, with the ticket's band · size M · `[Backend/Logic]`
-- Files: `core_brain/statistical_analytics.py`, `tests/test_markout_robustness_analytics.py`.
-- Build: share `markout()`'s per-horizon loop with a private helper that takes a per-row direction
-  (`markout()` passes `+1` for every row and its output does not change); add
-  `markout_cents_band()`, `MARKOUT_BAND_WORDS` and `signed_markout()`. Median of per-fill signed
-  cents, `band` + `meaning` per interval, unmatured horizons omitted.
-- Verification (automated): each row `fill_price 0.50`, `size 10.0` unless stated —
-  BUY `mid_h0 0.51` → `markout_cents == 1.0`, `band == "good"`; BUY `0.50` → `0.0` / `good`;
-  BUY `0.49` → `-1.0` / `bad`; SELL `0.51` → `-1.0`, SELL `0.49` → `1.0`; BUY at `0.51` and `0.53`
-  (different sizes) → median `2.0`, `samples == 2`, and the weighted mean would have been `2.5`
-  (the pin that this is a median); unknown side `"HOLD"` only → `intervals == []`;
-  `mid_h0` set with `mid_h3 None` → only the 5m interval; `horizons=(("mid_h1", "1h"),)` → only 1h;
-  band edges `0.0` → `good`, `-0.4` → `average`, `-1.0` → `bad`, `None` → `unmeasured` (never
-  `bad`); unchanged sibling — `markout([<SELL row, mid_h0 0.51>])["intervals"][0]["displacement_bps"]
-  == 200.0`.
-  **Corrected during Station V (CodeRabbit, `core_brain/statistical_analytics.py`):** these
-  expectations were first written as `2.0` / `-2.0` / `10.0`, which is `bps / 100` — the PERCENT
-  move of the fill price, not cents of price. The two agree only on a $1.00 fill, so the figures
-  were inflated by `1 / fill` and the ticket's cent bands were being scored against a percentage.
-  The shared loop now returns the raw dollar displacement (`(later - fill) * direction`) and each
-  reader names its own unit: `markout()` in bps, `signed_markout()` in `delta * 100`. T2 also
-  carries a dedicated pin — a 1c move reads `1.0` on both a 25c and a 75c fill, and a 0.6c
-drift on a cheap fill is `average`, not `bad`.
-- RED expectation: `ImportError: cannot import name 'markout_cents_band'` (or `signed_markout`).
+### [x] T4 — The `#capital-risk-readout` card · size M · `[Design/UI]`
+**Files:** `dashboard/static/index.html`, `dashboard/static/app.js`, `tests/js/analytics_surface_harness.cjs`,
+`tests/test_analytics_surface_mount.py`.
+**Depends on:** T3.
+**Verification (agent-run, `python -m pytest -q tests/test_analytics_surface_mount.py`; skips with a
+reason on a Node-less host):**
+- Section payload (skewness `bad`, Sortino `good`, drawdown figures from the demo store) → the six tiles
+  read their figures, the four recovery tiles carry **no** chip, the two banded tiles carry exactly two
+  chips (`analytics-chip bad` ×1, `analytics-chip live` ×1), and no tile prints `NaN`, `undefined`,
+  `null` or `0.00` where the payload is `None`.
+- A payload with `unmeasured` bands renders `UNMEASURED` with no colour; a payload **without** the
+  `capital_risk` key (every store written before this change) renders no chips and no exception —
+  back-compat tested, not assumed.
+- Changing a band name in the payload changes the chip and nothing else (the renderer holds no threshold).
+- Every figure on the card matches the payload the socket delivered (no invented numbers, the
+  `renderAnalyticsSurface` call is wrapped like its siblings so one broken card cannot blank the page).
+- **RED (before T4):** the harness reports `capital_risk_html` empty, and `index.html` has no
+  `#capital-risk-readout`.
 
-### T3 — Maximum adverse excursion over the holding window, and SQN · size M · `[Backend/Logic]`
-- Files: `core_brain/statistical_analytics.py`, `tests/test_markout_robustness_analytics.py`.
-- Build: `HeldMark`, `MARKOUT_HORIZON_SECONDS`, `max_adverse_excursion()`, `excursion_summary()`,
-  `SQN_NOISE_BELOW`, `SQN_STABLE_EDGE_ABOVE`, `sqn_band()`, `SQN_BAND_WORDS`,
-  `system_quality_number()`.
-- Verification (automated): MAE with entry `0.50` — BUY dip `[0.52, 0.47, 0.49, 0.53]` →
-  `mae_cents ≈ 3.0`, `worst_price == 0.47`, `samples == 4`; SELL rise `[0.48, 0.54, 0.51]` →
-  `mae_cents ≈ 4.0`, `worst_price == 0.54`; BUY never adverse `[0.50, 0.51, 0.52]` → `0.0`;
-  flat `[0.50, 0.50]` → `0.0`; non-finite filtered `[0.52, nan, 0.47]` → `samples == 2`, `3.0`;
-  empty series / entry `0.0` / side `"HOLD"` → all three fields `None`. Window semantics —
-  a mark at exactly `close.ts` counts (`<=`), a mark one second later does not; a row with no close
-  lands in `open`; a SELL row lands in `exit_fill`; a closed row with no in-window mark lands in
-  `no_marks_in_window`; the buckets sum to `len(markouts)`; `median_cents == statistics.median`
-  of the per-row values (the interpolation pin). SQN — N=10 `range(1, 11)` → `sqn ≈ 5.744563`,
-  `band == "good"`; `[3, -1] * 5` → `≈ 1.5` → `bad`; `[4, -1] * 5` → `≈ 1.8` → `average`;
-  `[23, -7] * 5` → exactly `1.6` → `average`; `[11, -1] * 5` → exactly `2.5` → `average`;
-  N=100 `[1.0, -0.5] * 50` → `≈ 3.316625` → `good`; `[1.0, -0.9] * 50` → `≈ 0.523678` → `bad`
-  (corrected during T3: the intake comment's `0.523681` was rounded from a 6-decimal stdev, while
-  the score is computed from the full-precision one);
-  low variance `[0.99, 1.01] * 5` → `≈ 300.0` → `good`; zero variance `[2.0] * 5` → `sqn is None`,
-  `stdev_usd == 0.0`; one sample → `sqn is None`, `stdev_usd is None`; zero samples → `n == 0`.
-  Plus: `MARKOUT_HORIZON_SECONDS` pinned against `core_brain.config.load().markout_horizons`
-  (300/3600/21600/900) so a config move fails the pin instead of silently mis-windowing MAE.
-- RED expectation: `ImportError: cannot import name 'max_adverse_excursion'`.
-
-### T4 — Payload section, the readout card, and the operator's demo store · size L · `[Backend/Logic]` + `[Design/UI]`
-- Files: `core_brain/statistical_analytics.py`, `dashboard/static/index.html`,
-  `dashboard/static/app.js`, `scripts/build_demo_db.py`,
-  `tests/js/analytics_surface_harness.cjs`, `tests/test_analytics_surface_mount.py`,
-  `tests/test_statistical_analytics.py` (additions only, per #515's precedent),
-  `tests/test_build_demo_db.py`, `tests/test_markout_robustness_analytics.py`.
-- Build: `robustness(closes, markouts)` (always present, bands from the rounded figures, the 95%
-  level selected by `"level" == 95`); `build()` gains the additive `robustness` key;
-  `#robustness-readout` card after `#queue-realism-readout` with the title
-  `POST-FILL ROBUSTNESS — MARKOUT, MAE, CI & SQN`; `renderRobustness(stats)` reading
-  `stats.robustness` — 4 markout tiles (one chip each), MAE median + p90 tiles (**no chip at all**),
-  a 95% CI tile (chip), an SQN tile (chip), a disclosed counts line, and the subtitle/copy that
-  keeps the median-cents figure distinct from the chart's mean-bps figure; `module.exports` entry;
-  harness stub id + direct call + printed HTML; demo seeding so the demo store measures MAE (an
-  entry close on the markout-mix market timed to leave marks inside the window) and its pinning test.
-- Verification (automated): the focused suites in `CONSTRAINTS.md`; section shape-frozen on an empty
-  run (every figure `None`, every band `unmeasured`, no `NaN`/`Infinity` under
-  `json.dumps(..., allow_nan=False)`); mount cases — the card renders from a full payload, the
-  markout/CI/SQN chips come from the payload's band names, `html.count("analytics-chip") == 6`,
-  MAE carries none, a payload with no `robustness` key renders no chips and no crash, and no
-  `NaN`/`undefined`/`null` reaches the rendered text; the demo pin asserting the demo store's
-  `excursion_summary()["measured"] >= 1` and `median_cents is not None`.
-- RED expectation: the mount case fails without `renderRobustness` (`TypeError`/missing HTML), and
-  the demo pin fails without the seeding (`measured == 0`).
-- Verify before reporting (agent-run, no venue): build the demo store, start the dashboard against
-  it, and read the card over HTTP; the operator gets the shorter path in the block below.
-
-## Checkpoints
-
-- **CHKPT A (after T1):** the helper lives in one place, `kpi.py` is down four definitions, and
-  `tests/test_mean_pnl_ci.py` + `tests/test_trade_analytics.py` pass unchanged. One-line progress
-  report under `auto` mode.
-- **CHKPT B (after T3):** all four pure functions green in the ticket's focused file, with the
-  RED output recorded for each; `tests/test_statistical_analytics.py` still green (nothing in it
-  was edited yet).
-- **CHKPT C (after T4):** the payload carries `robustness`, the card renders on the demo store
-  with six chips and an unbanded MAE, and every focused suite in `CONSTRAINTS.md` is green.
+**Checkpoints (Mode A `auto` reports one line each):**
+- **CHKPT A (after T1+T2):** both pure layers green in the ticket's focused file, RED output captured for
+  each, and nothing outside `core_brain/statistical_analytics.py` + the new test file has moved.
+- **CHKPT B (after T4):** the payload carries `capital_risk`, the card renders on the demo store with two
+  chips and four unbanded recovery tiles, and every focused suite in `CONSTRAINTS.md` is green.
 
 ## What fails without the change (RED evidence to capture)
 
-1. T1: `ImportError: cannot import name 'mean_pnl_ci' from 'core_brain.statistical_analytics'`.
-2. T2: `ImportError: cannot import name 'markout_cents_band'`.
-3. T3: `ImportError: cannot import name 'max_adverse_excursion'`.
-4. T4: the mount harness reports the missing card HTML (`robustness_html` empty / chips `0`), and
-   the demo pin reports `measured == 0` before the seeding lands.
+1. T1: `ImportError: cannot import name 'drawdown_recovery' from 'core_brain.statistical_analytics'`.
+2. T2: `ImportError: cannot import name 'pnl_skewness' from 'core_brain.statistical_analytics'`.
+3. T3: `KeyError: 'capital_risk'` on `build()`'s payload.
+4. T4: harness `capital_risk_html` empty; `analytics-chip` count `0` on the new card.
 
 ## How to verify (operator — hands-on, no venue, no money at risk)
 
-Nothing in this change places, cancels or merges an order; no step reaches the venue.
+Nothing in this change places, cancels or merges an order, signs anything, or touches the registry; no
+step reaches the venue.
 
-1. `python -m scripts.build_demo_db --out data/demo_516.db --force` — the scenario list gains the
-   post-fill robustness rows and the run ends with `demo registry written:`.
-2. `python -m dashboard.server --db data/demo_516.db`, then open `http://127.0.0.1:8799` and go to
+1. `python -m scripts.build_demo_db --out data/demo_517.db --force` — ends with
+   `demo registry written:` and lists the scenarios (unchanged by this branch).
+2. `python -m dashboard.server --db data/demo_517.db`, then open `http://127.0.0.1:8799` and go to
    **Reports & Analytics**.
-3. Read the new card `POST-FILL ROBUSTNESS — MARKOUT, MAE, CI & SQN`, directly under
-   `QUEUE REALISM — TRADE-THROUGH DEPTH & FILL LATENCY`. Expected: four markout tiles carrying a
-   cent figure and a coloured chip each, `MAE median` and `MAE p90` tiles carrying a cent figure and
-   **no chip**, a `95% CI` tile in cents with its chip, and an `SQN` tile with its chip and a short
-   word from the payload (`stable edge`, `promising but unproven`, `noise`).
-4. Open the same card against the live registry (`python -m dashboard.server`, then
-   `http://127.0.0.1:8799` → Reports & Analytics). Expected: the card is present with counts that
-   explain each figure, SQN and CI read `unmeasured` until at least two closes exist, and MAE reads
-   `unmeasured` with a count where no mark fell inside a holding window.
-5. A failure looks like one of: the card missing entirely, a tile printing `0.00` where the store
-   recorded nothing (only `unmeasured` is honest), a chip on either MAE tile, or any tile reading
-   `NaN`/`undefined`.
+3. Read the new card `CAPITAL RISK — DRAWDOWN RECOVERY, SKEWNESS & SORTINO`, directly under
+   `POST-FILL ROBUSTNESS — MARKOUT, MAE, CI & SQN`. Expected on the demo store: `Deepest DD ($)` reads
+   `14.60`, the recovery tiles read `4`/`7.2` marks with `4800`/`8640` seconds beside them and **no
+   chips**, `PnL skewness` reads about `-1.50` with a red `BAD` chip, and `Sortino` reads about `-0.23`
+   with a red `BAD` chip.
+4. Same card against the live registry (`python -m dashboard.server`, then the same page): expected —
+   the card is present, recovery and skewness read `unmeasured` until that store holds enough closes and
+   account marks, and no tile prints `0.00` where the store recorded nothing.
+5. A failure looks like one of: the card missing entirely, a chip on any recovery tile, a tile printing
+   `0.00`/`NaN`/`undefined` instead of `unmeasured`, or `CI`/`SQN` restated in a second place on this
+   card instead of the robustness card's own figures.
+
+## Open decisions carried to Station III
+
+None. The curve, the series, the band tables, the field names, the card copy and the version bump are all
+frozen above; anything that changes them is a planning change recorded in this file first.
