@@ -749,6 +749,133 @@ def test_the_banded_tiles_carry_a_chip_and_the_excursion_carries_none():
     assert "STABLE EDGE -- SIGNAL DOMINATES NOISE" in text.upper()
 
 
+# -- Capital risk: drawdown recovery, skewness and Sortino (#517) -----------
+
+# The demo store's own numbers: fifteen closes of mostly small wins with a few large losses, and an
+# account-value curve with three drawdowns that all came back, the worst of them 14.60 deep and
+# eleven points underwater at +11.96% of its peak.
+CAPITAL = {
+    "units": "percent_per_close_and_curve_points",
+    "pnl_skewness": {"pnl_skewness": -1.504061, "band": "bad",
+                     "meaning": "downside tails -- the catastrophic-loss shape", "n": 15},
+    "sortino_ratio": {"sortino_ratio": -0.23345, "risk_free_pct_per_close": 0.0,
+                      "band": "bad", "meaning": "the downside pain outweighs the returns",
+                      "n": 15},
+    "drawdown_recovery": {
+        "units": "curve_points_and_seconds", "episodes": 3, "open": 0, "skipped": 0,
+        "deepest_usd": 14.6, "deepest_pct": 11.957412, "deepest_recovered": True,
+        "drawdown_recovery_trades": {"median": 4.0, "p90": 7.2, "n": 3},
+        "drawdown_recovery_sec": {"median": 4800.0, "p90": 8640.0, "n": 3},
+    },
+}
+
+
+def _capital(payload) -> dict:
+    """A payload carrying the capital-risk section, or one from before it existed."""
+    return {"statistical_analytics": {} if payload is None else {"capital_risk": payload}}
+
+
+def test_the_capital_risk_card_shows_all_three_readings():
+    # Act
+    out = _mount(_capital(CAPITAL))
+
+    # Assert -- the depth in dollars and as a share of its peak, the wait in marks and in time, and
+    # the two banded readings with their own figures.
+    assert out["errors"] == []
+    text = _visible(out["capital_risk_html"])
+    assert "Deepest DD ($)" in text
+    assert "14.60" in text
+    assert "11.96" in text            # percent of the peak it fell from
+    assert "regained" in text
+    assert "Recovery median (marks)" in text
+    assert "4" in text
+    assert "1h 20m" in text           # 4800 seconds, in the page's own duration format
+    assert "Recovery p90 (marks)" in text
+    assert "7.2" in text
+    assert "2h 24m" in text
+    assert "PnL skewness" in text
+    assert "-1.50" in text
+    assert "Sortino" in text
+    assert "-0.23" in text
+    assert "risk-free 0.00% per close" in text
+
+
+def test_only_the_two_banded_tiles_carry_a_chip():
+    """Recovery is descriptive: a chip on a guess is a confident lie."""
+    # Act
+    out = _mount(_capital(CAPITAL))
+
+    # Assert
+    html = out["capital_risk_html"]
+    assert html.count("analytics-chip") == 2
+    assert html.count("analytics-chip bad") == 2
+    assert "DOWNSIDE TAILS" in _visible(html).upper()
+
+
+def test_the_colour_of_the_capital_chips_follows_the_payload_band():
+    # Arrange -- the same readings, where the run's tails are on the upside and the edge pays.
+    payload = {
+        **CAPITAL,
+        "pnl_skewness": {**CAPITAL["pnl_skewness"], "pnl_skewness": 0.4, "band": "good"},
+        "sortino_ratio": {**CAPITAL["sortino_ratio"], "sortino_ratio": 2.4, "band": "good"},
+    }
+
+    # Act
+    out = _mount(_capital(payload))
+
+    # Assert -- green, and no red anywhere: the renderer holds no threshold.
+    html = out["capital_risk_html"]
+    assert html.count("analytics-chip live") == 2
+    assert "analytics-chip bad" not in html
+
+
+def test_a_reading_the_store_could_not_make_says_unmeasured_not_zero():
+    # Arrange -- one close and no curve: every figure is missing rather than zero.
+    payload = {
+        "units": "percent_per_close_and_curve_points",
+        "pnl_skewness": {"pnl_skewness": None, "band": "unmeasured",
+                         "meaning": "fewer than three closes, or no spread to divide by", "n": 1},
+        "sortino_ratio": {"sortino_ratio": None, "risk_free_pct_per_close": 0.0,
+                          "band": "unmeasured", "meaning": "fewer than two closes", "n": 1},
+        "drawdown_recovery": {
+            "units": "curve_points_and_seconds", "episodes": 0, "open": 0, "skipped": 0,
+            "deepest_usd": None, "deepest_pct": None, "deepest_recovered": None,
+            "drawdown_recovery_trades": {"median": None, "p90": None, "n": 0},
+        },
+    }
+
+    # Act
+    out = _mount(_capital(payload))
+
+    # Assert -- unmeasured names itself without a colour, and nothing reads as a measured zero or
+    # leaks a placeholder to the reader.
+    assert out["errors"] == []
+    html = out["capital_risk_html"]
+    text = _visible(html)
+    assert "UNMEASURED" in text.upper()
+    assert "analytics-chip live" not in html
+    assert "analytics-chip warn" not in html
+    assert "analytics-chip bad" not in html
+    assert "$0.00" not in text          # a depth nobody measured is not a depth of zero
+    for leak in ("NaN", "undefined", "null"):
+        assert leak not in text
+
+
+def test_a_store_from_before_this_section_reads_as_unmeasured_without_chips():
+    # Arrange / Act -- a payload with no `capital_risk` key at all, which is what every store
+    # written before this change looks like.
+    out = _mount(_capital(None))
+
+    # Assert
+    assert out["errors"] == []
+    html = out["capital_risk_html"]
+    assert "analytics-chip" not in html
+    text = _visible(html)
+    assert "unmeasured" in text
+    for leak in ("NaN", "undefined", "null"):
+        assert leak not in text
+
+
 def test_the_colour_follows_the_payload_band_not_a_copy_of_it():
     # Arrange -- the same card where the tape went our way within the minute.
     payload = {
