@@ -195,17 +195,55 @@ def test_closed_palette_is_hidden_and_has_no_options():
 # ── Entries: pages, actions, filtering, arrow navigation (harness) ──
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
-def test_palette_lists_six_pages_and_two_actions():
+def test_palette_lists_pages_actions_and_rail_links():
     """Every rail page (six today — the list is built from the DOM, never
-    hardcoded) plus the two actions; the external Polymarket link, which
-    shares the .proto-nav-btn class without data-page, is excluded."""
+    hardcoded) plus the two actions, plus rail links: the external Polymarket
+    anchor, which shares the .proto-nav-btn class without data-page, is a
+    Links entry carrying its URL as sub (REPINNED for #564 — inclusion
+    replaces the old exclusion expectation)."""
     res = _run({"withPrototype": True, "externalLink": True}, _open())
     labels = [r["label"] for r in res["rows"]]
     assert labels == [
         "Dashboard", "Data & Markets", "Strategy", "Trades & Positions",
-        "Reports & Analytics", "Data Analysis", "SYNC VENUE", "RESET",
+        "Reports & Analytics", "Data Analysis", "Polymarket",
+        "SYNC VENUE", "RESET",
     ]
-    assert "Polymarket" not in labels
+    link = [r for r in res["rows"] if r["label"] == "Polymarket"][0]
+    assert link["sub"] == "https://polymarket.com/markets"
+    assert link["entryId"] == "link:Polymarket"
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_link_entry_opens_new_tab_with_noopener():
+    """Activating a link row opens its href in a new tab, like the rail."""
+    res = _run({"withPrototype": True, "externalLink": True},
+               _open() + [{"type": "input", "value": "poly"}, _key("Enter")])
+    assert res["threw"] is None
+    assert res["open"] is False
+    assert res["openedLinks"] == [{
+        "href": "https://polymarket.com/markets",
+        "target": "_blank",
+        "features": "noopener",
+    }]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_rows_carry_rail_icons():
+    """Page and link rows show the rail item's icon; icon-less market rows
+    render without one (the railIcon guard path)."""
+    res = _run({"withPrototype": True, "externalLink": True}, _open())
+    rows = {r["label"]: r for r in res["rows"]}
+    assert rows["Dashboard"]["icon"] is True
+    assert rows["Polymarket"]["icon"] is True
+    # only rail-sourced rows carry icons — actions have no rail artwork
+    assert rows["SYNC VENUE"]["icon"] is False
+    assert rows["RESET"]["icon"] is False
+    # icon-less market rows render without one (the railIcon guard path)
+    res = _run(dict(MARKET_FIXTURE, externalLink=True),
+               _open() + [{"type": "input", "value": "0x"}])
+    markets = [r for r in res["rows"] if str(r["entryId"] or "").startswith("market:")]
+    assert markets, "fixture must yield market rows for the guard path"
+    assert all(r["icon"] is False for r in markets)
 
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")

@@ -74,6 +74,17 @@ function makeEl(id, extra) {
       return !ev.defaultPrevented;
     },
     appendChild(child) { el.children.push(child); child.parentNode = el; return child; },
+    querySelector(sel) {
+      // production clones a rail item's own svg into its palette row
+      if (sel !== 'svg') return null;
+      const stack = el.children.slice();
+      while (stack.length) {
+        const n = stack.shift();
+        if (n && n.tagName === 'SVG') return n;
+        if (n && n.children) stack.push(...n.children);
+      }
+      return null;
+    },
     contains(target) {
       if (target === el) return true;
       return el.children.some(c => c.contains && c.contains(target));
@@ -101,6 +112,7 @@ let kanbanKeys = [];
 let resetEscapeKeys = [];
 let syncClicks = 0;
 let resetClicks = 0;
+let openedLinks = [];
 let fetchCalls = 0;
 let otEvents = 0;
 
@@ -169,14 +181,22 @@ function buildFixture() {
       textContent: p.label,
       dataset: { page: p.page },
     });
+    const btnSvg = makeEl(null, { tagName: 'SVG' });
+    btnSvg.cloneNode = function () { return makeEl(null, { tagName: 'SVG' }); };
+    btn.appendChild(btnSvg);
     navButtons.push(btn);
   });
   if (fixture.externalLink) {
-    navButtons.push(makeEl('nav-polymarket', {
+    const ext = makeEl('nav-polymarket', {
       tagName: 'A',
       textContent: 'Polymarket',
       dataset: {},
-    }));
+    });
+    ext.setAttribute('href', 'https://polymarket.com/markets');
+    const extSvg = makeEl(null, { tagName: 'SVG' });
+    extSvg.cloneNode = function () { return makeEl(null, { tagName: 'SVG' }); };
+    ext.appendChild(extSvg);
+    navButtons.push(ext);
   }
 
   const opener = fixture.opener ? makeEl(fixture.opener, { tagName: 'BUTTON' }) : null;
@@ -245,6 +265,10 @@ function buildDoc() {
       setItem: (k, v) => { store[k] = String(v); },
     },
     location: { pathname: '/prototype' },
+    open(href, target, features) {
+      openedLinks.push({ href, target, features });
+      return null;
+    },
     addEventListener(type, fn, capture) {
       (windowListeners[type] = windowListeners[type] || []).push({ fn, capture: !!capture });
     },
@@ -284,6 +308,7 @@ function snapshot() {
     entryId: c.dataset.entryId || null,
     selected: c.attrs['aria-selected'] === 'true',
     disabled: c.attrs['aria-disabled'] === 'true',
+    icon: c.children.some(k => k && k.className === 'palette-icon'),
   })) : [];
   const current = navButtons.find(b => b.getAttribute('aria-current') === 'page');
   return {
@@ -300,6 +325,7 @@ function snapshot() {
     currentPage: current ? current.dataset.page : null,
     visiblePages: sections.filter(s => !s.hidden).map(s => s.id),
     syncClicks, resetClicks, fetchCalls,
+    openedLinks,
     kanbanKeys, resetEscapeKeys,
     otValue: els['ot-search-input'] ? els['ot-search-input'].value : null,
     otEvents,
