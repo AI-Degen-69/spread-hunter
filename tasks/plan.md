@@ -73,7 +73,7 @@ T1 (Groups & Landmarks)
   - Create `tests/test_ui_top_nav_groups.py` with element tree assertions and update `test_dashboard_server.py` group check.
 - **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_ui_278_status_strip.py tests/test_sidebar_prototype.py -q`.
 
-### T2 [Code] Status Pill Grammar Normalization & Fake DOM Harnesses — M
+### T2 [x] [Code] Status Pill Grammar Normalization & Fake DOM Harnesses — M
 - **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/js/live_state_harness.cjs`, `tests/js/master_toggle_harness.cjs`, `tests/js/start_toggle_harness.cjs`, `tests/test_live_state_language.py`, `tests/test_ui_top_nav_groups.py`.
 - **What**:
   - Normalize pill markup in `index.html` to `.pill mono` base with `.pill-label` and `.pill-value` spans.
@@ -84,7 +84,7 @@ T1 (Groups & Landmarks)
   - Update elsewhere assertion in `tests/test_live_state_language.py`.
 - **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_live_state_language.py -q`.
 
-### T3 [Design/UI] Unified Button Hierarchy & Master Toggle State Handler — S
+### T3 [x] [Design/UI] Unified Button Hierarchy & Master Toggle State Handler — S
 - **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/test_dashboard_server.py`, `tests/test_ui_top_nav_groups.py`, `tests/test_ui_277_touch_targets.py`.
 - **What**:
   - Add `.ctrl-btn` base class, `.ctrl-btn-primary` (weight 800, 16px pad), and `.ctrl-btn-secondary` (weight 700, 14px pad).
@@ -94,7 +94,7 @@ T1 (Groups & Landmarks)
   - Update `tests/test_dashboard_server.py` to use token checks instead of exact string equality.
 - **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_ui_277_touch_targets.py -q`.
 
-### T4 [Design/UI] Panel Anchoring, Unified Positioning & Dismissal — M
+### T4 [x] [Design/UI] Panel Anchoring, Unified Positioning & Dismissal — M
 - **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/test_ui_top_nav_groups.py`, `tests/test_live_state_language.py`.
 - **What**:
   - Move `#services-dropdown` to direct child of `<header>` alongside `#db-run-switcher`. Add `.header-panel` class to both.
@@ -104,7 +104,7 @@ T1 (Groups & Landmarks)
   - Implement outside click and Escape key dismissal; opening one panel closes the other.
 - **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_live_state_language.py -q`.
 
-### T5 [Design/UI] Live State Aggregation & Neutral Kanban Hero Palette (Consolidated #479) — M
+### T5 [x] [Design/UI] Live State Aggregation & Neutral Kanban Hero Palette (Consolidated #479) — M
 - **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/test_ui_top_nav_groups.py`.
 - **What**:
   - Implement summary aggregate status pill in live state group computing worst-state-wins (`DOWN` > `DEGRADED` > `RUNNING`) via `stateKey`.
@@ -112,3 +112,14 @@ T1 (Groups & Landmarks)
   - Neutralize kanban bucket hero styling in `styles.css`: remove categorical hues (`#a78bfa`, `#fb923c`, `#f472b6`, `#38bdf8`, `#fbbf24`), replacing with neutral slate/ink chip styling.
   - Confirm green/amber/red/gray are strictly reserved for live execution status.
 - **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_dashboard_server.py -q` and `npm run build`.
+
+### T6 [x] [Design/UI + UX] Station III-B Iteration: Streamline Top Nav, Mode-DB Pairing, Shadow Telemetry & Sync Removal — M
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/test_ui_top_nav_groups.py`, `tests/test_dashboard_server.py`.
+- **What**:
+  - Pair `#master-status-indicator` and `#db-mode-badge` directly inside `.top-group-source` (Data source).
+  - Clean up `.top-group-state`: remove standalone pills (`SCAN`, `ENGINE`, `WATCHDOG`), leaving single consolidated `#hud-services-pill`.
+  - Add `Shadow Rehearsal Quoter` (`shadow`) to `SERVICE_DEFS` and render distinct contextual status in `#services-dropdown` (`live only (shadow uses in-process client)` / `shadow only (live uses venue engine)`).
+  - Permanently remove unused `#btn-sync` button from `.top-group-controls`.
+  - Permanently remove `#exposure-bar` from `.top-group-source` and guard `renderExposure`.
+  - Add distinct `.mode-shadow` (amber) vs `.mode-live` (emerald) styling for master indicator and service cards.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_dashboard_server.py tests/test_live_state_language.py tests/test_dashboard_command_palette.py -q`.
