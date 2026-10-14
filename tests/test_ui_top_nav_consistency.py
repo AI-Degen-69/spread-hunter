@@ -45,29 +45,42 @@ def test_header_pills_carry_label_and_value_spans():
         assert m, f"{pill_id} must pair a .pill-label with a .pill-value"
 
 
+def _slice(js: str, start_marker: str, end_markers: tuple[str, ...]) -> str:
+    """Return the text from start_marker up to the first end marker, with no
+    fixed length. A fragile char-count slice drifts as markup grows (#586)."""
+    start = js.find(start_marker)
+    assert start != -1, f"start marker {start_marker!r} not found in app.js"
+    rest = js[start:]
+    ends = [rest.find(m) for m in end_markers if rest.find(m) != -1]
+    end = min(ends) if ends else len(rest)
+    return rest[:end]
+
+
 def test_dropdown_row_builder_emits_label_and_value():
     js = _js()
-    seg = js[js.find("const pillTag"):]
-    seg = seg[:seg.find("});join('')")] if "});join('')" in seg else seg[:1200]
+    seg = _slice(js, "const pillTag", ("}).join",))
     assert 'class="pill-label"' in seg, "dropdown row pill missing .pill-label"
     assert 'class="pill-value"' in seg, "dropdown row pill missing .pill-value"
 
 
 def test_dropdown_row_dot_has_separator():
     js = _js()
-    assert "${dot}<span" not in js, "pulse-dot emitted with no separator before a span"
-    assert "${dot} <span" in js, "pulse-dot must be followed by a space before the label span"
+    # Scope to the dropdown row builder so the check is about that code.
+    seg = _slice(js, "const pillTag", ("}).join",))
+    assert "${dot}<span" not in seg, "dropdown liveness dot emitted with no separator"
+    assert "${dot} <span" in seg, "dropdown liveness dot must be followed by a space before the label span"
 
 
 def test_switcher_rows_use_pill_grammar():
     js = _js()
-    switcher = js[js.find("const runState"):][:600]
-    assert 'class="pill state-' in switcher, "switcher run row missing .pill shell"
-    assert 'class="pill-label"' in switcher, "switcher run row missing .pill-label"
-    assert 'class="pill-value"' in switcher, "switcher run row missing .pill-value"
-    demo = js[js.find("const demoState"):][:400]
-    assert 'class="pill-label">DEMO' in demo, "demo row missing DEMO label pill"
-    assert 'class="pill-value"' in demo, "demo row missing value span"
+    # Each slice ends at the template literal's closing backtick, not a byte count.
+    run_seg = _slice(js, "const runState", ("</div>`;",))
+    assert 'class="pill state-' in run_seg, "switcher run row missing .pill shell"
+    assert 'class="pill-label"' in run_seg, "switcher run row missing .pill-label"
+    assert 'class="pill-value"' in run_seg, "switcher run row missing .pill-value"
+    demo_seg = _slice(js, "const demoState", ("return `<div", "</div>`;"))
+    demo_seg = _slice(js, "const demoState", ("</div>`;",))
+    assert 'class="pill-value"' in demo_seg, "demo row missing value span"
 
 # -- Meta vocabulary + tooltip relocation --
 
