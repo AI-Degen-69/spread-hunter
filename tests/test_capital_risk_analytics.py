@@ -27,8 +27,16 @@ import pytest
 from core_brain import kpi
 from core_brain import statistical_analytics as sa
 from core_brain.statistical_analytics import (
+    RISK_FREE_PCT_PER_CLOSE,
+    SKEWNESS_BAND_WORDS,
+    SORTINO_BAND_WORDS,
     drawdown_episodes,
     drawdown_recovery,
+    pnl_skewness,
+    skewness_band,
+    sortino,
+    sortino_band,
+    sortino_ratio,
 )
 
 
@@ -171,6 +179,135 @@ def test_the_episodes_are_the_drawdowns_the_msummary_counts():
     assert only["recovered"] is True
     assert only["points"] == 3
     assert only["seconds"] == pytest.approx(300.0)
+
+
+# ---------------------------------------------------------------------------
+# The skewness half: where the tail risk sits
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("values, expected", [
+    ([1.0, 1.0, 1.0, 1.0, -10.0], -1.5),      # a lone large loss: the downside-tail shape
+    ([-1.0, -1.0, -1.0, -1.0, 10.0], 1.5),    # a lone large win: the upside-tail shape
+    ([-1.0, 0.0, 1.0], 0.0),                  # symmetric about the mean
+])
+def test_skewness_is_the_third_standardized_moment(values, expected):
+    assert pnl_skewness(values)["pnl_skewness"] == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize("values", [[1.0, 2.0], [2.0, 2.0, 2.0], [], [5.0]])
+def test_skewness_needs_three_distinct_observations(values):
+    """Two values have no third moment to measure, and a flat sample has no spread to divide by.
+
+    Reporting `0.0` for either would read as "roughly symmetric" -- a verdict drawn from evidence
+    that does not exist.
+    """
+    out = pnl_skewness(values)
+
+    assert out["pnl_skewness"] is None
+    assert out["band"] == "unmeasured"
+    assert out["n"] == len(values)
+
+
+def test_the_settled_skewness_bands_are_inclusive_where_the_ticket_says_so():
+    assert skewness_band(0.000001) == "good"
+    assert skewness_band(0.0) == "average"        # symmetric is not an upside tail
+    assert skewness_band(-0.5) == "average"
+    assert skewness_band(-0.500001) == "bad"
+    assert skewness_band(None) == "unmeasured"    # never `bad`: nobody could judge it
+
+
+def test_the_skewness_reading_carries_its_band_and_its_words():
+    out = pnl_skewness([1.0, 1.0, 1.0, 1.0, -10.0])
+
+    assert set(out) == {"pnl_skewness", "band", "meaning", "n"}
+    assert out["band"] == "bad"
+    assert out["meaning"] == SKEWNESS_BAND_WORDS["bad"]
+    assert out["n"] == 5
+
+
+def test_a_malformed_return_is_dropped_rather_than_measured_as_zero():
+    dirty = [1.0, 1.0, float("nan"), 1.0, None, 1.0, -10.0, float("inf"), "abc"]
+
+    assert pnl_skewness(dirty)["pnl_skewness"] == pnl_skewness([1.0, 1.0, 1.0, 1.0, -10.0])["pnl_skewness"]
+    assert pnl_skewness(dirty)["n"] == 5
+
+
+# ---------------------------------------------------------------------------
+# The Sortino half: return per unit of downside pain
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("risk_free, expected", [
+    (0.0, 1.2),
+    (1.0, 0.1),
+    (11.0, -0.91227),     # every excess return is now a loss, and the reading says so
+])
+def test_sortino_is_measured_against_the_risk_free_rate_it_is_given(risk_free, expected):
+    assert sortino_ratio([-1.0, -1.0, -1.0, -1.0, 10.0], risk_free) == pytest.approx(expected, abs=1e-6)
+
+
+def test_sortino_separates_the_tail_that_matters():
+    """The same mean either way; the downside deviation is what moves."""
+    assert sortino_ratio([2.0, 2.0, 2.0, 2.0, -5.0]) == pytest.approx(0.12, abs=1e-6)
+
+
+@pytest.mark.parametrize("values, risk_free", [
+    ([], 0.0),
+    ([3.0], 0.0),
+    ([2.0, 2.0, 2.0], 0.0),      # no spread to divide by
+    ([1.0, 2.0, 3.0], 0.0),      # no downside to be paid for
+    ([-1.0, 2.0], float("nan")),
+])
+def test_sortino_declines_to_answer_without_the_evidence(values, risk_free):
+    assert sortino_ratio(values, risk_free) is None
+    assert sortino(values, risk_free)["band"] == "unmeasured"
+
+
+def test_the_shipped_risk_free_rate_is_named_on_the_reading():
+    """The operator sees the assumption the number was computed under, not just the number."""
+    out = sortino([-1.0, -1.0, -1.0, -1.0, 10.0])
+
+    assert out["risk_free_pct_per_close"] == RISK_FREE_PCT_PER_CLOSE == 0.0
+    assert out["sortino_ratio"] == pytest.approx(1.2, abs=1e-6)
+    assert out["band"] == "average"
+    assert out["meaning"] == SORTINO_BAND_WORDS["average"]
+    assert out["n"] == 5
+
+
+def test_the_settled_sortino_bands_are_inclusive_where_the_ticket_says_so():
+    assert sortino_band(2.0) == "good"
+    assert sortino_band(1.999999) == "average"
+    assert sortino_band(1.0) == "average"
+    assert sortino_band(0.999999) == "bad"
+    assert sortino_band(-0.23) == "bad"
+    assert sortino_band(None) == "unmeasured"
+
+
+# ---------------------------------------------------------------------------
+# The oracle: the same reading, from `kpi`'s own Sortino
+# ---------------------------------------------------------------------------
+
+def _oracle_closes(returns: list[float]) -> list[dict]:
+    """Closes whose percentage return IS the number handed in, so the two series are the same."""
+    return [{"realized_pnl": r, "cost_basis": 100.0} for r in returns]
+
+
+@pytest.mark.parametrize("returns", [[-1.0, -1.0, -1.0, -1.0, 10.0], [2.0, 2.0, 2.0, 2.0, -5.0]])
+def test_sortino_matches_the_kpi_oracle_when_the_risk_free_rate_is_zero(returns):
+    oracle = kpi.compute_trade_analytics(_oracle_closes(returns), 100.0, [], [])
+
+    assert sortino_ratio(returns, 0.0) == pytest.approx(oracle["sortino_ratio"], abs=1e-6)
+
+
+def test_the_two_ratios_disagree_exactly_where_the_skew_says_they_should():
+    """An upside surge flatters Sortino; a downside tail drags it below Sharpe."""
+    upside = [-1.0, -1.0, -1.0, -1.0, 10.0]
+    downside = [2.0, 2.0, 2.0, 2.0, -5.0]
+
+    upside_oracle = kpi.compute_trade_analytics(_oracle_closes(upside), 100.0, [], [])
+    downside_oracle = kpi.compute_trade_analytics(_oracle_closes(downside), 100.0, [], [])
+
+    assert sortino_ratio(upside, 0.0) > upside_oracle["sharpe_ratio"]
+    assert sortino_ratio(downside, 0.0) < downside_oracle["sharpe_ratio"]
 
 
 # ---------------------------------------------------------------------------

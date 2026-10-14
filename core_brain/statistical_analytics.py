@@ -1570,6 +1570,149 @@ def robustness(closes: Sequence[Any], markouts: Sequence[Any]) -> dict[str, Any]
 # and where the tail risk sits.
 # ---------------------------------------------------------------------------
 
+# The settled skewness table, on the third standardized moment of the per-close returns: a right
+# tail is the shape where the losses stay small and the wins occasionally run, and the closed band
+# down to `SKEWNESS_AVERAGE_AT_OR_ABOVE` is "no dominant tail" -- zero included, because a
+# symmetric sample is not an upside tail. Below the edge the losses are the tail.
+SKEWNESS_AVERAGE_AT_OR_ABOVE = -0.5
+
+SKEWNESS_BAND_WORDS = {
+    "good": "upside tails -- losses stay small, wins occasionally large",
+    "average": "roughly symmetric -- no dominant tail",
+    "bad": "downside tails -- the catastrophic-loss shape",
+    "unmeasured": "fewer than three closes, or no spread to divide by",
+}
+
+# The settled Sortino table, on the return per unit of downside pain.
+SORTINO_GOOD_AT_OR_ABOVE = 2.0
+SORTINO_AVERAGE_AT_OR_ABOVE = 1.0
+
+SORTINO_BAND_WORDS = {
+    "good": "returns are twice the downside pain",
+    "average": "returns merely match the downside pain",
+    "bad": "the downside pain outweighs the returns",
+    "unmeasured": "fewer than two closes, no spread, or no downside to measure",
+}
+
+# The shipped risk-free assumption, percent per close -- the unit every return is already in, so a
+# caller compares like with like. It is named on the reading rather than buried in the call.
+RISK_FREE_PCT_PER_CLOSE = 0.0
+
+
+def skewness_band(value: Optional[float]) -> str:
+    """The traffic-light band for a per-close PnL skewness: good / average / bad.
+
+    The settled table: above zero the tails are on the upside, down to
+    `SKEWNESS_AVERAGE_AT_OR_ABOVE` the sample has no dominant tail, below it the losses are the
+    tail. `None` and anything non-finite read `unmeasured` -- a sample too small to have a third
+    moment is not a sample with a symmetric one, and a chip nobody could justify is the confident
+    lie this band exists to avoid.
+    """
+    number = _finite(value)
+    if number is None:
+        return "unmeasured"
+    if number > 0:
+        return "good"
+    return "average" if number >= SKEWNESS_AVERAGE_AT_OR_ABOVE else "bad"
+
+
+def pnl_skewness(return_pcts: Sequence[float]) -> dict[str, Any]:
+    """Where the tail risk sits, as the third standardized moment of the per-close returns.
+
+    Population moments, so the figure is the sample's own shape rather than a bias-corrected
+    estimate of a wider population's, and so a run's reading does not shift because one close was
+    added. Negative means the losses are the tail -- small wins with occasional large losses -- and
+    positive means the wins are.
+
+    Fewer than three usable values is `None`: with two the moment is zero by construction, which
+    would print "roughly symmetric" over a sample that cannot say so. A flat sample has no spread
+    to divide by and is `None` for the same reason. Values that are missing, non-numeric, `NaN` or
+    infinite are dropped rather than read as a break-even close.
+    """
+    sample = [value for value in (_finite(value) for value in return_pcts or [])
+              if value is not None]
+    n = len(sample)
+    if n < 3:
+        return {"pnl_skewness": None, "band": "unmeasured",
+                "meaning": SKEWNESS_BAND_WORDS["unmeasured"], "n": n}
+
+    mean = statistics.fmean(sample)
+    variance = sum((value - mean) ** 2 for value in sample) / n
+    if variance == 0:
+        return {"pnl_skewness": None, "band": "unmeasured",
+                "meaning": SKEWNESS_BAND_WORDS["unmeasured"], "n": n}
+
+    moment = sum((value - mean) ** 3 for value in sample) / n
+    score = round(moment / variance ** 1.5, 6)
+    band = skewness_band(score)
+    return {"pnl_skewness": score, "band": band,
+            "meaning": SKEWNESS_BAND_WORDS[band], "n": n}
+
+
+def sortino_band(value: Optional[float]) -> str:
+    """The traffic-light band for a Sortino ratio: good / average / bad.
+
+    The settled table: at or above `SORTINO_GOOD_AT_OR_ABOVE` the returns are twice the downside
+    pain, at or above `SORTINO_AVERAGE_AT_OR_ABOVE` they merely match it, and below that the pain
+    outweighs them -- a negative reading included, which is an edge that pays nothing for its risk.
+    `None` and anything non-finite read `unmeasured`.
+    """
+    number = _finite(value)
+    if number is None:
+        return "unmeasured"
+    if number >= SORTINO_GOOD_AT_OR_ABOVE:
+        return "good"
+    return "average" if number >= SORTINO_AVERAGE_AT_OR_ABOVE else "bad"
+
+
+def sortino_ratio(return_pcts: Sequence[float],
+                  risk_free: float = RISK_FREE_PCT_PER_CLOSE) -> Optional[float]:
+    """Return per unit of downside pain, against an explicit risk-free rate.
+
+    The numerator is the mean EXCESS return and the denominator is the root-mean-square of the
+    negative excess returns over their own count -- the same denominator `kpi.compute_trade_analytics`
+    already uses, so at `risk_free = 0.0` the two agree to the last digit and the KPI payload stays
+    the oracle for this one. Textbook versions divide by the total count; that would read a run
+    with one bad close in fifty as nearly painless, which is the opposite of what this ratio is for.
+
+    `risk_free` is percent PER CLOSE, the unit of every return handed in, and nothing here is
+    annualized: trades are not daily observations, and annualizing a five-close sample would quote
+    a rate the sample never earned. `None` for fewer than two usable returns, a sample with no
+    spread, no negative excess return (nothing was paid for), or a non-finite `risk_free`.
+    """
+    rate = _finite(risk_free)
+    if rate is None:
+        return None
+    sample = [value for value in (_finite(value) for value in return_pcts or [])
+              if value is not None]
+    if len(sample) < 2 or len(set(sample)) < 2:
+        return None
+
+    excess = [value - rate for value in sample]
+    downside = [value for value in excess if value < 0]
+    if not downside:
+        return None
+
+    deviation = math.sqrt(sum(value * value for value in downside) / len(downside))
+    if deviation == 0:
+        return None
+    return round(statistics.fmean(excess) / deviation, 6)
+
+
+def sortino(return_pcts: Sequence[float],
+            risk_free: float = RISK_FREE_PCT_PER_CLOSE) -> dict[str, Any]:
+    """The Sortino reading with its band, its words, and the risk-free rate it assumed.
+
+    The rate ships beside the number so the card can print the assumption: a Sortino is only
+    meaningful against the rate it was measured over, and a reader who cannot see it has to guess.
+    """
+    sample = [value for value in (_finite(value) for value in return_pcts or [])
+              if value is not None]
+    score = sortino_ratio(sample, risk_free)
+    band = sortino_band(score)
+    return {"sortino_ratio": score, "risk_free_pct_per_close": _finite(risk_free),
+            "band": band, "meaning": SORTINO_BAND_WORDS[band], "n": len(sample)}
+
 
 def _equity_points(points: Sequence[Any]) -> tuple[list[tuple[float, Optional[float]]], int]:
     """The usable `(value, timestamp)` pairs of a caller-supplied curve, in the order given.
