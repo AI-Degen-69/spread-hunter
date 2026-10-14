@@ -210,6 +210,14 @@
     }
   }
 
+  function optionRows() {
+    // list.children is an HTMLCollection in the page (no .filter) but a plain
+    // array in the offline stub — Array.prototype works on both.
+    return Array.prototype.filter.call(list.children, function (c) {
+      return c.getAttribute && c.getAttribute('role') === 'option';
+    });
+  }
+
   function heading(text) {
     var h = doc.createElement('div');
     h.className = 'palette-group';
@@ -266,15 +274,11 @@
   function setHighlight(i) {
     if (i < 0 || i >= visible.length) return;
     if (highlight >= 0 && visible[highlight]) {
-      var prev = list.children.filter(function (c) {
-        return c.attrs && c.attrs.role === 'option';
-      })[highlight];
+      var prev = optionRows()[highlight];
       if (prev) prev.setAttribute('aria-selected', 'false');
     }
     highlight = i;
-    var row = list.children.filter(function (c) {
-      return c.attrs && c.attrs.role === 'option';
-    })[i];
+    var row = optionRows()[i];
     if (row) {
       row.setAttribute('aria-selected', 'true');
       if (typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'nearest' });

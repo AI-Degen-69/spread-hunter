@@ -82,6 +82,15 @@ def test_palette_script_is_served_and_parses():
     assert res.returncode == 0, f"command-palette.js parse error: {res.stderr}"
 
 
+def test_palette_list_traversal_is_real_dom_safe():
+    """`list.children` is an HTMLCollection in the page (no `.filter`/`.map`)
+    but a plain array in the offline stub — traversal must go through
+    `Array.prototype`, or opening the palette throws for real operators."""
+    src = PALETTE_JS.read_text(encoding="utf-8")
+    assert ".children.filter" not in src
+    assert ".children.map" not in src
+
+
 # ── Shell: open, close, keyboard ownership (harness) ──
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
