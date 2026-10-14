@@ -316,9 +316,9 @@ function enginePillVerdicts() {
     },
     other_live_runs: [
       {
-        run_id: 'ladder-live',
+        run_id: 'other-live',
         db_path: 'data/NN_shadow.db',
-        heartbeat_file: 'runtime/shadow_run_ladder-live.json',
+        heartbeat_file: 'runtime/shadow_run_other-live.json',
       },
     ],
   };
@@ -461,7 +461,7 @@ function dbModeVerdicts() {
     };
   };
   const dead = { run_id: 'shadow-01', db_path: '/d/01_shadow.db', running: false, is_active_db: true, heartbeat_age_sec: 4800 };
-  const live = { run_id: 'ladder-live', db_path: '/d/NN_shadow.db', running: true, is_active_db: false, heartbeat_age_sec: 2 };
+  const live = { run_id: 'other-live', db_path: '/d/NN_shadow.db', running: true, is_active_db: false, heartbeat_age_sec: 2 };
   return {
     // The reported case: pointed at a store whose run died, live run elsewhere.
     deadHereLiveElsewhere: call({ db_is_production: false, shadow_runs: [dead, live] }),

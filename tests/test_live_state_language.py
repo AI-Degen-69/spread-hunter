@@ -446,7 +446,7 @@ def test_a_dead_store_with_a_live_run_elsewhere_is_flagged_stale():
     assert v["stale"] is True
     assert v["hereRunning"] is False
     assert v["activeRunId"] == "shadow-01"
-    assert v["liveElsewhere"] == ["ladder-live"]
+    assert v["liveElsewhere"] == ["other-live"]
 
 
 @requires_node
@@ -591,7 +591,7 @@ def test_engine_pill_renders_down_and_reveals_neutral_elsewhere_tag_when_other_r
     assert "STALLED — process gone (pid 1234 not running)" in rendered["pillTitle"]
     assert rendered["elsewhereDisplay"] == ""
     assert rendered["elsewhereText"] == "1 RUN LIVE ON ANOTHER STORE"
-    assert "ladder-live (data/NN_shadow.db, runtime/shadow_run_ladder-live.json)" in rendered["elsewhereTitle"]
+    assert "other-live (data/NN_shadow.db, runtime/shadow_run_other-live.json)" in rendered["elsewhereTitle"]
     assert "its numbers are not shown on this page" in rendered["elsewhereTitle"]
 
 
