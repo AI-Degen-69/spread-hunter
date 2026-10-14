@@ -192,22 +192,22 @@
           </thead>
           <tbody>
             <tr>
-              <td class="lab">Strategy Pricing Band</td><td>Implied contract probability sweet-spot filter</td><td class="num">$0.15 ≤ P ≤ $0.85</td><td class="num" data-bind="_gateBand" data-fmt="html"></td><td><span class="badge badge--active">Active Rule</span></td>
+              <td class="lab">Strategy Pricing Band</td><td>Implied contract probability sweet-spot filter</td><td class="num">$0.15 ≤ P ≤ $0.85</td><td class="num" data-bind="_gateBand" data-fmt="html"></td><td><span class="badge badge--active" data-band="gates.band">Active Rule</span></td>
             </tr>
             <tr>
-              <td class="lab">Edge Viability <span class="sub">H₁: μ > 0</span></td><td>90% confidence lower bound of realised spread</td><td class="num">&gt; 0.00% (strictly positive)</td><td class="num" data-bind="trade_analytics.ci90_lower_pct" data-fmt="pct" data-sign="1" data-band="gates.edge_viability"></td><td><span class="badge badge--accum">Accumulating</span></td>
+              <td class="lab">Edge Viability <span class="sub">H₁: μ &gt; 0</span></td><td>90% confidence lower bound of realised spread</td><td class="num">&gt; 0.00% (strictly positive)</td><td class="num" data-bind="trade_analytics.ci90_lower_pct" data-fmt="pct" data-sign="1"></td><td><span class="badge badge--accum" data-band="gates.edge_viability">Accumulating</span></td>
             </tr>
             <tr>
               <td class="lab">Directional Neutrality <span class="sub">win rate</span></td><td>Closed round-trips merged at $1.00</td><td class="num">&gt; 50.0%</td><td class="num" data-bind="trade_analytics.win_rate" data-fmt="pctmul" data-sign="1"></td><td><span class="badge badge--go" data-band="gates.neutrality">Go</span></td>
             </tr>
             <tr>
-              <td class="lab">Statistical Power Target</td><td>Observations required to reject the null hypothesis</td><td class="num">≥ 120 closes</td><td class="num" data-bind="_gatePower" data-fmt="html"></td><td><span class="badge badge--accum">Accumulating</span></td>
+              <td class="lab">Statistical Power Target</td><td>Observations required to reject the null hypothesis</td><td class="num">≥ 120 closes</td><td class="num" data-bind="_gatePower" data-fmt="html"></td><td><span class="badge badge--accum" data-band="gates.power">Accumulating</span></td>
             </tr>
             <tr>
-              <td class="lab">Adverse Selection Markout</td><td>Post-trade price drift across the matured horizon</td><td class="num">≥ 25 matured fills, drift ≥ 0</td><td class="num" data-bind="_gateMarkout" data-fmt="html"></td><td><span class="badge badge--nogo">No-Go</span></td>
+              <td class="lab">Adverse Selection Markout</td><td>Post-trade price drift across the matured horizon</td><td class="num">≥ 25 matured fills, drift ≥ 0</td><td class="num" data-bind="_gateMarkout" data-fmt="html"></td><td><span class="badge badge--nogo" data-band="gates.markout">No-Go</span></td>
             </tr>
             <tr>
-              <td class="lab">Max Drawdown Guard</td><td>Peak-to-trough equity degradation envelope</td><td class="num">≤ 5.00%</td><td class="num" data-bind="trade_analytics.max_drawdown_pct" data-fmt="pct" data-sign="1"></td><td><span class="badge badge--nogo">No-Go</span></td>
+              <td class="lab">Max Drawdown Guard</td><td>Peak-to-trough equity degradation envelope</td><td class="num">≤ 5.00%</td><td class="num" data-bind="trade_analytics.max_drawdown_pct" data-fmt="pct" data-sign="1"></td><td><span class="badge badge--nogo" data-band="gates.drawdown_guard">No-Go</span></td>
             </tr>
           </tbody>
         </table>

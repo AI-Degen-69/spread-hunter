@@ -153,8 +153,10 @@ function gateVerdicts(kpi) {
     neutrality: {
       observed: winRate === null ? 'unmeasured' : format(winRate, 'pctmul'),
       cls: winRate === null ? '' : (winRate > 0.5 ? 'pos' : 'neg'),
-      badge: n === 0 ? 'badge--accum' : (winRate > 0.5 ? 'badge--go' : 'badge--nogo'),
-      badgeText: n === 0 ? 'Accumulating' : (winRate > 0.5 ? 'Go' : 'No-Go'),
+      // An unmeasured win rate is Accumulating, never No-Go: a missing
+      // sample is not a failed hypothesis.
+      badge: winRate === null ? 'badge--accum' : (winRate > 0.5 ? 'badge--go' : 'badge--nogo'),
+      badgeText: winRate === null ? 'Accumulating' : (winRate > 0.5 ? 'Go' : 'No-Go'),
     },
     power: {
       observed: `${n} / ${required} (${required > 0 ? Math.min(100, Math.round((n / required) * 100)) : 0}%)`,
@@ -506,7 +508,7 @@ function paintCharts(kpi) {
       `<path d="${linePath(p50)}" fill="none" stroke="#38BDF8" stroke-width="2"/>` +
       `<path d="${linePath(p01)}" fill="none" stroke="#64748B" stroke-width="1" stroke-dasharray="3 3"/>`);
     badge('ch3', `P(Profit &gt; 0): ${format(prob, 'pct1')}`,
-      prob !== null && prob >= 0.5 ? 'good' : 'warn');
+      prob !== null && prob >= 50 ? 'good' : 'warn'); // prob_positive_return is a PERCENT
     statsLine('ch3', `Simulations: ${num(mc.paths) || 0} paths · ${steps.length} cycles · Worst-case drawdown ${format(num(mc.worst_case_drawdown_pct), 'pct')} · Median return ${format(p50[p50.length - 1], 'usd')}`);
     foot('ch3', `<span class="k">paths <b>${num(mc.paths) || 0}</b></span>` +
       `<span class="k">samples <b>${num(mc.samples_count) || 0}</b></span>` +
@@ -550,7 +552,7 @@ function paintCharts(kpi) {
     const worst = mo.reduce((a, b) => ((num(a.displacement_bps) || 0) < (num(b.displacement_bps) || 0) ? a : b), mo[0]);
     const allOk = vals.every((v) => v >= 0);
     badge('ch5', `Markout Status: ${allOk ? 'FAVOURABLE' : 'MIXED'}`, allOk ? 'good' : 'warn');
-    statsLine('ch5', `Longest horizon ${worst.horizon} · Displacement ${format(num(worst.displacement_bps), 'pcts').replace('%', ' bps')} · Matured samples ${num(kpi.markout_samples) || 0} fills`);
+    statsLine('ch5', `Worst horizon ${worst.horizon} · Displacement ${format(num(worst.displacement_bps), 'pcts').replace('%', ' bps')} · Matured samples ${num(kpi.markout_samples) || 0} fills`);
     foot('ch5', mo.map((m) => `<span class="k">${m.horizon} <b>${(num(m.displacement_bps) || 0) >= 0 ? '+' : ''}${(num(m.displacement_bps) || 0).toFixed(1)} bps</b> (${m.samples})</span>`).join(''));
   }
 }

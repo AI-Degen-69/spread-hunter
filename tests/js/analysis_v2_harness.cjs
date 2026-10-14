@@ -95,8 +95,11 @@ html.replace(/<(article|div|span|b|i|td|tr|section)\b[^>]*>/g, (tag, kind) => {
       const v = attr(tag, 'data-' + k);
       if (v !== null) e.dataset[k] = v;
     });
-    // The cells paintSufficiency() rewrites in place.
-    e._cells = { '.cur': makeEl('td'), '.req': makeEl('td') };
+    // The cells paintSufficiency() and the design's toggle IIFE rewrite.
+    e._cells = {
+      '.cur': makeEl('td'), '.req': makeEl('td'), '.rem': makeEl('td'),
+      '.pct': makeEl('span'), '.pfill': makeEl('i'),
+    };
     e.querySelector = (s) => e._cells[s] || null;
     e._cellsOut = e._cells;
     ssrNodes.push(e);
@@ -137,7 +140,26 @@ reg('id:ciScale').querySelectorAll = qsa; // paintCiScale queries descendants
 nodeFor.set('[data-bind]', bindNodes);
 nodeFor.set('[data-band]', bandNodes);
 nodeFor.set('tr.ssr', ssrNodes);
-nodeFor.set('.conf-toggle .pill.active', makeEl('span'));
+
+/* The confidence pills get real click dispatch, so the design's own
+ * toggle IIFE (executed against this stub below) attaches handlers the
+ * test can fire -- the toggle is the page's code, not a copy of it. */
+const pills = ['95', '98', '99'].map((c, i) => {
+  const p = makeEl('button');
+  p.attrs['data-conf'] = c;
+  p.dataset.conf = c;
+  p.className = 'pill' + (i === 0 ? ' active' : '');
+  p._listeners = [];
+  p.addEventListener = (ev, fn) => { if (ev === 'click') p._listeners.push(fn); };
+  p.click = () => p._listeners.forEach((fn) => fn());
+  const baseAdd = p.classList.add.bind(p.classList);
+  const baseRemove = p.classList.remove.bind(p.classList);
+  p.classList.add = (cl) => { baseAdd(cl); if (cl === 'active') nodeFor.set('.conf-toggle .pill.active', [p]); };
+  p.classList.remove = (cl) => { if (cl === 'active') nodeFor.delete('.conf-toggle .pill.active'); baseRemove(cl); };
+  return p;
+});
+nodeFor.set('.conf-toggle .pill', pills);
+nodeFor.set('.conf-toggle .pill.active', [pills[0]]);
 
 global.document = {
   getElementById: (id) => {
@@ -158,6 +180,16 @@ global.document = {
   body: { appendChild: noop, classList: { add: noop, remove: noop } },
   documentElement: { appendChild: noop },
 };
+
+/* Run the design's own inline scripts (confidence toggle, DB popover)
+ * against the stub, exactly as the page does, before analysis_v2.js. */
+const inlineMod = { exports: {} };
+(html.match(/<script>[\s\S]*?<\/script>/g) || []).forEach((block) => {
+  const src = block.replace(/^<script>/, '').replace(/<\/script>$/, '');
+  new Function('module', 'exports', 'document', 'window', 'fetch', src)(
+    inlineMod, inlineMod.exports, global.document, { addEventListener: noop },
+    () => Promise.reject(new Error('fetch is not exercised by the harness')));
+});
 
 const source = fs.readFileSync(path.join(staticDir, 'analysis_v2.js'), 'utf8');
 const mod = { exports: {} };
@@ -212,8 +244,30 @@ try {
       dataset: r.dataset,
       cur: r._cellsOut['.cur'].textContent,
       req: r._cellsOut['.req'].textContent,
+      rem: r._cellsOut['.rem'].textContent,
+      pct: r._cellsOut['.pct'].textContent,
+      pfill: r._cellsOut['.pfill'].style.width,
     });
   });
+  /* The confidence toggle is the design's own IIFE: fire the pills the
+   * way a click does and snapshot the VISIBLE cells at each level. */
+  if (action === 'toggle') {
+    const snap = () => ssrNodes.map((r) => ({
+      key: r.attrs['data-suff'],
+      req: r._cellsOut['.req'].textContent,
+      rem: r._cellsOut['.rem'].textContent,
+      pct: r._cellsOut['.pct'].textContent,
+      pfill: r._cellsOut['.pfill'].style.width,
+    }));
+    const pill = (c) => pills.filter((p) => p.dataset.conf === c)[0];
+    out.toggle = {};
+    pill('98').click();
+    out.toggle.r98 = snap();
+    pill('99').click();
+    out.toggle.r99 = snap();
+    pill('95').click();
+    out.toggle.r95 = snap();
+  }
   out.gates = JSON.parse(JSON.stringify(app.gateVerdicts(kpi)));
 } catch (e) {
   out.errors.push(`${action}: ${(e && e.stack) || e}`);

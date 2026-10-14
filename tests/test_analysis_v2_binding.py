@@ -79,6 +79,7 @@ def test_server_exposes_the_analysis_v2_route():
         assert legacy in paths, f"regression: {legacy} disappeared"
 
 
+@requires_node
 def test_every_bind_hook_paints_a_real_value(tmp_path, live_payload):
     """No data-bind is left blank and no mock number survives."""
     out = _run(live_payload, "render", tmp_path)
@@ -113,6 +114,7 @@ def test_no_mock_value_survives_on_the_page():
         assert mock not in html, f"mock value still hardcoded in markup: {mock}"
 
 
+@requires_node
 def test_units_and_signs_match_the_payload(tmp_path, live_payload):
     """$ and ¢ are signed; % and x are signed only when negative."""
     out = _run(live_payload, "render", tmp_path)
@@ -125,6 +127,7 @@ def test_units_and_signs_match_the_payload(tmp_path, live_payload):
     assert p["trade_analytics.max_drawdown_pct"] == "6.33%"
 
 
+@requires_node
 def test_unmeasured_fields_blank_rather_than_invent(tmp_path, live_payload):
     """var_95/cvar_95 are null in the payload -- the page must say unmeasured."""
     out = _run(live_payload, "render", tmp_path)
@@ -132,6 +135,7 @@ def test_unmeasured_fields_blank_rather_than_invent(tmp_path, live_payload):
     assert out["painted"]["_cvar"] == "unmeasured"
 
 
+@requires_node
 def test_ci_verdict_reads_a_loss_as_negative(tmp_path, live_payload):
     """negative_depth_usd is a loss depth; it must not render as +$."""
     out = _run(live_payload, "render", tmp_path)
@@ -152,6 +156,7 @@ def test_ci_verdict_reads_a_loss_as_negative(tmp_path, live_payload):
     assert s["labels"]["hi90"][0]["text"] == "90% High +$0.32"
 
 
+@requires_node
 def test_sufficiency_table_fills_from_the_payload(tmp_path, live_payload):
     """The 95% column the table defaults to comes from the real statuses."""
     out = _run(live_payload, "render", tmp_path)
@@ -164,6 +169,34 @@ def test_sufficiency_table_fills_from_the_payload(tmp_path, live_payload):
     assert rows["stop_loss_rate"]["dataset"]["r98"] == "542"
 
 
+@requires_node
+def test_sufficiency_toggle_repaints_visible_cells(tmp_path, live_payload):
+    """Clicking 98/99 repaints the visible .req/.rem/.pct cells, not just data.
+
+    The toggle is the design's own IIFE; the harness executes it against
+    the stub and fires the pills the way a click does.
+    """
+    out = _run(live_payload, "toggle", tmp_path)
+    assert not out["errors"], out["errors"]
+    t = out["toggle"]
+    rows98 = {r["key"]: r for r in t["r98"]}
+    assert rows98["stop_loss_rate"]["req"] == "542"
+    assert rows98["stop_loss_rate"]["rem"] == "527"
+    assert rows98["pnl_expectancy"]["req"] == "136"
+    rows99 = {r["key"]: r for r in t["r99"]}
+    assert rows99["stop_loss_rate"]["req"] == "664"
+    assert rows99["stop_loss_rate"]["rem"] == "649"
+    assert rows99["pnl_expectancy"]["req"] == "166"
+    rows95 = {r["key"]: r for r in t["r95"]}
+    assert rows95["pnl_expectancy"]["req"] == "97"
+    assert rows95["pnl_expectancy"]["rem"] == "82"
+    # The progress bar tracks the same pct the cell shows.
+    for rows in (rows95, rows98, rows99):
+        for r in rows.values():
+            assert r["pfill"] == r["pct"], r
+
+
+@requires_node
 def test_band_badges_come_from_the_payloads_own_verdicts(tmp_path, live_payload):
     """Payload bands drive the badges; computed gates drive their own."""
     out = _run(live_payload, "render", tmp_path)
@@ -177,6 +210,7 @@ def test_band_badges_come_from_the_payloads_own_verdicts(tmp_path, live_payload)
         assert "badge--" in b["cls"], f"badge {ref} has no badge-- class"
 
 
+@requires_node
 def test_gate_verdicts_follow_the_payload(tmp_path, live_payload):
     """15 closes against a 120 gate is Accumulating, never Go."""
     out = _run(live_payload, "render", tmp_path)
@@ -190,8 +224,24 @@ def test_gate_verdicts_follow_the_payload(tmp_path, live_payload):
     assert g["neutrality"]["badge"] == "badge--go"
     # 6.33% drawdown breaches the 5% envelope.
     assert g["drawdown_guard"]["badge"] == "badge--nogo"
+    # The badges themselves paint from the payload: data-band sits on the
+    # badge span, so the verdict updates while the observed cell keeps its
+    # own bound value (a band on the value cell would clobber the number).
+    b = out["bands"]
+    assert b["gates.band"]["text"] == "Active Rule"
+    assert b["gates.edge_viability"]["text"] == "Accumulating"
+    assert b["gates.power"]["text"] == "Accumulating"
+    assert b["gates.markout"]["text"] == "Accumulating"
+    assert b["gates.neutrality"]["text"] == "Go"
+    assert b["gates.drawdown_guard"]["text"] == "No-Go"
+    for ref in ("gates.band", "gates.edge_viability", "gates.power",
+                "gates.markout", "gates.neutrality", "gates.drawdown_guard"):
+        assert b[ref]["cls"].endswith("badge--go") or b[ref]["cls"].endswith("badge--nogo") \
+            or b[ref]["cls"].endswith("badge--accum") or b[ref]["cls"].endswith("badge--active"), ref
+    assert out["painted"]["trade_analytics.ci90_lower_pct"] == "-15.00%"
 
 
+@requires_node
 def test_all_five_charts_paint_real_series(tmp_path, live_payload):
     """Each chart card gets an svg, a badge and a stats line from live data."""
     out = _run(live_payload, "render", tmp_path)
@@ -211,6 +261,7 @@ def test_all_five_charts_paint_real_series(tmp_path, live_payload):
     assert "Median: +$0.95" in charts["ch2"]["badge"]
 
 
+@requires_node
 def test_empty_payload_mounts_without_throwing(tmp_path):
     """A fresh registry (no closes yet) must blank the page, not crash it.
 
@@ -239,6 +290,7 @@ def test_empty_payload_mounts_without_throwing(tmp_path):
     assert out["ciScale"]["display"] == "none"
 
 
+@requires_node
 def test_formatters_handle_the_fraction_and_percent_families():
     """pct takes a percentage; pctmul takes a 0..1 fraction."""
     import subprocess as sp
