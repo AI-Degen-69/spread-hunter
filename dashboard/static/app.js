@@ -4784,12 +4784,12 @@ function renderRescueFriction(stats, hostId) {
    * dollar: `+15.80`, never `15.80+`. Three cases, written as three returns rather than
    * a nested ternary. */
   const signOf = (n) => { if (n > 0) return '+'; if (n < 0) return '-'; return ''; };
-  /* Cents, signed: a drag that improved on the trigger is a real reading and must not
+  /* Cents, signed, with the unit attached: a drag that improved on the trigger is a real reading and must not
    * print as `0.00`. Two decimals is all a cent-based metric can carry. */
   const cents = (value) => {
     const n = figure(value);
     if (n === null) return 'unmeasured';
-    return signOf(n) + Math.abs(n).toFixed(2);
+    return signOf(n) + Math.abs(n).toFixed(2) + '¢';
   };
   /* A price, to the cent. `--` when the payload does not carry one: an offset nobody
    * reported is not `0.00`. */
@@ -4863,11 +4863,11 @@ function renderQueueRealism(stats, hostId) {
     return (value === null || value === undefined || !Number.isFinite(n)) ? null : n;
   };
   const count = (value) => figure(value) || 0;
-  /* Two decimals: a depth is quoted in cents, and the whole table turns on whether the
+  /* Two decimals, unit attached: a depth is quoted in cents, and the whole table turns on whether the
    * tape cleared within one of them. */
   const cents = (value) => {
     const n = figure(value);
-    return n === null ? 'unmeasured' : n.toFixed(2);
+    return n === null ? 'unmeasured' : n.toFixed(2) + '¢';
   };
   /* One decimal, with the unit attached: a wait without its unit is a number nobody can
    * read against anything. */
@@ -4950,20 +4950,27 @@ function renderRobustness(stats, hostId) {
   const count = (value) => figure(value) || 0;
   const signOf = (n) => { if (n > 0) return '+'; if (n < 0) return '-'; return ''; };
   /* Every figure on this card is in cents, and the markout question turns on whether the tape
-   * cleared within one of them, so two decimals is the most a reader can act on. */
+   * cleared within one of them, so two decimals is the most a reader can act on.
+   * The unit rides on the value: a bare cent figure is unreadable against the
+   * dollar figures beside it. SQN is the exception -- a unitless ratio -- and
+   * goes through bare() instead. */
   const cents = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : n.toFixed(2) + '¢';
+  };
+  const bare = (value) => {
     const n = figure(value);
     return n === null ? 'unmeasured' : n.toFixed(2);
   };
   const signedCents = (value) => {
     const n = figure(value);
-    return n === null ? 'unmeasured' : signOf(n) + Math.abs(n).toFixed(2);
+    return n === null ? 'unmeasured' : signOf(n) + Math.abs(n).toFixed(2) + '¢';
   };
   const rangeCents = (lower, upper) => {
     const lo = figure(lower);
     const hi = figure(upper);
     if (lo === null || hi === null) return 'unmeasured';
-    return `${signOf(lo)}${Math.abs(lo).toFixed(2)} to ${signOf(hi)}${Math.abs(hi).toFixed(2)}`;
+    return `${signOf(lo)}${Math.abs(lo).toFixed(2)}¢ to ${signOf(hi)}${Math.abs(hi).toFixed(2)}¢`;
   };
   const usd = (value) => {
     const n = figure(value);
@@ -5012,7 +5019,7 @@ function renderRobustness(stats, hostId) {
       ${tile('95% CI (\u00a2)', rangeCents(ci.lower_cents, ci.upper_cents), ci.band,
              ci.meaning || 'mean close PnL \u00b7 does the edge survive the uncertainty',
              `mean ${signedCents(ci.mean_cents)} \u00b7 ${plural(count(ci.n), 'close', 'closes')}`)}
-      ${tile('SQN', cents(sqn.sqn), sqn.band,
+      ${tile('SQN', bare(sqn.sqn), sqn.band,
              sqn.meaning || 'mean trade \u00f7 result noise \u00d7 \u221aN',
              `${plural(count(sqn.n), 'close', 'closes')} \u00b7 mean ${usd(sqn.mean_usd)} \u00b7 spread ${usd(sqn.stdev_usd)}`)}
     </div>
