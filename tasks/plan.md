@@ -153,7 +153,7 @@ Guard test `tests/test_close_method_taxonomy.py` — imports **only**
 - Skill: test-driven-development, constraint-driven-development.
 - Depends on: none. Verify: T2's pins go GREEN against it.
 
-### T2 [Code] Write the guard test — M
+### T2 [x] [Code] Write the guard test — M
 
 - Target files: `tests/test_close_method_taxonomy.py` (new).
 - What: the scanner + self-checks + pins above. Import only
