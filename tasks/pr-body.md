@@ -20,7 +20,7 @@ GitHub CI runs the full `python -m pytest -q` regression suite on Ubuntu and Win
 1. Fresh feed plus fresh shadow store, spends nothing: `python -m scripts.filter_markets ; python -m core_brain.shadow_run --minutes 10 --run-id shadow-verify --db data\NN_shadow_<stamp>.db` — the run starts and rotates.
 2. Dashboard: `python -m dashboard.server --db data\NN_shadow_<stamp>.db --port 8799` — open http://127.0.0.1:8799 — the badge reads SHADOW.
 3. Wait until the dashboard shows at least one NAKED or BALANCED pair.
-4. Read the Cycle feed, or `runtime/shadow-verify.jsonl`: in each rotation after that market was first seen as held, its entry comes before every flat market entry. Failure: a flat market comes first. If the entries do not identify markets in visit order, report "insufficient evidence" (do not use `runtime/markets.json` as visit order).
+4. Read the Cycle feed, or `runtime/shadow-verify.jsonl`: in each rotation where that market still holds exposure, its entry comes before every flat market entry. Failure: a flat market comes first while the market is still held. A market that went flat correctly returns to its feed position — that is not a failure. If the entries do not identify markets in visit order, report "insufficient evidence" (do not use `runtime/markets.json` as visit order).
 5. Already proven shortcut: `runtime/shadow-smoke505.jsonl` from the build smoke shows the promotion directly (cycles 1-7 feed order, cycle 8 onward the held market first).
 
 ## What this speeds up
