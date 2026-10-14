@@ -107,7 +107,7 @@ def test_merge_rate_counts_close_methods_not_leg_rows(tmp_path, capsys):
     _write_merge_fixture_db(
         str(db),
         [
-            (1.0, "merge", "shadow_merge", 10.0),
+            (1.0, "sell", "shadow_merge", 10.0),
             (2.0, "lifecycle_hard_stop", "single_buy_exit", 20.0),
             (3.0, "sell", "sell", 30.0),
         ],
