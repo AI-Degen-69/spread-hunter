@@ -1,127 +1,117 @@
-# Plan - #541 Consolidate every project statistic onto one page with one producer per number
+# Plan - #540 Analytics readouts can stay blank after a reload while the tiles beside them keep painting
 
-Branch: i541/refactor-consolidate-every-project-statistic-onto | Issue: #541
+Branch: i540/analytics-readouts-can-stay-blank-after-a-reload | Issue: #540
 
-Size: **Large** — cross-cutting (dashboard JS + `core_brain` + `scripts/` + report products),
-DOM and math, one architectural decision (registry shape). Task type: **Code + Design/UI**.
-Domain tags per task. Helper skills: `test-driven-development`, `incremental-implementation`
-(all tasks); `frontend-ui-engineering` (T3). Verification mode: pytest focused files for
-logic; harness + rendered-DOM sample + served-asset grep for the page (no-browser syntax
-checks alone never count).
+Size: **Standard** — 3 files, one pre-decided approach (issue default verified against
+live code), test-heavy. Task type: **Debug + Code**. Helper skills:
+`test-driven-development`, `incremental-implementation` (all tasks);
+`debugging-and-error-recovery` (T1). Verification mode: focused pytest files only
+(full suite is the CI merge gate).
 
 ## Intake - CodeRabbit plan (adopted / rejected / resolved)
 
-- Adopted: phase skeleton (freeze goldens → dedupe math → page+registry → findings),
-  affected files/seams, exact test assertions, regression file list. All cited seams
-  spot-checked live — line numbers drifted slightly from the issue text
-  (e.g. `renderAnalyticsSurface` now app.js:5158; `report()` kpi.py:1230/2224;
-  `run_analysis` audit:97) but every symbol exists; no [UNVERIFIED] remains.
-- Rejected: >4 task splits — merged into 4 tasks below (one proposal: math-dedupe-first
-  ordering, adopted by default — evidence: the issue's own "Natural split line… (b) can
-  land first without touching the DOM").
-- Operator override (2026-10-14): single convention is Student's t via `ci_critical_value`
-  (`statistical_analytics.py:1076` — t while the sample is small, normal once it isn't).
-  Audit adapters, the kpi inline band, and `ladder_probe.mean_ci90` all switch to it.
-  Wilson (proportions) and power/planning constants stay as-is — different estimators.
-  Pre-switch values frozen in T1 goldens; per-stat deltas logged in T4 + PR.
-- Resolved from code: simulator button already `display:none` (index.html:440) → remove;
-  `required_observations` double-render confirmed (app.js:4136 + :5171);
-  `Z_ALPHA_90_ONE_SIDED == ci_z(90) == 1.645`, `Z_BETA_80_POWER == 0.8416` — stat_gate
-  literal swap is value-identical; kpi names the exit tuple `SINGLE_BUY_EXIT_METHODS`
-  (:815) vs artifacts' local `EXIT_METHODS` (:60) — name drift recorded, import wins;
-  #520 OPEN → use kpi tuples, no restating; #542 CLOSED via merged #543 → audit
-  cross-check unblocked.
-- Sub-issues deferred: no per-task sub-issues created now — tracker noise stays down
-  until T1 goldens prove the baseline on this branch; mapping table below is the record
-  Station III works from (T1→none, T2→math, T3→page, T4→findings).
+- Adopted: phase skeleton (fail-first tests → one cached branch → acceptance run),
+  affected files, exact readout assertions, regression file list, `try`/`catch` shape,
+  keep-guard + keep-deferred-frame decisions, input-lag-harness reuse.
+- Rejected (>4 splits merged into 3 tasks); rejected the specified error-isolation
+  poison — see correction 3 below (adopted by default: it is edge-case hardening
+  with verbatim evidence, not scope).
+- Resolved, all spot-checked live, no [UNVERIFIED] remains:
+  1. Line drift: `renderAnalyticsSurface` is app.js:5180, `renderCachedSections`
+     588–633, `renderKPIs` 5273–5354, generation guard 5347–5353, exports incl.
+     `renderCachedSections` at 9369.
+  2. `#analytics-surface` exists (index.html:450) and contains all five readouts
+     (489–534) plus `#kpi-grid` (538); rail maps it to Reports (prototype.js:77).
+     `#analytics-gates` lives on Strategy — never gate on it.
+  3. `trade_analytics.sharpe_ratio` is NOT surface-only: `renderKPIs` reads the same
+     field the same guarded way (app.js:5328 vs 5215). A string poison there throws
+     in the EXISTING branch first, failing the test even with the correct fix.
+     Replacement poison: `trade_analytics.mean_return_pct = "<string>"` with
+     `n_closes >= 1` — `renderKPIs` never reads it; the quant grid throws at 5358
+     (`.toFixed(2)` on a string, guard passes on non-null), unguarded call at 5237.
+  4. Error-isolation scenario must NOT flush: the deferred callback (5348–5353) is
+     deliberately untouched and unguarded, so flushing the poisoned frame would
+     throw outside the new branch. Record state synchronously after
+     `renderCachedSections()`; harness runs one scenario per process so the queued
+     frame dies with it.
+  5. Deferral source check (`test_dashboard_input_lag.py:199`) matches the existing
+     deferred call, which stays — safe.
+  6. Startup guard: init calls `switchTab` (673) before any poll with `lastKpi`
+     undefined, so the new branch MUST require `currentKpi` or it paints zeros over
+     placeholders on a fresh load.
 
-## Interface contracts (frozen before logic)
+## Open questions (needs-answers — resolved from code, operator confirms at review)
 
-- `core_brain/statistical_analytics.py`: one public normal-interval helper with explicit
-  multiplier — `mean ± mult·(std/sqrt(n))`, exact op order of today's kpi inline math.
-  Mean-interval callers pass `ci_critical_value(level, n, z)` (Student's t). Callers keep
-  their own empty/one-close adapters (`(mean, mean, 0)`; n<2 still yields no interval —
-  t is undefined for one close).
-- `core_brain/kpi.py`: one public Wilson name; `_wilson_ci` stays as alias (same signature).
-  Sufficiency table (`Z_95/98/99_SAMPLE_SUFFICIENCY` = 1.95996/2.32635/2.57583) importable.
-- Registry entry: `{id, producer, block, view, unit, aliasOf?}` — one id, one producer, one
-  placement, one declared unit (`$`, `¢`, `%`, `bps`, or `bare` for unitless ratios like SQN).
-  Report-only entries carry `{producer, reason}` and are never rendered.
-- Charts are not numbers: the SVG deck and the Distributions / Monte Carlo charts stay in
-  their current views, one home view each, rendering registry values (same producer, never
-  recomputed in JS). No new chart type. The registry covers readout numbers; chart-vs-readout
-  parity is tested, not restyled into existence.
+1. One `paintable(tab2, …)` branch calling `renderAnalyticsSurface` — YES (default).
+   Readouts each have own `try`/`catch` (5230–5234) but tiles (5202–5223), quant grid
+   (5237) and gates/sample (5249–5255) do not, so one call + one local `try`/`catch`
+   matches existing style and contains all of them.
+2. Keep the generation guard — YES. Purpose pinned by comment (578–582) and the
+   deferral tests; the stale-generation test below guards it.
+
+## Spec (embedded — Small surface, Standard ceremony waived to this block)
+
+- Goal: opening Reports & Analytics repaints the five readouts synchronously from
+  the cached snapshot, the way KPI tiles already do.
+- Acceptance: `python -m pytest -q tests/test_analytics_surface_mount.py tests/test_analytics_api.py`
+  green; `tests/test_dashboard_input_lag.py` green unedited.
+- Edge: dropped deferred frame (hidden-tab flush) → cached branch restores;
+  stale generation → still no paint; surface throw mid-navigation → navigation
+  survives + `console.error`; empty cache at startup → placeholders untouched.
+- Out of scope: metrics, payload, `payload_version`, readout markup/copy, deferred
+  mechanism (#266), sub-view filter, `#kpi-grid` tiles, header pills from cache.
+- Must not change: `index.html`, `prototype.js`, `analytics_surface_harness.cjs`,
+  `test_analytics_api.py`, `test_dashboard_input_lag.py`, `data/orders.db`;
+  in app.js: `deferPaint` callback, `deferPaint`/`tabVisible`/`paintable`,
+  generation increment, poll paint gates, readout renderers, per-card catches.
+
+## Interface contract (no new app interfaces; harness JSON is the contract)
+
+- Fix (app.js ~611, directly after the `kpi-grid` branch):
+  `paintable(tab2, getElementById('analytics-surface')) && currentKpi` →
+  `try { renderAnalyticsSurface(currentKpi, lastStatus); } catch (e) { console.error(...); }`.
+  Tiles paint first, readouts in the same call, no fetch.
+- Harness (`input_lag_harness.cjs` only): argv `{scenario, kpi}` feeds `/api/kpi`
+  (+ fetch counter); readout sentinels seeded pre-load + record helper; rail links
+  `readout → analytics-surface → page-reports`; one-head frame runner (never
+  `__flushRaf` to observe callback A); `console.error` counter; scenarios:
+  `analytics-startup`, `analytics-tabs-recovery`, `analytics-rail-recovery`,
+  `analytics-error-isolation`, `analytics-stale`.
+- Tests (`test_analytics_surface_mount.py` only): reuse the five existing fixture
+  builders + add `portfolio` and `trade_analytics` with `n_closes >= 1` (guarded
+  reads need it). Per-readout assertions per the issue strings (fill-path `per
+  close`/`0.30`/`33.3%`; rescue `SLED (¢)`/`15.80`; queue `Trade-Through Depth
+  (¢)`/`2.50`/`10.0s`; robustness `Markout 5m (¢)`/`-2.50`/`SQN`; capital `Deepest
+  DD ($)`/`14.60`/`Sortino`). Recovery records after `switchTab(2)` BEFORE any
+  flush; queue holds exactly 1 new unrun callback; fetch count unchanged on reopen.
+
+## Proposal (adopted by default — hardening, evidence above)
+
+Use the `mean_return_pct`-string poison for error isolation instead of the planned
+`sharpe_ratio` poison: the specified poison throws in `renderKPIs` (5328) before
+the new branch runs, so the test would fail with the fix in place. Evidence:
+`ta.sharpe_ratio.toFixed(2)` at 5328 (existing branch, reached first) vs
+`ta.mean_return_pct.toFixed(2)` at 5358 via unguarded 5237 (`renderKPIs` never
+reads that field). No scope expansion proposed.
 
 ## Tasks
 
-- [x] T1 (M) [Backend/Logic] Freeze today's values. Fixture: fixed shadow run in `tmp_path`
-  (reuse `_seed_closes`/`_kpi_for`/`_run_closes` from `tests/test_stat_validation_artifacts.py`;
-  mixed methods, fixed-timestamp fills/quotes, one missing-PnL + one zero-cost close,
-  equity + account curves starting below capital). Golden JSON of `kpi.report()` stats
-  sections (explicit time-field strip list read from `report()`; pre-switch record,
-  regenerated once post-switch with deltas logged). Audit goldens (`run_analysis` text +
-  95/98/99 values + empty/one-close edges; `mean_ci90` / `_prop_ci90_diff` pins;
-  paired-depth min-2 rule; family median-5/p90-9 kept). Page↔report parity
-  (`write_statistics_report` vs payload; `report.json` vs payload; `ci90_lower_pct` vs
-  stat-gate/sensitivity — difference recorded, code untouched). No-second-producer ledger
-  test (RED now). Files: `tests/` (+1 golden JSON, +2-3 test files).
-  Helper: `test-driven-development`. Depends on: none. Verify: goldens pass on this
-  branch pre-change; ledger test fails.
-- [x] T2 (L) [Backend/Logic] One copy of the math + the t-switch, no DOM change. Core helper
-  (explicit multiplier); audit script becomes thin caller (delete `Z_CRITICAL`, 3 fns;
-  adapters call `ci_critical_value`, keeping tuple shapes + n≤1/no-interval edges; SQL +
-  printed layout untouched). kpi inline band + `ladder_probe.mean_ci90` switch to
-  `ci_critical_value`. Public Wilson + `_percentile` docstring as planned. `stat_gate`
-  literals → kpi constants; family helper renamed nearest-rank + divergence docstring;
-  `artifacts.py` imports kpi tuples; queue-multiple single home module
-  (`statistics_report._queue_multiple` + `shadow_fills` call it; boundary test green).
-  Report-only computations untouched + listed for T4.
-  Helper: `test-driven-development`. Depends on: T1. Verify: goldens regenerated once
-  with per-stat t-deltas logged; non-CI values byte-identical; focused suites incl.
-  `test_shadow_run` boundary green.
-- [x] T3 (L) [Design/UI] NEW "Data Analysis" tab (tab-2 frozen, operator override).
-  Legacy tab-2 renderers/markup stay byte-identical; all work lands in new
-  `dashboard/static/data_analysis.js` + a tab-4 panel. Contents, copied or redesigned
-  from the legacy components: (a) registry `{id, producer, block, view, unit, aliasOf?}`
-  covering every rendered stat; claim ledger (double-claim in one pass throws);
-  ONE tile builder every card uses; (b) single `required_observations` (helper from
-  the start — the legacy double-read stays untouched on the old page); (c) deduped
-  placements — Win Rate/Sharpe/MaxDrawdown/Expectancy shown once each (richest placement
-  wins: quant w/ CI, gates row w/ threshold, surface AvgProfit top-of-page);
-  run-profitability banner keeps verdict/counts/venue (win_rate/expectancy/paths lines go,
-  they live on the new tab); capital drawdown hints name the account curve (legacy hint
-  wrongly said equity — fixed ONLY on the new tab); (d) units on all 21 bare titles
-  (`$`/`¢`/`%`/`bps`/`s`/`×`, or registry-`bare` for ratios); fabricated-zero fallbacks
-  (`$0.000`, `0.00%`) become `unmeasured`; (e) charts render registry values into new
-  containers (existing chart fns gain optional target-id params, defaults = legacy
-  behavior); (f) trading-terminal card restyle, CSS scoped to the new tab, same palette;
-  a11y (tablist/keyboard/empty-error) preserved; home keeps live account state.
-  2a/2b ledger tests keep scanning `app.js` as written (titles gain units in the shared
-  renderers, so both tabs benefit; assertion strength unchanged).
-  Files: `data_analysis.js` (new), `index.html` (tab shell only), `prototype.js`
-  (mount wiring if needed). Helpers: `frontend-ui-engineering`,
-  `incremental-implementation`. Depends on: T2. Verify: ledger
-  test GREEN; harness + `test_analytics_surface_mount` green; rendered-DOM sample (incl.
-  chart values) + served-asset grep.
-- [x] T4 (S) [Docs] Findings + report-only registry. Findings doc: pre/post-switch t-deltas
-  per stat plus remaining disagreements with both numbers (interp-vs-nearest-rank,
-  equity-vs-account drawdown, ci90/sensitivity if differ). Registry covers every rendered
-  id; report-only + research-only entries listed with producer + reason. PR names removed
-  duplicates + aliases. Layouts unchanged. Depends on: T2, T3. Verify: registry-coverage
-  test (every rendered id registered; report-only listed, never rendered).
+- [x] T1 (M, [Debug]): harness scenarios + recovery/error/stale tests; run RED —
+  tabs-immediate and rail-Reports records still show sentinels; stale A-run shows
+  no change only via one-head runner. Depends on: —.
+- [x] T2 (S, [Code]): one cached branch + local catch in `renderCachedSections`;
+  new tests GREEN. Depends on: T1. Checkpoint: open Reports post-reload paints
+  readouts synchronously; report RED→GREEN record + stale-guard removal check.
+- [ ] T3 (S, [Code]): acceptance command + `test_dashboard_input_lag.py` green
+  unedited; record proofs (recovery RED→GREEN; stale fails with guard removed,
+  passes restored). Depends on: T2.
 
-## Checkpoints
+## How to verify (operator, hands-on — no pytest)
 
-- After T1: goldens green pre-change, ledger RED — baseline proven, safe to refactor.
-- After T2: t-switch landed with logged deltas, zero DOM diff — math unified, page untouched.
-- After T3: page walk (hands-on verify below) — one page, each figure once, charts agree.
-
-## How to verify (hands-on, operator)
-
-Launch the stack (`.\scripts\spread-hunter-menu.ps1 start`), open
-`http://127.0.0.1:8799`, walk the NEW Data Analysis tab: every project figure is there exactly
-once; view buttons filter without repeating a number; chart values match the readouts
-beside them; text, sizes, and spacing look uniform. Legacy tab 2 must read exactly as
-before. Cross-check the audit script on
-`data/02_shadow_prudent_13-10_03-01.db` — its printed CIs match the page for that database
-(small-sample bands read slightly wider now: that's the t-switch, deltas in the PR).
+1. `python -m scripts.build_demo_db --out data/demo_analytics_unique.db` (unused
+   name, no `--force`). 2. `python -m dashboard.server --db
+   data/demo_analytics_unique.db` (dashboard only, no bridge, `BRIDGE_CONTROL`
+   unset, never START). 3. Open `http://127.0.0.1:8799` → Reports & Analytics:
+   all five readouts show figures. 4. Reload → Home → Reports & Analytics:
+   readouts show figures immediately. Failure look: placeholder text beside
+   painted KPI tiles.

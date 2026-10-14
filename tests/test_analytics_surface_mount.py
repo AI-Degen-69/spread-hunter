@@ -961,3 +961,99 @@ def test_a_payload_from_before_this_section_renders_no_chips_at_all():
             assert leak not in text
 
 
+# -- Cached analytics-surface recovery (#540) --------------------------------
+#
+# A dropped deferred frame leaves the five readouts at their placeholders
+# while the KPI tiles beside them keep painting. Opening Reports must repaint
+# the readouts synchronously from the cached snapshot. Driven through the
+# input-lag harness (real pollStatus + switchTab), recording BEFORE any flush.
+_INPUT_LAG_HARNESS = Path(__file__).resolve().parent / "js" / "input_lag_harness.cjs"
+
+
+def _recover(scenario, kpi):
+    out = subprocess.run(
+        [shutil.which("node"), str(_INPUT_LAG_HARNESS),
+         json.dumps({"scenario": scenario, "kpi": kpi})],
+        capture_output=True, text=True, check=True, encoding="utf-8")
+    return json.loads(out.stdout)
+
+
+def _full_kpi(poison_mean_return=False):
+    """All five readout sections plus the guarded reads renderAnalyticsSurface needs."""
+    return {
+        "portfolio": {"account": {"account_value_usd": 100}},
+        "trade_analytics": {
+            "n_closes": 12, "wins": 7, "losses": 5,
+            "mean_return_pct": ("<string>" if poison_mean_return else 0.5),
+        },
+        "statistical_analytics": {
+            "fill_path_edge": FILL_PATH_EDGE,
+            "rescue_friction": RESCUE_FRICTION,
+            "queue_realism": QUEUE_REALISM,
+            "robustness": ROBUSTNESS,
+            "capital_risk": CAPITAL,
+        },
+    }
+
+
+def _assert_all_five_readouts_painted(readouts):
+    assert "per close" in readouts["fill-path-edge-readout"]
+    assert "0.30" in readouts["fill-path-edge-readout"]
+    assert "33.3%" in readouts["fill-path-edge-readout"]
+    assert "SLED (¢)" in readouts["rescue-friction-readout"]
+    assert "15.80" in readouts["rescue-friction-readout"]
+    assert "Trade-Through Depth (¢)" in readouts["queue-realism-readout"]
+    assert "2.50" in readouts["queue-realism-readout"]
+    assert "10.0s" in readouts["queue-realism-readout"]
+    assert "Markout 5m (¢)" in readouts["robustness-readout"]
+    assert "-2.50" in readouts["robustness-readout"]
+    assert "SQN" in readouts["robustness-readout"]
+    assert "Deepest DD ($)" in readouts["capital-risk-readout"]
+    assert "14.60" in readouts["capital-risk-readout"]
+    assert "Sortino" in readouts["capital-risk-readout"]
+    for html in readouts.values():
+        assert "SENTINEL" not in html
+
+
+def test_tabs_recovery_repaints_all_five_readouts_synchronously():
+    res = _recover("analytics-tabs-recovery", _full_kpi())
+
+    _assert_all_five_readouts_painted(res["readouts"])
+    assert res["kpiGrid"] != "" and "SENTINEL" not in res["kpiGrid"]
+    assert res["queuedNew"] == 1
+    assert res["fetchKpi"] == 0
+
+
+def test_rail_recovery_repaints_all_five_readouts():
+    res = _recover("analytics-rail-recovery", _full_kpi())
+
+    _assert_all_five_readouts_painted(res["readouts"])
+    assert res["kpiGrid"] != ""
+    assert res["fetchKpi"] == 0
+
+
+def test_error_isolation_survives_navigation_and_logs():
+    res = _recover("analytics-error-isolation", _full_kpi(poison_mean_return=True))
+
+    assert res["crashed"] is False
+    assert res["tab2Hidden"] is False
+    assert res["consoleErrors"] >= 1
+
+
+def test_stale_frame_paints_nothing():
+    res = _recover("analytics-stale", _full_kpi())
+
+    for html in res["readouts"].values():
+        assert "SENTINEL" in html
+    assert res["remainingQueue"] == 1
+
+
+def test_startup_with_empty_cache_leaves_placeholders():
+    res = _recover("analytics-startup", _full_kpi())
+
+    for html in res["readouts"].values():
+        assert "SENTINEL" in html
+    assert "SENTINEL" in res["kpiGrid"]
+    assert res["consoleErrors"] == 0
+
+
