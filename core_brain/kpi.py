@@ -20,6 +20,7 @@ from contextlib import closing
 
 from core_brain.statistical_analytics import (
     build as build_statistical_analytics,
+    ci_z,
     mean_pnl_ci as _mean_pnl_ci,
 )
 from core_brain.order_registry import (
@@ -45,7 +46,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 255
+KPI_PAYLOAD_VERSION = 256
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -53,11 +54,12 @@ KPI_PAYLOAD_VERSION = 255
 MIN_RISK_SAMPLE = 20
 
 
-def _wilson_ci(successes: int, n: int, z: float = 1.96) -> Optional[dict[str, float]]:
+def _wilson_ci(successes: int, n: int, z: float = ci_z(95)) -> Optional[dict[str, float]]:
     """Wilson score interval for a binomial proportion (the win rate).
 
     The normal-approximation interval misbehaves at n=1 or all-wins/losses;
-    Wilson stays inside [0, 1] there. z=1.96 is the 95% two-sided bound.
+    Wilson stays inside [0, 1] there. The default is the 95% two-sided bound,
+    read from the one critical-value table rather than written down again (#535).
     """
     if n <= 0:
         return None
@@ -77,9 +79,13 @@ def _wilson_ci(successes: int, n: int, z: float = 1.96) -> Optional[dict[str, fl
 # --------------------------------------------------------------------------
 
 # Pre-computed z-scores so callers do not need scipy.
-Z_ALPHA_90_ONE_SIDED = 1.645   # one-sided 90% confidence (alpha=0.05)
+#
+# `Z_ALPHA_90_ONE_SIDED` is a ONE-SIDED alpha for the power formulas below. Its value is the
+# same quantile as the two-sided 90% row of `statistical_analytics.CI_Z_BY_LEVEL` -- the 5%
+# tail on one side is the 5% tail split across two -- so it is READ from the one table rather
+# than written down a second time (#535).
+Z_ALPHA_90_ONE_SIDED = ci_z(90)   # alpha = 0.05, one-sided (the value is one-sided 95%)
 Z_BETA_80_POWER = 0.8416       # 80% power (beta=0.20)
-Z_95_TWO_SIDED = 1.96          # 95% two-sided (used by _wilson_ci default)
 
 # Two-tailed z-scores for mean sample size sufficiency (Issue #443)
 Z_95_SAMPLE_SUFFICIENCY = 1.95996
@@ -283,7 +289,7 @@ def evaluate_stat_gate(
     mean_r = statistics.mean(return_pcts)
     std_r = statistics.stdev(return_pcts)
     se = std_r / math.sqrt(len(return_pcts))
-    ci90_lower = mean_r - Z_ALPHA_90_ONE_SIDED * se
+    ci90_lower = mean_r - ci_z(90) * se
 
     result["mean_return_pct"] = mean_r
     result["stdev_return_pct"] = std_r
@@ -408,12 +414,14 @@ def compute_trade_analytics(
     ci95_return_pct: Optional[dict[str, float]] = None
     if mean_return_pct is not None and stdev_return_pct is not None and len(return_pcts) > 1:
         se = stdev_return_pct / math.sqrt(len(return_pcts))
-        # One-sided 90% lower bound (the "is expectancy positive?" gate the
-        # paper run uses), plus a 95% two-sided band for context.
-        ci90_lower_pct = mean_return_pct - 1.645 * se
+        # The 90% lower bound (the "is expectancy positive?" gate the paper run
+        # uses) -- the 5% tail on one side, which is the 90% two-sided row -- plus
+        # a 95% two-sided band for context. Both multipliers come from the one
+        # critical-value table (#535).
+        ci90_lower_pct = mean_return_pct - ci_z(90) * se
         ci95_return_pct = {
-            "lower": mean_return_pct - 1.96 * se,
-            "upper": mean_return_pct + 1.96 * se,
+            "lower": mean_return_pct - ci_z(95) * se,
+            "upper": mean_return_pct + ci_z(95) * se,
         }
 
     mean_pnl_ci = _mean_pnl_ci(wins + losses)
@@ -1128,9 +1136,9 @@ def compute_pessimistic_analytics(
 ) -> dict[str, Any]:
     """Recompute the return distribution as if every taker resolution paid one
     tick worse plus `gas`. Same tail shape as `compute_trade_analytics`:
-    mean, stdev, and `ci90_lower_pct` (z=1.645), with `rebate_est` pinned to
-    None -- the pessimistic variant never invents rebate income. A field is
-    NULL when it cannot be measured.
+    mean, stdev, and `ci90_lower_pct` (the 90% two-sided row), with `rebate_est`
+    pinned to None -- the pessimistic variant never invents rebate income. A
+    field is NULL when it cannot be measured.
     """
     returns = [
         r for r in (_pessimistic_close_return(c, tick, gas) for c in closes)
@@ -1141,7 +1149,7 @@ def compute_pessimistic_analytics(
     stdev_r = statistics.stdev(returns) if n > 1 else None
     ci90: Optional[float] = None
     if mean_r is not None and stdev_r is not None and n > 1:
-        ci90 = mean_r - Z_ALPHA_90_ONE_SIDED * (stdev_r / math.sqrt(n))
+        ci90 = mean_r - ci_z(90) * (stdev_r / math.sqrt(n))
     return {
         "n_closes": n,
         "mean_return_pct": mean_r,
