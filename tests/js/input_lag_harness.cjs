@@ -10,6 +10,7 @@ const path = require('path');
 
 const input = JSON.parse(process.argv[2]);
 const scenario = input.scenario || 'hidden-tabs-skipped';
+const kpiInput = input.kpi || null;
 
 const noop = () => {};
 function stubElement(id) {
@@ -82,6 +83,13 @@ const rafQueue = [];
 let rafId = 0;
 global.requestAnimationFrame = (cb) => { rafQueue.push(cb); return ++rafId; };
 global.__flushRaf = () => { const q = rafQueue.splice(0); q.forEach((cb) => cb(0)); return q.length; };
+// One-head frame runner (#540): runs exactly one queued callback so a test
+// can observe that the first frame was stale without running the second.
+global.__runOneRaf = () => { const cb = rafQueue.shift(); if (cb) cb(0); return rafQueue.length; };
+// Surface throw mid-navigation must survive with a log, not a blank tab.
+let consoleErrorCount = 0;
+const _origConsoleError = console.error.bind(console);
+console.error = (...args) => { consoleErrorCount++; _origConsoleError(...args); };
 
 // One full poll snapshot, served per endpoint like the backend would.
 // {fetchOk:false} simulates a dead backend: every endpoint answers unusable.
@@ -90,15 +98,19 @@ let fetchLive = input.fetchOk !== false;
 const SNAPSHOT = {
   '/api/state': { orders: [], fills: [] },
   '/api/system/status': { bot_state: 'STOPPED', services: {} },
-  '/api/kpi': { portfolio: { account: { account_value_usd: 100 } } },
+  '/api/kpi': kpiInput || { portfolio: { account: { account_value_usd: 100 } } },
   '/api/scan-state': null,
   '/api/trial-readiness': { trial_ready: true, ready_gates: ['gate-a'] },
   '/api/guardrail-alerts': null,
   '/api/guardrail-health': null,
 };
-global.fetch = async (url) => (fetchLive
-  ? { ok: true, json: async () => SNAPSHOT[url] ?? null }
-  : { ok: false });
+let kpiFetchCount = 0;
+global.fetch = async (url) => {
+  if (url === '/api/kpi') kpiFetchCount++;
+  return fetchLive
+    ? { ok: true, json: async () => SNAPSHOT[url] ?? null }
+    : { ok: false };
+};
 global.__setFetchOk = (v) => { fetchLive = v !== false; };
 
 
@@ -137,7 +149,21 @@ const PANEL_PAGE = {
   'market-body': 'data-markets',
   'kanban-board': 'data-markets',
   'broker-hero-equity': 'home',
+  'analytics-surface': 'reports',
 };
+// The five readouts live inside #analytics-surface on the rail's Reports
+// page; sentinels prove a synchronous cached repaint actually replaced them.
+const READOUT_IDS = ['fill-path-edge-readout', 'rescue-friction-readout',
+  'queue-realism-readout', 'robustness-readout', 'capital-risk-readout'];
+el('analytics-surface').parentElement = el('page-reports');
+function seedReadoutSentinels() {
+  for (const id of READOUT_IDS) el(id).innerHTML = 'SENTINEL-' + id;
+}
+function readReadouts() {
+  const out = {};
+  for (const id of READOUT_IDS) out[id] = el(id).innerHTML;
+  return out;
+}
 for (const [panelId, page] of Object.entries(PANEL_PAGE)) {
   el(panelId).parentElement = el('page-' + page);
 }
@@ -329,6 +355,74 @@ async function main() {
     app.deferPaint(() => { ranSync++; });
     // Assert material.
     result = { queuedBeforeFlush, ranBeforeFlush, flushed, ranAfterFlush: ran, ranSync };
+  } else if (scenario === 'analytics-startup') {
+    // Empty cache at startup: init already called switchTab before any poll
+    // with lastKpi undefined, so this repaint must leave placeholders alone.
+    seedReadoutSentinels();
+    el('kpi-grid').innerHTML = 'SENTINEL-kpi-grid';
+    app.switchTab(2);
+    result = { readouts: readReadouts(), kpiGrid: el('kpi-grid').innerHTML, consoleErrors: consoleErrorCount };
+  } else if (scenario === 'analytics-tabs-recovery') {
+    // Tabs era (no rail): poll on Tab 1 fills the cache, then the operator
+    // opens Reports. The repaint must be synchronous — record BEFORE flush.
+    setTabs(false, true, true);
+    await app.pollStatus();
+    seedReadoutSentinels();
+    const queuedBefore = rafQueue.length;
+    const fetchBefore = kpiFetchCount;
+    app.switchTab(2);
+    result = {
+      readouts: readReadouts(),
+      kpiGrid: el('kpi-grid').innerHTML,
+      queuedNew: rafQueue.length - queuedBefore,
+      fetchKpi: kpiFetchCount - fetchBefore,
+      consoleErrors: consoleErrorCount,
+    };
+  } else if (scenario === 'analytics-rail-recovery') {
+    // Rail era: poll on Home fills the cache, then the operator opens the
+    // rail's Reports page. Same synchronous contract, gated by rail page.
+    global.__railMounted = true;
+    setTabs(false, false, false);
+    setRailPage('home');
+    await app.pollStatus();
+    setRailPage('reports');
+    seedReadoutSentinels();
+    const fetchBefore = kpiFetchCount;
+    app.switchTab(2);
+    result = {
+      readouts: readReadouts(),
+      kpiGrid: el('kpi-grid').innerHTML,
+      fetchKpi: kpiFetchCount - fetchBefore,
+      consoleErrors: consoleErrorCount,
+    };
+  } else if (scenario === 'analytics-error-isolation') {
+    // Poisoned mean poisons the quant grid mid-surface: navigation survives
+    // with a log instead of a throw. Record synchronously, never flush.
+    setTabs(false, true, true);
+    await app.pollStatus();
+    seedReadoutSentinels();
+    let crashed = null;
+    try {
+      app.switchTab(2);
+      crashed = false;
+    } catch (e) {
+      crashed = String((e && e.message) || e);
+    }
+    result = {
+      crashed,
+      tab2Hidden: el('tab-2').hidden,
+      readouts: readReadouts(),
+      consoleErrors: consoleErrorCount,
+    };
+  } else if (scenario === 'analytics-stale') {
+    // Two polls queue two frames; the first is stale. Running exactly one
+    // head must paint nothing — flushing both would mask the guard.
+    setTabs(false, false, false);
+    await app.pollStatus();
+    await app.pollStatus();
+    seedReadoutSentinels();
+    const remainingQueue = global.__runOneRaf();
+    result = { readouts: readReadouts(), remainingQueue, consoleErrors: consoleErrorCount };
   } else {
     throw new Error('unknown scenario: ' + scenario);
   }
