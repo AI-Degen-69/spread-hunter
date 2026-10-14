@@ -96,6 +96,13 @@
       </button>
       <button id="btn-sync" class="btn-sync" type="button" title="Reconcile orders/fills and account vs venue (read-only, fixes stale dashboard when Polymarket shows 0/0)">SYNC VENUE</button>
       <button id="btn-reset" class="btn-reset" type="button">RESET</button>
+      <!-- Command palette mouse entry (#562): opens the palette, focus lands in
+           search and returns here on close. #504 may relocate it with the rest. -->
+      <button id="btn-command-palette" class="btn-palette" type="button" aria-label="Open command palette search" title="Search pages, actions, markets (Ctrl+K or /)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style="display:inline-block;vertical-align:-2px;margin-right:6px" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+        <span>Search</span>
+        <kbd>Ctrl K</kbd>
+      </button>
     </div>
     <!-- The run switcher: which rehearsal is writing this store, and one click
          to re-point the page at a live one. Populated by renderDbMode().
@@ -860,7 +867,7 @@
     <div class="modal-title" id="palette-title">Command palette</div>
     <input id="palette-search" class="modal-input palette-input" type="text" placeholder="Search pages, actions, markets…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="palette-list" aria-label="Command palette search">
     <div id="palette-list" class="palette-list" role="listbox" aria-label="Commands"></div>
-    <div class="palette-hint">Use arrow keys to move. Press Enter to choose. Press Escape to close.</div>
+    <div class="palette-hint">Press Ctrl+K or / to open. Use arrow keys to move. Press Enter to choose. Press Escape to close.</div>
   </div>
 </div>
 

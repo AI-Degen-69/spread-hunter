@@ -431,6 +431,10 @@
     overlay.addEventListener('click', onOverlayClick);
     doc.addEventListener('focusin', onFocusIn);
     search.addEventListener('input', refreshList);
+    // Mouse entry (#562): a nav button that opens the palette. Bound here —
+    // the browser IIFE exposes no globals — and guarded for pages without it.
+    var trigger = doc.getElementById('btn-command-palette');
+    if (trigger) trigger.addEventListener('click', function () { openPalette(); });
     window.addEventListener('keydown', onKeydown, true);
   }
 
