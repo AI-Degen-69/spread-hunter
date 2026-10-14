@@ -268,7 +268,7 @@ function enginePillVerdicts() {
     return {
       pillClass: pillEl.className,
       pillTitle: pillEl.title,
-      stateHtml: stateEl.innerHTML,
+      stateHtml: pillEl.innerHTML,
       elsewhereDisplay: elsewhereEl.style.display,
       elsewhereText: elsewhereEl.textContent,
       elsewhereTitle: elsewhereEl.title,
@@ -408,7 +408,7 @@ function engineHoldVerdicts() {
     app.renderScanStatePill(scanState, opts);
     return {
       pillClass: pillEl.className,
-      stateHtml: stateEl.innerHTML,
+      stateHtml: pillEl.innerHTML,
       pillTitle: pillEl.title,
     };
   };
@@ -547,8 +547,7 @@ function topNavVerdicts() {
   });
   const engineRunning = {
     className: enginePill.className,
-    stateHtml: engineState.innerHTML,
-    stateText: engineState.textContent,
+    stateHtml: enginePill.innerHTML,
     elsewhereDisplay: elsewhereTag.style.display,
   };
 
