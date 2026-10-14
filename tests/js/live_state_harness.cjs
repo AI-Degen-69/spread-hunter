@@ -228,11 +228,18 @@ function guardrailHudVerdict() {
   elements.set('services-dropdown', servicesPanel);
 
   // Pull the WATCHDOG pill's state class out of the rebuilt dropdown rows. The
-  // row emits `<span class="pill state-<state>" id="hud-guardrail-pill">`.
+  // row emits `<span class="pill state-<state>" id="hud-guardrail-pill">`
+  // with a status-only inner (dot + state, #602). The pre-rebuild header
+  // node is detached by the rebuild, so the row is the owner to read.
   const dropdownGuardrailState = () => {
     const html = servicesPanel.innerHTML;
     const m = html.match(/pill state-([a-z]+)"\s+id="hud-guardrail-pill"/);
     return m ? m[1] : '(no guardrail row)';
+  };
+  const dropdownGuardrailPill = () => {
+    const html = servicesPanel.innerHTML;
+    const m = html.match(/<span class="pill state-([a-z]+)" id="hud-guardrail-pill">(.*?)<\/span>\s*<span class="services-dropdown-name"/s);
+    return m ? { state: m[1], inner: m[2] } : null;
   };
 
   const render = (health, alerts) => {
@@ -241,9 +248,10 @@ function guardrailHudVerdict() {
       health,
       alerts,
     );
+    const pill = dropdownGuardrailPill();
     return {
-      state: document.getElementById('hud-guardrail-state').textContent,
-      className: document.getElementById('hud-guardrail-pill').className,
+      state: pill ? pill.state.toUpperCase() : '',
+      className: pill ? `pill state-${pill.state}` : '',
       dropdownState: dropdownGuardrailState(),
     };
   };
