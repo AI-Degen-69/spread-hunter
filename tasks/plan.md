@@ -29,8 +29,8 @@ The 4c/10% loss-from-entry dual-trigger is **ladder-only** today. The main
   gating the fixed 0.15 floor. Scope expansion; touches `single_leg_lifecycle` too.
 
 ## Interface contract (Step 4)
-- Mode selector: `single_buy_stop_mode: str = "usd"` ("usd"|"pct");
-  env `HUNTER_SINGLE_BUY_STOP_MODE`. Exactly one active per run.
+- Mode selector: `stop_loss_mode: str = "usd"` ("usd"|"pct");
+  env `HUNTER_STOP_LOSS_MODE`. Exactly one active per run.
 - Parallel trigger vars (same structure, human whole-number units):
   - `stop_loss_trigger_pct: int = 10` (10 = 10% drawdown from entry).
   - `stop_loss_trigger_usd_cents: int = 4` (4 = 4c = $0.04 loss/share).
@@ -51,7 +51,7 @@ T1 (config: mode + rename) -> T2 (`_route_pair`: one-mode) -> T3 (tests)
 ## Tasks
 ### T1 [XS] [Backend/Logic] Config: mode selector + parallel trigger vars
 - Files: core_brain/config.py
-- Add `single_buy_stop_mode`; rename `single_buy_max_loss_pct` ->
+- Add `stop_loss_mode`; rename `single_buy_max_loss_pct` ->
   `stop_loss_trigger_pct` (int, percent) and `single_buy_max_loss_usd` ->
   `stop_loss_trigger_usd_cents` (int, cents); update env overrides + validation.
 - Depends on: —

@@ -176,7 +176,7 @@ def test_usd_mode_holds_when_only_the_pct_trigger_would_fire(registry):
     The retired OR'd dual-trigger would have exited here."""
     _ladder_pair(registry, NOW)
     venue = FakeVenue(best_ask=0.40, best_bid=0.56)  # loss 0.04
-    cfg = _cfg(single_buy_stop_mode="usd", stop_loss_trigger_pct=5.0,
+    cfg = _cfg(stop_loss_mode="usd", stop_loss_trigger_pct=5.0,
                stop_loss_trigger_usd_cents=4.5)
     routed = lp._route_pair(venue, registry, lp.load_pair(registry, PAIR),
                             MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
@@ -190,7 +190,7 @@ def test_pct_mode_holds_when_only_the_usd_trigger_would_fire(registry):
     4.5c dollar stop but is only 8.3% (< the 10% pct stop), so pct mode holds."""
     _ladder_pair(registry, NOW)
     venue = FakeVenue(best_ask=0.40, best_bid=0.55)  # loss 0.05
-    cfg = _cfg(single_buy_stop_mode="pct", stop_loss_trigger_pct=10.0,
+    cfg = _cfg(stop_loss_mode="pct", stop_loss_trigger_pct=10.0,
                stop_loss_trigger_usd_cents=4.5)
     routed = lp._route_pair(venue, registry, lp.load_pair(registry, PAIR),
                             MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
@@ -205,7 +205,7 @@ def test_shadow_and_live_make_the_same_stop_decision(registry, tmp_path):
     shadow_reg = OrderRegistry(db_path=tmp_path / "shadow_parity.db")
     _ladder_pair(registry, NOW)
     _ladder_pair(shadow_reg, NOW)
-    cfg = _cfg(single_buy_stop_mode="usd")
+    cfg = _cfg(stop_loss_mode="usd")
     live_res = lp._route_pair(FakeVenue(best_ask=0.40, best_bid=0.50),
                               registry, lp.load_pair(registry, PAIR),
                               MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
@@ -227,7 +227,7 @@ def test_dollar_trigger_is_tunable(registry, tmp_path):
     tight = lp._route_pair(FakeVenue(best_ask=0.40, best_bid=0.55),
                            registry, lp.load_pair(registry, PAIR),
                            MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
-                           cfg=_cfg(single_buy_stop_mode="usd",
+                           cfg=_cfg(stop_loss_mode="usd",
                                     stop_loss_trigger_usd_cents=4.5),
                            last_ms=NOW, now_s=NOW / 1000.0 + 10.0)
     assert tight["action"] == "exited"
@@ -236,7 +236,7 @@ def test_dollar_trigger_is_tunable(registry, tmp_path):
     wide = lp._route_pair(FakeVenue(best_ask=0.40, best_bid=0.55),
                           wide_reg, lp.load_pair(wide_reg, PAIR),
                           MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
-                          cfg=_cfg(single_buy_stop_mode="usd",
+                          cfg=_cfg(stop_loss_mode="usd",
                                    stop_loss_trigger_usd_cents=6.0),
                           last_ms=NOW, now_s=NOW / 1000.0 + 10.0)
     assert wide["action"] == "holding_grace"

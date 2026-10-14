@@ -2044,7 +2044,7 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     if is_ladder:
         grace_sec = min(float(getattr(cfg, "ladder_exit_sec", 60.0)),
                         window_sec)
-    stop_mode = str(getattr(cfg, "single_buy_stop_mode", "usd") if cfg else "usd").lower()
+    stop_mode = str(getattr(cfg, "stop_loss_mode", "usd") if cfg else "usd").lower()
     max_loss_pct = float(getattr(cfg, "stop_loss_trigger_pct", 10.0) if cfg else 10.0) / 100.0
     max_loss_usd = float(getattr(cfg, "stop_loss_trigger_usd_cents", 4.0) if cfg else 4.0) / 100.0
 

@@ -1036,7 +1036,7 @@ class MakerConfig:
     # Which stop mode is active for a run: "usd" (Stop-Loss Trigger $) or
     # "pct" (Stop-Loss Trigger %). Exactly one fires per run; shadow and live
     # apply the same mode (only the fill source differs).
-    single_buy_stop_mode: str = "usd"
+    stop_loss_mode: str = "usd"
     # Grace period (seconds) to allow the missing maker leg to fill naturally (0.0 default for test baseline; 45.0 in .env for live)
     single_buy_grace_sec: float = 0.0
     # Stop-Loss Trigger (%): sell the naked leg when it is down this many
@@ -1622,12 +1622,12 @@ def load(*, for_display: bool = False) -> MakerConfig:
         if not math.isfinite(val) or val < 0:
             raise ValueError(f"HUNTER_SINGLE_BUY_GRACE_SEC must be finite and non-negative, got: {val}")
         kw["single_buy_grace_sec"] = val
-    sbsm = os.environ.get("HUNTER_SINGLE_BUY_STOP_MODE")
+    sbsm = os.environ.get("HUNTER_STOP_LOSS_MODE")
     if sbsm and sbsm.strip():
         mode = sbsm.strip().lower()
         if mode not in ("usd", "pct"):
-            raise ValueError(f"HUNTER_SINGLE_BUY_STOP_MODE must be 'usd' or 'pct', got: {sbsm}")
-        kw["single_buy_stop_mode"] = mode
+            raise ValueError(f"HUNTER_STOP_LOSS_MODE must be 'usd' or 'pct', got: {sbsm}")
+        kw["stop_loss_mode"] = mode
     sblp = os.environ.get("HUNTER_STOP_LOSS_TRIGGER_PCT")
     if sblp and sblp.strip():
         val = float(sblp)
