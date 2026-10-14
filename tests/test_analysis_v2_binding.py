@@ -23,6 +23,7 @@ HARNESS = Path(__file__).resolve().parent / "js" / "analysis_v2_harness.cjs"
 STATIC = Path(__file__).resolve().parent.parent / "dashboard" / "static"
 PAGE = STATIC / "analysis_v2.html"
 PAGE_JS = STATIC / "analysis_v2.js"
+DEMO_DB = Path("data/demo_analytics_unique.db")
 
 requires_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 
@@ -34,7 +35,7 @@ def _run(payload: dict, action: str = "render", tmp_path=None) -> dict:
     src.write_text(json.dumps({"kpi": payload}), encoding="utf-8")
     proc = subprocess.run(
         ["node", str(HARNESS), str(src), action],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, encoding="utf-8", timeout=120,
     )
     assert proc.returncode == 0, f"harness failed: {proc.stderr[:2000]}"
     return json.loads(proc.stdout)
@@ -42,8 +43,19 @@ def _run(payload: dict, action: str = "render", tmp_path=None) -> dict:
 
 @pytest.fixture(scope="module")
 def live_payload() -> dict:
-    """The real /api/kpi shape from the checked-in demo registry."""
-    return kpi_report(db_path="data/demo_analytics_unique.db")
+    """The real /api/kpi shape from the demo registry.
+
+    ``data/*.db`` is gitignored, so a fresh checkout (CI) has no file:
+    build the registry on demand rather than assert against an empty
+    store. The builder is deterministic apart from wall-clock stamps,
+    so every numeric assertion below holds for a fresh build.
+    """
+    if not DEMO_DB.is_file():
+        from scripts.build_demo_db import build
+
+        DEMO_DB.parent.mkdir(parents=True, exist_ok=True)
+        build(DEMO_DB)
+    return kpi_report(db_path=str(DEMO_DB))
 
 
 def test_page_and_assets_are_served_from_static():
@@ -241,7 +253,7 @@ def test_formatters_handle_the_fraction_and_percent_families():
         "f(-0.414,'usd'), f(0.457,'usd'), f(-6.21,'cents'), f(0.39,'x'),"
         "f(15,'int'), f(300,'sec'), f(null,'pct'), f('n/a','raw')]))"
     )
-    proc = sp.run(["node", "-e", probe], capture_output=True, text=True, timeout=60)
+    proc = sp.run(["node", "-e", probe], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr[:1000]
     got = json.loads(proc.stdout.strip().splitlines()[-1])
     assert got == ["-6.76%", "60.0%", "0.2%", "100.0%",
