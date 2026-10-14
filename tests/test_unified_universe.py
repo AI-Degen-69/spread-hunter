@@ -385,12 +385,10 @@ class _PagingSession:
                       "asks": [{"price": "0.52", "size": "5000"}]})
 
 
-def test_the_legacy_reward_scan_runs_only_behind_the_flag(monkeypatch,
-                                                          tmp_path):
-    # main() scores the universe, then --legacy-rewards scores the legacy
-    # pool in a SECOND score_pool call. Record every call and let main run
-    # to completion with RUN redirected, so the snapshot's legacy accounting
-    # can be asserted too.
+def test_the_legacy_reward_flag_is_retired(monkeypatch, tmp_path):
+    """The reward scan is gone: --legacy-rewards errors instead of
+    resurrecting the pot path (#594), and a plain run scores only the
+    unified universe."""
     monkeypatch.setattr(fm, "RUN", tmp_path)
     calls: list[list[str]] = []
 
@@ -403,83 +401,14 @@ def test_the_legacy_reward_scan_runs_only_behind_the_flag(monkeypatch,
 
     monkeypatch.setattr(sys, "argv", ["filter_markets.py"])
     fm.main()
-    assert calls == [["spread"]], (
-        "the retired reward scan ran without --legacy-rewards")
-    snap = json.loads(
-        (tmp_path / "pipeline.json").read_text(encoding="utf-8"))
-    assert snap["counts"]["funded"] == 0, (
-        "the reward pool must read as empty when the legacy path never ran")
+    assert calls == [["spread"]]
 
     calls.clear()
-    (tmp_path / "pipeline.json").unlink()
-    monkeypatch.setattr(sys, "argv", ["filter_markets.py", "--legacy-rewards"])
-    fm.main()
-    assert len(calls) == 2
-    assert calls[0] == ["spread"]
-    assert calls[1] == ["rewards"], (
-        "the legacy pool must be scored as rewards, with its payout floor")
-    snap = json.loads(
-        (tmp_path / "pipeline.json").read_text(encoding="utf-8"))
-    assert snap["counts"]["funded"] == 1
-
-
-@pytest.mark.parametrize(
-    "failure",
-    [fm.requests.Timeout("timed out"),
-     fm.requests.ConnectionError("disconnected"),
-     ValueError("invalid json")],
-    ids=["timeout", "connection", "json"],
-)
-def test_unavailable_legacy_sampling_returns_an_empty_result(failure,
-                                                              capsys):
-    class BrokenResponse:
-        def json(self):
-            raise failure
-
-    class BrokenSession:
-        def get(self, url, params=None, timeout=None):
-            if isinstance(failure, ValueError):
-                return BrokenResponse()
-            raise failure
-
-    result = fm._legacy_reward_candidates(BrokenSession())
-
-    assert result == ([], [], [], {})
-    assert "continuing without legacy markets" in capsys.readouterr().err
-
-
-def test_legacy_sampling_failure_preserves_unified_output(monkeypatch,
-                                                           tmp_path):
-    class UnavailableLegacySession(_PagingSession):
-        def get(self, url, params=None, timeout=None):
-            if "sampling" in url:
-                raise fm.requests.Timeout("timed out")
-            return super().get(url, params=params, timeout=timeout)
-
-    unified_row = {
-        "source": "spread", "eligible": False,
-        "reject_reason": "cannot score here without overbidding the book",
-        "volume_24h": 900_000.0, "cid": "a", "title": "Market a",
-        "slug": "mkt-a",
-    }
-
-    def score(jobs, **kwargs):
-        return [unified_row] if jobs and jobs[0][3] == "spread" else []
-
-    monkeypatch.setattr(fm, "RUN", tmp_path)
-    monkeypatch.setattr(fm, "score_pool", score)
-    monkeypatch.setattr(fm.requests, "Session", UnavailableLegacySession)
-    monkeypatch.setattr(sys, "argv", ["filter_markets.py", "--legacy-rewards"])
-
-    fm.main()
-
-    rows = json.loads(
-        (tmp_path / "market_universe.json").read_text(encoding="utf-8"))["rows"]
-    assert rows == [unified_row]
-    pipeline = json.loads(
-        (tmp_path / "pipeline.json").read_text(encoding="utf-8"))
-    assert pipeline["counts"]["scored"] == 1
-    assert pipeline["counts"]["funded"] == 0
+    monkeypatch.setattr(sys, "argv",
+                        ["filter_markets.py", "--legacy-rewards"])
+    with pytest.raises(SystemExit):
+        fm.main()
+    assert calls == [], "the retired reward scan must not score anything"
 
 
 # --- the universe file -------------------------------------------------------

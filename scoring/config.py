@@ -27,24 +27,14 @@ class MakerConfig:
     bankroll_usd: float = 1000.0
 
     # --- objective --------------------------------------------------------
-    # "pair"    : the original bet -- rest under the ask, try to buy a hedged
-    #             pair for under $1.00. Measured dead over 60 markets: quoting
-    #             off the ASK puts every quote ~half a spread ABOVE mid, so the
-    #             pair costs 1.00 + spread by construction. The book runs at
-    #             101% all window; there is nothing to capture.
-    # "rewards" : quote for the liquidity-reward score instead of for the fill.
-    #             Gamma reports this series as incentivised --
-    #               rewardsMaxSpread = 4.5c, rewardsMinSize = 50,
-    #               feeSchedule.rebateRate = 0.2
-    #             -- and the score is paid on RESTING size, filled or not:
-    #               S(v, s) = ((v - s)/v)^2 * size,  v = 4.5c, s = own spread
-    #             Two consequences the "pair" objective had backwards:
-    #               1. Sitting out is the expensive move. The old gates skipped
-    #                  69% of cycles (602/875), earning zero score for them.
-    #               2. Quoting off MID rather than the ask makes the pair cost
-    #                  1.00 - 2*offset, i.e. automatically under $1.00 -- the
-    #                  exact thing the pair objective failed to achieve.
-    objective: str = "rewards"
+    # ONE MODE: spread capture. Price both legs at mid - offset, so the pair
+    # assembles at ~1.00 - 2*offset and the merge returns $1.00 -- profit is
+    # the pair discount. The "rewards" mode (quote for the venue's
+    # liquidity-reward score) and the "pair" mode (price off the ask, measured
+    # dead: the pair costs 1.00 + spread by construction) were deleted in the
+    # rewards purge (#594). Do not reintroduce either; the income is the
+    # discount, not emissions.
+    objective: str = "spread_capture"
 
     # How far below mid to rest, in price units. This is the whole tradeoff:
     # score is quadratic in closeness (0.5c -> ~16% of market score, 2c -> ~7%,
@@ -226,38 +216,10 @@ class MakerConfig:
     markout_catastrophic_threshold: float = -0.020
     # Widened quotes stay inside the 4.5c reward window, so rent continues.
     widen_offset: float = 0.035
-    # Marginal $/day per $ committed, below which capital is better left idle.
-    marginal_return_floor: float = 0.02
-    # Leave wallet headroom for inventory and order-lifecycle timing.
-    allocation_budget: float = 900.0
-    # Ceiling on any ONE market's share of that budget.
-    #
-    # The water-fill was a diversifier and is not one. `marginal`
-    # is daily*T/(capital+T)^2, which is nearly FLAT in capital whenever
-    # competitor depth T dominates our size -- so the argmax never changes
-    # and a single market absorbs every increment. Measured 2026-08-02: one
-    # market took the full $900 budget, `shares_for` turned it into a
-    # 900-share order, and it filled in one print for $792 -- 79% of a
-    # $1,000 wallet, 1.98x the $400 per-market cost cap.
-    #
-    # 0.15 puts the floor at roughly seven concurrently funded markets. That
-    # number is set by the variance, not by taste: per-fill markout measured
-    # -$7.58 with a standard deviation of $56.68, so at full concentration a
-    # single fill moves the book by more than the entire expected edge of a
-    # hundred fills and no mean is readable at any sample size.
-    max_market_frac: float = 0.15
+    # The allocator knobs and the reward-economics fields were deleted in the
+    # rewards purge (#594); see core_brain/config.py for the same note.
     # Set per-market by the fleet each cycle: NORMAL | WIDENED | EXITED.
     gate_state: str = "NORMAL"
-
-    # --- profit taking ----------------------------------------------------
-    # Nothing in this strategy ever closed a position: every fill rode to
-    # settlement in 2027, so a filled pair immobilised capital that had been
-    # earning daily rent. Selling a pair that has appreciated converts locked
-    # capital back into working capital.
-    #
-    # Selling means crossing the spread, so BOTH legs pay the taker fee. The
-    # move therefore has to clear two fees before it clears anything else.
-    profit_take_fee_per_share: float = 0.017
 
     # MERGE (U2). There is no `merge_gas_usd` here, and that is the point.
     #
@@ -306,46 +268,6 @@ class MakerConfig:
     # something, short enough that the exception stays rare and the loss cap
     # remains the binding constraint rather than a formality.
     merge_velocity_hold_days: float = 30.0
-
-    # REWARD ELIGIBILITY (U4). Polymarket's published rule: "The minimum reward
-    # payout is $1; amounts below this will not be paid." A market projecting
-    # under a dollar a day does not pay a fraction of a dollar -- it pays zero.
-    #
-    # Measured 2026-07-30, only 4 of 20 fleet markets cleared it. The other 16
-    # held capital and earned exactly nothing, which makes spreading thin
-    # actively harmful rather than merely inefficient. Concentration is not a
-    # preference here, it is what the payout rule requires.
-    #
-    # Whether the threshold applies per-market or across a maker's aggregate is
-    # not settled by the docs. Per-market is the conservative reading and is
-    # safe under either; the first real payout settles it empirically.
-    reward_min_payout_usd: float = 1.0
-    # Multiple of the floor a market must clear to be funded. Projections are
-    # noisy and competitors arrive, so 1.0x would fund markets that cross below
-    # the line the moment anyone else quotes. 1.5x buys headroom.
-    reward_floor_multiple: float = 1.5
-
-    # SPREAD CAPTURE (U6). The payout floor above, and the sizing that feeds
-    # it, assume income arrives as reward emissions. The markets that actually
-    # trade -- bitcoin-up-or-down-*, ~$92k/24h -- publish clobRewards: 0, so
-    # the allocator valued them at exactly zero and the fleet instead funded a
-    # universe that printed 9 tape-backed fills in 74 hours.
-    #
-    # For those markets the income IS the spread, and
-    # `allocate.spread_capture_daily` converts it into the same $/day pot the
-    # reward path uses. These two are its inputs.
-    #
-    # Fraction of the quoted spread earned per share traded. A resting maker
-    # earns at MOST half the spread on a round trip, and less in practice,
-    # because flow that reaches a resting order is adversely selected. This is
-    # a starting hypothesis at half of that theoretical half -- to be replaced
-    # by the first real markout sample on one of these markets, exactly as
-    # every other EV parameter here is.
-    spread_capture_frac: float = 0.25
-    # Fallback quoted spread when the market spec carries none. 1c is the
-    # observed book on the up-or-down series. The estimate is most sensitive to
-    # this number, so a spec reporting its own spread is always preferred.
-    spread_capture_default_spread: float = 0.01
 
     # TRADABILITY AND HORIZON (U6). Reward yield per dollar of capital prefers
     # a thin book by construction, and a thin book is thin because nobody
@@ -627,14 +549,6 @@ class MakerConfig:
     # -- it has no fleet whose markout could be pooled.
     fleet_posture: str = "NORMAL"
 
-    # Maker pool per 5-min window, for turning score-share into dollars.
-    # Measured 2026-07-28 from 15 recorded windows: 68405 shares traded per
-    # window -> $716 median taker-fee pool -> 20% = $143 to makers. Treat as an
-    # order of magnitude, not a promise: data-api /trades reports each
-    # participant's own side, so the volume behind it may be double-counted,
-    # in which case the true pool is nearer $70.
-    est_reward_pool_usd: float = 143.0
-
     # --- quoting ----------------------------------------------------------
     # He posts on BOTH outcomes. In a binary market a bid on DOWN at 0.40 is
     # economically a sell of UP at 0.60, so bidding both sides IS two-sided
@@ -829,7 +743,6 @@ class MakerConfig:
     # pool, so rebates are ESTIMATED and reported separately from trading PnL,
     # never blended in.
     maker_fee: float = 0.0
-    rebate_rate: float = 0.20
     fee_rate: float = 0.07          # taker fee rate, for the rebate estimate
 
     # LATENCY AND PROPAGATION PARAMETERS (issue #27, Phase 1 components 2 & 3).
@@ -873,7 +786,6 @@ class MakerConfig:
     pinned_condition_id: str = ""
     market_title: str = ""
     market_url: str = ""
-    market_daily_rate: float = 0.0
 
 
 def _bounded_float(name: str, raw: str, lo: float, hi: float) -> float:
@@ -951,7 +863,6 @@ def load() -> MakerConfig:
         kw["pinned_condition_id"] = cid
         kw["market_title"] = os.environ.get("HUNTER_TITLE", "")
         kw["market_url"] = os.environ.get("HUNTER_URL", "")
-        kw["market_daily_rate"] = float(os.environ.get("HUNTER_DAILY_RATE", "0") or 0)
         # Long-dated markets do not close in 15 seconds, and the min-size floor
         # is per-market (20, 50, 100, 200) -- quoting under it earns nothing.
         kw["min_t_remaining_sec"] = 0.0
@@ -1047,9 +958,6 @@ def load() -> MakerConfig:
     pva = os.environ.get("HUNTER_POST_VENUE_ACCEPT_MS")
     if pva and pva.strip():
         kw["post_venue_accept_ms"] = float(pva)
-    mf = os.environ.get("HUNTER_MARGINAL_FLOOR") or ""
-    if mf.strip():
-        kw["marginal_return_floor"] = float(mf)
     bk = os.environ.get("SPREAD_HUNTER_BANKROLL") or os.environ.get("HUNTER_BANKROLL") or ""
     if bk.strip():
         val = float(bk)
