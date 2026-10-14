@@ -2058,7 +2058,8 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     if is_adverse:
         res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
                               live=live, venue_positions=venue_positions,
-                              reason="adverse_drift", method=exit_method)
+                              reason="adverse_drift", method=exit_method,
+                              trigger_bid=heavy_bid)
         if isinstance(res, dict):
             res["reason"] = "adverse_drift"
         return res
@@ -2075,7 +2076,8 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     timer_reason = "ladder_exit" if is_ladder else "grace_expired"
     res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
                           live=live, venue_positions=venue_positions,
-                          reason=timer_reason, method=exit_method)
+                          reason=timer_reason, method=exit_method,
+                          trigger_bid=heavy_bid)
     if isinstance(res, dict):
         res["reason"] = timer_reason
     return res
