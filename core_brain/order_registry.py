@@ -694,6 +694,10 @@ class FillRecord:
     venue_ts: Optional[int] = None
     recorded_ts: Optional[int] = None
     run_id: Optional[str] = None
+    #: The closest tape print strictly below our resting price that cleared
+    #: the level (#531). Carried in memory only — never in the `fills` INSERT,
+    #: which keeps the production schema untouched.
+    clearing_price: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -1770,15 +1774,34 @@ class OrderRegistry:
 
     def get_all_fills(self) -> list[dict]:
         with self._conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT f.trade_id, f.order_uuid, f.size, f.price, f.venue_ts, f.recorded_ts, f.run_id,
-                       o.condition_id, o.token_id, o.side, o.pair_id, o.posted_ts
-                FROM fills f
-                JOIN orders o ON f.order_uuid = o.id
-                ORDER BY f.recorded_ts ASC
-                """
-            ).fetchall()
+            has_prints = any(
+                r[1] == "shadow_clearing_prints"
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            )
+            if has_prints:
+                rows = conn.execute(
+                    """
+                    SELECT f.trade_id, f.order_uuid, f.size, f.price, f.venue_ts, f.recorded_ts, f.run_id,
+                           o.condition_id, o.token_id, o.side, o.pair_id, o.posted_ts,
+                           p.clearing_price AS clearing_price
+                    FROM fills f
+                    JOIN orders o ON f.order_uuid = o.id
+                    LEFT JOIN shadow_clearing_prints p ON p.trade_id = f.trade_id
+                    ORDER BY f.recorded_ts ASC
+                    """
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT f.trade_id, f.order_uuid, f.size, f.price, f.venue_ts, f.recorded_ts, f.run_id,
+                           o.condition_id, o.token_id, o.side, o.pair_id, o.posted_ts
+                    FROM fills f
+                    JOIN orders o ON f.order_uuid = o.id
+                    ORDER BY f.recorded_ts ASC
+                    """
+                ).fetchall()
             return [dict(r) for r in rows]
 
     def get_all_market_events(self) -> list[dict]:
