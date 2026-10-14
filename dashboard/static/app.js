@@ -1786,7 +1786,7 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       pid = sr?.pid;
       if (!isShadow) {
         state = 'stopped';
-        meta = 'shadow only (live uses venue engine)';
+        meta = 'stopped';
       } else if (running) {
         state = 'running';
         const elapsed = sr?.elapsed_sec ? fmtStopwatch(sr.elapsed_sec) : '';
@@ -1804,7 +1804,7 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       state = running ? 'running' : 'stopped';
       const uptime = typeof svc?.uptime_sec === 'number' ? `${Math.round(svc.uptime_sec)}s up` : '';
       if (def.liveOnly && isShadow) {
-        meta = 'live only (shadow uses in-process client)';
+        meta = 'stopped';
       } else if (running) {
         meta = uptime ? (pid ? `pid ${pid} · ${uptime}` : uptime) : (pid ? `pid ${pid}` : 'running');
       } else {
@@ -1813,8 +1813,14 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
     }
     const dot = `<span class="pulse-dot ${state === 'running' ? 'active' : ''}"></span>`;
     const label = state.toUpperCase();
-    return `<div class="services-dropdown-row">
-      <span class="pill state-${state}"${pillId}>${dot}<span class="pill-label">${esc(label)}</span></span>
+    const pillTag = { guardrail: 'WATCHDOG', filter: 'SCAN', query: 'ENGINE', decide: 'DECIDE', shadow: 'SHADOW' }[def.key] || def.key.toUpperCase();
+    // Live-only/shadow-only context rides on the row tooltip, not the visible
+    // meta slot: full sentences wrap and squeeze the name column (#586).
+    let rowTitle = def.name;
+    if (def.liveOnly && isShadow) rowTitle += ' — live only (shadow uses in-process client)';
+    else if (def.key === 'shadow' && !isShadow) rowTitle += ' — shadow only (live uses venue engine)';
+    return `<div class="services-dropdown-row" title="${esc(rowTitle)}">
+      <span class="pill state-${state}"${pillId}>${dot} <span class="pill-label">${esc(pillTag)}</span> <span class="pill-value">${esc(label)}</span></span>
       <span class="services-dropdown-name" title="${esc(def.name)}">${esc(def.name)}</span>
       <span class="services-dropdown-meta">${esc(meta)}</span>
     </div>`;
