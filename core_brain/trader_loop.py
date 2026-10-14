@@ -585,7 +585,10 @@ def _recording_inventory(read, recorder, cid):
 
     def wrapped(market):
         inv = read(market)
-        recorder(str(cid).lower(), inv)
+        # An empty id ranks flat without ever looking the snapshot up, so
+        # there is nothing to record for it -- and no "" key to grow.
+        if cid:
+            recorder(str(cid).lower(), inv)
         return inv
 
     return wrapped

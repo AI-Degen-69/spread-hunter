@@ -12,7 +12,8 @@ feed position.
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 from core_brain.quotes import Inventory
 
@@ -24,7 +25,7 @@ _RANK_BALANCED = 1
 _RANK_FLAT = 2
 
 
-def _rank_of(inv: "Inventory | None") -> int:
+def _rank_of(inv: Inventory | None) -> int:
     if inv is None:
         return _RANK_FLAT
     up = float(inv.up_shares)
