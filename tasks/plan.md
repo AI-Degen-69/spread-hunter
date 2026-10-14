@@ -143,7 +143,7 @@ Guard test `tests/test_close_method_taxonomy.py` — imports **only**
 
 ## Tasks
 
-### T1 [Code] Build the leaf module — S
+### T1 [x] [Code] Build the leaf module — S
 
 - Target files: `core_brain/close_methods.py` (new).
 - What: the contract above — docstring rules, 12 constants, frozen record,
