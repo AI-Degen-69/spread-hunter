@@ -17,7 +17,7 @@
 (function () {
 'use strict';
 
-const PAGES =['home', 'data-markets', 'strategy', 'trades', 'reports'];
+const PAGES =['home', 'data-markets', 'strategy', 'trades', 'reports', 'analysis'];
 const STORAGE_KEY = 'sh-proto-page';
 /* The pinned rail is a preference, so it persists -- under its own key. One
  * shared slot would let pinning the rail forget the chosen page. */
@@ -76,13 +76,20 @@ const PAGE_LAYOUT = [
     note: 'The evidence behind the numbers on the Dashboard.',
     selectors: ['.stats-subnav-container', '#analytics-surface'],
   },
+  {
+    page: 'analysis',
+    label: 'Data Analysis',
+    icon: 'M2.4 13.6h11.2 M4.6 7.4l2.2 2.2 3-3.6 3.4 3.4',
+    note: 'Every project statistic, each shown once (#541).',
+    selectors: ['#da-surface'],
+  },
 ];
 
 function pageId(page) {
   return 'page-' + page;
 }
 
-// A stored value is data, not a command: anything that is not one of the five
+// A stored value is data, not a command: anything that is not one of the six
 // known pages falls back to Home rather than hiding every panel.
 function normalizePage(page) {
   return PAGES.includes(page) ? page : DEFAULT_PAGE;
@@ -459,7 +466,7 @@ function mountSidebarLayout(doc) {
   // and reads `#tab-3.hidden` before it will scroll the kanban, so removing
   // them would break the keyboard navigation the kanban still needs. Unhiding
   // them costs nothing: they have no children left.
-  for (const tab of ['tab-1', 'tab-2', 'tab-3']) {
+  for (const tab of ['tab-1', 'tab-2', 'tab-3', 'tab-4']) {
     const section = scope.getElementById(tab);
     if (section) section.hidden = false;
   }

@@ -65,8 +65,12 @@ class FamilyStat:
     gate: str
 
 
-def _percentile(values: list[float], fraction: float) -> Optional[float]:
+def _nearest_rank_percentile(values: list[float], fraction: float) -> Optional[float]:
     """The value at `fraction` through a sorted sample, nearest-rank.
+
+    Named for what it is (#541): for `[1, 3]`, p50 is 1 here but 2 under the
+    interpolated `core_brain.statistical_analytics._percentile`. Same word,
+    different number -- the name must not let a caller pick up the wrong one.
 
     `statistics.quantiles` needs at least two points and interpolates; a family
     with one sample is a real and common case here, and reporting nothing for
@@ -128,10 +132,10 @@ def summarise(rows: list[dict], queue_bar: float,
                        for r in samples}),
             book_pct=100.0 * sum(1 for r in samples
                                  if r.get("book_ok")) / len(samples),
-            spread_med=_percentile(spreads, 0.5),
-            pair_med=_percentile(pairs, 0.5),
-            queue_med=_percentile(queues, 0.5),
-            queue_p90=_percentile(queues, 0.9),
+            spread_med=_nearest_rank_percentile(spreads, 0.5),
+            pair_med=_nearest_rank_percentile(pairs, 0.5),
+            queue_med=_nearest_rank_percentile(queues, 0.5),
+            queue_p90=_nearest_rank_percentile(queues, 0.9),
             pass_pct=100.0 * passing / len(samples),
             gate=gate))
     out.sort(key=lambda s: (-s.pass_pct, -s.hours, -s.samples))

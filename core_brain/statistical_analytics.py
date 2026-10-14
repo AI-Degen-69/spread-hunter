@@ -93,7 +93,7 @@ MERGE_METHODS = ("merge", "shadow_merge")
 
 # The single-buy exits: a leg whose partner never filled, sold back through the
 # book. Mirrors `kpi.SINGLE_BUY_EXIT_METHODS`,
-# `statistical_validation_run.artifacts.EXIT_METHODS` and
+# `statistical_validation_run.artifacts.SINGLE_BUY_EXIT_METHODS` and
 # `ladder.LADDER_EXIT_METHODS`, and shares `artifacts.rescue_stats`'
 # merges-plus-exits denominator. Declared rather than imported because `kpi`
 # imports THIS module, so the reverse import is a cycle; the copies are pinned
@@ -820,6 +820,7 @@ class ClearedFill:
 def _percentile(values: Sequence[float], fraction: float) -> Optional[float]:
     """The value at `fraction` through a sorted sample, linearly interpolated.
 
+    Convention: linear interpolation at index `fraction * (n - 1)` (#541).
     `None` for an empty sample, and the value itself for a single one: an index of
     `fraction * (n - 1)` has no neighbour to blend with at n = 1 and no meaning at all at
     n = 0, which is where this section's zero-denominator question lives. Non-finite
@@ -1071,6 +1072,19 @@ def ci_z(level: int) -> Optional[float]:
     `ci_critical_value`, which swaps in the t row for the same level (#535).
     """
     return dict(CI_Z_BY_LEVEL).get(level)
+
+
+def normal_mean_interval(mean: float, std: float, n: int, mult: float) -> tuple[float, float, float]:
+    """Mean ± mult·(std/sqrt(n)): the one arithmetic every mean interval shares.
+
+    The multiplier stays the caller's choice (`ci_z` for a normal approximation,
+    `ci_critical_value` for Student-t) — this function only fixes the order of
+    operations so all producers compute bit-identical bands from the same inputs.
+    Callers keep their own empty/small-sample behavior; `n < 2` has no standard
+    error and must never reach here.
+    """
+    margin = mult * (std / math.sqrt(n))
+    return mean - margin, mean + margin, margin
 
 
 def ci_critical_value(level: int, n: int, z: float) -> float:

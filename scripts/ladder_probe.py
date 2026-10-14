@@ -33,6 +33,8 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from core_brain.statistical_analytics import ci_critical_value, ci_z
+
 TICK = 0.01
 SLIPPAGE_TICKS = 2
 SHAPES = {
@@ -183,7 +185,7 @@ def simulate_market(market: MarketTape, rungs: tuple,
 
 
 def mean_ci90(xs: list) -> tuple:
-    """Mean with a normal-approx 90% interval; empty input stays unmeasured."""
+    """Mean with a Student-t 90% interval; empty input stays unmeasured."""
     xs = [x for x in xs if x is not None]
     if not xs:
         return None, None, None
@@ -191,12 +193,17 @@ def mean_ci90(xs: list) -> tuple:
     if len(xs) < 2:
         return mean, None, None
     var = sum((x - mean) ** 2 for x in xs) / (len(xs) - 1)
-    half = 1.645 * math.sqrt(var) / math.sqrt(len(xs))
+    mult = ci_critical_value(90, len(xs), ci_z(90))
+    half = mult * math.sqrt(var) / math.sqrt(len(xs))
     return mean, mean - half, mean + half
 
 
 def _prop_ci90_diff(n1: int, k1: int, n2: int, k2: int) -> tuple:
-    """90% interval for p2 - p1, two-proportion normal approximation."""
+    """90% interval for p2 - p1, two-proportion normal approximation.
+
+    Keeps its own formula on purpose: an unpooled interval for a difference is
+    a different estimator from Wilson, not a copy of it (#541).
+    """
     if n1 < 2 or n2 < 2:
         return None, None
     p1, p2 = k1 / n1, k2 / n2

@@ -1,108 +1,127 @@
-# Plan — #524 Rescue closes never record a fee so taker cost reads unmeasured
+# Plan - #541 Consolidate every project statistic onto one page with one producer per number
 
-Branch: i524/fix-rescue-closes-never-record-a-fee-so-taker-cost | Issue: #524
+Branch: i541/refactor-consolidate-every-project-statistic-onto | Issue: #541
 
-Size: **Small** — one function plus its writer in one production file, tests in one
-test file; straightforward now that every seam is read. Task type: **Code**.
-Domain tag for all tasks: `[Backend/Logic]`. Helper skills: `test-driven-development`,
-`incremental-implementation`. Verification mode: pytest runners (logic, no UI).
+Size: **Large** — cross-cutting (dashboard JS + `core_brain` + `scripts/` + report products),
+DOM and math, one architectural decision (registry shape). Task type: **Code + Design/UI**.
+Domain tags per task. Helper skills: `test-driven-development`, `incremental-implementation`
+(all tasks); `frontend-ui-engineering` (T3). Verification mode: pytest focused files for
+logic; harness + rendered-DOM sample + served-asset grep for the page (no-browser syntax
+checks alone never count).
 
-## Intake — CodeRabbit plan (adopted / rejected / resolved)
+## Intake - CodeRabbit plan (adopted / rejected / resolved)
 
-- Adopted: task skeleton (shadow fee → live policy → friction proof), affected files
-  (`core_brain/single_buy_saver.py` + `tests/test_single_buy_saver.py`), exact test
-  assertions, regression file list, hands-on verify sketch.
-- Rejected: `scripts/seed_rescue_fixture.py` and the `docs/issues/514-*.md` ledger edit —
-  existing helpers (`registry` fixture, `_one_sided_pair`, `FakeClient`) already seed a
-  throwaway store and force a real exit; GitHub is the canonical tracker. No
-  `order_registry.py` change (INSERT at `:1602` already writes `close.fee`).
-- Resolved from live code (was `[UNVERIFIED]`): shadow branch is
-  `if hasattr(client, "_sell_into_bids")` with `reason=` passed only there (`:978-981`);
-  `_record_exit_close` has no `fee` kwarg (`:694-699`); `CloseRecord.fee` defaults `None`
-  and persists (`order_registry.py:296,769,1602`); NULL = unmeasured, `0.0` = measured
-  (`statistical_analytics.py:606-623,708-763`); `exit_naked_leg` is the alias (`:2074`);
-  resp shapes read via `resp.get("price"/"size")` with floor/requested fallback
-  (`:650-691`); CONSTRAINTS concern cleared — the #517 file is branch-scoped and does
-  not bind this branch.
+- Adopted: phase skeleton (freeze goldens → dedupe math → page+registry → findings),
+  affected files/seams, exact test assertions, regression file list. All cited seams
+  spot-checked live — line numbers drifted slightly from the issue text
+  (e.g. `renderAnalyticsSurface` now app.js:5158; `report()` kpi.py:1230/2224;
+  `run_analysis` audit:97) but every symbol exists; no [UNVERIFIED] remains.
+- Rejected: >4 task splits — merged into 4 tasks below (one proposal: math-dedupe-first
+  ordering, adopted by default — evidence: the issue's own "Natural split line… (b) can
+  land first without touching the DOM").
+- Operator override (2026-10-14): single convention is Student's t via `ci_critical_value`
+  (`statistical_analytics.py:1076` — t while the sample is small, normal once it isn't).
+  Audit adapters, the kpi inline band, and `ladder_probe.mean_ci90` all switch to it.
+  Wilson (proportions) and power/planning constants stay as-is — different estimators.
+  Pre-switch values frozen in T1 goldens; per-stat deltas logged in T4 + PR.
+- Resolved from code: simulator button already `display:none` (index.html:440) → remove;
+  `required_observations` double-render confirmed (app.js:4136 + :5171);
+  `Z_ALPHA_90_ONE_SIDED == ci_z(90) == 1.645`, `Z_BETA_80_POWER == 0.8416` — stat_gate
+  literal swap is value-identical; kpi names the exit tuple `SINGLE_BUY_EXIT_METHODS`
+  (:815) vs artifacts' local `EXIT_METHODS` (:60) — name drift recorded, import wins;
+  #520 OPEN → use kpi tuples, no restating; #542 CLOSED via merged #543 → audit
+  cross-check unblocked.
+- Sub-issues deferred: no per-task sub-issues created now — tracker noise stays down
+  until T1 goldens prove the baseline on this branch; mapping table below is the record
+  Station III works from (T1→none, T2→math, T3→page, T4→findings).
 
-## Spec (embedded — Small tier)
+## Interface contracts (frozen before logic)
 
-- Goal: rescue closes persist an explicit fee so the RESCUE FRICTION card's taker-cost
-  drag ratio reads measured instead of "unmeasured".
-- Acceptance 1: a shadow rescue close (full and partial fill, both methods) saves
-  `fee == 0.0`, never `None`.
-- Acceptance 2: under the adopted shadow-only policy, a live rescue close still saves
-  `fee is None` (deliberately unmeasured); the friction card reads measured-zero on
-  shadow stores.
-- Out of scope: fee schema/migration, TCDR formula, merge/resolution writers, fee-regime
-  sources, sell behavior, any new script, `data/orders.db`, live commands, START.
-
-## Frozen interface contract
-
-- `ZERO_FEE = 0.0` in `core_brain/single_buy_saver.py` + comment naming the source and
-  which closes receive it (shadow rescues; live taker fees unknown at sell time → NULL).
-- `_record_exit_close(..., fee: Optional[float] = None)`, passed into `CloseRecord(fee=...)`.
-- `exit_single_buy` passes `fee=ZERO_FEE` only inside the existing `_sell_into_bids` branch.
-
-## Fee-policy decision (adopted default)
-
-Shadow-only (CodeRabbit Option 2). Evidence, verbatim: "an unmeasured fee and a zero fee
-are different claims" (`venue_fees.py:77`) against "the taker rate stepped 0.03 → 0.05 →
-0.07 afterwards" (`venue_fees.py:14`) and `fee_rate: float = 0.07  # taker fee rate`
-(`config.py:1115`). Recording `0.0` on live rescue sells would print a measured zero the
-venue may have charged. Owner may override to all-rescues before Station IV; that is a
-planning change recorded here first.
-
-## Improvement proposal
-
-None beyond the adopted plan — the change is already minimal (one constant, one kwarg,
-one call-site argument, reuse of the existing branch check and helpers). Recorded so it
-does not resurface.
+- `core_brain/statistical_analytics.py`: one public normal-interval helper with explicit
+  multiplier — `mean ± mult·(std/sqrt(n))`, exact op order of today's kpi inline math.
+  Mean-interval callers pass `ci_critical_value(level, n, z)` (Student's t). Callers keep
+  their own empty/one-close adapters (`(mean, mean, 0)`; n<2 still yields no interval —
+  t is undefined for one close).
+- `core_brain/kpi.py`: one public Wilson name; `_wilson_ci` stays as alias (same signature).
+  Sufficiency table (`Z_95/98/99_SAMPLE_SUFFICIENCY` = 1.95996/2.32635/2.57583) importable.
+- Registry entry: `{id, producer, block, view, unit, aliasOf?}` — one id, one producer, one
+  placement, one declared unit (`$`, `¢`, `%`, `bps`, or `bare` for unitless ratios like SQN).
+  Report-only entries carry `{producer, reason}` and are never rendered.
+- Charts are not numbers: the SVG deck and the Distributions / Monte Carlo charts stay in
+  their current views, one home view each, rendering registry values (same producer, never
+  recomputed in JS). No new chart type. The registry covers readout numbers; chart-vs-readout
+  parity is tested, not restyled into existence.
 
 ## Tasks
 
-### T1 [M] Shadow rescue closes save an explicit zero fee [Backend/Logic]
-Files: `core_brain/single_buy_saver.py`, `tests/test_single_buy_saver.py`. Depends on: —
-- Test-first: add `ShadowFakeClient(FakeClient)` with `_sell_into_bids` marker and
-  `create_and_post_market_order(order_args, reason=None, ...)` returning
-  `{"success": True, "orderID": ..., "price": <bid>, "size": <filled>}`.
-- `test_shadow_rescue_exit_records_an_explicit_zero_fee`, parametrized over
-  `("single_buy_exit", "ladder_exit")`: seed `_one_sided_pair(registry)`, call
-  `exit_single_buy(..., max_pair_cost=MAX_PAIR_COST, live=True, reason="hard_stop",
-  method=method)`; assert `action == "exited"`, one close with that method,
-  `fee is not None and fee == 0.0`. Confirm RED first.
-- `test_partial_shadow_rescue_exit_records_zero_fee`: `ShadowFakeClient` with small
-  `size` in resp against held 10.0; assert `shares < 10` and `fee == 0.0`.
-- Code: `ZERO_FEE` + comment, `fee` kwarg on `_record_exit_close` → `CloseRecord`,
-  `fee=ZERO_FEE` at the shadow call site only.
-- Verify: `pytest -q tests/test_single_buy_saver.py` (new cases green, rest unbroken).
+- [x] T1 (M) [Backend/Logic] Freeze today's values. Fixture: fixed shadow run in `tmp_path`
+  (reuse `_seed_closes`/`_kpi_for`/`_run_closes` from `tests/test_stat_validation_artifacts.py`;
+  mixed methods, fixed-timestamp fills/quotes, one missing-PnL + one zero-cost close,
+  equity + account curves starting below capital). Golden JSON of `kpi.report()` stats
+  sections (explicit time-field strip list read from `report()`; pre-switch record,
+  regenerated once post-switch with deltas logged). Audit goldens (`run_analysis` text +
+  95/98/99 values + empty/one-close edges; `mean_ci90` / `_prop_ci90_diff` pins;
+  paired-depth min-2 rule; family median-5/p90-9 kept). Page↔report parity
+  (`write_statistics_report` vs payload; `report.json` vs payload; `ci90_lower_pct` vs
+  stat-gate/sensitivity — difference recorded, code untouched). No-second-producer ledger
+  test (RED now). Files: `tests/` (+1 golden JSON, +2-3 test files).
+  Helper: `test-driven-development`. Depends on: none. Verify: goldens pass on this
+  branch pre-change; ledger test fails.
+- [x] T2 (L) [Backend/Logic] One copy of the math + the t-switch, no DOM change. Core helper
+  (explicit multiplier); audit script becomes thin caller (delete `Z_CRITICAL`, 3 fns;
+  adapters call `ci_critical_value`, keeping tuple shapes + n≤1/no-interval edges; SQL +
+  printed layout untouched). kpi inline band + `ladder_probe.mean_ci90` switch to
+  `ci_critical_value`. Public Wilson + `_percentile` docstring as planned. `stat_gate`
+  literals → kpi constants; family helper renamed nearest-rank + divergence docstring;
+  `artifacts.py` imports kpi tuples; queue-multiple single home module
+  (`statistics_report._queue_multiple` + `shadow_fills` call it; boundary test green).
+  Report-only computations untouched + listed for T4.
+  Helper: `test-driven-development`. Depends on: T1. Verify: goldens regenerated once
+  with per-stat t-deltas logged; non-CI values byte-identical; focused suites incl.
+  `test_shadow_run` boundary green.
+- [x] T3 (L) [Design/UI] NEW "Data Analysis" tab (tab-2 frozen, operator override).
+  Legacy tab-2 renderers/markup stay byte-identical; all work lands in new
+  `dashboard/static/data_analysis.js` + a tab-4 panel. Contents, copied or redesigned
+  from the legacy components: (a) registry `{id, producer, block, view, unit, aliasOf?}`
+  covering every rendered stat; claim ledger (double-claim in one pass throws);
+  ONE tile builder every card uses; (b) single `required_observations` (helper from
+  the start — the legacy double-read stays untouched on the old page); (c) deduped
+  placements — Win Rate/Sharpe/MaxDrawdown/Expectancy shown once each (richest placement
+  wins: quant w/ CI, gates row w/ threshold, surface AvgProfit top-of-page);
+  run-profitability banner keeps verdict/counts/venue (win_rate/expectancy/paths lines go,
+  they live on the new tab); capital drawdown hints name the account curve (legacy hint
+  wrongly said equity — fixed ONLY on the new tab); (d) units on all 21 bare titles
+  (`$`/`¢`/`%`/`bps`/`s`/`×`, or registry-`bare` for ratios); fabricated-zero fallbacks
+  (`$0.000`, `0.00%`) become `unmeasured`; (e) charts render registry values into new
+  containers (existing chart fns gain optional target-id params, defaults = legacy
+  behavior); (f) trading-terminal card restyle, CSS scoped to the new tab, same palette;
+  a11y (tablist/keyboard/empty-error) preserved; home keeps live account state.
+  2a/2b ledger tests keep scanning `app.js` as written (titles gain units in the shared
+  renderers, so both tabs benefit; assertion strength unchanged).
+  Files: `data_analysis.js` (new), `index.html` (tab shell only), `prototype.js`
+  (mount wiring if needed). Helpers: `frontend-ui-engineering`,
+  `incremental-implementation`. Depends on: T2. Verify: ledger
+  test GREEN; harness + `test_analytics_surface_mount` green; rendered-DOM sample (incl.
+  chart values) + served-asset grep.
+- [x] T4 (S) [Docs] Findings + report-only registry. Findings doc: pre/post-switch t-deltas
+  per stat plus remaining disagreements with both numbers (interp-vs-nearest-rank,
+  equity-vs-account drawdown, ci90/sensitivity if differ). Registry covers every rendered
+  id; report-only + research-only entries listed with producer + reason. PR names removed
+  duplicates + aliases. Layouts unchanged. Depends on: T2, T3. Verify: registry-coverage
+  test (every rendered id registered; report-only listed, never rendered).
 
-### T2 [S] Live rescue close keeps fee unmeasured (policy pin) [Backend/Logic]
-Files: `tests/test_single_buy_saver.py` (test only — no production change under the
-adopted policy). Depends on: T1.
-- Test-first: `test_live_rescue_exit_keeps_fee_unmeasured` with plain `FakeClient`;
-  assert saved close `fee is None`. Confirms RED-then-GREEN trivially (documents the rule).
-- If owner overrides to all-rescues: pass `fee=ZERO_FEE` on the live branch instead and
-  rename test to `test_live_rescue_exit_records_the_regime_zero_fee` asserting `0.0`.
-- Verify: `pytest -q tests/test_single_buy_saver.py -k "live_rescue"`.
+## Checkpoints
 
-### T3 [S] Executed rescue close reads as measured zero on the friction card [Backend/Logic]
-Files: `tests/test_single_buy_saver.py` (test only expected). Depends on: T1.
-- Test-first: `test_executed_rescue_close_reads_as_measured_zero_friction` — shadow exit
-  via `ShadowFakeClient`, pass `registry.get_all_closes()` to
-  `rescue_friction_summary`; assert `fee_measured_count == 1`, `mean_tcdr == 0.0`, and
-  `realized_pnl != 0` (zero PNL yields `mean_tcdr None`). If it fails, fix T1, not the formula.
-- Verify: `pytest -q tests/test_single_buy_saver.py tests/test_rescue_friction_analytics.py`
-  plus extras `tests/test_rc_fixes.py tests/test_shadow_exec.py`.
+- After T1: goldens green pre-change, ledger RED — baseline proven, safe to refactor.
+- After T2: t-switch landed with logged deltas, zero DOM diff — math unified, page untouched.
+- After T3: page walk (hands-on verify below) — one page, each figure once, charts agree.
 
-Checkpoint after T1: shadow fee persisted end-to-end (constant → writer → saved close).
-Checkpoint after T3: card reads measured zero; ready for Station IIIB review.
+## How to verify (hands-on, operator)
 
-## How to verify (hands-on, for the report)
-
-1. Terminal 1: `python -m dashboard.server --db data\rescue_fee_01.db --port 8799`.
-2. Terminal 2: `python -m core_brain.shadow_run --minutes 5 --interval 1 --db data\rescue_fee_01.db --run-id rescue-fee-01`.
-3. Open `http://127.0.0.1:8799`; confirm SHADOW badge + throwaway store (production name = failure).
-4. After a rescue appears, read-only `closes` query → rescue rows show `fee 0.0`, not NULL
-   (no rescue fired = inconclusive, not passed).
-5. Performance & Analytics → RESCUE FRICTION → 0% with measured-fee count > 0, not "unmeasured".
+Launch the stack (`.\scripts\spread-hunter-menu.ps1 start`), open
+`http://127.0.0.1:8799`, walk the NEW Data Analysis tab: every project figure is there exactly
+once; view buttons filter without repeating a number; chart values match the readouts
+beside them; text, sizes, and spacing look uniform. Legacy tab 2 must read exactly as
+before. Cross-check the audit script on
+`data/02_shadow_prudent_13-10_03-01.db` — its printed CIs match the page for that database
+(small-sample bands read slightly wider now: that's the t-switch, deltas in the PR).

@@ -119,6 +119,7 @@
     <button class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-1" id="tab-btn-1" type="button">LIVE OPERATIONS</button>
     <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-2" id="tab-btn-2" type="button">PERFORMANCE &amp; ANALYTICS</button>
     <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-3" id="tab-btn-3" type="button">MARKET FILTER</button>
+    <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-4" id="tab-btn-4" type="button">DATA ANALYSIS</button>
   </nav>
 
   <!-- ── Tab 1: Live Operations ── -->
@@ -757,6 +758,79 @@
     </div>
   </section>
 
+  <!-- ── Tab 4: Data Analysis (#541 canonical statistics page) ── -->
+  <!-- Tab 2 stays frozen as the legacy page; every figure below is placed once,
+       claimed in the STAT_REGISTRY in data_analysis.js. -->
+  <section id="tab-4" role="tabpanel" aria-labelledby="tab-btn-4" hidden>
+    <div id="da-surface">
+      <div class="da-head">
+        <div>
+          <div class="da-title">DATA ANALYSIS</div>
+          <div class="da-sub">Every project statistic, each shown once · <span id="da-sample-count"></span></div>
+        </div>
+      </div>
+      <div class="da-grid" id="da-headline"></div>
+      <div class="da-grid da-grid-2">
+        <div class="da-card" id="da-pnl-ci"></div>
+        <div class="da-card" id="da-sufficiency"></div>
+      </div>
+      <div class="da-card" id="da-funnel"></div>
+      <div class="da-card da-gates" id="da-gates"></div>
+      <div class="da-grid da-grid-2">
+        <div class="da-card" id="da-fillpath"></div>
+        <div class="da-card" id="da-rescue"></div>
+      </div>
+      <div class="da-grid da-grid-2">
+        <div class="da-card" id="da-queue"></div>
+        <div class="da-card" id="da-robustness"></div>
+      </div>
+      <div class="da-card" id="da-capital"></div>
+      <div class="da-card" id="da-quant"></div>
+      <!-- 6. Statistical Charts Grid (2 columns; markout full-width below) -->
+      <div class="da-grid da-grid-2" style="margin-top:14px">
+        <div class="da-card">
+          <div class="da-card-header">
+            <span class="da-card-title font-display">RETURN DISTRIBUTION &amp; CONFIDENCE INTERVALS</span>
+            <div id="da-dist-badge"></div>
+          </div>
+          <div id="da-dist-banner"></div>
+          <div id="da-dist-container" class="chart-canvas-container"></div>
+          <div id="da-dist-footer" class="chart-footer-metrics"></div>
+        </div>
+        <div class="da-card">
+          <div class="da-card-header">
+            <span class="da-card-title font-display">PAIR COST &amp; SPREAD DISTRIBUTION ($)</span>
+            <div id="da-paircost-badge"></div>
+          </div>
+          <div id="da-paircost-container" class="chart-canvas-container"></div>
+          <div id="da-paircost-footer" class="chart-footer-metrics"></div>
+        </div>
+        <div class="da-card">
+          <div class="da-card-header">
+            <span class="da-card-title font-display">MONTE CARLO TRAJECTORY (1,000 PATHS) ($)</span>
+          </div>
+          <div id="da-mc-container" class="chart-canvas-container"></div>
+          <div id="da-mc-footer" class="chart-footer-metrics"></div>
+        </div>
+        <div class="da-card">
+          <div class="da-card-header">
+            <span class="da-card-title font-display">OUTCOME PROBABILITY &amp; LIQUIDITY SKEW</span>
+            <div id="da-bell-badge"></div>
+          </div>
+          <div id="da-bell-container" class="chart-canvas-container"></div>
+          <div id="da-bell-footer" class="chart-footer-metrics"></div>
+        </div>
+        <div class="da-card" style="grid-column: 1 / -1">
+          <div class="da-card-header">
+            <span class="da-card-title font-display">POST-FILL MARKOUT &amp; ADVERSE SELECTION (BPS)</span>
+          </div>
+          <div id="da-markout-container" class="chart-canvas-container"></div>
+          <div id="da-markout-footer" class="chart-footer-metrics"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
 </div>
 
 <!-- ── Toast Notifications Container ── -->
@@ -784,6 +858,7 @@
   const CONTROL_TOKEN = "__LIVE_DASH_CONTROL_TOKEN__";
 </script>
 <script src="/static/app.js?v=9"></script>
+<script src="/static/data_analysis.js?v=1"></script>
 <!-- Runs after app.js has bound every panel, and only on /prototype: it moves
      those same nodes into the sidebar pages rather than re-rendering them. -->
 <script src="/static/prototype.js?v=6"></script>

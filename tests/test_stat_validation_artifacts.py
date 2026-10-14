@@ -469,3 +469,14 @@ class TestPessimisticSensitivity:
         assert "Single-buy exit" in md
         assert "Shadow-only estimate" in md
 
+
+class TestMethodGroupsSingleSourced541:
+    """#541: artifact readers import close-method groups from kpi — one tuple per idea."""
+
+    def test_method_tuples_are_the_kpi_objects(self):
+        import core_brain.kpi as kpi_mod
+        import statistical_validation_run.artifacts as artifacts_mod
+
+        assert artifacts_mod.MERGE_METHODS is kpi_mod.MERGE_METHODS
+        assert artifacts_mod.SINGLE_BUY_EXIT_METHODS is kpi_mod.SINGLE_BUY_EXIT_METHODS
+

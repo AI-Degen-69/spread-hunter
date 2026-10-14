@@ -23,7 +23,12 @@ if str(_LIVE_ROOT) not in sys.path:
     sys.path.insert(0, str(_LIVE_ROOT))
 
 from core_brain.config import load as load_cfg
-from core_brain.kpi import gate_definition, power_table
+from core_brain.kpi import (
+    Z_ALPHA_90_ONE_SIDED,
+    Z_BETA_80_POWER,
+    gate_definition,
+    power_table,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -72,8 +77,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     pt = power_table(
         sigma=sigma,
         deltas=cfg.stat_gate_deltas,
-        z_alpha=1.645,
-        z_beta=0.8416,
+        z_alpha=Z_ALPHA_90_ONE_SIDED,
+        z_beta=Z_BETA_80_POWER,
     )
     gdef = gate_definition(cfg)
 

@@ -9,14 +9,27 @@ shadow_merge_legs הן מטמון פר-רגל לעלות, לא סגירות, ו�
 import sqlite3
 import math
 import sys
+from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 
-# ערכי z קריטיים עבור רמות סמך של 95%, 98% ו-99%
-Z_CRITICAL: Dict[str, float] = {
-    "95%": 1.95996,
-    "98%": 2.32635,
-    "99%": 2.57583,
-}
+# Ensure repo root is importable when run as ``python scripts/statistical_trade_audit.py``.
+_LIVE_ROOT = Path(__file__).resolve().parent.parent
+if str(_LIVE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_LIVE_ROOT))
+
+from core_brain.kpi import (
+    SAMPLE_SUFFICIENCY_LEVELS,
+    required_sample_size_for_mean,
+    wilson_ci,
+)
+from core_brain.statistical_analytics import ci_critical_value, normal_mean_interval
+
+# Level labels the audit has always printed ("95%"...); the multipliers behind
+# them live in `core_brain.kpi` now -- this dict is labels, not a second table.
+Z_CRITICAL: Dict[str, float] = {f"{level}%": z for level, z in SAMPLE_SUFFICIENCY_LEVELS}
+# Reverse map so the adapters below keep their `(…, z)` signatures while still
+# reaching the level-keyed Student-t table.
+_LEVEL_BY_Z: Dict[float, int] = {z: level for level, z in SAMPLE_SUFFICIENCY_LEVELS}
 
 # Close methods that mean the pair was merged back into $1.00 of USDC.
 # Pinned copy of `core_brain/registry_state.py:41 MERGE_CLOSE_METHODS` (kept
@@ -37,34 +50,32 @@ def calculate_mean_and_std(values: List[float]) -> Tuple[float, float]:
     return mean, math.sqrt(variance)
 
 def mean_confidence_interval(mean: float, std_dev: float, n: int, z: float) -> Tuple[float, float, float]:
-    """מחשב רווח סמך עבור משתנה רציף (רווח/הפסד, זמן החזקה)."""
+    """מחשב רווח סמך עבור משתנה רציף (רווח/הפסד, זמן החזקה).
+
+    Thin adapter over `core_brain.statistical_analytics.normal_mean_interval`.
+    The multiplier is Student-t while the sample is small, normal once it is
+    not (#541: one convention); `(mean, mean, 0.0)` when n <= 1 or zero
+    deviation, exactly as before.
+    """
     if n <= 1 or std_dev == 0.0:
         return mean, mean, 0.0
-    margin = z * (std_dev / math.sqrt(n))
-    return mean - margin, mean + margin, margin
+    level = _LEVEL_BY_Z.get(z)
+    mult = ci_critical_value(level, n, z) if level is not None else z
+    return normal_mean_interval(mean, std_dev, n, mult)
 
 def proportion_confidence_interval(successes: int, n: int, z: float) -> Optional[Tuple[float, float, float]]:
     """מחשב רווח סמך לפרופורציה (Wilson Score Interval).
 
-    Returns None ("no estimate is possible") when the count is impossible:
-    `n <= 0`, `successes < 0`, or `successes > n`. Callers print a named
-    unavailable line instead of a fraction in that case.
+    Thin adapter over `core_brain.kpi.wilson_ci`: same (lower, upper, margin)
+    tuple, same `None` for impossible counts.
     """
     if n <= 0 or successes < 0 or successes > n:
         return None
-    p = successes / n
-    denominator = 1.0 + (z ** 2) / n
-    center = (p + (z ** 2) / (2.0 * n)) / denominator
-    spread = (z / denominator) * math.sqrt((p * (1.0 - p) / n) + ((z ** 2) / (4.0 * (n ** 2))))
-    lower = max(0.0, center - spread)
-    upper = min(1.0, center + spread)
-    return lower, upper, (upper - lower) / 2.0
-
-def required_sample_size_for_mean(std_dev: float, target_margin: float, z: float) -> int:
-    """מחשב גודל מדגם מינימלי נדרש לדיוק מבוקש."""
-    if target_margin <= 0 or std_dev <= 0:
-        return 0
-    return math.ceil(((z * std_dev) / target_margin) ** 2)
+    interval = wilson_ci(successes, n, z)
+    if interval is None:
+        return None
+    low, high = interval["lower"], interval["upper"]
+    return low, high, (high - low) / 2.0
 
 def fetch_table_rows(cursor: sqlite3.Cursor, table_name: str) -> List[Dict[str, Any]]:
     """שולף את כל הרשומות מטבלה ומחזיר אותן כמילונים לפי שמות העמודות."""

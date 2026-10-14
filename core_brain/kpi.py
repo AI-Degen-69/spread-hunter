@@ -20,8 +20,10 @@ from contextlib import closing
 
 from core_brain.statistical_analytics import (
     build as build_statistical_analytics,
+    ci_critical_value,
     ci_z,
     mean_pnl_ci as _mean_pnl_ci,
+    normal_mean_interval,
 )
 from core_brain.order_registry import (
     OrderRegistry, DEFAULT_DB_PATH, VENUE_SYNC_RUN_ID, get_connection,
@@ -72,6 +74,11 @@ def _wilson_ci(successes: int, n: int, z: float = ci_z(95)) -> Optional[dict[str
         "lower": max(0.0, center - half),
         "upper": min(1.0, center + half),
     }
+
+
+#: Public name for the one Wilson score interval; `_wilson_ci` stays as an alias
+#: for current callers (#541).
+wilson_ci = _wilson_ci
 
 
 # --------------------------------------------------------------------------
@@ -366,14 +373,17 @@ def compute_trade_analytics(
     _measured_pairs: list[tuple[float, float]] = []
 
     for c in closes:
-        pnl = float(c.get("realized_pnl") or 0.0)
+        raw_pnl = c.get("realized_pnl")
+        pnl = float(raw_pnl) if raw_pnl is not None else None
         cost = c.get("cost_basis")
         cost_f = float(cost) if cost is not None else None
-        return_pct = (100.0 * pnl / cost_f) if (cost_f is not None and cost_f > 0) else None
+        return_pct = (100.0 * pnl / cost_f) if (pnl is not None and cost_f is not None and cost_f > 0) else None
         if return_pct is not None:
             return_pcts.append(return_pct)
             _measured_pairs.append((pnl, cost_f))
-        if pnl > 0:
+        if pnl is None:
+            pass  # unmeasured outcome: not a win, not a loss, still a close
+        elif pnl > 0:
             wins.append(pnl)
         else:
             losses.append(pnl)
@@ -393,7 +403,9 @@ def compute_trade_analytics(
     win_rate = (n_wins / n) if n else None
     win_rate_ci95 = _wilson_ci(n_wins, n) if n else None
 
-    expectancy_usd = statistics.mean(wins + losses) if n else None
+    # All-None run: n > 0 but nothing measured — mean([]) would raise (#552).
+    measured_pnls = wins + losses
+    expectancy_usd = statistics.mean(measured_pnls) if measured_pnls else None
     mean_return_pct = statistics.mean(return_pcts) if return_pcts else None
     # Companion fields (display-only, never gate inputs): how many closes the
     # percent mean actually sees, and the dollar-weighted percent over the same
@@ -413,21 +425,25 @@ def compute_trade_analytics(
     ci90_lower_pct: Optional[float] = None
     ci95_return_pct: Optional[dict[str, float]] = None
     if mean_return_pct is not None and stdev_return_pct is not None and len(return_pcts) > 1:
-        se = stdev_return_pct / math.sqrt(len(return_pcts))
         # The 90% lower bound (the "is expectancy positive?" gate the paper run
         # uses) -- the 5% tail on one side, which is the 90% two-sided row -- plus
-        # a 95% two-sided band for context. Both multipliers come from the one
-        # critical-value table (#535).
-        ci90_lower_pct = mean_return_pct - ci_z(90) * se
+        # a 95% two-sided band for context. Multipliers are Student-t while the
+        # sample is small, normal once it is not (#541: one convention).
+        ci90_lower_pct, _, _ = normal_mean_interval(
+            mean_return_pct, stdev_return_pct, len(return_pcts),
+            ci_critical_value(90, len(return_pcts), ci_z(90)))
+        ci95_lower, ci95_upper, _ = normal_mean_interval(
+            mean_return_pct, stdev_return_pct, len(return_pcts),
+            ci_critical_value(95, len(return_pcts), ci_z(95)))
         ci95_return_pct = {
-            "lower": mean_return_pct - ci_z(95) * se,
-            "upper": mean_return_pct + ci_z(95) * se,
+            "lower": ci95_lower,
+            "upper": ci95_upper,
         }
 
-    mean_pnl_ci = _mean_pnl_ci(wins + losses)
+    mean_pnl_ci = _mean_pnl_ci(measured_pnls)
 
     # Issue #443 & Issue #448: Sample size sufficiency per confidence level & status
-    pnls = wins + losses
+    pnls = measured_pnls
     std_dev_usd: Optional[float] = None
     if n > 1:
         try:
@@ -1149,7 +1165,8 @@ def compute_pessimistic_analytics(
     stdev_r = statistics.stdev(returns) if n > 1 else None
     ci90: Optional[float] = None
     if mean_r is not None and stdev_r is not None and n > 1:
-        ci90 = mean_r - ci_z(90) * (stdev_r / math.sqrt(n))
+        ci90, _, _ = normal_mean_interval(
+            mean_r, stdev_r, n, ci_critical_value(90, n, ci_z(90)))
     return {
         "n_closes": n,
         "mean_return_pct": mean_r,
@@ -1623,8 +1640,9 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # Realized PnL from closes
     realized_from_closes = sum(float(c.get("realized_pnl") or 0.0) for c in closes)
     realized_pnl = realized_from_closes
-    wins = [float(c["realized_pnl"]) for c in closes if float(c.get("realized_pnl") or 0.0) > 0]
-    losses = [float(c["realized_pnl"]) for c in closes if float(c.get("realized_pnl") or 0.0) <= 0]
+    measured_pnls = [float(c["realized_pnl"]) for c in closes if c.get("realized_pnl") is not None]
+    wins = [p for p in measured_pnls if p > 0]
+    losses = [p for p in measured_pnls if p <= 0]
 
     # Time span
     all_ts = [float(q["ts"]) for q in quotes if q.get("ts")] + [float(f.get("venue_ts", 0))/1000 for f in fills if f.get("venue_ts")]

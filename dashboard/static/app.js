@@ -546,7 +546,7 @@ function tabVisible(el) {
 function railActivePage(doc) {
   if (typeof document === 'undefined') return null;
   const scope = doc || document;
-  const pages = scope.querySelectorAll('#page-home, #page-data-markets, #page-strategy, #page-trades, #page-reports');
+  const pages = scope.querySelectorAll('#page-home, #page-data-markets, #page-strategy, #page-trades, #page-reports, #page-analysis');
   if (!pages || pages.length === 0) return null; // tabs-only page: no rail
   for (const page of pages) {
     if (page.hidden !== true) return page.id;
@@ -611,6 +611,12 @@ function renderCachedSections() {
   if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
     renderKPIs(currentKpi, lastStatus);
   }
+  // Tab 4: DATA ANALYSIS (#541 canonical page). Painted from the same cache;
+  // the renderer lives in data_analysis.js and no-ops when the tab is absent.
+  if (typeof renderDataAnalysis === 'function'
+      && paintable(tab4, document.getElementById('da-surface')) && currentKpi) {
+    renderDataAnalysis(currentKpi, lastStatus);
+  }
   // Tab 3: MARKET FILTER (kanban → rail Data & Markets page). The readiness
   // banner lives on this tab, so it refreshes with it; the poll loop still
   // calls it unconditionally (see pollStatus) so a dead endpoint hides the
@@ -631,6 +637,7 @@ const tabBtns = document.querySelectorAll('.tab-btn');
 const tab1 = document.getElementById('tab-1');
 const tab2 = document.getElementById('tab-2');
 const tab3 = document.getElementById('tab-3');
+const tab4 = document.getElementById('tab-4');
 
 function switchTab(which) {
   tabBtns.forEach(b => {
@@ -641,6 +648,7 @@ function switchTab(which) {
   tab1.hidden = (which !== 1);
   tab2.hidden = (which !== 2);
   tab3.hidden = (which !== 3);
+  if (tab4) tab4.hidden = (which !== 4);
   localStorage.setItem('sh-active-tab', String(which));
   // Paint the newly shown tab synchronously from the cached poll data, so a
   // click never waits behind the next 2s poll render.
@@ -652,7 +660,7 @@ function switchTab(which) {
 
 tabBtns.forEach(b => {
   b.addEventListener('click', () => {
-    const num = b.id === 'tab-btn-1' ? 1 : (b.id === 'tab-btn-2' ? 2 : 3);
+    const num = b.id === 'tab-btn-1' ? 1 : (b.id === 'tab-btn-2' ? 2 : (b.id === 'tab-btn-4' ? 4 : 3));
     switchTab(num);
   });
   b.addEventListener('keydown', (e) => {
@@ -662,7 +670,7 @@ tabBtns.forEach(b => {
 
 // Restore tab from localStorage, default to Tab 1
 const savedTab = parseInt(localStorage.getItem('sh-active-tab') || '1', 10);
-switchTab(savedTab === 2 ? 2 : (savedTab === 3 ? 3 : 1));
+switchTab(savedTab === 2 ? 2 : (savedTab === 3 ? 3 : (savedTab === 4 ? 4 : 1)));
 
 /* ── Toast Notifications (#478) ── */
 const MAX_TOASTS = 4;
@@ -2415,20 +2423,10 @@ function renderRunProfitability(kpi) {
     verdictEl.className = 'rp-verdict-text ' + (rp.verdict_level || 'profit');
   }
   if (detailsEl) {
+    // #541: the banner keeps run verdict, activity counts, and venue. Win rate,
+    // expectancy, and fill-path PnL live on the Data Analysis tab now.
     const detParts = [];
     detParts.push(`${rp.fills || 0} fills / ${rp.quotes || 0} quotes / ${rp.closes_count || 0} closes`);
-    if (rp.win_rate != null) detParts.push(`win rate ${(rp.win_rate * 100).toFixed(1)}%`);
-    if (rp.expectancy_usd != null) detParts.push(`expectancy ${fmtUSD(rp.expectancy_usd)}`);
-    const split = rp.pnl_by_fill_path || kpi.pnl_by_fill_path;
-    if (split && split.by_path) {
-      const mPnl = fmtSignedUSD(split.by_path.maker_merged || 0);
-      const tPnl = fmtSignedUSD(split.by_path.taker_completed || 0);
-      const rPnl = fmtSignedUSD(split.by_path.single_buy_exit || 0);
-      const mPct = split.pct?.maker_merged != null ? ` (${(split.pct.maker_merged * 100).toFixed(0)}%)` : '';
-      const tPct = split.pct?.taker_completed != null ? ` (${(split.pct.taker_completed * 100).toFixed(0)}%)` : '';
-      const rPct = split.pct?.single_buy_exit != null ? ` (${(split.pct.single_buy_exit * 100).toFixed(0)}%)` : '';
-      detParts.push(`paths: maker ${mPnl}${mPct} · taker ${tPnl}${tPct} · rescue ${rPnl}${rPct}`);
-    }
     detailsEl.textContent = detParts.join(' · ');
   }
 }
@@ -3093,11 +3091,12 @@ function initDistControls() {
   });
 }
 
-function renderPositionDistributionChart(stats) {
-  const container = document.getElementById('position-dist-svg-container');
-  const footer = document.getElementById('position-dist-footer');
-  const badge = document.getElementById('dist-ci-badge');
-  const banner = document.getElementById('dist-power-banner');
+function renderPositionDistributionChart(stats, ids) {
+  const _ids = ids || {};
+  const container = document.getElementById(_ids.container || 'position-dist-svg-container');
+  const footer = document.getElementById(_ids.footer || 'position-dist-footer');
+  const badge = document.getElementById(_ids.badge || 'dist-ci-badge');
+  const banner = document.getElementById(_ids.banner || 'dist-power-banner');
   if (!container) return;
 
   const pr = stats?.position_returns || {};
@@ -3545,8 +3544,8 @@ function _ciBounds(ci) {
   return [Number(lower), Number(upper)];
 }
 
-function renderQuantRiskGrid(ta, p, stats) {
-  const container = document.getElementById('quant-grid');
+function renderQuantRiskGrid(ta, p, stats, hostId) {
+  const container = document.getElementById(hostId || 'quant-grid');
   if (!container) return;
 
   const n = ta.n_closes ?? (ta.closes_count || 0);
@@ -3587,7 +3586,7 @@ function renderQuantRiskGrid(ta, p, stats) {
 
   container.innerHTML = `
     <div class="quant-tile">
-      <div class="quant-label">Mathematical Expectancy <span class="info-bubble" title="Why can $ and % disagree?">?</span><span class="info-tooltip">Dollars average $ per close over ALL closes; percents average % per close over measured closes only. A small trade with a big % loss can pull % negative while larger-$ wins keep $ positive.</span></div>
+      <div class="quant-label">Mathematical Expectancy ($) <span class="info-bubble" title="Why can $ and % disagree?">?</span><span class="info-tooltip">Dollars average $ per close over ALL closes; percents average % per close over measured closes only. A small trade with a big % loss can pull % negative while larger-$ wins keep $ positive.</span></div>
       <div class="quant-value ${n > 0 ? signClass(ta.expectancy_usd) : ''}">${esc(expectancy)}</div>
       <div class="quant-sub">${esc(meanRet)} mean return / trade${dwRet != null ? ` · ${esc(dwRet)} dollar-weighted` : ' · dollar-weighted unmeasured'}${nMeas != null ? ` · ${nMeas}/${n} measured` : ''}</div>
     </div>
@@ -3602,27 +3601,28 @@ function renderQuantRiskGrid(ta, p, stats) {
       <div class="quant-sub">Downside-deviation weighted</div>
     </div>
     <div class="quant-tile">
-      <div class="quant-label">Kelly Optimal Sizing</div>
+      <div class="quant-label">Kelly Optimal Sizing (%)</div>
       <div class="quant-value">${esc(kelly)}</div>
       <div class="quant-sub">Half-Kelly: <b>${esc(halfKelly)}</b> (Conservative)</div>
     </div>
     <div class="quant-tile">
-      <div class="quant-label">Win Rate &amp; Wilson CI</div>
+      <div class="quant-label">Win Rate &amp; Wilson CI (%)</div>
       <div class="quant-value">${esc(winRate)}</div>
       <div class="quant-sub">95% CI: ${esc(ci95)}</div>
     </div>
     <div class="quant-tile">
-      <div class="quant-label">Profit Factor &amp; Payoff</div>
+      <div class="quant-label">Profit Factor &amp; Payoff (×)</div>
       <div class="quant-value ${n > 0 && ta.profit_factor != null ? (Number(ta.profit_factor) >= 1 ? 'positive' : 'negative') : ''}">${esc(profitFactor)}</div>
       <div class="quant-sub">Payoff Ratio: ${esc(payoffRatio)}</div>
     </div>
   `;
 }
 
-function renderPairCostKdeChart(stats) {
-  const container = document.getElementById('pair-cost-svg-container');
-  const footer = document.getElementById('pair-cost-footer');
-  const medianBadge = document.getElementById('hist-median-badge');
+function renderPairCostKdeChart(stats, ids) {
+  const _ids = ids || {};
+  const container = document.getElementById(_ids.container || 'pair-cost-svg-container');
+  const footer = document.getElementById(_ids.footer || 'pair-cost-footer');
+  const medianBadge = document.getElementById(_ids.badge || 'hist-median-badge');
   if (!container) return;
 
   const pc = stats?.pair_costs || {};
@@ -3739,9 +3739,10 @@ function renderPairCostKdeChart(stats) {
   }
 }
 
-function renderMonteCarloChart(stats, cyclesCount = 100) {
-  const container = document.getElementById('monte-carlo-svg-container');
-  const footer = document.getElementById('monte-carlo-footer');
+function renderMonteCarloChart(stats, cyclesCount = 100, ids) {
+  const _ids = ids || {};
+  const container = document.getElementById(_ids.container || 'monte-carlo-svg-container');
+  const footer = document.getElementById(_ids.footer || 'monte-carlo-footer');
   if (!container) return;
 
   const mc = stats?.monte_carlo || {};
@@ -3843,10 +3844,11 @@ function renderMonteCarloChart(stats, cyclesCount = 100) {
   }
 }
 
-function renderProbabilityBellChart(stats) {
-  const container = document.getElementById('prob-bell-svg-container');
-  const footer = document.getElementById('prob-bell-footer');
-  const sweetBadge = document.getElementById('bell-sweetspot-badge');
+function renderProbabilityBellChart(stats, ids) {
+  const _ids = ids || {};
+  const container = document.getElementById(_ids.container || 'prob-bell-svg-container');
+  const footer = document.getElementById(_ids.footer || 'prob-bell-footer');
+  const sweetBadge = document.getElementById(_ids.badge || 'bell-sweetspot-badge');
   if (!container) return;
 
   const pb = stats?.probability_bell || {};
@@ -3930,9 +3932,10 @@ function renderProbabilityBellChart(stats) {
   }
 }
 
-function renderMarkoutChart(stats) {
-  const container = document.getElementById('markout-svg-container');
-  const footer = document.getElementById('markout-footer');
+function renderMarkoutChart(stats, ids) {
+  const _ids = ids || {};
+  const container = document.getElementById(_ids.container || 'markout-svg-container');
+  const footer = document.getElementById(_ids.footer || 'markout-footer');
   if (!container) return;
 
   const mk = stats?.markout || {};
@@ -4126,6 +4129,13 @@ function typesetMath(root) {
   });
 }
 
+/* #541: one read site for the sample-size requirement. Both the gates table and
+ * the analytics surface need it; both call this instead of reading the payload
+ * twice, so no second placement can drift from the first. */
+function requiredObservations(ta) {
+  return ta.required_observations != null ? Number(ta.required_observations) : 120;
+}
+
 function decisionGatesRows(ta, stats, n, kpi) {
   // Markout figures live at the top level of the KPI payload, not inside
   // trade_analytics. Reading them off `ta` alone is why this row reported
@@ -4133,7 +4143,7 @@ function decisionGatesRows(ta, stats, n, kpi) {
   const markout = kpi || {};
   const lower = ta.ci90_lower_pct != null ? Number(ta.ci90_lower_pct) : null;
   const winRate = ta.win_rate != null ? Number(ta.win_rate) * 100 : null;
-  const required = ta.required_observations != null ? Number(ta.required_observations) : 120;
+  const required = requiredObservations(ta);
   const progressPct = required > 0 ? Math.min(100, Math.round((n / required) * 100)) : 0;
   const sweetSpot = stats?.probability_bell?.sweet_spot_pct;
   const samplesRaw = markout.markout_samples ?? ta.markout_samples;
@@ -4252,8 +4262,8 @@ function decisionGatesHtml(ta, stats, n, kpi) {
 /* Tier 1: the band around our average close, and whether it still contains a
  * loss. `mean_pnl_ci` answers that in dollars; this only has to not soften it.
  */
-function renderPnlCiReadout(ta) {
-  const host = document.getElementById('pnl-ci-readout');
+function renderPnlCiReadout(ta, hostId) {
+  const host = document.getElementById(hostId || 'pnl-ci-readout');
   if (!host) return;
 
   const ci = ta?.mean_pnl_ci || {};
@@ -4402,8 +4412,8 @@ function renderPnlCiReadout(ta) {
  * Shows observations count, margin of error, required/remaining closes, and progress bars
  * across 95%, 98%, and 99% confidence levels.
  */
-function renderSampleSufficiency(ta) {
-  const host = document.getElementById('sample-sufficiency-readout');
+function renderSampleSufficiency(ta, hostId) {
+  const host = document.getElementById(hostId || 'sample-sufficiency-readout');
   if (!host) return;
 
   const suff = ta?.sample_size_sufficiency || {};
@@ -4556,8 +4566,8 @@ function renderSampleSufficiency(ta) {
  * A stepped, tapered Funnel representation showing pipeline stages, retention rates,
  * and drop-off bottlenecks between each phase.
  */
-function renderExecutionFunnel(kpi) {
-  const host = document.getElementById('execution-funnel');
+function renderExecutionFunnel(kpi, hostId) {
+  const host = document.getElementById(hostId || 'execution-funnel');
   if (!host) return;
 
   const funnel = kpi?.execution_funnel;
@@ -4650,8 +4660,8 @@ function renderExecutionFunnel(kpi) {
  *
  * A `null` reads as "unmeasured", never as `0`: a path with no closes has no
  * mean, and `$0.00` there would say a rescue costs nothing. */
-function renderFillPathEdge(stats) {
-  const host = document.getElementById('fill-path-edge-readout');
+function renderFillPathEdge(stats, hostId) {
+  const host = document.getElementById(hostId || 'fill-path-edge-readout');
   if (!host) return;
 
   const edge = (stats || {}).fill_path_edge || {};
@@ -4715,22 +4725,22 @@ function renderFillPathEdge(stats) {
 
   host.innerHTML = `
     <div class="kpi-grid">
-      ${tile('Merge Expectancy', perClose(edge.merge_expectancy_usd),
+      ${tile('Merge Expectancy ($)', perClose(edge.merge_expectancy_usd),
              mergeN > 0 ? signClass(figure(edge.merge_expectancy_usd)) : '',
              'merge_expectancy',
              `per close · ${closesN(edge.merge_count)}`)}
-      ${tile('Rescue Expectancy', perClose(edge.rescue_expectancy_usd),
+      ${tile('Rescue Expectancy ($)', perClose(edge.rescue_expectancy_usd),
              rescueN > 0 ? signClass(figure(edge.rescue_expectancy_usd)) : '',
              'rescue_expectancy',
              `per close · ${closesN(edge.rescue_count)}`)}
-      ${tile('Rescue Rate', pct(edge.rescue_rate), '',
+      ${tile('Rescue Rate (%)', pct(edge.rescue_rate), '',
              'rescue_rate',
              `${rescueN} of ${resolved} completed closes`)}
-      ${tile('Break-Even Rescue Rate', hasThreshold ? pct(edge.break_even_rescue_rate) : thresholdWords,
+      ${tile('Break-Even Rescue Rate (%)', hasThreshold ? pct(edge.break_even_rescue_rate) : thresholdWords,
              hasThreshold ? '' : 'null',
              'break_even_rescue_rate',
              'the rescue rate that nets to zero')}
-      ${tile('Net Expectancy', perClose(edge.net_expectancy_usd),
+      ${tile('Net Expectancy ($)', perClose(edge.net_expectancy_usd),
              figure(edge.net_expectancy_usd) !== null ? signClass(figure(edge.net_expectancy_usd)) : '',
              'net_expectancy',
              'per close · both paths')}
@@ -4759,8 +4769,8 @@ function renderFillPathEdge(stats) {
  *
  * A `null` mean reads `unmeasured`, never `0.00` and never `NaN`: the rescue writer
  * leaves `fee` empty, so a fee ratio of zero would be a claim nobody measured. */
-function renderRescueFriction(stats) {
-  const host = document.getElementById('rescue-friction-readout');
+function renderRescueFriction(stats, hostId) {
+  const host = document.getElementById(hostId || 'rescue-friction-readout');
   if (!host) return;
 
   const friction = (stats || {}).rescue_friction || {};
@@ -4774,12 +4784,12 @@ function renderRescueFriction(stats) {
    * dollar: `+15.80`, never `15.80+`. Three cases, written as three returns rather than
    * a nested ternary. */
   const signOf = (n) => { if (n > 0) return '+'; if (n < 0) return '-'; return ''; };
-  /* Cents, signed: a drag that improved on the trigger is a real reading and must not
+  /* Cents, signed, with the unit attached: a drag that improved on the trigger is a real reading and must not
    * print as `0.00`. Two decimals is all a cent-based metric can carry. */
   const cents = (value) => {
     const n = figure(value);
     if (n === null) return 'unmeasured';
-    return signOf(n) + Math.abs(n).toFixed(2);
+    return signOf(n) + Math.abs(n).toFixed(2) + '¢';
   };
   /* A price, to the cent. `--` when the payload does not carry one: an offset nobody
    * reported is not `0.00`. */
@@ -4815,8 +4825,8 @@ function renderRescueFriction(stats) {
       ${tile('SLED (¢)', cents(friction.mean_sled_cents), 'sled', 'trigger → what we got')}
       ${tile('Latency Drag (¢)', cents(friction.mean_latency_drag_cents), 'latency', 'trigger → decision')}
       ${tile('Execution Drag (¢)', cents(friction.mean_execution_drag_cents), 'execution', 'decision → fill')}
-      ${tile('Taker Cost Ratio', shareOfLoss(friction.mean_tcdr), 'tcdr', 'fee ÷ booked loss')}
-      ${tile('Overshoot', multiple(friction.mean_overshoot_ratio), 'overshoot', 'drag ÷ planned risk')}
+      ${tile('Taker Cost Ratio (%)', shareOfLoss(friction.mean_tcdr), 'tcdr', 'fee ÷ booked loss')}
+      ${tile('Overshoot (×)', multiple(friction.mean_overshoot_ratio), 'overshoot', 'drag ÷ planned risk')}
     </div>
     <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
       Measured ${count(friction.measured_count)} of ${count(friction.rescue_count)} rescue closes ·
@@ -4841,8 +4851,8 @@ function renderRescueFriction(stats) {
  * A `null` figure reads `unmeasured`, never `0.00` and never `NaN`: on every store today
  * the depth is unmeasured, because the credit path drops the print that cleared our level,
  * and a `0.00` there would claim the tape sat exactly on our price. */
-function renderQueueRealism(stats) {
-  const host = document.getElementById('queue-realism-readout');
+function renderQueueRealism(stats, hostId) {
+  const host = document.getElementById(hostId || 'queue-realism-readout');
   if (!host) return;
 
   const section = (stats || {}).queue_realism || {};
@@ -4853,11 +4863,11 @@ function renderQueueRealism(stats) {
     return (value === null || value === undefined || !Number.isFinite(n)) ? null : n;
   };
   const count = (value) => figure(value) || 0;
-  /* Two decimals: a depth is quoted in cents, and the whole table turns on whether the
+  /* Two decimals, unit attached: a depth is quoted in cents, and the whole table turns on whether the
    * tape cleared within one of them. */
   const cents = (value) => {
     const n = figure(value);
-    return n === null ? 'unmeasured' : n.toFixed(2);
+    return n === null ? 'unmeasured' : n.toFixed(2) + '¢';
   };
   /* One decimal, with the unit attached: a wait without its unit is a number nobody can
    * read against anything. */
@@ -4884,9 +4894,9 @@ function renderQueueRealism(stats) {
              'print that cleared our price', chip)}
       ${tile('Depth p75 (¢)', cents(depth.p75_cents),
              '75th percentile · descriptive')}
-      ${tile('Fill Latency (median)', seconds(wait.median_sec),
+      ${tile('Fill Latency (median, s)', seconds(wait.median_sec),
              'placement → first fill')}
-      ${tile('Fill Latency p90', seconds(wait.p90_sec),
+      ${tile('Fill Latency (p90, s)', seconds(wait.p90_sec),
              '90th percentile · no band: a wait has no market reference')}
     </div>
     <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
@@ -4924,8 +4934,8 @@ function renderQueueRealism(stats) {
  * A `null` reads `unmeasured`, never `0.00`: a run with one close has no band, and `0.00` would
  * claim it breaks even. A payload served before this section existed renders no chips at all
  * rather than inventing a verdict. */
-function renderRobustness(stats) {
-  const host = document.getElementById('robustness-readout');
+function renderRobustness(stats, hostId) {
+  const host = document.getElementById(hostId || 'robustness-readout');
   if (!host) return;
 
   const section = (stats || {}).robustness || {};
@@ -4940,20 +4950,27 @@ function renderRobustness(stats) {
   const count = (value) => figure(value) || 0;
   const signOf = (n) => { if (n > 0) return '+'; if (n < 0) return '-'; return ''; };
   /* Every figure on this card is in cents, and the markout question turns on whether the tape
-   * cleared within one of them, so two decimals is the most a reader can act on. */
+   * cleared within one of them, so two decimals is the most a reader can act on.
+   * The unit rides on the value: a bare cent figure is unreadable against the
+   * dollar figures beside it. SQN is the exception -- a unitless ratio -- and
+   * goes through bare() instead. */
   const cents = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : n.toFixed(2) + '¢';
+  };
+  const bare = (value) => {
     const n = figure(value);
     return n === null ? 'unmeasured' : n.toFixed(2);
   };
   const signedCents = (value) => {
     const n = figure(value);
-    return n === null ? 'unmeasured' : signOf(n) + Math.abs(n).toFixed(2);
+    return n === null ? 'unmeasured' : signOf(n) + Math.abs(n).toFixed(2) + '¢';
   };
   const rangeCents = (lower, upper) => {
     const lo = figure(lower);
     const hi = figure(upper);
     if (lo === null || hi === null) return 'unmeasured';
-    return `${signOf(lo)}${Math.abs(lo).toFixed(2)} to ${signOf(hi)}${Math.abs(hi).toFixed(2)}`;
+    return `${signOf(lo)}${Math.abs(lo).toFixed(2)}¢ to ${signOf(hi)}${Math.abs(hi).toFixed(2)}¢`;
   };
   const usd = (value) => {
     const n = figure(value);
@@ -5002,7 +5019,7 @@ function renderRobustness(stats) {
       ${tile('95% CI (\u00a2)', rangeCents(ci.lower_cents, ci.upper_cents), ci.band,
              ci.meaning || 'mean close PnL \u00b7 does the edge survive the uncertainty',
              `mean ${signedCents(ci.mean_cents)} \u00b7 ${plural(count(ci.n), 'close', 'closes')}`)}
-      ${tile('SQN', cents(sqn.sqn), sqn.band,
+      ${tile('SQN', bare(sqn.sqn), sqn.band,
              sqn.meaning || 'mean trade \u00f7 result noise \u00d7 \u221aN',
              `${plural(count(sqn.n), 'close', 'closes')} \u00b7 mean ${usd(sqn.mean_usd)} \u00b7 spread ${usd(sqn.stdev_usd)}`)}
     </div>
@@ -5031,9 +5048,14 @@ function renderRobustness(stats) {
  * section existed renders no chips at all rather than inventing a verdict -- and no counts either: a
  * store that never measured a curve must not be told it regained zero of zero drawdowns with every
  * point usable. */
-function renderCapitalRisk(stats) {
-  const host = document.getElementById('capital-risk-readout');
+function renderCapitalRisk(stats, hostId, opts) {
+  const host = document.getElementById(hostId || 'capital-risk-readout');
   if (!host) return;
+  // #541: the recovery walk reads the venue account-value curve (one point per
+  // sweep), not the trade-equity curve. The legacy default below preserves the
+  // frozen tab-2 wording byte-for-byte; the Data Analysis tab passes {curveName}
+  // with the true curve.
+  const curveName = (opts && opts.curveName) || 'equity curve';
 
   const section = (stats || {}).capital_risk || {};
   /* The section names its own units when it is there at all, which is the one thing a payload from
@@ -5112,7 +5134,7 @@ function renderCapitalRisk(stats) {
   const deepestState = recovery.deepest_recovered === true ? 'regained'
     : (recovery.deepest_recovered === false ? 'still open' : 'nothing to recover from');
   const depthDetail = depth === null
-    ? 'the equity curve has no points yet'
+    ? `the ${curveName} has no points yet`
     : `${shareOfPeak(recovery.deepest_pct)} of its peak \u00b7 ${deepestState}`;
   const unusable = count(recovery.skipped);
   const rf = figure(sortino.risk_free_pct_per_close);
@@ -5120,7 +5142,7 @@ function renderCapitalRisk(stats) {
   host.innerHTML = `
     <div class="kpi-grid">
       ${tile('Deepest DD ($)', dollars(recovery.deepest_usd), '',
-             'worst peak-to-trough on the equity curve', depthDetail)}
+             `worst peak-to-trough on the ${curveName}`, depthDetail)}
       ${tile('Recovery median (marks)', marks(lengths.median), '',
              'how long a drawdown stayed under water',
              `${plural(count(lengths.n), 'drawdown', 'drawdowns')} regained \u00b7 median wait ${waited(waits.median)}`)}
@@ -5168,7 +5190,7 @@ function renderAnalyticsSurface(kpi, status) {
   const n = nRaw != null ? nRaw : 0;
   const wins = ta.wins != null ? ta.wins : 0;
   const losses = ta.losses != null ? ta.losses : 0;
-  const required = ta.required_observations != null ? ta.required_observations : 120;
+  const required = requiredObservations(ta);
   const winRate = ta.win_rate != null ? ta.win_rate * 100 : (n > 0 ? 0.0 : 0.0);
   const lower = ta.ci90_lower_pct != null ? ta.ci90_lower_pct : 0.00;
   const progressPct = Math.min(100, Math.round((n / required) * 100));
@@ -5179,12 +5201,12 @@ function renderAnalyticsSurface(kpi, status) {
 
   grid.innerHTML = `
     <div class="kpi-tile">
-      <div class="kpi-label">Average Profit Per Close <span class="info-bubble" title="Why can $ and % disagree?">?</span><span class="info-tooltip">Dollars average $ per close over ALL closes; percents average % per close over measured closes only. A small trade with a big % loss can pull % negative while larger-$ wins keep $ positive.</span></div>
+      <div class="kpi-label">Average Profit Per Close ($) <span class="info-bubble" title="Why can $ and % disagree?">?</span><span class="info-tooltip">Dollars average $ per close over ALL closes; percents average % per close over measured closes only. A small trade with a big % loss can pull % negative while larger-$ wins keep $ positive.</span></div>
       ${fmtVal(ta.expectancy_usd != null && n > 0 ? fmtSignedUSD(ta.expectancy_usd) : '$0.000', n > 0 ? ' ' + signClass(ta.expectancy_usd) : '')}
       <div class="hint">Spread capture net of slippage</div>
     </div>
     <div class="kpi-tile">
-      <div class="kpi-label">Mean Return Per Trade</div>
+      <div class="kpi-label">Mean Return Per Trade (%)</div>
       ${fmtVal(ta.mean_return_pct != null && n > 0 ? fmtPct(ta.mean_return_pct) : '0.00%', n > 0 ? ' ' + signClass(ta.mean_return_pct) : '')}
       <div class="hint">± ${ta.stdev_return_pct != null && n > 0 ? Number(ta.stdev_return_pct).toFixed(2) + '%' : '0.00%'} (σ)${dwRetKpi != null ? ` · ${dwRetKpi} dollar-weighted` : ' · dollar-weighted unmeasured'}</div>
     </div>
@@ -5281,24 +5303,24 @@ function renderKPIs(kpi, status) {
 
   grid.innerHTML = `
     <div class="kpi-tile">
-      <div class="kpi-label">Net Portfolio Value</div>
+      <div class="kpi-label">Net Portfolio Value ($)</div>
       ${fmtVal(netValue !== null && netValue !== undefined ? fmtUSD(netValue) : null)}
     </div>
     <div class="kpi-tile">
-      <div class="kpi-label">Starting Capital</div>
+      <div class="kpi-label">Starting Capital ($)</div>
       ${fmtVal(startCap !== null && startCap !== undefined ? fmtUSD(startCap) : 'estimated')}
     </div>
     <div class="kpi-tile">
-      <div class="kpi-label">Realized P&L</div>
+      <div class="kpi-label">Realized P&L ($)</div>
       ${fmtVal(realized !== null && realized !== undefined ? fmtUSD(realized) : null, realized >= 0 ? ' positive' : ' negative')}
       <div class="kpi-value null" style="font-size:12px">${fmtPct(p.pnl_pct)}</div>
     </div>
     <div class="kpi-tile">
-      <div class="kpi-label">Unrealized P&L</div>
+      <div class="kpi-label">Unrealized P&L ($)</div>
       ${fmtVal(unrealized !== null && unrealized !== undefined ? fmtUSD(unrealized) : (p.unrealized_measured === false ? 'unmeasured' : null))}
     </div>
     <div class="kpi-tile">
-      <div class="kpi-label">Win Rate</div>
+      <div class="kpi-label">Win Rate (%)</div>
       ${fmtVal(ta.win_rate !== null && ta.win_rate !== undefined ? (ta.win_rate * 100).toFixed(1) + '%' : null)}
     </div>
     <div class="kpi-tile">
@@ -5306,7 +5328,7 @@ function renderKPIs(kpi, status) {
       ${fmtVal(ta.sharpe_ratio !== null && ta.sharpe_ratio !== undefined ? ta.sharpe_ratio.toFixed(2) : null)}
     </div>
     <div class="kpi-tile">
-      <div class="kpi-label">Max Drawdown</div>
+      <div class="kpi-label">Max Drawdown (%)</div>
       ${fmtVal(ta.max_drawdown_pct !== null && ta.max_drawdown_pct !== undefined ? fmtPct(-ta.max_drawdown_pct) : null, ' negative')}
     </div>
     <div class="kpi-tile">
@@ -9254,6 +9276,12 @@ async function pollStatus() {
     // Render KPIs (Tab 2 → rail Reports page)
     if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
       renderKPIs(currentKpi, status);
+    }
+
+    // Render the Data Analysis tab (Tab 4, #541) from the same poll snapshot.
+    if (typeof renderDataAnalysis === 'function'
+        && paintable(tab4, document.getElementById('da-surface')) && currentKpi) {
+      renderDataAnalysis(currentKpi, status);
     }
 
     // Render the Market Filter kanban (Tab 3 → rail Data & Markets page)

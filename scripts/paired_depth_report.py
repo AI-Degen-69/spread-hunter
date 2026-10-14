@@ -11,6 +11,13 @@ import sys
 from pathlib import Path
 from urllib.parse import quote
 
+# Ensure repo root is importable when run as ``python scripts/paired_depth_report.py``.
+_LIVE_ROOT = Path(__file__).resolve().parent.parent
+if str(_LIVE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_LIVE_ROOT))
+
+from core_brain.kpi import required_sample_size
+
 
 class PairedDepthReportError(RuntimeError):
     """Paired shadow data cannot support a trustworthy report."""
@@ -554,7 +561,7 @@ def analyze_paired_depth(
         if len(paired_differences) >= 2:
             sigma_upper_bound = _paired_sigma_upper_bound(
                 pilot_sigma, len(paired_differences))
-        required_clusters = max(2, math.ceil(((1.96 + 0.842) * pilot_sigma / target_delta) ** 2))
+        required_clusters = max(2, required_sample_size(pilot_sigma, target_delta, 1.96, 0.842))
         if len(clusters) < required_clusters:
             limitations.append(
                 f"{len(clusters)} event-family clusters below the pilot-powered target "
