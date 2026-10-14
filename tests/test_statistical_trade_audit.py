@@ -157,3 +157,30 @@ def test_merge_rate_unavailable_without_method_column(tmp_path, capsys):
 
 def test_merge_methods_pinned_to_registry():
     assert audit.MERGE_CLOSE_METHODS == REGISTRY_MERGE_METHODS
+
+
+# --- T3: a missing table is named with the database path, never a traceback ---
+
+
+def test_missing_merge_legs_table_named_with_path(tmp_path, capsys):
+    db = tmp_path / "t3_nolegs.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("CREATE TABLE closes (realized_pnl REAL, method TEXT)")
+        conn.execute("CREATE TABLE single_leg_lifecycle (id INTEGER)")
+        conn.commit()
+    finally:
+        conn.close()
+    run_analysis(str(db))  # must not raise OperationalError
+    out = capsys.readouterr().out
+    assert "shadow_merge_legs" in out
+    assert str(db) in out
+
+
+def test_empty_database_names_closes_with_path(tmp_path, capsys):
+    db = tmp_path / "t3_empty.db"
+    sqlite3.connect(str(db)).close()
+    run_analysis(str(db))  # must not raise OperationalError
+    out = capsys.readouterr().out
+    assert "closes" in out
+    assert str(db) in out

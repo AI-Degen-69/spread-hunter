@@ -103,11 +103,24 @@ def run_analysis(db_path: str):
         print(f"Error connecting to database: {e}")
         return
 
-    # שליפת רשומות מהטבלאות הרלוונטיות
-    closes = fetch_table_rows(cursor, "closes")
-    single_legs = fetch_table_rows(cursor, "single_leg_lifecycle")
-    merge_legs = fetch_table_rows(cursor, "shadow_merge_legs")
-    conn.close()
+    try:
+        # All three tables are required; a missing one gets a naming sentence, not a traceback.
+        existing = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        required = ("closes", "single_leg_lifecycle", "shadow_merge_legs")
+        missing = [t for t in required if t not in existing]
+        if missing:
+            names = ", ".join(f"'{t}'" for t in missing)
+            noun = "Table" if len(missing) == 1 else "Tables"
+            print(f"{noun} {names} not found in {db_path}. "
+                  f"This audit needs closes, single_leg_lifecycle, and shadow_merge_legs.")
+            return
+
+        # שליפת רשומות מהטבלאות הרלוונטיות
+        closes = fetch_table_rows(cursor, "closes")
+        single_legs = fetch_table_rows(cursor, "single_leg_lifecycle")
+        merge_legs = fetch_table_rows(cursor, "shadow_merge_legs")
+    finally:
+        conn.close()
 
     total_closed = len(closes)
     print(f"Found {total_closed} records in 'closes' table.\n")
