@@ -118,8 +118,8 @@ OVERSHOOT_BAD_ABOVE = 1.0
 
 # The assumed stop reference for a rescue close that recorded no `trigger_bid`. It is an
 # ASSUMPTION, not an observed price: it equals the system default in `core_brain/config.py`
-# (`single_buy_max_loss_usd = 0.04`, promoted 2026-10-12), a per-share loss limit that
-# profile presets move (0.030-0.065). Every figure derived from it is tagged
+# (`stop_loss_trigger_usd_cents = 4.0` = $0.04, promoted 2026-10-12), a per-share loss
+# limit that profile presets move (3.0-6.5 cents). Every figure derived from it is tagged
 # `assumed_offset` and counted apart from the recorded ones.
 STOP_OFFSET_FALLBACK = 0.04
 
@@ -319,7 +319,7 @@ def break_even_rescue_rate(merge_mean: Optional[float],
     where every resolution is a rescue can never break even.
 
     No stop-offset constant is involved, deliberately. `hard_stop_bid` is an
-    absolute bid floor and `single_buy_max_loss_usd` is a per-profile per-share
+    absolute bid floor and `stop_loss_trigger_usd_cents` is a per-profile per-share
     limit, so a constant here would drift away from execution; the realized
     close dollars already contain the exit that actually filled.
 

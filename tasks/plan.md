@@ -70,3 +70,17 @@ T1 (config: mode + rename) -> T2 (`_route_pair`: one-mode) -> T3 (tests)
   parity; dollar tunable.
 - Depends on: T2
 - Verify: `python -m pytest -q tests/test_dual_stop_loss.py tests/test_single_buy_saver.py`
+
+## Build complete (Station III)
+- T1/T2/T3 done. Scope = (a) ladder-only (locked default). The one-mode logic
+  lives in `_route_pair` (ladder path), so the one-mode / shadow==live / tunable /
+  %-isolated tests went in `tests/test_ladder_exit.py` (which drives `_route_pair`),
+  not `test_dual_stop_loss.py` (that pins the non-ladder lifecycle escalation).
+- Refinement: `stop_loss_trigger_usd_cents` is a FLOAT (4.0), not int, so the
+  tournament's fractional-cent arms (4.5, 3.8, 6.5) survive. `%` is whole-number
+  (10.0 = 10%).
+- The rename is cross-cutting (~50 refs): config fields + env vars +
+  TOURNAMENT_PRESETS + apply_tournament_preset + 4 script readers + the i492
+  tournament JSON (dollars->cents) + 7 test files. Committed as ONE atomic commit
+  (intermediate states would be broken).
+- 185 tests pass across the affected suites.

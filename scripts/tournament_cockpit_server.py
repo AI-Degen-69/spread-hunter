@@ -50,9 +50,9 @@ ARMS_CONFIG_484 = [
         "run_id": "i484_tournament_control-1",
         "color": "#00e676",
         "desc": "Baseline fixed 2c offset, $0.045 single-buy loss stop",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.045 static)",
+        "worst_catalyst": "stop_loss_trigger_usd_cents ($0.045 static)",
         "worst_catalyst_desc": "Fixed stop dumped 56 trades on temporary 4.5c noise (-$15.16 in rescue/stop haircuts)",
-        "hypothesized_tweak": "single_buy_max_loss_usd -> $0.060",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents -> $0.060",
         "tweak_rationale": "Widen stop from 4.5c to 6.0c to absorb noise and prevent premature panic exits while keeping adverse limit intact",
     },
     {
@@ -64,9 +64,9 @@ ARMS_CONFIG_484 = [
         "run_id": "i484_tournament_conservative-1",
         "color": "#00b0ff",
         "desc": "Dynamic offset 0.75x (2-5c), tighter $0.030 single-buy stop",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.030 tight)",
+        "worst_catalyst": "stop_loss_trigger_usd_cents ($0.030 tight)",
         "worst_catalyst_desc": "Hair-trigger 3c stop panic-sold 28 trades via aged_out_rescue (-$15.43, -$0.55/tr)",
-        "hypothesized_tweak": "single_buy_max_loss_usd -> $0.045",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents -> $0.045",
         "tweak_rationale": "Relax hair-trigger 3c stop to standard 4.5c so normal maker variance does not force emergency bailouts",
     },
     {
@@ -92,9 +92,9 @@ ARMS_CONFIG_484 = [
         "run_id": "i484_tournament_aggressive-1",
         "color": "#ffd600",
         "desc": "Dynamic offset 0.25x (2-3c), wider $0.060 single-buy stop",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.065 wide)",
+        "worst_catalyst": "stop_loss_trigger_usd_cents ($0.065 wide)",
         "worst_catalyst_desc": "Wide 6.5c leash allowed adverse single buys to bleed deeper (-$0.32 avg loss per stop)",
-        "hypothesized_tweak": "single_buy_max_loss_usd -> $0.045",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents -> $0.045",
         "tweak_rationale": "Reign in excessive 6.5c stop to standard 4.5c to cap catastrophic single-leg drawdown",
     },
     {
@@ -195,9 +195,9 @@ ARMS_CONFIG_487 = [
         "run_id": "i487_tournament_control-2",
         "color": "#00e676",
         "desc": "Control baseline with adverse noise stop relaxed to $0.060 (absorbs micro-volatility)",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.045 static)",
+        "worst_catalyst": "stop_loss_trigger_usd_cents ($0.045 static)",
         "worst_catalyst_desc": "Baseline dumped 56 trades prematurely on 4.5c noise (-$15.16 haircut losses)",
-        "hypothesized_tweak": "single_buy_max_loss_usd = 0.060",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents = 0.060",
         "tweak_rationale": "Relaxed stop threshold to 6.0c to absorb noise and prevent premature panic exits while keeping adverse limit intact",
     },
     {
@@ -209,9 +209,9 @@ ARMS_CONFIG_487 = [
         "run_id": "i487_tournament_conservative-2",
         "color": "#00b0ff",
         "desc": "Conservative profile with hair-trigger stop widened from $0.030 to standard $0.045",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.030 tight)",
+        "worst_catalyst": "stop_loss_trigger_usd_cents ($0.030 tight)",
         "worst_catalyst_desc": "Hair-trigger 3c stop panic-sold 28 trades via aged_out_rescue (-$15.43, -$0.55/tr)",
-        "hypothesized_tweak": "single_buy_max_loss_usd = 0.045",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents = 0.045",
         "tweak_rationale": "Relaxed hair-trigger 3c stop to standard 4.5c so normal maker variance does not force emergency bailouts",
     },
     {
@@ -237,9 +237,9 @@ ARMS_CONFIG_487 = [
         "run_id": "i487_tournament_aggressive-2",
         "color": "#ffd600",
         "desc": "Aggressive tight offset with loose stop reigned in from $0.065 to standard $0.045",
-        "worst_catalyst": "single_buy_max_loss_usd ($0.065 wide)",
+        "worst_catalyst": "stop_loss_trigger_usd_cents ($0.065 wide)",
         "worst_catalyst_desc": "Wide 6.5c leash allowed adverse single buys to bleed deeper (-$0.32 avg loss per stop)",
-        "hypothesized_tweak": "single_buy_max_loss_usd = 0.045",
+        "hypothesized_tweak": "stop_loss_trigger_usd_cents = 0.045",
         "tweak_rationale": "Reigned in excessive 6.5c stop to standard 4.5c to cap catastrophic single-leg drawdown",
     },
     {
@@ -1387,7 +1387,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         <tr>
           <td><strong>Single-Buy Stop Cap</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>$0.045 (4.5¢)</strong></td>
-          <td><code>HUNTER_SINGLE_BUY_MAX_LOSS_USD</code></td>
+          <td><code>HUNTER_STOP_LOSS_TRIGGER_USD_CENTS</code></td>
           <td><span class="badge badge-green">#484 control</span></td>
           <td>Hard loss stop on orphan legs. If one leg fills and second leg drifts beyond safety cap, exits before adverse drift exceeds 4.5¢. Prevented catastrophic directional tail loss.</td>
         </tr>
@@ -1455,7 +1455,7 @@ HUNTER_TOURNAMENT_PRESET=hybrid
 HUNTER_DYNAMIC_OFFSET=0
 HUNTER_REWARD_OFFSET=0.02
 HUNTER_REQUOTE_DEAD_BAND=0.06
-HUNTER_SINGLE_BUY_MAX_LOSS_USD=0.045
+HUNTER_STOP_LOSS_TRIGGER_USD_CENTS=4.5
 HUNTER_SINGLE_BUY_GRACE_SEC=45
 HUNTER_REQUOTE_HOLD_QUEUE=500
 HUNTER_REQUOTE_HOLD_BELOW=0.08

@@ -2002,11 +2002,12 @@ def rescue_aged_out_legs(
 
 def _route_pair(client, registry, pair, max_pair_cost, live,
                 venue_positions, cfg=None, last_ms: int = 0, now_s: float = 0.0) -> dict:
-    """Route a single-buy pair under the Dual-Trigger Stop-Loss rules:
+    """Route a single-buy pair under the single-buy stop-loss rules (ONE stop
+    mode per run -- usd or pct; shadow and live apply the same mode):
 
     1. TAKER FINISH: If fill_cost + light_ask < max_pair_cost, cross to complete immediately.
-    2. ADVERSE DRIFT TRIGGER: If heavy leg's best bid dropped by >= single_buy_max_loss_usd
-       or >= single_buy_max_loss_pct, exit immediately to stop fast runaway bleed.
+    2. ADVERSE DRIFT TRIGGER: If heavy leg's best bid dropped past the active
+       Stop-Loss Trigger (usd cents OR pct, one mode per run), exit immediately.
     3. GRACE WINDOW: If age < single_buy_grace_sec (default 45s) and price is stable,
        hold and let the resting maker quote fill.
     4. GRACE EXPIRY: If age >= single_buy_grace_sec, exit at best bid to prevent holding
@@ -2043,8 +2044,9 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     if is_ladder:
         grace_sec = min(float(getattr(cfg, "ladder_exit_sec", 60.0)),
                         window_sec)
-    max_loss_pct = float(getattr(cfg, "single_buy_max_loss_pct", 0.10) if cfg else 0.10)
-    max_loss_usd = float(getattr(cfg, "single_buy_max_loss_usd", 0.04) if cfg else 0.04)
+    stop_mode = str(getattr(cfg, "single_buy_stop_mode", "usd") if cfg else "usd").lower()
+    max_loss_pct = float(getattr(cfg, "stop_loss_trigger_pct", 10.0) if cfg else 10.0) / 100.0
+    max_loss_usd = float(getattr(cfg, "stop_loss_trigger_usd_cents", 4.0) if cfg else 4.0) / 100.0
 
     age_s = max(0.0, now_s - (last_ms / 1000.0)) if (last_ms > 0 and now_s > 0) else 0.0
 
@@ -2052,8 +2054,12 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     if heavy_bid is not None and heavy_fill_price > 0:
         loss = heavy_fill_price - heavy_bid
         loss_pct = loss / heavy_fill_price
-        if loss >= max_loss_usd or loss_pct >= max_loss_pct:
-            is_adverse = True
+        # One stop mode per run (usd XOR pct); shadow and live apply the same
+        # mode -- the decision is identical, only order placement differs.
+        if stop_mode == "pct":
+            is_adverse = loss_pct >= max_loss_pct
+        else:
+            is_adverse = loss >= max_loss_usd
 
     if is_adverse:
         res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,

@@ -294,7 +294,7 @@ def classify_exit(reg: sqlite3.Connection, row: dict) -> str:
     fill_price = row["paid"]
     sold_price = row["sold"] or 0.0
     # The route's drift trigger, from core_brain/config.py defaults: exit at
-    # max(single_buy_max_loss_usd, single_buy_max_loss_pct * fill).
+    # max(stop_loss_trigger_usd_cents, stop_loss_trigger_pct * fill).
     threshold = max(0.045, 0.10 * fill_price)
     for ts, b in bids:
         if b > fill_price - threshold:

@@ -114,7 +114,7 @@ def _ladder_market(registry: OrderRegistry, when: int) -> None:
 def _cfg(grace_sec: float):
     return SimpleNamespace(
         single_buy_grace_sec=grace_sec, pairs_exit_window_sec=900.0,
-        single_buy_max_loss_pct=0.10, single_buy_max_loss_usd=0.045,
+        stop_loss_trigger_pct=10.0, stop_loss_trigger_usd_cents=4.5,
         max_pair_cost=MAX_PAIR_COST, max_order_usd=100.0,
     )
 
