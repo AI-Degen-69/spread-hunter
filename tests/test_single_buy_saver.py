@@ -1659,3 +1659,37 @@ def test_ladder_adverse_drift_only_store_has_zero_assumed_references(
     friction = rescue_friction_summary(registry.get_all_closes())
     assert friction["recorded_reference_count"] == 1
     assert friction["assumed_reference_count"] == 0
+
+
+def test_ladder_timer_exit_records_trigger_bid(registry: OrderRegistry):
+    """The ladder timer books the last observed bid, not the execution bid."""
+    _ladder525_pair(registry, LADDER525_NOW - 200_000)
+    venue = DecisionThenExecutionBook(decision_bid=0.57, execution_bid=0.56)
+    routed = _ladder525_route(
+        registry, venue, LADDER525_NOW - 200_000, LADDER525_NOW / 1000.0)
+
+    assert routed["action"] == "exited"
+    assert routed["reason"] == "ladder_exit"
+    closes = [c for c in registry.get_all_closes()
+              if c.get("method") == "ladder_exit"]
+    assert len(closes) == 1
+    assert closes[0]["trigger_bid"] == pytest.approx(0.57)
+    assert closes[0]["fresh_bid"] == pytest.approx(0.56)
+
+
+def test_ladder_timer_exit_without_decision_bid_keeps_trigger_null(
+    registry: OrderRegistry,
+):
+    """No decision bid means no trigger: the timer never borrows fresh_bid."""
+    _ladder525_pair(registry, LADDER525_NOW - 200_000)
+    venue = DecisionThenExecutionBook(decision_bid=None, execution_bid=0.56)
+    routed = _ladder525_route(
+        registry, venue, LADDER525_NOW - 200_000, LADDER525_NOW / 1000.0)
+
+    assert routed["action"] == "exited"
+    assert routed["reason"] == "ladder_exit"
+    closes = [c for c in registry.get_all_closes()
+              if c.get("method") == "ladder_exit"]
+    assert len(closes) == 1
+    assert closes[0]["trigger_bid"] is None
+    assert closes[0]["fresh_bid"] == pytest.approx(0.56)
