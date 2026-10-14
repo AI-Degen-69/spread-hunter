@@ -1,191 +1,102 @@
-﻿# Plan — #477: Command palette for pages, actions, and market search
+﻿# Plan — #562: Command palette hotkey loses to the browser, no mouse entry point
 
-Branch: `spread-hunter-i477` | Issue: [#477](https://github.com/AI-Degen-69/spread-hunter/issues/477) | Tier: Standard | Type: UX/UI (keyboard-first dashboard feature)
+Branch: i562/command-palette-hotkey-loses-to-the-browser-and-pa | Issue: #562
 
 ## Why (issue summary)
 
-Add a command palette (Cmd/Ctrl+K, `/` alias) so the operator can jump to any sidebar
-page, trigger SYNC VENUE, open the existing RESET typed-confirm, and search markets
-already loaded in the page — all keyboard-first. Vanilla JS, reuses the existing modal
-styling, no endpoints, no dependencies.
+The #477 palette ships exactly two bindings (Ctrl/Cmd+K, `/`), but live in
+Chrome Ctrl+K focuses the URL bar and `/` does nothing — and no mouse control
+opens the palette. The offline harness passes, so the failure is in the
+live-serving path, not palette logic.
 
-## CodeRabbit plan intake (read once, costed once)
+## Tier: Standard (5 files, one Debug decision + one small UI addition)
 
-- **Adopted:** separate `dashboard/static/command-palette.js` loaded after
-  `prototype.js` (keeps the 446 KB `app.js` and its many harnesses untouched —
-  `tests/test_sidebar_prototype.py:348` asserts only `app.js` before `prototype.js`);
-  click-the-sidebar-button navigation (the real click runs persistence,
-  `aria-current`, drawer close); capture-phase keydown + `stopPropagation` so the
-  kanban arrow listener (`app.js:9120-9128`) and reset-Escape listener
-  (`app.js:776-780`) stay silent while open; three-source market search with dedupe
-  by condition id.
-- **Rejected:** its Task 4 is closeout, not a build task — folded into Verification
-  below. Its "five pages" test assertion — live `PAGE_LAYOUT` has SIX (the `analysis`
-  page, #541); entries are built dynamically from `.proto-nav-btn[data-page]` instead.
-- **[UNVERIFIED] resolved during intake:** reset button binding is at
-  `app.js:857-864` (not :727-735); `.modal-*` styles at `styles.css:731-775` (not
-  :667-676); `#reset-modal` markup at `index.html:839-848` (not :697);
-  `orderGroupMarket` takes 4 args (`app.js:6202-6210`); `#ot-search-input` has an
-  `input` listener (`:8108-8124`) AND a render-time re-filter (`:8027-8033`).
+Two debug/UI tasks plus a test task; no new dependency, no API, no schema.
+
+## Type: Debug + Design/UI
+
+- [Debug] T1 — serving-source diagnosis, live reproduction.
+- [Design/UI] T2 — nav trigger button + hint copy.
+- [Code] T3 — harness regression tests (RED first).
+
+## CodeRabbit plan intake (2026-10-14)
+
+No plan comment had landed at planning time (only this station's `@coderabbitai
+plan` request). Proceeding from code; Station III must not wait for it. If a
+plan lands mid-build, mine it for test cases only — the diagnosis in T1 is
+already grounded in fresher evidence (serving stack predates #561).
+
+## Resolved questions (from code + operator, 2026-10-14)
+
+- "Ctrl+\" was `/` (operator-confirmed). No backslash work exists or is added.
+- Stale-browser-cache ruled OUT: no-store HTML + content-hash fingerprints
+  (`server.py:3994-4008,4062-4082`). Prime suspect is operational: the
+  serving checkout sits pre-#561, so the page has no palette markup and
+  `initPalette` returns before registering the keydown listener
+  (`command-palette.js:425-434`) — one cause for both dead hotkeys.
+- Button placement default stands: minimal trigger in `.top-meta`; #504 relocates.
+
+## Improvement proposal: none — evidence reshaped T1 instead
+
+No filler proposal. The one evidence-backed change to the issue's approach:
+do NOT touch hotkey code until T1 proves what the operator's browser actually
+receives (served-bytes grep + live keypress). If T1 shows the palette ships
+and keys still fail, T1's findings become the bug's new root cause and T2
+follows unchanged.
 
 ## Dependency graph
 
-T1 (shell + keyboard + a11y) → T2 (entries + filter + arrows) → T3 (market search)
-→ Verification (focused suites + tsc parity + operator How-to-verify)
-
-## Locked interfaces (frozen for this branch)
-
-- New file `dashboard/static/command-palette.js` — IIFE, browser guard shaped like
-  `prototype.js:511-516`, testable exports on `module.exports`. Frozen exports:
-  - `initPalette(doc)` — idempotent; no-op, no throw when `#command-palette` is absent.
-  - `openPalette()` / `closePalette({ restoreFocus = true })` — `restoreFocus: false`
-    is the RESET entry's close (the typed-confirm modal takes focus next).
-  - `isPaletteOpen()`
-  - `buildEntries(doc)` → `{ id, label, group, sub?, disabled?, run }[]` — pages
-    dynamically from `.proto-nav-btn[data-page]` (NEVER hardcoded — six pages today);
-    actions: SYNC VENUE (`#btn-sync`), RESET (sub-label "Opens the typed
-    confirmation.").
-  - `filterEntries(entries, query)` — trimmed, case-insensitive substring on label.
-  - `marketEntries(state, kpi, query)` — sources `kpi.by_market`,
-    `state.orders[].condition_id`, `state.pairs[].market`; dedupe by condition id;
-    label `title || name || slug` else first 10 chars of the id (mirrors
-    `orderGroupMarket`, `app.js:6202-6210`, so palette labels match the tables —
-    mirrored inline as one code path, no `typeof` guard); ≥2 chars; cap 8 under a
-    "Markets" heading; neither snapshot → inert "No markets loaded yet." row.
-  - `moveHighlight(delta)` / `activateHighlighted()` — arrows bounded at both ends.
-- DOM contract (frozen): `#command-palette` overlay = `.modal-overlay` + `hidden`,
-  `role="dialog"`, `aria-modal="true"`, `aria-labelledby` → visible `.modal-title`
-  "Command palette"; `input#palette-search` with `role="combobox"`, `aria-controls`,
-  `aria-expanded`, `aria-activedescendant`; `#palette-list` `role="listbox"`; rows
-  `role="option"`, `aria-selected="true"` on the highlighted row only; hint line
-  "Use arrow keys to move. Press Enter to choose. Press Escape to close."; overlay
-  beside `#reset-modal` in `index.html`; script tag after `prototype.js`, no
-  `async`/`defer`; palette CSS reuses `.modal-*` unchanged, new `palette-` rules keep
-  `z-index:1000`.
-- Key contract (frozen): ONE `window` keydown listener, capture phase. Cmd/Ctrl+K
-  (case-insensitive, `preventDefault`) opens from anywhere incl. inputs, and while
-  open selects the input text; `/` opens only with no modifier, outside
-  INPUT/TEXTAREA/SELECT/contenteditable, and when not `defaultPrevented`; never opens
-  while `#reset-modal` has `.show`; while open ArrowUp/Down/Enter/Escape/Tab each
-  `preventDefault()` + `stopPropagation()`; focus trap via `focusin` guard (the
-  input is the only tabbable control); backdrop click closes only when the target is
-  the overlay itself.
+- T1: no dependencies (risk-first: kills or confirms the operational theory
+  before any code moves).
+- T2: depends on T1 (the button must open a palette T1 proved live).
+- T3: depends on T2 (tests pin T2's wiring; RED run first against unmodified code).
 
 ## Tasks
 
-### T1 [L] [UX/UI] Palette shell — markup, styles, open/close, keyboard ownership
-- Files: `dashboard/static/index.html`, `dashboard/static/styles.css`,
-  `dashboard/static/command-palette.js` (NEW),
-  `tests/js/command_palette_harness.cjs` (NEW),
-  `tests/test_dashboard_command_palette.py` (NEW)
-- Build: overlay markup beside `#reset-modal` (pattern at `index.html:839-848`);
-  script tag after `prototype.js`; `palette-` CSS; the IIFE per the frozen contract;
-  harness per `tests/js/prototype_nav_harness.cjs` (scenario JSON on argv[2], stub
-  DOM, `new Function('module','exports','document','window', source)` evaluation)
-  extended with: capture-before-bubble dispatch, key events with observable
-  `defaultPrevented` and `stopPropagation` that ends dispatch, `focus()` updating
-  `activeElement`, `fetch` spy + `EventSource` stub, document-level kanban/reset
-  Escape spies; pytest wrapper with the `shutil.which("node")` skip pattern from
-  `tests/test_dashboard_input_lag.py:31-32`.
-- Verify (RED first): markup is a hidden labelled dialog; script loads after
-  `prototype.js`; `/static/command-palette.js` served 200 (dashboard test client) and
-  `node --check` clean; init safe with no markup; Ctrl+K/Meta+K (+ uppercase K) open
-  and focus the search; Escape closes and restores focus (body when the opener is
-  gone); `/` opens only outside editables and without modifiers; ignored while
-  `#reset-modal.show`; backdrop vs inner click; Tab/Shift+Tab hold focus; background
-  spies get zero calls while open; closed palette has zero `role="option"` rows.
-- Depends on: nothing.
+### T1 [Debug] Prove the served page, reproduce live — S
 
-### T2 [M] [UX/UI] Entries — pages, actions, filtering, arrow navigation
-- Files: `dashboard/static/command-palette.js`,
-  `tests/js/command_palette_harness.cjs`,
-  `tests/test_dashboard_command_palette.py`
-- Build: `buildEntries` per contract — pages from `.proto-nav-btn[data-page]`
-  (external rail links carry the class WITHOUT `data-page` and must be excluded),
-  SYNC VENUE (`#btn-sync`, `aria-disabled` + no-op when disabled), RESET (close
-  without focus restore → click `#btn-reset`; never `fetch`); input-event filtering;
-  arrow highlight bounded + scrolled into view; Enter/click activation; "No
-  matches." row; harness evaluates the REAL `prototype.js` first (nav fixture shape
-  from `prototype_nav_harness.cjs`) plus one external `.proto-nav-btn` link,
-  `#btn-sync`, `#btn-reset` click spies.
-- Verify (RED first): entries = six pages + SYNC VENUE + RESET, external link
-  absent; "rep"/"REP" filter leaves Reports & Analytics + RESET; arrows track one
-  `aria-selected`/`aria-activedescendant` and stop at both ends; no-match Enter does
-  nothing; choosing Reports & Analytics leaves only `page-reports` visible with
-  `aria-current="page"` and `localStorage["sh-proto-page"] = "reports"`; SYNC clicks
-  once (zero when disabled); RESET opens the confirm with zero `fetch` and no focus
-  restore.
-- Depends on: T1.
+- Target files: none (reads only) — dashboard URL `/`, serving checkout/process.
+- What: fetch the served `/` bytes and grep for `command-palette`; identify
+  which checkout and process serves the operator's dashboard; if stale,
+  pull/restart through the operator-approved stack path and re-fetch. Then
+  press Ctrl+K and `/` in live Chrome and record which opens the palette.
+- Skill: `debugging-and-error-recovery` (reproduce → localize → fix root cause).
+- Verify: served-bytes grep green AND live open observed for both hotkeys, or
+  a written root-cause finding that redirects T2. Checkpoint: **report the
+  diagnosis before touching code.**
 
-### T3 [x] [M] [UX/UI] Market search from the loaded state
-- Files: `dashboard/static/command-palette.js`,
-  `tests/js/command_palette_harness.cjs`,
-  `tests/test_dashboard_command_palette.py`
-- Build: `marketEntries` per contract (inline label mirror of `orderGroupMarket`);
-  rows computed only on `input` — polls/snapshot changes never rebuild an open list;
-  selection **[PROPOSED — operator opt-in pending]**: click `home`, set
-  `#ot-search-input`, dispatch `input`, focus it; harness fixtures: `lastKpi.by_market`
-  + `lastState` with one market in both sources and one untitled, plus an
-  `#ot-search-input` spy.
-- Verify (RED first): title match case-insensitive; full condition-id match; two-source
-  dedupe → one row; two-char minimum + eight-row cap; neither snapshot → inert
-  "No markets loaded yet."; selection navigates home with the label in the input, one
-  `input` event, input focused (untitled → ten-char prefix); snapshot change mid-open
-  leaves rows, query, and highlight untouched.
-- Depends on: T2.
+### T2 [Design/UI] Nav trigger button + hint names the hotkeys — M
+
+- Target files: `dashboard/static/index.html` (button in `.top-meta` beside
+  RESET, hint line `:863`), `dashboard/static/command-palette.js` (bind by id
+  in `initPalette`), `dashboard/static/styles.css` (one token-reusing rule).
+- What: real `<button id="btn-command-palette">` with magnifier icon
+  (`aria-hidden`) + accessible name; click opens the palette with focus in
+  search; close returns focus to the button via the existing opener path
+  (`openPalette` captures `doc.activeElement`, `:335`). Hint becomes e.g.
+  "Ctrl+K or / to open. Arrows to move. Enter to choose. Escape to close."
+- Skill: `frontend-ui-engineering` (native button, focus management, tokens).
+- Depends on: T1. Verify: live click opens + harness click test (T3) green.
+
+### T3 [Code] Harness regression tests, RED first — S
+
+- Target files: `tests/js/command_palette_harness.cjs` (fixture trigger
+  element), `tests/test_dashboard_command_palette.py` (new assertions only).
+- What: RED run first (trigger click with no binding → palette stays shut;
+  Ctrl+K asserts `keyPrevented` true and open), then T2 makes them GREEN.
+  Keep: no skips (node present), no touched existing assertions.
+- Depends on: T2. Verify:
+  `python -m pytest -q tests/test_dashboard_command_palette.py` green, then the
+  dashboard `-k` selection from CONSTRAINTS.md.
 
 ## Checkpoints
 
-- After T1: the palette opens/closes, owns the keyboard, traps and restores focus —
-  all a11y contracts proven offline.
-- After T2: the feature is end-to-end usable (pages, SYNC, RESET, filtering) — this
-  slice alone is shippable.
-- After T3: market search complete; run Verification.
+1. After T1: one-line diagnosis report (serving source + live result). If the
+   cause is operational and fixed by restart/pull, T2 still builds the button.
+2. After T3: suite green, branch ready for Station IV.
 
-## Verification (agent-run only — never handed to the operator)
+## Build status (Station III)
 
-- Node present (verified: hermes toolchain node 26.7.0). New file alone first, cwd =
-  worktree, zero skips expected:
-  `"C:/Users/Tiger/Agents/Projects/AI Trading/spread-hunter/.venv/Scripts/python.exe" -m pytest tests/test_dashboard_command_palette.py -q`
-- The issue's selection, unchanged (covers `test_dashboard_server.py`,
-  `test_dashboard_input_lag.py`, `test_live_state_language.py`,
-  `test_analytics_surface_mount.py`, `test_sidebar_prototype.py` incl. the
-  script-order assertion at `:348`):
-  `"C:/Users/Tiger/Agents/Projects/AI Trading/spread-hunter/.venv/Scripts/python.exe" -m pytest tests/ -k "live_state or input_lag or analytics_surface or start_toggle or dashboard" -q`
-- PORT note: this host's shell sometimes exports `PORT=0`, which breaks dashboard
-  collection — prefix `unset PORT;` when set. Planning session verified clean.
-- tsc parity (verified at intake, cwd = worktree):
-  `npx -y -p typescript@5.7.3 tsc --noEmit server.ts` fails on `main` with exactly one
-  pre-existing error — `server.ts(251,111): error TS1343` (`import.meta` with the
-  default module setting; no `tsconfig.json`, `package.json` is `"type": "module"`).
-  Acceptable result after the change: the SAME single error, never fewer, never more.
-  Never edit `server.ts`.
-- Operator How-to-verify (goes in the PR, hands-on only per
-  `docs/agents/verifying.md`): press Ctrl+K → "Command palette" dialog with the cursor
-  in the search box; type "reports" → Enter → only Reports & Analytics visible, and it
-  survives a reload; press `/`, Tab a few times, Escape → focus stays in the search
-  then returns to where it was; choose RESET → Cancel → typed-confirm appears, nothing
-  reset; type part of a market title → Enter → Dashboard page with Orders & Trades
-  filtered. Local bridge, `BRIDGE_CONTROL` unset; no START, no SYNC against
-  production, no confirmed RESET — zero dollar risk. PowerShell `;` between commands.
-
-## Resolved open questions (from the issue + CodeRabbit, answered from code)
-
-1. "Three pages" vs the issue's own five — live `PAGE_LAYOUT` (`prototype.js:38-84`)
-   has SIX (`analysis`, #541). Entries are dynamic; no hardcoded page list anywhere.
-2. "The same switch function" is private — the palette clicks the real sidebar button
-   (persistence, `aria-current`, drawer close all run).
-3. Background key handlers — TWO document-level listeners exist (reset Escape
-   `app.js:776-780`, kanban arrows `app.js:9120-9128`); the capture-phase listener
-   silences both while open.
-4. Choosing a market result is unspecified by the issue — see the opt-in question put
-   to the operator.
-
-## Rejected proposals (recorded so they do not resurface)
-
-- by_market-only market search (dropped at intake): `orderGroupMarket`'s pairs
-  fallback exists precisely for order groups the KPI did not break down — one source
-  would hide markets the tables render. Three sources stay.
-- Sub-issue fan-out for T1-T3 (skipped): single cohesive frontend feature; the repo's
-  child-ticket convention (`docs/agents/issue-tracker.md:81-83`) targets map-style
-  multi-workstream decomposition. `tasks/plan.md` is the durable mirror.
+- [x] T1 — diagnosis proven: operator stack serves pre-#561 page, no code defect
+- [x] T2 — trigger button + hint committed
+- [x] T3 — 31 passed palette suite + 387 dashboard selection + served-bytes proof

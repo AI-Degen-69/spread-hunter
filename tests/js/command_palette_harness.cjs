@@ -114,6 +114,14 @@ function clickEl(el) {
     preventDefault() { this.defaultPrevented = true; },
     stopPropagation() { this.propagationStopped = true; },
   };
+  // Real browsers move focus to a focusable target on mousedown, before the
+  // click handlers run — so openPalette captures the trigger as its opener.
+  // DIV rows and the overlay are not focusable: no transition for them.
+  if (el && (el.tagName === 'BUTTON' || el.tagName === 'INPUT' || el.tagName === 'A'
+      || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA')) {
+    doc.activeElement = el;
+    fireFocusin(el);
+  }
   let node = el;
   const chain = [];
   while (node) { chain.push(node); node = node.parentNode; }
@@ -187,6 +195,13 @@ function buildFixture() {
 
   els['btn-reset'] = makeEl('btn-reset', { tagName: 'BUTTON', textContent: 'RESET' });
   els['btn-reset'].addEventListener('click', () => { resetClicks += 1; });
+
+  // Nav trigger (#562): production binds it by id in initPalette. Absent only
+  // when the fixture says so, pinning the guard for pages without the button.
+  if (fixture.paletteTrigger !== false) {
+    const trigger = makeEl('btn-command-palette', { tagName: 'BUTTON' });
+    els['btn-command-palette'] = trigger;
+  }
 
   const resetModal = makeEl('reset-modal');
   if (fixture.resetModalShown) resetModal.classList.add('show');

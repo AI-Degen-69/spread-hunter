@@ -203,10 +203,13 @@
 
   function clearList() {
     if (!list) return;
-    if (typeof list.removeChild === 'function' && list.firstChild) {
+    // Real-DOM safe: children is a live HTMLCollection in the page, so only
+    // firstChild/removeChild may touch it; the stub has neither and falls
+    // through to the plain-array splice.
+    if (typeof list.removeChild === 'function') {
       while (list.firstChild) list.removeChild(list.firstChild);
-    } else if (list.children) {
-      list.children.length = 0;
+    } else if (list.children && typeof list.children.splice === 'function') {
+      list.children.splice(0, list.children.length);
     }
   }
 
@@ -431,6 +434,10 @@
     overlay.addEventListener('click', onOverlayClick);
     doc.addEventListener('focusin', onFocusIn);
     search.addEventListener('input', refreshList);
+    // Mouse entry (#562): a nav button that opens the palette. Bound here —
+    // the browser IIFE exposes no globals — and guarded for pages without it.
+    var trigger = doc.getElementById('btn-command-palette');
+    if (trigger) trigger.addEventListener('click', function () { openPalette(); });
     window.addEventListener('keydown', onKeydown, true);
   }
 
