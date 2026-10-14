@@ -82,7 +82,7 @@ Dependency graph: T1 (engine entry points) → T2 (`_route_pair` internals) → 
 (taxonomy note) → T4 (scripts + suites + survivor repairs) → T5 (docs/dashboard) → T6
 (acceptance sweep). T3 depends on T1 only; T4 on T1+T2; T5 on T4; T6 on all.
 
-### T1 [M] [Code] — Delete `core_brain/ladder.py` and strip engine entry points
+### [x] T1 [M] [Code] — Delete `core_brain/ladder.py` and strip engine entry points
 - Delete `core_brain/ladder.py`.
 - `core_brain/config.py`: remove the five `ladder_*` fields (`:1061-1070` block incl. its
   comment header) and `validate_ladder` (`:1149-1163`).
@@ -99,7 +99,7 @@ Dependency graph: T1 (engine entry points) → T2 (`_route_pair` internals) → 
 
 **Checkpoint 1** — after T1+T2: ordinary quoting path imports clean; focused engine suites green.
 
-### T2 [M] [Code] — Strip ladder selection from `_route_pair`
+### [x] T2 [M] [Code] — Strip ladder selection from `_route_pair`
 - `core_brain/single_buy_saver.py:2041`: keep the function; always use `single_buy_exit`,
   grace from `min(single_buy_grace_sec, pairs_exit_window_sec)`, timer reason
   `grace_expired`. Preserve completion, adverse-drift, grace-hold, and `trigger_bid`
@@ -107,7 +107,7 @@ Dependency graph: T1 (engine entry points) → T2 (`_route_pair` internals) → 
 - Depends on: T1
 - Verify: `py -3.12 -m pytest -q tests/test_single_buy_saver.py tests/test_refill_after_exit.py tests/test_exit_price_realism.py tests/test_grace_sweep_report.py`.
 
-### T3 [XS] [Code] — Mark the `ladder_exit` writer legacy
+### [x] T3 [XS] [Code] — Mark the `ladder_exit` writer legacy
 - `core_brain/close_methods.py`: change only the writer note — legacy, no current writer.
   Keep `LADDER_EXIT`, the `ladder_exit` string, and `RESCUE_METHODS` membership untouched
   (old databases still contain these rows).
@@ -115,7 +115,7 @@ Dependency graph: T1 (engine entry points) → T2 (`_route_pair` internals) → 
 - Verify: `grep -n "LADDER_EXIT\|ladder_exit" core_brain/close_methods.py` still present;
   `py -3.12 -m pytest -q tests/test_close_method_taxonomy.py`.
 
-### T4 [M] [Code] — Delete scripts + dedicated suites, repair survivors
+### [x] T4 [M] [Code] — Delete scripts + dedicated suites, repair survivors
 - Delete `scripts/ladder_probe.py`, `scripts/ladder_live_books_trial.py`,
   `scripts/ladder_shadow_rehearsal.py`, `scripts/ladder_tape_collect.py` and the nine
   `tests/test_ladder_*.py` suites.
@@ -130,7 +130,7 @@ Dependency graph: T1 (engine entry points) → T2 (`_route_pair` internals) → 
 
 **Checkpoint 2** — after T4: every surviving suite green, zero ladder suites remain.
 
-### T5 [S] [Docs] — Comment-only edits + current guidance
+### [x] T5 [S] [Docs] — Comment-only edits + current guidance
 - Reword stale ladder-path comments: `shadow_exec.py:348`, `shadow_run.py:684`,
   `trader_loop.py:675,2405-2406`, `statistical_analytics.py:526`. Leave all order-book
   depth-ladder code and risk-sizing ladder comments untouched.
@@ -140,7 +140,7 @@ Dependency graph: T1 (engine entry points) → T2 (`_route_pair` internals) → 
 - Depends on: T4
 - Verify: `py -3.12 -m pytest -q tests/test_docs_layout.py`; `grep -rn "ladder" core_brain scripts --include="*.py"` shows only order-book depth + taxonomy strings.
 
-### T6 [XS] [Code] — Acceptance sweep
+### [x] T6 [XS] [Code] — Acceptance sweep
 - Run the refined acceptance grep and the issue's four suites + the focused quote-lifecycle
   suites. Confirm `snapshot_ladder`, risk-sizing ladder code, and all `ladder_exit`
   taxonomy strings still present.

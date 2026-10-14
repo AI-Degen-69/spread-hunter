@@ -1810,8 +1810,8 @@ class TestQueueGateInRehearsal:
         """A caller that substitutes its own sources gets no live read by
         surprise -- and must be told the gate stayed inert.
 
-        `scripts/ladder_shadow_rehearsal.py` replays a recorded tape for books
-        and fills and rotates at `--interval 0.01`; defaulting the live reader
+        A recorded-tape replay for books and fills, rotating at
+        `--interval 0.01`; defaulting the live reader
         at the seam would put public requests per market per rotation into a
         recorded experiment and measure today's tape against a previous
         session's book. Silent inertness is the failure this pins shut.
