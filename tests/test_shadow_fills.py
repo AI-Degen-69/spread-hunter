@@ -37,6 +37,30 @@ def test_queue_ahead_is_zero_when_no_one_rests_at_our_price():
     assert queue_ahead_at(book, 0.47) == 0.0
 
 
+# --- T1 (#531): the clearing print travels on the fill ---
+
+
+def test_credited_fill_carries_the_closest_print_strictly_below():
+    orders = [_order()]
+    fills, _ = credit_fills(orders, {"tok-up": {0.46: 1.0, 0.44: 5.0}})
+
+    assert len(fills) == 1
+    assert fills[0].clearing_price == 0.46
+
+
+def test_credited_fill_ignores_prints_at_or_above_our_price():
+    orders = [_order()]
+    fills, _ = credit_fills(orders, {"tok-up": {0.47: 9.0, 0.46: 1.0}})
+
+    assert fills[0].clearing_price == 0.46
+
+
+def test_clearing_price_defaults_to_none_and_does_not_affect_equality():
+    assert ShadowFill("a", "t", 0.5, 1.0) == ShadowFill(
+        "a", "t", 0.5, 1.0, clearing_price=0.48)
+    assert ShadowFill("a", "t", 0.5, 1.0).clearing_price is None
+
+
 # --- trade-through: the only fill path ---
 
 def test_sell_print_below_our_bid_clears_queue_and_fills_remainder():
