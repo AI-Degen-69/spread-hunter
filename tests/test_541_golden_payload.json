@@ -1408,10 +1408,10 @@
   "trade_analytics": {
     "avg_loss_usd": -0.8999999999999999,
     "avg_win_usd": 1.62,
-    "ci90_lower_pct": -1.6525002191140494,
+    "ci90_lower_pct": -6.785078789168072,
     "ci95_return_pct": {
-      "lower": -6.0221279206465255,
-      "upper": 48.35546125397986
+      "lower": -14.497818478222225,
+      "upper": 56.83115181155556
     },
     "cvar_95_usd": null,
     "dollar_weighted_return_pct": 21.85185185185185,

@@ -19,6 +19,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from core_brain.queue_math import queue_multiple as _queue_multiple_impl
+
 
 @dataclass(frozen=True)
 class ShadowRestingOrder:
@@ -44,31 +46,12 @@ class ShadowFill:
     size: float
 
 
-def queue_multiple(
-    queue_ahead: float | None, order_size: float | None
-) -> float | None:
-    """How deep a quote sits in its queue, relative to its own size.
-
-    Returns `queue_ahead / order_size`. `None` means unmeasured: the queue is
-    missing/negative or the size is missing/not positive, so the row stays out
-    of medians and maxima instead of distorting them.
-
-    Descriptive only: how deep the quote sat at post. Queue position cannot
-    be measured from the public book, so this no longer gates any fill --
-    see `credit_fills`.
-    """
-    if queue_ahead is None or order_size is None:
-        return None
-    try:
-        queue = float(queue_ahead)
-        size = float(order_size)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(queue) or not math.isfinite(size):
-        return None
-    if queue < 0.0 or size <= 0.0:
-        return None
-    return queue / size
+#: One home for the queue multiple lives in `core_brain.queue_math` (#541); this
+#: alias keeps the rehearsal model's public name while both callers share the
+#: single implementation. Descriptive only: how deep the quote sat at post.
+#: Queue position cannot be measured from the public book, so this no longer
+#: gates any fill -- see `credit_fills`.
+queue_multiple = _queue_multiple_impl
 
 
 def queue_ahead_at(book: dict, price: float) -> float:

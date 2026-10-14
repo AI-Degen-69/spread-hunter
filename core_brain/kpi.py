@@ -20,8 +20,10 @@ from contextlib import closing
 
 from core_brain.statistical_analytics import (
     build as build_statistical_analytics,
+    ci_critical_value,
     ci_z,
     mean_pnl_ci as _mean_pnl_ci,
+    normal_mean_interval,
 )
 from core_brain.order_registry import (
     OrderRegistry, DEFAULT_DB_PATH, VENUE_SYNC_RUN_ID, get_connection,
@@ -72,6 +74,11 @@ def _wilson_ci(successes: int, n: int, z: float = ci_z(95)) -> Optional[dict[str
         "lower": max(0.0, center - half),
         "upper": min(1.0, center + half),
     }
+
+
+#: Public name for the one Wilson score interval; `_wilson_ci` stays as an alias
+#: for current callers (#541).
+wilson_ci = _wilson_ci
 
 
 # --------------------------------------------------------------------------
@@ -416,15 +423,19 @@ def compute_trade_analytics(
     ci90_lower_pct: Optional[float] = None
     ci95_return_pct: Optional[dict[str, float]] = None
     if mean_return_pct is not None and stdev_return_pct is not None and len(return_pcts) > 1:
-        se = stdev_return_pct / math.sqrt(len(return_pcts))
         # The 90% lower bound (the "is expectancy positive?" gate the paper run
         # uses) -- the 5% tail on one side, which is the 90% two-sided row -- plus
-        # a 95% two-sided band for context. Both multipliers come from the one
-        # critical-value table (#535).
-        ci90_lower_pct = mean_return_pct - ci_z(90) * se
+        # a 95% two-sided band for context. Multipliers are Student-t while the
+        # sample is small, normal once it is not (#541: one convention).
+        ci90_lower_pct, _, _ = normal_mean_interval(
+            mean_return_pct, stdev_return_pct, len(return_pcts),
+            ci_critical_value(90, len(return_pcts), ci_z(90)))
+        ci95_lower, ci95_upper, _ = normal_mean_interval(
+            mean_return_pct, stdev_return_pct, len(return_pcts),
+            ci_critical_value(95, len(return_pcts), ci_z(95)))
         ci95_return_pct = {
-            "lower": mean_return_pct - ci_z(95) * se,
-            "upper": mean_return_pct + ci_z(95) * se,
+            "lower": ci95_lower,
+            "upper": ci95_upper,
         }
 
     mean_pnl_ci = _mean_pnl_ci(wins + losses)
@@ -1152,7 +1163,8 @@ def compute_pessimistic_analytics(
     stdev_r = statistics.stdev(returns) if n > 1 else None
     ci90: Optional[float] = None
     if mean_r is not None and stdev_r is not None and n > 1:
-        ci90 = mean_r - ci_z(90) * (stdev_r / math.sqrt(n))
+        ci90, _, _ = normal_mean_interval(
+            mean_r, stdev_r, n, ci_critical_value(90, n, ci_z(90)))
     return {
         "n_closes": n,
         "mean_return_pct": mean_r,

@@ -61,7 +61,7 @@ Sample Mean PnL:              $0.7875
 Standard Deviation:           $1.4496
 
 Confidence Intervals for Expected PnL:
-  [95% CL]: [$-0.2170, $1.7920] | Margin of Error: +/- $1.0045
+  [95% CL]: [$-0.4246, $1.9996] | Margin of Error: +/- $1.2121
   [98% CL]: [$-0.4048, $1.9798] | Margin of Error: +/- $1.1923
   [99% CL]: [$-0.5326, $2.1076] | Margin of Error: +/- $1.3201
 
@@ -165,7 +165,7 @@ def test_run_analysis_fixture_values_at_all_levels():
     assert audit.calculate_mean_and_std([-1.2, -0.6, 2.1, 0.9, 1.5, 0.0, 0.4, 3.2]) == (
         0.7875000000000001, 1.4495689014324225)
     assert audit.mean_confidence_interval(0.7875000000000001, 1.4495689014324225, 8, z["95%"]) == (
-        -0.21697949999999988, 1.7919795, 1.0044795)
+        -0.42456249999999995, 1.9995625000000001, 1.2120625)  # #541 t-switch was (-0.2170, 1.7920, 1.0045)
     assert audit.mean_confidence_interval(0.7875000000000001, 1.4495689014324225, 8, z["98%"]) == (
         -0.4047543749999998, 1.979754375, 1.1922543749999999)
     assert audit.mean_confidence_interval(0.7875000000000001, 1.4495689014324225, 8, z["99%"]) == (
@@ -179,7 +179,7 @@ def test_run_analysis_fixture_values_at_all_levels():
     assert audit.proportion_confidence_interval(5, 8, z["95%"]) == (
         0.3057428968878372, 0.8631554346710865, 0.27870626889162464)
     assert audit.proportion_confidence_interval(5, 8, z["98%"]) == (
-        0.26292309097269173, 0.886198163690956, 0.31163753635913216)
+        0.2629230909726917, 0.8861981636909562, 0.3116375363591323)  # #541: shared-Wilson op order, 1-ulp realignment
     assert audit.proportion_confidence_interval(5, 8, z["99%"]) == (
         0.2374701607531901, 0.8991894661786644, 0.3308596527127371)
     std = 1.4495689014324225
@@ -217,7 +217,7 @@ def test_run_analysis_one_close_db_stdout_frozen(tmp_path, capsys):
 def test_ladder_mean_ci90_pins():
     assert ladder_probe.mean_ci90([]) == (None, None, None)
     assert ladder_probe.mean_ci90([2.5]) == (2.5, None, None)
-    assert ladder_probe.mean_ci90([1, 3]) == (2.0, 0.355, 3.645)
+    assert ladder_probe.mean_ci90([1, 3]) == (2.0, -4.313999999999999, 8.314)  # #541 t-switch was (2.0, 0.355, 3.645)
 
 
 def test_ladder_prop_ci90_diff_pin():
@@ -241,5 +241,5 @@ def test_required_clusters_floor_still_in_source():
 
 def test_family_percentile_median_and_p90():
     values = list(range(1, 11))
-    assert family_probe_report._percentile(values, 0.5) == 5
-    assert family_probe_report._percentile(values, 0.9) == 9
+    assert family_probe_report._nearest_rank_percentile(values, 0.5) == 5
+    assert family_probe_report._nearest_rank_percentile(values, 0.9) == 9

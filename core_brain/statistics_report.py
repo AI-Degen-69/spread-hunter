@@ -11,6 +11,7 @@ from typing import Any
 from core_brain.config import MakerConfig, load as load_cfg
 from core_brain.kpi import report as kpi_report
 from core_brain.order_registry import OrderRegistry
+from core_brain.queue_math import queue_multiple as _queue_multiple
 from core_brain.runtime_paths import LIVE_ROOT
 from statistical_validation_run.artifacts import (
     build_gate_rows,
@@ -33,31 +34,10 @@ _VALID_MODES = {"shadow", "live"}
 DEFAULT_REPORT_DIR = LIVE_ROOT / "reports"
 
 
-def _queue_multiple(queue_ahead: float | None, order_size: float | None) -> float | None:
-    """Queue depth relative to order size, owned by this report module.
-
-    Same contract as the rehearsal fill model's queue-multiple helper, deliberately
-    duplicated rather than imported: the live/shadow import boundary
-    (`test_no_live_module_imports_the_shadow_model` in `tests/test_shadow_run.py`)
-    forbids any live-side module -- and this reporter serves live reports too --
-    from importing rehearsal fill logic, whose inferred-fill semantics must never
-    meet the live path. (The name of that module is spelled out nowhere in this
-    file on purpose: the boundary guard scans source text.) A multiple of N means
-    the tape must trade N times the order size at the exact order price before
-    first fill.
-    """
-    if queue_ahead is None or order_size is None:
-        return None
-    try:
-        queue = float(queue_ahead)
-        size = float(order_size)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(queue) or not math.isfinite(size):
-        return None
-    if queue < 0.0 or size <= 0.0:
-        return None
-    return queue / size
+# `_queue_multiple` is the shared `core_brain.queue_math.queue_multiple` imported
+# above (#541: one home for the formula). It stays boundary-clean: the neutral
+# module names no engine and carries no inferred-fill semantics, so the live
+# report path may import it — proven by `test_no_live_module_imports_the_shadow_model`.
 
 
 def _order_lifetime_s(posted_ts: Any, last_polled_ts: Any) -> float | None:

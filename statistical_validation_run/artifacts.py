@@ -34,6 +34,8 @@ from typing import Any, Optional
 
 from core_brain.config import MakerConfig
 from core_brain.kpi import (
+    MERGE_METHODS,
+    SINGLE_BUY_EXIT_METHODS,
     build_sensitivity,
     evaluate_stat_gate,
     gate_definition,
@@ -56,8 +58,6 @@ COST_OF_BEING_WRONG = (
 
 WIN_RATE_GATE = 0.50          # secondary: win_rate_ci95.lower must exceed 0.50
 ADVERSE_SELECTION_GATE = -0.005  # per share; more adverse than this is a finding
-MERGE_METHODS = ("merge", "shadow_merge")
-EXIT_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")
 
 GATE_ORDER = [
     "Primary — total PnL (inclusive)",
@@ -83,14 +83,14 @@ def rescue_stats(closes: list[dict]) -> dict[str, Any]:
     "no rescues needed" and "rescues never resolved" are different facts.
     """
     merges = [c for c in closes if c.get("method") in MERGE_METHODS]
-    exits = [c for c in closes if c.get("method") in EXIT_METHODS]
+    exits = [c for c in closes if c.get("method") in SINGLE_BUY_EXIT_METHODS]
     resolved = merges + exits
     return {
         "merges": len(merges),
         "exits": len(exits),
         "other_methods": sorted(
             {c.get("method") or "unknown" for c in closes}
-            - set(MERGE_METHODS) - set(EXIT_METHODS)
+            - set(MERGE_METHODS) - set(SINGLE_BUY_EXIT_METHODS)
         ),
         "completion_rate": (len(merges) / len(resolved)) if resolved else None,
         "exit_rate": (len(exits) / len(resolved)) if resolved else None,
