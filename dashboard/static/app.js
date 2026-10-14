@@ -7844,7 +7844,12 @@ function stitchClosedTradesRows(kpi, state, sort) {
       }
     }
 
-    const totalCost = Number(m.total_cost || 0) || settlements.reduce((acc, s) => acc + (Number(s.cost_basis) || 0), 0);
+    // Total Cost is the basis of what CLOSED in this market, summed from the
+    // settlements — never `m.total_cost`, which KPI keeps as residual
+    // open-inventory cost (fills minus what the closes removed). On a closed
+    // market that residual is dust or 0; reading it here divides realized PnL
+    // by the wrong number and prints impossible percentages (#579).
+    const totalCost = settlements.reduce((acc, s) => acc + (Number(s.cost_basis) || 0), 0);
     const realizedPnl = Number(m.realized_pnl || 0);
     const pnlPct = totalCost > 0 ? (realizedPnl / totalCost) * 100 : 0;
     const pnlCls = realizedPnl > 0 ? 'pos' : (realizedPnl < 0 ? 'neg' : 'flat');

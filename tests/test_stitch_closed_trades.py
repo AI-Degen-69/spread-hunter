@@ -146,6 +146,64 @@ def test_stitch_closed_trades_solos_render_each_in_own_row_with_own_pnl():
 
 
 @requires_node
+def test_stitch_closed_trades_total_cost_uses_settlement_basis_not_residual_dust():
+    """#579: a closed market's Total Cost is the basis of what closed, never the
+    residual open-inventory dust KPI publishes in the same field."""
+    code = """
+    const settlements = [
+        {
+            method: 'shadow_merge',
+            shares: 7,
+            up_cost_removed: 2.87,
+            dn_cost_removed: 4.06,
+            cost_basis: 6.93,
+            proceeds: 7.00,
+            realized_pnl: 0.07,
+            ts: 1700000000
+        },
+        {
+            method: 'shadow_merge',
+            shares: 6,
+            up_cost_removed: 2.10,
+            dn_cost_removed: 3.42,
+            cost_basis: 5.52,
+            proceeds: 6.00,
+            realized_pnl: 0.48,
+            ts: 1700000010
+        }
+    ];
+    // The real-world shape from the #569 store: both pairs fully closed, so the
+    // only thing left in KPI's residual field is dust.
+    const kpi = {
+        by_market: {
+            '0x123': {
+                condition_id: '0x123',
+                title: 'Feyenoord vs Como',
+                category: 'Sports',
+                settlements: settlements,
+                realized_pnl: 0.55,
+                total_cost: 0.35,
+                total_sh: 0
+            }
+        }
+    };
+    const html = app.stitchClosedTradesRows(kpi, { orders: [] }, null);
+    console.log(JSON.stringify({
+        html,
+        hasDustCost: html.includes('$0.35'),
+        hasTrueCost: html.includes('$12.45'),
+        hasInflatedPct: html.includes('157.14%'),
+        hasTruePct: html.includes('4.42%')
+    }));
+    """
+    res = json.loads(_eval_js(code))
+    assert res["hasTrueCost"] is True, "closed row must show the settlement basis total"
+    assert res["hasTruePct"] is True, "PnL pct must divide by the settlement basis total"
+    assert res["hasDustCost"] is False, "residual dust must not render as Total Cost"
+    assert res["hasInflatedPct"] is False, "dust denominator must not inflate the pct"
+
+
+@requires_node
 def test_stitch_open_orders_and_positions_headers_and_pills():
     code = """
     const ordersHead = app.stitchOpenOrdersHeadHtml(null);
