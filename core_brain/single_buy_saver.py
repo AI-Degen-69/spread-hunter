@@ -2047,7 +2047,8 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     if is_adverse:
         res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
                               live=live, venue_positions=venue_positions,
-                              reason="adverse_drift", method=exit_method)
+                              reason="adverse_drift", method=exit_method,
+                              trigger_bid=heavy_bid)
         if isinstance(res, dict):
             res["reason"] = "adverse_drift"
         return res

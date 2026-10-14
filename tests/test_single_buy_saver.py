@@ -13,6 +13,7 @@ Stage 3 invariants:
 
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 import pytest
 
@@ -20,6 +21,7 @@ from core_brain.order_registry import (
     OrderRegistry, OrderRecord, FillRecord, QuoteRecord,
 )
 from core_brain import single_buy_saver as lp
+from core_brain.statistical_analytics import rescue_friction_summary
 
 
 MAX_PAIR_COST = 0.995
@@ -1514,3 +1516,146 @@ def test_manage_single_leg_positions_stranded_maker_wait_and_forced_exit(registr
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# Issue #525 — _route_pair exits record the trigger bid
+# ---------------------------------------------------------------------------
+# The bid that trips the stop is already in hand as `heavy_bid`; both ladder
+# exits must pass it to `exit_single_buy` the way the lifecycle hard stop
+# passes `held_bid`, so latency drag is measured instead of assumed.
+
+LADDER525_COND = "0xcond-ladder-525"
+LADDER525_PAIR = "ladder-0xcond-ladder-525"
+LADDER525_NOW = 2_000_000
+
+
+def _ladder525_pair(registry: OrderRegistry, when: int) -> None:
+    """Ladder-stamped pair: UP 10 filled at 0.60, DOWN 10 working at 0.38."""
+    down = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-dn", condition_id=LADDER525_COND,
+        token_id=TOK_DN, side="BUY", price=0.38, original_size=10.0,
+        status="open", posted_ts=when, last_polled_ts=when,
+        pair_id=LADDER525_PAIR, max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(down)
+    up = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-up", condition_id=LADDER525_COND,
+        token_id=TOK_UP, side="BUY", price=0.60, original_size=10.0,
+        status="open", posted_ts=when, last_polled_ts=when,
+        pair_id=LADDER525_PAIR, max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(up)
+    registry.record_fill(FillRecord(
+        trade_id=f"trade-{up.id}", order_uuid=up.id, size=10.0,
+        price=0.60, venue_ts=when,
+    ))
+    registry.update_order_status(up.id, status="filled", last_polled_ts=when)
+    registry.log_quote(QuoteRecord(
+        ts=when / 1000.0, condition_id=LADDER525_COND, token_id=TOK_UP,
+        side="UP", price=0.60, size=10.0,
+    ))
+    registry.log_quote(QuoteRecord(
+        ts=when / 1000.0, condition_id=LADDER525_COND, token_id=TOK_DN,
+        side="DOWN", price=0.38, size=10.0,
+    ))
+
+
+def _ladder525_cfg():
+    return SimpleNamespace(
+        ladder_mode=True, ladder_exit_sec=60.0,
+        single_buy_grace_sec=0.0, pairs_exit_window_sec=900.0,
+        single_buy_max_loss_pct=0.10, single_buy_max_loss_usd=0.045,
+        max_pair_cost=MAX_PAIR_COST, max_order_usd=100.0,
+    )
+
+
+class DecisionThenExecutionBook:
+    """Decision bid until the first cancel, execution bid after it.
+
+    `exit_single_buy` cancels resting orders before its fresh read, so gating
+    on the cancel proves the recorded trigger and fresh bids come from two
+    separate reads. No network. An empty bid list means "no bid".
+    """
+
+    def __init__(self, decision_bid, execution_bid, light_ask=0.40,
+                 depth=100.0):
+        self.decision_bid = decision_bid
+        self.execution_bid = execution_bid
+        self.light_ask = light_ask
+        self.depth = depth
+        self.calls: list[str] = []
+
+    def _book(self, bid):
+        bids = ([] if bid is None
+                else [{"price": str(bid), "size": str(self.depth)}])
+        return {
+            "asset_id": "tok", "tick_size": "0.01",
+            "asks": [{"price": str(self.light_ask),
+                      "size": str(self.depth)}],
+            "bids": bids,
+        }
+
+    def get_order_book(self, token_id):
+        self.calls.append(f"book:{token_id}")
+        if token_id == TOK_DN:
+            return self._book(None) | {
+                "asks": [{"price": str(self.light_ask),
+                          "size": str(self.depth)}],
+            }
+        cancelled = any(c.startswith("cancel:") for c in self.calls)
+        return self._book(
+            self.execution_bid if cancelled else self.decision_bid)
+
+    def get_order(self, order_id):
+        return {"orderID": order_id, "size_matched": 0.0}
+
+    def cancel_order(self, payload):
+        self.calls.append(f"cancel:{getattr(payload, 'orderID', payload)}")
+        return {"canceled": True}
+
+    def create_and_post_market_order(self, order_args, options=None,
+                                     order_type="FOK", defer_exec=False):
+        verb = "sell" if order_args.side == "SELL" else "buy"
+        self.calls.append(f"{verb}:{order_args.token_id}:{order_args.amount}")
+        return {"success": True, "orderID": f"venue-{verb}"}
+
+
+def _ladder525_route(registry, venue, last_ms, now_s):
+    return lp._route_pair(
+        venue, registry, lp.load_pair(registry, LADDER525_PAIR),
+        MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
+        cfg=_ladder525_cfg(), last_ms=last_ms, now_s=now_s)
+
+
+def test_ladder_adverse_drift_exit_records_trigger_bid(
+    registry: OrderRegistry,
+):
+    """Adverse drift books the bid that tripped the check, not the fresh one."""
+    _ladder525_pair(registry, LADDER525_NOW)
+    venue = DecisionThenExecutionBook(decision_bid=0.50, execution_bid=0.49)
+    routed = _ladder525_route(
+        registry, venue, LADDER525_NOW, LADDER525_NOW / 1000.0 + 10.0)
+
+    assert routed["action"] == "exited"
+    assert routed["reason"] == "adverse_drift"
+    closes = [c for c in registry.get_all_closes()
+              if c.get("method") == "ladder_exit"]
+    assert len(closes) == 1
+    assert closes[0]["trigger_bid"] == pytest.approx(0.50)
+    assert closes[0]["fresh_bid"] == pytest.approx(0.49)
+    assert closes[0]["trigger_bid"] != pytest.approx(closes[0]["fresh_bid"])
+
+
+def test_ladder_adverse_drift_only_store_has_zero_assumed_references(
+    registry: OrderRegistry,
+):
+    """An adverse-only store measures every reference — assumed count is 0."""
+    _ladder525_pair(registry, LADDER525_NOW)
+    venue = DecisionThenExecutionBook(decision_bid=0.50, execution_bid=0.49)
+    _ladder525_route(
+        registry, venue, LADDER525_NOW, LADDER525_NOW / 1000.0 + 10.0)
+
+    friction = rescue_friction_summary(registry.get_all_closes())
+    assert friction["recorded_reference_count"] == 1
+    assert friction["assumed_reference_count"] == 0
