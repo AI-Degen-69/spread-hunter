@@ -191,6 +191,12 @@ def position_returns(closes: Sequence[dict]) -> dict[str, Any]:
         out[f"stdev_pnl_{name}"] = None if stdev is None else round(stdev, 6)
         out[f"sem_pnl_{name}"] = (None if stdev is None
                                   else round(stdev / math.sqrt(len(sample)), 6))
+        # The multiplier for THIS sample, shipped beside its standard error, so the renderer
+        # multiplies a number the server decided. The two samples can differ in length -- a
+        # close with no cost basis carries a dollar figure and no percent -- so each names its
+        # own. None on a sample of one, which has no spread to scale (#535).
+        out[f"ci_critical_{name}"] = (None if stdev is None
+                                      else ci_critical_values(len(sample)))
     return out
 
 
@@ -248,6 +254,10 @@ def pair_costs(closes: Sequence[dict]) -> dict[str, Any]:
     return {
         "bins": bins,
         "samples_count": len(costs),
+        # The chart's own standard error is `stdev / sqrt(samples_count)`, computed in the
+        # renderer; the multiplier that scales it is decided here and shipped, and is None on
+        # exactly the samples that have no `stdev` for it to scale (#535).
+        "ci_critical": ci_critical_values(len(costs)) if len(costs) > 1 else None,
         "mean": round(statistics.fmean(costs), 6),
         "median": round(statistics.median(costs), 6),
         "stdev": round(statistics.stdev(costs), 6) if len(costs) > 1 else None,
@@ -1028,6 +1038,20 @@ CI_T_BY_DF: dict[int, dict[int, float]] = {
 }
 
 
+def ci_z(level: int) -> Optional[float]:
+    """The plain two-sided normal multiplier at `level`, or `None` when there is no such row.
+
+    THE table, for every caller that has a normal approximation to draw. A caller writes the
+    number down from here rather than as a literal, and `None` for an unknown level is not the
+    same answer as `1.0`: a level nobody tabulated has no multiplier, and returning one would
+    put a confident band around a figure no table supports.
+
+    A caller whose sample is small enough for the tail to matter wants
+    `ci_critical_value`, which swaps in the t row for the same level (#535).
+    """
+    return dict(CI_Z_BY_LEVEL).get(level)
+
+
 def ci_critical_value(level: int, n: int, z: float) -> float:
     """The multiplier for a two-sided interval on a sample of `n`.
 
@@ -1036,6 +1060,20 @@ def ci_critical_value(level: int, n: int, z: float) -> float:
     `scipy.stats.t.ppf` would be used for here.
     """
     return CI_T_BY_DF.get(n - 1, {}).get(level, z)
+
+
+def ci_critical_values(n: int) -> dict[str, float]:
+    """Every two-sided multiplier for a sample of `n`, keyed by level as a string.
+
+    Shipped as payload DATA so a renderer multiplies its own standard error by a number the
+    server decided. The renderer then holds no table, no threshold and no opinion about the
+    distribution, which is the difference between one definition and two that can quietly draw
+    different intervals over the same closes (#535).
+
+    Callers ship this only for a sample that has a standard deviation to scale; a distribution
+    with nothing to multiply stores `None` instead, so `None` never becomes a critical value.
+    """
+    return {str(level): ci_critical_value(level, n, z) for level, z in CI_Z_BY_LEVEL}
 
 
 def mean_pnl_ci(pnls: Sequence[float]) -> dict[str, Any]:
@@ -1567,6 +1605,9 @@ def probability_bell(fills: Sequence[dict]) -> dict[str, Any]:
     return {
         "bins": bins,
         "samples_count": len(prices),
+        # Multiplier for the mean of THESE samples, shipped beside them, and None exactly
+        # when there is no spread to scale (#535).
+        "ci_critical": ci_critical_values(len(prices)) if len(prices) > 1 else None,
         "sweet_spot_pct": round(100.0 * in_band / len(prices), 2),
         "mean": round(mean, 6),
         "stdev": None if stdev is None else round(stdev, 6),

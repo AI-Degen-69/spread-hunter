@@ -85,7 +85,7 @@ let lastStatusAtMs = null;
  * envelope; anything lower (or missing) means this page is newer than the
  * process answering it. Keep EXPECTED_PAYLOAD_VERSION matched with
  * KPI_PAYLOAD_VERSION in core_brain/kpi.py. */
-const EXPECTED_PAYLOAD_VERSION = 255;
+const EXPECTED_PAYLOAD_VERSION = 256;
 let payloadVersionWarned = false;
 
 // True when the payload is absent, malformed, or predates this page.
@@ -3060,6 +3060,18 @@ function initSensitivitySimulator() {
 let currentDistMetric = 'pnl_pct';
 let currentCiLevel = 90;
 
+/* The two-sided critical value for a CI level, read out of the payload (#535).
+ * The server owns the distribution: it picks the row from one table, for the
+ * sample the figure was actually drawn from, and ships it beside the standard
+ * error. A level the payload carries no multiplier for returns null -- a level
+ * nobody tabulated has no multiplier, and writing one down here is how this
+ * chart came to disagree with the card next to it over the same closes. */
+function ciMultiplier(levels, level) {
+  if (!levels || typeof levels !== 'object') return null;
+  const v = levels[String(level)];
+  return (v != null && Number.isFinite(Number(v))) ? Number(v) : null;
+}
+
 function initDistControls() {
   const selectParam = document.getElementById('select-dist-param');
   const ciButtons = document.querySelectorAll('#dist-ci-toggle-group button');
@@ -3139,6 +3151,9 @@ function renderPositionDistributionChart(stats) {
   let sem = 0;
   let ciLower = 0;
   let ciUpper = 0;
+  // The multiplier for this metric at this CI level, read out of the payload
+  // just below. NULL means the payload shipped none and no interval is drawn.
+  let ciCritical = null;
   let delta = 1.0;
   let unit = '';
   let formatVal = (v) => v.toFixed(2);
@@ -3151,11 +3166,7 @@ function renderPositionDistributionChart(stats) {
     // single trade rendered as "90% CI [+5.10%, +5.43%] · EDGE CONFIRMED".
     stdev = pr.stdev_pnl_pct != null ? pr.stdev_pnl_pct : null;
     sem = pr.sem_pnl_pct != null ? pr.sem_pnl_pct : null;
-    if (sem != null) {
-      const z = currentCiLevel === 95 ? 1.96 : 1.645;
-      ciLower = mean - z * sem;
-      ciUpper = mean + z * sem;
-    }
+    ciCritical = ciMultiplier(pr.ci_critical_pct, currentCiLevel);
     const minVal = Math.min(...rawValues);
     const maxVal = Math.max(...rawValues);
     // `stdev` is null when the sample is too small to have one. Feeding that
@@ -3171,11 +3182,7 @@ function renderPositionDistributionChart(stats) {
     mean = pr.mean_pnl_usd != null ? pr.mean_pnl_usd : (rawValues.reduce((a,b)=>a+b,0)/rawValues.length);
     stdev = pr.stdev_pnl_usd != null ? pr.stdev_pnl_usd : null;
     sem = pr.sem_pnl_usd != null ? pr.sem_pnl_usd : null;
-    if (sem != null) {
-      const z = currentCiLevel === 95 ? 1.96 : 1.645;
-      ciLower = mean - z * sem;
-      ciUpper = mean + z * sem;
-    }
+    ciCritical = ciMultiplier(pr.ci_critical_usd, currentCiLevel);
     const minVal = Math.min(...rawValues);
     const maxVal = Math.max(...rawValues);
     const spreadTerm = stdev != null ? 3.0 * stdev : 0;
@@ -3190,9 +3197,7 @@ function renderPositionDistributionChart(stats) {
     sem = (stdev != null && pc.samples_count)
       ? stdev / Math.sqrt(pc.samples_count)
       : null;
-    const z = currentCiLevel === 95 ? 1.96 : 1.645;
-    ciLower = mean - z * sem;
-    ciUpper = mean + z * sem;
+    ciCritical = ciMultiplier(pc.ci_critical, currentCiLevel);
     delta = 0.035;
     unit = '$';
     formatVal = (v) => `$${v.toFixed(3)}`;
@@ -3207,17 +3212,26 @@ function renderPositionDistributionChart(stats) {
     stdev = pb.stdev != null ? pb.stdev * 100 : null;
     sem = (stdev != null && pb.samples_count)
       ? stdev / Math.sqrt(pb.samples_count) : null;
-    if (sem != null && mean != null) {
-      const z = currentCiLevel === 95 ? 1.96 : 1.645;
-      ciLower = mean - z * sem;
-      ciUpper = mean + z * sem;
-    }
+    ciCritical = ciMultiplier(pb.ci_critical, currentCiLevel);
     rawValues = (pb.bins || []).flatMap(
       b => Array(b.empirical_count || 0).fill(b.bin * 100));
     delta = 45.0;
     unit = '%';
     formatVal = (v) => `${v.toFixed(1)}%`;
     rawValues = positions.map((_, i) => ((i * 17 + 23) % 70 + 15));
+  }
+
+  // ONE SOURCE OF DISTRIBUTION FOR EVERY ARM (#535).
+  // The multiplier is not this file's to choose: the server picks it from the
+  // one critical-value table, for the sample this figure was drawn from, and
+  // ships it beside the standard error. A metric whose payload carries no
+  // multiplier draws no band -- an undefined level, a sample too small to have
+  // a spread, or a backend older than this page. Inventing one here is exactly
+  // how this chart came to publish a band the payload's own gate contradicted.
+  const bandMeasured = mean != null && isFinite(mean) && sem != null && ciCritical != null;
+  if (bandMeasured) {
+    ciLower = mean - ciCritical * sem;
+    ciUpper = mean + ciCritical * sem;
   }
 
   // Anchor mean symmetrically to the dead center: [mean - delta, mean + delta]
@@ -3247,13 +3261,14 @@ function renderPositionDistributionChart(stats) {
   if (badge) {
     const isPos = ciLower > 0;
     badge.className = `badge-tag ${isPos ? 'live' : 'warn'}`;
-    if (sem == null) {
-      // One observation, or a metric the payload could not measure a spread
-      // for. There is no interval to state and no edge to confirm.
+    if (!bandMeasured) {
+      // One observation, or no multiplier shipped for this sample and level.
+      // Either way there is no interval to state and no edge to confirm.
       badge.className = 'badge-tag stopped';
       badge.textContent = `${currentCiLevel}% CI: unmeasured · `
         + `${posCount} observation${posCount === 1 ? '' : 's'} · `
-        + `NEEDS 2+ TO ESTIMATE SPREAD`;
+        + (sem == null ? 'NEEDS 2+ TO ESTIMATE SPREAD'
+                       : 'NO MULTIPLIER FOR THIS SAMPLE');
     } else {
       badge.textContent = `${currentCiLevel}% CI: [${formatVal(ciLower)}, ${formatVal(ciUpper)}] · ${isPos ? `LOWER BOUND POSITIVE (${formatVal(ciLower)} > 0) · EDGE CONFIRMED` : 'ZERO CROSSING'}`;
     }
@@ -3304,7 +3319,7 @@ function renderPositionDistributionChart(stats) {
     const x = padL + i * (plotW / binCount) + ((plotW / binCount) - barW) / 2;
     const barH = ((b.count || 0) / maxBinCount) * plotH * 0.75;
     const y = padT + plotH - barH;
-    const inCI = b.mid >= ciLower && b.mid <= ciUpper;
+    const inCI = bandMeasured && b.mid >= ciLower && b.mid <= ciUpper;
     const fill = inCI ? 'rgba(52, 211, 153, 0.45)' : 'rgba(56, 189, 248, 0.3)';
     const stroke = inCI ? '#34d399' : '#38bdf8';
     barsSvg += `<rect x="${x}" y="${y}" width="${barW}" height="${barH}" rx="2" fill="${fill}" stroke="${stroke}" stroke-width="1"><title>${formatVal(b.min)} to ${formatVal(b.max)}: ${b.count} positions</title></rect>`;
@@ -3383,8 +3398,10 @@ function renderPositionDistributionChart(stats) {
       <line x1="${padL}" y1="${padT + plotH * 0.50}" x2="${w - padR}" y2="${padT + plotH * 0.50}" stroke="rgba(255,255,255,0.05)" stroke-dasharray="2,2"/>
       <line x1="${padL}" y1="${padT + plotH * 0.75}" x2="${w - padR}" y2="${padT + plotH * 0.75}" stroke="rgba(255,255,255,0.05)" stroke-dasharray="2,2"/>
 
-      <!-- Shaded Confidence Interval Envelope (CI_lower to CI_upper) -->
-      <rect x="${ciX1}" y="${padT}" width="${ciWidth}" height="${plotH}" fill="url(#ciZoneGrad)" stroke="rgba(52, 211, 153, 0.5)" stroke-dasharray="3,2" stroke-width="1.2" rx="3"/>
+      <!-- Shaded Confidence Interval Envelope (CI_lower to CI_upper). Only drawn
+           when the payload shipped a multiplier to place it with (#535); a 2px
+           band at an unmeasured position is geometry nobody measured. -->
+      ${bandMeasured ? `<rect x="${ciX1}" y="${padT}" width="${ciWidth}" height="${plotH}" fill="url(#ciZoneGrad)" stroke="rgba(52, 211, 153, 0.5)" stroke-dasharray="3,2" stroke-width="1.2" rx="3"/>` : ''}
 
       <!-- Histogram Frequency Bars -->
       ${barsSvg}
@@ -3448,9 +3465,9 @@ function renderPositionDistributionChart(stats) {
       <div class="chart-footer-item"><span>Sample Mean (μ):</span> <b style="color:#38bdf8">${formatVal(mean)}</b></div>
       <div class="chart-footer-item"><span>Std Dev (σ):</span> <b>${stdev == null ? 'unmeasured' : '±' + formatVal(stdev).replace('+', '')}</b></div>
       <div class="chart-footer-item"><span>Standard Error (SE):</span> <b>${sem == null ? 'unmeasured' : formatVal(sem).replace('+', '')}</b></div>
-      <div class="chart-footer-item"><span>${currentCiLevel}% Confidence Interval:</span> <b style="color:${sem == null ? 'var(--text-muted)' : '#34d399'}">${sem == null ? 'unmeasured' : `[${formatVal(ciLower)}, ${formatVal(ciUpper)}]`}</b></div>
+      <div class="chart-footer-item"><span>${currentCiLevel}% Confidence Interval:</span> <b style="color:${bandMeasured ? '#34d399' : 'var(--text-muted)'}">${bandMeasured ? `[${formatVal(ciLower)}, ${formatVal(ciUpper)}]` : 'unmeasured'}</b></div>
       <div class="chart-footer-item"><span>Distribution Sample Universe:</span> <b>N = ${posCount} observations</b></div>
-      <div class="chart-footer-item"><span>Statistical Edge:</span> <b style="color:${sem == null ? 'var(--text-muted)' : 'var(--signal)'}">${sem == null ? 'ACCUMULATING (needs 2+ observations)' : 'H₁: μ &gt; 0 CONFIRMED'}</b></div>
+      <div class="chart-footer-item"><span>Statistical Edge:</span> <b style="color:${bandMeasured && ciLower > 0 ? 'var(--signal)' : 'var(--text-muted)'}">${!bandMeasured ? 'ACCUMULATING (needs 2+ observations)' : (ciLower > 0 ? 'H₁: μ &gt; 0 CONFIRMED' : 'ZERO CROSSING (no confirmed edge)')}</b></div>
     `;
   }
 }
@@ -4407,10 +4424,13 @@ function renderSampleSufficiency(ta) {
   const n = (suff.current_n != null && Number.isFinite(Number(suff.current_n)))
     ? Number(suff.current_n)
     : (ta?.n_closes != null ? Number(ta.n_closes) : 0);
+  // Levels only, no multipliers: nothing below reads `z`, and a renderer that
+  // writes a critical value down is a second source for the same number (#535).
+  // With no `levels` in the payload every cell reads 'unmeasured'.
   const defaultLevels = [
-    { confidence_pct: 95, z: 1.95996, required_n: null, remaining_n: null, progress_pct: null },
-    { confidence_pct: 98, z: 2.32635, required_n: null, remaining_n: null, progress_pct: null },
-    { confidence_pct: 99, z: 2.57583, required_n: null, remaining_n: null, progress_pct: null },
+    { confidence_pct: 95, required_n: null, remaining_n: null, progress_pct: null },
+    { confidence_pct: 98, required_n: null, remaining_n: null, progress_pct: null },
+    { confidence_pct: 99, required_n: null, remaining_n: null, progress_pct: null },
   ];
   const levels = (Array.isArray(suff.levels) && suff.levels.length) ? suff.levels : defaultLevels;
 
@@ -9103,6 +9123,11 @@ if (typeof module !== 'undefined' && module.exports) {
     // sub-table that the real click path renders.
     get expandedMarkets() { return expandedMarkets; },
     set isStopping(v) { isStopping = v; },
+    // The distribution chart's two controls. A harness renders the arm it means
+    // to test instead of only the default one, which is how a per-arm change can
+    // be pinned per arm.
+    set distMetric(v) { currentDistMetric = v; },
+    set distCiLevel(v) { currentCiLevel = v; },
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState, resolveHeldRead,
     engineReasonText, engineProvenanceText, renderScanStatePill,
     get setBackendContact() { return setBackendContact; },
