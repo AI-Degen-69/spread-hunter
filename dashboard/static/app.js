@@ -1534,7 +1534,9 @@ function demoSwitcherRow() {
     ? 'Return this page to the live store (the demo registry is bogus data).'
     : 'Load the demo registry: bogus orders, trades and metrics to eyeball '
       + 'every table and card. Read-only -- START stays disabled while it is loaded.';
+  const demoState = readingDemo ? 'LOADED' : 'AVAILABLE';
   return `<div class="db-run-row db-demo-row">
+      <span class="pill state-stopped"><span class="pill-label">DEMO</span> <span class="pill-value">${demoState}</span></span>
       <span class="db-run-name">Demo registry (bogus data)</span>
       <button class="db-run-switch db-demo-load" title="${esc(title)}">${label}</button>
     </div>`;
@@ -1611,9 +1613,9 @@ async function renderRunSwitcher() {
     const btn = isThis
       ? `<span class="db-run-current">THIS PAGE</span>`
       : `<button class="db-run-switch" data-db="${esc(r.db_path)}">SWITCH</button>`;
+    const runState = r.running === true ? 'running' : 'stopped';
     return `<div class="db-run-row${isThis ? ' current' : ''}">
-        <span class="db-run-name mono">${esc(label)}</span>${portLink}
-        <span class="db-run-state state-${r.running === true ? 'running' : 'stopped'}">${state}${age ? ' · ' + age : ''}</span>
+        <span class="pill state-${runState}"><span class="pill-label">${esc(label)}</span> <span class="pill-value">${state}</span>${age ? ` <span class="pill-detail">${age}</span>` : ''}</span>${portLink}
         ${btn}
       </div>`;
   });
@@ -1786,7 +1788,7 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       pid = sr?.pid;
       if (!isShadow) {
         state = 'stopped';
-        meta = 'shadow only (live uses venue engine)';
+        meta = 'stopped';
       } else if (running) {
         state = 'running';
         const elapsed = sr?.elapsed_sec ? fmtStopwatch(sr.elapsed_sec) : '';
@@ -1804,7 +1806,7 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       state = running ? 'running' : 'stopped';
       const uptime = typeof svc?.uptime_sec === 'number' ? `${Math.round(svc.uptime_sec)}s up` : '';
       if (def.liveOnly && isShadow) {
-        meta = 'live only (shadow uses in-process client)';
+        meta = 'stopped';
       } else if (running) {
         meta = uptime ? (pid ? `pid ${pid} · ${uptime}` : uptime) : (pid ? `pid ${pid}` : 'running');
       } else {
@@ -1813,8 +1815,14 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
     }
     const dot = `<span class="pulse-dot ${state === 'running' ? 'active' : ''}"></span>`;
     const label = state.toUpperCase();
-    return `<div class="services-dropdown-row">
-      <span class="pill state-${state}"${pillId}>${dot}<span class="pill-label">${esc(label)}</span></span>
+    const pillTag = { guardrail: 'WATCHDOG', filter: 'SCAN', query: 'ENGINE', decide: 'DECIDE', shadow: 'SHADOW' }[def.key] || def.key.toUpperCase();
+    // Live-only/shadow-only context rides on the row tooltip, not the visible
+    // meta slot: full sentences wrap and squeeze the name column (#586).
+    let rowTitle = def.name;
+    if (def.liveOnly && isShadow) rowTitle += ' — live only (shadow uses in-process client)';
+    else if (def.key === 'shadow' && !isShadow) rowTitle += ' — shadow only (live uses venue engine)';
+    return `<div class="services-dropdown-row" title="${esc(rowTitle)}">
+      <span class="pill state-${state}"${pillId}>${dot} <span class="pill-label">${esc(pillTag)}</span> <span class="pill-value">${esc(label)}</span></span>
       <span class="services-dropdown-name" title="${esc(def.name)}">${esc(def.name)}</span>
       <span class="services-dropdown-meta">${esc(meta)}</span>
     </div>`;

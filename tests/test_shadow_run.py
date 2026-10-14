@@ -1163,7 +1163,8 @@ class TestBoundaryGuard:
         # close_methods.py is the canonical taxonomy leaf (#558); it NAMES
         # core_brain.shadow_exec as a writer (a string in the METHODS table),
         # not an import, so the text heuristic below false-positives on it.
-        # It is stdlib-only, so it cannot import the shadow model.
+        # It is stdlib-only, so it cannot import the shadow model. (#586 unblocks
+        # CI on the pre-#573 base that still carries the unpatched guard.)
         taxonomy_leaf = {"close_methods.py"}
         live_modules = [
             p

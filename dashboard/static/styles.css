@@ -440,10 +440,10 @@ header {
 }
 .pill.mode-live { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
 .pill.mode-live.state-running { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
-.pill.mode-live.state-stopped { background: rgba(52, 211, 153, 0.08); color: #10b981; border: 1px solid rgba(52, 211, 153, 0.25); }
+.pill.mode-live.state-stopped { background: rgba(52, 211, 153, 0.08); color: var(--text-secondary); border: 1px solid rgba(52, 211, 153, 0.25); }
 .pill.mode-shadow { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
 .pill.mode-shadow.state-running { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
-.pill.mode-shadow.state-stopped { background: rgba(251, 191, 36, 0.08); color: #f59e0b; border: 1px solid rgba(251, 191, 36, 0.25); }
+.pill.mode-shadow.state-stopped { background: rgba(251, 191, 36, 0.08); color: var(--text-secondary); border: 1px solid rgba(251, 191, 36, 0.25); }
 /* The store this page reads has no run writing it while another one is live.
    Red, not amber: nothing on the page is updating, and the operator has to be
    told that before they read the rest of the dashboard. */
@@ -477,7 +477,8 @@ header {
   letter-spacing: 0.08em;
 }
 .db-run-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 150px 1fr auto;
   align-items: center;
   gap: 8px;
   padding: 5px 6px;
@@ -485,7 +486,8 @@ header {
 }
 .db-run-row:hover { background: rgba(255, 255, 255, 0.04); }
 .db-run-row.current { background: rgba(255, 255, 255, 0.06); }
-.db-run-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-run-row .pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-run-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 
 /* The SERVICES pill dropdown (terminal-redesign pattern): the summary pill in
    the top bar doubles as the trigger; a child of <header>, NOT of .top-meta,
@@ -502,7 +504,7 @@ header {
 .services-caret { font-size: 9px; opacity: 0.7; transition: transform 0.15s; }
 .services-pill-trigger[aria-expanded="true"] .services-caret { transform: rotate(180deg); }
 .services-dropdown {
-  width: 340px;
+  width: 380px;
   font-family: 'JetBrains Mono', monospace;
 }
 .services-dropdown-head {
@@ -517,15 +519,17 @@ header {
   margin-bottom: 6px;
 }
 .services-dropdown-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 150px 1fr 140px;
   align-items: center;
   gap: 8px;
   padding: 5px 6px;
   border-radius: 4px;
 }
 .services-dropdown-row:hover { background: rgba(255, 255, 255, 0.04); }
-.services-dropdown-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
-.services-dropdown-meta { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.services-dropdown-row .pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.services-dropdown-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.services-dropdown-meta { max-width: 140px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .services-dropdown-live { color: var(--signal); font-weight: 700; }
 .services-dropdown-foot {
   padding: 6px 6px 2px;
