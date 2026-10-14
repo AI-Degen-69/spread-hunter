@@ -1209,7 +1209,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
         "stop_loss_trigger_usd_cents": 3.0,
-        "description": "Wider safety buffer in volatile swings (2¢–5¢) with queue hold; stop $0.030",
+        "description": "Wider safety buffer in volatile swings (2¢–5¢) with queue hold; stop 3.0c",
     },
     "balanced": {
         "dynamic_offset_enabled": True,
@@ -1219,7 +1219,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
         "stop_loss_trigger_usd_cents": 5.0,
-        "description": "Proportional volatility tracking (2¢–4¢) with queue hold; stop $0.050",
+        "description": "Proportional volatility tracking (2¢–4¢) with queue hold; stop 5.0c",
     },
     "aggressive": {
         "dynamic_offset_enabled": True,
@@ -1229,7 +1229,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
         "stop_loss_trigger_usd_cents": 6.5,
-        "description": "Tight queue priority capturing fast fills (2¢–3¢) with queue hold; stop $0.065",
+        "description": "Tight queue priority capturing fast fills (2¢–3¢) with queue hold; stop 6.5c",
     },
     "prudent": {
         "dynamic_offset_enabled": True,
@@ -1239,7 +1239,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
         "stop_loss_trigger_usd_cents": 3.8,
-        "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x) with queue hold; stop $0.038",
+        "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x) with queue hold; stop 3.8c",
     },
     "hybrid": {
         "dynamic_offset_enabled": False,
@@ -1270,7 +1270,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
         "stop_loss_trigger_usd_cents": 4.5,
-        "description": "Loose baseline: raw dynamic offset (0.5x range), 1c floor, 20c ceiling, no widen snap-back, 15c score window; stop $0.045",
+        "description": "Loose baseline: raw dynamic offset (0.5x range), 1c floor, 20c ceiling, no widen snap-back, 15c score window; stop 4.5c",
     },
 }
 
@@ -1640,6 +1640,15 @@ def load(*, for_display: bool = False) -> MakerConfig:
         if not math.isfinite(val) or val < 0:
             raise ValueError(f"HUNTER_STOP_LOSS_TRIGGER_USD_CENTS must be finite and non-negative, got: {val}")
         kw["stop_loss_trigger_usd_cents"] = val
+    # Deprecation: the pre-#573 env names were renamed AND rescaled (pct is now
+    # percent, usd is now cents). Warn if a stale old var is set so the operator
+    # is not silently running on defaults.
+    for _old_env in ("HUNTER_SINGLE_BUY_MAX_LOSS_PCT", "HUNTER_SINGLE_BUY_MAX_LOSS_USD"):
+        if os.environ.get(_old_env):
+            logging.getLogger(__name__).warning(
+                "%s is deprecated and ignored (#573 renamed it); set "
+                "HUNTER_STOP_LOSS_TRIGGER_PCT (percent) or "
+                "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS (cents) instead.", _old_env)
     aorl = os.environ.get("HUNTER_AGED_OUT_RESCUE_LEAD_SEC")
     if aorl and aorl.strip():
         val = float(aorl)
