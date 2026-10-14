@@ -55,6 +55,10 @@ htmlcov/
 /runtime/*.py
 /runtime/.current_run_id
 /data/*.db*
+# Exception: the demo registry is a synthetic fixture (bogus run, no live
+# data), committed so anyone can serve it for dashboard review without
+# running the builder first.
+!/data/demo_orders.db
 /data/archive*/
 /data/shadow_stat_*/
 /data/shadow_stat_*.db*
