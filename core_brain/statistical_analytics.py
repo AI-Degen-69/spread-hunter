@@ -1639,22 +1639,41 @@ def pnl_skewness(return_pcts: Sequence[float]) -> dict[str, Any]:
     would print "roughly symmetric" over a sample that cannot say so. A flat sample has no spread
     to divide by and is `None` for the same reason. Values that are missing, non-numeric, `NaN` or
     infinite are dropped rather than read as a break-even close.
+
+    The moment is measured in units of the sample's own spread, so no intermediate can overflow: a
+    magnitude whose raw squares and cubes do not fit a float still has a shape, and that shape is
+    what ships. A reading that cannot be produced at all is `None` with the `unmeasured` band --
+    never `NaN` and never `Infinity`, both of which the payload's strict serialization rejects.
     """
     sample = [value for value in (_finite(value) for value in return_pcts or [])
               if value is not None]
     n = len(sample)
-    if n < 3:
+
+    def unmeasured() -> dict[str, Any]:
         return {"pnl_skewness": None, "band": "unmeasured",
                 "meaning": SKEWNESS_BAND_WORDS["unmeasured"], "n": n}
+
+    if n < 3:
+        return unmeasured()
 
     mean = statistics.fmean(sample)
-    variance = sum((value - mean) ** 2 for value in sample) / n
-    if variance == 0:
-        return {"pnl_skewness": None, "band": "unmeasured",
-                "meaning": SKEWNESS_BAND_WORDS["unmeasured"], "n": n}
+    if not math.isfinite(mean):
+        return unmeasured()
 
-    moment = sum((value - mean) ** 3 for value in sample) / n
-    score = round(moment / variance ** 1.5, 6)
+    # The spread is the unit everything below is divided by, which keeps every deviation inside
+    # [-1, 1] and the third moment well inside a float.
+    spread = max(abs(value - mean) for value in sample)
+    if not math.isfinite(spread) or spread == 0:
+        return unmeasured()
+
+    deviations = [(value - mean) / spread for value in sample]
+    second = sum(value * value for value in deviations) / n
+    if second == 0:
+        return unmeasured()
+
+    score = _finite(round(sum(value ** 3 for value in deviations) / n / second ** 1.5, 6))
+    if score is None:
+        return unmeasured()
     band = skewness_band(score)
     return {"pnl_skewness": score, "band": band,
             "meaning": SKEWNESS_BAND_WORDS[band], "n": n}
@@ -1690,6 +1709,12 @@ def sortino_ratio(return_pcts: Sequence[float],
     annualized: trades are not daily observations, and annualizing a five-close sample would quote
     a rate the sample never earned. `None` for fewer than two usable returns, a sample with no
     spread, no negative excess return (nothing was paid for), or a non-finite `risk_free`.
+
+    The downside deviation is computed in units of the widest loss, so no square overflows. That is
+    not only a precision matter: a squared loss past the float range used to make the denominator
+    `inf`, and a finite numerator over it returned `0.0` -- a measured-looking "no return at all"
+    where the real reading was a small positive one. An intermediate that cannot be represented is
+    `None`, never a figure.
     """
     rate = _finite(risk_free)
     if rate is None:
@@ -1704,10 +1729,15 @@ def sortino_ratio(return_pcts: Sequence[float],
     if not downside:
         return None
 
-    deviation = math.sqrt(sum(value * value for value in downside) / len(downside))
-    if deviation == 0:
+    scale = max(abs(value) for value in downside)
+    deviation = scale * math.sqrt(sum((value / scale) ** 2 for value in downside) / len(downside))
+    if not math.isfinite(deviation) or deviation == 0:
         return None
-    return round(statistics.fmean(excess) / deviation, 6)
+
+    mean_excess = statistics.fmean(excess)
+    if not math.isfinite(mean_excess):
+        return None
+    return _finite(round(mean_excess / deviation, 6))
 
 
 def sortino(return_pcts: Sequence[float],
@@ -1762,6 +1792,10 @@ def drawdown_episodes(points: Sequence[Any],
     curve points and in seconds. An episode still open when the curve ends is returned with
     `recovered: False` and no length: a drawdown nobody has come back from yet has no duration, and
     reporting the length so far would put a still-running loss into the medians as a finished one.
+    A depth or a duration no float can hold is `None` rather than an infinity the payload's strict
+    serialization would reject, and a recovery timestamped before its own peak carries no seconds:
+    the curve is read in the order given and is never sorted, so that is a real shape, but a
+    negative wait is not a duration.
     """
     usable, _ = _equity_points(points)
     return _episodes_from(usable, starting_value)
@@ -1777,16 +1811,19 @@ def _episodes_from(usable: Sequence[tuple[float, Optional[float]]],
     episodes: list[dict[str, Any]] = []
 
     def record(recovered: bool, index: int, ts: Optional[float]) -> None:
-        depth = float(peak) - float(trough)
+        depth = _finite(float(peak) - float(trough))
+        elapsed = (_finite(float(ts) - float(peak_ts))
+                   if (recovered and ts is not None and peak_ts is not None
+                       and float(ts) >= float(peak_ts)) else None)
         episodes.append({
             "peak": float(peak),
             "trough": float(trough),
             "depth_usd": depth,
-            "depth_pct": (100.0 * depth / float(peak)) if float(peak) > 0 else None,
+            "depth_pct": (_finite(100.0 * depth / float(peak))
+                          if depth is not None and float(peak) > 0 else None),
             "recovered": recovered,
             "points": (index - int(peak_index)) if recovered else None,
-            "seconds": ((float(ts) - float(peak_ts))
-                        if recovered and ts is not None and peak_ts is not None else None),
+            "seconds": elapsed,
         })
 
     for index, (value, ts) in enumerate(usable):
@@ -1815,14 +1852,18 @@ def drawdown_recovery(points: Sequence[Any],
     drawdowns only, and are read off the module's `_percentile` so `median` IS the median.
 
     `deepest_usd` is `0.0` on a curve that was read and never dropped -- a measurement -- and `None`
-    on a curve with no usable point, which measured nothing. `drawdown_recovery_sec` is omitted
-    entirely when no regained episode carried both endpoint timestamps, because a zero there would
-    read as an instant recovery.
+    on a curve with no usable point, which measured nothing, and on one whose only drawdown ran
+    wider than a float can represent, which measured nothing this reader can name. The depth comes
+    from the deepest episode whose depth is representable; the lengths and the waits still count
+    every regained episode. `drawdown_recovery_sec` is omitted entirely when no regained episode
+    carried both endpoint timestamps in order, because a zero there would read as an instant
+    recovery.
     """
     usable, skipped = _equity_points(points)
     episodes = _episodes_from(usable, starting_value)
     regained = [episode for episode in episodes if episode["recovered"]]
-    deepest = max(episodes, key=lambda episode: episode["depth_usd"]) if episodes else None
+    measured = [episode for episode in episodes if episode["depth_usd"] is not None]
+    deepest = max(measured, key=lambda episode: episode["depth_usd"]) if measured else None
 
     def shape(value: Optional[float]) -> Optional[float]:
         return None if value is None else round(float(value), 6)
@@ -1830,7 +1871,9 @@ def drawdown_recovery(points: Sequence[Any],
     def deepest_figure(key: str) -> Optional[float]:
         if not usable:
             return None
-        return 0.0 if deepest is None else shape(deepest[key])
+        if deepest is None:
+            return 0.0 if not episodes else None
+        return shape(deepest[key])
 
     out: dict[str, Any] = {
         "units": "curve_points_and_seconds",

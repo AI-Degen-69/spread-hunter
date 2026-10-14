@@ -408,3 +408,71 @@ def test_this_file_holds_no_second_copy_of_the_reused_statistics():
         assert definition not in source
     assert kpi._mean_pnl_ci is sa.mean_pnl_ci
     assert sa.system_quality_number.__module__ == "core_brain.statistical_analytics"
+
+
+# ---------------------------------------------------------------------------
+# A figure that cannot be produced is `None` -- never `inf`, never `nan`, never `0`
+# ---------------------------------------------------------------------------
+
+# The payload ships under `allow_nan=False`, so one unrepresentable intermediate does more than
+# print a wrong band: it fails the whole KPI response. The three cases below are what a store
+# holding an extreme close or a mark at the edge of the float range can actually produce.
+
+def test_a_sample_that_overflows_the_raw_third_moment_still_reads_its_shape():
+    # Arrange -- two wins and a loss of a magnitude whose raw third moment overflows a float. Same
+    # shape as [1, 1, -1], which reads -0.707107.
+    sample = [1e200, 1e200, -1e200]
+
+    # Act
+    reading = pnl_skewness(sample)
+
+    # Assert -- the standardized moment is scale-free, so the shape is still measured, and the
+    # section serializes under the rule the payload is written with.
+    assert reading["pnl_skewness"] == pytest.approx(-0.707107, abs=1e-6)
+    assert reading["band"] == "bad"
+    assert reading["n"] == 3
+    json.dumps(capital_risk(sample), allow_nan=False)
+
+
+def test_a_downside_whose_squares_overflow_is_not_read_as_a_measured_zero():
+    # Arrange -- the same magnitude. Squaring each loss overflowed to `inf`, and a finite numerator
+    # over an infinite denominator is `0.0`: a measured-looking reading of "no return at all".
+    sample = [1e200, 1e200, -1e200]
+
+    # Act
+    ratio = sortino_ratio(sample)
+
+    # Assert -- the true reading is mean excess / downside deviation, one third.
+    assert ratio == pytest.approx(1.0 / 3.0, abs=1e-6)
+
+
+def test_a_derived_depth_that_cannot_be_represented_is_not_published_as_a_figure():
+    # Arrange -- a peak and a trough whose difference is wider than a float holds.
+    curve = _curve((1e308, 0.0), (-1e308, 1.0), (1e308, 2.0))
+
+    # Act
+    out = drawdown_recovery(curve)
+
+    # Assert -- the drawdown happened and its length in points was measured, but a depth no float
+    # can hold is `None`, never `inf` and never `0.0`, and the section still serializes.
+    assert out["episodes"] == 1
+    assert out["drawdown_recovery_trades"]["median"] == 2.0
+    assert out["deepest_usd"] is None
+    assert out["deepest_pct"] is None
+    assert out["deepest_recovered"] is None
+    json.dumps(out, allow_nan=False)
+
+
+def test_a_recovery_timestamp_before_its_peak_reports_no_duration():
+    # Arrange -- timestamps out of order. The contract reads the curve in the order it is given and
+    # never sorts it, so the recovery can carry an earlier timestamp than the peak it regained.
+    curve = _curve((100.0, 20.0), (90.0, 30.0), (100.0, 10.0))
+
+    # Act
+    out = drawdown_recovery(curve)
+
+    # Assert -- the drawdown was regained and its length in points is real; -10 seconds is not a
+    # duration, so the seconds half is not published at all rather than published as a wait.
+    assert out["episodes"] == 1
+    assert out["drawdown_recovery_trades"] == {"median": 2.0, "p90": 2.0, "n": 1}
+    assert "drawdown_recovery_sec" not in out

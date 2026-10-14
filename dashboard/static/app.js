@@ -4964,9 +4964,11 @@ function renderRobustness(stats) {
  * A `null` reads `unmeasured`, never `0.00`: one close has no third moment, and `0.00` would claim
  * it is symmetric. The 95% interval and the system quality number are the robustness card's own
  * figures above, computed once in the analytics module -- this card points at them instead of
- * restating them in a second place. A payload served before this section existed renders no chips
- * at all rather than inventing a verdict -- and no counts either: a store that never measured a
- * curve must not be told it regained zero of zero drawdowns with every point usable. */
+ * restating them in a second place -- and they read realized dollars over their own population,
+ * which is a different unit from this card's per-close percentages. A payload served before this
+ * section existed renders no chips at all rather than inventing a verdict -- and no counts either: a
+ * store that never measured a curve must not be told it regained zero of zero drawdowns with every
+ * point usable. */
 function renderCapitalRisk(stats) {
   const host = document.getElementById('capital-risk-readout');
   if (!host) return;
@@ -5083,9 +5085,11 @@ function renderCapitalRisk(stats) {
              + `${plural(count(sortino.n), 'close', 'closes')} \u00b7 not annualised`)}
     </div>
     <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
-      Skewness and Sortino read the same per-close returns the robustness card's interval does. The
-      95% interval and the system quality number live on that card, computed once in the analytics
-      module \u2014 this one links to them rather than restating them here.
+      Skewness and Sortino read each close as a percentage of what that close cost, so a close with
+      no usable cost basis drops out of these two; the interval on the robustness card above reads
+      realized dollars over its own population instead. The 95% interval and the system quality
+      number stay on that card, computed once in the analytics module \u2014 this one points at them
+      rather than restating them here.
     </div>`;
 }
 
