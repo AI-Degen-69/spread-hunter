@@ -1,7 +1,7 @@
-"""The statistics surface the analytics charts read, built from the registry.
+﻿"""The statistics surface the analytics charts read, built from the registry.
 
-The Performance & Analytics tab has five charts — position-return distribution,
-pair-cost density, outcome-probability bell, post-fill markout, Monte Carlo —
+The Performance & Analytics tab has five charts â€” position-return distribution,
+pair-cost density, outcome-probability bell, post-fill markout, Monte Carlo â€”
 and every one of them reads `kpi.statistical_analytics`. Nothing ever produced
 that key: not `kpi.report`, not the TS bridge, at any commit in this repo's
 history. So the charts have shown "unmeasured" since the day they were written,
@@ -797,9 +797,9 @@ class ClearedFill:
 
     * `order_price`    -- our resting price in DOLLARS (`orders.price` / `quotes.price`).
     * `clearing_price` -- the closest tape print STRICTLY below `order_price` that credited
-      the fill, in DOLLARS. The crediting path sees this print and drops it, so nothing
-      populates this field in production yet -- the follow-up, with the exact call sites, is
-      recorded in `docs/issues/515-noticed-but-not-touching.md`.
+      the fill, in DOLLARS. Recorded at fill-credit time by the shadow path (#531,
+      the shadow rehearsal path (`_write_clearing_print`)) and read back via `get_all_fills`; stores that
+      never ran a rehearsal still leave it `None`.
     * `placed_ts`      -- `quotes.ts`, in SECONDS.
     * `filled_ts`      -- the credited fill's time in SECONDS. `quotes.fill_ts` and
       `fills.venue_ts` are MILLISECONDS (`order_registry._attribute_fill_to_quote` builds
@@ -973,11 +973,11 @@ def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFi
       millisecond number. The earliest fill is the one the wait is measured to: averaging
       the last partial in would shorten every reading.
     * `order_price` -- `quotes.price`, in dollars.
-    * `clearing_price` -- `None`, and that is the honest state rather than a placeholder.
-      The trade-through rule proves the level cleared by a print strictly below our price;
-      the crediting path sees that print and drops it, and no writer stores it. So every
-      depth figure reads `missing` until one does -- a measurement nobody took, which is
-      not the same as a depth of zero.
+    * `clearing_price` -- the closest print strictly below our price, from the
+      EARLIEST fill row that carries one (#531), so a print-less earliest row
+      never suppresses a usable later one. Rows from stores that never recorded
+      a print (or fills with no print) keep `None` -- a measurement nobody
+      took, which is not the same as a depth of zero.
 
     A quote that never filled is left out instead of carried as an unmeasurable wait: it did
     not wait for a fill, it was cancelled or expired, and counting it in `excluded` would
@@ -988,6 +988,8 @@ def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFi
     """
     credited: set[str] = set()
     first_fill_ms: dict[str, float] = {}
+    first_fill_print: dict[str, Optional[float]] = {}
+    first_print_ms: dict[str, Optional[float]] = {}
     for fill in fills or []:
         order_uuid = _close_field(fill, "order_uuid")
         if order_uuid is None:
@@ -998,7 +1000,18 @@ def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFi
         if stamp is None:
             stamp = _finite(_close_field(fill, "recorded_ts"))
         if stamp is not None:
-            first_fill_ms[key] = min(stamp, first_fill_ms.get(key, stamp))
+            if key not in first_fill_ms or stamp < first_fill_ms[key]:
+                first_fill_ms[key] = stamp
+        # Prefer the EARLIEST row that actually carries a print (#531): a
+        # timestamp-less or print-less earliest row must not suppress a usable
+        # print on a later row of the same order.
+        clearing = _finite(_close_field(fill, "clearing_price"))
+        if clearing is not None and (
+            key not in first_print_ms
+            or (stamp is not None and stamp < first_print_ms[key])
+        ):
+            first_fill_print[key] = clearing
+            first_print_ms[key] = stamp
 
     records: list[ClearedFill] = []
     for quote in quotes or []:
@@ -1012,7 +1025,7 @@ def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFi
         records.append(ClearedFill(
             order_id=key,
             order_price=_finite(_close_field(quote, "price")),
-            clearing_price=None,
+            clearing_price=first_fill_print.get(key),
             placed_ts=_finite(_close_field(quote, "ts")),
             filled_ts=None if stamp is None else stamp / 1000.0,
         ))
@@ -1075,10 +1088,10 @@ def ci_z(level: int) -> Optional[float]:
 
 
 def normal_mean_interval(mean: float, std: float, n: int, mult: float) -> tuple[float, float, float]:
-    """Mean ± mult·(std/sqrt(n)): the one arithmetic every mean interval shares.
+    """Mean Â± multÂ·(std/sqrt(n)): the one arithmetic every mean interval shares.
 
     The multiplier stays the caller's choice (`ci_z` for a normal approximation,
-    `ci_critical_value` for Student-t) — this function only fixes the order of
+    `ci_critical_value` for Student-t) â€” this function only fixes the order of
     operations so all producers compute bit-identical bands from the same inputs.
     Callers keep their own empty/small-sample behavior; `n < 2` has no standard
     error and must never reach here.

@@ -1,4 +1,4 @@
-"""What a trade-through fill says about where the tape was, in cents (#515).
+﻿"""What a trade-through fill says about where the tape was, in cents (#515).
 
 The shadow fill model credits a resting order ONLY when the tape prints strictly below its
 price -- a trade-through proving the level cleared. Three of the metrics once planned around
@@ -317,10 +317,12 @@ def _quote(local_id: str = "q1", ts: float | None = 1000.0,
 
 
 def _fill_row(order_uuid: str = "q1", venue_ts: int | None = 1_005_000,
-              recorded_ts: int | None = 1_005_000, size: float = 5.0) -> dict:
+              recorded_ts: int | None = 1_005_000, size: float = 5.0,
+              clearing_price: float | None = None) -> dict:
     """One `fills` row, in the shape `get_all_fills()` returns."""
     return {"trade_id": "t", "order_uuid": order_uuid, "size": size,
-            "price": 0.50, "venue_ts": venue_ts, "recorded_ts": recorded_ts}
+            "price": 0.50, "venue_ts": venue_ts, "recorded_ts": recorded_ts,
+            "clearing_price": clearing_price}
 
 
 def test_cleared_fills_joins_a_quote_to_its_earliest_fill_in_seconds():
@@ -335,8 +337,31 @@ def test_cleared_fills_joins_a_quote_to_its_earliest_fill_in_seconds():
     # Earliest fill, milliseconds -> seconds: the wait is measured from placement to the
     # first credit, and averaging the last partial in would shorten every reading.
     assert records[0].filled_ts == 1005.0
-    # Nothing records the print that cleared the level, so no builder can supply it.
+    # Rows from stores that never recorded a print keep None â€” a measurement
+    # nobody took, not a depth of zero.
     assert records[0].clearing_price is None
+
+
+def test_cleared_fills_reads_the_print_from_the_earliest_fill_row():
+    """Latency and depth describe the same fill event (#531)."""
+    records = cleared_fills(
+        [_quote("q1", ts=1000.0)],
+        [_fill_row("q1", venue_ts=1_015_000, clearing_price=0.47),
+         _fill_row("q1", venue_ts=1_005_000, size=2.0,
+                    clearing_price=0.48)])
+
+    assert records[0].filled_ts == 1005.0
+    assert records[0].clearing_price == 0.48
+    assert trade_through_depth(records)["median_cents"] == 2.0
+
+
+def test_cleared_fills_keeps_a_missing_print_missing():
+    records = cleared_fills([_quote("q1", ts=1000.0)],
+                            [_fill_row("q1", clearing_price=None)])
+
+    assert records[0].clearing_price is None
+    depth = trade_through_depth(records)
+    assert depth["count"] == 0 and depth["missing"] == 1
 
 
 def test_cleared_fills_leaves_out_a_quote_that_never_filled():
@@ -379,3 +404,86 @@ def test_cleared_fills_feeds_the_latency_metric_and_leaves_depth_unmeasured():
     assert depth["missing"] == 2
     assert depth["median_cents"] is None
     assert depth["band"] == "unmeasured"
+
+
+# --- T4 (#531): end-to-end — the write is what makes depth measure ---
+
+
+class _SettleMarket:
+    """Minimal market shape `settle_market` reads."""
+    condition_id = "0xabc"
+    up_token = "tok-up"
+    down_token = "tok-dn"
+    market_slug = "fake-market"
+    tick_size = 0.01
+    neg_risk = False
+
+
+def _depth_after_settle(tmp_path):
+    """One credit pass through the real path, then the depth it produces."""
+    from core_brain.config import load
+    from core_brain.order_registry import OrderRegistry, init_db
+    from core_brain.quotes import QuoteIntent
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, record_submit, settle_market,
+    )
+
+    db = tmp_path / "shadow.db"
+    init_db(db)
+    ensure_shadow_tables(db)
+    reg = OrderRegistry(db_path=db)
+    record_submit(object(), reg, _SettleMarket(),
+                  [QuoteIntent(side="UP", token_id="tok-up", price=0.50,
+                               size=20, mid=0.5, edge_vs_mid=0.0)],
+                  load(), db_path=db, book_fn=lambda h, t: {"bids": {}})
+
+    # 0.48 is the closest print below 0.50; 0.44 is deeper and must NOT win.
+    settle_market(reg, _SettleMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.48: 5.0, 0.44: 9.0}})
+
+    return trade_through_depth(
+        cleared_fills(reg.get_all_quotes(), reg.get_all_fills()))
+
+
+def test_depth_measures_on_the_real_credit_path(tmp_path):
+    depth = _depth_after_settle(tmp_path)
+
+    assert depth["count"] == 1
+    assert depth["median_cents"] == 2.0
+    assert depth["band"] == "average"
+
+
+def test_no_table_and_no_fills_column_leaves_depth_unmeasured(tmp_path):
+    """The two invariants a reader must be able to rely on.
+
+    A registry that never ran a rehearsal has no `shadow_clearing_prints`
+    table, so `get_all_fills` still answers — and the production `fills`
+    schema is untouched, so the print can never appear as a column there.
+    """
+    import sqlite3
+
+    from core_brain.order_registry import OrderRegistry, init_db
+
+    db = tmp_path / "plain.db"
+    init_db(db)
+    reg = OrderRegistry(db_path=db)
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO orders (id, condition_id, token_id, side, price, "
+            "original_size, status, posted_ts, last_polled_ts) "
+            "VALUES ('q1', '0xabc', 'tok-up', 'BUY', 0.50, 5.0, 'open', "
+            "1000000, 1000000)"
+        )
+        conn.execute(
+            "INSERT INTO fills (trade_id, order_uuid, size, price) "
+            "VALUES ('t1', 'q1', 5.0, 0.50)"
+        )
+        conn.commit()
+
+    rows = reg.get_all_fills()
+    assert rows and rows[0]["clearing_price"] is None
+    with sqlite3.connect(db) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(fills)")}
+    assert "clearing_price" not in cols
+

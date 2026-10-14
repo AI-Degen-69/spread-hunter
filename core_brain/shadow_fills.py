@@ -17,7 +17,7 @@ removed (see `credit_fills`).
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from core_brain.queue_math import queue_multiple as _queue_multiple_impl
 
@@ -44,6 +44,10 @@ class ShadowFill:
     token_id: str
     price: float
     size: float
+    #: The closest tape print strictly below our resting price that cleared
+    #: the level (#531). Telemetry only — excluded from equality so existing
+    #: fill-model assertions stay green without edits.
+    clearing_price: float | None = field(default=None, compare=False)
 
 
 #: One home for the queue multiple lives in `core_brain.queue_math` (#541); this
@@ -120,10 +124,11 @@ def credit_fills(
     for o in orders:
         own = round(float(o.price), 4)
         token = str(o.token_id)
-        if any(price < own for (t, price) in swept if t == token):
+        below = [price for (t, price) in swept if t == token and price < own]
+        if below:
             queues[o.local_id] = 0.0
             if o.remaining > 0:
                 fills.append(ShadowFill(o.local_id, o.token_id, o.price,
-                                        o.remaining))
+                                        o.remaining, clearing_price=max(below)))
 
     return fills, queues

@@ -1,4 +1,4 @@
-"""Live order and fill registry backed by SQLite.
+﻿"""Live order and fill registry backed by SQLite.
 
 Stage 2 Architecture Constraints:
 - Stored in data/orders.db, the only registry path. Every module resolves it through
@@ -81,10 +81,10 @@ def _resolve_run_id() -> str:
     Priority:
     1. SH_RUN_ID env var (explicit override, set by start_bot)
     2. live/runtime/.current_run_id lock file, if it was written in the last 12h
-       (or the pre-rename live/run/.current_run_id, while only that one exists —
+       (or the pre-rename live/run/.current_run_id, while only that one exists â€”
        a process started before the rename must keep tagging its fills with the
        same run_id, or the dashboard's run selector splits one run into two)
-    3. New UUID — generates and writes the lock file so other processes pick it up
+    3. New UUID â€” generates and writes the lock file so other processes pick it up
     """
     env_id = os.environ.get("SH_RUN_ID")
     if env_id:
@@ -694,6 +694,11 @@ class FillRecord:
     venue_ts: Optional[int] = None
     recorded_ts: Optional[int] = None
     run_id: Optional[str] = None
+    #: NOT persisted (#531): the print that cleared the level is written by
+    #: the shadow rehearsal path (`_write_clearing_print`) into the shadow-only companion table,
+    #: not into `fills` â€” setting this field here has no effect. Kept only as
+    #: the in-memory shape `ShadowFill` carries to that writer.
+    clearing_price: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -1770,12 +1775,33 @@ class OrderRegistry:
 
     def get_all_fills(self) -> list[dict]:
         with self._conn() as conn:
+            # The print lives in a SHADOW-only table (#531), so the join is
+            # optional: a store that never ran the rehearsal has no such table,
+            # and its fills read exactly as before. The projection always emits
+            # `clearing_price` (NULL without the table) so every consumer sees
+            # one stable row shape instead of a key that appears and vanishes.
+            has_prints = any(
+                r[0] == "shadow_clearing_prints"
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            )
+            print_col = (
+                "p.clearing_price AS clearing_price" if has_prints
+                else "NULL AS clearing_price"
+            )
+            print_join = (
+                "LEFT JOIN shadow_clearing_prints p ON p.trade_id = f.trade_id"
+                if has_prints else ""
+            )
             rows = conn.execute(
-                """
+                f"""
                 SELECT f.trade_id, f.order_uuid, f.size, f.price, f.venue_ts, f.recorded_ts, f.run_id,
-                       o.condition_id, o.token_id, o.side, o.pair_id, o.posted_ts
+                       o.condition_id, o.token_id, o.side, o.pair_id, o.posted_ts,
+                       {print_col}
                 FROM fills f
                 JOIN orders o ON f.order_uuid = o.id
+                {print_join}
                 ORDER BY f.recorded_ts ASC
                 """
             ).fetchall()
