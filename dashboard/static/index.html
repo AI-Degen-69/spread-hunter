@@ -97,15 +97,15 @@
         <!-- One master button, state-driven by renderServiceHeader: green START
              when stopped, red STOP when running, disabled + spinner in flight.
              Replaces the two separate master buttons (#457). -->
-        <button id="btn-master-toggle" class="btn-start-run" type="button" aria-label="Start bot execution stack">
+        <button id="btn-master-toggle" class="ctrl-btn ctrl-btn-primary btn-start-run" type="button" aria-label="Start bot execution stack">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           START RUN
         </button>
-        <button id="btn-sync" class="btn-sync" type="button" title="Reconcile orders/fills and account vs venue (read-only, fixes stale dashboard when Polymarket shows 0/0)">SYNC VENUE</button>
-        <button id="btn-reset" class="btn-reset" type="button">RESET</button>
+        <button id="btn-sync" class="ctrl-btn ctrl-btn-secondary btn-sync" type="button" title="Reconcile orders/fills and account vs venue (read-only, fixes stale dashboard when Polymarket shows 0/0)">SYNC VENUE</button>
+        <button id="btn-reset" class="ctrl-btn ctrl-btn-secondary btn-reset" type="button">RESET</button>
         <!-- Command palette mouse entry (#562): opens the palette, focus lands in
              search and returns here on close. #504 may relocate it with the rest. -->
-        <button id="btn-command-palette" class="btn-palette" type="button" aria-label="Open command palette search" title="Search pages, actions, markets (Ctrl+K or /)">
+        <button id="btn-command-palette" class="ctrl-btn ctrl-btn-secondary btn-palette" type="button" aria-label="Open command palette search" title="Search pages, actions, markets (Ctrl+K or /)">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style="display:inline-block;vertical-align:-2px;margin-right:6px" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
           <span>Search</span>
           <kbd>Ctrl K</kbd>

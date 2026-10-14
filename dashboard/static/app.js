@@ -1796,6 +1796,14 @@ function bindServicesDropdown() {
   });
 }
 
+function getMasterToggleClasses(action, isShadow) {
+  const isStop = action === 'stop';
+  const modeClass = isStop
+    ? (isShadow ? 'btn-stop-run btn-stop-shadow' : 'btn-stop-run')
+    : (isShadow ? 'btn-start-run btn-start-shadow' : 'btn-start-run');
+  return `ctrl-btn ctrl-btn-primary ${modeClass}`;
+}
+
 function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const executionServiceKeys = ['filter', 'query', 'decide'];
   const anyExecutionServiceRunning = executionServiceKeys.some(k => Boolean(status?.services?.[k]?.running));
@@ -1897,9 +1905,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     if (isStarting || isStopping || shadowPending) {
       // Busy overrides status: no second click while a request is in flight.
       const busyLabel = isStopping ? 'STOPPING…' : 'STARTING…';
-      masterToggle.className = isStopping
-        ? (isShadow ? 'btn-stop-run btn-stop-shadow' : 'btn-stop-run')
-        : (isShadow ? 'btn-start-run btn-start-shadow' : 'btn-start-run');
+      masterToggle.className = getMasterToggleClasses(isStopping ? 'stop' : 'start', isShadow);
       masterToggle.disabled = true;
       masterToggle.setAttribute('aria-busy', 'true');
       masterToggle.style.opacity = '0.6';
@@ -1914,7 +1920,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
         masterToggle.dataset.mode = 'shadow';
         const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
         if (shadowRunning) {
-          masterToggle.className = 'btn-stop-run btn-stop-shadow';
+          masterToggle.className = getMasterToggleClasses('stop', true);
           masterToggle.setAttribute('aria-label', 'Stop shadow rehearsal');
           masterToggle.dataset.action = 'stop';
           masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>STOP SHADOW`;
@@ -1923,7 +1929,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
           masterToggle.style.cursor = 'pointer';
           masterToggle.title = 'Stop shadow rehearsal for this database';
         } else {
-          masterToggle.className = 'btn-start-run btn-start-shadow';
+          masterToggle.className = getMasterToggleClasses('start', true);
           masterToggle.setAttribute('aria-label', 'Start shadow rehearsal');
           masterToggle.dataset.action = 'start';
           masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>START SHADOW`;
@@ -1934,7 +1940,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
         }
       } else if (anyExecutionServiceRunning) {
         masterToggle.dataset.mode = 'live';
-        masterToggle.className = 'btn-stop-run';
+        masterToggle.className = getMasterToggleClasses('stop', false);
         masterToggle.setAttribute('aria-label', 'Stop bot execution stack');
         masterToggle.dataset.action = 'stop';
         masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>STOP RUN`;
@@ -1944,7 +1950,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
         masterToggle.title = '';
       } else {
         masterToggle.dataset.mode = 'live';
-        masterToggle.className = 'btn-start-run';
+        masterToggle.className = getMasterToggleClasses('start', false);
         masterToggle.setAttribute('aria-label', 'Start bot execution stack');
         masterToggle.dataset.action = 'start';
         masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>START RUN`;
@@ -9405,6 +9411,7 @@ if (typeof module !== 'undefined' && module.exports) {
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState, resolveHeldRead,
     engineReasonText, engineProvenanceText, renderScanStatePill,
     renderMarketScanPill, renderPillHtml, renderDbMode, renderServiceHeader,
+    getMasterToggleClasses,
     get setBackendContact() { return setBackendContact; },
     get renderBackendContact() { return renderBackendContact; },
     get backendStale() { return backendStale; },

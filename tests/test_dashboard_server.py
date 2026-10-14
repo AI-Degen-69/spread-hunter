@@ -2561,29 +2561,29 @@ def test_master_toggle_renders_every_state():
     out = json.loads(res.stdout)
 
     stop_look = out["running"]
-    assert stop_look["className"] == "btn-stop-run"
+    assert "btn-stop-run" in stop_look["className"]
     assert "STOP RUN" in stop_look["text"]
     assert stop_look["ariaLabel"] == "Stop bot execution stack"
     assert stop_look["action"] == "stop"
     assert stop_look["disabled"] is False
 
     # A partial stack is still "running": the STOP look, not START.
-    assert out["partial"]["className"] == "btn-stop-run"
+    assert "btn-stop-run" in out["partial"]["className"]
     assert out["partial"]["action"] == "stop"
 
     start_look = out["stopped"]
-    assert start_look["className"] == "btn-start-run"
+    assert "btn-start-run" in start_look["className"]
     assert "START RUN" in start_look["text"]
     assert start_look["ariaLabel"] == "Start bot execution stack"
     assert start_look["action"] == "start"
 
     # UNKNOWN reads as stopped to the operator: START look, no crash.
-    assert out["unknown"]["className"] == "btn-start-run"
+    assert "btn-start-run" in out["unknown"]["className"]
     assert out["unknown"]["action"] == "start"
 
     # A null service entry is not a crash and is not a running service.
     assert "error" not in out["nullEntry"]
-    assert out["nullEntry"]["className"] == "btn-stop-run"  # query still runs
+    assert "btn-stop-run" in out["nullEntry"]["className"]  # query still runs
 
     # Double click: exactly one POST, busy state while in flight.
     assert out["doubleClick"]["posts"] == 1
@@ -2595,7 +2595,7 @@ def test_master_toggle_renders_every_state():
 
     # After a confirmed stop, the button is back to START and clickable.
     after = out["doubleClick"]["afterStop"]
-    assert after["className"] == "btn-start-run"
+    assert "btn-start-run" in after["className"]
     assert after["disabled"] is False
     assert after["ariaBusy"] is None
 

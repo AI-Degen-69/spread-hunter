@@ -263,3 +263,43 @@ def test_master_and_services_render_grammar():
     assert 'class="pill-value"' in data["innerHTML"]
     assert data["textContent"] == "STACK RUNNING"
     assert "services-pill-trigger" in data["servicesClass"]
+
+
+def test_header_buttons_carry_ctrl_btn_hierarchy(dom: DOMNode):
+    master = dom.find_one(id="btn-master-toggle")
+    assert master is not None
+    assert "ctrl-btn" in master.classes
+    assert "ctrl-btn-primary" in master.classes
+
+    for bid in ["btn-sync", "btn-reset", "btn-command-palette"]:
+        btn = dom.find_one(id=bid)
+        assert btn is not None, f"Expected #{bid} in DOM"
+        assert "ctrl-btn" in btn.classes, f"#{bid} must have .ctrl-btn class"
+        assert "ctrl-btn-secondary" in btn.classes, f"#{bid} must have .ctrl-btn-secondary class"
+
+
+def test_ctrl_btn_css_rules(css: str):
+    match_base = re.search(r"\.ctrl-btn\s*\{([^}]*)\}", css)
+    assert match_base, ".ctrl-btn rule not found"
+    base = match_base.group(1)
+    assert "inline-flex" in base
+    assert "min-height" in base and "--touch-min" in base
+    assert "min-width" in base and "--touch-min" in base
+
+    match_prim = re.search(r"\.ctrl-btn-primary\s*\{([^}]*)\}", css)
+    assert match_prim, ".ctrl-btn-primary rule not found"
+    assert "800" in match_prim.group(1)
+
+    match_sec = re.search(r"\.ctrl-btn-secondary\s*\{([^}]*)\}", css)
+    assert match_sec, ".ctrl-btn-secondary rule not found"
+    assert "700" in match_sec.group(1)
+
+
+@requires_node
+def test_master_toggle_helper_classes():
+    t = _harness("topnav")["toggleClasses"]
+    assert t["startLive"] == "ctrl-btn ctrl-btn-primary btn-start-run"
+    assert t["stopLive"] == "ctrl-btn ctrl-btn-primary btn-stop-run"
+    assert t["startShadow"] == "ctrl-btn ctrl-btn-primary btn-start-run btn-start-shadow"
+    assert t["stopShadow"] == "ctrl-btn ctrl-btn-primary btn-stop-run btn-stop-shadow"
+    assert t["renderedLiveRunning"] == "ctrl-btn ctrl-btn-primary btn-stop-run"

@@ -283,6 +283,34 @@ header {
   border-bottom: 2px solid var(--tab-active-border);
 }
 
+/* ── Unified Control Buttons (#504) ── */
+.ctrl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 12px;
+  min-height: var(--touch-min, 44px);
+  min-width: var(--touch-min, 44px);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ctrl-btn-primary {
+  font-weight: 800;
+  padding: 8px 16px;
+}
+
+.ctrl-btn-secondary {
+  font-weight: 700;
+  padding: 8px 14px;
+}
+
 /* ── Sync button (read-only venue refresh) ── */
 .btn-sync {
   background: rgba(56, 189, 248, 0.12);

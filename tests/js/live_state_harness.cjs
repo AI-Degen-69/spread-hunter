@@ -553,6 +553,10 @@ function topNavVerdicts() {
     textContent: dbBadge.textContent,
   };
 
+  const masterToggle = new FakeEl('button');
+  masterToggle.id = 'btn-master-toggle';
+  elements.set('btn-master-toggle', masterToggle);
+
   app.renderServiceHeader({
     services: {
       filter: { running: true },
@@ -570,7 +574,15 @@ function topNavVerdicts() {
     servicesClass: servicesPill.className,
   };
 
-  return { scan, engineRunning, engineStalledElsewhere, dbProd, masterRunning };
+  const toggleClasses = {
+    startLive: app.getMasterToggleClasses('start', false),
+    stopLive: app.getMasterToggleClasses('stop', false),
+    startShadow: app.getMasterToggleClasses('start', true),
+    stopShadow: app.getMasterToggleClasses('stop', true),
+    renderedLiveRunning: masterToggle.className,
+  };
+
+  return { scan, engineRunning, engineStalledElsewhere, dbProd, masterRunning, toggleClasses };
 }
 
 let out;

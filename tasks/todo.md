@@ -2,6 +2,6 @@
 
 - [x] T1: Semantic groups, accessibility landmarks & tab-row styling alignment
 - [x] T2: Status pill grammar normalization, escaped helper & fake DOM harness updates
-- [ ] T3: Shared button hierarchy (`.ctrl-btn`), touch targets & master-toggle handler
+- [x] T3: Shared button hierarchy (`.ctrl-btn`), touch targets & master-toggle handler
 - [ ] T4: Panel anchoring, unified placement (`placePanel`) & click/escape dismissal
 - [ ] T5: Live state aggregation & neutral kanban hero palette (Consolidated #479)
