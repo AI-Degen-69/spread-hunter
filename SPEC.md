@@ -9,7 +9,7 @@ Shadow and live apply it identically (only the fill source differs).
 - `stop_loss_trigger_pct` = 10  → sell when the leg is down 10% from entry.
 - `stop_loss_trigger_usd_cents` = 4 → sell when the leg is down 4c ($0.04) from entry.
 - Example: buy at 0.50, willing to lose 5c → Stop-Loss Trigger ($) = 5.
-- `single_buy_stop_mode` selects which is active ("usd" | "pct"); default "usd".
+- `stop_loss_mode` selects which is active ("usd" | "pct"); default "usd".
 
 ## Acceptance criteria
 - A run activates exactly one stop mode (usd XOR pct) — never both.
