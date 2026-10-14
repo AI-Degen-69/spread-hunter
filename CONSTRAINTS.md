@@ -1,4 +1,4 @@
-# CONSTRAINTS — #531 (locked by Station II, enforced through Station V)
+﻿# CONSTRAINTS â€” #531 (locked by Station II, enforced through Station V)
 
 Governs the `i531/persist-clearing-print-at-fill-credit-time` branch only.
 The #541 contract this file replaces is branch-scoped by its own header line and stays
@@ -21,7 +21,7 @@ print lands in a small table created in `ensure_shadow_tables`
 reads as a registry with odd ids, never as one with columns that do not exist.
 
 **Travel: `ShadowFill.clearing_price: Optional[float] = None`, `compare=False`.**
-`credit_fills`'s return type `(fills, queues)` is part of the fill-model seam —
+`credit_fills`'s return type `(fills, queues)` is part of the fill-model seam â€”
 it stays unchanged. With `compare=False` the existing equality assertions in
 `tests/test_shadow_fills.py` stay green without edits. Telemetry must not
 decide whether two fills are equal.
@@ -29,33 +29,33 @@ decide whether two fills are equal.
 ## Scope & File Boundaries
 
 - Target files for modification (exactly five, plus this planning set):
-  - `core_brain/shadow_fills.py` — select `max(price for (t,price) in swept
+  - `core_brain/shadow_fills.py` â€” select `max(price for (t,price) in swept
     if t == token and price < own)` inside the branch that already credits;
     attach it to the credited `ShadowFill`. Nothing else in the function.
-  - `core_brain/shadow_exec.py` — the companion table DDL in
-    `ensure_shadow_tables` + one write per credited fill in `_credit_market`.
-    `_credit_market` keeps writing `FillRecord` exactly as today.
-  - `core_brain/order_registry.py` — `FillRecord` gains the optional field;
+  - `core_brain/shadow_exec.py` â€” the companion table DDL in
+    `ensure_shadow_tables` + one write per credited fill in `settle_market`.
+    `settle_market` keeps writing `FillRecord` exactly as today.
+  - `core_brain/order_registry.py` â€” `FillRecord` gains the optional field;
     `record_fill` INSERT unchanged; `get_all_fills()` enriches rows with the
     print via an optional join guarded by a table-existence check.
-  - `core_brain/statistical_analytics.py` — `cleared_fills` reads the print
+  - `core_brain/statistical_analytics.py` â€” `cleared_fills` reads the print
     from the row that supplies the earliest usable timestamp (latency and
     depth then describe the same event; latency figures do not move).
-  - `tests/test_shadow_fills.py`, `tests/test_queue_realism_analytics.py` —
+  - `tests/test_shadow_fills.py`, `tests/test_queue_realism_analytics.py` â€”
     new tests only, except updating the two assertions that pin
     `clearing_price is None` as the honest state (they become the
     present-print cases).
   - `SPEC.md`, `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
 - Files that must NOT be modified:
-  - `data/orders.db` and every production registry — read-only at all times.
-  - Fill eligibility, credited size, execution price, timestamps — the fill
+  - `data/orders.db` and every production registry â€” read-only at all times.
+  - Fill eligibility, credited size, execution price, timestamps â€” the fill
     model is frozen; which orders fill must not change.
-  - The taker path (`core_brain/shadow_exec.py:1222`) — no resting level,
+  - The taker path (`core_brain/shadow_exec.py (taker: create_and_post_market_order)`) â€” no resting level,
     no depth; stays unmeasured.
   - Bands, thresholds, the queue-realism card, the latency half of #515.
   - `core_brain/config.py`, quoting, sizing, close-method tuples (#520 owns
     them), top nav (#504 owns it).
-  - `dashboard/static/app.js` — `renderQueueRealism` already renders a real
+  - `dashboard/static/app.js` â€” `renderQueueRealism` already renders a real
     figure; no change expected.
 
 ## Population & missing-value rules
@@ -63,7 +63,7 @@ decide whether two fills are equal.
 - One `ClearedFill` per credited quote. The clearing price comes from the row
   that supplies the earliest usable timestamp; ties take the first row seen;
   all rows timestamp-less take the first row.
-- A missing clearing print stays `None` — never `0.0`, never `fills.price`.
+- A missing clearing print stays `None` â€” never `0.0`, never `fills.price`.
   `trade_through_depth` keeps counting it as `missing`, not zero.
 
 ## Quality bar
@@ -83,7 +83,7 @@ decide whether two fills are equal.
 
 - This host's shell exports `PORT=0`, which breaks dashboard test collection.
   Run focused suites via `.venv/Scripts/python -m pytest`. Never hand pytest
-  commands to the operator — agent-run only, reported as background results.
+  commands to the operator â€” agent-run only, reported as background results.
 
 
 ## Values rule (operator-ordered t-switch)
@@ -93,7 +93,7 @@ decide whether two fills are equal.
 - The one deliberate value change: every mean interval switches to Student's t via
   `ci_critical_value` (audit script, kpi inline band, `ladder_probe.mean_ci90`). Large-n
   values stay ~identical; small-n deltas are recorded per-stat in the findings doc + PR.
-- Goldens are regenerated exactly once for the t-switch — never silently, never twice.
+- Goldens are regenerated exactly once for the t-switch â€” never silently, never twice.
   Any other golden mismatch means the code moved a value it shouldn't have: fix the code.
 - `KPI_PAYLOAD_VERSION` stays 257. No payload section renames. Wilson (proportions) and
   power/planning constants are out of the switch (different estimators).
@@ -104,40 +104,40 @@ decide whether two fills are equal.
   (`renderAnalyticsSurface`, `renderKPIs`, the 8 readouts, `renderQuantRiskGrid`,
   `decisionGatesHtml/Rows`, Tier-1 row), tab-2 sections of `dashboard/static/index.html`.
   Two information-only exceptions, both invisible to layout and values: (a) card titles
-  gain unit suffixes (`$`/`¢`/`%`/`bps`/`s`/`×`) — the operator's own screenshot complaint;
+  gain unit suffixes (`$`/`Â¢`/`%`/`bps`/`s`/`Ã—`) â€” the operator's own screenshot complaint;
   (b) defaulted params that preserve current behavior byte-for-byte (renderer host-id /
   chart-ids params for the new tab's use, `renderCapitalRisk` curve-name override).
-  The 2a/2b ledger tests keep scanning `app.js` as written — no rescope needed.
+  The 2a/2b ledger tests keep scanning `app.js` as written â€” no rescope needed.
 - ALLOWED on the original surface only: the tab-switcher shell (4th tab button), the
   `<script>` include for the new module, and optional target-id params on chart fns
   (defaults preserve current behavior byte-for-byte).
 - T3 work area: NEW `dashboard/static/data_analysis.js` (registry, claim ledger, one tile
-  builder, units, restyle — scoped CSS in the new tab's markup), a new tab-4 panel in
+  builder, units, restyle â€” scoped CSS in the new tab's markup), a new tab-4 panel in
   `index.html`, and mount wiring in `dashboard/static/prototype.js` if the tab needs it.
 
 - Target files for modification (T2 items below are DONE and committed):
-  - `dashboard/static/data_analysis.js` (NEW) — registry, claim ledger, one tile builder,
+  - `dashboard/static/data_analysis.js` (NEW) â€” registry, claim ledger, one tile builder,
     units, restyle; the only JS the new tab renders.
-  - `dashboard/static/index.html` — new tab-4 panel + tab button + module `<script>` include
+  - `dashboard/static/index.html` â€” new tab-4 panel + tab button + module `<script>` include
     (+ optional chart target containers). Tab-2 markup untouched.
-  - `dashboard/static/app.js` — tab-switcher 4th-tab support + optional chart target-id
+  - `dashboard/static/app.js` â€” tab-switcher 4th-tab support + optional chart target-id
     params (defaults = current behavior) ONLY. No renderer/title/value edits.
-  - `dashboard/static/prototype.js` — mount wiring for the new tab only if needed.
-  - `core_brain/statistical_analytics.py` — one public normal-interval helper (explicit `z`),
+  - `dashboard/static/prototype.js` â€” mount wiring for the new tab only if needed.
+  - `core_brain/statistical_analytics.py` â€” one public normal-interval helper (explicit `z`),
     `_percentile` convention docstring; exact op order preserved. [T2 done]
-  - `core_brain/kpi.py` — call the new helper; add a public Wilson name (`_wilson_ci` kept
+  - `core_brain/kpi.py` â€” call the new helper; add a public Wilson name (`_wilson_ci` kept
     as alias); expose the sufficiency z table for import. No semantics change. [T2 done]
-  - `core_brain/` — one neutral module for the queue-multiple formula shared by the live
+  - `core_brain/` â€” one neutral module for the queue-multiple formula shared by the live
     report and the shadow fill model. [T2 done]
   - `scripts/statistical_trade_audit.py`, `scripts/ladder_probe.py`,
     `scripts/paired_depth_report.py`, `scripts/stat_gate.py`,
-    `scripts/family_probe_report.py` — import shared math; adapters only; printed layouts stay.
+    `scripts/family_probe_report.py` â€” import shared math; adapters only; printed layouts stay.
     [T2 done]
-  - `statistical_validation_run/artifacts.py` — import method tuples from `kpi` (no local
+  - `statistical_validation_run/artifacts.py` â€” import method tuples from `kpi` (no local
     tuples). Layouts and report-only computations stay. [T2 done]
-  - `tests/` + `tests/js/` — goldens, parity, registry-ledger tests (2a/2b scan `app.js`
+  - `tests/` + `tests/js/` â€” goldens, parity, registry-ledger tests (2a/2b scan `app.js`
     as written; units land in the shared renderers).
-- MUST NOT modify: `data/orders.db` (production registry — read-only); top-nav structure
+- MUST NOT modify: `data/orders.db` (production registry â€” read-only); top-nav structure
   (#504 owns it); close-method classification rules (#520 owns them); any report/artifact
   layout; `paired_depth_report`'s `.842` pilot constant and `max(2, n)` rule.
 
@@ -154,10 +154,10 @@ decide whether two fills are equal.
 - UI: keep `tablist` semantics, keyboard access, and empty/error states. Stats-card restyle
   is operator-ordered: minimal new CSS scoped to the stats surface only, same palette
   family, no global stylesheet changes. Every registry entry declares `unit`
-  ($/¢/%/bps/bare); every rendered card shows its unit — the missing-unit audit is T3 work.
+  ($/Â¢/%/bps/bare); every rendered card shows its unit â€” the missing-unit audit is T3 work.
 
 ## Environment quirk (verified at intake)
 
 - This host's shell exports `PORT=0`, which breaks dashboard test collection. Run focused
   suites with `unset PORT` first or via `.venv/Scripts/python -m pytest`. Never hand pytest
-  commands to the operator — agent-run only, reported as background results.
+  commands to the operator â€” agent-run only, reported as background results.

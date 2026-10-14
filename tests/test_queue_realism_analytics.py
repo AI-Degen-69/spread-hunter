@@ -452,3 +452,38 @@ def test_depth_measures_on_the_real_credit_path(tmp_path):
     assert depth["median_cents"] == 2.0
     assert depth["band"] == "average"
 
+
+def test_no_table_and_no_fills_column_leaves_depth_unmeasured(tmp_path):
+    """The two invariants a reader must be able to rely on.
+
+    A registry that never ran a rehearsal has no `shadow_clearing_prints`
+    table, so `get_all_fills` still answers — and the production `fills`
+    schema is untouched, so the print can never appear as a column there.
+    """
+    import sqlite3
+
+    from core_brain.order_registry import OrderRegistry, init_db
+
+    db = tmp_path / "plain.db"
+    init_db(db)
+    reg = OrderRegistry(db_path=db)
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO orders (id, condition_id, token_id, side, price, "
+            "original_size, status, posted_ts, last_polled_ts) "
+            "VALUES ('q1', '0xabc', 'tok-up', 'BUY', 0.50, 5.0, 'open', "
+            "1000000, 1000000)"
+        )
+        conn.execute(
+            "INSERT INTO fills (trade_id, order_uuid, size, price) "
+            "VALUES ('t1', 'q1', 5.0, 0.50)"
+        )
+        conn.commit()
+
+    rows = reg.get_all_fills()
+    assert rows and rows[0]["clearing_price"] is None
+    with sqlite3.connect(db) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(fills)")}
+    assert "clearing_price" not in cols
+

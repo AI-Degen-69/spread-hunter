@@ -210,15 +210,21 @@ def _write_clearing_print(
     """Persist the print that cleared a fill's level, keyed by `trade_id`.
 
     Telemetry only (#531) — the fill itself is already recorded; this is the
-    evidence the reader needs to turn `missing` into cents.
+    evidence the reader needs to turn `missing` into cents. Guarded like
+    `_record_taker_completion` and `_log_shadow_markout`: a locked or missing
+    table must not abort the fill loop, which would leave `orders.status`
+    disagreeing with `fills`.
     """
-    with closing(get_connection(Path(db_path))) as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO shadow_clearing_prints "
-            "(trade_id, clearing_price) VALUES (?, ?)",
-            (str(trade_id), float(clearing_price)),
-        )
-        conn.commit()
+    try:
+        with closing(get_connection(Path(db_path))) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO shadow_clearing_prints "
+                "(trade_id, clearing_price) VALUES (?, ?)",
+                (str(trade_id), float(clearing_price)),
+            )
+            conn.commit()
+    except (sqlite3.Error, OSError) as exc:  # pragma: no cover - defensive
+        _log.warning("clearing print not written: %s", exc)
 
 
 def write_queue_ahead(
@@ -701,13 +707,17 @@ def settle_market(
     owned_by_id = {o.id: o for o in owned}
     for f in fills:
         trade_id = f"{SHADOW_TRADE_PREFIX}{uuid.uuid4().hex[:16]}"
+        # Telemetry BEFORE the fill row (#531): the tape is consumed once, so a
+        # process death between the two writes would otherwise cost this depth
+        # sample permanently. An orphan print row matches no fill and is dropped
+        # inertly by the LEFT JOIN, so the cheap failure is writing it early.
+        if f.clearing_price is not None:
+            _write_clearing_print(db_path, trade_id, f.clearing_price)
         registry.record_fill(FillRecord(
             trade_id=trade_id,
             order_uuid=f.local_id, size=f.size, price=f.price,
             venue_ts=now_ms, recorded_ts=now_ms,
         ))
-        if f.clearing_price is not None:
-            _write_clearing_print(db_path, trade_id, f.clearing_price)
         _log_shadow_markout(
             registry, owned_by_id.get(f.local_id), market,
             price=f.price, size=f.size, fill_sec=now_ms / 1000.0,
