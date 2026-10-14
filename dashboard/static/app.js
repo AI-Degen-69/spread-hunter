@@ -611,6 +611,13 @@ function renderCachedSections() {
   if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
     renderKPIs(currentKpi, lastStatus);
   }
+  // A dropped deferred frame leaves the five readouts at their placeholders
+  // while the tiles beside them keep painting (#540). Repaint the surface
+  // synchronously from the same cache; a throw mid-navigation logs instead
+  // of blanking the tab. Empty cache paints nothing (startup guard).
+  if (paintable(tab2, document.getElementById('analytics-surface')) && currentKpi) {
+    try { renderAnalyticsSurface(currentKpi, lastStatus); } catch (e) { console.error('Error rendering cached analytics surface', e); }
+  }
   // Tab 4: DATA ANALYSIS (#541 canonical page). Painted from the same cache;
   // the renderer lives in data_analysis.js and no-ops when the tab is absent.
   if (typeof renderDataAnalysis === 'function'
