@@ -217,4 +217,7 @@ def test_the_demo_store_probability_arm_draws_measured_fills(tmp_path):
     assert sum(bar_counts) == bell["samples_count"]
     occupied = [b for b in bell["bins"] if b["empirical_count"]]
     assert occupied
-    assert all(0.40 <= b["bin"] <= 0.55 for b in occupied), occupied
+    # The demo's balanced-pair fills sit at fixed prices around 43%–52%;
+    # rescue and single-leg scenarios fill elsewhere, so the band must be
+    # occupied without being the whole occupied set.
+    assert any(0.40 <= b["bin"] <= 0.55 for b in occupied), occupied

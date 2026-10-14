@@ -271,14 +271,16 @@ def _arm_stats() -> dict:
 
 @requires_node
 @pytest.mark.parametrize("metric, low, high", [
-    # Two arms derive their half-width from the sample's own spread...
+    # Three arms derive their axis from the sample's own spread...
     ("pnl_pct", "-2.90%", "+6.90%"),
     ("pnl_usd", "-$2.880", "+$6.880"),
-    # ...and two write theirs down. The pair-cost arm spans cents around a ~$0.95
-    # mean, so losing its 0.035 half-width prints $-0.045 .. $1.955 and draws
-    # every bar against that instead.
+    # ...the probability arm fits the occupied measured bins (#538), padded
+    # one bin each side and clamped to 0–100%...
+    ("outcome_prob", "38.9%", "66.7%"),
+    # ...and one writes its half-width down. The pair-cost arm spans cents
+    # around a ~$0.95 mean, so losing its 0.035 half-width prints
+    # $-0.045 .. $1.955 and draws every bar against that instead.
     ("spread_cost", "$0.920", "$0.990"),
-    ("outcome_prob", "5.0%", "95.0%"),
 ])
 def test_each_arm_keeps_its_own_axis_scale(metric, low, high):
     """The four arms scale their axes four different ways, and a whole-arm edit
@@ -309,7 +311,10 @@ def test_the_other_arms_still_draw_the_bands_their_own_payload_names():
                                 "ci_critical": {"90": 2.353, "95": 3.182}}
 
     for metric, expected in (("spread_cost", "90% CI: [$0.932, $0.968]"),
-                             ("outcome_prob", "90% CI: [45.3%, 54.7%]")):
+                             # The probability arm states an interval, not an
+                             # edge test (#538).
+                             ("outcome_prob",
+                              "90% interval for mean fill price: [45.3%, 54.7%]")):
         rendered = _render(stats, metric=metric)
         assert expected in rendered["badge"], (metric, rendered["badge"])
         assert "unmeasured" not in rendered["badge"]
