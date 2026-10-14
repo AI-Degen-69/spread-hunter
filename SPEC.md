@@ -1,8 +1,8 @@
-# SPEC — #541: One statistics page, one producer per number
+# SPEC — #531: Persist the clearing print so trade-through depth measures
 
-Branch: `i541/refactor-consolidate-every-project-statistic-onto` | Tier: Large | Type: Code + Design/UI
+Branch: `i531/persist-clearing-print-at-fill-credit-time` | Tier: Small | Type: Code (telemetry write)
 
-Supersedes the #517 spec in this file's history (kept in git).
+Supersedes the #541 spec in this file's history (kept in git).
 
 ## Goals
 

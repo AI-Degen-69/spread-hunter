@@ -1,8 +1,90 @@
-# CONSTRAINTS - #541 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #531 (locked by Station II, enforced through Station V)
 
-Governs the `i541/refactor-consolidate-every-project-statistic-onto` branch only.
-The #524 contract this file replaces is branch-scoped by its own header line and stays
+Governs the `i531/persist-clearing-print-at-fill-credit-time` branch only.
+The #541 contract this file replaces is branch-scoped by its own header line and stays
 readable in git history.
+
+## The N1 follow-up and its storage decision
+
+#515 shipped the `queue realism` readout but left the clearing print unwritten
+(N1 in `docs/issues/515-noticed-but-not-touching.md`, filed as #531 by operator
+decision 2026-10-14). This ticket is that writer.
+
+**Storage: a shadow-only companion table, NOT a `fills` column.**
+A new nullable `clearing_price` column on `fills` would travel through the shared
+`SCHEMA` + `_apply_migrations()` (`core_brain/order_registry.py:213-222`,
+`:461-475`) and alter production stores the next time those stores open.
+`data/orders.db` is read-only and every prior contract forbids touching it. So the
+print lands in a small table created in `ensure_shadow_tables`
+(`core_brain/shadow_exec.py:106`), keyed by `trade_id`, exactly like
+`shadow_queue` / `shadow_merge_legs` beside it: a shadow store opened by live code
+reads as a registry with odd ids, never as one with columns that do not exist.
+
+**Travel: `ShadowFill.clearing_price: Optional[float] = None`, `compare=False`.**
+`credit_fills`'s return type `(fills, queues)` is part of the fill-model seam —
+it stays unchanged. With `compare=False` the existing equality assertions in
+`tests/test_shadow_fills.py` stay green without edits. Telemetry must not
+decide whether two fills are equal.
+
+## Scope & File Boundaries
+
+- Target files for modification (exactly five, plus this planning set):
+  - `core_brain/shadow_fills.py` — select `max(price for (t,price) in swept
+    if t == token and price < own)` inside the branch that already credits;
+    attach it to the credited `ShadowFill`. Nothing else in the function.
+  - `core_brain/shadow_exec.py` — the companion table DDL in
+    `ensure_shadow_tables` + one write per credited fill in `_credit_market`.
+    `_credit_market` keeps writing `FillRecord` exactly as today.
+  - `core_brain/order_registry.py` — `FillRecord` gains the optional field;
+    `record_fill` INSERT unchanged; `get_all_fills()` enriches rows with the
+    print via an optional join guarded by a table-existence check.
+  - `core_brain/statistical_analytics.py` — `cleared_fills` reads the print
+    from the row that supplies the earliest usable timestamp (latency and
+    depth then describe the same event; latency figures do not move).
+  - `tests/test_shadow_fills.py`, `tests/test_queue_realism_analytics.py` —
+    new tests only, except updating the two assertions that pin
+    `clearing_price is None` as the honest state (they become the
+    present-print cases).
+  - `SPEC.md`, `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
+- Files that must NOT be modified:
+  - `data/orders.db` and every production registry — read-only at all times.
+  - Fill eligibility, credited size, execution price, timestamps — the fill
+    model is frozen; which orders fill must not change.
+  - The taker path (`core_brain/shadow_exec.py:1222`) — no resting level,
+    no depth; stays unmeasured.
+  - Bands, thresholds, the queue-realism card, the latency half of #515.
+  - `core_brain/config.py`, quoting, sizing, close-method tuples (#520 owns
+    them), top nav (#504 owns it).
+  - `dashboard/static/app.js` — `renderQueueRealism` already renders a real
+    figure; no change expected.
+
+## Population & missing-value rules
+
+- One `ClearedFill` per credited quote. The clearing price comes from the row
+  that supplies the earliest usable timestamp; ties take the first row seen;
+  all rows timestamp-less take the first row.
+- A missing clearing print stays `None` — never `0.0`, never `fills.price`.
+  `trade_through_depth` keeps counting it as `missing`, not zero.
+
+## Quality bar
+
+- Focused suites the agent runs: `tests/test_shadow_fills.py`,
+  `tests/test_queue_realism_analytics.py`; boundary `tests/test_shadow_run.py`
+  + `tests/test_statistical_analytics.py` (readers of the touched seams).
+  The full `python -m pytest -q` sweep is GitHub CI's job, not a local step.
+- Every changed behaviour carries a test that fails without the change; the
+  end-to-end regression lives in `tests/test_queue_realism_analytics.py` so
+  the issue's own acceptance command runs it.
+- Anti-cheat: no skipped/disabled tests, no deleted assertions, no linter
+  suppression. No new external dependencies.
+- `data/orders.db` is never opened for writing; tests use `tmp_path` or fakes.
+
+## Environment quirk (verified at intake)
+
+- This host's shell exports `PORT=0`, which breaks dashboard test collection.
+  Run focused suites via `.venv/Scripts/python -m pytest`. Never hand pytest
+  commands to the operator — agent-run only, reported as background results.
+
 
 ## Values rule (operator-ordered t-switch)
 
