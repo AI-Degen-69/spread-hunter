@@ -6,7 +6,10 @@ dashboard/static/index.html and CSS assertions against dashboard/static/styles.c
 """
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -15,6 +18,16 @@ import pytest
 STATIC = Path(__file__).resolve().parent.parent / "dashboard" / "static"
 INDEX_HTML = STATIC / "index.html"
 STYLES_CSS = STATIC / "styles.css"
+HARNESS = Path(__file__).resolve().parent / "js" / "live_state_harness.cjs"
+
+requires_node = pytest.mark.skipif(shutil.which("node") is None,
+                                   reason="node is not installed on this host")
+
+
+def _harness(script: str) -> dict:
+    out = subprocess.run([shutil.which("node"), str(HARNESS), script],
+                         capture_output=True, text=True, check=True, encoding="utf-8")
+    return json.loads(out.stdout)
 
 
 class DOMNode:
@@ -178,3 +191,75 @@ def test_tab_row_styling(css: str):
     assert "uppercase" in body
     assert "IBM Plex Sans" in body
     assert "letter-spacing" in body
+
+
+def test_status_pills_share_markup(dom: DOMNode):
+    """All top-nav status pills must share the .pill mono base and carry .pill-label and .pill-value spans."""
+    pills = [
+        "market-scan-pill",
+        "scan-state-pill",
+        "master-status-indicator",
+        "hud-services-pill",
+        "hud-guardrail-pill",
+        "db-mode-badge",
+    ]
+    for pid in pills:
+        el = dom.find_one(id=pid)
+        assert el is not None, f"Expected #{pid} in DOM"
+        assert "pill" in el.classes, f"#{pid} must have .pill class"
+        assert "mono" in el.classes, f"#{pid} must have .mono class"
+        label = el.find_one(cls="pill-label")
+        assert label is not None, f"#{pid} must carry .pill-label span"
+        value = el.find_one(cls="pill-value")
+        assert value is not None, f"#{pid} must carry .pill-value span"
+
+
+def test_pill_value_css(css: str):
+    match = re.search(r"\.pill-value\s*\{([^}]*)\}", css)
+    assert match, ".pill-value rule not found in styles.css"
+    assert "font-weight" in match.group(1)
+
+
+@requires_node
+def test_scan_pill_renders_grammar():
+    data = _harness("topnav")["scan"]
+    assert {"pill", "state-running", "mono"}.issubset(set(data["className"].split()))
+    assert 'class="pill-label"' in data["innerHTML"]
+    assert 'class="pill-value"' in data["innerHTML"]
+    assert data["textContent"].startswith("SCAN RUNNING")
+
+
+@requires_node
+def test_engine_and_elsewhere_renders_grammar():
+    top = _harness("topnav")
+    eng = top["engineRunning"]
+    assert {"pill", "state-running", "mono"}.issubset(set(eng["className"].split()))
+    assert eng["elsewhereDisplay"] == "none"
+
+    stalled = top["engineStalledElsewhere"]
+    assert {"pill", "state-down", "mono"}.issubset(set(stalled["className"].split()))
+    assert stalled["elsewhereDisplay"] == ""
+    assert {"pill", "engine-elsewhere-pill", "mono"}.issubset(set(stalled["elsewhereClass"].split()))
+    assert 'class="pill-label"' in stalled["elsewhereHtml"]
+    assert 'class="pill-value"' in stalled["elsewhereHtml"]
+    assert stalled["elsewhereText"] == "1 RUN LIVE ON ANOTHER STORE"
+
+
+@requires_node
+def test_db_badge_renders_grammar():
+    data = _harness("topnav")["dbProd"]
+    assert {"pill", "mode-live", "mono"}.issubset(set(data["className"].split()))
+    assert 'class="pill-label"' in data["innerHTML"]
+    assert 'class="pill-value"' in data["innerHTML"]
+    assert data["textContent"] == "DB LIVE"
+
+
+@requires_node
+def test_master_and_services_render_grammar():
+    data = _harness("topnav")["masterRunning"]
+    assert {"pill", "state-running", "mono"}.issubset(set(data["className"].split()))
+    assert 'pulse-dot active' in data["innerHTML"]
+    assert 'class="pill-label"' in data["innerHTML"]
+    assert 'class="pill-value"' in data["innerHTML"]
+    assert data["textContent"] == "STACK RUNNING"
+    assert "services-pill-trigger" in data["servicesClass"]

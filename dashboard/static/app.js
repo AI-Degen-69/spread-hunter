@@ -276,17 +276,47 @@ function marketScanState(status, kpi, opts) {
            title: 'The Market Filter is running and its snapshot is fresh.' + heldNote };
 }
 
+/* ── Shared status pill markup helper (#504) ── */
+function renderPillHtml(labelOrOpts, value, detail, dotState) {
+  let label, val, det, dot;
+  if (typeof labelOrOpts === 'object' && labelOrOpts !== null) {
+    label = labelOrOpts.label;
+    val = labelOrOpts.value;
+    det = labelOrOpts.detail;
+    dot = labelOrOpts.dotState || labelOrOpts.dot;
+  } else {
+    label = labelOrOpts;
+    val = value;
+    det = detail;
+    dot = dotState;
+  }
+  let dotHtml = '';
+  if (dot === 'running' || dot === 'active') {
+    dotHtml = '<span class="pulse-dot active"></span>';
+  } else if (dot === 'degraded' || dot === 'down' || dot === 'pulse') {
+    dotHtml = '<span class="pulse-dot"></span>';
+  }
+  let out = dotHtml;
+  if (label) {
+    out += '<span class="pill-label">' + esc(label) + '</span> ';
+  }
+  if (val !== undefined && val !== null && val !== '') {
+    out += '<span class="pill-value">' + esc(val) + '</span>';
+  }
+  if (det !== undefined && det !== null && det !== '') {
+    out += ' <span class="pill-detail">' + esc(det) + '</span>';
+  }
+  return out;
+}
+
 function renderMarketScanPill(status, kpi, opts) {
   const el = document.getElementById('market-scan-pill');
   if (!el) return;
   const v = marketScanState(status, kpi, opts);
-  el.className = 'pill state-' + v.state;
+  el.className = 'pill state-' + v.state + ' mono';
   el.title = v.title;
-  const dot = (v.state === 'running') ? '<span class="pulse-dot active"></span>'
-    : (v.state === 'degraded' || v.state === 'down') ? '<span class="pulse-dot"></span>'
-    : '';
-  const age = (v.ageSec !== null && v.ageSec !== undefined) ? ' · ' + fmtAge(v.ageSec) : '';
-  el.innerHTML = dot + esc(v.label + age);
+  const age = (v.ageSec !== null && v.ageSec !== undefined) ? '· ' + fmtAge(v.ageSec) : '';
+  el.innerHTML = renderPillHtml('SCAN', v.state.toUpperCase(), age, v.state);
 }
 
 /* ── Backend-contact watchdog (DESIGN.md Risk 2) ──
@@ -1606,7 +1636,7 @@ function renderDbMode(status) {
 
   if (!mode) {
     el.className = 'pill state-unknown mono';
-    el.textContent = 'DB: UNKNOWN';
+    el.innerHTML = renderPillHtml('DB', 'UNKNOWN');
     el.title = 'Active registry unknown: the status endpoint did not answer.';
     return;
   }
@@ -1614,14 +1644,18 @@ function renderDbMode(status) {
   const path = status.db_path || '';
   if (lastDbIsProduction) {
     el.className = 'pill mode-live mono';
-    el.textContent = 'DB: LIVE';
+    el.innerHTML = renderPillHtml('DB', 'LIVE');
     el.title = `Reading the production registry: ${path}`;
   } else {
     // Not a cosmetic state. Every number on the page is a rehearsal, and START
     // is refused while this shows.
+    const fileName = path.split(/[\\/]/).pop();
+    let detail = fileName ? `· ${fileName}` : '';
+    if (verdict.stale) {
+      detail += (detail ? ' · ' : '') + 'NO LIVE RUN';
+    }
     el.className = 'pill mode-shadow mono' + (verdict.stale ? ' mode-stale' : '');
-    el.textContent = `DB: ${mode} · ${path.split(/[\\/]/).pop()}`
-      + (verdict.stale ? ' · NO LIVE RUN' : '');
+    el.innerHTML = renderPillHtml('DB', mode, detail);
     el.title = `Reading ${path}, not the production registry. `
       + (verdict.stale
         // The whole point: say what IS running, and where, instead of leaving
@@ -1792,24 +1826,23 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
 
   if (masterIndicator) {
     if (isStopping) {
-      masterIndicator.className = 'pill state-degraded font-display';
+      masterIndicator.className = 'pill state-degraded mono';
       const stopText = isShadow ? 'SHADOW STOPPING' : 'STACK STOPPING';
-      masterIndicator.textContent = stopText;
+      masterIndicator.innerHTML = renderPillHtml(isShadow ? 'SHADOW' : 'STACK', 'STOPPING', '', 'degraded');
       masterIndicator.setAttribute('aria-label', stopText);
     } else if (isShadow) {
       if (isShadowStartPending()) {
         // A launch was accepted but the run has not reported back yet: say
         // STARTING, not STOPPED, so the operator can tell booting from dead.
-        masterIndicator.className = 'pill state-degraded font-display';
-        masterIndicator.textContent = 'SHADOW STARTING';
+        masterIndicator.className = 'pill state-degraded mono';
+        masterIndicator.innerHTML = renderPillHtml('SHADOW', 'STARTING', '', 'degraded');
         masterIndicator.setAttribute('aria-label', 'SHADOW STARTING');
       } else {
         const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
         const shadowState = shadowRunning ? 'running' : 'stopped';
         const shadowLabel = 'SHADOW ' + shadowState.toUpperCase();
-        masterIndicator.className = `pill state-${shadowState} font-display`;
-        masterIndicator.innerHTML = (shadowState === 'running' ? '<span class="pulse-dot active"></span>' : '')
-          + esc(shadowLabel);
+        masterIndicator.className = `pill state-${shadowState} mono`;
+        masterIndicator.innerHTML = renderPillHtml('SHADOW', shadowState.toUpperCase(), '', shadowState);
         masterIndicator.setAttribute('aria-label', shadowLabel);
       }
     } else {
@@ -1818,9 +1851,8 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       // kept in step for readers that take the text, not the markup.
       const stackState = processState(isRunning, status?.registry_unreadable);
       const stackLabel = 'STACK ' + stackState.toUpperCase();
-      masterIndicator.className = `pill state-${stackState} font-display`;
-      masterIndicator.innerHTML = (stackState === 'running' ? '<span class="pulse-dot active"></span>' : '')
-        + esc(stackLabel);
+      masterIndicator.className = `pill state-${stackState} mono`;
+      masterIndicator.innerHTML = renderPillHtml('STACK', stackState.toUpperCase(), '', stackState);
       // aria-label, not textContent: overwriting textContent would delete the
       // pulse-dot span the line above just created.
       masterIndicator.setAttribute('aria-label', stackLabel);
@@ -1832,7 +1864,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const hudGuardrailState = document.getElementById('hud-guardrail-state');
   const hudGuardrailSub = document.getElementById('hud-guardrail-sub');
 
-  if (servicesPill) servicesPill.className = `pill state-${servicesState} mono`;
+  if (servicesPill) servicesPill.className = `pill state-${servicesState} mono services-pill-trigger`;
   if (hudServicesState) hudServicesState.textContent = servicesState.toUpperCase();
   if (hudServicesSub) hudServicesSub.textContent = isRunning ? `${activeCount} active` : 'all stopped';
 
@@ -2150,9 +2182,9 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
       if (isShadow) clearPendingShadowStart();
       const pill = document.getElementById('master-status-indicator');
       if (pill) {
-        pill.className = 'pill state-degraded font-display';
+        pill.className = 'pill state-degraded mono';
+        pill.innerHTML = renderPillHtml(isShadow ? 'SHADOW' : 'STACK', 'STOPPING', '', 'degraded');
         const stopText = isShadow ? 'SHADOW STOPPING' : 'STACK STOPPING';
-        pill.textContent = stopText;
         pill.setAttribute('aria-label', stopText);
       }
     } else {
@@ -8704,7 +8736,7 @@ function renderScanStatePill(scanState, opts) {
       ? hbAge + ageOffsetSec : hbAge;
     const telemetryError = scanState.telemetry_error;
     const state = telemetryError ? 'unknown' : scanPillState(raw, effHbAge, scanState.cadence_sec, scanState.stall_reason);
-    headerPill.className = 'pill state-' + state;
+    headerPill.className = 'pill state-' + state + ' mono';
     const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
       : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
       : '';
@@ -8713,6 +8745,7 @@ function renderScanStatePill(scanState, opts) {
       ? ' · ' + formattedAge : '';
     // Write the verdict into the inner state span only: overwriting the pill's
     // own innerHTML would erase the ENGINE label that names this measurement.
+    stateText.className = 'pill-value';
     stateText.innerHTML = dot + esc(state.toUpperCase() + age);
     const rawSec = (effHbAge !== null && effHbAge !== undefined) ? Math.max(0, Math.round(effHbAge)) : null;
     if (telemetryError) {
@@ -8750,8 +8783,9 @@ function renderScanStatePill(scanState, opts) {
     if (elsewhereTag) {
       if (otherRuns.length > 0 && state !== 'running') {
         elsewhereTag.style.display = '';
-        const countText = otherRuns.length === 1 ? '1 RUN LIVE ON ANOTHER STORE' : `${otherRuns.length} RUNS LIVE ON ANOTHER STORE`;
-        elsewhereTag.textContent = countText;
+        const countLabel = otherRuns.length === 1 ? '1 RUN' : `${otherRuns.length} RUNS`;
+        elsewhereTag.className = 'pill engine-elsewhere-pill mono';
+        elsewhereTag.innerHTML = renderPillHtml(countLabel, 'LIVE ON ANOTHER STORE');
         const details = otherRuns.map(r => `${r.run_id || 'unnamed'} (${r.db_path || 'unknown store'}, ${r.heartbeat_file || 'unknown file'})`).join('; ');
         elsewhereTag.title = `${details} — its numbers are not shown on this page`;
       } else {
@@ -8760,7 +8794,8 @@ function renderScanStatePill(scanState, opts) {
     }
   } else {
     // No scan-state payload: the loop's state is unknown, not stopped.
-    headerPill.className = 'pill state-unknown';
+    headerPill.className = 'pill state-unknown mono';
+    stateText.className = 'pill-value';
     stateText.textContent = 'UNKNOWN';
     headerPill.title = backendStale
       ? 'Quote engine state unknown: current read did not land and the backend contact is lost.'
@@ -9369,6 +9404,7 @@ if (typeof module !== 'undefined' && module.exports) {
     set distCiLevel(v) { currentCiLevel = v; },
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState, resolveHeldRead,
     engineReasonText, engineProvenanceText, renderScanStatePill,
+    renderMarketScanPill, renderPillHtml, renderDbMode, renderServiceHeader,
     get setBackendContact() { return setBackendContact; },
     get renderBackendContact() { return renderBackendContact; },
     get backendStale() { return backendStale; },

@@ -28,6 +28,16 @@ function fakeClassList() {
   };
 }
 
+function stripHtml(html) {
+  return String(html)
+    .replace(/<[^>]*>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
 class FakeEl {
   constructor(tag) {
     this.tagName = tag;
@@ -42,7 +52,10 @@ class FakeEl {
     this.classList = fakeClassList();
     this.attrs = {};
   }
-  set innerHTML(v) { this._html = String(v); }
+  set innerHTML(v) {
+    this._html = String(v);
+    this._text = stripHtml(v);
+  }
   get innerHTML() { return this._html; }
   // Like a real DOM node, assigning textContent replaces the children, so a
   // later innerHTML read serializes the text (Issue #348 never-read case).
@@ -465,6 +478,101 @@ function runSwitcherVerdicts() {
   };
 }
 
+function topNavVerdicts() {
+  const scanPill = new FakeEl('span');
+  scanPill.id = 'market-scan-pill';
+  elements.set('market-scan-pill', scanPill);
+
+  const enginePill = new FakeEl('span');
+  enginePill.id = 'scan-state-pill';
+  const engineState = new FakeEl('span');
+  engineState.id = 'scan-engine-state';
+  const elsewhereTag = new FakeEl('span');
+  elsewhereTag.id = 'scan-engine-elsewhere';
+  elements.set('scan-state-pill', enginePill);
+  elements.set('scan-engine-state', engineState);
+  elements.set('scan-engine-elsewhere', elsewhereTag);
+
+  const dbBadge = new FakeEl('span');
+  dbBadge.id = 'db-mode-badge';
+  elements.set('db-mode-badge', dbBadge);
+
+  const masterIndicator = new FakeEl('span');
+  masterIndicator.id = 'master-status-indicator';
+  elements.set('master-status-indicator', masterIndicator);
+
+  const servicesPill = new FakeEl('button');
+  servicesPill.id = 'hud-services-pill';
+  const servicesDropdown = new FakeEl('div');
+  servicesDropdown.id = 'services-dropdown';
+  elements.set('hud-services-pill', servicesPill);
+  elements.set('services-dropdown', servicesDropdown);
+
+  const guardrailPill = new FakeEl('span');
+  guardrailPill.id = 'hud-guardrail-pill';
+  elements.set('hud-guardrail-pill', guardrailPill);
+
+  app.renderMarketScanPill({ services: { filter: { running: true } } }, { funnel: { snapshot_age: 120 } });
+  const scan = {
+    className: scanPill.className,
+    innerHTML: scanPill.innerHTML,
+    textContent: scanPill.textContent,
+  };
+
+  app.renderScanStatePill({
+    scan_state: 'SCANNING',
+    seconds_since_heartbeat: 2.5,
+    heartbeat_source: { kind: 'shadow', run_id: 'trial-01', db_path: 'data/trial_01.db' },
+    other_live_runs: [{ run_id: 'other-01', db_path: 'data/other.db' }],
+  });
+  const engineRunning = {
+    className: enginePill.className,
+    stateHtml: engineState.innerHTML,
+    stateText: engineState.textContent,
+    elsewhereDisplay: elsewhereTag.style.display,
+  };
+
+  app.renderScanStatePill({
+    scan_state: 'STALLED',
+    stall_reason: 'process_gone',
+    seconds_since_heartbeat: 4000,
+    other_live_runs: [{ run_id: 'other-01', db_path: 'data/other.db' }],
+  });
+  const engineStalledElsewhere = {
+    className: enginePill.className,
+    elsewhereDisplay: elsewhereTag.style.display,
+    elsewhereClass: elsewhereTag.className,
+    elsewhereHtml: elsewhereTag.innerHTML,
+    elsewhereText: elsewhereTag.textContent,
+  };
+
+  app.renderDbMode({ db_mode: 'LIVE', db_is_production: true });
+  const dbProd = {
+    className: dbBadge.className,
+    innerHTML: dbBadge.innerHTML,
+    textContent: dbBadge.textContent,
+  };
+
+  app.renderServiceHeader({
+    services: {
+      filter: { running: true },
+      query: { running: true },
+      decide: { running: true },
+    },
+    bot_state: 'RUNNING',
+    db_mode: 'LIVE',
+    db_is_production: true,
+  }, { running: true, age_s: 2, alerts_total: 0 }, { alerts: [] });
+  const masterRunning = {
+    className: masterIndicator.className,
+    innerHTML: masterIndicator.innerHTML,
+    textContent: masterIndicator.textContent,
+    servicesClass: servicesPill.className,
+  };
+
+  return { scan, engineRunning, engineStalledElsewhere, dbProd, masterRunning };
+}
+
 let out;
 if (script === 'dbmode') out = dbModeVerdicts();
 else if (script === 'runswitcher') out = runSwitcherVerdicts();
@@ -477,6 +585,7 @@ else if (script === 'enginepill') out = enginePillVerdicts();
 else if (script === 'pills') out = pillVerdicts();
 else if (script === 'keys') out = keyVerdicts();
 else if (script === 'backend') out = backendSequence();
+else if (script === 'topnav') out = topNavVerdicts();
 else out = {
   pills: pillVerdicts(),
   keys: keyVerdicts(),
@@ -490,6 +599,7 @@ else out = {
   trialbanner: trialBannerVerdicts(),
   dbmode: dbModeVerdicts(),
   runswitcher: runSwitcherVerdicts(),
+  topnav: topNavVerdicts(),
 };
 
 process.stdout.write(JSON.stringify(out));
