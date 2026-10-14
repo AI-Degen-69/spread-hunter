@@ -20,6 +20,7 @@ Journeys under test:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,6 +30,23 @@ import pytest
 from core_brain.kpi import _signed_usd
 
 HARNESS = Path(__file__).resolve().parent / "js" / "sign_colours_harness.cjs"
+STATIC = Path(__file__).resolve().parent.parent / "dashboard" / "static"
+
+
+def _page_payload_version() -> int:
+    """The payload version the page itself treats as current.
+
+    Written as a literal this rots at the next payload bump: the number sat at
+    256 while the page moved to 257, and the test below then quietly asserted
+    that a *stale* backend shows no stale note -- it passed on the old page and
+    failed on the new one for the wrong reason. The pin that both sides agree
+    lives in `test_analytics_api.py`; this test only needs today's number, and
+    the page is where today's number is declared.
+    """
+    match = re.search(r"^const EXPECTED_PAYLOAD_VERSION\s*=\s*(\d+);",
+                      (STATIC / "app.js").read_text(encoding="utf-8"), re.M)
+    assert match, "app.js no longer declares EXPECTED_PAYLOAD_VERSION"
+    return int(match.group(1))
 
 # The zero fixture these tiles shipped with: numbers the backend never produced.
 _DEFAULT_RISK = {
@@ -246,7 +264,8 @@ def test_a_stale_backend_says_so_once():
 
 @requires_node
 def test_a_current_backend_shows_no_note_and_warns_not():
-    fresh = _render(payload_version=256)
+    """A backend at the page's own version is current, whatever that version is."""
+    fresh = _render(payload_version=_page_payload_version())
     assert fresh["stale_note_shown"] is False
     assert fresh["stale_warn_count"] == 0
 

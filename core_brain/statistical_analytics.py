@@ -51,6 +51,17 @@ quality number. The last two look like the same question from different angles, 
 not merged into one verdict: a run can have a proven positive mean on too few trades to call
 the edge stable, and a single combined word would hide which half said so.
 
+The fifth section is the same question at the level of the capital. `capital_risk` (#517) reads the
+closes as percentages for two banded readings -- the skewness of the per-close returns, which says
+whether the swings come from upside surges or from downside tails, and a Sortino against an explicit
+risk-free rate, which says whether the return is worth the downside pain -- and reads a
+caller-supplied equity curve for the third: how deep the worst drawdown ran and how long the
+drawdowns that came back took to do it, in curve points and in seconds. That one carries no band on
+purpose. A duration has nothing to be judged against until it can be compared with how fast this
+strategy normally compounds, and a chip on a guess is a confident lie. The confidence-interval
+helper and the system quality number above are the ones this section's card links to, reused rather
+than copied, so the page holds one definition of each.
+
 This builds the payload, and it builds it only from what the registry actually
 holds. The rule throughout: **a section with no input is omitted, not
 synthesised.** A chart saying "unmeasured" is information; a chart drawing a
@@ -1565,6 +1576,361 @@ def robustness(closes: Sequence[Any], markouts: Sequence[Any]) -> dict[str, Any]
     }
 
 
+# ---------------------------------------------------------------------------
+# Capital risk (#517) -- how deep and how long the equity curve was underwater,
+# and where the tail risk sits.
+# ---------------------------------------------------------------------------
+
+# The settled skewness table, on the third standardized moment of the per-close returns: a right
+# tail is the shape where the losses stay small and the wins occasionally run, and the closed band
+# down to `SKEWNESS_AVERAGE_AT_OR_ABOVE` is "no dominant tail" -- zero included, because a
+# symmetric sample is not an upside tail. Below the edge the losses are the tail.
+SKEWNESS_AVERAGE_AT_OR_ABOVE = -0.5
+
+SKEWNESS_BAND_WORDS = {
+    "good": "upside tails -- losses stay small, wins occasionally large",
+    "average": "roughly symmetric -- no dominant tail",
+    "bad": "downside tails -- the catastrophic-loss shape",
+    "unmeasured": "fewer than three closes, or no spread to divide by",
+}
+
+# The settled Sortino table, on the return per unit of downside pain.
+SORTINO_GOOD_AT_OR_ABOVE = 2.0
+SORTINO_AVERAGE_AT_OR_ABOVE = 1.0
+
+SORTINO_BAND_WORDS = {
+    "good": "returns are twice the downside pain",
+    "average": "returns merely match the downside pain",
+    "bad": "the downside pain outweighs the returns",
+    "unmeasured": "fewer than two closes, no spread, or no downside to measure",
+}
+
+# The shipped risk-free assumption, percent per close -- the unit every return is already in, so a
+# caller compares like with like. It is named on the reading rather than buried in the call.
+RISK_FREE_PCT_PER_CLOSE = 0.0
+
+
+def skewness_band(value: Optional[float]) -> str:
+    """The traffic-light band for a per-close PnL skewness: good / average / bad.
+
+    The settled table: above zero the tails are on the upside, down to
+    `SKEWNESS_AVERAGE_AT_OR_ABOVE` the sample has no dominant tail, below it the losses are the
+    tail. `None` and anything non-finite read `unmeasured` -- a sample too small to have a third
+    moment is not a sample with a symmetric one, and a chip nobody could justify is the confident
+    lie this band exists to avoid.
+    """
+    number = _finite(value)
+    if number is None:
+        return "unmeasured"
+    if number > 0:
+        return "good"
+    return "average" if number >= SKEWNESS_AVERAGE_AT_OR_ABOVE else "bad"
+
+
+def pnl_skewness(return_pcts: Sequence[float]) -> dict[str, Any]:
+    """Where the tail risk sits, as the third standardized moment of the per-close returns.
+
+    Population moments, so the figure is the sample's own shape rather than a bias-corrected
+    estimate of a wider population's, and so a run's reading does not shift because one close was
+    added. Negative means the losses are the tail -- small wins with occasional large losses -- and
+    positive means the wins are.
+
+    Fewer than three usable values is `None`: with two the moment is zero by construction, which
+    would print "roughly symmetric" over a sample that cannot say so. A flat sample has no spread
+    to divide by and is `None` for the same reason. Values that are missing, non-numeric, `NaN` or
+    infinite are dropped rather than read as a break-even close.
+
+    The moment is measured in units of the sample's own spread, so no intermediate can overflow: a
+    magnitude whose raw squares and cubes do not fit a float still has a shape, and that shape is
+    what ships. A reading that cannot be produced at all is `None` with the `unmeasured` band --
+    never `NaN` and never `Infinity`, both of which the payload's strict serialization rejects.
+    """
+    sample = [value for value in (_finite(value) for value in return_pcts or [])
+              if value is not None]
+    n = len(sample)
+
+    def unmeasured() -> dict[str, Any]:
+        return {"pnl_skewness": None, "band": "unmeasured",
+                "meaning": SKEWNESS_BAND_WORDS["unmeasured"], "n": n}
+
+    if n < 3:
+        return unmeasured()
+
+    mean = statistics.fmean(sample)
+    if not math.isfinite(mean):
+        return unmeasured()
+
+    # The spread is the unit everything below is divided by, which keeps every deviation inside
+    # [-1, 1] and the third moment well inside a float.
+    spread = max(abs(value - mean) for value in sample)
+    if not math.isfinite(spread) or spread == 0:
+        return unmeasured()
+
+    deviations = [(value - mean) / spread for value in sample]
+    second = sum(value * value for value in deviations) / n
+    if second == 0:
+        return unmeasured()
+
+    score = _finite(round(sum(value ** 3 for value in deviations) / n / second ** 1.5, 6))
+    if score is None:
+        return unmeasured()
+    band = skewness_band(score)
+    return {"pnl_skewness": score, "band": band,
+            "meaning": SKEWNESS_BAND_WORDS[band], "n": n}
+
+
+def sortino_band(value: Optional[float]) -> str:
+    """The traffic-light band for a Sortino ratio: good / average / bad.
+
+    The settled table: at or above `SORTINO_GOOD_AT_OR_ABOVE` the returns are twice the downside
+    pain, at or above `SORTINO_AVERAGE_AT_OR_ABOVE` they merely match it, and below that the pain
+    outweighs them -- a negative reading included, which is an edge that pays nothing for its risk.
+    `None` and anything non-finite read `unmeasured`.
+    """
+    number = _finite(value)
+    if number is None:
+        return "unmeasured"
+    if number >= SORTINO_GOOD_AT_OR_ABOVE:
+        return "good"
+    return "average" if number >= SORTINO_AVERAGE_AT_OR_ABOVE else "bad"
+
+
+def sortino_ratio(return_pcts: Sequence[float],
+                  risk_free: float = RISK_FREE_PCT_PER_CLOSE) -> Optional[float]:
+    """Return per unit of downside pain, against an explicit risk-free rate.
+
+    The numerator is the mean EXCESS return and the denominator is the root-mean-square of the
+    negative excess returns over their own count -- the same denominator `kpi.compute_trade_analytics`
+    already uses, so at `risk_free = 0.0` the two agree to the last digit and the KPI payload stays
+    the oracle for this one. Textbook versions divide by the total count; that would read a run
+    with one bad close in fifty as nearly painless, which is the opposite of what this ratio is for.
+
+    `risk_free` is percent PER CLOSE, the unit of every return handed in, and nothing here is
+    annualized: trades are not daily observations, and annualizing a five-close sample would quote
+    a rate the sample never earned. `None` for fewer than two usable returns, a sample with no
+    spread, no negative excess return (nothing was paid for), or a non-finite `risk_free`.
+
+    The downside deviation is computed in units of the widest loss, so no square overflows. That is
+    not only a precision matter: a squared loss past the float range used to make the denominator
+    `inf`, and a finite numerator over it returned `0.0` -- a measured-looking "no return at all"
+    where the real reading was a small positive one. An intermediate that cannot be represented is
+    `None`, never a figure.
+    """
+    rate = _finite(risk_free)
+    if rate is None:
+        return None
+    sample = [value for value in (_finite(value) for value in return_pcts or [])
+              if value is not None]
+    if len(sample) < 2 or len(set(sample)) < 2:
+        return None
+
+    excess = [value - rate for value in sample]
+    downside = [value for value in excess if value < 0]
+    if not downside:
+        return None
+
+    scale = max(abs(value) for value in downside)
+    deviation = scale * math.sqrt(sum((value / scale) ** 2 for value in downside) / len(downside))
+    if not math.isfinite(deviation) or deviation == 0:
+        return None
+
+    mean_excess = statistics.fmean(excess)
+    if not math.isfinite(mean_excess):
+        return None
+    return _finite(round(mean_excess / deviation, 6))
+
+
+def sortino(return_pcts: Sequence[float],
+            risk_free: float = RISK_FREE_PCT_PER_CLOSE) -> dict[str, Any]:
+    """The Sortino reading with its band, its words, and the risk-free rate it assumed.
+
+    The rate ships beside the number so the card can print the assumption: a Sortino is only
+    meaningful against the rate it was measured over, and a reader who cannot see it has to guess.
+    """
+    sample = [value for value in (_finite(value) for value in return_pcts or [])
+              if value is not None]
+    score = sortino_ratio(sample, risk_free)
+    band = sortino_band(score)
+    return {"sortino_ratio": score, "risk_free_pct_per_close": _finite(risk_free),
+            "band": band, "meaning": SORTINO_BAND_WORDS[band], "n": len(sample)}
+
+
+def _equity_points(points: Sequence[Any]) -> tuple[list[tuple[float, Optional[float]]], int]:
+    """The usable `(value, timestamp)` pairs of a caller-supplied curve, in the order given.
+
+    `_close_field` reads a dict or a record, because a caller holds whichever shape it holds: the
+    registry's account marks arrive as dicts while a test or a repair script may pass objects. A
+    point whose value is not finite is dropped and counted rather than read as a crash to zero, and
+    it is not a curve point -- the episode lengths count the points that were actually measured.
+
+    The timestamp is optional and never substituted: a point without one still contributes its
+    length in points, and contributes nothing to the seconds.
+    """
+    usable: list[tuple[float, Optional[float]]] = []
+    skipped = 0
+    for row in points or []:
+        value = _finite(_close_field(row, "v"))
+        if value is None:
+            skipped += 1
+            continue
+        usable.append((value, _finite(_close_field(row, "ts"))))
+    return usable, skipped
+
+
+def drawdown_episodes(points: Sequence[Any],
+                      starting_value: Optional[float] = None) -> list[dict[str, Any]]:
+    """Every peak-to-recovery run the curve made, in curve order.
+
+    Points are read in the order given and never sorted: an equity curve's order is its meaning, and
+    a sorted one would report the drawdown of a run that never happened. A point at or above the
+    running peak REGAINS it -- that is what recovered means on a capital curve, and it matches the
+    drawdown walk in `kpi.compute_trade_analytics`, where a point back at the peak is a zero
+    drawdown.
+
+    Each episode carries its peak, its trough, the depth in dollars and (unless the peak is zero or
+    below) as a share of that peak, whether it was regained, and -- only when it was -- its length in
+    curve points and in seconds. An episode still open when the curve ends is returned with
+    `recovered: False` and no length: a drawdown nobody has come back from yet has no duration, and
+    reporting the length so far would put a still-running loss into the medians as a finished one.
+    A depth or a duration no float can hold is `None` rather than an infinity the payload's strict
+    serialization would reject, and a recovery timestamped before its own peak carries no seconds:
+    the curve is read in the order given and is never sorted, so that is a real shape, but a
+    negative wait is not a duration.
+    """
+    usable, _ = _equity_points(points)
+    return _episodes_from(usable, starting_value)
+
+
+def _episodes_from(usable: Sequence[tuple[float, Optional[float]]],
+                   starting_value: Optional[float]) -> list[dict[str, Any]]:
+    """The episode walk itself, over already-validated `(value, timestamp)` pairs."""
+    peak = _finite(starting_value)
+    peak_index = -1 if peak is not None else None
+    peak_ts: Optional[float] = None
+    trough: Optional[float] = None
+    episodes: list[dict[str, Any]] = []
+
+    def record(recovered: bool, index: int, ts: Optional[float]) -> None:
+        depth = _finite(float(peak) - float(trough))
+        elapsed = (_finite(float(ts) - float(peak_ts))
+                   if (recovered and ts is not None and peak_ts is not None
+                       and float(ts) >= float(peak_ts)) else None)
+        episodes.append({
+            "peak": float(peak),
+            "trough": float(trough),
+            "depth_usd": depth,
+            "depth_pct": (_finite(100.0 * depth / float(peak))
+                          if depth is not None and float(peak) > 0 else None),
+            "recovered": recovered,
+            "points": (index - int(peak_index)) if recovered else None,
+            "seconds": elapsed,
+        })
+
+    for index, (value, ts) in enumerate(usable):
+        if peak is None:
+            peak, peak_index, peak_ts = value, index, ts
+            continue
+        if value >= peak:
+            if trough is not None:
+                record(True, index, ts)
+            peak, peak_index, peak_ts, trough = value, index, ts, None
+        elif trough is None or value < trough:
+            trough = value
+
+    if trough is not None:
+        record(False, len(usable), None)
+    return episodes
+
+
+def drawdown_recovery(points: Sequence[Any],
+                      starting_value: Optional[float] = None) -> dict[str, Any]:
+    """How far a caller-supplied equity curve fell, and how long the drawdowns took to come back.
+
+    Always present, like its sibling sections, and descriptive on purpose: the ticket settles that a
+    recovery duration carries no band, because "recovered in four points is good" has no meaning
+    without knowing how fast this strategy normally compounds. The medians read the REGAINED
+    drawdowns only, and are read off the module's `_percentile` so `median` IS the median.
+
+    `deepest_usd` is `0.0` on a curve that was read and never dropped -- a measurement -- and `None`
+    on a curve with no usable point, which measured nothing, and on one whose only drawdown ran
+    wider than a float can represent, which measured nothing this reader can name. The depth comes
+    from the deepest episode whose depth is representable; the lengths and the waits still count
+    every regained episode. `drawdown_recovery_sec` is omitted entirely when no regained episode
+    carried both endpoint timestamps in order, because a zero there would read as an instant
+    recovery.
+    """
+    usable, skipped = _equity_points(points)
+    episodes = _episodes_from(usable, starting_value)
+    regained = [episode for episode in episodes if episode["recovered"]]
+    measured = [episode for episode in episodes if episode["depth_usd"] is not None]
+    deepest = max(measured, key=lambda episode: episode["depth_usd"]) if measured else None
+
+    def shape(value: Optional[float]) -> Optional[float]:
+        return None if value is None else round(float(value), 6)
+
+    def deepest_figure(key: str) -> Optional[float]:
+        if not usable:
+            return None
+        if deepest is None:
+            return 0.0 if not episodes else None
+        return shape(deepest[key])
+
+    out: dict[str, Any] = {
+        "units": "curve_points_and_seconds",
+        "episodes": len(regained),
+        "open": len(episodes) - len(regained),
+        "skipped": skipped,
+        "deepest_usd": deepest_figure("depth_usd"),
+        "deepest_pct": deepest_figure("depth_pct"),
+        "deepest_recovered": None if deepest is None else bool(deepest["recovered"]),
+    }
+
+    lengths = [float(episode["points"]) for episode in regained]
+    out["drawdown_recovery_trades"] = {
+        "median": _percentile(lengths, 0.50),
+        "p90": _percentile(lengths, 0.90),
+        "n": len(lengths),
+    }
+    seconds = [float(episode["seconds"]) for episode in regained
+               if episode["seconds"] is not None]
+    if seconds:
+        out["drawdown_recovery_sec"] = {
+            "median": _percentile(seconds, 0.50),
+            "p90": _percentile(seconds, 0.90),
+            "n": len(seconds),
+        }
+    return out
+
+
+def capital_risk(return_pcts: Sequence[float],
+                 curve: Sequence[Any] = ()) -> dict[str, Any]:
+    """The capital-level readings the Reports & Analytics card mounts (#517).
+
+    Always present, like `robustness` and the three sections before it, and for the same reason: a
+    caller must never have to branch on whether a reading exists. A run with nothing recorded
+    reports `None` and `unmeasured`, which say "nothing to measure", never "no risk" and never
+    "no edge".
+
+    Two halves that read different sources and are deliberately independent. The banded readings --
+    `pnl_skewness` and `sortino_ratio` -- read the per-close percentage returns the caller hands
+    over; the descriptive `drawdown_recovery` reads the equity curve. One unrecorded writer must not
+    blank the other half, and the drawdown half carries NO band: the ticket settles that a recovery
+    duration has no intrinsic good or bad, because it has nothing to be judged against.
+
+    Each band is computed here, from the same rounded figure it ships with, so the chip a reader
+    sees cannot disagree with the number beside it. The confidence-interval helper and the system
+    quality number are the module's own (`robustness`), reused rather than restated.
+    """
+    sample = [value for value in (_finite(value) for value in return_pcts or [])
+              if value is not None]
+    return {
+        "units": "percent_per_close_and_curve_points",
+        "pnl_skewness": pnl_skewness(sample),
+        "sortino_ratio": sortino(sample),
+        "drawdown_recovery": drawdown_recovery(curve),
+    }
+
+
 def probability_bell(fills: Sequence[dict]) -> dict[str, Any]:
     """Where our executions landed across the probability range.
 
@@ -1688,18 +2054,24 @@ def monte_carlo(returns_usd: Sequence[float], starting_capital: float,
 
 def build(closes: Sequence[dict], fills: Sequence[dict],
           markouts: Sequence[dict], starting_capital: float,
-          quotes: Optional[Sequence[Any]] = None) -> dict[str, Any]:
+          quotes: Optional[Sequence[Any]] = None,
+          equity_curve: Optional[Sequence[Any]] = None) -> dict[str, Any]:
     """The whole `statistical_analytics` payload the analytics tab reads.
 
     The charts come and go with their input; `fill_path_edge`, `rescue_friction`,
-    `queue_realism` and `robustness` are always present, because they summarise the closes, the
-    fills and the quotes this call already holds and a caller must never have to branch on
-    whether a reading exists.
+    `queue_realism`, `robustness` and `capital_risk` are always present, because they summarise the
+    closes, the fills, the quotes and the curve this call already holds and a caller must never have
+    to branch on whether a reading exists.
 
     `quotes` is optional and additive. The queue-realism section reads the placement price
     and timestamp a close never carries, so a caller without quotes gets that section at
     zero counts rather than a missing key -- and a caller with them gets the one part of it
     the registry can answer today, the wait between placement and the first credited fill.
+
+    `equity_curve` is optional and additive for the same reason. The capital-risk section reads a
+    curve this call cannot assemble (realised closes stacked with the venue's own float marks), so a
+    caller without one gets every drawdown figure `None` rather than a curve invented from the
+    closes it happens to hold. `kpi.report` supplies the venue account-value curve it already emits.
     """
     returns = position_returns(closes)
     records = cleared_fills(quotes or [], fills)
@@ -1717,6 +2089,13 @@ def build(closes: Sequence[dict], fills: Sequence[dict],
         # The robustness gates (#516) read the closes and the markout rows, both of which this
         # call already holds -- no new parameter, and no section above it changes.
         "robustness": robustness(closes, markouts),
+        # The capital-level readings (#517) take the per-close percentages the distribution above
+        # already measured -- one definition of a close's return, never a second -- and the equity
+        # curve from the caller. No section above them changes.
+        "capital_risk": capital_risk(
+            [position["pnl_pct"] for position in returns["positions"]
+             if position["pnl_pct"] is not None],
+            equity_curve or ()),
         "probability_bell": probability_bell(fills),
         "markout": markout(markouts),
     }

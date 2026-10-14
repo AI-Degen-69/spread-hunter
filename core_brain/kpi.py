@@ -46,7 +46,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 256
+KPI_PAYLOAD_VERSION = 257
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -2204,6 +2204,18 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     except Exception:
         run_profitability = None
 
+    # The true account-value curve: one point per sweep, venue-sourced.
+    # Marks that failed to reach the venue carry a NULL value and are dropped
+    # here rather than plotted as a crash to zero. Named once and shipped twice
+    # (#517) -- as this payload key, and as the capital-risk section's curve --
+    # so the two can never disagree about which points the account had.
+    account_series = [
+        {"ts": float(am["ts"]), "v": float(am["account_value_usd"]),
+         "pnl": (None if am.get("pnl_usd") is None else float(am["pnl_usd"]))}
+        for am in sorted_account_marks
+        if am.get("account_value_usd") is not None
+    ]
+
     return {
         # Multi-run metadata
         "runs": runs,
@@ -2217,15 +2229,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         # Portfolio overview (run-level, all markets)
         "portfolio": portfolio,
         "equity_series": equity_series,
-        # The true account-value curve: one point per sweep, venue-sourced.
-        # Marks that failed to reach the venue carry a NULL value and are
-        # dropped here rather than plotted as a crash to zero.
-        "account_series": [
-            {"ts": float(am["ts"]), "v": float(am["account_value_usd"]),
-             "pnl": (None if am.get("pnl_usd") is None else float(am["pnl_usd"]))}
-            for am in sorted_account_marks
-            if am.get("account_value_usd") is not None
-        ],
+        "account_series": account_series,
 
         # Pace
         "markets_quoted": len({q["condition_id"] for q in quotes if q.get("condition_id")}),
@@ -2297,8 +2301,12 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         # markouts; a section with no input is omitted rather than synthesised,
         # so a chart says "unmeasured" instead of drawing a curve through
         # nothing. See core_brain/statistical_analytics.py.
+        # `account_series` goes in as the capital-risk section's equity curve
+        # (#517): it is the venue's own value curve, which is the capital, and
+        # it is the same series the payload below already ships.
         "statistical_analytics": build_statistical_analytics(
-            closes, fills, markouts, starting_capital, quotes),
+            closes, fills, markouts, starting_capital, quotes,
+            equity_curve=account_series),
 
         # Adverse selection & rebate
         "adverse_selection": adverse_selection,

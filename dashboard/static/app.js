@@ -85,7 +85,7 @@ let lastStatusAtMs = null;
  * envelope; anything lower (or missing) means this page is newer than the
  * process answering it. Keep EXPECTED_PAYLOAD_VERSION matched with
  * KPI_PAYLOAD_VERSION in core_brain/kpi.py. */
-const EXPECTED_PAYLOAD_VERSION = 256;
+const EXPECTED_PAYLOAD_VERSION = 257;
 let payloadVersionWarned = false;
 
 // True when the payload is absent, malformed, or predates this page.
@@ -4952,6 +4952,147 @@ function renderRobustness(stats) {
     </div>`;
 }
 
+/* How deep and how long the capital curve was underwater, where the swing risk sits, and whether
+ * the return is worth the downside pain (#517).
+ *
+ * Three readings off one run. The drawdown half is descriptive and carries NO chip: "recovered in
+ * four marks" has no verdict until it can be compared against how fast this strategy normally
+ * compounds, and a chip on a guess is a confident lie. The other two are banded, and their colour
+ * is NOT decided here -- the band arrives in the payload, computed beside the metric itself, and
+ * this renderer only names the theme's chip for it (green is `.live`, amber `.warn`, red `.bad`).
+ *
+ * A `null` reads `unmeasured`, never `0.00`: one close has no third moment, and `0.00` would claim
+ * it is symmetric. The 95% interval and the system quality number are the robustness card's own
+ * figures above, computed once in the analytics module -- this card points at them instead of
+ * restating them in a second place -- and they read realized dollars over their own population,
+ * which is a different unit from this card's per-close percentages. A payload served before this
+ * section existed renders no chips at all rather than inventing a verdict -- and no counts either: a
+ * store that never measured a curve must not be told it regained zero of zero drawdowns with every
+ * point usable. */
+function renderCapitalRisk(stats) {
+  const host = document.getElementById('capital-risk-readout');
+  if (!host) return;
+
+  const section = (stats || {}).capital_risk || {};
+  /* The section names its own units when it is there at all, which is the one thing a payload from
+   * before #517 cannot fake. Saying the reading is missing beats four tiles of zeroes over a curve
+   * nobody measured -- `0 / 0 drawdowns regained` and `every curve point usable` are claims about
+   * capital, and this card does not get to make them up. The page's own stale-backend note explains
+   * the restart; this says what is missing until it happens. */
+  if (!section.units) {
+    host.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-title">Capital risk unmeasured</div>
+        <div class="empty-state-msg">The backend answering this page carries no capital-risk
+        section, so the drawdown, skewness and Sortino readings are missing rather than zero.
+        Restart it against this build to read them.</div>
+      </div>`;
+    return;
+  }
+
+  const skew = section.pnl_skewness || {};
+  const sortino = section.sortino_ratio || {};
+  const recovery = section.drawdown_recovery || {};
+  const lengths = recovery.drawdown_recovery_trades || {};
+  const waits = recovery.drawdown_recovery_sec || {};
+
+  const figure = (value) => {
+    const n = Number(value);
+    return (value === null || value === undefined || !Number.isFinite(n)) ? null : n;
+  };
+  const count = (value) => figure(value) || 0;
+  const signOf = (n) => { if (n > 0) return '+'; if (n < 0) return '-'; return ''; };
+  const signed = (value, places) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : signOf(n) + Math.abs(n).toFixed(places);
+  };
+  const dollars = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : '$' + n.toFixed(2);
+  };
+  const shareOfPeak = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : n.toFixed(2) + '%';
+  };
+  /* A wait in curve points is a count, not a measurement: four marks, never 4.00. */
+  const marks = (value) => {
+    const n = figure(value);
+    if (n === null) return 'unmeasured';
+    return Number.isInteger(n) ? String(n) : n.toFixed(1);
+  };
+  /* Seconds go through the page's own duration format, so every wait on the dashboard reads alike. */
+  const waited = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : fmtHoldDuration(n);
+  };
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  const BAND_CHIP = { good: 'live', average: 'warn', bad: 'bad' };
+  /* A chip only when the payload carries a band. `unmeasured` still names itself -- an unmodified
+   * chip is this theme's word for a reading nobody could judge -- but a missing band is silence,
+   * not a verdict. */
+  const chip = (band) => {
+    if (typeof band !== 'string' || !band) return '';
+    const modifier = BAND_CHIP[band] ? ' ' + BAND_CHIP[band] : '';
+    return `<div><span class="analytics-chip${modifier}" style="margin-top:6px">`
+         + `${esc(band.toUpperCase())}</span></div>`;
+  };
+  const tile = (label, value, band, hint, detail) => `
+    <div class="kpi-tile">
+      <div class="kpi-label">${esc(label)}</div>
+      ${fmtVal(value, value === 'unmeasured' ? ' null' : '')}
+      ${chip(band)}
+      <div class="mono" style="font-size:11px;color:var(--text-muted)">${esc(hint)}</div>
+      ${detail ? `<div class="mono" style="font-size:11px;color:var(--text-muted)">${esc(detail)}</div>` : ''}
+    </div>`;
+
+  const depth = figure(recovery.deepest_usd);
+  const deepestState = recovery.deepest_recovered === true ? 'regained'
+    : (recovery.deepest_recovered === false ? 'still open' : 'nothing to recover from');
+  const depthDetail = depth === null
+    ? 'the equity curve has no points yet'
+    : `${shareOfPeak(recovery.deepest_pct)} of its peak \u00b7 ${deepestState}`;
+  const unusable = count(recovery.skipped);
+  const rf = figure(sortino.risk_free_pct_per_close);
+
+  host.innerHTML = `
+    <div class="kpi-grid">
+      ${tile('Deepest DD ($)', dollars(recovery.deepest_usd), '',
+             'worst peak-to-trough on the equity curve', depthDetail)}
+      ${tile('Recovery median (marks)', marks(lengths.median), '',
+             'how long a drawdown stayed under water',
+             `${plural(count(lengths.n), 'drawdown', 'drawdowns')} regained \u00b7 median wait ${waited(waits.median)}`)}
+      ${tile('Recovery p90 (marks)', marks(lengths.p90), '',
+             '90th percentile of the same wait',
+             `p90 wait ${waited(waits.p90)}`)}
+      ${tile('Drawdowns regained', `${count(recovery.episodes)} / ${count(recovery.open)}`, '',
+             'regained / still open at the end of the curve',
+             unusable ? `${plural(unusable, 'curve point', 'curve points')} unusable`
+                      : 'every curve point usable')}
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
+      Depth and recovery are read off the venue account-value curve, one point per sweep, so a
+      length in marks counts curve points rather than trades. A drawdown still under water carries
+      no length: a wait that has not finished is not a duration. No chip on this half, on purpose.
+    </div>
+    <div class="kpi-grid" style="margin-top:14px">
+      ${tile('PnL skewness', signed(skew.pnl_skewness, 2), skew.band,
+             skew.meaning || 'per-close return skew \u00b7 where the tail risk sits',
+             `${plural(count(skew.n), 'close', 'closes')}`)}
+      ${tile('Sortino', signed(sortino.sortino_ratio, 2), sortino.band,
+             sortino.meaning || 'mean excess return \u00f7 downside deviation',
+             `risk-free ${rf === null ? 'unmeasured' : rf.toFixed(2) + '%'} per close \u00b7 `
+             + `${plural(count(sortino.n), 'close', 'closes')} \u00b7 not annualised`)}
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
+      Skewness and Sortino read each close as a percentage of what that close cost, so a close with
+      no usable cost basis drops out of these two; the interval on the robustness card above reads
+      realized dollars over its own population instead. The 95% interval and the system quality
+      number stay on that card, computed once in the analytics module \u2014 this one points at them
+      rather than restating them here.
+    </div>`;
+}
+
 function renderAnalyticsSurface(kpi, status) {
   const grid = document.getElementById('kpi-grid');
   const gates = document.getElementById('analytics-gates');
@@ -5006,6 +5147,7 @@ function renderAnalyticsSurface(kpi, status) {
   try { renderRescueFriction(stats); } catch (e) { console.error('Error rendering rescue friction', e); }
   try { renderQueueRealism(stats); } catch (e) { console.error('Error rendering queue realism', e); }
   try { renderRobustness(stats); } catch (e) { console.error('Error rendering robustness gates', e); }
+  try { renderCapitalRisk(stats); } catch (e) { console.error('Error rendering capital risk', e); }
 
   // Render Quant Grid
   renderQuantRiskGrid(ta, p, stats);
@@ -9095,7 +9237,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderQueueRealism, renderRobustness, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState,

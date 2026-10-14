@@ -11,6 +11,7 @@ import sqlite3
 
 import pytest
 
+from core_brain import kpi
 from core_brain import statistical_analytics as sa
 from core_brain.order_registry import DEFAULT_DB_PATH, OrderRegistry
 from core_brain.registry_state import summarize_state
@@ -79,6 +80,36 @@ def test_the_demo_store_measures_an_excursion_and_the_robustness_gates(tmp_path)
     assert gates["mean_pnl_ci"]["band"] in {"good", "average", "bad"}
     assert gates["sqn"]["sqn"] is not None
     assert gates["sqn"]["band"] != "unmeasured"
+
+
+def test_the_demo_store_measures_the_capital_risk_section(tmp_path):
+    """The capital-risk card (#517) reads numbers on the demo store, not `unmeasured`.
+
+    A readout that can only ever say "unmeasured" cannot be verified on the screen. The scenarios
+    already carry what these metrics need: closes that are mostly small wins with a few large
+    losses (the downside-tail shape the skewness band names), and an account-value curve with one
+    deep drawdown that recovers plus two shallower ones.
+    """
+    build(tmp_path / "demo.db")
+    payload = kpi.report(db_path=str(tmp_path / "demo.db"), run_id="all")
+
+    capital = payload["statistical_analytics"]["capital_risk"]
+    assert capital["pnl_skewness"]["pnl_skewness"] == pytest.approx(-1.504061, abs=1e-6)
+    assert capital["pnl_skewness"]["band"] == "bad"
+    assert capital["sortino_ratio"]["sortino_ratio"] == pytest.approx(-0.23345, abs=1e-6)
+    assert capital["sortino_ratio"]["band"] == "bad"
+
+    recovery = capital["drawdown_recovery"]
+    assert recovery["deepest_usd"] == pytest.approx(14.6)
+    assert recovery["deepest_pct"] == pytest.approx(11.957412, abs=1e-6)
+    assert recovery["deepest_recovered"] is True
+    assert recovery["episodes"] == 3
+    assert recovery["open"] == 0
+    assert recovery["drawdown_recovery_trades"] == {"median": 4.0, "p90": 7.2, "n": 3}
+    assert recovery["drawdown_recovery_sec"] == {"median": 4800.0, "p90": 8640.0, "n": 3}
+    # The curve the section reads is the one the payload already shipped, untouched.
+    assert len(payload["account_series"]) == 45
+    assert payload["account_series"][-1]["v"] == pytest.approx(163.4)
 
 
 def test_every_quote_carries_a_leg_side(tmp_path):
