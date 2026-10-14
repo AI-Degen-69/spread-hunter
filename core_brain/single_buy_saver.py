@@ -41,7 +41,6 @@ from contextlib import contextmanager
 from typing import Optional
 
 from core_brain.close_methods import RESCUE_METHODS
-from core_brain.ladder import is_ladder_pair
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
 
 log = logging.getLogger("single_buy_saver")
@@ -1694,21 +1693,6 @@ def _manage_single_leg_positions_locked(
             if pair["naked"] <= SIZE_EPS:
                 continue
 
-            if is_ladder_pair(pair_id):
-                # Ladder-stamped pairs bypass the shared lifecycle and keep
-                # the pre-#413 `_route_pair` semantics: under `ladder_mode`
-                # one-shot rungs rest until `ladder_exit_sec`, then leave
-                # with the `ladder_exit` method; without it they answer to
-                # the ordinary grace timer with `single_buy_exit`. The
-                # unified routing retired the `_route_pair` call; this
-                # restores it for ladder-stamped pairs only.
-                out.append(_route_pair(
-                    client, registry, pair, max_pair_cost, live,
-                    venue_positions, cfg=cfg, last_ms=last_fill_ms,
-                    now_s=now_s,
-                ))
-                continue
-
             pair_side_tokens: dict[str, list[str]] = {}
             for token_id in pair["legs"]:
                 side = _token_side(registry, pair["condition_id"], token_id)
@@ -2034,16 +2018,7 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     window_sec = float(getattr(cfg, "pairs_exit_window_sec", 900.0) if cfg else 900.0)
     raw_grace = float(getattr(cfg, "single_buy_grace_sec", 45.0) if cfg else 45.0)
     grace_sec = min(raw_grace, window_sec)
-    # Ladder pairs answer to the ladder timer, not single grace: one-shot
-    # rungs rest until `ladder_exit_sec`, then leave with the ladder_exit
-    # method. Adverse drift above still exits immediately -- the timer is
-    # patience, not permission to bleed.
-    is_ladder = is_ladder_pair(pair["pair_id"]) \
-        and bool(getattr(cfg, "ladder_mode", False))
-    exit_method = "ladder_exit" if is_ladder else "single_buy_exit"
-    if is_ladder:
-        grace_sec = min(float(getattr(cfg, "ladder_exit_sec", 60.0)),
-                        window_sec)
+    exit_method = "single_buy_exit"
     stop_mode = str(getattr(cfg, "stop_loss_mode", "usd") if cfg else "usd").lower()
     max_loss_pct = float(getattr(cfg, "stop_loss_trigger_pct", 10.0) if cfg else 10.0) / 100.0
     max_loss_usd = float(getattr(cfg, "stop_loss_trigger_usd_cents", 4.0) if cfg else 4.0) / 100.0
@@ -2079,7 +2054,7 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
             "current_bid": heavy_bid,
         }
 
-    timer_reason = "ladder_exit" if is_ladder else "grace_expired"
+    timer_reason = "grace_expired"
     res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
                           live=live, venue_positions=venue_positions,
                           reason=timer_reason, method=exit_method,
