@@ -3313,7 +3313,7 @@ function renderPositionDistributionChart(stats) {
         + (sem == null ? 'NEEDS 2+ TO ESTIMATE SPREAD'
                        : 'NO MULTIPLIER FOR THIS SAMPLE');
     } else {
-      badge.textContent = `${currentCiLevel}% CI: [${formatVal(ciLower)}, ${formatVal(ciUpper)}] · ${isPos ? `LOWER BOUND POSITIVE (${formatVal(ciLower)} > 0) · EDGE CONFIRMED` : 'ZERO CROSSING'}`;
+      badge.textContent = `${currentCiLevel}% CI: [${formatVal(ciLower)}, ${formatVal(ciUpper)}] · ${isPos ? `LOWER BOUND POSITIVE · EDGE CONFIRMED` : 'ZERO CROSSING'}`;
     }
   }
 
