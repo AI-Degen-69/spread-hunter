@@ -603,6 +603,16 @@ function topNavVerdicts() {
     textContent: dbBadge.textContent,
   };
 
+  // #600: the LIVE badge shows the store name, exactly as the SHADOW branch
+  // does, so the two badges are consistent and the significant db name is
+  // visible instead of living only in the tooltip.
+  app.renderDbMode({ db_mode: 'LIVE', db_is_production: true, db_path: 'data/production_live.db' });
+  const dbLiveWithName = {
+    className: dbBadge.className,
+    innerHTML: dbBadge.innerHTML,
+    textContent: dbBadge.textContent,
+  };
+
   const masterToggle = new FakeEl('button');
   masterToggle.id = 'btn-master-toggle';
   elements.set('btn-master-toggle', masterToggle);
@@ -699,6 +709,7 @@ function topNavVerdicts() {
     engineRunning,
     engineStalledElsewhere,
     dbProd,
+    dbLiveWithName,
     masterRunning,
     toggleClasses,
     panelPlacement,

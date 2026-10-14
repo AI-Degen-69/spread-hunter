@@ -504,7 +504,7 @@ header {
 .services-caret { font-size: 9px; opacity: 0.7; transition: transform 0.15s; }
 .services-pill-trigger[aria-expanded="true"] .services-caret { transform: rotate(180deg); }
 .services-dropdown {
-  width: 380px;
+  width: 500px;
   font-family: 'JetBrains Mono', monospace;
 }
 .services-dropdown-head {
@@ -520,16 +520,19 @@ header {
 }
 .services-dropdown-row {
   display: grid;
-  grid-template-columns: 150px 1fr 140px;
+  grid-template-columns: 140px 1fr 120px;
   align-items: center;
   gap: 8px;
   padding: 5px 6px;
   border-radius: 4px;
 }
 .services-dropdown-row:hover { background: rgba(255, 255, 255, 0.04); }
-.services-dropdown-row .pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* One pill width for every row (#600): the pill box fills the fixed 140px column
+   so WATCHDOG, SCAN, ENGINE, DECIDE and SHADOW share one right edge and stack in
+   a clean column instead of ragged content-sized boxes. */
+.services-dropdown-row .pill { width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .services-dropdown-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
-.services-dropdown-meta { max-width: 140px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.services-dropdown-meta { max-width: 120px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .services-dropdown-live { color: var(--signal); font-weight: 700; }
 .services-dropdown-foot {
   padding: 6px 6px 2px;

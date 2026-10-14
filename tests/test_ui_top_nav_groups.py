@@ -257,6 +257,16 @@ def test_db_badge_renders_grammar():
 
 
 @requires_node
+def test_live_db_badge_shows_the_store_name():
+    # #600: LIVE must show the db filename like SHADOW does — the store name is
+    # significant info, and the two badges must be consistent.
+    data = _harness("topnav")["dbLiveWithName"]
+    assert {"pill", "mode-live", "mono"}.issubset(set(data["className"].split()))
+    assert data["textContent"] == "DB LIVE · production_live.db"
+    assert 'class="pill-detail"' in data["innerHTML"]
+
+
+@requires_node
 def test_master_and_services_render_grammar():
     data = _harness("topnav")["masterRunning"]
     assert {"pill", "state-running", "mono"}.issubset(set(data["className"].split()))
