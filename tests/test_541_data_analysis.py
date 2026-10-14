@@ -68,6 +68,7 @@ def test_da_headline_gates_and_quant_carry_units_and_values(tmp_path):
     rendered = _run(_fixture_payload(tmp_path), tmp_path=tmp_path)
     html = rendered["html"]
     assert "Mean Return Per Trade (%)" in html["headline"]
+    assert "8 Closes (5W / 2L)" in html["headline"]
     assert "8 Closes" in rendered["samplePill"]
     assert "Max Drawdown Guard" in html["gates"]
     assert "Statistical Power Target" in html["gates"]

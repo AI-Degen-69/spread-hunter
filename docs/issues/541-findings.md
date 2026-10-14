@@ -47,9 +47,11 @@ byte-identical. Small-sample bands read wider now — that is the correction wor
   `ci_critical_value` falls back to z at 98/99. Extending the table is a follow-up —
   it needs 60 hand-checked constants, which is exactly the transcription risk this
   issue removes elsewhere.
-- **Legacy tab-2 is frozen with two known warts** (removal is the follow-up):
+- **Legacy tab-2 is frozen with known warts** (removal is the follow-up):
   the capital-risk hints say "equity curve" while the walk reads the account curve
-  (true label on the new tab), and `core_brain/ladder.py:19` carries a third copy of
+  (true label on the new tab), the dead Sensitivity Simulator button stays put, the
+  five charts render on both tabs (same fns, separate containers — one home view each
+  holds only within a tab), and `core_brain/ladder.py:19` carries a third copy of
   the exit-method tuple (#520 owns classification).
 
 ## 4. Report-only remainder (see also STAT_REPORT_ONLY in data_analysis.js)
