@@ -28,6 +28,18 @@ requires_node = pytest.mark.skipif(shutil.which("node") is None,
                                    reason="node is not installed on this host")
 
 
+def _plain(html: str) -> str:
+    """Strip HTML tags from a rendered pill so assertions read the visible text.
+
+    The canonical pill template renders dot / label / value / detail as sibling
+    spans, so the old "RUNNING · 3s" substring no longer appears verbatim: the
+    value and detail live in separate elements. This helper lets a test assert
+    the exact visible string the operator reads (#586).
+    """
+    import re as _re
+    return _re.sub(r"<[^>]+>", "", html).strip()
+
+
 def _harness(script: str) -> dict:
     out = subprocess.run([shutil.which("node"), str(HARNESS), script],
                          capture_output=True, text=True, check=True, encoding="utf-8")
@@ -211,15 +223,31 @@ def test_the_guardrail_hud_preserves_stale_liveness_states():
     assert hud["stale"] == {
         "state": "DOWN",
         "className": "pill state-down mono",
+        "dropdownState": "down",
     }
     assert hud["alerting"] == {
         "state": "DEGRADED",
         "className": "pill state-degraded mono",
+        "dropdownState": "degraded",
     }
     assert hud["stopped"] == {
         "state": "STOPPED",
         "className": "pill state-stopped mono",
+        "dropdownState": "stopped",
     }
+
+
+@requires_node
+def test_guardrail_header_and_dropdown_read_the_same_alert_count():
+    # #598: the header falls back to guardrailHealth.alerts_total when the alert
+    # payload is empty/absent; the dropdown must read the same count or it shows
+    # RUNNING while the header paints DEGRADED for the same watchdog.
+    hud = _harness("all")["guardrailHud"]
+    for case in ("alertingViaHealthOnly", "alertingViaHealthOnlyNoAlertsPayload"):
+        assert hud[case]["state"] == "DEGRADED", case
+        assert hud[case]["dropdownState"] == "degraded", case
+        # The header pill class and the dropdown row state agree.
+        assert "state-degraded" in hud[case]["className"], case
 
 
 def test_the_design_system_is_declared_to_every_agent():
@@ -411,9 +439,10 @@ def test_the_top_nav_engine_pill_carries_a_visible_label():
 def test_the_poller_writes_the_engine_verdict_without_erasing_its_label():
     js = APP_JS.read_text(encoding="utf-8")
     fn = js.split("function renderScanStatePill", 1)[1].split("\nfunction ", 1)[0]
-    # The verdict goes into the inner state span, not the pill's innerHTML.
-    assert "scan-engine-state" in fn
-    assert "headerPill.innerHTML" not in fn
+    # The verdict is rendered through the single canonical template
+    # (renderPillHtml, leading dot + label + value), never a hand-placed dot.
+    assert "renderPillHtml" in fn
+    assert "'ENGINE'" in fn or '"ENGINE"' in fn
 
 
 def test_the_services_pill_does_not_claim_to_be_the_engine():
@@ -566,8 +595,12 @@ def test_engine_provenance_text_names_source_run_and_store():
 def test_engine_pill_renders_running_with_provenance():
     rendered = _harness("enginepill")["rendered"]["shadowFresh"]
     assert set(rendered["pillClass"].split()) >= {"pill", "state-running", "mono"}
-    assert "RUNNING · 3s" in rendered["stateHtml"]
+    # Single template: gray ENGINE label, RUNNING value with heartbeat age,
+    # leading live dot — the dot never sits mid-pill beside the verdict.
+    assert ">ENGINE<" in rendered["stateHtml"]
+    assert _plain(rendered["stateHtml"]) == "ENGINE RUNNING · 3s"
     assert "pulse-dot active" in rendered["stateHtml"]
+    assert rendered["stateHtml"].index("pill-label") < rendered["stateHtml"].index("pill-value")
     assert "Quote engine heartbeat: SCANNING (3s ago)" in rendered["pillTitle"]
     assert "Source: run trial-01 on store data/trial_01.db" in rendered["pillTitle"]
     assert rendered["elsewhereDisplay"] == "none"
@@ -577,6 +610,7 @@ def test_engine_pill_renders_running_with_provenance():
 def test_engine_pill_renders_finished_as_stopped_and_hides_elsewhere_tag():
     rendered = _harness("enginepill")["rendered"]["shadowFinished"]
     assert set(rendered["pillClass"].split()) >= {"pill", "state-stopped", "mono"}
+    assert ">ENGINE<" in rendered["stateHtml"]
     assert "STOPPED" in rendered["stateHtml"]
     assert "pulse-dot" not in rendered["stateHtml"]
     assert "STALLED — run finished cleanly" in rendered["pillTitle"]
@@ -587,6 +621,7 @@ def test_engine_pill_renders_finished_as_stopped_and_hides_elsewhere_tag():
 def test_engine_pill_renders_down_and_reveals_neutral_elsewhere_tag_when_other_run_live():
     rendered = _harness("enginepill")["rendered"]["shadowDeadOtherLive"]
     assert set(rendered["pillClass"].split()) >= {"pill", "state-down", "mono"}
+    assert ">ENGINE<" in rendered["stateHtml"]
     assert "DOWN" in rendered["stateHtml"]
     assert "STALLED — process gone (pid 1234 not running)" in rendered["pillTitle"]
     assert rendered["elsewhereDisplay"] == ""
@@ -633,7 +668,8 @@ def test_a_failed_engine_read_keeps_its_verdict_and_ages():
     assert set(v["fresh"]["pillClass"].split()) >= {"pill", "state-running", "mono"}
     # The held pill is not gray: it keeps the verdict and its age advances.
     assert set(v["held"]["pillClass"].split()) >= {"pill", "state-running", "mono"}
-    assert "RUNNING · 11s" in v["held"]["stateHtml"]
+    assert _plain(v["held"]["stateHtml"]) == "ENGINE RUNNING · 11s"
+    assert ">ENGINE<" in v["held"]["stateHtml"]
     assert "did not land" in v["held"]["pillTitle"]
     assert "SCANNING" in v["held"]["pillTitle"]
 
@@ -648,7 +684,10 @@ def test_a_held_engine_verdict_still_ages_out_through_the_ramp():
 def test_an_engine_that_never_read_is_unknown_not_held():
     v = _harness("enginehold")["neverRead"]
     assert set(v["pillClass"].split()) >= {"pill", "state-unknown", "mono"}
-    assert v["stateHtml"] == "UNKNOWN"
+    # The whole pill renders through the single template: gray ENGINE label,
+    # UNKNOWN value, no dot. This is the never-read case, never a bare span.
+    assert "pill-label" in v["stateHtml"] and ">ENGINE<" in v["stateHtml"]
+    assert "pill-value" in v["stateHtml"] and ">UNKNOWN<" in v["stateHtml"]
 
 
 @requires_node

@@ -1759,6 +1759,16 @@ const SERVICE_DEFS = [
  * service the card grid does not. The state vocabulary is the same as the
  * cards' (statePillHtml): RUNNING/STOPPED, and UNKNOWN only when a telemetry
  * read genuinely failed. */
+
+/* The guardrail alert count, read one way by every surface (#598). The alert
+ * payload is authoritative when present; the health payload's alerts_total is
+ * the fallback when the alert payload is empty or absent. The header pill and
+ * the dropdown row MUST read the same count or they paint different states for
+ * the same guardrail. */
+function guardrailAlertCount(guardrailHealth, guardrailAlerts) {
+  return guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
+}
+
 function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, activeCount, overallState) {
   const trigger = document.getElementById('hud-services-pill');
   const panel = document.getElementById('services-dropdown');
@@ -1774,11 +1784,15 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       const telemetryError = guardrailHealth?.telemetry_error;
       const healthKnown = guardrailHealth !== null && guardrailHealth !== undefined && !telemetryError;
       const age = typeof guardrailHealth?.age_s === 'number' ? guardrailHealth.age_s : null;
-      const hasAlert = (guardrailAlerts?.alerts?.length > 0);
+      // One alert count shared with the header (#598): the header falls back to
+      // guardrailHealth.alerts_total when the alert payload is empty, so the
+      // dropdown must read the same count or it can show RUNNING while the
+      // header paints state-degraded.
+      const alertsTotal = guardrailAlertCount(guardrailHealth, guardrailAlerts);
+      const hasAlert = alertsTotal > 0;
       state = !healthKnown ? 'unknown'
         : hasAlert ? 'degraded'
         : (running ? stateKey(true, age, cadenceThresholds(5)) : stateKey(false, age));
-      const alertsTotal = guardrailHealth?.alerts_total || 0;
       meta = telemetryError ? 'telemetry down'
         : (hasAlert ? `${alertsTotal} alert${alertsTotal === 1 ? '' : 's'}` : 'auto-watch');
     } else if (def.key === 'shadow') {
@@ -1813,16 +1827,17 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
         meta = 'stopped';
       }
     }
-    const dot = `<span class="pulse-dot ${state === 'running' ? 'active' : ''}"></span>`;
-    const label = state.toUpperCase();
     const pillTag = { guardrail: 'WATCHDOG', filter: 'SCAN', query: 'ENGINE', decide: 'DECIDE', shadow: 'SHADOW' }[def.key] || def.key.toUpperCase();
     // Live-only/shadow-only context rides on the row tooltip, not the visible
     // meta slot: full sentences wrap and squeeze the name column (#586).
     let rowTitle = def.name;
     if (def.liveOnly && isShadow) rowTitle += ' — live only (shadow uses in-process client)';
     else if (def.key === 'shadow' && !isShadow) rowTitle += ' — shadow only (live uses venue engine)';
+    // Single canonical template: leading dot, gray label, state value, muted
+    // detail — no hand-rolled dot+label variants anywhere in this surface.
+    const pillInner = renderPillHtml({ label: pillTag, value: state.toUpperCase(), dotState: state });
     return `<div class="services-dropdown-row" title="${esc(rowTitle)}">
-      <span class="pill state-${state}"${pillId}>${dot} <span class="pill-label">${esc(pillTag)}</span> <span class="pill-value">${esc(label)}</span></span>
+      <span class="pill state-${state}"${pillId}>${pillInner}</span>
       <span class="services-dropdown-name" title="${esc(def.name)}">${esc(def.name)}</span>
       <span class="services-dropdown-meta">${esc(meta)}</span>
     </div>`;
@@ -1830,7 +1845,12 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
 
   const head = `<div class="services-dropdown-head"><span>Service Telemetry</span><span>${activeCount} active${overallState ? ' · ' + esc(overallState.toUpperCase()) : ''}</span></div>`;
   const foot = `<div class="services-dropdown-foot">Full controls on the Live Operations tab</div>`;
-  const telemetryPillIds = ['hud-guardrail-pill', 'market-scan-pill', 'scan-state-pill', 'hud-shadow-pill'];
+  // SCAN and ENGINE pills are driven live by their own renderers
+  // (renderMarketScanPill, renderScanStatePill). Swap those two back in so the
+  // rebuild never clobbers their fresh verdicts. Every other row's pill is
+  // owned here and must NOT be preserved — preserving hud-shadow-pill froze it
+  // on the static UNKNOWN fallback and hid the real shadow_run state.
+  const telemetryPillIds = ['market-scan-pill', 'scan-state-pill'];
   const existingTelemetryPills = telemetryPillIds
     .map(id => [id, panel.querySelector ? panel.querySelector(`#${id}`) : null])
     .filter(([, node]) => node);
@@ -1915,7 +1935,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   if (guardrailHealth?.running) activeCount++;
   if (isShadow && status?.shadow_run?.running && !status?.shadow_run?.ended) activeCount++;
 
-  const alertsCount = guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
+  const alertsCount = guardrailAlertCount(guardrailHealth, guardrailAlerts);
   const guardrailTelemetryError = guardrailHealth?.telemetry_error || guardrailAlerts?.telemetry_error;
   const guardrailKnown = guardrailHealth !== null && guardrailHealth !== undefined;
   let guardrailState = 'unknown';
@@ -2022,7 +2042,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   if (guardrailPill) guardrailPill.className = `pill state-${guardrailState} mono`;
   if (hudGuardrailState) hudGuardrailState.textContent = guardrailState.toUpperCase();
   if (hudGuardrailSub) {
-    const alertsTotal = guardrailHealth?.alerts_total || 0;
+    const alertsTotal = guardrailAlertCount(guardrailHealth, guardrailAlerts);
     hudGuardrailSub.textContent = guardrailState === 'unknown'
       ? 'telemetry unavailable' : `${alertsTotal} alerts`;
   }
@@ -8876,8 +8896,6 @@ function engineProvenanceText(scanState) {
 function renderScanStatePill(scanState, opts) {
   const headerPill = document.getElementById('scan-state-pill');
   if (!headerPill) return;
-  const stateText = document.getElementById('scan-engine-state');
-  if (!stateText) return;
   const elsewhereTag = document.getElementById('scan-engine-elsewhere');
 
   // Render scan state pill — canonical live-state vocabulary (DESIGN.md).
@@ -8898,16 +8916,12 @@ function renderScanStatePill(scanState, opts) {
     const telemetryError = scanState.telemetry_error;
     const state = telemetryError ? 'unknown' : scanPillState(raw, effHbAge, scanState.cadence_sec, scanState.stall_reason);
     headerPill.className = 'pill state-' + state + ' mono';
-    const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
-      : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
-      : '';
     const formattedAge = formatHeartbeatAge(effHbAge);
     const age = (state !== 'stopped' && state !== 'unknown' && formattedAge)
-      ? ' · ' + formattedAge : '';
-    // Write the verdict into the inner state span only: overwriting the pill's
-    // own innerHTML would erase the ENGINE label that names this measurement.
-    stateText.className = 'pill-value';
-    stateText.innerHTML = dot + esc(state.toUpperCase() + age);
+      ? '· ' + formattedAge : '';
+    // Canonical template: leading dot + gray label + value, identical to every
+    // other pill. Never hand-place the dot inside the value span.
+    headerPill.innerHTML = renderPillHtml({ label: 'ENGINE', value: state.toUpperCase(), detail: age, dotState: state });
     const rawSec = (effHbAge !== null && effHbAge !== undefined) ? Math.max(0, Math.round(effHbAge)) : null;
     if (telemetryError) {
       headerPill.title = `Telemetry unavailable: ${telemetryError.error || 'cycle ring read failed'}`;
@@ -8956,8 +8970,7 @@ function renderScanStatePill(scanState, opts) {
   } else {
     // No scan-state payload: the loop's state is unknown, not stopped.
     headerPill.className = 'pill state-unknown mono';
-    stateText.className = 'pill-value';
-    stateText.textContent = 'UNKNOWN';
+    headerPill.innerHTML = renderPillHtml({ label: 'ENGINE', value: 'UNKNOWN' });
     headerPill.title = backendStale
       ? 'Quote engine state unknown: current read did not land and the backend contact is lost.'
       : 'Quote engine state unknown: no heartbeat payload';

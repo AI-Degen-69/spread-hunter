@@ -58,17 +58,20 @@ def _slice(js: str, start_marker: str, end_markers: tuple[str, ...]) -> str:
 
 def test_dropdown_row_builder_emits_label_and_value():
     js = _js()
+    # The row pill itself is built by the single template, never hand-rolled:
+    # renderPillHtml emits the dot, the gray label, the value, and the detail.
     seg = _slice(js, "const pillTag", ("}).join",))
-    assert 'class="pill-label"' in seg, "dropdown row pill missing .pill-label"
-    assert 'class="pill-value"' in seg, "dropdown row pill missing .pill-value"
+    assert "renderPillHtml({ label: pillTag, value:" in seg, \
+        "dropdown row pill must be built by renderPillHtml with the service tag and state value"
 
 
 def test_dropdown_row_dot_has_separator():
     js = _js()
     # Scope to the dropdown row builder so the check is about that code.
     seg = _slice(js, "const pillTag", ("}).join",))
+    # No hand-rolled dot variant may survive alongside the canonical call.
     assert "${dot}<span" not in seg, "dropdown liveness dot emitted with no separator"
-    assert "${dot} <span" in seg, "dropdown liveness dot must be followed by a space before the label span"
+    assert "pulse-dot ${state" not in seg, "no hand-rolled dot markup: renderPillHtml owns the dot"
 
 
 def test_switcher_rows_use_pill_grammar():
@@ -146,3 +149,14 @@ def test_mode_stopped_value_uses_state_gray():
     assert "#10b981" not in live.group(1), "live-stopped text must not be mode-emerald"
     assert "var(--text-secondary)" in shadow.group(1)
     assert "var(--text-secondary)" in live.group(1)
+# -- Shadow freshness (stale-node swap must not freeze unrendered pills) --
+
+def test_shadow_and_guardrail_pills_not_preserved_as_stale_nodes():
+    js = _js()
+    m = re.search(r"telemetryPillIds\s*=\s*\[(.*?)\]", js, re.DOTALL)
+    assert m, "telemetryPillIds list missing"
+    ids = m.group(1)
+    assert "hud-shadow-pill" not in ids, "hud-shadow-pill has no dedicated renderer; preserving it freezes the static UNKNOWN fallback"
+    assert "hud-guardrail-pill" not in ids, "hud-guardrail-pill has no dedicated renderer either"
+    assert "market-scan-pill" in ids, "SCAN is live-rendered and must be preserved across rebuilds"
+    assert "scan-state-pill" in ids, "ENGINE is live-rendered and must be preserved across rebuilds"

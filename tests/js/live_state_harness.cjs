@@ -217,6 +217,24 @@ function backendSequence() {
 }
 
 function guardrailHudVerdict() {
+  // The dropdown needs its trigger + panel present, or renderServicesDropdown
+  // returns early. Register them so the WATCHDOG row actually renders and we
+  // can read its pill class out of the panel innerHTML (#598).
+  const servicesTrigger = new FakeEl('button');
+  servicesTrigger.id = 'hud-services-pill';
+  elements.set('hud-services-pill', servicesTrigger);
+  const servicesPanel = new FakeEl('div');
+  servicesPanel.id = 'services-dropdown';
+  elements.set('services-dropdown', servicesPanel);
+
+  // Pull the WATCHDOG pill's state class out of the rebuilt dropdown rows. The
+  // row emits `<span class="pill state-<state>" id="hud-guardrail-pill">`.
+  const dropdownGuardrailState = () => {
+    const html = servicesPanel.innerHTML;
+    const m = html.match(/pill state-([a-z]+)"\s+id="hud-guardrail-pill"/);
+    return m ? m[1] : '(no guardrail row)';
+  };
+
   const render = (health, alerts) => {
     app.renderServiceCards(
       { bot_state: 'STOPPED', services: {} },
@@ -226,6 +244,7 @@ function guardrailHudVerdict() {
     return {
       state: document.getElementById('hud-guardrail-state').textContent,
       className: document.getElementById('hud-guardrail-pill').className,
+      dropdownState: dropdownGuardrailState(),
     };
   };
   return {
@@ -235,6 +254,18 @@ function guardrailHudVerdict() {
       { alerts: [{ kind: 'TEST' }] },
     ),
     stopped: render({ running: false, age_s: null, alerts_total: 0 }, null),
+    // #598: the alert payload is empty/unavailable, but the health payload
+    // reports alerts_total. Header and dropdown must read the SAME count, so
+    // both go DEGRADED. Before the shared helper the dropdown read only the
+    // (empty) alert payload and stayed RUNNING while the header was degraded.
+    alertingViaHealthOnly: render(
+      { running: true, age_s: 3, alerts_total: 2 },
+      { alerts: [] },
+    ),
+    alertingViaHealthOnlyNoAlertsPayload: render(
+      { running: true, age_s: 3, alerts_total: 2 },
+      null,
+    ),
   };
 }
 
@@ -268,7 +299,7 @@ function enginePillVerdicts() {
     return {
       pillClass: pillEl.className,
       pillTitle: pillEl.title,
-      stateHtml: stateEl.innerHTML,
+      stateHtml: pillEl.innerHTML,
       elsewhereDisplay: elsewhereEl.style.display,
       elsewhereText: elsewhereEl.textContent,
       elsewhereTitle: elsewhereEl.title,
@@ -408,7 +439,7 @@ function engineHoldVerdicts() {
     app.renderScanStatePill(scanState, opts);
     return {
       pillClass: pillEl.className,
-      stateHtml: stateEl.innerHTML,
+      stateHtml: pillEl.innerHTML,
       pillTitle: pillEl.title,
     };
   };
@@ -547,8 +578,7 @@ function topNavVerdicts() {
   });
   const engineRunning = {
     className: enginePill.className,
-    stateHtml: engineState.innerHTML,
-    stateText: engineState.textContent,
+    stateHtml: enginePill.innerHTML,
     elsewhereDisplay: elsewhereTag.style.display,
   };
 
