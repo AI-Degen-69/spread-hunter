@@ -1740,6 +1740,11 @@ const SERVICE_DEFS = [
     tag: 'SPREAD QUOTER',
     desc: 'Runs the trading loop (dual-sided maker quotes -> merge execution) every 5s across approved markets.',
     liveOnly: true },
+  { key: 'shadow', name: 'Shadow Rehearsal Quoter', cmd: 'python -m core_brain.shadow_run',
+    tag: 'REHEARSAL ENGINE',
+    desc: 'In-process paper arbitrage loop executing zero-cost dual-sided quotes against live book.',
+    shadowOnly: true,
+    readOnly: true },
 ];
 
 /* Global top-nav status: stack pill, ENGINE/WATCHDOG pills, START/STOP
@@ -1756,10 +1761,12 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
   const trigger = document.getElementById('hud-services-pill');
   const panel = document.getElementById('services-dropdown');
   if (!trigger || !panel) return;
+  const isShadow = isShadowMode(status);
 
   const rows = SERVICE_DEFS.map(def => {
-    let state, meta, pid;
+    let state, meta, pid, pillId = '';
     if (def.key === 'guardrail') {
+      pillId = ' id="hud-guardrail-pill"';
       const running = guardrailHealth?.running || false;
       pid = guardrailHealth?.pid;
       const telemetryError = guardrailHealth?.telemetry_error;
@@ -1772,21 +1779,42 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       const alertsTotal = guardrailHealth?.alerts_total || 0;
       meta = telemetryError ? 'telemetry down'
         : (hasAlert ? `${alertsTotal} alert${alertsTotal === 1 ? '' : 's'}` : 'auto-watch');
+    } else if (def.key === 'shadow') {
+      pillId = ' id="hud-shadow-pill"';
+      const sr = status?.shadow_run;
+      const running = Boolean(sr?.running && !sr?.ended);
+      pid = sr?.pid;
+      if (!isShadow) {
+        state = 'stopped';
+        meta = 'shadow only (live uses venue engine)';
+      } else if (running) {
+        state = 'running';
+        const elapsed = sr?.elapsed_sec ? fmtStopwatch(sr.elapsed_sec) : '';
+        meta = pid ? `pid ${pid}${elapsed ? ` · ${elapsed}` : ''}` : (elapsed || 'running');
+      } else {
+        state = 'stopped';
+        meta = sr?.ended ? 'rehearsal ended' : 'stopped';
+      }
     } else {
+      if (def.key === 'filter') pillId = ' id="market-scan-pill"';
+      else if (def.key === 'query') pillId = ' id="scan-state-pill"';
       const svc = status?.services?.[def.key];
       const running = svc?.running || false;
       pid = svc?.pid;
       state = running ? 'running' : 'stopped';
       const uptime = typeof svc?.uptime_sec === 'number' ? `${Math.round(svc.uptime_sec)}s up` : '';
-      meta = def.liveOnly && status?.db_mode === 'SHADOW'
-        ? 'live only'
-        : (running ? (uptime ? (pid ? `pid ${pid} · ${uptime}` : uptime) : (pid ? `pid ${pid}` : 'running')) : 'stopped');
+      if (def.liveOnly && isShadow) {
+        meta = 'live only (shadow uses in-process client)';
+      } else if (running) {
+        meta = uptime ? (pid ? `pid ${pid} · ${uptime}` : uptime) : (pid ? `pid ${pid}` : 'running');
+      } else {
+        meta = 'stopped';
+      }
     }
     const dot = `<span class="pulse-dot ${state === 'running' ? 'active' : ''}"></span>`;
     const label = state.toUpperCase();
-    const liveCls = state === 'running' ? ' services-dropdown-live' : '';
     return `<div class="services-dropdown-row">
-      <span class="pill state-${state}">${dot}${label}</span>
+      <span class="pill state-${state}"${pillId}>${dot}<span class="pill-label">${esc(label)}</span></span>
       <span class="services-dropdown-name" title="${esc(def.name)}">${esc(def.name)}</span>
       <span class="services-dropdown-meta">${esc(meta)}</span>
     </div>`;
@@ -1869,6 +1897,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     activeCount = executionServiceKeys.filter(k => Boolean(status.services[k]?.running)).length;
   }
   if (guardrailHealth?.running) activeCount++;
+  if (isShadow && status?.shadow_run?.running && !status?.shadow_run?.ended) activeCount++;
 
   const alertsCount = guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
   const guardrailTelemetryError = guardrailHealth?.telemetry_error || guardrailAlerts?.telemetry_error;
@@ -1892,6 +1921,20 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   for (const def of SERVICE_DEFS) {
     if (def.key === 'guardrail') continue;
     if (isShadow && def.liveOnly) continue;
+    if (!isShadow && def.shadowOnly) continue;
+    if (def.key === 'shadow') {
+      const srRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
+      if (status?.registry_unreadable) {
+        subStates.push('unknown');
+      } else if (srRunning) {
+        subStates.push('running');
+      } else if (status?.shadow_run?.ended) {
+        subStates.push('stopped');
+      } else {
+        subStates.push('stopped');
+      }
+      continue;
+    }
     const svc = status?.services?.[def.key];
     if (status?.registry_unreadable) {
       subStates.push('unknown');
@@ -1910,7 +1953,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
 
   if (masterIndicator) {
     if (isStopping) {
-      masterIndicator.className = 'pill state-degraded mono';
+      masterIndicator.className = 'pill state-degraded mono' + (isShadow ? ' mode-shadow' : ' mode-live');
       const stopText = isShadow ? 'SHADOW STOPPING' : 'STACK STOPPING';
       masterIndicator.innerHTML = renderPillHtml(isShadow ? 'SHADOW' : 'STACK', 'STOPPING', '', 'degraded');
       masterIndicator.setAttribute('aria-label', stopText);
@@ -1918,14 +1961,14 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       if (isShadowStartPending()) {
         // A launch was accepted but the run has not reported back yet: say
         // STARTING, not STOPPED, so the operator can tell booting from dead.
-        masterIndicator.className = 'pill state-degraded mono';
+        masterIndicator.className = 'pill state-degraded mono mode-shadow';
         masterIndicator.innerHTML = renderPillHtml('SHADOW', 'STARTING', '', 'degraded');
         masterIndicator.setAttribute('aria-label', 'SHADOW STARTING');
       } else {
         const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
         const shadowState = shadowRunning ? 'running' : 'stopped';
         const shadowLabel = 'SHADOW ' + shadowState.toUpperCase();
-        masterIndicator.className = `pill state-${shadowState} mono`;
+        masterIndicator.className = `pill state-${shadowState} mono mode-shadow`;
         masterIndicator.innerHTML = renderPillHtml('SHADOW', shadowState.toUpperCase(), '', shadowState);
         masterIndicator.setAttribute('aria-label', shadowLabel);
       }
@@ -1935,7 +1978,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       // kept in step for readers that take the text, not the markup.
       const stackState = processState(isRunning, status?.registry_unreadable);
       const stackLabel = 'STACK ' + stackState.toUpperCase();
-      masterIndicator.className = `pill state-${stackState} mono`;
+      masterIndicator.className = `pill state-${stackState} mono mode-live`;
       masterIndicator.innerHTML = renderPillHtml('STACK', stackState.toUpperCase(), '', stackState);
       // aria-label, not textContent: overwriting textContent would delete the
       // pulse-dot span the line above just created.
@@ -2048,6 +2091,9 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
     if (def.key === 'guardrail') {
       running = guardrailHealth?.running || false;
       pid = guardrailHealth?.pid;
+    } else if (def.key === 'shadow') {
+      running = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
+      pid = status?.shadow_run?.pid;
     } else {
       svc = status?.services?.[def.key];
       running = svc?.running || false;
@@ -2077,12 +2123,21 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
         // looking like a healthy watcher in the operator surface.
         pill = `<span class="pill state-unknown" title="Telemetry unavailable: ${esc(telemetryError.error || 'cycle ring read failed')}">UNKNOWN</span>`;
       }
+    } else if (def.key === 'shadow') {
+      const isShadow = isShadowMode(status);
+      if (!isShadow) {
+        pill = `<span class="pill state-stopped">STOPPED</span>`;
+      } else {
+        pill = statePillHtml(running ? 'running' : 'stopped');
+      }
     } else {
       pill = statePillHtml(running ? 'running' : 'stopped');
     }
 
     let toggleHtml = '';
-    if (!def.readOnly) {
+    if (def.key === 'shadow') {
+      toggleHtml = `<span style="font-size:10px;font-weight:700;color:var(--text-muted);font-family:'JetBrains Mono',monospace">REHEARSAL</span>`;
+    } else if (!def.readOnly) {
       toggleHtml = `<button class="toggle ${running ? 'on' : ''}" data-svc="${def.key}" role="switch" aria-checked="${running}" aria-label="Toggle ${def.name}" tabindex="0"></button>`;
     } else {
       toggleHtml = `<span style="font-size:10px;font-weight:700;color:var(--text-muted);font-family:'JetBrains Mono',monospace">AUTO-WATCH</span>`;
@@ -2095,7 +2150,8 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
             <div>
               <div class="font-display" style="font-size:14px;letter-spacing:0.02em;color:var(--text-primary)">${def.name}</div>
               <span class="param-code-pill" style="margin-top:2px;display:inline-block">${def.tag}</span>${def.liveOnly ? `
-              <span class="svc-scope-pill" title="Live stack only. A shadow rehearsal runs this same code inside python -m core_brain.shadow_run, so this card stays STOPPED during a rehearsal by design.">LIVE ONLY</span>` : ''}
+              <span class="svc-scope-pill" title="Live stack only. A shadow rehearsal runs this same code inside python -m core_brain.shadow_run, so this card stays STOPPED during a rehearsal by design.">LIVE ONLY</span>` : ''}${def.shadowOnly ? `
+              <span class="svc-scope-pill svc-scope-shadow" title="Shadow rehearsal only. Uses an in-process client with a zero-cost fake signer.">SHADOW ONLY</span>` : ''}
             </div>
             <span class="service-pill-slot">${pill}</span>
           </div>
@@ -2488,6 +2544,7 @@ if (paramGridBtn && paramTableBtn) {
 /* ── Render: Exposure Bar (DT3) ── */
 function renderExposure(kpi) {
   const bar = document.getElementById('exposure-bar');
+  if (!bar) return;
   const text = document.getElementById('exposure-text');
   const fill = document.getElementById('exposure-fill');
 

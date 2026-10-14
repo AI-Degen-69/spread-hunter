@@ -439,7 +439,11 @@ header {
   white-space: nowrap;
 }
 .pill.mode-live { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
+.pill.mode-live.state-running { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
+.pill.mode-live.state-stopped { background: rgba(52, 211, 153, 0.08); color: #10b981; border: 1px solid rgba(52, 211, 153, 0.25); }
 .pill.mode-shadow { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
+.pill.mode-shadow.state-running { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
+.pill.mode-shadow.state-stopped { background: rgba(251, 191, 36, 0.08); color: #f59e0b; border: 1px solid rgba(251, 191, 36, 0.25); }
 /* The store this page reads has no run writing it while another one is live.
    Red, not amber: nothing on the page is updating, and the operator has to be
    told that before they read the rest of the dashboard. */
@@ -2667,6 +2671,10 @@ th[aria-sort] .ot-sort-btn {
   display: inline-block;
   border-radius: 4px;
   border: 1px dashed var(--border-strong);
+}
+.svc-scope-pill.svc-scope-shadow {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
 }
 #scan-engine-elsewhere,
 .engine-elsewhere-pill {

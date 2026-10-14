@@ -133,8 +133,8 @@ def test_top_meta_has_three_named_groups(dom: DOMNode):
     roles = [g.get_attr("role") for g in child_groups]
 
     assert roles == ["group", "group", "group"], "All 3 groups must have role='group'"
-    assert labels == ["Live state", "Data source", "Run controls"], (
-        f"Expected groups 'Live state', 'Data source', 'Run controls', got {labels}"
+    assert labels == ["Data source", "Live state", "Run controls"], (
+        f"Expected groups 'Data source', 'Live state', 'Run controls', got {labels}"
     )
 
 
@@ -149,25 +149,27 @@ def test_top_meta_mixed_aria_removed(dom: DOMNode):
 def test_live_state_group_items(dom: DOMNode):
     top_meta = dom.find_one(cls="top-meta")
     state_group = [c for c in top_meta.children if "top-group-state" in c.classes][0]
-    expected_ids = ["market-scan-pill", "scan-state-pill", "scan-engine-elsewhere", "master-status-indicator", "hud-guardrail-pill"]
-    for eid in expected_ids:
-        assert state_group.find_one(id=eid) is not None, f"Expected #{eid} in Live state group"
+    assert state_group.find_one(id="hud-services-pill") is not None, "Expected #hud-services-pill in Live state group"
+    for removed_from_top in ["market-scan-pill", "scan-state-pill", "hud-guardrail-pill"]:
+        assert state_group.find_one(id=removed_from_top) is None, f"#{removed_from_top} must not be a standalone pill in Live state group"
 
 
 def test_source_group_items(dom: DOMNode):
     top_meta = dom.find_one(cls="top-meta")
     source_group = [c for c in top_meta.children if "top-group-source" in c.classes][0]
-    expected_ids = ["db-mode-badge", "shadow-run-clock", "exposure-bar"]
+    expected_ids = ["master-status-indicator", "db-mode-badge", "shadow-run-clock", "scan-engine-elsewhere"]
     for eid in expected_ids:
         assert source_group.find_one(id=eid) is not None, f"Expected #{eid} in Data source group"
+    assert source_group.find_one(id="exposure-bar") is None, "#exposure-bar must be removed from Data source group"
 
 
 def test_controls_group_items(dom: DOMNode):
     top_meta = dom.find_one(cls="top-meta")
     ctrls_group = [c for c in top_meta.children if "top-group-controls" in c.classes][0]
-    expected_ids = ["btn-master-toggle", "btn-sync", "btn-reset", "btn-command-palette"]
+    expected_ids = ["btn-master-toggle", "btn-reset", "btn-command-palette"]
     for eid in expected_ids:
         assert ctrls_group.find_one(id=eid) is not None, f"Expected #{eid} in Run controls group"
+    assert ctrls_group.find_one(id="btn-sync") is None, "#btn-sync must be removed from Run controls group"
 
 
 def test_top_group_styles(css: str):
@@ -271,11 +273,12 @@ def test_header_buttons_carry_ctrl_btn_hierarchy(dom: DOMNode):
     assert "ctrl-btn" in master.classes
     assert "ctrl-btn-primary" in master.classes
 
-    for bid in ["btn-sync", "btn-reset", "btn-command-palette"]:
+    for bid in ["btn-reset", "btn-command-palette"]:
         btn = dom.find_one(id=bid)
         assert btn is not None, f"Expected #{bid} in DOM"
         assert "ctrl-btn" in btn.classes, f"#{bid} must have .ctrl-btn class"
         assert "ctrl-btn-secondary" in btn.classes, f"#{bid} must have .ctrl-btn-secondary class"
+    assert dom.find_one(id="btn-sync") is None, "#btn-sync must not exist in DOM"
 
 
 def test_ctrl_btn_css_rules(css: str):

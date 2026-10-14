@@ -403,7 +403,8 @@ def test_milestone8_html_contains_required_sections():
     dashboard orders table superseded it), so it is asserted ABSENT here.
     """
     assert "kpi-grid" in _read_static("index.html")
-    assert "exposure-bar" in _read_static("index.html")
+    # Issue #504 / Operator Directive: exposure-bar retired from top-nav
+    assert "exposure-bar" not in _read_static("index.html")
     assert "service-cards" in _read_static("index.html")
     assert "event-ticker" in _read_static("index.html")
     assert "cancel-modal" not in _read_static("index.html")
@@ -1495,10 +1496,10 @@ def test_operational_statuses_share_one_top_nav_bar():
         assert html.count(f'id="{element_id}"') == 1
     # The two old buttons must be gone, not merely unrendered.
     assert "btn-master-start" not in html
-    assert "btn-master-stop" not in html
-
-    assert 'id="btn-sync"' in top_meta
-    assert ">SYNC VENUE<" in top_meta
+    # Issue #504 / Operator Directive: btn-sync permanently removed
+    assert 'id="btn-sync"' not in top_meta
+    assert "btn-sync" not in html
+    assert ">SYNC VENUE<" not in html
     assert "btn-live-sync" not in html
     assert "live-ops-master-card" not in html
     assert "hud-db-mode" not in html
