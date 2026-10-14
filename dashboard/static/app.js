@@ -3527,9 +3527,9 @@ function renderPositionDistributionChart(stats) {
       <div class="chart-footer-item"><span>Sample Mean (μ):</span> <b style="color:#38bdf8">${formatVal(mean)}</b></div>
       <div class="chart-footer-item"><span>Std Dev (σ):</span> <b>${stdev == null ? 'unmeasured' : '±' + formatVal(stdev).replace('+', '')}</b></div>
       <div class="chart-footer-item"><span>Standard Error (SE):</span> <b>${sem == null ? 'unmeasured' : formatVal(sem).replace('+', '')}</b></div>
-      <div class="chart-footer-item"><span>${currentCiLevel}% Confidence Interval:</span> <b style="color:${bandMeasured ? '#34d399' : 'var(--text-muted)'}">${bandMeasured ? `[${formatVal(ciLower)}, ${formatVal(ciUpper)}]` : 'unmeasured'}</b></div>
-      <div class="chart-footer-item"><span>Distribution Sample Universe:</span> <b>N = ${directBins ? bellSamples + ' fills' : posCount + ' observations'}</b></div>
-      ${directBins ? '' : `<div class="chart-footer-item"><span>Statistical Edge:</span> <b style="color:${bandMeasured && ciLower > 0 ? 'var(--signal)' : 'var(--text-muted)'}">${!bandMeasured ? 'ACCUMULATING (needs 2+ observations)' : (ciLower > 0 ? 'H₁: μ &gt; 0 CONFIRMED' : 'ZERO CROSSING (no confirmed edge)')}</b></div>`}
+      <div class="chart-footer-item"><span>Confidence Interval:</span> <b style="color:${bandMeasured ? '#34d399' : 'var(--text-muted)'}">${bandMeasured ? `[${formatVal(ciLower)}, ${formatVal(ciUpper)}]` : 'unmeasured'}</b></div>
+      ${directBins ? `<div class="chart-footer-item"><span>Distribution Sample Universe:</span> <b>N = ${bellSamples} fills</b></div>` : ''}
+      ${directBins ? '' : `<div class="chart-footer-item"><b>${!bandMeasured ? 'ACCUMULATING (needs 2+ observations)' : (ciLower > 0 ? `H₁: mean return &gt; 0 @ CL: ${currentCiLevel}%` : `interval crosses 0 @ CL: ${currentCiLevel}%`)}</b></div>`}
     `;
   }
 }

@@ -231,13 +231,15 @@ def test_the_chart_draws_the_band_the_payload_handed_it():
 
 @requires_node
 def test_a_band_that_crosses_zero_is_not_a_confirmed_edge_in_the_footer():
-    """The badge already refused to call this a confirmed edge; the footer two
-    lines below it said H₁: μ > 0 CONFIRMED over the same interval."""
+    """The badge refused to call this a confirmed edge; the footer two lines
+    below it used to say H₁: μ > 0 CONFIRMED over the same interval. The footer
+    now states the crossing at the chosen level instead of confirming anything.
+    """
     rendered = _render(_chart_stats())
 
     assert "ZERO CROSSING" in rendered["badge"]
     assert "CONFIRMED" not in rendered["footer"]
-    assert "ZERO CROSSING" in rendered["footer"]
+    assert "interval crosses 0 @ CL: 90%" in rendered["footer"]
 
 
 @requires_node
@@ -339,12 +341,13 @@ def test_an_arm_whose_key_is_missing_goes_unmeasured_and_the_rest_do_not():
 @requires_node
 def test_a_band_clear_of_zero_is_a_confirmed_edge_in_the_footer():
     """The other side of the same line, so the copy cannot pass by always
-    declining to confirm."""
+    declining to confirm. A band clear of zero states the hypothesis it
+    supports at the chosen level."""
     rendered = _render(_chart_stats(mean_pnl_pct=8.0,
                                     ci_critical_pct={"90": 2.0, "95": 3.0}))
 
-    assert "CONFIRMED" in rendered["footer"]
-    assert "ZERO CROSSING" not in rendered["footer"]
+    assert "H₁: mean return &gt; 0 @ CL: 90%" in rendered["footer"]
+    assert "interval crosses 0" not in rendered["footer"]
 
 
 @requires_node
