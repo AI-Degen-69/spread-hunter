@@ -12,6 +12,7 @@ smooth curve through one observation is a lie that looks like analysis.
 from __future__ import annotations
 
 import math
+import re
 
 import pytest
 
@@ -448,9 +449,14 @@ requires_node = pytest.mark.skipif(shutil.which("node") is None,
                                    reason="node is not installed on this host")
 
 
-def _render(stats: dict) -> dict:
+def _render(stats: dict, metric: str | None = None, ci_level: int | None = None) -> dict:
+    payload: dict = {"statistical_analytics": stats}
+    if metric is not None:
+        payload["metric"] = metric
+    if ci_level is not None:
+        payload["ciLevel"] = ci_level
     out = subprocess.run(
-        [shutil.which("node"), str(HARNESS), json.dumps({"statistical_analytics": stats})],
+        [shutil.which("node"), str(HARNESS), json.dumps(payload)],
         capture_output=True, text=True, check=True, encoding="utf-8")
     return json.loads(out.stdout)
 
@@ -514,8 +520,150 @@ def test_the_renderer_carries_no_invented_statistics():
 
     # Act / Assert
     for invented in (": 0.42", ": 0.102", ": 0.042", "|| 0.981", "|| 0.008",
-                     "|| 0.945", "|| 17"):
+                     "|| 0.945", "|| 17",
+                     # The outcome-probability arm's bars came from a row's
+                     # position in the list, and its axis from a fixed 45pt.
+                     "i * 17 + 23", "delta = 45.0"):
         assert invented not in source, f"invented statistic back in app.js: {invented}"
+
+
+# --- outcome-probability arm (#538) -----------------------------------------
+
+def _fills(*prices: float) -> list[dict]:
+    return [{"price": p} for p in prices]
+
+
+def _bar_counts(rendered: dict) -> list[int]:
+    # Bar titles read "low% to high%: N fills" once the arm measures.
+    return [int(m) for m in re.findall(r": (\d+) fills", rendered["svgText"])]
+
+
+@requires_node
+def test_the_probability_arm_draws_only_measured_fill_counts():
+    # Arrange — six fills across two bins, three closes (a number the arm
+    # must never draw from again).
+    fills = _fills(0.45, 0.45, 0.47, 0.47, 0.50, 0.50)
+    closes = [_close(0.30), _close(-0.10, method="sell"),
+              _close(0.05, cost=0.95, shares=1.0)]
+    stats = build(closes, fills, [], 85.42)
+
+    # Act
+    rendered = _render(stats, metric="outcome_prob")
+
+    # Assert — every drawn bar count is a measured fill, summing to the sample.
+    assert _bar_counts(rendered) == [4, 2]
+    assert sum(_bar_counts(rendered)) == stats["probability_bell"]["samples_count"]
+
+
+@requires_node
+def test_fills_without_closes_still_draw_the_probability_arm():
+    # Arrange — a run that filled but never closed: the arm measures fills,
+    # so "No closed positions recorded" must not gate it.
+    stats = build([], _fills(0.45, 0.50, 0.47), [], 85.42)
+
+    # Act
+    rendered = _render(stats, metric="outcome_prob")
+
+    # Assert
+    assert rendered["chartEmpty"] is False
+    assert sum(_bar_counts(rendered)) == 3
+
+
+@requires_node
+def test_closes_without_fills_leave_the_probability_arm_unmeasured():
+    # Arrange
+    stats = build([_close(0.30)], [], [], 85.42)
+
+    # Act
+    rendered = _render(stats, metric="outcome_prob")
+
+    # Assert
+    assert "unmeasured" in rendered["badge"]
+    assert _bar_counts(rendered) == []
+
+
+@requires_node
+def test_identical_fill_prices_draw_one_bar_and_no_curve():
+    # Arrange — four fills at one price: one bar, and no normal curve fitted
+    # to a zero spread (which used to render as NaN geometry).
+    stats = build([_close(0.30)], _fills(0.47, 0.47, 0.47, 0.47), [], 85.42)
+
+    # Act
+    rendered = _render(stats, metric="outcome_prob")
+
+    # Assert
+    assert _bar_counts(rendered) == [4]
+    assert "NaN" not in rendered["chart"]
+    assert "Infinity" not in rendered["chart"]
+
+
+@requires_node
+def test_the_probability_arm_ignores_the_close_count():
+    # Arrange — the same fills, a different number of closes. Bars, badge
+    # and footer describe fills, so nothing on the arm may move.
+    fills = _fills(0.45, 0.50, 0.47)
+    one = _render(build([_close(0.30)], fills, [], 85.42), metric="outcome_prob")
+    three = _render(build([_close(0.30), _close(0.10), _close(-0.05, method="sell")],
+                          fills, [], 85.42), metric="outcome_prob")
+
+    # Assert
+    assert re.findall(r"<title>([^<]*fills[^<]*)</title>", one["chart"]) \
+        == re.findall(r"<title>([^<]*fills[^<]*)</title>", three["chart"])
+    assert one["badge"] == three["badge"]
+    assert one["footer"] == three["footer"]
+
+
+@requires_node
+def test_the_probability_arm_states_an_interval_not_an_edge():
+    # Arrange
+    fills = _fills(0.44, 0.46, 0.48, 0.50, 0.45, 0.47)
+    stats = build([_close(0.30)], fills, [], 85.42)
+
+    # Act
+    rendered = _render(stats, metric="outcome_prob")
+
+    # Assert — a fill-price distribution has no "edge above zero" to confirm.
+    assert "EDGE CONFIRMED" not in rendered["badge"]
+    assert "ZERO CROSSING" not in rendered["badge"]
+    assert "H₁" not in rendered["footer"]
+    assert "N = 6 fills" in rendered["footer"]
+    # No per-fill rows exist in the payload, so no scatter dots are drawn.
+    assert "pos-scatter-dot" not in rendered["chart"]
+    # A probability axis never leaves 0–100%.
+    axis_values = [float(v) for v in re.findall(r"(\d+\.\d)%", rendered["svgText"])]
+    assert axis_values and all(0.0 <= v <= 100.0 for v in axis_values)
+
+
+# --- spread cost per position (#538 fold-in) --------------------------------
+
+def test_a_merged_pair_carries_its_assembly_price():
+    # Arrange — $5.70 for 6 shares is a 95c pair.
+    out = position_returns([_close(0.30)])
+
+    # Act / Assert
+    assert out["positions"][0]["spread_cost"] == pytest.approx(0.95)
+
+
+def test_an_unwind_carries_no_assembly_price():
+    # Arrange — an unwind never assembled a pair at a price.
+    out = position_returns([_close(-0.10, method="sell")])
+
+    # Act / Assert
+    assert out["positions"][0]["spread_cost"] is None
+
+
+@requires_node
+def test_the_spread_cost_arm_draws_once_positions_carry_a_price():
+    # Arrange — two merges at 95c. The arm used to read a field the payload
+    # never sent, so it showed "metric not recorded" on every run.
+    stats = build([_close(0.30), _close(0.05, cost=0.95, shares=1.0)], [], [], 85.42)
+
+    # Act
+    rendered = _render(stats, metric="spread_cost")
+
+    # Assert
+    assert "unmeasured" not in rendered["badge"]
+    assert rendered["chartEmpty"] is False
 
 
 def test_a_pair_at_or_over_a_dollar_lands_in_a_visible_loss_bin():
