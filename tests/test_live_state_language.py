@@ -223,15 +223,31 @@ def test_the_guardrail_hud_preserves_stale_liveness_states():
     assert hud["stale"] == {
         "state": "DOWN",
         "className": "pill state-down mono",
+        "dropdownState": "down",
     }
     assert hud["alerting"] == {
         "state": "DEGRADED",
         "className": "pill state-degraded mono",
+        "dropdownState": "degraded",
     }
     assert hud["stopped"] == {
         "state": "STOPPED",
         "className": "pill state-stopped mono",
+        "dropdownState": "stopped",
     }
+
+
+@requires_node
+def test_guardrail_header_and_dropdown_read_the_same_alert_count():
+    # #598: the header falls back to guardrailHealth.alerts_total when the alert
+    # payload is empty/absent; the dropdown must read the same count or it shows
+    # RUNNING while the header paints DEGRADED for the same watchdog.
+    hud = _harness("all")["guardrailHud"]
+    for case in ("alertingViaHealthOnly", "alertingViaHealthOnlyNoAlertsPayload"):
+        assert hud[case]["state"] == "DEGRADED", case
+        assert hud[case]["dropdownState"] == "degraded", case
+        # The header pill class and the dropdown row state agree.
+        assert "state-degraded" in hud[case]["className"], case
 
 
 def test_the_design_system_is_declared_to_every_agent():

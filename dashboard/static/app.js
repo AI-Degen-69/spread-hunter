@@ -1759,6 +1759,16 @@ const SERVICE_DEFS = [
  * service the card grid does not. The state vocabulary is the same as the
  * cards' (statePillHtml): RUNNING/STOPPED, and UNKNOWN only when a telemetry
  * read genuinely failed. */
+
+/* The guardrail alert count, read one way by every surface (#598). The alert
+ * payload is authoritative when present; the health payload's alerts_total is
+ * the fallback when the alert payload is empty or absent. The header pill and
+ * the dropdown row MUST read the same count or they paint different states for
+ * the same guardrail. */
+function guardrailAlertCount(guardrailHealth, guardrailAlerts) {
+  return guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
+}
+
 function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, activeCount, overallState) {
   const trigger = document.getElementById('hud-services-pill');
   const panel = document.getElementById('services-dropdown');
@@ -1774,11 +1784,15 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       const telemetryError = guardrailHealth?.telemetry_error;
       const healthKnown = guardrailHealth !== null && guardrailHealth !== undefined && !telemetryError;
       const age = typeof guardrailHealth?.age_s === 'number' ? guardrailHealth.age_s : null;
-      const hasAlert = (guardrailAlerts?.alerts?.length > 0);
+      // One alert count shared with the header (#598): the header falls back to
+      // guardrailHealth.alerts_total when the alert payload is empty, so the
+      // dropdown must read the same count or it can show RUNNING while the
+      // header paints state-degraded.
+      const alertsTotal = guardrailAlertCount(guardrailHealth, guardrailAlerts);
+      const hasAlert = alertsTotal > 0;
       state = !healthKnown ? 'unknown'
         : hasAlert ? 'degraded'
         : (running ? stateKey(true, age, cadenceThresholds(5)) : stateKey(false, age));
-      const alertsTotal = guardrailHealth?.alerts_total || 0;
       meta = telemetryError ? 'telemetry down'
         : (hasAlert ? `${alertsTotal} alert${alertsTotal === 1 ? '' : 's'}` : 'auto-watch');
     } else if (def.key === 'shadow') {
@@ -1921,7 +1935,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   if (guardrailHealth?.running) activeCount++;
   if (isShadow && status?.shadow_run?.running && !status?.shadow_run?.ended) activeCount++;
 
-  const alertsCount = guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
+  const alertsCount = guardrailAlertCount(guardrailHealth, guardrailAlerts);
   const guardrailTelemetryError = guardrailHealth?.telemetry_error || guardrailAlerts?.telemetry_error;
   const guardrailKnown = guardrailHealth !== null && guardrailHealth !== undefined;
   let guardrailState = 'unknown';
@@ -2028,7 +2042,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   if (guardrailPill) guardrailPill.className = `pill state-${guardrailState} mono`;
   if (hudGuardrailState) hudGuardrailState.textContent = guardrailState.toUpperCase();
   if (hudGuardrailSub) {
-    const alertsTotal = guardrailHealth?.alerts_total || 0;
+    const alertsTotal = guardrailAlertCount(guardrailHealth, guardrailAlerts);
     hudGuardrailSub.textContent = guardrailState === 'unknown'
       ? 'telemetry unavailable' : `${alertsTotal} alerts`;
   }
