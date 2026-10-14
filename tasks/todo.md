@@ -1,9 +1,5 @@
-# Todo - #541 Consolidate every project statistic onto one page with one producer per number
+# Todo - #540 Analytics readouts can stay blank after a reload
 
-- [x] T1: Goldens freeze today's values pre-switch; ledger test RED (no prod change)
-- [x] T2: Shared math + Student's-t switch in `core_brain`; deltas logged (no DOM change)
-- [x] T3: NEW Data Analysis tab on the registry (charts, unit audit, card restyle); ledger GREEN
-- [x] T4: Findings doc (t-deltas + disagreements) + report-only registry; coverage test green
-- [ ] Focused suites green: `test_statistical_analytics`, `test_account_kpi`,
-  `test_analytics_api`, `test_analytics_surface_mount`, `test_statistics_report`
-  (full suite deferred to CI)
+- [x] T1: Harness scenarios + recovery/error/stale tests in place, run RED pre-fix
+- [x] T2: One cached `analytics-surface` branch in `renderCachedSections`; tests GREEN
+- [ ] T3: Acceptance + input-lag focused suites green unedited; proofs recorded
