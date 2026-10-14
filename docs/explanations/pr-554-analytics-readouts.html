@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR #554 — Analytics readouts repaint from cache</title>
+<style>
+  :root { --bg:#0f1419; --card:#1a2230; --line:#2c3a52; --txt:#e8eef7; --mut:#9fb0c9;
+          --good:#3fd68c; --bad:#ff6b6b; --warn:#ffcf5c; --acc:#5aa9ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font:16px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  h2 { font-size:20px; margin:36px 0 12px; padding-top:20px; border-top:1px solid var(--line); }
+  .sub { color:var(--mut); margin:0 0 8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:18px 20px; margin:14px 0; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:700px){ .grid2{grid-template-columns:1fr;} }
+  .badge { display:inline-block; font-size:12px; font-weight:700; letter-spacing:.04em;
+           border-radius:999px; padding:2px 10px; margin-bottom:8px; }
+  .b-before{background:#3a2330;color:var(--bad);} .b-after{background:#12372a;color:var(--good);}
+  .b-fix{background:#16294a;color:var(--acc);} .b-proof{background:#3a3117;color:var(--warn);}
+  code, pre { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  pre { background:#0b0f16; border:1px solid var(--line); border-radius:8px;
+        padding:14px; overflow:auto; font-size:13px; line-height:1.5; }
+  .hl { background:#1d3a2a; display:block; border-left:3px solid var(--good); padding-left:10px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--mut); font-weight:600; }
+  .ok{color:var(--good);font-weight:700;} .no{color:var(--bad);font-weight:700;}
+  svg.flow { width:100%; height:auto; background:#0b0f16; border:1px solid var(--line); border-radius:8px; }
+  .tabs { display:flex; gap:8px; margin:12px 0; }
+  .tabs button { background:var(--card); color:var(--txt); border:1px solid var(--line);
+                 border-radius:8px; padding:8px 16px; cursor:pointer; font-size:14px; }
+  .tabs button[aria-selected="true"] { border-color:var(--acc); background:#16294a; }
+  .callout { border-left:4px solid var(--warn); background:#241f10; padding:10px 14px;
+             border-radius:0 8px 8px 0; margin:14px 0; font-size:14px; }
+  .steps li { margin:6px 0; }
+  a { color:var(--acc); }
+  @media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important;} }
+</style>
+</head>
+<body>
+<main>
+  <h1>PR #554 — Reports readouts paint from cache</h1>
+  <p class="sub">Closes <a href="https://github.com/AI-Degen-69/spread-hunter/issues/540">#540</a> · 5 files · +314/−131 · merged as <code>c428485</code></p>
+
+  <h2>1 · The bug</h2>
+  <div class="card">
+    <p>After a reload, the five analytics readouts stayed at their placeholders while the KPI tiles beside them kept painting. The renderer was fine — calling <code>renderAnalyticsSurface(lastKpi, lastStatus)</code> by hand painted everything. The loss was in the <strong>paint schedule</strong>:</p>
+    <div class="tabs" role="tablist" aria-label="Before and after">
+      <button id="tB" aria-selected="true" onclick="show('before')">Before (broken)</button>
+      <button id="tA" aria-selected="false" onclick="show('after')">After (fixed)</button>
+    </div>
+    <div id="p-before">
+      <svg class="flow" viewBox="0 0 900 250" role="img" aria-label="Broken paint flow">
+        <text x="20" y="28" fill="#9fb0c9" font-size="14">Reload → poll on Home → deferred chart frame queued → frame dropped (tab hidden / newer paint)</text>
+        <rect x="20" y="50" width="250" height="56" rx="8" fill="#1a2230" stroke="#2c3a52"/>
+        <text x="36" y="74" fill="#e8eef7" font-size="14">Open Reports (switchTab)</text>
+        <text x="36" y="94" fill="#9fb0c9" font-size="12">renderCachedSections</text>
+        <rect x="310" y="50" width="250" height="56" rx="8" fill="#12372a" stroke="#3fd68c"/>
+        <text x="326" y="74" fill="#3fd68c" font-size="14">KPI tiles repaint ✓</text>
+        <text x="326" y="94" fill="#9fb0c9" font-size="12">from cache — always worked</text>
+        <rect x="600" y="50" width="280" height="56" rx="8" fill="#3a2330" stroke="#ff6b6b"/>
+        <text x="616" y="74" fill="#ff6b6b" font-size="14">Readouts stay blank ✗</text>
+        <text x="616" y="94" fill="#9fb0c9" font-size="12">nothing replays the dropped frame</text>
+        <rect x="20" y="140" width="860" height="70" rx="8" fill="#0b0f16" stroke="#2c3a52"/>
+        <text x="36" y="166" fill="#9fb0c9" font-size="13">fill-path · rescue-friction · queue-realism · robustness · capital-risk</text>
+        <text x="36" y="190" fill="#ff6b6b" font-size="13">innerHTML = 0 bytes — placeholders beside 1164 bytes of tiles</text>
+      </svg>
+    </div>
+    <div id="p-after" hidden>
+      <svg class="flow" viewBox="0 0 900 250" role="img" aria-label="Fixed paint flow">
+        <text x="20" y="28" fill="#9fb0c9" font-size="14">Same reload, same dropped frame — but the tab switch now restores from cache</text>
+        <rect x="20" y="50" width="250" height="56" rx="8" fill="#1a2230" stroke="#2c3a52"/>
+        <text x="36" y="74" fill="#e8eef7" font-size="14">Open Reports (switchTab)</text>
+        <text x="36" y="94" fill="#9fb0c9" font-size="12">renderCachedSections</text>
+        <rect x="310" y="50" width="250" height="56" rx="8" fill="#12372a" stroke="#3fd68c"/>
+        <text x="326" y="74" fill="#3fd68c" font-size="14">KPI tiles repaint ✓</text>
+        <text x="326" y="94" fill="#9fb0c9" font-size="12">unchanged path</text>
+        <rect x="600" y="50" width="280" height="56" rx="8" fill="#12372a" stroke="#3fd68c"/>
+        <text x="616" y="74" fill="#3fd68c" font-size="14">Readouts repaint ✓ sync</text>
+        <text x="616" y="94" fill="#9fb0c9" font-size="12">new cached branch, no fetch</text>
+        <rect x="20" y="140" width="860" height="70" rx="8" fill="#0b0f16" stroke="#2c3a52"/>
+        <text x="36" y="166" fill="#9fb0c9" font-size="13">measured live in a real browser at click time (before any frame ran):</text>
+        <text x="36" y="190" fill="#3fd68c" font-size="13">fill 2054 · rescue 2076 · queue 1750 · robustness 3882 · capital 3393 bytes</text>
+      </svg>
+    </div>
+  </div>
+
+  <h2>2 · The fix (7 lines)</h2>
+  <div class="card">
+    <span class="badge b-fix">dashboard/static/app.js ~614</span>
+    <p>One cached branch directly after the <code>kpi-grid</code> branch, following the file's own idiom. A throw mid-navigation logs instead of blanking the tab; empty cache paints nothing (startup guard).</p>
+<pre>if (paintable(tab2, document.getElementById('kpi-grid')) &amp;&amp; currentKpi) {
+  renderKPIs(currentKpi, lastStatus);
+}
+<span class="hl">if (paintable(tab2, document.getElementById('analytics-surface')) &amp;&amp; currentKpi) {
+  try { renderAnalyticsSurface(currentKpi, lastStatus); } catch (e) { console.error('Error rendering cached analytics surface', e); }
+}</span></pre>
+    <div class="callout"><strong>Untouched by design:</strong> <code>index.html</code>, <code>prototype.js</code>, the <code>deferPaint</code> callback, generation guard, both frozen test files, and <code>data/orders.db</code>.</div>
+  </div>
+
+  <h2>3 · Proof it works</h2>
+  <div class="card">
+    <span class="badge b-proof">RED → GREEN + live browser</span>
+    <table>
+      <tr><th>Check</th><th>Result</th></tr>
+      <tr><td>New tests pre-fix (tabs / rail / error-isolation)</td><td class="no">3 failed — bug reproduced</td></tr>
+      <tr><td>Same tests post-fix (+ stale &amp; startup guards)</td><td class="ok">5 passed</td></tr>
+      <tr><td>Stale-guard removal check</td><td class="ok">fails without guard, passes restored</td></tr>
+      <tr><td>Browser gate: Reports click, sync readout bytes</td><td class="ok">all five non-zero at click time</td></tr>
+      <tr><td>Browser gate: console / network</td><td class="ok">0 JS errors · 0 failed requests</td></tr>
+      <tr><td>Acceptance suites (mount + api + input-lag, unedited)</td><td class="ok">73 passed</td></tr>
+      <tr><td>CI merge gate (6 windows shards + GitGuardian)</td><td class="ok">8/8 green</td></tr>
+    </table>
+  </div>
+
+  <h2>4 · What shipped</h2>
+  <div class="card">
+    <div class="grid2">
+      <div><span class="badge b-after">tests</span><p class="sub">5 scenarios in <code>input_lag_harness.cjs</code> (tabs / rail / error / stale / startup) + 5 tests in <code>test_analytics_surface_mount.py</code> asserting real rendered copy.</p></div>
+      <div><span class="badge b-after">fix</span><p class="sub">Synchronous cached repaint of the analytics surface on every Reports open — the deferred frame is now a progressive enhancement, not the only path.</p></div>
+    </div>
+    <ol class="steps">
+      <li>Open the dashboard → Reports &amp; Analytics → all five readouts show figures.</li>
+      <li>Reload → Home → Reports → readouts appear immediately, no placeholders.</li>
+    </ol>
+  </div>
+</main>
+<script>
+function show(which){
+  document.getElementById('p-before').hidden = which !== 'before';
+  document.getElementById('p-after').hidden = which !== 'after';
+  document.getElementById('tB').setAttribute('aria-selected', which === 'before');
+  document.getElementById('tA').setAttribute('aria-selected', which === 'after');
+}
+</script>
+</body>
+</html>
