@@ -104,3 +104,6 @@ SETTLEMENT_METHODS = tuple(r.name for r in METHODS if r.bucket == SETTLEMENT_BUC
 BOOKKEEPING_METHODS = tuple(r.name for r in METHODS if r.bucket == BOOKKEEPING_BUCKET)
 ALL_METHOD_NAMES = frozenset(r.name for r in METHODS)
 DASHBOARD_FORCED_EXIT_METHODS = RESCUE_METHODS + (AGED_OUT_EXIT, STOP_LOSS_EXIT)
+# a close that resolved a taker's position: the rehearsal merge plus the
+# three rescue exits. Drives the pessimistic pnl recost (kpi).
+TAKER_RESOLVED_METHODS = (SHADOW_MERGE,) + RESCUE_METHODS

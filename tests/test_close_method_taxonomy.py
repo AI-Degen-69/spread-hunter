@@ -268,3 +268,5 @@ def test_the_derived_lists_match_todays_consumer_tuples():
     assert cm.DASHBOARD_FORCED_EXIT_METHODS == (
         "single_buy_exit", "naked_exit", "ladder_exit",
         "aged_out_exit", "stop_loss_exit")
+    assert cm.TAKER_RESOLVED_METHODS == (
+        "shadow_merge", "single_buy_exit", "naked_exit", "ladder_exit")
