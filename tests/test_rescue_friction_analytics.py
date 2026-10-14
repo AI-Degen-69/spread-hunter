@@ -352,9 +352,10 @@ def test_a_close_with_no_measurable_drag_has_no_overshoot():
     ("sled", 2.0, "average"),
     ("sled", 2.01, "bad"),
     ("latency", 0.0, "good"),
-    ("latency", 5.0, "good"),
-    ("latency", -1.99, "average"),
-    ("latency", -2.0, "bad"),
+    ("latency", -1.0, "good"),
+    ("latency", 2.0, "average"),
+    ("latency", 2.01, "bad"),
+    ("latency", 34.0, "bad"),
     ("execution", 0.0, "good"),
     ("execution", 2.0, "good"),
     ("execution", 2.01, "average"),
@@ -437,7 +438,7 @@ def test_the_summary_bands_the_means_it_reports():
     # Assert
     assert set(out["bands"]) == set(FRICTION_BAND_METRICS)
     assert out["bands"]["sled"] == "bad"                # 15.8c mean, worst close 68c
-    assert out["bands"]["latency"] == "good"           # 17.75c mean, none of it favourable
+    assert out["bands"]["latency"] == "bad"            # 17.75c mean adverse drift
     assert out["bands"]["execution"] == "good"         # 0.4c mean
     assert out["bands"]["tcdr"] == "average"           # 1.6% of the booked loss
     assert out["bands"]["overshoot"] == "average"      # 0.41x the planned risk

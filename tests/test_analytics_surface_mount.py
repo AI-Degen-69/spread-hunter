@@ -445,7 +445,7 @@ RESCUE_FRICTION = {
     "mean_sled_cents": 15.8, "mean_latency_drag_cents": 17.75,
     "mean_execution_drag_cents": 0.4, "mean_tcdr": 0.015625,
     "mean_overshoot_ratio": 0.40625,
-    "bands": {"sled": "bad", "latency": "good", "execution": "good",
+    "bands": {"sled": "bad", "latency": "bad", "execution": "good",
               "tcdr": "average", "overshoot": "average"},
     "assumed_stop_offset": 0.03,
     "units": "cents_per_share",
@@ -506,9 +506,11 @@ def test_each_metric_carries_the_colour_the_payload_computed():
 
 
 def test_the_colour_follows_the_value_not_a_static_label():
-    # Arrange -- the same card with a stop that paid nothing: the sled band is good.
+    # Arrange -- the same card with a stop that paid nothing: sled and latency good.
     payload = {**RESCUE_FRICTION, "mean_sled_cents": -0.5,
-               "bands": {**RESCUE_FRICTION["bands"], "sled": "good"}}
+               "mean_latency_drag_cents": -1.0,
+               "bands": {**RESCUE_FRICTION["bands"], "sled": "good",
+                         "latency": "good"}}
 
     # Act
     out = _mount(_friction(payload))

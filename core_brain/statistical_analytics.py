@@ -688,9 +688,9 @@ def friction_band(metric: str, value: Optional[float]) -> str:
         return "average" if number <= SPREAD_CENTS else "bad"
     if metric == "latency":
         # Signed: the book drifting toward us between trigger and decision is good news.
-        if number >= 0:
+        if number <= 0:
             return "good"
-        return "average" if number > -SPREAD_CENTS else "bad"
+        return "average" if number <= SPREAD_CENTS else "bad"
     if metric == "execution":
         if number <= SPREAD_CENTS:
             return "good"
