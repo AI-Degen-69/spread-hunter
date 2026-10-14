@@ -1,39 +1,50 @@
-# SPEC — #531: Persist the clearing print so trade-through depth measures
+# SPEC — #477: Command palette for pages, actions, and market search
 
-Branch: `i531/persist-clearing-print-at-fill-credit-time` | Tier: Small | Type: Code (telemetry write)
+Branch: `spread-hunter-i477` | Tier: Standard | Type: UX/UI (keyboard-first dashboard feature)
 
-Supersedes the #541 spec in this file's history (kept in git).
+Supersedes the #531 spec in this file's history (kept in git).
 
 ## Goals
 
-1. The operator opens the statistics page and finds **every figure the project computes, each shown once**, grouped so it can be found — no number rendered twice, none repeated across views.
-2. Any number on the page traces to **exactly one producer**: a metric registry maps each statistic id to its single reader, and a second readout claiming the same number fails a test.
-3. `scripts/statistical_trade_audit.py` **holds no math of its own**: z table, mean CI, proportion CI, and sample-size planner all import from `core_brain`, and the audit still prints.
-4. No silent renames: the family probe's nearest-rank `_percentile` says what it is, and its divergence from the interpolated core helper is recorded.
-5. **One convention: Student's t.** Every mean interval uses `ci_critical_value` (t while
-    the sample is small, normal once it isn't). Pre-switch values freeze in goldens first;
-    every delta lands in the findings doc and the PR. Proportion intervals stay Wilson
-    (proportions don't take t); power/planning constants stay normal-approx (different
-    estimator, standard practice).
-6. A figure on the page and the same figure in `reports/*_statistics_report.md` carry the **same value** (layouts untouched).
-7. Every card shows its unit (`$`, `¢`, `%`, `bps`) or is registry-flagged bare (e.g. SQN);
-    no more bare numbers with an ambiguous denomination. The stats page reads like a trading
-    terminal — minimal, value-first cards, consistent type, aligned spacing.
+1. Cmd/Ctrl+K anywhere on the dashboard opens a command palette; `/` is an alias;
+   Escape and backdrop click close it; focus returns to the element focused before
+   opening.
+2. Typing filters the entry list (trimmed, case-insensitive substring);
+   ArrowUp/ArrowDown move the highlight (bounded); Enter activates.
+3. A page entry navigates exactly like clicking the sidebar item — page visibility,
+   `aria-current`, `sh-proto-page` persistence, drawer close — and covers every page
+   the rail has (six today), built dynamically, never hardcoded.
+4. SYNC VENUE triggers the existing `#btn-sync` click; RESET opens the existing
+   typed-confirm modal and executes nothing.
+5. Market search finds markets by title or full condition id from the currently
+   loaded state (`lastKpi.by_market`, `lastState.orders`, `lastState.pairs`),
+   deduped, with the same labels the tables show.
+6. Accessibility is part of the feature, not a follow-up: `role="dialog"`,
+   `aria-modal="true"`, a visible title, a focus trap while open, and the combobox
+   pattern (focus stays in the input; `aria-activedescendant` tracks the highlight).
+7. Closed, the palette is not focusable or tabbable and leaks no DOM.
 
 ## Out of scope (from the issue — binding)
 
-No new statistic, model, chart, or metric. No `/api/kpi` semantics change: `portfolio`, `trade_analytics`, `statistical_analytics` stay, no renames, `KPI_PAYLOAD_VERSION` stays 257. Report/artifact layouts stay. Top nav (#504), command palette (#477), close-method rules (#520 — adjacent, do not restate), GO-gate thresholds (#471), tournament arms (#487/#492) all stay out.
+- No new dependency, no framework migration — this dashboard is vanilla HTML/CSS/JS.
+- No new pages, no data endpoints — the palette only surfaces what the page already
+  renders and the actions the existing buttons already perform.
+- No changes to `server.ts` or the Python API.
+- No edits to `app.js`, `prototype.js`, or any existing test file.
 
 ## Resolved open questions (defaults adopted, confirmed against code)
 
-1. **Add a tab, keep the original (operator override 2026-10-14).** Tab 2 stays frozen
-    as the legacy page — no renderer or layout edits there. A new fourth tab, "Data Analysis",
-    is the canonical one-statistics page: registry, ledger, units, and restyle all land there,
-    reusing (copied or redesigned) components. Legacy-tab removal is a follow-up, out of scope.
-2. **Keep the four views → switcher becomes a filter, one placement per tick.** The Sensitivity Simulator button is already `display:none` (index.html:440) — remove the dead button rather than leaving it.
-3. **Shared-reader reach → unify duplicated readers; leave report-only stats, list them in the PR.** Lifetimes, cancel reasons, queue sections, rescue rates, run counters, validation verdict, and research-only figures (tape/probe/two-arm) stay in their products, registered as report-only with producer + reason.
-4. **Duplicate = both shapes.** Two producers of one number AND one number placed twice both count. Population rule: same population + same measure → one placed, other `aliasOf`; different population/curve → both placed, each labeled (equity-curve vs account-curve drawdown; gate input marked).
-
-## Ordering note
-
-#520 is OPEN, so close-method groups import from the existing `core_brain/kpi.py` tuples (`MERGE_METHODS`, `SINGLE_BUY_EXIT_METHODS`) — its rules are not restated here. #542 is CLOSED via #543 (merged), so the audit cross-check database (`data/02_shadow_prudent_13-10_03-01.db`) is usable at build time.
+1. **Six pages, not five.** The issue's parenthetical lists five; live `PAGE_LAYOUT`
+   (`prototype.js:38-84`) has six — `analysis` ("Data Analysis") arrived with #541.
+   Entries come from the DOM (`.proto-nav-btn[data-page]`), so the palette tracks the
+   rail automatically.
+2. **Click the button, don't call the switch.** `showPage` is private to the
+   `prototype.js` IIFE in the browser; a real sidebar click runs the full behavior.
+3. **Two background listeners to silence.** Document-level reset-Escape
+   (`app.js:776-780`) and kanban ArrowLeft/ArrowRight (`app.js:9120-9128`); the
+   palette's capture-phase listener with `stopPropagation` keeps both silent while
+   open.
+4. **Choosing a market result** — the issue specifies search, not the result action.
+   Opt-in question put to the operator; the recommended default (prefill the existing
+   Orders & Trades filter on the Dashboard page) is marked `[PROPOSED]` in
+   `tasks/plan.md` and enters the build only on approval.
