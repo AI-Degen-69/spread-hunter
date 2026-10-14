@@ -70,9 +70,33 @@
         id: 'page:' + page,
         label: String(btn.textContent || '').trim() || page,
         group: 'Pages',
+        icon: railIcon(btn),
         run: function () {
           btn.click(); // the real sidebar click: persistence, aria-current, drawer
           closePalette({ focusEl: pickFocus(btn) });
+        },
+      });
+    });
+    // Links come from the same rail, never a hardcoded list: rail anchors
+    // carry .proto-nav-btn without data-page. The entry opens the link's own
+    // href in a new tab — exactly what a rail click does today.
+    var anchors = doc.querySelectorAll('.proto-nav-btn') || [];
+    Array.prototype.forEach.call(anchors, function (a) {
+      if (!a || (a.dataset && a.dataset.page)) return;
+      var href = (a.getAttribute && a.getAttribute('href')) || a.href;
+      if (!href) return;
+      var label = String(a.textContent || '').trim() || href;
+      out.push({
+        id: 'link:' + label,
+        label: label,
+        sub: href,
+        group: 'Links',
+        icon: railIcon(a),
+        run: function () {
+          closePalette({ restoreFocus: false });
+          if (typeof window !== 'undefined' && typeof window.open === 'function') {
+            window.open(href, '_blank', 'noopener');
+          }
         },
       });
     });
@@ -201,6 +225,16 @@
 
   /* ── List rendering ── */
 
+  function railIcon(el) {
+    // The rail owns the artwork: clone the item's own svg so rows track rail
+    // edits for free. Guarded — stub elements and icon-less items yield null,
+    // never a throw (aria-hidden rides along from the rail node).
+    if (!el || typeof el.querySelector !== 'function') return null;
+    var svg = el.querySelector('svg');
+    if (!svg || typeof svg.cloneNode !== 'function') return null;
+    return svg.cloneNode(true);
+  }
+
   function clearList() {
     if (!list) return;
     // Real-DOM safe: children is a live HTMLCollection in the page, so only
@@ -239,15 +273,27 @@
     row.dataset.entryId = entry.id;
     if (entry.sub) row.dataset.sub = entry.sub;
     if (entry.disabled || entry.inert) row.setAttribute('aria-disabled', 'true');
+    if (entry.icon) {
+      var icon = doc.createElement('span');
+      icon.className = 'palette-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.appendChild(entry.icon);
+      row.appendChild(icon);
+    }
+    // Label and sub share one text container so the flex row keeps the icon
+    // left of the word and the sub under the label (#566).
+    var text = doc.createElement('div');
+    text.className = 'palette-text';
     var label = doc.createElement('div');
     label.textContent = entry.label;
-    row.appendChild(label);
+    text.appendChild(label);
     if (entry.sub) {
       var sub = doc.createElement('div');
       sub.className = 'palette-sub';
       sub.textContent = entry.sub;
-      row.appendChild(sub);
+      text.appendChild(sub);
     }
+    row.appendChild(text);
     row.addEventListener('click', function () { activate(entry); });
     return row;
   }
