@@ -1,50 +1,46 @@
-# SPEC — #477: Command palette for pages, actions, and market search
+# SPEC — #562: Command palette hotkey loses to the browser, no mouse entry point
 
-Branch: `spread-hunter-i477` | Tier: Standard | Type: UX/UI (keyboard-first dashboard feature)
+Branch: `i562/command-palette-hotkey-loses-to-the-browser-and-pa` | Tier: Standard | Type: Debug + Design/UI
 
-Supersedes the #531 spec in this file's history (kept in git).
+Supersedes the #477 spec in this file's history (kept in git).
 
 ## Goals
 
-1. Cmd/Ctrl+K anywhere on the dashboard opens a command palette; `/` is an alias;
-   Escape and backdrop click close it; focus returns to the element focused before
-   opening.
-2. Typing filters the entry list (trimmed, case-insensitive substring);
-   ArrowUp/ArrowDown move the highlight (bounded); Enter activates.
-3. A page entry navigates exactly like clicking the sidebar item — page visibility,
-   `aria-current`, `sh-proto-page` persistence, drawer close — and covers every page
-   the rail has (six today), built dynamically, never hardcoded.
-4. SYNC VENUE triggers the existing `#btn-sync` click; RESET opens the existing
-   typed-confirm modal and executes nothing.
-5. Market search finds markets by title or full condition id from the currently
-   loaded state (`lastKpi.by_market`, `lastState.orders`, `lastState.pairs`),
-   deduped, with the same labels the tables show.
-6. Accessibility is part of the feature, not a follow-up: `role="dialog"`,
-   `aria-modal="true"`, a visible title, a focus trap while open, and the combobox
-   pattern (focus stays in the input; `aria-activedescendant` tracks the highlight).
-7. Closed, the palette is not focusable or tabbable and leaks no DOM.
+1. Ctrl+K (and Cmd+K, `/` outside a text field) opens the palette in a live
+   Chrome session at the dashboard URL — the page handler wins over the
+   browser default.
+2. A magnifier trigger button in the top nav opens the palette with the mouse
+   and puts focus in search; closing returns focus to the button (the existing
+   opener-restore path).
+3. The palette hint line names the working hotkeys so they are discoverable.
 
 ## Out of scope (from the issue — binding)
 
-- No new dependency, no framework migration — this dashboard is vanilla HTML/CSS/JS.
-- No new pages, no data endpoints — the palette only surfaces what the page already
-  renders and the actions the existing buttons already perform.
-- No changes to `server.ts` or the Python API.
-- No edits to `app.js`, `prototype.js`, or any existing test file.
+- No Ctrl+Backslash binding: confirmed with the operator that `/` was meant;
+  no such contract ever shipped, and none is added.
+- #504 owns the nav reorganization — this issue adds one minimal button to the
+  existing strip; #504 may relocate it.
+- No new palette entries or commands; nothing about the palette once open changes.
+- No edits to `app.js`, `prototype.js`, `server.py`, or any existing test file
+  outside the palette suite; serving (fingerprinted assets, no-store HTML) is
+  verified correct and stays untouched.
 
-## Resolved open questions (defaults adopted, confirmed against code)
+## Resolved open questions (operator + code, 2026-10-14)
 
-1. **Six pages, not five.** The issue's parenthetical lists five; live `PAGE_LAYOUT`
-   (`prototype.js:38-84`) has six — `analysis` ("Data Analysis") arrived with #541.
-   Entries come from the DOM (`.proto-nav-btn[data-page]`), so the palette tracks the
-   rail automatically.
-2. **Click the button, don't call the switch.** `showPage` is private to the
-   `prototype.js` IIFE in the browser; a real sidebar click runs the full behavior.
-3. **Two background listeners to silence.** Document-level reset-Escape
-   (`app.js:776-780`) and kanban ArrowLeft/ArrowRight (`app.js:9120-9128`); the
-   palette's capture-phase listener with `stopPropagation` keeps both silent while
-   open.
-4. **Choosing a market result** — the issue specifies search, not the result action.
-   Opt-in question put to the operator; the recommended default (prefill the existing
-   Orders & Trades filter on the Dashboard page) is marked `[PROPOSED]` in
-   `tasks/plan.md` and enters the build only on approval.
+1. **"Ctrl+\" was `/`.** The operator confirmed they meant the documented `/`
+   alias. Both dead hotkeys (Ctrl+K and `/`) share one listener, so one cause
+   explains both — no separate key work.
+2. **Stale-browser-cache theory is dead.** `index()` serves HTML `no-store`
+   (`server.py:4062-4082`) and `_fingerprint_static_refs` rewrites every
+   `/static/` ref to a content hash (`server.py:3994-4008`) — no author bump
+   needed, no stale markup possible from a current server.
+3. **Prime suspect: the serving stack predates #561.** The operator-facing
+   checkout (`main`) sits at `5cfd53f`, one commit before the palette merge
+   (`0c82aad`). A page served from there has no palette markup, so
+   `initPalette` early-returns before registering the window keydown listener
+   (`command-palette.js:425-434`) — exactly the symptom: Ctrl+K falls through
+   to the URL bar, `/` does nothing. T1 proves the served bytes first.
+4. **Button wiring stays inside the palette file.** The browser IIFE exposes
+   no globals (exports exist only under node `module.exports`, `:440-452`),
+   so `initPalette` binds the trigger by id itself — no inline `onclick`, no
+   `app.js` edits.
