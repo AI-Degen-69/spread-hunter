@@ -89,6 +89,9 @@ def test_palette_list_traversal_is_real_dom_safe():
     src = PALETTE_JS.read_text(encoding="utf-8")
     assert ".children.filter" not in src
     assert ".children.map" not in src
+    # length is getter-only on a live HTMLCollection: clearing by assignment
+    # throws in the page while the offline stub (plain array) stays silent
+    assert ".children.length =" not in src
 
 
 # ── Shell: open, close, keyboard ownership (harness) ──
