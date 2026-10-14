@@ -3126,12 +3126,12 @@ function renderPositionDistributionChart(stats) {
       banner.innerHTML = `
         <div class="dist-power-stat">
           <span class="label">Sample Universe:</span>
-          <span class="val">0 Observations</span>
+          <span class="val">0</span>
           <span class="sub">(0 Merged · 0 Unwind)</span>
         </div>
         <div class="dist-power-stat">
           <span class="label">Statistical Power Target:</span>
-          <span class="val">0 / 120 Obs</span>
+          <span class="val">0 / 120</span>
           <span class="sub">(0% Power · Sequential SPRT Active)</span>
         </div>
         <div class="dist-progress-wrap">
@@ -3313,7 +3313,7 @@ function renderPositionDistributionChart(stats) {
         + (sem == null ? 'NEEDS 2+ TO ESTIMATE SPREAD'
                        : 'NO MULTIPLIER FOR THIS SAMPLE');
     } else {
-      badge.textContent = `${currentCiLevel}% CI: [${formatVal(ciLower)}, ${formatVal(ciUpper)}] · ${isPos ? `LOWER BOUND POSITIVE (${formatVal(ciLower)} > 0) · EDGE CONFIRMED` : 'ZERO CROSSING'}`;
+      badge.textContent = `${currentCiLevel}% CI: [${formatVal(ciLower)}, ${formatVal(ciUpper)}] · ${isPos ? `LOWER BOUND POSITIVE · EDGE CONFIRMED` : 'ZERO CROSSING'}`;
     }
   }
 
@@ -3427,12 +3427,12 @@ function renderPositionDistributionChart(stats) {
     banner.innerHTML = `
       <div class="dist-power-stat">
         <span class="label">Sample Universe:</span>
-        <span class="val">${posCount} Observations</span>
+        <span class="val">${posCount}</span>
         <span class="sub">(${mergedCount} Merged · ${unwindCount} Unwind)</span>
       </div>
       <div class="dist-power-stat">
         <span class="label">Statistical Power Target:</span>
-        <span class="val ${posCount >= requiredObs ? 'positive' : ''}">${posCount} / ${requiredObs} Obs</span>
+        <span class="val ${posCount >= requiredObs ? 'positive' : ''}">${posCount} / ${requiredObs}</span>
         <span class="sub">(${powerPct}% Power · Sequential SPRT Active)</span>
       </div>
       <div class="dist-progress-wrap">
@@ -3527,9 +3527,9 @@ function renderPositionDistributionChart(stats) {
       <div class="chart-footer-item"><span>Sample Mean (μ):</span> <b style="color:#38bdf8">${formatVal(mean)}</b></div>
       <div class="chart-footer-item"><span>Std Dev (σ):</span> <b>${stdev == null ? 'unmeasured' : '±' + formatVal(stdev).replace('+', '')}</b></div>
       <div class="chart-footer-item"><span>Standard Error (SE):</span> <b>${sem == null ? 'unmeasured' : formatVal(sem).replace('+', '')}</b></div>
-      <div class="chart-footer-item"><span>${currentCiLevel}% Confidence Interval:</span> <b style="color:${bandMeasured ? '#34d399' : 'var(--text-muted)'}">${bandMeasured ? `[${formatVal(ciLower)}, ${formatVal(ciUpper)}]` : 'unmeasured'}</b></div>
-      <div class="chart-footer-item"><span>Distribution Sample Universe:</span> <b>N = ${directBins ? bellSamples + ' fills' : posCount + ' observations'}</b></div>
-      ${directBins ? '' : `<div class="chart-footer-item"><span>Statistical Edge:</span> <b style="color:${bandMeasured && ciLower > 0 ? 'var(--signal)' : 'var(--text-muted)'}">${!bandMeasured ? 'ACCUMULATING (needs 2+ observations)' : (ciLower > 0 ? 'H₁: μ &gt; 0 CONFIRMED' : 'ZERO CROSSING (no confirmed edge)')}</b></div>`}
+      <div class="chart-footer-item"><span>Confidence Interval:</span> <b style="color:${bandMeasured ? '#34d399' : 'var(--text-muted)'}">${bandMeasured ? `[${formatVal(ciLower)}, ${formatVal(ciUpper)}]` : 'unmeasured'}</b></div>
+      ${directBins ? `<div class="chart-footer-item"><span>Distribution Sample Universe:</span> <b>N = ${bellSamples} fills</b></div>` : ''}
+      ${directBins ? '' : `<div class="chart-footer-item"><b>${!bandMeasured ? 'ACCUMULATING (needs 2+ observations)' : (ciLower > 0 ? `H₁: mean return &gt; 0 @ CL: ${currentCiLevel}%` : `interval crosses 0 @ CL: ${currentCiLevel}%`)}</b></div>`}
     `;
   }
 }

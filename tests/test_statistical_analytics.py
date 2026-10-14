@@ -487,7 +487,8 @@ def test_the_chart_draws_once_there_is_an_observation():
 
     # Assert
     assert rendered["chartEmpty"] is False
-    assert "1 Observations" in rendered["banner"]
+    assert "Sample Universe: 1 " in rendered["banner"]
+    assert "1 / 120" in rendered["banner"]
     assert "1 Merged" in rendered["banner"]
 
 
