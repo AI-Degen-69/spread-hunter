@@ -4034,6 +4034,31 @@ def prototype_page():
     )
 
 
+@app.get("/analysis-v2", response_class=HTMLResponse)
+def analysis_v2_page() -> str:
+    """The redesigned Data Analysis surface, read-only, on its own path.
+
+    Serves `static/analysis_v2.html`, whose only telemetry read is
+    `GET /api/kpi` from `analysis_v2.js` (an ordinary client-side fetch --
+    no backend change, no new route, no write path). It deliberately stays
+    off `/`: the live-operations dashboard and the #541 Data Analysis tab
+    keep their routes untouched, so a defect here cannot reach quoting,
+    the order registry, or any background worker. `/static/analysis_v2.html`
+    reaches the same document if the mount is preferred.
+    """
+    path = _STATIC_DIR / "analysis_v2.html"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="analysis-v2 page not built")
+    return HTMLResponse(
+        path.read_text(encoding="utf-8"),
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     """Serve the live operations dashboard.
