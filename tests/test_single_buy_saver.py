@@ -1580,4 +1580,26 @@ def test_partial_shadow_rescue_exit_records_zero_fee(registry: OrderRegistry):
     assert closes[0]["fee"] == 0.0
 
 
+def test_live_rescue_exit_keeps_fee_unmeasured(registry: OrderRegistry):
+    """Live taker fees are unknown at sell time: the close stays NULL (#524).
+
+    Policy pin for the adopted shadow-only fee rule — a live zero would be an
+    invented measurement. If the owner overrides to all-rescues, this test is
+    replaced by one asserting 0.0 (see tasks/plan.md T2).
+    """
+    pair_id = _one_sided_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.38, best_bid=0.55)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        live=True, force=True, reason="hard_stop",
+    )
+
+    assert result["action"] == "exited"
+    closes = [c for c in registry.get_all_closes()
+              if c["method"] == "single_buy_exit"]
+    assert len(closes) == 1
+    assert closes[0]["fee"] is None
+
+
 
