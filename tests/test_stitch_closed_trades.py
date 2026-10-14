@@ -146,6 +146,95 @@ def test_stitch_closed_trades_solos_render_each_in_own_row_with_own_pnl():
 
 
 @requires_node
+def test_stitch_closed_trades_total_cost_uses_settlement_basis_not_residual_dust():
+    """#579: a closed market's Total Cost is the basis of what closed, never the
+    residual open-inventory dust KPI publishes in the same field."""
+    code = """
+    const settlements = [
+        {
+            method: 'shadow_merge',
+            shares: 7,
+            up_cost_removed: 2.87,
+            dn_cost_removed: 4.06,
+            cost_basis: 6.93,
+            proceeds: 7.00,
+            realized_pnl: 0.07,
+            ts: 1700000000
+        },
+        {
+            method: 'shadow_merge',
+            shares: 6,
+            up_cost_removed: 2.10,
+            dn_cost_removed: 3.42,
+            cost_basis: 5.52,
+            proceeds: 6.00,
+            realized_pnl: 0.48,
+            ts: 1700000010
+        }
+    ];
+    // The real-world shape from the #569 store: both pairs fully closed, so the
+    // only thing left in KPI's residual field is dust.
+    const kpi = {
+        by_market: {
+            '0x123': {
+                condition_id: '0x123',
+                title: 'Feyenoord vs Como',
+                category: 'Sports',
+                settlements: settlements,
+                realized_pnl: 0.55,
+                total_cost: 0.35,
+                total_sh: 0
+            }
+        }
+    };
+    const html = app.stitchClosedTradesRows(kpi, { orders: [] }, null);
+    console.log(JSON.stringify({
+        html,
+        hasDustCost: html.includes('$0.35'),
+        hasTrueCost: html.includes('$12.45'),
+        hasInflatedPct: html.includes('157.14%'),
+        hasTruePct: html.includes('4.42%')
+    }));
+    """
+    res = json.loads(_eval_js(code))
+    assert res["hasTrueCost"] is True, "closed row must show the settlement basis total"
+    assert res["hasTruePct"] is True, "PnL pct must divide by the settlement basis total"
+    assert res["hasDustCost"] is False, "residual dust must not render as Total Cost"
+    assert res["hasInflatedPct"] is False, "dust denominator must not inflate the pct"
+
+
+@requires_node
+def test_stitch_closed_trades_total_cost_sort_uses_settlement_basis():
+    """#579 follow-up: the Total Cost column sort ranks by the settlement basis,
+    not the residual dust — a $12.45-basis market must outrank a $5.00 one even
+    when it holds only $0.35 of residual."""
+    code = """
+    const big = {
+        condition_id: '0xbig', title: 'Big Basis Market', category: 'Sports',
+        settlements: [{ method: 'shadow_merge', shares: 7, cost_basis: 12.45,
+            proceeds: 13.00, realized_pnl: 0.55, ts: 1700000000 }],
+        realized_pnl: 0.55, total_cost: 0.35, total_sh: 0
+    };
+    const small = {
+        condition_id: '0xsmall', title: 'Small Basis Market', category: 'Sports',
+        settlements: [{ method: 'shadow_merge', shares: 5, cost_basis: 5.00,
+            proceeds: 5.20, realized_pnl: 0.20, ts: 1700000000 }],
+        realized_pnl: 0.20, total_cost: 0.50, total_sh: 0
+    };
+    const kpi = { by_market: { '0xbig': big, '0xsmall': small } };
+    const desc = app.stitchClosedTradesRows(kpi, { orders: [] }, { col: 3, dir: 'desc' });
+    const asc = app.stitchClosedTradesRows(kpi, { orders: [] }, { col: 3, dir: 'asc' });
+    console.log(JSON.stringify({
+        descFirst: desc.indexOf('0xbig') < desc.indexOf('0xsmall'),
+        ascFirst: asc.indexOf('0xsmall') < asc.indexOf('0xbig')
+    }));
+    """
+    res = json.loads(_eval_js(code))
+    assert res["descFirst"] is True, "desc sort must put the larger basis first"
+    assert res["ascFirst"] is True, "asc sort must put the smaller basis first"
+
+
+@requires_node
 def test_stitch_open_orders_and_positions_headers_and_pills():
     code = """
     const ordersHead = app.stitchOpenOrdersHeadHtml(null);
