@@ -108,7 +108,7 @@ def test_da_required_observations_has_one_read_site():
 
 
 def test_da_registry_entries_all_carry_a_unit_and_valid_refs():
-    src = DA_JS.read_text(encoding="utf-8")
+    src = DA_JS.read_text(encoding="utf-8").split("STAT_REPORT_ONLY")[0]
     ids = re.findall(r"'([\w.]+)': \{ producer:", src)
     assert len(ids) >= 40, f"registry looks thin: {len(ids)} entries"
     for stat_id in ids:
@@ -116,3 +116,34 @@ def test_da_registry_entries_all_carry_a_unit_and_valid_refs():
             f"{stat_id} has no unit"
     for ref in re.findall(r"refOf: '([\w.]+)'", src):
         assert ref in ids, f"refOf target {ref} is not a registry id"
+
+
+def test_da_registry_blocks_all_have_containers_and_vice_versa():
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    tab4 = html.split('id="tab-4"')[1].split("</section>")[0]
+    src = DA_JS.read_text(encoding="utf-8")
+    placed = re.findall(r"'([\w.]+)': \{ producer: '([^']+)', block: '([^']+)'", src)
+    assert placed, "no placed registry entries found"
+    blocks = {block for _, _, block in placed}
+    for block in blocks:
+        assert f'id="{block}"' in tab4, f"registry block {block} has no tab-4 container"
+    containers = set(re.findall(r'id="(da-[\w-]+)"', tab4))
+    # Root panel and headline pill carry no stats themselves: the pill is
+    # painted by renderDAHeadline, whose stats register under da-headline.
+    structural = {"da-surface", "da-sample-count"}
+    for container in containers:
+        stem = re.sub(r"-(footer|badge|banner)$", "", container)
+        block = stem if stem in blocks else stem + "-container"
+        assert container in blocks or container in structural or block in blocks, \
+            f"tab-4 container {container} claims no registry stat"
+
+
+def test_da_report_only_entries_name_producer_and_reason():
+    src = DA_JS.read_text(encoding="utf-8")
+    entries = re.findall(r"'([\w.]+)': \{ producer: '([^']+)', reason: '([^']+)'", src)
+    assert len(entries) >= 8, f"report-only list looks thin: {len(entries)}"
+    for stat_id, producer, reason in entries:
+        assert reason.strip(), f"{stat_id} has an empty reason"
+        assert any(loc in producer for loc in (
+            "core_brain/", "scripts/", "statistical_validation_run/", "dashboard")), \
+            f"{stat_id} producer {producer} points nowhere"

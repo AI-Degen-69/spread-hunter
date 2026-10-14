@@ -77,6 +77,20 @@ const STAT_REGISTRY = {
   'charts.markout': { producer: 'statistical_analytics.markouts', block: 'da-markout-container', section: 'charts', unit: 'c' },
 };
 
+/* Report-only statistics: computed in their products, never rendered on the
+ * page, listed here so the remainder stays visible (#541 default for open
+ * question 3). A coverage test pins this list against the page. */
+const STAT_REPORT_ONLY = {
+  'report.lifetimes': { producer: 'core_brain/statistics_report.py lifetimes section', reason: 'report product; no read-only route exposes it' },
+  'report.cancel_reasons': { producer: 'core_brain/statistics_report.py cancel/queue sections', reason: 'report product; no read-only route exposes it' },
+  'report.rescue_rates': { producer: 'statistical_validation_run/artifacts.py rescue_stats', reason: 'validation-run product; memo block, not a page card' },
+  'report.run_counters': { producer: 'statistical_validation_run/run.py count_closes / count_matured_markouts', reason: 'validation-run counters, not statistics' },
+  'report.validation_verdict': { producer: 'statistical_validation_run/artifacts.py resolve_verdict', reason: 'artifact-set verdict, rendered in report.md only' },
+  'research.tape_probe': { producer: 'scripts/family_probe_report.py + scripts/ladder_probe.py sims', reason: 'research-only; needs tape files and probe tables' },
+  'research.two_arm': { producer: 'scripts/paired_depth_report.py', reason: 'research-only; needs two comparison arms' },
+  'research.sensitivity': { producer: 'dashboard hidden simulator card (no producer wired)', reason: 'dead control; not wired to any producer' },
+};
+
 /* Claim ledger: a block claimed twice in one pass is a second placement. */
 let _daClaimedBlocks = null;
 
@@ -195,7 +209,7 @@ function renderDataAnalysis(kpi, status) {
 // Node-only: lets tests reach the registry and the renderer. Dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    STAT_REGISTRY, claimBlock, resetStatLedger, requiredDAObservations,
+    STAT_REGISTRY, STAT_REPORT_ONLY, claimBlock, resetStatLedger, requiredDAObservations,
     renderDAHeadline, renderDataAnalysis,
     claimedBlocks: () => Array.from(_daClaimedBlocks || []),
   };
