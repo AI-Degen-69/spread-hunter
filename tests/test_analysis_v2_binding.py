@@ -23,7 +23,7 @@ HARNESS = Path(__file__).resolve().parent / "js" / "analysis_v2_harness.cjs"
 STATIC = Path(__file__).resolve().parent.parent / "dashboard" / "static"
 PAGE = STATIC / "analysis_v2.html"
 PAGE_JS = STATIC / "analysis_v2.js"
-DEMO_DB = Path("data/demo_analytics_unique.db")
+DEMO_DB = Path("data/demo_orders.db")
 
 requires_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 
@@ -43,18 +43,12 @@ def _run(payload: dict, action: str = "render", tmp_path=None) -> dict:
 
 @pytest.fixture(scope="module")
 def live_payload() -> dict:
-    """The real /api/kpi shape from the demo registry.
+    """The real /api/kpi shape from the committed demo registry.
 
-    ``data/*.db`` is gitignored, so a fresh checkout (CI) has no file:
-    build the registry on demand rather than assert against an empty
-    store. The builder is deterministic apart from wall-clock stamps,
-    so every numeric assertion below holds for a fresh build.
+    ``data/demo_orders.db`` is the one database in ``data/`` the repo
+    tracks (the .gitignore negation exists so it can be served for
+    dashboard review), so a fresh checkout -- CI included -- has it.
     """
-    if not DEMO_DB.is_file():
-        from scripts.build_demo_db import build
-
-        DEMO_DB.parent.mkdir(parents=True, exist_ok=True)
-        build(DEMO_DB)
     return kpi_report(db_path=str(DEMO_DB))
 
 
