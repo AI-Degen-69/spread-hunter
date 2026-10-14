@@ -1,102 +1,114 @@
-﻿# Plan — #562: Command palette hotkey loses to the browser, no mouse entry point
+# Plan — #504: Reorganize the top nav bar with consistent grouping and clear hierarchy
 
-Branch: i562/command-palette-hotkey-loses-to-the-browser-and-pa | Issue: #562
+Branch: i504/improve-reorganize-the-top-nav-bar-with-consistent | Issue: #504
 
 ## Why (issue summary)
 
-The #477 palette ships exactly two bindings (Ctrl/Cmd+K, `/`), but live in
-Chrome Ctrl+K focuses the URL bar and `/` does nothing — and no mouse control
-opens the palette. The offline harness passes, so the failure is in the
-live-serving path, not palette logic.
+The top status strip (`.top-meta`) mixes seven status pills, exposure bar, and three buttons in an unstructured row with no grouping. `#services-dropdown` is nested inside `.services-pill-host` causing scroll clipping on desktop. Status pills lack a consistent HTML grammar, run buttons duplicate geometry without a shared base class, and kanban bucket heroes dilute the live-state color vocabulary with five categorical hues. Consolidated #479 collapses individual service pills into a single worst-state aggregate pill with a detail popover and neutralizes hero card hues.
 
-## Tier: Standard (5 files, one Debug decision + one small UI addition)
+## Tier: Standard (5 code files + 4 test files, cohesive UI architecture overhaul)
 
-Two debug/UI tasks plus a test task; no new dependency, no API, no schema.
+## Type: Design/UI + Code + UX/Copy
 
-## Type: Debug + Design/UI
-
-- [Debug] T1 — serving-source diagnosis, live reproduction.
-- [Design/UI] T2 — nav trigger button + hint copy.
-- [Code] T3 — harness regression tests (RED first).
+- [Design/UI] T1 — Semantic groups, accessibility landmarks & tab-row styling alignment.
+- [Code] T2 — Status pill grammar normalization, escaped helper & fake DOM harness updates.
+- [Design/UI] T3 — Shared button hierarchy (`.ctrl-btn`), touch targets & master-toggle handler.
+- [Design/UI] T4 — Panel anchoring, unified placement (`placePanel`) & click/escape dismissal.
+- [Design/UI] T5 — Live state aggregation & neutral kanban hero palette (Consolidated #479).
 
 ## CodeRabbit plan intake (2026-10-14)
 
-No plan comment had landed at planning time (only this station's `@coderabbitai
-plan` request). Proceeding from code; Station III must not wait for it. If a
-plan lands mid-build, mine it for test cases only — the diagnosis in T1 is
-already grounded in fresher evidence (serving stack predates #561).
+- **Adopted**:
+  - Semantic child groups inside `.top-meta` (`Live state`, `Data source`, `Run controls`) removing mixed outer group role/aria-label while keeping `tabindex="0"` for keyboard scrolling (#278).
+  - Normalizing status pills to `.pill mono` base with `.pill-label`, space, and `.pill-value` spans.
+  - Adding `textContent` derivation to fake DOMs (`live_state_harness.cjs`, `master_toggle_harness.cjs`, `start_toggle_harness.cjs`) by stripping tags and decoding basic entities.
+  - Shared `.ctrl-btn` base with `.ctrl-btn-primary` and `.ctrl-btn-secondary` variants; updating exact class equality in tests to token checks.
+  - Moving `#services-dropdown` to direct child of `<header>` and unifying placement logic.
+- **Rejected/Modified**:
+  - CodeRabbit initially flagged #479 as independent due to 401 credential error; #479 was actually closed as consolidated into #504 by the issue owner. Scope includes T5 for aggregate pill + neutral kanban hero recolor.
+  - Maintained `#btn-command-palette` (added in #563) inside `.top-group-controls`.
 
-## Resolved questions (from code + operator, 2026-10-14)
+## Resolved questions (from issue, code & operator)
 
-- "Ctrl+\" was `/` (operator-confirmed). No backslash work exists or is added.
-- Stale-browser-cache ruled OUT: no-store HTML + content-hash fingerprints
-  (`server.py:3994-4008,4062-4082`). Prime suspect is operational: the
-  serving checkout sits pre-#561, so the page has no palette markup and
-  `initPalette` returns before registering the keydown listener
-  (`command-palette.js:425-434`) — one cause for both dead hotkeys.
-- Button placement default stands: minimal trigger in `.top-meta`; #504 relocates.
+- **Degraded services count**: Aggregate pill displays worst single state only (DOWN > DEGRADED > RUNNING); individual counts and breakdown live in the detail popover.
+- **Kanban bucket icons**: Keep existing text labels, remove categorical colors, no new icon set.
+- **Search button placement**: `#btn-command-palette` remains adjacent to run controls inside `.top-group-controls`.
 
-## Improvement proposal: none — evidence reshaped T1 instead
+## Improvement proposal (evidence-based, adopted by default)
 
-No filler proposal. The one evidence-backed change to the issue's approach:
-do NOT touch hotkey code until T1 proves what the operator's browser actually
-receives (served-bytes grep + live keypress). If T1 shows the palette ships
-and keys still fail, T1's findings become the bug's new root cause and T2
-follows unchanged.
+- **Unified Header Panel Geometry & Auto-Dismissal**:
+  - *Evidence*: `dashboard/static/index.html:78-81` nests `#services-dropdown` in `.services-pill-host`, while `#db-run-switcher` sits as a direct child of `<header>` (`index.html:111`).
+  - *Improvement*: Both panels share `.header-panel` base class and a single `placePanel(trigger, panel)` helper with viewport left-clamping (margin >= 4px), dynamic repositioning on strip scroll and resize, and mutual exclusivity (opening one closes the other; Escape closes both).
 
 ## Dependency graph
 
-- T1: no dependencies (risk-first: kills or confirms the operational theory
-  before any code moves).
-- T2: depends on T1 (the button must open a palette T1 proved live).
-- T3: depends on T2 (tests pin T2's wiring; RED run first against unmodified code).
+```
+T1 (Groups & Landmarks)
+├── T2 (Pill Grammar)
+│   └── T5 (State Aggregation & Kanban Colors [Consolidated #479])
+├── T3 (Button Hierarchy)
+└── T4 (Panel Anchoring & Dismissal)
+```
+
+- T1 has no dependencies (establishes DOM group structure).
+- T2 and T3 depend on T1 (styles and markup operate within groups).
+- T4 depends on T1 and T2 (anchors to normalized service and DB triggers).
+- T5 depends on T2 and T4 (leverages pill grammar and panel popover).
+
+---
 
 ## Tasks
 
-### T1 [Debug] Prove the served page, reproduce live — S
+### T1 [Design/UI] Semantic Groups, Accessibility Landmarks & Tab Row Alignment — M
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `tests/test_ui_top_nav_groups.py`, `tests/test_dashboard_server.py`.
+- **What**:
+  - Keep `.brand` as first header child.
+  - Inside `.top-meta`, introduce 3 direct child groups:
+    - `.top-group.top-group-state` with `role="group"` and `aria-label="Live state"`.
+    - `.top-group.top-group-source` with `role="group"` and `aria-label="Data source"`.
+    - `.top-group.top-group-controls` with `role="group"` and `aria-label="Run controls"`.
+  - Remove mixed `role="group"` and `aria-label` from `.top-meta`, preserving `tabindex="0"`.
+  - Add inline-flex `.top-group` rules with 6px item gap, group dividers, and responsive wrapping for `<=900px`.
+  - Align tab-row styling with header (radius, padding, uppercase font, active tint).
+  - Create `tests/test_ui_top_nav_groups.py` with element tree assertions and update `test_dashboard_server.py` group check.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_ui_278_status_strip.py tests/test_sidebar_prototype.py -q`.
 
-- Target files: none (reads only) — dashboard URL `/`, serving checkout/process.
-- What: fetch the served `/` bytes and grep for `command-palette`; identify
-  which checkout and process serves the operator's dashboard; if stale,
-  pull/restart through the operator-approved stack path and re-fetch. Then
-  press Ctrl+K and `/` in live Chrome and record which opens the palette.
-- Skill: `debugging-and-error-recovery` (reproduce → localize → fix root cause).
-- Verify: served-bytes grep green AND live open observed for both hotkeys, or
-  a written root-cause finding that redirects T2. Checkpoint: **report the
-  diagnosis before touching code.**
+### T2 [Code] Status Pill Grammar Normalization & Fake DOM Harnesses — M
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/js/live_state_harness.cjs`, `tests/js/master_toggle_harness.cjs`, `tests/js/start_toggle_harness.cjs`, `tests/test_live_state_language.py`, `tests/test_ui_top_nav_groups.py`.
+- **What**:
+  - Normalize pill markup in `index.html` to `.pill mono` base with `.pill-label` and `.pill-value` spans.
+  - Add `.pill-value` style in `styles.css`. Reduce `#scan-engine-elsewhere` to color modifier only.
+  - Add `renderPillHtml(label, value, detail, options)` helper in `app.js`.
+  - Update `renderMarketScanPill`, `renderServiceHeader`, master indicator branches, `renderDbMode`, and elsewhere renderers to use helper.
+  - Update Node fake DOM harnesses to strip HTML tags and decode entities (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`) on `innerHTML` setter.
+  - Update elsewhere assertion in `tests/test_live_state_language.py`.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_live_state_language.py -q`.
 
-### T2 [Design/UI] Nav trigger button + hint names the hotkeys — M
+### T3 [Design/UI] Unified Button Hierarchy & Master Toggle State Handler — S
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/test_dashboard_server.py`, `tests/test_ui_top_nav_groups.py`, `tests/test_ui_277_touch_targets.py`.
+- **What**:
+  - Add `.ctrl-btn` base class, `.ctrl-btn-primary` (weight 800, 16px pad), and `.ctrl-btn-secondary` (weight 700, 14px pad).
+  - Strip redundant geometry from existing button rules while preserving colors and hover states.
+  - Update markup in `index.html` for `#btn-master-toggle`, `#btn-sync`, `#btn-reset`, and `#btn-command-palette`.
+  - Add helper in `app.js` for master toggle class assignment (`getMasterToggleClasses`).
+  - Update `tests/test_dashboard_server.py` to use token checks instead of exact string equality.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_ui_277_touch_targets.py -q`.
 
-- Target files: `dashboard/static/index.html` (button in `.top-meta` beside
-  RESET, hint line `:863`), `dashboard/static/command-palette.js` (bind by id
-  in `initPalette`), `dashboard/static/styles.css` (one token-reusing rule).
-- What: real `<button id="btn-command-palette">` with magnifier icon
-  (`aria-hidden`) + accessible name; click opens the palette with focus in
-  search; close returns focus to the button via the existing opener path
-  (`openPalette` captures `doc.activeElement`, `:335`). Hint becomes e.g.
-  "Ctrl+K or / to open. Arrows to move. Enter to choose. Escape to close."
-- Skill: `frontend-ui-engineering` (native button, focus management, tokens).
-- Depends on: T1. Verify: live click opens + harness click test (T3) green.
+### T4 [Design/UI] Panel Anchoring, Unified Positioning & Dismissal — M
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/test_ui_top_nav_groups.py`, `tests/test_live_state_language.py`.
+- **What**:
+  - Move `#services-dropdown` to direct child of `<header>` alongside `#db-run-switcher`. Add `.header-panel` class to both.
+  - Add `.header-panel` shared absolute styling (safe top default, `z-index: 60`, max-width clamp).
+  - Extract `placePanel(trigger, panel)` helper in `app.js` with left-edge margin clamp (>=4px).
+  - Reposition panels on strip scroll and window resize.
+  - Implement outside click and Escape key dismissal; opening one panel closes the other.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_live_state_language.py -q`.
 
-### T3 [Code] Harness regression tests, RED first — S
-
-- Target files: `tests/js/command_palette_harness.cjs` (fixture trigger
-  element), `tests/test_dashboard_command_palette.py` (new assertions only).
-- What: RED run first (trigger click with no binding → palette stays shut;
-  Ctrl+K asserts `keyPrevented` true and open), then T2 makes them GREEN.
-  Keep: no skips (node present), no touched existing assertions.
-- Depends on: T2. Verify:
-  `python -m pytest -q tests/test_dashboard_command_palette.py` green, then the
-  dashboard `-k` selection from CONSTRAINTS.md.
-
-## Checkpoints
-
-1. After T1: one-line diagnosis report (serving source + live result). If the
-   cause is operational and fixed by restart/pull, T2 still builds the button.
-2. After T3: suite green, branch ready for Station IV.
-
-## Build status (Station III)
-
-- [x] T1 — diagnosis proven: operator stack serves pre-#561 page, no code defect
-- [x] T2 — trigger button + hint committed
-- [x] T3 — 31 passed palette suite + 387 dashboard selection + served-bytes proof
+### T5 [Design/UI] Live State Aggregation & Neutral Kanban Hero Palette (Consolidated #479) — M
+- **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `dashboard/static/app.js`, `tests/test_ui_top_nav_groups.py`.
+- **What**:
+  - Implement summary aggregate status pill in live state group computing worst-state-wins (`DOWN` > `DEGRADED` > `RUNNING`) via `stateKey`.
+  - Clicking aggregate pill opens services popover detailing individual service states and heartbeat age.
+  - Neutralize kanban bucket hero styling in `styles.css`: remove categorical hues (`#a78bfa`, `#fb923c`, `#f472b6`, `#38bdf8`, `#fbbf24`), replacing with neutral slate/ink chip styling.
+  - Confirm green/amber/red/gray are strictly reserved for live execution status.
+- **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_dashboard_server.py -q` and `npm run build`.

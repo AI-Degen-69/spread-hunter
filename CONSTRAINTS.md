@@ -1,46 +1,40 @@
-﻿# CONSTRAINTS — #562 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #504 (locked by Station II, enforced through Station V)
 
-Governs the `i562/command-palette-hotkey-loses-to-the-browser-and-pa` branch
-only. The #477 contract this file replaces is branch-scoped by its own header
-line and stays readable in git history.
+Governs the `i504/improve-reorganize-the-top-nav-bar-with-consistent` branch.
 
 ## Scope & File Boundaries
 
-- Target files (exactly five, plus this planning set):
-  - `dashboard/static/index.html` — one trigger button
-    (`#btn-command-palette`) in `.top-meta` beside RESET (`:97-98` pattern),
-    and the hint line (`:863`) naming Ctrl+K and `/`. Markup only.
-  - `dashboard/static/command-palette.js` — bind the trigger by id in
-    `initPalette` (`:422-435`); no other behavior change.
-  - `dashboard/static/styles.css` — one minimal button rule reusing the
-    existing pill/button tokens; no new palette, no layout.
-  - `tests/js/command_palette_harness.cjs` — fixture trigger element; the
-    harness already supports `{type:'click', target}` and records
-    `keyPrevented`.
-  - `tests/test_dashboard_command_palette.py` — new assertions only.
+- **Target files**:
+  - `dashboard/static/index.html` — group wrappers, pill markup normalization, button classes, services dropdown location.
+  - `dashboard/static/styles.css` — `.top-group` flex rules, `.pill-value` styling, `.ctrl-btn` base and variants, `.header-panel` positioning rules, kanban hero neutral styling.
+  - `dashboard/static/app.js` — `renderPillHtml` helper, master toggle class helper, `placePanel` positioning, outside click & Escape handlers, aggregate state helper.
+  - `tests/test_ui_top_nav_groups.py` — comprehensive test suite covering header groups, pill grammar, button hierarchy, and panel anchoring.
+  - `tests/test_dashboard_server.py` — update top-meta group assertion to child group assertions; replace exact button `className ==` checks with token assertions.
+  - `tests/test_live_state_language.py` — update elsewhere pill exact string check to token checks.
+  - `tests/js/live_state_harness.cjs`, `tests/js/master_toggle_harness.cjs`, `tests/js/start_toggle_harness.cjs` — update fake DOM `textContent` derivation from `innerHTML`.
   - `SPEC.md`, `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
-- Files that must NOT be modified:
-  - `dashboard/static/app.js`, `dashboard/static/prototype.js` — seams reused,
-    none edited (carried over from #477).
-  - `dashboard/server.py` — serving verified correct (content-hash
-    fingerprints + no-store HTML); the stale-page cause is operational, not code.
-  - Every existing test file outside the palette suite.
-  - `data/orders.db` — production registry, read-only at all times.
 
-## Quality bar
+- **Protected files (MUST NOT BE MODIFIED)**:
+  - `dashboard/server.py` — backend server remains untouched.
+  - `server.ts` — TypeScript server entrypoint remains untouched.
+  - `dashboard/static/prototype.js` and `prototype.css` — prototype logic and styling preserved.
+  - `data/orders.db` — production registry is strictly read-only.
+  - Existing test suites outside the touched modules.
 
-- Zero regressions: the palette suite plus the issue's dashboard selection pass
-  unchanged —
-  `python -m pytest -q tests/test_dashboard_command_palette.py` and
-  `pytest tests/ -k "live_state or input_lag or analytics_surface or start_toggle or
-  dashboard"`. The full sweep is GitHub CI's merge gate, never a local step.
-  (Verified at intake on `origin/main`: 26/27 green in a subset extraction; the
-  one failure needs `dashboard.server` from the full checkout, 27/27 in PR #561.)
-- Every new behaviour carries a test that fails without the change (RED first).
-- T1 is evidence before synthesis: no hotkey code is touched until the served
-  bytes prove whether the palette ships to the operator's browser at all.
-- Anti-cheat: no skipped or disabled tests, no deleted assertions, no linter
-  suppression. No new external dependencies.
-- Accessibility floor (binding): the trigger is a real `<button>` with an
-  accessible name (magnifier `aria-hidden`, visible label or `aria-label`);
-  focus moves into search on open and returns to the trigger on close. Never cut.
+## Quality Guardrails
+
+1. **Zero Regressions**:
+   - `python -m pytest tests/test_ui_top_nav_groups.py tests/test_ui_278_status_strip.py tests/test_ui_277_touch_targets.py tests/test_sidebar_prototype.py -q` MUST pass.
+   - `python -m pytest tests/ -k "live_state or input_lag or analytics_surface or start_toggle or dashboard" -q` MUST pass.
+   - `npm run build` MUST pass cleanly.
+
+2. **Touch Targets & Accessibility**:
+   - All interactive controls (buttons, triggers) MUST maintain `>= 44px` touch targets (`--touch-min` / #277).
+   - `.top-meta` MUST preserve `tabindex="0"` for keyboard scrolling (#278).
+   - Groups MUST have explicit `role="group"` and `aria-label`s.
+
+3. **Anti-Cheat Rules**:
+   - No disabled or skipped tests (`@pytest.mark.skip`, `xit`, `it.skip`).
+   - No deleted assertions; existing test intentions must be preserved.
+   - No linting or typing suppressions added to bypass checks.
+   - Zero new external runtime dependencies added to `package.json` or `pyproject.toml`.
