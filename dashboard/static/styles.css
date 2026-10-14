@@ -3361,3 +3361,22 @@ th[aria-sort] .ot-sort-btn {
   outline-offset: 1px;
 }
 
+/* ── Data Analysis tab (#541): value-first trading-terminal cards, scoped ── */
+#da-surface { display: flex; flex-direction: column; gap: 14px; }
+#da-surface .da-head { display: flex; align-items: baseline; justify-content: space-between; }
+#da-surface .da-title { font-size: 15px; letter-spacing: 0.04em; color: var(--text-primary); }
+#da-surface .da-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+#da-surface .da-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+#da-surface .da-grid-2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+#da-surface .da-card { background: var(--card, #1a2233); border: 1px solid var(--line, #33405c); border-radius: 12px; padding: 14px 16px; }
+#da-surface .da-card:empty { display: none; }
+#da-surface .da-tile { display: flex; flex-direction: column; gap: 2px; }
+#da-surface .da-tile .da-value { font-size: 24px; font-weight: 700; order: -1; }
+#da-surface .da-tile .da-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+#da-surface .da-tile .da-hint { font-size: 11px; color: var(--text-muted); }
+/* Shared renderer markup inside the new tab reads one scale tighter. */
+#da-surface .kpi-tile .kpi-label,
+#da-surface .quant-tile .quant-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+#da-surface .kpi-tile .kpi-value,
+#da-surface .quant-tile .quant-value { font-size: 22px; font-weight: 700; }
+

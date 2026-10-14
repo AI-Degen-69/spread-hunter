@@ -119,6 +119,7 @@
     <button class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-1" id="tab-btn-1" type="button">LIVE OPERATIONS</button>
     <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-2" id="tab-btn-2" type="button">PERFORMANCE &amp; ANALYTICS</button>
     <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-3" id="tab-btn-3" type="button">MARKET FILTER</button>
+    <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-4" id="tab-btn-4" type="button">DATA ANALYSIS</button>
   </nav>
 
   <!-- ── Tab 1: Live Operations ── -->
@@ -757,6 +758,61 @@
     </div>
   </section>
 
+  <!-- ── Tab 4: Data Analysis (#541 canonical statistics page) ── -->
+  <!-- Tab 2 stays frozen as the legacy page; every figure below is placed once,
+       claimed in the STAT_REGISTRY in data_analysis.js. -->
+  <section id="tab-4" role="tabpanel" aria-labelledby="tab-btn-4" hidden>
+    <div id="da-surface">
+      <div class="da-head">
+        <div>
+          <div class="da-title">DATA ANALYSIS</div>
+          <div class="da-sub">Every project statistic, each shown once · <span id="da-sample-count"></span></div>
+        </div>
+      </div>
+      <div class="da-grid" id="da-headline"></div>
+      <div class="da-grid da-grid-2">
+        <div class="da-card" id="da-pnl-ci"></div>
+        <div class="da-card" id="da-sufficiency"></div>
+      </div>
+      <div class="da-card" id="da-funnel"></div>
+      <div class="da-card da-gates" id="da-gates"></div>
+      <div class="da-grid da-grid-2">
+        <div class="da-card" id="da-fillpath"></div>
+        <div class="da-card" id="da-rescue"></div>
+      </div>
+      <div class="da-grid da-grid-2">
+        <div class="da-card" id="da-queue"></div>
+        <div class="da-card" id="da-robustness"></div>
+      </div>
+      <div class="da-card" id="da-capital"></div>
+      <div class="da-card" id="da-quant"></div>
+      <div class="da-card">
+        <div id="da-dist-container"></div>
+        <div id="da-dist-footer"></div>
+        <div id="da-dist-badge"></div>
+        <div id="da-dist-banner"></div>
+      </div>
+      <div class="da-card">
+        <div id="da-paircost-container"></div>
+        <div id="da-paircost-footer"></div>
+        <div id="da-paircost-badge"></div>
+      </div>
+      <div class="da-card">
+        <div id="da-mc-container"></div>
+        <div id="da-mc-footer"></div>
+      </div>
+      <div class="da-card">
+        <div id="da-bell-container"></div>
+        <div id="da-bell-footer"></div>
+        <div id="da-bell-badge"></div>
+      </div>
+      <div class="da-card">
+        <div id="da-markout-container"></div>
+        <div id="da-markout-footer"></div>
+      </div>
+    </div>
+  </section>
+
 </div>
 
 <!-- ── Toast Notifications Container ── -->
@@ -784,6 +840,7 @@
   const CONTROL_TOKEN = "__LIVE_DASH_CONTROL_TOKEN__";
 </script>
 <script src="/static/app.js?v=9"></script>
+<script src="/static/data_analysis.js?v=1"></script>
 <!-- Runs after app.js has bound every panel, and only on /prototype: it moves
      those same nodes into the sidebar pages rather than re-rendering them. -->
 <script src="/static/prototype.js?v=6"></script>

@@ -159,7 +159,7 @@ class TestParity541:
         assert finding["sensitivity_base_ci90_lower_pct"] == finding["gate_ci90_lower_pct"]
 
 
-_UNIT_RE = re.compile(r"[$\u00a2%]|bps", re.IGNORECASE)
+_UNIT_RE = re.compile(r"[$¢%×]|bps|\b(s|sec|secs|min|mins|h)\b", re.IGNORECASE)
 
 # Titles that need no unit: unitless ratios, raw counts, or a word-unit
 # already in the title. Everything else must name its unit ($, c, %, bps).
