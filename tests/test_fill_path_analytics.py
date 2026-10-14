@@ -326,13 +326,14 @@ def test_the_method_sets_match_their_canonical_homes():
     # Arrange -- this module re-declares the sets rather than importing them,
     # because `kpi` imports `statistical_analytics` and the reverse is a cycle.
     # The duplication is therefore pinned here instead of trusted.
-    from core_brain import kpi, ladder, registry_state
+    from core_brain import kpi, registry_state
+    from core_brain.close_methods import RESCUE_METHODS as CANONICAL_RESCUE
     from statistical_validation_run import artifacts
 
     # Act / Assert
     assert set(MERGE_METHODS) == set(registry_state.MERGE_CLOSE_METHODS)
     for home in (artifacts.SINGLE_BUY_EXIT_METHODS, kpi.SINGLE_BUY_EXIT_METHODS,
-                 ladder.LADDER_EXIT_METHODS):
+                 CANONICAL_RESCUE):
         assert set(RESCUE_METHODS) == set(home)
     assert set(EXCLUDED_METHODS) == set(kpi.NON_TRADE_CLOSE_METHODS)
 

@@ -343,9 +343,9 @@ def test_scan_state_ticket_scenario_dead_here_live_elsewhere(client, tmp_path, m
     monkeypatch.setattr(
         srv, "read_other_live_shadow_runs",
         lambda *a, **k: [{
-            "run_id": "ladder-live",
-            "db_path": "/path/to/NN_shadow_ladder.db",
-            "heartbeat_file": "runtime/shadow_run_ladder-live.json",
+            "run_id": "other-live",
+            "db_path": "/path/to/NN_shadow_other.db",
+            "heartbeat_file": "runtime/shadow_run_other-live.json",
         }],
     )
     set_ring_override(ring)
@@ -361,7 +361,7 @@ def test_scan_state_ticket_scenario_dead_here_live_elsewhere(client, tmp_path, m
     assert data["stall_reason"] == "process_gone"
     assert data["seconds_since_heartbeat"] == pytest.approx(4800.0, abs=2.0)
     assert len(data["other_live_runs"]) == 1
-    assert data["other_live_runs"][0]["run_id"] == "ladder-live"
+    assert data["other_live_runs"][0]["run_id"] == "other-live"
 
 
 # --- ring resolution --------------------------------------------------------

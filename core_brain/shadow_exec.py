@@ -345,7 +345,7 @@ def record_submit(
     if pair_id is None:
         pair_id = f"pair-{uuid.uuid4().hex[:12]}"
 
-    # Explicit carry still wins: a replacement leg stamped by the ladder or
+    # Explicit carry still wins: a replacement leg stamped by the
     # lifecycle-escalation path joins the pair it names (#397).
     carried = {getattr(i, "pair_id", None) for i in intents} - {None}
     if len(carried) == 1:

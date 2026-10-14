@@ -681,10 +681,9 @@ def build_shadow_seam(
     (`_default_flow_fn`). That is deliberately not the `traded_fn` treatment, and
     the reason is whose read it is: a caller that substituted its other sources
     must not be handed a live one by surprise.
-    `scripts/ladder_shadow_rehearsal.py` replays a RECORDED tape for both books
-    and fills, states that its only network is the resolution read, and rotates
-    at `--interval 0.01` -- defaulting this to the live tape would put public
-    reads per market per rotation into a recorded experiment and measure today's
+    A caller that replays a RECORDED tape states that its only network is the
+    resolution read; defaulting this to the live tape would put public reads
+    per market per rotation into a recorded experiment and measure today's
     tape against a previous session's book.
 
     Left unset, that inertness is NAMED rather than silent (see the warning

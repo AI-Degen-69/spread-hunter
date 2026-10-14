@@ -110,19 +110,19 @@ def test_a_run_on_another_store_is_named_and_marked_not_active(tmp_path, monkeyp
     # the pointed store's run died, another store's run is mid-rotation.
     runtime = _wire_runtime(tmp_path, monkeypatch)
     here = _make_db(tmp_path, "01_shadow_12-09_00-58.db")
-    there = _make_db(tmp_path, "NN_shadow_ladder_333_mine.db")
+    there = _make_db(tmp_path, "NN_shadow_other_333_mine.db")
     _hb(runtime, "shadow_run_shadow-01.json", here, "shadow-01", age=4800.0)
-    _hb(runtime, "shadow_run_ladder-live.json", there, "ladder-live", age=2.0)
+    _hb(runtime, "shadow_run_other-live.json", there, "other-live", age=2.0)
 
     # Act
     runs = srv.list_shadow_runs(str(here), now=_clock())
 
     # Assert -- both are named; only one belongs to this page's store.
     by_id = {r["run_id"]: r for r in runs}
-    assert set(by_id) == {"shadow-01", "ladder-live"}
-    assert by_id["ladder-live"]["running"] is True
-    assert by_id["ladder-live"]["is_active_db"] is False
-    assert by_id["ladder-live"]["db_path"] == str(there)
+    assert set(by_id) == {"shadow-01", "other-live"}
+    assert by_id["other-live"]["running"] is True
+    assert by_id["other-live"]["is_active_db"] is False
+    assert by_id["other-live"]["db_path"] == str(there)
     assert by_id["shadow-01"]["running"] is False
     assert by_id["shadow-01"]["is_active_db"] is True
 
@@ -185,16 +185,16 @@ def test_a_malformed_heartbeat_file_is_skipped(tmp_path, monkeypatch):
 def test_status_carries_the_run_list(client, tmp_path, monkeypatch):
     runtime = _wire_runtime(tmp_path, monkeypatch)
     here = _make_db(tmp_path, "01_shadow.db")
-    there = _make_db(tmp_path, "NN_shadow_ladder_333_mine.db")
+    there = _make_db(tmp_path, "NN_shadow_other_333_mine.db")
     _hb(runtime, "shadow_run_shadow-01.json", here, "shadow-01", age=4800.0)
-    _hb(runtime, "shadow_run_ladder-live.json", there, "ladder-live", age=2.0)
+    _hb(runtime, "shadow_run_other-live.json", there, "other-live", age=2.0)
     set_db_override(here)
 
     payload = client.get("/api/system/status").json()
 
     runs = payload.get("shadow_runs")
     assert isinstance(runs, list), "the status endpoint must name the other runs"
-    assert {r["run_id"] for r in runs} == {"shadow-01", "ladder-live"}
+    assert {r["run_id"] for r in runs} == {"shadow-01", "other-live"}
 
 
 # ── POST /api/system/db: the run switcher ─────────────────────────────────
@@ -208,9 +208,9 @@ def _token() -> dict:
 def test_switching_re_points_the_page_at_the_live_store(client, tmp_path, monkeypatch):
     runtime = _wire_runtime(tmp_path, monkeypatch)
     stale = _make_db(tmp_path, "01_shadow_12-09_00-58.db")
-    live = _make_db(tmp_path, "NN_shadow_ladder_333_mine.db")
+    live = _make_db(tmp_path, "NN_shadow_other_333_mine.db")
     _hb(runtime, "shadow_run_shadow-01.json", stale, "shadow-01", age=4800.0)
-    _hb(runtime, "shadow_run_ladder-live.json", live, "ladder-live", age=2.0)
+    _hb(runtime, "shadow_run_other-live.json", live, "other-live", age=2.0)
     set_db_override(stale)
 
     res = client.post("/api/system/db", params={"db": str(live)}, headers=_token())
@@ -220,12 +220,12 @@ def test_switching_re_points_the_page_at_the_live_store(client, tmp_path, monkey
     assert body["ok"] is True
     assert Path(body["status"]["db_path"]).resolve() == live.resolve()
     # And the stopwatch follows: the page is now watching a run that is alive.
-    assert body["status"]["shadow_run"]["run_id"] == "ladder-live"
+    assert body["status"]["shadow_run"]["run_id"] == "other-live"
     assert body["status"]["shadow_run"]["running"] is True
 
 
 def test_switching_without_the_control_token_is_refused(client, tmp_path):
-    live = _make_db(tmp_path, "NN_shadow_ladder_333_mine.db")
+    live = _make_db(tmp_path, "NN_shadow_other_333_mine.db")
     set_db_override(_make_db(tmp_path, "01_shadow.db"))
 
     res = client.post("/api/system/db", params={"db": str(live)})
@@ -258,7 +258,7 @@ def test_is_temp_or_test_db_detection():
     assert srv._is_temp_or_test_db("/tmp/shadow.db") is True
     assert srv._is_temp_or_test_db("C:\\Users\\Tiger\\Agents\\Projects\\spread-hunter\\data\\orders.db") is False
     assert srv._is_temp_or_test_db("data/NN_shadow_123.db") is False
-    assert srv._is_temp_or_test_db("data/pytest_ladder_01.db") is False
+    assert srv._is_temp_or_test_db("data/pytest_other_01.db") is False
     assert srv._is_temp_or_test_db("data/pytest-123/shadow.db") is True
     assert srv._is_temp_or_test_db(None) is False
     assert srv._is_temp_or_test_db(12345) is False
