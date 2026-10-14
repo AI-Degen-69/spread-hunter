@@ -1598,11 +1598,10 @@ class DecisionThenExecutionBook:
 
     def get_order_book(self, token_id):
         self.calls.append(f"book:{token_id}")
+        # The light leg only needs its ask (the exit's completion guard); an
+        # empty bid list keeps it out of any trigger check.
         if token_id == TOK_DN:
-            return self._book(None) | {
-                "asks": [{"price": str(self.light_ask),
-                          "size": str(self.depth)}],
-            }
+            return self._book(None)
         cancelled = any(c.startswith("cancel:") for c in self.calls)
         return self._book(
             self.execution_bid if cancelled else self.decision_bid)
@@ -1717,13 +1716,14 @@ def test_shadow_ladder_adverse_drift_records_trigger_bid(tmp_path):
         run_id=reg._run_id(), best_bid=0.49, best_bid_size=20.0,
     )
 
-    heavy_reads = {"n": 0}
+    # Decision bid first, then the live bid the exit prices off; once the
+    # stub runs dry it keeps the last book, which is the real steady state.
+    bids = iter([0.50, 0.49])
 
     def book_fn(host, token_id):
         if token_id == TOK_DN:
             return {"bids": {0.38: 100.0}, "asks": {0.40: 100.0}}
-        heavy_reads["n"] += 1
-        bid = 0.50 if heavy_reads["n"] == 1 else 0.49
+        bid = next(bids, 0.49)
         return {"bids": {bid: 100.0}, "asks": {0.65: 100.0}}
 
     client = ShadowExecutionClient(reg, db, book_fn=book_fn)
