@@ -1,4 +1,4 @@
-"""What a trade-through fill says about where the tape was, in cents (#515).
+﻿"""What a trade-through fill says about where the tape was, in cents (#515).
 
 The shadow fill model credits a resting order ONLY when the tape prints strictly below its
 price -- a trade-through proving the level cleared. Three of the metrics once planned around
@@ -337,7 +337,7 @@ def test_cleared_fills_joins_a_quote_to_its_earliest_fill_in_seconds():
     # Earliest fill, milliseconds -> seconds: the wait is measured from placement to the
     # first credit, and averaging the last partial in would shorten every reading.
     assert records[0].filled_ts == 1005.0
-    # Rows from stores that never recorded a print keep None — a measurement
+    # Rows from stores that never recorded a print keep None â€” a measurement
     # nobody took, not a depth of zero.
     assert records[0].clearing_price is None
 
@@ -404,3 +404,51 @@ def test_cleared_fills_feeds_the_latency_metric_and_leaves_depth_unmeasured():
     assert depth["missing"] == 2
     assert depth["median_cents"] is None
     assert depth["band"] == "unmeasured"
+
+
+# --- T4 (#531): end-to-end — the write is what makes depth measure ---
+
+
+class _SettleMarket:
+    """Minimal market shape `settle_market` reads."""
+    condition_id = "0xabc"
+    up_token = "tok-up"
+    down_token = "tok-dn"
+    market_slug = "fake-market"
+    tick_size = 0.01
+    neg_risk = False
+
+
+def _depth_after_settle(tmp_path):
+    """One credit pass through the real path, then the depth it produces."""
+    from core_brain.config import load
+    from core_brain.order_registry import OrderRegistry, init_db
+    from core_brain.quotes import QuoteIntent
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, record_submit, settle_market,
+    )
+
+    db = tmp_path / "shadow.db"
+    init_db(db)
+    ensure_shadow_tables(db)
+    reg = OrderRegistry(db_path=db)
+    record_submit(object(), reg, _SettleMarket(),
+                  [QuoteIntent(side="UP", token_id="tok-up", price=0.50,
+                               size=20, mid=0.5, edge_vs_mid=0.0)],
+                  load(), db_path=db, book_fn=lambda h, t: {"bids": {}})
+
+    # 0.48 is the closest print below 0.50; 0.44 is deeper and must NOT win.
+    settle_market(reg, _SettleMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.48: 5.0, 0.44: 9.0}})
+
+    return trade_through_depth(
+        cleared_fills(reg.get_all_quotes(), reg.get_all_fills()))
+
+
+def test_depth_measures_on_the_real_credit_path(tmp_path):
+    depth = _depth_after_settle(tmp_path)
+
+    assert depth["count"] == 1
+    assert depth["median_cents"] == 2.0
+    assert depth["band"] == "average"
+

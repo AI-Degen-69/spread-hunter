@@ -1775,7 +1775,7 @@ class OrderRegistry:
     def get_all_fills(self) -> list[dict]:
         with self._conn() as conn:
             has_prints = any(
-                r[1] == "shadow_clearing_prints"
+                r[0] == "shadow_clearing_prints"
                 for r in conn.execute(
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 )
