@@ -1757,18 +1757,20 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                                volatility_exempt=is_volatility_exempt)
         books.append((side, bids, asks))
         mid = (max(bids)[0] + min(asks)[0]) / 2.0
-        # Outside [0.15, 0.85] the book is one-sided in practice and the
-        # position is mostly a bet on a near-settled outcome.
-        # Tightened 2026-08-28 from [0.05, 0.95] per operator directive,
-        # widened 2026-10-09 to [0.15, 0.85] (#432) to capture additional
-        # viable pairs while preventing settled legs from entering the
-        # graduated universe.
+        # Outside the configured price band the book is one-sided in
+        # practice and the position is mostly a bet on a near-settled
+        # outcome. The band is the config's (price_band_low/high), not a
+        # hardcoded pair of edges -- a second hardcoded band here silently
+        # ignored whatever the config said (#582). Mirrors the quoter's
+        # decided check in core_brain/quotes.py.
         #
         # LIVE-SERIES EXEMPTION (#402): a best-of series with games remaining
         # is quotable outside the band -- without this, the feed drops the
         # series and the Trader cancels it as market_dropped. Same predicate
         # as the quoter's, read off the row's series evidence.
-        if not 0.15 < mid < 0.85 and not live_series_with_games_remaining(
+        band_low = getattr(_CFG, "price_band_low", 0.10)
+        band_high = getattr(_CFG, "price_band_high", 0.90)
+        if not band_low < mid < band_high and not live_series_with_games_remaining(
                 parse_series_state(
                     sports_market_type=m.get("sports_market_type"),
                     score=m.get("_event_score"),
@@ -1780,7 +1782,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                 time.time()):
             return _reject_row(
                 source,
-                f"{side}: decided mid {mid:.2f} outside [0.15, 0.85]",
+                f"{side}: decided mid {mid:.2f} outside [{band_low:.2f}, {band_high:.2f}]",
                 m, volume_24h, movement_usd=movement_usd,
                 **_book_stats({j: min(asks)[0] - max(bids)[0]},
                               {j: top_depth_usd(bids)}))

@@ -1269,15 +1269,15 @@ def test_screening_mid_price_band_boundary():
 
     m = _universe_candidate("0xmid")
 
-    # Mids 0.17 and 0.83 (inside [0.15, 0.85]): admitted
+    # Mids 0.17 and 0.83 (inside [0.10, 0.90]): admitted
     session_in = _MidBookSession(0.17, 0.83)
     row_in = evaluate(session_in, 5.0, m, volume_24h=250_000.0, source="spread")
     assert row_in["eligible"] is True
 
-    # Mids 0.14 and 0.86 (outside [0.15, 0.85]): rejected as decided mid
-    session_out = _MidBookSession(0.14, 0.86)
+    # Mids 0.09 and 0.91 (outside [0.10, 0.90]): rejected as decided mid
+    session_out = _MidBookSession(0.09, 0.91)
     row_out = evaluate(session_out, 5.0, m, volume_24h=250_000.0, source="spread")
     assert row_out["eligible"] is False
     assert "decided mid" in row_out["reject_reason"]
-    assert "outside [0.15, 0.85]" in row_out["reject_reason"]
+    assert "outside [0.10, 0.90]" in row_out["reject_reason"]
 

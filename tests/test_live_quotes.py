@@ -254,7 +254,9 @@ def test_flat_lone_leg_refusal_names_blocked_side():
     intents, why = decide_quotes(cfg, up, down, flat, 1e9, None)
     assert intents == []
     assert "lone resting leg is a naked position" in why
-    assert "outside band" in why
+    # UP mid 0.25 is outside this fixture's custom 0.30-0.70 band; the
+    # decided-market gate names the configured band (#582).
+    assert "outside [0.30,0.70]" in why
 
 
 def test_flat_pair_sizes_harmonize_to_minimum():
@@ -745,7 +747,7 @@ def test_decide_quotes_admits_mid_between_15_and_20_cents():
     assert "decided market" not in why
 
 
-def test_decide_quotes_refuses_mid_outside_15_to_85_cents():
+def test_decide_quotes_refuses_mid_outside_configured_band():
     cfg = MakerConfig(
         objective="rewards",
         quote_shares=120,
@@ -753,7 +755,8 @@ def test_decide_quotes_refuses_mid_outside_15_to_85_cents():
         price_band_low=0.10,
         price_band_high=0.90,
     )
-    # Mid 0.1499 for UP, Mid 0.8501 for DOWN - outside [0.15, 0.85]
+    # Mid 0.1499 for UP, Mid 0.8501 for DOWN - inside the configured
+    # [0.10, 0.90] band, so the decided-market gate must NOT refuse them.
     up_book = {
         "token_id": "tok_up",
         "best_bid": 0.1399, "best_ask": 0.1599,
@@ -766,7 +769,58 @@ def test_decide_quotes_refuses_mid_outside_15_to_85_cents():
     }
     inv = Inventory()
     intents, why = decide_quotes(cfg, up_book, down_book, inv, 1e9, None)
+    assert "decided market" not in why
+    assert "outside [0.10,0.90]" not in why
+
+
+def test_decide_quotes_refuses_mid_outside_configured_band_edges():
+    cfg = MakerConfig(
+        objective="rewards",
+        quote_shares=120,
+        min_quote_shares=50,
+        price_band_low=0.10,
+        price_band_high=0.90,
+    )
+    # Mid 0.09 for UP, Mid 0.91 for DOWN - outside the configured band.
+    up_book = {
+        "token_id": "tok_up",
+        "best_bid": 0.08, "best_ask": 0.10,
+        "bids": {0.08: 1000.0}, "asks": {0.10: 1000.0}
+    }
+    down_book = {
+        "token_id": "tok_down",
+        "best_bid": 0.90, "best_ask": 0.92,
+        "bids": {0.90: 1000.0}, "asks": {0.92: 1000.0}
+    }
+    inv = Inventory()
+    intents, why = decide_quotes(cfg, up_book, down_book, inv, 1e9, None)
     assert len(intents) == 0
-    assert "UP: mid 0.150 outside [0.15,0.85] -- decided market" in why
-    assert "DOWN: mid 0.850 outside [0.15,0.85] -- decided market" in why
+    assert "UP: mid 0.090 outside [0.10,0.90] -- decided market" in why
+    assert "DOWN: mid 0.910 outside [0.10,0.90] -- decided market" in why
+
+
+def test_decide_quotes_decided_band_follows_custom_config_band():
+    """The gate reads the config, not a hardcoded pair of edges: a wider
+    custom band admits a mid the shipped band would refuse."""
+    cfg = MakerConfig(
+        objective="rewards",
+        quote_shares=120,
+        min_quote_shares=50,
+        price_band_low=0.05,
+        price_band_high=0.95,
+    )
+    up_book = {
+        "token_id": "tok_up",
+        "best_bid": 0.048, "best_ask": 0.062,
+        "bids": {0.048: 1000.0}, "asks": {0.062: 1000.0}
+    }
+    down_book = {
+        "token_id": "tok_down",
+        "best_bid": 0.938, "best_ask": 0.942,
+        "bids": {0.938: 1000.0}, "asks": {0.942: 1000.0}
+    }
+    inv = Inventory()
+    intents, why = decide_quotes(cfg, up_book, down_book, inv, 1e9, None)
+    assert "decided market" not in why
+    assert "outside [0.05,0.95]" not in why
 

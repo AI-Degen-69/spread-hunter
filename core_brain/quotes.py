@@ -367,9 +367,16 @@ def _decide_quotes_from_mid(
         # routinely sits outside the band mid-series (game 2 of a BO3 at 0.85
         # is a live market, not a settled one). The exemption is venue
         # evidence only -- unknown, stale, or clinched state keeps the band.
+        # DECIDED MARKET — no room to work. The band is the CONFIGURED
+        # price band (price_band_low/high), not a hardcoded pair of edges:
+        # the operator's directive is 10c-90c, and a second hardcoded band
+        # here silently ignored whatever the config said (#582). Mirrors
+        # scripts/filter_markets.py's decided check.
         series_exempt = live_series_with_games_remaining(series_state)
-        if (mid <= 0.15 or mid >= 0.85) and not series_exempt:
-            blocked.append(f"{side}: mid {mid:.3f} outside [0.15,0.85] -- decided market")
+        if (mid <= cfg.price_band_low or mid >= cfg.price_band_high) and not series_exempt:
+            blocked.append(
+                f"{side}: mid {mid:.3f} outside "
+                f"[{cfg.price_band_low:.2f},{cfg.price_band_high:.2f}] -- decided market")
             continue
 
         # INVENTORY SKEW. Push the heavy side away from mid and pull the light
@@ -667,9 +674,10 @@ def _decide_lifecycle_escalation(
     mid = mid_price(own_book.get("best_bid"), own_book.get("best_ask"))
     if mid is None:
         return [], f"{side}: no two-sided book"
-    if (mid <= 0.15 or mid >= 0.85) and not live_series_with_games_remaining(
+    if (mid <= cfg.price_band_low or mid >= cfg.price_band_high) and not live_series_with_games_remaining(
             series_state):
-        return [], f"{side}: mid {mid:.3f} outside [0.15,0.85] -- decided market"
+        return [], (f"{side}: mid {mid:.3f} outside "
+                    f"[{cfg.price_band_low:.2f},{cfg.price_band_high:.2f}] -- decided market")
 
     blocked = risk.hard_block(
         cfg,
