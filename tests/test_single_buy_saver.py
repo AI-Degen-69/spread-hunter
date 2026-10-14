@@ -20,6 +20,7 @@ from core_brain.order_registry import (
     OrderRegistry, OrderRecord, FillRecord, QuoteRecord,
 )
 from core_brain import single_buy_saver as lp
+from core_brain.statistical_analytics import rescue_friction_summary
 
 
 MAX_PAIR_COST = 0.995
@@ -1511,6 +1512,118 @@ def test_manage_single_leg_positions_stranded_maker_wait_and_forced_exit(registr
     # -> forces stranded exit
     results_exit = manage_single_leg_positions(client, registry, cfg, live=False, now=1350.0)
     assert any(r.get("action") == "would_exit" and r.get("route") == "stranded_exit" for r in results_exit)
+
+
+# ---------------------------------------------------------------------------
+# Issue #524 — rescue closes record an explicit fee
+# ---------------------------------------------------------------------------
+
+class ShadowFakeClient(FakeClient):
+    """Shadow rehearsal client: sells into the fresh book with a reason.
+
+    Presence of `_sell_into_bids` alone selects the shadow branch in
+    `exit_single_buy` (it passes `reason=` only there); the method below is
+    never called on this path. `create_and_post_market_order` answers with the
+    rehearsal-style fill (`price`/`size`) the `_exit_fill_*` helpers read.
+    """
+
+    def __init__(self, fill_price=None, fill_size=None, **kwargs):
+        super().__init__(**kwargs)
+        self._fill_price = fill_price
+        self._fill_size = fill_size
+
+    def _sell_into_bids(self, *args, **kwargs):
+        """Marker only — never called here; presence selects the shadow branch."""
+
+    def create_and_post_market_order(self, order_args, reason=None, **kwargs):
+        super().create_and_post_market_order(order_args)
+        price = self._fill_price if self._fill_price is not None else self.best_bid
+        size = self._fill_size if self._fill_size is not None else order_args.amount
+        return {"success": True, "orderID": "venue-shadow-sell",
+                "price": price, "size": size}
+
+
+@pytest.mark.parametrize("method", ["single_buy_exit", "ladder_exit"])
+def test_shadow_rescue_exit_records_an_explicit_zero_fee(
+    registry: OrderRegistry, method: str,
+):
+    """A shadow rescue close saves fee 0.0, never NULL (#524)."""
+    pair_id = _one_sided_pair(registry, fill_price=0.60)
+    client = ShadowFakeClient(best_ask=0.38, best_bid=0.55)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        live=True, force=True, reason="hard_stop", method=method,
+    )
+
+    assert result["action"] == "exited"
+    closes = [c for c in registry.get_all_closes() if c["method"] == method]
+    assert len(closes) == 1
+    assert closes[0]["fee"] is not None
+    assert closes[0]["fee"] == 0.0
+
+
+def test_partial_shadow_rescue_exit_records_zero_fee(registry: OrderRegistry):
+    """A short shadow fill still records its close with fee 0.0 (#524)."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = ShadowFakeClient(best_ask=0.38, best_bid=0.55, fill_size=4.0)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        live=True, force=True, reason="hard_stop",
+    )
+
+    assert result["action"] == "exited"
+    closes = [c for c in registry.get_all_closes()
+              if c["method"] == "single_buy_exit"]
+    assert len(closes) == 1
+    assert closes[0]["shares"] < 10
+    assert closes[0]["fee"] == 0.0
+
+
+def test_live_rescue_exit_keeps_fee_unmeasured(registry: OrderRegistry):
+    """Live taker fees are unknown at sell time: the close stays NULL (#524).
+
+    Policy pin for the adopted shadow-only fee rule — a live zero would be an
+    invented measurement. If the owner overrides to all-rescues, this test is
+    replaced by one asserting 0.0 (see tasks/plan.md T2).
+    """
+    pair_id = _one_sided_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.38, best_bid=0.55)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        live=True, force=True, reason="hard_stop",
+    )
+
+    assert result["action"] == "exited"
+    closes = [c for c in registry.get_all_closes()
+              if c["method"] == "single_buy_exit"]
+    assert len(closes) == 1
+    assert closes[0]["fee"] is None
+
+
+def test_executed_rescue_close_reads_as_measured_zero_friction(
+    registry: OrderRegistry,
+):
+    """A real saved shadow close — not hand-built — reads measured zero (#524)."""
+    pair_id = _one_sided_pair(registry, fill_price=0.60)
+    client = ShadowFakeClient(best_ask=0.38, best_bid=0.55)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        live=True, force=True, reason="hard_stop",
+    )
+
+    assert result["action"] == "exited"
+    closes = registry.get_all_closes()
+    assert len(closes) == 1
+    # A break-even close has no denominator and reads mean_tcdr None, which
+    # would make this proof vacuous — the exit must book a real loss.
+    assert closes[0]["realized_pnl"] != 0
+    summary = rescue_friction_summary(closes)
+    assert summary["fee_measured_count"] == 1
+    assert summary["mean_tcdr"] == 0.0
 
 
 
