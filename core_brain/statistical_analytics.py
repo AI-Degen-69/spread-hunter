@@ -1565,6 +1565,146 @@ def robustness(closes: Sequence[Any], markouts: Sequence[Any]) -> dict[str, Any]
     }
 
 
+# ---------------------------------------------------------------------------
+# Capital risk (#517) -- how deep and how long the equity curve was underwater,
+# and where the tail risk sits.
+# ---------------------------------------------------------------------------
+
+
+def _equity_points(points: Sequence[Any]) -> tuple[list[tuple[float, Optional[float]]], int]:
+    """The usable `(value, timestamp)` pairs of a caller-supplied curve, in the order given.
+
+    `_close_field` reads a dict or a record, because a caller holds whichever shape it holds: the
+    registry's account marks arrive as dicts while a test or a repair script may pass objects. A
+    point whose value is not finite is dropped and counted rather than read as a crash to zero, and
+    it is not a curve point -- the episode lengths count the points that were actually measured.
+
+    The timestamp is optional and never substituted: a point without one still contributes its
+    length in points, and contributes nothing to the seconds.
+    """
+    usable: list[tuple[float, Optional[float]]] = []
+    skipped = 0
+    for row in points or []:
+        value = _finite(_close_field(row, "v"))
+        if value is None:
+            skipped += 1
+            continue
+        usable.append((value, _finite(_close_field(row, "ts"))))
+    return usable, skipped
+
+
+def drawdown_episodes(points: Sequence[Any],
+                      starting_value: Optional[float] = None) -> list[dict[str, Any]]:
+    """Every peak-to-recovery run the curve made, in curve order.
+
+    Points are read in the order given and never sorted: an equity curve's order is its meaning, and
+    a sorted one would report the drawdown of a run that never happened. A point at or above the
+    running peak REGAINS it -- that is what recovered means on a capital curve, and it matches the
+    drawdown walk in `kpi.compute_trade_analytics`, where a point back at the peak is a zero
+    drawdown.
+
+    Each episode carries its peak, its trough, the depth in dollars and (unless the peak is zero or
+    below) as a share of that peak, whether it was regained, and -- only when it was -- its length in
+    curve points and in seconds. An episode still open when the curve ends is returned with
+    `recovered: False` and no length: a drawdown nobody has come back from yet has no duration, and
+    reporting the length so far would put a still-running loss into the medians as a finished one.
+    """
+    usable, _ = _equity_points(points)
+    return _episodes_from(usable, starting_value)
+
+
+def _episodes_from(usable: Sequence[tuple[float, Optional[float]]],
+                   starting_value: Optional[float]) -> list[dict[str, Any]]:
+    """The episode walk itself, over already-validated `(value, timestamp)` pairs."""
+    peak = _finite(starting_value)
+    peak_index = -1 if peak is not None else None
+    peak_ts: Optional[float] = None
+    trough: Optional[float] = None
+    episodes: list[dict[str, Any]] = []
+
+    def record(recovered: bool, index: int, ts: Optional[float]) -> None:
+        depth = float(peak) - float(trough)
+        episodes.append({
+            "peak": float(peak),
+            "trough": float(trough),
+            "depth_usd": depth,
+            "depth_pct": (100.0 * depth / float(peak)) if float(peak) > 0 else None,
+            "recovered": recovered,
+            "points": (index - int(peak_index)) if recovered else None,
+            "seconds": ((float(ts) - float(peak_ts))
+                        if recovered and ts is not None and peak_ts is not None else None),
+        })
+
+    for index, (value, ts) in enumerate(usable):
+        if peak is None:
+            peak, peak_index, peak_ts = value, index, ts
+            continue
+        if value >= peak:
+            if trough is not None:
+                record(True, index, ts)
+            peak, peak_index, peak_ts, trough = value, index, ts, None
+        elif trough is None or value < trough:
+            trough = value
+
+    if trough is not None:
+        record(False, len(usable), None)
+    return episodes
+
+
+def drawdown_recovery(points: Sequence[Any],
+                      starting_value: Optional[float] = None) -> dict[str, Any]:
+    """How far a caller-supplied equity curve fell, and how long the drawdowns took to come back.
+
+    Always present, like its sibling sections, and descriptive on purpose: the ticket settles that a
+    recovery duration carries no band, because "recovered in four points is good" has no meaning
+    without knowing how fast this strategy normally compounds. The medians read the REGAINED
+    drawdowns only, and are read off the module's `_percentile` so `median` IS the median.
+
+    `deepest_usd` is `0.0` on a curve that was read and never dropped -- a measurement -- and `None`
+    on a curve with no usable point, which measured nothing. `drawdown_recovery_sec` is omitted
+    entirely when no regained episode carried both endpoint timestamps, because a zero there would
+    read as an instant recovery.
+    """
+    usable, skipped = _equity_points(points)
+    episodes = _episodes_from(usable, starting_value)
+    regained = [episode for episode in episodes if episode["recovered"]]
+    deepest = max(episodes, key=lambda episode: episode["depth_usd"]) if episodes else None
+
+    def shape(value: Optional[float]) -> Optional[float]:
+        return None if value is None else round(float(value), 6)
+
+    def deepest_figure(key: str) -> Optional[float]:
+        if not usable:
+            return None
+        return 0.0 if deepest is None else shape(deepest[key])
+
+    out: dict[str, Any] = {
+        "units": "curve_points_and_seconds",
+        "episodes": len(regained),
+        "open": len(episodes) - len(regained),
+        "skipped": skipped,
+        "deepest_usd": deepest_figure("depth_usd"),
+        "deepest_pct": deepest_figure("depth_pct"),
+        "deepest_recovered": None if deepest is None else bool(deepest["recovered"]),
+    }
+
+    lengths = [float(episode["points"]) for episode in regained]
+    out["drawdown_recovery_trades"] = {
+        "median": _percentile(lengths, 0.50),
+        "p90": _percentile(lengths, 0.90),
+        "n": len(lengths),
+    }
+    seconds = [float(episode["seconds"]) for episode in regained
+               if episode["seconds"] is not None]
+    if seconds:
+        out["drawdown_recovery_sec"] = {
+            "median": _percentile(seconds, 0.50),
+            "p90": _percentile(seconds, 0.90),
+            "n": len(seconds),
+        }
+    return out
+
+
 def probability_bell(fills: Sequence[dict]) -> dict[str, Any]:
     """Where our executions landed across the probability range.
 
