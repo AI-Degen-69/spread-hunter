@@ -1513,4 +1513,71 @@ def test_manage_single_leg_positions_stranded_maker_wait_and_forced_exit(registr
     assert any(r.get("action") == "would_exit" and r.get("route") == "stranded_exit" for r in results_exit)
 
 
+# ---------------------------------------------------------------------------
+# Issue #524 — rescue closes record an explicit fee
+# ---------------------------------------------------------------------------
+
+class ShadowFakeClient(FakeClient):
+    """Shadow rehearsal client: sells into the fresh book with a reason.
+
+    Presence of `_sell_into_bids` alone selects the shadow branch in
+    `exit_single_buy` (it passes `reason=` only there); the method below is
+    never called on this path. `create_and_post_market_order` answers with the
+    rehearsal-style fill (`price`/`size`) the `_exit_fill_*` helpers read.
+    """
+
+    def __init__(self, fill_price=None, fill_size=None, **kwargs):
+        super().__init__(**kwargs)
+        self._fill_price = fill_price
+        self._fill_size = fill_size
+
+    def _sell_into_bids(self, *args, **kwargs):
+        """Marker only — never called here; presence selects the shadow branch."""
+
+    def create_and_post_market_order(self, order_args, reason=None, **kwargs):
+        super().create_and_post_market_order(order_args)
+        price = self._fill_price if self._fill_price is not None else self.best_bid
+        size = self._fill_size if self._fill_size is not None else order_args.amount
+        return {"success": True, "orderID": "venue-shadow-sell",
+                "price": price, "size": size}
+
+
+@pytest.mark.parametrize("method", ["single_buy_exit", "ladder_exit"])
+def test_shadow_rescue_exit_records_an_explicit_zero_fee(
+    registry: OrderRegistry, method: str,
+):
+    """A shadow rescue close saves fee 0.0, never NULL (#524)."""
+    pair_id = _one_sided_pair(registry, fill_price=0.60)
+    client = ShadowFakeClient(best_ask=0.38, best_bid=0.55)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        live=True, force=True, reason="hard_stop", method=method,
+    )
+
+    assert result["action"] == "exited"
+    closes = [c for c in registry.get_all_closes() if c["method"] == method]
+    assert len(closes) == 1
+    assert closes[0]["fee"] is not None
+    assert closes[0]["fee"] == 0.0
+
+
+def test_partial_shadow_rescue_exit_records_zero_fee(registry: OrderRegistry):
+    """A short shadow fill still records its close with fee 0.0 (#524)."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = ShadowFakeClient(best_ask=0.38, best_bid=0.55, fill_size=4.0)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        live=True, force=True, reason="hard_stop",
+    )
+
+    assert result["action"] == "exited"
+    closes = [c for c in registry.get_all_closes()
+              if c["method"] == "single_buy_exit"]
+    assert len(closes) == 1
+    assert closes[0]["shares"] < 10
+    assert closes[0]["fee"] == 0.0
+
+
 
