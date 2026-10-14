@@ -32,6 +32,12 @@ STATIC = ROOT / "dashboard" / "static"
 # close methods (operator decision on #558).
 HOOKS = ROOT / "scripts" / "hooks"
 
+# dashboard/static/app.js EXIT_METHODS is the one JS consumer of the taxonomy.
+# JS cannot import the Python leaf, so it keeps a pinned copy of
+# DASHBOARD_FORCED_EXIT_METHODS; it is excluded from the scan and kept honest
+# by test_app_js_exit_methods_is_pinned_to_the_leaf instead.
+APP_JS_EXIT_METHODS = "const EXIT_METHODS"
+
 # `sell` is also an order side (`("buy", "sell")`), so it never triggers the
 # scan on its own; the other eleven names do.
 TRIGGER_NAMES = cm.ALL_METHOD_NAMES - {cm.SELL}
@@ -93,6 +99,8 @@ def _js_hits(lines: list[str]) -> list[int]:
     """
     hits: list[int] = []
     for lineno, line in enumerate(lines, 1):
+        if APP_JS_EXIT_METHODS in line:
+            continue  # pinned dashboard set; see the pin test below
         for match in _JS_STRING_ARRAY.finditer(line):
             values = [a or b for a, b in _JS_QUOTED.findall(match.group(0))]
             if any(v in TRIGGER_NAMES for v in values):
@@ -270,3 +278,14 @@ def test_the_derived_lists_match_todays_consumer_tuples():
         "aged_out_exit", "stop_loss_exit")
     assert cm.TAKER_RESOLVED_METHODS == (
         "shadow_merge", "single_buy_exit", "naked_exit", "ladder_exit")
+
+
+def test_app_js_exit_methods_is_pinned_to_the_leaf():
+    """app.js cannot import the Python leaf, so its EXIT_METHODS is a pinned
+    copy of DASHBOARD_FORCED_EXIT_METHODS. The pin keeps the copy honest: a
+    change to the leaf's forced-exit set fails here until app.js follows."""
+    app_js = (STATIC / "app.js").read_text(encoding="utf-8-sig")
+    match = re.search(r"const EXIT_METHODS = new Set\(\[([^\]]*)\]\)", app_js)
+    assert match, "app.js EXIT_METHODS not found"
+    values = [a or b for a, b in _JS_QUOTED.findall(match.group(1))]
+    assert tuple(values) == cm.DASHBOARD_FORCED_EXIT_METHODS

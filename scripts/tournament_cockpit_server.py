@@ -32,6 +32,13 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from core_brain.close_methods import (  # noqa: E402
+    MERGE_METHODS,
+    RESCUE_METHODS,
+    SETTLEMENT,
+    SHADOW_MERGE_NOTE,
+)
+
 ARMS_CONFIG_484 = [
     # Issue #484: Strategy Profiles
     {
@@ -621,12 +628,14 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
                 "SELECT count(DISTINCT order_uuid) FROM fills WHERE run_id = ?", (cfg["run_id"],)
             ).fetchone()[0]
 
-            # Closes
+            # Closes (settlement / shadow_merge_note / '' are nontrade, not exits)
+            nontrade_exclude = (SETTLEMENT, SHADOW_MERGE_NOTE, "")
             rows = c.execute(
                 "SELECT ts, method, realized_pnl, cost_basis, proceeds, shares FROM closes "
-                "WHERE run_id = ? AND method NOT IN ('settlement', 'shadow_merge_note', '') "
+                "WHERE run_id = ? AND method NOT IN ("
+                + ", ".join("?" for _ in nontrade_exclude) + ") "
                 "ORDER BY ts ASC",
-                (cfg["run_id"],)
+                (cfg["run_id"], *nontrade_exclude),
             ).fetchall()
 
             # Order lifecycle funnel:
@@ -691,8 +700,8 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
 
     wins = [p for p in pnls if p > 0.0]
     losses = [p for p in pnls if p < 0.0]
-    merge_methods = ("merge", "shadow_merge")
-    stop_loss_methods = ("single_buy_exit", "naked_exit", "ladder_exit")
+    merge_methods = MERGE_METHODS
+    stop_loss_methods = RESCUE_METHODS
     merges = [r for r in rows if r[1] in merge_methods]
     stops = [r for r in rows if r[1] in stop_loss_methods]
     single_exits = n - len(merges)

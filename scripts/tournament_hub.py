@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from core_brain.close_methods import SHADOW_MERGE_NOTE  # noqa: E402
 from dashboard.server import read_shadow_run  # noqa: E402
 
 TOURNAMENT_DIR = ROOT / "runtime" / "tournaments"
@@ -98,7 +99,7 @@ def _arm_counts(db_path: Path, run_id: str) -> dict[str, Any]:
     finally:
         conn.close()
 
-    nontrade = {"", None, "unknown", "shadow_merge_note"}
+    nontrade = {"", None, "unknown", SHADOW_MERGE_NOTE}
     traded = [r for r in rows if (r[0] or "unknown") not in nontrade]
     merges = [r for r in traded if (r[0] or "") == "shadow_merge"]
     return {

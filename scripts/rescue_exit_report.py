@@ -35,13 +35,22 @@ import sqlite3
 import sys
 from pathlib import Path
 
-# The rescue window: `pairs_exit_window_sec` in core_brain/config.py. Aged-out
+# Ensure repo root is importable when run as ``python scripts/rescue_exit_report.py``.
+_LIVE_ROOT = Path(__file__).resolve().parent.parent
+if str(_LIVE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_LIVE_ROOT))
+
+from core_brain.close_methods import MERGE_METHODS, SHADOW_SETTLEMENT, SINGLE_BUY_EXIT
+
+# The rescue window: `pairs_exit_window_sec` in core_brain/config.py.
 # detection is measured against it; a store carries no config, so the default
 # is stated here rather than guessed per run.
 PAIRS_EXIT_WINDOW_SEC = 900.0
 
-RESCUE_METHODS = ("single_buy_exit", "shadow_settlement")
-MERGE_METHODS = ("merge", "shadow_merge")
+# Report-specific rescue grouping (single-buy exit + shadow settlement); NOT
+# the leaf's RESCUE_METHODS -- sourced from the canonical names below.
+RESCUE_METHODS = (SINGLE_BUY_EXIT, SHADOW_SETTLEMENT)
+# MERGE_METHODS is imported from the canonical taxonomy above.
 
 # Fields Question 3 needs but the registry does not record. Listed verbatim in
 # the output so the gap is visible next to the features that do exist.
