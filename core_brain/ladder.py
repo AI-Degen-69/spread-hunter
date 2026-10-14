@@ -12,11 +12,12 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from core_brain.close_methods import RESCUE_METHODS as LADDER_EXIT_METHODS
 from core_brain.quotes import route_quotes
 
 log = logging.getLogger("ladder")
 
-LADDER_EXIT_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")
+# LADDER_EXIT_METHODS is the rescue bucket, single-sourced from the canonical leaf.
 
 
 def ladder_pair_id(condition_id: str) -> str:
