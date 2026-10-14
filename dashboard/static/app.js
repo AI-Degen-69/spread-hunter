@@ -3143,6 +3143,7 @@ function renderPositionDistributionChart(stats) {
       ? stdev / Math.sqrt(pc.samples_count)
       : null;
     ciCritical = ciMultiplier(pc.ci_critical, currentCiLevel);
+    delta = 0.035;
     unit = '$';
     formatVal = (v) => `$${v.toFixed(3)}`;
     // Only positions that actually carry a cost. The fallback constant that
@@ -9067,6 +9068,11 @@ if (typeof module !== 'undefined' && module.exports) {
     // sub-table that the real click path renders.
     get expandedMarkets() { return expandedMarkets; },
     set isStopping(v) { isStopping = v; },
+    // The distribution chart's two controls. A harness renders the arm it means
+    // to test instead of only the default one, which is how a per-arm change can
+    // be pinned per arm.
+    set distMetric(v) { currentDistMetric = v; },
+    set distCiLevel(v) { currentCiLevel = v; },
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState, resolveHeldRead,
     engineReasonText, engineProvenanceText, renderScanStatePill,
     get setBackendContact() { return setBackendContact; },

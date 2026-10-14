@@ -1,7 +1,10 @@
 /* Renders the position-return distribution chart against a stub DOM and prints
  * the badge and footer text. Used by tests/test_statistical_analytics.py.
  *
- * Reads {statistical_analytics} as JSON on argv[2].
+ * Reads {statistical_analytics} as JSON on argv[2], plus an optional `metric`
+ * (`pnl_pct` | `pnl_usd` | `spread_cost` | `outcome_prob`) and `ciLevel` (90 |
+ * 95), so a test can render the arm and level it means to check rather than only
+ * whichever the page happens to default to.
  */
 const fs = require('fs');
 const path = require('path');
@@ -44,6 +47,9 @@ new Function('module', 'exports', 'document', 'window', 'localStorage', 'EventSo
   mod, mod.exports, global.document, global.window, global.localStorage, global.EventSource);
 const app = mod.exports;
 
+if (input.metric != null) app.distMetric = input.metric;
+if (input.ciLevel != null) app.distCiLevel = input.ciLevel;
+
 app.renderPositionDistributionChart(input.statistical_analytics || {});
 
 process.stdout.write(JSON.stringify({
@@ -51,4 +57,10 @@ process.stdout.write(JSON.stringify({
   footer: stubElement('position-dist-footer').innerHTML.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
   banner: stubElement('dist-power-banner').innerHTML.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
   chartEmpty: /No closed positions recorded/.test(stubElement('position-dist-svg-container').innerHTML),
+  // The drawn chart's own text, so a test can read the axis domain and the
+  // shaded interval out of the SVG the renderer produced.
+  svgText: stubElement('position-dist-svg-container').innerHTML.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
+  // Counts the drawn envelope, not the gradient definition it references:
+  // 1 when the renderer put a shaded band on the chart, 0 when it did not.
+  ciZones: (stubElement('position-dist-svg-container').innerHTML.match(/url\(#ciZoneGrad\)/g) || []).length,
 }));

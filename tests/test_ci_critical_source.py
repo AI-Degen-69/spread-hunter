@@ -191,10 +191,11 @@ def test_the_trade_analytics_bands_read_their_multiplier_from_the_table():
 
 # --- the renderer reads the payload, it does not decide ----------------------
 
-def _render(stats: dict) -> dict:
+def _render(stats: dict, **controls) -> dict:
+    payload = {"statistical_analytics": stats}
+    payload.update(controls)
     out = subprocess.run(
-        [shutil.which("node"), str(HARNESS),
-         json.dumps({"statistical_analytics": stats})],
+        [shutil.which("node"), str(HARNESS), json.dumps(payload)],
         capture_output=True, text=True, check=True, encoding="utf-8")
     return json.loads(out.stdout)
 
@@ -203,7 +204,10 @@ def _chart_stats(**overrides) -> dict:
     """A two-close dollar sample at the 90% level, whose multiplier the test owns."""
     stats = {
         "position_returns": {
-            "positions": [{"pnl_pct": 1.0}, {"pnl_pct": 3.0}],
+            # Both metrics on the same positions: each arm reads its own field, and
+            # the spread-cost arm has nothing to draw without `spread_cost`.
+            "positions": [{"pnl_pct": 1.0, "spread_cost": 0.95},
+                          {"pnl_pct": 3.0, "spread_cost": 0.96}],
             "mean_pnl_pct": 2.0,
             "stdev_pnl_pct": 1.414214,
             "sem_pnl_pct": 1.0,
@@ -234,6 +238,97 @@ def test_a_band_that_crosses_zero_is_not_a_confirmed_edge_in_the_footer():
     assert "ZERO CROSSING" in rendered["badge"]
     assert "CONFIRMED" not in rendered["footer"]
     assert "ZERO CROSSING" in rendered["footer"]
+
+
+@requires_node
+def test_the_selected_level_picks_that_level_out_of_the_payload():
+    """The toggle selects a row; it never scales the band itself."""
+    at_90 = _render(_chart_stats(), ciLevel=90)
+    at_95 = _render(_chart_stats(), ciLevel=95)
+
+    assert "+0.00%" in at_90["badge"] and "+4.00%" in at_90["badge"]
+    assert "-1.00%" in at_95["badge"] and "+5.00%" in at_95["badge"]
+
+
+def _arm_stats() -> dict:
+    """Every arm's payload, each carrying the field and multiplier it reads."""
+    return {
+        "position_returns": {
+            "positions": [{"pnl_pct": 1.0, "pnl_usd": 1.0, "spread_cost": 0.95},
+                          {"pnl_pct": 3.0, "pnl_usd": 3.0, "spread_cost": 0.96}],
+            "mean_pnl_pct": 2.0, "stdev_pnl_pct": 1.414214, "sem_pnl_pct": 1.0,
+            "mean_pnl_usd": 2.0, "stdev_pnl_usd": 1.414214, "sem_pnl_usd": 1.0,
+            "ci_critical_pct": {"90": 2.0, "95": 3.0},
+            "ci_critical_usd": {"90": 2.0, "95": 3.0},
+        },
+        "pair_costs": {"mean": 0.955, "stdev": 0.007, "samples_count": 2,
+                       "ci_critical": {"90": 6.314, "95": 12.706}},
+        "probability_bell": {"mean": 0.5, "stdev": 0.04, "samples_count": 4,
+                             "bins": [{"bin": 0.5, "empirical_count": 4}],
+                             "ci_critical": {"90": 2.353, "95": 3.182}},
+    }
+
+
+@requires_node
+@pytest.mark.parametrize("metric, low, high", [
+    # Two arms derive their half-width from the sample's own spread...
+    ("pnl_pct", "-2.90%", "+6.90%"),
+    ("pnl_usd", "-$2.880", "+$6.880"),
+    # ...and two write theirs down. The pair-cost arm spans cents around a ~$0.95
+    # mean, so losing its 0.035 half-width prints $-0.045 .. $1.955 and draws
+    # every bar against that instead.
+    ("spread_cost", "$0.920", "$0.990"),
+    ("outcome_prob", "5.0%", "95.0%"),
+])
+def test_each_arm_keeps_its_own_axis_scale(metric, low, high):
+    """The four arms scale their axes four different ways, and a whole-arm edit
+    can drop one of them while the chart still renders something plausible.
+
+    That is not hypothetical: replacing the pair-cost arm's multiplier line is
+    exactly how its `delta = 0.035` went missing, and no test noticed because
+    the arm had no renderer test at all.
+    """
+    svg = _render(_arm_stats(), metric=metric)["svgText"]
+
+    assert low in svg, f"{metric} lower axis label"
+    assert high in svg, f"{metric} upper axis label"
+    # A pair cost is never negative and never past the dollar the instrument pays.
+    assert "$-" not in svg
+    assert "$1.9" not in svg
+
+
+@requires_node
+def test_the_other_arms_still_draw_the_bands_their_own_payload_names():
+    """One payload key per arm, so a renamed key shows as that arm alone going
+    unmeasured rather than as a wrong band."""
+    stats = _chart_stats()
+    stats["pair_costs"] = {"mean": 0.95, "stdev": 0.004, "samples_count": 2,
+                           "ci_critical": {"90": 6.314, "95": 12.706}}
+    stats["probability_bell"] = {"mean": 0.5, "stdev": 0.04, "samples_count": 4,
+                                "bins": [{"bin": 0.5, "empirical_count": 4}],
+                                "ci_critical": {"90": 2.353, "95": 3.182}}
+
+    for metric, expected in (("spread_cost", "90% CI: [$0.932, $0.968]"),
+                             ("outcome_prob", "90% CI: [45.3%, 54.7%]")):
+        rendered = _render(stats, metric=metric)
+        assert expected in rendered["badge"], (metric, rendered["badge"])
+        assert "unmeasured" not in rendered["badge"]
+        assert rendered["ciZones"] == 1
+
+
+@requires_node
+def test_an_arm_whose_key_is_missing_goes_unmeasured_and_the_rest_do_not():
+    """The misnamed-key case, which is the failure this payload shape makes
+    visible instead of silent."""
+    stats = _chart_stats()
+    stats["pair_costs"] = {"mean": 0.95, "stdev": 0.004, "samples_count": 2}
+
+    unmeasured = _render(stats, metric="spread_cost")
+    other_arm = _render(stats, metric="pnl_pct")
+
+    assert "NO MULTIPLIER FOR THIS SAMPLE" in unmeasured["badge"]
+    assert unmeasured["ciZones"] == 0
+    assert "unmeasured" not in other_arm["badge"]
 
 
 @requires_node
