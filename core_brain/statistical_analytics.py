@@ -86,24 +86,18 @@ import statistics
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Sequence
 
-# Merge methods, mirroring `registry_state.MERGE_CLOSE_METHODS`. A merged pair
-# is the strategy's own exit; anything else unwound some other way, and the
-# distribution chart splits the two.
-MERGE_METHODS = ("merge", "shadow_merge")
+from core_brain.close_methods import (
+    BOOKKEEPING_METHODS as EXCLUDED_METHODS,
+    MERGE_METHODS,
+    RESCUE_METHODS,
+)
 
-# The single-buy exits: a leg whose partner never filled, sold back through the
-# book. Mirrors `kpi.SINGLE_BUY_EXIT_METHODS`,
-# `statistical_validation_run.artifacts.SINGLE_BUY_EXIT_METHODS` and
-# `ladder.LADDER_EXIT_METHODS`, and shares `artifacts.rescue_stats`'
-# merges-plus-exits denominator. Declared rather than imported because `kpi`
-# imports THIS module, so the reverse import is a cycle; the copies are pinned
-# against each other in `tests/test_fill_path_analytics.py`.
-RESCUE_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")
-
-# Bookkeeping rows the account sweep writes against a market. Nothing was sold
-# and no position was lost, so they belong to no path. Mirrors
-# `kpi.NON_TRADE_CLOSE_METHODS`.
-EXCLUDED_METHODS = ("venue_sync",)
+# Merge methods, rescue exits, and bookkeeping rows are single-sourced from the
+# canonical leaf (core_brain/close_methods.py), imported above as MERGE_METHODS
+# / RESCUE_METHODS / EXCLUDED_METHODS. They were local copies only because
+# importing them from `kpi` was a cycle (`kpi` imports this module); the leaf
+# dissolves that. A merged pair is the strategy's own exit; a rescue is a leg
+# sold back through the book; bookkeeping rows sold nothing and lost no position.
 
 # Zero-loss guard for the ratio denominators, mirroring `kpi.pnl_by_fill_path`. A booked
 # loss a hair away from zero has no share to divide into, and the float noise around a

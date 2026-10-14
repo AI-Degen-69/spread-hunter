@@ -17,6 +17,7 @@ _LIVE_ROOT = Path(__file__).resolve().parent.parent
 if str(_LIVE_ROOT) not in sys.path:
     sys.path.insert(0, str(_LIVE_ROOT))
 
+from core_brain.close_methods import MERGE_METHODS as MERGE_CLOSE_METHODS
 from core_brain.kpi import (
     SAMPLE_SUFFICIENCY_LEVELS,
     required_sample_size_for_mean,
@@ -31,12 +32,10 @@ Z_CRITICAL: Dict[str, float] = {f"{level}%": z for level, z in SAMPLE_SUFFICIENC
 # reaching the level-keyed Student-t table.
 _LEVEL_BY_Z: Dict[float, int] = {z: level for level, z in SAMPLE_SUFFICIENCY_LEVELS}
 
-# Close methods that mean the pair was merged back into $1.00 of USDC.
-# Pinned copy of `core_brain/registry_state.py:41 MERGE_CLOSE_METHODS` (kept
-# local, not imported: `python scripts/...` puts `scripts/` first on the
-# import path, so a `core_brain` import may fail). The pin is enforced by
-# `tests/test_statistical_trade_audit.py::test_merge_methods_pinned_to_registry`.
-MERGE_CLOSE_METHODS = ("merge", "shadow_merge")
+# Close methods that mean the pair was merged back into $1.00 of USDC --
+# MERGE_METHODS from the canonical leaf `core_brain/close_methods.py` (imported
+# above as MERGE_CLOSE_METHODS). The core_brain import works here (repo root is
+# on sys.path); the old "may fail" rationale is gone.
 
 def calculate_mean_and_std(values: List[float]) -> Tuple[float, float]:
     """מחשב ממוצע וסטיית תקן מדגמית."""

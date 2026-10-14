@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from core_brain.close_methods import MERGE_METHODS as MERGE_CLOSE_METHODS
 from core_brain.market_meta import resolve_market_meta
 
 # The repo root, one level up from core_brain/. Same tree-boundary rule as the
@@ -37,8 +38,8 @@ STALE_THRESHOLD_SEC = 30.0
 
 
 # Close methods that mean the pair was merged back into $1.00 of USDC: the
-# live path writes 'merge', the shadow path 'shadow_merge'.
-MERGE_CLOSE_METHODS = ("merge", "shadow_merge")
+# live path writes 'merge', the shadow path 'shadow_merge'. Single-sourced
+# from the canonical leaf (imported above as MERGE_CLOSE_METHODS).
 
 
 def _market_identity(condition_id: str, closes_by_cid: dict) -> dict:

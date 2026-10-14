@@ -40,6 +40,7 @@ import urllib.request
 from contextlib import contextmanager
 from typing import Optional
 
+from core_brain.close_methods import RESCUE_METHODS
 from core_brain.ladder import is_ladder_pair
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
 
@@ -547,8 +548,7 @@ def _prior_exit_shares(registry, condition_id: str, token_id: str) -> float:
     for c in registry.get_all_closes():
         if c.get("condition_id") != condition_id:
             continue
-        if c.get("method") not in ("single_buy_exit", "naked_exit",
-                                      "ladder_exit"):
+        if c.get("method") not in RESCUE_METHODS:
             continue
         sold_up = c.get("up_price") is not None
         if (sold_up and side == "UP") or (not sold_up and side == "DOWN"):

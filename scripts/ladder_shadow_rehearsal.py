@@ -40,6 +40,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from core_brain.close_methods import RESCUE_METHODS as EXIT_STATUSES  # noqa: E402
 from scripts.ladder_probe import SHAPES, refuse_tape  # noqa: E402
 
 REFUSED_OUT_DIRS = ("data", "run")
@@ -230,7 +231,7 @@ def ladder_pair_id(series: str, condition_id: str) -> str:
     return f"ladder-{series}-{safe}"
 
 
-EXIT_STATUSES = ("single_buy_exit", "naked_exit", "ladder_exit")
+# EXIT_STATUSES is RESCUE_METHODS from the canonical taxonomy (imported above).
 
 
 def ladder_decide(series: str, rungs: tuple,
