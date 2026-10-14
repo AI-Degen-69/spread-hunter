@@ -466,7 +466,7 @@ function mountSidebarLayout(doc) {
   // and reads `#tab-3.hidden` before it will scroll the kanban, so removing
   // them would break the keyboard navigation the kanban still needs. Unhiding
   // them costs nothing: they have no children left.
-  for (const tab of ['tab-1', 'tab-2', 'tab-3']) {
+  for (const tab of ['tab-1', 'tab-2', 'tab-3', 'tab-4']) {
     const section = scope.getElementById(tab);
     if (section) section.hidden = false;
   }

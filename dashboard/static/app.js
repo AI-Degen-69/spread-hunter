@@ -546,7 +546,7 @@ function tabVisible(el) {
 function railActivePage(doc) {
   if (typeof document === 'undefined') return null;
   const scope = doc || document;
-  const pages = scope.querySelectorAll('#page-home, #page-data-markets, #page-strategy, #page-trades, #page-reports');
+  const pages = scope.querySelectorAll('#page-home, #page-data-markets, #page-strategy, #page-trades, #page-reports, #page-analysis');
   if (!pages || pages.length === 0) return null; // tabs-only page: no rail
   for (const page of pages) {
     if (page.hidden !== true) return page.id;
