@@ -774,6 +774,18 @@ header {
 .modal-btn.danger:disabled { background: rgba(239,68,68,0.3); cursor: not-allowed; }
 .modal-btn.cancel { background: var(--bg-surface-raised); color: var(--text-secondary); }
 
+/* ── Command palette (#477) — reuses the modal shell above ── */
+.palette-overlay { align-items: flex-start; }
+.palette-modal { max-width: 520px; margin-top: 12vh; padding: 16px; }
+.palette-input { margin-bottom: 12px; }
+.palette-list { max-height: 320px; overflow-y: auto; margin-bottom: 8px; }
+.palette-group { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); padding: 8px 4px 4px; }
+.palette-row { padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.palette-row[aria-selected="true"] { background: var(--bg-surface-raised); }
+.palette-row[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.palette-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+.palette-hint { font-size: 11px; color: var(--text-muted); }
+
 /* ── Tables ── */
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border-subtle); }
