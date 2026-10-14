@@ -30,7 +30,6 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scoring.allocate import (marginal, spread_capture_daily)   # noqa: E402
 from core_brain import rehearsal   # noqa: E402
 from core_brain.market_resolution import (  # noqa: E402
     extract_uma_resolution_status,
@@ -40,7 +39,6 @@ from scoring import config as _load_cfg_module   # noqa: E402
 from scoring.config import load as _load_cfg   # noqa: E402
 from scoring.family_admission import classify_identity   # noqa: E402
 from scoring.markets import parse_book   # noqa: E402
-from scoring.rewards import score_per_share   # noqa: E402
 from scoring.selector import (identity_allowed, is_sports_or_esports, maker_queue_allowed,  # noqa: E402
                               pair_books_allowed, top_depth_usd)
 from scripts.family_probe import family_key   # noqa: E402
@@ -924,11 +922,6 @@ def gamma_universe(session: requests.Session,
                 "event_id": _str(event.get("id")),
                 "event_slug": _str(event.get("slug")),
                 "tokens": [{"token_id": str(t)} for t in toks],
-                # Reward config, when the venue publishes one, feeds the score
-                # WINDOW only. It is not a filter and not an income source:
-                # the pot for every row here is spread capture.
-                "rewards": {"max_spread": float(m.get("rewardsMaxSpread") or 3.5),
-                            "min_size": float(m.get("rewardsMinSize") or 50)},
                 "minimum_tick_size": float(m.get("orderPriceMinTickSize") or 0.01),
                 "end_date_iso": m.get("endDate"),
                 # Quoting minimum, which is the venue's order minimum --
@@ -1142,8 +1135,6 @@ def _live_event_row(ev: dict, m: dict, sport: object) -> dict:
         "event_id": _str(ev.get("id")),
         "event_slug": _str(ev.get("slug")),
         "tokens": [{"token_id": str(t)} for t in toks],
-        "rewards": {"max_spread": float(m.get("rewardsMaxSpread") or 3.5),
-                    "min_size": float(m.get("rewardsMinSize") or 50)},
         "minimum_tick_size": float(m.get("orderPriceMinTickSize") or 0.01),
         "end_date_iso": m.get("endDate"),
         "_order_min": float(m.get("orderMinSize") or 5),
@@ -1647,9 +1638,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
             # Carried so the pipeline view can estimate what the allocator
             # would have said had this market been admitted.
             "their_score": round(q_min(q1, q2), 1),
-            "daily": rate if source == "rewards" else 0.0,
             "spread": round(float(m.get("_spread") or 0.0), 4) or None,
-            "max_spread": rw.get("max_spread") or 3.5,
             "cid": m.get("condition_id"),
             "title": m.get("question", "")[:90],
             "slug": m.get("market_slug", ""),
@@ -1749,18 +1738,9 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "event_live": bool(m.get("_event_live")),
         "event_ended": bool(m.get("_event_ended")),
         "series_ts": m.get("_series_ts"),
-        # THE REWARD POT, and zero is the honest figure for a market that pays
-        # none. `fleet.reallocate` keys the spread path off `daily <= 0` and
-        # recomputes the pot from `volume_24h` and `spread`, so the capture
-        # assumption stays in config where it can be revised without
-        # re-ranking. `est_income` below reports what that pot projects.
-        "daily": rate if source == "rewards" else 0.0,
-        # Reward markets must quote at least rewardsMinSize or they score
-        # nothing; a spread market only has to clear the venue's order
-        # minimum, and using the larger figure would force the allocator to
-        # buy a lot several times bigger than the market needs.
-        "min_size": min_size if source == "rewards" else m.get("_order_min", 5),
-        "max_spread": rw.get("max_spread") or 3.5,
+        # The venue's order minimum; a spread market only has to clear that,
+        # and the quote window is the engine's, not the venue's reward config.
+        "min_size": m.get("_order_min", 5),
         "tick": m.get("minimum_tick_size") or 0.01,
         "shares": n,
         "est_income": round(income, 3),
@@ -1876,82 +1856,6 @@ def _cause(reason: str) -> str:
     return reason.split(" $")[0] or "other"
 
 
-def _if_adopted(r: dict) -> dict | None:
-    """What the allocator WOULD have said had this rejected market been adopted.
-
-    The allocator's admission test is the first-dollar marginal return --
-    pot / competitor-depth, compared to `marginal_return_floor` -- and it is
-    the same number the GRADUATED lane's alloc-verdict shows for a refused
-    market. For a market the ranker refused there is no fleet-measured
-    `avg_theirs` to use, so the venue's own score reading (`their_score`, the
-    same q_min the fleet averages over its 30-min window) stands in as a
-    single-snapshot estimate, and `k` -- the per-share score of the quote we
-    would rest -- converts it to competitor depth in dollars exactly as
-    `reallocate` does. `pot` is the reward rate for a reward market, or the
-    spread-capture pot for a spread one, so both income sources are judged
-    on the same axis as the fleet's water-fill.
-
-    Returns None where no book reading exists -- an identity rejection never
-    fetched the book, and a readable book with `their_score` 0.0 (nothing
-    resting inside the reward window) is the thin-book shape the depth gate
-    exists to catch, so treating it as an empty competitor field and guessing
-    "we would take the whole pot" would be the wrong signal (the same
-    no-guess principle as the fleet's `avg_theirs()` returning None). There
-    is nothing honest to estimate from in either case.
-    """
-    theirs = r.get("their_score")
-    if not theirs:
-        return None
-    pot = r.get("daily") or 0.0
-    if pot <= 0 and r.get("source") == "spread":
-        pot = spread_capture_daily(
-            float(r.get("volume_24h") or 0.0),
-            float(r.get("spread") or _CFG.spread_capture_default_spread),
-            _CFG.spread_capture_frac)
-    k = score_per_share(float(r.get("max_spread") or 3.5) / 100.0, OFFSET)
-    # T == inf (k == 0 -- we would score nothing per share -- or a null
-    # reading): the first dollar earns nothing, not NaN. Same guard as the
-    # fleet's `_alloc_verdict`.
-    T = theirs / k if k and k > 0 else float("inf")
-    first = 0.0 if T == float("inf") else marginal(0.0, pot, T) * 100.0
-    thresh = _CFG.marginal_return_floor * 100.0
-    # With no pot `first` is always 0.0, so the floor comparison alone is
-    # the admission test -- no separate pot guard needed.
-    would_fund = first >= thresh
-    # The MIRAGE arm: the estimate is pot / competition, so a book with
-    # nobody resting inside the reward window (competition reading near zero)
-    # divides by ~nothing and reports an absurd %/day -- 890%/day on the Dem
-    # retirees book, 4,938%/day on UK inflation. That is the empty-book shape
-    # the depth gate exists to catch, not an opportunity. A depth reject at
-    # under half the gate bar is the same shape measured directly. Both are
-    # flagged `trap` so the lanes can show them honestly instead of as green
-    # "would clear the floor" wins -- same rule the tracker's pot tile uses.
-    _d = _DEPTH_RE.search(r.get("reject_reason") or "")
-    depth_trap = False
-    if _d:
-        dm = float(_d.group(1).replace(",", ""))
-        db = float(_d.group(2).replace(",", ""))
-        depth_trap = db > 0 and dm < 0.5 * db
-    trap = depth_trap or first > 10.0
-    if pot <= 0:
-        reason = "unpayable: no pot (spread/volume unmeasured)"
-    elif trap:
-        reason = ("empty-book mirage: nobody resting in the reward window, "
-                  "the estimate divides by ~zero competition and is not real")
-    elif would_fund:
-        reason = (f"first dollar clears the {thresh:.2f}%/day floor -- "
-                  "the allocator would have admitted it")
-    else:
-        reason = f"below the {thresh:.2f}%/day floor"
-    return {
-        "marg_pct_day": round(first, 2),
-        "would_fund": would_fund,
-        "trap": trap,
-        "threshold_pct": round(thresh, 2),
-        "pot_day": round(pot, 2),
-        "competition": round(theirs, 1),
-        "reason": reason,
-    }
 
 
 PAIRED_DEPTH_BUNDLE_FORMAT = "spread_hunter.paired-depth.v1"
@@ -2411,6 +2315,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--no-velocity-gate", dest="velocity_gate", action="store_false",
                    help="disable velocity and flat-range filtering")
     args = p.parse_args(argv)
+    if args.legacy_rewards:
+        p.error("--legacy-rewards is retired: the reward path was deleted in "
+                "#594; the unified universe is the only scan")
     if args.paired_depth_control_usd is not None:
         if args.out_dir is None:
             p.error("--paired-depth-control-usd requires an isolated --out-dir")
@@ -2676,8 +2583,11 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
     # object id so the per-bucket near-miss count and the example cards are
     # computed from the same rows and cannot disagree. Precomputed by `main`
     # and shared with the near-miss logger; computed here for direct callers.
+    # The estimator itself is deleted (rewards purge #594): near-misses now
+    # carry their MEASURED tape (movement_usd, depth, spread) and the
+    # would_fund column is gone.
     if verdicts is None:
-        verdicts = {id(r): _if_adopted(r) for r in out}
+        verdicts = {}
 
     rejections = []
     for cause, n in sorted(causes.items(), key=lambda kv: -kv[1]):
@@ -2929,16 +2839,14 @@ def _score_universe(universe: list[dict], *, volume_bar: float,
                     velocity_gate_enabled: Optional[bool] = None) -> tuple[list[dict], int]:
     """Score the unified universe and return (scored rows, attempted count).
 
-    One job per candidate: the pot is ALWAYS spread capture --
-    `spread_capture_daily(volume_24h, quoted_spread)`, the income a taker
-    crossing pays the resting maker. Reward state is not consulted: a market
-    carrying `clobRewards` is scored on the same terms, its reward config
-    feeding only the score-window width.
+    One job per candidate. The estimated-income pot is deleted (rewards purge
+    #594): ranking is by MEASURED tape. The job tuple still carries a numeric
+    first element the evaluator records; it is the market's measured movement
+    notional, not a modeled $/day.
     """
     v_enabled = VELOCITY_GATE_ENABLED if velocity_gate_enabled is None else bool(velocity_gate_enabled)
     r_cents = MIN_RANGE_CENTS if min_range_cents is None else min_range_cents
-    jobs = [(spread_capture_daily(m["_volume_24h"], m["_spread"],
-                                  _CFG.spread_capture_frac),
+    jobs = [(float(m.get("_movement_usd") or 0.0),
              m, m["_volume_24h"], "spread")
             for m in universe]
     out = score_pool(jobs, min_depth_usd=depth_bar,
@@ -2952,55 +2860,6 @@ def _score_universe(universe: list[dict], *, volume_bar: float,
                      min_range_cents=r_cents,
                      velocity_gate_enabled=v_enabled)
     return out, len(jobs)
-
-
-def _legacy_reward_candidates(s: requests.Session) -> tuple[list[dict], list[dict], list[tuple[float, dict]], dict[str, float]]:
-    """The retired two-path scan, behind `--legacy-rewards`, for comparison.
-
-    Returns (the old top-250 reward job list, additional legacy-only spread
-    rows -- none today -- all funded candidates, and the chunked gamma volume
-    map). The legacy reward rows are scored as "rewards" alongside the
-    unified universe so the funnel can show what retiring the reward path
-    cost -- which the evidence so far says is nothing, because the markets
-    that actually trade publish clobRewards: 0.
-    """
-    # LEGACY PATH 1: the old /sampling-markets reward scan, verbatim.
-    try:
-        data = s.get("https://clob.polymarket.com/sampling-markets",
-                     timeout=30).json()
-    except Exception as exc:
-        # The file's fail-soft contract, not a list of expected errors: a
-        # ChunkedEncodingError from a flaky CDN aborts main() just as dead
-        # as a timeout, and by this point a full scored pool is in hand.
-        print("WARNING: legacy-rewards sampling-markets unavailable "
-              f"({type(exc).__name__}); continuing without legacy markets",
-              file=sys.stderr)
-        return [], [], [], {}
-    if not isinstance(data, dict):
-        print("WARNING: legacy-rewards sampling-markets returned an "
-              "unreadable response; continuing without legacy markets",
-              file=sys.stderr)
-        return [], [], [], {}
-    cands = []
-    for m in data.get("data") or []:
-        if not m.get("accepting_orders") or m.get("closed"):
-            continue
-        rate = sum(x.get("rewards_daily_rate", 0) or 0
-                   for x in ((m.get("rewards") or {}).get("rates") or []))
-        if rate > 0:
-            cands.append((rate, m))
-    cands.sort(key=lambda x: -x[0])
-    # Volume lives on gamma, the book lives on the CLOB. Fetched up front for
-    # the whole candidate list so the per-market workers stay one round trip
-    # each, as they were before the filter existed.
-    short = [(rate, m) for rate, m in cands[:250]
-             if (days_to_resolve(m.get("end_date_iso")) or -1) >= 0]
-    vols = gamma_volume(s, [m["condition_id"] for _, m in short])
-    # LEGACY PATH 2: the old spread scan, minus the markets the unified
-    # universe already carries -- so no market is scored twice and competes
-    # against itself in the ranking.
-    legacy_spread_extra = []
-    return short, legacy_spread_extra, cands, vols
 
 
 def main() -> None:
@@ -3094,28 +2953,8 @@ def main() -> None:
         # stamp no fallback could name its refused mainline member.
         _stamp_trial_identity(out, universe)
 
-    # --legacy-rewards: the retired two-path scan, scored alongside the
-    # unified universe so the funnel shows what retiring it cost. The reward
-    # markets are ALSO in the unified universe -- this measures the old
-    # pot/payout-floor treatment of the same books, not extra markets.
-    cands: list[tuple[float, dict]] = []
-    if args.legacy_rewards:
-        short, legacy_extra, cands, vols = _legacy_reward_candidates(s)
-        legacy_jobs = [(rate, m, vols.get(m["condition_id"]), "rewards")
-                       for rate, m in short]
-        legacy_jobs += [(spread_capture_daily(m["_volume_24h"], m["_spread"],
-                                              _CFG.spread_capture_frac),
-                        m, m["_volume_24h"], "spread")
-                       for m in legacy_extra]
-        legacy_out = score_pool(
-            legacy_jobs, min_depth_usd=trial_bar,
-            min_volume_usd=volume_bar, min_movement_usd=movement_bar,
-            max_spread=spread_bar,
-            max_queue_minutes=resolve_queue_bar(_CFG))
-        out += legacy_out
-        attempted += len(legacy_jobs)
-        print(f"legacy-rewards: {len(cands)} funded candidates, "
-              f"{len(short)} scored (top 250 by rate)")
+    # --legacy-rewards: RETIRED with the rewards purge (#594). The flag now
+    # errors instead of resurrecting the reward pot path.
     # Eligibility BEFORE ranking. Sorting on return_pct_day alone put the
     # top-ranked market at $0.25/day actual against $18.96 projected, because a
     # spectacular percentage return on an income of eleven cents is still
@@ -3329,12 +3168,11 @@ def main() -> None:
               "tagged trial_volume_usd and their markouts are the "
               "decision evidence")
 
-    verdicts = {id(r): _if_adopted(r) for r in out}
     _write_universe_file(out, disc_meta, out_dir=out_dir)
     _write_pipeline_snapshot(
-        cands=cands, spread_cands=universe, out=out, eligible=eligible,
+        cands=[], spread_cands=universe, out=out, eligible=eligible,
         picked=picked, causes=causes, census=census, gates=gates,
-        attempted=attempted, rejected=rejected, verdicts=verdicts,
+        attempted=attempted, rejected=rejected, verdicts=None,
         discovery=disc_meta,
         depth_gate_usd=trial_bar,
         trial_depth_usd=(trial_bar if trial_active else None),
@@ -3348,15 +3186,15 @@ def main() -> None:
     # dry-run audit must not pollute it (it would double-count against the
     # supervised every-10-min ranks).
     if not args.dry_run:
-        n_greens = _log_rank_near_misses(out, rejected, verdicts,
+        n_greens = _log_rank_near_misses(out, rejected, None,
                                          out_dir=out_dir)
         if n_greens:
             print(f"near-misses logged: {n_greens} would clear the floor")
         # The VOLUME tracker (U34): every volume-reject with a measured
         # reading, for the gate U33 showed actually binds. Same dry-run guard
         # as the depth log -- an audit must not pollute the evidence.
-        n_vols = _log_rank_volume_near_misses(out, rejected, verdicts,
-                                                 out_dir=out_dir)
+        n_vols = _log_rank_volume_near_misses(out, rejected, None,
+                                              out_dir=out_dir)
         if n_vols:
             print(f"volume-rejects logged: {n_vols} measured "
                   "(volume near-miss tracker)")
