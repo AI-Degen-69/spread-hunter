@@ -1,5 +1,5 @@
-﻿# Todo — #564
+# Todo - #569
 
-- [x] T1: link entries + row icons in production code
-- [x] T2: harness infra + tests RED-first + repin
-- [x] T3: live proof + suite green
+- [x] T1: one-arm baseline arms file + dry-run proof
+- [x] T2: short isolated practice run (CHECKPOINT)
+- [x] T3: per-market report + reference note + evidence comment

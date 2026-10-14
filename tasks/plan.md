@@ -1,91 +1,31 @@
-﻿# Plan — #564: Command palette lists sidebar links with their rail icons
+# Plan - #569: Run a loose baseline so every later test has something to compare against
 
-Branch: i564/command-palette-lists-sidebar-links-with-their-rai | Issue: #564
+Branch: i569/loose-baseline-reference-run | Issue: #569
 
 ## Why (issue summary)
+The `baseline` tournament preset (wide, loose quoting) has never been run. This issue runs one short practice arm with it and records the numbers, giving every later tightening test a fixed "before" picture. No code changes, no setting changes, no real money.
 
-The palette mirrors the rail but drops its four links and all its icons:
-`buildEntries` selects only `.proto-nav-btn[data-page]`, and rows render
-text-only. Every rail item already carries its icon (`buildIcon`,
-`prototype.js:239-251`), and links behave as new-tab anchors — so the palette
-can read both from the DOM with no hardcoded lists.
+## Size & type
+- **Tier: Small** — run-only; existing launcher, existing reports, no code edits.
+- **Task type: Research** — a rehearsal run producing evidence. Domain tag: `[Research]`. Verification mode: run artifacts (plan JSON, results JSON, DB, heartbeat) + existing pytest selection.
 
-## Tier: Standard (4 files, one DOM-driven addition + harness infra)
+## Step 0A intake (CodeRabbit plan — adopted / rejected / resolved)
+- **Adopted:** one-arm `baseline` arms file with stable naming (`--issue 569 --run-number 1`); short isolated practice run (clean env, fresh DB, preset via env only, no signer); completion proved by results file + arm exit code + DB + heartbeat; reference recorded in a `docs/runs/` note.
+- **Rejected (with reason):** extending `read_arm_results` with a per-market `markets` list. The issue asks for per-market numbers *in the report*, and `scripts/pair_fill_report.py` already reports per-arm/per-market from the DB — a launcher code change is scope expansion for a reporting need existing tooling covers.
+- **Resolved from code:** `read_arm_results` exists (`scripts/shadow_tournament.py`); `pair_fill_report.py` exists; `shadow_run` takes `--minutes/--db/--run-id`; `docs/runs/` exists; `/runtime/*` logs are gitignored. Still open for Station III: which universe file the arm reads when no `--markets-path` is passed, and whether `data/*.db` is gitignored (decides if the DB path is referenced or committed).
 
-## Type: Code + Design/UI
+## Spec (embedded — Small, no SPEC.md ceremony)
+- Goal: a finished 5-minute practice run of the baseline preset with a results report showing fills, merges, exits, and PnL overall and per market.
+- Out of scope: #492's old-arm rerun, any setting-value change, any code change, live trading, `data/orders.db`.
+- Edge cases: arm exits non-zero (read the log, fix the invocation, never the strategy); zero fills in 5 minutes (report it as measured, not as failure — the reference is an observation); stale universe file (use the shared filter output, copy it fixed for the run).
 
-- [Code] T1 — link entries + icon cloning in production code.
-- [Code] T2 — harness infra + tests RED-first + repin.
-- [Design/UI] T3 — live browser proof + suite green.
-
-## CodeRabbit plan intake (2026-10-14)
-
-No plan comment had landed at planning time (only this station's `@coderabbitai
-plan` request). Proceeding from code; Station III must not wait for it.
-
-## Resolved questions (from code, 2026-10-14)
-
-- Icons: clone each rail item's own `<svg>` (aria-hidden, 16x16, currentColor).
-- Exclusion test repin is a deliberate expectation change (recorded in
-  CONSTRAINTS.md), not a regression.
-- Harness needs `makeEl.querySelector('svg')` + `win.open` spy; production
-  guards both with `typeof` checks.
-
-## Improvement proposal: none — the minimal fit is already the issue's approach
-
-No separate proposal. Cloning the rail's own nodes (rather than copying path
-data into the palette) is the smallest change that tracks future rail edits
-for free; anything else would be a second source of truth.
+## Improvement proposal (adopted — simplification)
+Use the existing `pair_fill_report.py` for the per-market breakdown instead of adding a `markets` list to the launcher's results reader. Evidence: `scripts/pair_fill_report.py` exists and is the established per-arm reporter (cited by #492 for the same job); the issue's acceptance asks for report numbers, not launcher features.
 
 ## Dependency graph
-
-- T1: no dependencies (risk-first: the DOM approach is the uncertain core).
-- T2: depends on T1 (tests pin T1's wiring; RED proven by stashing T1).
-- T3: depends on T2 (live proof runs against tested code).
+T1 (arms file + dry-run proof) → T2 (short run + completion proof) → T3 (per-market report + reference note + evidence).
 
 ## Tasks
-
-### T1 [Code] Link entries + row icons in production code — M
-
-- Target files: `dashboard/static/command-palette.js`, `dashboard/static/styles.css`.
-- What: in `buildEntries`, after the pages loop, query `.proto-nav-btn`
-  without `data-page` but with `href` → entries `{id:'link:'+label, label,
-  group:'Links', sub: href, icon: cloned svg or null, run: close palette, then
-  window.open(href, '_blank', 'noopener')}`. Icon helper: guarded
-  `btn.querySelector('svg')` → `cloneNode(true)` (guard `typeof` on both).
-  `makeRow` prepends the clone in a `.palette-icon` span (skip when null).
-  CSS: `.palette-row .palette-icon svg { width:16px; height:16px; }` aligned
-  with the label; reuse existing tokens only.
-- Skill: `frontend-ui-engineering` (accessible rows, token reuse).
-- Depends on: none. Verify: T2 tests + T3 live proof.
-
-### T2 [Code] Harness infra + tests, RED first — S
-
-- Target files: `tests/js/command_palette_harness.cjs`,
-  `tests/test_dashboard_command_palette.py`.
-- What: fixture link elements (href + svg child, reuse the `externalLink`
-  flag to mean "one external link present"); `makeEl.querySelector('svg')`
-  (search children recursively, `null` when absent); `win.open` spy recording
-  `{href, target, features}` into a new `openedLinks` observation.
-  New tests: link rows listed with icons; Enter on a link records the
-  new-tab open (href + `_blank`); page rows carry icons; guard (no svg → row
-  still renders). REPIN `test_palette_lists_six_pages_and_two_actions` to
-  inclusion (documented expectation change).
-  RED: stash the T1 product files, new tests fail; pop, GREEN.
-- Depends on: T1. Verify: `python -m pytest -q
-  tests/test_dashboard_command_palette.py` green.
-
-### T3 [Design/UI] Live proof + suite green — S
-
-- Target files: none (reads) + rerun suites.
-- What: scratch server from the branch (read-only demo db, free port);
-  single batched eval: rows contain svg icons; stub `window.open`, activate a
-  link row, assert captured `(href, '_blank')`; console + requests clean.
-  Then the dashboard `-k` selection green.
-- Depends on: T2. Verify: eval JSON all-true + suites green.
-- Checkpoint: **all green → Station IV.**
-
-## Checkpoints
-
-1. After T2: suite green with repin recorded, no other test touched.
-2. After T3: live proof JSON + suites green, branch ready for Station IV.
+- [x] **T1 [Research] (S): one-arm baseline arms file + dry-run.** Write the single-arm arms file (preset `baseline`, shared universe), print the plan with `--dry-run`, confirm fixed paths (`i569_tournament-1.json`, `control-1`-style slug, `data/i569_tournament-1_<slug>-1.db`). Depends on: none. Verify: dry-run exits clean and the plan JSON names the expected files.
+- [x] **T2 [Research] (M): short isolated practice run.** Run the arm ~5 min with a clean env (`HUNTER_TOURNAMENT_PRESET=baseline`), fresh DB, no dashboards. Depends on: T1. Verify: arm exit code 0, results JSON exists, DB exists with closes/fills tables, heartbeat finished. CHECKPOINT: run works end-to-end.
+- [x] **T3 [Research] (S): per-market report + reference note.** Run `pair_fill_report.py` on the DB, write the `docs/runs/` reference note (paths, preset, totals, per-market table), post the numbers as an issue comment. Depends on: T2. Verify: note exists, numbers match the results JSON, `python -m pytest -q tests/test_shadow_tournament.py` green.
