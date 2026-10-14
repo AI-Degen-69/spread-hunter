@@ -1,74 +1,62 @@
-# CONSTRAINTS — #524 (locked by Station II, enforced through Station V)
+# CONSTRAINTS - #541 (locked by Station II, enforced through Station V)
 
-Governs the `i524/fix-rescue-closes-never-record-a-fee-so-taker-cost` branch only.
-The #517 contract this file replaces is branch-scoped by its own header line and stays
+Governs the `i541/refactor-consolidate-every-project-statistic-onto` branch only.
+The #524 contract this file replaces is branch-scoped by its own header line and stays
 readable in git history.
 
-## Fee policy (adopted default, owner-overridable)
+## Values rule (operator-ordered t-switch)
 
-- Shadow rescue closes save `fee=0.0` (measured zero).
-- Live rescue closes keep `fee=None` (unmeasured) — the venue charges takers up to 7%
-  (`core_brain/venue_fees.py:14`, `core_brain/config.py:1115`), and "an unmeasured fee and
-  a zero fee are different claims" (`core_brain/venue_fees.py:77`). A live zero would be
-  a false measured claim.
-- Override: only on explicit owner approval, pass `ZERO_FEE` on the live branch too.
+- Phase-1 goldens freeze today's numbers FIRST (pre-switch record) and pass before any
+  production change.
+- The one deliberate value change: every mean interval switches to Student's t via
+  `ci_critical_value` (audit script, kpi inline band, `ladder_probe.mean_ci90`). Large-n
+  values stay ~identical; small-n deltas are recorded per-stat in the findings doc + PR.
+- Goldens are regenerated exactly once for the t-switch — never silently, never twice.
+  Any other golden mismatch means the code moved a value it shouldn't have: fix the code.
+- `KPI_PAYLOAD_VERSION` stays 257. No payload section renames. Wilson (proportions) and
+  power/planning constants are out of the switch (different estimators).
 
 ## Scope & File Boundaries
 
 - Target files for modification:
-  - `core_brain/single_buy_saver.py` — exactly three edits: the `ZERO_FEE = 0.0`
-    module constant plus its source comment, the optional `fee` keyword on
-    `_record_exit_close` (default `None`, passed into the `CloseRecord`), and
-    `fee=ZERO_FEE` passed at the existing `_sell_into_bids` branch call site
-    (`:992-994`). No new helper, no config setting.
-  - `tests/test_single_buy_saver.py` — `ShadowFakeClient` plus four test-first cases
-    (shadow parametrized, shadow partial, live-pin, friction summary).
-  - `SPEC.md`, `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
-- Files that must NOT be modified:
-  - `core_brain/order_registry.py` — schema (`fee REAL` at `:296`), `CloseRecord.fee`
-    (`:769`), `log_close` (`:1555-1602`) already persist the fee. No migration, no INSERT change.
-  - `core_brain/statistical_analytics.py` — TCDR formula and NULL-vs-zero rules unchanged;
-    `tests/test_rescue_friction_analytics.py` unchanged.
-  - Merge writers (`core_brain/shadow_exec.py`, `core_brain/order_manager.py`), resolution
-    closes (`core_brain/market_resolution.py`), `taker_fees_paid` (`core_brain/kpi.py`).
-  - Fee regime sources: `core_brain/config.py`, `core_brain/venue_fees.py`.
-  - `exit_single_buy` sell behavior: order args, price floor, size caps, cancel/reread
-    steps, `reason` passing; the `exit_naked_leg` alias.
-  - LIVE execution and stores: `core_brain/trader_loop.py`, `core_brain/live_fill_engine.py`,
-    `core_brain/risk.py`, `data/orders.db` and every production registry (read-only at all times).
+  - `dashboard/static/app.js` — registry, readout routing, single `required_observations`
+    placement (today at :4136 and :5171), gates group move.
+  - `dashboard/static/index.html` — statistics page structure, `#analytics-gates` group
+    placement, dead simulator button removal.
+  - `dashboard/static/prototype.js` — mount/prune updates only.
+  - `core_brain/statistical_analytics.py` — one public normal-interval helper (explicit `z`),
+    `_percentile` convention docstring; exact op order preserved.
+  - `core_brain/kpi.py` — call the new helper; add a public Wilson name (`_wilson_ci` kept
+    as alias); expose the sufficiency z table for import. No semantics change.
+  - `core_brain/` — one neutral module for the queue-multiple formula shared by the live
+    report and the shadow fill model.
+  - `scripts/statistical_trade_audit.py`, `scripts/ladder_probe.py`,
+    `scripts/paired_depth_report.py`, `scripts/stat_gate.py`,
+    `scripts/family_probe_report.py` — import shared math; adapters only; printed layouts stay.
+  - `statistical_validation_run/artifacts.py` — import method tuples from `kpi` (no local
+    tuples). Layouts and report-only computations stay.
+  - `tests/` + `tests/js/analytics_surface_harness.cjs` — goldens, parity, registry-ledger tests.
+- MUST NOT modify: `data/orders.db` (production registry — read-only); top-nav structure
+  (#504 owns it); close-method classification rules (#520 owns them); any report/artifact
+  layout; `paired_depth_report`'s `.842` pilot constant and `max(2, n)` rule.
 
-## Zero regressions
+## Quality bar
 
-- Focused suites that must pass on this branch, each run by the agent:
-  `tests/test_single_buy_saver.py`, `tests/test_rescue_friction_analytics.py`.
-- Focused extra checks (callers of the touched function):
-  `tests/test_rc_fixes.py`, `tests/test_shadow_exec.py`.
-- The full `python -m pytest -q` sweep is GitHub CI's job, not a local station step.
-- Every changed behaviour carries a test that fails without the change.
+- Zero regressions: focused suites for touched modules pass
+  (`test_statistical_analytics`, `test_account_kpi`, `test_analytics_api`,
+  `test_analytics_surface_mount`, `test_statistics_report`, `test_shadow_run` boundary).
+  Full suite is CI's merge gate, never a local step.
+- New behavior (registry ledger, goldens, parity) requires tests; the ledger test must be
+  RED before the registry exists and GREEN after.
+- Anti-cheat: no skipped/disabled tests, no deleted assertions, no linter suppression.
+- No new external dependencies without explicit operator approval.
+- UI: keep `tablist` semantics, keyboard access, and empty/error states. Stats-card restyle
+  is operator-ordered: minimal new CSS scoped to the stats surface only, same palette
+  family, no global stylesheet changes. Every registry entry declares `unit`
+  ($/¢/%/bps/bare); every rendered card shows its unit — the missing-unit audit is T3 work.
 
-## Anti-cheat
+## Environment quirk (verified at intake)
 
-- No skipped, `xfail`ed or deleted test; no removed or weakened assertion; no `# noqa`,
-  `# type: ignore`, bare `except` or threshold edited downward to reach green.
-- A failing case is fixed **in the code**, or the plan is corrected in `tasks/plan.md` with
-  the reason — never by loosening the pin.
-
-## Dependencies
-
-- No new external dependency of any kind. No new module or script file
-  (no `scripts/seed_rescue_fixture.py` — existing test helpers seed and force the exit).
-
-## Interface freeze
-
-- `ZERO_FEE = 0.0` (module constant, `core_brain/single_buy_saver.py`).
-- `_record_exit_close(..., fee: Optional[float] = None)` — additive keyword only; every
-  existing parameter, position and default unchanged. Its value passes straight into
-  `CloseRecord(fee=...)`.
-- A change to any of these is a planning change, recorded in `tasks/plan.md` before code moves.
-
-## Reporting
-
-- The operator's **"How to verify"** block is hands-on only: throwaway shadow store,
-  dashboard open, read the card. Never `pytest`, `gh`, `git`, or "confirm CI is green".
-- The report states the adopted fee policy (shadow-only). Under it, live rescue closes
-  still read "unmeasured" on purpose.
+- This host's shell exports `PORT=0`, which breaks dashboard test collection. Run focused
+  suites with `unset PORT` first or via `.venv/Scripts/python -m pytest`. Never hand pytest
+  commands to the operator — agent-run only, reported as background results.
