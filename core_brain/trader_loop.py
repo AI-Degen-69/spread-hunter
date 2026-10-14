@@ -672,7 +672,7 @@ class VenueSeam:
     emit_fn: Optional[Callable] = None
     #: Whether an empty `markets_fn` refresh is this caller's normal state or a
     #: signal worth a warning. Only the caller can answer it: the live stack's
-    #: filter finding nothing is a finding, while a ladder trial asking for a
+    #: filter finding nothing is a finding, while a caller asking for a
     #: 30-second open window inside a 5-minute series is empty ~90% of the time
     #: by construction. Default stays False -- the loud reading -- because
     #: guessing "routine" for a caller that means it would hide a dead feed.
@@ -2402,9 +2402,8 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
     # open a new one, or the market ends up with two one-legged pairs -- the
     # detachment seen live (#206). `plan_orders` never stamps -- it only reads
     # the carry (`i.pair_id == lifecycle_pair_id`). The stamps come from the
-    # ladder (`make_ladder_decide` in `core_brain/ladder.py`, one
-    # `ladder_pair_id` per market) and the lifecycle-escalation path in
-    # `core_brain/quotes.py` (which carries `override.pair_id`); a fresh
+    # lifecycle-escalation path in `core_brain/quotes.py` (which carries
+    # `override.pair_id`); a fresh
     # `decide_quotes` batch carries None and mints below (#397).
     # Every carried intent in one batch shares one complement, so one id wins;
     # a batch mixing carried ids would be a planner bug, and minting fresh is

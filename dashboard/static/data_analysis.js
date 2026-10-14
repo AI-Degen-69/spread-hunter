@@ -86,7 +86,7 @@ const STAT_REPORT_ONLY = {
   'report.rescue_rates': { producer: 'statistical_validation_run/artifacts.py rescue_stats', reason: 'validation-run product; memo block, not a page card' },
   'report.run_counters': { producer: 'statistical_validation_run/run.py count_closes / count_matured_markouts', reason: 'validation-run counters, not statistics' },
   'report.validation_verdict': { producer: 'statistical_validation_run/artifacts.py resolve_verdict', reason: 'artifact-set verdict, rendered in report.md only' },
-  'research.tape_probe': { producer: 'scripts/family_probe_report.py + scripts/ladder_probe.py sims', reason: 'research-only; needs tape files and probe tables' },
+  'research.tape_probe': { producer: 'scripts/family_probe_report.py sims', reason: 'research-only; needs tape files and probe tables' },
   'research.two_arm': { producer: 'scripts/paired_depth_report.py', reason: 'research-only; needs two comparison arms' },
   'research.sensitivity': { producer: 'dashboard hidden simulator card (no producer wired)', reason: 'dead control; not wired to any producer' },
 };
