@@ -166,7 +166,7 @@ Guard test `tests/test_close_method_taxonomy.py` — imports **only**
   scope).
 - Checkpoint: **pins green + scan red with the expected list → T3.**
 
-### T3 [Code] Red proof + closeout — XS
+### T3 [x] [Code] Red proof + closeout — XS
 
 - Target files: none (reads captured output).
 - What: run the focused file, capture the scan's failure list, confirm the
@@ -181,6 +181,25 @@ Guard test `tests/test_close_method_taxonomy.py` — imports **only**
 - Depends on: T2. Verify: captured output in the closeout.
 - Checkpoint: **scan red by design → Station IV. The PR cannot pass CI;
   Station IV stops before merge and hands the red PR to the owner.**
+
+**Captured RED list (2026-10-14 — 18 files, 37 line hits) — the #559/#560
+work order:**
+
+- **#559 scope** (core_brain/, 25 hits): `kpi.py` 826, 829, 831, 1118, 1494,
+  1500, 2195; `ladder.py` 19; `market_resolution.py` 639, 653, 681, 684;
+  `order_registry.py` 2427, 2448; `paired_shadow.py` 739, 741;
+  `registry_state.py` 41; `run_scorer.py` 185, 198; `shadow_exec.py` 1381,
+  1384; `single_buy_saver.py` 550; `statistical_analytics.py` 92, 101, 106.
+  (`statistical_validation_run/` holds no literals — artifacts.py imports.)
+- **#560 scope** (scripts/ + dashboard, 11 hits): `ladder_shadow_rehearsal.py`
+  233; `paired_depth_report.py` 509, 1017; `rescue_exit_report.py` 43, 44;
+  `statistical_trade_audit.py` 39; `tournament_cockpit_server.py` 626, 694,
+  695; `tournament_hub.py` 101; `dashboard/static/app.js` 8159.
+- **False positive** (N4 — operator decision needed before #560 can reach
+  green): `scripts/hooks/git_workflow_guard.py` 131.
+- **Discoveries beyond #520's inventory**: `kpi.py:2195` (N1),
+  `tournament_cockpit_server.py:626` (N2), `tournament_hub.py:101` (N3) —
+  all recorded in `docs/issues/558-noticed-but-not-touching.md`.
 
 ## How to verify (operator, hands-on — no pytest)
 
