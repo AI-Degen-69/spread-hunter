@@ -20,6 +20,7 @@ from core_brain.order_registry import (
     OrderRegistry, OrderRecord, FillRecord, QuoteRecord,
 )
 from core_brain import single_buy_saver as lp
+from core_brain.statistical_analytics import rescue_friction_summary
 
 
 MAX_PAIR_COST = 0.995
@@ -1600,6 +1601,29 @@ def test_live_rescue_exit_keeps_fee_unmeasured(registry: OrderRegistry):
               if c["method"] == "single_buy_exit"]
     assert len(closes) == 1
     assert closes[0]["fee"] is None
+
+
+def test_executed_rescue_close_reads_as_measured_zero_friction(
+    registry: OrderRegistry,
+):
+    """A real saved shadow close — not hand-built — reads measured zero (#524)."""
+    pair_id = _one_sided_pair(registry, fill_price=0.60)
+    client = ShadowFakeClient(best_ask=0.38, best_bid=0.55)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        live=True, force=True, reason="hard_stop",
+    )
+
+    assert result["action"] == "exited"
+    closes = registry.get_all_closes()
+    assert len(closes) == 1
+    # A break-even close has no denominator and reads mean_tcdr None, which
+    # would make this proof vacuous — the exit must book a real loss.
+    assert closes[0]["realized_pnl"] != 0
+    summary = rescue_friction_summary(closes)
+    assert summary["fee_measured_count"] == 1
+    assert summary["mean_tcdr"] == 0.0
 
 
 
