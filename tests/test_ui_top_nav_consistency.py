@@ -56,22 +56,34 @@ def _slice(js: str, start_marker: str, end_markers: tuple[str, ...]) -> str:
     return rest[:end]
 
 
-def test_dropdown_row_builder_emits_label_and_value():
+def test_dropdown_row_builder_emits_value_only():
     js = _js()
-    # The row pill itself is built by the single template, never hand-rolled:
-    # renderPillHtml emits the dot, the gray label, the value, and the detail.
-    seg = _slice(js, "const pillTag", ("}).join",))
-    assert "renderPillHtml({ label: pillTag, value:" in seg, \
-        "dropdown row pill must be built by renderPillHtml with the service tag and state value"
+    # Status only (#602): the dropdown row's name column identifies the service,
+    # so the row pill carries just the colored dot + state value, no label. It is
+    # still built by the single renderPillHtml template, never hand-rolled.
+    seg = _slice(js, "let rowTitle", ("}).join",))
+    assert "renderPillHtml({ value: state.toUpperCase(), dotState: state })" in seg, \
+        "dropdown row pill must be status-only via renderPillHtml (no label)"
+    assert "label: pillTag" not in seg, "dropdown row pill must not carry a name label"
 
 
 def test_dropdown_row_dot_has_separator():
     js = _js()
     # Scope to the dropdown row builder so the check is about that code.
-    seg = _slice(js, "const pillTag", ("}).join",))
+    seg = _slice(js, "let rowTitle", ("}).join",))
     # No hand-rolled dot variant may survive alongside the canonical call.
     assert "${dot}<span" not in seg, "dropdown liveness dot emitted with no separator"
     assert "pulse-dot ${state" not in seg, "no hand-rolled dot markup: renderPillHtml owns the dot"
+
+
+def test_dropdown_meta_never_echoes_state():
+    js = _js()
+    # #602: the meta column is genuine detail only; it must never restate the
+    # pill's state word (stopped/running), which the pill already shows.
+    seg = _slice(js, "let state, meta, pid", ("}).join",))
+    assert "meta = 'stopped'" not in seg, "meta must not echo the STOPPED state"
+    assert "meta = 'running'" not in seg, "meta must not echo the RUNNING state"
+    assert "|| 'running'" not in seg, "meta fallback must not echo the RUNNING state"
 
 
 def test_switcher_rows_use_pill_grammar():
@@ -104,7 +116,9 @@ def test_guardrail_alert_meta_preserved():
     assert "alert${alertsTotal === 1 ? '' : 's'}" in js, "guardrail alerts meta must stay"
     assert "'auto-watch'" in js, "guardrail auto-watch meta must stay"
 
-def test_static_fallback_rows_use_label_value_spans():
+def test_static_fallback_rows_are_status_only():
+    # #602: dropdown rows are status-only. The pill carries just .pill-value (the
+    # state); the name column identifies the service. No .pill-label in the pill.
     html = _html()
     ids = ("hud-guardrail-pill", "market-scan-pill", "scan-state-pill", "hud-shadow-pill")
     for pill_id in ids:
@@ -113,8 +127,9 @@ def test_static_fallback_rows_use_label_value_spans():
         end = html.find("services-dropdown-name", start)
         assert end != -1, f"{pill_id} row has no name column"
         slice_ = html[start:end]
-        assert 'class="pill-label"' in slice_, f"{pill_id} must carry .pill-label"
         assert 'class="pill-value"' in slice_, f"{pill_id} must carry .pill-value"
+        assert 'class="pill-label"' not in slice_, \
+            f"{pill_id} must NOT carry .pill-label: the name column identifies the service (#602)"
 
 # -- Grid + ellipsis + tint rules --
 
@@ -122,8 +137,8 @@ def test_dropdown_row_is_grid_with_fixed_columns():
     css = _css()
     m = re.search(r"\.services-dropdown-row\s*\{([^}]*)\}", css, re.DOTALL)
     assert m, ".services-dropdown-row rule missing"
-    assert "grid-template-columns: 140px 1fr 120px" in m.group(1), \
-        "dropdown row must be a 140px / 1fr / 120px grid (#600)"
+    assert "grid-template-columns: 100px 1fr 120px" in m.group(1), \
+        "dropdown row must be a 100px / 1fr / 120px grid (#602: pill is status-only)"
 
 
 def test_dropdown_pills_share_one_width():
