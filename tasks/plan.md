@@ -43,7 +43,7 @@ T1 (Dropdown row pills + meta vocab)
 ```
 ## Tasks
 
-### T1 [ ] [Design/UI + Code] Dropdown rows: pill-helper pills, service labels, fixed meta vocabulary, tooltip move — M
+### T1 [x] [Design/UI + Code] Dropdown rows: pill-helper pills, service labels, fixed meta vocabulary, tooltip move — M
 - **Target files**: `dashboard/static/app.js`, `dashboard/static/index.html`.
 - **What**:
   - In `renderServicesDropdown` (`app.js:1766-1821`), replace the hand-rolled `${dot}<span class="pill-label">` pill with `renderPillHtml({label: <short tag>, value: <STATE>, detail: <meta>, dotState: state})`. Short tags: `WATCHDOG`, `SCAN`, `ENGINE`, `SHADOW`.
@@ -51,21 +51,21 @@ T1 (Dropdown row pills + meta vocab)
   - Guardrail branch keeps alerts logic; only pill construction and meta strings change.
   - Update the four fallback rows in `index.html:101-120` to the same label+value span shape.
 - **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py -q` (existing pins hold).
-### T2 [ ] [Design/UI] Mode-tint refactor + dropdown grid + meta ellipsis — S
+### T2 [x] [Design/UI] Mode-tint refactor + dropdown grid + meta ellipsis — S
 - **Target files**: `dashboard/static/styles.css`.
 - **What**:
   - Refactor `.pill.mode-live` / `.pill.mode-shadow` so background/border carry mode (emerald vs amber wash) while `.pill-value` text color comes from `state-*` only. `mode-shadow.state-stopped` value text becomes stopped gray, not `#f59e0b`; amber survives on the shell. Same for `mode-live.state-stopped`.
   - Convert `.services-dropdown-row` to grid: `grid-template-columns: 150px 1fr 140px`; `.services-dropdown-meta` gets `max-width: 140px; text-align: right; ellipsis`.
   - Widen `.services-dropdown` 340px → 380px. Add `.services-dropdown-row .pill` min-width 0 + ellipsis guard.
 - **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_ui_277_touch_targets.py -q` + visual check on demo.
-### T3 [ ] [Design/UI + Code] DB switcher rows + demo row adopt pill grammar — M
+### T3 [x] [Design/UI + Code] DB switcher rows + demo row adopt pill grammar — M
 - **Target files**: `dashboard/static/app.js`, `dashboard/static/styles.css`.
 - **What**:
   - In `renderRunSwitcher` (`app.js:1603-1619`), replace `.db-run-name` + `.db-run-state` spans with a single `.pill` built by `renderPillHtml({label: <run short id>, value: <RUNNING/FINISHED/ENDED>, detail: <age>})`; keep port link and SWITCH/THIS PAGE controls untouched. Pill carries `state-running`/`state-stopped` for text color.
   - `demoSwitcherRow` (`app.js:1529-1541`): same treatment — `DEMO` label + `LOADED`/`AVAILABLE` value pill beside the toggle button.
   - CSS: `.db-run-row` becomes the same grid as dropdown rows; port link and switch button styles preserved.
 - **Verification**: `python -m pytest tests/test_ui_top_nav_groups.py tests/test_dashboard_server.py -q`.
-### T4 [ ] [Code] New consistency suite + full regression — S
+### T4 [x] [Code] New consistency suite + full regression — S
 - **Target files**: `tests/test_ui_top_nav_consistency.py` (new).
 - **What**:
   - Pin label/value/detail roles: every header pill, dropdown row pill, and switcher pill contains `.pill-label` (gray, uppercase) + `.pill-value` (state-colored), never a bare state-only pill.
