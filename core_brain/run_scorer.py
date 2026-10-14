@@ -23,6 +23,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from core_brain.close_methods import MERGE_METHODS, SINGLE_BUY_EXIT
+
 
 @dataclass(frozen=True)
 class ActionThresholds:
@@ -183,20 +185,21 @@ def score_run(
             if "reason" in closes_cols:
                 q_stop = (
                     "SELECT count(*) FROM closes WHERE (reason IN ('lifecycle_hard_stop', "
-                    "'aged_out_rescue') OR method = 'single_buy_exit')"
+                    "'aged_out_rescue') OR method = ?)"
                 )
             else:
                 q_stop = "SELECT count(*) FROM closes WHERE method = 'single_buy_exit'"
 
-            params_stop = []
+            params_stop = [SINGLE_BUY_EXIT]
             if run_id:
                 q_stop += " AND run_id = ?"
                 params_stop.append(run_id)
             stop_loss_count = cur.execute(q_stop, params_stop).fetchone()[0]
 
             # Merges: merge or shadow_merge
-            q_merge = "SELECT count(*) FROM closes WHERE method IN ('merge', 'shadow_merge')"
-            params_merge = []
+            merge_ph = ", ".join("?" for _ in MERGE_METHODS)
+            q_merge = f"SELECT count(*) FROM closes WHERE method IN ({merge_ph})"
+            params_merge = list(MERGE_METHODS)
             if run_id:
                 q_merge += " AND run_id = ?"
                 params_merge.append(run_id)
