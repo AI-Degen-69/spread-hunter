@@ -2784,11 +2784,12 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
         })
 
     try:
+        max_order_usd, _ = order_caps()
         result = complete_pair(
             client(), registry, pair_id,
             max_pair_cost=strategy_config.load().max_pair_cost,
             live=live,
-            max_order_usd=MAX_ORDER_USD,
+            max_order_usd=max_order_usd,
         )
     except PairCompletionRefused as exc:
         if entry_id:

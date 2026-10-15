@@ -300,7 +300,11 @@ def record_submit(
     if not intents:
         return 0
 
-    max_order_usd, max_total_usd = order_caps()
+    # Same precedence as live submission (`trader_loop._submit_intents`):
+    # effective caps already merged into cfg win, otherwise the live caps.
+    _live_order, _live_total = order_caps()
+    max_order_usd = float(getattr(cfg, "max_order_usd", _live_order)) if cfg is not None else _live_order
+    max_total_usd = float(getattr(cfg, "max_total_usd", _live_total)) if cfg is not None else _live_total
 
     paired_context = getattr(registry, "paired_context", None)
     paired_enabled = isinstance(paired_context, dict)
