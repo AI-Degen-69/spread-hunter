@@ -4,8 +4,9 @@ The taxonomy lives in ``core_brain/close_methods.py`` and nowhere else. This
 file proves it stays that way:
 
 * the scanner fails when a method-string literal list reappears outside the
-  canonical module. It is RED until #559/#560 move the consumers — the
-  failure list is the work order, not a regression;
+  canonical module. Every consumer named in #520 now imports the taxonomy
+  (#558 moved the leaf, #559 moved the readers in scope for it), so the scan
+  is green and a hit is a regression, not a work order;
 * the pins keep the module honest: every declared name is either written by
   a named code path or marked legacy, the module is a standard-library leaf,
   and a settlement is never a rescue.
@@ -127,10 +128,10 @@ def _scan() -> dict[str, list[tuple[int, str]]]:
     return offenders
 
 
-# --- the guard (RED until #559/#560 move the consumers) ------------------------
+# --- the guard ----------------------------------------------------------------
 
 def test_no_method_string_list_lives_outside_the_canonical_module():
-    """The failure list is the work order for #559/#560, not a regression."""
+    """#520's work order is done: a hit here is a fresh literal list, i.e. drift."""
     offenders = _scan()
     assert offenders == {}, (
         "a method-string list still lives outside core_brain/close_methods.py: "
