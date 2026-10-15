@@ -243,13 +243,12 @@ def live_volume_bar(live_event: bool = False) -> Optional[float]:
 
 
 def expired_at_intake(end_iso: Optional[str],
-                      start_iso: Optional[str] = None,
-                      category: object = None,
+                      live_event: bool = False,
                       now_iso: Optional[str] = None,
                       state: object = None) -> tuple[bool, str]:
-    """Has this market already passed its end date without being an in-play sports kickoff?
+    """Has this market already passed its end date without the venue calling it live?
 
-    A non-sports market whose end date is in the past has already resolved or lapsed,
+    A market whose end date is in the past has already resolved or lapsed,
     so spending cycle time, tape reads, and book reads on it is wasted venue work (#357).
 
     `endDate` alone is not the end of trading: a market the venue still reports
@@ -258,9 +257,13 @@ def expired_at_intake(end_iso: Optional[str],
     (#461). Only a venue-closed, not-accepting, UMA-resolved, or unreadable
     market is refused here, with a reason naming the venue signal first.
 
-    In-play sports markets are exempt: on Polymarket, `endDate` is often kickoff,
-    not the final whistle (see lines 392-396), so an open sports market past kickoff
-    continues to trade live and is governed by the quote-time gate.
+    A market the venue declares live (`/events?live=true`, carried on the row as
+    `_live_event`) is exempt: on Polymarket `endDate` is often kickoff rather
+    than the final whistle, so a game under way sits past it. LIVENESS IS THE
+    VENUE'S DECLARATION AND NOTHING ELSE (time-of-game purge, #597) -- a
+    kickoff timestamp and a sports category label were both game-clock
+    inferences standing in for it, and the sports label additionally admitted
+    markets the venue had already closed, which #461 exists to refuse.
 
     Unknown or missing end date is NOT treated as expired: it falls through to
     downstream resolution and horizon gates. `state=None` keeps the legacy
@@ -269,8 +272,7 @@ def expired_at_intake(end_iso: Optional[str],
     days = days_to_resolve(end_iso, now_iso=now_iso)
     if days is None or days >= 0:
         return False, ""
-    cat_str = str(category or "").strip().lower()
-    if start_iso is not None or cat_str == "sports":
+    if live_event:
         return False, ""
     elapsed_seconds = abs(days * 86400.0)
     hours = elapsed_seconds / 3600.0
@@ -932,13 +934,6 @@ def gamma_universe(session: requests.Session,
                 # Quoting minimum, which is the venue's order minimum --
                 # there is no reward score to qualify for, so rewardsMinSize
                 # would only inflate the lot the allocator has to buy.
-                # Sports markets open before the event does, so the venue
-                # states a kickoff here. NOTHING GATES ON IT (time-of-game
-                # purge, #597): the expiry gate below reads it only for the
-                # sports "endDate is kickoff, not the final whistle" nuance.
-                # Absent on everything else.
-                "_start_iso": (m.get("gameStartTime")
-                               or event.get("gameStartTime")),
                 "_order_min": float(m.get("orderMinSize") or 5),
                 "_volume_24h": vol,
                 "_spread": spread,
@@ -1151,10 +1146,6 @@ def _live_event_row(ev: dict, m: dict, sport: object) -> dict:
                     "min_size": float(m.get("rewardsMinSize") or 50)},
         "minimum_tick_size": float(m.get("orderPriceMinTickSize") or 0.01),
         "end_date_iso": m.get("endDate"),
-        # On sports markets `endDate` is kickoff, not the final whistle, so the
-        # start time is what `expired_at_intake` needs to keep a live market
-        # from being refused as already lapsed.
-        "_start_iso": m.get("gameStartTime") or ev.get("startTime"),
         "_order_min": float(m.get("orderMinSize") or 5),
         "_volume_24h": float(m.get("volume24hr") or 0.0),
         "_spread": float(m.get("spread") or 0.0),
@@ -1442,8 +1433,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     # past its end date (a runoff election past its first-round date) is not
     # refused here (#461).
     is_expired, expired_reason = expired_at_intake(
-        m.get("end_date_iso"), m.get("_start_iso"),
-        category=m.get("category") or m.get("venue_category"),
+        m.get("end_date_iso"),
+        live_event=bool(m.get("_live_event") or m.get("live_event")),
         now_iso=now_iso,
         state=resolve_state(
             m.get("closed"), m.get("accepting_orders"),
