@@ -32,7 +32,6 @@ from decimal import Decimal
 from typing import Any, Callable, Optional
 
 from core_brain import config, risk, unhedged_stop_loss
-from core_brain.markets import SeriesState, live_series_with_games_remaining, quote_t_remaining
 from core_brain.config import MakerConfig
 from core_brain.single_leg_lifecycle import (
     LegState,
@@ -245,7 +244,6 @@ def _decide_quotes_from_mid(
     down_book: dict,
     inv: Inventory,
     t_remaining: float,
-    series_state: Optional[SeriesState] = None,
     lifecycle_override: LifecycleQuoteOverride | None = None,
 ) -> tuple[list[QuoteIntent], str]:
     """Rest both legs under MID. The production path.
@@ -331,7 +329,7 @@ def _decide_quotes_from_mid(
 
     if lifecycle_override is not None:
         return _decide_lifecycle_escalation(
-            cfg, up_book, down_book, inv, lifecycle_override, series_state,
+            cfg, up_book, down_book, inv, lifecycle_override,
         )
 
     p_up_calc, _, _, _ = quote_resting_price(cfg, inv, "UP", up_book)
@@ -363,12 +361,13 @@ def _decide_quotes_from_mid(
         # this market — the safe path for a settled book (Polymarket also
         # cancels at settlement, but we don't wait for it).
         #
-        # LIVE-SERIES EXEMPTION (#402): a best-of series with games remaining
-        # routinely sits outside the band mid-series (game 2 of a BO3 at 0.85
-        # is a live market, not a settled one). The exemption is venue
-        # evidence only -- unknown, stale, or clinched state keeps the band.
-        series_exempt = live_series_with_games_remaining(series_state)
-        if (mid <= 0.15 or mid >= 0.85) and not series_exempt:
+        # A live series is NOT exempt (time-of-game purge, #597): game
+        # progress says nothing about when this market decides, so the band
+        # applies to every market alike. The band is the quoter's own
+        # decided-mid bar (operator directive 2026-08-28, widened 2026-10-09
+        # to [0.15, 0.85] per #432), tighter than the config `price_band_*`
+        # the risk gates read.
+        if mid <= 0.15 or mid >= 0.85:
             blocked.append(f"{side}: mid {mid:.3f} outside [0.15,0.85] -- decided market")
             continue
 
@@ -416,43 +415,9 @@ def _decide_quotes_from_mid(
             )
             continue
 
-        # ENDGAME PROXIMITY GATE (#240). A market that can converge faster
-        # than the loop revisits it turns a new pair into a one-look bet:
-        # the post-mortem pair posted with 32min left, sat 2m52s untouched,
-        # and filled one leg into the outcome. Inside the horizon with a
-        # slow measured cadence, opening new exposure is refused (or
-        # repriced deeper); a quote that REDUCES unhedged inventory is never
-        # blocked. Unknown cadence (None) fails open, like every missing
-        # clock on this path.
-        side_cfg = cfg
-        endgame_note = ""
-        if getattr(cfg, "enforce_endgame_gate", False):
-            cadence = getattr(cfg, "observed_cadence_sec", None)
-            horizon = getattr(cfg, "endgame_horizon_min", 45.0)
-            budget = getattr(cfg, "endgame_max_cadence_sec", 120.0)
-            if (t_remaining / 60.0 <= horizon
-                    and cadence is not None and cadence > budget):
-                naked = risk.naked_side(inv)
-                other = "DOWN" if side == "UP" else "UP"
-                if naked is not None and side != naked:
-                    pass  # light-side balancing quote: reduces exposure
-                elif inv.avg(other) <= 0:
-                    stamp = (f"endgame_gate {t_remaining / 60.0:.0f}min left "
-                             f"<= {horizon:.0f}min horizon at {cadence:.0f}s "
-                             f"cadence > {budget:.0f}s budget")
-                    if getattr(cfg, "endgame_action", "refuse") == "deepen":
-                        deepen = float(
-                            getattr(cfg, "endgame_deepen_offset", 0.0) or 0.0)
-                        side_cfg = replace(
-                            cfg, reward_offset=cfg.reward_offset + deepen)
-                        endgame_note = f"; {stamp} deepened +{deepen:.3f}"
-                    else:
-                        blocked.append(
-                            f"{side}: {stamp} refused new pair leg")
-                        continue
 
         price, provisional, band, truncated = quote_resting_price(
-            side_cfg, inv, side, book)
+            cfg, inv, side, book)
         if price is None or provisional is None or band is None:
             blocked.append(f"{side}: price calculation failed")
             continue
@@ -574,14 +539,14 @@ def _decide_quotes_from_mid(
                     f"{side}: price risk at {price:.3f} cut {ladder}sh to "
                     f"under the {cfg.min_quote_shares}sh reward minimum")
             continue
-        _, dyn_tag = dynamic_offset_for(side_cfg)
+        _, dyn_tag = dynamic_offset_for(cfg)
         dyn_note = f"; {dyn_tag}" if dyn_tag.startswith("dynamic_") else ""
         out.append(QuoteIntent(
             side=side, token_id=book.get("token_id"), price=price, size=size,
             mid=mid, edge_vs_mid=mid - price,
             reason=(f"reward quote {100*s:.1f}c under mid {mid:.3f}, "
                     f"score {reward_score(cfg, s, size):.0f}{waived}"
-                    f"{endgame_note}{dyn_note}"),
+                    f"{dyn_note}"),
         ))
 
     if not out:
@@ -602,7 +567,6 @@ def _decide_lifecycle_escalation(
     down_book: dict,
     inv: Inventory,
     override: LifecycleQuoteOverride,
-    series_state: Optional[SeriesState],
 ) -> tuple[list[QuoteIntent], str]:
     """Validate and size one pair-scoped escalation without ordinary repricing."""
     if override.state is not LegState.ESCALATED_HEDGE:
@@ -667,8 +631,8 @@ def _decide_lifecycle_escalation(
     mid = mid_price(own_book.get("best_bid"), own_book.get("best_ask"))
     if mid is None:
         return [], f"{side}: no two-sided book"
-    if (mid <= 0.15 or mid >= 0.85) and not live_series_with_games_remaining(
-            series_state):
+    # The band, no series exemption (time-of-game purge, #597).
+    if mid <= 0.15 or mid >= 0.85:
         return [], f"{side}: mid {mid:.3f} outside [0.15,0.85] -- decided market"
 
     blocked = risk.hard_block(
@@ -725,7 +689,6 @@ def decide_quotes(
     inv: Inventory,
     t_remaining: float,
     window_frac: Optional[float] = None,
-    series_state: Optional[SeriesState] = None,
     *,
     lifecycle_override: LifecycleQuoteOverride | None = None,
 ) -> tuple[list[QuoteIntent], str]:
@@ -735,12 +698,10 @@ def decide_quotes(
     `window_frac` is how far into the trading window we are, 0..1. None means
     the caller could not work it out, in which case the timing rule is SKIPPED
     rather than guessed -- a missing clock must not silently gate every quote.
-    `series_state` is the feed row's series evidence (None on every path that
-    has none): only a proven live series with games left skips the mid band.
     """
     if cfg.objective in ("spread_capture", "rewards"):
         intents, why = _decide_quotes_from_mid(cfg, up_book, down_book, inv,
-                                               t_remaining, series_state,
+                                               t_remaining,
                                                lifecycle_override)
         return _require_two_sided(cfg, inv, intents, why)
     if lifecycle_override is not None:
@@ -977,16 +938,6 @@ def _decide_declares_keyword(fn: Callable[..., tuple], keyword: str) -> bool:
         return False
 
 
-def _decide_takes_series_state(fn: Callable[..., tuple]) -> bool:
-    """True when the decide port can receive the #402 `series_state` keyword.
-
-    `decide_quotes` declares it; the ladder adapter and the trial seams
-    predate it, so their ports are called without the argument. An
-    uninspectable callable fails closed to the legacy call shape.
-    """
-    return _decide_takes_keyword(fn, "series_state")
-
-
 def evaluate_market_quote(
     cid: str,
     cfg: MakerConfig,
@@ -1041,24 +992,16 @@ def evaluate_market_quote(
         raise MarketQuoteError(
             "custom decision port cannot accept lifecycle override")
     # Real countdown, not the old 1e9 placeholder that skipped every timing
-    # rule on this path. Kickoff-aware: an in-play market whose venue endDate
-    # is kickoff counts down from kickoff plus the in-play window (#386).
-    # `window_frac` stays None: both production callers
+    # rule on this path. The market's own venue countdown is the only clock
+    # (time-of-game purge, #597): kickoff, in-play windows and series state
+    # are gone. `window_frac` stays None: both production callers
     # serve pinned markets whose `start_ts` is the load time, not a window
     # open -- computing a fraction off that would invent a window origin.
-    # `series_state` travels on the market object the Trader attached after
-    # `fetch_market` (#402). Custom `decide` ports predate the keyword, so it
-    # is passed only when set AND the port can take it -- a None state calls
-    # exactly as before, and a legacy port (the ladder adapter, trial seams)
-    # is never handed a keyword its signature does not declare.
-    series_state = getattr(market, "series_state", None)
     decision_kwargs = {}
-    if series_state is not None and _decide_takes_series_state(decide):
-        decision_kwargs["series_state"] = series_state
     if lifecycle_override is not None:
         decision_kwargs["lifecycle_override"] = lifecycle_override
     intents, why = decide(
-        cfg, up_book, down_book, inv, quote_t_remaining(market), None,
+        cfg, up_book, down_book, inv, market.t_remaining(), None,
         **decision_kwargs,
     )
     return MarketEval(

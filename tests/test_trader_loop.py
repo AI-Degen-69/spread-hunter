@@ -1326,10 +1326,13 @@ class TestMarketSpecsPath:
 
 
 class TestFuriaQuoteClock:
-    """#386 full path: FURIA venue times through fetch to decision."""
+    """#386 full path: FURIA venue times through fetch to decision.
 
-    END = 1791244800.0      # 2026-10-06T00:00:00Z
-    KICKOFF = 1791301200.0  # 2026-10-06T15:40:00Z
+    The kickoff-aware rescue window is GONE (time-of-game purge, #597): the
+    FURIA shape (venue `endDate` == kickoff, match in progress) now counts
+    down on the venue's own clock like every other market. A market past its
+    end date is refused, not rescued by an assumed in-play window.
+    """
 
     def _books(self):
         up = {"token_id": "tok-up", "best_bid": 0.59, "best_ask": 0.61,
@@ -1338,10 +1341,12 @@ class TestFuriaQuoteClock:
                 "bids": {0.39: 5000.0}, "asks": {0.41: 5000.0}}
         return up, down
 
-    def test_decide_receives_a_positive_countdown_not_minus_59681(self):
-        # Same shape as the FURIA market (venue endDate is kickoff, match in
-        # progress), with times relative to now so the test never expires:
-        # kickoff an hour ago must read positive, never the old -59681s.
+    def test_a_market_past_its_venue_end_date_is_refused(self):
+        # Same shape as the FURIA market (venue endDate is kickoff). Under the
+        # kickoff-aware clock this read a positive window and quoted; now the
+        # venue countdown is the only clock, so it is refused. The real
+        # `decide_quotes` runs here, not a stub: the point is that the countdown
+        # the decision actually receives is the market's own.
         import time
         from core_brain.markets import LiveMarket
         from core_brain.quotes import evaluate_market_quote
@@ -1350,8 +1355,30 @@ class TestFuriaQuoteClock:
             condition_id="0xfuria", market_slug="cs2-furia-aur1-2026-10-06",
             up_token="tok-up", down_token="tok-dn",
             start_ts=kickoff - 7200.0, end_ts=kickoff,
-            tick_size=0.01, neg_risk=False, game_start_ts=kickoff)
-        assert market.t_remaining() < 0  # the old clock says expired
+            tick_size=0.01, neg_risk=False)
+        assert market.t_remaining() < 0
+        up, down = self._books()
+
+        ev = evaluate_market_quote(
+            market.condition_id, MakerConfig(), "https://clob.polymarket.com",
+            fetch_market=lambda cid: market,
+            fetch_books=lambda host, tok: up if tok == "tok-up" else down,
+            inventory_for=lambda m: Inventory(),
+        )
+        assert ev.intents == []
+        assert "t_remaining" in ev.why
+
+    def test_a_market_inside_its_venue_window_quotes(self):
+        import time
+        from core_brain.markets import LiveMarket
+        from core_brain.quotes import evaluate_market_quote
+        now = time.time()
+        market = LiveMarket(
+            condition_id="0xfuria", market_slug="cs2-furia-aur1-2026-10-06",
+            up_token="tok-up", down_token="tok-dn",
+            start_ts=now - 7200.0, end_ts=now + 3600.0,
+            tick_size=0.01, neg_risk=False)
+        assert market.t_remaining() > 0
         up, down = self._books()
         seen = {}
 
@@ -1368,31 +1395,8 @@ class TestFuriaQuoteClock:
             decide=decide,
         )
         assert seen["t_rem"] > 0
-        assert seen["t_rem"] <= 6 * 3600.0
         assert len(ev.intents) == 2
         assert ev.why == ""
-
-    def test_stale_window_still_refuses(self):
-        from core_brain.markets import LiveMarket, quote_t_remaining
-        market = LiveMarket(
-            condition_id="0xfuria", market_slug="cs2-furia-aur1-2026-10-06",
-            up_token="tok-up", down_token="tok-dn",
-            start_ts=self.END - 3600.0, end_ts=self.END,
-            tick_size=0.01, neg_risk=False, game_start_ts=self.KICKOFF)
-        # A day after kickoff the window is spent: negative again.
-        assert quote_t_remaining(market, now=self.KICKOFF + 86400.0) < 0
-
-    # --- live BO3 series (#402 T2) -------------------------------------------
-    def _bo3_market(self, series_state):
-        from core_brain.markets import LiveMarket
-        import time
-        kickoff = time.time() - 3600.0
-        return LiveMarket(
-            condition_id="0xflysr", market_slug="lol-fly-sr-2026-10-07",
-            up_token="tok-up", down_token="tok-dn",
-            start_ts=kickoff - 7200.0, end_ts=kickoff,
-            tick_size=0.01, neg_risk=False, game_start_ts=kickoff,
-            series_state=series_state)
 
     def _outside_band_books(self):
         up = {"token_id": "tok-up", "best_bid": 0.13, "best_ask": 0.15,
@@ -1401,58 +1405,16 @@ class TestFuriaQuoteClock:
                 "bids": {0.83: 5000.0}, "asks": {0.85: 5000.0}}
         return up, down
 
-    def _decide(self, series_state):
-        import time
+    def test_outside_the_band_is_refused(self):
+        # The live-series exemption fell with the time-of-game purge (#597):
+        # a book outside [0.15, 0.85] is decided, whatever the game is doing.
+        # A settled book is refused HERE now -- the band fires before the
+        # settled-book check can, which is the same verdict one gate earlier.
         from core_brain.quotes import decide_quotes
-        market = self._bo3_market(series_state)
         up, down = self._outside_band_books()
-        return decide_quotes(
-            MakerConfig(), up, down, Inventory(), 600.0,
-            series_state=getattr(market, "series_state", None))
-
-    def _live_bo3(self):
-        import time
-        from core_brain.markets import parse_series_state
-        return parse_series_state(
-            sports_market_type="moneyline", score="9-4|1-1|Bo3",
-            period="2/3", question="FlyQuest vs Shopify Rebellion",
-            live=True, ended=False, evidence_ts=time.time())
-
-    def test_live_bo3_with_games_left_quotes_outside_the_band(self):
-        intents, why = self._decide(self._live_bo3())
-        assert len(intents) == 2, why
-        assert why == ""
-
-    def test_single_game_with_same_mid_is_still_refused(self):
-        intents, why = self._decide(None)
+        intents, why = decide_quotes(MakerConfig(), up, down, Inventory(), 600.0)
         assert intents == []
         assert "decided market" in why
-
-    def test_stale_series_score_is_still_refused(self):
-        import time
-        from core_brain.markets import (SERIES_EVIDENCE_MAX_AGE_SEC,
-                                        parse_series_state)
-        stale = parse_series_state(
-            sports_market_type="moneyline", score="9-4|1-1|Bo3",
-            period="2/3", question="FlyQuest vs Shopify Rebellion",
-            live=True, ended=False,
-            evidence_ts=time.time() - SERIES_EVIDENCE_MAX_AGE_SEC - 1)
-        intents, why = self._decide(stale)
-        assert intents == []
-        assert "decided market" in why
-
-    def test_settled_book_still_refuses_a_live_series(self):
-        from core_brain.quotes import decide_quotes
-        market = self._bo3_market(self._live_bo3())
-        up = {"token_id": "tok-up", "best_bid": 0.989, "best_ask": 0.999,
-              "bids": {0.989: 5000.0}, "asks": {0.999: 5000.0}}
-        down = {"token_id": "tok-dn", "best_bid": 0.001, "best_ask": 0.011,
-                "bids": {0.001: 5000.0}, "asks": {0.011: 5000.0}}
-        intents, why = decide_quotes(
-            MakerConfig(), up, down, Inventory(), 600.0,
-            series_state=market.series_state)
-        assert intents == []
-        assert "settled book" in why
 
 
 class TestClassifyRefusal:
@@ -1870,7 +1832,7 @@ def _t3_spec(cid):
             "tick": 0.01, "daily": 0.0, "title": f"t-{cid}", "slug": cid}
 
 
-def _quoting_decide(cfg, up, dn, inv, t_rem, wf, series_state=None):
+def _quoting_decide(cfg, up, dn, inv, t_rem, wf):
     toks = [up["token_id"], dn["token_id"]]
     return ([_intent(side="UP", token=toks[0], price=0.59),
              _intent(side="DOWN", token=toks[1], price=0.41)], "")
@@ -2063,8 +2025,8 @@ class TestLifecycleStopRows:
         assert "fleet loop shutdown: once" in caplog.text
 
 
-class TestSuspectsAndSeriesAttach:
-    """#402 T3: suspect visits feed the sweeper; specs carry series state."""
+class TestSuspectsAttach:
+    """#402 T3: suspect visits feed the sweeper."""
 
     def test_settled_and_countdown_visits_become_suspects(self, tmp_path):
         reg, _db = _t3_registry(tmp_path)
@@ -2104,33 +2066,6 @@ class TestSuspectsAndSeriesAttach:
             markets=[_t3_spec("0xbad")], sleep_fn=lambda s: None,
             suspects_box=box)
         assert box.get("cids") == frozenset({"0xbad"})
-
-    def test_spec_series_evidence_reaches_the_market(self, tmp_path):
-        import time
-        reg, _db = _t3_registry(tmp_path)
-        seen: dict = {}
-
-        def submit_fn(client, registry, market, intents, cfg):
-            seen["series"] = getattr(market, "series_state", None)
-            return 0
-
-        books_calls, calls = {}, {"submitted": [], "cancelled": []}
-        seam = _t3_seam(reg, books_calls, _quoting_decide, calls)
-        seam.submit_fn = submit_fn
-        spec = _t3_spec("0xflysr")
-        spec.update({
-            "sports_market_type": "moneyline",
-            "event_score": "9-4|1-1|Bo3",
-            "event_period": "2/3",
-            "question": "FlyQuest vs Shopify Rebellion",
-            "event_live": True,
-            "event_ended": False,
-            "series_ts": time.time(),
-        })
-        run(seam, interval=0.0, once=True, live=True, markets=[spec],
-            sleep_fn=lambda s: None)
-        assert seen["series"] is not None
-        assert seen["series"].scope == "series"
 
 
 class TestUmaResolutionGateVisit:
