@@ -33,30 +33,6 @@ for _scheme in ("https://", "http://"):
         pool_connections=8, pool_maxsize=8, max_retries=0))
 
 
-# How fresh series evidence must be for the live-series exemption (#402). The
-# feed stamps each live row when it is built; older than this, the score may
-# describe a finished game and the band applies as usual (fail closed).
-SERIES_EVIDENCE_MAX_AGE_SEC = 300.0
-
-
-@dataclass(frozen=True)
-class SeriesState:
-    """What the venue says about a series market's progress.
-
-    ``scope`` is "series" (a best-of match whose moneyline is the match
-    winner), "single" (a per-game line), or "unknown" (anything the parser
-    cannot prove). Only "series" can ever pass the live-series predicate;
-    unknown fails closed. ``games_remaining`` is None when the score gives no
-    series count to work from.
-    """
-    scope: str
-    best_of: Optional[int] = None
-    wins_a: Optional[int] = None
-    wins_b: Optional[int] = None
-    games_remaining: Optional[int] = None
-    venue_live: bool = False
-    venue_ended: bool = False
-    evidence_ts: Optional[float] = None
 
 
 _BO_SUFFIX_RE = re.compile(r"\b[Bb][Oo]\s?(\d{1,2})\b")
@@ -75,108 +51,6 @@ def _parse_games_score(text: str) -> Optional[tuple[int, int]]:
         return None
 
 
-def parse_series_state(
-    *,
-    sports_market_type: Optional[str] = None,
-    score: Optional[str] = None,
-    period: Optional[str] = None,
-    question: Optional[str] = None,
-    live: bool = False,
-    ended: bool = False,
-    evidence_ts: Optional[float] = None,
-) -> SeriesState:
-    """Pure: venue series evidence -> SeriesState, never raises.
-
-    Score shape (docs/polymarket-live-events-endpoint.md): the running game
-    score, the series games, and the best-of suffix, e.g. "8-1|2-0|Bo5".
-    `moneyline` + best-of > 1 is a series; `child_moneyline` is a single
-    game; anything else is unknown. Best-of falls back to the "k/N" period
-    form ("3/5" -> best of 5) and then to "(BO3)" / "best of 3" in the
-    question. A lone "A-B" score counts as the series games only when a
-    best-of is known from elsewhere -- without that context it is as likely
-    a game score (NHL "2-0") and stays unknown.
-    """
-    mtype = str(sports_market_type or "").strip().lower()
-    best_of: Optional[int] = None
-    wins: Optional[tuple[int, int]] = None
-
-    parts = [p.strip() for p in str(score or "").split("|")]
-    bo_part = next((p for p in reversed(parts)
-                    if _BO_SUFFIX_RE.search(p)), None)
-    if bo_part:
-        try:
-            best_of = int(_BO_SUFFIX_RE.search(bo_part).group(1))  # type: ignore[union-attr]
-        except (ValueError, AttributeError):
-            best_of = None
-        if len(parts) >= 3:
-            wins = _parse_games_score(parts[-2])
-    if best_of is None:
-        pm = _PERIOD_GAMES_RE.match(str(period or ""))
-        if pm:
-            try:
-                best_of = int(pm.group(2))
-            except ValueError:
-                best_of = None
-    if best_of is None:
-        q = str(question or "")
-        qm = _BO_SUFFIX_RE.search(q) or _BEST_OF_TEXT_RE.search(q)
-        if qm:
-            try:
-                best_of = int(qm.group(1))
-            except ValueError:
-                best_of = None
-    if wins is None and best_of is not None and len(parts) == 1:
-        wins = _parse_games_score(parts[0])
-
-    if mtype == "child_moneyline":
-        scope = "single"
-    elif mtype == "moneyline" and best_of is not None and best_of > 1:
-        scope = "series"
-    else:
-        scope = "unknown"
-
-    games_remaining: Optional[int] = None
-    if scope == "series" and wins is not None and best_of:
-        games_remaining = max(0, best_of - (wins[0] + wins[1]))
-
-    return SeriesState(
-        scope=scope,
-        best_of=best_of,
-        wins_a=wins[0] if wins else None,
-        wins_b=wins[1] if wins else None,
-        games_remaining=games_remaining,
-        venue_live=bool(live),
-        venue_ended=bool(ended),
-        evidence_ts=evidence_ts,
-    )
-
-
-def live_series_with_games_remaining(
-    state: Optional[SeriesState],
-    now_ts: Optional[float] = None,
-    max_age_sec: float = SERIES_EVIDENCE_MAX_AGE_SEC,
-) -> bool:
-    """True only when venue evidence proves a live series has games left.
-
-    Fails closed: unknown scope, missing or clinched score, an ended venue
-    flag, or stale/absent evidence all read False and the band applies as
-    it does today.
-    """
-    if state is None or state.scope != "series":
-        return False
-    if not state.venue_live or state.venue_ended:
-        return False
-    if state.games_remaining is None or state.games_remaining <= 0:
-        return False
-    if state.best_of and state.wins_a is not None and state.wins_b is not None:
-        needed = state.best_of // 2 + 1
-        if max(state.wins_a, state.wins_b) >= needed:
-            return False
-    if state.evidence_ts is None:
-        return False
-    at = now_ts if now_ts is not None else time.time()
-    age = at - float(state.evidence_ts)
-    return 0 <= age <= max_age_sec
 
 
 @dataclass(frozen=True)
@@ -186,47 +60,21 @@ class LiveMarket:
     up_token: str
     down_token: str
     start_ts: float  # unix seconds, market opens
-    end_ts: float    # unix seconds, market closes
+    end_ts: float    # unix seconds, market closes (the VENUE's date)
     tick_size: float
     neg_risk: bool
-    game_start_ts: Optional[float] = None  # venue kickoff, None when unstated
-    # Feed-row series evidence, attached by the Trader after `fetch_market`
-    # (#402). None on every other path: the band applies as before.
-    series_state: Optional[SeriesState] = None
 
     def t_remaining(self, now: Optional[float] = None) -> float:
         return self.end_ts - (now if now is not None else time.time())
 
 
-# How long after kickoff an in-play market stays quotable. Sports/esports
-# `endDate` is kickoff, not the final whistle (see #312, #386), so the plain
-# countdown goes negative the moment the match starts. Six hours covers a BO5
-# or a football match with extra time; the operator can retune it.
-IN_PLAY_WINDOW_SEC = 6 * 3600.0
-
-
-def quote_t_remaining(market: Any, now: Optional[float] = None) -> float:
-    """Seconds left to quote this market, kickoff-aware.
-
-    A market whose kickoff has passed counts down to kickoff plus
-    `IN_PLAY_WINDOW_SEC` instead of the kickoff-valued `end_ts`. A real later
-    end date always wins, and anything without a past kickoff keeps the plain
-    countdown -- pre-start and genuinely expired markets stay refused.
-    `market` needs only a `t_remaining()` method; the kickoff field is read
-    defensively so older stand-ins keep working.
-    """
-    at = now if now is not None else time.time()
-    try:
-        real = market.t_remaining() if now is None else market.t_remaining(now)
-    except TypeError:
-        real = market.t_remaining()
-    try:
-        kickoff = float(getattr(market, "game_start_ts", None))
-    except (TypeError, ValueError):
-        return real
-    if kickoff > at:
-        return real
-    return max(real, kickoff + IN_PLAY_WINDOW_SEC - at)
+# The kickoff clock, the assumed in-play window, the best-of series state and
+# the endgame gate were demolished in the time-of-game purge (#597): a game's
+# start, quarter, half, or end does not describe when this market decides, so
+# nothing here may key off it. Liveness is the VENUE's declaration
+# (`/events?live=true` in the ranker's discovery path); every other market
+# passes the measured gates. `t_remaining` is the market's own venue countdown
+# and nothing more -- do not teach it about games again.
 
 
 # Slugs come from the venue API and are later embedded in dashboard HTML
@@ -384,10 +232,8 @@ def fetch_pinned_market(condition_id: str) -> Optional[LiveMarket]:
         # than refusing to load it. Every 5-min timing rule is disabled by an
         # effectively-infinite t_remaining anyway.
         end_ts = time.time() + 365 * 86400
-    # Kickoff when the venue states one (sports/esports `game_start_time`).
-    # Missing or mangled reads as None: the quote clock falls back to the
-    # plain countdown exactly as before.
-    game_start_ts = _iso_to_unix(m.get("game_start_time") or "")
+    # Game time is not read (time-of-game purge, #597): kickoff, period,
+    # score and best-of state say nothing about when this market decides.
     return LiveMarket(
         condition_id=condition_id,
         market_slug=_sanitize_slug(m.get("market_slug") or condition_id[:10]),
@@ -397,7 +243,6 @@ def fetch_pinned_market(condition_id: str) -> Optional[LiveMarket]:
         end_ts=end_ts,
         tick_size=float(m.get("minimum_tick_size") or 0.01),
         neg_risk=bool(m.get("neg_risk", False)),
-        game_start_ts=game_start_ts,
     )
 
 

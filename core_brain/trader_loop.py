@@ -157,44 +157,6 @@ def _visit_stop(why: str, grace_expired: bool) -> Optional[LifecycleStop]:
     return classify_refusal(why or "")
 
 
-def _attach_series_state(market: Any, spec: Any) -> Any:
-    """Attach the feed row's series evidence to a fetched market (#402).
-
-    The CLOB read carries no series fields; the ranker's row does. Attached
-    ONLY when the evidence proves a live series with games remaining -- every
-    other market keeps no state, so custom `decide` ports (which predate the
-    `series_state` keyword) are called exactly as before. A frozen dataclass
-    market (LiveMarket) is rebuilt; any other shape is stamped in place.
-    Unparseable evidence attaches nothing and fails closed downstream --
-    never raises.
-    """
-    from core_brain.markets import live_series_with_games_remaining, parse_series_state
-    get = (lambda k: spec.get(k)) if isinstance(spec, dict) else (
-        lambda k: getattr(spec, k, None))
-    try:
-        state = parse_series_state(
-            sports_market_type=get("sports_market_type"),
-            score=get("event_score"),
-            period=get("event_period"),
-            question=get("question") or get("title"),
-            live=bool(get("event_live")),
-            ended=bool(get("event_ended")),
-            evidence_ts=get("series_ts"),
-        )
-    except Exception:
-        return market
-    if not live_series_with_games_remaining(state):
-        return market
-    try:
-        return replace(market, series_state=state)
-    except Exception:
-        pass
-    try:
-        market.series_state = state
-    except Exception:
-        pass
-    return market
-
 
 def _note_lifecycle_stop(
     seam: VenueSeam,
@@ -1866,11 +1828,9 @@ def _visit_one(
         return LiveFleetResult(status="ERROR", condition_id=cid,
                                error=f"{type(e).__name__}: {e}")
 
-    # Series evidence rides the feed row, not the CLOB read: attach it now so
-    # `decide` (via `evaluate_market_quote`) can exempt a live series with
-    # games left from the mid band (#402).
-    market = _attach_series_state(market, spec)
-
+    # Series evidence and game clocks were demolished in the time-of-game
+    # purge (#597): the feed row's series state is not attached and the
+    # observed rotation cadence is not carried (nothing keys off it).
     title = getattr(market, "market_slug", "") or cid[:16]
     if paired_enabled:
         from core_brain.paired_shadow import PairedShadowError, record_paired_market_tokens
@@ -2277,8 +2237,9 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
             "daily": gm.daily,
             "title": gm.title,
             "slug": gm.slug,
-            # Series evidence for the live-series exemption (#402). Absent
-            # on old feeds: the parser fails closed without it.
+            # Venue event evidence for the dashboard/funnel, not a gate
+            # (time-of-game purge, #597). Absent on old feeds: the parser
+            # fails closed without it.
             "sports_market_type": getattr(gm, "sports_market_type", ""),
             "event_score": getattr(gm, "event_score", None),
             "event_period": getattr(gm, "event_period", None),
@@ -2640,7 +2601,7 @@ def _fleet_state(registry, cfg) -> dict:
     from core_brain.unhedged_stop_loss import fleet_posture
     from core_brain.markout import fleet_stats
     from core_brain.order_registry import (
-        registry_committed_usd, registry_cycle_cadence_sec, registry_naked_usd,
+        registry_committed_usd, registry_naked_usd,
     )
     from core_brain.config import derive_dynamic_caps
 
@@ -2693,9 +2654,6 @@ def _fleet_state(registry, cfg) -> dict:
         "committed_usd": registry_committed_usd(registry),
         "fleet_posture": fleet_posture(
             fleet_stats(registry, cfg.markout_fleet_min_sample), cfg),
-        # Feeds the endgame gate (#240). None when unmeasurable; the gate
-        # fails open on None.
-        "observed_cadence_sec": registry_cycle_cadence_sec(registry),
         **dynamic_caps,
     }
 

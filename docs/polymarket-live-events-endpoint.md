@@ -126,28 +126,20 @@ the same row shape `gamma_universe` emits, stamped `_live_event`.
 - `merge_live_event_markets()` folds those rows into the scanned universe,
 keyed on `condition_id`. A market the scan also found is **replaced in place**
 by the live row, because the live row is the one carrying the stamp.
-- `evaluate()` lets a `_live_event` row **skip both clock gates** (pre-start and
-in-play). Both refuse on `gameStartTime`, and a market the venue declares live
-is exactly the case where that clock is wrong.
+- `evaluate()` gates every row -- live or scanned -- on the measured funnel
+  alone: movement, depth, spread, horizon, mid band. There are **no clock
+  gates** (time-of-game purge, #597): a game's start, quarter, half or end
+  says nothing about when this market decides, so no gate may key off it.
 - `tradable()` gates it on `select_min_volume_24h_usd_live` ($10,000) instead of
-the permanent floor.
+  the permanent floor.
 
 Everything downstream is unchanged: movement, depth, spread, horizon and the
-mid gate all still apply, so a live market buys passage through the two clock
-gates and the volume floor -- never through the funnel.
+mid gate all still apply, so a live market buys passage through the volume
+floor -- never through the funnel.
 
 `_live_event` is also carried onto the scored row as `live_event`, with
 `_sport`, `event_period`, `event_score` and the `volume_bar_usd` it was gated
 on, so `market_universe.json` and the dashboard show which picks are live.
-
-### The clock still refuses
-
-A market the clock says is in play, which the venue does **not** declare live,
-is still refused -- `in-play: event started 20m ago`. That gate was added
-because a started match reaches the depth arm and gets refused for liquidity
-when its real defect is the clock (the 2026-10-06 CS2 market's
-`NO: top-3 bid depth $44.56`). Nothing about the venue's live set changes that:
-the declaration is an extra admission path, not a replacement gate.
 
 ### What the page-walking was for, and why it is gone
 
@@ -159,8 +151,9 @@ floor.
 
 ## What this endpoint does NOT do
 
-- **It does not list pre-kickoff markets.** It is the live set only. The
-  pre-start / quote-window logic is unchanged and still owns that case.
+- **It does not list pre-kickoff markets.** It is the live set only, and
+  nothing refuses a pre-kickoff market on a clock any more -- a row is judged
+  on the measured funnel alone.
 - **`tag_slug` is silently ignored** on both `/markets` and `/events`: passing
   `esports` or `league-of-legends` returned byte-identical results to passing
   no tag. Filter on `sport.sport` client-side instead.
@@ -177,11 +170,11 @@ wta-buyukak-klimovi-2026-10-05  period S3  score "6-3, 6-7(2-7), 0-3"
                                 gameStartTime 2026-10-07 11:00:00+00
 ```
 
-A clock-based in-play gate reads those as *not started*, because the venue's
-per-event start time is not reliable for multi-day tournaments. The probe
-reports the clock next to the flag and marks the disagreement rather than
-silently resolving it -- the venue's own `live` flag is the stronger signal,
-but anyone tuning an in-play window has to see this.
+A clock-based liveness gate reads those as *not started*, because the venue's
+per-event start time is not reliable for multi-day tournaments. That is why
+every clock gate was demolished (time-of-game purge, #597) and the venue's own
+`live` flag is the only liveness signal: `gameStartTime` is collected as event
+evidence for the dashboard and read by nothing that gates.
 
 Format note: the venue writes `gameStartTime` space-separated with an
 hour-only offset (`"2026-10-06 23:00:00+00"`), not `T`/`Z` ISO. Python 3.11+
