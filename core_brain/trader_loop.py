@@ -586,13 +586,15 @@ def _market_cfg(base, spec: Any):
         objective="spread_capture",
         min_quote_shares=int(spec.get("min_size", base.min_quote_shares)),
         quote_shares=int(spec.get("shares", base.quote_shares)),
-        max_spread_from_mid=float(
-            spec.get("max_spread", base.max_spread_from_mid * 100.0)
-        ) / 100.0,
+        # The quote window is the ENGINE's max_spread_from_mid, single source.
+        # The venue's rewardsMaxSpread used to ride in on the feed row's
+        # max_spread field and cap the window here (2.5c on Fed rows, 4.5c on
+        # sports) — a rewards-program leftover throttling a strategy that earns
+        # the pair discount, not emissions. Deleted with the rewards purge
+        # (#594); do not reintroduce a per-market window.
         price_tick=float(spec.get("tick", base.price_tick)),
         min_t_remaining_sec=0.0,
         market_title=str(spec.get("title", "")),
-        market_daily_rate=float(spec.get("daily", 0.0)),
         range_cents=(
             float(spec["range_cents"])
             if spec.get("range_cents") is not None
