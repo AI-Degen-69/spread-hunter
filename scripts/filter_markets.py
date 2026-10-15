@@ -1338,11 +1338,9 @@ def evaluate(session: requests.Session, rate: float, m: dict,
              now_iso: Optional[str] = None) -> dict:
     """Income and capital for one market, from its live book.
 
-    `rate` is the market's pot in $/day. In the unified universe every pot is
-    spread capture -- `spread_capture_daily`, paid by the taker on the trade;
-    no minimum distribution exists to apply. (`source` remains a parameter
-    only for `--legacy-rewards`, which restores the old reward pot and its
-    $1.50 floor for one comparison period.)
+    `rate` is the market's measured movement notional in dollars -- the
+    ranking key since the rewards purge (#594) deleted the estimated-income
+    pot. `income` below scales it by our share of the resting score.
 
     GATE ORDER, cheapest first: identity, expiry, queue, score-window
     shape -- then the TAPE (one request) -- then the books (two
@@ -1695,8 +1693,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         live_event=bool(m.get("_live_event") or m.get("live_event")))
     # The movement gate has already been enforced above, before the book
     # fetches -- `flat` cannot be true here. The income gate requires
-    # positive income for both sources: spread markets earn on the spread,
-    # and legacy reward candidates earn on daily maker rewards.
+    # positive income: a market whose measured movement scales to nothing
+    # earns nothing.
     pays = income > 0
     if not why and not pays:
         why = ("no reward income" if source == "rewards" else "no spread income")
