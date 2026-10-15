@@ -101,11 +101,10 @@ from core_brain.merge_pairs import (
     sign_redeem_transaction,
 )
 from core_brain.venue import (
-    MAX_ORDER_USD,
-    MAX_TOTAL_USD,
     api_creds_from_env,
     client,
     open_notional,
+    order_caps,
     venue_order_id,
 )
 from core_brain.account import fetch_live_balance, log_float_mark_if_measured
@@ -458,9 +457,10 @@ def quote(condition_id: str, price: float, size: float, live: bool,
 
     dn_price = round(down_price, 4) if down_price is not None else round(1.0 - price, 4)
     cost = price * size + dn_price * size
-    if cost > MAX_ORDER_USD:
+    max_order_usd, _ = order_caps()
+    if cost > max_order_usd:
         raise SystemExit(
-            f"${cost:.2f} exceeds MAX_ORDER_USD ${MAX_ORDER_USD:.2f}")
+            f"${cost:.2f} exceeds MAX_ORDER_USD ${max_order_usd:.2f}")
 
     legs = [(m.up_token, price, "UP"), (m.down_token, dn_price, "DOWN")]
     print(f"market   {m.market_slug[:60]}")
@@ -476,9 +476,10 @@ def quote(condition_id: str, price: float, size: float, live: bool,
 
     c = client()
     already = open_notional(c)
-    if already + cost > MAX_TOTAL_USD:
+    _, max_total_usd = order_caps()
+    if already + cost > max_total_usd:
         raise SystemExit(f"open ${already:.2f} + ${cost:.2f} exceeds "
-                         f"MAX_TOTAL_USD ${MAX_TOTAL_USD:.2f}")
+                         f"MAX_TOTAL_USD ${max_total_usd:.2f}")
 
     # The registry is what every later stage reads. Without a row here the poll
     # loop has nothing to reconcile, `exit` and `complete` have no pair_id to
@@ -1444,8 +1445,9 @@ def merge(condition_id: str,
 
     # Pre-flight Guard 3: MAX_ORDER_USD ceiling
     cost = amount * 1.0
-    if cost > MAX_ORDER_USD:
-        raise SystemExit(f"${cost:.2f} exceeds MAX_ORDER_USD ${MAX_ORDER_USD:.2f}")
+    max_order_usd, _ = order_caps()
+    if cost > max_order_usd:
+        raise SystemExit(f"${cost:.2f} exceeds MAX_ORDER_USD ${max_order_usd:.2f}")
 
     # Pre-flight Guard 4: Idempotency check
     _check_idempotency_guard(condition_id, force=force)
@@ -2782,11 +2784,12 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
         })
 
     try:
+        max_order_usd, _ = order_caps()
         result = complete_pair(
             client(), registry, pair_id,
             max_pair_cost=strategy_config.load().max_pair_cost,
             live=live,
-            max_order_usd=MAX_ORDER_USD,
+            max_order_usd=max_order_usd,
         )
     except PairCompletionRefused as exc:
         if entry_id:

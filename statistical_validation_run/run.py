@@ -32,7 +32,7 @@ from core_brain.shadow_run import (
     shadow_run_id,
     ShadowResult,
 )
-from core_brain.venue import MAX_ORDER_USD, MAX_TOTAL_USD
+from core_brain.venue import order_caps
 from statistical_validation_run.artifacts import (
     build_gate_rows,
     resolve_verdict,
@@ -225,10 +225,11 @@ def snapshot_stat_validation_env(
     except (OSError, TypeError) as e:
         log.warning("snapshot: failed to write config_snapshot.json: %s", e)
 
+    max_order_usd, max_total_usd = order_caps()
     log.info(
         "STAT HARNESS config: max_order_usd=%.2f max_total_usd=%.2f objective=%s bankroll_usd=%.2f",
-        MAX_ORDER_USD,
-        MAX_TOTAL_USD,
+        max_order_usd,
+        max_total_usd,
         getattr(cfg, "objective", "balanced"),
         getattr(cfg, "bankroll_usd", 0.0),
     )

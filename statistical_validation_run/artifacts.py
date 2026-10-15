@@ -41,7 +41,7 @@ from core_brain.kpi import (
     gate_definition,
 )
 from core_brain.order_registry import OrderRegistry
-from core_brain.venue import MAX_ORDER_USD, MAX_TOTAL_USD
+from core_brain.venue import order_caps
 
 log = logging.getLogger("statistical_validation_run")
 
@@ -364,7 +364,8 @@ def render_report_md(
     ci95 = ta.get("ci95_return_pct") or {}
     win_ci = (ta.get("win_rate_ci95") or {})
     generated = datetime.datetime.now().isoformat(timespec="seconds")
-    caps = f"`MAX_ORDER_USD={MAX_ORDER_USD:.2f}`, `MAX_TOTAL_USD={MAX_TOTAL_USD:.2f}`"
+    max_order_usd, max_total_usd = order_caps()
+    caps = f"`MAX_ORDER_USD={max_order_usd:.2f}`, `MAX_TOTAL_USD={max_total_usd:.2f}`"
     disclaimer = gate_definition(cfg)["tautology_disclaimer"]
 
     lines: list[str] = [
@@ -584,6 +585,7 @@ def write_artifacts(
         return p
 
     methods = sorted({c.get("method") or "unknown" for c in closes})
+    max_order_usd, max_total_usd = order_caps()
 
     # Issue #55: the side-by-side sensitivity column. GO must survive pessimism,
     # so the verdict here is GO only when BOTH the base and the pessimistic
@@ -618,8 +620,8 @@ def write_artifacts(
         "bankroll_fraction": cfg.stat_gate_bankroll_fraction,
         "tautology_disclaimer": gate_definition(cfg)["tautology_disclaimer"],
         "caps_at_risk_usd": {
-            "MAX_ORDER_USD": MAX_ORDER_USD,
-            "MAX_TOTAL_USD": MAX_TOTAL_USD,
+            "MAX_ORDER_USD": max_order_usd,
+            "MAX_TOTAL_USD": max_total_usd,
         },
         "cost_of_being_wrong": COST_OF_BEING_WRONG,
         "rescue": rescue_stats(closes),

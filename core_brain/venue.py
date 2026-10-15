@@ -26,6 +26,18 @@ MAX_ORDER_USD = _CFG.max_order_usd
 MAX_TOTAL_USD = _CFG.max_total_usd
 
 
+def order_caps(portfolio_usd: float | None = None) -> tuple[float, float]:
+    # Live caps: re-read settings at order time so per-run overrides
+    # (HUNTER_BANKROLL, tournament presets) and the live portfolio mark
+    # move the enforced limit, not just the displayed one (#574). The
+    # module constants above stay as the import-time snapshot for callers
+    # that only need a default.
+    from core_brain.config import derive_dynamic_caps
+
+    caps = derive_dynamic_caps(_load_cfg(), portfolio_usd)
+    return caps["max_order_usd"], caps["max_total_usd"]
+
+
 # ── UA patch ──────────────────────────────────────────────────────────────────
 # Polymarket's WAF now returns HTTP 403 for the SDK's default User-Agent
 # ("py_clob_client_v2"). Monkey-patch _overload_headers at import time so
