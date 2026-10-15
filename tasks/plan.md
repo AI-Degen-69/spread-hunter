@@ -73,7 +73,7 @@ Dependency graph: T0 → (T1, T2, T3) → T4. T1/T2/T3 are independent of each o
 
 **Checkpoint 2** — after T3: rescue block and forensics report agree on the reference store copy.
 
-### T4 [S] [Code] — Guard test extension + acceptance sweep
+### [x] T4 [S] [Code] — Guard test extension + acceptance sweep
 - Extend `tests/test_close_method_taxonomy.py` with the M/C regression cases from T1–T3 (merge membership, settled/other buckets, settlements-not-rescues). No new scan scope — the T1 drift scan already covers it.
 - Run the issue's acceptance command (all four suites + taxonomy). Every accounting suite passes with no changed assertions except the one deliberate T1 edit.
 - Record the measured "1 against 65" exit-count gap disposition (left unchanged per plan) as a follow-up note at the bottom of this file, not as code.
@@ -83,3 +83,8 @@ Dependency graph: T0 → (T1, T2, T3) → T4. T1/T2/T3 are independent of each o
 ## Improvement proposal (Step 5)
 
 **Adopt-by-default (stale-comment correction).** Evidence, verbatim from live code (`core_brain/kpi.py:2196-2197`): *"Exit-shape counts (merges vs one-sided dumps) feed the card's details line, which owns the "all exits were naked" warning."* No warning code exists on the card (the details line never reads `merge_closes`/`single_buy_exits`), so repointing the comment at a warning would document fiction. Proposal: replace with one factual line — *"Exit-shape counts for the card's details line."* — folded into T2. A scope expansion (building the warning) was considered and rejected — it is new behavior this issue never asks for.
+
+## Dispositions recorded at build close (T4)
+
+- **The "1 against 65" exit-count gap: left unchanged, recorded, not silenced.** The pair names one count at two scopes. #520's own measurements read `single_buy_exits: 1` on the reference store's newest run (2 closes) and 65 `single_buy_exit` rows across `data/`. The card counts the run-filtered closes through the canonical three-exit set (`kpi.py:2199`); the 65 is the store-wide population. Two scopes, no defect in either — so T2 left `_single_exits` exactly as it was and this issue changed neither number. The reference store (`data/02_shadow_prudent_13-10_03-01.db`) is absent from this checkout (`data/` holds only `demo_orders.db` and `orders.db`), so the pair is recorded from the parent's figures rather than re-measured here. Re-measure when a store carrying settlements is available.
+- **`KPI_PAYLOAD_VERSION` not bumped — candidate, not touched.** `pnl_by_fill_path` now ships two extra keys (`settled`, `other`), and `core_brain/kpi.py` documents the hand-bumped envelope version as how a stale backend is told apart from a genuinely unmeasured field. The consumer of those keys is the fill-path card in `dashboard/static/app.js`, which #560/T3 owns, so the bump belongs with that work rather than with the producers here.

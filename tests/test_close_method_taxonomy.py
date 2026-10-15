@@ -20,6 +20,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 from core_brain import close_methods as cm
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -289,3 +291,56 @@ def test_app_js_exit_methods_is_pinned_to_the_leaf():
     assert match, "app.js EXIT_METHODS not found"
     values = [a or b for a, b in _JS_QUOTED.findall(match.group(1))]
     assert tuple(values) == cm.DASHBOARD_FORCED_EXIT_METHODS
+
+
+# --- consumer routing pins (#559) -----------------------------------------------
+
+
+def test_pnl_by_fill_path_routes_every_close_into_one_bucket():
+    """#559: the fill-path split is total-preserving. A settled close and an
+    unclassified close used to land in no bucket at all, so `total` was short
+    of the run's realized PnL and every rendered share divided by a wrong one."""
+    from core_brain.kpi import pnl_by_fill_path
+
+    closes = [
+        {"method": cm.MERGE, "realized_pnl": 0.30, "tx_hash": "pair-chain"},
+        {"method": cm.MERGE, "realized_pnl": 0.20, "tx_hash": "pair-taker"},
+        {"method": cm.SHADOW_MERGE, "realized_pnl": 0.10, "tx_hash": "pair-shadow"},
+        {"method": cm.SINGLE_BUY_EXIT, "realized_pnl": -0.40},
+        {"method": cm.SHADOW_SETTLEMENT, "realized_pnl": -0.50},
+        {"method": cm.SELL, "realized_pnl": -0.10},
+        {"method": cm.VENUE_SYNC, "realized_pnl": 9.99},
+    ]
+
+    res = pnl_by_fill_path(closes, taker_pairs={"pair-taker"})
+
+    assert set(res["by_path"]) == set(res["pct"]) == {
+        "maker_merged", "taker_completed", "single_buy_exit", "settled", "other"}
+    assert res["by_path"]["maker_merged"] == pytest.approx(0.40)
+    assert res["by_path"]["taker_completed"] == pytest.approx(0.20)
+    assert res["by_path"]["single_buy_exit"] == pytest.approx(-0.40)
+    assert res["by_path"]["settled"] == pytest.approx(-0.50)
+    assert res["by_path"]["other"] == pytest.approx(-0.10)
+    # `venue_sync` is bookkeeping, not a fill path, and nothing else is dropped.
+    assert res["total"] == pytest.approx(-0.40)
+
+
+def test_a_settled_close_is_never_counted_as_a_rescue():
+    """#559: the memo's rescue block counts settlements on their own line, so
+    "rescue" means the exits -- and only the exits -- in every report."""
+    from statistical_validation_run.artifacts import rescue_stats
+
+    stats = rescue_stats([
+        {"method": cm.SHADOW_MERGE, "realized_pnl": 0.30},
+        {"method": cm.SINGLE_BUY_EXIT, "realized_pnl": -0.60},
+        {"method": cm.SHADOW_SETTLEMENT, "realized_pnl": -1.00},
+    ])
+
+    assert stats["merges"] == 1
+    assert stats["exits"] == 1
+    assert stats["settlements"] == 1
+    assert stats["other_methods"] == []
+    # The rescue denominator is unchanged: a settlement is not a completion and
+    # not a rescue, so it never enters either rate.
+    assert stats["completion_rate"] == pytest.approx(0.5)
+    assert stats["exit_rate"] == pytest.approx(0.5)
