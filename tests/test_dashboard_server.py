@@ -1486,14 +1486,17 @@ def test_operational_statuses_share_one_top_nav_bar():
         "hud-services-state",
         "hud-services-sub",
         "hud-guardrail-pill",
-        "hud-guardrail-state",
-        "hud-guardrail-sub",
         # Issue #457: one state-driven toggle replaced the start/stop pair.
         "btn-master-toggle",
     )
     for element_id in moved_ids:
         assert f'id="{element_id}"' in top_meta
         assert html.count(f'id="{element_id}"') == 1
+    # #602: the WATCHDOG row is status-only — the guardrail pill carries just
+    # dot + state, so its old state/sub detail spans are gone from the surface
+    # and the client logic alike.
+    assert 'id="hud-guardrail-state"' not in html
+    assert 'id="hud-guardrail-sub"' not in html
     # The two old buttons must be gone, not merely unrendered.
     assert "btn-master-start" not in html
     # Issue #504 / Operator Directive: btn-sync permanently removed
