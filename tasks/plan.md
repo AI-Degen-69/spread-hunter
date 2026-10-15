@@ -49,7 +49,7 @@ Task type: **Code** (primary). Helper skills: `test-driven-development`, `increm
 
 Dependency graph: T0 → (T1, T2, T3) → T4. T1/T2/T3 are independent of each other.
 
-### T1 [S] [Code] — Defect 1: total-preserving fill paths
+### [x] T1 [S] [Code] — Defect 1: total-preserving fill paths
 - `core_brain/kpi.py:918-963`: route through canonical families — skip `NON_TRADE_CLOSE_METHODS`, keep the maker/taker merge split, exits → `single_buy_exit`, `SETTLEMENT_METHODS` → `settled`, everything else → `other`. Always return all five keys in `by_path` and `pct`. Fix the docstring (signed shares).
 - The single permitted assertion edit: `tests/test_pnl_by_fill_path.py:61-73` empty shape → five keys. Add R-cases (settlement lands in `settled`, unknown/`sell` lands in `other`, total reconciles).
 - Frozen: do not touch `kpi.py:1143`, `:1504`, or the execution funnel (`:980-981`).
