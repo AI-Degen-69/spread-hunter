@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+import os
+import subprocess
+import sys
 
+from core_brain import markets
 from core_brain.markets import _iso_to_unix, _iso_to_unix_end
 
 # 2026-10-15T00:00:00Z -- the shape CLOB returns for a date-only end date.
@@ -42,6 +47,15 @@ def test_iso_to_unix_end_leaves_a_real_timestamp_untouched():
     assert ts == WITH_TIME_EPOCH
 
 
+def test_iso_to_unix_end_preserves_an_offset_equivalent_timed_close():
+    # Arrange -- 01:00+01:00 IS UTC midnight, but the stated wall clock is a
+    # real close time, so it must not inherit the date-only extension.
+    ts = _iso_to_unix_end("2026-10-15T01:00:00+01:00")
+
+    # Assert
+    assert ts == MIDNIGHT_EPOCH
+
+
 def test_iso_to_unix_end_propagates_an_unparseable_value():
     # Arrange / Act / Assert
     assert _iso_to_unix_end("not-a-date") is None
@@ -60,10 +74,109 @@ def test_iso_to_unix_end_keeps_a_midnight_market_quotable_today():
     assert remaining > 0
 
 
-def test_iso_to_unix_treats_a_naive_timestamp_as_utc():
-    # Arrange -- a naive value read as local time shifts by the host offset.
-    naive = "2026-10-15T12:00:00"
-    expected = dt.datetime(2026, 10, 15, 12, tzinfo=dt.timezone.utc).timestamp()
+# --- both production conversions -----------------------------------------
+
+
+def _market_row(end_iso: str) -> dict:
+    """A Gamma-shaped market row, as `_parse_market_row` receives it."""
+    return {
+        "conditionId": "0x" + "ab" * 32,
+        "clobTokenIds": json.dumps(["111", "222"]),
+        "eventStartTime": "2026-10-15T16:00:00Z",
+        "endDate": end_iso,
+        "orderPriceMinTickSize": 0.01,
+        "negRisk": False,
+    }
+
+
+def test_market_row_extends_a_midnight_end_date():
+    # Arrange / Act
+    lm = markets._parse_market_row(_market_row(MIDNIGHT_UTC))
+
+    # Assert -- the row path must roll too, not just the helper. This is the
+    # test that fails if a production caller reverts to `_iso_to_unix`.
+    assert lm is not None
+    assert lm.end_ts == MIDNIGHT_EPOCH + 86400.0
+
+
+def test_market_row_keeps_a_timed_end_date():
+    # Arrange / Act
+    lm = markets._parse_market_row(_market_row(WITH_TIME))
+
+    # Assert
+    assert lm is not None
+    assert lm.end_ts == WITH_TIME_EPOCH
+
+
+class _FakeResponse:
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSession:
+    """Stands in for the CLOB session `fetch_pinned_market` uses."""
+
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    def get(self, url, **kwargs):
+        return _FakeResponse(self._payload)
+
+
+def test_pinned_market_extends_a_midnight_end_date(monkeypatch):
+    # Arrange -- a CLOB payload whose end_date_iso is the date-only encoding.
+    payload = {
+        "tokens": [{"token_id": "111"}, {"token_id": "222"}],
+        "end_date_iso": MIDNIGHT_UTC,
+        "closed": False,
+        "accepting_orders": True,
+        "market_slug": "cs2-lgc-furia-2026-10-15",
+        "minimum_tick_size": 0.01,
+        "neg_risk": False,
+    }
+    monkeypatch.setattr(markets, "_SESSION", _FakeSession(payload))
+
+    # Act
+    lm = markets.fetch_pinned_market("0x" + "cd" * 32)
+
+    # Assert -- the pinned path must roll too, not just the helper.
+    assert lm is not None
+    assert lm.end_ts == MIDNIGHT_EPOCH + 86400.0
+
+
+# --- naive timestamps are UTC, not local ---------------------------------
+
+# A POSIX TZ string understood by both glibc and the Windows CRT, so the child
+# process below is genuinely non-UTC on every platform CI runs on. Without this
+# the assertion passes on a UTC host even with the local-time bug present.
+# Mirrors the sibling suite in tests/scoring/test_markets.py.
+NON_UTC_TZ = "EST5EDT,M3.2.0,M11.1.0"
+
+# 2026-10-15T12:00:00 with no offset. Read as US/Eastern it is 4h larger.
+NAIVE = "2026-10-15T12:00:00"
+NAIVE_UTC_EPOCH = dt.datetime(2026, 10, 15, 12, tzinfo=dt.timezone.utc).timestamp()
+
+_CHILD = """
+import json, sys
+from core_brain.markets import _iso_to_unix
+print(json.dumps(_iso_to_unix(sys.argv[1])))
+"""
+
+
+def test_iso_to_unix_treats_a_naive_timestamp_as_utc_on_a_non_utc_host():
+    # Arrange -- run in a child pinned to a non-UTC zone, so a local read
+    # diverges from the UTC answer by the host offset and the test can fail.
+    env = {**os.environ, "TZ": NON_UTC_TZ}
+    result = subprocess.run(
+        [sys.executable, "-c", _CHILD, NAIVE],
+        capture_output=True, text=True, check=True, env=env, cwd=os.getcwd(),
+    )
 
     # Act / Assert
-    assert _iso_to_unix(naive) == expected
+    assert json.loads(result.stdout) == NAIVE_UTC_EPOCH
