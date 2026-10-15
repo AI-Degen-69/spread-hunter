@@ -295,10 +295,12 @@ def record_submit(
     Fields the venue supplies live and a rehearsal does not (`latency_ms`) are
     left unset rather than filled with a plausible number.
     """
-    from core_brain.venue import MAX_ORDER_USD, MAX_TOTAL_USD
+    from core_brain.venue import order_caps
 
     if not intents:
         return 0
+
+    max_order_usd, max_total_usd = order_caps()
 
     paired_context = getattr(registry, "paired_context", None)
     paired_enabled = isinstance(paired_context, dict)
@@ -308,17 +310,17 @@ def record_submit(
             db_path, run_id=registry._run_id(),
             condition_id=market.condition_id)
     for i in intents:
-        if i.price * i.size > MAX_ORDER_USD:
+        if i.price * i.size > max_order_usd:
             raise ShadowOrderRefused(
                 f"leg {i.side} ${i.price * i.size:.2f} exceeds "
-                f"MAX_ORDER_USD ${MAX_ORDER_USD:.2f}")
+                f"MAX_ORDER_USD ${max_order_usd:.2f}")
 
     open_usd = sum(o.price * o.original_size for o in registry.get_active_orders())
     total_cost = sum(i.price * i.size for i in intents)
-    if open_usd + total_cost > MAX_TOTAL_USD:
+    if open_usd + total_cost > max_total_usd:
         raise ShadowOrderRefused(
             f"open ${open_usd:.2f} + ${total_cost:.2f} exceeds "
-            f"MAX_TOTAL_USD ${MAX_TOTAL_USD:.2f}")
+            f"MAX_TOTAL_USD ${max_total_usd:.2f}")
 
     now_ms = int(now_fn() * 1000)
     max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))

@@ -2326,7 +2326,7 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
     )
     from py_clob_client_v2.order_builder.constants import BUY
     from core_brain.venue import (
-        MAX_ORDER_USD, MAX_TOTAL_USD, open_notional, venue_order_id,
+        open_notional, order_caps, venue_order_id,
     )
     from core_brain.order_registry import OrderRecord, QuoteRecord, get_run_id
 
@@ -2335,9 +2335,10 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
 
     # Dynamic caps scale with live account value (AGENTS.md). When the trader
     # loop has already merged the latest venue account_value into base_cfg via
-    # _fleet_state, use those; otherwise fall back to the static venue constants.
-    max_order_usd = float(getattr(cfg, "max_order_usd", MAX_ORDER_USD)) if cfg is not None else MAX_ORDER_USD
-    max_total_usd = float(getattr(cfg, "max_total_usd", MAX_TOTAL_USD)) if cfg is not None else MAX_TOTAL_USD
+    # _fleet_state, use those; otherwise fall back to the live venue caps.
+    _live_order, _live_total = order_caps()
+    max_order_usd = float(getattr(cfg, "max_order_usd", _live_order)) if cfg is not None else _live_order
+    max_total_usd = float(getattr(cfg, "max_total_usd", _live_total)) if cfg is not None else _live_total
 
     total_cost = sum(i.price * i.size for i in intents)
     for i in intents:
