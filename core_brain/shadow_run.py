@@ -649,7 +649,7 @@ def build_shadow_seam(
     decide_fn: Optional[Callable] = None,
     fetch_market: Optional[Callable] = None,
     fetch_books: Optional[Callable] = None,
-    traded_fn: Optional[Callable[[str, set], dict]] = None,
+    traded_fn: Optional[Callable[[str, set], Any]] = None,
     flow_fn: Optional[Callable[[str, float], Any]] = None,
     fetch_uma_status: Optional[Callable[[str], Any]] = None,
     record_market_event: Optional[Callable[[Any], None]] = None,
@@ -783,6 +783,7 @@ def build_shadow_seam(
 
     resolved_traded_fn = traded_fn or _default_traded_fn()
     seen_by_market: dict[str, set] = {}
+    market_cycles: dict[str, int] = {}
     base_inventory_fn = _make_inventory_fn(registry, Path(db_path))
 
     # What the log line reads its `up=`/`down=` counts from. Keyed by
@@ -799,6 +800,9 @@ def build_shadow_seam(
         decision taken against a position the market has already left.
         """
         seen = seen_by_market.setdefault(market.condition_id, set())
+        market_cycles[market.condition_id] = \
+            market_cycles.get(market.condition_id, 0) + 1
+        cycle = market_cycles[market.condition_id]
         try:
             # `shadow_fetch_books` is the same source the rest of this seam
             # decides against, so an injected book drives the telemetry too.
@@ -806,8 +810,9 @@ def build_shadow_seam(
             # behaves exactly as before.
             settle_market(registry, market, db_path=db_path,
                           traded_fn=resolved_traded_fn, seen=seen,
-                          book_fn=shadow_fetch_books, clob_host=clob_host)
-        except (sqlite3.Error, OSError, ValueError) as e:
+                          book_fn=shadow_fetch_books, clob_host=clob_host,
+                          cycle=cycle)
+        except (sqlite3.Error, OSError, ValueError, RuntimeError) as e:
             # Degrade, do not stop: an unsettled visit decides against a stale
             # inventory, which the next visit corrects. Raising here would take
             # the market out of the rotation entirely.
@@ -1557,11 +1562,16 @@ def _default_fetch_books() -> Callable[[str, str], dict]:
     return fetch
 
 
-def _default_traded_fn() -> Callable[[str, set], dict]:
+def _default_traded_fn() -> Callable[[str, set], Any]:
     """The live tape reader. Public endpoint, no credentials, no signer."""
-    def traded(condition_id: str, seen: set) -> dict:
-        from core_brain.markets import recent_trades
-        return recent_trades(condition_id, seen)
+    def traded(condition_id: str, seen: set) -> Any:
+        import core_brain.markets as markets
+        if getattr(markets, "recent_trades", None) is not getattr(
+                markets, "_ORIGINAL_RECENT_TRADES", None):
+            # A test substituted the dict reader: keep calling the double
+            # rather than bypassing it with the detailed reader.
+            return markets.recent_trades(condition_id, seen)
+        return markets.recent_trades_detailed(condition_id, seen)
 
     return traded
 
