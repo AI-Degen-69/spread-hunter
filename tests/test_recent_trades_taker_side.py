@@ -327,3 +327,19 @@ def test_taker_buy_mode_never_opens_the_maker_walk(paged_tape):
     # Assert
     assert out == {"tok": {0.26: 93.0}}
     assert not any(p.get("takerOnly") is False for p in paged_tape.calls)
+
+
+def test_non_list_tape_response_is_unavailable_not_empty(tape):
+    # Arrange -- the endpoint answers with a truthy non-list payload.
+    tape({"trades": [_trade("SELL", 0.26, 7.0, "0xt")]})
+
+    # Act
+    report = markets.recent_trades_detailed("0xcond", set())
+
+    # Assert -- a structural failure is unavailable (staged pages discarded
+    # for a later poll), never a proven-empty tape.
+    assert report.status == "unavailable"
+    assert report.volume_by_token_price == {}
+    assert len(report.walks) == 1
+    assert report.walks[0].status == "unavailable"
+    assert markets.recent_trades("0xcond", set()) == {}

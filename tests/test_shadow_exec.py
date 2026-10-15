@@ -641,6 +641,71 @@ def test_identical_market_visits_keep_separate_run_ids(registry):
     assert read_shadow_tape_reads(db)[0]["run_id"] == "run-b"
 
 
+def test_failed_tape_write_does_not_lose_a_measured_fill(registry, monkeypatch):
+    import sqlite3
+
+    import core_brain.shadow_exec as shadow_exec
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, read_shadow_tape_reads, record_submit,
+        settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    record_submit(
+        object(), reg, FakeMarket(), _intents()[:1], _cfg(), db_path=db,
+        book_fn=lambda _host, _token: {"bids": {0.47: 10.0}},
+    )
+    order = reg.get_active_orders()[0]
+
+    def _locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(shadow_exec, "write_shadow_tape_read", _locked)
+
+    fills = settle_market(
+        reg, FakeMarket(), db_path=db, seen=set(),
+        traded_fn=lambda _cid, _seen: _tape_report(
+            "complete", {"tok-up": {0.46: 15.0}}),
+    )
+
+    assert [(f.local_id, f.size) for f in fills] == [(order.id, 20.0)]
+    assert reg.get_all_fills() != []
+    assert read_shadow_tape_reads(db) == []
+
+
+def test_legacy_resting_rows_keep_queue_marks_on_detailed_path(registry):
+    import sqlite3
+
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, read_shadow_tape_reads, record_submit,
+        settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    record_submit(
+        object(), reg, FakeMarket(), _intents()[:1], _cfg(), db_path=db,
+        book_fn=lambda _host, _token: {"bids": {0.47: 10.0}},
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE orders SET run_id = NULL")
+        conn.commit()
+
+    settle_market(
+        reg, FakeMarket(), db_path=db, seen=set(),
+        traded_fn=lambda _cid, _seen: _tape_report("empty"),
+        book_fn=lambda _host, _token: {"bids": {0.47: 10.0}},
+    )
+
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM queue_marks").fetchone()[0] == 1
+    row = read_shadow_tape_reads(db)[0]
+    assert row["report"]["settlement"]["measurement_status"] == \
+        "no_resting_orders"
+
+
 def test_exact_price_print_leaves_the_queue_and_order_untouched(registry):
     """A print AT our own price is not a trade-through: no fill, and the
     recorded queue is unchanged. The exact-price consumption path is gone."""

@@ -628,9 +628,10 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
         r.raise_for_status()
         rows = r.json() or []
         if not isinstance(rows, list):
-            log.debug("tape response is not a list (got %s)",
-                      type(rows).__name__)
-            return staged, walk_out, info
+            # Structural failure, not an empty tape: raise so the caller
+            # marks the walk `unavailable` and discards its staged pages
+            # for a later poll, instead of committing them as `empty`.
+            raise ValueError("tape response is not a list")
         info["pages_read"] += 1
         fresh = False
         for t in rows:

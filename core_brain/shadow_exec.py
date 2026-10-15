@@ -731,20 +731,28 @@ def _write_tape_read(db_path, market, run_id, cycle, now_fn, tape_report,
 
     Shared by the measured and the two no-measurement branches so the three
     cannot drift apart: one writer, one log shape, one settlement schema.
+
+    Never raises: like the other shadow telemetry writers, a locked store or
+    an unserializable report must cost one row of evidence, never the
+    settlement it describes.
     """
-    write_shadow_tape_read(
-        db_path,
-        ts=now_fn(),
-        cycle=cycle,
-        condition_id=market.condition_id,
-        market_slug=_market_slug(market),
-        run_id=run_id,
-        status=report_status,
-        report={
-            **asdict(tape_report),
-            "settlement": settlement,
-        },
-    )
+    try:
+        write_shadow_tape_read(
+            db_path,
+            ts=now_fn(),
+            cycle=cycle,
+            condition_id=market.condition_id,
+            market_slug=_market_slug(market),
+            run_id=run_id,
+            status=report_status,
+            report={
+                **asdict(tape_report),
+                "settlement": settlement,
+            },
+        )
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        _log.warning("tape read not written: %s", exc)
+        return
     pages = sum(w.pages_read for w in tape_report.walks)
     rows = sum(w.rows_read for w in tape_report.walks)
     qual_rows = sum(w.qualifying_rows for w in tape_report.walks)
@@ -848,6 +856,20 @@ def settle_market(
         return []
 
     if is_detailed and not owned:
+        if resting and book_fn is not None:
+            # Observation still covers every resting row, including legacy
+            # rows no run owns: the marks below are the pre-decision book the
+            # exit path prices against, and skipping them would make the two
+            # tape paths behave differently.
+            _record_queue_marks(
+                db_path, market,
+                [ShadowRestingOrder(
+                    local_id=o.id, token_id=o.token_id, price=o.price,
+                    size=o.original_size, filled=_filled_size(db_path, o.id),
+                    queue_ahead=read_queue_ahead(db_path, mine_run_id, o.id),
+                ) for o in resting],
+                volume_map, book_fn, now_fn(), run_id=mine_run_id,
+                clob_host=clob_host)
         _write_tape_read(
             db_path, market, mine_run_id, cycle, now_fn, tape_report,
             report_status,
