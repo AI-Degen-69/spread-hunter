@@ -35,13 +35,22 @@ import sqlite3
 import sys
 from pathlib import Path
 
-# The rescue window: `pairs_exit_window_sec` in core_brain/config.py. Aged-out
+# Ensure repo root is importable when run as ``python scripts/rescue_exit_report.py``.
+_LIVE_ROOT = Path(__file__).resolve().parent.parent
+if str(_LIVE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_LIVE_ROOT))
+
+from core_brain.close_methods import MERGE_METHODS, SHADOW_SETTLEMENT, SINGLE_BUY_EXIT
+
+# The rescue window: `pairs_exit_window_sec` in core_brain/config.py.
 # detection is measured against it; a store carries no config, so the default
 # is stated here rather than guessed per run.
 PAIRS_EXIT_WINDOW_SEC = 900.0
 
-RESCUE_METHODS = ("single_buy_exit", "shadow_settlement")
-MERGE_METHODS = ("merge", "shadow_merge")
+# Report-specific rescue grouping (single-buy exit + shadow settlement); NOT
+# the leaf's RESCUE_METHODS -- sourced from the canonical names below.
+RESCUE_METHODS = (SINGLE_BUY_EXIT, SHADOW_SETTLEMENT)
+# MERGE_METHODS is imported from the canonical taxonomy above.
 
 # Fields Question 3 needs but the registry does not record. Listed verbatim in
 # the output so the gap is visible next to the features that do exist.
@@ -284,8 +293,9 @@ def classify_exit(reg: sqlite3.Connection, row: dict) -> str:
 
     fill_price = row["paid"]
     sold_price = row["sold"] or 0.0
-    # The route's drift trigger, from core_brain/config.py defaults: exit at
-    # max(single_buy_max_loss_usd, single_buy_max_loss_pct * fill).
+    # Historical classification boundary (dual-trigger era). The live trigger is
+    # now ONE mode per run (usd XOR pct); this classifier keeps a fixed dual-era
+    # proxy and does not track the active mode.
     threshold = max(0.045, 0.10 * fill_price)
     for ts, b in bids:
         if b > fill_price - threshold:

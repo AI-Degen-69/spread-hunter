@@ -217,15 +217,42 @@ function backendSequence() {
 }
 
 function guardrailHudVerdict() {
+  // The dropdown needs its trigger + panel present, or renderServicesDropdown
+  // returns early. Register them so the WATCHDOG row actually renders and we
+  // can read its pill class out of the panel innerHTML (#598).
+  const servicesTrigger = new FakeEl('button');
+  servicesTrigger.id = 'hud-services-pill';
+  elements.set('hud-services-pill', servicesTrigger);
+  const servicesPanel = new FakeEl('div');
+  servicesPanel.id = 'services-dropdown';
+  elements.set('services-dropdown', servicesPanel);
+
+  // Pull the WATCHDOG pill's state class out of the rebuilt dropdown rows. The
+  // row emits `<span class="pill state-<state>" id="hud-guardrail-pill">`
+  // with a status-only inner (dot + state, #602). The pre-rebuild header
+  // node is detached by the rebuild, so the row is the owner to read.
+  const dropdownGuardrailState = () => {
+    const html = servicesPanel.innerHTML;
+    const m = html.match(/pill state-([a-z]+)"\s+id="hud-guardrail-pill"/);
+    return m ? m[1] : '(no guardrail row)';
+  };
+  const dropdownGuardrailPill = () => {
+    const html = servicesPanel.innerHTML;
+    const m = html.match(/<span class="pill state-([a-z]+)" id="hud-guardrail-pill">(.*?)<\/span>\s*<span class="services-dropdown-name"/s);
+    return m ? { state: m[1], inner: m[2] } : null;
+  };
+
   const render = (health, alerts) => {
     app.renderServiceCards(
       { bot_state: 'STOPPED', services: {} },
       health,
       alerts,
     );
+    const pill = dropdownGuardrailPill();
     return {
-      state: document.getElementById('hud-guardrail-state').textContent,
-      className: document.getElementById('hud-guardrail-pill').className,
+      state: pill ? pill.state.toUpperCase() : '',
+      className: pill ? `pill state-${pill.state}` : '',
+      dropdownState: dropdownGuardrailState(),
     };
   };
   return {
@@ -235,6 +262,18 @@ function guardrailHudVerdict() {
       { alerts: [{ kind: 'TEST' }] },
     ),
     stopped: render({ running: false, age_s: null, alerts_total: 0 }, null),
+    // #598: the alert payload is empty/unavailable, but the health payload
+    // reports alerts_total. Header and dropdown must read the SAME count, so
+    // both go DEGRADED. Before the shared helper the dropdown read only the
+    // (empty) alert payload and stayed RUNNING while the header was degraded.
+    alertingViaHealthOnly: render(
+      { running: true, age_s: 3, alerts_total: 2 },
+      { alerts: [] },
+    ),
+    alertingViaHealthOnlyNoAlertsPayload: render(
+      { running: true, age_s: 3, alerts_total: 2 },
+      null,
+    ),
   };
 }
 
@@ -268,7 +307,7 @@ function enginePillVerdicts() {
     return {
       pillClass: pillEl.className,
       pillTitle: pillEl.title,
-      stateHtml: stateEl.innerHTML,
+      stateHtml: pillEl.innerHTML,
       elsewhereDisplay: elsewhereEl.style.display,
       elsewhereText: elsewhereEl.textContent,
       elsewhereTitle: elsewhereEl.title,
@@ -316,9 +355,9 @@ function enginePillVerdicts() {
     },
     other_live_runs: [
       {
-        run_id: 'ladder-live',
+        run_id: 'other-live',
         db_path: 'data/NN_shadow.db',
-        heartbeat_file: 'runtime/shadow_run_ladder-live.json',
+        heartbeat_file: 'runtime/shadow_run_other-live.json',
       },
     ],
   };
@@ -408,7 +447,7 @@ function engineHoldVerdicts() {
     app.renderScanStatePill(scanState, opts);
     return {
       pillClass: pillEl.className,
-      stateHtml: stateEl.innerHTML,
+      stateHtml: pillEl.innerHTML,
       pillTitle: pillEl.title,
     };
   };
@@ -461,7 +500,7 @@ function dbModeVerdicts() {
     };
   };
   const dead = { run_id: 'shadow-01', db_path: '/d/01_shadow.db', running: false, is_active_db: true, heartbeat_age_sec: 4800 };
-  const live = { run_id: 'ladder-live', db_path: '/d/NN_shadow.db', running: true, is_active_db: false, heartbeat_age_sec: 2 };
+  const live = { run_id: 'other-live', db_path: '/d/NN_shadow.db', running: true, is_active_db: false, heartbeat_age_sec: 2 };
   return {
     // The reported case: pointed at a store whose run died, live run elsewhere.
     deadHereLiveElsewhere: call({ db_is_production: false, shadow_runs: [dead, live] }),
@@ -547,8 +586,7 @@ function topNavVerdicts() {
   });
   const engineRunning = {
     className: enginePill.className,
-    stateHtml: engineState.innerHTML,
-    stateText: engineState.textContent,
+    stateHtml: enginePill.innerHTML,
     elsewhereDisplay: elsewhereTag.style.display,
   };
 
@@ -566,8 +604,27 @@ function topNavVerdicts() {
     elsewhereText: elsewhereTag.textContent,
   };
 
+  // #602: no scan-state payload renders UNKNOWN, status-only (no ENGINE
+  // label — the dropdown row's name column identifies the service).
+  app.renderScanStatePill(null);
+  const engineNoPayload = {
+    className: enginePill.className,
+    stateHtml: enginePill.innerHTML,
+    stateText: enginePill.textContent,
+  };
+
   app.renderDbMode({ db_mode: 'LIVE', db_is_production: true });
   const dbProd = {
+    className: dbBadge.className,
+    innerHTML: dbBadge.innerHTML,
+    textContent: dbBadge.textContent,
+  };
+
+  // #600: the LIVE badge shows the store name, exactly as the SHADOW branch
+  // does, so the two badges are consistent and the significant db name is
+  // visible instead of living only in the tooltip.
+  app.renderDbMode({ db_mode: 'LIVE', db_is_production: true, db_path: 'data/production_live.db' });
+  const dbLiveWithName = {
     className: dbBadge.className,
     innerHTML: dbBadge.innerHTML,
     textContent: dbBadge.textContent,
@@ -668,7 +725,9 @@ function topNavVerdicts() {
     scan,
     engineRunning,
     engineStalledElsewhere,
+    engineNoPayload,
     dbProd,
+    dbLiveWithName,
     masterRunning,
     toggleClasses,
     panelPlacement,

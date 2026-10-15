@@ -221,7 +221,7 @@ on the `[QUEUE]` line, and the run ends with
 `SHADOW RUN queue gate: reported=N measured=N unmeasurable=N` — `unmeasurable`
 meaning the tape could not be read, never that a queue was clear. A caller that
 builds its own seam without a flow port gets the gate **inert** and is told so at
-startup; `scripts/ladder_shadow_rehearsal.py`, which replays a recorded tape, is
+startup; a recorded-tape replay, whose only network is the resolution read, is
 deliberately one of those.
 
 ## The wiring rule that prevents contradictions

@@ -29,6 +29,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Callable, Optional
 
+from core_brain.close_methods import MERGE_METHODS, RESCUE_METHODS
 from core_brain.order_registry import (
     SIZE_EPS, CloseRecord, FillRecord, MarkoutRecord, OrderRecord, OrderRegistry,
     QuoteRecord, get_connection,
@@ -344,7 +345,7 @@ def record_submit(
     if pair_id is None:
         pair_id = f"pair-{uuid.uuid4().hex[:12]}"
 
-    # Explicit carry still wins: a replacement leg stamped by the ladder or
+    # Explicit carry still wins: a replacement leg stamped by the
     # lifecycle-escalation path joins the pair it names (#397).
     carried = {getattr(i, "pair_id", None) for i in intents} - {None}
     if len(carried) == 1:
@@ -1378,11 +1379,10 @@ def shadow_positions(registry: OrderRegistry, db_path: Path | str) -> dict[str, 
             continue
         cid = str(cr["condition_id"])
         legs = [k for k in held if k[0] == cid]
-        if cr["method"] in ("merge", "shadow_merge"):
+        if cr["method"] in MERGE_METHODS:
             # Both legs leave together at a dollar a share.
             pass
-        elif cr["method"] in ("single_buy_exit", "naked_exit",
-                                 "ladder_exit"):
+        elif cr["method"] in RESCUE_METHODS:
             want = "UP" if cr["up_price"] is not None else "DOWN"
             sold = [k for k in legs if side_of.get(k) == want]
             # An unlabelled leg cannot happen -- the exit path refuses to sell

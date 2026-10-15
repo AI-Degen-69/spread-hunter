@@ -1,30 +1,50 @@
-# Constraints & Quality Guardrails — Issue #365
+# CONSTRAINTS — #589 (archived after merge, per the #366 cleanup convention)
 
-Branch: `i365/prune-stale-local-stores-in-data-runtime-and-repor` | Issue: #365
+Branch: i589/remove-short-window-ladder | Issue: #589 | Merged: PR #599 (f4efc52)
 
-## Quality & Tests
-- **Zero regressions**: `python -m pytest -q tests/test_data_retention.py` must
-  pass cleanly before and after every task.
-- **New behavior requires tests**: cwd-independence and nested-runtime tests
-  must each fail without their change (RED) and pass with it (GREEN).
-- **Anti-cheat**: No skipped tests, no deleted assertions, no suppressions or
-  linter silencing.
-- **No new external dependencies**: Python standard library only; reuse
-  `core_brain/runtime_paths.LIVE_ROOT`.
+## Scope & File Boundaries
 
-## Safety & Invariants (must survive any change)
-- **Production registry is untouchable**: `data/orders.db` plus `-wal`/`-shm`
-  is strictly refused by `assert_not_protected_store()` and can never be
-  deleted — including via nested-scan paths, forged audit items, `rmtree`
-  descendants, or sibling cleanup.
-- **`data/price_tape.db` excluded** from deletion; `01_shadow`-style names stay
-  user-protected at classification level.
-- **Dry-run is the default**: real deletion requires explicit opt-in; the real
-  `--no-dry-run` prune on the operator tree is operator-gated — the agent runs
-  dry-run + audit only, never live deletion on the working tree.
-- **Never open `data/orders.db` for writing**; test fixtures use `tmp_path`
-  only.
+- Delete: `core_brain/ladder.py`, `scripts/ladder_probe.py`,
+  `scripts/ladder_live_books_trial.py`, `scripts/ladder_shadow_rehearsal.py`,
+  `scripts/ladder_tape_collect.py`, the nine `tests/test_ladder_*.py` suites.
+- Edit: `core_brain/config.py`, `core_brain/quotes.py`, `core_brain/markets.py`,
+  `core_brain/single_buy_saver.py`, `core_brain/close_methods.py` (writer note only),
+  `tests/test_541_audit_goldens.py` (helper inlining), the five rename-only test files +
+  `tests/js/live_state_harness.cjs`, comment-only edits in `shadow_exec.py`,
+  `shadow_run.py`, `trader_loop.py`, `statistical_analytics.py`, plus
+  `docs/agents/first-run.md`, `docs/data_inventory.md`,
+  `dashboard/static/data_analysis.js`, `docs/explanations/btc-eth-ladder-strategy.html`
+  (retirement notice only).
 
-## Performance
-- Audit must complete in seconds on the live tree (single recursive walk, no
-  double counting from aggregate dir items).
+## Must NOT change (verified survivors)
+
+- The `ladder_exit` close-method string, `LADDER_EXIT`, and `RESCUE_METHODS` membership in
+  `close_methods.py` / `kpi.py` / analytics buckets — owned by the #558-560 taxonomy chain;
+  old databases still contain these rows.
+- Order-book depth ladder code: `snapshot_ladder` (`shadow_exec.py:1075-1099` and callers).
+- Risk-sizing ladder code and prose: `config.py:127,840`, `risk.py:112`.
+- `_route_pair` as a function — only its ladder selection went (refill tests depend on it).
+- `docs/ideas/short-window-ladder.md`, issue #325, `docs/runs/*`, `tasks/*` history.
+
+## Quality bar
+
+- Zero regressions: every targeted suite listed per task in the plan must be green after
+  its task. The full `pytest` suite is the CI merge gate (Ubuntu + Windows) — not run
+  locally during review stations.
+- The inlined `mean_ci90` / `_prop_ci90_diff` keep their exact numeric behavior (the
+  `statistical_analytics.py` equivalents give different results — do not substitute).
+- Renames must preserve every existing assertion; comment-only files must not change
+  behavior.
+
+## Anti-cheat
+
+- No skipping, disabling, or deleting assertions to go green.
+- No test file may be emptied to avoid a repair — inline or migrate, never drop.
+- No new external dependencies.
+
+## Merge discipline
+
+- Land behind the #558-560 taxonomy chain; the PR body states the merge order.
+- On `close_methods.py` conflict: keep the taxonomy chain's version, then re-apply the
+  legacy-writer note.
+- Never touch `data/orders.db`; no venue-reaching commands in this branch.

@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Any, Optional
 from contextlib import closing
 
+from core_brain.close_methods import (
+    MERGE_METHODS,
+    TAKER_RESOLVED_METHODS,
+    RESCUE_METHODS as SINGLE_BUY_EXIT_METHODS,
+    BOOKKEEPING_METHODS as NON_TRADE_CLOSE_METHODS,
+)
 from core_brain.statistical_analytics import (
     build as build_statistical_analytics,
     ci_critical_value,
@@ -821,14 +827,13 @@ def _funnel_from_pipeline(
     }
 
 
-# The two spellings of a completed pair: `merge` is what the venue verb
-# writes, `shadow_merge` what a rehearsal writes. Both retire two legs at once.
-MERGE_METHODS = ("merge", "shadow_merge")
+# Close-method vocabulary now comes from the canonical leaf (core_brain/close_methods.py),
+# imported above: MERGE_METHODS / SINGLE_BUY_EXIT_METHODS / NON_TRADE_CLOSE_METHODS.
+# The two spellings of a completed pair: `merge` is what the venue verb writes,
+# `shadow_merge` what a rehearsal writes. Both retire two legs at once.
 # Bookkeeping rows the account sweep writes against a market. They are not an
 # exit the strategy chose, so they belong to no execution stage.
-NON_TRADE_CLOSE_METHODS = ("venue_sync",)
 # Methods representing single-buy liquidation or rescue exits.
-SINGLE_BUY_EXIT_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")
 # The stages, in the order a leg travels them.
 EXECUTION_STAGES = (
     ("quoted", "Quoted"),
@@ -1114,9 +1119,8 @@ PESSIMISTIC_CONVERSION_GAS = 0.0
 # at the ask, or a naked / single-buy leg sold through the book. These are the
 # rows whose recorded exit is the optimistic end of a taker, so the pessimistic
 # variant recosts them. Everything else (a non-shadow plain close) never
-# depended on an optimistic ask and is recosted at zero extra.
-TAKER_RESOLVED_METHODS = ("shadow_merge", "single_buy_exit", "naked_exit",
-                               "ladder_exit")
+# depended on an optimistic ask and is recosted at zero extra. The name now
+# comes from the canonical leaf (core_brain/close_methods.py), imported above.
 
 
 def _pessimistic_close_return(closes_row: dict, tick: float, gas: float) -> Optional[float]:
@@ -1491,13 +1495,13 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         for c in m_closes:
             method = c.get("method")
             sh = float(c.get("shares") or 0.0)
-            if method in ("merge", "shadow_merge"):
+            if method in MERGE_METHODS:
                 up_sh = max(0.0, up_sh - sh)
                 dn_sh = max(0.0, dn_sh - sh)
                 up_cost = max(0.0, up_cost - float(c.get("up_cost_removed") or 0.0))
                 dn_cost = max(0.0, dn_cost - float(c.get("dn_cost_removed") or 0.0))
                 continue
-            if method not in ("single_buy_exit", "naked_exit", "ladder_exit"):
+            if method not in SINGLE_BUY_EXIT_METHODS:
                 continue
             if c.get("up_price") is not None:
                 up_sh = max(0.0, up_sh - sh)
@@ -2192,7 +2196,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         # Exit-shape counts (merges vs one-sided dumps) feed the card's details
         # line, which owns the "all exits were naked" warning.
         _merge_closes = sum(1 for c in closes if c.get("method") == "merge")
-        _single_exits = sum(1 for c in closes if c.get("method") in ("single_buy_exit", "naked_exit", "ladder_exit"))
+        _single_exits = sum(1 for c in closes if c.get("method") in SINGLE_BUY_EXIT_METHODS)
 
         run_profitability = {
             "run_id": active_run_id,

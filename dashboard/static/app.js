@@ -327,8 +327,9 @@ function renderMarketScanPill(status, kpi, opts) {
   const v = marketScanState(status, kpi, opts);
   el.className = 'pill state-' + v.state + ' mono';
   el.title = v.title;
-  const age = (v.ageSec !== null && v.ageSec !== undefined) ? '· ' + fmtAge(v.ageSec) : '';
-  el.innerHTML = renderPillHtml('SCAN', v.state.toUpperCase(), age, v.state);
+  // Status only (#602): the dropdown row's name column identifies the service,
+  // so the pill carries just the colored dot + state, no label and no age.
+  el.innerHTML = renderPillHtml(null, v.state.toUpperCase(), '', v.state);
 }
 
 /* ── Backend-contact watchdog (DESIGN.md Risk 2) ──
@@ -1534,7 +1535,9 @@ function demoSwitcherRow() {
     ? 'Return this page to the live store (the demo registry is bogus data).'
     : 'Load the demo registry: bogus orders, trades and metrics to eyeball '
       + 'every table and card. Read-only -- START stays disabled while it is loaded.';
+  const demoState = readingDemo ? 'LOADED' : 'AVAILABLE';
   return `<div class="db-run-row db-demo-row">
+      <span class="pill state-stopped"><span class="pill-label">DEMO</span> <span class="pill-value">${demoState}</span></span>
       <span class="db-run-name">Demo registry (bogus data)</span>
       <button class="db-run-switch db-demo-load" title="${esc(title)}">${label}</button>
     </div>`;
@@ -1611,9 +1614,9 @@ async function renderRunSwitcher() {
     const btn = isThis
       ? `<span class="db-run-current">THIS PAGE</span>`
       : `<button class="db-run-switch" data-db="${esc(r.db_path)}">SWITCH</button>`;
+    const runState = r.running === true ? 'running' : 'stopped';
     return `<div class="db-run-row${isThis ? ' current' : ''}">
-        <span class="db-run-name mono">${esc(label)}</span>${portLink}
-        <span class="db-run-state state-${r.running === true ? 'running' : 'stopped'}">${state}${age ? ' · ' + age : ''}</span>
+        <span class="pill state-${runState}"><span class="pill-label">${esc(label)}</span> <span class="pill-value">${state}</span>${age ? ` <span class="pill-detail">${age}</span>` : ''}</span>${portLink}
         ${btn}
       </div>`;
   });
@@ -1667,8 +1670,12 @@ function renderDbMode(status) {
 
   const path = status.db_path || '';
   if (lastDbIsProduction) {
+    // The store name is significant information (#600): show it here exactly as
+    // the SHADOW branch does, so LIVE and SHADOW badges are consistent.
+    const fileName = path.split(/[\\/]/).pop();
+    const detail = fileName ? `· ${fileName}` : '';
     el.className = 'pill mode-live mono';
-    el.innerHTML = renderPillHtml('DB', 'LIVE');
+    el.innerHTML = renderPillHtml('DB', 'LIVE', detail);
     el.title = `Reading the production registry: ${path}`;
   } else {
     // Not a cosmetic state. Every number on the page is a rehearsal, and START
@@ -1757,6 +1764,16 @@ const SERVICE_DEFS = [
  * service the card grid does not. The state vocabulary is the same as the
  * cards' (statePillHtml): RUNNING/STOPPED, and UNKNOWN only when a telemetry
  * read genuinely failed. */
+
+/* The guardrail alert count, read one way by every surface (#598). The alert
+ * payload is authoritative when present; the health payload's alerts_total is
+ * the fallback when the alert payload is empty or absent. The header pill and
+ * the dropdown row MUST read the same count or they paint different states for
+ * the same guardrail. */
+function guardrailAlertCount(guardrailHealth, guardrailAlerts) {
+  return guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
+}
+
 function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, activeCount, overallState) {
   const trigger = document.getElementById('hud-services-pill');
   const panel = document.getElementById('services-dropdown');
@@ -1772,11 +1789,15 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       const telemetryError = guardrailHealth?.telemetry_error;
       const healthKnown = guardrailHealth !== null && guardrailHealth !== undefined && !telemetryError;
       const age = typeof guardrailHealth?.age_s === 'number' ? guardrailHealth.age_s : null;
-      const hasAlert = (guardrailAlerts?.alerts?.length > 0);
+      // One alert count shared with the header (#598): the header falls back to
+      // guardrailHealth.alerts_total when the alert payload is empty, so the
+      // dropdown must read the same count or it can show RUNNING while the
+      // header paints state-degraded.
+      const alertsTotal = guardrailAlertCount(guardrailHealth, guardrailAlerts);
+      const hasAlert = alertsTotal > 0;
       state = !healthKnown ? 'unknown'
         : hasAlert ? 'degraded'
         : (running ? stateKey(true, age, cadenceThresholds(5)) : stateKey(false, age));
-      const alertsTotal = guardrailHealth?.alerts_total || 0;
       meta = telemetryError ? 'telemetry down'
         : (hasAlert ? `${alertsTotal} alert${alertsTotal === 1 ? '' : 's'}` : 'auto-watch');
     } else if (def.key === 'shadow') {
@@ -1786,14 +1807,14 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       pid = sr?.pid;
       if (!isShadow) {
         state = 'stopped';
-        meta = 'shadow only (live uses venue engine)';
+        meta = '';
       } else if (running) {
         state = 'running';
         const elapsed = sr?.elapsed_sec ? fmtStopwatch(sr.elapsed_sec) : '';
-        meta = pid ? `pid ${pid}${elapsed ? ` · ${elapsed}` : ''}` : (elapsed || 'running');
+        meta = pid ? `pid ${pid}${elapsed ? ` · ${elapsed}` : ''}` : (elapsed || '');
       } else {
         state = 'stopped';
-        meta = sr?.ended ? 'rehearsal ended' : 'stopped';
+        meta = sr?.ended ? 'rehearsal ended' : '';
       }
     } else {
       if (def.key === 'filter') pillId = ' id="market-scan-pill"';
@@ -1803,18 +1824,26 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
       pid = svc?.pid;
       state = running ? 'running' : 'stopped';
       const uptime = typeof svc?.uptime_sec === 'number' ? `${Math.round(svc.uptime_sec)}s up` : '';
+      // Meta is genuine detail only (#602): pid/uptime when running, empty when
+      // not. It never echoes the pill's state word.
       if (def.liveOnly && isShadow) {
-        meta = 'live only (shadow uses in-process client)';
+        meta = '';
       } else if (running) {
-        meta = uptime ? (pid ? `pid ${pid} · ${uptime}` : uptime) : (pid ? `pid ${pid}` : 'running');
+        meta = uptime ? (pid ? `pid ${pid} · ${uptime}` : uptime) : (pid ? `pid ${pid}` : '');
       } else {
-        meta = 'stopped';
+        meta = '';
       }
     }
-    const dot = `<span class="pulse-dot ${state === 'running' ? 'active' : ''}"></span>`;
-    const label = state.toUpperCase();
-    return `<div class="services-dropdown-row">
-      <span class="pill state-${state}"${pillId}>${dot}<span class="pill-label">${esc(label)}</span></span>
+    // Live-only/shadow-only context rides on the row tooltip, not the visible
+    // meta slot: full sentences wrap and squeeze the name column (#586).
+    let rowTitle = def.name;
+    if (def.liveOnly && isShadow) rowTitle += ' — live only (shadow uses in-process client)';
+    else if (def.key === 'shadow' && !isShadow) rowTitle += ' — shadow only (live uses venue engine)';
+    // Status only (#602): the name column identifies the service, so the pill
+    // carries just the colored dot + state — no short-name label.
+    const pillInner = renderPillHtml({ value: state.toUpperCase(), dotState: state });
+    return `<div class="services-dropdown-row" title="${esc(rowTitle)}">
+      <span class="pill state-${state}"${pillId}>${pillInner}</span>
       <span class="services-dropdown-name" title="${esc(def.name)}">${esc(def.name)}</span>
       <span class="services-dropdown-meta">${esc(meta)}</span>
     </div>`;
@@ -1822,7 +1851,12 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
 
   const head = `<div class="services-dropdown-head"><span>Service Telemetry</span><span>${activeCount} active${overallState ? ' · ' + esc(overallState.toUpperCase()) : ''}</span></div>`;
   const foot = `<div class="services-dropdown-foot">Full controls on the Live Operations tab</div>`;
-  const telemetryPillIds = ['hud-guardrail-pill', 'market-scan-pill', 'scan-state-pill', 'hud-shadow-pill'];
+  // SCAN and ENGINE pills are driven live by their own renderers
+  // (renderMarketScanPill, renderScanStatePill). Swap those two back in so the
+  // rebuild never clobbers their fresh verdicts. Every other row's pill is
+  // owned here and must NOT be preserved — preserving hud-shadow-pill froze it
+  // on the static UNKNOWN fallback and hid the real shadow_run state.
+  const telemetryPillIds = ['market-scan-pill', 'scan-state-pill'];
   const existingTelemetryPills = telemetryPillIds
     .map(id => [id, panel.querySelector ? panel.querySelector(`#${id}`) : null])
     .filter(([, node]) => node);
@@ -1896,7 +1930,6 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const masterIndicator = document.getElementById('master-status-indicator');
   const masterToggle = document.getElementById('btn-master-toggle');
   const servicesPill = document.getElementById('hud-services-pill');
-  const guardrailPill = document.getElementById('hud-guardrail-pill');
 
   const anyServiceRunning = anyExecutionServiceRunning;
 
@@ -1907,7 +1940,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   if (guardrailHealth?.running) activeCount++;
   if (isShadow && status?.shadow_run?.running && !status?.shadow_run?.ended) activeCount++;
 
-  const alertsCount = guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
+  const alertsCount = guardrailAlertCount(guardrailHealth, guardrailAlerts);
   const guardrailTelemetryError = guardrailHealth?.telemetry_error || guardrailAlerts?.telemetry_error;
   const guardrailKnown = guardrailHealth !== null && guardrailHealth !== undefined;
   let guardrailState = 'unknown';
@@ -1996,8 +2029,6 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   // Status pills use the same live-state vocabulary as every service card.
   const hudServicesState = document.getElementById('hud-services-state');
   const hudServicesSub = document.getElementById('hud-services-sub');
-  const hudGuardrailState = document.getElementById('hud-guardrail-state');
-  const hudGuardrailSub = document.getElementById('hud-guardrail-sub');
 
   if (servicesPill) servicesPill.className = `pill state-${servicesState} mono services-pill-trigger`;
   if (hudServicesState) hudServicesState.textContent = servicesState.toUpperCase();
@@ -2011,13 +2042,10 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     }
   }
 
-  if (guardrailPill) guardrailPill.className = `pill state-${guardrailState} mono`;
-  if (hudGuardrailState) hudGuardrailState.textContent = guardrailState.toUpperCase();
-  if (hudGuardrailSub) {
-    const alertsTotal = guardrailHealth?.alerts_total || 0;
-    hudGuardrailSub.textContent = guardrailState === 'unknown'
-      ? 'telemetry unavailable' : `${alertsTotal} alerts`;
-  }
+  // The guardrail pill is owned by renderServicesDropdown (above), which
+  // rebuilds it with its own dot + state. The pre-rebuild node captured at the
+  // top of this function is detached after that rebuild, so writing its
+  // className here would be a no-op (#602).
   if (masterToggle) {
     // A latched shadow launch holds the busy look past the HTTP round-trip,
     // until the run reports back (or the boot window lapses).
@@ -8868,8 +8896,6 @@ function engineProvenanceText(scanState) {
 function renderScanStatePill(scanState, opts) {
   const headerPill = document.getElementById('scan-state-pill');
   if (!headerPill) return;
-  const stateText = document.getElementById('scan-engine-state');
-  if (!stateText) return;
   const elsewhereTag = document.getElementById('scan-engine-elsewhere');
 
   // Render scan state pill — canonical live-state vocabulary (DESIGN.md).
@@ -8890,16 +8916,9 @@ function renderScanStatePill(scanState, opts) {
     const telemetryError = scanState.telemetry_error;
     const state = telemetryError ? 'unknown' : scanPillState(raw, effHbAge, scanState.cadence_sec, scanState.stall_reason);
     headerPill.className = 'pill state-' + state + ' mono';
-    const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
-      : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
-      : '';
-    const formattedAge = formatHeartbeatAge(effHbAge);
-    const age = (state !== 'stopped' && state !== 'unknown' && formattedAge)
-      ? ' · ' + formattedAge : '';
-    // Write the verdict into the inner state span only: overwriting the pill's
-    // own innerHTML would erase the ENGINE label that names this measurement.
-    stateText.className = 'pill-value';
-    stateText.innerHTML = dot + esc(state.toUpperCase() + age);
+    // Status only (#602): the dropdown row's name column identifies the service,
+    // so the pill carries just the colored dot + state, no label and no age.
+    headerPill.innerHTML = renderPillHtml({ value: state.toUpperCase(), dotState: state });
     const rawSec = (effHbAge !== null && effHbAge !== undefined) ? Math.max(0, Math.round(effHbAge)) : null;
     if (telemetryError) {
       headerPill.title = `Telemetry unavailable: ${telemetryError.error || 'cycle ring read failed'}`;
@@ -8947,9 +8966,10 @@ function renderScanStatePill(scanState, opts) {
     }
   } else {
     // No scan-state payload: the loop's state is unknown, not stopped.
+    // Status only (#602): no ENGINE label — the dropdown row's name column
+    // identifies the service.
     headerPill.className = 'pill state-unknown mono';
-    stateText.className = 'pill-value';
-    stateText.textContent = 'UNKNOWN';
+    headerPill.innerHTML = renderPillHtml({ value: 'UNKNOWN', dotState: 'unknown' });
     headerPill.title = backendStale
       ? 'Quote engine state unknown: current read did not land and the backend contact is lost.'
       : 'Quote engine state unknown: no heartbeat payload';

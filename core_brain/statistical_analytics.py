@@ -86,24 +86,18 @@ import statistics
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Sequence
 
-# Merge methods, mirroring `registry_state.MERGE_CLOSE_METHODS`. A merged pair
-# is the strategy's own exit; anything else unwound some other way, and the
-# distribution chart splits the two.
-MERGE_METHODS = ("merge", "shadow_merge")
+from core_brain.close_methods import (
+    BOOKKEEPING_METHODS as EXCLUDED_METHODS,
+    MERGE_METHODS,
+    RESCUE_METHODS,
+)
 
-# The single-buy exits: a leg whose partner never filled, sold back through the
-# book. Mirrors `kpi.SINGLE_BUY_EXIT_METHODS`,
-# `statistical_validation_run.artifacts.SINGLE_BUY_EXIT_METHODS` and
-# `ladder.LADDER_EXIT_METHODS`, and shares `artifacts.rescue_stats`'
-# merges-plus-exits denominator. Declared rather than imported because `kpi`
-# imports THIS module, so the reverse import is a cycle; the copies are pinned
-# against each other in `tests/test_fill_path_analytics.py`.
-RESCUE_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")
-
-# Bookkeeping rows the account sweep writes against a market. Nothing was sold
-# and no position was lost, so they belong to no path. Mirrors
-# `kpi.NON_TRADE_CLOSE_METHODS`.
-EXCLUDED_METHODS = ("venue_sync",)
+# Merge methods, rescue exits, and bookkeeping rows are single-sourced from the
+# canonical leaf (core_brain/close_methods.py), imported above as MERGE_METHODS
+# / RESCUE_METHODS / EXCLUDED_METHODS. They were local copies only because
+# importing them from `kpi` was a cycle (`kpi` imports this module); the leaf
+# dissolves that. A merged pair is the strategy's own exit; a rescue is a leg
+# sold back through the book; bookkeeping rows sold nothing and lost no position.
 
 # Zero-loss guard for the ratio denominators, mirroring `kpi.pnl_by_fill_path`. A booked
 # loss a hair away from zero has no share to divide into, and the float noise around a
@@ -124,8 +118,8 @@ OVERSHOOT_BAD_ABOVE = 1.0
 
 # The assumed stop reference for a rescue close that recorded no `trigger_bid`. It is an
 # ASSUMPTION, not an observed price: it equals the system default in `core_brain/config.py`
-# (`single_buy_max_loss_usd = 0.04`, promoted 2026-10-12), a per-share loss limit that
-# profile presets move (0.030-0.065). Every figure derived from it is tagged
+# (`stop_loss_trigger_usd_cents = 4.0` = $0.04, promoted 2026-10-12), a per-share loss
+# limit that profile presets move (3.0-6.5 cents). Every figure derived from it is tagged
 # `assumed_offset` and counted apart from the recorded ones.
 STOP_OFFSET_FALLBACK = 0.04
 
@@ -325,7 +319,7 @@ def break_even_rescue_rate(merge_mean: Optional[float],
     where every resolution is a rescue can never break even.
 
     No stop-offset constant is involved, deliberately. `hard_stop_bid` is an
-    absolute bid floor and `single_buy_max_loss_usd` is a per-profile per-share
+    absolute bid floor and `stop_loss_trigger_usd_cents` is a per-profile per-share
     limit, so a constant here would drift away from execution; the realized
     close dollars already contain the exit that actually filled.
 
@@ -529,7 +523,7 @@ def _stop_reference(close: Any, entry: Optional[float],
     """The bid the stop intended to exit at, and where that bid came from.
 
     `trigger_bid` is the recorded bid that fired the stop. The lifecycle hard stop
-    and both `_route_pair` exits (adverse drift, ladder timer) write it, so the
+    and both `_route_pair` exits (adverse drift, grace timer) write it, so the
     remaining rescue routes fall back to `entry - STOP_OFFSET_FALLBACK`,
     which is an assumption and is tagged as one.
 

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One clear stop-loss — practice matches real</title>
+<style>
+:root { --ink:#eaf1f6; --muted:#9aabb8; --bg:#0b1117; --panel:#121c25; --panel-2:#172530;
+--line:#29404d; --accent:#f4b860; --accent-ink:#2a1a05; --good:#55d6c2; --shadow:0 20px 55px rgba(0,0,0,.28); }
+* { box-sizing:border-box }
+body { margin:0; color:var(--ink); background:var(--bg); font:16px/1.65 "Segoe UI",Tahoma,sans-serif }
+main { max-width:820px; margin:auto; padding:44px 20px 70px }
+h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .4rem }
+.lede { font-size:1.12rem; margin:0 0 1.6rem; max-width:64ch }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:26px; margin-top:24px; box-shadow:var(--shadow) }
+.panel h3 { margin:0 0 .5rem; font-size:1rem }
+.panel p { margin:.25rem 0; font-size:.92rem }
+.figure { border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--panel-2) }
+.figure-label { font-size:.7rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); padding:.9rem 1rem 0 }
+.figure-controls { display:flex; gap:.9rem; align-items:center; padding:.7rem 1rem; flex-wrap:wrap }
+.ctrl-btn { font-size:.8rem; padding:.45rem 1rem; border-radius:9px; border:1px solid var(--line); background:transparent; color:var(--ink); cursor:pointer }
+.ctrl-btn.active { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:700 }
+input[type=range] { accent-color:var(--accent); }
+.slider-row { display:flex; align-items:center; gap:.7rem; font-size:.85rem; color:var(--muted); flex:1 }
+.slider-row input { flex:1; min-width:130px }
+.slider-val { color:var(--ink); font-weight:700; min-width:5ch; text-align:right }
+.bar-wrap { padding:.2rem 1rem .3rem }
+.bar { position:relative; height:26px; background:#0e1720; border:1px solid var(--line); border-radius:8px; overflow:hidden }
+.bar-fill { position:absolute; left:0; top:0; bottom:0; width:33%; background:var(--good); transition:width .12s, background .12s }
+.bar-fill.cut { background:var(--accent) }
+.bar-stop { position:absolute; top:0; bottom:0; width:3px; background:var(--ink); left:33% }
+.bar-legend { display:flex; justify-content:space-between; font-size:.72rem; color:var(--muted); padding:.35rem 1rem .7rem }
+.cards { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:.3rem 1rem 1rem }
+@media(max-width:620px){ .cards{grid-template-columns:1fr} }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; text-align:center }
+.card .who { font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted) }
+.card .dec { font-size:1.25rem; font-weight:800; margin:.45rem 0 .2rem }
+.card .why { font-size:.82rem; color:var(--muted) }
+.card.cut { border-color:var(--accent) } .card.cut .dec { color:var(--accent) }
+.card.hold { border-color:var(--good) } .card.hold .dec { color:var(--good) }
+.figure-caption { font-size:.8rem; color:var(--muted); padding:.7rem 1rem .9rem; border-top:1px solid var(--line) }
+.callout { border-left:3px solid var(--accent); background:rgba(255,255,255,.04); padding:1rem 1.2rem; border-radius:0 8px 8px 0; margin-top:24px }
+.callout h3 { margin:0 0 .4rem; font-size:1rem }
+.callout p { margin:.35rem 0; font-size:.92rem }
+.note { font-size:.85rem; color:var(--muted) }
+.links { font-size:.9rem; margin-top:1.4rem }
+.links a { color:var(--accent); text-decoration:none; font-weight:600 }
+code { background:rgba(255,255,255,.07); padding:.1rem .35rem; border-radius:5px; font-size:.85em }
+@media(prefers-reduced-motion:reduce){ *{transition:none!important} }
+</style>
+</head>
+<body>
+<main>
+  <h1>One clear stop-loss — practice matches real</h1>
+  <p class="lede">When the bot ends up holding just one side of a two-sided bet, it now cuts the loss on a single rule you choose — and a practice run makes the exact same call as a real one.</p>
+
+  <div class="panel">
+    <div class="figure">
+      <div class="figure-label">Try it — drag the price drop, pick a rule</div>
+      <div class="figure-controls">
+        <button class="ctrl-btn active" id="mode-usd">Dollar stop</button>
+        <button class="ctrl-btn" id="mode-pct">Percent stop</button>
+      </div>
+      <div class="figure-controls" style="padding-top:0">
+        <div class="slider-row">
+          <span>Price has fallen</span>
+          <input id="drop" type="range" min="0" max="12" step="0.5" value="3">
+          <span class="slider-val" id="drop-v">3¢</span>
+        </div>
+      </div>
+      <div class="figure-controls" style="padding-top:0">
+        <div class="slider-row">
+          <span id="stop-label">Cut the loss at a fall of</span>
+          <input id="stop" type="range" min="1" max="8" step="0.5" value="4">
+          <span class="slider-val" id="stop-v">4¢</span>
+        </div>
+      </div>
+      <div class="bar-wrap">
+        <div class="bar">
+          <div class="bar-fill" id="fill"></div>
+          <div class="bar-stop" id="stopmark"></div>
+        </div>
+      </div>
+      <div class="bar-legend"><span>entry</span><span id="dropread">3¢ down (6%)</span><span>12¢ down</span></div>
+      <div class="cards">
+        <div class="card hold" id="card-practice">
+          <div class="who">Practice run</div>
+          <div class="dec" id="dec-practice">Holding</div>
+          <div class="why" id="why-practice">Not far enough yet</div>
+        </div>
+        <div class="card hold" id="card-real">
+          <div class="who">Real run</div>
+          <div class="dec" id="dec-real">Holding</div>
+          <div class="why" id="why-real">Not far enough yet</div>
+        </div>
+      </div>
+      <div class="figure-caption">Both runs read the same single rule — they always agree. Only how the trade is actually filled differs between practice and real. (Example assumes a leg bought at 50¢, so 4¢ down ≈ 8%.)</div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <h3>What changed</h3>
+    <p><strong>Before:</strong> two rules watched at once — a dollar rule <em>and</em> a percent rule. Nobody could tell which would fire, and a practice run could disagree with a real one.</p>
+    <p><strong>Now:</strong> exactly one rule is active per run. You pick dollar or percent. Practice and real always decide the same way.</p>
+    <p class="note">The dollar number is simply <em>how much room before cutting</em>: a bigger number means the bot waits longer (and can lose more); a smaller one cuts sooner. The named settings just pick a room size — "conservative" cuts the earliest (3¢ of room), "aggressive" gives the most room (6.5¢).</p>
+  </div>
+
+  <div class="panel">
+    <h3>See it in your setup</h3>
+    <p>Open your trading settings and set the stop mode to <strong>percent</strong> (the setting <code>HUNTER_STOP_LOSS_MODE</code>), then start a practice session. Watch a naked leg: it now holds or cuts based on the percent drop — the same way a real run would. Switch it back to <strong>dollar</strong> to use the cents rule.</p>
+    <p class="note">No screen for this one — it runs inside the trader. Verified automatically by the project's checks (one-rule, practice-matches-real, and tunable), and the full test suite passed on the change.</p>
+  </div>
+
+  <div class="links">
+    <a href="https://github.com/AI-Degen-69/spread-hunter/issues/573">Issue #573</a> ·
+    <a href="https://github.com/AI-Degen-69/spread-hunter/pull/593">PR #593 — merged</a>
+  </div>
+</main>
+<script>
+(function(){
+  var entry = 50;
+  var mode = "usd";
+  var dropEl = document.getElementById("drop");
+  var stopEl = document.getElementById("stop");
+  var dropV = document.getElementById("drop-v");
+  var stopV = document.getElementById("stop-v");
+  var stopLabel = document.getElementById("stop-label");
+  var fill = document.getElementById("fill");
+  var stopmark = document.getElementById("stopmark");
+  var dropread = document.getElementById("dropread");
+  var modeUsd = document.getElementById("mode-usd");
+  var modePct = document.getElementById("mode-pct");
+
+  function setMode(m){
+    mode = m;
+    modeUsd.classList.toggle("active", m === "usd");
+    modePct.classList.toggle("active", m === "pct");
+    if (m === "usd") {
+      stopEl.min = 1; stopEl.max = 8; stopEl.step = 0.5; stopEl.value = 4;
+      stopLabel.textContent = "Cut the loss at a fall of";
+    } else {
+      stopEl.min = 2; stopEl.max = 20; stopEl.step = 1; stopEl.value = 10;
+      stopLabel.textContent = "Cut the loss at a fall of";
+    }
+    update();
+  }
+
+  function update(){
+    var drop = parseFloat(dropEl.value);
+    var stop = parseFloat(stopEl.value);
+    var dropPct = drop / entry * 100;
+    var cut;
+    if (mode === "usd") { cut = drop >= stop; stopV.textContent = stop + "¢"; }
+    else { cut = dropPct >= stop; stopV.textContent = stop + "%"; }
+    dropV.textContent = drop + "¢";
+    dropread.textContent = drop + "¢ down (" + dropPct.toFixed(0) + "%)";
+    var stopCentsBar = (mode === "usd") ? stop : (stop / 100 * entry);
+    var stopPctBar = Math.min(100, stopCentsBar / 12 * 100);
+    var dropPctBar = Math.min(100, drop / 12 * 100);
+    fill.style.width = dropPctBar + "%";
+    fill.classList.toggle("cut", cut);
+    stopmark.style.left = stopPctBar + "%";
+    var dec = cut ? "Cutting the loss" : "Holding";
+    var why = cut ? "The fall hit your limit" : "Not far enough yet";
+    ["practice", "real"].forEach(function(w){
+      var card = document.getElementById("card-" + w);
+      document.getElementById("dec-" + w).textContent = dec;
+      document.getElementById("why-" + w).textContent = why;
+      card.classList.toggle("cut", cut);
+      card.classList.toggle("hold", !cut);
+    });
+  }
+
+  dropEl.addEventListener("input", update);
+  stopEl.addEventListener("input", update);
+  modeUsd.addEventListener("click", function(){ setMode("usd"); });
+  modePct.addEventListener("click", function(){ setMode("pct"); });
+  setMode("usd");
+})();
+</script>
+</body>
+</html>

@@ -16,6 +16,7 @@ _LIVE_ROOT = Path(__file__).resolve().parent.parent
 if str(_LIVE_ROOT) not in sys.path:
     sys.path.insert(0, str(_LIVE_ROOT))
 
+from core_brain.close_methods import NAKED_EXIT, SINGLE_BUY_EXIT
 from core_brain.kpi import required_sample_size
 
 
@@ -506,7 +507,7 @@ def analyze_paired_depth(
                 limitations.append(f"{label} close {close['id']} has no finite realized PnL")
                 continue
             sums[cluster] = sums.get(cluster, 0.0) + float(pnl)
-            if close.get("method") in {"single_buy_exit", "naked_exit"}:
+            if close.get("method") in (SINGLE_BUY_EXIT, NAKED_EXIT):
                 basis = close.get("cost_basis")
                 if basis is None or not math.isfinite(float(basis)) or float(basis) <= 0:
                     limitations.append(
@@ -1014,7 +1015,7 @@ def analyze_paired_admission(
         for close in arm["closes"]:
             if not common_start <= float(close["ts"]) <= common_end:
                 continue
-            if close.get("method") in {"single_buy_exit", "naked_exit"}:
+            if close.get("method") in (SINGLE_BUY_EXIT, NAKED_EXIT):
                 pnl = close.get("realized_pnl")
                 if pnl is None or not math.isfinite(float(pnl)):
                     limitations.append(

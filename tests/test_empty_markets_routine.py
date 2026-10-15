@@ -2,21 +2,19 @@
 
 `markets_fn` returning `[]` means two different things depending on who asked.
 The live stack's market filter returning nothing is worth a warning: the ranker
-found nothing that cycle and the operator should know. The ladder trial asks
-for markets inside a 30-second open window out of a 5-minute series, so it is
-empty ~90% of the time by construction -- logging that as a warning filled the
-trial's stderr with one line per rotation for four hours and read as a fault.
-It cost a real diagnosis: two readings of that log concluded the market feed
-had died while the feed was returning 168 upcoming markets.
+found nothing that cycle and the operator should know. A caller whose universe
+is empty by construction (a query inside a narrow window) is different: logging
+that as a warning fills stderr with one line per rotation and reads as a fault.
+It cost a real diagnosis once: two readings of such a log concluded the market
+feed had died while the feed was returning 168 upcoming markets.
 
 Only the caller knows which contract it holds, so the caller declares it:
-`markets_fn_empty_is_routine` on the seam, set by the ladder trial.
+`markets_fn_empty_is_routine` on the seam.
 """
 from __future__ import annotations
 
 import logging
 
-import pytest
 
 from core_brain import trader_loop
 from core_brain.trader_loop import VenueSeam
@@ -66,7 +64,7 @@ def _levels(caplog) -> list[str]:
 
 def test_an_empty_refresh_warns_by_default(caplog, monkeypatch):
     # The live stack's filter finding nothing is a real signal. This default
-    # must not be relaxed to make the ladder trial quiet.
+    # must not be relaxed to quieten an expected emptiness.
     caplog.set_level(logging.DEBUG, logger=_LOOP_LOGGER)
     _run_empty(monkeypatch, _seam())
     assert _levels(caplog) == ["WARNING"]
@@ -94,34 +92,3 @@ def test_the_warning_default_still_names_what_it_kept(caplog, monkeypatch):
     _run_empty(monkeypatch, _seam())
     msg = [r.getMessage() for r in caplog.records if "no markets" in r.getMessage()][0]
     assert "keeping the previous 0" in msg
-
-
-# ── the ladder trial is the caller that declares it routine ────────────────
-
-def test_the_live_books_trial_declares_an_empty_refresh_routine():
-    from scripts import ladder_live_books_trial as trial
-
-    captured = {}
-    import core_brain.shadow_run as shadow_run
-
-    real = shadow_run.run_shadow
-
-    def spy(**kwargs):
-        captured.update(kwargs)
-        raise SystemExit(0)  # the run is not what this test exercises
-
-    shadow_run.run_shadow = spy
-    try:
-        with pytest.raises(SystemExit):
-            trial.run_trial(
-                series_slugs=["btc-up-or-down-5m"],
-                gamma_host="https://example.invalid",
-                db_path="data/NN_shadow_probe.db",
-                out_path=None,
-                minutes=1.0, budget_usd=5.0, open_window_sec=30.0,
-                max_markets=10,
-            )
-    finally:
-        shadow_run.run_shadow = real
-
-    assert captured.get("markets_fn_empty_is_routine") is True

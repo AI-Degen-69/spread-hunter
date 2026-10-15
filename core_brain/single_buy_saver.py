@@ -40,7 +40,7 @@ import urllib.request
 from contextlib import contextmanager
 from typing import Optional
 
-from core_brain.ladder import is_ladder_pair
+from core_brain.close_methods import RESCUE_METHODS
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
 
 log = logging.getLogger("single_buy_saver")
@@ -547,8 +547,7 @@ def _prior_exit_shares(registry, condition_id: str, token_id: str) -> float:
     for c in registry.get_all_closes():
         if c.get("condition_id") != condition_id:
             continue
-        if c.get("method") not in ("single_buy_exit", "naked_exit",
-                                      "ladder_exit"):
+        if c.get("method") not in RESCUE_METHODS:
             continue
         sold_up = c.get("up_price") is not None
         if (sold_up and side == "UP") or (not sold_up and side == "DOWN"):
@@ -1694,21 +1693,6 @@ def _manage_single_leg_positions_locked(
             if pair["naked"] <= SIZE_EPS:
                 continue
 
-            if is_ladder_pair(pair_id):
-                # Ladder-stamped pairs bypass the shared lifecycle and keep
-                # the pre-#413 `_route_pair` semantics: under `ladder_mode`
-                # one-shot rungs rest until `ladder_exit_sec`, then leave
-                # with the `ladder_exit` method; without it they answer to
-                # the ordinary grace timer with `single_buy_exit`. The
-                # unified routing retired the `_route_pair` call; this
-                # restores it for ladder-stamped pairs only.
-                out.append(_route_pair(
-                    client, registry, pair, max_pair_cost, live,
-                    venue_positions, cfg=cfg, last_ms=last_fill_ms,
-                    now_s=now_s,
-                ))
-                continue
-
             pair_side_tokens: dict[str, list[str]] = {}
             for token_id in pair["legs"]:
                 side = _token_side(registry, pair["condition_id"], token_id)
@@ -2002,11 +1986,12 @@ def rescue_aged_out_legs(
 
 def _route_pair(client, registry, pair, max_pair_cost, live,
                 venue_positions, cfg=None, last_ms: int = 0, now_s: float = 0.0) -> dict:
-    """Route a single-buy pair under the Dual-Trigger Stop-Loss rules:
+    """Route a single-buy pair under the single-buy stop-loss rules (ONE stop
+    mode per run -- usd or pct; shadow and live apply the same mode):
 
     1. TAKER FINISH: If fill_cost + light_ask < max_pair_cost, cross to complete immediately.
-    2. ADVERSE DRIFT TRIGGER: If heavy leg's best bid dropped by >= single_buy_max_loss_usd
-       or >= single_buy_max_loss_pct, exit immediately to stop fast runaway bleed.
+    2. ADVERSE DRIFT TRIGGER: If heavy leg's best bid dropped past the active
+       Stop-Loss Trigger (usd cents OR pct, one mode per run), exit immediately.
     3. GRACE WINDOW: If age < single_buy_grace_sec (default 45s) and price is stable,
        hold and let the resting maker quote fill.
     4. GRACE EXPIRY: If age >= single_buy_grace_sec, exit at best bid to prevent holding
@@ -2033,18 +2018,10 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     window_sec = float(getattr(cfg, "pairs_exit_window_sec", 900.0) if cfg else 900.0)
     raw_grace = float(getattr(cfg, "single_buy_grace_sec", 45.0) if cfg else 45.0)
     grace_sec = min(raw_grace, window_sec)
-    # Ladder pairs answer to the ladder timer, not single grace: one-shot
-    # rungs rest until `ladder_exit_sec`, then leave with the ladder_exit
-    # method. Adverse drift above still exits immediately -- the timer is
-    # patience, not permission to bleed.
-    is_ladder = is_ladder_pair(pair["pair_id"]) \
-        and bool(getattr(cfg, "ladder_mode", False))
-    exit_method = "ladder_exit" if is_ladder else "single_buy_exit"
-    if is_ladder:
-        grace_sec = min(float(getattr(cfg, "ladder_exit_sec", 60.0)),
-                        window_sec)
-    max_loss_pct = float(getattr(cfg, "single_buy_max_loss_pct", 0.10) if cfg else 0.10)
-    max_loss_usd = float(getattr(cfg, "single_buy_max_loss_usd", 0.04) if cfg else 0.04)
+    exit_method = "single_buy_exit"
+    stop_mode = str(getattr(cfg, "stop_loss_mode", "usd") if cfg else "usd").lower()
+    max_loss_pct = float(getattr(cfg, "stop_loss_trigger_pct", 10.0) if cfg else 10.0) / 100.0
+    max_loss_usd = float(getattr(cfg, "stop_loss_trigger_usd_cents", 4.0) if cfg else 4.0) / 100.0
 
     age_s = max(0.0, now_s - (last_ms / 1000.0)) if (last_ms > 0 and now_s > 0) else 0.0
 
@@ -2052,8 +2029,12 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     if heavy_bid is not None and heavy_fill_price > 0:
         loss = heavy_fill_price - heavy_bid
         loss_pct = loss / heavy_fill_price
-        if loss >= max_loss_usd or loss_pct >= max_loss_pct:
-            is_adverse = True
+        # One stop mode per run (usd XOR pct); shadow and live apply the same
+        # mode -- the decision is identical, only order placement differs.
+        if stop_mode == "pct":
+            is_adverse = loss_pct >= max_loss_pct
+        else:
+            is_adverse = loss >= max_loss_usd
 
     if is_adverse:
         res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
@@ -2073,7 +2054,7 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
             "current_bid": heavy_bid,
         }
 
-    timer_reason = "ladder_exit" if is_ladder else "grace_expired"
+    timer_reason = "grace_expired"
     res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
                           live=live, venue_positions=venue_positions,
                           reason=timer_reason, method=exit_method,

@@ -195,14 +195,14 @@ def test_tab_row_styling(css: str):
     assert "letter-spacing" in body
 
 
-def test_status_pills_share_markup(dom: DOMNode):
-    """All top-nav status pills must share the .pill mono base and carry .pill-label and .pill-value spans."""
+def test_header_status_pills_share_markup(dom: DOMNode):
+    """Header status pills (no name beside them) keep .pill-label + .pill-value.
+
+    The Services-dropdown pills are excluded: they are status-only (#602) because
+    the row's name column identifies the service."""
     pills = [
-        "market-scan-pill",
-        "scan-state-pill",
         "master-status-indicator",
         "hud-services-pill",
-        "hud-guardrail-pill",
         "db-mode-badge",
     ]
     for pid in pills:
@@ -216,6 +216,28 @@ def test_status_pills_share_markup(dom: DOMNode):
         assert value is not None, f"#{pid} must carry .pill-value span"
 
 
+def test_dropdown_pills_are_status_only(dom: DOMNode):
+    """#602: the Services-dropdown pills carry only .pill-value (the state).
+
+    The row's name column identifies the service, so the pill must not also
+    carry a .pill-label — that would duplicate the name."""
+    pills = [
+        "market-scan-pill",
+        "scan-state-pill",
+        "hud-guardrail-pill",
+        "hud-shadow-pill",
+    ]
+    for pid in pills:
+        el = dom.find_one(id=pid)
+        assert el is not None, f"Expected #{pid} in DOM"
+        assert "pill" in el.classes, f"#{pid} must have .pill class"
+        value = el.find_one(cls="pill-value")
+        assert value is not None, f"#{pid} must carry .pill-value span"
+        label = el.find_one(cls="pill-label")
+        assert label is None, \
+            f"#{pid} must NOT carry .pill-label: the name column identifies the service (#602)"
+
+
 def test_pill_value_css(css: str):
     match = re.search(r"\.pill-value\s*\{([^}]*)\}", css)
     assert match, ".pill-value rule not found in styles.css"
@@ -224,11 +246,13 @@ def test_pill_value_css(css: str):
 
 @requires_node
 def test_scan_pill_renders_grammar():
+    # #602: the SCAN pill lives in a Services-dropdown row whose name column
+    # identifies the service, so it is status-only: dot + state, no label.
     data = _harness("topnav")["scan"]
     assert {"pill", "state-running", "mono"}.issubset(set(data["className"].split()))
-    assert 'class="pill-label"' in data["innerHTML"]
+    assert 'class="pill-label"' not in data["innerHTML"]
     assert 'class="pill-value"' in data["innerHTML"]
-    assert data["textContent"].startswith("SCAN RUNNING")
+    assert data["textContent"] == "RUNNING"
 
 
 @requires_node
@@ -248,12 +272,33 @@ def test_engine_and_elsewhere_renders_grammar():
 
 
 @requires_node
+def test_engine_no_payload_is_status_only():
+    # CodeRabbit on #605: the no-payload branch rendered ENGINE UNKNOWN,
+    # duplicating the row's name. Status-only per #602: just UNKNOWN.
+    eng = _harness("topnav")["engineNoPayload"]
+    assert {"pill", "state-unknown", "mono"}.issubset(set(eng["className"].split()))
+    assert 'class="pill-label"' not in eng["stateHtml"]
+    assert 'class="pill-value"' in eng["stateHtml"]
+    assert eng["stateText"] == "UNKNOWN"
+
+
+@requires_node
 def test_db_badge_renders_grammar():
     data = _harness("topnav")["dbProd"]
     assert {"pill", "mode-live", "mono"}.issubset(set(data["className"].split()))
     assert 'class="pill-label"' in data["innerHTML"]
     assert 'class="pill-value"' in data["innerHTML"]
     assert data["textContent"] == "DB LIVE"
+
+
+@requires_node
+def test_live_db_badge_shows_the_store_name():
+    # #600: LIVE must show the db filename like SHADOW does — the store name is
+    # significant info, and the two badges must be consistent.
+    data = _harness("topnav")["dbLiveWithName"]
+    assert {"pill", "mode-live", "mono"}.issubset(set(data["className"].split()))
+    assert data["textContent"] == "DB LIVE · production_live.db"
+    assert 'class="pill-detail"' in data["innerHTML"]
 
 
 @requires_node

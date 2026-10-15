@@ -67,6 +67,7 @@ from typing import Any, Callable, Optional
 
 import urllib.request
 
+from core_brain.close_methods import MERGE_METHODS, RESCUE_METHODS, SHADOW_SETTLEMENT
 from core_brain.market_lifecycle import resolved_condition_ids
 
 log = logging.getLogger("market_resolution")
@@ -636,7 +637,7 @@ def _held_shares_by_token(registry, condition_id: str, run_id: str) -> tuple[dic
     # the conservative branch only fires on partial/legacy stores with a merge-
     # type close.
     merge_type_close = any(
-        cr["method"] in ("merge", "shadow_merge", "shadow_settlement")
+        cr["method"] in MERGE_METHODS + (SHADOW_SETTLEMENT,)
         for cr in close_rows
     )
     if merge_type_close and (up_token is None or down_token is None):
@@ -650,7 +651,7 @@ def _held_shares_by_token(registry, condition_id: str, run_id: str) -> tuple[dic
     # later win could redeem already-exited shares (double-counted proceeds).
     for cr in close_rows:
         m = cr["method"]
-        if m not in ("single_buy_exit", "naked_exit", "ladder_exit"):
+        if m not in RESCUE_METHODS:
             continue
         exited_up = cr["up_price"] is not None
         if exited_up and up_token is None:
@@ -678,10 +679,10 @@ def _held_shares_by_token(registry, condition_id: str, run_id: str) -> tuple[dic
             continue
         # merge / shadow_merge / shadow_settlement dissolve both held legs; a
         # single-buy-exit / naked-exit removes only the encoded (UP) leg.
-        if m in ("merge", "shadow_merge", "shadow_settlement"):
+        if m in MERGE_METHODS + (SHADOW_SETTLEMENT,):
             _drip(up_token, sh, cr["up_cost_removed"])
             _drip(down_token, sh, cr["dn_cost_removed"])
-        elif m in ("single_buy_exit", "naked_exit", "ladder_exit"):
+        elif m in RESCUE_METHODS:
             if cr["up_price"] is not None:
                 _drip(up_token, sh, cr["up_cost_removed"])
             else:

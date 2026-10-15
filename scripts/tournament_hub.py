@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from core_brain.close_methods import SHADOW_MERGE_NOTE  # noqa: E402
 from dashboard.server import read_shadow_run  # noqa: E402
 
 TOURNAMENT_DIR = ROOT / "runtime" / "tournaments"
@@ -98,7 +99,7 @@ def _arm_counts(db_path: Path, run_id: str) -> dict[str, Any]:
     finally:
         conn.close()
 
-    nontrade = {"", None, "unknown", "shadow_merge_note"}
+    nontrade = {"", None, "unknown", SHADOW_MERGE_NOTE}
     traded = [r for r in rows if (r[0] or "unknown") not in nontrade]
     merges = [r for r in traded if (r[0] or "") == "shadow_merge"]
     return {
@@ -144,7 +145,7 @@ def build_arm_view(plan: dict, arm: dict, reachable_map: Optional[dict[int, bool
         "dashboard_reachable": dashboard_reachable,
         "db_path": str(db_path),
         "db_exists": db_path.exists(),
-        "stop_loss_usd": env.get("HUNTER_SINGLE_BUY_MAX_LOSS_USD"),
+        "stop_loss_usd_cents": env.get("HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"),
         "dynamic_offset": env.get("HUNTER_DYNAMIC_OFFSET"),
         "offset_min_cents": env.get("HUNTER_DYNAMIC_OFFSET_MIN_CENTS"),
         "offset_max_cents": env.get("HUNTER_DYNAMIC_OFFSET_MAX_CENTS"),

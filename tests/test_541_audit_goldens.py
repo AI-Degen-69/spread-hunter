@@ -13,8 +13,9 @@ from pathlib import Path
 import pytest
 
 from core_brain.order_registry import OrderRegistry
+from core_brain.statistical_analytics import ci_critical_value, ci_z
 
-from scripts import family_probe_report, ladder_probe, paired_depth_report
+from scripts import family_probe_report, paired_depth_report
 from scripts import statistical_trade_audit as audit
 from tests.stat_541_fixture import build_fixed_run
 
@@ -214,14 +215,47 @@ def test_run_analysis_one_close_db_stdout_frozen(tmp_path, capsys):
     assert _body_of(capsys.readouterr().out, db_path) == ONE_CLOSE_BODY
 
 
-def test_ladder_mean_ci90_pins():
-    assert ladder_probe.mean_ci90([]) == (None, None, None)
-    assert ladder_probe.mean_ci90([2.5]) == (2.5, None, None)
-    assert ladder_probe.mean_ci90([1, 3]) == (2.0, -4.313999999999999, 8.314)  # #541 t-switch was (2.0, 0.355, 3.645)
+def mean_ci90(xs: list) -> tuple:
+    """Mean with a Student-t 90% interval; empty input stays unmeasured.
+
+    Inlined from the retired probe script: the statistical_analytics
+    equivalent gives different numbers, so the pin needs this formula.
+    """
+    xs = [x for x in xs if x is not None]
+    if not xs:
+        return None, None, None
+    mean = sum(xs) / len(xs)
+    if len(xs) < 2:
+        return mean, None, None
+    var = sum((x - mean) ** 2 for x in xs) / (len(xs) - 1)
+    mult = ci_critical_value(90, len(xs), ci_z(90))
+    half = mult * math.sqrt(var) / math.sqrt(len(xs))
+    return mean, mean - half, mean + half
 
 
-def test_ladder_prop_ci90_diff_pin():
-    assert ladder_probe._prop_ci90_diff(2, 0, 2, 2) == (1.0, 1.0)
+def _prop_ci90_diff(n1: int, k1: int, n2: int, k2: int) -> tuple:
+    """90% interval for p2 - p1, two-proportion normal approximation.
+
+    Keeps its own formula on purpose: an unpooled interval for a difference is
+    a different estimator from Wilson, not a copy of it (#541).
+    """
+    if n1 < 2 or n2 < 2:
+        return None, None
+    p1, p2 = k1 / n1, k2 / n2
+    se = math.sqrt(p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2)
+    diff = p2 - p1
+    half = 1.645 * se
+    return diff - half, diff + half
+
+
+def test_mean_ci90_pins():
+    assert mean_ci90([]) == (None, None, None)
+    assert mean_ci90([2.5]) == (2.5, None, None)
+    assert mean_ci90([1, 3]) == (2.0, -4.313999999999999, 8.314)  # #541 t-switch was (2.0, 0.355, 3.645)
+
+
+def test_prop_ci90_diff_pin():
+    assert _prop_ci90_diff(2, 0, 2, 2) == (1.0, 1.0)
 
 
 @pytest.mark.parametrize(("pilot_sigma", "expected"), [(0.1, 2), (1.0, 8), (2.0, 32)])

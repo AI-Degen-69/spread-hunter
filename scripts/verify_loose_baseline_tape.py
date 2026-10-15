@@ -170,9 +170,9 @@ def main():
     print(f"  decision latency = {dt_h:.2f} ms")
 
     # STOP LOSS. If the resting BUY fills at our quote price, the naked leg is
-    # force-exited once its best bid drops $single_buy_max_loss_usd below the
+    # force-exited once its best bid drops the Stop-Loss Trigger ($) below the
     # fill. Show the exact trigger price on the whole-cent book.
-    stop_usd = cfg.single_buy_max_loss_usd
+    stop_usd = cfg.stop_loss_trigger_usd_cents / 100.0
     fill = price                       # assume we get filled at our resting bid
     stop_trigger = fill - stop_usd     # bid at/below this cuts the position
     stop_trigger_cent = math.floor(stop_trigger * 100.0 + 1e-9) / 100.0
