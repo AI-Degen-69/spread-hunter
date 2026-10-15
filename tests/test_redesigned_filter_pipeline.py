@@ -3,7 +3,7 @@
 This suite validates the end-to-end execution of the market filtering funnel
 offline without reaching the live Polymarket venue or writing to production stores:
 1. Strict fail-fast evaluation order (cheap metadata -> tape -> books).
-2. Boundary and edge conditions: price band [0.15, 0.85] and tight 0.02 spread ceiling.
+2. Boundary and edge conditions: price band [0.10, 0.90] and tight 0.02 spread ceiling.
 3. Venue-declared live sports / eSports priority (volatility exemption and lower volume bar).
 4. Zero-reward market independence and downstream decide order manager safety.
 5. Snapshot accounting and persistence consistency.
@@ -186,7 +186,7 @@ def test_price_edge_rejects_out_of_band_mids(yes_mid, yes_bid, yes_ask):
     )
 
     assert result["eligible"] is False
-    expected_reason = f"YES: decided mid {yes_mid:.2f} outside [0.15, 0.85]"
+    expected_reason = f"YES: decided mid {yes_mid:.2f} outside [0.10, 0.90]"
     assert result["reject_reason"] == expected_reason
     assert _cause(result["reject_reason"]) == "YES decided mid"
 
@@ -213,19 +213,19 @@ def test_price_edge_precedes_spread_and_depth_failures():
     )
 
     assert result["eligible"] is False
-    assert result["reject_reason"] == "YES: decided mid 0.10 outside [0.15, 0.85]"
+    assert result["reject_reason"] == "YES: decided mid 0.10 outside [0.10, 0.90]"
     assert _cause(result["reject_reason"]) == "YES decided mid"
 
 
 def test_price_boundary_exactly_at_band_is_rejected():
-    """Strict inequality: mid of exactly 0.15 is rejected by `not 0.15 < mid < 0.85`."""
+    """Strict inequality: mid of exactly 0.10 is rejected by `not 0.10 < mid < 0.90`."""
     now_ts = time.time()
     now_iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
-    cid = "0xbound_15"
+    cid = "0xbound_10"
     cand = _candidate(cid)
 
-    # 0.125 + 0.175 = 0.30 exactly in float; mid is exactly 0.1500
-    yes_book, no_book = _books(0.125, 0.175, depth_usd=2400.0)
+    # 0.075 + 0.125 = 0.20 exactly in float; mid is exactly 0.1000
+    yes_book, no_book = _books(0.075, 0.125, depth_usd=2400.0)
     session = _FakeSession(
         trades=_active_tape(now_ts),
         books_by_token={f"{cid}-yes": yes_book, f"{cid}-no": no_book},
@@ -237,7 +237,7 @@ def test_price_boundary_exactly_at_band_is_rejected():
     )
 
     assert result["eligible"] is False
-    assert result["reject_reason"] == "YES: decided mid 0.15 outside [0.15, 0.85]"
+    assert result["reject_reason"] == "YES: decided mid 0.10 outside [0.10, 0.90]"
     assert _cause(result["reject_reason"]) == "YES decided mid"
 
 

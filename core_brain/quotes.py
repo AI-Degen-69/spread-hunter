@@ -352,23 +352,24 @@ def _decide_quotes_from_mid(
             blocked.append(f"{side}: no two-sided book")
             continue
 
-        # DECIDED MARKET — no room to work. The filter's [0.05,0.95] was
-        # 5c from the edge, tightened 2026-08-28 to [0.20,0.80], widened
-        # 2026-10-09 to [0.15,0.85] per operator directive (#432): captures
-        # additional viable pairs while continuing to block settled books.
-        # Mirrors scripts/filter_markets.py:462. When both sides block here,
-        # plan_orders() sees empty intents and cancels all OPEN orders for
-        # this market — the safe path for a settled book (Polymarket also
-        # cancels at settlement, but we don't wait for it).
+        # DECIDED MARKET — no room to work. The band is the CONFIGURED price
+        # band (price_band_low/high), not a hardcoded pair of edges: the
+        # operator's directive is 10c-90c, and a second hardcoded band here
+        # silently ignored whatever the config said (#582). Mirrors
+        # scripts/filter_markets.py's decided check.
         #
-        # A live series is NOT exempt (time-of-game purge, #597): game
-        # progress says nothing about when this market decides, so the band
-        # applies to every market alike. The band is the quoter's own
-        # decided-mid bar (operator directive 2026-08-28, widened 2026-10-09
-        # to [0.15, 0.85] per #432), tighter than the config `price_band_*`
-        # the risk gates read.
-        if mid <= 0.15 or mid >= 0.85:
-            blocked.append(f"{side}: mid {mid:.3f} outside [0.15,0.85] -- decided market")
+        # When both sides block here, plan_orders() sees empty intents and
+        # cancels all OPEN orders for this market — the safe path for a
+        # settled book (Polymarket also cancels at settlement, but we don't
+        # wait for it).
+        #
+        # A live series is NOT exempt (time-of-game purge, #597): game progress
+        # says nothing about when this market decides, so the band applies to
+        # every market alike.
+        if mid <= cfg.price_band_low or mid >= cfg.price_band_high:
+            blocked.append(
+                f"{side}: mid {mid:.3f} outside "
+                f"[{cfg.price_band_low:.2f},{cfg.price_band_high:.2f}] -- decided market")
             continue
 
         # INVENTORY SKEW. Push the heavy side away from mid and pull the light
@@ -631,9 +632,11 @@ def _decide_lifecycle_escalation(
     mid = mid_price(own_book.get("best_bid"), own_book.get("best_ask"))
     if mid is None:
         return [], f"{side}: no two-sided book"
-    # The band, no series exemption (time-of-game purge, #597).
-    if mid <= 0.15 or mid >= 0.85:
-        return [], f"{side}: mid {mid:.3f} outside [0.15,0.85] -- decided market"
+    # The band, no series exemption (time-of-game purge, #597). The band is
+    # the CONFIGURED price band, not a hardcoded pair of edges (#582).
+    if mid <= cfg.price_band_low or mid >= cfg.price_band_high:
+        return [], (f"{side}: mid {mid:.3f} outside "
+                    f"[{cfg.price_band_low:.2f},{cfg.price_band_high:.2f}] -- decided market")
 
     blocked = risk.hard_block(
         cfg,

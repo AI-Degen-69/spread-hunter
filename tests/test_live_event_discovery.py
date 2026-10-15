@@ -510,7 +510,7 @@ def test_a_live_row_carries_its_event_evidence():
 
 def test_a_live_row_outside_the_band_is_refused_like_every_other_market(monkeypatch):
     # The live-series mid-gate exemption (#402) fell with the time-of-game
-    # purge (#597): a venue-live row whose book sits outside [0.15, 0.85] is
+    # purge (#597): a venue-live row whose book sits outside the configured price band is
     # refused as decided, exactly like any other market with the same books.
     # Game progress is not evidence about when this market decides, and the
     # venue's live flag admits the row to the measured gates -- it does not
@@ -524,7 +524,7 @@ def test_a_live_row_outside_the_band_is_refused_like_every_other_market(monkeypa
                          "measured_at": "t", "trade_count": 100})
 
     def books(url, params=None, timeout=None):
-        mid = 0.88 if params["token_id"] == "101" else 0.12
+        mid = 0.92 if params["token_id"] == "101" else 0.08
         return _FakeResponse({
             "bids": [{"price": f"{mid - 0.01:.2f}", "size": "5000"}],
             "asks": [{"price": f"{mid + 0.01:.2f}", "size": "5000"}]})
