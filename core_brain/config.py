@@ -512,8 +512,9 @@ class MakerConfig:
     # is under way has not had the market's full day to trade, so 24h volume
     # systematically understates it: the match winner of a live LoL game listed
     # hours ago and cannot be judged against a bar meant for markets that have
-    # been open all day. Live markets gate on THIS bar instead, which is 1/5 of
-    # the loosened floor and 1/12.5 of the permanent one.
+    # been open all day. Live markets gate on THIS bar instead of
+    # `select_min_volume_24h_usd` ($125,000, unchanged -- that bar still governs
+    # non-live rows, which have had the full day).
     #
     # LIVENESS IS THE VENUE'S DECLARATION, not the clock (operator decision
     # 2026-10-07): the bar applies to markets discovered through
@@ -524,13 +525,20 @@ class MakerConfig:
     # bar; a clock-based live market is refused outright, so a bar it could not
     # reach would be dead code.
     #
-    # Measured on the live set 2026-10-06: 25 live main lines, volumes $403 to
-    # $1.10M, median $82,095. A $10,000 bar admits 13 of them and drops only the
-    # genuinely thin tail (a `bra2` second-half line at $403). The movement gate
-    # is unchanged and still the real proof -- a live market must measure
-    # `select_min_movement_usd` of tape in the window before it is scored, so
-    # this bar admits an event that is actively trading, never a quiet one.
-    select_min_volume_24h_usd_live: float = 10_000.0
+    # Raised 2026-10-15 from $10,000 to $35,000. Measured on the live set the
+    # same day (main lines only): $1.40M and $162K at the top, a $37-44K
+    # tradable mid tier with balanced two-sided books and real tape, then a
+    # $10-21K junk tier -- a $20.7K tennis market sat pinned at 99.7%/0.3% on
+    # a dead-flat 1h chart and a $10.1K CS2 match at 97/3. $35k keeps the
+    # tradable tier and cuts the junk: the flat/decided cases are caught by
+    # their own gates anyway, but the volume bar is what stops the thin tier
+    # from spending quote cycles. The movement gate is unchanged and still the
+    # real proof -- a live market must measure `select_min_movement_usd` of
+    # tape in the window before it is scored, so this bar admits an event that
+    # is actively trading, never a quiet one. Expect to dial up once the
+    # measured high-to-low price-range telemetry lands and replaces volume as
+    # the movement proxy.
+    select_min_volume_24h_usd_live: float = 35_000.0
     # Tightened 2026-10-09 (#432) to 2.05 cents (0.0205 in price units) to
     # prevent entry into wide/slippage-heavy books.
     select_max_book_spread: float = 0.0205
