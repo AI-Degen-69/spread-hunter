@@ -33,7 +33,7 @@ from core_brain.trader_loop import (
     run,
 )
 from core_brain.config import MakerConfig
-from core_brain.quotes import Inventory, QuoteIntent
+from core_brain.quotes import Inventory, QuoteIntent, decide_quotes
 
 
 def _intent(side="UP", token="tok-up", price=0.60, size=5, pair_id=None):
@@ -1394,18 +1394,27 @@ class TestFuriaQuoteClock:
             tick_size=0.01, neg_risk=False, game_start_ts=kickoff,
             series_state=series_state)
 
-    def _outside_band_books(self):
-        up = {"token_id": "tok-up", "best_bid": 0.13, "best_ask": 0.15,
-              "bids": {0.13: 5000.0}, "asks": {0.15: 5000.0}}
-        down = {"token_id": "tok-dn", "best_bid": 0.83, "best_ask": 0.85,
-                "bids": {0.83: 5000.0}, "asks": {0.85: 5000.0}}
+    def _outside_configured_band_books(self):
+        """Mids 0.09 / 0.91 -- outside the CONFIGURED [0.10,0.90] band.
+
+        These were 0.14 / 0.84, which sat outside the OLD hardcoded
+        [0.15,0.85] decided edges. #582 moved that gate onto the configured
+        band, so 0.14 / 0.84 is now INSIDE it and no longer refused -- the
+        refusal tests below would then pass for the wrong reason.
+        """
+        up = {"token_id": "tok-up", "best_bid": 0.08, "best_ask": 0.10,
+              "bids": {0.08: 5000.0}, "asks": {0.10: 5000.0}}
+        down = {"token_id": "tok-dn", "best_bid": 0.90, "best_ask": 0.92,
+                "bids": {0.90: 5000.0}, "asks": {0.92: 5000.0}}
         return up, down
 
-    def _decide(self, series_state):
-        import time
-        from core_brain.quotes import decide_quotes
+    def _decide_books(self, series_state, up, down):
+        """Quote `up`/`down` with the series evidence `series_state` supplies.
+
+        The market is still built through `_bo3_market` so the helper derives
+        the series state exactly the way the live loop does.
+        """
         market = self._bo3_market(series_state)
-        up, down = self._outside_band_books()
         return decide_quotes(
             MakerConfig(), up, down, Inventory(), 600.0,
             series_state=getattr(market, "series_state", None))
@@ -1419,12 +1428,37 @@ class TestFuriaQuoteClock:
             live=True, ended=False, evidence_ts=time.time())
 
     def test_live_bo3_with_games_left_quotes_outside_the_band(self):
-        intents, why = self._decide(self._live_bo3())
+        """The series exemption lifts the MID band only (#402, #582).
+
+        The mids here sit outside the configured [0.10,0.90] band, so on their
+        own the decided gate refuses them. Pinning the exemption needs the
+        RESTING-price band gate dropped as well (`enforce_price_band=False` --
+        the knob that separates the two band checks): the resting price is
+        always below mid, so a mid outside the configured band always rests
+        outside it too and `risk.hard_block` would refuse the leg regardless of
+        the series state. With that gate waived, the series evidence is the only
+        thing that can admit the books.
+        """
+        up, down = self._outside_configured_band_books()
+        market = self._bo3_market(self._live_bo3())
+        cfg = MakerConfig(enforce_price_band=False)
+
+        # Without venue series evidence the decided band refuses both books.
+        plain, why_plain = decide_quotes(
+            cfg, up, down, Inventory(), 600.0, series_state=None)
+        assert plain == []
+        assert "decided market" in why_plain
+
+        # A proven live series with games remaining admits them.
+        intents, why = decide_quotes(
+            cfg, up, down, Inventory(), 600.0,
+            series_state=market.series_state)
         assert len(intents) == 2, why
         assert why == ""
 
     def test_single_game_with_same_mid_is_still_refused(self):
-        intents, why = self._decide(None)
+        up, down = self._outside_configured_band_books()
+        intents, why = self._decide_books(None, up, down)
         assert intents == []
         assert "decided market" in why
 
@@ -1437,7 +1471,8 @@ class TestFuriaQuoteClock:
             period="2/3", question="FlyQuest vs Shopify Rebellion",
             live=True, ended=False,
             evidence_ts=time.time() - SERIES_EVIDENCE_MAX_AGE_SEC - 1)
-        intents, why = self._decide(stale)
+        up, down = self._outside_configured_band_books()
+        intents, why = self._decide_books(stale, up, down)
         assert intents == []
         assert "decided market" in why
 

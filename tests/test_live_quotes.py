@@ -806,21 +806,28 @@ def test_decide_quotes_decided_band_follows_custom_config_band():
         objective="rewards",
         quote_shares=120,
         min_quote_shares=50,
+        # Size in shares, not dollars: the shipped dollar mode funds a $10
+        # couple allocation that buys 10sh, under the 50sh venue floor, so the
+        # books would be refused by sizing and never reach the band at all.
+        size_mode="shares",
         price_band_low=0.05,
         price_band_high=0.95,
     )
     up_book = {
         "token_id": "tok_up",
-        "best_bid": 0.048, "best_ask": 0.062,
-        "bids": {0.048: 1000.0}, "asks": {0.062: 1000.0}
+        "best_bid": 0.07, "best_ask": 0.085,
+        "bids": {0.07: 1000.0}, "asks": {0.085: 1000.0}
     }
     down_book = {
         "token_id": "tok_down",
-        "best_bid": 0.938, "best_ask": 0.942,
-        "bids": {0.938: 1000.0}, "asks": {0.942: 1000.0}
+        "best_bid": 0.915, "best_ask": 0.93,
+        "bids": {0.915: 1000.0}, "asks": {0.93: 1000.0}
     }
     inv = Inventory()
     intents, why = decide_quotes(cfg, up_book, down_book, inv, 1e9, None)
+    # Both books must actually be ADMITTED: checking only that the decided-market
+    # phrase is absent would also pass if a different gate refused both sides.
+    assert len(intents) == 2, why
     assert "decided market" not in why
     assert "outside [0.05,0.95]" not in why
 
