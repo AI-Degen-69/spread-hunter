@@ -136,7 +136,7 @@ def _parse_market_row(market: dict) -> Optional[LiveMarket]:
         return None
 
     start_ts = _iso_to_unix(start_iso)
-    end_ts = _iso_to_unix(end_iso)
+    end_ts = _iso_to_unix_end(end_iso)
     if start_ts is None or end_ts is None:
         return None
 
@@ -159,16 +159,56 @@ def _iso_to_unix(s: str) -> Optional[float]:
     to skip, not a reason to abort the caller's whole scan.
     """
     # tolerate "Z" suffix
-    from datetime import datetime
+    from datetime import datetime, timezone
     if not isinstance(s, str) or not s:
         return None
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(s).timestamp()
+        dt = datetime.fromisoformat(s)
     except ValueError:
         log.debug("unparseable market timestamp: %r", s)
         return None
+    # A naive venue timestamp is UTC by convention, not local: scoring.markets
+    # has always forced this and a local read shifts a date by the host offset.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _iso_to_unix_end(s: str) -> Optional[float]:
+    """`_iso_to_unix` for a resolution date, where midnight UTC means the whole
+    calendar day rather than its first instant.
+
+    The venue's end-date field is documented as a *date*: the Market Timing
+    reference describes `endDateIso` as "Market end date in ISO 8601 format"
+    and its canonical example for a market ending 2027-01-01 is
+    `2027-01-01T00:00:00Z`. The midnight is an ISO-8601 date serialization
+    artifact, not a stated close time, so reading it as "expired at 00:00"
+    refuses every market resolving later that same day.
+
+    Measured 2026-10-15: CLOB `end_date_iso` and Gamma `endDate` disagreed on
+    9 of 9 graduated rows (by up to 22h) and CLOB's was always midnight, so the
+    quoter refused three markets that still had hours of trading left. Gamma's
+    `endDate` is the richer field and carries a real time-of-day; when it is
+    present it is the one to prefer.
+    """
+    ts = _iso_to_unix(s)
+    if ts is None:
+        return None
+    # An explicitly stated non-midnight wall clock stays authoritative even when
+    # it normalizes to UTC midnight: `01:00+01:00` is a real close time, not the
+    # date serialization. Only a bare date, or an exact `00:00:00Z` that no
+    # payload signal can distinguish from one, takes the whole-day extension.
+    from datetime import datetime
+    raw = s[:-1] + "+00:00" if s.endswith("Z") else s
+    stated = datetime.fromisoformat(raw)
+    if len(raw) > 10 and raw[10] in {"T", " "} and any(
+        (stated.hour, stated.minute, stated.second, stated.microsecond)
+    ):
+        return ts
+    # Epoch is itself midnight UTC, so every whole-day boundary divides exactly.
+    return ts + 86400.0 if ts % 86400.0 == 0.0 else ts
 
 
 def fetch_live_market(gamma_host: str, series_slug: str) -> Optional[LiveMarket]:
@@ -226,7 +266,7 @@ def fetch_pinned_market(condition_id: str) -> Optional[LiveMarket]:
         return None
 
     end_iso = m.get("end_date_iso")
-    end_ts = _iso_to_unix(end_iso) if end_iso else None
+    end_ts = _iso_to_unix_end(end_iso) if end_iso else None
     if end_ts is None:
         # No parseable resolution date: treat the market as long-dated rather
         # than refusing to load it. Every 5-min timing rule is disabled by an
