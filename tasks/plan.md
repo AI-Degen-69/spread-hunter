@@ -58,7 +58,7 @@ Dependency graph: T0 → (T1, T2, T3) → T4. T1/T2/T3 are independent of each o
 
 **Checkpoint 1** — after T1+T2: fill-path totals reconcile and merge counts read correctly on a temp store.
 
-### T2 [XS] [Code] — Defect 2: merge count counts `shadow_merge`
+### [x] T2 [XS] [Code] — Defect 2: merge count counts `shadow_merge`
 - `core_brain/kpi.py:2198`: `_merge_closes` by membership in `MERGE_METHODS`. Leave `:2199` exit counting unchanged. Replace the stale `:2196-2197` comment with one factual line (see proposal below) — no warning code exists, so none is added.
 - Add M1 regression on a temp store (rehearsal-shaped closes: `shadow_merge` counted, `single_buy_exit` not).
 - Depends on: T0

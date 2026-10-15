@@ -2206,9 +2206,8 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
             _verdict_level = "neutral"
         if unrealized_usd is not None and unrealized_usd != 0:
             _verdict += f" · {_signed_usd(unrealized_usd)} open"
-        # Exit-shape counts (merges vs one-sided dumps) feed the card's details
-        # line, which owns the "all exits were naked" warning.
-        _merge_closes = sum(1 for c in closes if c.get("method") == "merge")
+        # Exit-shape counts for the card's details line.
+        _merge_closes = sum(1 for c in closes if c.get("method") in MERGE_METHODS)
         _single_exits = sum(1 for c in closes if c.get("method") in SINGLE_BUY_EXIT_METHODS)
 
         run_profitability = {
