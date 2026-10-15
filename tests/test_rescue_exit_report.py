@@ -474,6 +474,41 @@ class TestReasonPrecedenceWithoutMarkStore:
         assert "classifier=unresolved" in out
 
 
+class TestRescueVsSettlementSplit:
+    """#559: a settlement is not a rescue, and the summary must price them apart.
+
+    Both populations stay in the one loss table (the row selection is not the
+    defect); what changes is that the headline numbers are readable as rescues
+    only, with the settled closes counted and costed on their own line.
+    """
+
+    def test_the_summary_counts_and_prices_rescues_apart_from_settlements(
+            self, tmp_path):
+        # Arrange - one real rescue exit (-$2.50) and one settled leg held to
+        # the end (-$6.00). Fails before the fix: no per-method split existed,
+        # so the only numbers were the two populations added together.
+        reg = build_registry(tmp_path / "reg.db")
+        e1 = add_pair_orders(reg, pair_id="p1", cid="c1", up_token="u1",
+                             dn_token="d1", heavy_price=0.55)
+        add_exit_close(reg, cid="c1", shares=10.0, sell_price=0.30,
+                       heavy_avg=e1["heavy_price"], ts=2000.0)
+        e2 = add_pair_orders(reg, pair_id="p2", cid="c2", up_token="u2",
+                             dn_token="d2", heavy_price=0.60)
+        add_exit_close(reg, cid="c2", shares=10.0, sell_price=0.00,
+                       heavy_avg=e2["heavy_price"], ts=3000.0,
+                       method="shadow_settlement")
+
+        # Act
+        out = run_report(tmp_path / "reg.db")
+
+        # Assert - one rescue, one settlement, each with its own loss.
+        assert "rescue exits: 1  loss: -$2.50" in out
+        assert "settlements: 1  loss: -$6.00" in out
+        # The combined table above keeps both rows: the fix separates the
+        # numbers, it does not drop the settled close from the report.
+        assert "rescue closes: 2" in out
+
+
 class TestAmbiguousAttribution:
     def test_multi_group_settlement_fails_closed(self, tmp_path):
         """Two viable (pair, token) groups: no age claim, no reconstruction."""

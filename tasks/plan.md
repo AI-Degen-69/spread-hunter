@@ -64,7 +64,7 @@ Dependency graph: T0 → (T1, T2, T3) → T4. T1/T2/T3 are independent of each o
 - Depends on: T0
 - Verify: `python -m pytest -q tests/test_kpi.py tests/test_close_method_taxonomy.py`
 
-### T3 [S] [Code] — Defect 3: settlement is not a rescue
+### [x] T3 [S] [Code] — Defect 3: settlement is not a rescue
 - `statistical_validation_run/artifacts.py:74-97`: add `settlements` count from `SETTLEMENT_METHODS`; exclude settlements from `other_methods`. Keep `merges`, `exits`, both rates, denominator. Do not touch `build_gate_rows` / `resolve_verdict`.
 - `scripts/rescue_exit_report.py`: source the selection from canonical names (`SINGLE_BUY_EXIT` + `SETTLEMENT_METHODS`); keep row selection, ordering, loss-share arithmetic, and both AGED OUT labels. First grep tests for pinned prose (`rescue closes`, `aged-out settlements`) and change settlement-as-rescue wording only where no test pins it; add the per-method count/loss split.
 - Add C-cases (settlement counted once, under `settlements`, never under `exits`/`rescues`).

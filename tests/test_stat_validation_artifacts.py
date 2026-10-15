@@ -113,6 +113,33 @@ class TestRescueStats:
         assert stats["completion_rate"] is None
         assert stats["exit_rate"] is None
 
+    def test_a_settlement_is_counted_apart_from_the_rescues(self):
+        """#559, defect 3: settled closes sank into `other_methods`, so the memo
+        could not tell a leg held to resolution from one that was rescued.
+
+        Fails before the fix: `rescue_stats` had no `settlements` key and
+        `shadow_settlement` showed up in `other_methods`.
+        """
+        closes = [
+            {"method": "shadow_merge", "realized_pnl": 0.30},
+            {"method": "single_buy_exit", "realized_pnl": -0.60},
+            {"method": "shadow_settlement", "realized_pnl": -1.00},
+            {"method": "settlement", "realized_pnl": -0.40},
+        ]
+
+        stats = rescue_stats(closes)
+
+        assert stats["merges"] == 1
+        assert stats["exits"] == 1
+        assert stats["settlements"] == 2
+        # Neither legacy nor current settlement names are left over as
+        # "other" once they have their own line.
+        assert stats["other_methods"] == []
+        # The rescue population keeps its own denominator: a settlement is not
+        # a pair that was completed, so it never enters either rate.
+        assert stats["completion_rate"] == pytest.approx(0.5)
+        assert stats["exit_rate"] == pytest.approx(0.5)
+
 
 class TestGateRowsAndVerdict:
     """The gate is ci90_lower_pct > 1.0 INCLUSIVE of every close method."""
@@ -468,6 +495,25 @@ class TestPessimisticSensitivity:
         assert "Taker-completed" in md
         assert "Single-buy exit" in md
         assert "Shadow-only estimate" in md
+
+    def test_the_memo_names_settlements_apart_from_rescues(self, tmp_path):
+        """#559: the memo's rescue block gives settled closes their own line, so
+        an operator reading it never counts a settlement as a rescue."""
+        closes = [
+            {"method": "shadow_merge", "realized_pnl": 0.30,
+             "cost_basis": 9.7, "shares": 10},
+            {"method": "single_buy_exit", "realized_pnl": -0.60,
+             "cost_basis": 5.0, "shares": 5},
+            {"method": "shadow_settlement", "realized_pnl": -1.00,
+             "cost_basis": 5.0, "shares": 5},
+        ]
+
+        out, _kpi = _write_bundle(tmp_path, closes)
+
+        md = (out / "report.md").read_text(encoding="utf-8")
+        assert "- Merges (`shadow_merge`): 1" in md
+        assert "- Single-buy / naked exits: 1" in md
+        assert "- Settlements (held to market resolution): 1" in md
 
 
 class TestMethodGroupsSingleSourced541:
