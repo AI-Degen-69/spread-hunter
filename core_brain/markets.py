@@ -136,7 +136,7 @@ def _parse_market_row(market: dict) -> Optional[LiveMarket]:
         return None
 
     start_ts = _iso_to_unix(start_iso)
-    end_ts = _iso_to_unix(end_iso)
+    end_ts = _iso_to_unix_end(end_iso)
     if start_ts is None or end_ts is None:
         return None
 
@@ -159,16 +159,38 @@ def _iso_to_unix(s: str) -> Optional[float]:
     to skip, not a reason to abort the caller's whole scan.
     """
     # tolerate "Z" suffix
-    from datetime import datetime
+    from datetime import datetime, timezone
     if not isinstance(s, str) or not s:
         return None
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(s).timestamp()
+        dt = datetime.fromisoformat(s)
     except ValueError:
         log.debug("unparseable market timestamp: %r", s)
         return None
+    # A naive venue timestamp is UTC by convention, not local: scoring.markets
+    # has always forced this and a local read shifts a date by the host offset.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _iso_to_unix_end(s: str) -> Optional[float]:
+    """`_iso_to_unix` for a resolution date, where midnight UTC means the whole
+    calendar day rather than its first instant.
+
+    The venue renders a time-less end date as `T00:00:00Z`, which reads as
+    "expired at 00:00" and refuses every market resolving later that same day.
+    Measured 2026-10-15: CLOB `end_date_iso` and Gamma `endDate` disagreed on
+    9 of 9 graduated rows (by up to 22h) and CLOB's was always midnight, so the
+    quoter refused three markets that still had hours of trading left.
+    """
+    ts = _iso_to_unix(s)
+    if ts is None:
+        return None
+    # Epoch is itself midnight UTC, so every whole-day boundary divides exactly.
+    return ts + 86400.0 if ts % 86400.0 == 0.0 else ts
 
 
 def fetch_live_market(gamma_host: str, series_slug: str) -> Optional[LiveMarket]:
@@ -226,7 +248,7 @@ def fetch_pinned_market(condition_id: str) -> Optional[LiveMarket]:
         return None
 
     end_iso = m.get("end_date_iso")
-    end_ts = _iso_to_unix(end_iso) if end_iso else None
+    end_ts = _iso_to_unix_end(end_iso) if end_iso else None
     if end_ts is None:
         # No parseable resolution date: treat the market as long-dated rather
         # than refusing to load it. Every 5-min timing rule is disabled by an
