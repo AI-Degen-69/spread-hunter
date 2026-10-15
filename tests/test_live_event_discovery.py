@@ -252,10 +252,10 @@ def test_a_live_market_under_the_live_bar_is_counted_not_emitted():
 
 
 def test_the_live_bar_admits_a_market_the_permanent_floor_would_hide():
-    # Arrange: $19,967 -- under the $50,000 permanent floor, over the live bar.
+    # Arrange: $40,000 -- under the $50,000 permanent floor, over the live bar.
     # This is the whole point of the lower bar.
     event = {**_NHL_EVENT, "markets": [
-        {**_NHL_EVENT["markets"][0], "volume24hr": 19_967.0}]}
+        {**_NHL_EVENT["markets"][0], "volume24hr": 40_000.0}]}
 
     # Act
     rows, stats = fm.live_event_markets(_FakeSession([event]))
@@ -263,7 +263,7 @@ def test_the_live_bar_admits_a_market_the_permanent_floor_would_hide():
     # Assert
     assert [r["condition_id"] for r in rows] == ["0xnhlmain"]
     assert stats["live_below_bar"] == 0
-    ok, why = fm.tradable(19_967.0, 0.2, "Predators vs. Maple Leafs",
+    ok, why = fm.tradable(40_000.0, 0.2, "Predators vs. Maple Leafs",
                           "nhl-nsh-tor-2026-10-06", "", "", "", "NHL 2026",
                           "Predators vs. Maple Leafs", min_volume_usd=50_000.0,
                           live_event=True)
