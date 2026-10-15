@@ -499,74 +499,7 @@ _BO3_EVENT = {
     ],
 }
 
-_NOW = 1_790_000_000.0
-
-
-def _series(**kw):
-    from core_brain.markets import parse_series_state
-    base = {"sports_market_type": "moneyline", "score": None, "period": None,
-            "question": "", "live": True, "ended": False,
-            "evidence_ts": _NOW}
-    base.update(kw)
-    return parse_series_state(**base)
-
-
-def _quotable(state, now=_NOW):
-    from core_brain.markets import live_series_with_games_remaining
-    return live_series_with_games_remaining(state, now)
-
-
-class TestSeriesState:
-    def test_bo5_with_games_left_is_quotable(self):
-        s = _series(score="8-1|2-0|Bo5", period="3/5")
-        assert s.scope == "series"
-        assert s.best_of == 5
-        assert s.games_remaining == 3
-        assert _quotable(s) is True
-
-    def test_bo3_with_one_game_left_is_quotable(self):
-        s = _series(score="9-4|1-1|Bo3", period="2/3")
-        assert s.scope == "series"
-        assert s.games_remaining == 1
-        assert _quotable(s) is True
-
-    def test_clinched_series_is_not_quotable(self):
-        assert _quotable(_series(score="15-5|2-0|Bo3")) is False
-
-    def test_nhl_single_game_fails_closed(self):
-        s = _series(score="2-0", period="End P1")
-        assert s.scope == "unknown"
-        assert _quotable(s) is False
-
-    def test_tennis_fails_closed(self):
-        s = _series(score="6-3, 6-7(2-7), 0-3", period="S3")
-        assert s.scope == "unknown"
-        assert _quotable(s) is False
-
-    def test_finished_cs2_is_not_quotable(self):
-        s = _series(score="2-1", period="3/3", live=False, ended=True)
-        assert _quotable(s) is False
-
-    def test_stale_evidence_fails_closed(self):
-        from core_brain.markets import SERIES_EVIDENCE_MAX_AGE_SEC
-        s = _series(score="9-4|1-1|Bo3", period="2/3")
-        assert _quotable(s, now=_NOW + SERIES_EVIDENCE_MAX_AGE_SEC + 1) is False
-
-    def test_child_moneyline_is_a_single_game(self):
-        s = _series(sports_market_type="child_moneyline",
-                    score="9-4|1-1|Bo3", period="2/3")
-        assert s.scope == "single"
-        assert _quotable(s) is False
-
-    def test_question_names_the_best_of_when_score_does_not(self):
-        s = _series(score="1-0",
-                    question="Team Falcons vs Natus Vincere (BO3) - Map Winner")
-        assert s.scope == "series"
-        assert s.best_of == 3
-        assert _quotable(s) is True
-
-
-def test_a_live_series_row_carries_its_series_evidence():
+def test_a_live_row_carries_its_event_evidence():
     rows, _ = fm.live_event_markets(_FakeSession([_BO3_EVENT]))
     row = rows[0]
     assert row["sports_market_type"] == "moneyline"
@@ -575,15 +508,15 @@ def test_a_live_series_row_carries_its_series_evidence():
     assert row["_series_ts"] > 0
 
 
-def test_the_rank_keeps_a_live_series_past_the_mid_gate(monkeypatch):
-    # Arrange: books with UP mid 0.92 / DOWN mid 0.08 -- outside the
-    # configured [0.10, 0.90] band on both sides. A series row must sail past
-    # the mid gate; the same books on a single-game row must refuse as decided.
-    import time
+def test_a_live_row_outside_the_band_is_refused_like_every_other_market(monkeypatch):
+    # The live-series mid-gate exemption (#402) fell with the time-of-game
+    # purge (#597): a venue-live row whose book sits outside the configured price band is
+    # refused as decided, exactly like any other market with the same books.
+    # Game progress is not evidence about when this market decides, and the
+    # venue's live flag admits the row to the measured gates -- it does not
+    # buy it an exemption from the band.
     rows, _ = fm.live_event_markets(_FakeSession([_BO3_EVENT]))
-    series_row = dict(rows[0], _series_ts=time.time())
-    nhl_rows, _ = fm.live_event_markets(_FakeSession([_NHL_EVENT]))
-    single_row = dict(nhl_rows[0], _series_ts=time.time())
+    live_row = rows[0]
 
     monkeypatch.setattr(
         fm, "tape_movement_and_range",
@@ -602,10 +535,6 @@ def test_the_rank_keeps_a_live_series_past_the_mid_gate(monkeypatch):
                 return books(url, **kwargs)
             raise AssertionError(f"unexpected venue call {url}")
 
-    out = fm.evaluate(_BookSession([]), 1.0, series_row,
-                      volume_24h=63_664.0, source="spread")
-    assert "decided mid" not in (out.get("reject_reason") or "")
-
-    out = fm.evaluate(_BookSession([]), 1.0, single_row,
+    out = fm.evaluate(_BookSession([]), 1.0, live_row,
                       volume_24h=63_664.0, source="spread")
     assert "decided mid" in (out.get("reject_reason") or "")

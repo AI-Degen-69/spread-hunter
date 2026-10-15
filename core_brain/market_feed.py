@@ -90,8 +90,11 @@ class GraduatedMarket:
     event_title: str = ""
     range_cents: Optional[float] = None
     velocity_measured_at: Optional[float] = None
-    # Series evidence for the live-series mid-gate exemption (#402). Carried
-    # from the ranker's eligible row; absent on scanned rows and old feeds.
+    # Venue event evidence, carried from the ranker's eligible row so the
+    # funnel and the dashboard can show WHY a row is live rather than taking
+    # the flag on faith. NO GATE READS IT (time-of-game purge, #597): a game's
+    # score, period or live/ended flag says nothing about when this market
+    # decides. Absent on scanned rows and old feeds.
     sports_market_type: str = ""
     event_score: str = ""
     event_period: str = ""

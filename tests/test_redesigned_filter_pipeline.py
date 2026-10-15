@@ -3,7 +3,7 @@
 This suite validates the end-to-end execution of the market filtering funnel
 offline without reaching the live Polymarket venue or writing to production stores:
 1. Strict fail-fast evaluation order (cheap metadata -> tape -> books).
-2. Boundary and edge conditions: price band [0.15, 0.85] and tight 0.02 spread ceiling.
+2. Boundary and edge conditions: price band [0.10, 0.90] and tight 0.02 spread ceiling.
 3. Venue-declared live sports / eSports priority (volatility exemption and lower volume bar).
 4. Zero-reward market independence and downstream decide order manager safety.
 5. Snapshot accounting and persistence consistency.
@@ -324,14 +324,6 @@ def test_spread_edge_precedes_thin_depth_failure():
         0, False, False,
     ),
     (
-        "row_2_in_play",
-        {"gameStartTime": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(), "_live_event": False},
-        lambda now: _active_tape(now),
-        lambda cid: _books(0.49, 0.51),
-        "in-play",
-        0, False, False,
-    ),
-    (
         "row_3_expired",
         {"end_date_iso": (datetime.now(timezone.utc) - timedelta(hours=16)).isoformat(), "category": "Crypto", "closed": True},
         lambda now: _active_tape(now),
@@ -590,7 +582,10 @@ def test_live_event_merges_and_qualifies_esports_market():
     assert result["volatility_exempt"] is True
     assert result.get("reject_reason") in (None, "")
 
-    # Counter-factual: non-live market is rejected by in-play clock gate
+    # Counter-factual: without the venue's live declaration the row must clear
+    # the PERMANENT volume floor, and $48,000 does not. The in-play clock gate
+    # that used to refuse it is gone (time-of-game purge, #597) -- the live
+    # declaration buys the lower bar and nothing else.
     non_live_cand = dict(merged[0], _live_event=False)
     result_non_live = fm.evaluate(
         session, rate=50.0, m=non_live_cand, volume_24h=48_000.0,
@@ -598,7 +593,7 @@ def test_live_event_merges_and_qualifies_esports_market():
         velocity_gate_enabled=True, now_iso=now_iso,
     )
     assert result_non_live["eligible"] is False
-    assert "in-play" in result_non_live["reject_reason"]
+    assert "volume" in result_non_live["reject_reason"]
 
 
 def test_live_market_does_not_bypass_book_safety_gates():
@@ -637,8 +632,6 @@ def test_live_market_does_not_bypass_book_safety_gates():
 
 
 def test_live_sports_market_ranking_priority():
-    now_ts = time.time()
-
     live_row = {
         "condition_id": "0xlive_sports",
         "title": "FaZe vs NAVI",
@@ -662,12 +655,12 @@ def test_live_sports_market_ranking_priority():
     sorted_rows = fm.sort_eligible([non_live_row, live_row])
     assert sorted_rows[0]["condition_id"] == "0xlive_sports"
 
-    live_with_start = dict(
-        live_row,
-        _start_iso=(datetime.fromtimestamp(now_ts, timezone.utc) - timedelta(hours=1)).isoformat(),
-    )
-    score = fm.rank_score(live_with_start, now=now_ts)
+    # The live BOOST comes from the venue's declaration, not a game clock
+    # (time-of-game purge, #597): a started-but-not-declared-live row scores
+    # its bare return.
+    score = fm.rank_score(dict(live_row, _live_event=True))
     assert score == pytest.approx(live_row["return_pct_day"] * fm.RANK_LIVE_BOOST)
+    assert fm.rank_score(live_row) == live_row["return_pct_day"]
 
 
 # ==============================================================================

@@ -341,9 +341,9 @@ def test_a_zero_ours_score_is_retained_as_a_rejection_row():
 
 
 def test_a_decided_mid_buckets_as_one_gate():
-    assert (fm._cause("YES: decided mid 0.88 outside [0.15, 0.85]")
+    assert (fm._cause("YES: decided mid 0.88 outside [0.10, 0.90]")
             == "YES decided mid")
-    assert (fm._cause("NO: decided mid 0.11 outside [0.15, 0.85]")
+    assert (fm._cause("NO: decided mid 0.11 outside [0.10, 0.90]")
             == "NO decided mid")
 
 
@@ -1078,10 +1078,10 @@ def test_an_eligible_live_market_past_kickoff_reaches_the_books():
 # --- intake expiry gate (#357) ------------------------------------------------
 
 
-def test_expired_at_intake_refuses_past_end_date_for_non_sports():
+def test_expired_at_intake_refuses_past_end_date():
     now = "2026-10-04T12:00:00Z"
     past = "2026-10-03T20:00:00Z"  # 16 hours ago
-    expired, reason = expired_at_intake(past, start_iso=None, category="Crypto", now_iso=now)
+    expired, reason = expired_at_intake(past, now_iso=now)
     assert expired is True
     assert reason == "horizon passed (expired 16.0h ago)"
     assert fm._cause(reason) == "horizon"
@@ -1091,33 +1091,37 @@ def test_expired_at_intake_admits_future_or_missing_end_date():
     now = "2026-10-04T12:00:00Z"
     future = "2026-10-05T12:00:00Z"
     # Future
-    expired, reason = expired_at_intake(future, category="Crypto", now_iso=now)
+    expired, reason = expired_at_intake(future, now_iso=now)
     assert expired is False
     assert reason == ""
     # Missing / None
-    expired, reason = expired_at_intake(None, category="Crypto", now_iso=now)
+    expired, reason = expired_at_intake(None, now_iso=now)
     assert expired is False
     assert reason == ""
     # Malformed / non-string
-    expired, reason = expired_at_intake("not-a-date", category="Crypto", now_iso=now)
+    expired, reason = expired_at_intake("not-a-date", now_iso=now)
     assert expired is False
     assert reason == ""
-    expired, reason = expired_at_intake(12345, category="Crypto", now_iso=now)
+    expired, reason = expired_at_intake(12345, now_iso=now)
     assert expired is False
     assert reason == ""
 
 
-def test_expired_at_intake_preserves_sports_kickoff_exception():
+def test_expired_at_intake_exempts_a_venue_declared_live_market():
+    # On Polymarket `endDate` is often kickoff, not the final whistle, so a
+    # game under way sits past it. The venue's live declaration is the ONLY
+    # exemption (time-of-game purge, #597) -- a kickoff timestamp and a sports
+    # category label were both game-clock inferences standing in for it.
     now = "2026-10-04T12:00:00Z"
     past = "2026-10-04T10:00:00Z"  # 2 hours ago
-    # Category Sports without start_iso
-    expired, reason = expired_at_intake(past, start_iso=None, category="Sports", now_iso=now)
+    expired, reason = expired_at_intake(past, live_event=True, now_iso=now)
     assert expired is False
     assert reason == ""
-    # start_iso present
-    expired, reason = expired_at_intake(past, start_iso="2026-10-04T10:00:00Z", category="Other", now_iso=now)
-    assert expired is False
-    assert reason == ""
+    # The same market without the declaration is refused, whatever its
+    # category or kickoff field says.
+    expired, reason = expired_at_intake(past, now_iso=now)
+    assert expired is True
+    assert "horizon passed" in reason
 
 
 class _ExplodingSessionForExpired:
@@ -1171,8 +1175,7 @@ def test_expired_at_intake_admits_open_election_market_past_end_date():
     state = resolve_state(False, True, past)
 
     # Act
-    expired, reason = expired_at_intake(
-        past, start_iso=None, category="Politics", now_iso=now, state=state)
+    expired, reason = expired_at_intake(past, now_iso=now, state=state)
 
     # Assert
     assert expired is False
@@ -1191,8 +1194,7 @@ def test_expired_at_intake_refuses_closed_and_unreadable_past_end_date():
 
     # Act + Assert — each names the venue signal and stays in the horizon bucket.
     for state, venue_signal in cases:
-        expired, reason = expired_at_intake(
-            past, start_iso=None, category="Politics", now_iso=now, state=state)
+        expired, reason = expired_at_intake(past, now_iso=now, state=state)
         assert expired is True
         assert venue_signal in reason
         assert "horizon passed" in reason
