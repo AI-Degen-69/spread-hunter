@@ -385,9 +385,66 @@ def full_book(clob_host: str, token_id: str) -> dict:
     return parse_book(r.json(), token_id)
 
 
+@dataclass(frozen=True)
+class TapeWalkReport:
+    """Health of one paginated pass over the trade tape.
+
+    `status` tells a proven empty tape from a failed or page-bounded read:
+    only `complete`/`empty`/`partial`/`truncated` committed their volume, and
+    `unavailable` committed nothing. `rejected_rows` counts malformed rows
+    (never parsed); `non_qualifying_rows` counts valid rows the walk skipped
+    (wrong side, duplicate). Both only under-count, the safe direction.
+    """
+
+    name: str
+    status: str
+    pages_read: int
+    rows_read: int
+    qualifying_rows: int
+    accepted_volume: float
+    rejected_rows: dict
+    non_qualifying_rows: dict
+    first_trade_ts: object = None
+    last_trade_ts: object = None
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class TradeTapeReport:
+    """Volume plus the per-walk evidence behind it (fill-model calibration)."""
+
+    status: str
+    volume_by_token_price: dict
+    walks: tuple
+
+
+def _failure_label(exc: BaseException) -> str:
+    """Safe failure metadata: exception type plus HTTP status, never the text."""
+    label = type(exc).__name__
+    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status_code, int) and 100 <= status_code <= 599:
+        return f"{label} (HTTP {status_code})"
+    return label
+
+
 def recent_trades(condition_id: str, seen: set, limit: int = 500,
                   taker_side: str | None = "SELL") -> dict:
     """Volume by (token_id, price) that could fill a RESTING BID since we looked.
+
+    Compatibility wrapper over `recent_trades_detailed`: same volume, the
+    walk-health report discarded. See that function for the side semantics.
+    """
+    return recent_trades_detailed(
+        condition_id, seen, limit=limit, taker_side=taker_side,
+    ).volume_by_token_price
+
+
+_ORIGINAL_RECENT_TRADES = recent_trades
+
+
+def recent_trades_detailed(condition_id: str, seen: set, limit: int = 500,
+                           taker_side: str | None = "SELL") -> TradeTapeReport:
+    """Volume by (token_id, price) plus the per-walk read health behind it.
 
     The fill model needs this to tell a level that was TRADED from one that was
     CANCELLED -- from the book they are identical, and guessing costs an order
@@ -434,30 +491,86 @@ def recent_trades(condition_id: str, seen: set, limit: int = 500,
     counted: if the endpoint ever drops the field the rehearsal must report no
     fills instead of inventing them. Pass `taker_side=None` for the whole tape,
     which is what a recorder measuring market activity wants.
+
+    The `status` is the observability addition (fill-model calibration #474):
+    `unavailable` committed nothing, `partial` mixed a failed walk with a
+    finished one, `truncated` ran out of pages (a floor, not a measurement).
+    Only a successfully completed walk commits its identities.
     """
     out: dict[str, dict[float, float]] = {}
     wanted = None if taker_side is None else str(taker_side).strip().upper()
-    taker_ids: set = set()  # side-blind identities from walk 1, this call
+    taker_ids: set = set()
+    walks: list = []
+
+    def _report(name: str, info: dict, walk_out: dict,
+                error: Optional[str] = None) -> TapeWalkReport:
+        volume = sum(
+            float(amount)
+            for by_price in walk_out.values()
+            for amount in by_price.values()
+        )
+        if error is not None:
+            status = "unavailable"
+        elif info.get("truncated"):
+            status = "truncated"
+        elif volume > 0:
+            status = "complete"
+        else:
+            status = "empty"
+        # shortcut: no first/last trade timestamps yet; add them when
+        # calibration needs per-read latency (walk rows carry no ts today).
+        return TapeWalkReport(
+            name=name, status=status,
+            pages_read=info.get("pages_read", 0),
+            rows_read=info.get("rows_read", 0),
+            qualifying_rows=info.get("qualifying_rows", 0),
+            accepted_volume=volume,
+            rejected_rows=dict(info.get("rejected_rows", {})),
+            non_qualifying_rows=dict(info.get("non_qualifying_rows", {})),
+            error=error,
+        )
+
     try:
-        staged, walk_out = _walk_tape(condition_id, seen, taker_ids,
-                                      wanted, limit, taker_only=None)
+        staged, walk_out, info = _walk_tape(condition_id, seen, taker_ids,
+                                            wanted, limit, taker_only=None)
     except Exception as e:
         log.debug("tape fetch failed: %s", e)
-        return {}                       # no tape -> caller falls back to books
+        walks.append(_report("taker", {}, {}, error=_failure_label(e)))
+        return TradeTapeReport("unavailable", out, tuple(walks))
     seen.update(staged)
     _merge_tape_volume(out, walk_out)
+    walks.append(_report("taker", info, walk_out))
     if wanted in (None, "SELL"):
         # Resting-bid settlement (and the whole-tape recorder) only: a
         # taker-BUY request must read taker BUYs, never maker fills.
         try:
-            staged, walk_out = _walk_tape(condition_id, seen, taker_ids,
-                                              wanted, limit, taker_only=False)
+            staged, walk_out, info = _walk_tape(
+                condition_id, seen, taker_ids,
+                wanted, limit, taker_only=False)
         except (requests.RequestException, ValueError) as e:
             log.debug("maker tape fetch failed: %s", e)
+            walks.append(_report("maker", {}, {}, error=_failure_label(e)))
         else:
             seen.update(staged)
             _merge_tape_volume(out, walk_out)
-    return out
+            walks.append(_report("maker", info, walk_out))
+
+    has_failure = any(w.error is not None for w in walks)
+    has_malformed = any(w.rejected_rows for w in walks)
+    has_truncated = any(w.status == "truncated" for w in walks)
+    has_completed_walk = any(w.status != "unavailable" for w in walks)
+    has_volume = any(by_price for by_price in out.values())
+    if (has_failure or has_malformed) and has_completed_walk:
+        status = "partial"
+    elif has_failure or (has_malformed and not has_completed_walk):
+        status = "unavailable"
+    elif has_truncated:
+        status = "truncated"
+    elif has_volume:
+        status = "complete"
+    else:
+        status = "empty"
+    return TradeTapeReport(status, out, tuple(walks))
 
 
 # Pages per settlement read. Walk 1 preserves the old single-page shape on a
@@ -484,9 +597,10 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
                wanted, limit: int, taker_only):
     """One paginated pass over the tape.
 
-    Returns this walk's `(staged_identities, volume)`; the caller commits
-    both into `seen`/`out` only when the walk finishes. A fetch failure
-    raises, discarding the walk's pages so a later poll re-reads them.
+    Returns this walk's `(staged_identities, volume, info)`; the caller commits
+    staged/volume into `seen`/`out` only when the walk finishes. A fetch failure
+    raises, discarding the walk's pages so a later poll re-reads them. `info`
+    carries read-health counters only -- it never changes what counts.
 
     `taker_only=None` is the taker-view baseline walk: every row takes a
     side-aware staged key, its side-blind identity joins `taker_ids`, and
@@ -496,10 +610,16 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
     """
     staged: set = set()
     walk_out: dict = {}
+    info: dict = {
+        "pages_read": 0, "rows_read": 0, "qualifying_rows": 0,
+        "rejected_rows": {}, "non_qualifying_rows": {},
+        "truncated": False,
+    }
     maker_walk = taker_only is not None
     for page in range(TRADE_MAX_PAGES):
         offset = page * int(limit)
         if offset >= TRADE_MAX_OFFSET:
+            info["truncated"] = True
             break
         params = {"market": condition_id, "limit": limit, "offset": offset}
         if maker_walk:
@@ -510,39 +630,56 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
         if not isinstance(rows, list):
             log.debug("tape response is not a list (got %s)",
                       type(rows).__name__)
-            return staged, walk_out
+            return staged, walk_out, info
+        info["pages_read"] += 1
         fresh = False
         for t in rows:
+            info["rows_read"] += 1
             if not isinstance(t, dict):
+                info["rejected_rows"]["row"] = \
+                    info["rejected_rows"].get("row", 0) + 1
                 continue
             side = _row_side(t)
             blind = (str(t.get("transactionHash") or ""), str(t.get("asset")),
                      t.get("timestamp"), t.get("price"), t.get("size"))
             key = blind + (side,)
             if key in seen or key in staged:
+                info["non_qualifying_rows"]["duplicate"] = \
+                    info["non_qualifying_rows"].get("duplicate", 0) + 1
                 continue
             staged.add(key)
             fresh = True
             if not maker_walk:
                 taker_ids.add(blind)
                 if wanted is not None and side != wanted:
+                    info["non_qualifying_rows"]["side"] = \
+                        info["non_qualifying_rows"].get("side", 0) + 1
                     continue
             else:
                 if blind in taker_ids:
+                    info["non_qualifying_rows"]["maker_seen"] = \
+                        info["non_qualifying_rows"].get("maker_seen", 0) + 1
                     continue
                 if wanted is not None and side != "BUY":
+                    info["non_qualifying_rows"]["side"] = \
+                        info["non_qualifying_rows"].get("side", 0) + 1
                     continue
+            info["qualifying_rows"] += 1
             tok = str(t.get("asset"))
             try:
                 p = round(float(t.get("price") or 0), 4)
                 size = float(t.get("size") or 0)
             except (TypeError, ValueError):
+                info["rejected_rows"]["price_size"] = \
+                    info["rejected_rows"].get("price_size", 0) + 1
                 continue
             slot = walk_out.setdefault(tok, {})
             slot[p] = slot.get(p, 0.0) + size
         if len(rows) < int(limit) or not fresh:
             break
-    return staged, walk_out
+    else:
+        info["truncated"] = True
+    return staged, walk_out, info
 
 
 class SellFlow(NamedTuple):
