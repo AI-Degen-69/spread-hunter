@@ -5,6 +5,7 @@ See research/powerwinner_analysis.md.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 from dataclasses import dataclass
