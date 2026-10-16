@@ -895,16 +895,33 @@ def load() -> MakerConfig:
         kw["market_url"] = os.environ.get("HUNTER_URL", "")
         # Long-dated markets do not close in 15 seconds, and the min-size floor
         # is per-market (20, 50, 100, 200) -- quoting under it earns nothing.
-        kw["min_t_remaining_sec"] = 0.0
-        ms = os.environ.get("HUNTER_MIN_SIZE")
-        if ms:
+        ms = os.environ.get("HUNTER_MIN_QUOTE_SHARES")
+        if ms is None:
+            ms = os.environ.get("HUNTER_MIN_SIZE")
+            if ms is not None and ms.strip():
+                logging.getLogger(__name__).warning(
+                    "HUNTER_MIN_SIZE is deprecated (#632); set HUNTER_MIN_QUOTE_SHARES instead."
+                )
+        if ms and ms.strip():
             kw["min_quote_shares"] = int(float(ms))
             kw["quote_shares"] = max(int(float(ms)), 120)
-        sp = os.environ.get("HUNTER_MAX_SPREAD")   # in cents, from the venue
-        if sp:
+        sp = os.environ.get("HUNTER_MAX_SPREAD_CENTS")
+        if sp is None:
+            sp = os.environ.get("HUNTER_MAX_SPREAD")   # in cents, from the venue
+            if sp is not None and sp.strip():
+                logging.getLogger(__name__).warning(
+                    "HUNTER_MAX_SPREAD is deprecated (#632); set HUNTER_MAX_SPREAD_CENTS instead."
+                )
+        if sp and sp.strip():
             kw["max_spread_from_mid"] = float(sp) / 100.0
-        tk = os.environ.get("HUNTER_TICK")
-        if tk:
+        tk = os.environ.get("HUNTER_PRICE_TICK")
+        if tk is None:
+            tk = os.environ.get("HUNTER_TICK")
+            if tk is not None and tk.strip():
+                logging.getLogger(__name__).warning(
+                    "HUNTER_TICK is deprecated (#632); set HUNTER_PRICE_TICK instead."
+                )
+        if tk and tk.strip():
             kw["price_tick"] = float(tk)
     wide = resolve_wide_book_trial(os.environ.get("HUNTER_WIDE_BOOK_TRIAL") or "")
     if wide is not None and wide > 0:

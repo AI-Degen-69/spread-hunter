@@ -61,8 +61,9 @@ def marginal(capital: float, daily: float, T: float) -> float:
 
 
 def spread_capture_daily(volume_24h_usd: float, spread: float,
-                         capture_frac: float = 0.25,
-                         avg_price: float = 0.5) -> float:
+                         capture_pct: float = 0.25,
+                         avg_price: float = 0.5,
+                         **kwargs) -> float:
     """Pot-equivalent, in $/day, for a market that pays no rewards at all.
 
     Everything else in this module is written against `daily` -- the dollars a
@@ -75,7 +76,7 @@ def spread_capture_daily(volume_24h_usd: float, spread: float,
     So a synthetic pot is computed and handed to the same machinery:
 
         shares/day = volume_24h / avg_price
-        pot        = shares/day x spread x capture_frac
+        pot        = shares/day x spread x capture_pct
 
     It is a pot in the same sense the reward pot is -- what the market pays out
     in total, of which we take our depth's share -- so `income()` and
@@ -83,7 +84,7 @@ def spread_capture_daily(volume_24h_usd: float, spread: float,
     in, and the water-fill compares a spread market against a reward market on
     one axis.
 
-    `capture_frac` is the honest part of the estimate, and it is a HYPOTHESIS
+    `capture_pct` is the honest part of the estimate, and it is a HYPOTHESIS
     rather than a measurement. A maker resting inside the touch earns at most
     half the quoted spread per round trip, and earns less in practice because
     the flow that reaches a resting order is selected against it -- which is
@@ -95,9 +96,11 @@ def spread_capture_daily(volume_24h_usd: float, spread: float,
     dollars: near the middle of the book each share changes hands for about
     half a dollar.
     """
-    if volume_24h_usd <= 0 or spread <= 0 or avg_price <= 0 or capture_frac <= 0:
+    if "capture_frac" in kwargs:
+        capture_pct = kwargs.pop("capture_frac")
+    if volume_24h_usd <= 0 or spread <= 0 or avg_price <= 0 or capture_pct <= 0:
         return 0.0
-    return (volume_24h_usd / avg_price) * spread * capture_frac
+    return (volume_24h_usd / avg_price) * spread * capture_pct
 
 
 def shares_for(dollars: float, min_size: int) -> int:
@@ -116,7 +119,7 @@ def shares_for(dollars: float, min_size: int) -> int:
 
 
 def allocate(markets: list[dict], budget: float, floor: float,
-             step: float = 5.0, max_frac: float = 1.0) -> dict[str, float]:
+             step: float = 5.0, max_pct: float = 1.0, **kwargs) -> dict[str, float]:
     """Water-fill: hand each increment to whichever market currently has the
     highest marginal return, until the budget is exhausted or no market clears
     the floor.
@@ -129,7 +132,7 @@ def allocate(markets: list[dict], budget: float, floor: float,
     `share` are the CURRENT observation, used only to infer the competition.
     Returns dollars per market.
 
-    `max_frac` bounds any ONE market's share of the budget, and it exists
+    `max_pct` bounds any ONE market's share of the budget, and it exists
     because this function was a diversifier and is not one. Marginal
     return is daily*T/(capital+T)^2, which is nearly FLAT in capital whenever
     competitor depth T dominates our own size -- so the argmax never changes
@@ -143,10 +146,12 @@ def allocate(markets: list[dict], budget: float, floor: float,
     Defaults to 1.0 so existing callers keep the old behaviour and only the
     fleet runner, which has a configured fraction, opts in.
     """
+    if "max_frac" in kwargs:
+        max_pct = kwargs.pop("max_frac")
     T = {m["cid"]: competitor_depth(m["capital"], m["share"]) for m in markets}
     daily = {m["cid"]: m["daily"] for m in markets}
     out = {m["cid"]: 0.0 for m in markets}
-    cap = budget * max_frac if max_frac < 1.0 else float("inf")
+    cap = budget * max_pct if max_pct < 1.0 else float("inf")
 
     spent = 0.0
     while spent < budget:
@@ -169,7 +174,7 @@ def allocate(markets: list[dict], budget: float, floor: float,
 
 def allocate_fundable(markets: list[dict], budget: float, floor: float,
                       payout_floor: float, step: float = 5.0,
-                      max_frac: float = 1.0) -> dict[str, float]:
+                      max_pct: float = 1.0, **kwargs) -> dict[str, float]:
     """Water-fill, then drop whatever the funded size cannot actually earn on,
     and redistribute what that frees. Every input cid appears in the result;
     the ones that survived nothing are 0.0.
@@ -216,6 +221,8 @@ def allocate_fundable(markets: list[dict], budget: float, floor: float,
     that was only just under, so clearing every offender at once would defund
     markets the redistribution would have saved.
     """
+    if "max_frac" in kwargs:
+        max_pct = kwargs.pop("max_frac")
     live = list(markets)
     fixed: dict[str, float] = {}          # markets held at their minimum lot
     out = {m["cid"]: 0.0 for m in markets}
@@ -223,7 +230,7 @@ def allocate_fundable(markets: list[dict], budget: float, floor: float,
     # against the full budget rather than against the shrinking `free` -- if it
     # tracked `free`, each promotion would tighten the cap on everyone left and
     # the limit would depend on the order markets happened to be promoted in.
-    cap = budget * max_frac if max_frac < 1.0 else float("inf")
+    cap = budget * max_pct if max_pct < 1.0 else float("inf")
     while True:
         free = max(budget - sum(fixed.values()), 0.0)
         # Re-expressed as a fraction of `free`, because that is the budget
@@ -232,7 +239,7 @@ def allocate_fundable(markets: list[dict], budget: float, floor: float,
         # has to know a market is full while it still has increments to hand
         # out, or the surplus never reaches the next-best market.
         frac = 1.0 if cap == float("inf") or free <= 0 else min(cap / free, 1.0)
-        dollars = allocate(live, free, floor, step, max_frac=frac) if live else {}
+        dollars = allocate(live, free, floor, step, max_pct=frac) if live else {}
 
         promote, drop = None, None
         for m in live:

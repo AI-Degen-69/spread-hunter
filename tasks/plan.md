@@ -87,7 +87,7 @@ Verify: NEW tests in `tests/test_quotes.py` RED-first then GREEN
 alias-set-raises-AttributeError, legacy-kw-TypeError); then
 `pytest -q tests/test_quotes.py tests/test_config_for_display.py`.
 
-### T2 [M][Backend/Logic] Canonical-first env loader + all readers
+### [x] T2 [M][Backend/Logic] Canonical-first env loader + all readers
 Depends on: T1. Files: `config.py::load`, `quotes.py`, `risk.py`, `kpi.py`,
 `order_manager.py` (1 line), `scoring/allocate.py`, touched tests.
 5 env canonical-first+fallback+log-warning; rename `range_pct`,
