@@ -247,7 +247,11 @@ class MockExitClient:
     def get_order(self, order_id):
         return {"id": order_id, "status": "filled", "size_matched": 5.0}
 
-    def create_and_post_market_order(self, payload):
+    def create_and_post_market_order(self, payload, options=None,
+                                     order_type=None, defer_exec=False):
+        # SDK-shaped: every live caller may state an order type, and the stop
+        # exit does (#619). A double that rejects the kwarg tests itself.
+
         self.market_orders.append(payload)
         return {"status": "matched", "takingAmount": "5.0", "size": "5.0"}
 
@@ -436,7 +440,8 @@ def test_run_stray_guard_end_to_end(tmp_path):
         def get_order(self, order_id):
             return {"id": order_id, "status": "filled", "size_matched": 5.0}
 
-        def create_and_post_market_order(self, payload):
+        def create_and_post_market_order(self, payload, options=None,
+                                         order_type=None, defer_exec=False):
             self.market_orders.append(payload)
             return {"status": "matched", "takingAmount": "5.0", "size": "5.0"}
 
@@ -559,7 +564,8 @@ def test_hopeless_partial_order_cancelled_and_remediated(tmp_path):
         def get_order(self, order_id):
             return {"id": order_id, "status": "partial", "size_matched": 4.0}
 
-        def create_and_post_market_order(self, payload):
+        def create_and_post_market_order(self, payload, options=None,
+                                         order_type=None, defer_exec=False):
             self.market_orders.append(payload)
             return {"status": "matched", "takingAmount": "4.0", "size": "4.0"}
 
@@ -606,7 +612,8 @@ def test_resolved_tokens_are_never_requested(tmp_path):
         def cancel_order(self, payload_or_id):
             return {"success": True, "canceled": []}
 
-        def create_and_post_market_order(self, payload):
+        def create_and_post_market_order(self, payload, options=None,
+                                         order_type=None, defer_exec=False):
             return {"status": "matched", "takingAmount": "0.0", "size": "0.0"}
 
     run_stray_guard(_Client(), reg, live=False, resolved_cids={dead})
@@ -645,7 +652,8 @@ def test_resolved_tokens_skipped_when_caller_passes_no_set(tmp_path):
         def cancel_order(self, payload_or_id):
             return {"success": True, "canceled": []}
 
-        def create_and_post_market_order(self, payload):
+        def create_and_post_market_order(self, payload, options=None,
+                                         order_type=None, defer_exec=False):
             return {"status": "matched", "takingAmount": "0.0", "size": "0.0"}
 
     run_stray_guard(_Client(), reg, live=False)
@@ -677,7 +685,8 @@ def test_failing_book_backs_off_without_an_explicit_tracker(tmp_path):
         def cancel_order(self, payload_or_id):
             return {"success": True, "canceled": []}
 
-        def create_and_post_market_order(self, payload):
+        def create_and_post_market_order(self, payload, options=None,
+                                         order_type=None, defer_exec=False):
             return {"status": "matched", "takingAmount": "0.0", "size": "0.0"}
 
     client = _Client()
@@ -743,7 +752,8 @@ def test_failed_book_read_retries_after_backoff_without_resolving(tmp_path):
         def cancel_order(self, payload_or_id):
             return {"success": True, "canceled": []}
 
-        def create_and_post_market_order(self, payload):
+        def create_and_post_market_order(self, payload, options=None,
+                                         order_type=None, defer_exec=False):
             return {"status": "matched", "takingAmount": "0.0", "size": "0.0"}
 
     client = _Client()

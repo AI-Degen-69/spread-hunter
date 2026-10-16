@@ -184,17 +184,20 @@ def test_the_repeating_wait_verdicts_are_the_quiet_ones():
     assert lp.AGED_OUT_VENUE_CLOSED not in lp.AGED_OUT_QUIET_ACTIONS
 
 
-def test_no_existing_default_moved():
-    # Arrange - the issue forbids touching any shipped default.
+def test_no_unrelated_shipped_default_moved():
+    # Arrange - the issue forbids touching any shipped default but its own.
     cfg = MakerConfig()
 
     # Act / Assert
     assert cfg.pairs_exit_window_sec == 900.0
     assert cfg.max_pair_cost == 0.99
-    assert cfg.stop_loss_trigger_pct == 10.0
-    assert cfg.stop_loss_trigger_usd_cents == 4.0
-    assert cfg.single_buy_grace_sec == 0.0
     assert cfg.enable_pairs_rule is True
+    # #619 replaced the static cent stop with the entry-relative one; these are
+    # the new shipped defaults, asserted here so they cannot drift unnoticed.
+    assert cfg.stop_loss_mode == "NONE"
+    assert cfg.drop_cents == 0.05
+    assert cfg.drawdown_pct == 10.0
+    assert cfg.emergency_drawdown_pct == 75.0
 
 
 def test_the_lead_knob_has_an_env_override(monkeypatch):

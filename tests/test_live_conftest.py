@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import importlib
 import socket
+import subprocess
+import sys
 from pathlib import Path
 import pytest
 
@@ -22,7 +24,7 @@ REQUIRED_CREDENTIAL_VARS = frozenset({
 })
 
 
-from tests.conftest import CREDENTIAL_VARS
+from tests.conftest import CREDENTIAL_VARS, REPO_ROOT
 
 
 def test_live_env_scrub_removes_credentials():
@@ -91,4 +93,42 @@ def test_conftest_places_repo_root_on_sys_path():
     import sys
     from tests.conftest import REPO_ROOT
     assert sys.path[0] == str(REPO_ROOT)
+
+
+def test_a_stray_port_never_reaches_the_suite():
+    """`PORT` is dropped at conftest import, before any dashboard import.
+
+    `dashboard/server.py` resolves its port at import time, so an unusable
+    `PORT` inherited from the operator's shell (the ambient `PORT=0` this repo
+    has hit) crashes collection for every test file that imports the app.
+    """
+    assert "PORT" not in os.environ, (
+        "tests/conftest.py must drop a stray PORT before collection"
+    )
+
+
+def test_a_stray_port_cannot_fail_collection_of_a_dashboard_importing_file():
+    """The same guarantee, measured end to end in a child process.
+
+    The child runs pytest with `PORT=0` in its own environment, over a test
+    file that imports `dashboard.server` at module level. Without the conftest
+    scrub that run dies during collection -- exit 2, `ValueError: PORT='0' is
+    outside 1-65535`, zero tests run -- and this test fails.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "PORT"}
+    env["PORT"] = "0"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--no-header",
+         "tests/test_dashboard_port.py"],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+    )
+
+    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
 

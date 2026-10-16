@@ -20,14 +20,16 @@ store before any of these functions can be reached.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import sqlite3
 import time
 import uuid
 from contextlib import closing
+from dataclasses import asdict
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from core_brain.close_methods import MERGE_METHODS, RESCUE_METHODS
 from core_brain.order_registry import (
@@ -202,6 +204,24 @@ def ensure_shadow_tables(db_path: Path | str) -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shadow_tape_reads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                cycle INTEGER NOT NULL,
+                condition_id TEXT NOT NULL,
+                market_slug TEXT,
+                run_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                report_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_shadow_tape_reads_market_ts "
+            "ON shadow_tape_reads (condition_id, ts DESC, id DESC)"
+        )
         conn.commit()
 
 
@@ -264,6 +284,77 @@ def read_queue_ahead(db_path: Path | str, run_id: str, local_id: str) -> float:
     return float(row["queue_ahead"]) if row else 0.0
 
 
+def write_shadow_tape_read(
+    db_path: Path | str,
+    *,
+    ts: float,
+    cycle: int,
+    condition_id: str,
+    market_slug: Optional[str],
+    run_id: str,
+    status: str,
+    report: dict,
+) -> None:
+    """Persist one market visit's tape evidence for fill-model calibration.
+
+    Telemetry only (#474): the fill itself is already recorded by the time
+    this runs. `report` must be JSON-serializable without NaN (counts and
+    statuses, never floats that can be infinite).
+    """
+    payload = json.dumps(report, allow_nan=False, separators=(",", ":"))
+    with closing(get_connection(Path(db_path))) as conn:
+        conn.execute(
+            "INSERT INTO shadow_tape_reads "
+            "(ts, cycle, condition_id, market_slug, run_id, status, report_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (float(ts), int(cycle), str(condition_id), market_slug,
+             str(run_id), str(status), payload),
+        )
+        conn.commit()
+
+
+def read_shadow_tape_reads(
+    db_path: Path | str,
+    *,
+    limit: int = 500,
+) -> list[dict] | None:
+    """Latest tape read per market, newest first -- or None when unreadable.
+
+    Read-only by construction (a `mode=ro` URI): calibration reads must never
+    create or lock the store. Returns None for a missing store or a store
+    that predates the table; otherwise one row per market (its latest visit),
+    each with its parsed `report` dict.
+    """
+    path = Path(db_path)
+    if not path.is_file():
+        return None
+    uri = f"file:{path.resolve().as_posix()}?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True, timeout=2.0)) as conn:
+        conn.row_factory = sqlite3.Row
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'shadow_tape_reads'"
+        ).fetchone()
+        if exists is None:
+            return None
+        rows = conn.execute(
+            "SELECT t.id, t.ts, t.cycle, t.condition_id, t.market_slug, "
+            "t.run_id, t.status, t.report_json FROM shadow_tape_reads AS t "
+            "WHERE t.id = (SELECT s.id FROM shadow_tape_reads AS s "
+            "WHERE s.condition_id = t.condition_id "
+            "ORDER BY s.ts DESC, s.id DESC LIMIT 1) "
+            "ORDER BY t.ts DESC, t.id DESC LIMIT ?",
+            (max(0, min(int(limit), 500)),),
+        ).fetchall()
+        return [
+            {
+                **{key: row[key] for key in row.keys() if key != "report_json"},
+                "report": json.loads(row["report_json"]),
+            }
+            for row in rows
+        ]
+
+
 
 def record_submit(
     _client,
@@ -295,10 +386,16 @@ def record_submit(
     Fields the venue supplies live and a rehearsal does not (`latency_ms`) are
     left unset rather than filled with a plausible number.
     """
-    from core_brain.venue import MAX_ORDER_USD, MAX_TOTAL_USD
+    from core_brain.venue import order_caps
 
     if not intents:
         return 0
+
+    # Same precedence as live submission (`trader_loop._submit_intents`):
+    # effective caps already merged into cfg win, otherwise the live caps.
+    _live_order, _live_total = order_caps()
+    max_order_usd = float(getattr(cfg, "max_order_usd", _live_order)) if cfg is not None else _live_order
+    max_total_usd = float(getattr(cfg, "max_total_usd", _live_total)) if cfg is not None else _live_total
 
     paired_context = getattr(registry, "paired_context", None)
     paired_enabled = isinstance(paired_context, dict)
@@ -308,17 +405,17 @@ def record_submit(
             db_path, run_id=registry._run_id(),
             condition_id=market.condition_id)
     for i in intents:
-        if i.price * i.size > MAX_ORDER_USD:
+        if i.price * i.size > max_order_usd:
             raise ShadowOrderRefused(
                 f"leg {i.side} ${i.price * i.size:.2f} exceeds "
-                f"MAX_ORDER_USD ${MAX_ORDER_USD:.2f}")
+                f"MAX_ORDER_USD ${max_order_usd:.2f}")
 
     open_usd = sum(o.price * o.original_size for o in registry.get_active_orders())
     total_cost = sum(i.price * i.size for i in intents)
-    if open_usd + total_cost > MAX_TOTAL_USD:
+    if open_usd + total_cost > max_total_usd:
         raise ShadowOrderRefused(
             f"open ${open_usd:.2f} + ${total_cost:.2f} exceeds "
-            f"MAX_TOTAL_USD ${MAX_TOTAL_USD:.2f}")
+            f"MAX_TOTAL_USD ${max_total_usd:.2f}")
 
     now_ms = int(now_fn() * 1000)
     max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
@@ -628,13 +725,69 @@ def _log_shadow_markout(
         _log.warning("shadow markout row not written: %s", e)
 
 
+def _write_tape_read(db_path, market, run_id, cycle, now_fn, tape_report,
+                     report_status, settlement) -> None:
+    """Persist one visit's tape evidence and log its one-line summary.
+
+    Shared by the measured and the two no-measurement branches so the three
+    cannot drift apart: one writer, one log shape, one settlement schema.
+
+    Never raises: like the other shadow telemetry writers, a locked store or
+    an unserializable report must cost one row of evidence, never the
+    settlement it describes.
+    """
+    try:
+        write_shadow_tape_read(
+            db_path,
+            ts=now_fn(),
+            cycle=cycle,
+            condition_id=market.condition_id,
+            market_slug=_market_slug(market),
+            run_id=run_id,
+            status=report_status,
+            report={
+                **asdict(tape_report),
+                "settlement": settlement,
+            },
+        )
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        _log.warning("tape read not written: %s", exc)
+        return
+    pages = sum(w.pages_read for w in tape_report.walks)
+    rows = sum(w.rows_read for w in tape_report.walks)
+    qual_rows = sum(w.qualifying_rows for w in tape_report.walks)
+    rejections: dict = {}
+    for w in tape_report.walks:
+        for k, v in w.rejected_rows.items():
+            rejections[k] = rejections.get(k, 0) + v
+    slug = _market_slug(market) or market.condition_id
+    if settlement["measurement_status"] == "measured":
+        _log.info(
+            "tape-read %s run=%s cycle=%d status=%s pages=%d rows=%d "
+            "qual_rows=%d resting_vol=%.2f queue_consumed=%.2f "
+            "fill_credited=%.2f rejections=%s",
+            slug, run_id, cycle, report_status, pages, rows, qual_rows,
+            settlement["observed_volume"], settlement["queue_consumed"],
+            settlement["fill_credited"], rejections,
+        )
+    else:
+        _log.info(
+            "tape-read %s run=%s cycle=%d status=%s pages=%d rows=%d "
+            "qual_rows=%d resting_vol=None queue_consumed=None "
+            "fill_credited=None rejections=%s",
+            slug, run_id, cycle, report_status, pages, rows, qual_rows,
+            rejections,
+        )
+
+
 def settle_market(
     registry: OrderRegistry,
     market,
     *,
     db_path: Path | str,
-    traded_fn: Callable[[str, set], dict],
+    traded_fn: Callable[[str, set], Any],
     seen: set,
+    cycle: int = 0,
     now_fn: Callable[[], float] = time.time,
     book_fn: Optional[Callable] = None,
     clob_host: Optional[str] = None,
@@ -654,6 +807,20 @@ def settle_market(
     """
     traded = traded_fn(market.condition_id, seen)
 
+    from core_brain.markets import TradeTapeReport
+    is_detailed = isinstance(traded, TradeTapeReport) or (
+        hasattr(traded, "status") and hasattr(traded, "volume_by_token_price")
+        and hasattr(traded, "walks")
+    )
+    if is_detailed:
+        tape_report = traded
+        report_status = tape_report.status
+        volume_map = dict(tape_report.volume_by_token_price or {})
+    else:
+        tape_report = None
+        report_status = None
+        volume_map = traded or {}
+
     # Scoped to THIS run's orders. `data/shadow.db` is reused between
     # rehearsals by design, and `get_active_orders` reads every open row in
     # the store: without this filter a run started while an older run's
@@ -667,6 +834,57 @@ def settle_market(
         if o.condition_id == market.condition_id and o.status in ("open", "partial")
         and (o.run_id or mine_run_id) == mine_run_id
     ]
+    # Fill credit is stricter than observation -- only orders this run owns
+    # may consume this run's tape (see below). Hoisted here so the detailed
+    # no-measurement branches below can tell "no orders" from "not ours".
+    owned = [o for o in resting if o.run_id == mine_run_id]
+
+    if is_detailed and report_status == "unavailable":
+        _write_tape_read(
+            db_path, market, mine_run_id, cycle, now_fn, tape_report,
+            report_status,
+            settlement={
+                "measurement_status": "unavailable",
+                "observed_volume": None,
+                "total_qualifying_volume": None,
+                "unmatched_volume": None,
+                "queue_consumed": None,
+                "fill_credited": None,
+                "resting_levels": [],
+            },
+        )
+        return []
+
+    if is_detailed and not owned:
+        if resting and book_fn is not None:
+            # Observation still covers every resting row, including legacy
+            # rows no run owns: the marks below are the pre-decision book the
+            # exit path prices against, and skipping them would make the two
+            # tape paths behave differently.
+            _record_queue_marks(
+                db_path, market,
+                [ShadowRestingOrder(
+                    local_id=o.id, token_id=o.token_id, price=o.price,
+                    size=o.original_size, filled=_filled_size(db_path, o.id),
+                    queue_ahead=read_queue_ahead(db_path, mine_run_id, o.id),
+                ) for o in resting],
+                volume_map, book_fn, now_fn(), run_id=mine_run_id,
+                clob_host=clob_host)
+        _write_tape_read(
+            db_path, market, mine_run_id, cycle, now_fn, tape_report,
+            report_status,
+            settlement={
+                "measurement_status": "no_resting_orders",
+                "observed_volume": None,
+                "total_qualifying_volume": None,
+                "unmatched_volume": None,
+                "queue_consumed": None,
+                "fill_credited": None,
+                "resting_levels": [],
+            },
+        )
+        return []
+
     if not resting:
         return []
 
@@ -676,7 +894,6 @@ def settle_market(
     # is stricter -- only orders this run actually owns may consume this run's
     # tape. Claiming a NULL-run row's tape would let a stale, foreign order
     # absorb volume that belongs to a current-run order resting at the same price.
-    owned = [o for o in resting if o.run_id == mine_run_id]
     orders = [
         ShadowRestingOrder(
             local_id=o.id, token_id=o.token_id, price=o.price,
@@ -693,13 +910,13 @@ def settle_market(
         )
         for o in resting
     ]
-    fills, queues = credit_fills(orders, traded)
+    fills, queues = credit_fills(orders, volume_map)
 
     for local_id, queue_ahead in queues.items():
         write_queue_ahead(db_path, mine_run_id, local_id, queue_ahead)
 
     if book_fn is not None:
-        _record_queue_marks(db_path, market, marks, traded, book_fn,
+        _record_queue_marks(db_path, market, marks, volume_map, book_fn,
                             now_fn(), run_id=registry._run_id(),
                             clob_host=clob_host)
 
@@ -728,6 +945,56 @@ def settle_market(
         status = "filled" if total_filled >= order.size - 1e-9 else "partial"
         registry.update_order_status(f.local_id, status=status,
                                      last_polled_ts=now_ms)
+
+    if is_detailed:
+        level_dict: dict[tuple[str, float], list] = {}
+        for o in orders:
+            key = (str(o.token_id), round(float(o.price), 4))
+            q_before = o.queue_ahead
+            q_after = queues.get(o.local_id, q_before)
+            q_consumed = q_before - q_after
+            f_credited = sum(f.size for f in fills if f.local_id == o.local_id)
+            level_dict.setdefault(key, []).append({
+                "local_id": o.local_id,
+                "queue_before": q_before,
+                "queue_consumed": q_consumed,
+                "fill_credited": f_credited,
+            })
+
+        resting_levels = []
+        for (token_id, price), order_entries in level_dict.items():
+            lvl_obs = float(
+                (volume_map.get(token_id, {}) or {}).get(price, 0.0))
+            resting_levels.append({
+                "token_id": token_id,
+                "price": price,
+                "observed_volume": lvl_obs,
+                "orders": order_entries,
+            })
+
+        total_qualifying = sum(
+            float(v) for by_p in volume_map.values() for v in by_p.values())
+        obs_vol = sum(lvl["observed_volume"] for lvl in resting_levels)
+        total_q_consumed = sum(
+            entry["queue_consumed"]
+            for lvl in resting_levels for entry in lvl["orders"])
+        total_fill_credited = sum(
+            entry["fill_credited"]
+            for lvl in resting_levels for entry in lvl["orders"])
+
+        _write_tape_read(
+            db_path, market, mine_run_id, cycle, now_fn, tape_report,
+            report_status,
+            settlement={
+                "measurement_status": "measured",
+                "observed_volume": obs_vol,
+                "total_qualifying_volume": total_qualifying,
+                "unmatched_volume": total_qualifying - obs_vol,
+                "queue_consumed": total_q_consumed,
+                "fill_credited": total_fill_credited,
+                "resting_levels": resting_levels,
+            },
+        )
 
     return fills
 

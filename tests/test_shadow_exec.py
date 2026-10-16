@@ -33,6 +33,35 @@ def _books(_clob_host, token_id):
             "asks": {}, "best_bid": 0.47, "best_ask": None}
 
 
+def _tape_report(status, volume=None, *, error=None):
+    from core_brain.markets import TapeWalkReport, TradeTapeReport
+
+    volume = volume or {}
+    accepted = sum(
+        float(amount)
+        for by_price in volume.values()
+        for amount in by_price.values()
+    )
+    walk_status = "unavailable" if status == "unavailable" else status
+    return TradeTapeReport(
+        status=status,
+        volume_by_token_price=volume,
+        walks=(TapeWalkReport(
+            name="taker",
+            status=walk_status,
+            pages_read=0 if status == "unavailable" else 1,
+            rows_read=0 if status == "unavailable" else 2,
+            qualifying_rows=0 if status == "unavailable" else 1,
+            accepted_volume=accepted,
+            rejected_rows={"bad_timestamp": 1} if status == "partial" else {},
+            non_qualifying_rows={},
+            first_trade_ts=None,
+            last_trade_ts=None,
+            error=error,
+        ),),
+    )
+
+
 @pytest.fixture
 def registry(tmp_path):
     db = tmp_path / "shadow.db"
@@ -403,6 +432,278 @@ def test_the_same_tape_volume_is_never_credited_twice(registry):
 
     inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
     assert inv.up_shares == 20.0
+
+
+def test_detailed_tape_report_persists_queue_and_fill_evidence(registry):
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, read_queue_ahead, read_shadow_tape_reads,
+        record_submit, settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    record_submit(
+        object(), reg, FakeMarket(), _intents()[:1], _cfg(), db_path=db,
+        book_fn=lambda _host, _token: {"bids": {0.47: 10.0}},
+    )
+    order = reg.get_active_orders()[0]
+    # Trade-through only (#527): the print sits strictly below our price,
+    # proving the level cleared -- queue zeroes and the full remainder fills.
+    report = _tape_report("complete", {"tok-up": {0.46: 15.0}})
+
+    fills = settle_market(
+        reg, FakeMarket(), db_path=db, seen=set(),
+        traded_fn=lambda _cid, _seen: report,
+        cycle=3, now_fn=lambda: 123.0,
+    )
+
+    assert [(fill.local_id, fill.size, fill.price) for fill in fills] == [
+        (order.id, 20.0, 0.47)]
+    assert read_queue_ahead(db, reg._run_id(), order.id) == 0.0
+    rows = read_shadow_tape_reads(db)
+    assert len(rows) == 1
+    saved = rows[0]
+    assert (saved["cycle"], saved["run_id"], saved["status"]) == (
+        3, reg._run_id(), "complete")
+    assert saved["report"]["settlement"] == {
+        "measurement_status": "measured",
+        "observed_volume": 0.0,
+        "total_qualifying_volume": 15.0,
+        "unmatched_volume": 15.0,
+        "queue_consumed": 10.0,
+        "fill_credited": 20.0,
+        "resting_levels": [{
+            "token_id": "tok-up",
+            "price": 0.47,
+            "observed_volume": 0.0,
+            "orders": [{
+                "local_id": order.id,
+                "queue_before": 10.0,
+                "queue_consumed": 10.0,
+                "fill_credited": 20.0,
+            }],
+        }],
+    }
+
+
+def test_unavailable_tape_preserves_queue_and_does_not_write_queue_marks(registry):
+    import sqlite3
+
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, read_queue_ahead, read_shadow_tape_reads,
+        record_submit, settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    record_submit(
+        object(), reg, FakeMarket(), _intents()[:1], _cfg(), db_path=db,
+        book_fn=lambda _host, _token: {"bids": {0.47: 10.0}},
+    )
+    order = reg.get_active_orders()[0]
+
+    fills = settle_market(
+        reg, FakeMarket(), db_path=db, seen=set(),
+        traded_fn=lambda _cid, _seen: _tape_report(
+            "unavailable", error="RequestException"),
+        book_fn=lambda _host, _token: {"bids": {0.47: 2.0}},
+        cycle=1,
+    )
+
+    assert fills == []
+    assert reg.get_all_fills() == []
+    assert read_queue_ahead(db, reg._run_id(), order.id) == 10.0
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM queue_marks").fetchone()[0] == 0
+    row = read_shadow_tape_reads(db)[0]
+    assert row["status"] == "unavailable"
+    assert row["report"]["walks"][0]["error"] == "RequestException"
+    assert row["report"]["settlement"]["measurement_status"] == "unavailable"
+    assert row["report"]["settlement"]["observed_volume"] is None
+    assert row["report"]["settlement"]["queue_consumed"] is None
+
+
+def test_detailed_read_without_owned_orders_records_unmeasured_totals(registry, caplog):
+    import logging
+
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, read_shadow_tape_reads, settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    report = _tape_report("complete", {"tok-up": {0.47: 15.0}})
+
+    with caplog.at_level(logging.INFO, logger="core_brain.shadow_exec"):
+        result = settle_market(
+            reg, FakeMarket(), db_path=db, seen=set(),
+            traded_fn=lambda _cid, _seen: report,
+            cycle=2,
+        )
+
+    assert result == []
+    settlement = read_shadow_tape_reads(db)[0]["report"]["settlement"]
+    assert settlement["measurement_status"] == "no_resting_orders"
+    for field in (
+        "observed_volume", "total_qualifying_volume", "unmatched_volume",
+        "queue_consumed", "fill_credited",
+    ):
+        assert settlement[field] is None
+    assert settlement["resting_levels"] == []
+
+
+def test_dictionary_tape_callback_does_not_fabricate_tape_status(registry):
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, read_shadow_tape_reads, record_submit,
+        settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    record_submit(object(), reg, FakeMarket(), _intents()[:1], _cfg(),
+                  db_path=db, book_fn=lambda _host, _token: {"bids": {}})
+
+    settle_market(
+        reg, FakeMarket(), db_path=db, seen=set(),
+        traded_fn=lambda _cid, _seen: {"tok-up": {0.47: 0.0}},
+    )
+
+    assert read_shadow_tape_reads(db) == []
+
+
+def test_tape_read_helper_is_read_only_and_scoped_to_latest_market_visit(
+        registry, monkeypatch):
+    import sqlite3
+
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, read_shadow_tape_reads, write_shadow_tape_read,
+    )
+
+    _reg, db = registry
+    ensure_shadow_tables(db)
+    write_shadow_tape_read(
+        db, ts=1.0, cycle=1, condition_id="0xabc", market_slug="fake-market",
+        run_id="run-a", status="empty", report={},
+    )
+    write_shadow_tape_read(
+        db, ts=2.0, cycle=1, condition_id="0xabc", market_slug="fake-market",
+        run_id="run-b", status="partial", report={"validated": 3.0},
+    )
+
+    connect = sqlite3.connect
+    opened = []
+
+    def observe_connect(database, *args, **kwargs):
+        opened.append((database, kwargs))
+        return connect(database, *args, **kwargs)
+
+    monkeypatch.setattr("core_brain.shadow_exec.sqlite3.connect", observe_connect)
+    rows = read_shadow_tape_reads(db, limit=10)
+
+    assert len(rows) == 1
+    assert (rows[0]["run_id"], rows[0]["status"], rows[0]["report"]) == (
+        "run-b", "partial", {"validated": 3.0})
+    assert opened and opened[0][1]["uri"] is True
+    assert "mode=ro" in opened[0][0]
+    assert read_shadow_tape_reads(db.parent / "does-not-exist.db") is None
+
+
+def test_identical_market_visits_keep_separate_run_ids(registry):
+    import sqlite3
+
+    from core_brain.order_registry import OrderRegistry
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, read_shadow_tape_reads, record_submit,
+        settle_market,
+    )
+
+    _reg, db = registry
+    ensure_shadow_tables(db)
+    run_a = OrderRegistry(db_path=db, run_id="run-a")
+    record_submit(
+        object(), run_a, FakeMarket(), _intents()[:1], _cfg(), db_path=db,
+        book_fn=lambda _host, _token: {"bids": {}},
+    )
+    settle_market(
+        run_a, FakeMarket(), db_path=db, seen=set(),
+        traded_fn=lambda _cid, _seen: _tape_report("empty"),
+    )
+    run_b = OrderRegistry(db_path=db, run_id="run-b")
+    settle_market(
+        run_b, FakeMarket(), db_path=db, seen=set(),
+        traded_fn=lambda _cid, _seen: _tape_report("empty"),
+    )
+
+    with sqlite3.connect(db) as conn:
+        run_ids = [row[0] for row in conn.execute(
+            "SELECT run_id FROM shadow_tape_reads ORDER BY id")]
+    assert run_ids == ["run-a", "run-b"]
+    assert read_shadow_tape_reads(db)[0]["run_id"] == "run-b"
+
+
+def test_failed_tape_write_does_not_lose_a_measured_fill(registry, monkeypatch):
+    import sqlite3
+
+    import core_brain.shadow_exec as shadow_exec
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, read_shadow_tape_reads, record_submit,
+        settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    record_submit(
+        object(), reg, FakeMarket(), _intents()[:1], _cfg(), db_path=db,
+        book_fn=lambda _host, _token: {"bids": {0.47: 10.0}},
+    )
+    order = reg.get_active_orders()[0]
+
+    def _locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(shadow_exec, "write_shadow_tape_read", _locked)
+
+    fills = settle_market(
+        reg, FakeMarket(), db_path=db, seen=set(),
+        traded_fn=lambda _cid, _seen: _tape_report(
+            "complete", {"tok-up": {0.46: 15.0}}),
+    )
+
+    assert [(f.local_id, f.size) for f in fills] == [(order.id, 20.0)]
+    assert reg.get_all_fills() != []
+    assert read_shadow_tape_reads(db) == []
+
+
+def test_legacy_resting_rows_keep_queue_marks_on_detailed_path(registry):
+    import sqlite3
+
+    from core_brain.shadow_exec import (
+        ensure_shadow_tables, read_shadow_tape_reads, record_submit,
+        settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    record_submit(
+        object(), reg, FakeMarket(), _intents()[:1], _cfg(), db_path=db,
+        book_fn=lambda _host, _token: {"bids": {0.47: 10.0}},
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE orders SET run_id = NULL")
+        conn.commit()
+
+    settle_market(
+        reg, FakeMarket(), db_path=db, seen=set(),
+        traded_fn=lambda _cid, _seen: _tape_report("empty"),
+        book_fn=lambda _host, _token: {"bids": {0.47: 10.0}},
+    )
+
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM queue_marks").fetchone()[0] == 1
+    row = read_shadow_tape_reads(db)[0]
+    assert row["report"]["settlement"]["measurement_status"] == \
+        "no_resting_orders"
 
 
 def test_exact_price_print_leaves_the_queue_and_order_untouched(registry):

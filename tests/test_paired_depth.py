@@ -142,7 +142,6 @@ def test_ranker_writes_atomic_pair_with_shared_snapshot_and_pins_volume(
         return scored, len(universe)
 
     monkeypatch.setattr(fm, "_score_universe", score)
-    monkeypatch.setattr(fm, "_if_adopted", lambda _row: None)
     monkeypatch.setattr(fm, "_write_universe_file", lambda *a, **kw: None)
     monkeypatch.setattr(fm, "_write_pipeline_snapshot", lambda *a, **kw: None)
     monkeypatch.setattr(fm, "_log_rank_near_misses", lambda *a, **kw: 0)
@@ -202,7 +201,6 @@ def test_ranker_skips_the_audit_line_when_the_bundle_swap_is_refused(
                                     "truncated": False, "cheap_rejects": {}}))
     monkeypatch.setattr(fm, "_score_universe",
                         lambda universe, **kw: (scored, len(universe)))
-    monkeypatch.setattr(fm, "_if_adopted", lambda _row: None)
     monkeypatch.setattr(fm, "_write_universe_file", lambda *a, **kw: None)
     monkeypatch.setattr(fm, "_write_pipeline_snapshot", lambda *a, **kw: None)
     monkeypatch.setattr(fm, "_log_rank_near_misses", lambda *a, **kw: 0)

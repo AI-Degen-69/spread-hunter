@@ -99,7 +99,6 @@ def test_main_with_out_dir_publishes_a_tagged_trial_feed(tmp_path, monkeypatch, 
                             [], {"pages_fetched": 0, "rows_scanned": 0,
                                  "truncated": False, "cheap_rejects": {}}))
     monkeypatch.setattr(fm, "_score_universe", lambda *a, **k: ([winner], 1))
-    monkeypatch.setattr(fm, "_if_adopted", lambda r: {})
     monkeypatch.setattr(fm, "_write_universe_file",
                         lambda *a, **k: seen.setdefault("universe", k.get("out_dir")))
     monkeypatch.setattr(fm, "_write_pipeline_snapshot",

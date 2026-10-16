@@ -15,6 +15,23 @@ if TYPE_CHECKING:
 
 SIZE_EPS = 1e-6
 
+# The dynamic stop modes (#619). Exactly one is selected per run: `NONE` leaves
+# the held leg to the emergency floor alone. The two drop modes are mutually
+# exclusive by construction -- one field selects one formula. The spec spells
+# them `ABSOLUTE`/`PERCENTAGE` in its formulas and `ABSOLUTE_DROP`/
+# `PERCENTAGE_DROP` in its mode list; only the `_DROP` spellings are accepted,
+# because the retired `usd`/`pct` knobs they replace counted in different units
+# and a silent alias would run an operator's number in the wrong scale.
+STOP_LOSS_MODES = frozenset({"NONE", "ABSOLUTE_DROP", "PERCENTAGE_DROP"})
+
+# `drop_cents` is a price drop in DOLLARS per share, bounded to the contract.
+# The emergency drawdown is a percentage in the open interval (0, 100].
+DROP_CENTS_MIN = 0.01
+DROP_CENTS_MAX = 0.90
+# No stop can ever trigger below one cent: the venue's smallest tick, and the
+# only price at which an exit is still an exit rather than a donation.
+EMERGENCY_FLOOR_MIN = 0.01
+
 
 class LegState(str, Enum):
     DUAL_RESTING = "DUAL_RESTING"
@@ -228,13 +245,110 @@ def max_profitable_hedge_bid(
     return float(bid_decimal)
 
 
+def _validated_stop_knobs(
+    mode: str,
+    drop_cents: float,
+    drawdown_pct: float,
+    emergency_drawdown_pct: float,
+) -> tuple[str, Decimal, Decimal, Decimal]:
+    """The canonical mode and its three knobs, or a ValueError.
+
+    The bounded inputs are contract, not preference: an out-of-range knob is
+    refused rather than clamped, because a silently clamped stop is a stop the
+    operator believes is armed and is not. `mode` is trimmed and upper-cased
+    so the environment's spelling and the code's agree.
+    """
+    candidate = str(mode).strip().upper()
+    if candidate not in STOP_LOSS_MODES:
+        choices = ", ".join(sorted(STOP_LOSS_MODES))
+        raise ValueError(
+            f"stop_loss_mode must be one of {choices}, got {mode!r}"
+        )
+    drop_value = float(drop_cents)
+    if (not math.isfinite(drop_value)
+            or not DROP_CENTS_MIN <= drop_value <= DROP_CENTS_MAX):
+        raise ValueError(
+            f"drop_cents must be between {DROP_CENTS_MIN} and "
+            f"{DROP_CENTS_MAX}, got {drop_cents!r}"
+        )
+    drawdown_value = float(drawdown_pct)
+    if not math.isfinite(drawdown_value) or not 0 < drawdown_value <= 100:
+        raise ValueError(
+            f"drawdown_pct must be above zero and at most 100, "
+            f"got {drawdown_pct!r}"
+        )
+    emergency_value = float(emergency_drawdown_pct)
+    if not math.isfinite(emergency_value) or not 0 < emergency_value <= 100:
+        raise ValueError(
+            f"emergency_drawdown_pct must be above zero and at most 100, "
+            f"got {emergency_drawdown_pct!r}"
+        )
+    return (
+        candidate,
+        Decimal(str(drop_value)),
+        Decimal(str(drawdown_value)),
+        Decimal(str(emergency_value)),
+    )
+
+
+def stop_trigger(
+    entry: float,
+    mode: str,
+    drop_cents: float,
+    drawdown_pct: float,
+    emergency_drawdown_pct: float,
+) -> tuple[float, str]:
+    """The bid at which a held leg must be sold, and which rule set it.
+
+    The strategy trigger is the selected mode's formula off the leg's own
+    average fill; the emergency floor is the universal backstop every mode
+    shares, floored at one cent so an exit is never priced at nothing. The
+    active trigger is the higher of the two, and `source` names which one it
+    was -- so a booked loss can be attributed to the mode the operator chose or
+    to the catastrophe backstop.
+
+    `NONE` has no strategy trigger at all, so the floor is the whole rule. This
+    is what replaces the static $0.15 stop: active quotes span $0.10-$0.90, and
+    a fixed bid at the bottom of that range liquidated every low entry the
+    moment it filled.
+    """
+    entry_value = float(entry)
+    if not math.isfinite(entry_value) or not 0 < entry_value <= 1:
+        raise ValueError(
+            f"entry must be between zero and one, got {entry!r}"
+        )
+    normalised, drop_value, drawdown_value, emergency_value = (
+        _validated_stop_knobs(mode, drop_cents, drawdown_pct,
+                              emergency_drawdown_pct)
+    )
+
+    entry_decimal = Decimal(str(entry_value))
+    hundred = Decimal(100)
+    emergency = entry_decimal * (Decimal(1) - emergency_value / hundred)
+    emergency = max(emergency, Decimal(str(EMERGENCY_FLOOR_MIN)))
+
+    if normalised == "ABSOLUTE_DROP":
+        strategy: Decimal | None = entry_decimal - drop_value
+    elif normalised == "PERCENTAGE_DROP":
+        strategy = entry_decimal * (Decimal(1) - drawdown_value / hundred)
+    else:
+        strategy = None
+
+    if strategy is None or strategy <= emergency:
+        return float(emergency), "emergency"
+    return float(strategy), "strategy"
+
+
 def transition(
     position: SingleLegPosition,
     previous_state: LegState | None,
     *,
     max_pair_cost: float,
     settlement_due: bool = False,
-    hard_stop_bid: float = 0.15,
+    stop_loss_mode: str = "NONE",
+    drop_cents: float = 0.05,
+    drawdown_pct: float = 10.0,
+    emergency_drawdown_pct: float = 75.0,
     escalation_multiple: float = 2.0,
     tick_size: float = 0.01,
 ) -> LifecycleDecision:
@@ -242,8 +356,12 @@ def transition(
     cap_value = float(max_pair_cost)
     if not math.isfinite(cap_value) or cap_value <= 0:
         return _refused(previous_state, "pair cap must be finite and positive")
-    if not math.isfinite(hard_stop_bid) or not 0 <= hard_stop_bid <= 1:
-        return _refused(previous_state, "hard-stop bid must be between zero and one")
+    try:
+        _validated_stop_knobs(
+            stop_loss_mode, drop_cents, drawdown_pct, emergency_drawdown_pct,
+        )
+    except ValueError as exc:
+        return _refused(previous_state, str(exc))
     if not math.isfinite(escalation_multiple) or escalation_multiple <= 0:
         return _refused(previous_state, "escalation multiple must be finite and positive")
     if not math.isfinite(tick_size) or tick_size <= 0:
@@ -320,11 +438,18 @@ def transition(
         "naked_size": naked_size,
         "opposite_token_id": opposite_token,
     }
-    if held_bid is not None and held_bid <= hard_stop_bid:
+    active_trigger, trigger_source = stop_trigger(
+        held_average, stop_loss_mode, drop_cents, drawdown_pct,
+        emergency_drawdown_pct,
+    )
+    if held_bid is not None and held_bid <= active_trigger:
         return LifecycleDecision(
             state=LegState.HARD_STOP,
             action="hard_stop",
-            reason=f"held bid {held_bid:.4f} is at or below {hard_stop_bid:.4f}",
+            reason=(
+                f"held bid {held_bid:.4f} is at or below the "
+                f"{trigger_source} trigger {active_trigger:.4f}"
+            ),
             **details,
         )
 
@@ -443,6 +568,10 @@ def evaluate(
     *,
     max_pair_cost: float,
     settlement_due: bool = False,
+    stop_loss_mode: str = "NONE",
+    drop_cents: float = 0.05,
+    drawdown_pct: float = 10.0,
+    emergency_drawdown_pct: float = 75.0,
     tick_size: float = 0.01,
 ) -> LifecycleDecision:
     """Load sticky state, decide for one pair, and persist state changes."""
@@ -461,6 +590,10 @@ def evaluate(
         previous_state,
         max_pair_cost=max_pair_cost,
         settlement_due=settlement_due,
+        stop_loss_mode=stop_loss_mode,
+        drop_cents=drop_cents,
+        drawdown_pct=drawdown_pct,
+        emergency_drawdown_pct=emergency_drawdown_pct,
         tick_size=tick_size,
     )
     if decision.action == "refused" or decision.state is previous_state:

@@ -202,42 +202,46 @@ def test_apply_tournament_preset():
         apply_tournament_preset(base, "yolo")
 
 
-def test_tournament_presets_distinct_stop_loss_usd():
-    """Each arm carries its own single-buy stop, distinct and ordered by fill patience.
+def test_tournament_presets_no_longer_carry_a_stop():
+    """#619: the entry-relative stop is a run setting, not a per-arm one.
 
-    A wider-offset arm fills cheaper with more cushion, so it tolerates a
-    tighter dollar stop; a tight-offset arm fills near the touch and needs room
-    before the pair can complete. Asserting order locks that rationale.
+    The arms used to carry distinct cent stops ordered by fill patience. That
+    rationale is gone with the static stop it was calibrated against: a fixed
+    cent drop is not a per-arm edge, and the entry-relative trigger plus the
+    shared emergency floor apply to every profile identically.
     """
-    # The tournament arms (control purged 2026-10-12) carry distinct stops
-    # ordered by fill patience:
     tournament_arms = ["conservative", "balanced", "aggressive", "prudent"]
-    stops = {name: TOURNAMENT_PRESETS[name]["stop_loss_trigger_usd_cents"]
-             for name in tournament_arms}
-    assert set(stops.values()).__len__() == len(stops)  # all distinct
-    assert stops["conservative"] < stops["prudent"] < stops["balanced"] < stops["aggressive"]
-    # none disable the rule (0 disables) and none exceed a sensible bound
-    for name, v in stops.items():
-        assert 0.0 < v < 100.0, name
+
+    for name in tournament_arms:
+        preset = TOURNAMENT_PRESETS[name]
+        assert "stop_loss_trigger_usd_cents" not in preset, name
+        assert "stop_loss_trigger_pct" not in preset, name
 
 
-def test_tournament_preset_stop_flows_to_env_and_config():
-    """The preset stop reaches the shadow child process and the loaded config."""
+def test_tournament_preset_leaves_the_stop_to_the_operator_env():
+    """A preset no longer moves the stop; the loaded defaults stand."""
     import os
     from unittest import mock
-    from scripts.shadow_tournament import _preset_to_env
 
-    for name, expected in [
-        ("conservative", 3.0),
-        ("balanced", 5.0),
-        ("aggressive", 6.5),
-    ]:
-        env = _preset_to_env({"name": name, **TOURNAMENT_PRESETS[name]})
-        assert env["HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"] == str(expected)
-
+    for name in ["conservative", "balanced", "aggressive"]:
         with mock.patch.dict(os.environ, {"HUNTER_TOURNAMENT_PRESET": name}):
             cfg = load()
-        assert cfg.stop_loss_trigger_usd_cents == expected
+        assert cfg.stop_loss_mode == "NONE"
+        assert cfg.drop_cents == 0.05
+        assert cfg.drawdown_pct == 10.0
+        assert cfg.emergency_drawdown_pct == 75.0
+
+
+def test_preset_env_no_longer_emits_the_retired_stop_var():
+    """The shadow child process is not handed a knob nothing reads."""
+    from scripts.shadow_tournament import _preset_to_env
+
+    env = _preset_to_env(
+        {"name": "balanced", **TOURNAMENT_PRESETS["balanced"]}
+    )
+
+    assert "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS" not in env
+    assert "HUNTER_SINGLE_BUY_GRACE_SEC" not in env
 
 
 def test_load_config_with_preset_and_env_overrides():

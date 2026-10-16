@@ -1,27 +1,44 @@
-# SPEC — #573: Unify one-sided stop-loss (shadow == live, one mode per run)
+# SPEC - #619: Stop-loss architecture — dynamic modes plus entry-relative emergency floor
+
+Branch: i619/add-stop-loss-architecture-dynamic-modes-plus-entr | Issue: #619
+
+## Authority
+
+`docs/ideas/stop_loss_architecture_logic_requirements.md` is the operator
+specification. It is read-only and decides every conflict. The issue body
+summarizes; the file decides. Do not edit it.
+
+#618 (`[CONFIGURE] Retire the dead grace and stop-loss exit knobs`) is
+CLOSED/superseded by #619 — recorded here so no station reuses it. Verified
+2026-10-16 via `gh issue view 618 --json state`.
 
 ## Goal
-A one-sided position (one leg filled, the other never did — a naked directional
-bet) gets exactly ONE stop rule per run, in ONE unit, chosen by a mode selector.
-Shadow and live apply it identically (only the fill source differs).
 
-## The two modes (parallel, human whole-number units)
-- `stop_loss_trigger_pct` = 10  → sell when the leg is down 10% from entry.
-- `stop_loss_trigger_usd_cents` = 4 → sell when the leg is down 4c ($0.04) from entry.
-- Example: buy at 0.50, willing to lose 5c → Stop-Loss Trigger ($) = 5.
-- `stop_loss_mode` selects which is active ("usd" | "pct"); default "usd".
+Replace the fixed `$0.15` lifecycle hard stop in
+`core_brain/single_leg_lifecycle.py:transition()` (fires when
+`held_bid <= hard_stop_bid=0.15`, lines 231-329) with an entry-relative stop:
+one optional dynamic mode (`NONE` / `ABSOLUTE_DROP` / `PERCENTAGE_DROP`) plus
+an always-on emergency floor at `emergency_drawdown_pct` (default 75%) of the
+fill-weighted entry price (`held_average`), never below `$0.01`.
 
 ## Acceptance criteria
-- A run activates exactly one stop mode (usd XOR pct) — never both.
-- Shadow and live make the same stop decision for a given run (identical except fills).
-- The dollar trigger is tunable from config/env (iterated in tests/tournaments).
-- The percent trigger runs in isolation (its own run) and still works.
-- `python -m pytest -q tests/test_dual_stop_loss.py tests/test_single_buy_saver.py` passes.
 
-## Out of scope
-- The user-facing mode-selector config surface (later follow-up; the logic lands here).
-- Changing the dollar level itself (tournament tuning, #569).
-- The grace period, aged-out rescue, and the non-ladder lifecycle fixed floor
-  (`single_leg_lifecycle.transition` `hard_stop_bid = 0.15`) — separate rules,
-  untouched [see the scope question in the plan].
-- Any live trading.
+- Entry `0.10` at 75% triggers at `0.025` (bid `0.026` waits; `0.025`/`0.024`
+  hard-stop). Entry `0.12` with bid `0.14` does NOT stop under `NONE`
+  (the original low-entry bug: old `$0.15` rule sold on fill).
+- No live path in `core_brain/` uses `hard_stop_bid` or `$0.15` as a stop
+  (proven by search at build time).
+- `python -m pytest tests/test_dual_stop_loss.py tests/test_single_leg_lifecycle.py -q` — all pass.
+- `LegState.HARD_STOP`, action `hard_stop`, close reason `lifecycle_hard_stop`
+  unchanged (Trader suppression + shadow fresh-book path key on them).
+- Live stop exit sends explicit `OrderType.FOK`; shadow branch and
+  `core_brain/shadow_exec.py` signature unchanged.
+- #618 closed as superseded on publish.
+
+## Explicit out-of-scope
+
+Dashboard controls, stream-driven per-tick stop path, selling already-paired
+shares, widening the `tests/test_sale_close_pricing.py` guard, touching
+`data/orders.db`, any live `quote` / `complete` / Trader loop / dashboard START.
+Full untouched-file list lives in `tasks/plan.md`; noticed-but-untouched rows
+live in `docs/issues/619-noticed-but-not-touching.md`.

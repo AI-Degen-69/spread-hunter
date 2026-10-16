@@ -4,6 +4,8 @@ Invariants:
 1. Every test runs with credentials scrubbed from os.environ by default.
 2. Any outbound network connection to a non-loopback address is blocked and raises RuntimeError.
 3. No test may open the production registry `data/orders.db`.
+4. No test may depend on a `PORT` exported by the operator's shell: it is
+   dropped at conftest import, before any test module is collected.
 """
 from __future__ import annotations
 
@@ -21,6 +23,20 @@ repo_root_str = str(REPO_ROOT)
 while repo_root_str in sys.path:
     sys.path.remove(repo_root_str)
 sys.path.insert(0, repo_root_str)
+
+# `dashboard/server.py` resolves its port at import time (`resolve_port(None)`),
+# BEFORE any `--port` flag is parsed, so an unusable `PORT` inherited from the
+# operator's shell -- the ambient `PORT=0` one session in this repo hit --
+# raises `ValueError: PORT='0' is outside 1-65535` while pytest is still
+# COLLECTING. Collection stops there, so every test file that imports the app
+# fails without a single test having run (18 files when this was measured).
+#
+# Dropped here, at conftest import, because that is the last point that is
+# guaranteed to precede collection: a fixture or an autouse fixture runs per
+# test, long after the import that raises. `scripts/spread-hunter-menu.ps1`
+# drops the same variable for the dashboard child it spawns. A test that wants
+# a port sets its own (`tests/test_dashboard_port.py`).
+os.environ.pop("PORT", None)
 
 import pytest
 
@@ -70,8 +86,9 @@ def scrub_tuning_env(monkeypatch):
     rest of the process -- and `load_dotenv` writes the environment directly,
     which `monkeypatch` in a later test cannot undo. That made the suite's
     result depend on both the file order and on what the operator happened to
-    have tuned: with `HUNTER_SINGLE_BUY_GRACE_SEC=45` on disk, the shadow
-    rotation tests saw a 45-second grace and recorded no close.
+    have tuned: with `HUNTER_SINGLE_BUY_GRACE_SEC=45` on disk (the knob #619
+    later retired), the shadow rotation tests saw a 45-second grace and
+    recorded no close.
 
     A test that wants a knob sets it itself, after this has run.
     """

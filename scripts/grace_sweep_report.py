@@ -38,7 +38,7 @@ import statistics
 from pathlib import Path
 from typing import Optional
 
-# The rotation cadence is the real floor under this knob. `_route_pair` exits
+# The rotation cadence is the real floor under this knob. The live loop exits
 # on the first poll AFTER the grace expires, so a grace below the interval is
 # indistinguishable from a grace equal to it: a companion that arrives 0.9s
 # after its first leg is already there when the 5s poll looks. A `grace=0` row

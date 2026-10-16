@@ -9,8 +9,9 @@ refilled leg stranded, every rotation the same way.
 The exit now nets prior single-leg exits on the condition (capped by the
 observed venue gap), so a refill exits exactly the remainder with no
 oversell. These tests pin the fixed behavior plus the guard cases that
-still refuse: genuine and partially-explained divergence, under both grace
-regimes.
+still refuse: genuine and partially-explained divergence. The two routing
+cases drive the unified lifecycle (`manage_single_leg_positions`), which is
+the pass the live loop actually runs.
 
 The fake venue mirrors `tests/test_single_buy_saver.py` (same response
 shapes, same quote-ledger side resolution). No network in any test.
@@ -22,6 +23,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from core_brain.config import MakerConfig
+from core_brain.market_resolution import MarketEndState
 from core_brain.order_registry import (
     OrderRegistry, OrderRecord, FillRecord, QuoteRecord,
 )
@@ -111,12 +114,50 @@ def _ladder_market(registry: OrderRegistry, when: int) -> None:
     ))
 
 
-def _cfg(grace_sec: float):
-    return SimpleNamespace(
-        single_buy_grace_sec=grace_sec, pairs_exit_window_sec=900.0,
-        stop_loss_trigger_pct=10.0, stop_loss_trigger_usd_cents=4.5,
+def _cfg() -> MakerConfig:
+    """The manager's own knobs: both routes on, a 900s window and lead."""
+    return MakerConfig(
+        enable_pairs_rule=True, enable_aged_out_rescue=True,
+        pairs_exit_window_sec=900.0, aged_out_rescue_lead_sec=900.0,
         max_pair_cost=MAX_PAIR_COST, max_order_usd=100.0,
     )
+
+
+def _open_market_state(end_ts: float) -> MarketEndState:
+    """An open, accepting market with a stated end -- no venue, no network."""
+    return MarketEndState(
+        condition_id=COND, closed=False, end_ts=end_ts, end_date_iso=None,
+        end_date_passed=False, accepting_orders=True, resolved=False,
+        unreachable=False,
+    )
+
+
+@pytest.fixture
+def saver_clock(monkeypatch):
+    """A mutable clock on the `time` `single_buy_saver` reads.
+
+    A close stamps its own `ts` from the wall clock, and the pass skips any
+    pair whose last fill is older than the condition's newest close. Real time
+    (ms since 1970) would put that close decades after the fills this test
+    uses, so the second pass would read the pair as already closed. The test
+    owns the clock and advances it between passes instead.
+    """
+    now = {"t": 0.0}
+    monkeypatch.setattr(lp, "time", SimpleNamespace(time=lambda: now["t"]))
+    return now
+
+
+def _manager_pass(registry: OrderRegistry, venue, *, now_s: float,
+                  end_ts: float) -> dict:
+    """One lifecycle pass, with the venue position the divergence gate needs
+    (UP 10 held, DOWN nothing) and an open market inside the lead."""
+    results = lp.manage_single_leg_positions(
+        venue, registry, _cfg(), live=True, now=now_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+        market_state_fn=lambda cid: _open_market_state(end_ts),
+    )
+    assert len(results) == 1
+    return results[0]
 
 
 def test_refill_after_exit_sells_the_netted_remainder(registry):
@@ -186,47 +227,62 @@ def test_partially_explained_divergence_still_refuses(registry):
     assert len(sells) == 1
 
 
-@pytest.mark.parametrize("grace_sec", [0.0, 45.0])
-def test_route_pair_exits_the_refill_under_both_graces(
-        registry, grace_sec: float):
-    """Old fills route past grace in both regimes, and the refill exits."""
-    # Timestamps are ms throughout: fills 200 s and 100 s old at route time.
-    _ladder_market(registry, NOW - 200_000)
-    # Bid 0.57 avoids adverse drift so the grace path itself decides.
+def test_manager_exits_the_refill_on_second_pass(registry, saver_clock):
+    """Both passes route an old fill, and the refill sells exactly its 10.
+
+    Pass 1 (3900s) exits the 1000s-old fill; the refill lands a second later
+    under the same pair_id. Pass 2 (5000s) must sell just the refill: the
+    registry believes 20 shares, the venue agrees to 10, and the one recorded
+    exit explains the gap (#326). 20 shares sold across two closes, never 30.
+    """
+    # Timestamps are ms throughout; the manager's own routes own these fills
+    # (an old fill, an open market inside the 900s lead, a bid of 0.57 that is
+    # nowhere near the 0.15 stop line).
+    _ladder_market(registry, 1_000_000)
     venue = FakeVenue(best_ask=0.40, best_bid=0.57)
-    cfg = _cfg(grace_sec)
 
-    first = _resting_up(registry, 10.0, 0.60, NOW - 200_000, "r1")
-    _fill(registry, first, 10.0, 0.60, NOW - 200_000)
-    routed = lp._route_pair(venue, registry, lp.load_pair(registry, PAIR),
-                            MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
-                            cfg=cfg, last_ms=NOW - 200_000,
-                            now_s=NOW / 1000.0)
-    assert routed["action"] == "exited"
+    first = _resting_up(registry, 10.0, 0.60, 1_000_000, "r1")
+    _fill(registry, first, 10.0, 0.60, 1_000_000)
 
-    second = _resting_up(registry, 10.0, 0.60, NOW - 100_000, "r2")
-    _fill(registry, second, 10.0, 0.60, NOW - 100_000)
-    rerouted = lp._route_pair(venue, registry, lp.load_pair(registry, PAIR),
-                              MAX_PAIR_COST, True,
-                              {TOK_UP: 10.0, TOK_DN: 0.0},
-                              cfg=cfg, last_ms=NOW - 100_000,
-                              now_s=NOW / 1000.0)
-    assert rerouted["action"] == "exited"
-    assert rerouted["size"] == pytest.approx(10.0)
+    saver_clock["t"] = 3_900.0
+    pass1 = _manager_pass(registry, venue, now_s=3_900.0, end_ts=4_500.0)
+    assert pass1["action"] == "aged_out_rescue"
+    assert pass1["route"] == "exited"
+
+    second = _resting_up(registry, 10.0, 0.60, 3_901_000, "r2")
+    _fill(registry, second, 10.0, 0.60, 3_901_000)
+
+    saver_clock["t"] = 5_000.0
+    pass2 = _manager_pass(registry, venue, now_s=5_000.0, end_ts=5_600.0)
+    assert pass2["action"] == "aged_out_rescue"
+    assert pass2["route"] == "exited"
+    assert pass2["size"] == pytest.approx(10.0)
+
+    sold = [float(c.split(":")[2])
+            for c in venue.calls if c.startswith("sell:")]
+    assert sold == [pytest.approx(10.0), pytest.approx(10.0)]
+    assert sum(sold) == pytest.approx(20.0), "sold exactly the 20 filled, no more"
+    closes = [c for c in registry.get_all_closes()
+              if c.get("method") == "single_buy_exit"]
+    assert len(closes) == 2, "every filled share ends with a close"
 
 
-def test_fresh_fill_under_positive_grace_holds_instead(registry):
-    """Grace still defers the first exit; the trap needs an exit behind it."""
+def test_fresh_fill_waits_patiently(registry):
+    """A 1s-old fill is inside the window: the pass waits and sends nothing."""
     _ladder_market(registry, NOW)
-    # Bid 0.57 keeps the leg out of adverse drift (loss 0.03 < 0.045 and
-    # 5% < 10%), so grace -- not the drift trigger -- decides.
+    # Bid 0.57 keeps the leg out of escalation (drawdown 0.03 against a 0.04
+    # threshold), so the pass has no route to take here.
     venue = FakeVenue(best_ask=0.40, best_bid=0.57)
 
     first = _resting_up(registry, 10.0, 0.60, NOW, "r1")
     _fill(registry, first, 10.0, 0.60, NOW)
-    routed = lp._route_pair(venue, registry, lp.load_pair(registry, PAIR),
-                            MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
-                            cfg=_cfg(45.0), last_ms=NOW,
-                            now_s=NOW / 1000.0 + 1.0)
-    assert routed["action"] == "holding_grace"
-    assert not any(c.startswith("sell:") for c in venue.calls)
+
+    results = lp.manage_single_leg_positions(
+        venue, registry, _cfg(), live=True, now=NOW / 1000.0 + 1.0,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+
+    assert len(results) == 1
+    assert results[0]["action"] == "patient_wait"
+    assert not any(c.startswith(("buy:", "sell:", "cancel:"))
+                   for c in venue.calls)

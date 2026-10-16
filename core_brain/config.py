@@ -19,6 +19,11 @@ import os
 from dataclasses import dataclass
 
 from core_brain import rehearsal
+from core_brain.single_leg_lifecycle import (
+    DROP_CENTS_MAX,
+    DROP_CENTS_MIN,
+    STOP_LOSS_MODES,
+)
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -295,48 +300,12 @@ class MakerConfig:
     markout_catastrophic_threshold: float = -0.020
     # Widened quotes stay inside the 4.5c reward window, so rent continues.
     widen_offset: float = 0.035
-    # ALLOCATOR KNOBS -- READ BY NO LIVE CODE.
-    # `marginal_return_floor`, `allocation_budget` and `max_market_frac` below
-    # belong to the water-fill allocator in `scoring/allocate.py`, which only
-    # the Market Filter's scoring uses. The trading path has no allocator: the
-    # Trader quotes whatever runtime/markets.json lists and sizes each couple from
-    # `couple_allocation_usd`. Grep confirms no reference to these three
-    # anywhere in core_brain/ or dashboard/. The live capital bounds that DO bind
-    # are `max_naked_usd`,
-    # `max_fleet_naked_usd` and `max_committed_usd`.
-    #
-    # Marginal $/day per $ committed, below which capital is better left idle.
-    marginal_return_floor: float = 0.02
-    # Leave wallet headroom for inventory and order-lifecycle timing.
-    allocation_budget: float = 900.0
-    # Ceiling on any ONE market's share of that budget.
-    #
-    # The water-fill was a diversifier and is not one. `marginal`
-    # is daily*T/(capital+T)^2, which is nearly FLAT in capital whenever
-    # competitor depth T dominates our size -- so the argmax never changes
-    # and a single market absorbs every increment. Measured 2026-08-02: one
-    # market took the full $900 budget, `shares_for` turned it into a
-    # 900-share order, and it filled in one print for $792 -- 79% of a
-    # $1,000 wallet, 1.98x the $400 per-market cost cap.
-    #
-    # 0.15 puts the floor at roughly seven concurrently funded markets. That
-    # number is set by the variance, not by taste: per-fill markout measured
-    # -$7.58 with a standard deviation of $56.68, so at full concentration a
-    # single fill moves the book by more than the entire expected edge of a
-    # hundred fills and no mean is readable at any sample size.
-    max_market_frac: float = 0.15
+    # The allocator knobs (marginal_return_floor, allocation_budget,
+    # max_market_frac) and the reward-economics fields below were deleted in
+    # the rewards purge (#594): the strategy earns the pair discount, not
+    # emissions, and every graduated market pays daily: 0.00.
     # Set per-market by the fleet each cycle: NORMAL | WIDENED | EXITED.
     gate_state: str = "NORMAL"
-
-    # --- profit taking ----------------------------------------------------
-    # Nothing in this strategy ever closed a position: every fill rode to
-    # settlement in 2027, so a filled pair immobilised capital that had been
-    # earning daily rent. Selling a pair that has appreciated converts locked
-    # capital back into working capital.
-    #
-    # Selling means crossing the spread, so BOTH legs pay the taker fee. The
-    # move therefore has to clear two fees before it clears anything else.
-    profit_take_fee_per_share: float = 0.017
 
     # MERGE (U2). There is no `merge_gas_usd` here, and that is the point.
     #
@@ -385,52 +354,6 @@ class MakerConfig:
     # something, short enough that the exception stays rare and the loss cap
     # remains the binding constraint rather than a formality.
     merge_velocity_hold_days: float = 30.0
-
-    # REWARD ELIGIBILITY (U4). Polymarket's published rule: "The minimum reward
-    # payout is $1; amounts below this will not be paid." A market projecting
-    # under a dollar a day does not pay a fraction of a dollar -- it pays zero.
-    #
-    # Measured 2026-07-30, only 4 of 20 fleet markets cleared it. The other 16
-    # held capital and earned exactly nothing, which makes spreading thin
-    # actively harmful rather than merely inefficient. Concentration is not a
-    # preference here, it is what the payout rule requires.
-    #
-    # Whether the threshold applies per-market or across a maker's aggregate is
-    # not settled by the docs. Per-market is the conservative reading and is
-    # safe under either; the first real payout settles it empirically.
-    # PAPER RUN ONLY -- READ BY NO LIVE CODE (same status as the allocator
-    # knobs above). These price a REWARD market's payout floor, and the live
-    # universe has none: every graduated market in runtime/markets.json carries
-    # `source: "spread"` with `daily: 0.00`, because the markets that actually
-    # trade publish clobRewards: 0. For those the income is the pair discount,
-    # not an emission, and no floor applies.
-    reward_min_payout_usd: float = 1.0
-    # Multiple of the floor a market must clear to be funded. Projections are
-    # noisy and competitors arrive, so 1.0x would fund markets that cross below
-    # the line the moment anyone else quotes. 1.5x buys headroom.
-    reward_floor_multiple: float = 1.5
-
-    # SPREAD CAPTURE (U6). The payout floor above, and the sizing that feeds
-    # it, assume income arrives as reward emissions. The markets that actually
-    # trade -- bitcoin-up-or-down-*, ~$92k/24h -- publish clobRewards: 0, so
-    # the allocator valued them at exactly zero and the fleet instead funded a
-    # universe that printed 9 tape-backed fills in 74 hours.
-    #
-    # For those markets the income IS the spread, and
-    # `allocate.spread_capture_daily` converts it into the same $/day pot the
-    # reward path uses. These two are its inputs.
-    #
-    # Fraction of the quoted spread earned per share traded. A resting maker
-    # earns at MOST half the spread on a round trip, and less in practice,
-    # because flow that reaches a resting order is adversely selected. This is
-    # a starting hypothesis at half of that theoretical half -- to be replaced
-    # by the first real markout sample on one of these markets, exactly as
-    # every other EV parameter here is.
-    spread_capture_frac: float = 0.25
-    # Fallback quoted spread when the market spec carries none. 1c is the
-    # observed book on the up-or-down series. The estimate is most sensitive to
-    # this number, so a spec reporting its own spread is always preferred.
-    spread_capture_default_spread: float = 0.01
 
     # TRADABILITY AND HORIZON (U6). Reward yield per dollar of capital prefers
     # a thin book by construction, and a thin book is thin because nobody
@@ -522,8 +445,9 @@ class MakerConfig:
     # is under way has not had the market's full day to trade, so 24h volume
     # systematically understates it: the match winner of a live LoL game listed
     # hours ago and cannot be judged against a bar meant for markets that have
-    # been open all day. Live markets gate on THIS bar instead, which is 1/5 of
-    # the loosened floor and 1/12.5 of the permanent one.
+    # been open all day. Live markets gate on THIS bar instead of
+    # `select_min_volume_24h_usd` ($125,000, unchanged -- that bar still governs
+    # non-live rows, which have had the full day).
     #
     # LIVENESS IS THE VENUE'S DECLARATION, not the clock (operator decision
     # 2026-10-07): the bar applies to markets discovered through
@@ -534,13 +458,20 @@ class MakerConfig:
     # bar; a clock-based live market is refused outright, so a bar it could not
     # reach would be dead code.
     #
-    # Measured on the live set 2026-10-06: 25 live main lines, volumes $403 to
-    # $1.10M, median $82,095. A $10,000 bar admits 13 of them and drops only the
-    # genuinely thin tail (a `bra2` second-half line at $403). The movement gate
-    # is unchanged and still the real proof -- a live market must measure
-    # `select_min_movement_usd` of tape in the window before it is scored, so
-    # this bar admits an event that is actively trading, never a quiet one.
-    select_min_volume_24h_usd_live: float = 10_000.0
+    # Raised 2026-10-15 from $10,000 to $35,000. Measured on the live set the
+    # same day (main lines only): $1.40M and $162K at the top, a $37-44K
+    # tradable mid tier with balanced two-sided books and real tape, then a
+    # $10-21K junk tier -- a $20.7K tennis market sat pinned at 99.7%/0.3% on
+    # a dead-flat 1h chart and a $10.1K CS2 match at 97/3. $35k keeps the
+    # tradable tier and cuts the junk: the flat/decided cases are caught by
+    # their own gates anyway, but the volume bar is what stops the thin tier
+    # from spending quote cycles. The movement gate is unchanged and still the
+    # real proof -- a live market must measure `select_min_movement_usd` of
+    # tape in the window before it is scored, so this bar admits an event that
+    # is actively trading, never a quiet one. Expect to dial up once the
+    # measured high-to-low price-range telemetry lands and replaces volume as
+    # the movement proxy.
+    select_min_volume_24h_usd_live: float = 35_000.0
     # Tightened 2026-10-09 (#432) to 2.05 cents (0.0205 in price units) to
     # prevent entry into wide/slippage-heavy books.
     select_max_book_spread: float = 0.0205
@@ -556,15 +487,11 @@ class MakerConfig:
     # Re-rank cadence. runtime/markets.json was frozen from 2026-07-29 01:39 while
     # the fleet ran against it for a day and a half.
     rerank_interval_sec: float = 600.0
-    # Required profit per share AFTER both fees. Set at roughly one fee's
-    # width again, so a close is only taken on a move clearly larger than the
-    # cost of taking it -- at 1c the threshold sits inside the noise of a
-    # one-tick book flicker and would close positions on nothing.
-    profit_take_net_threshold: float = 0.020
 
-    # OPPORTUNITY COST. The threshold above prices a close against zero -- it
-    # asks "is closing better than holding?", never "is this dollar better
-    # spent somewhere else?". When the allocator is budget-bound while markets
+    # OPPORTUNITY COST. scarcity_close_threshold prices a close against zero
+    # AND against the return the capital would earn elsewhere -- it asks not
+    # only "is closing better than holding?" but "is this dollar better spent
+    # somewhere else?". When the allocator is budget-bound while markets
     # well above the marginal floor go underfunded, holding a stagnant pair
     # costs the return that dollar would have earned in the starved market, and
     # that cost is real whether or not the pair itself is up.
@@ -640,14 +567,6 @@ class MakerConfig:
     # single-market bot (archived on the legacy-bot-8788 branch) is unaffected
     # -- it has no fleet whose markout could be pooled.
     fleet_posture: str = "NORMAL"
-
-    # Maker pool per 5-min window, for turning score-share into dollars.
-    # Measured 2026-07-28 from 15 recorded windows: 68405 shares traded per
-    # window -> $716 median taker-fee pool -> 20% = $143 to makers. Treat as an
-    # order of magnitude, not a promise: data-api /trades reports each
-    # participant's own side, so the volume behind it may be double-counted,
-    # in which case the true pool is nearer $70.
-    est_reward_pool_usd: float = 143.0
 
     # --- quoting ----------------------------------------------------------
     # He posts on BOTH outcomes. In a binary market a bid on DOWN at 0.40 is
@@ -1018,16 +937,25 @@ class MakerConfig:
     pairs_complete_gain_cents: float = 3.68
     pairs_exit_cost_cents: float = 3.67
 
-    # --- single-buy stop-loss (ONE mode per run) ---------------------------
-    # Which stop mode is active for a run: "usd" (Stop-Loss Trigger $) or
-    # "pct" (Stop-Loss Trigger %). Exactly one fires per run; shadow and live
-    # apply the same mode (only the fill source differs).
-    stop_loss_mode: str = "usd"
-    # Grace period (seconds) to allow the missing maker leg to fill naturally (0.0 default for test baseline; 45.0 in .env for live)
-    single_buy_grace_sec: float = 0.0
-    # Stop-Loss Trigger (%): sell the naked leg when it is down this many
-    # PERCENT from entry (10 = 10% drawdown).
-    stop_loss_trigger_pct: float = 10.0
+    # --- single-buy stop-loss (entry-relative; #619) -----------------------
+    # One dynamic mode per run, or none. `NONE` leaves the naked leg to the
+    # universal emergency floor alone; `ABSOLUTE_DROP` cuts a fixed dollar drop
+    # below the held leg's own average fill, `PERCENTAGE_DROP` a percentage
+    # drawdown from it. The two drop modes are mutually exclusive by
+    # construction -- one field selects one formula -- and `ABSOLUTE` /
+    # `PERCENTAGE` (the spec's shorthand) are refused, never aliased: the
+    # retired `usd`/`pct` knobs they replaced counted in different units, so a
+    # silent alias would run the operator's number in the wrong scale.
+    stop_loss_mode: str = "NONE"
+    # Fixed dollar drop from entry for `ABSOLUTE_DROP` ($0.01 to $0.90/share).
+    drop_cents: float = 0.05
+    # Percentage drawdown from entry for `PERCENTAGE_DROP` (0 exclusive to 100).
+    drawdown_pct: float = 10.0
+    # The failsafe EVERY mode shares: exit at this drawdown from the held leg's
+    # own entry, floored at $0.01. Entry-relative because active quotes span
+    # $0.10-$0.90 -- the retired static $0.15 stop booked a loss on every
+    # 0.10-0.14 entry the moment it filled.
+    emergency_drawdown_pct: float = 75.0
 
     # --- stranded leg exposure resolution (#453) ---------------------------
     # Governs unhedged positions when no working maker hedge is active.
@@ -1037,10 +965,6 @@ class MakerConfig:
     # Max seconds to wait for a maker quote before forcing stop-loss exit on stranded legs.
     stranded_max_wait_sec: float = 300.0
 
-    # Stop-Loss Trigger ($): sell the naked leg when it is down this many
-    # CENTS from entry (4 = 4c = $0.04 loss/share). Float allows the
-    # tournament's fractional-cent arms (e.g. 4.5).
-    stop_loss_trigger_usd_cents: float = 4.0
     # Optional sizing ceiling per quote (None for standard mode; set via .env / CLI)
     max_quote_shares: float | None = None
 
@@ -1085,13 +1009,13 @@ class MakerConfig:
     balance_hedge_sec: float = 20.0
 
     # --- economics --------------------------------------------------------
-    # crypto_fees_v2: takerOnly=true -> makers pay NO fee. Rebate pool is 20%
-    # of taker fees, shared pro-rata among qualifying makers. We cannot see the
-    # pool, so rebates are ESTIMATED and reported separately from trading PnL,
-    # never blended in.
+    # crypto_fees_v2: takerOnly=true -> makers pay NO fee. These are VENUE
+    # facts the pair-cost math charges (core_brain/pair_scanner.taker_fee_rate
+    # reads fee_rate on every completion); the rebate share the venue used to
+    # describe was deleted in the rewards purge (#594) -- this strategy earns
+    # the pair discount, not emissions.
     maker_fee: float = 0.0
-    rebate_rate: float = 0.20
-    fee_rate: float = 0.07          # taker fee rate, for the rebate estimate
+    fee_rate: float = 0.07          # taker fee rate, charged on completion
 
     # LATENCY AND PROPAGATION PARAMETERS (issue #27, Phase 1 components 2 & 3).
     # Shared one-way network leg. MEASURED -- median(RTT)/2 = 7.85ms/2 (N=250)
@@ -1134,7 +1058,6 @@ class MakerConfig:
     pinned_condition_id: str = ""
     market_title: str = ""
     market_url: str = ""
-    market_daily_rate: float = 0.0
 
     # DYNAMIC OFFSET & VOLATILITY TELEMETRY (#370)
     # THE SYSTEM BASELINE (promoted 2026-10-12): dynamic quoting is ON repo-wide
@@ -1167,8 +1090,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 5,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "stop_loss_trigger_usd_cents": 3.0,
-        "description": "Wider safety buffer in volatile swings (2¢–5¢) with queue hold; stop 3.0c",
+        "description": "Wider safety buffer in volatile swings (2¢–5¢) with queue hold",
     },
     "balanced": {
         "dynamic_offset_enabled": True,
@@ -1177,8 +1099,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 4,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "stop_loss_trigger_usd_cents": 5.0,
-        "description": "Proportional volatility tracking (2¢–4¢) with queue hold; stop 5.0c",
+        "description": "Proportional volatility tracking (2¢–4¢) with queue hold",
     },
     "aggressive": {
         "dynamic_offset_enabled": True,
@@ -1187,8 +1108,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 3,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "stop_loss_trigger_usd_cents": 6.5,
-        "description": "Tight queue priority capturing fast fills (2¢–3¢) with queue hold; stop 6.5c",
+        "description": "Tight queue priority capturing fast fills (2¢–3¢) with queue hold",
     },
     "prudent": {
         "dynamic_offset_enabled": True,
@@ -1197,17 +1117,14 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 4,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "stop_loss_trigger_usd_cents": 3.8,
-        "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x) with queue hold; stop 3.8c",
+        "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x) with queue hold",
     },
     "hybrid": {
         "dynamic_offset_enabled": False,
         "requote_dead_band": 0.060,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "single_buy_grace_sec": 45.0,
-        "stop_loss_trigger_usd_cents": 4.5,
-        "description": "Empirical Winner Hybrid: control edge + Deadband-Wide queue stability (6c deadband, 45s grace)",
+        "description": "Empirical Winner Hybrid: control edge + Deadband-Wide queue stability (6c deadband)",
     },
     # THE LOOSE BASELINE. The wide, unconstrained benchmark we observe first and
     # tighten in later iterations. Quoting follows the raw dynamic offset with
@@ -1228,8 +1145,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "apply_widen_gate": False,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "stop_loss_trigger_usd_cents": 4.5,
-        "description": "Loose baseline: raw dynamic offset (0.5x range), 1c floor, 20c ceiling, no widen snap-back, 15c score window; stop 4.5c",
+        "description": "Loose baseline: raw dynamic offset (0.5x range), 1c floor, 20c ceiling, no widen snap-back, 15c score window",
     },
 }
 
@@ -1388,7 +1304,6 @@ def load(*, for_display: bool = False) -> MakerConfig:
         kw["pinned_condition_id"] = cid
         kw["market_title"] = os.environ.get("HUNTER_TITLE", "")
         kw["market_url"] = os.environ.get("HUNTER_URL", "")
-        kw["market_daily_rate"] = float(os.environ.get("HUNTER_DAILY_RATE", "0") or 0)
         # Long-dated markets do not close in 15 seconds, and the min-size floor
         # is per-market (20, 50, 100, 200) -- quoting under it earns nothing.
         kw["min_t_remaining_sec"] = 0.0
@@ -1534,50 +1449,75 @@ def load(*, for_display: bool = False) -> MakerConfig:
     pva = os.environ.get("HUNTER_POST_VENUE_ACCEPT_MS")
     if pva and pva.strip():
         kw["post_venue_accept_ms"] = float(pva)
-    mf = os.environ.get("HUNTER_MARGINAL_FLOOR") or ""
-    if mf.strip():
-        kw["marginal_return_floor"] = float(mf)
     bk = os.environ.get("SPREAD_HUNTER_BANKROLL") or os.environ.get("HUNTER_BANKROLL") or ""
     if bk.strip():
         val = float(bk)
         if not math.isfinite(val) or val <= 0:
             raise ValueError(f"Bankroll override must be finite and strictly positive, got: {val}")
         kw["bankroll_usd"] = val
-        kw["allocation_budget"] = val * 0.9
         kw["max_committed_usd"] = val
-    sbg = os.environ.get("HUNTER_SINGLE_BUY_GRACE_SEC")
-    if sbg and sbg.strip():
-        val = float(sbg)
-        if not math.isfinite(val) or val < 0:
-            raise ValueError(f"HUNTER_SINGLE_BUY_GRACE_SEC must be finite and non-negative, got: {val}")
-        kw["single_buy_grace_sec"] = val
-    sbsm = os.environ.get("HUNTER_STOP_LOSS_MODE")
-    if sbsm and sbsm.strip():
-        mode = sbsm.strip().lower()
-        if mode not in ("usd", "pct"):
-            raise ValueError(f"HUNTER_STOP_LOSS_MODE must be 'usd' or 'pct', got: {sbsm}")
+    # ENTRY-RELATIVE STOP (#619). The mode is canonicalised here so the
+    # environment's spelling and the code's agree; anything else is refused
+    # with the full choice list rather than silently defaulting to NONE, which
+    # would leave a naked leg protected by the floor alone while the operator
+    # believed their mode was armed.
+    slm = os.environ.get("HUNTER_STOP_LOSS_MODE")
+    if slm and slm.strip():
+        mode = slm.strip().upper()
+        if mode not in STOP_LOSS_MODES:
+            choices = ", ".join(sorted(STOP_LOSS_MODES))
+            raise ValueError(
+                f"HUNTER_STOP_LOSS_MODE must be one of {choices}, got: {slm}"
+            )
         kw["stop_loss_mode"] = mode
-    sblp = os.environ.get("HUNTER_STOP_LOSS_TRIGGER_PCT")
-    if sblp and sblp.strip():
-        val = float(sblp)
-        if not math.isfinite(val) or not (0.0 <= val <= 100.0):
-            raise ValueError(f"HUNTER_STOP_LOSS_TRIGGER_PCT must be between 0.0 and 100.0, got: {val}")
-        kw["stop_loss_trigger_pct"] = val
-    sblu = os.environ.get("HUNTER_STOP_LOSS_TRIGGER_USD_CENTS")
-    if sblu and sblu.strip():
-        val = float(sblu)
-        if not math.isfinite(val) or val < 0:
-            raise ValueError(f"HUNTER_STOP_LOSS_TRIGGER_USD_CENTS must be finite and non-negative, got: {val}")
-        kw["stop_loss_trigger_usd_cents"] = val
+    dc = os.environ.get("HUNTER_DROP_CENTS")
+    if dc and dc.strip():
+        # Dollars per share, NOT cents despite the name the spec uses: the
+        # retired HUNTER_STOP_LOSS_TRIGGER_USD_CENTS counted cents. Named
+        # `drop_cents` because that is the spec's parameter name.
+        kw["drop_cents"] = _bounded_float(
+            "HUNTER_DROP_CENTS", dc, DROP_CENTS_MIN, DROP_CENTS_MAX)
+    # The two percentages are open at the bottom: a 0% drawdown is not a looser
+    # stop, it is a stop that fires the instant the leg fills. `_bounded_float`
+    # is inclusive, so the strict lower bound is checked here.
+    for _env_name, _field in (("HUNTER_DRAWDOWN_PCT", "drawdown_pct"),
+                              ("HUNTER_EMERGENCY_DRAWDOWN_PCT",
+                               "emergency_drawdown_pct")):
+        _raw = os.environ.get(_env_name)
+        if _raw and _raw.strip():
+            _val = _bounded_float(_env_name, _raw, 0.0, 100.0)
+            if _val <= 0.0:
+                raise ValueError(
+                    f"{_env_name}={_raw!r} must be greater than zero"
+                )
+            kw[_field] = _val
+    # Deprecation. #619 replaced the static $0.15 stop with the entry-relative
+    # emergency floor, and the grace knob lost its last reader when the unified
+    # lifecycle shipped. The names are NOT converted into their replacements --
+    # the retired units differ (cents vs dollars, usd-mode vs percent-mode) --
+    # so a stale var is named and ignored rather than half-migrated.
+    for _old_env, _replacement in (
+        ("HUNTER_SINGLE_BUY_GRACE_SEC",
+         "HUNTER_AGED_OUT_RESCUE_LEAD_SEC (patience)"),
+        ("HUNTER_STOP_LOSS_TRIGGER_USD_CENTS",
+         "HUNTER_DROP_CENTS (dollars) or HUNTER_DRAWDOWN_PCT"),
+        ("HUNTER_STOP_LOSS_TRIGGER_PCT", "HUNTER_DRAWDOWN_PCT"),
+    ):
+        if os.environ.get(_old_env):
+            # `os.environ.get(...) or ()` in the #573 block below covers the
+            # older pair; this one is its #619 successor.
+            logging.getLogger(__name__).warning(
+                "%s is retired and ignored (#619); set %s instead.",
+                _old_env, _replacement)
     # Deprecation: the pre-#573 env names were renamed AND rescaled (pct is now
     # percent, usd is now cents). Warn if a stale old var is set so the operator
     # is not silently running on defaults.
     for _old_env in ("HUNTER_SINGLE_BUY_MAX_LOSS_PCT", "HUNTER_SINGLE_BUY_MAX_LOSS_USD"):
         if os.environ.get(_old_env):
             logging.getLogger(__name__).warning(
-                "%s is deprecated and ignored (#573 renamed it); set "
-                "HUNTER_STOP_LOSS_TRIGGER_PCT (percent) or "
-                "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS (cents) instead.", _old_env)
+                "%s is deprecated and ignored (#573 renamed it); #619 replaced "
+                "both with the entry-relative stop: set HUNTER_STOP_LOSS_MODE "
+                "plus HUNTER_DROP_CENTS / HUNTER_DRAWDOWN_PCT instead.", _old_env)
     aorl = os.environ.get("HUNTER_AGED_OUT_RESCUE_LEAD_SEC")
     if aorl and aorl.strip():
         val = float(aorl)

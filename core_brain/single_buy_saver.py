@@ -971,7 +971,7 @@ def exit_single_buy(
             f"Refusing to sell {size:.4f} against a holding of {naked:.4f}."
         )
 
-    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2, OrderType
 
     # `amount` is the maker amount: shares on a SELL. `price` is the worst
     # fill we accept, tick-aligned so the venue does not reject it outright.
@@ -985,7 +985,14 @@ def exit_single_buy(
     if hasattr(client, "_sell_into_bids"):
         resp = client.create_and_post_market_order(order_args, reason=reason)
     else:
-        resp = client.create_and_post_market_order(order_args)
+        # Fill-or-kill, STATED rather than inherited (#619). An exit is "get the
+        # whole leg out now or not at all": a partially filled stop leaves a
+        # naked remainder nobody decided to hold, and the poll would re-derive
+        # the same stop next cycle into a thinner book. The SDK's default
+        # happens to be FOK too, but that is a library detail -- this is the
+        # money path, and the instruction belongs in the call.
+        resp = client.create_and_post_market_order(
+            order_args, order_type=OrderType.FOK)
 
     # 4. Record the exit BEFORE returning. A sell that exists only on the
     #    venue is invisible to the registry -- reconcile adopts fills only
@@ -1635,6 +1642,11 @@ def _manage_single_leg_positions_locked(
     lead_sec = float(getattr(cfg, "aged_out_rescue_lead_sec", 900.0))
     max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
     tick_size = float(getattr(cfg, "price_tick", DEFAULT_TICK_SIZE))
+    stop_loss_mode = str(getattr(cfg, "stop_loss_mode", "NONE"))
+    drop_cents = float(getattr(cfg, "drop_cents", 0.05))
+    drawdown_pct = float(getattr(cfg, "drawdown_pct", 10.0))
+    emergency_drawdown_pct = float(
+        getattr(cfg, "emergency_drawdown_pct", 75.0))
     resolved = {str(cid).lower() for cid in (resolved_cids or ()) if cid}
 
     if market_state_fn is None:
@@ -1768,6 +1780,9 @@ def _manage_single_leg_positions_locked(
             decision = transition(
                 position, previous_state, max_pair_cost=max_pair_cost,
                 settlement_due=False, tick_size=tick_size,
+                stop_loss_mode=stop_loss_mode, drop_cents=drop_cents,
+                drawdown_pct=drawdown_pct,
+                emergency_drawdown_pct=emergency_drawdown_pct,
             )
             if decision.action == "hard_stop":
                 # The poll's hard stop is its own to persist: it survives
@@ -1806,6 +1821,10 @@ def _manage_single_leg_positions_locked(
                     decision = evaluate(
                         position, registry, max_pair_cost=max_pair_cost,
                         settlement_due=True, tick_size=tick_size,
+                        stop_loss_mode=stop_loss_mode,
+                        drop_cents=drop_cents,
+                        drawdown_pct=drawdown_pct,
+                        emergency_drawdown_pct=emergency_drawdown_pct,
                     )
                     result = _settlement_fallback(
                         client, registry, pair, cfg, max_pair_cost, live,
@@ -1982,86 +2001,6 @@ def rescue_aged_out_legs(
         market_state_fn=market_state_fn, state_cache=state_cache,
         gamma_host=gamma_host, resolved_cids=resolved_cids,
     )
-
-
-def _route_pair(client, registry, pair, max_pair_cost, live,
-                venue_positions, cfg=None, last_ms: int = 0, now_s: float = 0.0) -> dict:
-    """Route a single-buy pair under the single-buy stop-loss rules (ONE stop
-    mode per run -- usd or pct; shadow and live apply the same mode):
-
-    1. TAKER FINISH: If fill_cost + light_ask < max_pair_cost, cross to complete immediately.
-    2. ADVERSE DRIFT TRIGGER: If heavy leg's best bid dropped past the active
-       Stop-Loss Trigger (usd cents OR pct, one mode per run), exit immediately.
-    3. GRACE WINDOW: If age < single_buy_grace_sec (default 45s) and price is stable,
-       hold and let the resting maker quote fill.
-    4. GRACE EXPIRY: If age >= single_buy_grace_sec, exit at best bid to prevent holding
-       an unhedged leg into settlement.
-    """
-    light_token = pair["light"]["token_id"]
-    ask = best_ask(client.get_order_book(light_token)) if light_token else None
-
-    # Check 1: Can we complete the pair profitably as taker right now?
-    if not should_exit(pair["fill_cost"], ask, max_pair_cost):
-        try:
-            max_order = getattr(cfg, "max_order_usd", None) if cfg else None
-            return complete_pair(client, registry, pair["pair_id"], max_pair_cost,
-                                 live=live, max_order_usd=max_order)
-        except PairCompletionRefused:
-            pass  # Fall through to dual-trigger check
-
-    # Check 2: Evaluate adverse price drift on the heavy leg
-    heavy_token = pair["heavy"]["token_id"]
-    heavy_fill_price = float(pair["fill_cost"])
-    heavy_book = client.get_order_book(heavy_token) if heavy_token else None
-    heavy_bid = best_bid(heavy_book) if heavy_book else None
-
-    window_sec = float(getattr(cfg, "pairs_exit_window_sec", 900.0) if cfg else 900.0)
-    raw_grace = float(getattr(cfg, "single_buy_grace_sec", 45.0) if cfg else 45.0)
-    grace_sec = min(raw_grace, window_sec)
-    exit_method = "single_buy_exit"
-    stop_mode = str(getattr(cfg, "stop_loss_mode", "usd") if cfg else "usd").lower()
-    max_loss_pct = float(getattr(cfg, "stop_loss_trigger_pct", 10.0) if cfg else 10.0) / 100.0
-    max_loss_usd = float(getattr(cfg, "stop_loss_trigger_usd_cents", 4.0) if cfg else 4.0) / 100.0
-
-    age_s = max(0.0, now_s - (last_ms / 1000.0)) if (last_ms > 0 and now_s > 0) else 0.0
-
-    is_adverse = False
-    if heavy_bid is not None and heavy_fill_price > 0:
-        loss = heavy_fill_price - heavy_bid
-        loss_pct = loss / heavy_fill_price
-        # One stop mode per run (usd XOR pct); shadow and live apply the same
-        # mode -- the decision is identical, only order placement differs.
-        if stop_mode == "pct":
-            is_adverse = loss_pct >= max_loss_pct
-        else:
-            is_adverse = loss >= max_loss_usd
-
-    if is_adverse:
-        res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
-                              live=live, venue_positions=venue_positions,
-                              reason="adverse_drift", method=exit_method,
-                              trigger_bid=heavy_bid)
-        if isinstance(res, dict):
-            res["reason"] = "adverse_drift"
-        return res
-
-    if age_s < grace_sec:
-        return {
-            "pair_id": pair["pair_id"],
-            "action": "holding_grace",
-            "reason": f"grace_active ({age_s:.1f}s < {grace_sec:.0f}s)",
-            "fill_price": heavy_fill_price,
-            "current_bid": heavy_bid,
-        }
-
-    timer_reason = "grace_expired"
-    res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
-                          live=live, venue_positions=venue_positions,
-                          reason=timer_reason, method=exit_method,
-                          trigger_bid=heavy_bid)
-    if isinstance(res, dict):
-        res["reason"] = timer_reason
-    return res
 
 
 # Backward-compatible alias

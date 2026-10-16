@@ -1,9 +1,11 @@
-"""Tests for PnL attribution split by fill path (Issue #197).
+"""Tests for PnL attribution split by fill path (Issue #197, Issue #559).
 
-Proves the 3-way attribution:
+Proves the 5-way attribution:
 - maker_merged: pairs merged via resting maker orders on both legs.
 - taker_completed: pairs completed via a taker order (identified by >1 orders under (pair_id, token_id)).
-- single_buy_exit: single-buy rescue / liquidation closes (single_buy_exit, naked_exit).
+- single_buy_exit: single-buy rescue / liquidation closes (single_buy_exit, naked_exit, ladder_exit).
+- settled: legs held until the market resolved (settlement, shadow_settlement).
+- other: any remaining trade-like close (legacy names, `sell`).
 
 Target benchmark: 25% maker_merged / 35% taker_completed / 40% single_buy_exit (approx 25/35/41).
 """
@@ -65,12 +67,60 @@ def test_pnl_by_fill_path_empty():
         "maker_merged": 0.0,
         "taker_completed": 0.0,
         "single_buy_exit": 0.0,
+        "settled": 0.0,
+        "other": 0.0,
     }
     assert res["pct"] == {
         "maker_merged": None,
         "taker_completed": None,
         "single_buy_exit": None,
+        "settled": None,
+        "other": None,
     }
+
+
+def test_a_settled_or_unknown_close_lands_in_its_own_bucket():
+    """Issue #559, defect 1: settlements and unknown methods landed in NO
+    bucket, so `total` was short of the run's realized PnL.
+
+    Fails before the fix: `pnl_by_fill_path` returned three keys, a
+    `shadow_settlement` row was dropped from every one of them, and an
+    unclassified method was dropped too.
+    """
+    closes = [
+        {"method": "shadow_merge", "realized_pnl": 0.30, "tx_hash": "pair-maker"},
+        {"method": "shadow_merge", "realized_pnl": 0.20, "tx_hash": "pair-taker"},
+        {"method": "single_buy_exit", "realized_pnl": -0.10},
+        {"method": "shadow_settlement", "realized_pnl": -0.25},
+        {"method": "sell", "realized_pnl": 0.05},
+        {"method": "venue_sync", "realized_pnl": 4.00},
+    ]
+
+    res = pnl_by_fill_path(closes, taker_pairs={"pair-taker"})
+
+    assert res["by_path"] == {
+        "maker_merged": 0.30,
+        "taker_completed": 0.20,
+        "single_buy_exit": -0.10,
+        "settled": -0.25,
+        "other": 0.05,
+    }
+    # Total-preserving: the bookkeeping row stays out and no trade-like close
+    # is dropped, so the buckets sum to the run's own realized PnL.
+    assert res["total"] == pytest.approx(0.20)
+    assert res["total"] == pytest.approx(sum(
+        c["realized_pnl"] for c in closes if c["method"] != "venue_sync"
+    ))
+    assert res["pct"]["settled"] == pytest.approx(-0.25 / 0.20)
+
+
+def test_a_close_with_no_method_reads_as_other():
+    """An absent (or never-written) method is still a trade-like close: it must
+    be counted, not silently swallowed."""
+    res = pnl_by_fill_path([{"realized_pnl": -0.40}], set())
+
+    assert res["by_path"]["other"] == pytest.approx(-0.40)
+    assert res["total"] == pytest.approx(-0.40)
 
 
 def test_pnl_by_fill_path_benchmark_split(temp_db):

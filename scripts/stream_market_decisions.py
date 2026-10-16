@@ -32,6 +32,7 @@ from core_brain.config import MakerConfig
 from core_brain.quotes import (
     Inventory, dynamic_offset_for, mid_price, quote_resting_price,
 )
+from core_brain.single_leg_lifecycle import stop_trigger
 
 GAMMA = "https://gamma-api.polymarket.com"
 CLOB = "https://clob.polymarket.com"
@@ -163,11 +164,16 @@ def main():
                 dn_hit = "HIT" if tape["lo"] <= dn_q + 1e-9 else "-"
                 print(f"  FILL? up bid {up_q:.2f} {up_hit} / dn bid {dn_q:.2f} {dn_hit} "
                       f"(window lo {tape['lo']:.2f})")
-            # Stop illustration off the UP resting quote.
-            stop = cfg.stop_loss_trigger_usd_cents / 100.0
-            trig = (int(up_q * 100) - int(round(stop * 100))) / 100.0
+            # Stop illustration off the UP resting quote. Entry-relative since
+            # #619: the cut is derived from that fill's own average price, with
+            # the emergency floor as the backstop, so a $0.10-$0.14 fill is no
+            # longer cut the instant it fills.
+            trig, trig_source = stop_trigger(
+                up_q, cfg.stop_loss_mode, cfg.drop_cents, cfg.drawdown_pct,
+                cfg.emergency_drawdown_pct,
+            )
             print(f"  STOP  if up fills {up_q:.2f}, naked-leg cut at bid <= {trig:.2f} "
-                  f"(${stop:.2f})")
+                  f"({cfg.stop_loss_mode} / {trig_source})")
             print("-" * 68)
         except Exception as e:  # noqa: BLE001 - observer never dies on one bad read
             print(f"[{ts}] cycle {cycle}: read error {type(e).__name__}: {e}")

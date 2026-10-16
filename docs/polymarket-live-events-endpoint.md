@@ -130,7 +130,7 @@ by the live row, because the live row is the one carrying the stamp.
   alone: movement, depth, spread, horizon, mid band. There are **no clock
   gates** (time-of-game purge, #597): a game's start, quarter, half or end
   says nothing about when this market decides, so no gate may key off it.
-- `tradable()` gates it on `select_min_volume_24h_usd_live` ($10,000) instead of
+- `tradable()` gates it on `select_min_volume_24h_usd_live` ($35,000) instead of
   the permanent floor.
 
 Everything downstream is unchanged: movement, depth, spread, horizon and the

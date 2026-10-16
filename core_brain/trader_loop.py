@@ -586,13 +586,15 @@ def _market_cfg(base, spec: Any):
         objective="spread_capture",
         min_quote_shares=int(spec.get("min_size", base.min_quote_shares)),
         quote_shares=int(spec.get("shares", base.quote_shares)),
-        max_spread_from_mid=float(
-            spec.get("max_spread", base.max_spread_from_mid * 100.0)
-        ) / 100.0,
+        # The quote window is the ENGINE's max_spread_from_mid, single source.
+        # The venue's rewardsMaxSpread used to ride in on the feed row's
+        # max_spread field and cap the window here (2.5c on Fed rows, 4.5c on
+        # sports) — a rewards-program leftover throttling a strategy that earns
+        # the pair discount, not emissions. Deleted with the rewards purge
+        # (#594); do not reintroduce a per-market window.
         price_tick=float(spec.get("tick", base.price_tick)),
         min_t_remaining_sec=0.0,
         market_title=str(spec.get("title", "")),
-        market_daily_rate=float(spec.get("daily", 0.0)),
         range_cents=(
             float(spec["range_cents"])
             if spec.get("range_cents") is not None
@@ -1554,6 +1556,10 @@ def _lifecycle_quote_context(
             position,
             registry,
             max_pair_cost=float(cfg.max_pair_cost),
+            stop_loss_mode=str(cfg.stop_loss_mode),
+            drop_cents=float(cfg.drop_cents),
+            drawdown_pct=float(cfg.drawdown_pct),
+            emergency_drawdown_pct=float(cfg.emergency_drawdown_pct),
             tick_size=float(cfg.price_tick),
         )
         decisions.append((pair_id, position, decision))
@@ -2326,7 +2332,7 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
     )
     from py_clob_client_v2.order_builder.constants import BUY
     from core_brain.venue import (
-        MAX_ORDER_USD, MAX_TOTAL_USD, open_notional, venue_order_id,
+        open_notional, order_caps, venue_order_id,
     )
     from core_brain.order_registry import OrderRecord, QuoteRecord, get_run_id
 
@@ -2335,9 +2341,10 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
 
     # Dynamic caps scale with live account value (AGENTS.md). When the trader
     # loop has already merged the latest venue account_value into base_cfg via
-    # _fleet_state, use those; otherwise fall back to the static venue constants.
-    max_order_usd = float(getattr(cfg, "max_order_usd", MAX_ORDER_USD)) if cfg is not None else MAX_ORDER_USD
-    max_total_usd = float(getattr(cfg, "max_total_usd", MAX_TOTAL_USD)) if cfg is not None else MAX_TOTAL_USD
+    # _fleet_state, use those; otherwise fall back to the live venue caps.
+    _live_order, _live_total = order_caps()
+    max_order_usd = float(getattr(cfg, "max_order_usd", _live_order)) if cfg is not None else _live_order
+    max_total_usd = float(getattr(cfg, "max_total_usd", _live_total)) if cfg is not None else _live_total
 
     total_cost = sum(i.price * i.size for i in intents)
     for i in intents:

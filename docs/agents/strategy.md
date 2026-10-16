@@ -100,10 +100,33 @@ persistently to `ESCALATED_HEDGE`. The Trader raises the opposite maker to the h
 tick-aligned bid fitting `min($0.99, cfg.max_pair_cost) - held average`; once escalated,
 the state remains escalated until the pair locks or another terminal route applies.
 
-`HARD_STOP` takes precedence when the held best bid is at or below `$0.15` and routes
-through `single_buy_saver.py`'s guarded exit. Balanced inventory within the configured
-pair cap becomes `PAIR_LOCKED`. The only automatic taker-completion exception is the
-existing market-end-aware settlement fallback: it makes one capped attempt when due,
+`HARD_STOP` takes precedence when the held best bid is at or below the pair's
+**entry-relative** trigger and routes through `single_buy_saver.py`'s guarded exit:
+
+```
+active_trigger = max(strategy_trigger, max(held_average × (1 − emergency_drawdown_pct/100), $0.01))
+```
+
+The strategy trigger comes from `stop_loss_mode`, one mode per run: `NONE` (the default)
+contributes none, `ABSOLUTE_DROP` subtracts `drop_cents` from the held leg's fill average,
+`PERCENTAGE_DROP` subtracts `drawdown_pct` percent of it. The emergency floor is the
+backstop every mode shares, floored at one cent so an exit is never priced at nothing. The
+modes are mutually exclusive by construction — one field selects one formula — and
+`ABSOLUTE` / `PERCENTAGE` (the spec's shorthand) are refused rather than aliased, because
+the retired `usd`/`pct` knobs they replaced counted in different units. The trigger is
+entry-relative because active quotes span `$0.10`–`$0.90`: the static `$0.15` stop this
+replaced liquidated every entry at or below it the instant it filled.
+
+Operator overrides: `HUNTER_STOP_LOSS_MODE` (`NONE` / `ABSOLUTE_DROP` /
+`PERCENTAGE_DROP`, trailing spaces and case ignored, anything else refused with the choice
+list), `HUNTER_DROP_CENTS` (`0.01`–`0.90`, in DOLLARS per share despite the name),
+`HUNTER_DRAWDOWN_PCT` and `HUNTER_EMERGENCY_DRAWDOWN_PCT` (above `0`, at most `100`). The
+retired `HUNTER_STOP_LOSS_TRIGGER_USD_CENTS`, `HUNTER_STOP_LOSS_TRIGGER_PCT` and
+`HUNTER_SINGLE_BUY_GRACE_SEC` are named and ignored with a warning, never converted: their
+units do not match their replacements'.
+
+Balanced inventory within the configured pair cap becomes `PAIR_LOCKED`. The only
+automatic taker-completion exception is the existing market-end-aware settlement fallback: it makes one capped attempt when due,
 then uses the guarded exit if completion is refused. `single_buy_saver.py` executes these
 routes; it is not an independent lifecycle policy.
 

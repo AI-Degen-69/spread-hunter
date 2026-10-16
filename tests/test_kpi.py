@@ -311,3 +311,44 @@ def test_market_with_open_order_and_filled_quote_not_resolved(tmp_path, monkeypa
     rep = report(db_file, run_id="run-1")
     assert cid in rep["by_market"]
     assert rep["by_market"][cid]["resolved"] is False
+
+
+def test_merge_count_counts_the_whole_merge_family(tmp_path, monkeypatch):
+    """#559, defect 2: a rehearsal's only merge is `shadow_merge`, and the card
+    counted merges with `method == "merge"` -- so every rehearsal reported zero
+    merges while its exit count was right.
+
+    Fails before the fix: `merge_closes` read 0 against this store.
+    """
+    import sqlite3, time
+    from core_brain.kpi import report
+    from core_brain.order_registry import SCHEMA, CloseRecord, OrderRegistry
+
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+
+    db_file = tmp_path / "test_merges.db"
+    con = sqlite3.connect(str(db_file))
+    con.executescript(SCHEMA)
+    con.commit()
+    con.close()
+
+    reg = OrderRegistry(db_file)
+    now = time.time()
+    for i, (method, pnl) in enumerate((
+        ("shadow_merge", 0.30),
+        ("shadow_merge", 0.20),
+        ("single_buy_exit", -0.10),
+    )):
+        reg.log_close(CloseRecord(
+            ts=now, condition_id=f"0xmerge{i}", method=method, shares=10.0,
+            cost_basis=9.5, proceeds=9.5 + pnl, realized_pnl=pnl,
+            up_cost_removed=4.75, dn_cost_removed=4.75, run_id="run-1",
+        ))
+
+    rep = report(db_file, run_id="run-1")
+
+    prof = rep["run_profitability"]
+    assert prof["merge_closes"] == 2, \
+        "a rehearsal merge (`shadow_merge`) was not counted as a merge"
+    assert prof["single_buy_exits"] == 1, \
+        "the exit count moved; the plan leaves it as it was"

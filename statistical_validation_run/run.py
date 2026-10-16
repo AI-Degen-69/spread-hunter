@@ -17,7 +17,6 @@ import shutil
 import sqlite3
 import sys
 import time
-from dataclasses import replace as dc_replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -32,7 +31,7 @@ from core_brain.shadow_run import (
     shadow_run_id,
     ShadowResult,
 )
-from core_brain.venue import MAX_ORDER_USD, MAX_TOTAL_USD
+from core_brain.venue import order_caps
 from statistical_validation_run.artifacts import (
     build_gate_rows,
     resolve_verdict,
@@ -225,10 +224,11 @@ def snapshot_stat_validation_env(
     except (OSError, TypeError) as e:
         log.warning("snapshot: failed to write config_snapshot.json: %s", e)
 
+    max_order_usd, max_total_usd = order_caps()
     log.info(
         "STAT HARNESS config: max_order_usd=%.2f max_total_usd=%.2f objective=%s bankroll_usd=%.2f",
-        MAX_ORDER_USD,
-        MAX_TOTAL_USD,
+        max_order_usd,
+        max_total_usd,
         getattr(cfg, "objective", "balanced"),
         getattr(cfg, "bankroll_usd", 0.0),
     )
@@ -327,7 +327,10 @@ def main(
     # config target (60): a rehearsal that never collects enough closes must
     # run to its --max-hours ceiling and be reported underpowered, never
     # "PASS with adequate sample" at n=16. --target-closes 0 opts out.
-    cfg = dc_replace(load_cfg(), single_buy_grace_sec=0.0)
+    # No pinned override: the retired `single_buy_grace_sec` lost its last
+    # reader when the unified lifecycle shipped (#619), so the rehearsal runs
+    # on exactly what the operator configured.
+    cfg = load_cfg()
     if a.target_closes is None:
         a.target_closes = cfg.stat_gate_target_closes
     if a.target_closes < 0:
