@@ -95,6 +95,7 @@ Status: [x] done — coverage drives `manage_single_leg_positions`; helper still
 
 ### T2 [M, Test migration] Move refill/wait coverage onto manager passes — tests/test_refill_after_exit.py
 Depends on: none. Skill: test-driven-development.
+Status: [x] done — both cases drive `manage_single_leg_positions` with the manager's clock.
 - Extend `_cfg` with the same manager settings; drop the grace arg where dead.
 - Two refill cases → one `test_manager_exits_the_refill_on_second_pass` with a
   monkeypatched mutable clock on the `time.time` used by
