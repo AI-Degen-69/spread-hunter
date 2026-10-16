@@ -178,8 +178,9 @@ def test_the_payload_version_is_pinned_on_both_sides(app_js, kpi_module):
     # #535 shipped the per-distribution `ci_critical*` multipliers the
     # distribution chart now reads instead of its own constants; #517 added the
     # capital-risk section (`pnl_skewness`, `sortino_ratio`, `drawdown_recovery`)
-    # the new card reads: both sides sit at 257.
-    assert backend.group(1) == "257"
+    # the new card reads: both sides sit at 257. #559 added the `settled` and
+    # `other` fill-path buckets: both sides sit at 258.
+    assert backend.group(1) == "258"
 
 
 def test_a_stale_backend_shows_a_restart_note(app_js, index_html, styles_css):

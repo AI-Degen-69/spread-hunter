@@ -183,7 +183,7 @@ def _exit_row(close, fills, orders) -> dict | None:
         # A `shadow_settlement` close prices neither leg: it books the leg the
         # venue settled at $1.00/$0.00, not a market sell. Reconstruct the
         # one-sided held leg from its BUY fills instead of dropping the row.
-        if close["method"] != SHADOW_SETTLEMENT:
+        if close["method"] not in SETTLEMENT_METHODS:
             return None
         cfills = fills.get(cid, [])
         buys = [f for f in cfills if f["side"] == "BUY"]
@@ -441,10 +441,10 @@ def report(registry_path: Path, booktape_path: Path | None, top: int) -> str:
         if r["method"] == SHADOW_SETTLEMENT and r["aged_out"] is True)
 
     say(f"Rescue exit forensics -- {registry_path.name}")
-    say(f"  rescue closes: {len(rows)}  total rescue loss: {_usd(total_loss)}"
+    say(f"  total closes: {len(rows)}  total loss: {_usd(total_loss)}"
         f"  capital at risk: {_usd(total_capital)}")
-    # A settlement is not a rescue (#559): the two are counted and priced
-    # apart here, so the rescue numbers above are readable as rescues.
+    # A settlement is not a rescue (#559): the headline above is the combined
+    # table total, and the two populations are counted and priced apart here.
     for _label, _methods in (("rescue exits", RESCUE_EXIT_METHODS),
                              ("settlements", SETTLEMENT_METHODS)):
         _group = [r for r in rows if r["method"] in _methods]

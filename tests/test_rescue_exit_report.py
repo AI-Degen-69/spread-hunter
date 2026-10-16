@@ -506,7 +506,7 @@ class TestRescueVsSettlementSplit:
         assert "settlements: 1  loss: -$6.00" in out
         # The combined table above keeps both rows: the fix separates the
         # numbers, it does not drop the settled close from the report.
-        assert "rescue closes: 2" in out
+        assert "total closes: 2" in out
 
 
 class TestAmbiguousAttribution:

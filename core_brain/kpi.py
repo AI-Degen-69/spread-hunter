@@ -55,7 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 257
+KPI_PAYLOAD_VERSION = 258
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
