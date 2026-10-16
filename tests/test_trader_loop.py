@@ -3261,3 +3261,96 @@ class TestRefusalVisitRows:
             tmp_path, lambda *a: ([], self.TRANSIENT_WHY))
         self._run_cycles(seam, 2)
         assert [r["size"] for r in self._rows(reg, "refused_transient")] == [1.0, 1.0]
+
+
+def test_dropped_market_shield_narrows_to_escalated_hedge_and_cancels_hard_stop():
+    """#628: HEDGE SHIELD protects ESCALATED_HEDGE only; HARD_STOP cleans up."""
+    from types import SimpleNamespace
+    from core_brain.trader_loop import _cancel_dropped_markets
+
+    o_hedge = SimpleNamespace(
+        id="o_h", order_id="v_h", condition_id="0xhedge", token_id="tok-up",
+        price=0.50, side="BUY", status="open", pair_id="pair-hedge",
+    )
+    o_stop = SimpleNamespace(
+        id="o_s", order_id="v_s", condition_id="0xstopped", token_id="tok-dn",
+        price=0.45, side="BUY", status="open", pair_id="pair-stopped",
+    )
+    cancelled: list = []
+
+    def _cancel_fn(_client, _reg, orders):
+        cancelled.extend(orders)
+        return len(orders)
+
+    def _lifecycle_state(pair_id):
+        if pair_id == "pair-hedge":
+            return SimpleNamespace(pair_id="pair-hedge", condition_id="0xhedge",
+                                   state="ESCALATED_HEDGE")
+        if pair_id == "pair-stopped":
+            return SimpleNamespace(pair_id="pair-stopped", condition_id="0xstopped",
+                                   state="HARD_STOP")
+        return None
+
+    seam = SimpleNamespace(
+        client=object(),
+        registry=SimpleNamespace(
+            get_active_orders=lambda: [o_hedge, o_stop],
+            get_lifecycle_state=_lifecycle_state,
+        ),
+        cancel_fn=_cancel_fn,
+        resting_order_ids_fn=None,
+        db_path=None,
+    )
+
+    results = _cancel_dropped_markets(seam, current_markets=[])
+
+    # ESCALATED_HEDGE stays protected; HARD_STOP is cancelled
+    cancelled_ids = {getattr(o, "order_id", None) or o.get("order_id") for o in cancelled}
+    assert cancelled_ids == {"v_s"}, "HARD_STOP must be cancelled, ESCALATED_HEDGE kept"
+
+    warned = [r for r in results if r.why == "dropped_market_hedge_protected"]
+    assert len(warned) == 1
+    assert warned[0].condition_id == "0xhedge"
+
+    cancelled_res = [r for r in results if r.why == "dropped_market_cancelled"]
+    assert len(cancelled_res) == 1
+    assert cancelled_res[0].condition_id == "0xstopped"
+
+
+def test_stopped_out_pair_does_not_block_fresh_quote(tmp_path):
+    """#628: A pair stopped out and fully exited resets to DUAL_RESTING so fresh quotes are submitted."""
+    from core_brain.order_registry import LifecycleStateRecord
+    reg, db = _t3_registry(tmp_path, "fresh_quote.db")
+    cid = "0xmkt1"
+
+    # Previously stopped-out pair, now reset to DUAL_RESTING
+    reg.save_lifecycle_state(
+        LifecycleStateRecord(
+            pair_id="pair-stopped",
+            condition_id=cid,
+            state="DUAL_RESTING",
+            reason="hard_stop_exited",
+            updated_ts_ms=1_000_000,
+            evidence_json="{}",
+        )
+    )
+
+    calls = {"submitted": [], "cancelled": []}
+    books_calls = {}
+
+    def decide_fn(cfg, up, dn, inv, t_rem, wf):
+        tok_up = up["token_id"]
+        tok_dn = dn["token_id"]
+        return ([_intent(side="UP", token=tok_up, price=0.48),
+                 _intent(side="DOWN", token=tok_dn, price=0.48)], "")
+
+    seam = _t3_seam(reg, books_calls, decide_fn, calls)
+    results = run(seam, markets=[_TokMarket(cid)], once=True, live=True,
+                  sleep_fn=lambda s: None)
+
+    assert len(calls["submitted"]) == 1
+    submitted_cid, submitted_tokens = calls["submitted"][0]
+    assert submitted_cid == cid
+    assert len(submitted_tokens) == 2
+
+

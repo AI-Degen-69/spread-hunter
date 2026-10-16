@@ -384,7 +384,7 @@ def test_poll_preserves_a_trader_persisted_escalation_row(registry):
     )
 
     assert results[0]["action"] == "exited"
-    assert registry.get_lifecycle_state("pair-1").state == "HARD_STOP"
+    assert registry.get_lifecycle_state("pair-1").state == "DUAL_RESTING"
     assert any(call.startswith("sell:") for call in client.calls)
     assert not any(call.startswith("buy:") for call in client.calls)
 

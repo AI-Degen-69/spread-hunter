@@ -2381,6 +2381,7 @@ def _log_rank_near_misses(out, rejected, verdicts, ts=None,
     """
     greens = []
     depth_unparsed = 0
+    verdicts = verdicts or {}
     for r in out:
         if r.get("eligible"):
             continue
