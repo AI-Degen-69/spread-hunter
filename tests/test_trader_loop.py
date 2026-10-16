@@ -3316,3 +3316,41 @@ def test_dropped_market_shield_narrows_to_escalated_hedge_and_cancels_hard_stop(
     assert len(cancelled_res) == 1
     assert cancelled_res[0].condition_id == "0xstopped"
 
+
+def test_stopped_out_pair_does_not_block_fresh_quote(tmp_path):
+    """#628: A pair stopped out and fully exited resets to DUAL_RESTING so fresh quotes are submitted."""
+    from core_brain.order_registry import LifecycleStateRecord
+    reg, db = _t3_registry(tmp_path, "fresh_quote.db")
+    cid = "0xmkt1"
+
+    # Previously stopped-out pair, now reset to DUAL_RESTING
+    reg.save_lifecycle_state(
+        LifecycleStateRecord(
+            pair_id="pair-stopped",
+            condition_id=cid,
+            state="DUAL_RESTING",
+            reason="hard_stop_exited",
+            updated_ts_ms=1_000_000,
+            evidence_json="{}",
+        )
+    )
+
+    calls = {"submitted": [], "cancelled": []}
+    books_calls = {}
+
+    def decide_fn(cfg, up, dn, inv, t_rem, wf):
+        tok_up = up["token_id"]
+        tok_dn = dn["token_id"]
+        return ([_intent(side="UP", token=tok_up, price=0.48),
+                 _intent(side="DOWN", token=tok_dn, price=0.48)], "")
+
+    seam = _t3_seam(reg, books_calls, decide_fn, calls)
+    results = run(seam, markets=[_TokMarket(cid)], once=True, live=True,
+                  sleep_fn=lambda s: None)
+
+    assert len(calls["submitted"]) == 1
+    submitted_cid, submitted_tokens = calls["submitted"][0]
+    assert submitted_cid == cid
+    assert len(submitted_tokens) == 2
+
+

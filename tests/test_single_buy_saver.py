@@ -2001,3 +2001,40 @@ def test_hard_stop_exit_refuses_when_cancel_fails(registry: OrderRegistry):
 
     assert not any(c.startswith("sell:") for c in client.calls)
 
+
+def test_hard_stop_full_exit_resets_lifecycle(registry: OrderRegistry):
+    """#628: When all shares are sold on hard stop, lifecycle row resets to DUAL_RESTING."""
+    _trig525_pair(registry, TRIG525_NOW)
+    venue = DecisionThenExecutionBook(decision_bid=0.15, execution_bid=0.14)
+    routed = _trig525_route(registry, venue, TRIG525_NOW / 1000.0 + 10.0)
+
+    assert routed["action"] == "exited"
+    rec = registry.get_lifecycle_state(TRIG525_PAIR)
+    assert rec is not None
+    assert rec.state == "DUAL_RESTING"
+    assert rec.reason == "hard_stop_exited"
+
+
+def test_hard_stop_partial_exit_keeps_hard_stop(registry: OrderRegistry):
+    """#628: When only partial shares are sold, lifecycle row remains HARD_STOP."""
+    _trig525_pair(registry, TRIG525_NOW)
+
+    class PartialVenue(DecisionThenExecutionBook):
+        def create_and_post_market_order(self, order_args, options=None,
+                                         order_type="FOK", defer_exec=False):
+            super().create_and_post_market_order(order_args, options=options,
+                                                 order_type=order_type,
+                                                 defer_exec=defer_exec)
+            return {"success": True, "size": 4.0, "price": "0.14", "orderID": "v-partial"}
+
+    venue = PartialVenue(decision_bid=0.15, execution_bid=0.14)
+    routed = _trig525_route(registry, venue, TRIG525_NOW / 1000.0 + 10.0)
+
+    assert routed["action"] == "exited"
+    assert routed["size"] == 4.0
+    rec = registry.get_lifecycle_state(TRIG525_PAIR)
+    assert rec is not None
+    assert rec.state == "HARD_STOP"
+
+
+

@@ -564,3 +564,28 @@ def test_evaluate_exposure_stranded_when_no_opposing_orders():
     assert res.light_token_id == "tok-dn"
     assert res.held_deficit == 10.0
     assert res.coverage_shortfall == 10.0
+
+
+def test_patient_wait_never_cancels():
+    """#628: PATIENT_WAIT policy never emits a cancel action."""
+    decision = transition(
+        _position(up_size=2.0, down_size=0.0, up_avg=0.48, up_bid=0.47),
+        LegState.PATIENT_WAIT,
+        max_pair_cost=0.99,
+    )
+    assert decision.state is LegState.PATIENT_WAIT
+    assert decision.action == "wait"
+    assert decision.action != "cancel"
+
+
+def test_escalated_hedge_never_cancels():
+    """#628: ESCALATED_HEDGE policy emits hedge quote, never cancel."""
+    decision = transition(
+        _position(up_size=2.0, down_size=0.0, up_avg=0.48, up_bid=0.39, base_offset=0.04),
+        LegState.ESCALATED_HEDGE,
+        max_pair_cost=0.99,
+    )
+    assert decision.state is LegState.ESCALATED_HEDGE
+    assert decision.action == "hedge"
+    assert decision.action != "cancel"
+
