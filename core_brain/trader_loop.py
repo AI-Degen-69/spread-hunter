@@ -834,7 +834,7 @@ def _cancel_dropped_markets(
             why="dropped_market_partial_retained"))
 
     # THE HEDGE SHIELD (#416). A market that left the universe while holding
-    # a lifecycle-protected leg (ESCALATED_HEDGE / HARD_STOP, read from the
+    # a lifecycle-protected leg (ESCALATED_HEDGE, read from the
     # registry, never inferred) keeps its resting hedge: cancelling the
     # protection strands the filled leg as the single buy nobody decided to
     # take. Resolved markets still exit first -- protection never overrides
@@ -842,6 +842,8 @@ def _cancel_dropped_markets(
     # cancelled: cancelling a possibly-escalated hedge is the irreversible
     # harm, while a resting order is re-evaluated next cycle. Every skip
     # surfaces as a WARNED row, never a log line only.
+    # HARD_STOP pairs (#628) are not protected: their exit already cancels
+    # both legs and sells the filled position, leaving nothing to shield.
     protected_cids: dict[str, str] = {}
     if seam.registry is not None and callable(
             getattr(seam.registry, "get_lifecycle_state", None)):
@@ -974,10 +976,11 @@ def _still_resting(seam: VenueSeam, to_cancel: list[dict]) -> list[str]:
 
 
 # Lifecycle states whose hedge execution path outranks placement gating
-# (#416). Read from the registry lifecycle state via the quote context --
-# never an inferred flag -- and only these two: every other state keeps
-# full gate behavior.
-_HEDGE_PROTECTED_STATES = frozenset({"ESCALATED_HEDGE", "HARD_STOP"})
+# (#416, #628). Read from the registry lifecycle state via the quote context --
+# never an inferred flag: every other state keeps full gate behavior.
+# Narrowed to ESCALATED_HEDGE for dropped-market protection (#628), because
+# a stopped-out pair has already cancelled both legs and exited.
+_HEDGE_PROTECTED_STATES = frozenset({"ESCALATED_HEDGE"})
 
 
 def _admit_placements(
@@ -1030,7 +1033,7 @@ def _admit_placements(
     passive = [i for i in to_submit if not i.crossed]
     if not passive:
         return list(to_submit), ""
-    if lifecycle_state in _HEDGE_PROTECTED_STATES:
+    if lifecycle_state in _HEDGE_PROTECTED_STATES or lifecycle_state == "HARD_STOP":
         # THE HEDGE BYPASS (#416). A market holding an unhedged leg in an
         # escalated or hard-stop lifecycle state keeps its execution path:
         # refusing its hedge placement would strand the filled leg as the
