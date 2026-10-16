@@ -110,6 +110,10 @@ Status: [x] done — both cases drive `manage_single_leg_positions` with the man
 
 ### T3 [S, Deletion] Delete `_route_pair`, reword 2 docstrings, run acceptance checks
 Depends on: T1, T2. Skill: incremental-implementation.
+Status: [x] done — 80 lines removed; `core_brain` is clean of `_route_pair` (acceptance grep empty).
+Deviations: the improvement proposal's reword of tests/test_grace_sweep_report.py:179 was NOT
+applied — CONSTRAINTS.md allows only the 5 in-scope files, and that file is not one; recorded as
+ledger row N4 instead. Two further dead-knob findings recorded as N5/N6.
 - Delete only `_route_pair` (single_buy_saver.py:1987–2064); keep `should_exit`,
   `best_ask/bid`, `complete_pair`, `PairCompletionRefused`, `exit_single_buy`,
   `exit_naked_leg` alias, and all config fields. Remove leftover imports in the

@@ -360,8 +360,8 @@ def shadow_cfg():
     was discarded on the way in, and so the knob could never be swept.
 
     `load()` already defaults the field to 0.0, so an operator who sets nothing
-    still gets the old baseline; only an explicit setting now reaches
-    `_route_pair`.
+    still gets the old baseline; only an explicit setting now reaches the config
+    the rehearsal runs on.
     """
     from core_brain.config import load
     return load()
