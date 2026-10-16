@@ -98,7 +98,7 @@ T4 is independent of T1-T3 and can run any time before T5.
 
 ## 3. Tasks
 
-### T1 — Baseline truth and the decision rule, written before any result exists
+### [x] T1 — Baseline truth and the decision rule, written before any result exists
 
 - Size: **S** · Domain: **Research** · Depends on: none
 - Files: `docs/runs/2026-10-16-622-refusal-hold-tournament.md` (new),
@@ -116,7 +116,7 @@ T4 is independent of T1-T3 and can run any time before T5.
 - Verify: `python -m pytest -q tests/test_refusal_hold_decision.py`
 - **Checkpoint 1** — one-line report: baseline confirmed, decision rule frozen.
 
-### T2 — Policy switch and the drift path, default A
+### [ ] T2 — Policy switch and the drift path, default A
 
 - Size: **M** · Domain: **Backend/Logic** · Depends on: T1
 - Files: `core_brain/config.py`, `core_brain/trader_loop.py`, `tests/test_trader_loop.py`
@@ -144,7 +144,7 @@ T4 is independent of T1-T3 and can run any time before T5.
   C holds inside tolerance, cancels outside it on the **second** refusal, holds on a missing
   mid, and is two-sided; the per-visit hold→hold→expire sequence; streak restart after expiry.
 
-### T3 — Refusal visits as the rate denominator
+### [ ] T3 — Refusal visits as the rate denominator
 
 - Size: **S** · Domain: **Backend/Logic** · Depends on: T2
 - Files: `core_brain/order_registry.py` (only if needed), `core_brain/trader_loop.py`
@@ -154,7 +154,7 @@ T4 is independent of T1-T3 and can run any time before T5.
   event-writing helper. **No new table.** Record in `tasks/plan.md` which of the two it was.
 - Verify: focused test asserting one row per refused visit with a parseable outcome.
 
-### T4 — Nullable cancel timestamp
+### [ ] T4 — Nullable cancel timestamp
 
 - Size: **S** · Domain: **Backend/Logic** · Depends on: none
 - Files: `core_brain/order_registry.py`
@@ -166,7 +166,7 @@ T4 is independent of T1-T3 and can run any time before T5.
 - Verify: migration is idempotent on a legacy DB, and a fresh cancel stamps the column.
 - **Checkpoint 2** — one-line report: switch + events + cancel timestamp working; report next.
 
-### T5 — Read-only comparison report
+### [ ] T5 — Read-only comparison report
 
 - Size: **L** · Domain: **Backend/Logic** · Depends on: T3, T4
 - Files: `scripts/refusal_hold_report.py` (new), `tests/test_refusal_hold_report.py` (new)
@@ -193,7 +193,7 @@ T4 is independent of T1-T3 and can run any time before T5.
   run-id scoping, censoring, `NULL` bid fields, hand-made trend/chop series, and drift cancels
   counted under their own reason.
 
-### T6 — Arms file and run protocol
+### [ ] T6 — Arms file and run protocol
 
 - Size: **S** · Domain: **Research/Config** · Depends on: T2, T5
 - Files: `configs/tournaments/i622_tournament-1_arms.json` (new)
@@ -210,7 +210,7 @@ T4 is independent of T1-T3 and can run any time before T5.
   logs, heartbeats, stores.
 - Verify: `--dry-run` prints exactly three arms with the intended env deltas.
 
-### T7 — Run and record
+### [ ] T7 — Run and record  *(operator-launched; blocks T8–T10)*
 
 - Size: **M** · Domain: **Research** · Depends on: T6
 - Files: `docs/runs/2026-10-16-622-refusal-hold-tournament.md`
@@ -222,7 +222,7 @@ T4 is independent of T1-T3 and can run any time before T5.
 - Verify: the record contains a non-empty table for all five metrics for all three arms.
 - **Checkpoint 3** — one-line report: runs complete, metrics in hand; the decision is next.
 
-### T8 — Record the decision, keep the winner, delete the losers
+### [ ] T8 — Record the decision, keep the winner, delete the losers
 
 - Size: **M** · Domain: **Docs + Backend/Logic** · Depends on: T7
 - Files: `docs/agents/strategy.md`, `docs/explanations/grace-hold-explainer.html`,
@@ -250,7 +250,7 @@ T4 is independent of T1-T3 and can run any time before T5.
      describes the winner. Name each deletion and its justifying option in this file.
 - Verify: focused `trader_loop` / `shadow_run` suites green.
 
-### T9 — Sweep the dead hold machinery actually present
+### [ ] T9 — Sweep the dead hold machinery actually present
 
 - Size: **S** · Domain: **Backend/Logic** · Depends on: T8
 - Files: `core_brain/trader_loop.py`, `core_brain/config.py`, `core_brain/cancel_report.py`,
@@ -270,7 +270,7 @@ T4 is independent of T1-T3 and can run any time before T5.
      a `noticed-but-not-touching` row **instead** and record it here.
 - Verify: focused suites green; a search proving zero uncalled hold helpers remain.
 
-### T10 — Operator verification
+### [ ] T10 — Operator verification
 
 - Size: **XS** · Domain: **Docs** · Depends on: T9
 - Files: the How-to-verify block in the PR body / final report
