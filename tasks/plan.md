@@ -98,7 +98,7 @@ p_dn_calc, 4)`. A raw float sum falsely refuses ties (e.g. `0.495 + 0.495 =
 
 ## 4. Tasks (2 atomic vertical slices)
 
-### T1 (M) — entry pair-cost gate on the from-mid path
+### T1 (M) — entry pair-cost gate on the from-mid path — DONE (590c595)
 Files: `core_brain/quotes.py`, `tests/test_quotes.py` (new). Depends on: none.
 - In `_decide_quotes_from_mid`, after `out` is built: if exactly two intents
   and both have `crossed is False` and `pair_id is None`, compute
@@ -118,7 +118,7 @@ Files: `core_brain/quotes.py`, `tests/test_quotes.py` (new). Depends on: none.
   `test_live_quotes.py`, `test_completable_pair_gate.py`,
   `test_trader_loop.py` green.
 
-### T2 (S) — read-only break-even anchor in state summary
+### T2 (S) — read-only break-even anchor in state summary — DONE
 Files: `core_brain/registry_state.py`, `tests/test_quotes.py` (append).
 Depends on: none (shares the new test file — append, never overwrite).
 - Add pure `break_even_price(fill_price) = round(1.00 - fill_price, 4)`.

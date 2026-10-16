@@ -1,4 +1,7 @@
-"""The entry pair-cost cap on the from-mid path (#627).
+"""The two halves of #627: the entry pair-cost cap and the break-even anchor.
+
+Part 1 (below) is the entry pair-cost cap on the from-mid path.
+Part 2 is the read-only break-even anchor in `summarize_state`.
 
 The fleet quotes both legs under mid: `mid - reward_offset` each side, which is
 the income -- a pair assembled at ~1.00 - 2*offset merges back into exactly
@@ -160,3 +163,221 @@ class TestEntryPairCostCap:
         assert [(i.side, i.price, i.pair_id) for i in intents] == [
             ("DOWN", 0.44, "pair-1")]
         assert "entry_pair_cost" not in why
+
+
+# --- Part 2: the break-even anchor in the state summary ----------------------
+#
+# `summarize_state` reads the registry read-only (`mode=ro`) and derives the
+# anchor from the fills already on file: the price the missing leg must beat for
+# the pair to still merge at a profit is `1.00 - the first opening fill`. Nothing
+# is stored, nothing cancels, nothing exits -- the anchor is telemetry that
+# follows the pair's current membership, so a restart cannot change it.
+
+import sqlite3
+
+from core_brain.order_registry import FillRecord, OrderRecord, OrderRegistry
+from core_brain.registry_state import break_even_price, summarize_state
+
+_TS = 1_700_000_000_000
+
+
+@pytest.fixture
+def live_db(tmp_path):
+    """A live-schema registry in a temp dir: the tests never touch data/orders.db."""
+    return tmp_path / "live.db"
+
+
+def _order(reg, oid, token, price, *, side="BUY", pair_id="pair-1"):
+    reg.create_order(OrderRecord(
+        id=oid, condition_id="cond-1", token_id=token, side=side, price=price,
+        original_size=10.0, status="open", posted_ts=_TS, last_polled_ts=_TS,
+        pair_id=pair_id))
+    return oid
+
+
+def _fill(reg, trade_id, oid, price, *, venue_ts=_TS + 1000,
+          recorded_ts=_TS + 2000, size=10.0):
+    return reg.record_fill(FillRecord(
+        trade_id=trade_id, order_uuid=oid, size=size, price=price,
+        venue_ts=venue_ts, recorded_ts=recorded_ts, run_id="run-a"))
+
+
+def _pairs(db_path):
+    return {p["pair_id"]: p for p in summarize_state(db_path)["pairs"]}
+
+
+def _snapshot(db_path):
+    """Every row of the three tables the anchor's read path touches."""
+    con = sqlite3.connect(str(db_path))
+    try:
+        return {t: con.execute(f"SELECT * FROM {t} ORDER BY rowid").fetchall()
+                for t in ("orders", "fills", "single_leg_lifecycle")}
+    finally:
+        con.close()
+
+
+class TestBreakEvenAnchor:
+    def test_the_helper_rounds_the_break_even_to_four_places(self):
+        assert break_even_price(0.45) == 0.55
+        assert break_even_price(0.29) == 0.71
+        assert break_even_price(0.3333) == 0.6667
+
+    def test_the_first_opening_fill_anchors_the_pair(self, live_db):
+        reg = OrderRegistry(db_path=live_db)
+        _order(reg, "o-up", UP, 0.54)
+        _order(reg, "o-dn", DOWN, 0.43)
+        _fill(reg, "t1", "o-up", 0.45)
+
+        pair = _pairs(live_db)["pair-1"]
+
+        assert pair["break_even"] == {
+            "filled_token_id": UP,
+            "first_fill_trade_id": "t1",
+            "first_fill_price": 0.45,
+            "break_even_price": 0.55,
+            "opposite_token_id": DOWN,
+        }
+        # ...and the fields it sits beside are what they were before the anchor:
+        # the leg that filled is priced at what it cost, not at what we bid.
+        assert pair["hedge_state"] == "NAKED"
+        assert pair["naked_info"]["unhedged_shares"] == 10.0
+        assert pair["combined_price"] == 0.88
+
+    def test_later_partial_and_opposite_fills_do_not_move_the_anchor(self, live_db):
+        reg = OrderRegistry(db_path=live_db)
+        _order(reg, "o-up", UP, 0.54)
+        _order(reg, "o-dn", DOWN, 0.43)
+        _fill(reg, "t1", "o-up", 0.45, venue_ts=_TS + 1000)
+        _fill(reg, "t2", "o-up", 0.50, venue_ts=_TS + 2000, size=2.0)
+        _fill(reg, "t3", "o-dn", 0.40, venue_ts=_TS + 3000)
+
+        anchor = _pairs(live_db)["pair-1"]["break_even"]
+
+        assert anchor["first_fill_trade_id"] == "t1"
+        assert anchor["first_fill_price"] == 0.45
+        assert anchor["break_even_price"] == 0.55
+
+    def test_a_duplicate_trade_id_is_refused_and_a_sell_never_anchors(self, live_db):
+        reg = OrderRegistry(db_path=live_db)
+        _order(reg, "o-up", UP, 0.54)
+        _order(reg, "o-dn", DOWN, 0.43)
+        _fill(reg, "t1", "o-up", 0.45)
+        # The venue replaying a trade must not rewrite the anchor: `record_fill`
+        # refuses the duplicate, so the stored fill (and the anchor) stands.
+        assert reg.record_fill(FillRecord(
+            trade_id="t1", order_uuid="o-up", size=10.0, price=0.99,
+            venue_ts=_TS - 99_999, recorded_ts=_TS)) is False
+
+        # A pair whose only fill closes a leg has no opening fill to anchor on.
+        _order(reg, "s-dn", DOWN, 0.43, side="SELL", pair_id="pair-sell")
+        _order(reg, "s-up", UP, 0.54, pair_id="pair-sell")
+        _fill(reg, "t9", "s-dn", 0.46, venue_ts=_TS - 50_000)
+
+        pairs = _pairs(live_db)
+        assert pairs["pair-1"]["break_even"]["first_fill_trade_id"] == "t1"
+        assert pairs["pair-1"]["break_even"]["first_fill_price"] == 0.45
+        assert pairs["pair-sell"]["break_even"] is None
+
+    def test_timestamp_ties_break_on_recorded_then_trade_id(self, live_db):
+        reg = OrderRegistry(db_path=live_db)
+        _order(reg, "o-up", UP, 0.54)
+        _order(reg, "o-dn", DOWN, 0.43)
+        # Same venue clock, different arrival: the venue is the authority, so the
+        # tie is broken by when we recorded it.
+        _fill(reg, "t-late", "o-up", 0.50, venue_ts=_TS + 1000,
+              recorded_ts=_TS + 9000)
+        _fill(reg, "t-early", "o-up", 0.45, venue_ts=_TS + 1000,
+              recorded_ts=_TS + 100)
+        # Identical on both clocks: the trade id decides, so the anchor cannot
+        # wander between two reads of the same store.
+        _order(reg, "o-up2", UP, 0.54, pair_id="pair-2")
+        _order(reg, "o-dn2", DOWN, 0.43, pair_id="pair-2")
+        _fill(reg, "t-b", "o-up2", 0.48, venue_ts=_TS + 5000,
+              recorded_ts=_TS + 5000)
+        _fill(reg, "t-a", "o-up2", 0.47, venue_ts=_TS + 5000,
+              recorded_ts=_TS + 5000)
+
+        pairs = _pairs(live_db)
+
+        assert pairs["pair-1"]["break_even"]["first_fill_trade_id"] == "t-early"
+        assert pairs["pair-2"]["break_even"]["first_fill_trade_id"] == "t-a"
+
+    def test_a_fill_with_no_venue_timestamp_sorts_last(self, live_db):
+        reg = OrderRegistry(db_path=live_db)
+        _order(reg, "o-up", UP, 0.54)
+        _order(reg, "o-dn", DOWN, 0.43)
+        _fill(reg, "t-null", "o-up", 0.45, venue_ts=None, recorded_ts=_TS)
+        _fill(reg, "t-real", "o-up", 0.50, venue_ts=_TS + 1000,
+              recorded_ts=_TS + 2000)
+
+        state = summarize_state(live_db)
+
+        pair = {p["pair_id"]: p for p in state["pairs"]}["pair-1"]
+        assert pair["break_even"]["first_fill_trade_id"] == "t-real"
+        # An unknown venue time is unknown, not zero seconds old.
+        ages = {f["trade_id"]: f["age_sec"] for f in state["fills"]}
+        assert ages["t-null"] is None
+        assert ages["t-real"] is not None
+
+    def test_a_pair_whose_only_fill_has_no_venue_timestamp_still_reads(self, live_db):
+        reg = OrderRegistry(db_path=live_db)
+        _order(reg, "o-up", UP, 0.54)
+        _order(reg, "o-dn", DOWN, 0.43)
+        _fill(reg, "t-null", "o-up", 0.45, venue_ts=None, recorded_ts=_TS)
+
+        pair = _pairs(live_db)["pair-1"]
+
+        # It is still the only opening fill, so it anchors; None-last only ranks
+        # it against fills that do have a venue time.
+        assert pair["break_even"]["first_fill_trade_id"] == "t-null"
+        assert pair["break_even"]["break_even_price"] == 0.55
+        # With no venue time to date the naked leg from, the order's own post
+        # time is the next best evidence.
+        assert pair["naked_info"]["naked_since_ts"] == _TS
+
+    def test_a_pair_with_no_fill_or_no_pair_id_has_no_anchor(self, live_db):
+        reg = OrderRegistry(db_path=live_db)
+        _order(reg, "o-up", UP, 0.54)
+        _order(reg, "o-dn", DOWN, 0.43)          # pair-1: never filled
+        _order(reg, "u-up", UP, 0.54, pair_id=None)
+        _fill(reg, "t1", "u-up", 0.45)           # unattributed: no pair to anchor
+
+        pairs = _pairs(live_db)
+
+        assert pairs["pair-1"]["break_even"] is None
+        assert pairs["unpaired_u-up"]["break_even"] is None
+
+    def test_the_anchor_is_identical_across_a_reread(self, live_db):
+        reg = OrderRegistry(db_path=live_db)
+        _order(reg, "o-up", UP, 0.54)
+        _order(reg, "o-dn", DOWN, 0.43)
+        _fill(reg, "t1", "o-up", 0.45)
+
+        first = [p["break_even"] for p in summarize_state(live_db)["pairs"]]
+        second = [p["break_even"] for p in summarize_state(live_db)["pairs"]]
+
+        assert first == second
+        assert first[0]["first_fill_trade_id"] == "t1"
+
+    def test_reading_the_state_writes_nothing(self, live_db):
+        reg = OrderRegistry(db_path=live_db)
+        _order(reg, "o-up", UP, 0.54)
+        _order(reg, "o-dn", DOWN, 0.43)
+        _fill(reg, "t1", "o-up", 0.45)
+        con = sqlite3.connect(str(live_db))
+        try:
+            con.execute(
+                "INSERT INTO single_leg_lifecycle "
+                "(pair_id, condition_id, state, reason, updated_ts_ms, "
+                " evidence_json) VALUES (?, ?, ?, ?, ?, ?)",
+                ("pair-1", "cond-1", "ESCALATED_HEDGE", "test", _TS, "{}"))
+            con.commit()
+        finally:
+            con.close()
+
+        before = _snapshot(live_db)
+        summarize_state(live_db)
+
+        # The anchor is derived at read time: no orders posted, none cancelled,
+        # no fill written, no lifecycle transition.
+        assert _snapshot(live_db) == before

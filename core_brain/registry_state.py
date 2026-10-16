@@ -42,6 +42,16 @@ STALE_THRESHOLD_SEC = 30.0
 # from the canonical leaf (imported above as MERGE_CLOSE_METHODS).
 
 
+def break_even_price(fill_price: float) -> float:
+    """The price the pair's missing leg must beat, from the fill that opened it.
+
+    A pair merges back into exactly $1.00, so once a leg has filled at `p` the
+    other leg still leaves a profit while it costs less than `1.00 - p`. Read
+    from the first opening fill; derived, never stored (#627).
+    """
+    return round(1.00 - fill_price, 4)
+
+
 def _market_identity(condition_id: str, closes_by_cid: dict) -> dict:
     """Who is this market, in words a human recognises."""
     closed = (closes_by_cid.get(condition_id) if condition_id else None) or {}
@@ -196,6 +206,7 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
         if "fills" in tables:
             fills_rows = cur.execute("""
                             SELECT f.trade_id, f.order_uuid, f.size, f.price, f.venue_ts,
+                                   f.recorded_ts,
                                    o.side, o.pair_id, o.token_id, o.condition_id
                             FROM fills f
                             LEFT JOIN orders o ON o.id = f.order_uuid
@@ -280,7 +291,13 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
     fills_list = []
     for f in fills_rows:
         f_dict = dict(f)
-        f_dict["age_sec"] = max(0.0, round((now_ms - f_dict["venue_ts"]) / 1000.0, 1))
+        # `venue_ts` is nullable (a backfilled fill can arrive without one), and
+        # an unknown age is unknown -- reporting it as zero seconds old would be
+        # a lie the page then renders as "just filled".
+        f_dict["age_sec"] = (
+            None if f_dict["venue_ts"] is None
+            else max(0.0, round((now_ms - f_dict["venue_ts"]) / 1000.0, 1))
+        )
         try:
             dt = datetime.datetime.fromtimestamp(f_dict["venue_ts"] / 1000.0)
             f_dict["venue_time_str"] = dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -339,7 +356,34 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
 
         order_ids_in_pair = {leg["id"] for leg in legs}
         pair_fills = [f for f in fills_list if f["order_uuid"] in order_ids_in_pair]
-        pair_fills.sort(key=lambda x: x["venue_ts"])
+        # A fill with no venue time sorts last: unknown is not older than known.
+        pair_fills.sort(key=lambda x: (x["venue_ts"] is None, x["venue_ts"] or 0))
+
+        # BREAK-EVEN ANCHOR (#627). The first opening fill sets the price the
+        # pair's missing leg must still beat to merge at a profit. Read-time
+        # derived from the fills already on file: nothing is written, no order is
+        # cancelled, and a pair that re-forms anchors on its own first fill. A
+        # SELL fill closes -- it never opens -- and a pair with no BUY fill has
+        # nothing to hedge against, so it has no anchor.
+        buy_fills = [f for f in pair_fills if f["side"] == "BUY"]
+        if buy_fills and any(leg.get("pair_id") for leg in legs):
+            first = min(buy_fills, key=lambda f: (
+                f["venue_ts"] is None,
+                f["venue_ts"] or 0,
+                f["recorded_ts"] or 0,
+                str(f["trade_id"]),
+            ))
+            others = sorted({leg["token_id"] for leg in legs}
+                            - {first["token_id"]})
+            pdata["break_even"] = {
+                "filled_token_id": first["token_id"],
+                "first_fill_trade_id": first["trade_id"],
+                "first_fill_price": round(float(first["price"]), 4),
+                "break_even_price": break_even_price(first["price"]),
+                "opposite_token_id": others[0] if others else None,
+            }
+        else:
+            pdata["break_even"] = None
 
         tokens: dict[str, dict[str, Any]] = {}
         for o in legs:
@@ -369,8 +413,9 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
             """Build the naked payload for `shares` unhedged on `tok`."""
             tok_order_ids = {o["id"] for o in tok["orders"]}
             tok_fills = [f for f in pair_fills if f["order_uuid"] in tok_order_ids]
-            since = (tok_fills[0]["venue_ts"] if tok_fills
-                     else min(o["posted_ts"] for o in tok["orders"]))
+            since = (next((f["venue_ts"] for f in tok_fills
+                           if f["venue_ts"] is not None), None)
+                     or min(o["posted_ts"] for o in tok["orders"]))
             price = tok["avg_price"]
             nets = [t["net_matched"] for t in _toks.values()]
             return {
