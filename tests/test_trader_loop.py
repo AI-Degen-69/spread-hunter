@@ -32,6 +32,7 @@ from core_brain.trader_loop import (
     plan_orders,
     run,
 )
+from core_brain import trader_loop
 from core_brain.config import MakerConfig
 from core_brain.quotes import Inventory, QuoteIntent, decide_quotes
 
@@ -430,6 +431,19 @@ class TestPlanOrders:
         to_cancel, to_submit = plan_orders(open_orders, intents, dead_band=0.03)
         assert to_cancel == []
         assert to_submit == []
+
+
+class TestRetiredRegatePurge:
+    """#626: the per-cycle taker-ask re-gate is gone from the live path.
+
+    The constant is what the retired re-gate named its cancels with, so its
+    absence is the machine-checkable proof that no resting bid is re-gated any
+    more. `"regate_pair_cost"` survives only as historical text in
+    `cancel_report`, so rows written before #387 still read correctly.
+    """
+
+    def test_retired_regate_constant_is_gone(self):
+        assert not hasattr(trader_loop, "CANCEL_REGATE_PAIR_COST")
 
 
 

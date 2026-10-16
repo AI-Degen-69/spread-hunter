@@ -85,7 +85,6 @@ class LiveFleetResult:
 # of 37s and nothing in the registry said which kind each one was.
 CANCEL_NOT_QUOTED = "not_quoted"          # we no longer quote this token at all
 CANCEL_PRICE_MOVED = "price_moved"        # the desired price left the tolerance
-CANCEL_REGATE_PAIR_COST = "regate_pair_cost"  # holding would break max_pair_cost
 CANCEL_MARKET_DROPPED = LifecycleStop.MARKET_DROPPED.code  # market left universe
 # Why a quote was cancelled for UMA resolution state (#408). Entries for
 # #402's single discard list: per-status reasons naming the UMA status that
@@ -258,81 +257,20 @@ def plan_orders(
         book move. Answering it still cost the whole queue position, so the
         band trades a slightly stale price for time in the queue.
 
-    RETIRED BY #387 -- THE RE-GATE (historical behavior; not active). A kept
-    from the price `risk.hard_block` approved. Left unchecked, the band is a
-    hole through that gate: a 3c-stale bid in a moving market can carry a
-    completable cost 3c worse than anything the gate ever allowed. So a kept
-    order is re-tested against `risk.completable_pair_block` at its own price
-    and cancelled when it no longer passes. `cfg` and `hedge_asks` (token id ->
-    the OTHER token's best ask) are what that test needs; without both, the
-    re-gate stands down and the band behaves as a plain tolerance.
-
-    `hedge_held` names the tokens whose OPPOSITE leg we already own, and the
-    re-gate skips them -- exactly as `quotes._decide_quotes_from_mid` skips the
-    gate when `inv.avg(other) > 0`. Completion is not needed there, so the
-    hedge ASK is not the price that finishes the pair, and gating on it
-    cancels a valid hedge. Concretely: a kept UP bid at 0.54 against a DOWN leg
-    held at 0.43 average is a 0.97 pair, but a DOWN ask of 0.50 reads as 1.04
-    and would cancel and resubmit that bid every single cycle -- the churn this
-    whole change exists to stop, while the naked DOWN leg stays open longer for
-    it. This function has no inventory of its own, so it has to be told.
-
-    A re-gated cancel drops the order out of the kept set, so this cycle's
-    intent for that token IS submitted in its place. Cancelling without
-    replacing would leave the market dark for a cycle on a price that is
-    still quotable.
-
     `reasons` is an optional out-parameter: pass a dict and it comes back keyed
     by order id with one of the CANCEL_* constants. It exists because a cancel
     with no recorded reason cannot be tuned -- see #131.
 
-    RETIRED BY #387 -- THE QUEUE HOLD (historical behavior; not active).
-    order at its own price, and `hold_queue_shares` is the front-of-queue
-    threshold. An order that is inside the threshold is KEPT through a price
-    move it would otherwise be re-quoted for, because under price-time priority
-    a cancel sends it to the back of a new level and the queue is what produces
-    fills here: on shadow-02 the best position of the run, 25 shares from the
-    front, was re-quoted away six seconds after it was posted.
-
-    The hold is deliberately narrow. It never applies when:
-
-      * the token is no longer quoted at all -- there is nothing to hold for;
-      * the re-gate fails -- holding would carry a completable pair over
-        `max_pair_cost`, and queue position is not worth a booked loss;
-      * the re-gate is not ARMED (`cfg` or `hedge_asks` absent) -- with nothing
-        checking the economics of a stale price, holding is an unmeasured bet.
-
-    `hold_queue_shares` ships at 0.0, which disables the hold entirely. The
-    reasons above are recorded either way, and choosing the threshold is what
-    that record is for.
-
-    RETIRED BY #387 -- THE DIRECTION HOLD (historical behavior; not active).
-    band are not the same event, and re-quoting on both of them cancels the
-    order at the only moment it was ever going to fill:
-
-      * the target RISES -- the book walked away and our bid is stranded under
-        the market. It will not be reached. Re-quote.
-      * the target FALLS -- the book is walking down ONTO our bid. A limit BUY
-        at 0.47 fills at 0.47 when a seller sweeps through it; that is the
-        entire fill mechanism on this venue. Cancelling here hands back the
-        queue position and the fill, and the replacement rests lower down where
-        the same thing happens again.
-
-    `hold_below_target` caps how far the target may fall below a held bid,
-    because a LARGE drop is the market leaving rather than arriving: a bid held
-    36c above the book is an adverse fill, not a queue position. Measured on
-    shadow-01 across 2026-09-15 17:06-21:00, 393 of 755 `price_moved` cancels
-    (52%) fired while the best bid was falling toward the order, median order
-    lifetime 42s, and the run booked zero fills over 1,157 orders. Of those 393,
-    132 (34%) still rested 1c-5c ABOVE the new best bid -- close enough that the
-    next seller through reaches them. The rest ran out to a p90 of 36c, which is
-    the market leaving.
-
-    The direction hold takes the SAME standby conditions as the queue hold --
-    it never overrides the pair-cost re-gate, and it refuses to act on an
-    unarmed one. The two are independent: an order far back in the queue is
-    still held on a downward move, because a limit order fills at its own price
-    whoever is resting in front of it.
+    RETIRED BY #387 -- THE RE-GATE, THE QUEUE HOLD, THE DIRECTION HOLD
+    (historical only; none of them fire). A kept order used to be re-tested
+    against `risk.completable_pair_block` at its own price, kept when it sat
+    inside the front-of-queue threshold (`hold_queue_shares`), and kept through
+    a downward move (`hold_below_target`). All three cancelled profitable pairs
+    on book flicker, so a wanted token is now kept at its own price. The
+    parameters stay in the signature -- `cfg`, `hedge_asks`, `hedge_held`,
+    `queue_ahead`, `hold_queue_shares`, `hold_below_target`, `visit_outcome` --
+    for the follow-up cancel-conditions issue to disposition; only `dead_band`
+    and `cfg.min_quote_shares` are read here.
     """
     tolerance = max(float(price_eps), float(dead_band))
     preserve_ids = {str(value) for value in preserve_order_ids or ()}
