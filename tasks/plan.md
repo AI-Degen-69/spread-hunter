@@ -193,7 +193,7 @@ T4 is independent of T1-T3 and can run any time before T5.
   run-id scoping, censoring, `NULL` bid fields, hand-made trend/chop series, and drift cancels
   counted under their own reason.
 
-### [ ] T6 — Arms file and run protocol
+### [x] T6 — Arms file and run protocol
 
 - Size: **S** · Domain: **Research/Config** · Depends on: T2, T5
 - Files: `configs/tournaments/i622_tournament-1_arms.json` (new)
@@ -350,6 +350,16 @@ separate project, and rotating repeated concurrent runs is adequate for this dec
   helper — no new table, no migration — with the outcome in `reason_code`
   (`refused_hold` / `refused_grace_expired` / `refused_cancel` / `refused_drift`)
   and the streak ordinal in `size`, the table's only free numeric column.
+- **T6 — `SPREAD_HUNTER_BANKROLL` is NOT stripped from the workers (verified).**
+  The launcher builds each worker env as `{**clean_env, **arm.env}`, where
+  `clean_env` drops keys starting with `HUNTER_`. `SPREAD_HUNTER_BANKROLL` does
+  not start with `HUNTER_`, and `config.load()` reads it *before*
+  `HUNTER_BANKROLL` and lets it win — so a value in the operator's shell would
+  overwrite all three pinned bankrolls with one number and the arms would stop
+  differing in the way the record claims. The protocol tells the operator to
+  remove it and how to check. Recorded rather than fixed: making the launcher
+  strip it is #624's territory (its worker-env isolation), and this issue's
+  file list does not include `scripts/shadow_tournament.py` beyond the arms file.
 - **T3 — the test harness pins `base_cfg`, so env overrides are invisible to it.**
   `_t3_seam` passes `base_cfg=MakerConfig()`, which means `run()` never calls
   `load()` and a `HUNTER_REFUSAL_HOLD_POLICY` override is silently ignored. The

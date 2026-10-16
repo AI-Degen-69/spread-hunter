@@ -76,6 +76,67 @@ Only the refusal policy varies. Bankroll and the four live stop settings
 
 ---
 
+## 3a. Run protocol
+
+The arms file is `configs/tournaments/i622_tournament-1_arms.json`. **The agent
+runs only `--dry-run`; the operator launches the tournament**, because a real run
+starts the shared market filter and occupies ports 8801-8803 for its duration.
+
+### Unset the bankroll variable first — verified, not assumed
+
+The launcher strips inherited `HUNTER_*` variables from every worker (`clean_env`
+in `scripts/shadow_tournament.py`), which is what keeps the arms from inheriting
+the Market Filter's settings. **`SPREAD_HUNTER_BANKROLL` does not start with
+`HUNTER_`, so it is NOT stripped**, and `core_brain/config.py` reads it *before*
+`HUNTER_BANKROLL` and lets it win.
+
+```powershell
+$env:SPREAD_HUNTER_BANKROLL   # if this prints a value, every arm inherits it
+Remove-Item Env:\SPREAD_HUNTER_BANKROLL
+```
+
+A surviving value would silently overwrite all three pinned bankrolls with one
+number, and the arms would stop differing in the way the record claims.
+
+### The run
+
+```powershell
+# 1. Inspect the plan (agent did this; three arms, policies remove/keep/drift)
+python scripts/shadow_tournament.py --issue 622 --arms-file configs/tournaments/i622_tournament-1_arms.json --run-number 1 --dry-run
+
+# 2. Record the book tape on its own database, so the trend/chop labels are shared
+#    by every arm and independent of any arm's policy.
+python scripts/book_tape_recorder.py --db data/622_tape_01.db
+
+# 3. THE OPERATOR LAUNCHES. Repeat with --run-number 2, 3, ... and rotate the
+#    start order, because workers start sequentially.
+python scripts/shadow_tournament.py --issue 622 --arms-file configs/tournaments/i622_tournament-1_arms.json --run-number 1 --minutes 30
+```
+
+Each run writes its stores to `data/i622_tournament-<run>_<arm>.db` with run ids
+`shadow-622-tournament-<run>-<arm>`. Never `data/orders.db`: the launcher refuses
+it outright (`assert_not_production_registry`).
+
+### Reading the result
+
+```powershell
+python scripts/refusal_hold_report.py `
+  --arm remove data/i622_tournament-1_hold-remove-1.db shadow-622-tournament-1-hold-remove-1 `
+  --arm keep   data/i622_tournament-1_hold-keep-1.db   shadow-622-tournament-1-hold-keep-1 `
+  --arm drift  data/i622_tournament-1_hold-drift-1.db  shadow-622-tournament-1-hold-drift-1 `
+  --book-db data/622_tape_01.db
+```
+
+Repeat across runs before reading anything into a difference: §5 says so, and
+§1 rules 2 and 3 depend on it.
+
+### What to save
+
+The market list, each run's launcher log (`runtime/tournaments/`), the per-arm
+heartbeats, the per-arm stores, and the report output pasted into §4.
+
+---
+
 ## 4. Metrics
 
 Filled from `scripts/refusal_hold_report.py`. All five are required for every arm.

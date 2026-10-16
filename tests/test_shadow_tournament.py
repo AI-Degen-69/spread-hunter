@@ -723,3 +723,66 @@ def test_worker_environment_strips_parent_hunter_env(tmp_path, monkeypatch):
     assert explicit_env.get("HUNTER_PRICE_RISK_WIDEN") == "0.02"
 
 
+
+
+# --- #622: the refusal-hold arms file ---------------------------------------
+
+I622_ARMS = (Path(__file__).resolve().parent.parent
+             / "configs" / "tournaments" / "i622_tournament-1_arms.json")
+
+#: The only keys an arm may differ on. Everything else must be identical, or the
+#: comparison measures two changes at once.
+I622_VARYING = ("HUNTER_REFUSAL_HOLD_POLICY", "HUNTER_REFUSAL_HOLD_DRIFT")
+
+
+def _i622_plan(tmp_path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    arms = json.loads(I622_ARMS.read_text(encoding="utf-8"))
+    return build_tournament_plan(issue=622, arms=arms, base_dir=tmp_path,
+                                 run_number=1, check_ports=False)
+
+
+def test_the_i622_arms_file_varies_only_the_refusal_policy(tmp_path):
+    plan = _i622_plan(tmp_path)
+    assert len(plan.arms) == 3, "A/B/C is three arms"
+
+    policies = {a.env["HUNTER_REFUSAL_HOLD_POLICY"] for a in plan.arms}
+    assert policies == {"remove", "keep", "drift"}
+    assert "drift" in {a.env["HUNTER_REFUSAL_HOLD_POLICY"] for a in plan.arms}
+
+    shared = [{k: v for k, v in a.env.items() if k not in I622_VARYING}
+              for a in plan.arms]
+    assert shared[0] == shared[1] == shared[2], (
+        "the arms must differ ONLY in the refusal policy; anything else and the "
+        "result measures two changes at once"
+    )
+    assert shared[0]["HUNTER_BANKROLL"] == "100"
+    assert shared[0]["HUNTER_EMERGENCY_DRAWDOWN_PCT"] == "75.0"
+
+    # The four live stop settings are pinned, and the retired one is not carried
+    # over from the i492 presets.
+    for key in ("HUNTER_STOP_LOSS_MODE", "HUNTER_DROP_CENTS",
+                "HUNTER_DRAWDOWN_PCT", "HUNTER_EMERGENCY_DRAWDOWN_PCT"):
+        assert key in shared[0], f"{key} must be pinned identically across arms"
+    assert "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS" not in shared[0], (
+        "that stop setting is retired; config warns and ignores it"
+    )
+    # The drift arm states its tolerance instead of inheriting a default that
+    # could change under it.
+    drift = [a for a in plan.arms
+             if a.env["HUNTER_REFUSAL_HOLD_POLICY"] == "drift"][0]
+    assert drift.env["HUNTER_REFUSAL_HOLD_DRIFT"] == "0.02"
+
+
+def test_no_i622_arm_is_pointed_at_the_production_registry(tmp_path):
+    plan = _i622_plan(tmp_path)
+    for arm in plan.arms:
+        assert Path(arm.db_path).name != "orders.db"
+        assert "tournament" in Path(arm.db_path).name
+
+
+def test_every_i622_arm_names_a_distinct_store_and_run(tmp_path):
+    plan = _i622_plan(tmp_path)
+    assert len({str(a.db_path) for a in plan.arms}) == 3
+    assert len({a.run_id for a in plan.arms}) == 3
