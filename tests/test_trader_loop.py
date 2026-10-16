@@ -1504,9 +1504,7 @@ class TestRefusedHold:
             sleep_fn=lambda s: None,
         )
         assert results[0].status == "DECLINED"
-        # Only o-dn cancels: o-up sits inside the #419 mid-hold band, which
-        # is a separate untouched rule, not this grace.
-        assert calls["cancelled"] == [["o-dn"]]
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
         assert calls["submitted"] == []
 
     def test_terminal_refusal_cancels_now(self):
@@ -1569,8 +1567,7 @@ class TestRefusedHold:
             decides.append(1)
             return [], self.TRANSIENT_WHY
 
-        # Books above the mid-hold band (mid 0.67 vs UP 0.60): grace expiry
-        # cancels here as it always did.
+        # Out-of-band books (mid 0.67 vs UP 0.60): expiry cancels both legs.
         seam = self._seam(decide, calls, books={
             "best_bid": 0.66, "best_ask": 0.68,
             "bids": {0.66: 100}, "asks": {0.68: 100}})
@@ -1589,7 +1586,9 @@ class TestRefusedHold:
         assert calls["submitted"] == []
         assert calls["cancelled"] == [["o-up", "o-dn"]]
 
-    def test_grace_expiry_holds_when_the_mid_is_in_band(self):
+    def test_expiry_cancels_both_legs_with_no_band(self):
+        # The #419 mid-hold band is removed (operator directive 2026-10-16):
+        # expiry cancels everything, in band or out.
         from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
         calls = {"submitted": [], "cancelled": []}
         decides = []
@@ -1599,9 +1598,8 @@ class TestRefusedHold:
             decides.append(1)
             return [], self.TRANSIENT_WHY
 
-        # Default books (mid 0.60) sit inside the UP order's band
-        # (0.60 <= 0.60 + 0.02): the expired grace holds the UP leg while
-        # the out-of-band DOWN leg still cancels.
+        # Default books (mid 0.60) sit where the old band used to hold the
+        # UP leg -- now both legs cancel on the first refusal.
         seam = self._seam(decide, calls)
 
         def sleep_fn(s):
@@ -1616,7 +1614,7 @@ class TestRefusedHold:
         )
         assert len(decides) == GRACE
         assert calls["submitted"] == []
-        assert calls["cancelled"] == [["o-dn"]]
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
 
     def test_first_refusal_cancels_before_any_quote(self):
         # Interim default (operator directive 2026-10-16, pending #622):
@@ -1646,75 +1644,13 @@ class TestRefusedHold:
             markets=[FakeMarket("0xabc")],
             sleep_fn=sleep_fn,
         )
-        # Refuse, quote: the first refusal already cancelled the out-of-band
-        # leg (o-up survives inside the #419 band, not this grace). Cycle 2
-        # keeps rather than resubmits -- the fake books still list the
-        # orders -- so the cycle-1 cancel is the whole proof.
+        # Refuse, quote: the first refusal already cancelled both legs, and
+        # cycle 2 keeps rather than resubmits -- the fake books still list
+        # the orders -- so the cycle-1 cancel is the whole proof.
         assert len(decides) == GRACE + 1
-        assert calls["cancelled"] == [["o-dn"]]
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
         assert calls["submitted"] == []
 
-
-class TestMidHoldVisit:
-    """#419 end to end: `_visit_one` feeds live mids into the hold band."""
-
-    @staticmethod
-    def _seam(books, decide, orders):
-        return VenueSeam(
-            client=object(),
-            base_cfg=MakerConfig(max_completable_pair_cost=1.00),
-            fetch_market=lambda cid: FakeMarket(cid),
-            fetch_books=lambda host, token: books[token],
-            decide=decide,
-            submit_fn=lambda *a, **k: 0,
-            cancel_fn=lambda *a, **k: 0,
-            open_orders_fn=lambda market: list(orders),
-            reconcile_fn=lambda *a, **k: None,
-            sweep_fn=lambda: None,
-        )
-
-    @staticmethod
-    def _books(up_bid, up_ask):
-        return {
-            "tok-up": {"token_id": "tok-up", "best_bid": up_bid,
-                       "best_ask": up_ask, "bids": {}, "asks": {}},
-            "tok-dn": {"token_id": "tok-dn", "best_bid": 0.50,
-                       "best_ask": 0.52, "bids": {}, "asks": {}},
-        }
-
-    def _visit(self, books, decide, orders):
-        from core_brain.trader_loop import _visit_one, plan_orders
-
-        captured = {}
-
-        def plan_fn(open_orders, intents, price_eps=1e-9, **kwargs):
-            result = plan_orders(open_orders, intents, price_eps, **kwargs)
-            captured["cancel"] = result[0]
-            captured["submit"] = result[1]
-            return result
-
-        _visit_one(self._seam(books, decide, orders), {"cid": "0xabc"},
-                   live=False, cycle=1, emit_fn=lambda **event: None,
-                   plan_fn=plan_fn)
-        return captured
-
-    def test_in_band_visit_holds_the_up_order(self):
-        captured = self._visit(
-            self._books(0.45, 0.47),
-            lambda *a, **k: ([_intent(side="DOWN", token="tok-dn",
-                                       price=0.52)], ""),
-            [_open(token="tok-up", price=0.48, oid="o-up"),
-             _open(token="tok-dn", price=0.52, oid="o-dn")])
-        assert captured["cancel"] == []
-
-    def test_crossed_book_cancels_as_today(self):
-        captured = self._visit(
-            self._books(0.50, 0.48),
-            lambda *a, **k: ([_intent(side="DOWN", token="tok-dn",
-                                       price=0.52)], ""),
-            [_open(token="tok-up", price=0.48, oid="o-up"),
-             _open(token="tok-dn", price=0.52, oid="o-dn")])
-        assert [o["order_id"] for o in captured["cancel"]] == ["o-up"]
 
 
 class TestCycleMids:

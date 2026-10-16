@@ -1705,10 +1705,10 @@ class TestRefusedHoldShadow:
             return list(self._held_pair()), ""
 
         results = self._run_cycles(self._seam(decide, calls), 2)
-        # Out-of-band leg cancels on the first refusal; the in-band leg
-        # survives via #419, not via grace. Cycle 2 keeps (the fake books
-        # still list the orders), so the cycle-1 cancel is the whole proof.
-        assert calls["cancelled"] == [["o-dn"]]
+        # Both legs cancel on the first refusal -- no band anymore. Cycle 2
+        # keeps (the fake books still list the orders), so the cycle-1
+        # cancel is the whole proof.
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
         assert calls["submitted"] == []
 
     def test_dead_market_cancels_past_grace(self):
