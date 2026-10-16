@@ -1,121 +1,173 @@
-# Plan - #626 Purge instantaneous taker-ask re-gating on resting maker bids
+# Plan - #627 Anchor entry pair-cost validation and passive single-leg break-even tracking
 
-Branch: i626/purge-instantaneous-taker-ask-re-gating | Issue: #626
+Branch: i627/anchor-entry-pair-cost-and-passive-break-even | Issue: #627
 
-Tier: **Small** — live behavior already correct (`NO RE-CHECK (#387)`); remaining
-work is a dead-constant purge plus pinning tests and one stale-doc fix.
+Tier: **Small** — one narrow entry gate on the from-mid path plus one read-only
+telemetry field; no schema, lifecycle, trader-loop, or dashboard changes.
 
-Base: `main` @ `5cdd75b`, clean. Related: #622 (done), #627 (entry), #628.
+Base: `main` @ `2837e95`, clean. Related: #626 (resting re-gate purged), #622.
 
-## 0. Corrected premise (read before any task)
+## 0. Verified premise (read before any task)
 
-The issue text describes a live per-cycle cancel (`Our Bid + Opposing Ask >=
-$1.00`). That code no longer exists. `plan_orders`
-(`core_brain/trader_loop.py:379-384`) says verbatim:
+The gap is real and narrow. On the path the fleet runs
+(`decide_quotes` -> `_decide_quotes_from_mid` for `objective` in
+`("spread_capture", "rewards")`, `quotes.py:705-709`), a flat-book pair has NO
+`Bid_UP + Bid_DOWN <= max_pair_cost` check on the final resting prices:
 
-```
-# NO RE-CHECK (#387): a placed order was judged once, at placement
-# (rest price + rest price). Re-testing it against the live hedge ask
-# cancels profitable pairs on book flicker, so nothing here re-checks
-# cost. Only a token with no intent this cycle is cancelled.
-```
+- `risk.hard_block` pair-cost arm (`risk.py:515-527`) needs a held average
+  (`other_avg > 0`); flat book has none, so it passes silently.
+- `dynamic_pair_sum` (`quotes.py:341-344`) runs only when
+  `dynamic_offset_enabled` is true.
+- The legacy fresh-market `p_up + p_dn >= max_pair_cost` refusal
+  (`quotes.py:769-771`) sits below the from-mid early return — unreachable.
 
-`CANCEL_REGATE_PAIR_COST` (`trader_loop.py:88`) is defined but never referenced
-in `core_brain/` — only in `tests/test_cancel_attribution.py` (lines 26, 292,
-300, 427, 443). This ticket deletes dead scaffolding, pins resting behavior, and
-fixes the one doc still promising a per-second re-gate. Entry gates stay:
-`dynamic_pair_sum` (`quotes.py:335-344`) and `hard_block` (`risk.py:413-568`)
-judge NEW bids only (owner: #627).
+`break_even` exists nowhere in `core_brain/` or `registry_state.py` (only
+`break_even_rescue_rate` analytics in `statistical_analytics.py`, unrelated).
+`tests/test_quotes.py` does not exist — it is created by this plan and is the
+acceptance file the issue names.
 
-"Completely removed" cannot include the stored string: `cancel_report.py:21,26`
-keeps `"regate_pair_cost"` so old rows still report correctly.
+Contradiction recorded: the issue allows equality (`<= max_pair_cost`);
+`hard_block` refuses equality (`>=`, `risk.py:518-522`) and the legacy
+fresh-market check refuses equality (`>=`, `quotes.py:770`). The new entry
+gate allows the tie per the issue; existing arms keep their `>=`.
 
 ## 1. Interfaces (verified verbatim)
 
-- `CANCEL_NOT_QUOTED = "not_quoted"` (`trader_loop.py:86`) — ONLY cancel reason
-  on the live path (line 375). Stays.
-- `CANCEL_PRICE_MOVED = "price_moved"` (`trader_loop.py:87`) — defined,
-  unreferenced in `core_brain/`. NOTICED-BUT-NOT-TOUCHING.
-- `CANCEL_REGATE_PAIR_COST = "regate_pair_cost"` (`trader_loop.py:88`) — DELETE.
-- `plan_orders(open_orders, intents, price_eps=1e-9, *, dead_band, cfg,
-  hedge_asks, hedge_held, reasons, ...)` (`trader_loop.py:211-229`) — UNCHANGED.
-- `REASON_ORDER` / `REASON_BLURB["regate_pair_cost"]` (`cancel_report.py:21,26`)
-  — UNCHANGED (historical reporting).
-- Must stay green: `test_held_pair_keeps_both_legs_and_needs_no_resubmit`,
-  `test_single_held_leg_stays_without_submit`,
-  `test_a_failing_gate_on_a_wanted_token_records_nothing`,
-  `TestReGateRespectsHeldInventory`, `TestVisitOnePassesTheDeadBand`.
+- `MakerConfig.max_pair_cost: float = 0.99` (`config.py:769`);
+  `max_completable_pair_cost: float = 1.00` (`config.py:782`).
+- `decide_quotes(cfg, up_book, down_book, inv, t_remaining, window_frac=None,
+  *, lifecycle_override=None)` (`quotes.py:688-709`) — UNCHANGED signature.
+- `_decide_quotes_from_mid(cfg, up_book, down_book, inv, t_remaining,
+  lifecycle_override)` (`quotes.py:241-562`) — T1 insertion: after `out` built.
+- `quote_resting_price(cfg, inv, side, book)` (`quotes.py:190-238`);
+  `calc_pair_price = round(p_up_calc + p_dn_calc, 4)` (`quotes.py:335-339`).
+- `QuoteIntent(side, token_id, price, size, mid, edge_vs_mid, reason,
+  crossed=False, pair_id=None)` (`quotes.py:44-57`); lifecycle escalation
+  stamps `pair_id` (`quotes.py:684`). Gate: exactly two intents, both
+  `crossed is False` and `pair_id is None`. Single repair, crossed hedge,
+  lifecycle skip.
+- `risk.hard_block(...)` (`risk.py:413-424`) — UNCHANGED. Light side exempt
+  from exposure arms, never from pair-cost (`risk.py:470-476, 529-530`).
+- `risk.completable_pair_block(cfg, price, hedge_ask)` (`risk.py:326-363`) —
+  UNCHANGED.
+- `summarize_state(db_path, now=None)` (`registry_state.py:71-76`), read-only
+  `mode=ro` (`registry_state.py:54-68, 111-115`) — T2 insertion: per-pair
+  anchor after `combined_price`.
+- Fills query: `SELECT f.trade_id, f.order_uuid, f.size, f.price, f.venue_ts,
+  o.side, o.pair_id, o.token_id, o.condition_id ... ORDER BY f.venue_ts DESC`
+  (`registry_state.py:197-203`) — no `recorded_ts`. T2 adds `f.recorded_ts`
+  to the SELECT only.
+- Pair grouping by `pair_id`, `combined_price = round(sum, 4)`
+  (`registry_state.py:308-335`). `combined_price`/`avg_price`/`naked_info`
+  untouched by T2.
+- `FillRecord(trade_id, order_uuid, size, price, venue_ts=None,
+  recorded_ts=None, run_id=None)` (`order_registry.py:696-709`); `record_fill`
+  dedupes on `trade_id` (`:1187-1216`); fills cols `trade_id PK, venue_ts,
+  recorded_ts` (`:220-225`). NO schema / `record_fill` change.
+- `OrderRecord(..., pair_id=None, max_pair_cost_at_post=None, ...)`
+  (`order_registry.py:678-693`) — UNCHANGED.
+- Dashboard `_trim_cancelled_orders` (`server.py:629-688`): live pairs pass
+  through whole (anchor flows automatically); dead-pair lean keys omit it.
+  NO server change; omission for all-cancelled pairs accepted.
+- Test precedents: `_healthy_book` / `_gate_cfg` fixture shape
+  (`test_completable_pair_gate.py:76-88`); gate-in-`decide_quotes` tests
+  (`:91-131`); `temp_db` via `SCHEMA` (`test_registry_state.py:21-29`);
+  naked-pair orders+fill+`summarize_state` flow (`:88-129`).
 
 ## 2. Assumptions & risks
 
-- Per-cycle resting re-gate already inert (#387); no live path changes behavior.
-- Constant is dead in `core_brain/` (tests only) — deletion is safe.
-- Stored `"regate_pair_cost"` strings must stay for old-row readability.
-- `quotes.py`/`risk.py` pair-cost checks are entry-only; touching them breaks #627
-  scope — explicitly excluded.
-- Risk: `strategy_explainer.html:450-452,466-469` still promises a "1s Re-Gate";
-  fixed in T3 below.
+- Before T1, the flat-book from-mid pair was ungated (see section 0).
+- The new gate allows equality by comparing the exact Decimal sum of the
+  resting prices with the exact Decimal cap; old `>=` arms stay.
+- `tests/test_quotes.py` is new; the issue acceptance command targets it.
+- `recorded_ts` added to the state SELECT only; `ORDER BY` and `mode=ro` stay.
+- `venue_ts` may be NULL or tied — anchor order is None-last, then
+  `recorded_ts`, then `trade_id`.
+- Only opening BUY fills anchor; SELL fills never do.
+- Anchor is read-time derived, follows current pair membership, stable across
+  restarts because nothing is written.
+- No storage, no registry writes, no dashboard whitelist change.
+- Risk: equality / float-noise tests need `enforce_completable_pair_cost=False`
+  to isolate the new gate from the completable arm.
 
-## 3. Improvement (adopted, simplification)
+## 3. Improvement (adopted, edge-case hardening)
 
-Evidence (verbatim, `strategy_explainer.html:466-469`): "Kept orders are re-tested
-against `risk.completable_pair_block` **every single second**." Contradicts the
-shipped `NO RE-CHECK (#387)` planner. Fold the diagram/copy fix into T3 — same
-behavior, same review surface (one static file).
+The T1 gate uses `pair_cost_over_cap`, which compares exact `Decimal(str(price))`
+values and `Decimal(str(cap))` without float rounding noise. Equality passes.
 
-## 4. Tasks (3 atomic vertical slices)
+## 4. Tasks (2 atomic vertical slices)
 
-### T1 (S) — delete dead constant + trim retired docstring ✅
-Files: `core_brain/trader_loop.py`. Depends on: none.
-- Delete line 88 (`CANCEL_REGATE_PAIR_COST`). Keep `CANCEL_NOT_QUOTED`,
-  `CANCEL_PRICE_MOVED`, UMA reasons.
-- Trim `plan_orders` docstring `RETIRED BY #387` paragraphs to one short
-  historical note; keep the live `HOLD-AND-WAIT` paragraph. No logic change.
-- Verify: `rg CANCEL_REGATE_PAIR_COST core_brain` → no matches; new test
-  `test_retired_regate_constant_is_gone` asserts `not hasattr(trader_loop,
-  "CANCEL_REGATE_PAIR_COST")` (RED before, GREEN after).
+### T1 (M) — entry pair-cost gate on the from-mid path — DONE (590c595)
+Files: `core_brain/quotes.py`, `tests/test_quotes.py` (new). Depends on: none.
+- In `_decide_quotes_from_mid`, after `out` is built: if exactly two intents
+  and both have `crossed is False` and `pair_id is None`, compare the exact
+  Decimal sum of `i.price` with `Decimal(str(cfg.max_pair_cost))` using
+  `pair_cost_over_cap([i.price for i in out], cfg.max_pair_cost)`; if the sum is
+  greater, return `[]` with reason `entry_pair_cost: combined {combined:.4f} >
+  ${cap:.3f} cap -- pays exactly $1.00`. Single-intent, crossed, lifecycle
+  (`pair_id` set) skip.
+- Keep `hard_block`, completable gate, `dynamic_pair_sum`, sizing, legacy
+  branch byte-identical.
+- Tests in `tests/test_quotes.py` (fixtures follow
+  `test_completable_pair_gate.py:76-88`; isolate with
+  `enforce_completable_pair_cost=False` where noted): over-cap pair refused
+  with the entry reason (RED before); exact tie at cap passes (2 intents);
+  float-noise tie passes; balanced held inventory still gated on new-pair sum;
+  lone light-side repair survives; lifecycle escalation (`pair_id` set)
+  exempt. Each decision test first asserts the final intent prices.
+- Verify (agent): RED pre-change, GREEN after; regressions
+  `test_live_quotes.py`, `test_completable_pair_gate.py`,
+  `test_trader_loop.py` green.
 
-### T2 (M) — fixtures to literal + pin resting bids ✅
-Files: `tests/test_cancel_attribution.py`, `tests/test_trader_loop.py`.
-Depends on: T1.
-- Attribution file: drop the import (line 26); use literal `"regate_pair_cost"`
-  + one-line historical comment at lines 292, 300, 427, 443.
-- New tests: (a) `test_resting_bids_survive_ask_rise` — pair at 0.73/0.23,
-  hedge asks spiked, assert `to_cancel == []`, `to_submit == []`, `reasons ==
-  {}`; (b) `test_resting_bid_survives_retired_regate_math` — resting 0.60 +
-  ask 0.60 = 1.20 with matching intent, assert held, no reason, no duplicate;
-  (c) `test_planner_never_records_regate_reason` — hostile `hedge_asks` x each
-  `VisitOutcome`, assert `"regate_pair_cost"` never in `reasons`.
-- Verify: `python -m pytest -q tests/test_trader_loop.py
-  tests/test_cancel_attribution.py` green; each new test fails if a cost
-  re-check is reintroduced.
-
-### T3 (XS) — fix stale re-gate diagram ✅
-Files: `dashboard/static/strategy_explainer.html`. Depends on: T1.
-- Replace `REGATE` diamond (lines 450-452) with KEEP node (wanted token → KEEP
-  at own price; unwanted → `not_quoted` cancel). Rewrite the "1.0s Cycle
-  Re-Gating" subcard (lines 466-469): judged once at placement, never re-tested
-  vs live hedge ask; entry gates judge new bids only.
-- Verify: `rg -i "re-gate|regate" dashboard/static/strategy_explainer.html` →
-  no matches; open page, confirm no "CANCEL immediately" branch.
+### T2 (S) — read-only break-even anchor in state summary — DONE
+Files: `core_brain/registry_state.py`, `tests/test_quotes.py` (append).
+Depends on: none (shares the new test file — append, never overwrite).
+- Add pure `break_even_price(fill_price) = round(1.00 - fill_price, 4)`.
+- Add `f.recorded_ts` to the fills SELECT (`registry_state.py:197-203`);
+  keep `ORDER BY` and `mode=ro`.
+- Per non-null `pair_id`, pick the earliest opening BUY fill ordered by
+  (`venue_ts is None`, `venue_ts`, `recorded_ts or 0`, `trade_id`); set
+  `pair["break_even"]` to `{filled_token_id, first_fill_trade_id,
+  first_fill_price, break_even_price, opposite_token_id}` (opposite = the
+  pair's other order token, else `None`); `None` when no BUY fill. Leave
+  `combined_price`, `avg_price`, `naked_info` untouched. Never read the anchor
+  in execution/lifecycle; no writes.
+- Tests in `tests/test_quotes.py` (temp registry via `SCHEMA`, fills via
+  `OrderRegistry.record_fill` + `FillRecord`, read via `summarize_state`):
+  helper rounding (`0.45 -> 0.55`); first BUY anchors with correct opposite
+  token; later/partial/opposite fills ignored; duplicate `trade_id` + SELL
+  ignored; `venue_ts` ties broken by `recorded_ts` then `trade_id`; NULL
+  `venue_ts` sorts last; no-fill/no-pair gives `None`; re-read after restart
+  identical; orders/fills/`single_leg_lifecycle` rows snapshotted before/after
+  the read are identical (zero mutations, zero orders/cancels).
+- Verify (agent): RED before, GREEN after; regressions
+  `test_registry_state.py`, `test_completable_pair_gate.py` green. Full suite
+  is the GitHub CI merge gate, not a local step.
 
 ## 5. Checkpoints
 
-- After T1: constant gone from `core_brain/`, focused suite green.
-- After T2: resting survival pinned, focused suite green.
-- After T3: docs match shipped behavior; commit plan on this branch.
+- After T1: over-cap from-mid pairs refused at entry; focused suites green.
+- After T2: first-fill anchor present read-only with zero side effects;
+  `tasks/plan.md` committed on this branch.
 
 ## 6. NOTICED-BUT-NOT-TOUCHING
 
-- `CANCEL_PRICE_MOVED` unreferenced in `core_brain/` — future cleanup, 2026-10-16.
-- Refused fresh-entry ask → indirect `not_quoted` cancel — owner #622/#627.
-- `hedge_asks`/`hedge_held` plumbing now unused but kept (signature freeze).
+- `hard_block` / completable `>=` vs issue `<=` wording — section 0, future
+  alignment issue, 2026-10-16.
+- `_trim_cancelled_orders` lean dead-pair keys omit the anchor — accepted.
+- `CANCEL_PRICE_MOVED` unreferenced in `core_brain/` — future cleanup.
+
+## Files that must NOT be modified
+
+`core_brain/risk.py`, `core_brain/order_registry.py`,
+`core_brain/order_manager.py`, `core_brain/trader_loop.py`,
+`core_brain/single_leg_lifecycle.py`, `core_brain/unhedged_stop_loss.py`,
+`dashboard/server.py`.
 
 ## How to verify (operator, hands-on only)
 
-- Open `dashboard/static/strategy_explainer.html`: quoting diagram shows KEEP for
-  wanted tokens, no "1s Re-Gate / CANCEL immediately" branch.
+- Dashboard live state after a single-leg fill: the pair carries a
+  `break_even` anchor (`1.00 - first fill`); nothing cancels or exits for it.
 - Shadow rehearsal `python -m core_brain.shadow_run --minutes 5 --db
-  data/NN_shadow_<stamp>.db` then `python -m core_brain.cancel_report <that db>`:
-  no new `regate_pair_cost` rows while bids rest across ask moves.
-
+  data/NN_shadow_<stamp>.db`: wide markets sit out with the entry-cap reason.
+- `python -m core_brain.cancel_report <that db>`: no anchor-driven cancels.
