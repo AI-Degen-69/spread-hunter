@@ -77,7 +77,7 @@ Depends on: T1 → T2 → T3 (T2 needs T1's trigger semantics; T3 needs final be
   (0.50-0.05=0.45), PERCENTAGE_DROP (0.60-10%=0.54), both higher-of cases,
   0.12/0.14 regression, refusals (modes, ranges, nan), endpoints 0.01/0.90.
   Verify: focused `pytest tests/test_single_leg_lifecycle.py -q` + config tests.
-- [ ] T2.1 [Backend/Logic] S — Explicit live FOK + e2e rework. Files:
+- [x] T2.1 [Backend/Logic] S — Explicit live FOK + e2e rework. Files:
   `core_brain/single_buy_saver.py` (:974-988 exit), `tests/test_dual_stop_loss.py`
   (sentinel order-type default, ≥5-share bid depth, sell/no-sell boundaries incl.
   0.10→0.025 and floor-wins cases, close reason + explicit FOK via registry
