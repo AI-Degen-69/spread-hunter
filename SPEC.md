@@ -1,27 +1,19 @@
-# SPEC — #573: Unify one-sided stop-loss (shadow == live, one mode per run)
+# SPEC — #603: Delete the _route_pair exit helper that no live code calls
 
 ## Goal
-A one-sided position (one leg filled, the other never did — a naked directional
-bet) gets exactly ONE stop rule per run, in ONE unit, chosen by a mode selector.
-Shadow and live apply it identically (only the fill source differs).
+Remove the dead `_route_pair` helper from `core_brain/single_buy_saver.py`
+(last production caller went with the #589 ladder removal) after moving its
+real test coverage — completion, adverse-drift exit, grace-hold, trigger-bid
+recording (#525) — onto the unified lifecycle (`manage_single_leg_positions`).
 
-## The two modes (parallel, human whole-number units)
-- `stop_loss_trigger_pct` = 10  → sell when the leg is down 10% from entry.
-- `stop_loss_trigger_usd_cents` = 4 → sell when the leg is down 4c ($0.04) from entry.
-- Example: buy at 0.50, willing to lose 5c → Stop-Loss Trigger ($) = 5.
-- `stop_loss_mode` selects which is active ("usd" | "pct"); default "usd".
+## Scope
+Covers: deleting `_route_pair`, re-homing its tests, rewording the two
+`core_brain` docstrings that name it.
+Does NOT cover: lifecycle/exit-semantics changes, the `ladder_exit` taxonomy
+string (#558–560 chain), any other dead-code removal.
 
 ## Acceptance criteria
-- A run activates exactly one stop mode (usd XOR pct) — never both.
-- Shadow and live make the same stop decision for a given run (identical except fills).
-- The dollar trigger is tunable from config/env (iterated in tests/tournaments).
-- The percent trigger runs in isolation (its own run) and still works.
-- `python -m pytest -q tests/test_dual_stop_loss.py tests/test_single_buy_saver.py` passes.
-
-## Out of scope
-- The user-facing mode-selector config surface (later follow-up; the logic lands here).
-- Changing the dollar level itself (tournament tuning, #569).
-- The grace period, aged-out rescue, and the non-ladder lifecycle fixed floor
-  (`single_leg_lifecycle.transition` `hard_stop_bid = 0.15`) — separate rules,
-  untouched [see the scope question in the plan].
-- Any live trading.
+- `grep -rn "_route_pair" core_brain --include="*.py"` returns nothing.
+- The moved coverage passes on the unified lifecycle:
+  `tests/test_single_buy_saver.py tests/test_refill_after_exit.py
+  tests/test_exit_price_realism.py tests/test_grace_sweep_report.py`.

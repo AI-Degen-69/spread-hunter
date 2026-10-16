@@ -522,8 +522,8 @@ def _stop_reference(close: Any, entry: Optional[float],
                     ) -> tuple[Optional[float], Optional[str]]:
     """The bid the stop intended to exit at, and where that bid came from.
 
-    `trigger_bid` is the recorded bid that fired the stop. The lifecycle hard stop
-    and both `_route_pair` exits (adverse drift, grace timer) write it, so the
+    `trigger_bid` is the recorded bid that fired the stop. The lifecycle hard
+    stop writes it; the settlement-fallback exit leaves it null, so the
     remaining rescue routes fall back to `entry - STOP_OFFSET_FALLBACK`,
     which is an assumption and is tagged as one.
 

@@ -13,10 +13,11 @@ Stage 3 invariants:
 
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 import pytest
 
+from core_brain.config import MakerConfig
+from core_brain.market_resolution import MarketEndState
 from core_brain.order_registry import (
     OrderRegistry, OrderRecord, FillRecord, QuoteRecord,
 )
@@ -1515,6 +1516,47 @@ def test_manage_single_leg_positions_stranded_maker_wait_and_forced_exit(registr
     assert any(r.get("action") == "would_exit" and r.get("route") == "stranded_exit" for r in results_exit)
 
 
+def test_manage_single_leg_positions_settles_by_completing_under_the_cap(
+    registry: OrderRegistry,
+):
+    """A live aged-out pass prefers the capped cross to dumping the leg (#603).
+
+    0.60 fill + 0.30 ask = 0.90, under the cap: the poll buys the missing DOWN
+    leg for 10 shares x 0.30 = $3.00 and records no close. This is the
+    settlement-fallback half of the coverage the deleted `_route_pair` held
+    (it completed pairs too), now pinned on the live unified lifecycle.
+    """
+    from core_brain.single_buy_saver import manage_single_leg_positions
+
+    _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    # The fill is 1000s old (venue_ts 1_000_000ms); at now=3900s the 900s window
+    # is long past, and a market ending 600s out is inside the 900s lead.
+    client = FakeClient(best_ask=0.30, best_bid=0.55, ask_depth=100.0)
+    cfg = MakerConfig(
+        enable_pairs_rule=True, enable_aged_out_rescue=True,
+        pairs_exit_window_sec=900.0, aged_out_rescue_lead_sec=900.0,
+        max_pair_cost=0.99,
+    )
+
+    results = manage_single_leg_positions(
+        client, registry, cfg, live=True, now=3_900.0,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+        market_state_fn=lambda cid: _open_market_state(end_ts=4_500.0),
+    )
+
+    assert len(results) == 1
+    assert results[0]["action"] == "aged_out_rescue"
+    assert results[0]["route"] == "completed"
+    assert results[0]["lifecycle_stage"] == "settlement_fallback"
+    assert len(client.orders) == 1
+    assert client.orders[0]["side"] == "BUY"
+    assert client.orders[0]["token_id"] == TOK_DN
+    assert client.orders[0]["amount"] == pytest.approx(3.0)
+    assert client.orders[0]["price"] == pytest.approx(0.30)
+    assert not any(call.startswith("sell:") for call in client.calls)
+    assert registry.get_all_closes() == []
+
+
 # ---------------------------------------------------------------------------
 # Issue #524 — rescue closes record an explicit fee
 # ---------------------------------------------------------------------------
@@ -1631,16 +1673,25 @@ def test_executed_rescue_close_reads_as_measured_zero_friction(
 
 
 # ---------------------------------------------------------------------------
-# Issue #525 — _route_pair exits record the trigger bid
+# Issue #525 — lifecycle exits record the trigger bid
 # ---------------------------------------------------------------------------
-# The bid that trips the stop is already in hand as `heavy_bid`; both the
-# timer and adverse-drift exits must pass it to `exit_single_buy` the way the
-# lifecycle hard stop passes `held_bid`, so latency drag is measured instead
-# of assumed.
+# The bid that trips the stop is already in hand as the manager's decision read;
+# the hard-stop exit must pass it to `exit_single_buy` the way every other hard
+# stop does, so latency drag is measured instead of assumed. The poll's other
+# route -- the settlement fallback -- has no trigger to hand over and must leave
+# the reference null rather than borrow the execution bid.
+#
+# The coverage below drives the unified lifecycle (`manage_single_leg_positions`)
+# instead of the deleted `_route_pair` (#603).
 
 TRIG525_COND = "0xcond-ladder-525"
 TRIG525_PAIR = "trig-0xcond-trig-525"
 TRIG525_NOW = 2_000_000
+# An old fill (1000s) whose 900s window is long gone: the poll's aged-out route
+# owns it, and a market end 600s out sits inside the 900s lead.
+TRIG525_FILL_MS = 1_000_000
+TRIG525_ROUTE_S = 3_900.0
+TRIG525_END_S = 4_500.0
 
 
 def _trig525_pair(registry: OrderRegistry, when: int) -> None:
@@ -1675,10 +1726,20 @@ def _trig525_pair(registry: OrderRegistry, when: int) -> None:
 
 
 def _trig525_cfg():
-    return SimpleNamespace(
-        single_buy_grace_sec=60.0, pairs_exit_window_sec=900.0,
-        stop_loss_trigger_pct=10.0, stop_loss_trigger_usd_cents=4.5,
+    """The manager's own knobs: both routes on, a 900s window and lead."""
+    return MakerConfig(
+        enable_pairs_rule=True, enable_aged_out_rescue=True,
+        pairs_exit_window_sec=900.0, aged_out_rescue_lead_sec=900.0,
         max_pair_cost=MAX_PAIR_COST, max_order_usd=100.0,
+    )
+
+
+def _open_market_state(end_ts: float) -> MarketEndState:
+    """An open, accepting market with a stated end -- no venue, no network."""
+    return MarketEndState(
+        condition_id=TRIG525_COND, closed=False, end_ts=end_ts,
+        end_date_iso=None, end_date_passed=False, accepting_orders=True,
+        resolved=False, unreachable=False,
     )
 
 
@@ -1732,73 +1793,94 @@ class DecisionThenExecutionBook:
         return {"success": True, "orderID": f"venue-{verb}"}
 
 
-def _trig525_route(registry, venue, last_ms, now_s):
-    return lp._route_pair(
-        venue, registry, lp.load_pair(registry, TRIG525_PAIR),
-        MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
-        cfg=_trig525_cfg(), last_ms=last_ms, now_s=now_s)
+def _trig525_route(registry, venue, now_s, *, market_state_fn=None):
+    """One unified-lifecycle pass over the #525 pair, with the venue position
+    the exit's divergence gate needs (UP 10 held, DOWN nothing)."""
+    results = lp.manage_single_leg_positions(
+        venue, registry, _trig525_cfg(), live=True, now=now_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+        market_state_fn=market_state_fn,
+    )
+    assert len(results) == 1
+    return results[0]
 
 
-def test_adverse_drift_exit_records_trigger_bid(
-    registry: OrderRegistry,
-):
-    """Adverse drift books the bid that tripped the check, not the fresh one."""
+def test_hard_stop_exit_records_trigger_bid(registry: OrderRegistry):
+    """The hard stop books the decision bid, not the execution bid.
+
+    A held bid at the 0.15 stop line is the decision read; the exit's own read
+    after the cancel is 0.14. Both reach the close, so latency drag is a
+    measurement rather than the fresh bid standing in for the trigger.
+    """
     _trig525_pair(registry, TRIG525_NOW)
-    venue = DecisionThenExecutionBook(decision_bid=0.50, execution_bid=0.49)
-    routed = _trig525_route(
-        registry, venue, TRIG525_NOW, TRIG525_NOW / 1000.0 + 10.0)
+    venue = DecisionThenExecutionBook(decision_bid=0.15, execution_bid=0.14)
+    routed = _trig525_route(registry, venue, TRIG525_NOW / 1000.0 + 10.0)
 
     assert routed["action"] == "exited"
-    assert routed["reason"] == "adverse_drift"
+    assert routed["route"] == "hard_stop"
+    assert routed["lifecycle_state"] == "HARD_STOP"
     closes = [c for c in registry.get_all_closes()
               if c.get("method") == "single_buy_exit"]
     assert len(closes) == 1
-    assert closes[0]["trigger_bid"] == pytest.approx(0.50)
-    assert closes[0]["fresh_bid"] == pytest.approx(0.49)
+    assert closes[0]["reason"] == "lifecycle_hard_stop"
+    assert closes[0]["trigger_bid"] == pytest.approx(0.15)
+    assert closes[0]["fresh_bid"] == pytest.approx(0.14)
     assert closes[0]["trigger_bid"] != pytest.approx(closes[0]["fresh_bid"])
+    assert [c for c in venue.calls if c.startswith("sell:")] == ["sell:tok-up:10.0"]
+    assert not any(c.startswith("buy:") for c in venue.calls)
 
 
-def test_adverse_drift_only_store_has_zero_assumed_references(
+def test_hard_stop_only_store_has_zero_assumed_references(
     registry: OrderRegistry,
 ):
-    """An adverse-only store measures every reference — assumed count is 0."""
+    """A stop-only store measures every reference — assumed count is 0."""
     _trig525_pair(registry, TRIG525_NOW)
-    venue = DecisionThenExecutionBook(decision_bid=0.50, execution_bid=0.49)
-    _trig525_route(
-        registry, venue, TRIG525_NOW, TRIG525_NOW / 1000.0 + 10.0)
+    venue = DecisionThenExecutionBook(decision_bid=0.15, execution_bid=0.14)
+    _trig525_route(registry, venue, TRIG525_NOW / 1000.0 + 10.0)
 
     friction = rescue_friction_summary(registry.get_all_closes())
     assert friction["recorded_reference_count"] == 1
     assert friction["assumed_reference_count"] == 0
 
 
-def test_timer_exit_records_trigger_bid(registry: OrderRegistry):
-    """The grace timer books the last observed bid, not the execution bid."""
-    _trig525_pair(registry, TRIG525_NOW - 200_000)
+def test_settlement_fallback_exit_keeps_trigger_null(registry: OrderRegistry):
+    """The aged-out fallback has no trigger bid and never invents one.
+
+    The pair cannot complete (0.60 + 0.40 = 1.00, over the 0.995 cap), so the
+    pass sells at the exit's own fresh read of 0.56. There is no decision bid
+    to reference, and `grace_expired` is not a route this pass can take.
+    """
+    _trig525_pair(registry, TRIG525_FILL_MS)
     venue = DecisionThenExecutionBook(decision_bid=0.57, execution_bid=0.56)
     routed = _trig525_route(
-        registry, venue, TRIG525_NOW - 200_000, TRIG525_NOW / 1000.0)
+        registry, venue, TRIG525_ROUTE_S,
+        market_state_fn=lambda cid: _open_market_state(end_ts=TRIG525_END_S),
+    )
 
-    assert routed["action"] == "exited"
-    assert routed["reason"] == "grace_expired"
+    assert routed["action"] == "aged_out_rescue"
+    assert routed["route"] == "exited"
+    assert routed["lifecycle_stage"] == "settlement_fallback"
+    assert "grace" not in routed["reason"]
     closes = [c for c in registry.get_all_closes()
               if c.get("method") == "single_buy_exit"]
     assert len(closes) == 1
-    assert closes[0]["trigger_bid"] == pytest.approx(0.57)
+    assert closes[0]["reason"] == "aged_out_rescue"
+    assert closes[0]["trigger_bid"] is None
     assert closes[0]["fresh_bid"] == pytest.approx(0.56)
 
 
-def test_timer_exit_without_decision_bid_keeps_trigger_null(
+def test_settlement_fallback_without_a_decision_bid_keeps_trigger_null(
     registry: OrderRegistry,
 ):
-    """No decision bid means no trigger: the timer never borrows fresh_bid."""
-    _trig525_pair(registry, TRIG525_NOW - 200_000)
+    """No decision bid means no trigger: the fallback never borrows fresh_bid."""
+    _trig525_pair(registry, TRIG525_FILL_MS)
     venue = DecisionThenExecutionBook(decision_bid=None, execution_bid=0.56)
     routed = _trig525_route(
-        registry, venue, TRIG525_NOW - 200_000, TRIG525_NOW / 1000.0)
+        registry, venue, TRIG525_ROUTE_S,
+        market_state_fn=lambda cid: _open_market_state(end_ts=TRIG525_END_S),
+    )
 
-    assert routed["action"] == "exited"
-    assert routed["reason"] == "grace_expired"
+    assert routed["action"] == "aged_out_rescue"
     closes = [c for c in registry.get_all_closes()
               if c.get("method") == "single_buy_exit"]
     assert len(closes) == 1
@@ -1806,13 +1888,10 @@ def test_timer_exit_without_decision_bid_keeps_trigger_null(
     assert closes[0]["fresh_bid"] == pytest.approx(0.56)
 
 
-def test_shadow_adverse_drift_records_trigger_bid(tmp_path):
-    """Forced adverse drift through the shadow client books the trigger bid."""
-    from core_brain.config import MakerConfig
+def test_shadow_hard_stop_records_trigger_bid(tmp_path):
+    """A hard stop through the real shadow client books the trigger bid."""
     from core_brain.order_registry import init_db
-    from core_brain.shadow_exec import (
-        ShadowExecutionClient, ensure_shadow_tables, write_queue_mark,
-    )
+    from core_brain.shadow_exec import ShadowExecutionClient, ensure_shadow_tables
 
     db = tmp_path / "shadow525.db"
     init_db(db)
@@ -1820,42 +1899,35 @@ def test_shadow_adverse_drift_records_trigger_bid(tmp_path):
     ensure_shadow_tables(db)
 
     _trig525_pair(reg, TRIG525_NOW)
-    # Non-hard-stop shadow sells fill against the queue-mark snapshot.
-    write_queue_mark(
-        db, ts=TRIG525_NOW / 1000.0, condition_id=TRIG525_COND,
-        market_slug="fake-market", token_id=TOK_UP, price=0.51,
-        level_size=10.0, traded=0.0, cancel_decay=None, queue_minutes=None,
-        run_id=reg._run_id(), best_bid=0.49, best_bid_size=20.0,
-    )
 
-    # Decision bid first, then the live bid the exit prices off; once the
-    # stub runs dry it keeps the last book, which is the real steady state.
-    bids = iter([0.50, 0.49])
+    # Decision bid first, then the live bid the exit prices off; once the stub
+    # runs dry it keeps the last book, which is the real steady state. A hard
+    # stop sells into THIS book (shadow sells fresh for hard-stop reasons), so
+    # no queue-mark snapshot is involved.
+    bids = iter([0.15, 0.14])
 
     def book_fn(host, token_id):
         if token_id == TOK_DN:
             return {"bids": {0.38: 100.0}, "asks": {0.40: 100.0}}
-        bid = next(bids, 0.49)
+        bid = next(bids, 0.14)
         return {"bids": {bid: 100.0}, "asks": {0.65: 100.0}}
 
     client = ShadowExecutionClient(reg, db, book_fn=book_fn)
-    cfg = MakerConfig(
-        enable_pairs_rule=True, pairs_exit_window_sec=900.0,
-        max_pair_cost=MAX_PAIR_COST,
-        single_buy_grace_sec=45.0, stop_loss_trigger_pct=10.0,
-        stop_loss_trigger_usd_cents=4.5,
-    )
 
-    routed = lp._route_pair(
-        client, reg, lp.load_pair(reg, TRIG525_PAIR),
-        MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
-        cfg=cfg, last_ms=TRIG525_NOW, now_s=TRIG525_NOW / 1000.0 + 10.0,
-    )
+    routed = lp.manage_single_leg_positions(
+        client, reg, MakerConfig(
+            enable_pairs_rule=True, pairs_exit_window_sec=900.0,
+            max_pair_cost=MAX_PAIR_COST,
+        ),
+        live=True, now=TRIG525_NOW / 1000.0 + 10.0,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )[0]
 
     assert routed["action"] == "exited"
-    assert routed["reason"] == "adverse_drift"
+    assert routed["route"] == "hard_stop"
     closes = [c for c in reg.get_all_closes()
               if c.get("method") == "single_buy_exit"]
     assert len(closes) == 1
-    assert closes[0]["reason"] == "adverse_drift"
-    assert closes[0]["trigger_bid"] == pytest.approx(0.50)
+    assert closes[0]["reason"] == "lifecycle_hard_stop"
+    assert closes[0]["trigger_bid"] == pytest.approx(0.15)
+    assert closes[0]["fresh_bid"] == pytest.approx(0.14)
