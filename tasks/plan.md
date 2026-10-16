@@ -102,7 +102,7 @@ Verify: `pytest -q tests/test_quotes.py tests/test_config_for_display.py
 tests/test_trader_loop.py tests/test_stat_gate.py` + each edited file.
 `tests/test_risk.py` MISSING — create it or correct the command (record).
 
-### T3 [S][Docs/UX] Explainer: lowercase + badges + venue-vs-maker scope
+### [x] T3 [S][Docs/UX] Explainer: lowercase + badges + venue-vs-maker scope
 Depends on: T1. File: `dashboard/static/strategy_explainer.html`.
 Pre-grep 5 old patterns, record; hand-edit table/diagrams/descriptions;
 badge per row ([USD]/[cents Offset]/[% Ratio 0..1]/[Shares]) + style;

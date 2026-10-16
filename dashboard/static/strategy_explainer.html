@@ -168,6 +168,34 @@
     .pill-amber { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
     .pill-purple { background: rgba(100, 116, 139, 0.16); color: var(--text-secondary); }
 
+    .unit-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-weight: 600;
+      margin-left: 0.4rem;
+      vertical-align: middle;
+    }
+    .badge-usd { background: rgba(16, 185, 129, 0.15); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-offset { background: rgba(245, 158, 11, 0.15); color: var(--amber); border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-pct { background: rgba(56, 189, 248, 0.15); color: var(--cyan); border: 1px solid rgba(56, 189, 248, 0.3); }
+    .badge-shares { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
+    .scope-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin-right: 0.4rem;
+    }
+    .scope-venue { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .scope-maker { background: rgba(14, 165, 233, 0.15); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.3); }
+
     .grid-2 {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -488,64 +516,64 @@
         </thead>
         <tbody>
           <tr>
-            <td><code>max_completable_pair_cost</code></td>
+            <td><code>max_completable_pair_cost</code> <span class="unit-badge badge-usd">[USD]</span></td>
             <td><code>1.00</code> ($1.00)</td>
             <td><code>core_brain/risk.py</code></td>
-            <td><strong>Completable-Cost Gate</strong>: Refuses any maker bid if <code>bid + best_ask(other_leg) &ge; 1.00</code>. Guarantees a single fill can be hedged at market ask without loss.</td>
+            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Completable-Cost Gate</strong>: Refuses any maker bid if <code>bid + best_ask(other_leg) &ge; 1.00</code>. Guarantees a single fill can be hedged at market ask without loss.</td>
           </tr>
           <tr>
-            <td><code>max_pair_cost</code></td>
+            <td><code>max_pair_cost</code> <span class="unit-badge badge-usd">[USD]</span></td>
             <td><code>0.99</code> ($0.99)</td>
             <td><code>core_brain/config.py</code></td>
-            <td><strong>Profit Condition</strong>: Hard ceiling on combined both-maker bids (<code>up_bid + down_bid</code>) to ensure net merge profit.</td>
+            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Profit Condition</strong>: Hard ceiling on combined both-maker bids (<code>up_bid + down_bid</code>) to ensure net merge profit.</td>
           </tr>
           <tr>
-            <td><code>max_naked_usd</code></td>
+            <td><code>max_naked_usd</code> <span class="unit-badge badge-usd">[USD]</span></td>
             <td><code>6%</code> of portfolio ($5.40 at $90, $6.00 at $100)</td>
             <td><code>core_brain/risk.py</code></td>
-            <td><strong>Dynamic Directional Cap</strong>: 6% of account value. Denominator for quadratic size ladder &amp; inventory skew spring.</td>
+            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Dynamic Directional Cap</strong>: Maker risk budget (6% of account value). Denominator for quadratic size ladder &amp; inventory skew spring; hard block halts quoting when exceeded.</td>
           </tr>
           <tr>
-            <td><code>MAX_ORDER_USD</code></td>
+            <td><code>max_order_usd</code> <span class="unit-badge badge-usd">[USD]</span></td>
             <td><code>25%</code> of portfolio ($22.50 at $90, $25.00 at $100)</td>
             <td><code>core_brain/venue.py</code></td>
-            <td><strong>Dynamic Single Order Ceiling</strong>: 25% of account value. Caps single order notional.</td>
+            <td><span class="scope-badge scope-venue">Venue Scope</span> <strong>Dynamic Single Order Ceiling</strong>: 25% of account value ($1.00 minimum floor). Enforced per-order via <code>order_caps()</code> and <code>derive_dynamic_caps</code> across 3 order managers/enforcers to prevent single-fill blowout.</td>
           </tr>
           <tr>
-            <td><code>MAX_TOTAL_USD</code></td>
+            <td><code>max_total_usd</code> <span class="unit-badge badge-usd">[USD]</span></td>
             <td><code>90%</code> of portfolio ($81.00 at $90, $90.00 at $100)</td>
             <td><code>core_brain/venue.py</code></td>
-            <td><strong>Dynamic Bankroll Ceiling</strong>: 90% of total portfolio value deployed across active orders and inventory.</td>
+            <td><span class="scope-badge scope-venue">Venue Scope</span> <strong>Dynamic Bankroll Ceiling</strong>: 90% of total portfolio value deployed across all open orders and unmerged inventory. Enforced at venue level.</td>
           </tr>
           <tr>
-            <td><code>max_skew</code></td>
+            <td><code>max_skew_offset</code> <span class="unit-badge badge-offset">[cents Offset]</span></td>
             <td><code>0.015</code> (1.5¢)</td>
             <td><code>core_brain/risk.py</code></td>
-            <td><strong>Inventory Skew Spring</strong>: Pushes heavy-leg bid outward and pulls light-leg bid closer to mid to accelerate flattening.</td>
+            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Inventory Skew Spring</strong>: Pushes heavy-leg bid outward and pulls light-leg bid closer to mid by up to 1.5¢ offset to accelerate inventory flattening.</td>
           </tr>
           <tr>
-            <td><code>emergency_hedge_frac</code></td>
+            <td><code>emergency_hedge_pct</code> <span class="unit-badge badge-pct">[% Ratio 0..1]</span></td>
             <td><code>0.8</code> (80%)</td>
             <td><code>core_brain/quotes.py</code></td>
-            <td><strong>Taker Cross Trigger</strong>: At 80% of <code>max_naked_usd</code>, permits the light side to cross the spread and take the hedge before cap freezes.</td>
+            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Taker Cross Trigger</strong>: At 80% (0.80 ratio) of <code>max_naked_usd</code>, permits the light side to cross the spread and take the hedge before cap freezes.</td>
           </tr>
           <tr>
-            <td><code>max_book_spread</code></td>
+            <td><code>max_book_spread</code> <span class="unit-badge badge-offset">[cents Offset]</span></td>
             <td><code>0.06</code> (6¢)</td>
             <td><code>core_brain/config.py</code></td>
-            <td><strong>Book Health Spread Gate</strong>: Rejects books with bid-ask spread wider than 6¢ to prevent quoting into illiquid spreads.</td>
+            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Book Health Spread Gate</strong>: Rejects books with bid-ask spread wider than 6¢ to prevent quoting into illiquid spreads.</td>
           </tr>
           <tr>
-            <td><code>min_book_depth_sh</code></td>
+            <td><code>min_book_depth_shares</code> <span class="unit-badge badge-shares">[Shares]</span></td>
             <td><code>200.0</code> shares</td>
             <td><code>core_brain/config.py</code></td>
-            <td><strong>Book Depth Floor</strong>: Rejects markets with less than 200 shares in top-3 levels to guarantee exit liquidity.</td>
+            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Book Depth Floor</strong>: Rejects markets with less than 200 shares in top-3 levels to guarantee exit liquidity.</td>
           </tr>
           <tr>
-            <td><code>decided_price</code></td>
+            <td><code>decided_price</code> <span class="unit-badge badge-usd">[USD]</span></td>
             <td><code>0.02</code> (2¢ / 98¢)</td>
             <td><code>core_brain/config.py</code></td>
-            <td><strong>Decided Outcome Gate</strong>: Refuses to quote markets priced &le; 0.02 or &ge; 0.98 where outcome is resolved.</td>
+            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Decided Outcome Gate</strong>: Refuses to quote markets priced &le; 0.02 or &ge; 0.98 where outcome is resolved.</td>
           </tr>
         </tbody>
       </table>
