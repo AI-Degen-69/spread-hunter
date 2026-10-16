@@ -80,7 +80,7 @@ Depends-on graph: T1 (arms file) feeds T4 (dry-run) and T5 (tests). T2/T3
 (cockpit/hub) are frontend-only, independent of the specific arms, so they run
 in parallel with T1; T5 asserts all of them last.
 
-- [ ] **T1 [S] [Backend/Logic]** — `configs/tournaments/i608_tournament-1_arms.json`
+- [x] **T1 [S] [Backend/Logic]** — `configs/tournaments/i608_tournament-1_arms.json`
   : the 10 characters, one `HUNTER_*` env delta each, matching #608's table.
   Slugs: the-accountant, the-patient-one, the-surgeon, the-daydreamer,
   the-regular, the-metronome, the-gambler, the-chaperone, the-graceful,
@@ -88,7 +88,7 @@ in parallel with T1; T5 asserts all of them last.
   exactly the one knob #608 names (or two for the-gambler/the-strict-parent,
   which #608 defines as two-knob); names match `^[a-z0-9-]{1,24}$`.
 
-- [ ] **T2 [M] [Design/UI]** — cockpit refresh in `generate_cockpit_html`
+- [x] **T2 [M] [Design/UI]** — cockpit refresh in `generate_cockpit_html`
   (`tournament_cockpit_server.py`): (a) add `TOURNAMENTS["608"]` +
   `ARMS_CONFIG_608` (empty catalyst columns); (b) leaderboard header (:1298)
   + row-builder (:1588) swap Quoted Orders→Sharpe, Merged-legs→Profit Factor,
@@ -99,7 +99,7 @@ in parallel with T1; T5 asserts all of them last.
   starts, `/` renders the 608 table with new columns; `pytest tests/test_dashboard_server.py`
   (or the cockpit's own test if one exists) still green.
 
-- [ ] **T3 [S] [Design/UI]** — hub refresh `scripts/tournament_hub.py`: replace
+- [x] **T3 [S] [Design/UI]** — hub refresh `scripts/tournament_hub.py`: replace
   hardcoded `ARMS_ORDER` (:324) with plan-index order so all 10 arms sort
   correctly; surface worst-catalyst + next-run tweak on each card when present.
   Depends on: —. Verify: `python -m scripts.tournament_hub` serves, cards show
@@ -108,11 +108,11 @@ in parallel with T1; T5 asserts all of them last.
 **Checkpoint** — after T1-T3: arms file parses, cockpit + hub render #608 with
 new columns/order. One-line progress report; no approval pause in Mode A.
 
-- [ ] **T4 [XS] [Backend/Logic]** — dry-run gate: run the acceptance command
+- [x] **T4 [XS] [Backend/Logic]** — dry-run gate: run the acceptance command
   and confirm a valid 10-arm plan + exit 0. Depends on: T1. Verify: the
   acceptance command in the Spec bar.
 
-- [ ] **T5 [M] [Backend/Logic]** — tests: extend `tests/test_shadow_tournament.py`
+- [x] **T5 [M] [Backend/Logic]** — tests: extend `tests/test_shadow_tournament.py`
   with a case that loads the i608 arms file through `build_tournament_plan` and
   asserts 10 arms, unique names, ports 8801-8810, run-number slugs
   `<base>-1`, and one-knob-per-arm where #608 says one knob. Depends on: T1,
