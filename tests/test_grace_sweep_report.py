@@ -176,7 +176,7 @@ def test_a_longer_grace_contains_the_shorter_ones(tmp_path):
 
 
 def test_the_floor_row_is_the_poll_interval_not_zero(tmp_path):
-    # `_route_pair` exits on the first poll AFTER grace expires, so a grace
+    # The live loop exits on the first poll AFTER grace expires, so a grace
     # below the rotation cadence is unreachable. A zero row would recommend
     # against a setting the engine cannot make.
     db = _shadow(tmp_path, [(100.0, "m", "UP", 5.0, 0.66, "p1")])

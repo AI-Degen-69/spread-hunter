@@ -5,7 +5,8 @@ strategy -- unmeasurable in a rehearsal, which is the only surface on which
 it is safe to measure anything:
 
 1. `shadow_run` pinned `single_buy_grace_sec` to 0.0 unconditionally, so the
-   configured grace (45s in the operator's `.env`) never reached `_route_pair`.
+   configured grace (45s in the operator's `.env`) never reached the live
+   exit path.
    Every stranded leg was dumped on the first pass after the fill, and the knob
    could not be swept.
 
