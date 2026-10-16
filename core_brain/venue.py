@@ -15,10 +15,10 @@ from __future__ import annotations
 import hashlib
 import os
 
-# Hard ceilings. Re-exported from core_brain.config:MakerConfig so the dashboard's
-# /api/parameters endpoint reads one config object. Kept here as module-level
-# constants for backward compatibility with every file that already does
-# `from core_brain.venue import MAX_ORDER_USD, MAX_TOTAL_USD`.
+# Hard venue ceilings. Re-exported from core_brain.config:MakerConfig so the dashboard's
+# /api/parameters endpoint reads one config object. Kept here as legacy module-level
+# uppercase constants (MAX_ORDER_USD, MAX_TOTAL_USD) for backward compatibility as an
+# import-time snapshot; active execution enforcement is dynamic via order_caps().
 from core_brain.config import load as _load_cfg
 
 _CFG = _load_cfg()

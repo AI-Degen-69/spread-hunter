@@ -112,8 +112,9 @@ in `core_brain/config.py`:
 - **Total Portfolio Risk Ceiling (`bankroll_ceiling_pct`):** `90%` of account value ($90.00 baseline at $100).
 - **Max Pair Cost:** `$0.99` (guarantees $\ge \$0.01$ profit per pair upon merge).
 
-`MAX_ORDER_USD = 25.0`, `MAX_TOTAL_USD = 90.0` in `core_brain/venue.py` are independent hard
-venue caps matching baseline `MakerConfig` defaults. Dynamic caps are evaluated at cycle runtime in
+`MAX_ORDER_USD = 25.0`, `MAX_TOTAL_USD = 90.0` in `core_brain/venue.py` are legacy import-time
+snapshot constants matching baseline `MakerConfig` defaults (`max_order_usd`, `max_total_usd`).
+Active dynamic caps are evaluated at cycle runtime via `order_caps()` / `derive_dynamic_caps` in
 `core_brain/trader_loop.py`, `core_brain/order_manager.py`, and `core_brain/single_buy_saver.py`.
 
 Real-money checks are allowed and are often the only real proof of a change. Keep them at

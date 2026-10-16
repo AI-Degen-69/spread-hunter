@@ -112,7 +112,7 @@ keep $90/$100 examples.
 Verify: post-grep only `max_skew_offset` remains; hands-on FRESH-SHADOW
 dashboard check (`/api/parameters` + explainer page). No pytest.
 
-### T4 [S][Docs] Guidance + naming rule + venue comment + How-to-verify
+### [x] T4 [S][Docs] Guidance + naming rule + venue comment + How-to-verify
 Depends on: T2, T3. Files: `docs/agents/safety.md architecture.md
 first-run.md verifying.md strategy.md python-conventions.md`,
 `docs/prompts/statistical-validation-run.md`, `core_brain/venue.py`
