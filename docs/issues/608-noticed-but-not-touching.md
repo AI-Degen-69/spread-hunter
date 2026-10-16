@@ -6,4 +6,4 @@ branch/issue that later owns it. This file never blocks the #608 PR.
 
 | # | Observation | Owner | When | Status | Resolved-by |
 |---|-------------|-------|------|--------|-------------|
-| 1 | Shadow workers inherit un-stripped parent `HUNTER_*` vars: `scripts/shadow_tournament.py:516` builds `shadow_env = {**os.environ, **arm.env, ...}` while only the dashboard env (`:499-502`) strips them. Arm env wins on collision, but a stale exported knob the arms file does not set leaks into every worker. The #608 plan's "strip inherited HUNTER_*" choice was never implemented for shadow children. | Station IV reviewer | 2026-10-16 | open | — |
+| 1 | Shadow workers inherit un-stripped parent `HUNTER_*` vars: `scripts/shadow_tournament.py:516` builds `shadow_env = {**os.environ, **arm.env, ...}` while only the dashboard env (`:499-502`) strips them. Arm env wins on collision, but a stale exported knob the arms file does not set leaks into every worker. The #608 plan's "strip inherited HUNTER_*" choice was never implemented for shadow children. | Station IV reviewer | 2026-10-16 | published | #624 |
