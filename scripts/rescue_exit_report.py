@@ -43,6 +43,7 @@ if str(_LIVE_ROOT) not in sys.path:
 from core_brain.close_methods import (
     MERGE_METHODS,
     SETTLEMENT_METHODS,
+    SHADOW_SETTLEMENT,
     SINGLE_BUY_EXIT,
 )
 
@@ -182,7 +183,7 @@ def _exit_row(close, fills, orders) -> dict | None:
         # A `shadow_settlement` close prices neither leg: it books the leg the
         # venue settled at $1.00/$0.00, not a market sell. Reconstruct the
         # one-sided held leg from its BUY fills instead of dropping the row.
-        if close["method"] != "shadow_settlement":
+        if close["method"] != SHADOW_SETTLEMENT:
             return None
         cfills = fills.get(cid, [])
         buys = [f for f in cfills if f["side"] == "BUY"]
@@ -437,7 +438,7 @@ def report(registry_path: Path, booktape_path: Path | None, top: int) -> str:
     # `reason=aged_out_rescue` instead, so this counts the failure mode alone.
     aged_out_settlements = sum(
         1 for r in rows
-        if r["method"] == "shadow_settlement" and r["aged_out"] is True)
+        if r["method"] == SHADOW_SETTLEMENT and r["aged_out"] is True)
 
     say(f"Rescue exit forensics -- {registry_path.name}")
     say(f"  rescue closes: {len(rows)}  total rescue loss: {_usd(total_loss)}"
@@ -471,7 +472,7 @@ def report(registry_path: Path, booktape_path: Path | None, top: int) -> str:
         f2e = f"{r['fill_to_exit']:.1f}s" if r["fill_to_exit"] else "--"
         say(f"    fill_to_exit={f2e}  classifier={cls}")
         say(f"    Q1: {q1_grace_upper_bound(reg, r, tape)}")
-        if r["method"] == "shadow_settlement":
+        if r["method"] == SHADOW_SETTLEMENT:
             if r["aged_out"] is None:
                 say("    AMBIGUOUS: fills span more than one position for this "
                     "condition, so no settlement-age claim is made.")
