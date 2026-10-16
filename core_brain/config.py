@@ -103,7 +103,7 @@ class MakerConfig:
     # same push at 0.85, where it is $85 of downside, as at 0.15, where it is
     # $15 -- so on lol-maz-mg1 it was still ramping at 233 of 240 shares while
     # $190.26 was already at stake and the position was fully built.
-    max_skew: float = 0.015             # cap, in price units
+    max_skew_offset: float = 0.015      # cap, in price units
     min_reward_offset: float = 0.005    # never quote nearer mid than this
 
     # THE HARD CAP on directional exposure, in DOLLARS of naked cost. This is
@@ -219,7 +219,7 @@ class MakerConfig:
     # Summed bid depth below which the book cannot absorb an exit. A proxy,
     # not a measurement of exit liquidity: one aggregated number is the most
     # the recorded book shape supports.
-    min_book_depth_sh: float = 200.0
+    min_book_depth_shares: float = 200.0
 
     # EMERGENCY STOP-LOSS. The hard cap above stops us ADDING to the heavy
     # side; it does nothing about the exposure already on the book. Skew is
@@ -239,7 +239,7 @@ class MakerConfig:
     # 0.8 puts the exception inside the cap on purpose, so it fires while there
     # is still a hedge to buy rather than at the moment the cap freezes us at
     # maximum exposure.
-    emergency_hedge_frac: float = 0.8
+    emergency_hedge_pct: float = 0.8
     # Switchable so the exception can be measured on its own -- a taker order
     # is the one thing this strategy otherwise never does.
     enable_emergency_hedge: bool = True
@@ -626,11 +626,11 @@ class MakerConfig:
     quote_shares: int = 120
 
     # The Owner's allocation rule, 2026-08-19:
-    #     couple = max(bankroll * couple_risk_frac, min_couple_usd)
+    #     couple = max(bankroll * couple_risk_pct, min_couple_usd)
     #     leg    = couple / 2
     # At a $31.17 wallet and at $100 both give $10.00 a couple, $5.00 a leg --
     # the floor binds until bankroll passes $1000.
-    couple_risk_frac: float = 0.01
+    couple_risk_pct: float = 0.01
     min_couple_usd: float = 10.0
 
     # A $5.00 leg buys about 10 shares against a 5-share venue floor, so the
@@ -685,7 +685,7 @@ class MakerConfig:
     # A passive order needs time to be reached; posting late means resting into
     # the minutes when the price is converging on the outcome, which is exactly
     # when a fill is most likely to be adverse.
-    quote_window_frac: float = 0.40
+    quote_window_pct: float = 0.40
     # Both rules are switchable so their effect can be measured one at a time
     # rather than bundled -- a previous run changed two things at once and the
     # result could not be read.
@@ -977,7 +977,7 @@ class MakerConfig:
     stat_gate_alpha: float = 0.05          # one-sided alpha = 0.05 -> 90% one-sided CI lower bound
     stat_gate_beta: float = 0.20           # beta = 0.20 -> 80% power
     stat_gate_threshold_pct: float = 1.0   # primary gate threshold on return % (1.0%)
-    stat_gate_bankroll_fraction: float = 0.01  # dollar twin gate (1% of starting bankroll)
+    stat_gate_bankroll_pct: float = 0.01   # dollar twin gate (1% of starting bankroll)
     # Minimum closes a rehearsal must collect before the sample-size gate can
     # pass. shadow-01 cleared the economic gates at n=38 but failed this one
     # (and the CI was still wide enough to dip below zero at n=16), so the
@@ -1036,6 +1036,36 @@ class MakerConfig:
     def cancel_net_oneway_ms(self) -> float:
         """Backward compatibility alias for net_oneway_ms."""
         return self.net_oneway_ms
+
+    @property
+    def max_skew(self) -> float:
+        """Backward compatibility alias for max_skew_offset (#632)."""
+        return self.max_skew_offset
+
+    @property
+    def min_book_depth_sh(self) -> float:
+        """Backward compatibility alias for min_book_depth_shares (#632)."""
+        return self.min_book_depth_shares
+
+    @property
+    def emergency_hedge_frac(self) -> float:
+        """Backward compatibility alias for emergency_hedge_pct (#632)."""
+        return self.emergency_hedge_pct
+
+    @property
+    def couple_risk_frac(self) -> float:
+        """Backward compatibility alias for couple_risk_pct (#632)."""
+        return self.couple_risk_pct
+
+    @property
+    def quote_window_frac(self) -> float:
+        """Backward compatibility alias for quote_window_pct (#632)."""
+        return self.quote_window_pct
+
+    @property
+    def stat_gate_bankroll_fraction(self) -> float:
+        """Backward compatibility alias for stat_gate_bankroll_pct (#632)."""
+        return self.stat_gate_bankroll_pct
 
     @property
     def tau_cancel_sec(self) -> float:
@@ -1309,15 +1339,33 @@ def load(*, for_display: bool = False) -> MakerConfig:
         # Long-dated markets do not close in 15 seconds, and the min-size floor
         # is per-market (20, 50, 100, 200) -- quoting under it earns nothing.
         kw["min_t_remaining_sec"] = 0.0
-        ms = os.environ.get("HUNTER_MIN_SIZE")
-        if ms:
+        ms = os.environ.get("HUNTER_MIN_QUOTE_SHARES")
+        if ms is None:
+            ms = os.environ.get("HUNTER_MIN_SIZE")
+            if ms is not None and ms.strip():
+                logging.getLogger(__name__).warning(
+                    "HUNTER_MIN_SIZE is deprecated (#632); set HUNTER_MIN_QUOTE_SHARES instead."
+                )
+        if ms and ms.strip():
             kw["min_quote_shares"] = int(float(ms))
             kw["quote_shares"] = max(int(float(ms)), 120)
-        sp = os.environ.get("HUNTER_MAX_SPREAD")   # in cents, from the venue
-        if sp:
+        sp = os.environ.get("HUNTER_MAX_SPREAD_CENTS")
+        if sp is None:
+            sp = os.environ.get("HUNTER_MAX_SPREAD")   # in cents, from the venue
+            if sp is not None and sp.strip():
+                logging.getLogger(__name__).warning(
+                    "HUNTER_MAX_SPREAD is deprecated (#632); set HUNTER_MAX_SPREAD_CENTS instead."
+                )
+        if sp and sp.strip():
             kw["max_spread_from_mid"] = float(sp) / 100.0
-        tk = os.environ.get("HUNTER_TICK")
-        if tk:
+        tk = os.environ.get("HUNTER_PRICE_TICK")
+        if tk is None:
+            tk = os.environ.get("HUNTER_TICK")
+            if tk is not None and tk.strip():
+                logging.getLogger(__name__).warning(
+                    "HUNTER_TICK is deprecated (#632); set HUNTER_PRICE_TICK instead."
+                )
+        if tk and tk.strip():
             kw["price_tick"] = float(tk)
     # GENERAL-PATH spread ceiling + widen-gate kill switch. Parsed OUTSIDE the
     # HUNTER_MARKET block so a tournament preset (via _preset_to_env ->
@@ -1326,7 +1374,14 @@ def load(*, for_display: bool = False) -> MakerConfig:
     # preset window rather than replacing it. max_spread_from_mid is the score
     # window `v` too, so it is never set to 0 here -- a 0 would zero every
     # quote's score.
-    sp_general = os.environ.get("HUNTER_MAX_SPREAD") or ""
+    raw_sp_general = os.environ.get("HUNTER_MAX_SPREAD_CENTS")
+    if raw_sp_general is None:
+        raw_sp_general = os.environ.get("HUNTER_MAX_SPREAD")
+        if raw_sp_general is not None and raw_sp_general.strip():
+            logging.getLogger(__name__).warning(
+                "HUNTER_MAX_SPREAD is deprecated (#632); set HUNTER_MAX_SPREAD_CENTS instead."
+            )
+    sp_general = raw_sp_general or ""
     if sp_general.strip():
         try:
             cents = float(sp_general)
@@ -1533,21 +1588,33 @@ def load(*, for_display: bool = False) -> MakerConfig:
                 "HUNTER_AGED_OUT_RESCUE_LEAD_SEC must be finite and "
                 f"non-negative, got: {val}")
         kw["aged_out_rescue_lead_sec"] = val
-    mqs = os.environ.get("HUNTER_MAX_SHARES") or os.environ.get("SPREAD_HUNTER_MAX_SHARES")
+    mqs = os.environ.get("HUNTER_MAX_QUOTE_SHARES")
+    if mqs is None:
+        mqs = os.environ.get("HUNTER_MAX_SHARES") or os.environ.get("SPREAD_HUNTER_MAX_SHARES")
+        if mqs is not None and mqs.strip():
+            logging.getLogger(__name__).warning(
+                "HUNTER_MAX_SHARES is deprecated (#632); set HUNTER_MAX_QUOTE_SHARES instead."
+            )
     if mqs and mqs.strip():
         val = float(mqs)
         if not math.isfinite(val) or val <= 0:
-            raise ValueError(f"HUNTER_MAX_SHARES must be strictly positive, got: {val}")
+            raise ValueError(f"HUNTER_MAX_QUOTE_SHARES must be strictly positive, got: {val}")
         kw["max_quote_shares"] = val
     sgt = os.environ.get("HUNTER_STAT_GATE_THRESHOLD_PCT")
     if sgt and sgt.strip():
         kw["stat_gate_threshold_pct"] = _bounded_float(
             "HUNTER_STAT_GATE_THRESHOLD_PCT", sgt, -100.0, 100.0
         )
-    sgb = os.environ.get("HUNTER_STAT_GATE_BANKROLL_FRACTION")
+    sgb = os.environ.get("HUNTER_STAT_GATE_BANKROLL_PCT")
+    if sgb is None:
+        sgb = os.environ.get("HUNTER_STAT_GATE_BANKROLL_FRACTION")
+        if sgb is not None and sgb.strip():
+            logging.getLogger(__name__).warning(
+                "HUNTER_STAT_GATE_BANKROLL_FRACTION is deprecated (#632); set HUNTER_STAT_GATE_BANKROLL_PCT instead."
+            )
     if sgb and sgb.strip():
-        kw["stat_gate_bankroll_fraction"] = _bounded_float(
-            "HUNTER_STAT_GATE_BANKROLL_FRACTION", sgb, 0.0, 1.0
+        kw["stat_gate_bankroll_pct"] = _bounded_float(
+            "HUNTER_STAT_GATE_BANKROLL_PCT", sgb, 0.0, 1.0
         )
     stc = os.environ.get("HUNTER_STAT_GATE_TARGET_CLOSES")
     if stc and stc.strip():
@@ -1590,7 +1657,7 @@ def load(*, for_display: bool = False) -> MakerConfig:
 
 def couple_allocation_usd(cfg) -> float:
     """Dollars committed to one UP+DOWN couple, per the Owner's rule."""
-    return max(cfg.bankroll_usd * cfg.couple_risk_frac, cfg.min_couple_usd)
+    return max(cfg.bankroll_usd * cfg.couple_risk_pct, cfg.min_couple_usd)
 
 
 def leg_allocation_usd(cfg) -> float:

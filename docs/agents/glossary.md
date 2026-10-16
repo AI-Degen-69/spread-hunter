@@ -82,3 +82,22 @@ Old module paths (`scripts/rank_markets.py`, `scripts/rerank_loop.py`,
 calling them. Do not add to them.
 
 Commit scopes follow the package name: `fix(core_brain): ...`, not `fix(engine): ...`.
+
+## Standardized parameters and environment variables (#632)
+
+| Legacy name | Canonical name | Unit / Meaning |
+| --- | --- | --- |
+| `max_skew` | `max_skew_offset` | `0.015` (1.5¢ additive offset behind mid) |
+| `min_book_depth_sh` | `min_book_depth_shares` | `200.0` shares top-3 depth floor |
+| `emergency_hedge_frac` | `emergency_hedge_pct` | `0.80` ratio of naked cap trigger |
+| `couple_risk_frac` | `couple_risk_pct` | `0.01` max risk ratio per coupled pair |
+| `quote_window_frac` | `quote_window_pct` | `0.40` ratio of spread window |
+| `stat_gate_bankroll_fraction` | `stat_gate_bankroll_pct` | `0.01` (1% of bankroll for stat gate) |
+| `MAX_ORDER_USD` | `max_order_usd` | $25.0 baseline single order ceiling ($1.00 min floor) |
+| `MAX_TOTAL_USD` | `max_total_usd` | $90.0 baseline total portfolio ceiling |
+| `HUNTER_MIN_SIZE` | `HUNTER_MIN_QUOTE_SHARES` | Canonical environment variable |
+| `HUNTER_MAX_SPREAD` | `HUNTER_MAX_SPREAD_CENTS` | Canonical environment variable |
+| `HUNTER_TICK` | `HUNTER_PRICE_TICK` | Canonical environment variable |
+| `HUNTER_MAX_SHARES` | `HUNTER_MAX_QUOTE_SHARES` | Canonical environment variable |
+| `HUNTER_STAT_GATE_BANKROLL_FRACTION` | `HUNTER_STAT_GATE_BANKROLL_PCT` | Canonical environment variable |
+

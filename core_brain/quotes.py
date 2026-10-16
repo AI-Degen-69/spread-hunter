@@ -166,20 +166,23 @@ def rolling_range(price_history: list[float] | tuple[float, ...]) -> float:
 def calculate_limit_order_price(
     current_price: float,
     price_history: list[float] | tuple[float, ...],
-    range_fraction: float = 0.4,
+    range_pct: float = 0.4,
     min_floor: float = 0.02,
     tick_size: float = 0.01,
+    **kwargs,
 ) -> float:
     """Calculate dynamic limit order price below current market price.
 
-    Uses recent rolling price range scaled by range_fraction, clamped to at least min_floor
+    Uses recent rolling price range scaled by range_pct, clamped to at least min_floor
     to protect against adverse selection in calm markets. Enforces tick_size minimum floor.
     """
+    if "range_fraction" in kwargs:
+        range_pct = kwargs.pop("range_fraction")
     if not price_history:
         final_offset = min_floor
     else:
         local_range = rolling_range(price_history)
-        dynamic_offset = local_range * range_fraction
+        dynamic_offset = local_range * range_pct
         final_offset = max(dynamic_offset, min_floor)
 
     target_order_price = current_price - final_offset
@@ -729,17 +732,20 @@ def decide_quotes(
     down_book: dict,
     inv: Inventory,
     t_remaining: float,
-    window_frac: Optional[float] = None,
+    window_pct: Optional[float] = None,
     *,
     lifecycle_override: LifecycleQuoteOverride | None = None,
+    **kwargs,
 ) -> tuple[list[QuoteIntent], str]:
     """Return the bids we want resting right now, plus a reason if we want none.
 
     `*_book` is {'best_bid','best_ask'} for that outcome's token.
-    `window_frac` is how far into the trading window we are, 0..1. None means
+    `window_pct` is how far into the trading window we are, 0..1. None means
     the caller could not work it out, in which case the timing rule is SKIPPED
     rather than guessed -- a missing clock must not silently gate every quote.
     """
+    if "window_frac" in kwargs and window_pct is None:
+        window_pct = kwargs.pop("window_frac")
     if cfg.objective in ("spread_capture", "rewards"):
         intents, why = _decide_quotes_from_mid(cfg, up_book, down_book, inv,
                                                t_remaining,
@@ -755,10 +761,10 @@ def decide_quotes(
     # passive order needs time to be reached, and quoting late means resting
     # into the convergence, when a fill is most likely to be the wrong side of
     # a move.
-    if cfg.enforce_quote_window and window_frac is not None \
-            and window_frac > cfg.quote_window_frac:
-        return [], (f"{100*window_frac:.0f}% into window > "
-                    f"{100*cfg.quote_window_frac:.0f}% quoting window")
+    if cfg.enforce_quote_window and window_pct is not None \
+            and window_pct > cfg.quote_window_pct:
+        return [], (f"{100*window_pct:.0f}% into window > "
+                    f"{100*cfg.quote_window_pct:.0f}% quoting window")
     if inv.fills >= cfg.max_fills_per_market:
         return [], f"hit {cfg.max_fills_per_market} fills for this market"
 

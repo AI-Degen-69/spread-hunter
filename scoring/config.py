@@ -5,6 +5,7 @@ See research/powerwinner_analysis.md.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 from dataclasses import dataclass
@@ -62,7 +63,7 @@ class MakerConfig:
     # same push at 0.85, where it is $85 of downside, as at 0.15, where it is
     # $15 -- so on lol-maz-mg1 it was still ramping at 233 of 240 shares while
     # $190.26 was already at stake and the position was fully built.
-    max_skew: float = 0.015             # cap, in price units
+    max_skew_offset: float = 0.015      # cap, in price units
     min_reward_offset: float = 0.005    # never quote nearer mid than this
 
     # THE HARD CAP on directional exposure, in DOLLARS of naked cost. This is
@@ -134,7 +135,7 @@ class MakerConfig:
     # Summed bid depth below which the book cannot absorb an exit. A proxy,
     # not a measurement of exit liquidity: one aggregated number is the most
     # the recorded book shape supports.
-    min_book_depth_sh: float = 200.0
+    min_book_depth_shares: float = 200.0
 
     # EMERGENCY STOP-LOSS. The hard cap above stops us ADDING to the heavy
     # side; it does nothing about the exposure already on the book. Skew is
@@ -154,7 +155,7 @@ class MakerConfig:
     # 0.8 puts the exception inside the cap on purpose, so it fires while there
     # is still a hedge to buy rather than at the moment the cap freezes us at
     # maximum exposure.
-    emergency_hedge_frac: float = 0.8
+    emergency_hedge_pct: float = 0.8
     # Switchable so the exception can be measured on its own -- a taker order
     # is the one thing this strategy otherwise never does.
     enable_emergency_hedge: bool = True
@@ -606,7 +607,7 @@ class MakerConfig:
     # A passive order needs time to be reached; posting late means resting into
     # the minutes when the price is converging on the outcome, which is exactly
     # when a fill is most likely to be adverse.
-    quote_window_frac: float = 0.40
+    quote_window_pct: float = 0.40
     # Both rules are switchable so their effect can be measured one at a time
     # rather than bundled -- a previous run changed two things at once and the
     # result could not be read.
@@ -781,6 +782,26 @@ class MakerConfig:
     def tau_post_sec(self) -> float:
         return (self.net_oneway_ms + self.post_venue_accept_ms) / 1000.0
 
+    @property
+    def max_skew(self) -> float:
+        """Backward compatibility alias for max_skew_offset (#632)."""
+        return self.max_skew_offset
+
+    @property
+    def min_book_depth_sh(self) -> float:
+        """Backward compatibility alias for min_book_depth_shares (#632)."""
+        return self.min_book_depth_shares
+
+    @property
+    def emergency_hedge_frac(self) -> float:
+        """Backward compatibility alias for emergency_hedge_pct (#632)."""
+        return self.emergency_hedge_pct
+
+    @property
+    def quote_window_frac(self) -> float:
+        """Backward compatibility alias for quote_window_pct (#632)."""
+        return self.quote_window_pct
+
     sim_only: bool = True
 
     def db_path(self) -> Path:
@@ -875,16 +896,33 @@ def load() -> MakerConfig:
         kw["market_url"] = os.environ.get("HUNTER_URL", "")
         # Long-dated markets do not close in 15 seconds, and the min-size floor
         # is per-market (20, 50, 100, 200) -- quoting under it earns nothing.
-        kw["min_t_remaining_sec"] = 0.0
-        ms = os.environ.get("HUNTER_MIN_SIZE")
-        if ms:
+        ms = os.environ.get("HUNTER_MIN_QUOTE_SHARES")
+        if ms is None:
+            ms = os.environ.get("HUNTER_MIN_SIZE")
+            if ms is not None and ms.strip():
+                logging.getLogger(__name__).warning(
+                    "HUNTER_MIN_SIZE is deprecated (#632); set HUNTER_MIN_QUOTE_SHARES instead."
+                )
+        if ms and ms.strip():
             kw["min_quote_shares"] = int(float(ms))
             kw["quote_shares"] = max(int(float(ms)), 120)
-        sp = os.environ.get("HUNTER_MAX_SPREAD")   # in cents, from the venue
-        if sp:
+        sp = os.environ.get("HUNTER_MAX_SPREAD_CENTS")
+        if sp is None:
+            sp = os.environ.get("HUNTER_MAX_SPREAD")   # in cents, from the venue
+            if sp is not None and sp.strip():
+                logging.getLogger(__name__).warning(
+                    "HUNTER_MAX_SPREAD is deprecated (#632); set HUNTER_MAX_SPREAD_CENTS instead."
+                )
+        if sp and sp.strip():
             kw["max_spread_from_mid"] = float(sp) / 100.0
-        tk = os.environ.get("HUNTER_TICK")
-        if tk:
+        tk = os.environ.get("HUNTER_PRICE_TICK")
+        if tk is None:
+            tk = os.environ.get("HUNTER_TICK")
+            if tk is not None and tk.strip():
+                logging.getLogger(__name__).warning(
+                    "HUNTER_TICK is deprecated (#632); set HUNTER_PRICE_TICK instead."
+                )
+        if tk and tk.strip():
             kw["price_tick"] = float(tk)
     wide = resolve_wide_book_trial(os.environ.get("HUNTER_WIDE_BOOK_TRIAL") or "")
     if wide is not None and wide > 0:

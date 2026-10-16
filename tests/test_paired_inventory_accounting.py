@@ -83,7 +83,7 @@ def test_emergency_hedge_pair_inversion_blocked():
     cfg = MakerConfig(
         enable_emergency_hedge=True,
         max_naked_usd=5.0,
-        emergency_hedge_frac=0.5,
+        emergency_hedge_pct=0.5,
         max_pair_cost=0.99,
     )
     # 10 UP shares @ $0.60 ($6.00 deficit usd >= $2.50 threshold)

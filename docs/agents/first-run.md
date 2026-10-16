@@ -195,8 +195,8 @@ run `account-sweep`, they do not fetch your balance, and no live account mark is
 written into the rehearsal's store. Only the live dashboard's own page snapshots
 account equity.
 
-It rehearses everything: the same `MakerConfig`, the same `MAX_ORDER_USD` /
-`MAX_TOTAL_USD`, the same gates, the same `decide_quotes`. Only the signer, the
+It rehearses everything: the same `MakerConfig`, the same `max_order_usd` /
+`max_total_usd`, the same gates, the same `decide_quotes`. Only the signer, the
 store, and the wall clock differ — the bankroll is fixed, not read from the
 wallet. Point the shadow dashboard at the same per-run
 store path and it updates live while the rehearsal runs.

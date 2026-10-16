@@ -18,7 +18,7 @@ spread-hunter/
     registry_state.py     Read side of the registry; what the dashboard renders
     live_fill_engine.py   Turns venue fills into registry rows
     markout.py            Post-fill mark-to-market used by the stop-loss
-    venue.py              Venue client wiring + the MAX_ORDER_USD / MAX_TOTAL_USD caps
+    venue.py              Venue client wiring + order_caps() dynamic enforcement (legacy MAX_* caps)
     market_feed.py        Reads the market filter's graduated universe (runtime/markets.json)
     markets.py            Venue market lookup
     cycle_stream.py       Append-only telemetry ring + cycle_intent rows

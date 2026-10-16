@@ -32,7 +32,7 @@ Build a **Statistical Validation Run** — a time-boxed + event-boxed rehearsal 
    - Snapshot `runtime/pipeline.json` + `runtime/markets.json` + effective `MakerConfig` into the artifact directory so the run is replayable.
 
 3. **No forked strategy logic.** Call the live decision stack directly:
-   - Config: `core_brain/config.py:MakerConfig` via `load()` (`core_brain/shadow_run.py:517`) — same `MAX_ORDER_USD` / `MAX_TOTAL_USD` caps as `core_brain/venue.py:22`, same `max_pair_cost=0.99`, `max_completable_pair_cost=1.00`, `requote_dead_band=0.03`, `price_band 0.10-0.90`, skew, band risk, fleet caps (`core_brain/risk.py`, `core_brain/quotes.py:137`).
+   - Config: `core_brain/config.py:MakerConfig` via `load()` (`core_brain/shadow_run.py:517`) — same `max_order_usd` / `max_total_usd` caps as `core_brain/venue.py:25`, same `max_pair_cost=0.99`, `max_completable_pair_cost=1.00`, `requote_dead_band=0.03`, `price_band 0.10-0.90`, skew, band risk, fleet caps (`core_brain/risk.py`, `core_brain/quotes.py:137`).
    - Decision: `core_brain/quotes.py:decide_quotes` → `_decide_quotes_from_mid` (objective `spread_capture`, `core_brain/quotes.py:420`), including `risk.hard_block` and `risk.completable_pair_block`.
    - Planning: `core_brain/trader_loop.py:plan_orders` with re-gate + dead-band (`trader_loop.py:54`).
    - Loop: `core_brain/trader_loop.py:run` via `VenueSeam` (`core_brain/shadow_run.py:268 build_shadow_seam` / `run_shadow`). Wire `settling_inventory_fn` → `shadow_exec.settle_market` before each decide (same ordering as live).

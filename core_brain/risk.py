@@ -204,7 +204,7 @@ def skew_offset(cfg, inv, side: str) -> float:
     naked = naked_side(inv)
     if naked is None:
         return 0.0
-    push = cfg.max_skew * risk_utilization(cfg, inv, naked)
+    push = cfg.max_skew_offset * risk_utilization(cfg, inv, naked)
     return push if side == naked else -push
 
 
@@ -316,10 +316,10 @@ def book_health(book: dict, cfg) -> BookHealth:
         return BookHealth(True, "", depth_evaluated=False)
 
     depth = sum(bids.values())
-    if depth < cfg.min_book_depth_sh:
+    if depth < cfg.min_book_depth_shares:
         return BookHealth(False,
                           f"book too thin {depth:.0f}sh < "
-                          f"{cfg.min_book_depth_sh:.0f}sh")
+                          f"{cfg.min_book_depth_shares:.0f}sh")
     return BookHealth(True, "")
 
 

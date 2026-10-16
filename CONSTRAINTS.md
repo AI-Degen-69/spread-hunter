@@ -1,50 +1,33 @@
-# Constraints - #628 (atomic stop-loss exit)
+# Constraints - #632 (parameter & env naming standardization)
 
-Branch: i628/atomic-stop-loss-exit | Issue: #628
+Branch: main (planning) | Issue: #632
 
-Re-locked for #628: the previous file still carried #627's scope (it merged to `main`
-inside PR #633 and forbade `core_brain/single_leg_lifecycle.py`, which this plan must read).
-Header and Scope below are #628's; every anti-cheat, production-safety and job-guard
-line is kept verbatim.
+Replaces #628-scoped file wholesale (Step 0A.0: stale issue scope).
 
 ## Zero regressions
+- Focused suites: `tests/test_quotes.py`,
+  `tests/test_config_for_display.py`, `tests/test_trader_loop.py`,
+  `tests/test_stat_gate.py` + each edited file.
+- `tests/test_risk.py` (issue list) DOES NOT EXIST — build creates it
+  or corrects the command and records which. Full suite = CI gate.
+- Every rename needs a RED-first test.
 
-- Focused checks during build and after review fixes:
-  `python -m pytest -q tests/test_single_leg_lifecycle.py tests/test_single_buy_saver.py tests/test_trader_loop.py`
-- Every changed behaviour needs a test that fails without the change (RED first).
-- Full `python -m pytest -q` stays with GitHub CI. Never run it locally; never hand it
-  to the operator.
+## Deliberate contracts (not regressions)
+- Legacy ctor keywords rejected with TypeError (fail-loud).
+- KPI keys `"bankroll_fraction"`/`"kelly_fraction"` kept (shared format).
+- `MAX_ORDER_USD`/`MAX_TOTAL_USD` kept (import contract); comment only.
+- `threshold_pct`, `stat_gate_threshold_pct`, `*_return_pct` are
+  percentage-points exceptions (1.0 = 1%), never rescaled.
 
 ## Anti-cheat
+- No skipped/disabled tests, no weakened assertions, no silenced linters.
+- No rescaling disguised as rename; defaults asserted verbatim.
 
-- Never skip/delete tests, weaken assertions, or add skip/xfail/noqa to reach green.
-- The new entry gate allows the tie at the cap (issue wording `<=`); the existing
-  `>=` arms in `risk.hard_block` and the legacy fresh-market branch keep their
-  behavior byte-identical. Changing either to match is a separate issue.
-- No `# type: ignore`, no `# noqa`.
-
-## Production safety
-
-- Never write to `data/orders.db`. Tests use their own stores.
-- No live commands: no `quote`, `complete`, Trader loop, signer, dashboard START, or
-  `order_manager` subcommand.
-- No stop-threshold tuning: `ABSOLUTE_DROP` / `PERCENTAGE_DROP` knobs, tick size,
-  `emergency_drawdown_pct`, and `max_pair_cost` semantics stay byte-identical.
-- No taker-ask re-gating on resting quotes (purged in #626, closed).
-
-## Scope
-
-- Touch ONLY: `core_brain/single_buy_saver.py`, `core_brain/single_leg_lifecycle.py`,
-  `core_brain/trader_loop.py`, `tests/test_single_buy_saver.py`,
-  `tests/test_single_leg_lifecycle.py`, `tests/test_trader_loop.py`.
-- Do NOT touch: `core_brain/risk.py`, `core_brain/order_registry.py`,
-  `core_brain/order_manager.py`, `core_brain/config.py`, `core_brain/quotes.py`,
-  `core_brain/shadow_run.py`, `core_brain/unhedged_stop_loss.py`, `data/*.db`.
-- State machine stays: `DUAL_RESTING`, `PATIENT_WAIT`, `ESCALATED_HEDGE`,
-  `HARD_STOP`, `PAIR_LOCKED`. No new state, no renamed action.
+## Production safety (LIVE default)
+- `data/orders.db` read-only; never rewrite/delete.
+- Opening commands (quote/complete/Trader/START) operator-run only.
 
 ## Job guards
-
-- No destructive git ops (reset, force-push, `checkout --`, stash) without operator OK.
-- Base is synced: `git fetch origin` done 2026-10-16, 0 commits behind `origin/main`,
-  tree clean on `i628/atomic-stop-loss-exit`.
+- No stale refs (#628, #634 names never reused).
+- Out-of-scope -> `docs/issues/632-noticed-but-not-touching.md`.
+- No strategy code modified during planning.

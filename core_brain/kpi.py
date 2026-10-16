@@ -241,7 +241,7 @@ def gate_definition(cfg: MakerConfig | None = None) -> dict[str, Any]:
     return {
         "primary_gate": "ci90_lower_pct >= threshold_pct",
         "threshold_pct": cfg.stat_gate_threshold_pct,
-        "bankroll_fraction": cfg.stat_gate_bankroll_fraction,
+        "bankroll_fraction": cfg.stat_gate_bankroll_pct,
         "dollar_twin_gate": "ci90_lower_usd >= bankroll * bankroll_fraction",
         "tautology_disclaimer": (
             "TAUTOLOGY DISCLAIMER: E[PnL | method=merge] > 0 is trivially true "
@@ -257,7 +257,8 @@ def evaluate_stat_gate(
     closes: list[dict],
     starting_capital: float,
     threshold_pct: float = 1.0,
-    bankroll_fraction: float = 0.01,
+    bankroll_pct: float = 0.01,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Evaluate whether *closes* pass the inclusive 90% CI gate.
 
@@ -271,6 +272,8 @@ def evaluate_stat_gate(
 
     Pure function — no network, no database.
     """
+    if "bankroll_fraction" in kwargs:
+        bankroll_pct = kwargs.pop("bankroll_fraction")
     n = len(closes)
     result: dict[str, Any] = {
         "passed": False,
@@ -316,7 +319,7 @@ def evaluate_stat_gate(
     # Primary gate: 90% CI lower bound exceeds threshold
     pct_pass = ci90_lower >= threshold_pct
     # Dollar twin: lower bound in dollars meets or exceeds bankroll fraction
-    dollar_pass = ci90_lower_usd >= (starting_capital * bankroll_fraction)
+    dollar_pass = ci90_lower_usd >= (starting_capital * bankroll_pct)
     result["passed"] = pct_pass and dollar_pass
 
     return result
@@ -556,11 +559,11 @@ def compute_trade_analytics(
     payoff_ratio = risk_reward_ratio
     # Kelly fraction: f* = p − q/b on the measured win rate and payoff. May go
     # negative (reads as "no bet"); NULL when there is no loss or no rate yet.
-    kelly_fraction: Optional[float] = None
+    kelly_pct: Optional[float] = None
     half_kelly: Optional[float] = None
     if win_rate is not None and payoff_ratio is not None and payoff_ratio > 0:
-        kelly_fraction = win_rate - (1.0 - win_rate) / payoff_ratio
-        half_kelly = kelly_fraction / 2.0
+        kelly_pct = win_rate - (1.0 - win_rate) / payoff_ratio
+        half_kelly = kelly_pct / 2.0
 
     # Historical VaR / CVaR on the measured per-close return distribution,
     # converted to dollars through the mean measured cost basis (see
@@ -623,7 +626,7 @@ def compute_trade_analytics(
         "risk_reward_ratio": risk_reward_ratio,
         "profit_factor": profit_factor,
         "payoff_ratio": payoff_ratio,
-        "kelly_fraction": kelly_fraction,
+        "kelly_fraction": kelly_pct,
         "half_kelly": half_kelly,
         "var_95_usd": var_95_usd,
         "cvar_95_usd": cvar_95_usd,

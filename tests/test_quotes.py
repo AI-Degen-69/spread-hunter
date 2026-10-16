@@ -381,3 +381,86 @@ class TestBreakEvenAnchor:
         # The anchor is derived at read time: no orders posted, none cancelled,
         # no fill written, no lifecycle transition.
         assert _snapshot(live_db) == before
+
+
+class TestMakerConfigNamingStandardization:
+    """TDD pins for #632: parameter naming standardization across MakerConfig."""
+
+    def test_canonical_fields_and_defaults_core_config(self):
+        from core_brain.config import MakerConfig
+        cfg = MakerConfig()
+        assert cfg.max_skew_offset == 0.015
+        assert cfg.min_book_depth_shares == 200.0
+        assert cfg.emergency_hedge_pct == 0.8
+        assert cfg.couple_risk_pct == 0.01
+        assert cfg.quote_window_pct == 0.40
+        assert cfg.stat_gate_bankroll_pct == 0.01
+
+    def test_canonical_fields_and_defaults_scoring_config(self):
+        from scoring.config import MakerConfig as ScoringMakerConfig
+        cfg = ScoringMakerConfig()
+        assert cfg.max_skew_offset == 0.015
+        assert cfg.min_book_depth_shares == 200.0
+        assert cfg.emergency_hedge_pct == 0.8
+        assert cfg.quote_window_pct == 0.40
+
+    def test_no_frac_or_fraction_fields_on_both_classes(self):
+        from dataclasses import fields
+        from core_brain.config import MakerConfig
+        from scoring.config import MakerConfig as ScoringMakerConfig
+
+        core_field_names = [f.name for f in fields(MakerConfig)]
+        assert not any("_frac" in name or "_fraction" in name for name in core_field_names), (
+            f"Found _frac/_fraction field in core MakerConfig: {core_field_names}"
+        )
+
+        scoring_field_names = [f.name for f in fields(ScoringMakerConfig)]
+        assert not any("_frac" in name or "_fraction" in name for name in scoring_field_names), (
+            f"Found _frac/_fraction field in scoring MakerConfig: {scoring_field_names}"
+        )
+
+    def test_read_aliases_core_config(self):
+        from core_brain.config import MakerConfig
+        cfg = MakerConfig(
+            max_skew_offset=0.02,
+            min_book_depth_shares=300.0,
+            emergency_hedge_pct=0.75,
+            couple_risk_pct=0.02,
+            quote_window_pct=0.50,
+            stat_gate_bankroll_pct=0.02,
+        )
+        assert cfg.max_skew == 0.02
+        assert cfg.min_book_depth_sh == 300.0
+        assert cfg.emergency_hedge_frac == 0.75
+        assert cfg.couple_risk_frac == 0.02
+        assert cfg.quote_window_frac == 0.50
+        assert cfg.stat_gate_bankroll_fraction == 0.02
+
+    def test_read_aliases_scoring_config(self):
+        from scoring.config import MakerConfig as ScoringMakerConfig
+        cfg = ScoringMakerConfig(
+            max_skew_offset=0.02,
+            min_book_depth_shares=300.0,
+            emergency_hedge_pct=0.75,
+            quote_window_pct=0.50,
+        )
+        assert cfg.max_skew == 0.02
+        assert cfg.min_book_depth_sh == 300.0
+        assert cfg.emergency_hedge_frac == 0.75
+        assert cfg.quote_window_frac == 0.50
+
+    def test_alias_set_raises_attribute_error(self):
+        from core_brain.config import MakerConfig
+        cfg = MakerConfig()
+        with pytest.raises(AttributeError):
+            setattr(cfg, "max_skew", 0.05)
+        with pytest.raises(AttributeError):
+            setattr(cfg, "emergency_hedge_frac", 0.5)
+
+    def test_legacy_keyword_raises_type_error(self):
+        from core_brain.config import MakerConfig
+        with pytest.raises(TypeError):
+            MakerConfig(emergency_hedge_frac=0.8)
+        with pytest.raises(TypeError):
+            MakerConfig(max_skew=0.015)
+

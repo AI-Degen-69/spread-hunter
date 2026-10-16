@@ -3328,7 +3328,7 @@ def _evaluate_single_market_quote(
     depth_up = sum(up_book.get("bids", {}).values())
     depth_dn = sum(down_book.get("bids", {}).values())
 
-    couple_alloc = max(cfg.bankroll_usd * getattr(cfg, "couple_risk_frac", 0.01), getattr(cfg, "min_couple_usd", 6.00))
+    couple_alloc = max(cfg.bankroll_usd * getattr(cfg, "couple_risk_pct", 0.01), getattr(cfg, "min_couple_usd", 6.00))
     leg_alloc = couple_alloc / 2.0
 
     print("=" * 80)

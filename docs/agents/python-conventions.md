@@ -64,3 +64,24 @@ Narrow `except` clauses only (`except sqlite3.Error`, `except OSError`). A bare
   **bids** and will oversize a buy.
 - Fill attribution must not silently drop fills. Under-counting a position invites fresh
   exposure on top of it.
+
+## Parameter & Environment Variable Naming
+
+- **Ban `_frac` / `_fraction`:** In active configuration and logic, ratios in `0.0..1.0`
+  must use `_pct` (`quote_window_pct`, `emergency_hedge_pct`, `stat_gate_bankroll_pct`).
+  Legacy `_frac` / `_fraction` names are preserved as read-only property aliases on config
+  objects, but are forbidden in new code.
+- **Percentage-points exceptions:** Where a value is given in whole percentage points
+  (e.g., `1.0` means 1%): `threshold_pct`, `stat_gate_threshold_pct`, and `*_return_pct`.
+  These are explicitly documented exceptions and are never scaled or renamed.
+- **Strict unit suffixes:** Every parameter name must carry its physical unit:
+  - `_usd` for currency in USD (`max_naked_usd`, `max_order_usd`, `max_total_usd`).
+  - `_cents` for price in cents.
+  - `_shares` for share counts (`min_book_depth_shares`, `max_quote_shares`).
+  - `_sec` for seconds, `_ms` for milliseconds (`cancel_net_oneway_ms`).
+  - `_offset` for additive price deltas (`max_skew_offset`).
+- **Canonical environment variables:** Prefixed with `HUNTER_*` and carry strict unit
+  suffixes (`HUNTER_MIN_QUOTE_SHARES`, `HUNTER_MAX_SPREAD_CENTS`, `HUNTER_PRICE_TICK`,
+  `HUNTER_MAX_QUOTE_SHARES`, `HUNTER_STAT_GATE_BANKROLL_PCT`). Legacy environment variables
+  are supported with fallback and log a deprecation warning.
+

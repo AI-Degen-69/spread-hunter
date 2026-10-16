@@ -79,7 +79,7 @@ cost together, never on one axis.
 
 No reward-economics knob reaches live code. `reward_min_payout_usd`,
 `reward_floor_multiple`, `est_reward_pool_usd`, `rebate_rate`, `marginal_return_floor`,
-`allocation_budget` and `max_market_frac` belong to the allocator in `scoring/allocate.py`
+`allocation_budget` and `max_pct` belong to the allocator in `scoring/allocate.py`
 and are read by nothing in `core_brain/` or `dashboard/`. `quotes.reward_score()` formats
 a log string and feeds no sizing decision.
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>הסבר פשוט: max_skew וטריגר הגידור (Taker Cross)</title>
+  <title>הסבר פשוט: max_skew_offset וטריגר הגידור (Taker Cross)</title>
   <style>
     :root {
       --bg: #0b0f19;
@@ -193,13 +193,13 @@
   <div class="container">
     <header>
       <h1>הסבר פשוט: שני מנגנוני הגנה קריטיים בבוט</h1>
-      <p class="subtitle">הבנת <code>max_skew</code> ומנגנון <code>Taker Cross Trigger (80%)</code> בעברית פשוטה</p>
+      <p class="subtitle">הבנת <code>max_skew_offset</code> ומנגנון <code>Taker Cross Trigger (80%)</code> בעברית פשוטה</p>
     </header>
 
-    <!-- SECTION 1: max_skew -->
+    <!-- SECTION 1: max_skew_offset -->
     <div class="card">
       <div class="card-title">
-        <span>1. מה זה המשתנה <code>max_skew</code> (קפיץ ההטיה)?</span>
+        <span>1. מה זה המשתנה <code>max_skew_offset</code> (קפיץ ההטיה)?</span>
         <span class="tag tag-blue">ערך נוכחי: 0.015 (1.5 סנט)</span>
       </div>
 
@@ -213,7 +213,7 @@
         הבוט רוצה נואשות לקנות עכשיו את ה-<code>DOWN</code> כדי לאזן את החשבון.
       </div>
 
-      <p>כאן נכנס <strong><code>max_skew</code></strong> – הוא עובד בדיוק כמו <strong>קפיץ</strong>:</p>
+      <p>כאן נכנס <strong><code>max_skew_offset</code></strong> – הוא עובד בדיוק כמו <strong>קפיץ</strong>:</p>
 
       <div class="visual-box">
         <div style="text-align: center; font-weight: 700; color: #94a3b8; margin-bottom: 0.5rem;">כיצד הבוט מזיז את מחירי הפקודות בהתאם לחוסר האיזון:</div>
@@ -305,7 +305,7 @@
     <div class="card" style="border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.03);">
       <h3 style="color: #60a5fa; margin-bottom: 0.75rem;">בשורה אחת לסיכום:</h3>
       <p>
-        🔹 <strong><code>max_skew</code></strong> זה הקפיץ שמנסה בדרכי שלום (ע"י שיפור מחיר) לפתות את השוק לאזן אותנו.<br>
+        🔹 <strong><code>max_skew_offset</code></strong> זה הקפיץ שמנסה בדרכי שלום (ע"י שיפור מחיר) לפתות את השוק לאזן אותנו.<br>
         🔹 <strong><code>Taker Cross Trigger (80%)</code></strong> זה בלם החירום שאומר: אם הקפיץ לא עבד והגענו ל-80% סכנה, אל תחכה יותר – קנה מיד את הגידור במחיר שוק לפני שהבוט יינעל בהפסד!
       </p>
     </div>
