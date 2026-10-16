@@ -238,6 +238,17 @@ def quote_resting_price(
     return price, provisional, band, truncated
 
 
+def pair_cost_over_cap(prices: list[float], cap: float) -> bool:
+    """True when the resting prices add up past `cap` (pure).
+
+    Decimal, like `risk.hard_block`'s pair-cost arm: the float sum of a tie can
+    land a hair over its own cap (`0.495 + 0.495` comes out 0.9900000000000001),
+    and a pair that IS $0.99 against a $0.99 cap must post -- the rule is `<=`.
+    """
+    return (sum((Decimal(str(p)) for p in prices), Decimal("0"))
+            > Decimal(str(cap)))
+
+
 def _decide_quotes_from_mid(
     cfg: MakerConfig,
     up_book: dict,
@@ -293,6 +304,13 @@ def _decide_quotes_from_mid(
     taking the other leg -- the question the old `max_pair_cost` never asked,
     which is how all 209 orders of shadow run run-2809a7161de1 rested with one
     distinct `max_pair_cost_at_post` of 0.995 and zero fills.
+
+    The ENTRY PAIR-COST CAP (#627) is judged last, on the two resting prices
+    taken together: `sum(prices) <= max_pair_cost`, Decimal-compared so a $0.99
+    pair on a $0.99 cap still posts. Nothing else read the flat book as a pair
+    -- `hard_block`'s pair-cost arm needs a held average and `dynamic_pair_sum`
+    above runs only with the dynamic offset enabled -- so on the dynamic-off
+    preset a wide pair rested at $1.00 and up.
     """
     if t_remaining < cfg.min_t_remaining_sec:
         return [], f"t_remaining {t_remaining:.0f}s < {cfg.min_t_remaining_sec:.0f}s"
@@ -552,6 +570,26 @@ def _decide_quotes_from_mid(
 
     if not out:
         return [], "; ".join(blocked) or "no side quotable"
+
+    # ENTRY PAIR-COST CAP (#627). On a flat book nothing else read the FINAL
+    # resting prices as a pair: `hard_block`'s pair-cost arm needs a held
+    # average (`other_avg > 0`), `dynamic_pair_sum` above runs only with the
+    # dynamic offset enabled, and the legacy fresh-market check sits below this
+    # function's return. Two maker bids summing past `max_pair_cost` pay more
+    # than $1.00 for an instrument that pays exactly $1.00 -- a booked loss the
+    # moment they assemble, not a worse fill.
+    #
+    # Only an ordinary two-legged pair is judged. A crossed hedge buys at a
+    # price the market set (that is the point of crossing), and a lifecycle
+    # escalation priced its own pair against the same cap in Decimal before it
+    # arrived here.
+    if (len(out) == 2
+            and all(not i.crossed and i.pair_id is None for i in out)
+            and pair_cost_over_cap([i.price for i in out], cfg.max_pair_cost)):
+        combined = sum((Decimal(str(i.price)) for i in out), Decimal("0"))
+        return [], (f"entry_pair_cost: combined {combined:.4f} > "
+                    f"${cfg.max_pair_cost:.3f} cap -- pays exactly $1.00")
+
     # Lone survivor on a flat book: the two-sided gate below refuses it, so
     # carry the blocked side's reason into that refusal instead of dropping
     # it here. The flag-off opt-out keeps its one-sided result unchanged.
