@@ -1629,7 +1629,7 @@ def test_live_rescue_exit_keeps_fee_unmeasured(registry: OrderRegistry):
 
     Policy pin for the adopted shadow-only fee rule — a live zero would be an
     invented measurement. If the owner overrides to all-rescues, this test is
-    replaced by one asserting 0.0 (see tasks/plan.md T2).
+    replaced by one asserting 0.0 (see #524 plan T2).
     """
     pair_id = _one_sided_pair(registry, fill_price=0.60)
     client = FakeClient(best_ask=0.38, best_bid=0.55)
