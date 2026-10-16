@@ -76,8 +76,9 @@ gate allows the tie per the issue; existing arms keep their `>=`.
 
 ## 2. Assumptions & risks
 
-- Flat-book from-mid pair is ungated today (see section 0).
-- New gate allows equality (`round(sum,4) <= round(cap,4)`); old `>=` arms stay.
+- Before T1, the flat-book from-mid pair was ungated (see section 0).
+- The new gate allows equality by comparing the exact Decimal sum of the
+  resting prices with the exact Decimal cap; old `>=` arms stay.
 - `tests/test_quotes.py` is new; the issue acceptance command targets it.
 - `recorded_ts` added to the state SELECT only; `ORDER BY` and `mode=ro` stay.
 - `venue_ts` may be NULL or tied — anchor order is None-last, then
@@ -91,20 +92,20 @@ gate allows the tie per the issue; existing arms keep their `>=`.
 
 ## 3. Improvement (adopted, edge-case hardening)
 
-Evidence (verbatim, `quotes.py:339`): `calc_pair_price = round(p_up_calc +
-p_dn_calc, 4)`. A raw float sum falsely refuses ties (e.g. `0.495 + 0.495 =
-0.9900000000000001`). Folded into T1: compare `round(Bid_UP + Bid_DOWN, 4)
-<= round(max_pair_cost, 4)`.
+The T1 gate uses `pair_cost_over_cap`, which compares exact `Decimal(str(price))`
+values and `Decimal(str(cap))` without float rounding noise. Equality passes.
 
 ## 4. Tasks (2 atomic vertical slices)
 
 ### T1 (M) — entry pair-cost gate on the from-mid path — DONE (590c595)
 Files: `core_brain/quotes.py`, `tests/test_quotes.py` (new). Depends on: none.
 - In `_decide_quotes_from_mid`, after `out` is built: if exactly two intents
-  and both have `crossed is False` and `pair_id is None`, compute
-  `round(sum(i.price), 4)`; if `> round(cfg.max_pair_cost, 4)`, return `[]`
-  with reason `entry_pair_cost: combined {sum:.4f} > ${cap:.3f} cap -- pays
-  exactly $1.00`. Single-intent, crossed, lifecycle (`pair_id` set) skip.
+  and both have `crossed is False` and `pair_id is None`, compare the exact
+  Decimal sum of `i.price` with `Decimal(str(cfg.max_pair_cost))` using
+  `pair_cost_over_cap([i.price for i in out], cfg.max_pair_cost)`; if the sum is
+  greater, return `[]` with reason `entry_pair_cost: combined {combined:.4f} >
+  ${cap:.3f} cap -- pays exactly $1.00`. Single-intent, crossed, lifecycle
+  (`pair_id` set) skip.
 - Keep `hard_block`, completable gate, `dynamic_pair_sum`, sizing, legacy
   branch byte-identical.
 - Tests in `tests/test_quotes.py` (fixtures follow
