@@ -1450,11 +1450,15 @@
     "pnl_by_fill_path": {
       "by_path": {
         "maker_merged": 5.6000000000000005,
+        "other": 0.0,
+        "settled": 0.0,
         "single_buy_exit": 0.7000000000000001,
         "taker_completed": 0.0
       },
       "pct": {
         "maker_merged": 0.8888888888888888,
+        "other": 0.0,
+        "settled": 0.0,
         "single_buy_exit": 0.1111111111111111,
         "taker_completed": 0.0
       },
