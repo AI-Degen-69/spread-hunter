@@ -73,6 +73,7 @@ unified lifecycle instead of leaving a stale pointer.
 
 ### T1 [M, Test migration] Move #525 trigger-bid coverage onto the manager — tests/test_single_buy_saver.py
 Depends on: none. Skill: test-driven-development.
+Status: [x] done — coverage drives `manage_single_leg_positions`; helper still present (T3 deletes it).
 - Rework `_trig525_cfg`/`_trig525_route` in place (no new helper): cfg gets
   pairs rule on, aged-out rescue on, `max_pair_cost=0.995`, 900s window, 900s
   settlement lead; route calls `manage_single_leg_positions(live=True, now=...,
