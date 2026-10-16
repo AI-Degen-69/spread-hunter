@@ -57,14 +57,14 @@
 <body>
 <div class="wrap">
 
-<h1>Why &ldquo;grace&rdquo; keeps your orders alive</h1>
-<p class="sub">The refusal-hold path in <code>core_brain/trader_loop.py</code> — what it is, why it fires, and how it differs from the rescue grace you removed.</p>
+<h1>Why &ldquo;grace&rdquo; kept your orders alive</h1>
+<p class="sub">The refusal-hold path in <code>core_brain/trader_loop.py</code> — what it was, why it fired, and how it differs from the rescue grace you removed. <strong>Interim state 2026-10-16 (pending #622): the hold is OFF</strong> (<code>REFUSED_HOLD_GRACE_CYCLES = 1</code>), so the first transient refusal cancels. The walkthrough below shows the GRACE=3 behavior, restorable if #622 keeps the hold.</p>
 
 <div class="verdict">
   <strong>Short answer:</strong> there are <strong>two different things called &ldquo;grace&rdquo;</strong> in this codebase.
   You removed grace&nbsp;#1 (rescue patience on filled legs — dead, no reader).
-  The thing holding your orders is grace&nbsp;#2 (<strong>hold-on-refusal</strong>, issue #390) — a quote-management rule that keeps <em>resting orders</em> through up to
-  <strong>3 consecutive refused cycles</strong> before cancelling. It is live, deliberate, and unrelated to the stop-loss spec.
+  Grace&nbsp;#2 (<strong>hold-on-refusal</strong>, issue #390) kept <em>resting orders</em> through up to
+  <strong>3 consecutive refused cycles</strong> before cancelling — but it is <strong>currently OFF by interim operator directive</strong> (GRACE=1: first refusal cancels, pending #622). It is unrelated to the stop-loss spec either way.
 </div>
 
 <h2>1. The two graces — dead vs live</h2>
@@ -76,15 +76,15 @@
     <p class="k">Leftover mentions: <code>reason="grace_expired"</code> labels on old closes, dashboard chips, two open cleanup rows — forensic text, zero behavior.</p>
   </div>
   <div class="card live">
-    <span class="tag live">GRACE #2 — LIVE</span>
-    <h3>Hold-on-refusal (<code>REFUSED_HOLD_GRACE_CYCLES = 3</code>)</h3>
-    <p>When the loop visits a market but <code>decide</code> <em>refuses</em> to quote (book flicker, not abandonment), resting orders are <strong>kept, not cancelled</strong> — for up to 3 consecutive refused cycles. Lives in <code>trader_loop.py:128</code> and fires at <code>:456-461</code>.</p>
+    <span class="tag dead">GRACE #2 — OFF (INTERIM, PENDING #622)</span>
+    <h3>Hold-on-refusal (<code>REFUSED_HOLD_GRACE_CYCLES = 1</code>, was 3)</h3>
+    <p>When the loop visits a market but <code>decide</code> <em>refuses</em> to quote (book flicker, not abandonment), resting orders <strong>cancel on the first refusal</strong> — no hold, no second chance. The 3-cycle hold below is the pre-2026-10-16 behavior, restorable by setting the constant back to 3 if #622 keeps the machinery. Lives in <code>trader_loop.py:132</code>.</p>
     <p class="k">Nothing to do with filled legs, rescue, or the stop-loss MD. It manages <em>unfilled resting quotes</em>.</p>
   </div>
 </div>
 
-<h2>2. Walkthrough: one market, four refused cycles</h2>
-<p>Setup: you have a resting bid. Each cycle the loop visits the market, but <code>decide</code> returns <strong>no intents</strong> with a transient reason (e.g. wide book). Click through the cycles:</p>
+<h2>2. Walkthrough: one market, four refused cycles (GRACE=3, pre-2026-10-16)</h2>
+<p>Setup: you have a resting bid. Each cycle the loop visits the market, but <code>decide</code> returns <strong>no intents</strong> with a transient reason (e.g. wide book). This is the historical 3-cycle-hold behavior — today (GRACE=1) cycle 1 already cancels. Click through the cycles:</p>
 <div class="stepper" role="group" aria-label="Cycle stepper">
   <div class="cycles" id="cycleBtns">
     <button data-c="1" aria-pressed="true">Cycle 1</button>
@@ -98,14 +98,14 @@
 <h2>3. The decision flow (exact code path)</h2>
 <div class="flow">
   <div class="node q"><strong>Visit market, no intents.</strong> Lifecycle preserve-ids? → follow lifecycle, grace not involved. Otherwise:</div>
-  <div class="arrow">▼ classify <code>why</code> — <code>_classify_refusal</code> (<code>:136-146</code>)</div>
-  <div class="node act-cancel"><strong>Terminal refusal</strong> (settled, expired, exited, unfunded…) → <code>REFUSED_TERMINAL</code> → <strong>cancel immediately</strong> via <code>not_quoted</code>. No grace, ever. (<code>:462-467</code>)</div>
+  <div class="arrow">▼ classify <code>why</code> — <code>_classify_refusal</code> (<code>:135</code>)</div>
+  <div class="node act-cancel"><strong>Terminal refusal</strong> (settled, expired, exited, unfunded…) → <code>REFUSED_TERMINAL</code> → <strong>cancel immediately</strong> via <code>not_quoted</code>. No grace, ever. (<code>:426-433</code>)</div>
   <div class="arrow">▼ else <strong>transient</strong> (wide book, cap, reward window…) → <code>REFUSED_TRANSIENT</code></div>
-  <div class="node act-hold"><strong>Streak check</strong> (<code>:1939-1942</code>): <code>refused_streak + 1 &gt;= 3</code>?<br>
-    No → <strong>HOLD</strong>: <code>plan_orders</code> hits <code>continue</code> (<code>:456-461</code>) — no cancel, no submit. Logs <code>[HOLDING] … held through transient refusal</code>.<br>
-    Yes → <code>REFUSED_GRACE_EXPIRED</code> → <strong>cancel</strong> like terminal. (The #419 mid-hold band exception was removed 2026-10-16 — expiry now cancels everything.)</div>
+  <div class="node act-hold"><strong>Streak check</strong> (<code>:1900</code>): <code>refused_streak + 1 &gt;= REFUSED_HOLD_GRACE_CYCLES</code>?<br>
+    At GRACE=3: No → <strong>HOLD</strong> — no cancel, no submit. Logs <code>[HOLDING] … held through transient refusal</code>.<br>
+    <strong>Today (GRACE=1, interim): the very first refusal meets the threshold</strong> → <code>REFUSED_GRACE_EXPIRED</code> → <strong>cancel</strong> like terminal. (The #419 mid-hold band exception was removed 2026-10-16 — expiry now cancels everything.)</div>
   <div class="arrow">▼ after the visit</div>
-  <div class="node"><strong>Streak counter</strong> (<code>:860-862</code>): held → streak+1, anything else → reset to 0. A single quoted cycle in between resets the whole count.</div>
+  <div class="node"><strong>Streak counter</strong> (<code>:808-820</code>): held → streak+1, anything else → reset to 0. With the hold off, nothing is ever held by this path, so the streak never accumulates here — a single quoted cycle still wipes the count.</div>
 </div>
 
 <h2>4. Why it exists (the churn it prevents)</h2>
@@ -114,28 +114,28 @@
   <li>paying cancel/replace churn on every book wobble,</li>
   <li>losing queue position each time, then re-joining at the back.</li>
 </ul>
-<p>The 3-cycle hold says: <em>&ldquo;the book moved, not the market — sit still until it's clearly dead.&rdquo;</em> A market that never comes back still cancels on the 3rd consecutive refusal. The counter is per-market (<code>refused_streaks[cid]</code>), so one dead market can't spend another's patience.</p>
+<p>The 3-cycle hold said: <em>&ldquo;the book moved, not the market — sit still until it's clearly dead.&rdquo;</em> A market that never comes back still cancelled on the 3rd consecutive refusal. The counter is per-market (<code>refused_streaks[cid]</code>), so one dead market can't spend another's patience. <strong>Currently off by interim directive (GRACE=1, pending #622)</strong> — the churn described below is what the loop pays today.</p>
 
 <h2>5. How to tell which grace held your order</h2>
 <table>
   <tr><th>Signal</th><th>Grace #1 (rescue, dead)</th><th>Grace #2 (refusal hold, live)</th></tr>
-  <tr><td>Log line</td><td>Nothing — it cannot log, it never runs</td><td><code>[HOLDING] … N quote(s) held through transient refusal: {why}</code></td></tr>
-  <tr><td>Result flag</td><td>—</td><td><code>LiveFleetResult.held == True</code> (<code>:75-77, :2164-2167</code>)</td></tr>
+  <tr><td>Log line</td><td>Nothing — it cannot log, it never runs</td><td><code>[HOLDING] … N quote(s) held through transient refusal: {why}</code> — silent while GRACE=1 (nothing held by this path)</td></tr>
+  <tr><td>Result flag</td><td>—</td><td><code>LiveFleetResult.held == True</code> — unreachable while GRACE=1</td></tr>
   <tr><td>Outcome enum</td><td>—</td><td><code>refused_hold</code> → later <code>refused_grace_expired</code></td></tr>
   <tr><td>What is held</td><td>—</td><td>Unfilled resting quotes only. Filled legs go through the stop lifecycle, untouched by this.</td></tr>
 </table>
 
-<h2>6. If you want it gone (or shorter)</h2>
-<p>The dial is one constant — <code>REFUSED_HOLD_GRACE_CYCLES = 3</code> (<code>trader_loop.py:128</code>):</p>
+<h2>6. If you want it back (or shorter)</h2>
+<p>The dial is one constant — <code>REFUSED_HOLD_GRACE_CYCLES = 1</code> (<code>trader_loop.py:132</code>, interim pending #622):</p>
 <table>
   <tr><th>Value</th><th>Effect</th></tr>
-  <tr><td><code>3</code> (today)</td><td>Holds through 2 refused cycles, cancels on the 3rd consecutive one</td></tr>
-  <tr><td><code>1</code></td><td>No hold at all — first refusal cancels (pre-#390 behavior, maximum churn)</td></tr>
+  <tr><td><code>1</code> (today, interim)</td><td>No hold at all — first refusal cancels (maximum churn, quotes rest until fill / terminal refusal / stop exit)</td></tr>
+  <tr><td><code>3</code></td><td>Restores the hold: keeps resting orders through 2 refused cycles, cancels on the 3rd consecutive one — set this back if #622 keeps the machinery</td></tr>
   <tr><td><code>2</code></td><td>One cycle of patience</td></tr>
 </table>
-<p class="k">Note: this changes live quoting behavior (cancel churn vs queue-position defense), so it deserves its own issue and a shadow comparison — not a smuggle into #608. Say the word and I'll scope it.</p>
+<p class="k">The keep/remove/bound call belongs to #622 (still OPEN) — this branch only parks the dial at 1 until that decision lands.</p>
 
-<footer>Sources: <code>core_brain/trader_loop.py</code> lines 75-77, 109-147, 440-476, 840-862, 1939-1948, 2164-2179; <code>core_brain/config.py</code> 1494-1511. Generated 2026-10-16. No product code changed.</footer>
+<footer>Sources: <code>core_brain/trader_loop.py</code> VisitOutcome (:109-122), GRACE const (:132), plan_orders (:233), streak check (:1900), streak counter (:808-820); <code>core_brain/config.py</code> 1494-1511. Generated 2026-10-16, corrected to the interim GRACE=1 state. No product code changed by this doc.</footer>
 
 </div>
 <script>
