@@ -40,16 +40,24 @@ _LIVE_ROOT = Path(__file__).resolve().parent.parent
 if str(_LIVE_ROOT) not in sys.path:
     sys.path.insert(0, str(_LIVE_ROOT))
 
-from core_brain.close_methods import MERGE_METHODS, SHADOW_SETTLEMENT, SINGLE_BUY_EXIT
+from core_brain.close_methods import (
+    MERGE_METHODS,
+    SETTLEMENT_METHODS,
+    SHADOW_SETTLEMENT,
+    SINGLE_BUY_EXIT,
+)
 
 # The rescue window: `pairs_exit_window_sec` in core_brain/config.py.
 # detection is measured against it; a store carries no config, so the default
 # is stated here rather than guessed per run.
 PAIRS_EXIT_WINDOW_SEC = 900.0
 
-# Report-specific rescue grouping (single-buy exit + shadow settlement); NOT
-# the leaf's RESCUE_METHODS -- sourced from the canonical names below.
-RESCUE_METHODS = (SINGLE_BUY_EXIT, SHADOW_SETTLEMENT)
+# The two populations this report ranks in ONE table: a rescue exit is a leg
+# sold before market resolution, a settlement is a leg held until it resolved.
+# NOT the leaf's RESCUE_METHODS -- every name comes from the canonical taxonomy
+# above, and the summary counts and prices the two apart.
+RESCUE_EXIT_METHODS = (SINGLE_BUY_EXIT,)
+ROW_METHODS = RESCUE_EXIT_METHODS + SETTLEMENT_METHODS
 # MERGE_METHODS is imported from the canonical taxonomy above.
 
 # Fields Question 3 needs but the registry does not record. Listed verbatim in
@@ -175,7 +183,7 @@ def _exit_row(close, fills, orders) -> dict | None:
         # A `shadow_settlement` close prices neither leg: it books the leg the
         # venue settled at $1.00/$0.00, not a market sell. Reconstruct the
         # one-sided held leg from its BUY fills instead of dropping the row.
-        if close["method"] != "shadow_settlement":
+        if close["method"] not in SETTLEMENT_METHODS:
             return None
         cfills = fills.get(cid, [])
         buys = [f for f in cfills if f["side"] == "BUY"]
@@ -410,8 +418,8 @@ def report(registry_path: Path, booktape_path: Path | None, top: int) -> str:
     orders = _orders_by_condition(reg)
     closes = reg.execute(
         f"SELECT * FROM closes WHERE method IN "
-        f"({','.join('?' for _ in RESCUE_METHODS)}) ORDER BY realized_pnl ASC",
-        RESCUE_METHODS,
+        f"({','.join('?' for _ in ROW_METHODS)}) ORDER BY realized_pnl ASC",
+        ROW_METHODS,
     ).fetchall()
     rows = [r for r in (_exit_row(c, fills, orders) for c in closes) if r]
 
@@ -430,11 +438,19 @@ def report(registry_path: Path, booktape_path: Path | None, top: int) -> str:
     # `reason=aged_out_rescue` instead, so this counts the failure mode alone.
     aged_out_settlements = sum(
         1 for r in rows
-        if r["method"] == "shadow_settlement" and r["aged_out"] is True)
+        if r["method"] == SHADOW_SETTLEMENT and r["aged_out"] is True)
 
     say(f"Rescue exit forensics -- {registry_path.name}")
-    say(f"  rescue closes: {len(rows)}  total rescue loss: {_usd(total_loss)}"
+    say(f"  total closes: {len(rows)}  total loss: {_usd(total_loss)}"
         f"  capital at risk: {_usd(total_capital)}")
+    # A settlement is not a rescue (#559): the headline above is the combined
+    # table total, and the two populations are counted and priced apart here.
+    for _label, _methods in (("rescue exits", RESCUE_EXIT_METHODS),
+                             ("settlements", SETTLEMENT_METHODS)):
+        _group = [r for r in rows if r["method"] in _methods]
+        _group_loss = sum(r["pnl"] for r in _group
+                          if r["pnl"] and r["pnl"] < 0)
+        say(f"  {_label}: {len(_group)}  loss: {_usd(_group_loss)}")
     say(f"  aged-out settlements: {aged_out_settlements}"
         f"  (settlement closes whose leg outlived the "
         f"{PAIRS_EXIT_WINDOW_SEC:.0f}s rescue window; #311 target: 0)")
@@ -456,7 +472,7 @@ def report(registry_path: Path, booktape_path: Path | None, top: int) -> str:
         f2e = f"{r['fill_to_exit']:.1f}s" if r["fill_to_exit"] else "--"
         say(f"    fill_to_exit={f2e}  classifier={cls}")
         say(f"    Q1: {q1_grace_upper_bound(reg, r, tape)}")
-        if r["method"] == "shadow_settlement":
+        if r["method"] == SHADOW_SETTLEMENT:
             if r["aged_out"] is None:
                 say("    AMBIGUOUS: fills span more than one position for this "
                     "condition, so no settlement-age claim is made.")

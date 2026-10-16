@@ -1,169 +1,92 @@
-# Plan — #589 [REFACTOR] Delete the retired short-window ladder path
+# Plan — #559 [T2] Consumers import the taxonomy; three defects fixed (#520)
 
-Branch: i589/remove-short-window-ladder | Issue: #589
-Worktree: .worktrees/spread-hunter-i589
+Branch: i559/consumers-import-taxonomy | Issue: #559 (sub-issue of #520, blocked by #558 CLOSED)
+Worktree: none — fresh branch from `main`; the stale `i520/` worktree/branch were retired (50 commits behind, predated the #558 merge).
 
 ## Tier & type
 
-**Large** — cross-cutting removal: 1 engine module, 4 scripts, 9 dedicated suites, ~14
-edited files (engine, config schema, dashboard, docs). Mechanical deletion, but every
-strategy entry point must be traced before the module can go. No new dependencies.
-Task type: **Code** (primary) + **Docs**. Helper skills: `test-driven-development`,
-`incremental-implementation`.
+**Standard** — 4 source files plus 2 test files, one architectural decision (settlement is not a rescue), all populations already on the canonical module from #558. No new dependencies.
+Task type: **Code** (primary). Helper skills: `test-driven-development`, `incremental-implementation`.
 
 ## Discovery (Step 0A intake)
 
-**CodeRabbit plan comment (61.8K chars):** adopted — its file-level map, Design Choice 1
-(keep `_route_pair`, strip only its ladder selection), Design Choice 2 (delete
-`route_quotes`), the keep-taxonomy rules, and its probe-helper warning. Rejected — nothing
-material; its "redirect non-ladder `route_quotes` callers" step came back empty (verified:
-the only callers are `core_brain/ladder.py:105` and the deleted `tests/test_ladder_quotes.py`).
-`[UNVERIFIED]` items all resolved below. Read once; do not re-read.
+**CodeRabbit plan comment:** mined, not re-read. Adopted — the three defect sources, the `settled`/`other` bucket design, the merge-count fix, the rescue/settlement split, and the M/C regression list. Rejected — the `bucket_for` routing and the app.js card work belong to #560/T3, not this issue; this plan routes `pnl_by_fill_path` through the canonical families directly (smaller diff, same result). All `[UNVERIFIED]` items resolved below against live code.
+
+**#513–#517 coordination:** all five are CLOSED and their content is on `main` (git log shows #517 + #558 commits). `statistical_analytics.py` carries no settlement handling (`grep shadow_settlement` → empty), so there is no merged method set to fold in and no open issue to post canonical names on. T0 re-confirms with one grep; no cross-posting.
 
 **Verified against live code (all symbols confirmed at these sites):**
-- `route_quotes` callers: `core_brain/ladder.py:105`, `tests/test_ladder_quotes.py` only → delete outright.
-- `_route_pair` callers: `single_buy_saver.py:1705` (inside the `ladder_mode` bypass — dies
-  with it), `tests/test_refill_after_exit.py:201,209,227`, `tests/test_single_buy_saver.py:1736`
-  (both must keep passing) → keep the function.
-- Ladder config fields (exactly five): `config.py:1066-1070` — `ladder_mode`,
-  `ladder_rungs`, `ladder_exit_sec`, `ladder_budget_usd`, `ladder_open_window_sec`;
-  plus `validate_ladder` `config.py:1149-1163`.
-- `is_ladder_pair`: `ladder.py:33` (def), `single_buy_saver.py:44` (import), `:1697`
-  (bypass), `:2041` (`_route_pair` ladder selection).
-- Probe helpers `mean_ci90` / `_prop_ci90_diff`: defined `scripts/ladder_probe.py:187,201`,
-  consumed only by `tests/test_541_audit_goldens.py:217-224`. The
-  `statistical_analytics.py` equivalents give different numbers — inline, do not substitute.
-- Live "ladder" references that are NOT the strategy and must survive: `snapshot_ladder`
-  (order-book depth) `shadow_exec.py:1075-1099`; risk-sizing comments `config.py:127,840`,
-  `risk.py:112`; `ladder_exit` taxonomy strings (`close_methods.py`, `kpi.py`,
-  `statistical_analytics.py`, analytics buckets, dashboard labels).
+- Canonical module landed (#558): `core_brain/close_methods.py` exports `MERGE_METHODS`, `RESCUE_METHODS`, `SETTLEMENT_METHODS`, `BOOKKEEPING_METHODS`, `TAKER_RESOLVED_METHODS`. `kpi.py:21-26` already imports them.
+- Defect 1 — `kpi.py:918-963` `pnl_by_fill_path` returns exactly 3 keys; settlements and unknown methods fall through both branches and land nowhere, so `total` ≠ run realized PnL.
+- Defect 2 — `kpi.py:2198` counts `merge_closes` with `== "merge"`, ignoring `shadow_merge` (the only merge a rehearsal writes). `_single_exits` (`:2199`) already counts the full exit triple — leave it alone.
+- Defect 3 — `artifacts.py:74-97` `rescue_stats` has no `settlements` key (settlements sink into `other_methods`); `scripts/rescue_exit_report.py:50-52` defines a local `RESCUE_METHODS = (SINGLE_BUY_EXIT, SHADOW_SETTLEMENT)`, calling a settlement a rescue. The two disagree.
+- Frozen inventory/attribution/cost-basis populations (RESCUE_METHODS call sites — read, do not touch): `market_resolution.py:654,685`, `paired_shadow.py:742`, `order_registry.py:2427`, `shadow_exec.py:1652`, `single_buy_saver.py:550`, `statistical_analytics.py:304,732`, `kpi.py:1143` (TAKER_RESOLVED recost), `kpi.py:1504` (inventory filter).
+- Existing-test pin: `tests/test_pnl_by_fill_path.py:61-73` asserts the exact 3-key empty shape — the single permitted assertion edit.
+- Guard base exists: `tests/test_close_method_taxonomy.py` (T1 T-cases landed).
 
-**Resolved open questions:**
-1. `docs/explanations/btc-eth-ladder-strategy.html` — **keep**, add a retirement notice
-   (issue default; dated explanations are knowledge per Station VI convention).
-2. Acceptance-criterion contradiction — see the improvement proposal below; the literal
-   `grep "ladder"` can never reach zero without destroying the order-book depth ladder and
-   the taxonomy chain's close-method names.
-3. Merge order vs. the #558-560 taxonomy chain — state it in the PR body; if
-   `close_methods.py` conflicts at merge, keep the taxonomy chain's version, then mark the
-   `ladder_exit` writer legacy.
-4. `_route_pair` deletion is explicitly **out of scope** (refill tests still cover it) —
-   possible follow-up, not this issue.
+**Resolved open questions:** #520 carries `needs-answers`, but every question that touches T2 resolves from code above (writer table, measured 92/16/65 values, contradiction list in the parent). Nothing left that only the operator can answer — no batch asked.
 
-**Persona skips (recorded):** `code-explorer` and `type-design-analyzer` personas exist at
-`~/.agents/agents/` but were skipped — execution paths were already traced via the targeted
-caller greps above, and no new interfaces are being locked (pure deletion; `_route_pair`
-signature preserved).
+**Persona skips (recorded):** `code-explorer` skipped — the four defect sites and seven frozen sites were traced by direct grep/read above; `type-design-analyzer` skipped — no new interfaces (two dict keys added to existing shapes, locked below).
 
-## Spec (Small/Large inline spec — no SPEC.md)
+## Spec (inline — no SPEC.md)
 
-**Goal:** remove the retired short-window ladder strategy (#325) end to end: module,
-scripts, suites, config fields, and every engine branch, while ordinary quoting, the unified
-lifecycle, carried pair IDs, `_route_pair`'s generic exit logic, and the `ladder_exit`
-taxonomy string (owned by #558-560) are all preserved bit-for-bit in behavior.
+**Goal:** fix the three measured defects at their source so every non-`venue_sync` close lands in exactly one fill path, rehearsal merges count, and settled closes are never called rescues — while inventory, attribution, and cost-basis populations stay bit-identical.
 
-**Acceptance (refined — see proposal):**
-- No short-window-ladder strategy references remain: `grep -rn
-  "ladder_mode\|is_ladder_pair\|discover_ladder_series\|route_quotes\|decide_ladder_quotes"
-  core_brain scripts tests --include="*.py"` → empty.
-- `py -3.12 -m pytest -q tests/test_shadow_run.py tests/test_trader_loop.py
-  tests/test_single_buy_saver.py tests/test_config_for_display.py` → pass.
-- `py -3.12 -m pytest -q tests/test_market_quote.py tests/test_refill_after_exit.py
-  tests/test_exit_price_realism.py` → pass.
-- Order-book depth ladder (`snapshot_ladder`), risk-sizing ladder code, and all
-  `ladder_exit` taxonomy strings still present and untouched.
+**Acceptance:**
+- `pnl_by_fill_path` returns all five keys (`maker_merged`, `taker_completed`, `single_buy_exit`, `settled`, `other`) in `by_path` and `pct`; `total` equals run realized PnL on the reference store.
+- `merge_closes` counts `MERGE_METHODS` membership; `_single_exits` unchanged.
+- `rescue_stats` returns a `settlements` count; `rescue_exit_report` splits rescue exits vs settlements per method with identical row selection, ordering, and loss arithmetic.
+- `python -m pytest -q tests/test_pnl_by_fill_path.py tests/test_kpi.py tests/test_stat_validation_artifacts.py tests/test_fill_path_analytics.py tests/test_close_method_taxonomy.py` → pass (agent-run, background only — never an operator step).
 
-**Out of scope:** the `ladder_exit` close-method name and its rescue bucket; the idea doc
-`docs/ideas/short-window-ladder.md`; issue #325; any new behavior.
+**Out of scope:** `dashboard/static/app.js` (belongs to #560/T3); `build_gate_rows` / `resolve_verdict`; `close_methods.py` (read-only); anything in `data/`; new dependencies.
+
+## Interface contracts (locked)
+
+- `pnl_by_fill_path` shape: `by_path`/`pct` gain exactly `settled` (from `SETTLEMENT_METHODS`) and `other` (everything else trade-like, incl. legacy `sell`). Non-trades still skipped via `NON_TRADE_CLOSE_METHODS`. `pct = bucket / total`, near-zero → all-`None` rule kept. Docstring: shares are signed, can fall outside [0,1].
+- `rescue_stats` shape: gains `settlements: int` (from `SETTLEMENT_METHODS`); `merges`, `exits`, both rates, and the merges-plus-exits denominator unchanged. `other_methods` excludes settlements (they have their own key now).
+- `rescue_exit_report`: SQL row selection predicate may widen from the local tuple to `(SINGLE_BUY_EXIT,) + SETTLEMENT_METHODS` sourced from canonical names; per-method count/loss split added for rescue exits vs settlements. "AGED OUT" / "AGED-OUT RESCUE" labels kept.
 
 ## Tasks
 
-Dependency graph: T1 (engine entry points) → T2 (`_route_pair` internals) → T3
-(taxonomy note) → T4 (scripts + suites + survivor repairs) → T5 (docs/dashboard) → T6
-(acceptance sweep). T3 depends on T1 only; T4 on T1+T2; T5 on T4; T6 on all.
+Dependency graph: T0 → (T1, T2, T3) → T4. T1/T2/T3 are independent of each other.
 
-### [x] T1 [M] [Code] — Delete `core_brain/ladder.py` and strip engine entry points
-- Delete `core_brain/ladder.py`.
-- `core_brain/config.py`: remove the five `ladder_*` fields (`:1061-1070` block incl. its
-  comment header) and `validate_ladder` (`:1149-1163`).
-- `core_brain/markets.py`: delete `discover_ladder_series` (`:352`) and imports used only
-  by it.
-- `core_brain/quotes.py`: delete `decide_ladder_quotes` and `route_quotes` (no non-ladder
-  callers exist — verified).
-- `core_brain/single_buy_saver.py`: remove the `is_ladder_pair` import (`:44`) and the
-  bypass in `_manage_single_leg_positions_locked` (`:1697-1705`); all pairs go through the
-  unified lifecycle.
-- Depends on: —
-- Verify: `grep -rn "ladder_mode\|is_ladder_pair\|discover_ladder_series\|route_quotes\|decide_ladder_quotes" core_brain scripts --include="*.py"` → empty;
-  `py -3.12 -m pytest -q tests/test_config_for_display.py tests/test_empty_markets_routine.py tests/test_market_quote.py`.
+### [x] T1 [S] [Code] — Defect 1: total-preserving fill paths
+- `core_brain/kpi.py:918-963`: route through canonical families — skip `NON_TRADE_CLOSE_METHODS`, keep the maker/taker merge split, exits → `single_buy_exit`, `SETTLEMENT_METHODS` → `settled`, everything else → `other`. Always return all five keys in `by_path` and `pct`. Fix the docstring (signed shares).
+- The single permitted assertion edit: `tests/test_pnl_by_fill_path.py:61-73` empty shape → five keys. Add R-cases (settlement lands in `settled`, unknown/`sell` lands in `other`, total reconciles).
+- Frozen: do not touch `kpi.py:1143`, `:1504`, or the execution funnel (`:980-981`).
+- Depends on: T0
+- Verify: `python -m pytest -q tests/test_pnl_by_fill_path.py tests/test_fill_path_analytics.py`
 
-**Checkpoint 1** — after T1+T2: ordinary quoting path imports clean; focused engine suites green.
+**Checkpoint 1** — after T1+T2: fill-path totals reconcile and merge counts read correctly on a temp store.
 
-### [x] T2 [M] [Code] — Strip ladder selection from `_route_pair`
-- `core_brain/single_buy_saver.py:2041`: keep the function; always use `single_buy_exit`,
-  grace from `min(single_buy_grace_sec, pairs_exit_window_sec)`, timer reason
-  `grace_expired`. Preserve completion, adverse-drift, grace-hold, and `trigger_bid`
-  recording exactly.
-- Depends on: T1
-- Verify: `py -3.12 -m pytest -q tests/test_single_buy_saver.py tests/test_refill_after_exit.py tests/test_exit_price_realism.py tests/test_grace_sweep_report.py`.
+### [x] T2 [XS] [Code] — Defect 2: merge count counts `shadow_merge`
+- `core_brain/kpi.py:2198`: `_merge_closes` by membership in `MERGE_METHODS`. Leave `:2199` exit counting unchanged. Replace the stale `:2196-2197` comment with one factual line (see proposal below) — no warning code exists, so none is added.
+- Add M1 regression on a temp store (rehearsal-shaped closes: `shadow_merge` counted, `single_buy_exit` not).
+- Depends on: T0
+- Verify: `python -m pytest -q tests/test_kpi.py tests/test_close_method_taxonomy.py`
 
-### [x] T3 [XS] [Code] — Mark the `ladder_exit` writer legacy
-- `core_brain/close_methods.py`: change only the writer note — legacy, no current writer.
-  Keep `LADDER_EXIT`, the `ladder_exit` string, and `RESCUE_METHODS` membership untouched
-  (old databases still contain these rows).
-- Depends on: T1
-- Verify: `grep -n "LADDER_EXIT\|ladder_exit" core_brain/close_methods.py` still present;
-  `py -3.12 -m pytest -q tests/test_close_method_taxonomy.py`.
+### [x] T3 [S] [Code] — Defect 3: settlement is not a rescue
+- `statistical_validation_run/artifacts.py:74-97`: add `settlements` count from `SETTLEMENT_METHODS`; exclude settlements from `other_methods`. Keep `merges`, `exits`, both rates, denominator. Do not touch `build_gate_rows` / `resolve_verdict`.
+- `scripts/rescue_exit_report.py`: source the selection from canonical names (`SINGLE_BUY_EXIT` + `SETTLEMENT_METHODS`); keep row selection, ordering, loss-share arithmetic, and both AGED OUT labels. First grep tests for pinned prose (`rescue closes`, `aged-out settlements`) and change settlement-as-rescue wording only where no test pins it; add the per-method count/loss split.
+- Add C-cases (settlement counted once, under `settlements`, never under `exits`/`rescues`).
+- Depends on: T0
+- Verify: `python -m pytest -q tests/test_stat_validation_artifacts.py`
 
-### [x] T4 [M] [Code] — Delete scripts + dedicated suites, repair survivors
-- Delete `scripts/ladder_probe.py`, `scripts/ladder_live_books_trial.py`,
-  `scripts/ladder_shadow_rehearsal.py`, `scripts/ladder_tape_collect.py` and the nine
-  `tests/test_ladder_*.py` suites.
-- Repair `tests/test_541_audit_goldens.py`: inline `mean_ci90` and `_prop_ci90_diff` (move
-  from the probe script verbatim — the `statistical_analytics.py` equivalents give different
-  results) before the probe is gone.
-- Rename the `ladder-live` fixture label in `tests/js/live_state_harness.cjs` and the
-  ladder-named cases in `test_dashboard_run_switcher.py`, `test_scan_state_shadow.py`,
-  `test_live_state_language.py`, `test_trader_loop.py` (renames only — keep assertions).
-- Depends on: T1, T2
-- Verify: `py -3.12 -m pytest -q tests/test_541_audit_goldens.py tests/test_dashboard_run_switcher.py tests/test_scan_state_shadow.py tests/test_live_state_language.py tests/test_trader_loop.py`.
+**Checkpoint 2** — after T3: rescue block and forensics report agree on the reference store copy.
 
-**Checkpoint 2** — after T4: every surviving suite green, zero ladder suites remain.
-
-### [x] T5 [S] [Docs] — Comment-only edits + current guidance
-- Reword stale ladder-path comments: `shadow_exec.py:348`, `shadow_run.py:684`,
-  `trader_loop.py:675,2405-2406`, `statistical_analytics.py:526`. Leave all order-book
-  depth-ladder code and risk-sizing ladder comments untouched.
-- Update `docs/agents/first-run.md` and `docs/data_inventory.md`; update
-  `dashboard/static/data_analysis.js` ladder references.
-- Add a retirement notice to `docs/explanations/btc-eth-ladder-strategy.html` (keep the doc).
-- Depends on: T4
-- Verify: `py -3.12 -m pytest -q tests/test_docs_layout.py`; `grep -rn "ladder" core_brain scripts --include="*.py"` shows only order-book depth + taxonomy strings.
-
-### [x] T6 [XS] [Code] — Acceptance sweep
-- Run the refined acceptance grep and the issue's four suites + the focused quote-lifecycle
-  suites. Confirm `snapshot_ladder`, risk-sizing ladder code, and all `ladder_exit`
-  taxonomy strings still present.
-- Depends on: T5
-- Verify: the three acceptance commands from the Spec section above.
+### [x] T4 [S] [Code] — Guard test extension + acceptance sweep
+- Extend `tests/test_close_method_taxonomy.py` with the M/C regression cases from T1–T3 (merge membership, settled/other buckets, settlements-not-rescues). No new scan scope — the T1 drift scan already covers it.
+- Run the issue's acceptance command (all four suites + taxonomy). Every accounting suite passes with no changed assertions except the one deliberate T1 edit.
+- Record the measured "1 against 65" exit-count gap disposition (left unchanged per plan) as a follow-up note at the bottom of this file, not as code.
+- Depends on: T1, T2, T3
+- Verify: the acceptance command from the Spec section above.
 
 ## Improvement proposal (Step 5)
 
-**Adopt-by-default (edge-case hardening).** Evidence, verbatim from the issue's acceptance
-criteria: *"`grep -rn \"ladder\" core_brain scripts tests --include=\"*.py\"` returns no code
-references (only the `ladder_exit` taxonomy strings the taxonomy chain owns)."* That criterion
-is unreachable against live code: `core_brain/shadow_exec.py:1075-1099` uses `snapshot_ladder`
-for order-book depth, `core_brain/risk.py:112` ("tail of the ladder terminate") and
-`config.py:840` are risk-sizing prose — none are the short-window strategy. Proposal: the
-acceptance check targets the enumerated strategy symbols
-(`ladder_mode`/`is_ladder_pair`/`discover_ladder_series`/`route_quotes`/`decide_ladder_quotes`
-+ module/scripts/suites) instead of the literal string. Folded into the Spec above. A scope
-expansion (deleting the order-book depth ladder too) was considered and rejected — that would
-break `shadow_exec` pricing.
+**Adopt-by-default (stale-comment correction).** Evidence, verbatim from live code (`core_brain/kpi.py:2196-2197`): *"Exit-shape counts (merges vs one-sided dumps) feed the card's details line, which owns the "all exits were naked" warning."* No warning code exists on the card (the details line never reads `merge_closes`/`single_buy_exits`), so repointing the comment at a warning would document fiction. Proposal: replace with one factual line — *"Exit-shape counts for the card's details line."* — folded into T2. A scope expansion (building the warning) was considered and rejected — it is new behavior this issue never asks for.
 
-## Merge order (must appear in the PR body)
+## Dispositions recorded at build close (T4)
 
-This branch deletes ladder-path code from `single_buy_saver.py`, `close_methods.py`, and
-`statistical_analytics.py`, which the #558-560 taxonomy chain also touches. Land behind
-#558-560; on conflict in `close_methods.py`, keep the taxonomy chain's version, then re-apply
-the legacy-writer note.
+- **The "1 against 65" exit-count gap: left unchanged, recorded, not silenced.** The pair names one count at two scopes. #520's own measurements read `single_buy_exits: 1` on the reference store's newest run (2 closes) and 65 `single_buy_exit` rows across `data/`. The card counts the run-filtered closes through the canonical three-exit set (`kpi.py:2199`); the 65 is the store-wide population. Two scopes, no defect in either — so T2 left `_single_exits` exactly as it was and this issue changed neither number. The reference store (`data/02_shadow_prudent_13-10_03-01.db`) is absent from this checkout (`data/` holds only `demo_orders.db` and `orders.db`), so the pair is recorded from the parent's figures rather than re-measured here. Re-measure when a store carrying settlements is available.
+- **`KPI_PAYLOAD_VERSION` not bumped — candidate, not touched.** `pnl_by_fill_path` now ships two extra keys (`settled`, `other`), and `core_brain/kpi.py` documents the hand-bumped envelope version as how a stale backend is told apart from a genuinely unmeasured field. The consumer of those keys is the fill-path card in `dashboard/static/app.js`, which #560/T3 owns, so the bump belongs with that work rather than with the producers here.
+- **`tests/test_541_golden_payload.json` follows T1's payload delta (a consumer Station II's inventory missed).** The golden freezes `portfolio`, `trade_analytics` and `statistical_analytics`; `trade_analytics` embeds `pnl_by_fill_path`, so T1's two new buckets reach it. Reverted-T1 evidence: `tests/test_541_stat_goldens.py` → `2 passed` with `core_brain/kpi.py` at `origin/main`, `1 failed` with T1 in place. Regenerated through the file's own `REGEN_541_GOLDEN=1` path: the diff is **four inserted keys, `by_path.settled`, `by_path.other`, `pct.settled`, `pct.other`, all `0.0` — no existing value moved**. The file's docstring now records this as the second sanctioned regeneration so a future value drift cannot pass as a refresh. This file was not in the plan, the parent's regression list, or the acceptance command — the sweep that found it was the full local suite.
+- **`PORT=0` in the ambient shell fails one unrelated dashboard test — environmental, not this change.** This session's shell exports `PORT=0`, and `dashboard/server.py::resolve_port` rejects a `PORT` outside 1–65535 by design, so `tests/test_run_scorer.py::test_dashboard_reliability_endpoint` fails with `ValueError: PORT='0' is outside 1-65535`. Evidence it is not this build: the same test fails identically with the changed modules reverted to the pre-fix revisions (`df0f3e5`, no build in the tree) and passes with `PORT` unset (`11 passed` in that file); the rest of the adjacent sweep is `367 passed`, exit 0. No code change was made for it, and it is not a suppression — the test itself is untouched.
