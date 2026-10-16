@@ -282,14 +282,28 @@ T4 is independent of T1-T3 and can run any time before T5.
 
 ## 4. Checkpoints
 
-| # | After | Shows |
-|---|---|---|
-| 1 | T1 | Baseline confirmed as A; decision rule frozen before any result exists |
-| 2 | T4 | Policy switch, refusal-visit events, and cancel timestamp working |
-| 3 | T7 | Three arms run; all five metrics present for each |
-| 4 | T9 | Winner shipped; no dead hold machinery left; tree clean |
+| # | After | Shows | State |
+|---|---|---|---|
+| 1 | T1 | Baseline confirmed as A; decision rule frozen before any result exists | **met** |
+| 2 | T4 | Policy switch, refusal-visit events, and cancel timestamp working | **met** |
+| 3 | T7 | Three arms run; all five metrics present for each | **pending — operator launches T7** |
+| 4 | T9 | Winner shipped; no dead hold machinery left; tree clean | blocked on 3 |
 
 In `/iii-build-plan auto` each checkpoint is a one-line progress report, not an approval pause.
+
+### Build status: T1-T6 complete, T7 handed to the operator
+
+This station built everything that can be built before the measurement: the
+premise lock and record (T1), the policy switch and drift rule (T2), the refusal
+denominator (T3), the cancel clock (T4), the comparison report (T5), and the
+three-arm arms file with its protocol (T6). **T7 is the run itself, and it is the
+operator's to launch** — a real tournament starts the shared market filter and
+holds ports 8801-8803. T8-T10 delete the losing option and are therefore blocked
+on the decision T7 produces; they are deliberately NOT pre-empted here.
+
+Resuming: re-invoke `/iii-build-plan auto` after the runs. All six completed
+tasks are marked `[x]` above, so the resume picks up at T7's results rather than
+replaying the build.
 
 ---
 
