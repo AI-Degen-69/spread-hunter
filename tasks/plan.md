@@ -96,7 +96,7 @@ in parallel with T1; T5 asserts all of them last.
   the leaderboard from existing sums (:844-857) — realized PnL, closes-weighted
   win/merge %, best-minus-worst, NO_DATA when DBs missing; (d) guard the stale
   #484/#487 forensics out of the default render. Depends on: —. Verify: server
-  starts, `/` renders the 608 table with new columns; `pytest tests/test_dashboard_server.py`
+  starts, `/608` renders the 608 table with new columns; `pytest tests/test_dashboard_server.py`
   (or the cockpit's own test if one exists) still green.
 
 - [x] **T3 [S] [Design/UI]** — hub refresh `scripts/tournament_hub.py`: replace
