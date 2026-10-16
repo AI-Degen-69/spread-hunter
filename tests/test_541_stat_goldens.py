@@ -1,8 +1,15 @@
 """#541 T1: golden statistics payload on the fixed shadow run (pre-t-switch record).
 
 The golden JSON freezes today's values BEFORE any refactor. Post-freeze changes must
-keep every value exact — except the operator-ordered Student's-t switch (T2), which
-regenerates this file exactly once with per-stat deltas logged in the findings doc.
+keep every value exact. Two regenerations are sanctioned, and neither moved a value:
+
+* the operator-ordered Student's-t switch (T2) — per-stat deltas logged in the
+  findings doc;
+* **#559** added `settled` and `other` to `pnl_by_fill_path`, which this slice
+  carries inside `trade_analytics`. Regenerated once for exactly that: four keys
+  added, all `0.0`, and the JSON diff is four inserted lines with no value
+  change. Kept here because a second, silent regeneration would let a moved
+  number pass as a refresh — a moved number is a regression.
 """
 from __future__ import annotations
 

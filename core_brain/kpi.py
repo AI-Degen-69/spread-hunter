@@ -20,6 +20,7 @@ from contextlib import closing
 
 from core_brain.close_methods import (
     MERGE_METHODS,
+    SETTLEMENT_METHODS,
     TAKER_RESOLVED_METHODS,
     RESCUE_METHODS as SINGLE_BUY_EXIT_METHODS,
     BOOKKEEPING_METHODS as NON_TRADE_CLOSE_METHODS,
@@ -54,7 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 257
+KPI_PAYLOAD_VERSION = 258
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -919,18 +920,26 @@ def pnl_by_fill_path(
     closes: list[dict],
     taker_pairs: set[str],
 ) -> dict[str, Any]:
-    """Compute realized PnL split across three distinct fill paths.
+    """Compute realized PnL split across five distinct fill paths.
 
     1. maker_merged: merged pairs where both legs were placed as resting maker orders.
     2. taker_completed: merged pairs where one leg had to be completed via a taker order.
-    3. single_buy_exit: single-buy rescue / liquidation exits (single_buy_exit, naked_exit).
+    3. single_buy_exit: single-buy rescue / liquidation exits, sold before resolution.
+    4. settled: legs held until the market resolved (settlement, shadow_settlement).
+    5. other: any remaining trade-like close (legacy names, `sell`).
 
-    Percentages are returned as ratios in [0.0, 1.0], or None when total PnL is 0.0 or no closes.
+    Every close that is not bookkeeping lands in exactly one bucket, so the
+    buckets sum back to `total` and nothing a run realizes is dropped. The
+    buckets carry signed PnL, not counts: `pct` is each bucket over `total`, so
+    a ratio can fall outside [0.0, 1.0]. Percentages are None when total PnL is
+    0.0 or no closes.
     """
     by_path = {
         "maker_merged": 0.0,
         "taker_completed": 0.0,
         "single_buy_exit": 0.0,
+        "settled": 0.0,
+        "other": 0.0,
     }
 
     for c in closes:
@@ -949,6 +958,10 @@ def pnl_by_fill_path(
                 by_path["taker_completed"] += pnl
             else:
                 by_path["maker_merged"] += pnl
+        elif method in SETTLEMENT_METHODS:
+            by_path["settled"] += pnl
+        else:
+            by_path["other"] += pnl
 
     total = sum(by_path.values())
     if abs(total) > 1e-9:
@@ -2193,9 +2206,8 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
             _verdict_level = "neutral"
         if unrealized_usd is not None and unrealized_usd != 0:
             _verdict += f" · {_signed_usd(unrealized_usd)} open"
-        # Exit-shape counts (merges vs one-sided dumps) feed the card's details
-        # line, which owns the "all exits were naked" warning.
-        _merge_closes = sum(1 for c in closes if c.get("method") == "merge")
+        # Exit-shape counts for the card's details line.
+        _merge_closes = sum(1 for c in closes if c.get("method") in MERGE_METHODS)
         _single_exits = sum(1 for c in closes if c.get("method") in SINGLE_BUY_EXIT_METHODS)
 
         run_profitability = {

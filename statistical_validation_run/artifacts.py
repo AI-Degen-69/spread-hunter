@@ -35,6 +35,7 @@ from typing import Any, Optional
 from core_brain.config import MakerConfig
 from core_brain.kpi import (
     MERGE_METHODS,
+    SETTLEMENT_METHODS,
     SINGLE_BUY_EXIT_METHODS,
     build_sensitivity,
     evaluate_stat_gate,
@@ -79,18 +80,25 @@ def rescue_stats(closes: list[dict]) -> dict[str, Any]:
     Their losses are already inside `total_realized_pnl` -- this block only
     labels them, it does not gate on them separately.
 
+    A settlement is not a rescue (#559): a leg held until the market resolved
+    is counted under `settlements`, never inside the rescue population, so the
+    completion and exit rates keep their own denominator.
+
     Completion rate is NULL when no rescue path ever closed a position:
     "no rescues needed" and "rescues never resolved" are different facts.
     """
     merges = [c for c in closes if c.get("method") in MERGE_METHODS]
     exits = [c for c in closes if c.get("method") in SINGLE_BUY_EXIT_METHODS]
+    settlements = [c for c in closes if c.get("method") in SETTLEMENT_METHODS]
     resolved = merges + exits
     return {
         "merges": len(merges),
         "exits": len(exits),
+        "settlements": len(settlements),
         "other_methods": sorted(
             {c.get("method") or "unknown" for c in closes}
             - set(MERGE_METHODS) - set(SINGLE_BUY_EXIT_METHODS)
+            - set(SETTLEMENT_METHODS)
         ),
         "completion_rate": (len(merges) / len(resolved)) if resolved else None,
         "exit_rate": (len(exits) / len(resolved)) if resolved else None,
@@ -455,6 +463,7 @@ def render_report_md(
         "",
         f"- Merges (`shadow_merge`): {rescues['merges']}",
         f"- Single-buy / naked exits: {rescues['exits']}",
+        f"- Settlements (held to market resolution): {rescues['settlements']}",
         f"- Completion rate: {_pct(rescues['completion_rate'])}"
         f" (exit rate {_pct(rescues['exit_rate'])})",
         f"- Config calibration: `pairs_complete_gain_cents={cfg.pairs_complete_gain_cents}` "

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>הדוח עכשיו נסכם נכון — עדכון 615</title>
+<style>
+  :root { --bg:#FAF8F4; --ink:rgba(0,0,0,.82); --muted:rgba(0,0,0,.55);
+          --accent:#C2410C; --accent-soft:#FBE9DC; --card:#FFFFFF;
+          --line:rgba(0,0,0,.12); --good:#15803D; --bad:#B91C1C; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font-family:"Segoe UI", "Noto Sans Hebrew", Arial, sans-serif;
+         line-height:1.7; padding:24px 16px 64px; }
+  .wrap { max-width:860px; margin:0 auto; }
+  h1 { font-size:1.9rem; margin:.2em 0 .3em; }
+  .lede { font-size:1.15rem; color:var(--muted); margin:0 0 26px; }
+  .lede strong { color:var(--accent); }
+  .tabs { display:flex; gap:10px; margin-bottom:14px; }
+  .tabs button { font:inherit; font-size:1.05rem; padding:9px 26px; cursor:pointer;
+    border:2px solid var(--line); border-radius:999px; background:var(--card); color:var(--ink); }
+  .tabs button.active { border-color:var(--accent); background:var(--accent-soft);
+    color:var(--accent); font-weight:700; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:22px 22px 18px; box-shadow:0 2px 10px rgba(0,0,0,.05); }
+  .card h2 { font-size:1.05rem; margin:0 0 4px; font-family:monospace; direction:ltr; text-align:left; }
+  .rows { margin:12px 0 4px; }
+  .brow { display:flex; align-items:center; gap:10px; margin:9px 0; }
+  .brow .name { width:150px; flex:none; font-size:.95rem; }
+  .brow .bar { height:22px; border-radius:6px; min-width:3px; }
+  .brow .val { font-family:monospace; direction:ltr; font-size:.95rem; }
+  .mis { background:repeating-linear-gradient(45deg,#f3c1c1,#f3c1c1 6px,#f8dcdc 6px,#f8dcdc 12px);
+         border:1px dashed var(--bad); }
+  .ok { background:var(--accent-soft); border:1px solid var(--accent); }
+  .dim { background:#e8e4dc; }
+  .note { border-radius:10px; padding:10px 14px; margin-top:14px; font-size:1rem; }
+  .note.bad { background:#FDECEC; border:1px solid var(--bad); }
+  .note.good { background:#E9F7EF; border:1px solid var(--good); }
+  .note .tag { font-weight:700; }
+  .note.bad .tag { color:var(--bad); }
+  .note.good .tag { color:var(--good); }
+  .total { margin-top:14px; padding-top:12px; border-top:2px solid var(--line);
+           font-size:1.15rem; font-weight:700; font-family:monospace; direction:ltr; text-align:left; }
+  .total .match { color:var(--good); font-family:inherit; direction:rtl; font-size:.95rem; font-weight:400; }
+  .total .miss { color:var(--bad); font-family:inherit; direction:rtl; font-size:.95rem; font-weight:400; }
+  .try { margin-top:26px; background:var(--card); border:1px solid var(--line);
+         border-radius:14px; padding:18px 22px; }
+  .try h3 { margin:0 0 8px; font-size:1.1rem; }
+  .try ol { margin:0; padding-right:22px; }
+  .links { margin-top:22px; color:var(--muted); font-size:.95rem; }
+  .links a { color:var(--accent); }
+  .pill { display:inline-block; background:#E9F7EF; color:var(--good); border:1px solid var(--good);
+          border-radius:999px; padding:1px 12px; font-size:.9rem; font-weight:700; }
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>הדוח עכשיו נסכם נכון</h1>
+  <p class="lede">לפני: חלק מהעסקאות הסגורות <strong>לא נספרו בשום מקום</strong>, והכותרת קראה להכל "חילוצים".
+  עכשיו: כל עסקה יושבת בדיוק בקופה אחת, והסכום תמיד מתאים לרווח האמיתי. <span class="pill">חי ובאוויר</span></p>
+
+  <div class="tabs" role="tablist" aria-label="לפני ואחרי">
+    <button id="tab-before" role="tab" aria-selected="false">לפני</button>
+    <button id="tab-after" role="tab" aria-selected="true" class="active">אחרי</button>
+  </div>
+
+  <div class="card" id="panel" role="tabpanel">
+    <h2 id="headline">total closes: 2 &nbsp; total loss: -$8.50</h2>
+    <div class="rows" id="bucket-rows"></div>
+    <div class="note" id="split-note"></div>
+    <div class="total" id="total-line"></div>
+  </div>
+
+  <div class="try">
+    <h3>לנסות לבד במערכת האמיתית</h3>
+    <ol>
+      <li>פתחו את הדשבורד ← טאב המדדים. אם אין הערה כתומה שהמערכת מיושנת — גרסת הדוח תואמת.</li>
+      <li>הריצו את דוח החילוצים על קובץ הקלטות. הכותרת אומרת <b>סך הכל סגירות</b>, ומתחתיה שתי שורות נפרדות: חילוצים לחוד, עסקאות שהוחזקו עד הסוף לחוד.</li>
+    </ol>
+  </div>
+
+  <p class="links">בעיה <a href="https://github.com/AI-Degen-69/spread-hunter/issues/559">#559</a> ו-<a href="https://github.com/AI-Degen-69/spread-hunter/issues/520">#520</a> ·
+  עדכון <a href="https://github.com/AI-Degen-69/spread-hunter/pull/615">#615</a> מוזג.</p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var MAX = 8.50; // scale: biggest single amount shown
+  function row(name, amount, cls) {
+    var w = Math.max(3, Math.abs(amount) / MAX * 100);
+    return '<div class="brow"><span class="name">' + name + '</span>' +
+      '<span class="bar ' + cls + '" style="width:' + w.toFixed(1) + '%"></span>' +
+      '<span class="val">-$' + Math.abs(amount).toFixed(2) + '</span></div>';
+  }
+  var views = {
+    before: {
+      headline: 'rescue closes: 2 &nbsp; total rescue loss: -$8.50',
+      rows: row('מוזגו כזוג', 0, 'dim') +
+            row('הושלמו כבודדים', 0, 'dim') +
+            row('חילוצים', 2.50, 'mis'),
+      note: '<div class="note bad"><span class="tag">הבעיה: </span>' +
+        'עסקה שהוחזקה עד הסוף (‎-$6.00‎) לא מופיעה בשום קופה — הסכום של הקופות ‎-$2.50‎ ' +
+        'אבל ההפסד האמיתי ‎-$8.50‎. והכותרת קוראת להכל "חילוצים".</div>',
+      total: 'buckets sum: -$2.50 &nbsp;≠&nbsp; realized: -$8.50 <span class="miss">← לא מתאים</span>'
+    },
+    after: {
+      headline: 'total closes: 2 &nbsp; total loss: -$8.50',
+      rows: row('מוזגו כזוג', 0, 'dim') +
+            row('הושלמו כבודדים', 0, 'dim') +
+            row('חילוצים', 2.50, 'ok') +
+            row('הוחזקו עד הסוף', 6.00, 'ok') +
+            row('אחר', 0, 'dim'),
+      note: '<div class="note good"><span class="tag">התיקון: </span>' +
+        'כל סגירה יושבת בדיוק בקופה אחת — חילוצים: 1 בהפסד ‎-$2.50‎, סגירות סוף: 1 בהפסד ‎-$6.00‎. ' +
+        'והכותרת אומרת ביושר "סך הכל".</div>',
+      total: 'buckets sum: -$8.50 &nbsp;=&nbsp; realized: -$8.50 <span class="match">← מתאים בדיוק</span>'
+    }
+  };
+  var headline = document.getElementById('headline');
+  var rows = document.getElementById('bucket-rows');
+  var note = document.getElementById('split-note');
+  var total = document.getElementById('total-line');
+  var bB = document.getElementById('tab-before');
+  var bA = document.getElementById('tab-after');
+  function show(which) {
+    var v = views[which];
+    headline.innerHTML = v.headline;
+    rows.innerHTML = v.rows;
+    note.innerHTML = v.note;
+    total.innerHTML = v.total;
+    bB.classList.toggle('active', which === 'before');
+    bA.classList.toggle('active', which === 'after');
+    bB.setAttribute('aria-selected', which === 'before' ? 'true' : 'false');
+    bA.setAttribute('aria-selected', which === 'after' ? 'true' : 'false');
+  }
+  bB.addEventListener('click', function () { show('before'); });
+  bA.addEventListener('click', function () { show('after'); });
+  show('after');
+})();
+</script>
+</body>
+</html>
