@@ -1507,6 +1507,171 @@ class TestRefusedHold:
         assert calls["cancelled"] == [["o-up", "o-dn"]]
         assert calls["submitted"] == []
 
+    def test_keep_policy_holds_then_expires_on_the_cycle_limit(self, monkeypatch):
+        # #622 option B. The pre-d7810fd behavior, restored behind the switch:
+        # survive REFUSED_HOLD_GRACE_CYCLES_HELD consecutive refused cycles, then
+        # expire. The default policy is `remove`, so the shipped loop must be
+        # unaffected -- this asserts the opt-in arm really holds, not just that
+        # the constant changed.
+        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES_HELD as GRACE
+
+        monkeypatch.setenv("HUNTER_REFUSAL_HOLD_POLICY", "keep")
+        calls = {"submitted": [], "cancelled": []}
+        decides = []
+        sleeps = []
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            decides.append(1)
+            return [], self.TRANSIENT_WHY
+
+        seam = self._seam(decide, calls, books={
+            "best_bid": 0.66, "best_ask": 0.68,
+            "bids": {0.66: 100}, "asks": {0.68: 100}})
+
+        def sleep_fn(s):
+            sleeps.append(s)
+            if len(sleeps) >= GRACE:
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=[FakeMarket("0xabc")], sleep_fn=sleep_fn)
+
+        assert len(decides) == GRACE, "the hold must survive the earlier refusals"
+        assert calls["submitted"] == []
+        assert calls["cancelled"] == [["o-up", "o-dn"]], (
+            "the hold expires exactly once, on the last allowed cycle"
+        )
+
+    def test_remove_policy_still_cancels_on_the_first_refusal(self, monkeypatch):
+        # The control arm, spelled out: whatever the switch defaults to, the
+        # default must not hold. This is the regression guard for #622 Phase 1.
+        monkeypatch.setenv("HUNTER_REFUSAL_HOLD_POLICY", "remove")
+        calls = {"submitted": [], "cancelled": []}
+        seam = self._seam(
+            lambda cfg, up, dn, inv, t_rem, wf: ([], self.TRANSIENT_WHY), calls)
+        results = run(
+            seam, interval=0.0, once=True, live=True,
+            markets=[FakeMarket("0xabc")],
+            sleep_fn=lambda s: None,
+        )
+        assert results[0].status == "DECLINED"
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
+
+    def test_drift_policy_cancels_when_the_mid_moves(self, monkeypatch):
+        # #622 option C. The market refuses on cycle 1 and the mid is where it
+        # was, so the hold survives; between cycles the mid walks 10c, well past
+        # the 2c tolerance, and cycle 2 cancels instead of waiting out the
+        # cycle limit. This is what stops a one-way slide being held forever.
+        monkeypatch.setenv("HUNTER_REFUSAL_HOLD_POLICY", "drift")
+        calls = {"submitted": [], "cancelled": []}
+        decides = []
+        sleeps = []
+        books = {"best_bid": 0.59, "best_ask": 0.61,
+                 "bids": {0.59: 100}, "asks": {0.61: 100}}
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            decides.append(1)
+            return [], self.TRANSIENT_WHY
+
+        seam = self._seam(decide, calls, books=books)
+
+        def sleep_fn(s):
+            sleeps.append(s)
+            if len(sleeps) == 1:
+                books.update({"best_bid": 0.69, "best_ask": 0.71,
+                              "bids": {0.69: 100}, "asks": {0.71: 100}})
+            if len(sleeps) >= 2:
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=[FakeMarket("0xabc")], sleep_fn=sleep_fn)
+
+        assert len(decides) == 2, "drift must shorten the hold, not extend it"
+        assert calls["cancelled"] == [["o-up", "o-dn"]], (
+            "the drifted tokens cancel on their own reason, before the limit"
+        )
+
+    def test_drift_policy_holds_when_the_mid_stays_within_tolerance(self, monkeypatch):
+        # The other half of option C: a 1c move against a 2c tolerance is
+        # flicker, so the hold runs the full cycle limit. Without this the
+        # drift test above would pass for an implementation that cancels on
+        # every refusal.
+        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES_HELD as GRACE
+
+        monkeypatch.setenv("HUNTER_REFUSAL_HOLD_POLICY", "drift")
+        calls = {"submitted": [], "cancelled": []}
+        decides = []
+        sleeps = []
+        books = {"best_bid": 0.59, "best_ask": 0.61,
+                 "bids": {0.59: 100}, "asks": {0.61: 100}}
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            decides.append(1)
+            return [], self.TRANSIENT_WHY
+
+        seam = self._seam(decide, calls, books=books)
+
+        def sleep_fn(s):
+            sleeps.append(s)
+            books.update({"best_bid": 0.60, "best_ask": 0.62,
+                          "bids": {0.60: 100}, "asks": {0.62: 100}})
+            if len(sleeps) >= GRACE:
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=[FakeMarket("0xabc")], sleep_fn=sleep_fn)
+
+        assert len(decides) == GRACE
+        assert calls["cancelled"] == [["o-up", "o-dn"]], (
+            "within tolerance the hold survives to the cycle limit"
+        )
+
+    def test_drift_reference_is_cleared_when_the_streak_ends(self, monkeypatch):
+        # A market that quotes again ends its streak, so the next streak must
+        # take a FRESH reference. Inheriting the old mid would cancel a market
+        # on drift that happened during a hold which already ended.
+        monkeypatch.setenv("HUNTER_REFUSAL_HOLD_POLICY", "drift")
+        calls = {"submitted": [], "cancelled": []}
+        # Cycle 1 refuses with the mid at 0.70: the streak's reference.
+        books = {"best_bid": 0.69, "best_ask": 0.71,
+                 "bids": {0.69: 100}, "asks": {0.71: 100}}
+        seq = [[], "quote", []]
+        state = {"n": 0}
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            if seq[min(state["n"], 2)] == "quote":
+                # Both legs, at their resting prices, so the quoting cycle
+                # clears the streak without cancelling anything as `not_quoted`.
+                return [_intent(side="UP", token="tok-up", price=0.60),
+                        _intent(side="DOWN", token="tok-dn", price=0.40)], ""
+            return [], self.TRANSIENT_WHY
+
+        seam = self._seam(decide, calls, books=books)
+        sleeps = []
+
+        def sleep_fn(s):
+            sleeps.append(s)
+            state["n"] += 1
+            # The mid walks 10c DOWN before the quoting cycle, and stays there
+            # for the cycle after it. A fresh streak therefore starts at 0.60,
+            # while a stale reference would still be holding 0.70.
+            books.update({"best_bid": 0.59, "best_ask": 0.61,
+                          "bids": {0.59: 100}, "asks": {0.61: 100}})
+            if len(sleeps) >= 3:
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=[FakeMarket("0xabc")], sleep_fn=sleep_fn)
+
+        # Cycle 1 held at 0.70. Cycle 2 quoted both legs and ended the streak.
+        # Cycle 3 refused again with the mid at 0.60: against a fresh reference
+        # that is no drift, so the hold survives. Against the stale 0.70
+        # reference it would read as 10c of drift and cancel, which is what this
+        # asserts does NOT happen.
+        assert calls["cancelled"] == [], (
+            "a fresh streak must not inherit the previous streak's reference mid"
+        )
+
     def test_terminal_refusal_cancels_now(self):
         calls = {"submitted": [], "cancelled": []}
         seam = self._seam(

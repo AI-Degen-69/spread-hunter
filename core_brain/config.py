@@ -28,6 +28,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+#: The refusal-hold policies #622 compares in shadow runs. `remove` does not
+#: hold at all, `keep` holds for the cycle limit, `drift` holds until the mid
+#: has moved. TEMPORARY: #622 deletes this switch, and the fields that read it,
+#: once the tournament picks a winner.
+REFUSAL_HOLD_POLICIES = frozenset({"remove", "keep", "drift"})
+
 
 @dataclass(frozen=True)
 class MakerConfig:
@@ -856,6 +862,42 @@ class MakerConfig:
     # never fire, because an order inside the band was already kept by the
     # tolerance. The hold never overrides the pair-cost re-gate.
     requote_hold_below_target: float = 0.05
+
+    # THE REFUSAL-HOLD POLICY (#622). Three answers to "what happens to a
+    # resting order when `decide` transiently refuses the market this cycle":
+    #
+    #   remove -- nothing holds. The first transient refusal already expires
+    #             into a cancel, so quotes rest until fill, terminal refusal,
+    #             or stop exit. THE DEFAULT, because it is the behavior
+    #             `d7810fd` already put live (interim operator directive,
+    #             pending #622): the experiment must not revert live behavior
+    #             before the measurement meant to justify it, and its control
+    #             arm has to be the arm that actually ships.
+    #   keep   -- the pre-`d7810fd` behavior: survive
+    #             `REFUSED_HOLD_GRACE_CYCLES_HELD` consecutive refused cycles,
+    #             then expire. Fewest cancels, most missed fills in a trend.
+    #   drift  -- survive flicker, but cancel as soon as a token's mid has
+    #             moved further than `refusal_hold_drift` from where it stood
+    #             at the first refusal of the streak. Keeps the churn defense
+    #             and kills the dodge, which is #622's option C.
+    refusal_hold_policy: str = "remove"
+    # Drift tolerance for `drift`, in price units and TWO-SIDED: the mid moving
+    # either way by more than this counts as drift. "Flicker versus drift" is
+    # about how far the mid moved, not which way. 0 cancels on any movement.
+    # A missing mid is never drift -- the same rule the removed #419 band used.
+    refusal_hold_drift: float = 0.02
+
+    # An unknown policy is refused here as well as at the env boundary: an arms
+    # file or a test that sets the field directly must not silently run the
+    # baseline, which is the one way this experiment can lie to itself.
+    def __post_init__(self) -> None:
+        if self.refusal_hold_policy not in REFUSAL_HOLD_POLICIES:
+            choices = ", ".join(sorted(REFUSAL_HOLD_POLICIES))
+            raise ValueError(
+                "refusal_hold_policy must be one of "
+                f"{choices}, got: {self.refusal_hold_policy!r}"
+            )
+
     poll_interval_sec: float = 1.0
 
     # THE QUEUE-CLEAR GATE (#393). Every gate above judges the PRICE of a new
@@ -1408,6 +1450,24 @@ def load(*, for_display: bool = False) -> MakerConfig:
         # forever, which is not a setting.
         kw["requote_hold_queue_shares"] = _bounded_float(
             "HUNTER_REQUOTE_HOLD_QUEUE", rhq, 0.0, 2_000_000.0)
+    rhp = (os.environ.get("HUNTER_REFUSAL_HOLD_POLICY") or "").strip().lower()
+    if rhp:
+        # Refused with the choice list rather than defaulted, for the same
+        # reason `HUNTER_STOP_LOSS_MODE` is: an arms file that mis-spells
+        # `drift` and silently falls back to the baseline would measure the
+        # control arm twice and report it as a result.
+        if rhp not in REFUSAL_HOLD_POLICIES:
+            choices = ", ".join(sorted(REFUSAL_HOLD_POLICIES))
+            raise ValueError(
+                f"HUNTER_REFUSAL_HOLD_POLICY must be one of {choices}, got: {rhp}"
+            )
+        kw["refusal_hold_policy"] = rhp
+    rhd = os.environ.get("HUNTER_REFUSAL_HOLD_DRIFT") or ""
+    if rhd.strip():
+        # Bounded by the instrument's whole price range: a tolerance of 1.00
+        # already means "never drift", and anything past it is a typo.
+        kw["refusal_hold_drift"] = _bounded_float(
+            "HUNTER_REFUSAL_HOLD_DRIFT", rhd, 0.0, 1.0)
     qcg = os.environ.get("HUNTER_QUEUE_CLEAR_GATE") or ""
     if qcg.strip():
         # Enforce the queue-clear gate for ONE run (#393). "off" means off.

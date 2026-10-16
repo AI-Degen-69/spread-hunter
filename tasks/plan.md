@@ -116,7 +116,7 @@ T4 is independent of T1-T3 and can run any time before T5.
 - Verify: `python -m pytest -q tests/test_refusal_hold_decision.py`
 - **Checkpoint 1** — one-line report: baseline confirmed, decision rule frozen.
 
-### [ ] T2 — Policy switch and the drift path, default A
+### [x] T2 — Policy switch and the drift path, default A
 
 - Size: **M** · Domain: **Backend/Logic** · Depends on: T1
 - Files: `core_brain/config.py`, `core_brain/trader_loop.py`, `tests/test_trader_loop.py`
@@ -319,7 +319,31 @@ separate project, and rotating repeated concurrent runs is adequate for this dec
 
 ---
 
-## 6. Environment caveats and assumptions
+## 6. Build notes — deviations from this plan (reconciled, not silent)
+
+- **T2 — the drift decision travels, not the prices.** This plan said to
+  re-introduce `plan_orders(token_mids=...)` fed by `_cycle_mids`. Implemented
+  instead as `plan_orders(drifted_token_ids=...)`: `_visit_one` owns the books and
+  the streak's reference snapshot, so it computes *which tokens drifted* and hands
+  the planner that verdict. `plan_orders` stays a pure function of what it is
+  given — no prices, no tolerance, no streak state — which is what makes the
+  cancel path directly testable. `_cycle_mids` still regains a production
+  consumer (`_visit_one`), and T1's premise-lock assertion that `plan_orders`
+  takes no `token_mids` stays true, so the baseline facts the record publishes
+  are unchanged.
+- **T2 — two constants, not one.** `REFUSED_HOLD_GRACE_CYCLES` stays `1` (the
+  `remove` policy's effective limit), and `REFUSED_HOLD_GRACE_CYCLES_HELD = 3`
+  carries the hold count for `keep`/`drift`. Renaming the shipped constant to 3
+  and deriving `remove` from it would have changed what every existing grace test
+  reads and silently rewritten the baseline the run record publishes. This way
+  the default policy is byte-for-byte today's behavior and no existing assertion
+  moved.
+- **T2 — the drift boundary is rounded to the tick grid.** Found by a test that
+  failed on `0.62 - 0.60 == 0.020000000000000018`: a move of exactly the tolerance
+  read as drift. Both sides now round to 4 decimals before comparing, matching
+  `_market_arriving`'s existing rounding rule for the same reason.
+
+## 7. Environment caveats and assumptions
 
 - **`tasks/plan.md` and `tasks/todo.md` were empty** at branch time (closed-issue artifacts are
   pruned, e.g. `#624`, `#608`), so this plan is written fresh rather than reconciled. Nothing
