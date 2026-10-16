@@ -643,3 +643,83 @@ def test_i608_character_arms_plan(tmp_path: Path):
     for a in arms:
         assert set(a["env"]) == expected_knobs[a["name"]], a["name"]
 
+
+def test_worker_environment_strips_parent_hunter_env(tmp_path, monkeypatch):
+    """Shadow worker subprocesses must not inherit parent HUNTER_* variables.
+
+    Arms without explicit overrides must start with clean defaults, while arms
+    with explicit settings retain them, non-HUNTER parent variables are
+    preserved, and SPREAD_HUNTER_DB points to the arm-specific database.
+    """
+    import scripts.shadow_tournament as st
+
+    spawned: list[tuple[list[str], dict | None, _FakeProc]] = []
+
+    def fake_popen(argv, env=None, **kwargs):
+        label = "market-filter" if "filter_loop" in " ".join(argv) else "worker"
+        proc = _FakeProc(label)
+        spawned.append((list(argv), env.copy() if env is not None else None, proc))
+        return proc
+
+    monkeypatch.setattr(st.subprocess, "Popen", fake_popen)
+    # Avoid mutating global signal handlers in pytest process
+    monkeypatch.setattr(st.signal, "signal", lambda sig, handler: None)
+
+    # Set parent ambient environment variables
+    monkeypatch.setenv("HUNTER_DUMMY_LEAK", "should_be_stripped")
+    monkeypatch.setenv("HUNTER_PRICE_RISK_WIDEN", "0.03")
+    monkeypatch.setenv("HUNTER_TOURNAMENT_PRESET", "aggressive")
+    monkeypatch.setenv("FOO", "bar")
+    monkeypatch.setenv("SPREAD_HUNTER_DB", "data/wrong_parent.db")
+
+    plan = st.build_tournament_plan(
+        issue=624,
+        arms=[
+            {"name": "sparse"},
+            {"name": "explicit", "env": {"HUNTER_PRICE_RISK_WIDEN": "0.02"}},
+        ],
+        base_dir=tmp_path,
+        stamp="20261016-120000",
+        check_ports=False,
+    )
+    plan.dashboards = False
+
+    rc = st.launch_tournament(plan)
+    assert rc == 0
+
+    worker_calls = [
+        (a, e, p) for a, e, p in spawned if "core_brain.shadow_run" in " ".join(a)
+    ]
+    assert len(worker_calls) == 2, "Both arms must spawn shadow workers"
+
+    # Match workers to arms via --db path
+    sparse_arm = plan.arms[0]
+    explicit_arm = plan.arms[1]
+
+    sparse_call = next(c for c in worker_calls if str(sparse_arm.db_path) in c[0])
+    explicit_call = next(c for c in worker_calls if str(explicit_arm.db_path) in c[0])
+
+    sparse_env = sparse_call[1]
+    explicit_env = explicit_call[1]
+    assert sparse_env is not None
+    assert explicit_env is not None
+
+    # Parent non-HUNTER vars and correct db paths must be present in both
+    assert sparse_env.get("FOO") == "bar"
+    assert explicit_env.get("FOO") == "bar"
+    assert sparse_env.get("SPREAD_HUNTER_DB") == str(sparse_arm.db_path)
+    assert explicit_env.get("SPREAD_HUNTER_DB") == str(explicit_arm.db_path)
+
+    # Un-set parent HUNTER_* vars must be stripped from both
+    assert "HUNTER_DUMMY_LEAK" not in sparse_env
+    assert "HUNTER_DUMMY_LEAK" not in explicit_env
+    assert "HUNTER_TOURNAMENT_PRESET" not in sparse_env
+    assert "HUNTER_TOURNAMENT_PRESET" not in explicit_env
+
+    # Sparse arm must have clean defaults (no HUNTER_PRICE_RISK_WIDEN)
+    assert "HUNTER_PRICE_RISK_WIDEN" not in sparse_env
+
+    # Explicit arm must have its explicit override only
+    assert explicit_env.get("HUNTER_PRICE_RISK_WIDEN") == "0.02"
+
+

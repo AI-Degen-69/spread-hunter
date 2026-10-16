@@ -1,26 +1,21 @@
-# Constraints - #619 (entry-relative stop-loss, retire static $0.15 stop)
+# Constraints - #624 (strip un-set parent HUNTER_* env vars when spawning shadow tournament workers)
 
-Branch: i619/add-stop-loss-architecture-dynamic-modes-plus-entr | Issue: #619
+Branch: i624/strip-parent-hunter-env-shadow-workers | Issue: #624
 
-- **Zero regressions:** `tests/test_dual_stop_loss.py` +
-  `tests/test_single_leg_lifecycle.py` (acceptance pair) plus focused
-  `test_single_buy_saver`, `test_hard_stop_fresh_exit`,
-  `test_exit_price_realism`, `test_aged_out_rescue`, `test_dynamic_offset`,
-  `test_shadow_tournament` must pass. Every new behavior needs a test that
-  fails without the change (TDD RED first). Full suite stays with CI on push;
-  never run it locally during build.
+- **Zero regressions:** `tests/test_shadow_tournament.py` +
+  `tests/test_tournament_run_number_naming.py` must pass.
+  The new worker isolation test must fail before the change (TDD RED first).
+  Full suite stays with CI on push; never run it locally during build.
 - **Anti-cheat:** never skip/disable tests, delete assertions, or suppress
-  linters to reach green. `drop_cents` endpoints `0.01`/`0.90` and refusal
-  cases are contract, not optional.
-- **No new dependencies.** `Decimal(str(...))` math only (matches
-  `max_profitable_hedge_bid`, lines 205-228); no epsilon.
-- **#576 overlap checked 2026-10-16:** its dead-knob list
-  (`stat_gate_alpha/beta`, experiment trio, `balance_hedge_sec`, `sim_only`,
-  `scarcity_close_threshold`, `est_reward_pool_usd`,
-  `float_mark_retention_days`) contains none of this issue's knobs — no
-  stop-and-ask trigger.
-- **Scope discipline:** files in the plan's untouched list are not opened for
-  edits. Scope disputes go to the reviewer under the fix-size rule — never
-  back to the builder, never silent expansion.
+  linters to reach green.
+- **No new dependencies.** Standard library `os.environ` filtering and `subprocess` only.
+- **Scope discipline:** touch only `scripts/shadow_tournament.py` (worker launch site around line 516),
+  `tests/test_shadow_tournament.py`, and `docs/issues/608-noticed-but-not-touching.md`.
+  Do not modify `scripts/tournament_dashboard_hub.py`, `core_brain/config.py`, or tournament configs.
 - **Production safety:** never write to or delete `data/orders.db`. No live
-  trading commands at any station.
+  trading commands at any station (`quote`, `complete`, Trader loop, etc.).
+- **Job Guards:**
+  - Do not reference or reuse stale worktrees (`.worktrees/show-i504`, `.worktrees/spread-hunter-i504`, `.worktrees/testing-pony-tail-with-issue-525`).
+  - No destructive git operations without explicit operator confirmation.
+  - Recording homes: code out-of-scope rows in `docs/issues/624-noticed-but-not-touching.md`; run-environment caveats in `tasks/plan.md`.
+  - Ambient test env vars: mock or unset in place (Class 1).

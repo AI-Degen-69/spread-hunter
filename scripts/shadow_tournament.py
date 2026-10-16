@@ -513,7 +513,12 @@ def launch_tournament(plan: TournamentPlan) -> int:
         # 2. Spawn shadow rehearsal runs
         shadow_procs: list[subprocess.Popen] = []
         for arm in plan.arms:
-            shadow_env = {**os.environ, **arm.env, "SPREAD_HUNTER_DB": str(arm.db_path)}
+            # Strip inherited HUNTER_* variables like Market Filter and dashboard
+            clean_env = {
+                k: v for k, v in os.environ.items()
+                if not k.startswith("HUNTER_")
+            }
+            shadow_env = {**clean_env, **arm.env, "SPREAD_HUNTER_DB": str(arm.db_path)}
             p = subprocess.Popen(arm.shadow_argv, env=shadow_env)
             procs.append((p, f"shadow-{arm.name}"))
             shadow_procs.append(p)
