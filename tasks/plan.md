@@ -154,7 +154,7 @@ T4 is independent of T1-T3 and can run any time before T5.
   event-writing helper. **No new table.** Record in `tasks/plan.md` which of the two it was.
 - Verify: focused test asserting one row per refused visit with a parseable outcome.
 
-### [ ] T4 — Nullable cancel timestamp
+### [x] T4 — Nullable cancel timestamp
 
 - Size: **S** · Domain: **Backend/Logic** · Depends on: none
 - Files: `core_brain/order_registry.py`
