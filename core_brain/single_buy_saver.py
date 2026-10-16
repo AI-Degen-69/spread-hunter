@@ -1635,6 +1635,11 @@ def _manage_single_leg_positions_locked(
     lead_sec = float(getattr(cfg, "aged_out_rescue_lead_sec", 900.0))
     max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
     tick_size = float(getattr(cfg, "price_tick", DEFAULT_TICK_SIZE))
+    stop_loss_mode = str(getattr(cfg, "stop_loss_mode", "NONE"))
+    drop_cents = float(getattr(cfg, "drop_cents", 0.05))
+    drawdown_pct = float(getattr(cfg, "drawdown_pct", 10.0))
+    emergency_drawdown_pct = float(
+        getattr(cfg, "emergency_drawdown_pct", 75.0))
     resolved = {str(cid).lower() for cid in (resolved_cids or ()) if cid}
 
     if market_state_fn is None:
@@ -1768,6 +1773,9 @@ def _manage_single_leg_positions_locked(
             decision = transition(
                 position, previous_state, max_pair_cost=max_pair_cost,
                 settlement_due=False, tick_size=tick_size,
+                stop_loss_mode=stop_loss_mode, drop_cents=drop_cents,
+                drawdown_pct=drawdown_pct,
+                emergency_drawdown_pct=emergency_drawdown_pct,
             )
             if decision.action == "hard_stop":
                 # The poll's hard stop is its own to persist: it survives
@@ -1806,6 +1814,10 @@ def _manage_single_leg_positions_locked(
                     decision = evaluate(
                         position, registry, max_pair_cost=max_pair_cost,
                         settlement_due=True, tick_size=tick_size,
+                        stop_loss_mode=stop_loss_mode,
+                        drop_cents=drop_cents,
+                        drawdown_pct=drawdown_pct,
+                        emergency_drawdown_pct=emergency_drawdown_pct,
                     )
                     result = _settlement_fallback(
                         client, registry, pair, cfg, max_pair_cost, live,

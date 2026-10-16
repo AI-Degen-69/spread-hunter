@@ -2,10 +2,12 @@ import pytest
 
 from core_brain.order_registry import OrderRegistry
 from core_brain.single_leg_lifecycle import (
+    STOP_LOSS_MODES,
     LegState,
     SingleLegPosition,
     evaluate,
     max_profitable_hedge_bid,
+    stop_trigger,
     transition,
 )
 
@@ -99,10 +101,11 @@ def test_escalated_state_stays_sticky_after_price_recovers():
     assert decision.action == "hedge"
 
 
-def test_hard_stop_at_fifteen_cents_precedes_escalation():
+def test_hard_stop_at_the_entry_relative_floor_precedes_escalation():
+    # Entry 0.48 at the 75% default floor is 0.12, not a static 0.15.
     decision = transition(
         _position(up_size=2.0, down_size=0.0, up_avg=0.48,
-                  up_bid=0.15, base_offset=0.04),
+                  up_bid=0.12, base_offset=0.04),
         LegState.PATIENT_WAIT,
         max_pair_cost=0.99,
     )
@@ -173,7 +176,7 @@ def test_escalation_without_a_positive_capped_tick_is_refused():
 
 def test_settlement_fallback_follows_hard_stop_precedence():
     decision = transition(
-        _position(up_size=2.0, down_size=0.0, up_avg=0.48, up_bid=0.14),
+        _position(up_size=2.0, down_size=0.0, up_avg=0.48, up_bid=0.12),
         LegState.PATIENT_WAIT,
         max_pair_cost=0.99,
         settlement_due=True,
@@ -209,6 +212,234 @@ def test_hedge_bid_is_floored_to_fit_cap(held_average, cap, tick_size):
 def test_invalid_hedge_bid_inputs_are_refused(held_average, cap, tick_size):
     with pytest.raises(ValueError):
         max_profitable_hedge_bid(held_average, cap, tick_size)
+
+
+# --- entry-relative stop (#619) --------------------------------------------
+# The retired static $0.15 stop liquidated ANY entry at or below $0.15 the
+# moment it filled, and the strategy quotes (and fills) between $0.10 and
+# $0.90. The trigger is now derived from the held leg's own average fill, with
+# the emergency floor as the only universal backstop.
+
+
+def test_stop_loss_modes_are_the_three_canonical_spellings():
+    assert STOP_LOSS_MODES == frozenset(
+        {"NONE", "ABSOLUTE_DROP", "PERCENTAGE_DROP"}
+    )
+
+
+def test_stop_trigger_none_mode_uses_the_emergency_floor():
+    trigger, source = stop_trigger(0.10, "NONE", 0.05, 10.0, 75.0)
+
+    assert trigger == pytest.approx(0.025)
+    assert source == "emergency"
+
+
+def test_stop_trigger_percentage_mode_subtracts_the_drawdown():
+    trigger, source = stop_trigger(0.60, "PERCENTAGE_DROP", 0.05, 10.0, 75.0)
+
+    assert trigger == pytest.approx(0.54)
+    assert source == "strategy"
+
+
+def test_stop_trigger_absolute_mode_subtracts_the_cent_drop():
+    trigger, source = stop_trigger(0.50, "ABSOLUTE_DROP", 0.05, 10.0, 75.0)
+
+    assert trigger == pytest.approx(0.45)
+    assert source == "strategy"
+
+
+def test_stop_trigger_keeps_the_higher_of_strategy_and_floor():
+    # 0.12 - 25% = 0.09, well above 0.12's 0.03 emergency floor.
+    trigger, source = stop_trigger(0.12, "PERCENTAGE_DROP", 0.05, 25.0, 75.0)
+
+    assert trigger == pytest.approx(0.09)
+    assert source == "strategy"
+
+
+def test_stop_trigger_falls_back_to_the_floor_when_the_strategy_is_lower():
+    # 0.20 - 0.85 is below zero: the emergency floor is what protects.
+    trigger, source = stop_trigger(0.20, "ABSOLUTE_DROP", 0.85, 10.0, 75.0)
+
+    assert trigger == pytest.approx(0.05)
+    assert source == "emergency"
+
+
+def test_stop_trigger_floors_at_one_cent():
+    # A 100% emergency drawdown on a $0.02 entry would otherwise sit at zero.
+    trigger, source = stop_trigger(0.02, "NONE", 0.05, 10.0, 100.0)
+
+    assert trigger == pytest.approx(0.01)
+    assert source == "emergency"
+
+
+@pytest.mark.parametrize(
+    ("drop_cents", "expected", "source"),
+    [(0.01, 0.49, "strategy"), (0.90, 0.125, "emergency")],
+)
+def test_stop_trigger_accepts_both_drop_cents_endpoints(drop_cents, expected,
+                                                       source):
+    trigger, got_source = stop_trigger(
+        0.50, "ABSOLUTE_DROP", drop_cents, 10.0, 75.0,
+    )
+
+    assert trigger == pytest.approx(expected)
+    assert got_source == source
+
+
+def test_absolute_mode_ignores_the_drawdown_knob():
+    """The two dynamic modes cannot bleed into each other."""
+    low = stop_trigger(0.50, "ABSOLUTE_DROP", 0.05, 1.0, 75.0)
+    high = stop_trigger(0.50, "ABSOLUTE_DROP", 0.05, 99.0, 75.0)
+
+    assert low == high
+
+
+def test_percentage_mode_ignores_the_cent_drop_knob():
+    low = stop_trigger(0.50, "PERCENTAGE_DROP", 0.01, 10.0, 75.0)
+    high = stop_trigger(0.50, "PERCENTAGE_DROP", 0.90, 10.0, 75.0)
+
+    assert low == high
+
+
+@pytest.mark.parametrize(
+    "mode", ["ABSOLUTE", "PERCENTAGE", "usd", "pct", "bogus", ""]
+)
+def test_stop_trigger_refuses_non_canonical_modes(mode):
+    with pytest.raises(ValueError, match="ABSOLUTE_DROP"):
+        stop_trigger(0.50, mode, 0.05, 10.0, 75.0)
+
+
+@pytest.mark.parametrize(
+    "drop_cents", [0.0, 0.009, 0.91, float("nan"), float("inf")]
+)
+def test_stop_trigger_refuses_drop_cents_outside_the_contract(drop_cents):
+    with pytest.raises(ValueError, match="drop_cents"):
+        stop_trigger(0.50, "ABSOLUTE_DROP", drop_cents, 10.0, 75.0)
+
+
+@pytest.mark.parametrize("pct", [0.0, -1.0, 100.1, float("nan")])
+def test_stop_trigger_refuses_drawdown_pct_outside_the_contract(pct):
+    with pytest.raises(ValueError, match="drawdown_pct"):
+        stop_trigger(0.50, "PERCENTAGE_DROP", 0.05, pct, 75.0)
+
+
+@pytest.mark.parametrize("pct", [0.0, 100.1, float("nan"), float("inf")])
+def test_stop_trigger_refuses_emergency_pct_outside_the_contract(pct):
+    with pytest.raises(ValueError, match="emergency_drawdown_pct"):
+        stop_trigger(0.50, "NONE", 0.05, 10.0, pct)
+
+
+def test_stop_trigger_accepts_a_full_emergency_drawdown():
+    trigger, _ = stop_trigger(0.02, "NONE", 0.05, 10.0, 100.0)
+
+    assert trigger == pytest.approx(0.01)
+
+
+@pytest.mark.parametrize("entry", [0.0, -0.5, 1.01, float("nan")])
+def test_stop_trigger_refuses_an_entry_outside_the_price_range(entry):
+    with pytest.raises(ValueError, match="entry"):
+        stop_trigger(entry, "NONE", 0.05, 10.0, 75.0)
+
+
+@pytest.mark.parametrize(
+    ("entry", "bid", "expected"),
+    [(0.10, 0.026, LegState.PATIENT_WAIT),
+     (0.10, 0.025, LegState.HARD_STOP),
+     (0.10, 0.024, LegState.HARD_STOP)],
+)
+def test_none_mode_stops_a_ten_cent_entry_at_the_floored_emergency(
+    entry, bid, expected,
+):
+    decision = transition(
+        _position(up_size=2.0, down_size=0.0, up_avg=entry, up_bid=bid,
+                  base_offset=0.04),
+        LegState.PATIENT_WAIT,
+        max_pair_cost=0.99,
+    )
+
+    assert decision.state is expected
+
+
+@pytest.mark.parametrize(
+    "entry,bid", [(0.10, 0.10), (0.12, 0.14), (0.14, 0.14)]
+)
+def test_low_entries_are_no_longer_liquidated_on_fill(entry, bid):
+    """A resting $0.15 stop booked a loss on every 0.10-0.14 entry."""
+    decision = transition(
+        _position(up_size=2.0, down_size=0.0, up_avg=entry, up_bid=bid,
+                  base_offset=0.04),
+        LegState.PATIENT_WAIT,
+        max_pair_cost=0.99,
+    )
+
+    assert decision.state is LegState.PATIENT_WAIT
+    assert decision.action == "wait"
+
+
+def test_hard_stop_reason_names_the_trigger_that_fired():
+    decision = transition(
+        _position(up_size=2.0, down_size=0.0, up_avg=0.60, up_bid=0.54,
+                  base_offset=0.04),
+        LegState.PATIENT_WAIT,
+        max_pair_cost=0.99,
+        stop_loss_mode="PERCENTAGE_DROP",
+        drawdown_pct=10.0,
+    )
+
+    assert decision.state is LegState.HARD_STOP
+    assert "strategy" in decision.reason
+    assert "0.5400" in decision.reason
+
+
+def test_transition_refuses_an_unknown_stop_mode():
+    decision = transition(
+        _position(up_size=2.0, down_size=0.0, up_avg=0.50, up_bid=0.45),
+        LegState.PATIENT_WAIT,
+        max_pair_cost=0.99,
+        stop_loss_mode="ABSOLUTE",
+    )
+
+    assert decision.state is LegState.PATIENT_WAIT
+    assert decision.action == "refused"
+    assert "ABSOLUTE_DROP" in decision.reason
+
+
+@pytest.mark.parametrize(
+    "knobs",
+    [{"drop_cents": 0.0},
+     {"drop_cents": 0.91},
+     {"drawdown_pct": 0.0},
+     {"drawdown_pct": float("nan")},
+     {"emergency_drawdown_pct": 101.0},
+     {"emergency_drawdown_pct": float("nan")}],
+)
+def test_transition_refuses_out_of_range_stop_knobs(knobs):
+    decision = transition(
+        _position(up_size=2.0, down_size=0.0, up_avg=0.50, up_bid=0.45),
+        LegState.PATIENT_WAIT,
+        max_pair_cost=0.99,
+        **knobs,
+    )
+
+    assert decision.action == "refused"
+
+
+def test_evaluate_forwards_the_stop_knobs(tmp_path):
+    registry = OrderRegistry(db_path=tmp_path / "lifecycle.db")
+    position = _position(
+        up_size=2.0, down_size=0.0, up_avg=0.60, up_bid=0.54,
+        base_offset=0.04,
+    )
+
+    decision = evaluate(
+        position, registry, max_pair_cost=0.99,
+        stop_loss_mode="PERCENTAGE_DROP", drawdown_pct=10.0,
+    )
+
+    assert decision.state is LegState.HARD_STOP
+    record = registry.get_lifecycle_state("pair-1")
+    assert record is not None
+    assert record.state == LegState.HARD_STOP.value
 
 
 def test_settlement_due_uses_fallback_without_overriding_hard_stop():

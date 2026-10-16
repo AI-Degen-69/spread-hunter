@@ -35,9 +35,6 @@ def _cfg(**kw) -> MakerConfig:
         enable_pairs_rule=True,
         pairs_exit_window_sec=900.0,
         max_pair_cost=MAX_PAIR_COST,
-        single_buy_grace_sec=45.0,
-        stop_loss_trigger_pct=10.0,
-        stop_loss_trigger_usd_cents=4.5,
     )
     base.update(kw)
     return MakerConfig(**base)

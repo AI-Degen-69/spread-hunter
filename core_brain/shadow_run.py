@@ -351,7 +351,7 @@ def write_shadow_heartbeat(
 
 
 def shadow_cfg():
-    """The rehearsal's config: whatever `load()` reads, grace included.
+    """The rehearsal's config: whatever `load()` reads, nothing pinned.
 
     This used to force `single_buy_grace_sec=0.0` unconditionally. That made
     the exit path unmeasurable on the only surface it is safe to measure on --
@@ -359,9 +359,11 @@ def shadow_cfg():
     `data/15_shadow_touchpair.db`), the operator's `HUNTER_SINGLE_BUY_GRACE_SEC`
     was discarded on the way in, and so the knob could never be swept.
 
-    `load()` already defaults the field to 0.0, so an operator who sets nothing
-    still gets the old baseline; only an explicit setting now reaches the config
-    the rehearsal runs on.
+    #619 retired that knob outright -- the unified lifecycle's patience comes
+    from `pairs_exit_window_sec` / `aged_out_rescue_lead_sec`, and the stop is
+    entry-relative -- so the pin is gone with it. What remains is the rule that
+    mattered: the rehearsal runs on the operator's own settings, so a rehearsal
+    measures the exit the live path would really take.
     """
     from core_brain.config import load
     return load()

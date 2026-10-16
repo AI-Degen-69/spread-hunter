@@ -23,6 +23,7 @@ import requests
 
 from core_brain.config import MakerConfig
 from core_brain.quotes import Inventory, dynamic_offset_for, quote_resting_price
+from core_brain.single_leg_lifecycle import stop_trigger
 
 GAMMA = "https://gamma-api.polymarket.com"
 CLOB = "https://clob.polymarket.com"
@@ -169,34 +170,40 @@ def main():
     print(f"  quote = {price_h:.2f}  (offset {(mid - price_h)*100:.2f}c, skew applied)")
     print(f"  decision latency = {dt_h:.2f} ms")
 
-    # STOP LOSS. If the resting BUY fills at our quote price, the naked leg is
-    # force-exited once its best bid drops the Stop-Loss Trigger ($) below the
-    # fill. Show the exact trigger price on the whole-cent book.
-    stop_usd = cfg.stop_loss_trigger_usd_cents / 100.0
+    # STOP LOSS. Entry-relative since #619: if the resting BUY fills, the naked
+    # leg is force-exited once its best bid reaches the trigger derived from
+    # ITS OWN average fill, with the emergency floor as the backstop every mode
+    # shares. Show the exact trigger price on the whole-cent book.
     fill = price                       # assume we get filled at our resting bid
-    stop_trigger = fill - stop_usd     # bid at/below this cuts the position
-    stop_trigger_cent = math.floor(stop_trigger * 100.0 + 1e-9) / 100.0
-    print("\n--- STOP LOSS (single-leg, $%.2f flat) ---" % stop_usd)
+    trigger_price, trigger_source = stop_trigger(
+        fill, cfg.stop_loss_mode, cfg.drop_cents, cfg.drawdown_pct,
+        cfg.emergency_drawdown_pct,
+    )
+    trigger_cent = math.floor(trigger_price * 100.0 + 1e-9) / 100.0
+    print("\n--- STOP LOSS (entry-relative, mode %s) ---" % cfg.stop_loss_mode)
     print(f"  buy / fill       = {fill:.2f}  (${fill:.2f}/share)")
-    print(f"  stop loss        = ${stop_usd:.2f}/share")
-    print(f"  trigger bid      = {stop_trigger:.2f}  -> whole-cent {stop_trigger_cent:.2f}")
-    print(f"  if best bid <= {stop_trigger_cent:.2f}, the naked leg is force-exited")
-    print(f"  worst-case loss  = ${stop_usd:.2f}/share x size (bounded, flat cents)")
-    print(f"  exact diff       = {fill:.2f} - {stop_trigger_cent:.2f} = "
-          f"${fill - stop_trigger_cent:.2f}")
+    print(f"  active trigger   = {trigger_price:.4f}  (set by the {trigger_source} rule)")
+    print(f"  trigger bid      = {trigger_price:.2f}  -> whole-cent {trigger_cent:.2f}")
+    print(f"  if best bid <= {trigger_cent:.2f}, the naked leg is force-exited")
+    print(f"  worst-case loss  = ${fill - trigger_price:.4f}/share x size")
 
-    # Worked example at a 0.45 fill, so the operator sees the exact 4c cut
-    # the directive asked for regardless of where the live mid happens to sit.
-    ex_fill = 0.45
-    ex_trigger = math.floor((ex_fill - stop_usd) * 100.0 + 1e-9) / 100.0
-    print(f"  worked example   : buy {ex_fill:.2f} -> stop cuts at {ex_trigger:.2f} "
-          f"(exact ${ex_fill - ex_trigger:.2f} = {stop_usd*100:.0f}c)")
+    # The low entries the retired static $0.15 stop liquidated on fill, so the
+    # operator can see them survive their own entry-relative trigger instead.
+    for ex_fill in (0.10, 0.12, 0.14):
+        ex_price, ex_source = stop_trigger(
+            ex_fill, cfg.stop_loss_mode, cfg.drop_cents, cfg.drawdown_pct,
+            cfg.emergency_drawdown_pct,
+        )
+        ex_cent = math.floor(ex_price * 100.0 + 1e-9) / 100.0
+        print(f"  low entry {ex_fill:.2f}  -> cut at {ex_cent:.2f} "
+              f"({ex_source}), not the retired 0.15 static floor")
 
     print("\n--- VERDICT ---")
     print(f"  [OK] offset {dyn_off*100:.2f}c not clipped by any 4.5c cap")
     print(f"  [OK] resting price on whole-cent grid, floored not up ({price:.2f})")
     print(f"  [OK] WIDENED state does NOT snap back (kill switch active)")
-    print(f"  [OK] stop loss ${stop_usd:.2f} flat: buy {fill:.2f} -> cut {stop_trigger_cent:.2f}")
+    print(f"  [OK] stop loss entry-relative ({cfg.stop_loss_mode}): "
+          f"buy {fill:.2f} -> cut {trigger_cent:.2f} ({trigger_source})")
     print(f"  [OK] decision latency sub-ms ({max(dt_normal, dt_w, dt_h):.2f} ms worst)")
 
 

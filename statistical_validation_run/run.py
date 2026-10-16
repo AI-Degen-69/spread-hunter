@@ -17,7 +17,6 @@ import shutil
 import sqlite3
 import sys
 import time
-from dataclasses import replace as dc_replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -328,7 +327,10 @@ def main(
     # config target (60): a rehearsal that never collects enough closes must
     # run to its --max-hours ceiling and be reported underpowered, never
     # "PASS with adequate sample" at n=16. --target-closes 0 opts out.
-    cfg = dc_replace(load_cfg(), single_buy_grace_sec=0.0)
+    # No pinned override: the retired `single_buy_grace_sec` lost its last
+    # reader when the unified lifecycle shipped (#619), so the rehearsal runs
+    # on exactly what the operator configured.
+    cfg = load_cfg()
     if a.target_closes is None:
         a.target_closes = cfg.stat_gate_target_closes
     if a.target_closes < 0:

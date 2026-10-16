@@ -64,7 +64,7 @@ the retired `usd`/`pct` knobs used different units. Rejected alternative: none
 
 Depends on: T1 → T2 → T3 (T2 needs T1's trigger semantics; T3 needs final behavior).
 
-- [ ] T1.1 [Backend/Logic] M — Stop policy + config + both callers with tests.
+- [x] T1.1 [Backend/Logic] M — Stop policy + config + both callers with tests.
   Files: `core_brain/single_leg_lifecycle.py`, `core_brain/config.py`,
   `core_brain/trader_loop.py` (:1555), `core_brain/single_buy_saver.py`
   (:1768,:1806), `scripts/verify_loose_baseline_tape.py:175`,
