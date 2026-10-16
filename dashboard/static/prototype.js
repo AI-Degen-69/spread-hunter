@@ -270,6 +270,11 @@ function buildNavLabel(doc, text) {
  * are adopted by navigation rather than restyled into the shell. */
 const RAIL_LINKS = [
   {
+    href: '/explainer',
+    label: 'Strategy Explainer',
+    icon: 'M2 3h5a2 2 0 0 1 2 2v8a2 2 0 0 0-2-2H2z M14 3H9a2 2 0 0 0-2 2v8a2 2 0 0 1 2-2h5z',
+  },
+  {
     href: 'http://127.0.0.1:8798',
     label: 'Tournament Hub',
     icon: 'M2 4h12v9H2z M5 2h6 M5 15h6',

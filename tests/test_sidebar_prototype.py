@@ -650,3 +650,15 @@ def test_service_dot_styles_exist_in_prototype_css():
     assert ".dot-failed" in css
     assert ".dot-conflict" in css
 
+
+def test_explainer_route_and_rail_link():
+    client = _client()
+    res = client.get("/explainer")
+    assert res.status_code == 200
+    assert "Strategy, Timing & Risk Engine" in res.text
+
+    js = (_STATIC / "prototype.js").read_text(encoding="utf-8")
+    assert "Strategy Explainer" in js
+    assert "href: '/explainer'" in js
+
+

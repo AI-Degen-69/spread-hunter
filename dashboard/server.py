@@ -4059,6 +4059,27 @@ def analysis_v2_page() -> str:
     )
 
 
+@app.get("/explainer", response_class=HTMLResponse)
+def explainer_page() -> HTMLResponse:
+    """The Strategy Explainer page on its canonical clean path.
+
+    Serves `static/strategy_explainer.html`. Read-only documentation of strategy,
+    timing, parameters, and risk mechanics. `/static/strategy_explainer.html`
+    reaches the same document if the static mount is preferred.
+    """
+    path = _STATIC_DIR / "strategy_explainer.html"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="strategy explainer page not found")
+    return HTMLResponse(
+        path.read_text(encoding="utf-8"),
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     """Serve the live operations dashboard.
