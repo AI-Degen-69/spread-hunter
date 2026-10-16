@@ -266,7 +266,7 @@ T4 is independent of T1-T3 and can run any time before T5.
 |---|---|---|---|
 | 1 | T1 | Baseline confirmed as A; decision rule frozen before any result exists | **met** |
 | 2 | T4 | Policy switch, refusal-visit events, and cancel timestamp working | **met** |
-| 3 | T7 | Three arms run; operator decision recorded | **met** |
+| 3 | T7 | Tournament runs pending; Option A decision recorded | **not met** |
 | 4 | T9 | Winner shipped; no dead hold machinery left; tree clean | **met** |
 
 In `/iii-build-plan auto` each checkpoint is a one-line progress report, not an approval pause.
