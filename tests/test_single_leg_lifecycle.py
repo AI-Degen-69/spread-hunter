@@ -228,10 +228,34 @@ def test_stop_loss_modes_are_the_three_canonical_spellings():
 
 
 def test_stop_trigger_none_mode_uses_the_emergency_floor():
+    # 0.10 - 75% = 0.025, which rounds UP to the 0.03 cent.
     trigger, source = stop_trigger(0.10, "NONE", 0.05, 10.0, 75.0)
 
-    assert trigger == pytest.approx(0.025)
+    assert trigger == pytest.approx(0.03)
     assert source == "emergency"
+
+
+def test_stop_trigger_rounds_a_fractional_cent_up():
+    # The operator rule: any sub-cent fraction ceilings to the next whole
+    # cent, on both the strategy trigger and the emergency floor.
+    trigger, source = stop_trigger(0.50, "NONE", 0.05, 10.0, 75.0)
+    assert trigger == pytest.approx(0.13)
+    assert source == "emergency"
+
+    trigger, source = stop_trigger(0.50, "ABSOLUTE_DROP", 0.365, 10.0, 75.0)
+    assert trigger == pytest.approx(0.14)
+    assert source == "strategy"
+
+    # A strategy that ceilings onto the floor ties -- and the tie goes to
+    # the emergency backstop (0.50 - 0.375 = 0.125 -> 0.13, floor 0.13).
+    trigger, source = stop_trigger(0.50, "ABSOLUTE_DROP", 0.375, 10.0, 75.0)
+    assert trigger == pytest.approx(0.13)
+    assert source == "emergency"
+
+    # Whole-cent triggers are untouched by the ceiling.
+    trigger, source = stop_trigger(0.50, "ABSOLUTE_DROP", 0.05, 10.0, 75.0)
+    assert trigger == pytest.approx(0.45)
+    assert source == "strategy"
 
 
 def test_stop_trigger_percentage_mode_subtracts_the_drawdown():
@@ -274,7 +298,9 @@ def test_stop_trigger_floors_at_one_cent():
 
 @pytest.mark.parametrize(
     ("drop_cents", "expected", "source"),
-    [(0.01, 0.49, "strategy"), (0.90, 0.125, "emergency")],
+    # 0.50 - 0.90 is below zero, so the 0.125 emergency floor protects --
+    # rounded up to the 0.13 cent.
+    [(0.01, 0.49, "strategy"), (0.90, 0.13, "emergency")],
 )
 def test_stop_trigger_accepts_both_drop_cents_endpoints(drop_cents, expected,
                                                        source):
@@ -343,9 +369,10 @@ def test_stop_trigger_refuses_an_entry_outside_the_price_range(entry):
 
 @pytest.mark.parametrize(
     ("entry", "bid", "expected"),
-    [(0.10, 0.026, LegState.PATIENT_WAIT),
-     (0.10, 0.025, LegState.HARD_STOP),
-     (0.10, 0.024, LegState.HARD_STOP)],
+    # The 75% floor of 0.10 is 0.025, rounded UP to the 0.03 cent.
+    [(0.10, 0.031, LegState.PATIENT_WAIT),
+     (0.10, 0.03, LegState.HARD_STOP),
+     (0.10, 0.029, LegState.HARD_STOP)],
 )
 def test_none_mode_stops_a_ten_cent_entry_at_the_floored_emergency(
     entry, bid, expected,

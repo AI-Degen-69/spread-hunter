@@ -144,12 +144,12 @@ def _stop_exit(result: dict) -> bool:
 
 @pytest.mark.parametrize(
     ("best_bid", "expect_stop"),
-    [(0.026, False), (0.025, True), (0.024, True)],
+    [(0.031, False), (0.03, True), (0.029, True)],
 )
 def test_none_mode_cuts_a_ten_cent_entry_at_its_own_floor(
     registry, best_bid, expect_stop,
 ):
-    """Entry 0.10 at the 75% default floor is 0.025, not a static 0.15.
+    """Entry 0.10 at the 75% default floor is 0.025, rounded UP to 0.03.
 
     The retired rule sold on fill at any bid <= 0.15, and the strategy quotes
     down to 0.10 -- so every low-range entry was a booked loss by construction.
@@ -167,7 +167,7 @@ def test_none_mode_cuts_a_ten_cent_entry_at_its_own_floor(
         assert results[0]["lifecycle_state"] == "HARD_STOP"
         assert results[0]["reason"] == (
             f"held bid {best_bid:.4f} is at or below the emergency "
-            "trigger 0.0250"
+            "trigger 0.0300"
         )
     else:
         assert client.sell_calls == []
@@ -270,7 +270,7 @@ def test_the_floor_wins_when_the_mode_trigger_is_below_it(registry):
     )
 
     assert _stop_exit(results[0])
-    assert "emergency trigger 0.1250" in results[0]["reason"]
+    assert "emergency trigger 0.1300" in results[0]["reason"]
     assert "strategy" not in results[0]["reason"]
 
 
@@ -278,7 +278,7 @@ def test_the_floor_does_not_cut_below_its_own_level(registry):
     """With the floor as the live rule, one tick above it must not sell."""
     _one_sided_pair(registry, fill_price=0.50)
     now_s = (FILL_TS_MS / 1000.0) + 5.0
-    client = FakeClient(best_ask=0.14, best_bid=0.13)
+    client = FakeClient(best_ask=0.15, best_bid=0.14)
 
     results = auto_manage_pairs(
         client, registry,

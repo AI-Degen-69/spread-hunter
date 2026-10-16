@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_FLOOR
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from enum import Enum
 import time
 from typing import TYPE_CHECKING
@@ -307,6 +307,10 @@ def stop_trigger(
     was -- so a booked loss can be attributed to the mode the operator chose or
     to the catastrophe backstop.
 
+    Any trigger with a sub-cent fraction rounds UP to the next whole cent
+    (12.5c becomes 13c): the venue cannot price below its tick, and the bias
+    fires the exit a fraction earlier rather than later.
+
     `NONE` has no strategy trigger at all, so the floor is the whole rule. This
     is what replaces the static $0.15 stop: active quotes span $0.10-$0.90, and
     a fixed bid at the bottom of that range liquidated every low entry the
@@ -324,13 +328,17 @@ def stop_trigger(
 
     entry_decimal = Decimal(str(entry_value))
     hundred = Decimal(100)
+    cent = Decimal("0.01")
     emergency = entry_decimal * (Decimal(1) - emergency_value / hundred)
     emergency = max(emergency, Decimal(str(EMERGENCY_FLOOR_MIN)))
+    emergency = emergency.quantize(cent, rounding=ROUND_CEILING)
 
     if normalised == "ABSOLUTE_DROP":
-        strategy: Decimal | None = entry_decimal - drop_value
+        strategy: Decimal | None = (entry_decimal - drop_value).quantize(
+            cent, rounding=ROUND_CEILING)
     elif normalised == "PERCENTAGE_DROP":
-        strategy = entry_decimal * (Decimal(1) - drawdown_value / hundred)
+        strategy = (entry_decimal * (Decimal(1) - drawdown_value / hundred)).quantize(
+            cent, rounding=ROUND_CEILING)
     else:
         strategy = None
 
