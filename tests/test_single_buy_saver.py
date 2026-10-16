@@ -1931,3 +1931,73 @@ def test_shadow_hard_stop_records_trigger_bid(tmp_path):
     assert closes[0]["reason"] == "lifecycle_hard_stop"
     assert closes[0]["trigger_bid"] == pytest.approx(0.15)
     assert closes[0]["fresh_bid"] == pytest.approx(0.14)
+
+
+# ---------------------------------------------------------------------------
+# Atomic cancel-then-sell pinning on hard-stop (#628, Task T2)
+# ---------------------------------------------------------------------------
+
+
+def test_hard_stop_exit_cancels_opposite_before_selling(registry: OrderRegistry):
+    """#628: Opposite resting quote must be cancelled before selling held leg."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.40)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, MAX_PAIR_COST,
+        live=True, reason="lifecycle_hard_stop", force=True,
+        trigger_bid=0.15,
+    )
+
+    assert result["action"] == "exited"
+    assert "venue-light" in result["cancelled"]
+    cancel_i = next(i for i, c in enumerate(client.calls)
+                    if "venue-light" in c and c.startswith("cancel:"))
+    sell_i = next(i for i, c in enumerate(client.calls) if c.startswith("sell:"))
+    assert cancel_i < sell_i, "opposite resting quote must be cancelled before market selling"
+    closes = [c for c in registry.get_all_closes() if c.get("method") == "single_buy_exit"]
+    assert len(closes) == 1
+    assert closes[0]["reason"] == "lifecycle_hard_stop"
+
+
+def test_hard_stop_exit_refuses_when_opposite_fills_in_window(registry: OrderRegistry):
+    """#628: If light leg fills and overtakes during cancel, refuse exit and never sell."""
+    pair_id = _overfilling_light_pair(registry)
+    light = next(o for o in registry.get_active_orders() if o.token_id == TOK_DN)
+
+    class OvertakingClient(FakeClient):
+        def cancel_order(self, payload):
+            out = super().cancel_order(payload)
+            self.venue_matched["venue-light"] = 12.0
+            registry.record_fill(FillRecord(
+                trade_id="t-light", order_uuid=light.id, size=12.0,
+                price=0.30, venue_ts=1_000_100,
+            ))
+            registry.update_order_status(light.id, "filled", 1_000_100)
+            return out
+
+    client = OvertakingClient(best_ask=0.40)
+    with pytest.raises(lp.PairExitRefused, match="changed token"):
+        lp.exit_single_buy(
+            client, registry, pair_id, MAX_PAIR_COST,
+            live=True, reason="lifecycle_hard_stop", force=True,
+            trigger_bid=0.15,
+        )
+
+    assert not any(c.startswith("sell:") for c in client.calls)
+
+
+def test_hard_stop_exit_refuses_when_cancel_fails(registry: OrderRegistry):
+    """#628: If cancel of resting leg fails, refuse exit and never sell."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.40, cancel_ok=False)
+
+    with pytest.raises(lp.PairExitRefused, match="Cancel of"):
+        lp.exit_single_buy(
+            client, registry, pair_id, MAX_PAIR_COST,
+            live=True, reason="lifecycle_hard_stop", force=True,
+            trigger_bid=0.15,
+        )
+
+    assert not any(c.startswith("sell:") for c in client.calls)
+
