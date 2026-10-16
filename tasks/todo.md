@@ -3,26 +3,26 @@
 Branch: i622/decision-refusal-hold-keep-remove-or-bound | Issue: #622
 
 ## Phase 0 — ground truth
-- [ ] T1 · Confirm A is the shipped baseline (`GRACE_CYCLES == 1`; hold helpers uncalled) — as a test, not a grep
-- [ ] T1 · Write `docs/runs/2026-10-16-622-refusal-hold-tournament.md` with the decision rule FIRST
-- [ ] T1 · Record the evidence label, the shadow fill-model limit, and the six factual corrections
-- [ ] **Checkpoint 1**
+- [x] T1 · Confirm A is the shipped baseline (`GRACE_CYCLES == 1`; hold helpers uncalled) — as a test, not a grep
+- [x] T1 · Write `docs/runs/2026-10-16-622-refusal-hold-tournament.md` with the decision rule FIRST
+- [x] T1 · Record the evidence label, the shadow fill-model limit, and the six factual corrections
+- [x] **Checkpoint 1** — met
 
 ## Phase 1 — make the policy switchable without changing the default
-- [ ] T2 · Add `refusal_hold_policy` (default `remove`) + `refusal_hold_drift` with `HUNTER_*` overrides; unknown value raises
-- [ ] T2 · Plumb policy + tolerance + `token_mids` into `_visit_one` / `plan_orders`
-- [ ] T2 · `keep` branch restores 3-cycle hold; `drift` branch cancels two-sided beyond tolerance, no drift on missing mid
-- [ ] T2 · Tests: A indefinite hold, B third-cycle expiry, C in/out of tolerance, missing mid, hold→hold→expire, streak restart
-- [ ] T3 · Refusal visits reach a store (one `market_events` row per refused visit, or confirmed already there)
-- [ ] T4 · Nullable `orders.cancelled_ts` via the additive-migration pattern; populated at the cancel site
-- [ ] **Checkpoint 2**
+- [x] T2 · Add `refusal_hold_policy` (default `remove`) + `refusal_hold_drift` with `HUNTER_*` overrides; unknown value raises
+- [x] T2 · Plumb policy + tolerance into `_visit_one` / `plan_orders` (implemented as `drifted_token_ids`, see plan §6)
+- [x] T2 · `keep` branch restores 3-cycle hold; `drift` branch cancels two-sided beyond tolerance, no drift on missing mid
+- [x] T2 · Tests: A indefinite hold, B third-cycle expiry, C in/out of tolerance, missing mid, hold→hold→expire, streak restart
+- [x] T3 · Refusal visits reach a store — they did NOT; rows added via `log_market_event` (one `market_events` row per refused visit, or confirmed already there)
+- [x] T4 · Nullable `orders.cancelled_ts` via the additive-migration pattern; populated at the cancel site
+- [x] **Checkpoint 2** — met
 
 ## Phase 2 — measure
-- [ ] T5 · `scripts/refusal_hold_report.py`: churn, stop-out rate, censored time-to-fill, trend-vs-chop fill rate, stop slippage, run checks
-- [ ] T5 · `tests/test_refusal_hold_report.py`: run-id scoping, censoring, NULL bid fields, trend/chop series, drift cancels
-- [ ] T6 · `configs/tournaments/i622_tournament-1_arms.json`: 3 arms, policy-only, pinned bankroll + 4 live stop settings
-- [ ] T6 · Agent runs `--dry-run` only; protocol written (dedicated tape DB, rotated order, repeated runs)
-- [ ] T7 · **Operator** launches the runs; agent appends real report output to the run record
+- [x] T5 · `scripts/refusal_hold_report.py`: churn, stop-out rate, censored time-to-fill, trend-vs-chop fill rate, stop slippage, run checks
+- [x] T5 · `tests/test_refusal_hold_report.py`: run-id scoping, censoring, NULL bid fields, trend/chop series, drift cancels
+- [x] T6 · `configs/tournaments/i622_tournament-1_arms.json`: 3 arms, policy-only, pinned bankroll + 4 live stop settings
+- [x] T6 · Agent runs `--dry-run` only; protocol written (dedicated tape DB, rotated order, repeated runs)
+- [ ] T7 · **Operator** launches the runs; agent appends real report output to the run record — handed over, blocks T8–T10
 - [ ] **Checkpoint 3**
 
 ## Phase 3 — decide and simplify

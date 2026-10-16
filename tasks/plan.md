@@ -374,6 +374,16 @@ separate project, and rotating repeated concurrent runs is adequate for this dec
   remove it and how to check. Recorded rather than fixed: making the launcher
   strip it is #624's territory (its worker-env isolation), and this issue's
   file list does not include `scripts/shadow_tournament.py` beyond the arms file.
+- **T5 — an unreadable arm exited 0 and rendered a table of zeros (found by
+the operator-interface check, fixed).** Running the CLI against a path that does
+not exist printed a complete, plausible table — `status unavailable`, every
+metric `0` or `n/a` — and returned **0**, so a typo'd store path was
+indistinguishable from a measured all-zero arm in any scripted loop. That is the
+same false-measurement failure the report exists to prevent, one level up from
+the metric cells. `main()` now returns non-zero when any arm came back
+`unavailable`, prints the reason to stderr, and still prints the table. The
+revision cell for an unopened store also read `None`, which reads as a measured
+value; it is now `n/a`.
 - **T3 — the test harness pins `base_cfg`, so env overrides are invisible to it.**
   `_t3_seam` passes `base_cfg=MakerConfig()`, which means `run()` never calls
   `load()` and a `HUNTER_REFUSAL_HOLD_POLICY` override is silently ignored. The
