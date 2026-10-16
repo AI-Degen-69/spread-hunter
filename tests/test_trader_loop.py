@@ -432,6 +432,68 @@ class TestPlanOrders:
         assert to_cancel == []
         assert to_submit == []
 
+    def test_resting_bids_survive_ask_rise(self):
+        # #626: a resting pair at 0.73/0.23 (0.96 together) stays live when both
+        # opposite asks spike far past $1.00 combined. A resting pair's
+        # economics are its REST prices; the live ask is read only when a NEW
+        # bid is judged.
+        open_orders = [_open("tok-up", 0.73, "o-up"), _open("tok-dn", 0.23, "o-dn")]
+        intents = [_intent(side="UP", token="tok-up", price=0.73),
+                   _intent(side="DOWN", token="tok-dn", price=0.23)]
+        reasons: dict = {}
+
+        to_cancel, to_submit = plan_orders(
+            open_orders, intents, dead_band=0.03,
+            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            hedge_asks={"tok-up": 0.80, "tok-dn": 0.28},
+            reasons=reasons,
+        )
+
+        assert to_cancel == []
+        assert to_submit == []
+        assert reasons == {}
+
+    def test_resting_bid_survives_retired_regate_math(self):
+        # #626: 0.60 resting + 0.60 opposite ask = 1.20 -- the sum that used to
+        # cancel this bid. The wanted token is kept once: no cancel, no reason,
+        # and no duplicate posted beside it.
+        open_orders = [_open("tok-up", 0.60, "o-up")]
+        intents = [_intent(side="UP", token="tok-up", price=0.60)]
+        reasons: dict = {}
+
+        to_cancel, to_submit = plan_orders(
+            open_orders, intents,
+            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            hedge_asks={"tok-up": 0.60},
+            reasons=reasons,
+        )
+
+        assert to_cancel == []
+        assert to_submit == []
+        assert reasons == {}
+
+    @pytest.mark.parametrize("outcome", list(VisitOutcome))
+    def test_planner_never_records_regate_reason(self, outcome):
+        # #626: whatever the visit decided and however hostile the opposite
+        # asks, there is no re-gate left to record a reason for. This is the
+        # invariant, not one path: a reintroduced cost re-check fails here.
+        open_orders = [_open("tok-up", 0.60, "o-up"), _open("tok-dn", 0.23, "o-dn")]
+        intents = [_intent(side="UP", token="tok-up", price=0.60),
+                   _intent(side="DOWN", token="tok-dn", price=0.23)]
+        reasons: dict = {}
+
+        to_cancel, _ = plan_orders(
+            open_orders, intents, dead_band=0.03,
+            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            hedge_asks={"tok-up": 0.99, "tok-dn": 0.99},
+            hedge_held=set(),
+            visit_outcome=outcome,
+            reasons=reasons,
+        )
+
+        assert to_cancel == []
+        assert "regate_pair_cost" not in reasons.values()
+
 
 class TestRetiredRegatePurge:
     """#626: the per-cycle taker-ask re-gate is gone from the live path.

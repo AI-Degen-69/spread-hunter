@@ -65,7 +65,7 @@ behavior, same review surface (one static file).
 
 ## 4. Tasks (3 atomic vertical slices)
 
-### T1 (S) — delete dead constant + trim retired docstring
+### T1 (S) — delete dead constant + trim retired docstring ✅
 Files: `core_brain/trader_loop.py`. Depends on: none.
 - Delete line 88 (`CANCEL_REGATE_PAIR_COST`). Keep `CANCEL_NOT_QUOTED`,
   `CANCEL_PRICE_MOVED`, UMA reasons.
@@ -75,7 +75,7 @@ Files: `core_brain/trader_loop.py`. Depends on: none.
   `test_retired_regate_constant_is_gone` asserts `not hasattr(trader_loop,
   "CANCEL_REGATE_PAIR_COST")` (RED before, GREEN after).
 
-### T2 (M) — fixtures to literal + pin resting bids
+### T2 (M) — fixtures to literal + pin resting bids ✅
 Files: `tests/test_cancel_attribution.py`, `tests/test_trader_loop.py`.
 Depends on: T1.
 - Attribution file: drop the import (line 26); use literal `"regate_pair_cost"`
