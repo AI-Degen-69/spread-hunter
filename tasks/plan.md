@@ -166,7 +166,7 @@ T4 is independent of T1-T3 and can run any time before T5.
 - Verify: migration is idempotent on a legacy DB, and a fresh cancel stamps the column.
 - **Checkpoint 2** — one-line report: switch + events + cancel timestamp working; report next.
 
-### [ ] T5 — Read-only comparison report
+### [x] T5 — Read-only comparison report
 
 - Size: **L** · Domain: **Backend/Logic** · Depends on: T3, T4
 - Files: `scripts/refusal_hold_report.py` (new), `tests/test_refusal_hold_report.py` (new)
