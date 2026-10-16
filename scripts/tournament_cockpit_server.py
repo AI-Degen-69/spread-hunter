@@ -478,6 +478,152 @@ ARMS_CONFIG_492 = [
     },
 ]
 
+ARMS_CONFIG_608 = [
+    # Issue #608: 10-character shadow tournament on shipped defaults.
+    # Worst-catalyst columns stay EMPTY until this run produces results --
+    # the run's own verdict fills them, never hardcode (per #492 precedent).
+    {
+        "issue": 608,
+        "name": "the-accountant-1",
+        "label": "The Accountant (#1)",
+        "port": 8801,
+        "db": "data/i608_tournament-1_the-accountant-1.db",
+        "run_id": "shadow-608-tournament-1-the-accountant-1",
+        "color": "#00e676",
+        "desc": "Tight 2.0c stop (half shipped 4.0c): exits orphan legs early",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 608,
+        "name": "the-patient-one-1",
+        "label": "The Patient One (#1)",
+        "port": 8802,
+        "db": "data/i608_tournament-1_the-patient-one-1.db",
+        "run_id": "shadow-608-tournament-1-the-patient-one-1",
+        "color": "#00b0ff",
+        "desc": "Loose 8.0c stop: lets legs breathe through noise",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 608,
+        "name": "the-surgeon-1",
+        "label": "The Surgeon (#1)",
+        "port": 8803,
+        "db": "data/i608_tournament-1_the-surgeon-1.db",
+        "run_id": "shadow-608-tournament-1-the-surgeon-1",
+        "color": "#e040fb",
+        "desc": "Tight 0.25x dynamic offset: quotes close to the book",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 608,
+        "name": "the-daydreamer-1",
+        "label": "The Daydreamer (#1)",
+        "port": 8804,
+        "db": "data/i608_tournament-1_the-daydreamer-1.db",
+        "run_id": "shadow-608-tournament-1-the-daydreamer-1",
+        "color": "#ffd600",
+        "desc": "Wide 1.0x dynamic offset: rests deep for edge",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 608,
+        "name": "the-regular-1",
+        "label": "The Regular (#1)",
+        "port": 8805,
+        "db": "data/i608_tournament-1_the-regular-1.db",
+        "run_id": "shadow-608-tournament-1-the-regular-1",
+        "color": "#ff6d00",
+        "desc": "Offset excursion capped at 3c (down from 20c)",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 608,
+        "name": "the-metronome-1",
+        "label": "The Metronome (#1)",
+        "port": 8806,
+        "db": "data/i608_tournament-1_the-metronome-1.db",
+        "run_id": "shadow-608-tournament-1-the-metronome-1",
+        "color": "#69f0ae",
+        "desc": "Calm 0.06 requote deadband: reprices half as often",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 608,
+        "name": "the-gambler-1",
+        "label": "The Gambler (#1)",
+        "port": 8807,
+        "db": "data/i608_tournament-1_the-gambler-1.db",
+        "run_id": "shadow-608-tournament-1-the-gambler-1",
+        "color": "#ff4081",
+        "desc": "Hold direction (0.0) + 800-queue conviction through wobbles",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 608,
+        "name": "the-chaperone-1",
+        "label": "The Chaperone (#1)",
+        "port": 8808,
+        "db": "data/i608_tournament-1_the-chaperone-1.db",
+        "run_id": "shadow-608-tournament-1-the-chaperone-1",
+        "color": "#ff5252",
+        "desc": "Defends queue position (500) on every tick",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 608,
+        "name": "the-graceful-1",
+        "label": "The Graceful (#1)",
+        "port": 8809,
+        "db": "data/i608_tournament-1_the-graceful-1.db",
+        "run_id": "shadow-608-tournament-1-the-graceful-1",
+        "color": "#76ff03",
+        "desc": "45s maker grace on calm legs the stop did not take",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 608,
+        "name": "the-strict-parent-1",
+        "label": "The Strict Parent (#1)",
+        "port": 8810,
+        "db": "data/i608_tournament-1_the-strict-parent-1.db",
+        "run_id": "shadow-608-tournament-1-the-strict-parent-1",
+        "color": "#b388ff",
+        "desc": "Downside anchor: 2.0c stop + 0s grace (documents the floor)",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+]
+
 # Active Default / Backwards Compatibility Pointer
 ARMS_CONFIG = ARMS_CONFIG_492
 
@@ -494,6 +640,19 @@ TOURNAMENTS = {
         "static_filename": "tournament_cockpit_492.html",
         "issue_primary": 492,
         "issue_secondary": 492,
+    },
+    "608": {
+        "id": "608",
+        "title": "Issue #608 Character Tournament (Shipped Defaults)",
+        "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | 10 one-knob characters, shared Data Analysis verdict",
+        "badge": "R1 CHARACTERS",
+        "badge_cls": "badge-green",
+        "description": "Ten characters, one knob each, on loose shipped defaults. Catalyst columns stay empty until this run reports.",
+        "arms": ARMS_CONFIG_608,
+        "page_url": "/608",
+        "static_filename": "tournament_cockpit_608.html",
+        "issue_primary": 608,
+        "issue_secondary": 608,
     },
     "484": {
         "id": "484",
@@ -534,12 +693,12 @@ def resolve_tournament_arms(tourney_key: str = "492") -> list[dict[str, Any]]:
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS["492"])
     default_arms = meta["arms"]
     # #484 stays fully static (archive); live keys resolve their plan file.
-    if tourney_key not in ("487", "492"):
+    if tourney_key not in ("487", "492", "608"):
         return default_arms
 
     tourn_dir = ROOT / "runtime" / "tournaments"
     latest_plan = None
-    if tourney_key == "492":
+    if tourney_key in ("492", "608"):
         # Run-number scheme: i492_tournament-<run>.json, highest run wins.
         run_pattern = re.compile(rf"^i{tourney_key}_tournament-(?P<run>\d+)\.json$")
         best = None
@@ -856,6 +1015,24 @@ def collect_all_stats(tourney_key: str = "492") -> dict[str, Any]:
     total_stop_loss_exits = sum(
         int((a.get("funnel") or {}).get("stop_loss", 0) or 0) for a in arms_data
     )
+
+    # Aggregate strip (frontend-only, from the sums above): summed realized
+    # PnL, closes-weighted win/merge %, best-minus-worst spread. NO_DATA
+    # honesty when no arm DB has reported yet -- never a fabricated zero.
+    ok_arms = [a for a in arms_data if a.get("status") == "ok"]
+    agg_has_data = bool(ok_arms)
+    total_closes = sum(int(a.get("trades_count", 0) or 0) for a in ok_arms)
+    agg_realized_pnl = round(sum(float(a.get("total_pnl", 0.0) or 0.0) for a in ok_arms), 2)
+    agg_win_rate = (
+        round(sum(float(a.get("win_rate", 0.0) or 0.0) * int(a.get("trades_count", 0) or 0) for a in ok_arms) / total_closes, 1)
+        if total_closes else 0.0
+    )
+    agg_merge_rate = (
+        round(sum(int(a.get("merges_count", 0) or 0) for a in ok_arms) / total_closes * 100.0, 1)
+        if total_closes else 0.0
+    )
+    _pnls = [float(a.get("total_pnl", 0.0) or 0.0) for a in ok_arms]
+    agg_spread = round(max(_pnls) - min(_pnls), 2) if _pnls else 0.0
     
     # Global tournament progress
     max_elapsed = max((a.get("elapsed_min", 0.0) for a in arms_data), default=0.0)
@@ -900,6 +1077,11 @@ def collect_all_stats(tourney_key: str = "492") -> dict[str, Any]:
         "total_filled_orders": total_filled_orders,
         "total_merged_legs": total_merged_legs,
         "total_stop_loss_exits": total_stop_loss_exits,
+        "agg_has_data": agg_has_data,
+        "agg_realized_pnl": agg_realized_pnl,
+        "agg_win_rate": agg_win_rate,
+        "agg_merge_rate": agg_merge_rate,
+        "agg_spread": agg_spread,
         "max_elapsed_min": round(max_elapsed, 1),
         "elapsed_hours": round(max_elapsed / 60.0, 2),
         "rem_hours": round(time_rem_min / 60.0, 2),
@@ -1226,6 +1408,11 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     <span>#484 Baseline Archive (10 Arms)</span>
     <span class="badge badge-amber" style="font-size: 9px; padding: 1px 5px;">R1 ARCHIVE</span>
   </a>
+  <a href="/608" class="tourney-pill {'active-amber' if initial_data.get('tourney_key') == '608' else ''}">
+    <span>🎭</span>
+    <span>#608 Characters (10 Arms)</span>
+    <span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">R1 CHARACTERS</span>
+  </a>
 </div>
 
 <header>
@@ -1292,14 +1479,24 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 
 <!-- TAB 1: OVERVIEW & LEADERBOARD -->
 <div id="tab-overview" class="tab-pane active">
+  <div class="table-box" style="margin-bottom: 16px;">
+    <div style="display: flex; gap: 18px; flex-wrap: wrap; padding: 12px 16px; font-size: 13px;">
+      <span>Aggregate realized PnL: <strong class="tabular" id="agg-pnl">{('+$' if initial_data.get('agg_realized_pnl', 0.0) >= 0 else '-$') + f"{abs(initial_data.get('agg_realized_pnl', 0.0)):.2f}" if initial_data.get('agg_has_data') else 'NO_DATA'}</strong></span>
+      <span>Closes-weighted win: <strong class="tabular" id="agg-win">{f"{initial_data.get('agg_win_rate', 0.0):.1f}%" if initial_data.get('agg_has_data') else 'NO_DATA'}</strong></span>
+      <span>Closes-weighted merge: <strong class="tabular" id="agg-merge">{f"{initial_data.get('agg_merge_rate', 0.0):.1f}%" if initial_data.get('agg_has_data') else 'NO_DATA'}</strong></span>
+      <span>Best-minus-worst: <strong class="tabular" id="agg-spread">{('$' + f"{initial_data.get('agg_spread', 0.0):.2f}") if initial_data.get('agg_has_data') else 'NO_DATA'}</strong></span>
+    </div>
+  </div>
   <div class="table-box">
     <table>
       <thead>
         <tr>
           <th>Rank &amp; Arm</th>
-          <th>Quoted Orders</th>
+          <th>Sharpe</th>
+          <th>Profit Factor</th>
+          <th>VaR95</th>
+          <th>MC P5</th>
           <th>Filled Orders</th>
-          <th>Merged (legs ×2)</th>
           <th>Stop-Loss Exits</th>
           <th>Merge %</th>
           <th>Total PnL</th>
@@ -1576,6 +1773,15 @@ function renderAll() {{
   document.getElementById('m-leader-485-pnl').innerText = 'PnL: ' + (state.leader_485_pnl >= 0 ? '+$' : '-$') + Math.abs(state.leader_485_pnl).toFixed(2);
   document.getElementById('m-merges').innerText = state.total_merges.toLocaleString();
   document.getElementById('m-fills').innerText = (state.total_quoted || 0).toLocaleString();
+  const aggPnl = document.getElementById('agg-pnl');
+  if (aggPnl) aggPnl.innerText = state.agg_has_data
+    ? ((state.agg_realized_pnl >= 0 ? '+$' : '-$') + Math.abs(state.agg_realized_pnl).toFixed(2)) : 'NO_DATA';
+  const aggWin = document.getElementById('agg-win');
+  if (aggWin) aggWin.innerText = state.agg_has_data ? Number(state.agg_win_rate).toFixed(1) + '%' : 'NO_DATA';
+  const aggMerge = document.getElementById('agg-merge');
+  if (aggMerge) aggMerge.innerText = state.agg_has_data ? Number(state.agg_merge_rate).toFixed(1) + '%' : 'NO_DATA';
+  const aggSpread = document.getElementById('agg-spread');
+  if (aggSpread) aggSpread.innerText = state.agg_has_data ? '$' + Number(state.agg_spread).toFixed(2) : 'NO_DATA';
 
   // Table
   const tbody = document.getElementById('leaderboard-tbody');
@@ -1587,9 +1793,11 @@ function renderAll() {{
     const funnel = arm.funnel || {{}};
     tr.innerHTML = `
       <td><strong>#${{idx+1}}</strong> <span style="color: ${{arm.color}}">●</span> <strong>${{arm.label}}</strong></td>
-      <td class="tabular">${{funnel.quoted || 0}}</td>
+      <td class="tabular">${{(arm.sharpe_proxy ?? 0).toFixed(2)}}</td>
+      <td class="tabular">${{(arm.profit_factor ?? 0).toFixed(2)}}</td>
+      <td class="tabular">${{(arm.var_95 ?? 0).toFixed(4)}}</td>
+      <td class="tabular">${{(arm.mc_p5 ?? 0).toFixed(2)}}</td>
       <td class="tabular">${{funnel.filled || arm.orders_cnt || 0}}</td>
-      <td class="tabular">${{funnel.merged_legs || 0}} <span style="color: var(--text-muted);">(${{funnel.merged || 0}} pairs ×2)</span></td>
       <td class="tabular">${{arm.stop_loss_exits_count || 0}}</td>
       <td class="tabular">${{arm.merge_rate || 0}}%</td>
       <td class="tabular ${{pnlClass}}"><strong>${{pnlPrefix}}${{Math.abs(arm.total_pnl || 0).toFixed(2)}}</strong></td>
@@ -1936,6 +2144,16 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+        # Route 2b: Issue #608 character tournament (/608).
+        elif clean_path in ("/608", "/608.html"):
+            stats = get_cached_stats("608")
+            html = generate_cockpit_html(stats)
+            data = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
         # Route 3: JSON API (/api/stats or /api/stats?tourney=484)
         elif clean_path == "/api/stats":
             tourney = "492"
@@ -1980,12 +2198,19 @@ def run_cockpit_server(port: int = 8800) -> None:
 
     # 3. Issue #487 is HELD until R1 reports -- no fresh static export.
 
+    # 4. Issue #608 character tournament snapshot.
+    stats_608 = collect_all_stats("608")
+    static_608 = generate_cockpit_html(stats_608)
+    out_file_608 = reports_dir / "tournament_cockpit_608.html"
+    out_file_608.write_text(static_608, encoding="utf-8")
+    print(f"Static Cockpit (#608 characters) generated at: {out_file_608}")
+
     class ThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         daemon_threads = True
         allow_reuse_address = True
 
     server = ThreadedServer(("127.0.0.1", port), CockpitHandler)
-    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (pages: / [= #492 fresh], /484 [archive], /487 [held])")
+    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (pages: / [= #492 fresh], /608 [#608 characters], /484 [archive], /487 [held])")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

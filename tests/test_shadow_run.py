@@ -1689,7 +1689,10 @@ class TestRefusedHoldShadow:
         return run(seam, interval=0.0, once=False, live=True,
                    markets=[FakeMarket("0xabc")], sleep_fn=sleep_fn)
 
-    def test_refuse_then_quote_holds_without_churn(self, caplog):
+    def test_refuse_then_quote_cancels_then_requotes(self, caplog):
+        # Interim default (operator directive 2026-10-16, pending #622):
+        # no hold, so the first refusal cancels and the next quote
+        # resubmits -- churn by design until the #622 decision lands.
         import logging
         caplog.set_level(logging.INFO)
         calls = {"submitted": [], "cancelled": []}
@@ -1702,10 +1705,11 @@ class TestRefusedHoldShadow:
             return list(self._held_pair()), ""
 
         results = self._run_cycles(self._seam(decide, calls), 2)
-        assert [r.status for r in results] == ["QUOTED"]
-        assert calls["cancelled"] == []
+        # Both legs cancel on the first refusal -- no band anymore. Cycle 2
+        # keeps (the fake books still list the orders), so the cycle-1
+        # cancel is the whole proof.
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
         assert calls["submitted"] == []
-        assert "[HOLDING]" in caplog.text
 
     def test_dead_market_cancels_past_grace(self):
         from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE

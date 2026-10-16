@@ -156,6 +156,12 @@ def build_arm_view(plan: dict, arm: dict, reachable_map: Optional[dict[int, bool
         "elapsed_min": round(elapsed_min, 1),
         "remaining_min": round(remaining_min, 1),
         "heartbeat_age_sec": round(float(beat_age), 1) if beat_age is not None else None,
+        # Catalyst verdicts ride the plan arm when the run has reported them;
+        # empty until then (never hardcoded).
+        "worst_catalyst": arm.get("worst_catalyst") or "",
+        "worst_catalyst_desc": arm.get("worst_catalyst_desc") or "",
+        "hypothesized_tweak": arm.get("hypothesized_tweak") or "",
+        "tweak_rationale": arm.get("tweak_rationale") or "",
     }
 
     view["alive"] = bool(heartbeat.get("running"))
@@ -321,8 +327,6 @@ PAGE_HTML = """<!doctype html>
 <div id="arms" class="grid"><div class="empty">loading…</div></div>
 
 <script>
-const ARMS_ORDER = ["control", "conservative", "balanced", "aggressive", "prudent"];
-
 function fmt(n, digits = 2) {
   if (n === null || n === undefined) return "—";
   return Number(n).toFixed(digits);
@@ -356,7 +360,9 @@ function rows(a) {
     <dt>left</dt><dd>${fmt(a.remaining_min, 0)} min</dd>
     <dt>fills</dt><dd>${a.fill_events ?? 0} / ${a.filled_orders ?? 0} ord</dd>
     <dt>closes</dt><dd>${a.close_events ?? 0} (⇄${a.merges ?? 0} ✕${a.single_leg_exits ?? 0})</dd>
-    <dt>pnl</dt><dd>${a.realized_pnl_usd === undefined ? "—" : "$" + fmt(a.realized_pnl_usd)}</dd>`;
+    <dt>pnl</dt><dd>${a.realized_pnl_usd === undefined ? "—" : "$" + fmt(a.realized_pnl_usd)}</dd>
+    ${a.worst_catalyst ? `<dt>catalyst</dt><dd title="${esc(a.worst_catalyst_desc || "")}">🚨 ${esc(a.worst_catalyst)}</dd>` : ""}
+    ${a.hypothesized_tweak ? `<dt>tweak</dt><dd title="${esc(a.tweak_rationale || "")}">💡 ${esc(a.hypothesized_tweak)}</dd>` : ""}`;
 }
 
 function render(state) {
@@ -373,10 +379,10 @@ function render(state) {
     `${batches} · ${state.minutes} min · refreshed ${state.generated_at}`;
 
   // Group by issue (batch) first so both batches stay visually together, then
-  // by the known arm order within each batch.
+  // by plan index within each batch (all arms, any count, in plan order).
   const arms = [...state.arms].sort((a, b) => {
     if (a.issue !== b.issue) return (a.issue ?? 0) - (b.issue ?? 0);
-    return ARMS_ORDER.indexOf(a.name) - ARMS_ORDER.indexOf(b.name);
+    return (a.index ?? 0) - (b.index ?? 0);
   });
   wrap.innerHTML = arms.map(a => `
     <div class="card">

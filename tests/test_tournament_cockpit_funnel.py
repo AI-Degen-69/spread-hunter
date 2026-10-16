@@ -153,10 +153,17 @@ def test_cockpit_table_drops_issue_port_fills_columns():
     html = generate_cockpit_html({"arms": [], "tourney_key": "492"})
     for gone in ("<th>Issue</th>", "<th>Port</th>", "<th>Fills</th>"):
         assert gone not in html, f"{gone} column should be removed"
+    # #608 KPI swap repinned this list: Quoted Orders (volume, no quality
+    # signal) and Merged-legs (Merge % already carries the ratio) are gone;
+    # the already-computed Sharpe / Profit Factor / VaR95 / MC P5 are promoted.
+    for gone in ("<th>Quoted Orders</th>", "<th>Merged (legs \u00d72)</th>"):
+        assert gone not in html, f"{gone} column should be removed"
     for kept in (
-        "<th>Quoted Orders</th>",
+        "<th>Sharpe</th>",
+        "<th>Profit Factor</th>",
+        "<th>VaR95</th>",
+        "<th>MC P5</th>",
         "<th>Filled Orders</th>",
-        "<th>Merged (legs \u00d72)</th>",
         "<th>Stop-Loss Exits</th>",
     ):
         assert kept in html, f"{kept} funnel column should be present"

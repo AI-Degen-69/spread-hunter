@@ -606,3 +606,40 @@ def test_hybrid_preset_configuration():
     assert cfg.stop_loss_mode == "NONE"
     assert cfg.dynamic_offset_enabled is False
 
+
+def test_i608_character_arms_plan(tmp_path: Path):
+    """#608: the 10-character arms file builds a valid 10-arm plan."""
+    from scripts.shadow_tournament import build_tournament_plan
+
+    arms_file = Path(__file__).resolve().parent.parent / "configs" / "tournaments" / "i608_tournament-1_arms.json"
+    arms = json.loads(arms_file.read_text(encoding="utf-8"))
+    assert len(arms) == 10
+
+    plan = build_tournament_plan(
+        issue=608, arms=arms, base_port=8801, base_dir=tmp_path,
+        run_number=1, check_ports=False,
+    )
+    assert len(plan.arms) == 10
+    # Unique base names, run-number slugs <base>-1, ports 8801-8810.
+    bases = [a["name"] for a in arms]
+    assert len(set(bases)) == 10
+    assert [a.name for a in plan.arms] == [f"{b}-1" for b in bases]
+    assert [a.dash_port for a in plan.arms] == list(range(8801, 8811))
+
+    # One knob per character; the-gambler and the-strict-parent define two.
+    expected_knobs = {
+        "the-accountant": {"HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"},
+        "the-patient-one": {"HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"},
+        "the-surgeon": {"HUNTER_DYNAMIC_OFFSET_MULT"},
+        "the-daydreamer": {"HUNTER_DYNAMIC_OFFSET_MULT"},
+        "the-regular": {"HUNTER_DYNAMIC_OFFSET_MAX_CENTS"},
+        "the-metronome": {"HUNTER_REQUOTE_DEAD_BAND"},
+        "the-gambler": {"HUNTER_REQUOTE_HOLD_BELOW", "HUNTER_REQUOTE_HOLD_QUEUE"},
+        "the-chaperone": {"HUNTER_REQUOTE_HOLD_QUEUE"},
+        "the-graceful": {"HUNTER_SINGLE_BUY_GRACE_SEC"},
+        "the-strict-parent": {"HUNTER_STOP_LOSS_TRIGGER_USD_CENTS", "HUNTER_SINGLE_BUY_GRACE_SEC"},
+    }
+    assert {a["name"] for a in arms} == set(expected_knobs)
+    for a in arms:
+        assert set(a["env"]) == expected_knobs[a["name"]], a["name"]
+

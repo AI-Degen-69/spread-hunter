@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why "grace" keeps your orders alive — spread-hunter explainer</title>
+<style>
+  :root {
+    --bg: #0b0e14; --card: #141a26; --card2: #1a2233; --border: #2a3550;
+    --fg: #e8eef7; --muted: #93a1b8; --green: #00e676; --red: #ff5252;
+    --amber: #ffd600; --blue: #40a9ff; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.6 system-ui, "Segoe UI", sans-serif; margin: 0; padding: 0 0 64px; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 20px; }
+  h1 { font-size: 26px; margin: 8px 0 4px; }
+  h2 { font-size: 19px; margin: 36px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  h3 { font-size: 15px; margin: 18px 0 8px; }
+  p, li { color: var(--fg); }
+  .sub { color: var(--muted); margin-top: 0; }
+  .verdict { background: linear-gradient(135deg, rgba(255,82,82,.12), rgba(255,214,0,.08)); border: 1px solid #5a3a3a; border-radius: 12px; padding: 16px 18px; margin: 18px 0; }
+  .verdict strong { color: #fff; }
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 14px 0; }
+  @media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .card.dead { border-color: #2c4a38; }
+  .card.live { border-color: #6a5420; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .06em; padding: 2px 8px; border-radius: 20px; margin-bottom: 8px; }
+  .tag.dead { background: rgba(0,230,118,.15); color: var(--green); }
+  .tag.live { background: rgba(255,214,0,.15); color: var(--amber); }
+  code, .mono { font-family: var(--mono); font-size: 13px; }
+  code { background: #232c40; padding: 1px 6px; border-radius: 5px; }
+  pre { background: #0e1320; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
+  .hl { color: var(--amber); }
+  .grn { color: var(--green); }
+  .red { color: var(--red); }
+  .flow { display: flex; flex-direction: column; gap: 0; margin: 12px 0; }
+  .node { background: var(--card2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
+  .node.q { border-color: var(--blue); }
+  .node.act-hold { border-color: var(--amber); }
+  .node.act-cancel { border-color: var(--red); }
+  .node.act-ok { border-color: var(--green); }
+  .arrow { text-align: center; color: var(--muted); font-size: 12px; padding: 2px 0; }
+  .stepper { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin: 12px 0; }
+  .cycles { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+  .cycles button { background: var(--card2); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 13px; }
+  .cycles button[aria-pressed="true"] { border-color: var(--amber); background: #2a2415; }
+  .cycles button:focus-visible { outline: 2px solid var(--blue); }
+  #cycleOut { min-height: 150px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; }
+  th { background: var(--card2); }
+  .k { color: var(--muted); font-size: 12.5px; }
+  footer { color: var(--muted); font-size: 12.5px; margin-top: 36px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Why &ldquo;grace&rdquo; kept your orders alive</h1>
+<p class="sub">The refusal-hold path in <code>core_brain/trader_loop.py</code> — what it was, why it fired, and how it differs from the rescue grace you removed. <strong>Interim state 2026-10-16 (pending #622): the hold is OFF</strong> (<code>REFUSED_HOLD_GRACE_CYCLES = 1</code>), so the first transient refusal cancels. The walkthrough below shows the GRACE=3 behavior, restorable if #622 keeps the hold.</p>
+
+<div class="verdict">
+  <strong>Short answer:</strong> there are <strong>two different things called &ldquo;grace&rdquo;</strong> in this codebase.
+  You removed grace&nbsp;#1 (rescue patience on filled legs — dead, no reader).
+  Grace&nbsp;#2 (<strong>hold-on-refusal</strong>, issue #390) kept <em>resting orders</em> through up to
+  <strong>3 consecutive refused cycles</strong> before cancelling — but it is <strong>currently OFF by interim operator directive</strong> (GRACE=1: first refusal cancels, pending #622). It is unrelated to the stop-loss spec either way.
+</div>
+
+<h2>1. The two graces — dead vs live</h2>
+<div class="cards">
+  <div class="card dead">
+    <span class="tag dead">GRACE #1 — DEAD</span>
+    <h3>Rescue patience (<code>single_buy_grace_sec</code>)</h3>
+    <p>Gave a filled single leg N seconds as maker before rescue. Retired in #619: the env var now logs <em>&ldquo;retired and ignored&rdquo;</em> (<code>config.py:1494-1511</code>) and <strong>no code reads the knob</strong>. This is the one you remember removing. It cannot hold anything.</p>
+    <p class="k">Leftover mentions: <code>reason="grace_expired"</code> labels on old closes, dashboard chips, two open cleanup rows — forensic text, zero behavior.</p>
+  </div>
+  <div class="card live">
+    <span class="tag dead">GRACE #2 — OFF (INTERIM, PENDING #622)</span>
+    <h3>Hold-on-refusal (<code>REFUSED_HOLD_GRACE_CYCLES = 1</code>, was 3)</h3>
+    <p>When the loop visits a market but <code>decide</code> <em>refuses</em> to quote (book flicker, not abandonment), resting orders <strong>cancel on the first refusal</strong> — no hold, no second chance. The 3-cycle hold below is the pre-2026-10-16 behavior, restorable by setting the constant back to 3 if #622 keeps the machinery. Lives in <code>trader_loop.py:132</code>.</p>
+    <p class="k">Nothing to do with filled legs, rescue, or the stop-loss MD. It manages <em>unfilled resting quotes</em>.</p>
+  </div>
+</div>
+
+<h2>2. Walkthrough: one market, four refused cycles (GRACE=3, pre-2026-10-16)</h2>
+<p>Setup: you have a resting bid. Each cycle the loop visits the market, but <code>decide</code> returns <strong>no intents</strong> with a transient reason (e.g. wide book). This is the historical 3-cycle-hold behavior — today (GRACE=1) cycle 1 already cancels. Click through the cycles:</p>
+<div class="stepper" role="group" aria-label="Cycle stepper">
+  <div class="cycles" id="cycleBtns">
+    <button data-c="1" aria-pressed="true">Cycle 1</button>
+    <button data-c="2" aria-pressed="false">Cycle 2</button>
+    <button data-c="3" aria-pressed="false">Cycle 3</button>
+    <button data-c="4" aria-pressed="false">Cycle 4 (recovers)</button>
+  </div>
+  <div id="cycleOut"></div>
+</div>
+
+<h2>3. The decision flow (exact code path)</h2>
+<div class="flow">
+  <div class="node q"><strong>Visit market, no intents.</strong> Lifecycle preserve-ids? → follow lifecycle, grace not involved. Otherwise:</div>
+  <div class="arrow">▼ classify <code>why</code> — <code>_classify_refusal</code> (<code>:135</code>)</div>
+  <div class="node act-cancel"><strong>Terminal refusal</strong> (settled, expired, exited, unfunded…) → <code>REFUSED_TERMINAL</code> → <strong>cancel immediately</strong> via <code>not_quoted</code>. No grace, ever. (<code>:426-433</code>)</div>
+  <div class="arrow">▼ else <strong>transient</strong> (wide book, cap, reward window…) → <code>REFUSED_TRANSIENT</code></div>
+  <div class="node act-hold"><strong>Streak check</strong> (<code>:1900</code>): <code>refused_streak + 1 &gt;= REFUSED_HOLD_GRACE_CYCLES</code>?<br>
+    At GRACE=3: No → <strong>HOLD</strong> — no cancel, no submit. Logs <code>[HOLDING] … held through transient refusal</code>.<br>
+    <strong>Today (GRACE=1, interim): the very first refusal meets the threshold</strong> → <code>REFUSED_GRACE_EXPIRED</code> → <strong>cancel</strong> like terminal. (The #419 mid-hold band exception was removed 2026-10-16 — expiry now cancels everything.)</div>
+  <div class="arrow">▼ after the visit</div>
+  <div class="node"><strong>Streak counter</strong> (<code>:808-820</code>): held → streak+1, anything else → reset to 0. With the hold off, nothing is ever held by this path, so the streak never accumulates here — a single quoted cycle still wipes the count.</div>
+</div>
+
+<h2>4. Why it exists (the churn it prevents)</h2>
+<p>From the comment at <code>trader_loop.py:85-88</code>: on shadow-02, <strong>23 of 25 orders were cancelled with a median lifetime of 37s</strong> — mostly book flicker, not real abandonment. Cancelling on every refused cycle means:</p>
+<ul>
+  <li>paying cancel/replace churn on every book wobble,</li>
+  <li>losing queue position each time, then re-joining at the back.</li>
+</ul>
+<p>The 3-cycle hold said: <em>&ldquo;the book moved, not the market — sit still until it's clearly dead.&rdquo;</em> A market that never comes back still cancelled on the 3rd consecutive refusal. The counter is per-market (<code>refused_streaks[cid]</code>), so one dead market can't spend another's patience. <strong>Currently off by interim directive (GRACE=1, pending #622)</strong> — the churn described below is what the loop pays today.</p>
+
+<h2>5. How to tell which grace held your order</h2>
+<table>
+  <tr><th>Signal</th><th>Grace #1 (rescue, dead)</th><th>Grace #2 (refusal hold, live)</th></tr>
+  <tr><td>Log line</td><td>Nothing — it cannot log, it never runs</td><td><code>[HOLDING] … N quote(s) held through transient refusal: {why}</code> — silent while GRACE=1 (nothing held by this path)</td></tr>
+  <tr><td>Result flag</td><td>—</td><td><code>LiveFleetResult.held == True</code> — unreachable while GRACE=1</td></tr>
+  <tr><td>Outcome enum</td><td>—</td><td><code>refused_hold</code> → later <code>refused_grace_expired</code></td></tr>
+  <tr><td>What is held</td><td>—</td><td>Unfilled resting quotes only. Filled legs go through the stop lifecycle, untouched by this.</td></tr>
+</table>
+
+<h2>6. If you want it back (or shorter)</h2>
+<p>The dial is one constant — <code>REFUSED_HOLD_GRACE_CYCLES = 1</code> (<code>trader_loop.py:132</code>, interim pending #622):</p>
+<table>
+  <tr><th>Value</th><th>Effect</th></tr>
+  <tr><td><code>1</code> (today, interim)</td><td>No hold at all — first refusal cancels (maximum churn, quotes rest until fill / terminal refusal / stop exit)</td></tr>
+  <tr><td><code>3</code></td><td>Restores the hold: keeps resting orders through 2 refused cycles, cancels on the 3rd consecutive one — set this back if #622 keeps the machinery</td></tr>
+  <tr><td><code>2</code></td><td>One cycle of patience</td></tr>
+</table>
+<p class="k">The keep/remove/bound call belongs to #622 (still OPEN) — this branch only parks the dial at 1 until that decision lands.</p>
+
+<footer>Sources: <code>core_brain/trader_loop.py</code> VisitOutcome (:109-122), GRACE const (:132), plan_orders (:233), streak check (:1900), streak counter (:808-820); <code>core_brain/config.py</code> 1494-1511. Generated 2026-10-16, corrected to the interim GRACE=1 state. No product code changed by this doc.</footer>
+
+</div>
+<script>
+(function () {
+  var data = {
+    1: { title: "Cycle 1 — first refusal: HOLD",
+         body: "<p><code>refused_streak</code> enters at <strong>0</strong>. Check: <code>0 + 1 &gt;= 3</code>? No → " +
+         "<code>REFUSED_TRANSIENT</code>. <code>plan_orders</code> skips the order (<code>:456-461</code> <code>continue</code>): " +
+         "<strong class='hl'>no cancel, no submit</strong>. Result flag <code>held=true</code>, log line " +
+         "<code>[HOLDING]</code>. Streak becomes <strong>1</strong>.</p><p>Your order is alive because the loop believes the book flickered, not that the market died.</p>" },
+    2: { title: "Cycle 2 — second refusal: HOLD",
+         body: "<p>Streak enters at <strong>1</strong>. Check: <code>1 + 1 &gt;= 3</code>? No → hold again. Same path: no cancel, no submit, <code>held=true</code>. Streak becomes <strong>2</strong>.</p>" +
+         "<p>Still alive. One more consecutive refusal and patience runs out.</p>" },
+    3: { title: "Cycle 3 — third refusal: GRACE EXPIRES → CANCEL",
+         body: "<p>Streak enters at <strong>2</strong>. Check: <code>2 + 1 &gt;= 3</code>? <strong class='red'>Yes</strong> → " +
+         "outcome flips to <code>REFUSED_GRACE_EXPIRED</code>. The order now <strong>cancels via <code>not_quoted</code></strong>, exactly like a terminal refusal — " +
+         "with no exception since the #419 mid-hold band was removed 2026-10-16.</p>" +
+         "<p>Stop recorded as <code>HOLD_EXPIRED</code>. Streak resets to <strong>0</strong>.</p>" },
+    4: { title: "Cycle 4 (alternate ending) — market recovers: RESET",
+         body: "<p>Suppose cycle 3 had quoted instead of refusing: intents exist → <code>QUOTED</code>, the streak resets to <strong>0</strong>, " +
+         "and the whole 3-cycle allowance starts over. Any single quotable cycle wipes the count — only <em>consecutive</em> refusals accumulate.</p>" }
+  };
+  var out = document.getElementById("cycleOut");
+  var btns = document.querySelectorAll("#cycleBtns button");
+  function show(c) {
+    out.innerHTML = "<h3>" + data[c].title + "</h3>" + data[c].body;
+    btns.forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.c == c ? "true" : "false"); });
+  }
+  btns.forEach(function (b) { b.addEventListener("click", function () { show(b.dataset.c); }); });
+  show("1");
+})();
+</script>
+</body>
+</html>

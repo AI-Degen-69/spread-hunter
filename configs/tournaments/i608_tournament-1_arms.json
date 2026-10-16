@@ -1,0 +1,64 @@
+[
+  {
+    "name": "the-accountant",
+    "env": {
+      "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": "2.0"
+    }
+  },
+  {
+    "name": "the-patient-one",
+    "env": {
+      "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": "8.0"
+    }
+  },
+  {
+    "name": "the-surgeon",
+    "env": {
+      "HUNTER_DYNAMIC_OFFSET_MULT": "0.25"
+    }
+  },
+  {
+    "name": "the-daydreamer",
+    "env": {
+      "HUNTER_DYNAMIC_OFFSET_MULT": "1.0"
+    }
+  },
+  {
+    "name": "the-regular",
+    "env": {
+      "HUNTER_DYNAMIC_OFFSET_MAX_CENTS": "3"
+    }
+  },
+  {
+    "name": "the-metronome",
+    "env": {
+      "HUNTER_REQUOTE_DEAD_BAND": "0.06"
+    }
+  },
+  {
+    "name": "the-gambler",
+    "env": {
+      "HUNTER_REQUOTE_HOLD_BELOW": "0.0",
+      "HUNTER_REQUOTE_HOLD_QUEUE": "800"
+    }
+  },
+  {
+    "name": "the-chaperone",
+    "env": {
+      "HUNTER_REQUOTE_HOLD_QUEUE": "500"
+    }
+  },
+  {
+    "name": "the-graceful",
+    "env": {
+      "HUNTER_SINGLE_BUY_GRACE_SEC": "45"
+    }
+  },
+  {
+    "name": "the-strict-parent",
+    "env": {
+      "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": "2.0",
+      "HUNTER_SINGLE_BUY_GRACE_SEC": "0"
+    }
+  }
+]

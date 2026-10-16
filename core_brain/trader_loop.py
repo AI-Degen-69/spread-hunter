@@ -118,19 +118,18 @@ class VisitOutcome(Enum):
     REFUSED_TRANSIENT = "refused_hold"   # visited, refused: hold resting
     REFUSED_TERMINAL = "refused_cancel"  # visited, refused for good: cancel
     REFUSED_GRACE_EXPIRED = "refused_grace_expired"  # hold grace ran out:
-        # cancels like terminal, except the mid-hold band (#419) still holds
-        # an order the descending mid is about to reach
+        # cancels like terminal
 
 
 # Consecutive visited-but-refused cycles a market's resting orders survive
 # before the hold expires and they cancel via `not_quoted` (#390). A market
 # that never comes back is dead, not flickering. Named, not magic.
-REFUSED_HOLD_GRACE_CYCLES = 3
-
-# Mid-hold band (#419): hold a resting order while
-# `mid <= order.price + MID_HOLD_BAND`, instead of cancelling or re-quoting
-# into a book that is walking down onto the bid.
-MID_HOLD_BAND = 0.02
+#
+# Interim default (operator directive 2026-10-16, pending #622): 1, i.e. the
+# hold is OFF -- the first transient refusal already expires into a cancel,
+# so quotes rest until fill / terminal refusal / stop exit. Restore to
+# 3 if #622 keeps the hold.
+REFUSED_HOLD_GRACE_CYCLES = 1
 
 
 def _classify_refusal(why: str) -> VisitOutcome:
@@ -208,10 +207,11 @@ def _note_lifecycle_stop(
 
 
 def _cycle_mids(up_book: dict, down_book: dict) -> dict:
-    """This cycle's per-token midpoints for the mid-hold band (#419).
+    """This cycle's per-token midpoints.
 
     A token is left out when its book is missing, one-sided, non-numeric,
-    or crossed: with no trustworthy mid the planner keeps today's behavior.
+    or crossed. (Kept for telemetry/tests; no planner rule consumes it since
+    the #419 mid-hold band was removed.)
     """
     mids: dict[str, float] = {}
     for book in (up_book or {}, down_book or {}):
@@ -248,7 +248,6 @@ def plan_orders(
     replace_order_ids: Optional[set[str] | frozenset[str]] = None,
     cancel_order_ids: Optional[set[str] | frozenset[str]] = None,
     lifecycle_pair_id: str | None = None,
-    token_mids: Optional[dict] = None,
 ) -> tuple[list[dict], list[QuoteIntent]]:
     """Split open orders + desired intents into (cancel, submit).
 
@@ -266,14 +265,6 @@ def plan_orders(
 
     Orders on tokens we no longer quote are cancelled. An intent with no kept
     order near its price is submitted.
-
-    MID HOLD (#419). The two rules above gain one exception: while a token's
-    mid sits at or below its resting order's price plus `MID_HOLD_BAND`
-    (0.02, inclusive), the order is held -- no `not_quoted` cancel, no
-    `lifecycle_replace`, no duplicate submit. Terminal refusals, hard stop,
-    `lifecycle_cancel`, and explicit cancel sets still cancel in band, and
-    a missing, one-sided, or crossed book falls back to the rules above.
-    `token_mids` carries this cycle's mids; `None` keeps the old behavior.
 
     TWO INDEPENDENT REASONS TO KEEP AN ORDER, and the tolerance is the larger
     of them so neither can silently disable the other:
@@ -380,25 +371,6 @@ def plan_orders(
             if key is not None:
                 reasons[str(key)] = reason
 
-    def _mid_holds(order: dict) -> bool:
-        """Is the mid close enough above this bid to sit and wait for it?
-
-        Hold iff the token has a usable mid and `mid <= price + band`.
-        Equality counts: float sums such as `0.48 + 0.02` are not exact,
-        so the compare carries `price_eps`. Anything missing or
-        non-finite stands down to today's behavior.
-        """
-        if not token_mids:
-            return False
-        mid = token_mids.get(str(order.get("token_id")))
-        try:
-            mid = float(mid)
-        except (TypeError, ValueError):
-            return False
-        if not math.isfinite(mid):
-            return False
-        return mid <= float(order["price"]) + MID_HOLD_BAND + float(price_eps)
-
     def _near_front(order: dict) -> bool:
         """Is this order close enough to the front to be worth holding?"""
         if not hold_queue_shares or hold_queue_shares <= 0 or not queue_ahead:
@@ -434,12 +406,6 @@ def plan_orders(
     for o in open_orders:
         tok = o["token_id"]
         key = str(o.get("id") or o.get("order_id") or "")
-        if key in replace_ids and key not in cancel_ids and _mid_holds(o):
-            # MID HOLD (#419): the book is walking down onto this hedge.
-            # Keep it at its own price; the held token suppresses the
-            # replacement submit below, so no second order rests beside it.
-            held_tokens.add(tok)
-            continue
         if key in replace_ids or key in cancel_ids:
             _record(
                 o,
@@ -460,16 +426,9 @@ def plan_orders(
                 # is nothing to submit either.
                 continue
             if visit_outcome is VisitOutcome.REFUSED_TERMINAL:
-                # Refused for good (named stop, hard stop): cancel, even
-                # when the mid sits inside the hold band.
+                # Refused for good (named stop, hard stop): cancel.
                 _record(o, CANCEL_NOT_QUOTED)
                 to_cancel.append(o)
-                continue
-            if _mid_holds(o):
-                # MID HOLD (#419): the book is walking down onto this bid.
-                # Sit at our own price and wait for the fill: no cancel,
-                # and the held token suppresses any duplicate submit.
-                held_tokens.add(tok)
                 continue
             _record(o, CANCEL_NOT_QUOTED)
             to_cancel.append(o)
@@ -1942,9 +1901,7 @@ def _visit_one(
         )
         if grace_expired:
             # GRACE EXPIRED (#390): held through enough refused cycles with
-            # no quotable one between. Cancels via the grace path below --
-            # except the mid-hold band (#419) still holds an order the
-            # descending mid is about to reach.
+            # no quotable one between. Cancels via the grace path below.
             visit_outcome = VisitOutcome.REFUSED_GRACE_EXPIRED
         if intents:
             # A quote in between re-arms stop rows: the next stop is news.
@@ -1966,7 +1923,6 @@ def _visit_one(
             "hold_below_target": float(
                 getattr(cfg, "requote_hold_below_target", 0.0)),
             "visit_outcome": visit_outcome,
-            "token_mids": _cycle_mids(ev.up_book, ev.down_book),
         }
         lifecycle_context = ev.lifecycle_context
         if lifecycle_context is not None and (
