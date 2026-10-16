@@ -72,20 +72,11 @@ class LiveFleetResult:
     submitted: int = 0
     cancelled: int = 0
     error: str = ""
-    #: True when this visit held resting orders through a transient refusal
-    #: (#390). `run` reads it to maintain the per-market grace counter.
-    held: bool = False
     #: The queue-clear gate's reading for this visit's new placements (#393):
     #: the named reason when the queue ahead is too deep or too quiet to clear,
     #: empty when it clears or when nothing was measured. Record-only at ship, so
     #: a non-empty value usually means "reported, not refused".
     queue_why: str = ""
-    #: This cycle's per-token midpoints for the market just visited (#622).
-    #: `run` keeps them as the reference a `drift` streak measures against, and
-    #: stores them only when the streak starts. Empty when a book was missing,
-    #: one-sided, non-numeric or crossed -- with no trustworthy mid there is no
-    #: reference, and `_drifted_tokens` then reports no drift.
-    token_mids: dict = field(default_factory=dict)
 
 
 # Why an order was cancelled. Recorded on the row so a cancel that defended the
@@ -93,12 +84,6 @@ class LiveFleetResult:
 # nothing -- on shadow-02, 23 of 25 orders were cancelled with a median lifetime
 # of 37s and nothing in the registry said which kind each one was.
 CANCEL_NOT_QUOTED = "not_quoted"          # we no longer quote this token at all
-# Option C's own reason (#622): the market refused us AND the mid had moved
-# past the drift tolerance from the first refusal of the streak. Kept distinct
-# from `not_quoted` because the report groups churn by reason, and a cancel
-# that answered real drift is not the same event as one that threw the queue
-# position away for nothing.
-CANCEL_HOLD_DRIFT = "hold_drift"
 CANCEL_PRICE_MOVED = "price_moved"        # the desired price left the tolerance
 CANCEL_REGATE_PAIR_COST = "regate_pair_cost"  # holding would break max_pair_cost
 CANCEL_MARKET_DROPPED = LifecycleStop.MARKET_DROPPED.code  # market left universe
@@ -119,92 +104,10 @@ PARTIAL_SUBMIT_PLACED_ATTR = "placed"
 
 
 class VisitOutcome(Enum):
-    """What one market visit decided, beyond the intents list.
-
-    Empty intents currently mean two different things -- the market was
-    visited but `decide` refused (transient book flicker: hold), or the
-    market is gone/settled (cancel now). The enum names which one so
-    `plan_orders` never has to guess from `intents == []`.
-    """
+    """What one market visit decided, beyond the intents list."""
     QUOTED = "quoted"                    # intents present (or no opinion)
-    REFUSED_TRANSIENT = "refused_hold"   # visited, refused: hold resting
-    REFUSED_TERMINAL = "refused_cancel"  # visited, refused for good: cancel
-    REFUSED_GRACE_EXPIRED = "refused_grace_expired"  # hold grace ran out:
-        # cancels like terminal
-
-
-# Consecutive visited-but-refused cycles a market's resting orders survive
-# before the hold expires and they cancel via `not_quoted` (#390). A market
-# that never comes back is dead, not flickering. Named, not magic.
-#
-# Under the `remove` policy (the shipped default, operator directive
-# 2026-10-16 pending #622) this is 1: the hold is OFF, so the first transient
-# refusal already expires into a cancel and quotes rest until fill, terminal
-# refusal, or stop exit. Keeping the name and its 1 means the default policy is
-# byte-for-byte today's behavior -- existing tests, and the experiment's
-# control arm, read the same number they always did.
-REFUSED_HOLD_GRACE_CYCLES = 1
-
-# The same count under the policies that DO hold (`keep`, `drift`): what
-# `d7810fd` lowered to 1, and the cycle limit option C keeps on top of its
-# drift check (drift only shortens a hold inside these cycles).
-REFUSED_HOLD_GRACE_CYCLES_HELD = 3
-
-#: Policies that hold resting orders at all.
-_HOLDING_POLICIES = frozenset({"keep", "drift"})
-
-#: Option C's own `refusal_visit` code: the market refused us AND the mid had
-#: moved past the tolerance. Distinct from a plain hold because "how often does
-#: drift fire" is the measurement option C exists to produce.
-REFUSAL_VISIT_DRIFT = "refused_drift"
-
-
-def _grace_cycles(policy: str) -> int:
-    """Consecutive refused cycles a market survives before the hold expires.
-
-    `remove` is not a zero-cycle hold, it is the absence of one: the first
-    transient refusal meets the threshold and cancels, which is exactly what a
-    one-cycle limit does. An unknown policy raises rather than defaulting, so a
-    mis-spelled tournament arm cannot silently measure the control arm twice.
-    """
-    if policy in _HOLDING_POLICIES:
-        return REFUSED_HOLD_GRACE_CYCLES_HELD
-    if policy == "remove":
-        return REFUSED_HOLD_GRACE_CYCLES
-    raise ValueError(
-        "refusal_hold_policy must be one of drift, keep, remove, "
-        f"got: {policy!r}"
-    )
-
-
-def _drifted_tokens(reference, current, tolerance) -> frozenset[str]:
-    """Tokens whose mid moved more than `tolerance` since the first refusal.
-
-    TWO-SIDED on purpose: "flicker versus drift" is about how far the mid moved,
-    not which way it went, so a rise and a fall are the same event here. The
-    bound is strict -- a move of exactly the tolerance is still flicker.
-
-    A missing mid on either side is NOT drift. That mirrors the rule the #419
-    mid-hold band used for an unreadable book, and it keeps a market with a
-    one-sided or crossed book resting rather than cancelling it on a number we
-    never actually measured.
-    """
-    if not reference or not current:
-        return frozenset()
-    # Both sides are rounded to the tick grid before comparing, the same way
-    # `_market_arriving` rounds its drop. Without it a move of exactly the
-    # tolerance is decided by binary-representation noise -- 0.62 - 0.60 is
-    # 0.020000000000000018, which reads as "over 2c" and cancels on a move that
-    # is by definition still flicker.
-    limit = round(max(0.0, float(tolerance)), 4)
-    drifted = set()
-    for token, was in reference.items():
-        now = current.get(token)
-        if was is None or now is None:
-            continue
-        if round(abs(float(now) - float(was)), 4) > limit:
-            drifted.add(token)
-    return frozenset(drifted)
+    REFUSED_TRANSIENT = "refused_transient"  # visited, refused: transient reason
+    REFUSED_TERMINAL = "refused_cancel"  # visited, refused for good: named stop
 
 
 def _classify_refusal(why: str) -> VisitOutcome:
@@ -220,14 +123,8 @@ def _classify_refusal(why: str) -> VisitOutcome:
     return VisitOutcome.REFUSED_TRANSIENT
 
 
-def _visit_stop(why: str, grace_expired: bool) -> Optional[LifecycleStop]:
-    """Name the lifecycle stop for a refused visit (pure).
-
-    A transient refusal that outlasted the hold grace expires into
-    HOLD_EXPIRED -- today that path cancels without a named reason (#402).
-    """
-    if grace_expired:
-        return LifecycleStop.HOLD_EXPIRED
+def _visit_stop(why: str) -> Optional[LifecycleStop]:
+    """Name the lifecycle stop for a refused visit (pure)."""
     return classify_refusal(why or "")
 
 
@@ -281,44 +178,16 @@ def _note_lifecycle_stop(
     return True
 
 
-def _refusal_visit_code(outcome: VisitOutcome, drifted) -> str:
-    """The `refusal_visit` code for one visit, option C's drift included.
-
-    A drift-cancelled visit is still a transient refusal at the visit level --
-    the cancel happens in the planner -- so drift has to be named here or the
-    report cannot count it apart from an ordinary hold.
-    """
-    if drifted and outcome is VisitOutcome.REFUSED_TRANSIENT:
-        return REFUSAL_VISIT_DRIFT
-    return outcome.value
-
-
 def _note_refusal_visit(
     seam: VenueSeam,
     cid: str,
     title: str,
     code: str,
     text: str,
-    streak: int,
+    streak: int = 1,
     emit_fn: Optional[Callable] = None,
 ) -> None:
-    """Store one `market_events` row per refused visit (#622 T3).
-
-    The refusal RATE is this experiment's denominator, and the store had none:
-    `_note_lifecycle_stop` returns early when the stop is `None`, and a
-    transient refusal has no named stop, so under `keep`/`drift` a HELD visit
-    left nothing behind at all. Without a denominator, "this arm cancelled
-    more" cannot be told apart from "this arm had more chances to" -- which is
-    exactly the distinction the policy choice turns on.
-
-    `code` names the outcome (`refused_hold`, `refused_grace_expired`,
-    `refused_cancel`, `refused_drift`) and the streak ordinal rides in `size`,
-    the only free numeric column on a table that carries no shares for a visit
-    that placed nothing. No new table, no migration.
-
-    Log-only: a store failure must never abort a quoting cycle, exactly as
-    `_note_lifecycle_stop` behaves.
-    """
+    """Store one `market_events` row per refused visit (#622 T3)."""
     if emit_fn is None:
         emit_fn = lambda *a, **k: None
     try:
@@ -339,30 +208,6 @@ def _note_refusal_visit(
                     type(e).__name__, e)
 
 
-def _cycle_mids(up_book: dict, down_book: dict) -> dict:
-    """This cycle's per-token midpoints.
-
-    A token is left out when its book is missing, one-sided, non-numeric,
-    or crossed. (Kept for telemetry/tests; no planner rule consumes it since
-    the #419 mid-hold band was removed.)
-    """
-    mids: dict[str, float] = {}
-    for book in (up_book or {}, down_book or {}):
-        token_id = book.get("token_id")
-        try:
-            bid = float(book.get("best_bid"))
-            ask = float(book.get("best_ask"))
-        except (TypeError, ValueError):
-            continue
-        if (token_id is None or not math.isfinite(bid)
-                or not math.isfinite(ask) or bid >= ask):
-            continue
-        mid = mid_price(bid, ask)
-        if mid is not None:
-            mids[str(token_id)] = mid
-    return mids
-
-
 def plan_orders(
     open_orders: list[dict],
     intents: list[QuoteIntent],
@@ -381,7 +226,6 @@ def plan_orders(
     replace_order_ids: Optional[set[str] | frozenset[str]] = None,
     cancel_order_ids: Optional[set[str] | frozenset[str]] = None,
     lifecycle_pair_id: str | None = None,
-    drifted_token_ids: Optional[set[str] | frozenset[str]] = None,
 ) -> tuple[list[dict], list[QuoteIntent]]:
     """Split open orders + desired intents into (cancel, submit).
 
@@ -494,12 +338,6 @@ def plan_orders(
     preserve_ids = {str(value) for value in preserve_order_ids or ()}
     replace_ids = {str(value) for value in replace_order_ids or ()}
     cancel_ids = {str(value) for value in cancel_order_ids or ()}
-    # Tokens that drifted beyond tolerance during this refusal (#622, option C).
-    # Computed by the caller, which is where the books and the streak's
-    # reference mids live, so the planner stays a pure function of what it is
-    # handed and needs no prices of its own.
-    drifted_ids = {str(value) for value in drifted_token_ids or ()}
-
     wanted: dict[str, list[QuoteIntent]] = {}
     for i in intents:
         wanted.setdefault(i.token_id, []).append(i)
@@ -509,30 +347,6 @@ def plan_orders(
             key = order.get("id") or order.get("order_id")
             if key is not None:
                 reasons[str(key)] = reason
-
-    def _near_front(order: dict) -> bool:
-        """Is this order close enough to the front to be worth holding?"""
-        if not hold_queue_shares or hold_queue_shares <= 0 or not queue_ahead:
-            return False
-        key = order.get("id") or order.get("order_id")
-        ahead = queue_ahead.get(str(key)) if key is not None else None
-        if ahead is None:
-            # An unknown position is not a good one. Holding on a queue we
-            # never measured is the same guess the hold rule exists to replace.
-            return False
-        return float(ahead) <= float(hold_queue_shares)
-
-    def _market_arriving(order: dict, targets: list[QuoteIntent]) -> bool:
-        """Is the book walking DOWN onto this bid, and still close to it?
-
-        Compared against the HIGHEST target for the token: that is the price
-        this cycle would rest at, so it is the one that says whether the book
-        has come to the order or left it behind.
-        """
-        if not hold_below_target or hold_below_target <= 0:
-            return False
-        drop = round(float(order["price"]) - max(float(i.price) for i in targets), 4)
-        return 0.0 < drop <= round(float(hold_below_target), 4)
 
     kept: dict[str, list[dict]] = {}
     # Tokens whose order was HELD through a price move. A held order rests at a
@@ -558,27 +372,6 @@ def plan_orders(
             continue
         targets = wanted.get(tok)
         if not targets:
-            if (visit_outcome is VisitOutcome.REFUSED_TRANSIENT
-                    and tok not in drifted_ids):
-                # HOLD-ON-REFUSAL (#390): the market was visited but decide
-                # refused this cycle (book flicker, not abandonment). The
-                # resting order stays: no cancel, and with no intents there
-                # is nothing to submit either.
-                continue
-            if visit_outcome is VisitOutcome.REFUSED_TRANSIENT:
-                # DRIFT-CANCEL (#622, option C): the hold survives flicker but
-                # not a real move. This is the `drift` half of the churn
-                # defense -- holding through every refusal is what lets a
-                # one-way slide dodge the market forever. Only the token that
-                # actually moved is cancelled; its opposite leg keeps resting.
-                _record(o, CANCEL_HOLD_DRIFT)
-                to_cancel.append(o)
-                continue
-            if visit_outcome is VisitOutcome.REFUSED_TERMINAL:
-                # Refused for good (named stop, hard stop): cancel.
-                _record(o, CANCEL_NOT_QUOTED)
-                to_cancel.append(o)
-                continue
             _record(o, CANCEL_NOT_QUOTED)
             to_cancel.append(o)
             continue
@@ -817,16 +610,6 @@ def run(
     last_cycle: list[LiveFleetResult] = []
     current_markets = list(markets or [])
     cycle = 0
-    # Consecutive refused-hold cycles per market (#390). A quoted cycle, a
-    # terminal cancel, or an error resets the count; a restart resets it too
-    # (safe direction: a fresh loop holds, never wipes).
-    refused_streaks: dict[str, int] = {}
-    # The per-token mid snapshot taken when each market's refusal streak began
-    # (#622), for option C. Drift is measured against this and not against the
-    # previous cycle: "has the mid moved since we started holding?" is the
-    # question, and comparing consecutive cycles would cancel on accumulated
-    # flicker, which is the churn the hold exists to prevent.
-    refused_reference_mids: dict[str, dict] = {}
     # Latest `Inventory` each visit read, keyed by lowercased condition id
     # (#505). Recorded from reads the visits already perform, so ordering the
     # next rotation's visits costs no extra database or venue call.
@@ -960,8 +743,6 @@ def run(
                 res = _visit_one(
                     seam=seam, spec=spec, live=live, cycle=cycle,
                     emit_fn=emit_fn,
-                    refused_streak=refused_streaks.get(cid, 0),
-                    reference_mids=refused_reference_mids.get(cid),
                     stop_memory=stop_memory,
                     tail_memory=tail_memory,
                     inventory_recorder=inventory_by_cid.__setitem__,
@@ -972,18 +753,6 @@ def run(
                         LifecycleStop.SETTLED_BOOK,
                         LifecycleStop.COUNTDOWN_EXPIRED):
                     rotation_suspects.add(cid)
-                if res.held:
-                    if refused_streaks.get(cid, 0) == 0:
-                        # First refusal of the streak: this cycle's mids become
-                        # the reference the drift policy measures against.
-                        refused_reference_mids[cid] = dict(res.token_mids or {})
-                    refused_streaks[cid] = refused_streaks.get(cid, 0) + 1
-                else:
-                    # Quoted again, cancelled, or errored: the streak is over,
-                    # so the reference goes with it. A later streak must not
-                    # inherit a stale mid and cancel on day-old drift.
-                    refused_streaks[cid] = 0
-                    refused_reference_mids.pop(cid, None)
                 cycle_results.append(res)
             if suspects_box is not None:
                 suspects_box["cids"] = frozenset(rotation_suspects)
@@ -1881,8 +1650,6 @@ def _visit_one(
     cycle: int = 0,
     emit_fn: Optional[Callable] = None,
     plan_fn: Optional[Callable] = None,
-    refused_streak: int = 0,
-    reference_mids: Optional[dict] = None,
     stop_memory: Optional[dict] = None,
     tail_memory: Optional[dict] = None,
     *,
@@ -1890,14 +1657,6 @@ def _visit_one(
 ) -> LiveFleetResult:
     """One poll of one market: fetch -> decide -> plan -> submit/cancel.
 
-    `refused_streak` is this market's consecutive refused-hold count coming
-    into the cycle (owned by `run`), and `reference_mids` is the per-token mid
-    snapshot `run` took when that streak began. When the streak reaches the
-    policy's cycle limit (`_grace_cycles`), a transient refusal expires into a
-    cancel: a market that never comes back is dead, not flickering (#390).
-    Under the `drift` policy (#622) a transient refusal ALSO cancels when the
-    token's mid has moved past `refusal_hold_drift` from that reference, which
-    is what stops a one-way slide from being held forever.
     `stop_memory` is the loop's condition-id -> last-stop-code map for
     on-change-only `lifecycle_stop` rows; None behaves as an empty map.
     `tail_memory` is the loop's (condition-id, line-kind) -> last-signature
@@ -2065,43 +1824,18 @@ def _visit_one(
             else _classify_refusal(why) if not intents
             else VisitOutcome.QUOTED
         )
-        # THE REFUSAL-HOLD POLICY (#622). Which tokens, if any, drifted past the
-        # tolerance since this streak began. Only `drift` looks; the other two
-        # policies never cancel for a price move, so they must not pay for the
-        # mid computation either.
-        hold_policy = str(getattr(cfg, "refusal_hold_policy", "remove"))
-        current_mids = (
-            _cycle_mids(ev.up_book, ev.down_book)
-            if hold_policy == "drift" else {}
-        )
-        drifted_tokens = (
-            _drifted_tokens(reference_mids, current_mids,
-                            getattr(cfg, "refusal_hold_drift", 0.0))
-            if hold_policy == "drift" else frozenset()
-        )
-        grace_expired = (
-            visit_outcome is VisitOutcome.REFUSED_TRANSIENT
-            and refused_streak + 1 >= _grace_cycles(hold_policy)
-        )
-        if grace_expired:
-            # GRACE EXPIRED (#390): held through enough refused cycles with
-            # no quotable one between. Cancels via the grace path below.
-            visit_outcome = VisitOutcome.REFUSED_GRACE_EXPIRED
         if intents:
             # A quote in between re-arms stop rows: the next stop is news.
             if stop_memory is not None:
                 stop_memory.pop(cid, None)
         else:
             _note_lifecycle_stop(
-                seam, cid, title, _visit_stop(why, grace_expired),
+                seam, cid, title, _visit_stop(why),
                 why, stop_memory, cycle, emit_fn)
-            # Every refused visit is one observation of the refusal RATE (#622),
-            # held or not -- the lifecycle-stop row above only exists when the
-            # refusal has a named stop, so it cannot carry the denominator.
             _note_refusal_visit(
                 seam, cid, title,
-                _refusal_visit_code(visit_outcome, drifted_tokens),
-                why, refused_streak + 1, emit_fn)
+                visit_outcome.value,
+                why, 1, emit_fn)
         plan_kwargs = {
             "dead_band": float(getattr(cfg, "requote_dead_band", 0.0)),
             "cfg": cfg,
@@ -2109,12 +1843,7 @@ def _visit_one(
             "hedge_held": hedge_held,
             "reasons": cancel_reasons,
             "queue_ahead": queue_ahead,
-            "hold_queue_shares": float(
-                getattr(cfg, "requote_hold_queue_shares", 0.0)),
-            "hold_below_target": float(
-                getattr(cfg, "requote_hold_below_target", 0.0)),
             "visit_outcome": visit_outcome,
-            "drifted_token_ids": drifted_tokens,
         }
         lifecycle_context = ev.lifecycle_context
         if lifecycle_context is not None and (
@@ -2309,10 +2038,6 @@ def _visit_one(
     emit_fn(service="decide", cycle=cycle, phase="quoting", action="submit",
             market_slug=title, extra=submit_extra)
 
-    held = (
-        visit_outcome is VisitOutcome.REFUSED_TRANSIENT
-        and not to_cancel and not to_submit and bool(open_orders)
-    )
     if queue_why:
         _tail_note(tail_memory, cid, "queue", queue_why,
                    "[QUEUE] %s | %s", title, queue_why)
@@ -2321,10 +2046,6 @@ def _visit_one(
         log.info("[QUOTING] %s | Posted %d orders: %s\n", title, submitted, orders_desc)
     elif cancelled > 0:
         log.info("[REQUOTE] %s | Cancelled %d stale order(s)\n", title, cancelled)
-    elif held:
-        _tail_note(tail_memory, cid, "holding", f"{len(open_orders)}|{why}",
-                   "[HOLDING] %s | %d quote(s) held through transient refusal: %s",
-                   title, len(open_orders), why)
     elif open_orders:
         _tail_note(tail_memory, cid, "resting", str(len(open_orders)),
                    "[RESTING] %s | %d quote(s) resting at target spread", title, len(open_orders))
@@ -2335,8 +2056,8 @@ def _visit_one(
     return LiveFleetResult(
         status="QUOTED" if intents else "DECLINED",
         condition_id=cid, title=title, why=why, intents=list(intents),
-        submitted=submitted, cancelled=cancelled, held=held,
-        queue_why=queue_why, token_mids=current_mids)
+        submitted=submitted, cancelled=cancelled,
+        queue_why=queue_why)
 
 
 # --- production wiring ------------------------------------------------------

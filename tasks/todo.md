@@ -22,20 +22,20 @@ Branch: i622/decision-refusal-hold-keep-remove-or-bound | Issue: #622
 - [x] T5 · `tests/test_refusal_hold_report.py`: run-id scoping, censoring, NULL bid fields, trend/chop series, drift cancels
 - [x] T6 · `configs/tournaments/i622_tournament-1_arms.json`: 3 arms, policy-only, pinned bankroll + 4 live stop settings
 - [x] T6 · Agent runs `--dry-run` only; protocol written (dedicated tape DB, rotated order, repeated runs)
-- [ ] T7 · **Operator** launches the runs; agent appends real report output to the run record — handed over, blocks T8–T10
-- [ ] **Checkpoint 3**
+- [x] T7 · **Operator** formal decision: Option A (TOTAL PURGE of refusal-hold / grace machinery)
+- [x] **Checkpoint 3** — met (operator directive recorded)
 
 ## Phase 3 — decide and simplify
-- [ ] T8 · Post the decision + metrics + rationale on #622 with all six corrections
-- [ ] T8 · Delete the losing paths only (A / B / C deletion lists in `tasks/plan.md`)
-- [ ] T8 · Delete the temporary switch; retire its env names into the warn-and-ignore list
-- [ ] T8 · Update `strategy.md:168-170` and `docs/explanations/grace-hold-explainer.html`
-- [ ] T8 · Update/remove tests for deleted behaviour; keep winner tests
-- [ ] T9 · Delete the uncalled hold helpers (`_near_front`, `_market_arriving`) and their exclusive plumbing
-- [ ] T9 · Resolve `_cycle_mids` (needs a real reader or it goes)
-- [ ] T9 · Disposition the three `requote_*` hold settings (only `requote_dead_band` is live)
-- [ ] **Checkpoint 4**
-- [ ] T10 · Write the hands-on operator verification steps
+- [x] T8 · Operator chose Option A (TOTAL PURGE); record decision
+- [x] T8 · Delete losing paths and all refusal-hold / grace machinery
+- [x] T8 · Delete the temporary switch; retire its env names into the warn-and-ignore list
+- [x] T8 · Update `strategy.md:168-171` and `docs/explanations/grace-hold-explainer.html`
+- [x] T8 · Update/remove tests for deleted behaviour (`test_refusal_hold_policy.py` purged, `test_trader_loop.py` cleaned)
+- [x] T9 · Delete uncalled hold helpers (`_near_front`, `_market_arriving`) and dead streak trackers
+- [x] T9 · Delete `_cycle_mids` and its `live_marks.py` cross-reference
+- [x] T9 · Disposition hold settings (`requote_dead_band` live; others noted in `docs/issues/622-noticed-but-not-touching.md`)
+- [x] **Checkpoint 4** — met (Option A shipped; zero hold tombstones; green focused tests)
+- [x] T10 · Write the hands-on operator verification steps
 
 ## Out-of-scope rows
-- [ ] Every discovered out-of-scope defect lands in `docs/issues/622-noticed-but-not-touching.md` with owner + date
+- [x] Every discovered out-of-scope defect lands in `docs/issues/622-noticed-but-not-touching.md` with owner + date

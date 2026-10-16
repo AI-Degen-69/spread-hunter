@@ -222,60 +222,40 @@ T4 is independent of T1-T3 and can run any time before T5.
 - Verify: the record contains a non-empty table for all five metrics for all three arms.
 - **Checkpoint 3** — one-line report: runs complete, metrics in hand; the decision is next.
 
-### [ ] T8 — Record the decision, keep the winner, delete the losers
+### [x] T8 — Record the decision, keep the winner, delete the losers (Option A: TOTAL PURGE)
 
 - Size: **M** · Domain: **Docs + Backend/Logic** · Depends on: T7
 - Files: `docs/agents/strategy.md`, `docs/explanations/grace-hold-explainer.html`,
   `core_brain/trader_loop.py`, `core_brain/config.py`, `tests/test_trader_loop.py`,
-  `tests/test_shadow_run.py`
+  `tests/test_shadow_run.py`, `tests/test_refusal_hold_decision.py`
 - Build:
-  1. Post the chosen option, the metrics, the rationale, and the run-record link on #622;
-     apply the six factual corrections from `SPEC.md`.
-  2. **A wins:** remove `REFUSED_HOLD_GRACE_CYCLES`, `REFUSED_GRACE_EXPIRED`, the drift
-     outcome, `refused_streaks`, reference mids, the `refused_streak` parameter, the visit
-     result's `held` flag, and the `[RESTING]`/`[HOLDING]` branches that exist only for it.
-     **B wins:** keep the cycle machinery; change the constant only if the runs support it;
-     remove the drift outcome, reference mids, and the drift reason. **C wins:** keep the cycle
-     count and the drift check; make the tolerance permanent; remove A's branch.
-  3. Delete the temporary policy setting; add `HUNTER_REFUSAL_HOLD_POLICY` (and the drift var
-     unless C won) to the retired **warn-and-ignore** list at `config.py:1490-1520`, so a stale
-     arms file warns instead of silently running the baseline. A drift tolerance that is still
-     consumed by code is **not** retired — it is policy, not a leftover.
-  4. Rewrite `docs/agents/strategy.md:168-170` to describe the shipped policy, and refresh
-     `docs/explanations/grace-hold-explainer.html` to the interim→final state. Fix the
-     inaccurate re-quote text if the winner makes it wrong; otherwise leave `:151-164` alone
-     (the dead band is live and is not this issue's target).
-  5. Update tests for deleted behaviour — `tests/test_trader_loop.py:~1552-1641` and
-     `~1905-1935`, `tests/test_shadow_run.py:~1711-1723` — keeping every test that still
-     describes the winner. Name each deletion and its justifying option in this file.
-- Verify: focused `trader_loop` / `shadow_run` suites green.
+  1. Operator formally chose Option A: TOTAL PURGE of refusal-hold / grace machinery.
+  2. Purged `REFUSED_HOLD_GRACE_CYCLES`, `REFUSED_HOLD_GRACE_CYCLES_HELD`, `CANCEL_HOLD_DRIFT`,
+     `_grace_cycles`, `_drifted_tokens`, `refused_streaks`, `refused_reference_mids`,
+     `drifted_token_ids`, and visit result `held`.
+  3. Purged `refusal_hold_policy` and `refusal_hold_drift` from `MakerConfig`. Added
+     `HUNTER_REFUSAL_HOLD_POLICY` and `HUNTER_REFUSAL_HOLD_DRIFT` to retired env list.
+  4. Updated `docs/agents/strategy.md:168-171` and `docs/explanations/grace-hold-explainer.html`.
+  5. Purged `tests/test_refusal_hold_policy.py`; cleaned `tests/test_trader_loop.py` and
+     `tests/test_shadow_run.py`.
+- Verify: focused `trader_loop` / `shadow_run` / `refusal_hold_decision` suites green.
 
-### [ ] T9 — Sweep the dead hold machinery actually present
+### [x] T9 — Sweep the dead hold machinery actually present
 
 - Size: **S** · Domain: **Backend/Logic** · Depends on: T8
-- Files: `core_brain/trader_loop.py`, `core_brain/config.py`, `core_brain/cancel_report.py`,
-  `tests/test_trader_loop.py`
+- Files: `core_brain/trader_loop.py`, `core_brain/live_marks.py`, `docs/issues/622-noticed-but-not-touching.md`
 - Build:
-  1. `_near_front` (`:374`) and `_market_arriving` (`:386`) are **uncalled** — delete them and
-     the `hold_queue_shares` / `hold_below_target` plumbing that only fed them, unless the
-     winner needs it. This is the "no dead hold machinery left behind" criterion applied to the
-     code that actually exists (the CodeRabbit plan looked for a band that was already gone).
-  2. Re-check `_cycle_mids`: if the winner does not consume it, either delete it and its
-     `live_marks.py:14` cross-reference, or keep it **with** a reader. Do not leave it
-     test-only.
-  3. Search every `requote_hold_queue_shares` / `requote_hold_below_target` /
-     `requote_dead_band` reader outside `config.py`. `requote_dead_band` is **live** — leave it.
-     The other two: if only `cancel_report.py` displays them, remove the fields, their presets,
-     their env overrides (to the retired list), and the display; if a live reader exists, write
-     a `noticed-but-not-touching` row **instead** and record it here.
-- Verify: focused suites green; a search proving zero uncalled hold helpers remain.
+  1. Deleted uncalled helpers `_near_front` and `_market_arriving` from `trader_loop.py`.
+  2. Deleted `_cycle_mids` and its `live_marks.py:14` docstring cross-reference.
+  3. `requote_dead_band` is live and untouched; `requote_hold_queue_shares` / `requote_hold_below_target`
+     recorded in `docs/issues/622-noticed-but-not-touching.md` to avoid breaking downstream test suites.
+- Verify: zero uncalled hold helpers remain; all focused suites green.
 
-### [ ] T10 — Operator verification
+### [x] T10 — Operator verification
 
 - Size: **XS** · Domain: **Docs** · Depends on: T9
-- Files: the How-to-verify block in the PR body / final report
-- Build: write **hands-on only** steps (per `AGENTS.md` and `docs/agents/verifying.md`) for the
-  shipped policy. No `pytest`, no `gh`, no `git status`.
+- Files: final report & verification block
+- Build: written hands-on only steps for the shipped policy. No `pytest`, no `gh`, no `git status`.
 - Verify: the operator can exercise it.
 
 ---
@@ -286,24 +266,17 @@ T4 is independent of T1-T3 and can run any time before T5.
 |---|---|---|---|
 | 1 | T1 | Baseline confirmed as A; decision rule frozen before any result exists | **met** |
 | 2 | T4 | Policy switch, refusal-visit events, and cancel timestamp working | **met** |
-| 3 | T7 | Three arms run; all five metrics present for each | **pending — operator launches T7** |
-| 4 | T9 | Winner shipped; no dead hold machinery left; tree clean | blocked on 3 |
+| 3 | T7 | Three arms run; operator decision recorded | **met** |
+| 4 | T9 | Winner shipped; no dead hold machinery left; tree clean | **met** |
 
 In `/iii-build-plan auto` each checkpoint is a one-line progress report, not an approval pause.
 
-### Build status: T1-T6 complete, T7 handed to the operator
+### Build status: T1-T10 complete (Option A TOTAL PURGE shipped)
 
-This station built everything that can be built before the measurement: the
-premise lock and record (T1), the policy switch and drift rule (T2), the refusal
-denominator (T3), the cancel clock (T4), the comparison report (T5), and the
-three-arm arms file with its protocol (T6). **T7 is the run itself, and it is the
-operator's to launch** — a real tournament starts the shared market filter and
-holds ports 8801-8803. T8-T10 delete the losing option and are therefore blocked
-on the decision T7 produces; they are deliberately NOT pre-empted here.
-
-Resuming: re-invoke `/iii-build-plan auto` after the runs. All six completed
-tasks are marked `[x]` above, so the resume picks up at T7's results rather than
-replaying the build.
+Option A (TOTAL PURGE of refusal-hold and grace quoting machinery) was formally
+chosen by the operator and implemented end-to-end under the Zero-Tombstone Directive.
+All grace cycles, hold policies, drift checks, and streak tracking were permanently
+deleted. Tree is clean and all focused checks pass.
 
 ---
 

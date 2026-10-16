@@ -31,18 +31,20 @@ REQUIRED_METRICS = (
 )
 
 
-def test_option_a_is_the_shipped_baseline():
-    """The hold is OFF: the first transient refusal already expires into a cancel.
+def test_option_a_purged_all_refusal_hold_machinery():
+    """Operator formally chose option A: TOTAL PURGE of refusal-hold / grace machinery.
 
-    `d7810fd` set the constant to 1 as an interim operator directive "pending
-    #622". A value of 3 here would mean option B is live and the control arm is
-    mislabelled -- the record's premise needs rewriting before any run.
+    Zero-Tombstone Directive: no deprecated constants, dead helper functions,
+    or streak trackers survive.
     """
-    assert trader_loop.REFUSED_HOLD_GRACE_CYCLES == 1, (
-        "The shipped baseline is no longer option A. #622's run record "
-        "(docs/runs/2026-10-16-622-refusal-hold-tournament.md) labels the "
-        "control arm 'remove'; correct the record before measuring."
-    )
+    assert not hasattr(trader_loop, "REFUSED_HOLD_GRACE_CYCLES")
+    assert not hasattr(trader_loop, "REFUSED_HOLD_GRACE_CYCLES_HELD")
+    assert not hasattr(trader_loop, "CANCEL_HOLD_DRIFT")
+    assert not hasattr(trader_loop, "_near_front")
+    assert not hasattr(trader_loop, "_market_arriving")
+    assert not hasattr(trader_loop, "_grace_cycles")
+    assert not hasattr(trader_loop, "_drifted_tokens")
+    assert not hasattr(trader_loop, "_cycle_mids")
 
 
 def test_the_mid_hold_band_is_gone():
@@ -67,6 +69,7 @@ def test_plan_orders_takes_no_token_mid_parameter():
     """
     params = inspect.signature(trader_loop.plan_orders).parameters
     assert "token_mids" not in params
+    assert "drifted_token_ids" not in params
 
 
 def test_run_record_pre_registers_the_rule_and_metrics():
