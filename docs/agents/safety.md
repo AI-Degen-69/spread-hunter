@@ -140,9 +140,14 @@ least twice the dynamic quote offset from its best bid, the lifecycle enters sti
 `min($0.99, configured max_pair_cost) - held average`. Book health, price-band, pair-cost,
 order-size, naked-risk, bankroll, and venue checks remain in force.
 
-A held-leg best bid at or below `$0.15` is a `HARD_STOP` and takes precedence over the
-settlement fallback. Before any venue write, the executor checks venue-position
-agreement; it then cancels working orders on both legs, rereads venue fills rather than
+A held-leg best bid at or below its **entry-relative** trigger is a `HARD_STOP` and takes
+precedence over the settlement fallback. The trigger is the higher of the configured mode's
+drop from that leg's own fill average and the universal emergency floor
+(`emergency_drawdown_pct`, 75% by default) of the same average, never below `$0.01`; the
+shipped default mode is `NONE`, so the floor is the whole rule. There is no static bid
+stop, and none may be reintroduced: active quotes span `$0.10`–`$0.90`, so a fixed floor
+near the bottom of that range is a booked loss on fill, not a backstop. Before any venue
+write, the executor checks venue-position agreement; it then cancels working orders on both legs, rereads venue fills rather than
 trusting the stale registry alone, and recomputes the residual. It refuses to sell if the
 fill changes the naked side, if venue shares lack a priced registry cost, if no acceptable
 bid exists, or if sellable size is below the venue minimum. The sell is limited to the
@@ -170,8 +175,11 @@ Run those commands in separate terminals. Dashboard → Orders / Cycle feed → 
 simulated one-sided fill occurs, look for `PATIENT_WAIT`; no completion BUY should occur
 in that state. If the held bid crosses the escalation threshold, look for
 `ESCALATED_HEDGE` and an opposite bid no higher than the tick-aligned
-`$0.99 - held average` (or a lower configured cap). If the held bid reaches `$0.15` or
-below, look for a guarded simulated exit; when the market-end verdict is due, look for
-the single capped completion attempt. Missing transitions, a patient-wait completion, or
-a bid above the cap is a failed check. If no simulated one-sided fill occurs, the
+`$0.99 - held average` (or a lower configured cap). If the held bid reaches the trigger
+shown in the exit's own reason — by default 25% of that leg's own entry price
+(a 75% emergency drawdown), and never below `$0.01` — look for a guarded simulated exit;
+when the market-end verdict is due, look for the single capped completion attempt. A stop
+at any fixed bid is a failed check: read the fill price in the same row to see what the
+trigger should have been. Missing transitions, a patient-wait completion, or a bid above
+the cap is a failed check. If no simulated one-sided fill occurs, the
 rehearsal did not exercise these transitions.

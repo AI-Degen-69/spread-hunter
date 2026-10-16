@@ -82,9 +82,12 @@
 <section class="card">
   <h2>1 · How a hard-stop exit is supposed to work</h2>
   <p class="sub">One book, one price: decide and exit on the same fresh snapshot.</p>
+  <p class="sub">The trigger is <b>entry-relative</b> since #619 — the higher of the configured
+  drawdown from the leg's own fill average and a 75% emergency floor never below $0.01 — so the
+  <code>0.15</code> numbers quoted in this exhibit are the then-current static stop, not the rule today.</p>
   <div class="flow" role="img" aria-label="Intended flow: fresh book feeds both decision and exit">
     <div class="node good"><b>Fresh poll book</b><span class="t">bid = 0.13</span></div><div class="arrow">→</div>
-    <div class="node good"><b>Decision</b><span class="t">bid ≤ 0.15 → HARD_STOP</span></div><div class="arrow">→</div>
+    <div class="node good"><b>Decision</b><span class="t">bid ≤ trigger → HARD_STOP</span></div><div class="arrow">→</div>
     <div class="node good"><b>Exit at fresh bid</b><span class="t">10 × 0.13 = $1.30</span></div><div class="arrow">→</div>
     <div class="node good"><b>Close</b><span class="t">PnL = 1.30 − 2.40 = −$1.10</span></div>
   </div>

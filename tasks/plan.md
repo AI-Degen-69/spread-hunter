@@ -84,7 +84,7 @@ Depends on: T1 → T2 → T3 (T2 needs T1's trigger semantics; T3 needs final be
   accessor; age/drift/opposite-ask/cap cases under NONE). Verify: `pytest
   tests/test_dual_stop_loss.py tests/test_single_buy_saver.py
   tests/test_hard_stop_fresh_exit.py tests/test_exit_price_realism.py -q`.
-- [ ] T3.1 [Docs] XS — Current docs to entry-relative stop. Files: `README.md:29`,
+- [x] T3.1 [Docs] XS — Current docs to entry-relative stop. Files: `README.md:29`,
   `docs/agents/strategy.md:103`, `docs/agents/architecture.md:69`,
   `docs/agents/safety.md:143,169-177` (walkthrough step 4: default trigger 25%
   of entry, $0.01 minimum), `docs/explanations/hard-stop-stale-marks.html`

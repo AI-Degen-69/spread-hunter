@@ -27,7 +27,10 @@ The two failure modes everything else exists to prevent: a pair assembled **over
 is a booked loss, and a **single buy** (one leg filled, one not) is a directional bet
 nobody decided to take. The single-leg lifecycle (`DUAL_RESTING` → `PATIENT_WAIT` →
 `ESCALATED_HEDGE` / `HARD_STOP` → `PAIR_LOCKED`) manages the one-sided position; it does
-not taker-complete during ordinary management.
+not taker-complete during ordinary management. `HARD_STOP` fires on an **entry-relative**
+trigger — an optional dynamic drop from that leg's own fill average, always backed by an
+emergency floor (75% by default) that never falls below `$0.01` — so a quote filled at
+`$0.10–$0.14` is not liquidated the moment it fills.
 
 Full statement: [docs/agents/strategy.md](docs/agents/strategy.md).
 
