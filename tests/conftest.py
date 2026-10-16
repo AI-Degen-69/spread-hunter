@@ -86,8 +86,9 @@ def scrub_tuning_env(monkeypatch):
     rest of the process -- and `load_dotenv` writes the environment directly,
     which `monkeypatch` in a later test cannot undo. That made the suite's
     result depend on both the file order and on what the operator happened to
-    have tuned: with `HUNTER_SINGLE_BUY_GRACE_SEC=45` on disk, the shadow
-    rotation tests saw a 45-second grace and recorded no close.
+    have tuned: with `HUNTER_SINGLE_BUY_GRACE_SEC=45` on disk (the knob #619
+    later retired), the shadow rotation tests saw a 45-second grace and
+    recorded no close.
 
     A test that wants a knob sets it itself, after this has run.
     """

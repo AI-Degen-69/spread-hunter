@@ -971,7 +971,7 @@ def exit_single_buy(
             f"Refusing to sell {size:.4f} against a holding of {naked:.4f}."
         )
 
-    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2, OrderType
 
     # `amount` is the maker amount: shares on a SELL. `price` is the worst
     # fill we accept, tick-aligned so the venue does not reject it outright.
@@ -985,7 +985,14 @@ def exit_single_buy(
     if hasattr(client, "_sell_into_bids"):
         resp = client.create_and_post_market_order(order_args, reason=reason)
     else:
-        resp = client.create_and_post_market_order(order_args)
+        # Fill-or-kill, STATED rather than inherited (#619). An exit is "get the
+        # whole leg out now or not at all": a partially filled stop leaves a
+        # naked remainder nobody decided to hold, and the poll would re-derive
+        # the same stop next cycle into a thinner book. The SDK's default
+        # happens to be FOK too, but that is a library detail -- this is the
+        # money path, and the instruction belongs in the call.
+        resp = client.create_and_post_market_order(
+            order_args, order_type=OrderType.FOK)
 
     # 4. Record the exit BEFORE returning. A sell that exists only on the
     #    venue is invisible to the registry -- reconcile adopts fills only
@@ -1635,6 +1642,11 @@ def _manage_single_leg_positions_locked(
     lead_sec = float(getattr(cfg, "aged_out_rescue_lead_sec", 900.0))
     max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
     tick_size = float(getattr(cfg, "price_tick", DEFAULT_TICK_SIZE))
+    stop_loss_mode = str(getattr(cfg, "stop_loss_mode", "NONE"))
+    drop_cents = float(getattr(cfg, "drop_cents", 0.05))
+    drawdown_pct = float(getattr(cfg, "drawdown_pct", 10.0))
+    emergency_drawdown_pct = float(
+        getattr(cfg, "emergency_drawdown_pct", 75.0))
     resolved = {str(cid).lower() for cid in (resolved_cids or ()) if cid}
 
     if market_state_fn is None:
@@ -1768,6 +1780,9 @@ def _manage_single_leg_positions_locked(
             decision = transition(
                 position, previous_state, max_pair_cost=max_pair_cost,
                 settlement_due=False, tick_size=tick_size,
+                stop_loss_mode=stop_loss_mode, drop_cents=drop_cents,
+                drawdown_pct=drawdown_pct,
+                emergency_drawdown_pct=emergency_drawdown_pct,
             )
             if decision.action == "hard_stop":
                 # The poll's hard stop is its own to persist: it survives
@@ -1806,6 +1821,10 @@ def _manage_single_leg_positions_locked(
                     decision = evaluate(
                         position, registry, max_pair_cost=max_pair_cost,
                         settlement_due=True, tick_size=tick_size,
+                        stop_loss_mode=stop_loss_mode,
+                        drop_cents=drop_cents,
+                        drawdown_pct=drawdown_pct,
+                        emergency_drawdown_pct=emergency_drawdown_pct,
                     )
                     result = _settlement_fallback(
                         client, registry, pair, cfg, max_pair_cost, live,

@@ -2511,10 +2511,13 @@ class TestSingleLegLifecycleVisit:
         assert captured["submit"] == []
 
     def test_hard_stop_is_terminal_and_never_submits_a_buy(self, tmp_path):
+        # The trigger is entry-relative since #619: the seam's fill price is
+        # 0.48, so the 75% emergency floor is 0.12 -- not the retired $0.15
+        # static stop this case used to sit under.
         seam, _registry, _ = _lifecycle_visit_seam(
             tmp_path,
             [("pair-stop", {"up_filled": 100.0})],
-            up_bid=0.15,
+            up_bid=0.12,
             decide=lambda *args, **kwargs: pytest.fail(
                 "hard-stop refusal must skip quote decision"),
         )

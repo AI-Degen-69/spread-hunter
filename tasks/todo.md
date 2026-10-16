@@ -1,7 +1,8 @@
-# Todo — #603 [REFACTOR] Delete the _route_pair exit helper that no live code calls
+# Todo - #619 [ADD] Stop-loss architecture: dynamic modes plus entry-relative emergency floor
 
-Branch: i603/refactor-delete-the-route-pair-exit-helper-that | Issue: #603
+Branch: i619/add-stop-loss-architecture-dynamic-modes-plus-entr | Issue: #619
 
-- [ ] T1 — Move #525 trigger-bid coverage onto the manager (test_single_buy_saver.py) + add live settlement-completion test
-- [ ] T2 — Move refill/wait coverage onto manager passes (test_refill_after_exit.py)
-- [ ] T3 — Delete `_route_pair`, reword 2 docstrings, run acceptance checks (after T1+T2)
+- [x] T1.1 - Stop policy helper + config + both callers, TDD cases (0.10→0.025, $0.01 floor, higher-of ×2, 0.12/0.14 regression, refusals, endpoints) + `test_stop_loss_config.py`
+- [x] T2.1 - Live-only `OrderType.FOK` in `exit_single_buy()` + `test_dual_stop_loss.py` e2e rework (boundaries, close reason, FOK accessor)
+- [x] T3.1 - Docs: README + 3 agent docs + safety walkthrough step 4 + stale-marks HTML (current-rule lines only)
+- [ ] Publish: close #618 as superseded by #619 (already CLOSED — confirm at PR time)

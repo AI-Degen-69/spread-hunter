@@ -8,7 +8,8 @@ it is safe to measure anything:
    configured grace (45s in the operator's `.env`) never reached the live
    exit path.
    Every stranded leg was dumped on the first pass after the fill, and the knob
-   could not be swept.
+   could not be swept. (#619 retired that knob; what it established is that the
+   rehearsal must run on the operator's own exit settings.)
 
 2. The rehearsal's market SELL echoed back the limit floor it was handed
    (`best_bid - MAX_SELL_SLIPPAGE`, a flat 2c) as though that were the fill.
@@ -33,26 +34,39 @@ def registry(tmp_path):
     return OrderRegistry(db_path=db), db
 
 
-# --- 1. the configured grace must survive into the rehearsal --------------
+# --- 1. the configured exit must survive into the rehearsal ---------------
+# The pinned knob was `single_buy_grace_sec`, retired in #619. The rule it was
+# pinned in violation of is what matters and is asserted here: the rehearsal
+# runs on the operator's own exit settings, so what it measures is the exit the
+# live path would really take.
 
-def test_shadow_run_keeps_the_configured_single_buy_grace(monkeypatch):
-    """A rehearsal that discards the grace cannot sweep the grace."""
-    monkeypatch.setenv("HUNTER_SINGLE_BUY_GRACE_SEC", "45")
+def test_shadow_run_keeps_the_configured_exit(monkeypatch):
+    """A rehearsal that discards the exit knobs cannot sweep them."""
+    monkeypatch.setenv("HUNTER_AGED_OUT_RESCUE_LEAD_SEC", "1234")
+    monkeypatch.setenv("HUNTER_STOP_LOSS_MODE", "PERCENTAGE_DROP")
+    monkeypatch.setenv("HUNTER_DRAWDOWN_PCT", "20")
 
     from core_brain.config import load
     from core_brain.shadow_run import shadow_cfg
 
-    assert load().single_buy_grace_sec == 45.0
-    assert shadow_cfg().single_buy_grace_sec == 45.0
+    assert load().aged_out_rescue_lead_sec == 1234.0
+    assert shadow_cfg().aged_out_rescue_lead_sec == 1234.0
+    assert shadow_cfg().stop_loss_mode == "PERCENTAGE_DROP"
+    assert shadow_cfg().drawdown_pct == 20.0
 
 
-def test_shadow_run_grace_still_defaults_to_zero_when_unset(monkeypatch):
-    """Unset stays the old baseline, so existing rehearsals do not move."""
-    monkeypatch.delenv("HUNTER_SINGLE_BUY_GRACE_SEC", raising=False)
+def test_shadow_run_exit_defaults_when_unset(monkeypatch):
+    """Unset stays the shipped baseline, so existing rehearsals do not move."""
+    for name in ("HUNTER_AGED_OUT_RESCUE_LEAD_SEC", "HUNTER_STOP_LOSS_MODE",
+                 "HUNTER_DRAWDOWN_PCT"):
+        monkeypatch.delenv(name, raising=False)
 
     from core_brain.shadow_run import shadow_cfg
 
-    assert shadow_cfg().single_buy_grace_sec == 0.0
+    cfg = shadow_cfg()
+    assert cfg.aged_out_rescue_lead_sec == 900.0
+    assert cfg.stop_loss_mode == "NONE"
+    assert cfg.drawdown_pct == 10.0
 
 
 # --- 2. the rehearsed SELL must fill against the book ---------------------

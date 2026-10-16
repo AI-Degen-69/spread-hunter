@@ -1556,6 +1556,10 @@ def _lifecycle_quote_context(
             position,
             registry,
             max_pair_cost=float(cfg.max_pair_cost),
+            stop_loss_mode=str(cfg.stop_loss_mode),
+            drop_cents=float(cfg.drop_cents),
+            drawdown_pct=float(cfg.drawdown_pct),
+            emergency_drawdown_pct=float(cfg.emergency_drawdown_pct),
             tick_size=float(cfg.price_tick),
         )
         decisions.append((pair_id, position, decision))
