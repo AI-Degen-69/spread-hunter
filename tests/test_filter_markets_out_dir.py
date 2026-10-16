@@ -44,6 +44,23 @@ def test_depth_near_misses_go_to_the_output_directory(tmp_path):
     assert json.loads(lines[0])["scored"] == 0
 
 
+def test_depth_near_misses_handles_verdicts_none(tmp_path):
+    """#628: _log_rank_near_misses must tolerate verdicts=None when logging rejected markets."""
+    rejected_row = {
+        "condition_id": "0x123",
+        "eligible": False,
+        "reject_reason": "depth_too_shallow",
+        "score": 0.5,
+    }
+    fm._log_rank_near_misses([rejected_row], 1, None, out_dir=tmp_path)
+    lines = (tmp_path / "near_misses.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["scored"] == 1
+    assert record["rejected"] == 1
+    assert record["greens"] == []
+
+
 def test_volume_near_misses_go_to_the_output_directory(tmp_path):
     fm._log_rank_volume_near_misses([], 0, {}, out_dir=tmp_path)
     lines = (tmp_path / "volume_near_misses.jsonl").read_text(encoding="utf-8").strip().splitlines()

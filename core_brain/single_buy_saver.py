@@ -1804,12 +1804,26 @@ def _manage_single_leg_positions_locked(
                 if result.get("action") == "exited":
                     sold_size = float(result.get("size", 0.0) or 0.0)
                     requested_size = float(result.get("requested_size", 0.0) or 0.0)
-                    if requested_size > 0 and sold_size >= requested_size - SIZE_EPS:
-                        heavy_tok = result.get("token_id")
-                        if (venue_positions is not None
-                                and heavy_tok and heavy_tok in venue_positions):
-                            venue_positions[heavy_tok] = max(
-                                0.0, venue_positions[heavy_tok] - sold_size)
+                    heavy_tok = result.get("token_id")
+                    if (venue_positions is not None
+                            and heavy_tok and heavy_tok in venue_positions):
+                        venue_positions[heavy_tok] = max(
+                            0.0, float(venue_positions[heavy_tok]) - sold_size)
+                    opp_tok = getattr(position, "opposite_token_id", None)
+                    remaining_heavy = (
+                        float(venue_positions.get(heavy_tok, 0.0))
+                        if venue_positions is not None and heavy_tok
+                        else max(0.0, requested_size - sold_size)
+                    )
+                    remaining_opp = (
+                        float(venue_positions.get(opp_tok, 0.0))
+                        if venue_positions is not None and opp_tok
+                        else 0.0
+                    )
+                    if (requested_size > 0
+                            and sold_size >= requested_size - SIZE_EPS
+                            and remaining_heavy <= SIZE_EPS
+                            and remaining_opp <= SIZE_EPS):
                         if (registry is not None
                                 and callable(getattr(registry, "save_lifecycle_state", None))):
                             from core_brain.order_registry import LifecycleStateRecord
