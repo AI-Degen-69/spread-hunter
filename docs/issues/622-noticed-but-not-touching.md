@@ -20,6 +20,13 @@ number. Dates are when the row was written.
 | `#621` line 51 explicitly parks *"Stop slippage measurement. Log trigger bid vs actual fill price per stop exit; build the distribution over ~100 exits before optimizing anything."* #622's metrics list absorbs this item verbatim, so two open issues now own one measurement | The overlap is an intake artefact, not a defect. #622 must not claim it as new work, and #621 should drop the bullet once #622 lands. Recording it prevents both issues from building the same report | #621 | 2026-10-16 | open | |
 | `#576` ("[REFACTOR] Remove the settings that nothing in the bot reads") is directly adjacent to T9's requote-hold retirement, and carries `needs-answers` | T9 is scoped to the *hold* settings this issue's criterion covers ("no dead hold machinery left behind"); a repo-wide dead-settings sweep is #576's mandate. If T9 and #576 both edit `config.py`'s retired-env list they will conflict | #576 | 2026-10-16 | open | |
 
+## Discovered during build (owner: builder, 2026-10-16)
+
+| Noticed | Why out of scope | Owner | When | Status | Resolved-by |
+|---|---|---|---|---|---|
+| `SPREAD_HUNTER_BANKROLL` survives the tournament's worker env strip. `launch_tournament` builds each worker env as `{**clean_env, **arm.env}` and `clean_env` drops only keys starting with `HUNTER_` (`scripts/shadow_tournament.py:516-521`). `config.load()` reads `SPREAD_HUNTER_BANKROLL` before `HUNTER_BANKROLL` and lets it win (`core_brain/config.py:1512`, in `load()`), so a value in the operator's shell overwrites all three #622 arms' pinned bankrolls with one number and the comparison stops differing in the way its record claims | Found while verifying the #622 arms file with `--dry-run`. The fix belongs in the launcher's env isolation, which is #624's file and its whole subject; #622's file list does not include `scripts/shadow_tournament.py` beyond adding the arms file. #622 mitigates it in the run protocol (unset-and-verify) and records it here | #624 | 2026-10-16 | open | |
+| `data/demo_orders.db` mixes time units: `orders.posted_ts` is seconds while `fills.venue_ts`/`recorded_ts` are milliseconds, so any duration computed across the two is off by 1000x. Noticed when the #622 report was first run against it as a real store | It is a demo fixture, not a production store, and the #622 report already reports per-store windows rather than asserting a unit. Worth a fix so the next person reading a duration off the demo store is not misled | you | 2026-10-16 | open | |
+
 ## Rows inherited from #619's ledger (still open, still not ours)
 
 These were raised against #619 and remain unresolved. #622 does not adopt them; they are listed
