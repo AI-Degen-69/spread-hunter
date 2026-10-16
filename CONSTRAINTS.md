@@ -1,10 +1,18 @@
-# Constraints — #559 [T2] (sub-issue of #520, blocked by #558 CLOSED)
+# Constraints — #603 (delete `_route_pair`, move coverage to unified lifecycle)
 
-Branch: i559/consumers-import-taxonomy | Issue: #559
+Branch: i603/refactor-delete-the-route-pair-exit-helper-that | Issue: #603
 
-- **Frozen populations (bit-identical, read-only):** `market_resolution.py:654,685`, `paired_shadow.py:742`, `order_registry.py:2427`, `shadow_exec.py:1652`, `single_buy_saver.py:550`, `statistical_analytics.py:304,732`, `kpi.py:1143,1504`, execution funnel `kpi.py:980-981`. Any diff touching these lines rejects the change.
-- **Only behavior deltas:** the three T1–T3 defect fixes plus new guard assertions (T4). Exactly one existing assertion may change: `tests/test_pnl_by_fill_path.py:61-73`.
-- **Read-only:** `core_brain/close_methods.py`, `build_gate_rows` / `resolve_verdict`, `dashboard/static/app.js` (#560 owns it), everything in `data/` (temp stores only).
-- **Zero regressions:** the five acceptance suites pass; all other accounting suites pass with no changed assertions. Full-repo sweep stays with GitHub CI.
-- **Anti-cheat:** no skipped/disabled tests, no deleted assertions, no linter suppressions. The "1 against 65" gap is recorded as a follow-up note, never silenced.
-- **Dependencies:** no new external dependencies.
+- **Zero regressions:** the 4-file acceptance suite
+  (`test_single_buy_saver`, `test_refill_after_exit`, `test_exit_price_realism`,
+  `test_grace_sweep_report`) plus focused `test_auto_pairs`,
+  `test_aged_out_rescue`, `test_single_leg_lifecycle` must pass; every moved
+  assertion needs a test that fails without the migrated setup. Full suite stays
+  with CI on push.
+- **No behavior change:** `manage_single_leg_positions`, executors, and all
+  config fields stay untouched — a red migrated test means fix the test setup
+  (timestamps, venue holdings, book switching), never lifecycle code.
+- **Anti-cheat:** no skipping/disabling tests, no deleted assertions, no
+  suppressing linters to reach green.
+- **Dependencies:** none new. No file outside the 5 in-scope files
+  (`core_brain/single_buy_saver.py`, `core_brain/shadow_run.py`,
+  `core_brain/statistical_analytics.py`, the two test files) without approval.

@@ -1,9 +1,7 @@
-# Todo — #559 [T2] Consumers import the taxonomy; three defects fixed (#520)
+# Todo — #603 [REFACTOR] Delete the _route_pair exit helper that no live code calls
 
-Branch: i559/consumers-import-taxonomy | Issue: #559
+Branch: i603/refactor-delete-the-route-pair-exit-helper-that | Issue: #603
 
-- [x] T0 — Confirm #513–#517 add no stray method sets (one grep); claim #559
-- [x] T1 — `pnl_by_fill_path`: `settled` + `other` buckets; one deliberate edit at `tests/test_pnl_by_fill_path.py:61-73` + R-cases
-- [x] T2 — `merge_closes` counts `MERGE_METHODS`; stale-comment fix; M1 regression
-- [x] T3 — `rescue_stats.settlements` + forensics per-method split; grep pinned prose first; C-cases
-- [x] T4 — Guard extension (M/C cases) + acceptance sweep; record "1 against 65" disposition
+- [ ] T1 — Move #525 trigger-bid coverage onto the manager (test_single_buy_saver.py) + add live settlement-completion test
+- [ ] T2 — Move refill/wait coverage onto manager passes (test_refill_after_exit.py)
+- [ ] T3 — Delete `_route_pair`, reword 2 docstrings, run acceptance checks (after T1+T2)

@@ -1,0 +1,5 @@
+# #603 noticed-but-not-touching
+
+N1 | scripts/grace_sweep_report.py:41 comment names `_route_pair` ("exits on the first poll AFTER grace expires") | iii-build-plan | scripts/grace_sweep_report.py:41 | open | Noticed 2026-10-16 during #603 planning; CodeRabbit plan forbids editing that script — correct opportunistically if the script is ever touched. Resolved-by:
+N2 | tests/test_exit_price_realism.py:8 docstring names `_route_pair` (configured grace never reached it) | iii-build-plan | tests/test_exit_price_realism.py:8 | open | Noticed 2026-10-16 during #603 planning; historical context for a passing acceptance test — leave unless the file is reworked. Resolved-by:
+N3 | docs/issues/589-noticed-but-not-touching.md ledger row N1 (origin of this issue) + docs/archive/CONSTRAINTS.md:26 + docs/runs/2026-09-01-run151-touch-pair-and-the-exit-floor.md:225 name `_route_pair` | iii-build-plan | dated docs/archive | open | Noticed 2026-10-16 during #603 planning; dated records stay true to their time — never rewrite. Resolved-by:
