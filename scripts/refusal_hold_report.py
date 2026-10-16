@@ -600,8 +600,11 @@ def render(arms: dict[str, dict[str, Any]], cutoff: float,
          [str(v) for v in get(["run", "refusal_visits_total"], 0)])
     line("store window (s)", [_num(v, 0) for v in get(["run", "window_sec"])])
     line("completed cycles", [str(v) for v in get(["run", "cycles"], 0)])
+    # A store that could not be opened has no revision to report; `None` in a
+    # metric cell reads as a measured value, so the absent case says so.
     line("report-run code revision",
-         [str(v) for v in get(["run", "report_revision"])])
+         ["n/a" if v is None else str(v)
+          for v in get(["run", "report_revision"])])
     out.append("")
 
     out.append("Cancel reasons per arm (count, and per posted order):")
@@ -692,6 +695,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     finally:
         if book is not None:
             book.close()
+    # An arm that could not be read renders a table of zeros and `n/a`, which is
+    # indistinguishable from a measured all-zero run. The table is still printed
+    # -- the reason is in it -- but the exit status refuses to call that a result,
+    # so a typo'd path cannot pass as a measurement in a scripted loop.
+    unreadable = [name for name in results
+                  if results[name].get("status") == "unavailable"]
+    if unreadable:
+        print(f"!! {len(unreadable)} of {len(results)} arm(s) could not be read "
+              f"({', '.join(sorted(unreadable))}): this is not a comparison.",
+              file=sys.stderr)
+        return 1
     return 0
 
 

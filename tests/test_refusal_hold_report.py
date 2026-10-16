@@ -450,3 +450,47 @@ def test_the_report_renders_every_required_metric_row(tmp_path):
         assert required in text, f"report is missing {required!r}"
     assert "NOT measured" in text, (
         "a missing tape must be stated, not silently reported as zeros")
+
+
+def test_an_unavailable_arm_fails_the_process_rather_than_reading_as_a_run(
+        tmp_path, capsys):
+    # A typo'd store path is the likeliest operator error here: three long paths
+    # pasted from the launcher's output. Rendering a full table of zeros and
+    # exiting 0 makes a typo indistinguishable from a measured all-zero arm, so
+    # the process has to fail while still printing the reason.
+    conn = _store(tmp_path)
+    _order(conn, "o1", "run-a", status="open")
+    conn.commit()
+    conn.close()
+
+    rc = rhr.main(["--arm", "remove", str(tmp_path / "arm.db"), "run-a",
+                   "--arm", "keep", str(tmp_path / "typo.db"), "run-b"])
+
+    out = capsys.readouterr().out
+    assert "typo.db" in out, "the failing arm must name its store"
+    assert rc != 0, "an unreadable store must not exit 0"
+
+
+def test_every_readable_arm_still_exits_zero(tmp_path, capsys):
+    conn = _store(tmp_path)
+    _order(conn, "o1", "run-a", status="open")
+    conn.commit()
+    conn.close()
+
+    rc = rhr.main(["--arm", "remove", str(tmp_path / "arm.db"), "run-a"])
+
+    assert rc == 0, capsys.readouterr().out
+
+
+def test_an_unavailable_arm_reports_its_revision_as_absent_not_as_None(
+        tmp_path):
+    # `None` in a metric cell reads as a value somebody measured. For a store
+    # that was never opened, the honest cell is `n/a`.
+    text = rhr.render(
+        {"remove": rhr.arm(tmp_path / "absent.db", "run-a")}, 0.5,
+        book_used=False)
+    revision_row = [ln for ln in text.splitlines()
+                    if ln.startswith("| report-run code revision")]
+    assert revision_row, text
+    assert "None" not in revision_row[0], revision_row[0]
+    assert "n/a" in revision_row[0], revision_row[0]
