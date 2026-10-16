@@ -446,7 +446,8 @@ def run_checks(conn: sqlite3.Connection, run_id: str,
 
 def arm(store: Path, run_id: str, book: Optional[sqlite3.Connection] = None,
         cutoff: float = DEFAULT_TREND_CUTOFF,
-        revision: Optional[str] = None) -> dict[str, Any]:
+        revision: Optional[str] = None,
+        book_run_id: Optional[str] = None) -> dict[str, Any]:
     """Every metric for one arm, or an honest `unavailable` marker."""
     if not store.exists():
         return {"status": "unavailable", "error": f"no such store: {store}"}
@@ -468,7 +469,10 @@ def arm(store: Path, run_id: str, book: Optional[sqlite3.Connection] = None,
             }
         except sqlite3.Error as exc:
             return {"status": "unavailable", "error": str(exc)}
-        labels = market_labels(book, cutoff) if book is not None else {}
+        try:
+            labels = market_labels(book, cutoff, book_run_id) if book is not None else {}
+        except sqlite3.Error:
+            labels = {}
         result["labels_available"] = bool(labels)
         result["fill_rate_by_label"] = fill_rate_by_label(conn, run_id, labels)
         result["label_counts"] = {
@@ -688,7 +692,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             book = _ro(book_path)
     try:
         results = {
-            name: arm(Path(db), run_id, book, args.trend_cutoff, revision)
+            name: arm(Path(db), run_id, book, args.trend_cutoff, revision,
+                      book_run_id=args.book_run_id)
             for name, db, run_id in args.arm
         }
         print(render(results, args.trend_cutoff, book is not None))

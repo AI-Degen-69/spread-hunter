@@ -1504,8 +1504,6 @@ def load(*, for_display: bool = False) -> MakerConfig:
         ("HUNTER_STOP_LOSS_TRIGGER_USD_CENTS",
          "HUNTER_DROP_CENTS (dollars) or HUNTER_DRAWDOWN_PCT"),
         ("HUNTER_STOP_LOSS_TRIGGER_PCT", "HUNTER_DRAWDOWN_PCT"),
-        ("HUNTER_REFUSAL_HOLD_POLICY", "no replacement (#622 purged refusal-hold)"),
-        ("HUNTER_REFUSAL_HOLD_DRIFT", "no replacement (#622 purged refusal-hold)"),
     ):
         if os.environ.get(_old_env):
             # `os.environ.get(...) or ()` in the #573 block below covers the
@@ -1513,6 +1511,11 @@ def load(*, for_display: bool = False) -> MakerConfig:
             logging.getLogger(__name__).warning(
                 "%s is retired and ignored (#619); set %s instead.",
                 _old_env, _replacement)
+    for _old_env in ("HUNTER_REFUSAL_HOLD_POLICY", "HUNTER_REFUSAL_HOLD_DRIFT"):
+        if os.environ.get(_old_env):
+            logging.getLogger(__name__).warning(
+                "%s is retired and ignored (#622); it has no replacement.",
+                _old_env)
     # Deprecation: the pre-#573 env names were renamed AND rescaled (pct is now
     # percent, usd is now cents). Warn if a stale old var is set so the operator
     # is not silently running on defaults.

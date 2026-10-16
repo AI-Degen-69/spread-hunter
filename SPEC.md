@@ -59,6 +59,10 @@ The issue's three criteria, made measurable:
 - Lifecycle overrides (`preserve_order_ids` / `replace_order_ids` / `cancel_order_ids`) and
   the refused-escalation path are untouched by the switch.
 - Dropped-market cleanup (`_cancel_dropped_markets`) is untouched.
+
+The following bullets are historical experiment requirements. Option A superseded
+them, and they do not describe the current implementation.
+
 - A **missing or untrustworthy mid** (book absent, one-sided, non-numeric, crossed) under
   option C means **no drift detected** → hold, matching the old band's missing-mid rule.
 - Drift is **two-sided**: the mid moving either way by more than tolerance counts.
