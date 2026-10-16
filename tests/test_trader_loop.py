@@ -1507,6 +1507,18 @@ class TestRefusedHold:
         assert calls["cancelled"] == [["o-up", "o-dn"]]
         assert calls["submitted"] == []
 
+    def test_refusal_cancels_on_the_first_cycle(self):
+        calls = {"submitted": [], "cancelled": []}
+        seam = self._seam(
+            lambda cfg, up, dn, inv, t_rem, wf: ([], self.TRANSIENT_WHY), calls)
+        results = run(
+            seam, interval=0.0, once=True, live=True,
+            markets=[FakeMarket("0xabc")],
+            sleep_fn=lambda s: None,
+        )
+        assert results[0].status == "DECLINED"
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
+
     def test_terminal_refusal_cancels_now(self):
         calls = {"submitted": [], "cancelled": []}
         seam = self._seam(
@@ -1553,12 +1565,7 @@ class TestRefusedHold:
         assert calls["cancelled"] == [["o-old"]]
         assert calls["submitted"] == [["tok-new"]]
 
-    def test_first_refusal_expires_the_hold(self):
-        # Interim default (operator directive 2026-10-16, pending #622):
-        # GRACE is 1, so the very first transient refusal already expires
-        # into a cancel. If #622 restores the hold, this test goes back to
-        # running GRACE cycles.
-        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
+    def test_first_refusal_cancels_immediately(self):
         calls = {"submitted": [], "cancelled": []}
         decides = []
         sleeps = []
@@ -1567,29 +1574,24 @@ class TestRefusedHold:
             decides.append(1)
             return [], self.TRANSIENT_WHY
 
-        # Out-of-band books (mid 0.67 vs UP 0.60): expiry cancels both legs.
         seam = self._seam(decide, calls, books={
             "best_bid": 0.66, "best_ask": 0.68,
             "bids": {0.66: 100}, "asks": {0.68: 100}})
 
         def sleep_fn(s):
             sleeps.append(s)
-            if len(sleeps) >= GRACE:
-                raise KeyboardInterrupt
+            raise KeyboardInterrupt
 
         run(
             seam, interval=0.0, once=False, live=True,
             markets=[FakeMarket("0xabc")],
             sleep_fn=sleep_fn,
         )
-        assert len(decides) == GRACE
+        assert len(decides) == 1
         assert calls["submitted"] == []
         assert calls["cancelled"] == [["o-up", "o-dn"]]
 
-    def test_expiry_cancels_both_legs_with_no_band(self):
-        # The #419 mid-hold band is removed (operator directive 2026-10-16):
-        # expiry cancels everything, in band or out.
-        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
+    def test_refusal_cancels_both_legs(self):
         calls = {"submitted": [], "cancelled": []}
         decides = []
         sleeps = []
@@ -1598,29 +1600,22 @@ class TestRefusedHold:
             decides.append(1)
             return [], self.TRANSIENT_WHY
 
-        # Default books (mid 0.60) sit where the old band used to hold the
-        # UP leg -- now both legs cancel on the first refusal.
         seam = self._seam(decide, calls)
 
         def sleep_fn(s):
             sleeps.append(s)
-            if len(sleeps) >= GRACE:
-                raise KeyboardInterrupt
+            raise KeyboardInterrupt
 
         run(
             seam, interval=0.0, once=False, live=True,
             markets=[FakeMarket("0xabc")],
             sleep_fn=sleep_fn,
         )
-        assert len(decides) == GRACE
+        assert len(decides) == 1
         assert calls["submitted"] == []
         assert calls["cancelled"] == [["o-up", "o-dn"]]
 
     def test_first_refusal_cancels_before_any_quote(self):
-        # Interim default (operator directive 2026-10-16, pending #622):
-        # with no hold there is no streak to reset -- the first refusal
-        # cancels, and the later quote starts from empty.
-        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
         calls = {"submitted": [], "cancelled": []}
         decides = []
 
@@ -1636,7 +1631,7 @@ class TestRefusedHold:
 
         def sleep_fn(s):
             sleeps.append(s)
-            if len(sleeps) >= GRACE + 1:
+            if len(sleeps) >= 2:
                 raise KeyboardInterrupt
 
         run(
@@ -1644,46 +1639,9 @@ class TestRefusedHold:
             markets=[FakeMarket("0xabc")],
             sleep_fn=sleep_fn,
         )
-        # Refuse, quote: the first refusal already cancelled both legs, and
-        # cycle 2 keeps rather than resubmits -- the fake books still list
-        # the orders -- so the cycle-1 cancel is the whole proof.
-        assert len(decides) == GRACE + 1
+        assert len(decides) == 2
         assert calls["cancelled"] == [["o-up", "o-dn"]]
         assert calls["submitted"] == []
-
-
-
-class TestCycleMids:
-    """#419: the mid feed leaves out every token without a tradable book."""
-
-    @staticmethod
-    def _mids(up, dn):
-        from core_brain.trader_loop import _cycle_mids
-        return _cycle_mids(up, dn)
-
-    @staticmethod
-    def _book(token, bid, ask):
-        return {"token_id": token, "best_bid": bid, "best_ask": ask}
-
-    def test_two_sided_books_give_both_mids(self):
-        mids = self._mids(self._book("tok-up", 0.45, 0.47),
-                          self._book("tok-dn", 0.50, 0.52))
-        assert mids["tok-up"] == pytest.approx(0.46)
-        assert mids["tok-dn"] == pytest.approx(0.51)
-
-    def test_crossed_book_leaves_the_token_out(self):
-        mids = self._mids(self._book("tok-up", 0.50, 0.48),
-                          self._book("tok-dn", 0.50, 0.52))
-        assert mids == {"tok-dn": 0.51}
-
-    def test_one_sided_or_missing_book_leaves_the_token_out(self):
-        mids = self._mids(self._book("tok-up", 0.45, None), {})
-        assert mids == {}
-
-    def test_non_numeric_book_leaves_the_token_out(self):
-        mids = self._mids(self._book("tok-up", "bad", 0.47),
-                          self._book("tok-dn", 0.50, 0.52))
-        assert mids == {"tok-dn": 0.51}
 
 
 class TestLifecycleStops:
@@ -1910,23 +1868,6 @@ class TestLifecycleStopRows:
         run(seam, interval=0.0, once=False, live=True,
             markets=[_t3_spec("0xabc")], sleep_fn=sleep_fn)
         assert len(_stop_rows(reg, "decided_by_price")) == 1
-
-    def test_hold_expired_names_the_reason(self, tmp_path):
-        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
-        why = "UP: 8.0c from mid > 4.5c reward window"
-        reg, seam, calls = self._seam(
-            tmp_path, lambda *a: ([], why))
-        idx = [0]
-
-        def sleep_fn(s):
-            idx[0] += 1
-            if idx[0] >= GRACE:
-                raise KeyboardInterrupt
-
-        run(seam, interval=0.0, once=False, live=True,
-            markets=[_t3_spec("0xabc")], sleep_fn=sleep_fn)
-        assert calls["cancelled"], "grace expiry must cancel resting orders"
-        assert len(_stop_rows(reg, "hold_expired")) == 1
 
     def test_quote_between_stops_rearms_the_row(self, tmp_path):
         why = ("UP: mid 0.950 outside [0.10,0.90] -- decided market")
@@ -3166,3 +3107,81 @@ class TestHeldFirstRotation:
         for rotation, order in order_a.items():
             for cid in flat:
                 assert order.count(cid) == 1
+
+
+class TestRefusalVisitRows:
+    """#622 T3: the rate denominator.
+
+    `_note_lifecycle_stop` writes nothing for a HELD refusal -- `_visit_stop`
+    returns `None` when the reason is transient -- so under `keep`/`drift` almost
+    every refusal left no row at all and the arms had no comparable denominator.
+    Without a count of refusal VISITS, "this arm cancelled more" cannot be told
+    apart from "this arm had more chances to".
+    """
+
+    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
+                     "DOWN: 8.0c from mid > 4.5c reward window")
+
+    def _seam(self, tmp_path, decide, books=None):
+        reg, _db = _t3_registry(tmp_path)
+        calls = {"submitted": [], "cancelled": []}
+        seam = _t3_seam(reg, {}, decide, calls)
+        seam.base_cfg = MakerConfig()
+        state = books if books is not None else {
+            "best_bid": 0.59, "best_ask": 0.61,
+            "bids": {0.59: 100}, "asks": {0.61: 100}}
+
+        def fetch_books(host, token):
+            book = {"token_id": token}
+            book.update(state)
+            return book
+
+        seam.fetch_books = fetch_books
+        seam.open_orders_fn = lambda m: [
+            {"token_id": "tok-x", "price": 0.60, "order_id": "o-x",
+             "id": "o-x", "side": "BUY", "status": "open"}]
+        return reg, seam, calls, state
+
+    def _rows(self, reg, code=None):
+        rows = [r for r in reg.get_all_market_events()
+                if r["kind"] == "refusal_visit"]
+        if code is not None:
+            rows = [r for r in rows if r["reason_code"] == code]
+        return rows
+
+    def _run_cycles(self, seam, cycles):
+        idx = [0]
+
+        def sleep_fn(s):
+            idx[0] += 1
+            if idx[0] >= cycles:
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=[_t3_spec("0xabc")], sleep_fn=sleep_fn)
+        return idx[0]
+
+    def test_refused_visit_writes_a_row(self, tmp_path):
+        reg, seam, _calls, _b = self._seam(
+            tmp_path, lambda *a: ([], self.TRANSIENT_WHY))
+        self._run_cycles(seam, 1)
+        assert len(self._rows(reg, "refused_transient")) == 1
+
+    def test_every_refused_visit_is_counted(self, tmp_path):
+        reg, seam, _calls, _b = self._seam(
+            tmp_path, lambda *a: ([], self.TRANSIENT_WHY))
+        self._run_cycles(seam, 3)
+        assert len(self._rows(reg)) == 3
+        assert len(self._rows(reg, "refused_transient")) == 3
+
+    def test_a_quoted_visit_is_not_a_refusal(self, tmp_path):
+        reg, seam, _calls, _b = self._seam(
+            tmp_path, lambda *a: ([_intent(token="tok-x", price=0.60)], ""))
+        self._run_cycles(seam, 2)
+        assert self._rows(reg) == []
+
+    def test_the_row_carries_default_size_one(self, tmp_path):
+        reg, seam, _calls, _b = self._seam(
+            tmp_path, lambda *a: ([], self.TRANSIENT_WHY))
+        self._run_cycles(seam, 2)
+        assert [r["size"] for r in self._rows(reg, "refused_transient")] == [1.0, 1.0]

@@ -1711,8 +1711,7 @@ class TestRefusedHoldShadow:
         assert calls["cancelled"] == [["o-up", "o-dn"]]
         assert calls["submitted"] == []
 
-    def test_dead_market_cancels_past_grace(self):
-        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
+    def test_refused_market_cancels_immediately(self):
         calls = {"submitted": [], "cancelled": []}
 
         def out_of_band_books(clob_host, token):
@@ -1722,7 +1721,7 @@ class TestRefusedHoldShadow:
         seam = self._seam(
             lambda cfg, up, dn, inv, t_rem, wf: ([], self.TRANSIENT_WHY),
             calls, fetch_books=out_of_band_books)
-        self._run_cycles(seam, GRACE)
+        self._run_cycles(seam, 1)
         assert calls["submitted"] == []
         assert calls["cancelled"] == [["o-up", "o-dn"]]
 

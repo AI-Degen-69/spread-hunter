@@ -72,9 +72,6 @@ class LiveFleetResult:
     submitted: int = 0
     cancelled: int = 0
     error: str = ""
-    #: True when this visit held resting orders through a transient refusal
-    #: (#390). `run` reads it to maintain the per-market grace counter.
-    held: bool = False
     #: The queue-clear gate's reading for this visit's new placements (#393):
     #: the named reason when the queue ahead is too deep or too quiet to clear,
     #: empty when it clears or when nothing was measured. Record-only at ship, so
@@ -107,29 +104,10 @@ PARTIAL_SUBMIT_PLACED_ATTR = "placed"
 
 
 class VisitOutcome(Enum):
-    """What one market visit decided, beyond the intents list.
-
-    Empty intents currently mean two different things -- the market was
-    visited but `decide` refused (transient book flicker: hold), or the
-    market is gone/settled (cancel now). The enum names which one so
-    `plan_orders` never has to guess from `intents == []`.
-    """
+    """What one market visit decided, beyond the intents list."""
     QUOTED = "quoted"                    # intents present (or no opinion)
-    REFUSED_TRANSIENT = "refused_hold"   # visited, refused: hold resting
-    REFUSED_TERMINAL = "refused_cancel"  # visited, refused for good: cancel
-    REFUSED_GRACE_EXPIRED = "refused_grace_expired"  # hold grace ran out:
-        # cancels like terminal
-
-
-# Consecutive visited-but-refused cycles a market's resting orders survive
-# before the hold expires and they cancel via `not_quoted` (#390). A market
-# that never comes back is dead, not flickering. Named, not magic.
-#
-# Interim default (operator directive 2026-10-16, pending #622): 1, i.e. the
-# hold is OFF -- the first transient refusal already expires into a cancel,
-# so quotes rest until fill / terminal refusal / stop exit. Restore to
-# 3 if #622 keeps the hold.
-REFUSED_HOLD_GRACE_CYCLES = 1
+    REFUSED_TRANSIENT = "refused_transient"  # visited, refused: transient reason
+    REFUSED_TERMINAL = "refused_cancel"  # visited, refused for good: named stop
 
 
 def _classify_refusal(why: str) -> VisitOutcome:
@@ -145,14 +123,8 @@ def _classify_refusal(why: str) -> VisitOutcome:
     return VisitOutcome.REFUSED_TRANSIENT
 
 
-def _visit_stop(why: str, grace_expired: bool) -> Optional[LifecycleStop]:
-    """Name the lifecycle stop for a refused visit (pure).
-
-    A transient refusal that outlasted the hold grace expires into
-    HOLD_EXPIRED -- today that path cancels without a named reason (#402).
-    """
-    if grace_expired:
-        return LifecycleStop.HOLD_EXPIRED
+def _visit_stop(why: str) -> Optional[LifecycleStop]:
+    """Name the lifecycle stop for a refused visit (pure)."""
     return classify_refusal(why or "")
 
 
@@ -206,28 +178,34 @@ def _note_lifecycle_stop(
     return True
 
 
-def _cycle_mids(up_book: dict, down_book: dict) -> dict:
-    """This cycle's per-token midpoints.
-
-    A token is left out when its book is missing, one-sided, non-numeric,
-    or crossed. (Kept for telemetry/tests; no planner rule consumes it since
-    the #419 mid-hold band was removed.)
-    """
-    mids: dict[str, float] = {}
-    for book in (up_book or {}, down_book or {}):
-        token_id = book.get("token_id")
-        try:
-            bid = float(book.get("best_bid"))
-            ask = float(book.get("best_ask"))
-        except (TypeError, ValueError):
-            continue
-        if (token_id is None or not math.isfinite(bid)
-                or not math.isfinite(ask) or bid >= ask):
-            continue
-        mid = mid_price(bid, ask)
-        if mid is not None:
-            mids[str(token_id)] = mid
-    return mids
+def _note_refusal_visit(
+    seam: VenueSeam,
+    cid: str,
+    title: str,
+    code: str,
+    text: str,
+    streak: int = 1,
+    emit_fn: Optional[Callable] = None,
+) -> None:
+    """Store one `market_events` row per refused visit (#622 T3)."""
+    if emit_fn is None:
+        emit_fn = lambda *a, **k: None
+    try:
+        from core_brain.order_registry import MarketEventRecord
+        log_fn = getattr(seam.registry, "log_market_event", None)
+        if callable(log_fn):
+            log_fn(MarketEventRecord(
+                ts=time.time(),
+                condition_id=cid,
+                market_slug=title or None,
+                kind="refusal_visit",
+                reason=text or "",
+                reason_code=code,
+                size=float(streak),
+            ))
+    except Exception as e:
+        log.warning("refusal_visit store failed: %s: %s",
+                    type(e).__name__, e)
 
 
 def plan_orders(
@@ -360,7 +338,6 @@ def plan_orders(
     preserve_ids = {str(value) for value in preserve_order_ids or ()}
     replace_ids = {str(value) for value in replace_order_ids or ()}
     cancel_ids = {str(value) for value in cancel_order_ids or ()}
-
     wanted: dict[str, list[QuoteIntent]] = {}
     for i in intents:
         wanted.setdefault(i.token_id, []).append(i)
@@ -370,30 +347,6 @@ def plan_orders(
             key = order.get("id") or order.get("order_id")
             if key is not None:
                 reasons[str(key)] = reason
-
-    def _near_front(order: dict) -> bool:
-        """Is this order close enough to the front to be worth holding?"""
-        if not hold_queue_shares or hold_queue_shares <= 0 or not queue_ahead:
-            return False
-        key = order.get("id") or order.get("order_id")
-        ahead = queue_ahead.get(str(key)) if key is not None else None
-        if ahead is None:
-            # An unknown position is not a good one. Holding on a queue we
-            # never measured is the same guess the hold rule exists to replace.
-            return False
-        return float(ahead) <= float(hold_queue_shares)
-
-    def _market_arriving(order: dict, targets: list[QuoteIntent]) -> bool:
-        """Is the book walking DOWN onto this bid, and still close to it?
-
-        Compared against the HIGHEST target for the token: that is the price
-        this cycle would rest at, so it is the one that says whether the book
-        has come to the order or left it behind.
-        """
-        if not hold_below_target or hold_below_target <= 0:
-            return False
-        drop = round(float(order["price"]) - max(float(i.price) for i in targets), 4)
-        return 0.0 < drop <= round(float(hold_below_target), 4)
 
     kept: dict[str, list[dict]] = {}
     # Tokens whose order was HELD through a price move. A held order rests at a
@@ -419,17 +372,6 @@ def plan_orders(
             continue
         targets = wanted.get(tok)
         if not targets:
-            if visit_outcome is VisitOutcome.REFUSED_TRANSIENT:
-                # HOLD-ON-REFUSAL (#390): the market was visited but decide
-                # refused this cycle (book flicker, not abandonment). The
-                # resting order stays: no cancel, and with no intents there
-                # is nothing to submit either.
-                continue
-            if visit_outcome is VisitOutcome.REFUSED_TERMINAL:
-                # Refused for good (named stop, hard stop): cancel.
-                _record(o, CANCEL_NOT_QUOTED)
-                to_cancel.append(o)
-                continue
             _record(o, CANCEL_NOT_QUOTED)
             to_cancel.append(o)
             continue
@@ -668,10 +610,6 @@ def run(
     last_cycle: list[LiveFleetResult] = []
     current_markets = list(markets or [])
     cycle = 0
-    # Consecutive refused-hold cycles per market (#390). A quoted cycle, a
-    # terminal cancel, or an error resets the count; a restart resets it too
-    # (safe direction: a fresh loop holds, never wipes).
-    refused_streaks: dict[str, int] = {}
     # Latest `Inventory` each visit read, keyed by lowercased condition id
     # (#505). Recorded from reads the visits already perform, so ordering the
     # next rotation's visits costs no extra database or venue call.
@@ -805,7 +743,6 @@ def run(
                 res = _visit_one(
                     seam=seam, spec=spec, live=live, cycle=cycle,
                     emit_fn=emit_fn,
-                    refused_streak=refused_streaks.get(cid, 0),
                     stop_memory=stop_memory,
                     tail_memory=tail_memory,
                     inventory_recorder=inventory_by_cid.__setitem__,
@@ -816,9 +753,6 @@ def run(
                         LifecycleStop.SETTLED_BOOK,
                         LifecycleStop.COUNTDOWN_EXPIRED):
                     rotation_suspects.add(cid)
-                refused_streaks[cid] = (
-                    refused_streaks.get(cid, 0) + 1 if res.held else 0
-                )
                 cycle_results.append(res)
             if suspects_box is not None:
                 suspects_box["cids"] = frozenset(rotation_suspects)
@@ -1716,7 +1650,6 @@ def _visit_one(
     cycle: int = 0,
     emit_fn: Optional[Callable] = None,
     plan_fn: Optional[Callable] = None,
-    refused_streak: int = 0,
     stop_memory: Optional[dict] = None,
     tail_memory: Optional[dict] = None,
     *,
@@ -1724,10 +1657,6 @@ def _visit_one(
 ) -> LiveFleetResult:
     """One poll of one market: fetch -> decide -> plan -> submit/cancel.
 
-    `refused_streak` is this market's consecutive refused-hold count coming
-    into the cycle (owned by `run`). When the streak reaches
-    `REFUSED_HOLD_GRACE_CYCLES`, a transient refusal expires into a cancel:
-    a market that never comes back is dead, not flickering (#390).
     `stop_memory` is the loop's condition-id -> last-stop-code map for
     on-change-only `lifecycle_stop` rows; None behaves as an empty map.
     `tail_memory` is the loop's (condition-id, line-kind) -> last-signature
@@ -1895,22 +1824,18 @@ def _visit_one(
             else _classify_refusal(why) if not intents
             else VisitOutcome.QUOTED
         )
-        grace_expired = (
-            visit_outcome is VisitOutcome.REFUSED_TRANSIENT
-            and refused_streak + 1 >= REFUSED_HOLD_GRACE_CYCLES
-        )
-        if grace_expired:
-            # GRACE EXPIRED (#390): held through enough refused cycles with
-            # no quotable one between. Cancels via the grace path below.
-            visit_outcome = VisitOutcome.REFUSED_GRACE_EXPIRED
         if intents:
             # A quote in between re-arms stop rows: the next stop is news.
             if stop_memory is not None:
                 stop_memory.pop(cid, None)
         else:
             _note_lifecycle_stop(
-                seam, cid, title, _visit_stop(why, grace_expired),
+                seam, cid, title, _visit_stop(why),
                 why, stop_memory, cycle, emit_fn)
+            _note_refusal_visit(
+                seam, cid, title,
+                visit_outcome.value,
+                why, 1, emit_fn)
         plan_kwargs = {
             "dead_band": float(getattr(cfg, "requote_dead_band", 0.0)),
             "cfg": cfg,
@@ -1918,10 +1843,6 @@ def _visit_one(
             "hedge_held": hedge_held,
             "reasons": cancel_reasons,
             "queue_ahead": queue_ahead,
-            "hold_queue_shares": float(
-                getattr(cfg, "requote_hold_queue_shares", 0.0)),
-            "hold_below_target": float(
-                getattr(cfg, "requote_hold_below_target", 0.0)),
             "visit_outcome": visit_outcome,
         }
         lifecycle_context = ev.lifecycle_context
@@ -2117,10 +2038,6 @@ def _visit_one(
     emit_fn(service="decide", cycle=cycle, phase="quoting", action="submit",
             market_slug=title, extra=submit_extra)
 
-    held = (
-        visit_outcome is VisitOutcome.REFUSED_TRANSIENT
-        and not to_cancel and not to_submit and bool(open_orders)
-    )
     if queue_why:
         _tail_note(tail_memory, cid, "queue", queue_why,
                    "[QUEUE] %s | %s", title, queue_why)
@@ -2129,10 +2046,6 @@ def _visit_one(
         log.info("[QUOTING] %s | Posted %d orders: %s\n", title, submitted, orders_desc)
     elif cancelled > 0:
         log.info("[REQUOTE] %s | Cancelled %d stale order(s)\n", title, cancelled)
-    elif held:
-        _tail_note(tail_memory, cid, "holding", f"{len(open_orders)}|{why}",
-                   "[HOLDING] %s | %d quote(s) held through transient refusal: %s",
-                   title, len(open_orders), why)
     elif open_orders:
         _tail_note(tail_memory, cid, "resting", str(len(open_orders)),
                    "[RESTING] %s | %d quote(s) resting at target spread", title, len(open_orders))
@@ -2143,7 +2056,7 @@ def _visit_one(
     return LiveFleetResult(
         status="QUOTED" if intents else "DECLINED",
         condition_id=cid, title=title, why=why, intents=list(intents),
-        submitted=submitted, cancelled=cancelled, held=held,
+        submitted=submitted, cancelled=cancelled,
         queue_why=queue_why)
 
 

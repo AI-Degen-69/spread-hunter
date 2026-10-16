@@ -165,6 +165,7 @@ through the cap.
 Fewer orders posted is the expected result of both rules, not a regression — wide markets
 are declined rather than quoted into an empty book.
 
-**Mid-hold band** — removed 2026-10-16 (operator directive, pending #622).
-Resting orders are never held for drift: no intent for the token means cancel,
-period. One side fills eventually and the position machinery takes over.
+**Refusal-hold and mid-hold band** — permanently purged (#622).
+Transient refusals never hold resting orders: an empty intent list for a token
+cancels immediately on the first cycle. Resting orders are never held through
+refusals or price drift; position machinery takes over on fills.

@@ -11,8 +11,8 @@ Frames carry `asset_id` plus `bids` / `asks` level lists
 (`{"price", "size"}`), either as one dict or a list of them — keyed on
 `asset_id` alone, never on message shape.
 
-Mid rule mirrors `_cycle_mids` in `trader_loop.py` (both sides, finite,
-bid < ask) plus the binary 0–1 range: anything else drops the entry instead
+Mid rule requires both sides, finite, bid < ask, plus the binary 0–1 range:
+anything else drops the entry instead
 of keeping a stale mid. All timestamps are epoch seconds (float), the same
 unit KPI quote rows use, so the browser can compare mark age against quote
 age directly.

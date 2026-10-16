@@ -207,6 +207,12 @@ CREATE TABLE IF NOT EXISTS orders (
     -- tuned. See core_brain/trader_loop.plan_orders.
     cancel_reason TEXT,
     cancel_queue_ahead REAL,
+    -- When this order STOPPED resting (#622). `posted_ts` alone cannot give a
+    -- cancelled order's lifetime, and the churn metric is exactly that median.
+    -- `last_polled_ts` is not a substitute: it is the last time the loop
+    -- looked, which is neither the cancel moment nor bounded by it. Nullable,
+    -- because every row written before this column existed has no honest value.
+    cancelled_ts INTEGER,
     run_id TEXT
 );
 
@@ -482,6 +488,8 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE orders ADD COLUMN cancel_reason TEXT")
         if "cancel_queue_ahead" not in cols:
             conn.execute("ALTER TABLE orders ADD COLUMN cancel_queue_ahead REAL")
+        if "cancelled_ts" not in cols:
+            conn.execute("ALTER TABLE orders ADD COLUMN cancelled_ts INTEGER")
 
     # Check columns in markouts
     cur = conn.execute("PRAGMA table_info(markouts)")
@@ -1267,6 +1275,17 @@ class OrderRegistry:
             if cancel_queue_ahead is not None:
                 sets.append("cancel_queue_ahead = ?")
                 params.append(float(cancel_queue_ahead))
+            if str(status).lower() == "cancelled":
+                # COALESCE, not assignment: the FIRST cancel is when the order
+                # stopped resting. A later write that knows nothing about the
+                # cancel must not rewrite it, or every re-poll inflates the
+                # lifetime the churn metric is computed over. Stamped only for
+                # `cancelled` -- `unattributed` is terminal-unfilled too, but it
+                # means we could not match the venue order, not that we chose to
+                # stop quoting, and counting it would make every arm look like it
+                # cancelled more than it did.
+                sets.append("cancelled_ts = COALESCE(cancelled_ts, ?)")
+                params.append(int(time.time() * 1000))
             params.append(local_id)
             cur = conn.execute(
                 f"UPDATE orders SET {', '.join(sets)} WHERE id = ?",

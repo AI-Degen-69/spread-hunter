@@ -58,28 +58,27 @@
 <div class="wrap">
 
 <h1>Why &ldquo;grace&rdquo; kept your orders alive</h1>
-<p class="sub">The refusal-hold path in <code>core_brain/trader_loop.py</code> — what it was, why it fired, and how it differs from the rescue grace you removed. <strong>Interim state 2026-10-16 (pending #622): the hold is OFF</strong> (<code>REFUSED_HOLD_GRACE_CYCLES = 1</code>), so the first transient refusal cancels. The walkthrough below shows the GRACE=3 behavior, restorable if #622 keeps the hold.</p>
+<p class="sub">The historical refusal-hold path in <code>core_brain/trader_loop.py</code> — what it was, why it fired, and how it differs from the rescue grace. <strong>Final decision on Issue #622: TOTAL PURGE</strong> (Option A). The refusal-hold machinery, grace cycles, and streak trackers were completely deleted. Every refusal now cancels immediately.</p>
 
 <div class="verdict">
-  <strong>Short answer:</strong> there are <strong>two different things called &ldquo;grace&rdquo;</strong> in this codebase.
+  <strong>Short answer:</strong> there were <strong>two different things called &ldquo;grace&rdquo;</strong> in this codebase — and <strong>both are now permanently purged</strong>.
   You removed grace&nbsp;#1 (rescue patience on filled legs — dead, no reader).
-  Grace&nbsp;#2 (<strong>hold-on-refusal</strong>, issue #390) kept <em>resting orders</em> through up to
-  <strong>3 consecutive refused cycles</strong> before cancelling — but it is <strong>currently OFF by interim operator directive</strong> (GRACE=1: first refusal cancels, pending #622). It is unrelated to the stop-loss spec either way.
+  Grace&nbsp;#2 (<strong>hold-on-refusal</strong>, issue #390) was <strong>formally purged in #622</strong>: transient refusals cancel on the first cycle without holding, and all hold/grace structures were removed.
 </div>
 
-<h2>1. The two graces — dead vs live</h2>
+<h2>1. The two graces — both purged</h2>
 <div class="cards">
   <div class="card dead">
-    <span class="tag dead">GRACE #1 — DEAD</span>
+    <span class="tag dead">GRACE #1 — PURGED (#619)</span>
     <h3>Rescue patience (<code>single_buy_grace_sec</code>)</h3>
-    <p>Gave a filled single leg N seconds as maker before rescue. Retired in #619: the env var now logs <em>&ldquo;retired and ignored&rdquo;</em> (<code>config.py:1494-1511</code>) and <strong>no code reads the knob</strong>. This is the one you remember removing. It cannot hold anything.</p>
-    <p class="k">Leftover mentions: <code>reason="grace_expired"</code> labels on old closes, dashboard chips, two open cleanup rows — forensic text, zero behavior.</p>
+    <p>Gave a filled single leg N seconds as maker before rescue. Retired in #619: the env var now logs <em>&ldquo;retired and ignored&rdquo;</em> (<code>config.py</code>) and <strong>no code reads the knob</strong>. It cannot hold anything.</p>
+    <p class="k">Forensic text only, zero runtime behavior.</p>
   </div>
-  <div class="card live">
-    <span class="tag dead">GRACE #2 — OFF (INTERIM, PENDING #622)</span>
-    <h3>Hold-on-refusal (<code>REFUSED_HOLD_GRACE_CYCLES = 1</code>, was 3)</h3>
-    <p>When the loop visits a market but <code>decide</code> <em>refuses</em> to quote (book flicker, not abandonment), resting orders <strong>cancel on the first refusal</strong> — no hold, no second chance. The 3-cycle hold below is the pre-2026-10-16 behavior, restorable by setting the constant back to 3 if #622 keeps the machinery. Lives in <code>trader_loop.py:132</code>.</p>
-    <p class="k">Nothing to do with filled legs, rescue, or the stop-loss MD. It manages <em>unfilled resting quotes</em>.</p>
+  <div class="card dead">
+    <span class="tag dead">GRACE #2 — PURGED (#622)</span>
+    <h3>Hold-on-refusal (Option A: Total Purge)</h3>
+    <p>When the loop visits a market but <code>decide</code> <em>refuses</em> to quote, resting orders <strong>cancel on the first cycle</strong>. In #622 the operator chose Option A: all grace cycles, hold policies, and streak tracking were completely deleted from <code>trader_loop.py</code>.</p>
+    <p class="k">Zero tombstones: no hold constants or dead streak trackers remain in code.</p>
   </div>
 </div>
 
@@ -101,41 +100,28 @@
   <div class="arrow">▼ classify <code>why</code> — <code>_classify_refusal</code> (<code>:135</code>)</div>
   <div class="node act-cancel"><strong>Terminal refusal</strong> (settled, expired, exited, unfunded…) → <code>REFUSED_TERMINAL</code> → <strong>cancel immediately</strong> via <code>not_quoted</code>. No grace, ever. (<code>:426-433</code>)</div>
   <div class="arrow">▼ else <strong>transient</strong> (wide book, cap, reward window…) → <code>REFUSED_TRANSIENT</code></div>
-  <div class="node act-hold"><strong>Streak check</strong> (<code>:1900</code>): <code>refused_streak + 1 &gt;= REFUSED_HOLD_GRACE_CYCLES</code>?<br>
-    At GRACE=3: No → <strong>HOLD</strong> — no cancel, no submit. Logs <code>[HOLDING] … held through transient refusal</code>.<br>
-    <strong>Today (GRACE=1, interim): the very first refusal meets the threshold</strong> → <code>REFUSED_GRACE_EXPIRED</code> → <strong>cancel</strong> like terminal. (The #419 mid-hold band exception was removed 2026-10-16 — expiry now cancels everything.)</div>
+  <div class="node act-cancel"><strong>Transient refusal</strong> (wide book, cap, reward window…) → <code>REFUSED_TRANSIENT</code><br>
+    <strong>Post-#622 Purge:</strong> Transient refusals cancel immediately on the first cycle. All grace cycles, hold policies, and streak tracking were completely deleted. Resting orders cancel via <code>not_quoted</code>.</div>
   <div class="arrow">▼ after the visit</div>
-  <div class="node"><strong>Streak counter</strong> (<code>:808-820</code>): held → streak+1, anything else → reset to 0. With the hold off, nothing is ever held by this path, so the streak never accumulates here — a single quoted cycle still wipes the count.</div>
+  <div class="node"><strong>Visit accounting:</strong> Every refused visit is recorded in <code>market_events</code> as a <code>refusal_visit</code> for rate denominator tracking. No streak counter or hold state exists.</div>
 </div>
 
-<h2>4. Why it exists (the churn it prevents)</h2>
-<p>From the comment at <code>trader_loop.py:85-88</code>: on shadow-02, <strong>23 of 25 orders were cancelled with a median lifetime of 37s</strong> — mostly book flicker, not real abandonment. Cancelling on every refused cycle means:</p>
-<ul>
-  <li>paying cancel/replace churn on every book wobble,</li>
-  <li>losing queue position each time, then re-joining at the back.</li>
-</ul>
-<p>The 3-cycle hold said: <em>&ldquo;the book moved, not the market — sit still until it's clearly dead.&rdquo;</em> A market that never comes back still cancelled on the 3rd consecutive refusal. The counter is per-market (<code>refused_streaks[cid]</code>), so one dead market can't spend another's patience. <strong>Currently off by interim directive (GRACE=1, pending #622)</strong> — the churn described below is what the loop pays today.</p>
+<h2>4. Why it was removed (The #622 Decision)</h2>
+<p>Holding quotes through book flicker preserved queue position, but holding during adverse drift created unhedged exposure when orders filled while the opposite leg was refused. In #622 the operator chose <strong>Option A (TOTAL PURGE)</strong>: eliminate all hold and grace machinery entirely. Orders rest while quotable and cancel immediately when not quoted.</p>
 
-<h2>5. How to tell which grace held your order</h2>
+<h2>5. Summary of Purged Machinery</h2>
 <table>
-  <tr><th>Signal</th><th>Grace #1 (rescue, dead)</th><th>Grace #2 (refusal hold, live)</th></tr>
-  <tr><td>Log line</td><td>Nothing — it cannot log, it never runs</td><td><code>[HOLDING] … N quote(s) held through transient refusal: {why}</code> — silent while GRACE=1 (nothing held by this path)</td></tr>
-  <tr><td>Result flag</td><td>—</td><td><code>LiveFleetResult.held == True</code> — unreachable while GRACE=1</td></tr>
-  <tr><td>Outcome enum</td><td>—</td><td><code>refused_hold</code> → later <code>refused_grace_expired</code></td></tr>
-  <tr><td>What is held</td><td>—</td><td>Unfilled resting quotes only. Filled legs go through the stop lifecycle, untouched by this.</td></tr>
+  <tr><th>Component</th><th>Historical Behavior</th><th>Post-#622 Purged State</th></tr>
+  <tr><td>Refusal-hold grace</td><td>Held orders across 3 cycles</td><td><strong>Deleted</strong>: cancels on cycle 1</td></tr>
+  <tr><td>Mid-hold band</td><td>Held quote when mid was in band</td><td><strong>Deleted</strong>: no price-band holds</td></tr>
+  <tr><td>Streak trackers</td><td><code>refused_streaks</code>, reference mids</td><td><strong>Deleted</strong>: zero streak state</td></tr>
+  <tr><td>Config policies</td><td><code>remove</code>, <code>keep</code>, <code>drift</code></td><td><strong>Deleted</strong>: retired env warning list</td></tr>
 </table>
 
-<h2>6. If you want it back (or shorter)</h2>
-<p>The dial is one constant — <code>REFUSED_HOLD_GRACE_CYCLES = 1</code> (<code>trader_loop.py:132</code>, interim pending #622):</p>
-<table>
-  <tr><th>Value</th><th>Effect</th></tr>
-  <tr><td><code>1</code> (today, interim)</td><td>No hold at all — first refusal cancels (maximum churn, quotes rest until fill / terminal refusal / stop exit)</td></tr>
-  <tr><td><code>3</code></td><td>Restores the hold: keeps resting orders through 2 refused cycles, cancels on the 3rd consecutive one — set this back if #622 keeps the machinery</td></tr>
-  <tr><td><code>2</code></td><td>One cycle of patience</td></tr>
-</table>
-<p class="k">The keep/remove/bound call belongs to #622 (still OPEN) — this branch only parks the dial at 1 until that decision lands.</p>
+<h2>6. Post-Decision Architecture</h2>
+<p>There is no hold dial or grace knob in the codebase. Quoting is strictly reactive: every market visit with no desired intents cancels resting orders on the spot via <code>not_quoted</code>.</p>
 
-<footer>Sources: <code>core_brain/trader_loop.py</code> VisitOutcome (:109-122), GRACE const (:132), plan_orders (:233), streak check (:1900), streak counter (:808-820); <code>core_brain/config.py</code> 1494-1511. Generated 2026-10-16, corrected to the interim GRACE=1 state. No product code changed by this doc.</footer>
+<footer>Documented for #622. Final state: Option A (Total Purge). All hold constants, grace helpers, and streak trackers removed.</footer>
 
 </div>
 <script>

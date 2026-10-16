@@ -29,6 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+
 @dataclass(frozen=True)
 class MakerConfig:
     # LEGACY. The rolling 5-minute BTC series this project started on, kept only
@@ -856,6 +857,7 @@ class MakerConfig:
     # never fire, because an order inside the band was already kept by the
     # tolerance. The hold never overrides the pair-cost re-gate.
     requote_hold_below_target: float = 0.05
+
     poll_interval_sec: float = 1.0
 
     # THE QUEUE-CLEAR GATE (#393). Every gate above judges the PRICE of a new
@@ -1509,6 +1511,11 @@ def load(*, for_display: bool = False) -> MakerConfig:
             logging.getLogger(__name__).warning(
                 "%s is retired and ignored (#619); set %s instead.",
                 _old_env, _replacement)
+    for _old_env in ("HUNTER_REFUSAL_HOLD_POLICY", "HUNTER_REFUSAL_HOLD_DRIFT"):
+        if os.environ.get(_old_env):
+            logging.getLogger(__name__).warning(
+                "%s is retired and ignored (#622); it has no replacement.",
+                _old_env)
     # Deprecation: the pre-#573 env names were renamed AND rescaled (pct is now
     # percent, usd is now cents). Warn if a stale old var is set so the operator
     # is not silently running on defaults.

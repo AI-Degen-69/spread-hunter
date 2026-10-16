@@ -262,7 +262,8 @@ def _row(registry: OrderRegistry, local_id: str = "o1") -> dict:
     con = sqlite3.connect(str(registry.db_path))
     con.row_factory = sqlite3.Row
     row = con.execute(
-        "SELECT status, cancel_reason, cancel_queue_ahead FROM orders WHERE id = ?",
+        "SELECT status, cancel_reason, cancel_queue_ahead, posted_ts, "
+        "cancelled_ts FROM orders WHERE id = ?",
         (local_id,)).fetchone()
     con.close()
     return dict(row)
@@ -308,6 +309,108 @@ def test_an_order_that_was_never_cancelled_carries_no_reason(registry):
     row = _row(registry)
     assert row["cancel_reason"] is None
     assert row["cancel_queue_ahead"] is None
+
+
+# --- the cancel clock (#622 T4) ---------------------------------------------
+#
+# The churn metric is "median lifetime of a cancelled order", and until now the
+# registry could not answer it: `posted_ts` recorded when an order STARTED and
+# nothing recorded when it stopped resting. `last_polled_ts` is not a substitute
+# -- it is the last time the loop looked, which is neither the cancel moment nor
+# bounded by it. Without this column the shadow-02 claim ("23 of 25 cancelled,
+# median 37s") cannot be reproduced from a store this project records.
+
+
+def test_a_cancel_stamps_the_cancel_clock(registry):
+    # Arrange
+    _seed_order(registry)
+
+    # Act
+    registry.update_order_status("o1", status="cancelled", last_polled_ts=2,
+                                 cancel_reason=CANCEL_PRICE_MOVED)
+
+    # Assert
+    row = _row(registry)
+    assert row["cancelled_ts"] is not None
+    assert row["cancelled_ts"] >= row["posted_ts"]
+
+
+def test_the_cancelled_lifetime_is_computable(registry):
+    # The whole point: a lifetime in ms, from post to cancel.
+    _seed_order(registry)
+    registry.update_order_status("o1", status="cancelled", last_polled_ts=2,
+                                 cancel_reason=CANCEL_NOT_QUOTED)
+    row = _row(registry)
+    lifetime_ms = row["cancelled_ts"] - row["posted_ts"]
+    assert lifetime_ms > 0
+
+
+def test_an_order_that_was_never_cancelled_has_no_cancel_clock(registry):
+    _seed_order(registry)
+    assert _row(registry)["cancelled_ts"] is None
+
+
+def test_a_later_status_change_does_not_move_the_cancel_clock(registry):
+    # COALESCE, not assignment: a later write that knows nothing about the
+    # cancel must not rewrite when the order actually stopped resting, or every
+    # re-poll would inflate the lifetime it is being measured over.
+    _seed_order(registry)
+    registry.update_order_status("o1", status="cancelled", last_polled_ts=2,
+                                 cancel_reason=CANCEL_PRICE_MOVED)
+    first = _row(registry)["cancelled_ts"]
+
+    registry.update_order_status("o1", status="cancelled", last_polled_ts=9_999)
+
+    assert _row(registry)["cancelled_ts"] == first
+
+
+def test_an_unattributed_order_is_not_stamped_as_cancelled(registry):
+    # `unattributed` is a terminal-unfilled status but it is NOT a cancel we
+    # chose -- it means the venue order could not be matched to a local one.
+    # Stamping it would put unattributed rows into the churn denominator and
+    # make every arm look like it cancelled more than it did.
+    _seed_order(registry)
+    registry.update_order_status("o1", status="unattributed", last_polled_ts=2)
+    assert _row(registry)["cancelled_ts"] is None
+
+
+def test_the_migration_adds_the_column_to_a_legacy_store(tmp_path):
+    # Every store written before this change lacks the column. The additive
+    # migration has to put it there, or the whole back catalogue of stores
+    # errors on a SELECT instead of reporting NULL coverage.
+    from core_brain.order_registry import init_db
+
+    # Build a genuine pre-change store by taking today's schema and deleting the
+    # one declaration -- not by hand-rolling a partial `orders` table, which
+    # would be missing the columns the schema's own indexes reference and so
+    # would fail before reaching the migration at all.
+    legacy_ddl = SCHEMA.replace("    cancelled_ts INTEGER,\n", "")
+    assert "cancelled_ts" not in legacy_ddl, (
+        "the DDL declaration moved; update this strip so the test keeps testing "
+        "a store that genuinely lacks the column"
+    )
+
+    db = tmp_path / "legacy.db"
+    con = sqlite3.connect(str(db))
+    con.executescript(legacy_ddl)
+    con.execute(
+        "INSERT INTO orders (id, condition_id, token_id, side, price, "
+        "original_size, status, posted_ts, last_polled_ts) "
+        "VALUES ('o-legacy', '0xm', 'tok', 'BUY', 0.5, 5.0, 'open', 1, 1)")
+    con.commit()
+    con.close()
+
+    init_db(db)
+
+    con = sqlite3.connect(str(db))
+    con.row_factory = sqlite3.Row
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(orders)")}
+    assert "cancelled_ts" in cols
+    # The pre-existing row survives and reads as unknown, not as zero.
+    legacy = con.execute(
+        "SELECT cancelled_ts FROM orders WHERE id = 'o-legacy'").fetchone()
+    con.close()
+    assert legacy["cancelled_ts"] is None
 
 
 # --- reading the evidence back ----------------------------------------------
