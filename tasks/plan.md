@@ -90,7 +90,7 @@ Depends on: T1.
   tests/test_cancel_attribution.py` green; each new test fails if a cost
   re-check is reintroduced.
 
-### T3 (XS) — fix stale re-gate diagram
+### T3 (XS) — fix stale re-gate diagram ✅
 Files: `dashboard/static/strategy_explainer.html`. Depends on: T1.
 - Replace `REGATE` diamond (lines 450-452) with KEEP node (wanted token → KEEP
   at own price; unwanted → `not_quoted` cancel). Rewrite the "1.0s Cycle
