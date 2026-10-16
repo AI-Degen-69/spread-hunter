@@ -183,7 +183,8 @@ def main():
     print("\n--- STOP LOSS (entry-relative, mode %s) ---" % cfg.stop_loss_mode)
     print(f"  buy / fill       = {fill:.2f}  (${fill:.2f}/share)")
     print(f"  active trigger   = {trigger_price:.4f}  (set by the {trigger_source} rule)")
-    print(f"  trigger bid      = {trigger_price:.2f}  -> whole-cent {trigger_cent:.2f}")
+    print(f"  highest whole-cent bid that fires = {trigger_cent:.2f}"
+          f"  (bids are on the cent grid)")
     print(f"  if best bid <= {trigger_cent:.2f}, the naked leg is force-exited")
     print(f"  worst-case loss  = ${fill - trigger_price:.4f}/share x size")
 
