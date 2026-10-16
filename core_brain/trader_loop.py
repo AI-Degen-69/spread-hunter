@@ -153,6 +153,11 @@ REFUSED_HOLD_GRACE_CYCLES_HELD = 3
 #: Policies that hold resting orders at all.
 _HOLDING_POLICIES = frozenset({"keep", "drift"})
 
+#: Option C's own `refusal_visit` code: the market refused us AND the mid had
+#: moved past the tolerance. Distinct from a plain hold because "how often does
+#: drift fire" is the measurement option C exists to produce.
+REFUSAL_VISIT_DRIFT = "refused_drift"
+
 
 def _grace_cycles(policy: str) -> int:
     """Consecutive refused cycles a market survives before the hold expires.
@@ -274,6 +279,64 @@ def _note_lifecycle_stop(
         log.warning("lifecycle_stop store failed: %s: %s",
                     type(e).__name__, e)
     return True
+
+
+def _refusal_visit_code(outcome: VisitOutcome, drifted) -> str:
+    """The `refusal_visit` code for one visit, option C's drift included.
+
+    A drift-cancelled visit is still a transient refusal at the visit level --
+    the cancel happens in the planner -- so drift has to be named here or the
+    report cannot count it apart from an ordinary hold.
+    """
+    if drifted and outcome is VisitOutcome.REFUSED_TRANSIENT:
+        return REFUSAL_VISIT_DRIFT
+    return outcome.value
+
+
+def _note_refusal_visit(
+    seam: VenueSeam,
+    cid: str,
+    title: str,
+    code: str,
+    text: str,
+    streak: int,
+    emit_fn: Optional[Callable] = None,
+) -> None:
+    """Store one `market_events` row per refused visit (#622 T3).
+
+    The refusal RATE is this experiment's denominator, and the store had none:
+    `_note_lifecycle_stop` returns early when the stop is `None`, and a
+    transient refusal has no named stop, so under `keep`/`drift` a HELD visit
+    left nothing behind at all. Without a denominator, "this arm cancelled
+    more" cannot be told apart from "this arm had more chances to" -- which is
+    exactly the distinction the policy choice turns on.
+
+    `code` names the outcome (`refused_hold`, `refused_grace_expired`,
+    `refused_cancel`, `refused_drift`) and the streak ordinal rides in `size`,
+    the only free numeric column on a table that carries no shares for a visit
+    that placed nothing. No new table, no migration.
+
+    Log-only: a store failure must never abort a quoting cycle, exactly as
+    `_note_lifecycle_stop` behaves.
+    """
+    if emit_fn is None:
+        emit_fn = lambda *a, **k: None
+    try:
+        from core_brain.order_registry import MarketEventRecord
+        log_fn = getattr(seam.registry, "log_market_event", None)
+        if callable(log_fn):
+            log_fn(MarketEventRecord(
+                ts=time.time(),
+                condition_id=cid,
+                market_slug=title or None,
+                kind="refusal_visit",
+                reason=text or "",
+                reason_code=code,
+                size=float(streak),
+            ))
+    except Exception as e:
+        log.warning("refusal_visit store failed: %s: %s",
+                    type(e).__name__, e)
 
 
 def _cycle_mids(up_book: dict, down_book: dict) -> dict:
@@ -2032,6 +2095,13 @@ def _visit_one(
             _note_lifecycle_stop(
                 seam, cid, title, _visit_stop(why, grace_expired),
                 why, stop_memory, cycle, emit_fn)
+            # Every refused visit is one observation of the refusal RATE (#622),
+            # held or not -- the lifecycle-stop row above only exists when the
+            # refusal has a named stop, so it cannot carry the denominator.
+            _note_refusal_visit(
+                seam, cid, title,
+                _refusal_visit_code(visit_outcome, drifted_tokens),
+                why, refused_streak + 1, emit_fn)
         plan_kwargs = {
             "dead_band": float(getattr(cfg, "requote_dead_band", 0.0)),
             "cfg": cfg,

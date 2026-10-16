@@ -144,7 +144,7 @@ T4 is independent of T1-T3 and can run any time before T5.
   C holds inside tolerance, cancels outside it on the **second** refusal, holds on a missing
   mid, and is two-sided; the per-visit hold→hold→expire sequence; streak restart after expiry.
 
-### [ ] T3 — Refusal visits as the rate denominator
+### [x] T3 — Refusal visits as the rate denominator
 
 - Size: **S** · Domain: **Backend/Logic** · Depends on: T2
 - Files: `core_brain/order_registry.py` (only if needed), `core_brain/trader_loop.py`
@@ -342,6 +342,21 @@ separate project, and rotating repeated concurrent runs is adequate for this dec
   failed on `0.62 - 0.60 == 0.020000000000000018`: a move of exactly the tolerance
   read as drift. Both sides now round to 4 decimals before comparing, matching
   `_market_arriving`'s existing rounding rule for the same reason.
+- **T3 — the answer to "do refused visits already reach a store?" is NO, so the
+  rows had to be added.** `_note_lifecycle_stop` returns early when the stop is
+  `None`, and `_visit_stop` returns `None` for a transient reason, so a HELD
+  refusal wrote nothing anywhere. Under `keep`/`drift` that is most refusals.
+  Added `kind="refusal_visit"` rows through the existing `log_market_event`
+  helper — no new table, no migration — with the outcome in `reason_code`
+  (`refused_hold` / `refused_grace_expired` / `refused_cancel` / `refused_drift`)
+  and the streak ordinal in `size`, the table's only free numeric column.
+- **T3 — the test harness pins `base_cfg`, so env overrides are invisible to it.**
+  `_t3_seam` passes `base_cfg=MakerConfig()`, which means `run()` never calls
+  `load()` and a `HUNTER_REFUSAL_HOLD_POLICY` override is silently ignored. The
+  new tests set the policy on the config object instead. This is worth knowing
+  for T5/T6: **only an arm process that lets `run()` call `load()` will honour
+  the arms file**, and the tournament launches real processes, so the arms path
+  is fine — but a test that relies on env here would measure the baseline twice.
 
 ## 7. Environment caveats and assumptions
 

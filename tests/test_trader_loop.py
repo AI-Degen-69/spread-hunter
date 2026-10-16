@@ -3331,3 +3331,127 @@ class TestHeldFirstRotation:
         for rotation, order in order_a.items():
             for cid in flat:
                 assert order.count(cid) == 1
+
+
+class TestRefusalVisitRows:
+    """#622 T3: the rate denominator.
+
+    `_note_lifecycle_stop` writes nothing for a HELD refusal -- `_visit_stop`
+    returns `None` when the reason is transient -- so under `keep`/`drift` almost
+    every refusal left no row at all and the arms had no comparable denominator.
+    Without a count of refusal VISITS, "this arm cancelled more" cannot be told
+    apart from "this arm had more chances to".
+    """
+
+    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
+                     "DOWN: 8.0c from mid > 4.5c reward window")
+
+    def _seam(self, tmp_path, decide, policy="remove", books=None):
+        reg, _db = _t3_registry(tmp_path)
+        calls = {"submitted": [], "cancelled": []}
+        seam = _t3_seam(reg, {}, decide, calls)
+        # The policy is set on the config, not through the environment:
+        # `_t3_seam` pins `base_cfg`, so `run` never calls `load()` and an
+        # HUNTER_* override here would be silently ignored -- the exact failure
+        # mode this experiment cannot afford, where every arm looks like the
+        # baseline.
+        seam.base_cfg = MakerConfig(refusal_hold_policy=policy)
+        state = books if books is not None else {
+            "best_bid": 0.59, "best_ask": 0.61,
+            "bids": {0.59: 100}, "asks": {0.61: 100}}
+
+        def fetch_books(host, token):
+            book = {"token_id": token}
+            book.update(state)
+            return book
+
+        seam.fetch_books = fetch_books
+        seam.open_orders_fn = lambda m: [
+            {"token_id": "tok-x", "price": 0.60, "order_id": "o-x",
+             "id": "o-x", "side": "BUY", "status": "open"}]
+        return reg, seam, calls, state
+
+    def _rows(self, reg, code=None):
+        rows = [r for r in reg.get_all_market_events()
+                if r["kind"] == "refusal_visit"]
+        if code is not None:
+            rows = [r for r in rows if r["reason_code"] == code]
+        return rows
+
+    def _run_cycles(self, seam, cycles):
+        idx = [0]
+
+        def sleep_fn(s):
+            idx[0] += 1
+            if idx[0] >= cycles:
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=[_t3_spec("0xabc")], sleep_fn=sleep_fn)
+        return idx[0]
+
+    def test_a_held_refusal_writes_a_row(self, tmp_path):
+        # The one the store was missing: under `keep` the first refusal HOLDS,
+        # and before this change that visit was recorded nowhere.
+        reg, seam, _calls, _b = self._seam(
+            tmp_path, lambda *a: ([], self.TRANSIENT_WHY), policy="keep")
+        self._run_cycles(seam, 1)
+        assert len(self._rows(reg, "refused_hold")) == 1
+
+    def test_every_refused_visit_is_counted(self, tmp_path):
+        # Three refusing cycles under `keep` = two holds then one expiry, so
+        # three visits are the denominator even though only one cancelled.
+        reg, seam, _calls, _b = self._seam(
+            tmp_path, lambda *a: ([], self.TRANSIENT_WHY), policy="keep")
+        self._run_cycles(seam, 3)
+        assert len(self._rows(reg)) == 3
+
+    def test_an_expired_refusal_is_distinguishable_from_a_held_one(self, tmp_path):
+        reg, seam, _calls, _b = self._seam(
+            tmp_path, lambda *a: ([], self.TRANSIENT_WHY), policy="keep")
+        self._run_cycles(seam, 3)
+        assert len(self._rows(reg, "refused_hold")) == 2
+        assert len(self._rows(reg, "refused_grace_expired")) == 1
+
+    def test_under_the_default_policy_every_refusal_expires(self, tmp_path):
+        # The control arm's own denominator: `remove` never holds, so every
+        # refusal visit is an expiry and the two should agree.
+        reg, seam, _calls, _b = self._seam(
+            tmp_path, lambda *a: ([], self.TRANSIENT_WHY), policy="remove")
+        self._run_cycles(seam, 2)
+        assert len(self._rows(reg, "refused_hold")) == 0
+        assert len(self._rows(reg, "refused_grace_expired")) == 2
+
+    def test_a_drift_visit_gets_its_own_code(self, tmp_path):
+        # Drift is a refusal visit too, and it must not be counted as a plain
+        # hold: the whole point of option C is how often it fires.
+        reg, seam, _calls, books = self._seam(
+            tmp_path, lambda *a: ([], self.TRANSIENT_WHY), policy="drift")
+        idx = [0]
+
+        def sleep_fn(s):
+            idx[0] += 1
+            if idx[0] == 1:
+                books.update({"best_bid": 0.69, "best_ask": 0.71,
+                              "bids": {0.69: 100}, "asks": {0.71: 100}})
+            if idx[0] >= 2:
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=[_t3_spec("0xabc")], sleep_fn=sleep_fn)
+        assert len(self._rows(reg, "refused_hold")) == 1
+        assert len(self._rows(reg, "refused_drift")) == 1
+
+    def test_a_quoted_visit_is_not_a_refusal(self, tmp_path):
+        reg, seam, _calls, _b = self._seam(
+            tmp_path, lambda *a: ([_intent(token="tok-x", price=0.60)], ""))
+        self._run_cycles(seam, 2)
+        assert self._rows(reg) == []
+
+    def test_the_row_carries_the_streak_count(self, tmp_path):
+        # The report needs to know how deep a refusal ran, not only that it
+        # happened; the count rides in `size`, the only free numeric column.
+        reg, seam, _calls, _b = self._seam(
+            tmp_path, lambda *a: ([], self.TRANSIENT_WHY), policy="keep")
+        self._run_cycles(seam, 2)
+        assert [r["size"] for r in self._rows(reg, "refused_hold")] == [1.0, 2.0]
