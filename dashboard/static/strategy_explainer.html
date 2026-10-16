@@ -445,13 +445,10 @@
             classDef actRequote fill:#451a03,stroke:#f59e0b,stroke-width:2px,color:#ffffff;
 
             TICK["Every 1.0s Trader Tick"] --> EVAL["Compute Target Price: mid - offset"]
-            EVAL --> CMP{"|Target Price - Resting Price| &le; 3&cent; ?"}:::check
+            EVAL --> WANTED{"Token still quoted this cycle?"}:::check
 
-            CMP -->|"YES (&le; 3&cent; move)"| REGATE{"1s Re-Gate:<br/>Resting Price + Hedge Ask &lt; $1.00 ?"}:::check
-            REGATE -->|"PASSES"| KEEP["KEEP Resting Order<br/>(Preserves ~1050 shares queue seniority)"]:::actKeep
-            REGATE -->|"FAILS (Ask moved up)"| CXL["CANCEL immediately<br/>(Closes risk hole)"]:::actRequote
-
-            CMP -->|"NO (&gt; 3&cent; move)"| REQ["CANCEL Old & SUBMIT New Bid<br/>(Moves to new price level)"]:::actRequote
+            WANTED -->|"YES"| KEEP["KEEP Resting Order at its own price<br/>(Preserves ~1050 shares queue seniority)"]:::actKeep
+            WANTED -->|"NO"| CXL["CANCEL (`not_quoted`)<br/>(Token left the wanted set)"]:::actRequote
         </div>
       </div>
 
@@ -463,9 +460,9 @@
           </p>
         </div>
         <div class="subcard">
-          <h4>1.0s Cycle Re-Gating</h4>
+          <h4>Judged Once, at Placement</h4>
           <p>
-            Kept orders are re-tested against <code>risk.completable_pair_block</code> <strong>every single second</strong>. If the opposing token's ask price increases such that the pair can no longer complete profitably, the order is cancelled immediately.
+            A resting order is never re-tested against the live hedge ask: a pair's economics are its <strong>rest prices</strong>, so a moving opposite ask cannot cancel it. The entry gates (<code>quotes.dynamic_pair_sum</code>, <code>risk.hard_block</code>) judge <strong>new bids only</strong>, before they are placed.
           </p>
         </div>
       </div>
@@ -584,10 +581,10 @@
                 QP --> RG{"Risk Gates (risk.py):<br/>- max_completable_cost < 1.00<br/>- max_pair_cost < 0.99<br/>- naked_usd < 6% equity<br/>- order < 25%, total < 90%"}:::gateNode
                 
                 RG -->|"Fails Gate"| DEC["Decline / Skip Quoting"]:::gateNode
-                RG -->|"Passes Gates"| PLAN["plan_orders():<br/>Check 3c Dead Band & 1s Re-Gate"]:::engineNode
+                RG -->|"Passes Gates"| PLAN["plan_orders():<br/>Keep wanted resting orders, cancel dropped tokens"]:::engineNode
                 
-                PLAN -->|"Price move <= 3c & Passes Re-Gate"| KEEP["KEEP Resting Order<br/>(Maintain Queue Seniority)"]:::actionNode
-                PLAN -->|"Price move > 3c"| SUB["CANCEL Old & SUBMIT New Maker Bid"]:::actionNode
+                PLAN -->|"Already resting on a wanted token"| KEEP["KEEP Resting Order<br/>(Maintain Queue Seniority)"]:::actionNode
+                PLAN -->|"Nothing resting on a wanted token"| SUB["SUBMIT New Maker Bid"]:::actionNode
             end
 
             subgraph L3["Loop 3: Post-Fill Resolution & Rescues"]

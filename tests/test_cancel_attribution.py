@@ -23,7 +23,6 @@ from core_brain.quotes import QuoteIntent
 from core_brain.trader_loop import (
     CANCEL_NOT_QUOTED,
     CANCEL_PRICE_MOVED,
-    CANCEL_REGATE_PAIR_COST,
     plan_orders,
 )
 
@@ -289,7 +288,7 @@ def test_a_later_status_change_does_not_erase_why_it_was_cancelled(registry):
     # Arrange
     _seed_order(registry)
     registry.update_order_status("o1", status="cancelled", last_polled_ts=2,
-                                 cancel_reason=CANCEL_REGATE_PAIR_COST,
+                                 cancel_reason="regate_pair_cost",  # pre-#387 row
                                  cancel_queue_ahead=1058.0)
 
     # Act — a later write that knows nothing about the cancel.
@@ -297,7 +296,7 @@ def test_a_later_status_change_does_not_erase_why_it_was_cancelled(registry):
 
     # Assert
     row = _row(registry)
-    assert row["cancel_reason"] == CANCEL_REGATE_PAIR_COST
+    assert row["cancel_reason"] == "regate_pair_cost"
     assert row["cancel_queue_ahead"] == pytest.approx(1058.0)
 
 
@@ -424,7 +423,7 @@ def test_the_report_separates_churn_from_the_gates_doing_their_job(registry):
         (CANCEL_PRICE_MOVED, 25.0),
         (CANCEL_PRICE_MOVED, 1705.0),
         (CANCEL_PRICE_MOVED, 12930.0),
-        (CANCEL_REGATE_PAIR_COST, 40.0),
+        ("regate_pair_cost", 40.0),  # pre-#387 row: the retired re-gate wrote it
         (CANCEL_NOT_QUOTED, 900.0),
     ]):
         _seed_order(registry, f"o{i}")
@@ -440,7 +439,7 @@ def test_the_report_separates_churn_from_the_gates_doing_their_job(registry):
     assert summary["reasons"][CANCEL_PRICE_MOVED]["count"] == 3
     assert summary["reasons"][CANCEL_PRICE_MOVED]["median_queue_ahead"] == pytest.approx(1705.0)
     assert summary["reasons"][CANCEL_PRICE_MOVED]["min_queue_ahead"] == pytest.approx(25.0)
-    assert summary["reasons"][CANCEL_REGATE_PAIR_COST]["count"] == 1
+    assert summary["reasons"]["regate_pair_cost"]["count"] == 1
 
     text = format_report(summary)
     assert "60% of cancels were price moves" in text
