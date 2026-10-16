@@ -148,6 +148,8 @@ def allocate(markets: list[dict], budget: float, floor: float,
     """
     if "max_frac" in kwargs:
         max_pct = kwargs.pop("max_frac")
+    if kwargs:
+        raise TypeError(f"allocate() got unexpected keyword argument(s): {', '.join(kwargs.keys())}")
     T = {m["cid"]: competitor_depth(m["capital"], m["share"]) for m in markets}
     daily = {m["cid"]: m["daily"] for m in markets}
     out = {m["cid"]: 0.0 for m in markets}
@@ -223,6 +225,8 @@ def allocate_fundable(markets: list[dict], budget: float, floor: float,
     """
     if "max_frac" in kwargs:
         max_pct = kwargs.pop("max_frac")
+    if kwargs:
+        raise TypeError(f"allocate_fundable() got unexpected keyword argument(s): {', '.join(kwargs.keys())}")
     live = list(markets)
     fixed: dict[str, float] = {}          # markets held at their minimum lot
     out = {m["cid"]: 0.0 for m in markets}

@@ -1657,7 +1657,7 @@ def load(*, for_display: bool = False) -> MakerConfig:
 
 def couple_allocation_usd(cfg) -> float:
     """Dollars committed to one UP+DOWN couple, per the Owner's rule."""
-    return max(cfg.bankroll_usd * cfg.couple_risk_frac, cfg.min_couple_usd)
+    return max(cfg.bankroll_usd * cfg.couple_risk_pct, cfg.min_couple_usd)
 
 
 def leg_allocation_usd(cfg) -> float:

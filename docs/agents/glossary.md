@@ -93,8 +93,8 @@ Commit scopes follow the package name: `fix(core_brain): ...`, not `fix(engine):
 | `couple_risk_frac` | `couple_risk_pct` | `0.01` max risk ratio per coupled pair |
 | `quote_window_frac` | `quote_window_pct` | `0.40` ratio of spread window |
 | `stat_gate_bankroll_fraction` | `stat_gate_bankroll_pct` | `0.01` (1% of bankroll for stat gate) |
-| `MAX_ORDER_USD` | `max_order_usd` | 25% single order ceiling ($1.00 min) |
-| `MAX_TOTAL_USD` | `max_total_usd` | 90% total portfolio risk ceiling |
+| `MAX_ORDER_USD` | `max_order_usd` | $25.0 baseline single order ceiling ($1.00 min floor) |
+| `MAX_TOTAL_USD` | `max_total_usd` | $90.0 baseline total portfolio ceiling |
 | `HUNTER_MIN_SIZE` | `HUNTER_MIN_QUOTE_SHARES` | Canonical environment variable |
 | `HUNTER_MAX_SPREAD` | `HUNTER_MAX_SPREAD_CENTS` | Canonical environment variable |
 | `HUNTER_TICK` | `HUNTER_PRICE_TICK` | Canonical environment variable |
