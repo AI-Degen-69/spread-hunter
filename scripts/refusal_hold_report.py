@@ -40,6 +40,10 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Imported after the path insert above, the way the other scripts/ reports do.
+from core_brain.close_methods import DASHBOARD_FORCED_EXIT_METHODS
+from core_brain.kpi import NON_TRADE_CLOSE_METHODS
+
 MS_PER_SEC = 1000.0
 
 #: Net move / total path length at or above this is a TREND window, below it is
@@ -48,16 +52,17 @@ MS_PER_SEC = 1000.0
 DEFAULT_TREND_CUTOFF = 0.5
 
 #: Close methods counted as a lifecycle stop-out -- the orphan cleanup both
-#: options lean on. `single_buy_exit` is what the guarded exit writes on a
-#: rehearsal: safety.md records that the exit path is live money-path code and
-#: is deliberately NOT relabelled per store, so a shadow stop-out carries the
-#: same method string a live one would. The full method breakdown is printed
-#: alongside, so a store using different names shows up instead of silently
-#: reporting a zero stop-out rate.
-STOP_OUT_METHODS = frozenset({"stop_loss_exit", "single_buy_exit"})
-
-#: Sentinel close methods that are not trades (mirrors shadow_tournament).
-NON_TRADE_CLOSE_METHODS = frozenset({"shadow_merge_note"})
+#: options lean on. Taken from the canonical taxonomy in `core_brain/close_methods`
+#: rather than restated here: #520 made that module the single home for these
+#: strings, and a second literal list is exactly the drift it exists to prevent.
+#: It covers every exit that sells a leg into the book (`single_buy_exit`,
+#: `naked_exit`, `ladder_exit`), plus `aged_out_exit` and `stop_loss_exit`.
+#: `single_buy_exit` is what the guarded exit writes on a rehearsal -- safety.md
+#: records that the exit path is live money-path code and is deliberately NOT
+#: relabelled per store, so a shadow stop-out carries the same method string a
+#: live one would. The full method breakdown is printed alongside, so a store
+#: using different names shows up instead of silently reporting a zero rate.
+STOP_OUT_METHODS = frozenset(DASHBOARD_FORCED_EXIT_METHODS)
 
 
 def _ro(path: Path) -> sqlite3.Connection:
