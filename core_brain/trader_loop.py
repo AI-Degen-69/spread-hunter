@@ -125,7 +125,13 @@ class VisitOutcome(Enum):
 # Consecutive visited-but-refused cycles a market's resting orders survive
 # before the hold expires and they cancel via `not_quoted` (#390). A market
 # that never comes back is dead, not flickering. Named, not magic.
-REFUSED_HOLD_GRACE_CYCLES = 3
+#
+# Interim default (operator directive 2026-10-16, pending #622): 1, i.e. the
+# hold is OFF -- the first transient refusal already expires into a cancel,
+# so quotes rest until fill / terminal refusal / stop exit. The mid-hold band
+# (#419) below is untouched: it is a separate rule, not this grace. Restore to
+# 3 if #622 keeps the hold.
+REFUSED_HOLD_GRACE_CYCLES = 1
 
 # Mid-hold band (#419): hold a resting order while
 # `mid <= order.price + MID_HOLD_BAND`, instead of cancelling or re-quoting

@@ -1490,7 +1490,11 @@ class TestRefusedHold:
             sweep_fn=lambda: None,
         )
 
-    def test_refused_visited_holds_resting_orders(self):
+    def test_transient_refusal_cancels_on_first_visit(self):
+        # Interim default (operator directive 2026-10-16, pending #622):
+        # the refusal hold is OFF, so a transient refusal cancels on the
+        # first visit exactly like a terminal one -- quotes rest until
+        # fill, not through refusals.
         calls = {"submitted": [], "cancelled": []}
         seam = self._seam(
             lambda cfg, up, dn, inv, t_rem, wf: ([], self.TRANSIENT_WHY), calls)
@@ -1500,7 +1504,9 @@ class TestRefusedHold:
             sleep_fn=lambda s: None,
         )
         assert results[0].status == "DECLINED"
-        assert calls["cancelled"] == []
+        # Only o-dn cancels: o-up sits inside the #419 mid-hold band, which
+        # is a separate untouched rule, not this grace.
+        assert calls["cancelled"] == [["o-dn"]]
         assert calls["submitted"] == []
 
     def test_terminal_refusal_cancels_now(self):
@@ -1549,9 +1555,12 @@ class TestRefusedHold:
         assert calls["cancelled"] == [["o-old"]]
         assert calls["submitted"] == [["tok-new"]]
 
-    def test_grace_expiry_cancels_after_n_refused_cycles(self):
+    def test_first_refusal_expires_the_hold(self):
+        # Interim default (operator directive 2026-10-16, pending #622):
+        # GRACE is 1, so the very first transient refusal already expires
+        # into a cancel. If #622 restores the hold, this test goes back to
+        # running GRACE cycles.
         from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
-        assert GRACE >= 2
         calls = {"submitted": [], "cancelled": []}
         decides = []
         sleeps = []
@@ -1609,7 +1618,10 @@ class TestRefusedHold:
         assert calls["submitted"] == []
         assert calls["cancelled"] == [["o-dn"]]
 
-    def test_quote_resets_refusal_streak(self):
+    def test_first_refusal_cancels_before_any_quote(self):
+        # Interim default (operator directive 2026-10-16, pending #622):
+        # with no hold there is no streak to reset -- the first refusal
+        # cancels, and the later quote starts from empty.
         from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
         calls = {"submitted": [], "cancelled": []}
         decides = []
@@ -1634,11 +1646,13 @@ class TestRefusedHold:
             markets=[FakeMarket("0xabc")],
             sleep_fn=sleep_fn,
         )
-        # Refuse, quote, refuse, refuse: only two CONSECUTIVE refusals, so the
-        # grace never expires even though three refusals happened in total.
+        # Refuse, quote: the first refusal already cancelled the out-of-band
+        # leg (o-up survives inside the #419 band, not this grace). Cycle 2
+        # keeps rather than resubmits -- the fake books still list the
+        # orders -- so the cycle-1 cancel is the whole proof.
         assert len(decides) == GRACE + 1
+        assert calls["cancelled"] == [["o-dn"]]
         assert calls["submitted"] == []
-        assert calls["cancelled"] == []
 
 
 class TestMidHoldVisit:
