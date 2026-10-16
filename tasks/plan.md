@@ -41,15 +41,15 @@ Evidence: `scripts/shadow_tournament.py:465-469` unconditionally calls `signal.s
 
 Depends on: T1 → T2 → T3 (T2 solves the failing regression in T1; T3 syncs documentation after code green).
 
-- [ ] T1 [Debug/Test] S — Add regression test for shadow worker env isolation (TDD RED).
+- [x] T1 [Debug/Test] S — Add regression test for shadow worker env isolation (TDD RED).
   Files: `tests/test_shadow_tournament.py`.
   Description: Add `test_worker_environment_strips_parent_hunter_env(tmp_path, monkeypatch)` reusing `_FakeProc`. Set parent ambient `HUNTER_DUMMY_LEAK`, `HUNTER_PRICE_RISK_WIDEN=0.03`, `HUNTER_TOURNAMENT_PRESET=aggressive`, `FOO=bar`, and `SPREAD_HUNTER_DB=data/wrong.db`. Build 2 arms: sparse (`env={}`) and explicit (`env={"HUNTER_PRICE_RISK_WIDEN": "0.02"}`). Run `launch_tournament(plan)`. Match worker argv (`core_brain.shadow_run` / `--db`). Assert sparse arm has no `HUNTER_*` keys; explicit arm has only `HUNTER_PRICE_RISK_WIDEN="0.02"`; both retain `FOO="bar"` and correct arm db.
   Verify: `pytest -q tests/test_shadow_tournament.py -k test_worker_environment_strips_parent_hunter_env` FAILS (RED).
-- [ ] T2 [Code/Fix] S — Strip inherited `HUNTER_*` env vars in worker launch (TDD GREEN).
+- [x] T2 [Code/Fix] S — Strip inherited `HUNTER_*` env vars in worker launch (TDD GREEN).
   Files: `scripts/shadow_tournament.py:516`.
   Description: Update `launch_tournament()` to filter `os.environ` keys starting with `HUNTER_` before merging `arm.env` and `SPREAD_HUNTER_DB`. Add explanatory comment per conventions.
   Verify: `pytest -q tests/test_shadow_tournament.py` (33 passed) + `pytest -q tests/test_tournament_run_number_naming.py` (9 passed) (GREEN).
-- [ ] T3 [Docs] XS — Update N1 status in `docs/issues/608-noticed-but-not-touching.md` and record out-of-scope in `docs/issues/624-noticed-but-not-touching.md`.
+- [x] T3 [Docs] XS — Update N1 status in `docs/issues/608-noticed-but-not-touching.md` and record out-of-scope in `docs/issues/624-noticed-but-not-touching.md`.
   Files: `docs/issues/608-noticed-but-not-touching.md`, `docs/issues/624-noticed-but-not-touching.md`.
   Description: Mark N1 row as `resolved` with a note explaining shadow workers now strip parent `HUNTER_*` before applying arm overrides. Create `624-noticed-but-not-touching.md` documenting out-of-scope refactoring rows.
   Verify: Read-back inspection and `git status`.
