@@ -263,10 +263,10 @@
         </div>
       </div>
       <div class="ticker-tabs" role="tablist" aria-label="Process log streams" style="display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-        <button class="ticker-tab-btn active" role="tab" aria-selected="true" data-tab="all" type="button">ALL</button>
-        <button class="ticker-tab-btn" role="tab" aria-selected="false" data-tab="filter" type="button">FILTER LOOP</button>
-        <button class="ticker-tab-btn" role="tab" aria-selected="false" data-tab="shadow" type="button">SHADOW REHEARSAL</button>
-        <button class="ticker-tab-btn" role="tab" aria-selected="false" data-tab="live" type="button">LIVE RUN</button>
+        <button class="ticker-tab-btn active" role="tab" aria-selected="true" aria-controls="event-ticker" data-tab="all" type="button">ALL</button>
+        <button class="ticker-tab-btn" role="tab" aria-selected="false" aria-controls="event-ticker" data-tab="filter" type="button">FILTER LOOP</button>
+        <button class="ticker-tab-btn" role="tab" aria-selected="false" aria-controls="event-ticker" data-tab="shadow" type="button">SHADOW REHEARSAL</button>
+        <button class="ticker-tab-btn" role="tab" aria-selected="false" aria-controls="event-ticker" data-tab="live" type="button">LIVE RUN</button>
         <select id="ticker-shadow-picker" class="ticker-shadow-picker" style="display:none;" aria-label="Select shadow run"></select>
       </div>
       <div id="sse-reconnect" class="sse-reconnecting" style="display:none">Connecting to live cycle stream...</div>

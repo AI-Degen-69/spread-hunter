@@ -2544,9 +2544,9 @@ def test_event_stream_trades_tab_shows_only_trade_rows():
     assert all("ticker-raw" in r for r in out["detailsAfterRebuild"])
 
 
-@pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_event_stream_tabs_harness():
     """Verify multi-process log stream tabs: buffer isolation, caps, and escaping."""
+    assert NODE is not None, "node.js executable is required for event stream tabs harness"
     harness = Path(__file__).resolve().parent / "js" / "event_stream_tabs_harness.cjs"
     app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
     assert harness.exists()
@@ -2578,6 +2578,9 @@ def test_event_stream_tabs_harness():
     # Category filters within active tab
     assert len(out["liveTradesRows"]) == 1
     assert len(out["liveFilterRows"]) == 0
+
+    # Shadow run picker population
+    assert out.get("pickerPopulated") is True
 
 
 # ── Issue #457: the single master toggle ──────────────────────────────────────

@@ -57,11 +57,20 @@ global.window = { addEventListener() {}, matchMedia: () => ({ matches: false }) 
 global.CONTROL_TOKEN = 'harness-token';
 
 let sseInstance = null;
+let logInstance = null;
 global.EventSource = function (url) {
   this.url = url;
-  this.addEventListener = () => {};
+  this.listeners = {};
+  this.addEventListener = (evt, fn) => {
+    this.listeners[evt] = this.listeners[evt] || [];
+    this.listeners[evt].push(fn);
+  };
   this.close = () => {};
-  sseInstance = this;
+  if (url.includes('/api/log-stream')) {
+    logInstance = this;
+  } else {
+    sseInstance = this;
+  }
 };
 global.setInterval = () => 0;
 global.localStorage = {
@@ -99,8 +108,16 @@ try {
   out.emptyAll = tickerEl().innerHTML;
 
   // Feed one trade and one skip-only decide from different services.
-  app.connectSSE();
-  const send = (ev) => sseInstance.onmessage({ data: JSON.stringify(ev) });
+  if (typeof app.connectLogStream === 'function') app.connectLogStream(null);
+  const send = (ev) => {
+    if (logInstance && logInstance.listeners['log']) {
+      for (const fn of logInstance.listeners['log']) {
+        fn({ data: JSON.stringify({ family: 'live', source: 'ring', event: ev }) });
+      }
+    } else if (sseInstance && typeof sseInstance.onmessage === 'function') {
+      sseInstance.onmessage({ data: JSON.stringify(ev) });
+    }
+  };
   send({ ts: '2024-01-15T14:28:00Z', service: 'query', action: 'fill_recorded',
          market_slug: 'brazil-election',
          extra: { size: 3, price: 0.48, side: 'BUY', outcome: 'UP',

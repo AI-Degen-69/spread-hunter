@@ -3876,7 +3876,7 @@ def _resolve_log_families(run_id: str | None = None) -> dict[str, dict]:
     filter_ring = live_ring
     filter_text_logs: list[Path] = []
     rerank = resolve_runtime_file("rerank.log", root=LIVE_ROOT)
-    if rerank.exists() and rerank.resolve().parent == rt_dir:
+    if rerank.resolve().parent == rt_dir:
         filter_text_logs.append(rerank)
     try:
         for ext in [".out.log", ".err.log"]:
@@ -3889,7 +3889,7 @@ def _resolve_log_families(run_id: str | None = None) -> dict[str, dict]:
         pass
 
     filter_labels = [f"{filter_ring.name} (service=filter)"] + [p.name for p in filter_text_logs]
-    filter_avail = filter_ring.exists() or len(filter_text_logs) > 0
+    filter_avail = filter_ring.exists() or any(p.exists() for p in filter_text_logs)
     families["filter"] = {
         "available": filter_avail,
         "reason": None if filter_avail else "No filter events or rerank.log yet",
@@ -3915,24 +3915,29 @@ def _resolve_log_families(run_id: str | None = None) -> dict[str, dict]:
         known_ids = {r.get("run_id") for r in list_shadow_runs() if r.get("run_id")}
         if run_id not in known_ids and not candidate.exists():
             raise HTTPException(status_code=400, detail=f"Unlisted run_id: {run_id}")
-        if candidate.exists() and candidate.resolve().parent == rt_dir:
+        if candidate.resolve().parent == rt_dir:
             shadow_ring = candidate
             shadow_run_id = run_id
-            shadow_avail = True
+            shadow_avail = candidate.exists()
+            if not shadow_avail:
+                shadow_reason = f"Shadow rehearsal ring not found on disk"
         else:
             shadow_run_id = run_id
             shadow_avail = False
             shadow_reason = f"Shadow rehearsal ring not found on disk"
     else:
         candidate = _resolve_shadow_ring_path()
-        if candidate is not None and candidate.exists():
+        if candidate is not None:
             shadow_ring = candidate
-            shadow_avail = True
+            shadow_avail = candidate.exists()
             try:
-                shadow_info = _recent_shadow_run(str(resolve_db_path(_ACTIVE_DB_OVERRIDE))) if _ACTIVE_DB_OVERRIDE else _recent_shadow_run(None)
+                active_db = str(resolve_db_path(_ACTIVE_DB_OVERRIDE))
+                shadow_info = _recent_shadow_run(active_db)
                 shadow_run_id = shadow_info.get("run_id") if shadow_info else None
             except Exception:
                 shadow_run_id = None
+            if not shadow_avail:
+                shadow_reason = "Shadow rehearsal ring not found on disk"
         else:
             shadow_avail = False
             shadow_reason = "No active shadow rehearsal"
@@ -4109,7 +4114,27 @@ def _log_stream_sse(
                 })
 
     # 3. Follow loop
+    rt_dir = runtime_file("").resolve()
     while True:
+        if "filter" in families:
+            try:
+                for ext in [".out.log", ".err.log"]:
+                    matches = list(rt_dir.glob(f"screener-*{ext}")) + list(rt_dir.glob(f"resume_screener-*{ext}"))
+                    if matches:
+                        newest = max(matches, key=lambda p: p.stat().st_mtime)
+                        if newest.resolve().parent == rt_dir and not any(f.get("path") == newest for f in followers):
+                            followers.append({
+                                "family": "filter",
+                                "source": "text",
+                                "path": newest,
+                                "offset": 0,
+                                "file_key": None,
+                                "filter_fn": None,
+                                "label": newest.name,
+                            })
+            except OSError:
+                pass
+
         for f in followers:
             path = f["path"]
             if not path.exists():
@@ -4126,24 +4151,29 @@ def _log_stream_sse(
                     with open(path, "r", encoding="utf-8", errors="replace") as fh:
                         fh.seek(f["offset"])
                         lines_read = 0
-                        for line in fh:
-                            lines_read += 1
-                            if lines_read > 500:
+                        while True:
+                            line = fh.readline()
+                            if not line:
                                 break
+                            f["offset"] = fh.tell()
+                            lines_read += 1
                             clean = line.strip()
                             if not clean:
+                                if lines_read >= 500:
+                                    break
                                 continue
                             if f["source"] == "ring":
                                 try:
                                     ev = json.loads(clean)
                                 except Exception:
-                                    continue
-                                if f["filter_fn"] is not None and not f["filter_fn"](ev):
-                                    continue
-                                yield f"event: log\ndata: {json.dumps({'family': f['family'], 'source': 'ring', 'event': ev})}\n\n"
+                                    ev = None
+                                if ev is not None:
+                                    if f["filter_fn"] is None or f["filter_fn"](ev):
+                                        yield f"event: log\ndata: {json.dumps({'family': f['family'], 'source': 'ring', 'event': ev})}\n\n"
                             else:
                                 yield f"event: log\ndata: {json.dumps({'family': f['family'], 'source': 'text', 'file': f['label'], 'text': clean[:1000]})}\n\n"
-                        f["offset"] = fh.tell()
+                            if lines_read >= 500:
+                                break
             except OSError:
                 pass
 

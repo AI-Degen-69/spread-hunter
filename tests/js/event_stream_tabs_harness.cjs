@@ -207,6 +207,15 @@ try {
 
   app.setTickerFilter('all');
 
+  // Verify shadow-run picker population
+  const pickerEl = document.getElementById('ticker-shadow-picker');
+  if (typeof app.updateShadowRunPicker === 'function') {
+    app.updateShadowRunPicker([{ run_id: 'shadow-run-xyz', running: true }]);
+    out.pickerPopulated = Boolean(pickerEl && pickerEl.children && pickerEl.children.some(c => c.value === 'shadow-run-xyz'));
+  } else {
+    out.pickerPopulated = false;
+  }
+
 } catch (err) {
   out.error = String(err && err.stack ? err.stack : err);
 }

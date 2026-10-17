@@ -1271,6 +1271,35 @@ const tickerSourceMetadata = {
   shadow: { labels: [], available: false, reason: 'No active shadow rehearsal', run_id: null },
 };
 let activeShadowRunId = null;
+let lastSeenActiveDb = null;
+
+function updateShadowRunPicker(runs) {
+  const picker = document.getElementById('ticker-shadow-picker');
+  if (!picker) return;
+  const currentVal = picker.value || activeShadowRunId;
+  picker.innerHTML = '';
+  const defOpt = document.createElement('option');
+  defOpt.value = '';
+  defOpt.textContent = 'Active Rehearsal';
+  picker.appendChild(defOpt);
+  if (Array.isArray(runs)) {
+    for (const r of runs) {
+      const runId = typeof r === 'string' ? r : (r && r.run_id);
+      if (runId) {
+        const opt = document.createElement('option');
+        opt.value = runId;
+        opt.textContent = runId;
+        if (runId === currentVal) opt.selected = true;
+        picker.appendChild(opt);
+      }
+    }
+  }
+  if (activeTickerTab === 'shadow' && picker.options && picker.options.length > 1) {
+    picker.style.display = 'inline-block';
+  } else {
+    picker.style.display = 'none';
+  }
+}
 
 function rebuildAllTickerEvents() {
   const combined = [
@@ -1596,19 +1625,8 @@ function connectSSE() {
   sseSource.onopen = () => { if (sseReconnect) sseReconnect.style.display = 'none'; };
 
   sseSource.onmessage = (e) => {
-    try {
-      const ev = JSON.parse(e.data);
-      const ts = fmtLocalTime(ev.ts);
-      const svc = (ev.service || '').toUpperCase().slice(0,6);
-      const action = ev.action || '';
-      const slug = ev.market_slug || '';
-      const reason = ev.reason ? ` — ${ev.reason}` : '';
-      const rawLine = `[${ts}] [${svc}] ${action} ${slug}${reason}`;
-      const { translation, ctx } = translateEvent(ev);
-      appendTickerEvent(rawLine, translation, ctx, ev.service, ev.action, ev.extra, 'live');
-    } catch {
-      // Non-JSON line
-    }
+    // Ticker events arrive per family on /api/log-stream; this connection
+    // only carries the #427 `mark` frames now.
   };
 
   // #427 live marks ride this same connection as named events; the ticker
@@ -10074,7 +10092,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
-    renderTickerFeed, tickerMatches, tickerEmptyState,
+    renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,
     setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,

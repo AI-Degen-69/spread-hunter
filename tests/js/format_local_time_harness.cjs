@@ -60,11 +60,20 @@ global.window = { addEventListener() {}, matchMedia: () => ({ matches: false }) 
 global.CONTROL_TOKEN = 'harness-token';
 
 let sseInstance = null;
+let logInstance = null;
 global.EventSource = function (url) {
   this.url = url;
-  this.addEventListener = () => {};
+  this.listeners = {};
+  this.addEventListener = (evt, fn) => {
+    this.listeners[evt] = this.listeners[evt] || [];
+    this.listeners[evt].push(fn);
+  };
   this.close = () => {};
-  sseInstance = this;
+  if (url.includes('/api/log-stream')) {
+    logInstance = this;
+  } else {
+    sseInstance = this;
+  }
 };
 global.setInterval = () => 0;
 global.localStorage = {
@@ -97,7 +106,28 @@ const nullVal = typeof app.fmtLocalTime === 'function' ? app.fmtLocalTime(null) 
 
 // SSE Ticker integration verification
 let tickerHtml = null;
-if (typeof app.connectSSE === 'function') {
+if (typeof app.connectLogStream === 'function') {
+  app.connectLogStream(null);
+  if (logInstance && logInstance.listeners['log']) {
+    for (const fn of logInstance.listeners['log']) {
+      fn({
+        data: JSON.stringify({
+          family: 'live',
+          source: 'ring',
+          event: {
+            ts: sampleTs,
+            service: 'decide',
+            action: 'eval_market',
+            market_slug: 'btc-up',
+          },
+        }),
+      });
+    }
+    const tickerEl = document.getElementById('event-ticker');
+    const firstEvent = tickerEl.firstChild;
+    tickerHtml = firstEvent ? firstEvent.innerHTML : null;
+  }
+} else if (typeof app.connectSSE === 'function') {
   app.connectSSE();
   if (sseInstance && typeof sseInstance.onmessage === 'function') {
     sseInstance.onmessage({
