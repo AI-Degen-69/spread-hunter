@@ -225,7 +225,6 @@ def test_dropdown_pills_are_status_only(dom: DOMNode):
         "market-scan-pill",
         "scan-state-pill",
         "hud-guardrail-pill",
-        "hud-shadow-pill",
     ]
     for pid in pills:
         el = dom.find_one(id=pid)
@@ -236,6 +235,18 @@ def test_dropdown_pills_are_status_only(dom: DOMNode):
         label = el.find_one(cls="pill-label")
         assert label is None, \
             f"#{pid} must NOT carry .pill-label: the name column identifies the service (#602)"
+
+
+def test_implemented_run_pills_in_header(dom: DOMNode):
+    for pid in ("live-implemented-pill", "shadow-implemented-pill"):
+        el = dom.find_one(id=pid)
+        assert el is not None, f"Expected #{pid} in DOM"
+        assert "pill" in el.classes, f"#{pid} must have .pill class"
+        assert "mono" in el.classes, f"#{pid} must have .mono class"
+        label = el.find_one(cls="pill-label")
+        assert label is not None, f"#{pid} must carry .pill-label span"
+        value = el.find_one(cls="pill-value")
+        assert value is not None, f"#{pid} must carry .pill-value span"
 
 
 def test_pill_value_css(css: str):
@@ -252,7 +263,7 @@ def test_scan_pill_renders_grammar():
     assert {"pill", "state-running", "mono"}.issubset(set(data["className"].split()))
     assert 'class="pill-label"' not in data["innerHTML"]
     assert 'class="pill-value"' in data["innerHTML"]
-    assert data["textContent"] == "RUNNING"
+    assert data["textContent"] == "ON"
 
 
 @requires_node

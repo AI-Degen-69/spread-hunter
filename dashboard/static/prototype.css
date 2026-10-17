@@ -15,6 +15,15 @@
    window. */
 .proto-body .container {
   max-width: 1900px;
+  gap: 10px;
+}
+
+/* Empty tab sections unhidden for app.js compatibility must not take up layout space */
+.proto-body #tab-1,
+.proto-body #tab-2,
+.proto-body #tab-3,
+.proto-body #tab-4 {
+  display: none !important;
 }
 
 /* The tab row is replaced, not hidden behind a toggle: the rail is the
@@ -222,20 +231,103 @@
   color: #38bdf8;
 }
 
+/* Sub-navigation under rail items (e.g. Regular vs Live Markets) */
+.proto-sub-nav {
+  list-style: none;
+  margin: 3px 0 6px 0;
+  padding: 0 0 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border-left: 2px solid rgba(148, 163, 184, 0.15);
+  margin-left: 17px;
+  transition: opacity 140ms ease, max-height 220ms ease;
+}
+
+.proto-body:not(.proto-rail-pinned) .proto-sidebar:not(:hover):not(:has(:focus-visible)) .proto-sub-nav {
+  display: none;
+}
+
+.proto-sub-nav-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font: 500 12px 'IBM Plex Sans', sans-serif;
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.proto-sub-nav-btn:hover {
+  color: var(--text-primary);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.proto-sub-nav-btn[data-sub="regular"][aria-current="subpage"] {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.35);
+  font-weight: 600;
+}
+
+.proto-sub-nav-btn[data-sub="live"][aria-current="subpage"] {
+  color: #c084fc;
+  background: rgba(168, 85, 247, 0.15);
+  border-color: rgba(168, 85, 247, 0.4);
+  font-weight: 600;
+}
+
+.proto-sub-nav-btn .proto-nav-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  color: var(--text-muted);
+}
+
+.proto-sub-nav-btn[aria-current="subpage"] .proto-nav-icon {
+  color: inherit;
+}
+
+.proto-live-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c084fc;
+  box-shadow: 0 0 8px #c084fc;
+  margin-left: auto;
+  flex: 0 0 6px;
+  display: inline-block;
+}
+
 .proto-pages {
   min-width: 0;
   padding-bottom: 32px;
 }
 .proto-page-title {
-  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
   font-size: 22px;
   letter-spacing: 0.04em;
+  color: var(--text-primary);
 }
+
+.proto-page-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  color: #38bdf8;
+}
+
 .proto-page-note {
-  margin: 0 0 16px;
-  color: var(--text-secondary);
-  font-size: 13px;
-  max-width: 78ch;
+  display: none !important;
 }
 
 /* The panels arrive with the margins they had inside a tab panel; the page is

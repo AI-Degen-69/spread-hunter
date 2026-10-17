@@ -794,5 +794,33 @@ def test_preview_filter_pipeline_generates_dashboard_snapshots(tmp_path):
     assert univ_file.exists()
 
 
+def test_evaluate_populates_rate_from_tape_when_initial_rate_is_zero():
+    """Regression for Issue #594 remnant: rate=0.0 must not reject a market with valid tape movement."""
+    now_ts = time.time()
+    now_iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
+    cid = "0xzero_rate_tape"
+    cand = _candidate(cid, _volume_24h=150_000.0)
+    yes_book, no_book = _books(0.49, 0.51, depth_usd=2000.0)
+
+    # Active tape with $500 traded movement
+    session = _FakeSession(
+        trades=_active_tape(now_ts),
+        books_by_token={f"{cid}-yes": yes_book, f"{cid}-no": no_book},
+    )
+
+    # Simulate production gamma_universe where m.get('_movement_usd') was None -> rate=0.0
+    result = fm.evaluate(
+        session, rate=0.0, m=cand, volume_24h=cand.get("_volume_24h"),
+        source="spread", min_volume_usd=50_000.0, min_depth_usd=500.0,
+        max_spread=0.025, velocity_gate_enabled=False, now_iso=now_iso,
+    )
+
+    assert result["eligible"] is True
+    assert result["est_income"] > 0
+    assert result["return_pct_day"] > 0
+    assert result["reject_reason"] == ""
+
+
+
 
 

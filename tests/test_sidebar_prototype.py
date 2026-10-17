@@ -662,3 +662,26 @@ def test_explainer_route_and_rail_link():
     assert "href: '/explainer'" in js
 
 
+def test_top_nav_to_body_spacing_and_legacy_tab_suppression():
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+    assert ".proto-body #tab-1" in css
+    assert ".proto-body #tab-2" in css
+    assert ".proto-body #tab-3" in css
+    assert ".proto-body #tab-4" in css
+    rule = _rule(css, ".proto-body .container")
+    assert "gap: 10px" in rule
+
+
+def test_page_title_prepends_icon_and_hides_note():
+    js = (_STATIC / "prototype.js").read_text(encoding="utf-8")
+    assert "proto-page-icon" in js
+    assert "title.appendChild(icon)" in js
+    assert "title.appendChild(titleText)" in js
+
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+    assert ".proto-page-icon" in css
+    assert ".proto-page-note" in css
+    assert "display: none !important" in css
+
+
+

@@ -54,6 +54,18 @@ const PAGE_LAYOUT = [
     icon: 'M8 2.2c2.9 0 5 .8 5 1.8s-2.1 1.8-5 1.8-5-.8-5-1.8 2.1-1.8 5-1.8z M3 4v8c0 1 2.1 1.8 5 1.8s5-.8 5-1.8V4 M3 8c0 1 2.1 1.8 5 1.8s5-.8 5-1.8',
     note: 'What the Market Filter saw on its last scan.',
     selectors: ['#screener-header', '#kanban-carousel-container'],
+    subItems: [
+      {
+        id: 'regular',
+        label: 'Regular Markets',
+        icon: 'M2.5 13.5h11 M3.5 13.5V6.5l4.5-3.5 4.5 3.5v7 M7 13.5V9.5h2v4',
+      },
+      {
+        id: 'live',
+        label: 'Live Sports & eSports',
+        icon: 'M7.5 1.5L2 8.5h4.5L5.5 14.5l6.5-8H7.5z',
+      },
+    ],
   },
   {
     page: 'strategy',
@@ -166,6 +178,19 @@ function showPage(page, doc) {
     }
   });
 
+  const currentLane = (typeof window !== 'undefined' && window.currentMarketLane) || 'regular';
+  const subButtons = scope.querySelectorAll ? (scope.querySelectorAll('.proto-sub-nav-btn') || []) : [];
+  if (subButtons && subButtons.forEach) {
+    subButtons.forEach(subBtn => {
+      const isSubCurrent = (subBtn.dataset.page === target) && (subBtn.dataset.sub === currentLane);
+      if (isSubCurrent) {
+        subBtn.setAttribute('aria-current', 'subpage');
+      } else {
+        subBtn.removeAttribute('aria-current');
+      }
+    });
+  }
+
   // The poll loop paints only the active page (Issue #266), so a page the
   // polls skipped has to be painted the moment it shows — from the cached
   // snapshots, synchronously, the way a tab switch used to paint (#264).
@@ -220,6 +245,22 @@ function initPrototype(doc) {
     });
   });
 
+  const subButtons = scope.querySelectorAll ? (scope.querySelectorAll('.proto-sub-nav-btn') || []) : [];
+  if (subButtons && subButtons.forEach) {
+    subButtons.forEach(subBtn => {
+      subBtn.addEventListener('click', (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        const page = subBtn.dataset.page;
+        const sub = subBtn.dataset.sub;
+        showPage(page, scope);
+        if (typeof window !== 'undefined' && typeof window.setKanbanLane === 'function') {
+          window.setKanbanLane(sub);
+        }
+        setNavOpen(false, scope);
+      });
+    });
+  }
+
   const toggle = scope.getElementById('proto-nav-toggle');
   if (toggle) {
     toggle.addEventListener('click', () => {
@@ -227,6 +268,20 @@ function initPrototype(doc) {
       setNavOpen(open, scope);
     });
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.updateSidebarSubNav = function(lane) {
+    const currentLane = lane || window.currentMarketLane || 'regular';
+    const subButtons = document.querySelectorAll('.proto-sub-nav-btn');
+    subButtons.forEach(subBtn => {
+      if (subBtn.dataset.sub === currentLane) {
+        subBtn.setAttribute('aria-current', 'subpage');
+      } else {
+        subBtn.removeAttribute('aria-current');
+      }
+    });
+  };
 }
 
 /* ── Layout mount ───────────────────────────────────────────────────────── */
@@ -363,6 +418,7 @@ function buildSidebar(doc) {
 
   for (const entry of PAGE_LAYOUT) {
     const item = doc.createElement('li');
+    item.className = 'proto-nav-item';
     const button = doc.createElement('button');
     button.type = 'button';
     button.className = 'proto-nav-btn';
@@ -374,6 +430,35 @@ function buildSidebar(doc) {
     button.appendChild(buildIcon(doc, entry.icon));
     button.appendChild(buildNavLabel(doc, entry.label));
     item.appendChild(button);
+
+    if (entry.subItems && entry.subItems.length) {
+      const subList = doc.createElement('ul');
+      subList.className = 'proto-sub-nav';
+      subList.setAttribute('role', 'list');
+      for (const sub of entry.subItems) {
+        const subLi = doc.createElement('li');
+        const subBtn = doc.createElement('button');
+        subBtn.type = 'button';
+        subBtn.className = 'proto-sub-nav-btn';
+        subBtn.dataset.page = entry.page;
+        subBtn.dataset.sub = sub.id;
+        subBtn.title = sub.label;
+        if (sub.icon) {
+          subBtn.appendChild(buildIcon(doc, sub.icon));
+        }
+        subBtn.appendChild(buildNavLabel(doc, sub.label));
+        if (sub.id === 'live') {
+          const liveDot = doc.createElement('span');
+          liveDot.className = 'proto-live-indicator';
+          liveDot.setAttribute('aria-hidden', 'true');
+          subBtn.appendChild(liveDot);
+        }
+        subLi.appendChild(subBtn);
+        subList.appendChild(subLi);
+      }
+      item.appendChild(subList);
+    }
+
     list.appendChild(item);
   }
 
@@ -408,14 +493,19 @@ function buildPage(doc, entry, panels) {
   const title = doc.createElement('h1');
   title.id = pageId(entry.page) + '-title';
   title.className = 'font-display proto-page-title';
-  title.textContent = entry.label;
 
-  const note = doc.createElement('p');
-  note.className = 'proto-page-note';
-  note.textContent = entry.note;
+  if (entry.icon) {
+    const icon = buildIcon(doc, entry.icon);
+    icon.classList.add('proto-page-icon');
+    title.appendChild(icon);
+  }
+
+  const titleText = doc.createElement('span');
+  titleText.className = 'proto-page-title-text';
+  titleText.textContent = entry.label;
+  title.appendChild(titleText);
 
   section.appendChild(title);
-  section.appendChild(note);
 
   for (const panel of panels || []) {
     section.appendChild(panel);

@@ -76,8 +76,10 @@
       </div>
 
       <div class="top-group top-group-state" role="group" aria-label="Live state">
+        <span id="live-implemented-pill" class="pill state-stopped mono mode-live" title="Live Implemented: Real-money maker execution quoter (python -m core_brain.trader_loop)"><span class="pill-label">LIVE IMPLEMENTED</span> <span class="pill-value">OFF</span></span>
+        <span id="shadow-implemented-pill" class="pill state-stopped mono mode-shadow" title="Shadow Implemented: Paper rehearsal arbitrage loop on live CLOB (python -m core_brain.shadow_run)"><span class="pill-label">SHADOW IMPLEMENTED</span> <span class="pill-value">OFF</span></span>
         <!-- Consolidated SERVICES pill: live summary and dropdown trigger for all stack services -->
-        <button id="hud-services-pill" class="pill state-unknown mono services-pill-trigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="services-dropdown" title="Stack services liveness: how many of the stack's services (and the watchdog) are running. Click to inspect telemetry details."><span class="pill-label">SERVICES</span> <span id="hud-services-state" class="pill-value">UNKNOWN</span> <span id="hud-services-sub" class="pill-detail">--</span> <span class="services-caret" aria-hidden="true">▾</span></button>
+        <button id="hud-services-pill" class="pill state-unknown mono services-pill-trigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="services-dropdown" title="Stack services telemetry: how many of the stack's services (and the watchdog) are running. Click to inspect telemetry details."><span class="pill-label">SERVICES</span> <span id="hud-services-state" class="pill-value">UNKNOWN</span> <span id="hud-services-sub" class="pill-detail">--</span> <span class="services-caret" aria-hidden="true">▾</span></button>
       </div>
 
       <div class="top-group top-group-controls" role="group" aria-label="Run controls">
@@ -111,11 +113,6 @@
       <div class="services-dropdown-row" title="Venue Engine &amp; Order Poller">
         <span id="scan-state-pill" class="pill state-unknown mono"><span class="pill-value">UNKNOWN</span></span>
         <span class="services-dropdown-name" title="Venue Engine &amp; Order Poller">Venue Engine &amp; Order Poller</span>
-        <span class="services-dropdown-meta"></span>
-      </div>
-      <div class="services-dropdown-row" title="Shadow Rehearsal Quoter">
-        <span id="hud-shadow-pill" class="pill state-unknown mono"><span class="pill-value">UNKNOWN</span></span>
-        <span class="services-dropdown-name" title="Shadow Rehearsal Quoter">Shadow Rehearsal Quoter</span>
         <span class="services-dropdown-meta"></span>
       </div>
       <div class="services-dropdown-foot">Full controls on the Live Operations tab</div>
@@ -747,15 +744,34 @@
          Labelled ENGINE because "TRADING LOOP" read as the scanner to an
          operator sitting on the kanban market-scan page. -->
     <div class="card" id="screener-header">
+      <!-- ENGINE heartbeat provenance: runtime/shadow_run_<run_id>.json or runtime/live_poll_heartbeat.json -->
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="mono" style="font-size:10px;letter-spacing:.08em;color:var(--text-muted)"
-                title="Heartbeat age of the quote engine: runtime/shadow_run_<run_id>.json during a rehearsal, runtime/live_poll_heartbeat.json on the live stack. Not the market scan -- that is the SCAN pill in the top bar.">ENGINE</span>
+        <div style="display:flex;align-items:center;gap:10px" id="screener-status-group">
+          <span id="screener-filter-pill" class="pill state-unknown mono" title="Market Filter service status"><span class="pill-value">--</span></span>
+          <span class="font-display" style="font-size:12px;letter-spacing:0.04em;color:var(--text-primary);font-weight:700">MARKET FILTER</span>
           <span id="scan-snapshot-age" class="mono" style="font-size:12px;color:var(--text-secondary)">last scan: --</span>
           <span id="scan-filter-uptime" class="mono" style="font-size:12px;color:var(--text-secondary)"></span>
           <span id="trial-ready-banner" class="pill state-unknown mono" style="display:none;margin-left:8px"></span>
         </div>
+        <div class="kanban-lane-switcher" id="kanban-lane-switcher" aria-label="Kanban market lanes">
+          <button type="button" class="lane-tab-btn active" data-lane="regular" id="lane-btn-regular" aria-pressed="true" title="Regular binary markets ($50k volume floor, strict velocity)">
+            <span class="lane-icon">🏛️</span>
+            <span class="lane-name">Regular Markets</span>
+            <span class="lane-count-pill" id="lane-count-regular">0</span>
+          </button>
+          <button type="button" class="lane-tab-btn" data-lane="live" id="lane-btn-live" aria-pressed="false" title="Live sports and esports ($35k volume floor, Volatility Exempt)">
+            <span class="lane-icon">⚡</span>
+            <span class="lane-name">Live Sports & eSports</span>
+            <span class="lane-count-pill live" id="lane-count-live">0</span>
+          </button>
+          <button type="button" class="lane-tab-btn" data-lane="all" id="lane-btn-all" aria-pressed="false" title="Combined universe across all candidates">
+            <span class="lane-icon">🌐</span>
+            <span class="lane-name">All Candidates</span>
+            <span class="lane-count-pill" id="lane-count-all">0</span>
+          </button>
+        </div>
       </div>
+      <div class="kanban-lane-banner" id="kanban-lane-banner"></div>
     </div>
     <!-- Kanban carousel container with floating navigation arrows -->
     <div class="kanban-carousel-container" id="kanban-carousel-container">
