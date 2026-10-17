@@ -2952,6 +2952,46 @@ th[aria-sort] .ot-sort-btn {
   border-color: rgba(56, 189, 248, 0.4);
 }
 
+/* Ticker process family tabs (#639) */
+.ticker-tab-btn {
+  background: var(--bg-surface-raised, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 6px;
+  color: var(--text-secondary, #94a3b8);
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.ticker-tab-btn:hover {
+  color: var(--text-primary, #f1f5f9);
+  border-color: var(--border-strong, rgba(255, 255, 255, 0.2));
+}
+.ticker-tab-btn.active {
+  background: rgba(14, 165, 233, 0.2);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.6);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.15);
+}
+.ticker-tab-btn.unavailable {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ticker-shadow-picker {
+  background: var(--bg-surface-raised, #1e222d);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  color: var(--text-primary, #e2e8f0);
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+
 /* --- Tier 1 decision row (#90) ------------------------------------------ */
 /* Two cards, side by side, above every drill-down deck: the band around our
    average close, and where the run falls off. They are the only Tier 1

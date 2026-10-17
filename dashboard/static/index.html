@@ -246,7 +246,7 @@
           <div class="font-display" style="font-size:15px;letter-spacing:0.04em;color:var(--text-primary)">
             LIVE EXECUTION &amp; CYCLE EVENT STREAM
           </div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">
+          <div id="ticker-source-subtitle" style="font-size:11px;color:var(--text-muted);margin-top:2px">
             Real-time SSE feed from live/runtime/cycle_events.jsonl (Local timestamps)
           </div>
         </div>
@@ -261,6 +261,13 @@
           <button id="btn-ticker-details" class="toggle-cancelled-btn" type="button" style="padding:4px 8px;font-size:11px">SHOW DETAILS</button>
           <button id="btn-pause-ticker" class="toggle-cancelled-btn" type="button" style="padding:4px 8px;font-size:11px">AUTOSCROLL: ON</button>
         </div>
+      </div>
+      <div class="ticker-tabs" role="tablist" aria-label="Process log streams" style="display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <button class="ticker-tab-btn active" role="tab" aria-selected="true" aria-controls="event-ticker" data-tab="all" type="button">ALL</button>
+        <button class="ticker-tab-btn" role="tab" aria-selected="false" aria-controls="event-ticker" data-tab="filter" type="button">FILTER LOOP</button>
+        <button class="ticker-tab-btn" role="tab" aria-selected="false" aria-controls="event-ticker" data-tab="shadow" type="button">SHADOW REHEARSAL</button>
+        <button class="ticker-tab-btn" role="tab" aria-selected="false" aria-controls="event-ticker" data-tab="live" type="button">LIVE RUN</button>
+        <select id="ticker-shadow-picker" class="ticker-shadow-picker" style="display:none;" aria-label="Select shadow run"></select>
       </div>
       <div id="sse-reconnect" class="sse-reconnecting" style="display:none">Connecting to live cycle stream...</div>
       <div id="event-ticker" class="event-ticker" role="log" aria-live="polite" aria-label="Live event stream" style="max-height:240px;min-height:160px">

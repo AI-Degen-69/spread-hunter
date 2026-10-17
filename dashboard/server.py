@@ -34,7 +34,7 @@ import time
 from pathlib import Path
 from typing import Any, Generator, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
@@ -3829,6 +3829,399 @@ def cycle_stream_events():
     """Server-Sent-Events tail of live/runtime/cycle_events.jsonl."""
     return StreamingResponse(
         _cycle_stream_sse(resolve_ring_path()),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+_RUN_ID_SAFE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _validate_run_id(run_id: str | None) -> str | None:
+    if not run_id:
+        return None
+    if not _RUN_ID_SAFE_RE.match(run_id) or ".." in run_id or "/" in run_id or "\\" in run_id:
+        raise HTTPException(status_code=400, detail="Invalid run_id format")
+    return run_id
+
+
+def _resolve_log_families(run_id: str | None = None) -> dict[str, dict]:
+    """Resolve ring paths, text logs, and availability per log family.
+
+    Returns dict mapping family name ('live', 'filter', 'shadow') to metadata.
+    Callers never supply raw file paths.
+    """
+    rt_dir = runtime_file("").resolve()
+
+    # Live family
+    live_ring = _ACTIVE_RING_OVERRIDE if _ACTIVE_RING_OVERRIDE is not None else resolve_runtime_file(CYCLE_RING_NAME, root=LIVE_ROOT)
+    live_avail = live_ring.exists()
+    families = {
+        "live": {
+            "available": live_avail,
+            "reason": None if live_avail else "Cycle ring not found on disk",
+            "labels": [live_ring.name],
+            "run_id": None,
+            "ring_path": live_ring,
+            "ring_filter": lambda ev: "filter" not in str(ev.get("service") or "").lower() and "screener" not in str(ev.get("service") or "").lower(),
+            "text_logs": [],
+        }
+    }
+
+    # Filter family
+    filter_ring = live_ring
+    filter_text_logs: list[Path] = []
+    rerank = resolve_runtime_file("rerank.log", root=LIVE_ROOT)
+    if rerank.resolve().parent == rt_dir:
+        filter_text_logs.append(rerank)
+    try:
+        for ext in [".out.log", ".err.log"]:
+            matches = list(rt_dir.glob(f"screener-*{ext}")) + list(rt_dir.glob(f"resume_screener-*{ext}"))
+            if matches:
+                newest = max(matches, key=lambda p: p.stat().st_mtime)
+                if newest not in filter_text_logs and newest.resolve().parent == rt_dir:
+                    filter_text_logs.append(newest)
+    except OSError:
+        pass
+
+    filter_labels = [f"{filter_ring.name} (service=filter)"] + [p.name for p in filter_text_logs]
+    filter_avail = filter_ring.exists() or any(p.exists() for p in filter_text_logs)
+    families["filter"] = {
+        "available": filter_avail,
+        "reason": None if filter_avail else "No filter events or rerank.log yet",
+        "labels": filter_labels,
+        "run_id": None,
+        "ring_path": filter_ring,
+        "ring_filter": lambda ev: "filter" in str(ev.get("service") or "").lower() or "screener" in str(ev.get("service") or "").lower(),
+        "text_logs": filter_text_logs,
+    }
+
+    # Shadow family
+    shadow_ring = None
+    shadow_run_id = None
+    shadow_avail = False
+    shadow_reason = None
+    shadow_text_logs: list[Path] = []
+
+    if run_id:
+        _validate_run_id(run_id)
+        from core_brain.shadow_run import _run_ring_name
+        ring_name = _run_ring_name(run_id)
+        candidate = resolve_runtime_file(ring_name, root=LIVE_ROOT)
+        known_ids = {r.get("run_id") for r in list_shadow_runs() if r.get("run_id")}
+        if run_id not in known_ids and not candidate.exists():
+            raise HTTPException(status_code=400, detail=f"Unlisted run_id: {run_id}")
+        if candidate.resolve().parent == rt_dir:
+            shadow_ring = candidate
+            shadow_run_id = run_id
+            shadow_avail = candidate.exists()
+            if not shadow_avail:
+                shadow_reason = f"Shadow rehearsal ring not found on disk"
+        else:
+            shadow_run_id = run_id
+            shadow_avail = False
+            shadow_reason = f"Shadow rehearsal ring not found on disk"
+    else:
+        candidate = _resolve_shadow_ring_path()
+        if candidate is not None:
+            shadow_ring = candidate
+            shadow_avail = candidate.exists()
+            try:
+                active_db = str(resolve_db_path(_ACTIVE_DB_OVERRIDE))
+                shadow_info = _recent_shadow_run(active_db)
+                shadow_run_id = shadow_info.get("run_id") if shadow_info else None
+            except Exception:
+                shadow_run_id = None
+            if not shadow_avail:
+                shadow_reason = "Shadow rehearsal ring not found on disk"
+        else:
+            shadow_avail = False
+            shadow_reason = "No active shadow rehearsal"
+
+    if shadow_run_id and _RUN_ID_SAFE_RE.match(shadow_run_id):
+        for ext in [".out.log", ".err.log"]:
+            fresh = runtime_file(f"shadow_run-{shadow_run_id}{ext}")
+            resume = runtime_file(f"shadow_resume-{shadow_run_id}{ext}")
+            chosen = None
+            if fresh.exists() and resume.exists():
+                chosen = fresh if fresh.stat().st_mtime >= resume.stat().st_mtime else resume
+            elif fresh.exists():
+                chosen = fresh
+            elif resume.exists():
+                chosen = resume
+            if chosen and chosen.resolve().parent == rt_dir:
+                shadow_text_logs.append(chosen)
+
+    shadow_labels = ([shadow_ring.name] if shadow_ring else []) + [p.name for p in shadow_text_logs]
+    families["shadow"] = {
+        "available": shadow_avail,
+        "reason": shadow_reason,
+        "labels": shadow_labels,
+        "run_id": shadow_run_id,
+        "ring_path": shadow_ring,
+        "ring_filter": None,
+        "text_logs": shadow_text_logs,
+    }
+
+    return families
+
+
+def _log_stream_sse(
+    families: list[str],
+    run_id: str | None = None,
+    tail: int = SSE_REPLAY_LINES,
+    poll_sec: float = SSE_POLL_SEC,
+) -> Generator[str, None, None]:
+    """Yield SSE frames for per-process log streams without mark frames.
+
+    Events:
+    - ``event: source``: hello per family with available state, labels, reason, run_id.
+    - ``event: log``: {family, source, event} or {family, source, text, file}.
+    - ``event: rotate``: {family, source}.
+    """
+    from core_brain.cycle_stream import tail_lines_fh
+
+    last_keepalive = time.time()
+    families_map = _resolve_log_families(run_id=run_id)
+
+    # 1. Emit source hello frame per requested family
+    for fam in families:
+        fam_info = families_map.get(fam)
+        if fam_info:
+            hello = {
+                "family": fam,
+                "labels": fam_info.get("labels", []),
+                "available": fam_info.get("available", False),
+                "reason": fam_info.get("reason"),
+                "run_id": fam_info.get("run_id"),
+            }
+            yield f"event: source\ndata: {json.dumps(hello)}\n\n"
+
+    # 2. Setup followers & replay tail
+    followers: list[dict] = []
+    for fam in families:
+        fam_info = families_map.get(fam, {})
+        ring_path = fam_info.get("ring_path")
+        r_filter = fam_info.get("ring_filter")
+        if ring_path and ring_path.exists():
+            matched_evs = []
+            try:
+                with open(ring_path, "rb") as fh:
+                    if r_filter is not None:
+                        raw_lines = tail_lines_fh(fh, max(500, tail * 5))
+                        offset = fh.seek(0, os.SEEK_END)
+                        file_key = _ring_file_key(os.fstat(fh.fileno()))
+                        for raw in raw_lines:
+                            line_str = (raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)).strip()
+                            if not line_str:
+                                continue
+                            try:
+                                ev = json.loads(line_str)
+                            except Exception:
+                                continue
+                            if r_filter(ev):
+                                matched_evs.append(ev)
+                        matched_evs = matched_evs[-tail:]
+                    else:
+                        replay, offset, file_key = _ring_replay_and_offset(fh, tail)
+                        for line in replay:
+                            clean = (line.decode("utf-8", errors="replace") if isinstance(line, bytes) else str(line)).strip()
+                            if not clean:
+                                continue
+                            try:
+                                ev = json.loads(clean)
+                            except Exception:
+                                continue
+                            matched_evs.append(ev)
+                for ev in matched_evs:
+                    yield f"event: log\ndata: {json.dumps({'family': fam, 'source': 'ring', 'event': ev})}\n\n"
+                followers.append({
+                    "family": fam,
+                    "source": "ring",
+                    "path": ring_path,
+                    "offset": offset,
+                    "file_key": file_key,
+                    "filter_fn": r_filter,
+                    "label": ring_path.name,
+                })
+            except OSError:
+                followers.append({
+                    "family": fam,
+                    "source": "ring",
+                    "path": ring_path,
+                    "offset": 0,
+                    "file_key": None,
+                    "filter_fn": r_filter,
+                    "label": ring_path.name,
+                })
+        elif ring_path:
+            followers.append({
+                "family": fam,
+                "source": "ring",
+                "path": ring_path,
+                "offset": 0,
+                "file_key": None,
+                "filter_fn": r_filter,
+                "label": ring_path.name,
+            })
+
+        for t_path in fam_info.get("text_logs", []):
+            if t_path.exists():
+                text_lines = []
+                try:
+                    with open(t_path, "rb") as fh:
+                        raw_lines = tail_lines_fh(fh, tail)
+                        offset = fh.seek(0, os.SEEK_END)
+                        file_key = _ring_file_key(os.fstat(fh.fileno()))
+                        for raw in raw_lines:
+                            line_str = (raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)).strip()
+                            if line_str:
+                                text_lines.append(line_str[:1000])
+                    for t_line in text_lines:
+                        yield f"event: log\ndata: {json.dumps({'family': fam, 'source': 'text', 'file': t_path.name, 'text': t_line})}\n\n"
+                    followers.append({
+                        "family": fam,
+                        "source": "text",
+                        "path": t_path,
+                        "offset": offset,
+                        "file_key": file_key,
+                        "filter_fn": None,
+                        "label": t_path.name,
+                    })
+                except OSError:
+                    followers.append({
+                        "family": fam,
+                        "source": "text",
+                        "path": t_path,
+                        "offset": 0,
+                        "file_key": None,
+                        "filter_fn": None,
+                        "label": t_path.name,
+                    })
+            else:
+                followers.append({
+                    "family": fam,
+                    "source": "text",
+                    "path": t_path,
+                    "offset": 0,
+                    "file_key": None,
+                    "filter_fn": None,
+                    "label": t_path.name,
+                })
+
+    # 3. Follow loop
+    rt_dir = runtime_file("").resolve()
+    while True:
+        if "filter" in families:
+            try:
+                for ext in [".out.log", ".err.log"]:
+                    matches = list(rt_dir.glob(f"screener-*{ext}")) + list(rt_dir.glob(f"resume_screener-*{ext}"))
+                    if matches:
+                        newest = max(matches, key=lambda p: p.stat().st_mtime)
+                        if newest.resolve().parent == rt_dir and not any(f.get("path") == newest for f in followers):
+                            followers.append({
+                                "family": "filter",
+                                "source": "text",
+                                "path": newest,
+                                "offset": 0,
+                                "file_key": None,
+                                "filter_fn": None,
+                                "label": newest.name,
+                            })
+            except OSError:
+                pass
+
+        for f in followers:
+            path = f["path"]
+            if not path.exists():
+                continue
+            try:
+                st = path.stat()
+                key = _ring_file_key(st)
+                size = st.st_size
+                if f["file_key"] is not None and (key != f["file_key"] or size < f["offset"]):
+                    f["offset"] = 0
+                    yield f"event: rotate\ndata: {json.dumps({'family': f['family'], 'source': f['source']})}\n\n"
+                f["file_key"] = key
+                if size > f["offset"]:
+                    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                        fh.seek(f["offset"])
+                        lines_read = 0
+                        while True:
+                            line = fh.readline()
+                            if not line:
+                                break
+                            f["offset"] = fh.tell()
+                            lines_read += 1
+                            clean = line.strip()
+                            if not clean:
+                                if lines_read >= 500:
+                                    break
+                                continue
+                            if f["source"] == "ring":
+                                try:
+                                    ev = json.loads(clean)
+                                except Exception:
+                                    ev = None
+                                if ev is not None:
+                                    if f["filter_fn"] is None or f["filter_fn"](ev):
+                                        yield f"event: log\ndata: {json.dumps({'family': f['family'], 'source': 'ring', 'event': ev})}\n\n"
+                            else:
+                                yield f"event: log\ndata: {json.dumps({'family': f['family'], 'source': 'text', 'file': f['label'], 'text': clean[:1000]})}\n\n"
+                            if lines_read >= 500:
+                                break
+            except OSError:
+                pass
+
+        if time.time() - last_keepalive >= SSE_KEEPALIVE_SEC:
+            yield ": keepalive\n\n"
+            last_keepalive = time.time()
+
+        time.sleep(poll_sec)
+
+
+@app.get("/api/log-stream")
+def log_stream_events(
+    family: list[str] = Query(default=None),
+    run_id: str | None = Query(default=None),
+):
+    """Server-Sent-Events multi-family log and telemetry stream."""
+    valid_fams = {"live", "filter", "shadow"}
+    selected_fams: list[str] = []
+    if family:
+        for f in family:
+            for part in f.split(","):
+                part = part.strip().lower()
+                if not part:
+                    continue
+                if part == "all":
+                    for name in ["live", "filter", "shadow"]:
+                        if name not in selected_fams:
+                            selected_fams.append(name)
+                elif part in valid_fams:
+                    if part not in selected_fams:
+                        selected_fams.append(part)
+                else:
+                    raise HTTPException(status_code=400, detail=f"Unknown family: {part}")
+    if not selected_fams:
+        selected_fams = ["live", "filter", "shadow"]
+
+    sanitized_run_id = None
+    if run_id:
+        sanitized_run_id = _validate_run_id(run_id)
+        from core_brain.shadow_run import _run_ring_name
+        ring_name = _run_ring_name(sanitized_run_id)
+        candidate = resolve_runtime_file(ring_name, root=LIVE_ROOT)
+        known_ids = {r.get("run_id") for r in list_shadow_runs() if r.get("run_id")}
+        if sanitized_run_id not in known_ids and not candidate.exists():
+            raise HTTPException(status_code=400, detail=f"Unlisted run_id: {sanitized_run_id}")
+
+    return StreamingResponse(
+        _log_stream_sse(families=selected_fams, run_id=sanitized_run_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

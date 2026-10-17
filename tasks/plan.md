@@ -1,130 +1,95 @@
-# Plan — Station II: #632 Standardize parameter & env naming
+# Plan — Station II: #639 One log tab per process in dashboard event stream
 
-Branch: main | Issue: #632
-Title: [REFACTOR] Standardize parameter/env naming: purge frac, enforce unit suffixes
-Size: Standard (cross-cutting rename, no behavior change) | Type: Code + Docs
-Labels: ready-for-agent | Base: main == origin/main, 0/0 (2026-10-16), tree clean.
+Branch: i639/one-log-tab-per-process-in-dashboard | Issue: #639
+Title: [ADD] One log tab per process in the dashboard event stream
+Size: Standard (4 files, backend SSE route + frontend tabs + tests) | Type: Code + Design/UI
+Labels: enhancement, ready-for-agent | Base: main == origin/main, 0/0, tree clean.
 
-## Job-guard note (branch deviation, deliberate)
-- Step 0B prescribes `i632/<slug>`, but Job Guards order planning on synced `main`
-  with exit `tasks/plan.md written, no strategy code modified`, and forbid stale
-  refs (#628, #634). Planning stays on `main`, writes only the planning set.
-  Station III creates the feature branch.
-- Step 0A.0: root `CONSTRAINTS.md` carried #628's header, `SPEC.md` #622's — both
-  merged. Both replaced wholesale for #632. No `tasks/` dir existed.
+## Context & Problem
+The dashboard event ticker currently consumes a single shared 200-line buffer (`app.js:1257`) fed by `/api/cycle-stream`. A chatty rehearsal ring (e.g. `runtime/shadow-*.jsonl`, up to 28 MB) evicts filter loop (`runtime/rerank.log`, `scripts/filter_loop.py`) and live trading engine events (`runtime/cycle_events.jsonl`). Terminal logs (`rerank.log`) are currently invisible in the UI.
 
-## CodeRabbit intake (adopted / rejected / unverified)
-- ADOPTED: 2-phase skeleton (code renames + aliases + env fallback; then
-  explainer/docs); `cancel_net_oneway_ms` read-only alias pattern; keep shared
-  KPI output keys; keep venue constants with clarified comment; TDD-first;
-  `tests/test_quotes.py` EXISTS (16 tests) — no creation needed.
-- REJECTED: stale line numbers only; `test_market_quote.py` `wf` is positional
-  forward, not a keyword; no `threshold_pct` rename (only the documented
-  percentage-points exceptions stay).
-- [UNVERIFIED] for build: `decide_quotes` refusal return shape at window
-  boundary; emergency-hedge fixture two-sidedness; mermaid old-name hits.
+## Scope & Target Deliverables
+1. Backend (`dashboard/server.py`):
+   - Add `_resolve_log_families(run_id=None)` returning per-family source metadata (ring path, text logs, availability reason).
+   - Add `_log_stream_sse()` generator following multiple sources with independent tail replay, rotation handling, and keepalive frames.
+   - Register route `GET /api/log-stream` supporting repeated `family` query params (`live`, `filter`, `shadow`) and optional sanitized `run_id`.
+   - Preserve `/api/cycle-stream` and its `mark` frames completely unchanged.
+2. Markup & Styling (`dashboard/static/index.html` & `styles.css`):
+   - In `#event-ticker-card`, add `role="tablist"` tab strip with buttons `.ticker-tab-btn` for `all`, `filter`, `shadow`, and `live`.
+   - Add hidden `<select>` rehearsal run picker for the shadow tab.
+   - Dynamic active file source subtitle.
+   - Styling for tabs, active states, and connection status.
+3. Frontend State & Stream (`dashboard/static/app.js`):
+   - Decouple `allTickerEvents` into per-family ring buffers (capped at 200 items each): `tickerBuffers.all`, `filter`, `shadow`, `live`.
+   - Implement `connectLogStream()` connecting to `/api/log-stream`.
+   - Keep `connectSSE()` on `/api/cycle-stream` for live `mark` frames.
+   - Tab switching re-renders from the target buffer without reconnecting SSE.
+   - In-tab filtering (ALL / TRADES / MARKET FILTER / ALERTS) applies within the active tab.
+4. Test Harnesses & Pytest (`tests/`):
+   - Update `tests/js/event_stream_harness.cjs` to handle log stream format.
+   - Create `tests/js/event_stream_tabs_harness.cjs` verifying tab isolation, arrival sorting, and HTML escaping.
+   - Add backend tests in `tests/test_dashboard_server.py` verifying replay isolation, rotation handling, parameter validation, and harness execution.
 
-## Spec (embedded)
-Goal: one canonical lowercase name per setting with explicit unit suffix; zero
-`_frac`/`_fraction` field/param names in active code; canonical `HUNTER_*`
-first + legacy fallback + warning; explainer/docs show names + badges + scope.
-Contract: all defaults and math unchanged (0.80, 0.40, 0.01, 0.015, 200.0,
-bounds 0.0-1.0, cents/100). Out of scope: rescaling, deleting aliases,
-`data/orders.db`, opening commands (quote/complete/Trader/START).
-Acceptance: (1) zero `_frac`/`_fraction` fields on BOTH MakerConfigs (live
-today: core 4, scoring 3); (2) `max_skew_offset` + `min_book_depth_shares`
-fields with legacy read aliases; (3) canonical env loads, legacy `.env` works;
-(4) explainer lowercase + badges + scope; (5) focused suites green
-(NOTE: `tests/test_risk.py` DOES NOT EXIST — build creates it or corrects the
-command; recorded in CONSTRAINTS.md).
+## CodeRabbit Intake (adopted / rejected / unverified)
+- ADOPTED:
+  - Separate `GET /api/log-stream` endpoint; leaves `/api/cycle-stream` completely untouched for live marks.
+  - Event contract: `source` (handshake), `log` (`{family, source, event|text}`), `rotate` (`{family, source}`).
+  - Buffer isolation: 4 independent buffers (200 rows each) preventing cross-stream eviction.
+  - Plain text log tailing (`runtime/rerank.log`) with raw-path escaping.
+  - Run picker for shadow rehearsals when multiple runs exist.
+- REJECTED:
+  - Capturing subprocess stdout/stderr (dashboard subprocesses spawn with `DEVNULL`; out of scope).
+  - Creating new database tables or altering ring formats.
+- [RESOLVED FROM CODE]:
+  - `event_stream_harness.cjs` uses mock `EventSource`; will support both direct message passing and named `log` event listener.
+  - Inode rotation on Windows falls back to `st_ctime_ns` via existing `_ring_file_key()`.
 
-## Interface contract (paths locked; line numbers re-derive at build)
-- `core_brain/config.py` MakerConfig (frozen): `max_skew`->`max_skew_offset`
-  (0.015), `emergency_hedge_frac`->`_pct` (0.8), `couple_risk_frac`->`_pct`
-  (0.01), `quote_window_frac`->`_pct` (0.40), `stat_gate_bankroll_fraction`->
-  `_pct` (0.01), `min_book_depth_sh`->`min_book_depth_shares` (200.0). Legacy
-  read-only `@property` aliases beside `cancel_net_oneway_ms`. Frozen =>
-  set raises AttributeError. Legacy ctor keywords REJECTED (TypeError);
-  move all in-repo call sites in the same change (deliberate).
-- `scoring/config.py` MakerConfig: same for its 3 fields (no couple_risk).
-- `load()`: canonical-first + `logging.warning` fallback (NOT warnings
-  module): `HUNTER_STAT_GATE_BANKROLL_PCT`->legacy `_FRACTION`;
-  `HUNTER_MAX_SPREAD_CENTS`->`HUNTER_MAX_SPREAD` (BOTH blocks);
-  `HUNTER_PRICE_TICK`->`HUNTER_TICK`; `HUNTER_MIN_QUOTE_SHARES`->
-  `HUNTER_MIN_SIZE`; `HUNTER_MAX_QUOTE_SHARES`->`HUNTER_MAX_SHARES`.
-  Bounds/conversions unchanged.
-- `quotes.py`: `range_fraction`->`range_pct` (0.4); `window_frac`->`window_pct`
-  + refusal text. `order_manager.py:3331` getattr -> canonical.
-- `risk.py`: `cfg.max_skew`->`max_skew_offset`; `cfg.min_book_depth_sh`->
-  shares name. `kpi.py`: rename param/local only (`bankroll_pct`,
-  `kelly_pct`); KEEP dict keys `"bankroll_fraction"`/`"kelly_fraction"`.
-- `scoring/allocate.py`: `capture_frac`->`capture_pct`, `max_frac`->
-  `max_pct` (+internal call). `reachable_fraction` UNCHANGED (func name).
-- `venue.py`: keep MAX_* constants; comment-only rewrite (import-time
-  snapshot; enforcement via `order_caps()`).
-- Explainer rows ~508-545: MAX_ORDER_USD, MAX_TOTAL_USD, max_skew,
-  emergency_hedge_frac, min_book_depth_sh -> lowercase + badges + scope.
-- MUST NOT MODIFY: `data/orders.db`; dated history (`docs/superpowers/
-  specs/2026-08-*`, `docs/runs/`, `docs/ideas/`, `docs/issues/`);
-  `derive_dynamic_caps`, `apply_tournament_preset`, `_sanitize_pct`,
-  `threshold_pct`/`stat_gate_threshold_pct`/`*_return_pct` (pct-points
-  exceptions: 1.0 means 1%, documented not renamed).
+## Improvement Proposal (adopted)
+- Evidence: `index.html:249-251` shows static subtitle "Real-time SSE feed from live/runtime/cycle_events.jsonl".
+- Proposal: Update subtitle dynamically on tab switch to indicate active file sources (e.g. `runtime/rerank.log` on Filter, `runtime/shadow-<id>.jsonl` on Shadow, `runtime/cycle_events.jsonl` on Live).
 
-## Improvement proposal (adopted, simplification/hardening)
-Evidence verbatim: `config.py:1547: sgb = os.environ.get(
-"HUNTER_STAT_GATE_BANKROLL_FRACTION")` + `kpi.py:244:
-"bankroll_fraction": cfg.stat_gate_bankroll_fraction,` — field, loader kw,
-and reader must move in ONE atomic change or the gate/dashboard breaks
-silently. Tasks below are shaped that way. No operator question needed.
+## Task Breakdown
 
-## Tasks (4, dependency-ordered, risk-first)
-### [x] T1 [S][Backend/Logic] Rename MakerConfig fields + read aliases (both classes)
-Depends on: none. Files: `core_brain/config.py`, `scoring/config.py`.
-Rename 6 core / 3 scoring fields (defaults+units unchanged); legacy
-read-only properties; move all in-repo ctor call sites + old-kw tests.
-Verify: NEW tests in `tests/test_quotes.py` RED-first then GREEN
-(defaults, no-`_frac`-field scan both classes, alias-reads-canonical,
-alias-set-raises-AttributeError, legacy-kw-TypeError); then
-`pytest -q tests/test_quotes.py tests/test_config_for_display.py`.
+### Task 1: Backend Log Family Resolver & SSE Generator [Backend/Logic] [x]
+- Files: `dashboard/server.py`
+- Description:
+  - Implement `_resolve_log_families(run_id=None)` to map `live`, `filter`, `shadow` to their respective ring and text log files.
+  - Implement `_log_stream_sse()` to follow multiple files concurrently with independent offsets, replay caps (`SSE_REPLAY_LINES`), and rotation detection.
+  - Register `GET /api/log-stream` with parameter validation (sanitized `run_id`, valid family names).
+- Depends on: None
+- Size: M
+- Verification: `python -m pytest -q tests/test_dashboard_server.py -k "log_stream"`
 
-### [x] T2 [M][Backend/Logic] Canonical-first env loader + all readers
-Depends on: T1. Files: `config.py::load`, `quotes.py`, `risk.py`, `kpi.py`,
-`order_manager.py` (1 line), `scoring/allocate.py`, touched tests.
-5 env canonical-first+fallback+log-warning; rename `range_pct`,
-`window_pct` (+refusal text), `bankroll_pct` param, `kelly_pct` local
-(keys kept + format comment), `capture_pct`/`max_pct`; update readers;
-`test_stat_gate.py` 3 loader tests (monkeypatch+caplog: new, legacy,
-new-wins) + display test + window/skew/hedge threshold tests (reuse
-`test_live_quotes.py::test_decide_quotes_basic_two_sided` and
-`test_paired_inventory_accounting.py::test_emergency_hedge_pair_inversion_blocked`
-fixtures — confirm shapes first).
-Verify: `pytest -q tests/test_quotes.py tests/test_config_for_display.py
-tests/test_trader_loop.py tests/test_stat_gate.py` + each edited file.
-`tests/test_risk.py` MISSING — create it or correct the command (record).
+### Task 2: Dashboard Ticker Tab Strip Markup & Styles [Design/UI] [x]
+- Files: `dashboard/static/index.html`, `dashboard/static/styles.css`
+- Description:
+  - Add tab strip (`.ticker-tab-btn`) with `role="tab"` for All, Filter Loop, Shadow Rehearsal, and Live Run.
+  - Add shadow run `<select>` picker (hidden until needed).
+  - Add dynamic source indicator element.
+  - Add CSS classes in `styles.css` for tab styling, active states, and connection badges.
+- Depends on: None
+- Size: S
+- Verification: Markup structure inspection and browser inspection.
 
-### [x] T3 [S][Docs/UX] Explainer: lowercase + badges + venue-vs-maker scope
-Depends on: T1. File: `dashboard/static/strategy_explainer.html`.
-Pre-grep 5 old patterns, record; hand-edit table/diagrams/descriptions;
-badge per row ([USD]/[cents Offset]/[% Ratio 0..1]/[Shares]) + style;
-venue note (per-order vs all-open, 25%/90%, $1 min, `order_caps()` +
-`derive_dynamic_caps` sources, 3 enforcers) + maker note (6%, skew+block);
-keep $90/$100 examples.
-Verify: post-grep only `max_skew_offset` remains; hands-on FRESH-SHADOW
-dashboard check (`/api/parameters` + explainer page). No pytest.
+### Task 3: Client Per-Family Buffer & LogStream Integration [Frontend/Logic] [x]
+- Files: `dashboard/static/app.js`
+- Description:
+  - Replace single `allTickerEvents` array with per-family isolated buffers (`tickerBuffers`).
+  - Implement `connectLogStream()` consuming `/api/log-stream` `source`, `log`, and `rotate` events.
+  - Retain `connectSSE()` on `/api/cycle-stream` for live `mark` frames.
+  - Wire tab click handlers to `setTickerTab()`, switching active feed and updating empty states.
+  - Wire shadow run picker to re-subscribe `connectLogStream(selectedRunId)`.
+- Depends on: Task 1, Task 2
+- Size: M
+- Verification: `python -m pytest -q tests/test_dashboard_server.py -k "cycle_stream or event_stream"`
 
-### [x] T4 [S][Docs] Guidance + naming rule + venue comment + How-to-verify
-Depends on: T2, T3. Files: `docs/agents/safety.md architecture.md
-first-run.md verifying.md strategy.md python-conventions.md`,
-`docs/prompts/statistical-validation-run.md`, `core_brain/venue.py`
-(comment only), `glossary.md` iff it governs params.
-Dynamic-ceiling text; new names; `_pct`=0..1 rule + 3 pct-points
-exceptions + `_usd`/`_shares`/`_offset` + `_frac`-ban; venue comment;
-check prudent-guide currency; dated history untouched.
-Verify: zero old canonicals in touched docs; PR How-to-verify <=5
-hands-on steps (shadow cmd + URLs + expected + START warning; NO
-pytest/git steps).
-
-## Agent-run test commands (NOT operator steps)
-`python -m pytest -q tests/test_quotes.py tests/test_config_for_display.py
-tests/test_trader_loop.py tests/test_stat_gate.py` + edited files.
-Full suite = CI merge gate.
+### Task 4: Test Harnesses & Regression Suite [Verification/Tests] [x]
+- Files: `tests/js/event_stream_harness.cjs`, `tests/js/event_stream_tabs_harness.cjs`, `tests/test_dashboard_server.py`
+- Description:
+  - Update `event_stream_harness.cjs` for compatibility.
+  - Write `tests/js/event_stream_tabs_harness.cjs` verifying tab isolation, arrival order, category filtering within tabs, and `<script>` escaping.
+  - Add `test_event_stream_tabs_harness` in `tests/test_dashboard_server.py`.
+  - Add backend tests for `/api/log-stream` rotation, parameter validation, and multi-stream replay.
+- Depends on: Task 1, Task 3
+- Size: M
+- Verification: `python -m pytest -q tests/test_dashboard_server.py -k "cycle_stream or event_stream or event_ticker"`

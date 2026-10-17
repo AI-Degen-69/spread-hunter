@@ -1253,22 +1253,144 @@ function translateEvent(ev) {
   return { translation: buildStreamSentence(ev), ctx: '' };
 }
 
+let activeTickerTab = 'all';
 let tickerFilter = 'all';
 let tickerAutoscroll = true;
 let tickerShowDetails = false;
+let tickerSeqCounter = 0;
+const tickerBuffers = {
+  all: [],
+  filter: [],
+  shadow: [],
+  live: [],
+};
 const allTickerEvents = [];
+const tickerSourceMetadata = {
+  live: { labels: [], available: true, reason: null, run_id: null },
+  filter: { labels: [], available: true, reason: null, run_id: null },
+  shadow: { labels: [], available: false, reason: 'No active shadow rehearsal', run_id: null },
+};
+let activeShadowRunId = null;
+let lastSeenActiveDb = null;
+
+function updateShadowRunPicker(runs) {
+  const picker = document.getElementById('ticker-shadow-picker');
+  if (!picker) return;
+  const currentVal = picker.value || activeShadowRunId;
+  picker.innerHTML = '';
+  const defOpt = document.createElement('option');
+  defOpt.value = '';
+  defOpt.textContent = 'Active Rehearsal';
+  picker.appendChild(defOpt);
+  if (Array.isArray(runs)) {
+    for (const r of runs) {
+      const runId = typeof r === 'string' ? r : (r && r.run_id);
+      if (runId) {
+        const opt = document.createElement('option');
+        opt.value = runId;
+        opt.textContent = runId;
+        if (runId === currentVal) opt.selected = true;
+        picker.appendChild(opt);
+      }
+    }
+  }
+  if (activeTickerTab === 'shadow' && picker.options && picker.options.length > 1) {
+    picker.style.display = 'inline-block';
+  } else {
+    picker.style.display = 'none';
+  }
+}
+
+function rebuildAllTickerEvents() {
+  const combined = [
+    ...(tickerBuffers.live || []),
+    ...(tickerBuffers.filter || []),
+    ...(tickerBuffers.shadow || []),
+  ];
+  combined.sort((a, b) => (b.seq || 0) - (a.seq || 0));
+  allTickerEvents.length = 0;
+  for (let i = 0; i < Math.min(combined.length, 200); i++) {
+    allTickerEvents.push(combined[i]);
+  }
+  tickerBuffers.all = allTickerEvents;
+}
 
 function setTickerFilter(f) { tickerFilter = f || 'all'; renderTickerFeed(); }
 function setTickerShowDetails(b) { tickerShowDetails = !!b; renderTickerFeed(); }
 
-function appendTickerEvent(line, translation, ctx, service, action, extra) {
+function setTickerTab(tab) {
+  activeTickerTab = tab || 'all';
+  document.querySelectorAll('.ticker-tab-btn').forEach(btn => {
+    const isActive = btn.dataset.tab === activeTickerTab;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+
+  const pickerEl = document.getElementById('ticker-shadow-picker');
+  if (pickerEl) {
+    pickerEl.style.display = (activeTickerTab === 'shadow' && pickerEl.options.length > 1) ? 'inline-block' : 'none';
+  }
+
+  updateTickerSubtitle();
+  renderTickerFeed();
+}
+
+function updateTickerSubtitle() {
+  const subEl = document.getElementById('ticker-source-subtitle');
+  if (!subEl) return;
+  if (activeTickerTab === 'filter') {
+    const labels = (tickerSourceMetadata.filter && tickerSourceMetadata.filter.labels.length)
+      ? tickerSourceMetadata.filter.labels.join(' + ')
+      : 'cycle_events.jsonl (service=filter) + rerank.log';
+    subEl.textContent = `Real-time feed from ${labels} (Local timestamps)`;
+  } else if (activeTickerTab === 'shadow') {
+    const meta = tickerSourceMetadata.shadow;
+    if (meta && meta.available && meta.labels.length) {
+      subEl.textContent = `Real-time feed from ${meta.labels.join(' + ')} (Local timestamps)`;
+    } else {
+      subEl.textContent = meta && meta.reason ? meta.reason : 'No active shadow rehearsal';
+    }
+  } else if (activeTickerTab === 'live') {
+    const labels = (tickerSourceMetadata.live && tickerSourceMetadata.live.labels.length)
+      ? tickerSourceMetadata.live.labels.join(' + ')
+      : 'live/runtime/cycle_events.jsonl';
+    subEl.textContent = `Real-time feed from ${labels} (Local timestamps)`;
+  } else {
+    subEl.textContent = 'Real-time multi-process stream: Filter Loop, Shadow Rehearsal, Live Run';
+  }
+}
+
+function tickerTabCounts() {
+  return {
+    all: allTickerEvents.length,
+    filter: (tickerBuffers.filter || []).length,
+    shadow: (tickerBuffers.shadow || []).length,
+    live: (tickerBuffers.live || []).length,
+  };
+}
+
+function appendTickerEvent(line, translation, ctx, service, action, extra, family) {
   const empty = tickerEl.querySelector('.empty-state');
   if (empty) empty.remove();
 
-  const evObj = { line, translation, ctx, service: (service || '').toLowerCase(), action: (action || '').toLowerCase(), extra: extra || {} };
-  allTickerEvents.unshift(evObj);
-  while (allTickerEvents.length > 200) allTickerEvents.pop();
+  const fam = (family || (service && (service.includes('filter') || service.includes('screener')) ? 'filter' : 'live')).toLowerCase();
+  const seq = ++tickerSeqCounter;
+  const evObj = {
+    seq,
+    family: fam,
+    line,
+    translation,
+    ctx,
+    service: (service || '').toLowerCase(),
+    action: (action || '').toLowerCase(),
+    extra: extra || {}
+  };
 
+  const targetBuf = tickerBuffers[fam] || tickerBuffers.live;
+  targetBuf.unshift(evObj);
+  while (targetBuf.length > 200) targetBuf.pop();
+
+  rebuildAllTickerEvents();
   renderTickerFeed();
 }
 
@@ -1284,21 +1406,43 @@ function tickerMatches(ev) {
 }
 
 function tickerEmptyState() {
-  if (tickerFilter === 'trades' || tickerFilter === 'decide') {
-    return { title: 'No trades yet.', msg: 'Fills, sells, exits, merges and redeems show up here as they happen.' };
+  if (tickerFilter !== 'all') {
+    if (tickerFilter === 'trades' || tickerFilter === 'decide') {
+      return { title: 'No trades yet.', msg: 'Fills, sells, exits, merges and redeems show up here as they happen.' };
+    }
+    if (tickerFilter === 'filter') {
+      return { title: 'No market filter updates yet.', msg: 'Scans show up here as they run.' };
+    }
+    if (tickerFilter === 'guardrail') {
+      return { title: 'No alerts right now.', msg: 'Risk notes show up here if a guardrail trips.' };
+    }
   }
-  if (tickerFilter === 'filter') {
-    return { title: 'No market filter updates yet.', msg: 'Scans show up here as they run.' };
+
+  if (activeTickerTab === 'filter') {
+    return { title: 'No filter loop events yet.', msg: 'Filter scans and rerank.log updates will appear here.' };
   }
-  if (tickerFilter === 'guardrail') {
-    return { title: 'No alerts right now.', msg: 'Risk notes show up here if a guardrail trips.' };
+  if (activeTickerTab === 'shadow') {
+    const meta = tickerSourceMetadata.shadow;
+    if (meta && !meta.available && meta.reason) {
+      return { title: 'Shadow rehearsal unavailable.', msg: meta.reason };
+    }
+    return { title: 'No shadow rehearsal events yet.', msg: 'Events from the active shadow rehearsal will appear here.' };
+  }
+  if (activeTickerTab === 'live') {
+    return { title: 'No live run events yet.', msg: 'Events from the live trading loop will appear here.' };
   }
   return { title: 'No events yet.', msg: 'Events will appear here as the strategy execution loop runs.' };
 }
 
+function getActiveTickerEvents() {
+  if (activeTickerTab === 'all') return allTickerEvents;
+  return tickerBuffers[activeTickerTab] || [];
+}
+
 function renderTickerFeed() {
   tickerEl.innerHTML = '';
-  const filtered = allTickerEvents.filter(tickerMatches);
+  const currentEvents = getActiveTickerEvents();
+  const filtered = currentEvents.filter(tickerMatches);
 
   if (filtered.length === 0) {
     const st = tickerEmptyState();
@@ -1323,6 +1467,13 @@ function renderTickerFeed() {
   }
 }
 
+// Wire up ticker family tab buttons
+document.querySelectorAll('.ticker-tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    setTickerTab(btn.dataset.tab || 'all');
+  });
+});
+
 // Wire up ticker filter buttons
 document.querySelectorAll('.ticker-filter-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -1345,7 +1496,16 @@ if (btnTickerDetails) {
 const btnClearTicker = document.getElementById('btn-clear-ticker');
 if (btnClearTicker) {
   btnClearTicker.addEventListener('click', () => {
-    allTickerEvents.length = 0;
+    if (activeTickerTab === 'all') {
+      tickerBuffers.all.length = 0;
+      tickerBuffers.filter.length = 0;
+      tickerBuffers.shadow.length = 0;
+      tickerBuffers.live.length = 0;
+      allTickerEvents.length = 0;
+    } else if (tickerBuffers[activeTickerTab]) {
+      tickerBuffers[activeTickerTab].length = 0;
+      rebuildAllTickerEvents();
+    }
     tickerEl.innerHTML = '<div class="empty-state"><div class="empty-state-title">Feed cleared</div><div class="empty-state-msg">New events will appear here.</div></div>';
   });
 }
@@ -1359,27 +1519,114 @@ if (btnPauseTicker) {
   });
 }
 
+const tickerShadowPicker = document.getElementById('ticker-shadow-picker');
+if (tickerShadowPicker) {
+  tickerShadowPicker.addEventListener('change', () => {
+    activeShadowRunId = tickerShadowPicker.value || null;
+    connectLogStream(activeShadowRunId);
+  });
+}
+
+let logSource = null;
+let logReconnectTimer = null;
+
+function connectLogStream(runId) {
+  if (typeof EventSource !== 'function') return;
+  if (logReconnectTimer) {
+    clearTimeout(logReconnectTimer);
+    logReconnectTimer = null;
+  }
+  if (logSource) {
+    try { logSource.close(); } catch {}
+    logSource = null;
+  }
+
+  const url = runId ? `/api/log-stream?run_id=${encodeURIComponent(runId)}` : '/api/log-stream';
+  logSource = new EventSource(url);
+
+  if (typeof logSource.addEventListener === 'function') {
+    logSource.addEventListener('source', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data && data.family) {
+          tickerSourceMetadata[data.family] = data;
+          if (data.family === 'shadow') {
+            const shadowBtn = document.querySelector('.ticker-tab-btn[data-tab="shadow"]');
+            if (shadowBtn) {
+              shadowBtn.classList.toggle('unavailable', !data.available);
+              shadowBtn.title = data.available ? (data.labels || []).join(' ') : (data.reason || 'Unavailable');
+            }
+          }
+          if (tickerBuffers[data.family]) {
+            tickerBuffers[data.family].length = 0;
+            rebuildAllTickerEvents();
+          }
+          updateTickerSubtitle();
+          if (activeTickerTab === data.family || activeTickerTab === 'all') {
+            renderTickerFeed();
+          }
+        }
+      } catch {}
+    });
+
+    logSource.addEventListener('log', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (!data || !data.family) return;
+        if (data.source === 'ring' && data.event) {
+          const ev = data.event;
+          const ts = fmtLocalTime(ev.ts);
+          const svc = (ev.service || '').toUpperCase().slice(0, 6);
+          const action = ev.action || '';
+          const slug = ev.market_slug || '';
+          const reason = ev.reason ? ` — ${ev.reason}` : '';
+          const rawLine = `[${ts}] [${svc}] ${action} ${slug}${reason}`;
+          const { translation, ctx } = translateEvent(ev);
+          appendTickerEvent(rawLine, translation, ctx, ev.service, ev.action, ev.extra, data.family);
+        } else if (data.source === 'text') {
+          const fileTag = data.file || 'log';
+          const rawLine = `[${fileTag}] ${data.text}`;
+          const svc = data.family === 'filter' ? 'filter' : '';
+          appendTickerEvent(rawLine, null, null, svc, '', {}, data.family);
+        }
+      } catch {}
+    });
+
+    logSource.addEventListener('rotate', () => {});
+  }
+
+  logSource.onerror = () => {
+    if (logReconnectTimer) {
+      clearTimeout(logReconnectTimer);
+      logReconnectTimer = null;
+    }
+    logReconnectTimer = setTimeout(() => {
+      if (logSource && logSource.readyState === EventSource.CLOSED) {
+        connectLogStream(activeShadowRunId);
+      }
+    }, 3000);
+  };
+}
+
+let sseReconnectTimer = null;
+
 function connectSSE() {
-  if (sseSource) sseSource.close();
-  sseReconnect.style.display = 'block';
+  if (typeof EventSource !== 'function') return;
+  if (sseReconnectTimer) {
+    clearTimeout(sseReconnectTimer);
+    sseReconnectTimer = null;
+  }
+  if (sseSource) {
+    try { sseSource.close(); } catch {}
+  }
+  if (sseReconnect) sseReconnect.style.display = 'block';
   sseSource = new EventSource('/api/cycle-stream');
 
-  sseSource.onopen = () => { sseReconnect.style.display = 'none'; };
+  sseSource.onopen = () => { if (sseReconnect) sseReconnect.style.display = 'none'; };
 
   sseSource.onmessage = (e) => {
-    try {
-      const ev = JSON.parse(e.data);
-      const ts = fmtLocalTime(ev.ts);
-      const svc = (ev.service || '').toUpperCase().slice(0,6);
-      const action = ev.action || '';
-      const slug = ev.market_slug || '';
-      const reason = ev.reason ? ` — ${ev.reason}` : '';
-      const rawLine = `[${ts}] [${svc}] ${action} ${slug}${reason}`;
-      const { translation, ctx } = translateEvent(ev);
-      appendTickerEvent(rawLine, translation, ctx, ev.service, ev.action, ev.extra);
-    } catch {
-      // Non-JSON line
-    }
+    // Ticker events arrive per family on /api/log-stream; this connection
+    // only carries the #427 `mark` frames now.
   };
 
   // #427 live marks ride this same connection as named events; the ticker
@@ -1393,13 +1640,19 @@ function connectSSE() {
   }
 
   sseSource.onerror = () => {
-    sseReconnect.style.display = 'block';
-    // Auto-reconnect after 3s
-    setTimeout(() => { if (sseSource.readyState === EventSource.CLOSED) connectSSE(); }, 3000);
+    if (sseReconnect) sseReconnect.style.display = 'block';
+    if (sseReconnectTimer) {
+      clearTimeout(sseReconnectTimer);
+      sseReconnectTimer = null;
+    }
+    sseReconnectTimer = setTimeout(() => {
+      if (sseSource && sseSource.readyState === EventSource.CLOSED) connectSSE();
+    }, 3000);
   };
 }
 
 connectSSE();
+connectLogStream(activeShadowRunId);
 
 /* ── Render: Active registry (LIVE vs SHADOW) ── */
 // Shadow-run stopwatch. The rehearsal is not in the supervised registry, so
@@ -9707,7 +9960,18 @@ async function pollStatus() {
     if (kpi) applyPayloadVersion(kpi);
 
     // Which registry these numbers came from, before anything renders them.
-    if (status) renderDbMode(status);
+    if (status) {
+      renderDbMode(status);
+      const currentDb = status.db_path || (status.database && status.database.path);
+      if (lastSeenActiveDb !== null && currentDb && currentDb !== lastSeenActiveDb) {
+        activeShadowRunId = null;
+        connectLogStream(null);
+      }
+      if (currentDb) lastSeenActiveDb = currentDb;
+      if (Array.isArray(status.shadow_runs)) {
+        updateShadowRunPicker(status.shadow_runs);
+      }
+    }
 
     // Top-nav pills. Each read resolves to the current payload, the held
     // last-good payload while the backend is reachable, or nothing (#348).
@@ -9828,8 +10092,8 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
-    renderTickerFeed, tickerMatches, tickerEmptyState,
-    setTickerFilter, setTickerShowDetails, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
+    renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,
+    setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,
