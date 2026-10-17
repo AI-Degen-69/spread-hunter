@@ -2544,6 +2544,42 @@ def test_event_stream_trades_tab_shows_only_trade_rows():
     assert all("ticker-raw" in r for r in out["detailsAfterRebuild"])
 
 
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_event_stream_tabs_harness():
+    """Verify multi-process log stream tabs: buffer isolation, caps, and escaping."""
+    harness = Path(__file__).resolve().parent / "js" / "event_stream_tabs_harness.cjs"
+    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
+    assert harness.exists()
+
+    res = subprocess.run(
+        [NODE, str(harness), str(app_js)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out.get("exportsOk") is True, out.get("error")
+
+    # Buffer isolation: 500 shadow rehearsal events did NOT evict the 1 live event
+    assert out["liveRetained"] is True
+    assert out["counts"]["live"] == 1
+    assert out["counts"]["shadow"] == 200
+    assert out["counts"]["filter"] == 10
+    assert out["counts"]["all"] == 200
+
+    # Rendering per tab
+    assert len(out["liveRows"]) == 1
+    assert "Brazil election" in out["liveRows"][0]
+    assert out["shadowRowCount"] == 200
+    assert len(out["filterRows"]) == 10
+
+    # Hostile text log lines are escaped
+    assert out["filterEscaped"] is True
+
+    # Category filters within active tab
+    assert len(out["liveTradesRows"]) == 1
+    assert len(out["liveFilterRows"]) == 0
+
+
 # ── Issue #457: the single master toggle ──────────────────────────────────────
 
 

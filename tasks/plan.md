@@ -71,7 +71,7 @@ The dashboard event ticker currently consumes a single shared 200-line buffer (`
 - Size: S
 - Verification: Markup structure inspection and browser inspection.
 
-### Task 3: Client Per-Family Buffer & LogStream Integration [Frontend/Logic]
+### Task 3: Client Per-Family Buffer & LogStream Integration [Frontend/Logic] [x]
 - Files: `dashboard/static/app.js`
 - Description:
   - Replace single `allTickerEvents` array with per-family isolated buffers (`tickerBuffers`).
@@ -83,7 +83,7 @@ The dashboard event ticker currently consumes a single shared 200-line buffer (`
 - Size: M
 - Verification: `python -m pytest -q tests/test_dashboard_server.py -k "cycle_stream or event_stream"`
 
-### Task 4: Test Harnesses & Regression Suite [Verification/Tests]
+### Task 4: Test Harnesses & Regression Suite [Verification/Tests] [x]
 - Files: `tests/js/event_stream_harness.cjs`, `tests/js/event_stream_tabs_harness.cjs`, `tests/test_dashboard_server.py`
 - Description:
   - Update `event_stream_harness.cjs` for compatibility.
