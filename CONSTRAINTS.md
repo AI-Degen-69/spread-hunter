@@ -1,33 +1,24 @@
-# Constraints - #632 (parameter & env naming standardization)
+# Constraints - #639 (one log tab per process in dashboard event stream)
 
-Branch: main (planning) | Issue: #632
+Branch: i639/one-log-tab-per-process-in-dashboard | Issue: #639
 
-Replaces #628-scoped file wholesale (Step 0A.0: stale issue scope).
+Replaces #632-scoped file wholesale (Step 0A.0: stale issue scope).
 
 ## Zero regressions
-- Focused suites: `tests/test_quotes.py`,
-  `tests/test_config_for_display.py`, `tests/test_trader_loop.py`,
-  `tests/test_stat_gate.py` + each edited file.
-- `tests/test_risk.py` (issue list) DOES NOT EXIST — build creates it
-  or corrects the command and records which. Full suite = CI gate.
-- Every rename needs a RED-first test.
+- Targeted suites:
+  `python -m pytest -q tests/test_dashboard_server.py -k "cycle_stream or event_stream or event_ticker"`
+  `python -m pytest -q tests/test_positions_live_marks.py`
+  Full suite = CI gate.
+- Existing `/api/cycle-stream` route, `_cycle_stream_sse()`, and `mark` frames (snapshot, delta, reset) MUST remain 100% backward-compatible and unchanged.
+- Existing live-marks panel functionality MUST NOT be regressed.
 
 ## Deliberate contracts (not regressions)
-- Legacy ctor keywords rejected with TypeError (fail-loud).
-- KPI keys `"bankroll_fraction"`/`"kelly_fraction"` kept (shared format).
-- `MAX_ORDER_USD`/`MAX_TOTAL_USD` kept (import contract); comment only.
-- `threshold_pct`, `stat_gate_threshold_pct`, `*_return_pct` are
-  percentage-points exceptions (1.0 = 1%), never rescaled.
+- `/api/cycle-stream` remains dedicated to mark frames and legacy cycle stream readers.
+- `/api/log-stream` is a read-only SSE endpoint dedicated to per-process log and event streaming.
+- Process spawning in `dashboard/server.py` remains untouched (`stdout=subprocess.DEVNULL`). No child stdout interception.
+- Venue behavior remains untouched: zero order placement, zero venue network calls.
 
 ## Anti-cheat
-- No skipped/disabled tests, no weakened assertions, no silenced linters.
-- No rescaling disguised as rename; defaults asserted verbatim.
-
-## Production safety (LIVE default)
-- `data/orders.db` read-only; never rewrite/delete.
-- Opening commands (quote/complete/Trader/START) operator-run only.
-
-## Job guards
-- No stale refs (#628, #634 names never reused).
-- Out-of-scope -> `docs/issues/632-noticed-but-not-touching.md`.
-- No strategy code modified during planning.
+- No skipped or disabled tests, no weakened assertions.
+- Buffer isolation invariant: evictions in the Shadow Rehearsal buffer (capped at 200) MUST NOT evict entries in the Live Run or Filter Loop buffers.
+- Plain text log rows must be strictly HTML-escaped (`esc()`) before DOM insertion.
