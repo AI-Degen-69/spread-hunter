@@ -73,7 +73,7 @@ Require the agent to **derive N from the data**, not pick a round number:
    `core_brain/config.py:232 markout_min_sample=8`, `markout_fleet_min_sample=25`, horizons `(300, 3600, 21600, 900)`s (`core_brain/markout.py:24`). A verdict with zero matured markouts is `insufficient_sample`, not a pass. Require ≥ 25 pooled matured samples before evaluating `fleet_posture` (`core_brain/markout.py:219 fleet_stats`).
 
 4. **Historical calibration**:
-   Reference: paper run 476 closes, shadow run `run-2809a7161de1` had 209 orders / 0 fills in 30 min — **minutes ≠ sample**. The agent must justify **event-based stopping** (N closes) over pure time-box. E.g., `experiment_census_markets=60`, `experiment_verdict_markets=120` (`core_brain/config.py:829`) are starting points, but the agent must show they meet the power requirement or raise them.
+   Reference: paper run 476 closes, shadow run `run-2809a7161de1` had 209 orders / 0 fills in 30 min — **minutes ≠ sample**. The agent must justify **event-based stopping** (N closes) over pure time-box. E.g., 60 and 120 markets are starting points, but the agent must show they meet the power requirement or raise them.
 
 5. **Recommendation to implement**:
    - **Hybrid stop**: `stop when (elapsed ≥ T_min AND closes ≥ N_min AND matured_markouts ≥ 25) OR elapsed ≥ T_max`. Example: `T_min=6h`, `N_min=120 closes`, `T_max=72h`. If `T_max` hits with `N < N_min`, the report is `INCONCLUSIVE — underpowered`, not GO.
