@@ -61,7 +61,7 @@ quoting behavior), merging config files (#571's job), renaming the window (N1).
 
 ## 4. Tasks (3 atomic vertical slices, risk-first; T1 → T2 → T3)
 
-### T1 [S] config-derivation — derive the picker bar in both modules
+### T1 [x] config-derivation — derive the picker bar in both modules
 Depends on: nothing. Domain: config.
 - In `core_brain/config.py` AND `scoring/config.py` (mirror edit):
   add `select_spread_frac: float = 41.0 / 120.0` beside `max_book_spread`;

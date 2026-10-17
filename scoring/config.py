@@ -456,12 +456,33 @@ class MakerConfig:
     # 30-minute volume movement window (`select_movement_window_sec = 1800.0`).
     # Defaults to 2 hours (7200s). Operator-tunable via HUNTER_VOLATILITY_WINDOW_SEC.
     select_volatility_window_sec: float = 7200.0
-    # Tightened 2026-10-09 (#432) to 2.05 cents (0.0205 in price units) to
-    # prevent entry into wide/slippage-heavy books.
-    select_max_book_spread: float = 0.0205
+    # The picker's SHARE of the live gate above (#572), not a second absolute:
+    # 41/120 of `max_book_spread` is exactly the 2.05c the ranker has gated on
+    # since 2026-10-09 (#432), so `select_max_book_spread` is derived from it
+    # and there is no second number to edit out of step. This is the module
+    # `scripts.filter_markets` loads, so the bar the ranker publishes and the
+    # bar the fleet quotes under are the same decision.
+    select_spread_frac: float = 41.0 / 120.0
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
     select_max_days_to_resolve: float = 30.0
+
+    @property
+    def select_max_book_spread(self) -> float:
+        """The picking bar: the live gate times the picking share (#572).
+
+        DERIVED, never handed in. `max_book_spread` owns the number; this is
+        the fraction of it the ranker will still offer. `round(..., 6)` is
+        load-bearing: binary64 `0.06 * (41.0/120.0)` is `0.0204999...`, and
+        the boundary pins compare the bar to exactly `0.0205`.
+
+        Under the wide-book trial the bar IS the trial window, not a share of
+        it -- the trial exists to admit books the ranker would otherwise never
+        offer, and a scaled share would leave it refusing them.
+        """
+        if self.wide_book_trial is not None:
+            return self.wide_book_trial
+        return round(self.max_book_spread * self.select_spread_frac, 6)
 
     # How long to average competitor depth before sizing a position. One
     # snapshot sized the whole fleet on 2026-07-29 and read a competing score
@@ -880,9 +901,11 @@ def load() -> MakerConfig:
             kw["price_tick"] = float(tk)
     wide = resolve_wide_book_trial(os.environ.get("HUNTER_WIDE_BOOK_TRIAL") or "")
     if wide is not None and wide > 0:
+        # The trial moves ONE ceiling; the picker bar follows through the
+        # derived property (#572), and the reward window is widened only if
+        # the trial is wider than it already is.
         kw["wide_book_trial"] = wide
         kw["max_book_spread"] = wide
-        kw["select_max_book_spread"] = wide
         window = kw.get("max_spread_from_mid", MakerConfig.max_spread_from_mid)
         kw["max_spread_from_mid"] = max(window, wide)
     trial = os.environ.get("HUNTER_DEPTH_TRIAL_USD") or ""

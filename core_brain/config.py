@@ -465,12 +465,33 @@ class MakerConfig:
     # measured high-to-low price-range telemetry lands and replaces volume as
     # the movement proxy.
     select_min_volume_24h_usd_live: float = 35_000.0
-    # Tightened 2026-10-09 (#432) to 2.05 cents (0.0205 in price units) to
-    # prevent entry into wide/slippage-heavy books.
-    select_max_book_spread: float = 0.0205
+    # The picker's SHARE of the live gate above (#572), not a second absolute:
+    # 41/120 of `max_book_spread` is exactly the 2.05c the ranker has gated on
+    # since 2026-10-09 (#432), so `select_max_book_spread` is derived from it
+    # and there is no second number to edit out of step. The two ceilings are
+    # one decision: the picker may never offer a book the gate would refuse.
+    select_spread_frac: float = 41.0 / 120.0
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
     select_max_days_to_resolve: float = 30.0
+
+    @property
+    def select_max_book_spread(self) -> float:
+        """The picking bar: the live gate times the picking share (#572).
+
+        DERIVED, never handed in. `max_book_spread` owns the number; this is
+        the fraction of it the ranker will still offer. `round(..., 6)` is
+        load-bearing: binary64 `0.06 * (41.0/120.0)` is `0.0204999...`, and
+        the boundary pins compare the bar to exactly `0.0205`.
+
+        Under the wide-book trial the bar IS the trial window, not a share of
+        it. The trial exists to admit books the ranker would otherwise never
+        offer, and a scaled share would leave it refusing the very books the
+        trial was staged to measure.
+        """
+        if self.wide_book_trial is not None:
+            return self.wide_book_trial
+        return round(self.max_book_spread * self.select_spread_frac, 6)
 
     # How long to average competitor depth before sizing a position. One
     # snapshot sized the whole fleet on 2026-07-29 and read a competing score
@@ -1347,12 +1368,12 @@ def load(*, for_display: bool = False) -> MakerConfig:
     wide = resolve_wide_book_trial(
         os.environ.get("HUNTER_WIDE_BOOK_TRIAL") or "", for_display=for_display)
     if wide is not None and wide > 0:
-        # All three ceilings move together. The reward window is widened only
-        # if the trial is wider than it already is -- a trial NARROWER than
-        # 4.5c must not quietly tighten where we may quote.
+        # The trial moves ONE ceiling. The picker bar follows it through the
+        # derived property (#572), and the reward window is widened only if
+        # the trial is wider than it already is -- a trial NARROWER than 4.5c
+        # must not quietly tighten where we may quote.
         kw["wide_book_trial"] = wide
         kw["max_book_spread"] = wide
-        kw["select_max_book_spread"] = wide
         # Read whatever the per-bot `HUNTER_MAX_SPREAD` block above may have
         # set, not the class default, so a venue-supplied window is widened
         # rather than replaced.

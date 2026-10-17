@@ -132,6 +132,39 @@ def test_the_permanent_spread_bar_is_two_point_zero_five_cents():
     assert MakerConfig().select_max_book_spread == 0.0205
 
 
+def test_the_picker_bar_is_a_share_of_the_live_gate():
+    """#572: one ceiling, owned by the live safety gate. The picker bar is that
+    gate times a documented share -- not a second absolute that can be edited
+    out of step with the gate it has to stay under."""
+    for cfg in (ScoringConfig(), MakerConfig()):
+        assert cfg.max_book_spread == 0.06
+        assert cfg.select_spread_frac == 41.0 / 120.0
+        assert cfg.select_max_book_spread == round(
+            cfg.max_book_spread * cfg.select_spread_frac, 6) == 0.0205
+
+
+def test_moving_the_live_gate_moves_the_picker_bar():
+    """Raising the gate raises the picking limit with it, and nothing else has
+    to be found and edited."""
+    for cls in (ScoringConfig, MakerConfig):
+        broad = cls(max_book_spread=0.30)
+        assert broad.select_max_book_spread == round(0.30 * broad.select_spread_frac, 6)
+        assert broad.select_max_book_spread == 0.1025
+
+        # The share's one escape hatch: pick exactly as wide as the gate.
+        assert cls(select_spread_frac=1.0).select_max_book_spread == 0.06
+
+
+def test_the_picker_bar_is_derived_not_settable():
+    """A derived bar cannot be handed in: constructing with it raises rather
+    than parking a stale absolute beside the gate."""
+    import pytest
+
+    for cls in (ScoringConfig, MakerConfig):
+        with pytest.raises(TypeError):
+            cls(select_max_book_spread=0.05)
+
+
 def test_the_filter_markets_spread_bar_matches_config():
     import scripts.filter_markets as filter_markets
     assert filter_markets.MAX_BOOK_SPREAD == 0.0205

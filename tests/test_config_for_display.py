@@ -154,7 +154,9 @@ def test_retained_neighbors_still_declared():
     }
     expected_scoring = {
         "select_min_top3_depth_usd",
-        "select_max_book_spread",
+        # `select_max_book_spread` is derived (a property) since #572, so the
+        # declared scoring knob to guard is the share it derives from.
+        "select_spread_frac",
     }
 
     missing_core = expected_core - core_fields
