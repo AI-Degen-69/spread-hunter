@@ -1499,9 +1499,14 @@ if (tickerShadowPicker) {
 }
 
 let logSource = null;
+let logReconnectTimer = null;
 
 function connectLogStream(runId) {
   if (typeof EventSource !== 'function') return;
+  if (logReconnectTimer) {
+    clearTimeout(logReconnectTimer);
+    logReconnectTimer = null;
+  }
   if (logSource) {
     try { logSource.close(); } catch {}
     logSource = null;
@@ -1562,7 +1567,11 @@ function connectLogStream(runId) {
   }
 
   logSource.onerror = () => {
-    setTimeout(() => {
+    if (logReconnectTimer) {
+      clearTimeout(logReconnectTimer);
+      logReconnectTimer = null;
+    }
+    logReconnectTimer = setTimeout(() => {
       if (logSource && logSource.readyState === EventSource.CLOSED) {
         connectLogStream(activeShadowRunId);
       }
@@ -1570,8 +1579,14 @@ function connectLogStream(runId) {
   };
 }
 
+let sseReconnectTimer = null;
+
 function connectSSE() {
   if (typeof EventSource !== 'function') return;
+  if (sseReconnectTimer) {
+    clearTimeout(sseReconnectTimer);
+    sseReconnectTimer = null;
+  }
   if (sseSource) {
     try { sseSource.close(); } catch {}
   }
@@ -1608,10 +1623,14 @@ function connectSSE() {
 
   sseSource.onerror = () => {
     if (sseReconnect) sseReconnect.style.display = 'block';
-    // Auto-reconnect after 3s
-    setTimeout(() => { if (sseSource && sseSource.readyState === EventSource.CLOSED) connectSSE(); }, 3000);
+    if (sseReconnectTimer) {
+      clearTimeout(sseReconnectTimer);
+      sseReconnectTimer = null;
+    }
+    sseReconnectTimer = setTimeout(() => {
+      if (sseSource && sseSource.readyState === EventSource.CLOSED) connectSSE();
+    }, 3000);
   };
-
 }
 
 connectSSE();
