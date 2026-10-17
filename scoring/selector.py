@@ -12,6 +12,15 @@ import math
 import re
 from typing import Iterable, Mapping
 
+from scoring.config import MakerConfig as _MakerConfig
+
+# The picking bar, derived from the ONE ceiling `scoring.config` owns (#572).
+# A literal here would be a third copy of a number that already has an owner,
+# and it would keep refusing books after the gate moved. `round(..., 6)` for
+# the same binary64 reason the config property rounds.
+_PICKER_BAR: float = round(
+    _MakerConfig.max_book_spread * _MakerConfig.select_spread_frac, 6)
+
 
 # Normalize separators before matching so both human titles ("Game 1") and
 # venue slugs ("game1", "in-play", "map_2") are rejected.
@@ -201,7 +210,7 @@ def top_depth_usd(levels: Mapping[float, float] | Iterable[tuple[float, float]],
 def book_allowed(bids: Mapping[float, float] | Iterable[tuple[float, float]],
                  asks: Mapping[float, float] | Iterable[tuple[float, float]],
                  min_depth_usd: float = 5000.0,
-                 max_spread: float = 0.0205) -> tuple[bool, str, float, float]:
+                 max_spread: float = _PICKER_BAR) -> tuple[bool, str, float, float]:
     """Check one token's two-sided book and return depth/spread diagnostics."""
     bid_items = list(bids.items()) if isinstance(bids, Mapping) else list(bids)
     ask_items = list(asks.items()) if isinstance(asks, Mapping) else list(asks)
@@ -237,7 +246,7 @@ def book_allowed(bids: Mapping[float, float] | Iterable[tuple[float, float]],
 def pair_books_allowed(books: Iterable[tuple[str, Mapping[float, float],
                                              Mapping[float, float]]],
                        min_depth_usd: float = 5000.0,
-                       max_spread: float = 0.0205) -> tuple[bool, str]:
+                       max_spread: float = _PICKER_BAR) -> tuple[bool, str]:
     """Require the same book contract independently on YES and NO."""
     for label, bids, asks in books:
         ok, reason, _, _ = book_allowed(bids, asks, min_depth_usd, max_spread)

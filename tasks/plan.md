@@ -77,7 +77,7 @@ Depends on: nothing. Domain: config.
 - Verify: `python -c` prints `0.06`/`0.0205` from both modules;
   `pytest -q tests/test_market_selection_bars.py tests/test_wide_book_trial.py`.
 
-### T2 [S] selector-and-trial — wire defaults, pin the chain (§3 hardening)
+### T2 [x] selector-and-trial — wire defaults, pin the chain (§3 hardening)
 Depends on: T1. Domain: selection + trial.
 - `scoring/selector.py:204,240`: replace literal `0.0205` defaults with one
   module-level default computed from the imported ceiling × fraction (round 6).

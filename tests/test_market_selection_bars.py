@@ -170,6 +170,34 @@ def test_the_filter_markets_spread_bar_matches_config():
     assert filter_markets.MAX_BOOK_SPREAD == 0.0205
 
 
+def test_moving_the_live_gate_moves_the_selector_fallback(monkeypatch):
+    """The selector's own fallback bar is derived from the ceiling too (#572).
+
+    A literal there would be a third copy of the number the config already
+    owns, and it would keep refusing books after the gate was moved.
+    """
+    import importlib
+
+    from scoring import config as scoring_config
+    from scoring import selector
+
+    # 0.49/0.52 is a 3c book: outside the shipped 2.05c bar, inside a 4.1c one.
+    book = ({0.49: 20_000.0}, {0.52: 20_000.0})
+    assert not selector.book_allowed(*book)[0]
+
+    monkeypatch.setattr(scoring_config.MakerConfig, "max_book_spread", 0.12)
+    try:
+        reloaded = importlib.reload(selector)
+        ok, reason, _, spread = reloaded.book_allowed(*book)
+        assert spread == 0.03
+        assert ok, reason
+    finally:
+        # Undo the patch BEFORE reloading, or the module keeps the widened
+        # fallback bar for every test that runs after this one.
+        monkeypatch.undo()
+        importlib.reload(selector)
+
+
 def test_book_allowed_default_spread_gate_boundary():
     import pytest
     from scoring.selector import book_allowed
