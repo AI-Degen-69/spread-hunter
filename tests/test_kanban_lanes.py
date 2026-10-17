@@ -77,3 +77,41 @@ def test_screener_header_filter_service_pill_and_no_engine_label():
     assert "Service Inactive" in js
     assert "Scan overdue" in js
 
+
+def test_is_live_market_classification():
+    import shutil
+    import subprocess
+    import pytest
+
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed on this host")
+
+    js = (_STATIC / "app.js").read_text(encoding="utf-8")
+    fn_code = "function isLiveMarket(m) {" + js.split("function isLiveMarket(m) {")[1].split("const KANBAN_LANE_STORAGE_KEY")[0]
+    script = f"""
+    {fn_code}
+
+    const cases = [
+        {{ m: {{ category: 'Sports', question: 'Arsenal vs Chelsea', live_event: true }}, expected: true }},
+        {{ m: {{ category: 'Soccer', question: 'Real Madrid vs Barcelona', in_play: true }}, expected: true }},
+        {{ m: {{ category: 'eSports', question: 'T1 vs Gen.G', volatility_exempt: true }}, expected: true }},
+        {{ m: {{ category: 'Soccer', question: 'PSG vs Bayern', event_period: '2H' }}, expected: true }},
+        {{ m: {{ category: 'Sports', question: 'Lakers vs Warriors (Scheduled Dec 2026)', live: false }}, expected: false }},
+        {{ m: {{ category: 'Politics', question: 'US Presidential Election 2028' }}, expected: false }},
+        {{ m: {{ category: 'Crypto', question: 'Bitcoin above 100k?' }}, expected: false }},
+        {{ m: null, expected: false }}
+    ];
+
+    for (const c of cases) {{
+        const actual = isLiveMarket(c.m);
+        if (actual !== c.expected) {{
+            console.error('Mismatch for', JSON.stringify(c.m), 'expected', c.expected, 'got', actual);
+            process.exit(1);
+        }}
+    }}
+    console.log('ALL_PASSED');
+    """
+    res = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True, check=True)
+    assert "ALL_PASSED" in res.stdout
+
+

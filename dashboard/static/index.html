@@ -753,18 +753,18 @@
           <span id="scan-filter-uptime" class="mono" style="font-size:12px;color:var(--text-secondary)"></span>
           <span id="trial-ready-banner" class="pill state-unknown mono" style="display:none;margin-left:8px"></span>
         </div>
-        <div class="kanban-lane-switcher" id="kanban-lane-switcher" role="tablist" aria-label="Kanban market lanes">
-          <button type="button" class="lane-tab-btn active" data-lane="regular" id="lane-btn-regular" role="tab" aria-selected="true" title="Regular binary markets ($50k volume floor, strict velocity)">
+        <div class="kanban-lane-switcher" id="kanban-lane-switcher" aria-label="Kanban market lanes">
+          <button type="button" class="lane-tab-btn active" data-lane="regular" id="lane-btn-regular" aria-pressed="true" title="Regular binary markets ($50k volume floor, strict velocity)">
             <span class="lane-icon">🏛️</span>
             <span class="lane-name">Regular Markets</span>
             <span class="lane-count-pill" id="lane-count-regular">0</span>
           </button>
-          <button type="button" class="lane-tab-btn" data-lane="live" id="lane-btn-live" role="tab" aria-selected="false" title="Live sports and esports ($35k volume floor, Volatility Exempt)">
+          <button type="button" class="lane-tab-btn" data-lane="live" id="lane-btn-live" aria-pressed="false" title="Live sports and esports ($35k volume floor, Volatility Exempt)">
             <span class="lane-icon">⚡</span>
             <span class="lane-name">Live Sports & eSports</span>
             <span class="lane-count-pill live" id="lane-count-live">0</span>
           </button>
-          <button type="button" class="lane-tab-btn" data-lane="all" id="lane-btn-all" role="tab" aria-selected="false" title="Combined universe across all candidates">
+          <button type="button" class="lane-tab-btn" data-lane="all" id="lane-btn-all" aria-pressed="false" title="Combined universe across all candidates">
             <span class="lane-icon">🌐</span>
             <span class="lane-name">All Candidates</span>
             <span class="lane-count-pill" id="lane-count-all">0</span>

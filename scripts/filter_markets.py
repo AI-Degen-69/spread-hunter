@@ -645,7 +645,7 @@ def tradable(volume_24h: float | None,
             # it is usually a sports event under way -- `endDate` is kickoff,
             # not the final whistle -- and falls through to the distance arm.
             return False, "horizon passed (market open, endDate unknown)"
-    if days > MAX_DAYS_TO_RESOLVE:
+    if days > MAX_DAYS_TO_RESOLVE and not live_event:
         return False, f"horizon {days:.1f}d > {MAX_DAYS_TO_RESOLVE:.0f}d"
     if isinstance(key, str) and key:
         return True, key

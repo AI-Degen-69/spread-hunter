@@ -668,7 +668,8 @@ def test_top_nav_to_body_spacing_and_legacy_tab_suppression():
     assert ".proto-body #tab-2" in css
     assert ".proto-body #tab-3" in css
     assert ".proto-body #tab-4" in css
-    assert "gap: 10px" in css
+    rule = _rule(css, ".proto-body .container")
+    assert "gap: 10px" in rule
 
 
 def test_page_title_prepends_icon_and_hides_note():

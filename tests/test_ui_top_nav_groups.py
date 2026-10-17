@@ -263,7 +263,7 @@ def test_scan_pill_renders_grammar():
     assert {"pill", "state-running", "mono"}.issubset(set(data["className"].split()))
     assert 'class="pill-label"' not in data["innerHTML"]
     assert 'class="pill-value"' in data["innerHTML"]
-    assert data["textContent"] in ("RUNNING", "ON")
+    assert data["textContent"] == "ON"
 
 
 @requires_node

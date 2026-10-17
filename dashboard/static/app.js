@@ -8821,23 +8821,13 @@ function gateBar(value, fallback) {
   return (value === null || value === undefined) ? fallback : Number(value);
 }
 
-/* ── Dual-Lane Kanban Helpers (Regular vs Live Sports & eSports) ── */
 function isLiveMarket(m) {
   if (!m) return false;
-  if (m.volatility_exempt === true || m.live_event === true || m.event_live === true || m._live_event === true) {
+  if (m.volatility_exempt === true || m.live_event === true || m.event_live === true || m._live_event === true || m.in_play === true) {
     return true;
   }
-  if (m.sports_market_type) return true;
   if (m.event_period || m.event_score) return true;
-  const tags = Array.isArray(m.tags) ? m.tags.map(t => String(t).toLowerCase()) : [];
-  if (tags.some(t => ['sports', 'esports', 'soccer', 'premier league', 'epl', 'games', 'nba', 'nfl', 'mlb', 'cs2', 'dota', 'tennis'].includes(t))) {
-    return true;
-  }
-  const cat = String(m.category || m.venue_category || '').toLowerCase();
-  if (cat === 'sports' || cat === 'esports' || cat === 'gaming' || cat.includes('league') || cat.includes('premier')) return true;
-  const text = [m.title, m.slug, m.series_title, m.event_title].filter(Boolean).join(' ').toLowerCase();
-  const sportsRe = /\b(mlb|nfl|nba|nhl|ufc|atp|wta|fifa|premier\s*league|epl|esport|esports|dota|league\s*of\s*legends|counter[- ]strike|valorant|cs2|soccer|tennis|baseball|basketball|football|hockey|fc\b|chelsea|napoli|everton|liverpool|madrid|barcelona|manchester)\b/i;
-  return sportsRe.test(text);
+  return false;
 }
 
 const KANBAN_LANE_STORAGE_KEY = 'sh-kanban-lane';
@@ -8886,7 +8876,7 @@ function updateLaneBanner(lane, counts = {}) {
         <span class="lane-banner-badge live">⚡ LIVE SPORTS &amp; ESPORTS LANE</span>
         <span>Dedicated in-play pipeline: <strong>$35,000</strong> volume floor · <strong>Volatility Exemption</strong> (in-play score swings allowed, velocity friction bypassed) · <strong>Live Priority Boost</strong> sorted to the top.</span>
       </div>
-      <div class="mono" style="font-size:11px;color:#c084fc;white-space:nowrap">${counts.live ?? 0} active live markets</div>
+      <div class="mono" style="font-size:11px;color:#c084fc;white-space:nowrap">${counts.live != null ? counts.live : 0} active live markets</div>
     `;
   } else if (lane === 'regular') {
     banner.innerHTML = `
@@ -8894,7 +8884,7 @@ function updateLaneBanner(lane, counts = {}) {
         <span class="lane-banner-badge regular">🏛️ REGULAR MARKETS LANE</span>
         <span>Standard binary pipeline: <strong>$50,000</strong> volume floor · <strong>30-day</strong> horizon gate · Strict tape velocity (<strong>≥ $200 / 30m</strong>) and range stability (<strong>≤ 35¢</strong>) · Baseline yield ranking.</span>
       </div>
-      <div class="mono" style="font-size:11px;color:#38bdf8;white-space:nowrap">${counts.regular ?? 0} active regular markets</div>
+      <div class="mono" style="font-size:11px;color:#38bdf8;white-space:nowrap">${counts.regular != null ? counts.regular : 0} active regular markets</div>
     `;
   } else {
     banner.innerHTML = `
@@ -8902,14 +8892,14 @@ function updateLaneBanner(lane, counts = {}) {
         <span class="lane-banner-badge all">🌐 ALL CANDIDATES</span>
         <span>Unified screening universe: Dual-pipeline view displaying both Regular ($50k floor) and Live Sports ($35k floor + Volatility Exempt) fleets side-by-side.</span>
       </div>
-      <div class="mono" style="font-size:11px;color:var(--text-secondary);white-space:nowrap">${counts.total ?? 0} total quoting markets</div>
+      <div class="mono" style="font-size:11px;color:var(--text-secondary);white-space:nowrap">${counts.total != null ? counts.total : 0} total quoting markets</div>
     `;
   }
 }
 
 function getStageHero(key, funnel, lane) {
   const activeLane = lane || (typeof window !== 'undefined' && window.currentMarketLane) || 'regular';
-  const volGate = (activeLane === 'live') ? 35000 : gateBar(funnel?.trial_volume_usd, gateBar(funnel?.volume_gate_usd, 50000));
+  const volGate = (activeLane === 'live') ? 35000 : gateBar(funnel?.trial_volume_usd, gateBar(funnel?.volume_gate_usd, 125000));
   const depthGate = gateBar(funnel?.trial_depth_usd, gateBar(funnel?.depth_gate_usd, 500));
   const spreadGate = gateBar(funnel?.trial_spread, gateBar(funnel?.spread_gate, 0.0205));
   const horizonDays = gateBar(funnel?.horizon_gate_days, 30);
@@ -9123,11 +9113,15 @@ function renderScreener(kpi, scanState, status, engineOpts) {
 
     if (funnel && typeof funnel.snapshot_age === 'number') {
       const age = funnel.snapshot_age;
-      const filterRunning = Boolean(status?.services?.filter?.running);
+      const filterService = status?.services?.filter;
+      const filterRunning = filterService ? Boolean(filterService.running) : null;
 
-      if (!filterRunning) {
+      if (filterRunning === false) {
         headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + cycleMin + 'm cycle (Service Inactive)';
         headerAge.style.color = 'var(--error, #e5484d)';
+      } else if (filterRunning === null) {
+        headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + cycleMin + 'm cycle (Status unknown)';
+        headerAge.style.color = 'var(--text-muted)';
       } else if (age > SCAN_INTERVAL_SEC * 2) {
         headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + cycleMin + 'm cycle (Scan overdue)';
         headerAge.style.color = 'var(--error, #e5484d)';
@@ -9139,8 +9133,15 @@ function renderScreener(kpi, scanState, status, engineOpts) {
         headerAge.style.color = 'var(--text-secondary)';
       }
     } else {
-      const filterRunning = Boolean(status?.services?.filter?.running);
-      headerAge.textContent = filterRunning ? '~' + cycleMin + 'm cycle · awaiting scan' : '~' + cycleMin + 'm cycle · scan inactive';
+      const filterService = status?.services?.filter;
+      const filterRunning = filterService ? Boolean(filterService.running) : null;
+      if (filterRunning === true) {
+        headerAge.textContent = '~' + cycleMin + 'm cycle · awaiting scan';
+      } else if (filterRunning === false) {
+        headerAge.textContent = '~' + cycleMin + 'm cycle · scan inactive';
+      } else {
+        headerAge.textContent = '~' + cycleMin + 'm cycle · status unknown';
+      }
       headerAge.style.color = 'var(--text-muted)';
     }
   }
@@ -9237,7 +9238,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
   document.querySelectorAll('.lane-tab-btn').forEach(btn => {
     const isActive = btn.dataset.lane === lane;
     btn.classList.toggle('active', isActive);
-    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
   });
 
   updateLaneBanner(lane, { regular: regularCount, live: liveCount, total: totalCount });
@@ -9252,7 +9253,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
 
   // Preserve scroll positions: horizontal board scroll, vertical bucket body scrolls, and window scroll
   const prevScrollLeft = board.scrollLeft;
-  const prevWindowScroll = window.scrollY || document.documentElement.scrollTop;
+  const prevWindowScroll = window.scrollY || document.documentElement?.scrollTop || 0;
   const prevBucketScrolls = {};
   board.querySelectorAll('.kanban-bucket').forEach(bucket => {
     const key = Array.from(bucket.classList).find(c => ['raw', 'identity', 'movement', 'volume', 'depth', 'spread', 'horizon', 'passed'].includes(c));
@@ -9309,7 +9310,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
         }
       } else {
         cardsHtml = `<div class="kanban-empty">
-          <strong style="color:var(--text-primary)">${filteredRawSpread.length || totalRaw} Candidate Markets</strong>
+          <strong style="color:var(--text-primary)">${lane === 'all' ? (filteredRawSpread.length || totalRaw) : filteredRawSpread.length} Candidate Markets</strong>
           <div style="margin-top:6px;color:var(--text-secondary)">Scored from the ${lane === 'live' ? 'live venue scan (/events?live=true)' : 'unified Gamma scan'}.</div>
         </div>`;
       }
@@ -9418,10 +9419,10 @@ function renderScreener(kpi, scanState, status, engineOpts) {
         const filteredExamples = (lane === 'all')
           ? allExamples
           : allExamples.filter(ex => lane === 'live' ? isLiveMarket(ex) : !isLiveMarket(ex));
-        const displayExamples = filteredExamples.length > 0 ? filteredExamples : allExamples;
+        const displayExamples = filteredExamples;
 
         if (displayExamples.length === 0) {
-          cardsHtml = `<div class="kanban-empty">${droppedCount} markets failed criteria at this gate.</div>`;
+          cardsHtml = `<div class="kanban-empty">No ${lane === 'live' ? 'live sports' : (lane === 'regular' ? 'regular' : '')} market rejections at this gate.</div>`;
         } else {
           for (const ex of displayExamples) {
             const isLive = isLiveMarket(ex);
