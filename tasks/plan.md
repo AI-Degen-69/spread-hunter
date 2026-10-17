@@ -50,7 +50,7 @@ The dashboard event ticker currently consumes a single shared 200-line buffer (`
 
 ## Task Breakdown
 
-### Task 1: Backend Log Family Resolver & SSE Generator [Backend/Logic]
+### Task 1: Backend Log Family Resolver & SSE Generator [Backend/Logic] [x]
 - Files: `dashboard/server.py`
 - Description:
   - Implement `_resolve_log_families(run_id=None)` to map `live`, `filter`, `shadow` to their respective ring and text log files.
@@ -60,7 +60,7 @@ The dashboard event ticker currently consumes a single shared 200-line buffer (`
 - Size: M
 - Verification: `python -m pytest -q tests/test_dashboard_server.py -k "log_stream"`
 
-### Task 2: Dashboard Ticker Tab Strip Markup & Styles [Design/UI]
+### Task 2: Dashboard Ticker Tab Strip Markup & Styles [Design/UI] [x]
 - Files: `dashboard/static/index.html`, `dashboard/static/styles.css`
 - Description:
   - Add tab strip (`.ticker-tab-btn`) with `role="tab"` for All, Filter Loop, Shadow Rehearsal, and Live Run.
