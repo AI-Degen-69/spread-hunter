@@ -173,13 +173,18 @@ class MakerConfig:
     # spread, so landing in it means being the most exposed order in the book
     # -- measured on a 0.26/0.42 market, six cents better than anyone else.
     # 6c leaves margin under that arithmetic.
-    max_book_spread: float = 0.06
-    # WIDE-BOOK TRIAL (#145). When set, this REPLACES the three ceilings that
-    # together decide whether a wide book can be quoted at all. It is not a
-    # tuning knob and it has no permanent counterpart: the shipped values above
-    # never change, and a run either carries the trial or it does not.
     #
-    # Why one knob moves three numbers. Run 145 measured `mid_UP + mid_DOWN` at
+    # THIS IS THE ONE SPREAD CEILING (#572). The ranker's picking bar is a
+    # documented share of it (`select_spread_frac`, derived below) rather than
+    # a second absolute, so picking and quoting cannot disagree about which
+    # books are tradable, and the wide-book trial moves this field alone.
+    max_book_spread: float = 0.06
+    # WIDE-BOOK TRIAL (#145). When set, this REPLACES the ceilings that together
+    # decide whether a wide book can be quoted at all. It is not a tuning knob
+    # and it has no permanent counterpart: the shipped values above never
+    # change, and a run either carries the trial or it does not.
+    #
+    # Why one knob moves three gates. Run 145 measured `mid_UP + mid_DOWN` at
     # 1.0000 in 1,247 of 1,247 samples and the touch pair at or above
     # `max_pair_cost` in every one of them, so a one-tick book has no pair to
     # assemble at any offset. The only sub-$0.99 touch pairs the run saw --
@@ -187,7 +192,9 @@ class MakerConfig:
     # ~2.8c. Three separate gates refuse that regime, and leaving any one of
     # them at its shipped value makes the trial measure nothing:
     #
-    #   * `select_max_book_spread` -- the ranker never offers the market;
+    #   * `select_max_book_spread` -- the ranker never offers the market.
+    #     Derived from `max_book_spread` since #572, so it moves without being
+    #     written;
     #   * `max_book_spread` -- `risk.book_health` refuses to quote it
     #     ("book too wide 13.0c > 6.0c", observed in run 145's own log);
     #   * `max_spread_from_mid` -- on a wide book the `best_bid + tick` cap in

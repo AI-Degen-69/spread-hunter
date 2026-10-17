@@ -112,6 +112,11 @@ class MakerConfig:
     # spread, so landing in it means being the most exposed order in the book
     # -- measured on a 0.26/0.42 market, six cents better than anyone else.
     # 6c leaves margin under that arithmetic.
+    #
+    # THIS IS THE ONE SPREAD CEILING (#572). The picking bar is a documented
+    # share of it (`select_spread_frac`, derived below) rather than a second
+    # absolute, and `scripts.filter_markets` loads this module -- so the bar
+    # the ranker publishes and the bar the fleet quotes under are one decision.
     max_book_spread: float = 0.06
     # WIDE-BOOK TRIAL (#145). The ranker half of the knob documented in
     # `core_brain/config.py`. This module is the one `scripts.filter_markets`

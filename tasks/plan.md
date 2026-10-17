@@ -90,7 +90,7 @@ Depends on: T1. Domain: selection + trial.
 - Existing assertions stay byte-identical in intent.
 - Verify: same two suites as T1.
 
-### T3 [XS] display-and-docs — keep the surface honest
+### T3 [x] display-and-docs — keep the surface honest
 Depends on: T2. Domain: docs/display.
 - `scripts/filter_markets.py:101` needs NO logic edit (same attribute name,
   now derived) — existing `test_the_filter_markets_spread_bar_matches_config`

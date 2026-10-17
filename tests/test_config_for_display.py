@@ -82,6 +82,9 @@ def test_wide_book_trial_falls_back_to_shipped_for_display(monkeypatch, caplog):
 
     assert cfg.wide_book_trial is None
     assert cfg.max_book_spread == MakerConfig.max_book_spread
+    # The picking bar degrades with the gate (#572): the page shows the shipped
+    # contract, never a trial value the process it describes cannot act on.
+    assert cfg.select_max_book_spread == MakerConfig().select_max_book_spread == 0.0205
     assert "HUNTER_WIDE_BOOK_TRIAL ignored" in caplog.text
 
 
