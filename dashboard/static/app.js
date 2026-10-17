@@ -2012,14 +2012,23 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     const isLiveRunning = Boolean(liveSvc?.running);
     const livePid = liveSvc?.pid;
     const liveUptime = typeof liveSvc?.uptime_sec === 'number' ? `${Math.round(liveSvc.uptime_sec)}s up` : '';
-    const state = isLiveRunning ? 'running' : 'stopped';
-    const val = isLiveRunning ? 'ON' : 'OFF';
+    let state = isLiveRunning ? 'running' : 'stopped';
+    let val = isLiveRunning ? 'ON' : 'OFF';
+    if (!isShadow && isStopping) {
+      state = 'degraded';
+      val = 'STOPPING';
+    } else if (!isShadow && isStarting) {
+      state = 'degraded';
+      val = 'STARTING';
+    }
     const detail = isLiveRunning ? (livePid ? `pid ${livePid}` : '') : '';
     liveRunPill.className = `pill state-${state} mono mode-live`;
     liveRunPill.innerHTML = renderPillHtml('LIVE IMPLEMENTED', val, detail, state);
     liveRunPill.title = isLiveRunning
       ? `Live Implemented Run: active (${livePid ? `pid ${livePid} · ` : ''}${liveUptime}) — real-money maker execution quoter on Polymarket`
-      : 'Live Implemented Run: standby/off — real-money execution loop is not active';
+      : (state === 'degraded'
+        ? `Live Implemented Run: ${val.toLowerCase()}...`
+        : 'Live Implemented Run: standby/off — real-money execution loop is not active');
   }
 
   const shadowRunPill = document.getElementById('shadow-implemented-pill');
@@ -2028,17 +2037,27 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     const isShadowRunning = Boolean(sr?.running && !sr?.ended);
     const shadowPid = sr?.pid;
     const shadowElapsed = sr?.elapsed_sec ? fmtStopwatch(sr.elapsed_sec) : '';
-    const state = isShadowRunning ? 'running' : 'stopped';
-    const val = isShadowRunning ? 'ON' : 'OFF';
+    let state = isShadowRunning ? 'running' : 'stopped';
+    let val = isShadowRunning ? 'ON' : 'OFF';
+    if (isShadow && isStopping) {
+      state = 'degraded';
+      val = 'STOPPING';
+    } else if (isShadow && (isStarting || isShadowStartPending())) {
+      state = 'degraded';
+      val = 'STARTING';
+    }
     const detail = isShadowRunning ? (shadowElapsed || (shadowPid ? `pid ${shadowPid}` : '')) : '';
     shadowRunPill.className = `pill state-${state} mono mode-shadow`;
     shadowRunPill.innerHTML = renderPillHtml('SHADOW IMPLEMENTED', val, detail, state);
     shadowRunPill.title = isShadowRunning
       ? `Shadow Implemented Run: active (${shadowPid ? `pid ${shadowPid} · ` : ''}${shadowElapsed}) — paper rehearsal simulation loop on live CLOB`
-      : 'Shadow Implemented Run: standby/off — zero-cost paper rehearsal is not active';
+      : (state === 'degraded'
+        ? `Shadow Implemented Run: ${val.toLowerCase()}...`
+        : 'Shadow Implemented Run: standby/off — zero-cost paper rehearsal is not active');
   }
 
   if (masterIndicator) {
+    masterIndicator.style.display = 'none';
     if (isStopping) {
       masterIndicator.className = 'pill state-degraded mono' + (isShadow ? ' mode-shadow' : ' mode-live');
       const stopText = isShadow ? 'SHADOW STOPPING' : 'STACK STOPPING';
