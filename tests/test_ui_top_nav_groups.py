@@ -238,6 +238,7 @@ def test_dropdown_pills_are_status_only(dom: DOMNode):
 
 
 def test_implemented_run_pills_in_header(dom: DOMNode):
+    """Verify that both LIVE and SHADOW IMPLEMENTED pills exist in the top navbar with expected structure."""
     for pid in ("live-implemented-pill", "shadow-implemented-pill"):
         el = dom.find_one(id=pid)
         assert el is not None, f"Expected #{pid} in DOM"
