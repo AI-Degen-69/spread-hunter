@@ -238,6 +238,7 @@ def test_dropdown_pills_are_status_only(dom: DOMNode):
 
 
 def test_implemented_run_pills_in_header(dom: DOMNode):
+    """Verify that both LIVE and SHADOW IMPLEMENTED pills exist in the top navbar with expected structure."""
     for pid in ("live-implemented-pill", "shadow-implemented-pill"):
         el = dom.find_one(id=pid)
         assert el is not None, f"Expected #{pid} in DOM"
@@ -247,6 +248,18 @@ def test_implemented_run_pills_in_header(dom: DOMNode):
         assert label is not None, f"#{pid} must carry .pill-label span"
         value = el.find_one(cls="pill-value")
         assert value is not None, f"#{pid} must carry .pill-value span"
+
+
+def test_master_status_indicator_hidden_to_prevent_duplicate_with_run_pills(dom: DOMNode, css: str):
+    """#master-status-indicator was superseded by LIVE/SHADOW IMPLEMENTED pills.
+    It must be hidden in markup and style to eliminate duplicate execution pills."""
+    el = dom.find_one(id="master-status-indicator")
+    assert el is not None
+    assert "display:none" in el.get_attr("style").replace(" ", "").lower()
+    assert "#master-status-indicator" in css
+    match = re.search(r"#master-status-indicator\s*\{([^}]*)\}", css)
+    assert match is not None
+    assert "display" in match.group(1) and "none" in match.group(1)
 
 
 def test_pill_value_css(css: str):

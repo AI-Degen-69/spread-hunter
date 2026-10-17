@@ -121,6 +121,8 @@ function isShadowMode(status) {
 }
 let isStopping = false;
 let isStarting = false;
+let stoppingMode = null;
+let startingMode = null;
 // Bumped on every master-control request start and end. A poll captures the
 // value when it begins; if it changed before the poll's status arrives, the
 // poll's own (older) payload must not repaint the button over the click's
@@ -2012,14 +2014,23 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     const isLiveRunning = Boolean(liveSvc?.running);
     const livePid = liveSvc?.pid;
     const liveUptime = typeof liveSvc?.uptime_sec === 'number' ? `${Math.round(liveSvc.uptime_sec)}s up` : '';
-    const state = isLiveRunning ? 'running' : 'stopped';
-    const val = isLiveRunning ? 'ON' : 'OFF';
+    let state = isLiveRunning ? 'running' : 'stopped';
+    let val = isLiveRunning ? 'ON' : 'OFF';
+    if (!isShadow && isStopping && stoppingMode === 'live') {
+      state = 'degraded';
+      val = 'STOPPING';
+    } else if (!isShadow && isStarting && startingMode === 'live') {
+      state = 'degraded';
+      val = 'STARTING';
+    }
     const detail = isLiveRunning ? (livePid ? `pid ${livePid}` : '') : '';
     liveRunPill.className = `pill state-${state} mono mode-live`;
     liveRunPill.innerHTML = renderPillHtml('LIVE IMPLEMENTED', val, detail, state);
     liveRunPill.title = isLiveRunning
       ? `Live Implemented Run: active (${livePid ? `pid ${livePid} · ` : ''}${liveUptime}) — real-money maker execution quoter on Polymarket`
-      : 'Live Implemented Run: standby/off — real-money execution loop is not active';
+      : (state === 'degraded'
+        ? `Live Implemented Run: ${val.toLowerCase()}...`
+        : 'Live Implemented Run: standby/off — real-money execution loop is not active');
   }
 
   const shadowRunPill = document.getElementById('shadow-implemented-pill');
@@ -2028,24 +2039,35 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     const isShadowRunning = Boolean(sr?.running && !sr?.ended);
     const shadowPid = sr?.pid;
     const shadowElapsed = sr?.elapsed_sec ? fmtStopwatch(sr.elapsed_sec) : '';
-    const state = isShadowRunning ? 'running' : 'stopped';
-    const val = isShadowRunning ? 'ON' : 'OFF';
+    let state = isShadowRunning ? 'running' : 'stopped';
+    let val = isShadowRunning ? 'ON' : 'OFF';
+    if (isShadow && isStopping && stoppingMode === 'shadow') {
+      state = 'degraded';
+      val = 'STOPPING';
+    } else if (isShadow
+      && ((isStarting && startingMode === 'shadow') || isShadowStartPending(status))) {
+      state = 'degraded';
+      val = 'STARTING';
+    }
     const detail = isShadowRunning ? (shadowElapsed || (shadowPid ? `pid ${shadowPid}` : '')) : '';
     shadowRunPill.className = `pill state-${state} mono mode-shadow`;
     shadowRunPill.innerHTML = renderPillHtml('SHADOW IMPLEMENTED', val, detail, state);
     shadowRunPill.title = isShadowRunning
       ? `Shadow Implemented Run: active (${shadowPid ? `pid ${shadowPid} · ` : ''}${shadowElapsed}) — paper rehearsal simulation loop on live CLOB`
-      : 'Shadow Implemented Run: standby/off — zero-cost paper rehearsal is not active';
+      : (state === 'degraded'
+        ? `Shadow Implemented Run: ${val.toLowerCase()}...`
+        : 'Shadow Implemented Run: standby/off — zero-cost paper rehearsal is not active');
   }
 
   if (masterIndicator) {
+    masterIndicator.style.display = 'none';
     if (isStopping) {
       masterIndicator.className = 'pill state-degraded mono' + (isShadow ? ' mode-shadow' : ' mode-live');
       const stopText = isShadow ? 'SHADOW STOPPING' : 'STACK STOPPING';
       masterIndicator.innerHTML = renderPillHtml(isShadow ? 'SHADOW' : 'STACK', 'STOPPING', '', 'degraded');
       masterIndicator.setAttribute('aria-label', stopText);
     } else if (isShadow) {
-      if (isShadowStartPending()) {
+      if (isShadowStartPending(status)) {
         // A launch was accepted but the run has not reported back yet: say
         // STARTING, not STOPPED, so the operator can tell booting from dead.
         masterIndicator.className = 'pill state-degraded mono mode-shadow';
@@ -2095,7 +2117,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   if (masterToggle) {
     // A latched shadow launch holds the busy look past the HTTP round-trip,
     // until the run reports back (or the boot window lapses).
-    const shadowPending = isShadow && isShadowStartPending();
+    const shadowPending = isShadow && isShadowStartPending(status);
     if (isStarting || isStopping || shadowPending) {
       // Busy overrides status: no second click while a request is in flight.
       const busyLabel = isStopping ? 'STOPPING…' : 'STARTING…';
@@ -2314,23 +2336,33 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
  * after a successful launch and every pill stays red — indistinguishable
  * from a dead start. */
 const SHADOW_START_TIMEOUT_MS = 180000;
-let pendingShadowStart = null; // { runId, dbName, minutes, pid, startedAt }
+let pendingShadowStart = null; // { runId, dbName, dbPath, minutes, pid, startedAt }
 
 function noteShadowStartLaunched(info) {
   const i = info || {};
   pendingShadowStart = {
     runId: i.runId || null,
     dbName: i.dbName || null,
+    dbPath: i.dbPath || null,
     minutes: (i.minutes !== null && i.minutes !== undefined) ? i.minutes : null,
     pid: (i.pid !== null && i.pid !== undefined) ? i.pid : null,
     startedAt: i.startedAt || Date.now(),
   };
 }
 function clearPendingShadowStart() { pendingShadowStart = null; }
-function isShadowStartPending(nowMs) {
+function isShadowStartPending(status, nowMs) {
   if (!pendingShadowStart) return false;
-  const now = (nowMs !== undefined && nowMs !== null) ? nowMs : Date.now();
-  return (now - pendingShadowStart.startedAt) < SHADOW_START_TIMEOUT_MS;
+  let st = status;
+  let now = nowMs;
+  if (typeof status === 'number') {
+    now = status;
+    st = null;
+  }
+  const nowVal = (now !== undefined && now !== null) ? now : Date.now();
+  if (st && st.db_path && pendingShadowStart.dbPath && st.db_path !== pendingShadowStart.dbPath) {
+    return false;
+  }
+  return (nowVal - pendingShadowStart.startedAt) < SHADOW_START_TIMEOUT_MS;
 }
 /* Poll-loop seam: resolves the latch against fresh status. Returns
  * 'running' | 'timeout' | 'waiting' so the harness can assert each path. */
@@ -2338,7 +2370,9 @@ function checkPendingShadowStart(status, nowMs) {
   if (!pendingShadowStart) return 'waiting';
   const now = (nowMs !== undefined && nowMs !== null) ? nowMs : Date.now();
   const run = status && status.shadow_run;
-  const sameRun = Boolean(run && run.running && !run.ended
+  const sameStore = !pendingShadowStart.dbPath || !status?.db_path
+    || pendingShadowStart.dbPath === status.db_path;
+  const sameRun = Boolean(sameStore && run && run.running && !run.ended
     && (!pendingShadowStart.runId || run.run_id === pendingShadowStart.runId));
   if (sameRun) {
     const label = pendingShadowStart.runId || run.run_id || 'shadow rehearsal';
@@ -2389,6 +2423,7 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
 
     if (action === 'stop') {
       isStopping = true;
+      stoppingMode = isShadow ? 'shadow' : 'live';
       // A stop supersedes any pending start expectation, even if this
       // request fails or comes back with notes: the boot-resolution toast
       // must never fire for a run the operator already tried to stop.
@@ -2402,6 +2437,7 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
       }
     } else {
       isStarting = true;
+      startingMode = isShadow ? 'shadow' : 'live';
     }
     masterLifecycleSeq++;
     renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
@@ -2470,7 +2506,7 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
             const dbName = String(dbPath).split(/[\\/]/).pop() || 'this store';
             const minutes = (sr.minutes !== null && sr.minutes !== undefined) ? sr.minutes : null;
             const pid = (data && data.pid !== null && data.pid !== undefined) ? data.pid : sr.pid;
-            noteShadowStartLaunched({ runId, dbName, minutes, pid });
+            noteShadowStartLaunched({ runId, dbName, dbPath, minutes, pid });
             const dur = (minutes !== null) ? ` for ${minutes} min` : '';
             const who = (pid !== null && pid !== undefined) ? ` (PID ${pid})` : '';
             showToast(`Shadow rehearsal ${runId || 'rehearsal'} launched on ${dbName}${dur}${who}. `
@@ -2500,6 +2536,8 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
     } finally {
       isStarting = false;
       isStopping = false;
+      startingMode = null;
+      stoppingMode = null;
       masterLifecycleSeq++;
       renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
       pollStatus();
@@ -9696,6 +9734,11 @@ async function pollStatus() {
     // `#page-*` sections, the un-hidden legacy tab shells made every gate
     // read visible and put the whole render chain back on every poll.
 
+    // A latched shadow launch resolves here: the run appeared (→ "now
+    // running" toast) or the boot window lapsed (→ retry toast). One-shot:
+    // the latch clears on either outcome, so a 2s poll never double-toasts.
+    if (status) checkPendingShadowStart(status);
+
     // Top-nav status (stack pill, ENGINE/WATCHDOG pills, START/STOP buttons)
     // is global chrome: renderServiceCards paints it before the card grid, so
     // on any page but Trades the poll paints just the header — and on Trades
@@ -9710,11 +9753,6 @@ async function pollStatus() {
         renderServiceHeader(status, guardHealth, guardAlerts);
       }
     }
-
-    // A latched shadow launch resolves here: the run appeared (→ "now
-    // running" toast) or the boot window lapsed (→ retry toast). One-shot:
-    // the latch clears on either outcome, so a 2s poll never double-toasts.
-    if (status) checkPendingShadowStart(status);
 
     // Render exposure bar (DT3) — header element, page-independent, cheap.
     if (kpi || lastKpi) renderExposure(kpi || lastKpi);

@@ -187,6 +187,12 @@ header {
   margin-left: 8px;
 }
 
+/* #master-status-indicator was superseded by LIVE IMPLEMENTED and SHADOW IMPLEMENTED pills.
+   Kept in DOM for test harness compatibility, hidden from UI to remove duplication. */
+#master-status-indicator {
+  display: none !important;
+}
+
 /* One compact operational language across the header. Every status uses the
    same pill shell and the canonical state classes below; labels add context,
    not a second visual vocabulary. */
