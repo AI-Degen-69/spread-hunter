@@ -1476,6 +1476,11 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     vel_measured_at = tape_stats.get("measured_at")
     trade_count = tape_stats.get("trade_count", 0)
 
+    # Use the live-measured tape movement as the rate/revenue base for spread markets
+    # when rate was not pre-populated (as raw Gamma candidates don't have _movement_usd).
+    if movement_usd is not None and movement_usd > 0 and (rate is None or rate <= 0):
+        rate = float(movement_usd)
+
     # Active live sports and eSports exemption (#434)
     is_sports_market = is_sports_or_esports(
         title=m.get("question") or m.get("title"),
@@ -1695,7 +1700,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     # fetches -- `flat` cannot be true here. The income gate requires
     # positive income: a market whose measured movement scales to nothing
     # earns nothing.
-    pays = income > 0
+    pays = income > 0 or (source == "spread" and movement_usd is not None and movement_usd > 0 and ours > 0)
     if not why and not pays:
         why = ("no reward income" if source == "rewards" else "no spread income")
 

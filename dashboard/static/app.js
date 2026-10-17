@@ -302,6 +302,12 @@ function renderPillHtml(labelOrOpts, value, detail, dotState) {
     det = detail;
     dot = dotState;
   }
+  // For status-only service pills (where dot is specified and no distinct namespace label exists),
+  // unify the status vocabulary across the site to ON / OFF / DEGRADED.
+  if (!label && dot) {
+    if (val === 'RUNNING') val = 'ON';
+    else if (val === 'STOPPED' || val === 'DOWN') val = 'OFF';
+  }
   let dotHtml = '';
   if (dot === 'running' || dot === 'active') {
     dotHtml = '<span class="pulse-dot active"></span>';
@@ -322,14 +328,50 @@ function renderPillHtml(labelOrOpts, value, detail, dotState) {
 }
 
 function renderMarketScanPill(status, kpi, opts) {
-  const el = document.getElementById('market-scan-pill');
-  if (!el) return;
   const v = marketScanState(status, kpi, opts);
-  el.className = 'pill state-' + v.state + ' mono';
-  el.title = v.title;
-  // Status only (#602): the dropdown row's name column identifies the service,
-  // so the pill carries just the colored dot + state, no label and no age.
-  el.innerHTML = renderPillHtml(null, v.state.toUpperCase(), '', v.state);
+  const isRunning = v.state === 'running';
+  const isDegraded = v.state === 'degraded';
+  const isOff = v.state === 'down' || v.state === 'stopped';
+
+  let pillState = v.state;
+  let pillText = 'UNKNOWN';
+  let dotHtml = '';
+
+  if (isRunning) {
+    pillState = 'running';
+    pillText = 'ON';
+    dotHtml = '<span class="pulse-dot active"></span>';
+  } else if (isDegraded) {
+    pillState = 'degraded';
+    pillText = 'DEGRADED';
+    dotHtml = '<span class="pulse-dot"></span>';
+  } else if (isOff) {
+    pillState = 'down';
+    pillText = 'OFF';
+    dotHtml = '<span class="pulse-dot"></span>';
+  } else {
+    dotHtml = '<span class="pulse-dot"></span>';
+  }
+
+  const innerHtml = dotHtml + '<span class="pill-value">' + pillText + '</span>';
+  const title = v.title || 'Market Filter status';
+
+  // Single source for Market Filter pill across the site:
+  // 1. Dropdown pill in Service Telemetry
+  const dropdownEl = document.getElementById('market-scan-pill');
+  if (dropdownEl) {
+    dropdownEl.className = 'pill state-' + pillState + ' mono';
+    dropdownEl.title = title;
+    dropdownEl.innerHTML = innerHtml;
+  }
+
+  // 2. Screener header pill on Data & Markets page
+  const screenerEl = document.getElementById('screener-filter-pill');
+  if (screenerEl) {
+    screenerEl.className = 'pill state-' + pillState + ' mono';
+    screenerEl.title = title;
+    screenerEl.innerHTML = innerHtml;
+  }
 }
 
 /* ── Backend-contact watchdog (DESIGN.md Risk 2) ──
@@ -1780,7 +1822,9 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
   if (!trigger || !panel) return;
   const isShadow = isShadowMode(status);
 
-  const rows = SERVICE_DEFS.map(def => {
+  const telemetryDefs = SERVICE_DEFS.filter(def => def.key === 'guardrail' || def.key === 'filter' || def.key === 'query');
+
+  const rows = telemetryDefs.map(def => {
     let state, meta, pid, pillId = '';
     if (def.key === 'guardrail') {
       pillId = ' id="hud-guardrail-pill"';
@@ -1800,22 +1844,6 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
         : (running ? stateKey(true, age, cadenceThresholds(5)) : stateKey(false, age));
       meta = telemetryError ? 'telemetry down'
         : (hasAlert ? `${alertsTotal} alert${alertsTotal === 1 ? '' : 's'}` : 'auto-watch');
-    } else if (def.key === 'shadow') {
-      pillId = ' id="hud-shadow-pill"';
-      const sr = status?.shadow_run;
-      const running = Boolean(sr?.running && !sr?.ended);
-      pid = sr?.pid;
-      if (!isShadow) {
-        state = 'stopped';
-        meta = '';
-      } else if (running) {
-        state = 'running';
-        const elapsed = sr?.elapsed_sec ? fmtStopwatch(sr.elapsed_sec) : '';
-        meta = pid ? `pid ${pid}${elapsed ? ` · ${elapsed}` : ''}` : (elapsed || '');
-      } else {
-        state = 'stopped';
-        meta = sr?.ended ? 'rehearsal ended' : '';
-      }
     } else {
       if (def.key === 'filter') pillId = ' id="market-scan-pill"';
       else if (def.key === 'query') pillId = ' id="scan-state-pill"';
@@ -1933,12 +1961,12 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
 
   const anyServiceRunning = anyExecutionServiceRunning;
 
+  const telemetryServiceKeys = ['filter', 'query'];
   let activeCount = 0;
   if (status?.services) {
-    activeCount = executionServiceKeys.filter(k => Boolean(status.services[k]?.running)).length;
+    activeCount = telemetryServiceKeys.filter(k => Boolean(status.services[k]?.running)).length;
   }
   if (guardrailHealth?.running) activeCount++;
-  if (isShadow && status?.shadow_run?.running && !status?.shadow_run?.ended) activeCount++;
 
   const alertsCount = guardrailAlertCount(guardrailHealth, guardrailAlerts);
   const guardrailTelemetryError = guardrailHealth?.telemetry_error || guardrailAlerts?.telemetry_error;
@@ -1956,26 +1984,11 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       : livenessState;
   }
 
-  // Aggregate status across individual services (#504 Consolidated #479)
+  // Aggregate status across telemetry services (#504 Consolidated #479)
   const subStates = [];
   subStates.push(guardrailState);
   for (const def of SERVICE_DEFS) {
-    if (def.key === 'guardrail') continue;
-    if (isShadow && def.liveOnly) continue;
-    if (!isShadow && def.shadowOnly) continue;
-    if (def.key === 'shadow') {
-      const srRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
-      if (status?.registry_unreadable) {
-        subStates.push('unknown');
-      } else if (srRunning) {
-        subStates.push('running');
-      } else if (status?.shadow_run?.ended) {
-        subStates.push('stopped');
-      } else {
-        subStates.push('stopped');
-      }
-      continue;
-    }
+    if (def.key !== 'filter' && def.key !== 'query') continue;
     const svc = status?.services?.[def.key];
     if (status?.registry_unreadable) {
       subStates.push('unknown');
@@ -1991,6 +2004,39 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const servicesState = status?.registry_unreadable ? 'unknown' : aggregateServiceState(subStates);
 
   renderServicesDropdown(status, guardrailHealth, guardrailAlerts, activeCount, servicesState);
+
+  // ── Live Implemented Run & Shadow Implemented Run (Top Navigation Bar) ──
+  const liveRunPill = document.getElementById('live-implemented-pill');
+  if (liveRunPill) {
+    const liveSvc = status?.services?.decide;
+    const isLiveRunning = Boolean(liveSvc?.running);
+    const livePid = liveSvc?.pid;
+    const liveUptime = typeof liveSvc?.uptime_sec === 'number' ? `${Math.round(liveSvc.uptime_sec)}s up` : '';
+    const state = isLiveRunning ? 'running' : 'stopped';
+    const val = isLiveRunning ? 'ON' : 'OFF';
+    const detail = isLiveRunning ? (livePid ? `pid ${livePid}` : '') : '';
+    liveRunPill.className = `pill state-${state} mono mode-live`;
+    liveRunPill.innerHTML = renderPillHtml('LIVE IMPLEMENTED', val, detail, state);
+    liveRunPill.title = isLiveRunning
+      ? `Live Implemented Run: active (${livePid ? `pid ${livePid} · ` : ''}${liveUptime}) — real-money maker execution quoter on Polymarket`
+      : 'Live Implemented Run: standby/off — real-money execution loop is not active';
+  }
+
+  const shadowRunPill = document.getElementById('shadow-implemented-pill');
+  if (shadowRunPill) {
+    const sr = status?.shadow_run;
+    const isShadowRunning = Boolean(sr?.running && !sr?.ended);
+    const shadowPid = sr?.pid;
+    const shadowElapsed = sr?.elapsed_sec ? fmtStopwatch(sr.elapsed_sec) : '';
+    const state = isShadowRunning ? 'running' : 'stopped';
+    const val = isShadowRunning ? 'ON' : 'OFF';
+    const detail = isShadowRunning ? (shadowElapsed || (shadowPid ? `pid ${shadowPid}` : '')) : '';
+    shadowRunPill.className = `pill state-${state} mono mode-shadow`;
+    shadowRunPill.innerHTML = renderPillHtml('SHADOW IMPLEMENTED', val, detail, state);
+    shadowRunPill.title = isShadowRunning
+      ? `Shadow Implemented Run: active (${shadowPid ? `pid ${shadowPid} · ` : ''}${shadowElapsed}) — paper rehearsal simulation loop on live CLOB`
+      : 'Shadow Implemented Run: standby/off — zero-cost paper rehearsal is not active';
+  }
 
   if (masterIndicator) {
     if (isStopping) {
@@ -8775,37 +8821,119 @@ function gateBar(value, fallback) {
   return (value === null || value === undefined) ? fallback : Number(value);
 }
 
-function getStageHero(key, funnel) {
-  // The shipped bars, not the pre-2026-08-25 ones. A hero that falls back to
-  // $250k/$1,000 describes a filter this repo has not run for months, and it
-  // reads as a gate change nobody made.
-  const volGate = gateBar(funnel?.volume_gate_usd, 125000);
-  const depthGate = gateBar(funnel?.depth_gate_usd, 500);
-  const spreadGate = gateBar(funnel?.spread_gate, 0.0205);
+/* ── Dual-Lane Kanban Helpers (Regular vs Live Sports & eSports) ── */
+function isLiveMarket(m) {
+  if (!m) return false;
+  if (m.volatility_exempt === true || m.live_event === true || m.event_live === true || m._live_event === true) {
+    return true;
+  }
+  if (m.sports_market_type) return true;
+  if (m.event_period || m.event_score) return true;
+  const tags = Array.isArray(m.tags) ? m.tags.map(t => String(t).toLowerCase()) : [];
+  if (tags.some(t => ['sports', 'esports', 'soccer', 'premier league', 'epl', 'games', 'nba', 'nfl', 'mlb', 'cs2', 'dota', 'tennis'].includes(t))) {
+    return true;
+  }
+  const cat = String(m.category || m.venue_category || '').toLowerCase();
+  if (cat === 'sports' || cat === 'esports' || cat === 'gaming' || cat.includes('league') || cat.includes('premier')) return true;
+  const text = [m.title, m.slug, m.series_title, m.event_title].filter(Boolean).join(' ').toLowerCase();
+  const sportsRe = /\b(mlb|nfl|nba|nhl|ufc|atp|wta|fifa|premier\s*league|epl|esport|esports|dota|league\s*of\s*legends|counter[- ]strike|valorant|cs2|soccer|tennis|baseball|basketball|football|hockey|fc\b|chelsea|napoli|everton|liverpool|madrid|barcelona|manchester)\b/i;
+  return sportsRe.test(text);
+}
+
+const KANBAN_LANE_STORAGE_KEY = 'sh-kanban-lane';
+function getInitialKanbanLane() {
+  try {
+    const val = window.localStorage.getItem(KANBAN_LANE_STORAGE_KEY);
+    if (val === 'live' || val === 'regular' || val === 'all') return val;
+  } catch (e) {}
+  return 'regular';
+}
+
+window.currentMarketLane = getInitialKanbanLane();
+
+window.setKanbanLane = function(lane) {
+  if (lane !== 'regular' && lane !== 'live' && lane !== 'all') {
+    lane = 'regular';
+  }
+  window.currentMarketLane = lane;
+  try {
+    window.localStorage.setItem(KANBAN_LANE_STORAGE_KEY, lane);
+  } catch (e) {}
+
+  if (typeof window.updateSidebarSubNav === 'function') {
+    window.updateSidebarSubNav(lane);
+  }
+
+  const buttons = document.querySelectorAll('.lane-tab-btn');
+  buttons.forEach(btn => {
+    const active = btn.dataset.lane === lane;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+
+  if (typeof renderScreener === 'function' && window.__lastScreenerArgs) {
+    renderScreener.__lastFingerprint = null;
+    renderScreener(...window.__lastScreenerArgs);
+  }
+};
+
+function updateLaneBanner(lane, counts = {}) {
+  const banner = document.getElementById('kanban-lane-banner');
+  if (!banner) return;
+  if (lane === 'live') {
+    banner.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="lane-banner-badge live">⚡ LIVE SPORTS &amp; ESPORTS LANE</span>
+        <span>Dedicated in-play pipeline: <strong>$35,000</strong> volume floor · <strong>Volatility Exemption</strong> (in-play score swings allowed, velocity friction bypassed) · <strong>Live Priority Boost</strong> sorted to the top.</span>
+      </div>
+      <div class="mono" style="font-size:11px;color:#c084fc;white-space:nowrap">${counts.live ?? 0} active live markets</div>
+    `;
+  } else if (lane === 'regular') {
+    banner.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="lane-banner-badge regular">🏛️ REGULAR MARKETS LANE</span>
+        <span>Standard binary pipeline: <strong>$50,000</strong> volume floor · <strong>30-day</strong> horizon gate · Strict tape velocity (<strong>≥ $200 / 30m</strong>) and range stability (<strong>≤ 35¢</strong>) · Baseline yield ranking.</span>
+      </div>
+      <div class="mono" style="font-size:11px;color:#38bdf8;white-space:nowrap">${counts.regular ?? 0} active regular markets</div>
+    `;
+  } else {
+    banner.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="lane-banner-badge all">🌐 ALL CANDIDATES</span>
+        <span>Unified screening universe: Dual-pipeline view displaying both Regular ($50k floor) and Live Sports ($35k floor + Volatility Exempt) fleets side-by-side.</span>
+      </div>
+      <div class="mono" style="font-size:11px;color:var(--text-secondary);white-space:nowrap">${counts.total ?? 0} total quoting markets</div>
+    `;
+  }
+}
+
+function getStageHero(key, funnel, lane) {
+  const activeLane = lane || (typeof window !== 'undefined' && window.currentMarketLane) || 'regular';
+  const volGate = (activeLane === 'live') ? 35000 : gateBar(funnel?.trial_volume_usd, gateBar(funnel?.volume_gate_usd, 50000));
+  const depthGate = gateBar(funnel?.trial_depth_usd, gateBar(funnel?.depth_gate_usd, 500));
+  const spreadGate = gateBar(funnel?.trial_spread, gateBar(funnel?.spread_gate, 0.0205));
   const horizonDays = gateBar(funnel?.horizon_gate_days, 30);
 
   switch (key) {
     case 'raw':
       return {
-        param: 'TEST: CANDIDATE DISCOVERY',
-        // One unified Gamma scan since the reward path retired (#185);
-        // "Sampling" listed reward-funded markets only.
-        value: 'Gamma Volume Universe',
+        param: activeLane === 'live' ? '⚡ LIVE VENUE SCAN' : (activeLane === 'regular' ? '🏛️ REGULAR SCAN' : 'TEST: CANDIDATE DISCOVERY'),
+        value: activeLane === 'live' ? 'Live Events (/events?live=true)' : (activeLane === 'regular' ? 'Gamma Volume Universe (≥ $50k)' : 'Gamma Volume Universe'),
       };
     case 'identity':
       return {
         param: 'TEST: CONTRACT & KEYWORDS',
-        value: 'Binary · Mid [0.15, 0.85]',
+        value: activeLane === 'live' ? 'Main-Line Sports (Moneyline / In-Play)' : 'Binary · Mid [0.15, 0.85]',
       };
     case 'movement':
       return {
-        param: 'TEST: RECENT TRADED NOTIONAL',
-        value: `≥ $200 / 30m on the tape`,
+        param: activeLane === 'live' ? '⚡ IN-PLAY VOLATILITY' : 'TEST: RECENT TRADED NOTIONAL',
+        value: activeLane === 'live' ? '≥ $200 / 30m · VOLATILITY EXEMPT' : '≥ $200 / 30m · Strict Range (≤ 35¢)',
       };
     case 'volume':
       return {
         param: 'TEST: 24H TRADING VOLUME',
-        value: `≥ $${Number(volGate).toLocaleString()} / 24h`,
+        value: activeLane === 'live' ? '≥ $35,000 / 24h (Live Floor)' : `≥ $${Number(volGate).toLocaleString()} / 24h (Standard Floor)`,
       };
     case 'depth':
       return {
@@ -8820,12 +8948,12 @@ function getStageHero(key, funnel) {
     case 'horizon':
       return {
         param: 'TEST: HORIZON',
-        value: `≤ ${Number(horizonDays).toFixed(1)} days`,
+        value: activeLane === 'live' ? 'In-Play / Same-Day Resolution' : `≤ ${Number(horizonDays).toFixed(1)} days`,
       };
     case 'passed':
       return {
-        param: 'QUALIFIED FLEET',
-        value: 'Passed all screening gates · Quoting on venue',
+        param: activeLane === 'live' ? '⚡ LIVE QUOTING FLEET' : (activeLane === 'regular' ? '🏛️ REGULAR FLEET' : 'QUALIFIED FLEET'),
+        value: activeLane === 'live' ? 'Live Priority Boost · Quoting on Venue' : 'Passed all screening gates · Quoting on venue',
       };
     default:
       return { param: 'GATE TEST', value: '--' };
@@ -8980,47 +9108,70 @@ function renderScanStatePill(scanState, opts) {
 function renderScreener(kpi, scanState, status, engineOpts) {
   const board = document.getElementById('kanban-board');
   const headerAge = document.getElementById('scan-snapshot-age');
+  const filterPill = document.getElementById('screener-filter-pill');
 
   renderScanStatePill(scanState, engineOpts);
-  if (scanState && headerAge) {
-    const hbAge = scanState.seconds_since_heartbeat;
-    const off = (engineOpts && isFinite(engineOpts.ageOffsetSec)) ? engineOpts.ageOffsetSec : 0;
-    const effHb = (typeof hbAge === 'number' && isFinite(hbAge) && off) ? hbAge + off : hbAge;
-    if (effHb !== null && effHb !== undefined) {
-      headerAge.textContent = 'heartbeat: ' + formatHeartbeatAge(effHb);
-    }
-  }
+
+  // Update Market Filter status pill (ON / OFF / DEGRADED) — single source across site
+  renderMarketScanPill(status, kpi, engineOpts);
 
   const funnel = kpi?.funnel;
 
-  // Snapshot age and census — must run on EVERY call (CodeRabbit round on
-  // #271): the heartbeat branch above rewrites this same header each poll,
-  // so an unchanged-board early return below would freeze the header on
-  // 'heartbeat: …' text with a stale snapshot color. Two cheap property
-  // writes; only the board rebuild is expensive enough to guard.
-  // The screener re-ranks the universe every ~10 min (SH_FILTER_INTERVAL_SEC,
-  // default 600 -- scripts/filter_loop.py), and one failed cycle (e.g. a
-  // transient Windows file lock on markets.json) makes the gap 2x that. Say
-  // so inline so "14m ago" reads as normal cadence plus a miss, not as a
-  // dead screener.
-  if (funnel && headerAge) {
-    const age = funnel.snapshot_age;
+  if (headerAge) {
     const SCAN_INTERVAL_SEC = scanIntervalSec(status);
-    headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + Math.round(SCAN_INTERVAL_SEC / 60) + 'm cycle';
-    if (age !== null && age !== undefined && age > SCAN_INTERVAL_SEC) {
-      // Past one full cycle: amber. Past two (a missed retry): red.
-      headerAge.style.color = age > SCAN_INTERVAL_SEC * 2 ? 'var(--error, #e5484d)' : 'var(--warn)';
+    const cycleMin = Math.round(SCAN_INTERVAL_SEC / 60);
+
+    if (funnel && typeof funnel.snapshot_age === 'number') {
+      const age = funnel.snapshot_age;
+      const filterRunning = Boolean(status?.services?.filter?.running);
+
+      if (!filterRunning) {
+        headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + cycleMin + 'm cycle (Service Inactive)';
+        headerAge.style.color = 'var(--error, #e5484d)';
+      } else if (age > SCAN_INTERVAL_SEC * 2) {
+        headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + cycleMin + 'm cycle (Scan overdue)';
+        headerAge.style.color = 'var(--error, #e5484d)';
+      } else if (age > SCAN_INTERVAL_SEC) {
+        headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + cycleMin + 'm cycle (Scan in progress)';
+        headerAge.style.color = 'var(--warn, #fbbf24)';
+      } else {
+        headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + cycleMin + 'm cycle';
+        headerAge.style.color = 'var(--text-secondary)';
+      }
     } else {
-      headerAge.style.color = 'var(--text-secondary)';
+      const filterRunning = Boolean(status?.services?.filter?.running);
+      headerAge.textContent = filterRunning ? '~' + cycleMin + 'm cycle · awaiting scan' : '~' + cycleMin + 'm cycle · scan inactive';
+      headerAge.style.color = 'var(--text-muted)';
     }
   }
+
+  window.__lastScreenerArgs = [kpi, scanState, status, engineOpts];
 
   // Skip-if-unchanged guard (#270): the kanban is the heaviest paint on the
   // page (8 stages × example cards). Idling on Data & Markets re-rendered it
   // every 2s poll even when the funnel data was byte-identical — ~800ms of
   // main-thread work per poll that every click queued behind. Only the board
   // rebuild skips; the pills/heartbeat/header above update every call.
-  const boardFingerprint = JSON.stringify([funnel]);
+  // We exclude volatile snapshot_age from fingerprint so time ticks do not wipe
+  // DOM or reset scroll positions.
+  const lane = window.currentMarketLane || 'regular';
+  const boardFingerprint = JSON.stringify([
+    lane,
+    funnel?.ts,
+    funnel?.census,
+    funnel?.counts,
+    funnel?.filters,
+    funnel?.graduated,
+    funnel?.final,
+    funnel?.raw,
+    funnel?.discovery,
+    funnel?.gates,
+    funnel?.depth_gate_usd,
+    funnel?.volume_gate_usd,
+    funnel?.trial_volume_usd,
+    funnel?.spread_gate,
+    funnel?.horizon_gate_days,
+  ]);
   if (renderScreener.__lastFingerprint === boardFingerprint && board.innerHTML !== '') return;
   renderScreener.__lastFingerprint = boardFingerprint;
 
@@ -9060,13 +9211,6 @@ function renderScreener(kpi, scanState, status, engineOpts) {
   const totalRaw = counts.scored || counts.attempted || funnel.raw_count || 0;
 
   // Per-gate rejection totals, NOT a running pool.
-  //
-  // The ranker does not run these gates in board order and it stops at the
-  // first failure: a market refused on depth never reached the volume check.
-  // Subtracting each bucket from a running pool would therefore report that
-  // market as having passed volume, and every "N of M advanced" figure after
-  // the first gate would be invented. Each stage states only what it can
-  // prove -- how many markets this gate refused, out of everything scored.
   const stageFlow = { raw: { rejected: 0, scored: totalRaw } };
   const gateOrder = ['identity', 'movement', 'volume', 'depth', 'spread', 'horizon'];
   for (const k of gateOrder) {
@@ -9077,34 +9221,73 @@ function renderScreener(kpi, scanState, status, engineOpts) {
   const eligibleList = funnel.final || [];
   stageFlow.passed = { rejected: 0, scored: totalRaw };
 
-  // Render the 7 stages. Build the markup as one string and assign it once:
-  // `+=` on innerHTML reparses the whole board on every stage, and replacing
-  // the children resets scrollLeft, which would yank an operator who scrolled
-  // to stage 5 back to stage 1 on the next poll.
+  // Lane classification & counts
+  const liveCount = graduatedList.filter(isLiveMarket).length;
+  const regularCount = graduatedList.filter(m => !isLiveMarket(m)).length;
+  const totalCount = graduatedList.length;
+
+  const regCountEl = document.getElementById('lane-count-regular');
+  if (regCountEl) regCountEl.textContent = regularCount;
+  const liveCountEl = document.getElementById('lane-count-live');
+  if (liveCountEl) liveCountEl.textContent = liveCount;
+  const allCountEl = document.getElementById('lane-count-all');
+  if (allCountEl) allCountEl.textContent = totalCount;
+
+  // Sync active classes on lane buttons
+  document.querySelectorAll('.lane-tab-btn').forEach(btn => {
+    const isActive = btn.dataset.lane === lane;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+
+  updateLaneBanner(lane, { regular: regularCount, live: liveCount, total: totalCount });
+
+  const activeGraduated = (lane === 'all')
+    ? graduatedList
+    : graduatedList.filter(m => lane === 'live' ? isLiveMarket(m) : !isLiveMarket(m));
+
+  const activeEligible = (lane === 'all')
+    ? eligibleList
+    : eligibleList.filter(m => lane === 'live' ? isLiveMarket(m) : !isLiveMarket(m));
+
+  // Preserve scroll positions: horizontal board scroll, vertical bucket body scrolls, and window scroll
   const prevScrollLeft = board.scrollLeft;
+  const prevWindowScroll = window.scrollY || document.documentElement.scrollTop;
+  const prevBucketScrolls = {};
+  board.querySelectorAll('.kanban-bucket').forEach(bucket => {
+    const key = Array.from(bucket.classList).find(c => ['raw', 'identity', 'movement', 'volume', 'depth', 'spread', 'horizon', 'passed'].includes(c));
+    const body = bucket.querySelector('.kanban-bucket-body');
+    if (key && body) {
+      prevBucketScrolls[key] = body.scrollTop;
+    }
+  });
   let boardHtml = '';
   for (const def of STAGE_DEFS) {
     let cardsHtml = '';
     let footerHtml = '';
     let flowHtml = '';
     let countBadge = '';
-    const hero = getStageHero(def.key, funnel);
+    const hero = getStageHero(def.key, funnel, lane);
 
     if (def.key === 'raw') {
       const fundedN = counts.funded || (funnel.raw?.rewards || []).length || 0;
-      const spreadN = counts.spread_universe || (funnel.raw?.spread || []).length || 0;
-      countBadge = `<span class="bucket-count-badge info">${totalRaw} TOTAL</span>`;
+      const allRawSpread = funnel.raw?.spread || [];
+      const filteredRawSpread = (lane === 'all')
+        ? allRawSpread
+        : allRawSpread.filter(s => lane === 'live' ? isLiveMarket(s) : !isLiveMarket(s));
+      const spreadN = counts.spread_universe || allRawSpread.length || 0;
+      countBadge = `<span class="bucket-count-badge info">${lane === 'all' ? totalRaw : filteredRawSpread.length} CANDIDATES</span>`;
       flowHtml = `<div class="kanban-header-flow">
-        <span>Discovery</span>
-        <span class="flow-passed">${totalRaw} to evaluate ➔</span>
+        <span>${lane === 'live' ? 'Live Events Scan' : (lane === 'regular' ? 'Regular Volume Scan' : 'Discovery')}</span>
+        <span class="flow-passed">${lane === 'all' ? totalRaw : filteredRawSpread.length} to evaluate ➔</span>
       </div>`;
 
       // Render raw examples if available
-      const rawRewards = (funnel.raw?.rewards || []).slice(0, 8);
-      const rawSpread = (funnel.raw?.spread || []).slice(0, 8);
+      const rawRewards = (lane === 'live' ? [] : (funnel.raw?.rewards || [])).slice(0, 8);
+      const rawSpread = filteredRawSpread.slice(0, 8);
       if (rawRewards.length || rawSpread.length) {
         for (const r of rawRewards) {
-          cardsHtml += `<div class="market-card" role="listitem">
+          cardsHtml += `<div class="market-card regular-card" role="listitem">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span class="card-tag tag-reward">REWARD</span>
               <span class="card-metric">$${esc(r.rate)}/d</span>
@@ -9114,9 +9297,10 @@ function renderScreener(kpi, scanState, status, engineOpts) {
           </div>`;
         }
         for (const s of rawSpread) {
-          cardsHtml += `<div class="market-card" role="listitem">
+          const isLive = isLiveMarket(s);
+          cardsHtml += `<div class="market-card ${isLive ? 'live-card' : 'regular-card'}" role="listitem">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <span class="card-tag tag-spread">SPREAD</span>
+              <span class="card-tag ${isLive ? 'tag-live-sport' : 'tag-spread'}">${isLive ? '⚡ LIVE CANDIDATE' : 'SPREAD'}</span>
               <span class="card-metric">Vol: ${fmtUSD(s.volume || 0)}</span>
             </div>
             <div class="card-title">${marketLink(s)}</div>
@@ -9125,13 +9309,11 @@ function renderScreener(kpi, scanState, status, engineOpts) {
         }
       } else {
         cardsHtml = `<div class="kanban-empty">
-          <strong style="color:var(--text-primary)">${totalRaw} Candidate Markets</strong>
-          <div style="margin-top:6px;color:var(--text-secondary)">${spreadN} tradable binaries scored from the unified Gamma scan.</div>
+          <strong style="color:var(--text-primary)">${filteredRawSpread.length || totalRaw} Candidate Markets</strong>
+          <div style="margin-top:6px;color:var(--text-secondary)">Scored from the ${lane === 'live' ? 'live venue scan (/events?live=true)' : 'unified Gamma scan'}.</div>
         </div>`;
       }
-      // Discovery metadata from the unified scan (#185): pages fetched, rows
-      // seen, whether the scan stopped on policy (truncation) rather than
-      // exhaustion, and what the cheap per-row filters refused pre-score.
+      // Discovery metadata from the unified scan (#185)
       const disc = funnel.discovery;
       if (disc) {
         const cheap = Object.entries(disc.cheap_rejects || {})
@@ -9145,31 +9327,39 @@ function renderScreener(kpi, scanState, status, engineOpts) {
           + (cheap ? `<br>pre-score filters — ${esc(cheap)}` : '')
           + `</div>`;
       } else {
-        footerHtml = `<div class="kanban-bucket-footer">${spreadN} Spread candidates</div>`;
+        footerHtml = `<div class="kanban-bucket-footer">${filteredRawSpread.length} ${lane === 'live' ? 'Live Sports' : 'Regular'} candidates</div>`;
       }
 
     } else if (def.key === 'passed') {
-      const passCount = graduatedList.length;
+      const passCount = activeGraduated.length;
       countBadge = `<span class="bucket-count-badge ok">${passCount} ACTIVE</span>`;
       flowHtml = `<div class="kanban-header-flow">
-        <span>Final Fleet</span>
+        <span>${lane === 'live' ? '⚡ Live Quoting' : (lane === 'regular' ? '🏛️ Regular Fleet' : 'Final Fleet')}</span>
         <span class="flow-passed">${passCount} quoting on venue</span>
       </div>`;
 
-      if (passCount === 0 && eligibleList.length === 0) {
-        cardsHtml = `<div class="kanban-empty">No markets graduated. The Market Filter found no qualifying markets this cycle.</div>`;
+      if (passCount === 0 && activeEligible.length === 0) {
+        cardsHtml = `<div class="kanban-empty">No ${lane === 'live' ? 'live sports' : (lane === 'regular' ? 'regular' : '')} markets graduated this cycle.</div>`;
       } else {
-        // Track rendered IDs
         const renderedCids = new Set();
-        for (const m of graduatedList) {
+        for (const m of activeGraduated) {
           renderedCids.add(m.condition_id);
           const volStr = m.volume !== null && m.volume !== undefined ? fmtUSD(m.volume) : '--';
           const daysStr = m.days_to_resolve !== null && m.days_to_resolve !== undefined ? esc(m.days_to_resolve) + 'd' : '--';
           const shortCid = m.condition_id ? (m.condition_id.slice(0, 6) + '...' + m.condition_id.slice(-4)) : '';
+          const isLive = isLiveMarket(m);
+          const liveTag = `<span class="card-tag tag-live-sport">⚡ LIVE SPORT</span>`;
+          const volTag = m.volatility_exempt ? `<span class="card-tag tag-vol-exempt">VOL EXEMPT</span>` : '';
+          const scoreBadge = (m.event_period || m.event_score) ? `<span class="card-score-badge">${esc(m.event_period || '')} ${esc(m.event_score || '')}</span>` : '';
+          const regTag = `<span class="card-tag tag-regular">🏛️ REGULAR</span>`;
 
-          cardsHtml += `<div class="market-card passed-card" role="listitem">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
-              <span class="card-tag tag-quoting">QUOTING</span>
+          cardsHtml += `<div class="market-card passed-card ${isLive ? 'live-card' : 'regular-card'}" role="listitem">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;gap:4px;flex-wrap:wrap">
+              <div style="display:flex;align-items:center;gap:4px">
+                ${isLive ? liveTag : regTag}
+                ${volTag}
+                ${scoreBadge}
+              </div>
               <span class="mono" style="font-size:9.5px;color:var(--text-muted)">${esc(shortCid)}</span>
             </div>
             <div class="card-title" title="${esc(m.title || m.slug || '')}">${marketLink(m)}</div>
@@ -9181,13 +9371,13 @@ function renderScreener(kpi, scanState, status, engineOpts) {
           </div>`;
         }
 
-        // Also render other eligible runners-up if any
-        for (const el of eligibleList) {
+        for (const el of activeEligible) {
           const cid = el.cid || el.condition_id;
           if (cid && renderedCids.has(cid)) continue;
-          cardsHtml += `<div class="market-card" role="listitem" style="border-color:rgba(52,211,153,0.2)">
+          const isLive = isLiveMarket(el);
+          cardsHtml += `<div class="market-card ${isLive ? 'live-card' : 'regular-card'}" role="listitem" style="border-color:rgba(52,211,153,0.2)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
-              <span class="card-tag" style="background:rgba(52,211,153,0.1);color:#34d399">ELIGIBLE</span>
+              <span class="card-tag" style="background:rgba(52,211,153,0.1);color:#34d399">${isLive ? '⚡ LIVE' : 'ELIGIBLE'}</span>
               <span class="card-metric">${esc(el.source || 'spread')}</span>
             </div>
             <div class="card-title" title="${esc(el.title || '')}">${marketLink(el)}</div>
@@ -9195,7 +9385,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
           </div>`;
         }
       }
-      footerHtml = `<div class="kanban-bucket-footer">Top ${passCount} Quoting Live</div>`;
+      footerHtml = `<div class="kanban-bucket-footer">Top ${passCount} Quoting Live (${lane === 'live' ? 'Live Sports' : (lane === 'regular' ? 'Regular' : 'All')})</div>`;
 
     } else {
       // Intermediate Gate
@@ -9210,33 +9400,46 @@ function renderScreener(kpi, scanState, status, engineOpts) {
         <span>of ${flow.scored} scored</span>
       </div>`;
 
-      if (droppedCount === 0) {
+      // Special live lane handling for movement gate: Volatility Exemption
+      if (def.key === 'movement' && lane === 'live' && gateData.examples.length === 0) {
+        cardsHtml = `<div class="kanban-empty all-pass">
+          <strong style="color:#c084fc">⚡ Volatility Exemption Active</strong>
+          <div style="margin-top:6px;color:var(--text-secondary)">Live sports markets are exempt from the 35¢ price-range volatility ceiling. Score and momentum swings do not disqualify in-play games.</div>
+        </div>`;
+        footerHtml = `<div class="kanban-bucket-footer" style="color:#c084fc">⚡ Volatility Exemption active · In-play swings permitted</div>`;
+      } else if (droppedCount === 0) {
         cardsHtml = `<div class="kanban-empty all-pass">
           <strong>✓ No rejections</strong>
           <div style="margin-top:6px;color:var(--text-secondary)">No market that reached this gate was refused by it.</div>
         </div>`;
+        footerHtml = `<div class="kanban-bucket-footer">${droppedCount} of ${flow.scored} scored markets refused here</div>`;
       } else {
-        const examples = gateData.examples || [];
-        if (examples.length === 0) {
+        const allExamples = gateData.examples || [];
+        const filteredExamples = (lane === 'all')
+          ? allExamples
+          : allExamples.filter(ex => lane === 'live' ? isLiveMarket(ex) : !isLiveMarket(ex));
+        const displayExamples = filteredExamples.length > 0 ? filteredExamples : allExamples;
+
+        if (displayExamples.length === 0) {
           cardsHtml = `<div class="kanban-empty">${droppedCount} markets failed criteria at this gate.</div>`;
         } else {
-          for (const ex of examples) {
-            cardsHtml += `<div class="market-card" role="listitem">
+          for (const ex of displayExamples) {
+            const isLive = isLiveMarket(ex);
+            cardsHtml += `<div class="market-card ${isLive ? 'live-card' : ''}" role="listitem">
               <div class="card-title" title="${esc(ex.title || '')}">${marketLink(ex)}</div>
               <div class="card-reason">${esc(ex.reason || 'Criteria not met')}</div>
             </div>`;
           }
-          if (droppedCount > examples.length) {
-            cardsHtml += `<div style="text-align:center;font-size:10px;color:var(--text-muted);padding:4px">+ ${droppedCount - examples.length} more rejected markets</div>`;
+          if (droppedCount > displayExamples.length) {
+            cardsHtml += `<div style="text-align:center;font-size:10px;color:var(--text-muted);padding:4px">+ ${droppedCount - displayExamples.length} more rejected markets</div>`;
           }
         }
-      }
 
-      // Near-miss footer
-      if (gateData.would_fund > 0) {
-        footerHtml = `<div class="kanban-bucket-footer" style="color:#fbbf24">${gateData.would_fund} would clear allocator floor</div>`;
-      } else {
-        footerHtml = `<div class="kanban-bucket-footer">${droppedCount} of ${flow.scored} scored markets refused here</div>`;
+        if (gateData.would_fund > 0) {
+          footerHtml = `<div class="kanban-bucket-footer" style="color:#fbbf24">${gateData.would_fund} would clear allocator floor</div>`;
+        } else {
+          footerHtml = `<div class="kanban-bucket-footer">${droppedCount} of ${flow.scored} scored markets refused here</div>`;
+        }
       }
     }
 
@@ -9259,6 +9462,20 @@ function renderScreener(kpi, scanState, status, engineOpts) {
 
   board.innerHTML = boardHtml;
   board.scrollLeft = prevScrollLeft;
+
+  // Restore vertical scroll for each bucket body so exploring cards never snaps to top
+  board.querySelectorAll('.kanban-bucket').forEach(bucket => {
+    const key = Array.from(bucket.classList).find(c => ['raw', 'identity', 'movement', 'volume', 'depth', 'spread', 'horizon', 'passed'].includes(c));
+    const body = bucket.querySelector('.kanban-bucket-body');
+    if (key && body && prevBucketScrolls[key] !== undefined) {
+      body.scrollTop = prevBucketScrolls[key];
+    }
+  });
+
+  // Preserve window scroll position
+  if (typeof prevWindowScroll === 'number' && Math.abs((window.scrollY || document.documentElement.scrollTop) - prevWindowScroll) > 1) {
+    window.scrollTo({ top: prevWindowScroll, behavior: 'instant' });
+  }
 
   // Update navigation arrow states after rendering
   requestAnimationFrame(updateKanbanNavButtons);
@@ -9340,6 +9557,17 @@ function initKanbanCarousel() {
   });
 
   window.addEventListener('resize', updateKanbanNavButtons, { passive: true });
+
+  // Lane switcher buttons
+  document.querySelectorAll('.lane-tab-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const targetLane = btn.dataset.lane;
+      if (typeof window.setKanbanLane === 'function') {
+        window.setKanbanLane(targetLane);
+      }
+    });
+  });
 }
 
 /* Re-anchors any open header panels (services dropdown or DB run switcher)

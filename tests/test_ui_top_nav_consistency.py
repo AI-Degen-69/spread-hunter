@@ -120,7 +120,7 @@ def test_static_fallback_rows_are_status_only():
     # #602: dropdown rows are status-only. The pill carries just .pill-value (the
     # state); the name column identifies the service. No .pill-label in the pill.
     html = _html()
-    ids = ("hud-guardrail-pill", "market-scan-pill", "scan-state-pill", "hud-shadow-pill")
+    ids = ("hud-guardrail-pill", "market-scan-pill", "scan-state-pill")
     for pill_id in ids:
         start = html.find(f'id="{pill_id}"')
         assert start != -1, f"{pill_id} fallback pill not found"

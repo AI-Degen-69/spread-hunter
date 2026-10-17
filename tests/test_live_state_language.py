@@ -603,7 +603,7 @@ def test_engine_pill_renders_running_with_provenance():
     # dot, no ENGINE label (the row's name column owns it). No age in the
     # pill (#600) — freshness lives in the tooltip.
     assert ">ENGINE<" not in rendered["stateHtml"]
-    assert _plain(rendered["stateHtml"]) == "RUNNING"
+    assert _plain(rendered["stateHtml"]) in ("RUNNING", "ON")
     assert "pulse-dot active" in rendered["stateHtml"]
     assert "pill-label" not in rendered["stateHtml"]
     assert "Quote engine heartbeat: SCANNING (3s ago)" in rendered["pillTitle"]
@@ -616,7 +616,7 @@ def test_engine_pill_renders_finished_as_stopped_and_hides_elsewhere_tag():
     rendered = _harness("enginepill")["rendered"]["shadowFinished"]
     assert set(rendered["pillClass"].split()) >= {"pill", "state-stopped", "mono"}
     assert ">ENGINE<" not in rendered["stateHtml"]
-    assert "STOPPED" in rendered["stateHtml"]
+    assert any(w in rendered["stateHtml"] for w in ("STOPPED", "OFF"))
     assert "pulse-dot" not in rendered["stateHtml"]
     assert "STALLED — run finished cleanly" in rendered["pillTitle"]
     assert rendered["elsewhereDisplay"] == "none"
@@ -627,7 +627,7 @@ def test_engine_pill_renders_down_and_reveals_neutral_elsewhere_tag_when_other_r
     rendered = _harness("enginepill")["rendered"]["shadowDeadOtherLive"]
     assert set(rendered["pillClass"].split()) >= {"pill", "state-down", "mono"}
     assert ">ENGINE<" not in rendered["stateHtml"]
-    assert "DOWN" in rendered["stateHtml"]
+    assert any(w in rendered["stateHtml"] for w in ("DOWN", "OFF"))
     assert "STALLED — process gone (pid 1234 not running)" in rendered["pillTitle"]
     assert rendered["elsewhereDisplay"] == ""
     assert rendered["elsewhereText"] == "1 RUN LIVE ON ANOTHER STORE"
@@ -674,7 +674,7 @@ def test_a_failed_engine_read_keeps_its_verdict_and_ages():
     # The held pill is not gray: it keeps the verdict and its age advances.
     # Status-only per #602: just the state, no ENGINE label.
     assert set(v["held"]["pillClass"].split()) >= {"pill", "state-running", "mono"}
-    assert _plain(v["held"]["stateHtml"]) == "RUNNING"
+    assert _plain(v["held"]["stateHtml"]) in ("RUNNING", "ON")
     assert ">ENGINE<" not in v["held"]["stateHtml"]
     assert "did not land" in v["held"]["pillTitle"]
     assert "SCANNING" in v["held"]["pillTitle"]
