@@ -524,15 +524,15 @@ RANK_FLAT_PENALTY = 0.5          # multiplicative, applied once
 
 
 def rank_score(row: dict) -> float:
-    """Ranking score for one eligible row: return, boosted when live.
+    """Ranking score for one eligible row: spread-capture movement score, boosted when live.
 
     Pure of venue calls -- every input is already measured on the row.
     LIVENESS IS THE VENUE'S DECLARATION (`_live_event`, stamped by the
     `/events?live=true` discovery path), never a game clock (time-of-game
     purge, #597): the venue's `gameStartTime` contradicts its own `live`
     flag on multi-day events, so a clock read would rank a match in play
-    as not-started. Missing fields fail safe to today's behavior
-    (bare return_pct_day).
+    as not-started. Missing fields fail safe to unboosted baseline
+    (bare return_pct_day movement-notional score).
     """
     base = float(row.get("return_pct_day") or 0.0)
     movement = row.get("movement_usd")
@@ -1336,7 +1336,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
              min_range_cents: Optional[float] = None,
              velocity_gate_enabled: Optional[bool] = None,
              now_iso: Optional[str] = None) -> dict:
-    """Income and capital for one market, from its live book.
+    """Movement notional score and capital for one market, from its live book.
 
     `rate` is the market's measured movement notional in dollars -- the
     ranking key since the rewards purge (#594) deleted the estimated-income

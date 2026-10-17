@@ -100,14 +100,6 @@ class MakerConfig:
     # return None for every side, and nothing else changes.
     enable_hard_blocks: bool = True
 
-    # FLOAT-MARK RETENTION. The fleet writes one fleet-wide open-position mark
-    # per sweep (unrealized float, committed dollars, naked residue -- the
-    # same totals the dashboard derives at read time). 90 days keeps the
-    # Total-equity history deep while bounding the table, instead of growing
-    # forever like market_events; the dashboard downsamples to one point per
-    # minute anyway, so finer-than-a-minute retention buys nothing.
-    float_mark_retention_days: float = 90.0
-
     # BOOK HEALTH. Three arms, all on ONE token's book.
     #
     # A price this close to either end means the market has decided. There is
@@ -480,22 +472,9 @@ class MakerConfig:
     # the fleet ran against it for a day and a half.
     rerank_interval_sec: float = 600.0
 
-    # OPPORTUNITY COST. scarcity_close_threshold prices a close against zero
-    # AND against the return the capital would earn elsewhere -- it asks not
-    # only "is closing better than holding?" but "is this dollar better spent
-    # somewhere else?". When the allocator is budget-bound while markets
-    # well above the marginal floor go underfunded, holding a stagnant pair
-    # costs the return that dollar would have earned in the starved market, and
-    # that cost is real whether or not the pair itself is up.
-    #
-    # Under scarcity the required net drops to a SLIGHTLY NEGATIVE number: pay
-    # half a cent per share to free capital that can earn multiples of it per
-    # day elsewhere. Deliberately small -- this releases capital, it does not
-    # authorise dumping inventory at any price.
-    scarcity_close_threshold: float = -0.005
     # How far above the marginal floor a market's return must still sit, with
     # the budget exhausted, before capital counts as scarce. At 1.0 any fully
-    # spent budget would trip it, which would make the relaxed threshold the
+    # spent budget would trip it, which would make capital scarcity the
     # normal case rather than the exception.
     scarcity_marginal_multiple: float = 2.0
     # Set per-cycle by the fleet allocator, same mechanism as gate_state and
@@ -725,29 +704,6 @@ class MakerConfig:
     pairs_complete_gain_cents: float = 3.68
     pairs_exit_cost_cents: float = 3.67
 
-    # --- experiment end criteria (decisive test of the maker mechanism) -----
-    # Phase A (census): observe this many DISTINCT live markets and measure how
-    # often a fillable sub-$1.00 hedged pair exists at ask-1tick. Below the
-    # threshold the instrument simply cannot be made profitably -> stop (DEAD).
-    # Phase B (verdict): once the census passes, settle this many markets with
-    # the CORRECTED strategy and read P&L sign + confidence -> final save/lost
-    # call. These numbers are the experiment's stop condition, rendered live in
-    # the dashboard so the run ends on evidence, not vibes.
-    experiment_census_markets: int = 60
-    experiment_verdict_markets: int = 120
-    hedge_fillable_min_rate: float = 0.50
-
-    # --- balance enforcement --------------------------------------------
-    # The proven loss driver on 5-min BTC is PARTIAL fills: one side rests
-    # and fills, the other never does before the window closes, so the market
-    # settles one-sided and eats the full resolution loss. A passive maker
-    # cannot UN-fill an already-rested side, so the only enforceable balance
-    # rule is to CROSS THE SPREAD for the missing leg near resolution. We do
-    # this once, only if still imbalanced, inside this many seconds before
-    # close. This guarantees every settled market is balanced -> Phase B's
-    # win/loss is an unambiguous verdict on the INSTRUMENT, not our execution.
-    balance_hedge_sec: float = 20.0
-
     # --- economics --------------------------------------------------------
     # crypto_fees_v2: takerOnly=true -> makers pay NO fee. Rebate pool is 20%
     # of taker fees, shared pro-rata among qualifying makers. We cannot see the
@@ -801,8 +757,6 @@ class MakerConfig:
     def quote_window_frac(self) -> float:
         """Backward compatibility alias for quote_window_pct (#632)."""
         return self.quote_window_pct
-
-    sim_only: bool = True
 
     def db_path(self) -> Path:
         return Path(os.environ.get("SPREAD_HUNTER_DB") or os.environ.get("HUNTER_DB", str(ROOT / "hunter.db")))

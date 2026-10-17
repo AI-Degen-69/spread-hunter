@@ -105,3 +105,61 @@ def test_kpi_module_imports_with_an_inherited_trial_knob(monkeypatch):
     importlib.reload(kpi)  # must not raise
 
     assert kpi._CFG.max_pair_cost == MakerConfig.max_pair_cost
+
+
+# --- UNREAD SETTINGS PURGE (#576) ---------------------------------------------
+
+
+def test_unread_settings_purged_from_maker_configs():
+    import dataclasses
+    from scoring import config as scoring_config
+
+    purged = {
+        "float_mark_retention_days",
+        "scarcity_close_threshold",
+        "est_reward_pool_usd",
+        "stat_gate_alpha",
+        "stat_gate_beta",
+        "experiment_census_markets",
+        "experiment_verdict_markets",
+        "hedge_fillable_min_rate",
+        "balance_hedge_sec",
+        "sim_only",
+    }
+
+    core_fields = {f.name for f in dataclasses.fields(core_config.MakerConfig)}
+    scoring_fields = {f.name for f in dataclasses.fields(scoring_config.MakerConfig)}
+
+    core_lingering = core_fields.intersection(purged)
+    scoring_lingering = scoring_fields.intersection(purged)
+
+    assert not core_lingering, f"Unread fields lingering in core_brain.config.MakerConfig: {core_lingering}"
+    assert not scoring_lingering, f"Unread fields lingering in scoring.config.MakerConfig: {scoring_lingering}"
+
+
+def test_retained_neighbors_still_declared():
+    import dataclasses
+    from scoring import config as scoring_config
+
+    core_fields = {f.name for f in dataclasses.fields(core_config.MakerConfig)}
+    scoring_fields = {f.name for f in dataclasses.fields(scoring_config.MakerConfig)}
+
+    expected_core = {
+        "stat_gate_deltas",
+        "stat_gate_threshold_pct",
+        "stat_gate_bankroll_pct",
+        "stat_gate_target_closes",
+        "stranded_max_wait_sec",
+        "pairs_exit_window_sec",
+    }
+    expected_scoring = {
+        "select_min_top3_depth_usd",
+        "select_max_book_spread",
+    }
+
+    missing_core = expected_core - core_fields
+    missing_scoring = expected_scoring - scoring_fields
+
+    assert not missing_core, f"Retained core fields missing: {missing_core}"
+    assert not missing_scoring, f"Retained scoring fields missing: {missing_scoring}"
+
