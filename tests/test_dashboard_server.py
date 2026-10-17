@@ -37,6 +37,7 @@ from dashboard.server import (
     set_heartbeat_override,
     set_ring_override,
     _cycle_stream_sse,
+    _log_stream_sse,
 )
 
 NODE = shutil.which("node")
@@ -2888,5 +2889,146 @@ def test_reporting_service_start_filesystem_mkdir_error_500(client, monkeypatch,
     assert res.status_code == 500
     assert res.json()["error_type"] == "OSError"
     assert "Read-only file system" in res.json()["error"]
+
+
+# ── /api/log-stream & Log Family Tests (#639) ──
+
+
+def test_log_stream_route_registered():
+    """GET /api/log-stream is served as an SSE endpoint."""
+    paths = {getattr(r, "path", None) for r in app.routes}
+    assert "/api/log-stream" in paths
+
+
+def test_log_stream_refusals(client):
+    """Unknown family, traversal run_id, and unlisted run_id return 400."""
+    res = client.get("/api/log-stream?family=bogus")
+    assert res.status_code == 400
+    assert "Unknown family" in res.json().get("detail", "")
+
+    res = client.get("/api/log-stream?run_id=../../escape")
+    assert res.status_code == 400
+    assert "Invalid run_id format" in res.json().get("detail", "")
+
+    res = client.get("/api/log-stream?run_id=unlisted_shadow_run_123")
+    assert res.status_code == 400
+    assert "Unlisted run_id" in res.json().get("detail", "")
+
+
+def test_log_stream_sse_hello_and_no_mark_frames(tmp_path, monkeypatch):
+    """_log_stream_sse emits source hello frames and zero mark frames."""
+    ring = tmp_path / "cycle_events.jsonl"
+    ring.write_text(json.dumps({"service": "engine", "action": "tick"}) + "\n", encoding="utf-8")
+    monkeypatch.setattr("dashboard.server._ACTIVE_RING_OVERRIDE", ring)
+
+    gen = _log_stream_sse(families=["live", "filter", "shadow"], poll_sec=0.01)
+    frames = []
+    try:
+        # First 3 frames should be source hellos
+        for _ in range(3):
+            frames.append(next(gen))
+        # 4th frame should be live log replay
+        frames.append(next(gen))
+    finally:
+        gen.close()
+
+    assert any('event: source' in f and '"family": "live"' in f for f in frames)
+    assert any('event: source' in f and '"family": "filter"' in f for f in frames)
+    assert any('event: source' in f and '"family": "shadow"' in f for f in frames)
+    assert not any('event: mark' in f for f in frames)
+
+
+def test_log_stream_sse_replay_isolation_and_caps(tmp_path, monkeypatch):
+    """Live excludes filter events; filter includes only filter/screener events."""
+    ring = tmp_path / "cycle_events.jsonl"
+    events = []
+    events.append(json.dumps({"service": "filter_loop", "action": "filter_scan", "reason": "scan complete"}))
+    for i in range(60):
+        events.append(json.dumps({"service": "query", "action": "fill_recorded", "extra": {"i": i}}))
+    ring.write_text("\n".join(events) + "\n", encoding="utf-8")
+    monkeypatch.setattr("dashboard.server._ACTIVE_RING_OVERRIDE", ring)
+
+    # Filter stream: should receive the 1 filter event, not the 60 query events
+    gen_filter = _log_stream_sse(families=["filter"], tail=50, poll_sec=0.01)
+    filter_frames = []
+    try:
+        filter_frames.append(next(gen_filter))  # source
+        filter_frames.append(next(gen_filter))  # 1 matching log event
+    finally:
+        gen_filter.close()
+
+    assert any('"family": "filter"' in f and 'filter_scan' in f for f in filter_frames)
+    assert not any('fill_recorded' in f for f in filter_frames)
+
+    # Live stream: should receive the newest 50 query events, not the filter event
+    gen_live = _log_stream_sse(families=["live"], tail=50, poll_sec=0.01)
+    live_frames = []
+    try:
+        live_frames.append(next(gen_live))  # source
+        for _ in range(50):
+            live_frames.append(next(gen_live))
+    finally:
+        gen_live.close()
+
+    assert not any('filter_scan' in f for f in live_frames)
+    assert len([f for f in live_frames if 'fill_recorded' in f]) == 50
+
+
+def test_log_stream_sse_text_logs_tailing_and_escaping(tmp_path, monkeypatch):
+    """Text logs are yielded with source='text' and lines capped at 1000 characters."""
+    rt_dir = tmp_path / "runtime"
+    rt_dir.mkdir(parents=True, exist_ok=True)
+    rerank_log = rt_dir / "rerank.log"
+    long_line = "A" * 1500
+    rerank_log.write_text(f"[INFO] <script>alert(1)</script>\n{long_line}\n", encoding="utf-8")
+
+    monkeypatch.setattr("dashboard.server.LIVE_ROOT", tmp_path)
+    monkeypatch.setattr("dashboard.server.runtime_file", lambda f: rt_dir / f)
+    monkeypatch.setattr("dashboard.server.resolve_runtime_file", lambda f, root=None: rt_dir / f)
+
+    gen = _log_stream_sse(families=["filter"], tail=50, poll_sec=0.01)
+    frames = []
+    try:
+        frames.append(next(gen))  # source
+        frames.append(next(gen))  # text log line 1
+        frames.append(next(gen))  # text log line 2
+    finally:
+        gen.close()
+
+    text_frames = [f for f in frames if '"source": "text"' in f]
+    assert len(text_frames) == 2
+    assert '<script>alert(1)</script>' in text_frames[0]
+    # Check length capping on line 2
+    payload = json.loads(text_frames[1].split("data: ")[1].strip())
+    assert len(payload["text"]) <= 1000
+
+
+def test_log_stream_sse_rotation_detected(tmp_path, monkeypatch):
+    """Rotation emits an event: rotate frame for that stream."""
+    ring = tmp_path / "cycle_events.jsonl"
+    ring.write_text(json.dumps({"service": "query", "action": "step1"}) + "\n", encoding="utf-8")
+    monkeypatch.setattr("dashboard.server._ACTIVE_RING_OVERRIDE", ring)
+
+    gen = _log_stream_sse(families=["live"], tail=50, poll_sec=0.01)
+    try:
+        next(gen)  # source
+        next(gen)  # initial event
+
+        # Replace file
+        new_ring = tmp_path / "new_cycle.jsonl"
+        new_ring.write_text(json.dumps({"service": "query", "action": "step2"}) + "\n", encoding="utf-8")
+        os.replace(new_ring, ring)
+
+        deadline = time.time() + 3.0
+        saw_rotate = False
+        while time.time() < deadline:
+            frame = next(gen)
+            if "event: rotate" in frame and '"family": "live"' in frame:
+                saw_rotate = True
+                break
+        assert saw_rotate
+    finally:
+        gen.close()
+
 
 
