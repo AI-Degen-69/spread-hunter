@@ -823,6 +823,7 @@ def _funnel_from_pipeline(
         "volume_gate_usd": snap.get("volume_gate_usd"),
         "trial_depth_usd": snap.get("trial_depth_usd"),
         "trial_volume_usd": snap.get("trial_volume_usd"),
+        "movement_gate_usd": snap.get("movement_gate_usd"),
         "spread_gate": snap.get("spread_gate"),
         "horizon_gate_days": snap.get("horizon_gate_days"),
         "reward_min_income_usd_day": snap.get("reward_min_income_usd_day"),

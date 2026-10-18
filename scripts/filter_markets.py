@@ -2541,6 +2541,7 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
                              trial_volume_usd: Optional[float] = None,
                              spread_gate: Optional[float] = None,
                              trial_spread: Optional[float] = None,
+                             movement_gate_usd: Optional[float] = None,
                              discovery: Optional[dict] = None,
                              out_dir: Path | str | None = None) -> None:
     """Persist the whole selection funnel to runtime/pipeline.json.
@@ -2662,6 +2663,12 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         "spread_gate": (spread_gate if spread_gate is not None
                         else MAX_BOOK_SPREAD),
         "trial_spread": trial_spread,
+        # Which movement bar this rank gated on. The dashboard's movement
+        # hero and lane banner state the same number; without it they can
+        # only state a literal, which is how one kept claiming $200 through
+        # a config change while the scan gated elsewhere.
+        "movement_gate_usd": (movement_gate_usd if movement_gate_usd is not None
+                              else MIN_MOVEMENT_USD),
         "horizon_gate_days": MAX_DAYS_TO_RESOLVE,
         # Both sources require positive income (income > 0.0). Exported per
         # source so the snapshot schema is preserved without asymmetry.
@@ -3185,6 +3192,7 @@ def main() -> None:
         trial_volume_usd=(volume_bar if volume_trial_active else None),
         spread_gate=spread_bar,
         trial_spread=(spread_bar if spread_trial_active else None),
+        movement_gate_usd=movement_bar,
         out_dir=out_dir)
     # The near-miss log is the accumulated evidence for a gate decision; a
     # dry-run audit must not pollute it (it would double-count against the
