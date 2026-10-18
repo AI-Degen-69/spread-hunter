@@ -60,7 +60,7 @@ Size Tier: Standard | Task Types: Code, Refactor
   3. Set `env_var` to `""` for all remaining 33 cards (including `emergency_hedge_pct`, `select_min_top3_depth_usd`, `tick_size`, derived caps, etc.).
 - **Verification:** Script check confirming every card's `env_var` is a string, no `HUNTER_` substrings exist, and every non-empty badge exists in `.env.example`.
 
-### [ ] T3 — Automated tests in `tests/test_dashboard_server.py` & regression verification
+### [x] T3 — Automated tests in `tests/test_dashboard_server.py` & regression verification
 - **Size:** S | **Domain:** `[Backend/Logic]` | **Skill:** `test-driven-development`
 - **Depends on:** T1, T2
 - **Target files:** `tests/test_dashboard_server.py`
