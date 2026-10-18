@@ -37,34 +37,34 @@ def test_dynamic_offset_enabled_by_default():
 
 
 def test_dynamic_offset_handles_missing_range_telemetry():
-    cfg = MakerConfig(dynamic_offset_enabled=True, range_cents=None)
+    cfg = MakerConfig(bot_quote_gate_dynamic_offset_on=True, bot_quote_telemetry_range_cents=None)
     offset, tag = dynamic_offset_for(cfg, now=NOW)
-    assert offset == cfg.reward_offset
+    assert offset == cfg.bot_quote_spread_static_offset_cents
     assert tag == "static_missing_range"
 
 
 def test_dynamic_offset_handles_stale_telemetry():
     # 1000s old > 900s max age
     cfg = MakerConfig(
-        dynamic_offset_enabled=True,
-        range_cents=4.0,
-        velocity_measured_at=NOW - 1000.0,
-        dynamic_offset_max_age_sec=900.0,
+        bot_quote_gate_dynamic_offset_on=True,
+        bot_quote_telemetry_range_cents=4.0,
+        bot_quote_telemetry_velocity_measured_at=NOW - 1000.0,
+        bot_quote_spread_offset_max_age_sec=900.0,
     )
     offset, tag = dynamic_offset_for(cfg, now=NOW)
-    assert offset == cfg.reward_offset
+    assert offset == cfg.bot_quote_spread_static_offset_cents
     assert tag == "static_stale_range"
 
 
 def test_dynamic_offset_calculates_integer_cents_and_rounds_cleanly():
     # 3.2c * 0.5 = 1.6c -> rounds to 2c -> 0.02
     cfg = MakerConfig(
-        dynamic_offset_enabled=True,
-        dynamic_offset_multiplier=0.5,
-        dynamic_offset_min_cents=1,
-        dynamic_offset_max_cents=4,
-        range_cents=3.2,
-        velocity_measured_at=NOW - 60.0,
+        bot_quote_gate_dynamic_offset_on=True,
+        bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=1,
+        bot_quote_spread_offset_max_cents=4,
+        bot_quote_telemetry_range_cents=3.2,
+        bot_quote_telemetry_velocity_measured_at=NOW - 60.0,
     )
     offset, tag = dynamic_offset_for(cfg, now=NOW)
     assert offset == 0.02
@@ -76,12 +76,12 @@ def test_dynamic_offset_calculates_integer_cents_and_rounds_cleanly():
 def test_dynamic_offset_clamps_to_min_and_max():
     # 0.5c * 0.5 = 0.25c -> clamp to min 1c -> 0.01
     cfg_low = MakerConfig(
-        dynamic_offset_enabled=True,
-        dynamic_offset_multiplier=0.5,
-        dynamic_offset_min_cents=1,
-        dynamic_offset_max_cents=4,
-        range_cents=0.5,
-        velocity_measured_at=NOW - 30.0,
+        bot_quote_gate_dynamic_offset_on=True,
+        bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=1,
+        bot_quote_spread_offset_max_cents=4,
+        bot_quote_telemetry_range_cents=0.5,
+        bot_quote_telemetry_velocity_measured_at=NOW - 30.0,
     )
     offset_low, tag_low = dynamic_offset_for(cfg_low, now=NOW)
     assert offset_low == 0.01
@@ -89,12 +89,12 @@ def test_dynamic_offset_clamps_to_min_and_max():
 
     # 15.0c * 0.5 = 7.5c -> clamp to max 4c -> 0.04
     cfg_high = MakerConfig(
-        dynamic_offset_enabled=True,
-        dynamic_offset_multiplier=0.5,
-        dynamic_offset_min_cents=1,
-        dynamic_offset_max_cents=4,
-        range_cents=15.0,
-        velocity_measured_at=NOW - 30.0,
+        bot_quote_gate_dynamic_offset_on=True,
+        bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=1,
+        bot_quote_spread_offset_max_cents=4,
+        bot_quote_telemetry_range_cents=15.0,
+        bot_quote_telemetry_velocity_measured_at=NOW - 30.0,
     )
     offset_high, tag_high = dynamic_offset_for(cfg_high, now=NOW)
     assert offset_high == 0.04
@@ -105,12 +105,12 @@ def test_quote_resting_price_integrates_dynamic_offset():
     book = {"best_bid": 0.495, "best_ask": 0.505}  # mid 0.500
     # Dynamic offset produces 3c base
     cfg = MakerConfig(
-        dynamic_offset_enabled=True,
-        dynamic_offset_multiplier=0.5,
-        dynamic_offset_min_cents=1,
-        dynamic_offset_max_cents=5,
-        range_cents=6.0,
-        velocity_measured_at=NOW - 60.0,
+        bot_quote_gate_dynamic_offset_on=True,
+        bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=1,
+        bot_quote_spread_offset_max_cents=5,
+        bot_quote_telemetry_range_cents=6.0,
+        bot_quote_telemetry_velocity_measured_at=NOW - 60.0,
         price_risk_widen=0.0,  # isolate base offset
         coinflip_halfwidth=0.0,
     )
@@ -125,7 +125,7 @@ def test_decide_quotes_refuses_when_dynamic_pair_sum_exceeds_dollar():
     down_book = {"best_bid": 0.50, "best_ask": 0.51, "token_id": "tok_dn"}
     # Force an edge case where dynamic base or price calculation would hit >= 1.00
     # By mocking quote_resting_price to return 0.51 each, pair sum = 1.02 >= 1.00
-    cfg = MakerConfig(dynamic_offset_enabled=True, range_cents=2.0)
+    cfg = MakerConfig(bot_quote_gate_dynamic_offset_on=True, bot_quote_telemetry_range_cents=2.0)
     with mock.patch("core_brain.quotes.quote_resting_price", return_value=(0.51, 0.51, None, 1.0)):
         intents, reason = _decide_quotes_from_mid(cfg, up_book, down_book, Inventory(), t_remaining=1000.0)
         assert intents == []
@@ -287,6 +287,69 @@ def test_market_cfg_wires_range_telemetry():
         "velocity_measured_at": 1_788_000_123.0,
     }
     cfg = _market_cfg(base, spec)
-    assert cfg.range_cents == 5.5
-    assert cfg.velocity_measured_at == 1_788_000_123.0
+    assert cfg.bot_quote_telemetry_range_cents == 5.5
+    assert cfg.bot_quote_telemetry_velocity_measured_at == 1_788_000_123.0
+
+
+def test_dynamic_offset_for_reads_canonical_names_without_warning():
+    import warnings
+
+    cfg = MakerConfig(
+        bot_quote_gate_dynamic_offset_on=True,
+        bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=1,
+        bot_quote_spread_offset_max_cents=20,
+        bot_quote_telemetry_range_cents=6.0,
+        bot_quote_telemetry_velocity_measured_at=NOW - 60.0,
+    )
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        offset, tag = dynamic_offset_for(cfg, now=NOW)
+    assert offset == 0.03
+    assert tag == "dynamic_3c"
+
+    # Edge case: stale telemetry (> 900s)
+    cfg_stale = MakerConfig(
+        bot_quote_gate_dynamic_offset_on=True,
+        bot_quote_spread_static_offset_cents=0.020,
+        bot_quote_spread_offset_max_age_sec=900.0,
+        bot_quote_telemetry_range_cents=6.0,
+        bot_quote_telemetry_velocity_measured_at=NOW - 1000.0,
+    )
+    with warnings.catch_warnings(record=True) as recorded_stale:
+        warnings.simplefilter("always")
+        offset_stale, tag_stale = dynamic_offset_for(cfg_stale, now=NOW)
+    assert offset_stale == 0.020
+    assert tag_stale == "static_stale_range"
+
+    # Edge case: range 100.0 clamped to 20 cents
+    cfg_clamp = MakerConfig(
+        bot_quote_gate_dynamic_offset_on=True,
+        bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=1,
+        bot_quote_spread_offset_max_cents=20,
+        bot_quote_telemetry_range_cents=100.0,
+        bot_quote_telemetry_velocity_measured_at=NOW - 60.0,
+    )
+    with warnings.catch_warnings(record=True) as recorded_clamp:
+        warnings.simplefilter("always")
+        offset_clamp, tag_clamp = dynamic_offset_for(cfg_clamp, now=NOW)
+    assert offset_clamp == 0.20
+    assert tag_clamp == "dynamic_20c"
+
+    all_records = list(recorded) + list(recorded_stale) + list(recorded_clamp)
+    scoped_legacy = {
+        "dynamic_offset_enabled",
+        "dynamic_offset_multiplier",
+        "dynamic_offset_min_cents",
+        "dynamic_offset_max_cents",
+        "dynamic_offset_max_age_sec",
+        "range_cents",
+        "velocity_measured_at",
+        "reward_offset",
+    }
+    for w in all_records:
+        if "quotes.py" in str(w.filename):
+            assert not any(name in str(w.message) for name in scoped_legacy), f"Unexpected warning: {w.message}"
+
 

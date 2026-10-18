@@ -95,6 +95,27 @@ class TestEntryPairCostCap:
         assert "1.0200" in why
         assert "$0.990 cap" in why
 
+    def test_canonical_pair_cap_refuses_from_mid_pair_without_warning(self):
+        import warnings
+        cfg = _flat_cfg(enforce_completable_pair_cost=False, bot_pos_price_max_pair_cost_usd=0.99)
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            intents, why = decide_quotes(cfg, _WIDE_UP, _WIDE_DOWN, Inventory(), 1e9, None)
+
+        assert intents == []
+        assert why.startswith("entry_pair_cost:")
+        assert "1.0200" in why
+        assert "$0.990 cap" in why
+        scoped_legacy = {
+            "dynamic_offset_enabled",
+            "strict_paired_inventory",
+            "enable_emergency_hedge",
+            "min_reward_offset",
+        }
+        for w in recorded:
+            if "quotes.py" in str(w.filename):
+                assert not any(name in str(w.message) for name in scoped_legacy), f"Unexpected warning: {w.message}"
+
     def test_a_pair_exactly_at_the_cap_is_quoted(self):
         # The issue states the rule as `<= max_pair_cost`, so the tie is
         # allowed: 0.29 + 0.70 = $0.99 on a $0.99 cap posts both legs.
@@ -467,4 +488,24 @@ class TestMakerConfigNamingStandardization:
             MakerConfig(max_skew=0.015)
         with pytest.raises(TypeError):
             MakerConfig(select_spread_frac=41.0 / 120.0)
+
+
+def test_in_band_reads_canonical_gate():
+    import warnings
+    from core_brain.quotes import _in_band
+
+    cfg_off = MakerConfig(bot_quote_gate_price_band_on=False)
+    with warnings.catch_warnings(record=True) as recorded_off:
+        warnings.simplefilter("always")
+        assert _in_band(cfg_off, 0.95) is True
+
+    cfg_on = MakerConfig(bot_quote_gate_price_band_on=True)
+    with warnings.catch_warnings(record=True) as recorded_on:
+        warnings.simplefilter("always")
+        assert _in_band(cfg_on, 0.95) is False
+
+    for w in list(recorded_off) + list(recorded_on):
+        if "quotes.py" in str(w.filename):
+            assert "enforce_price_band" not in str(w.message)
+
 

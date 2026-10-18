@@ -135,3 +135,19 @@ def test_the_ask_branch_is_the_only_place_the_window_bites():
     assert _quote(_ask_cfg(), window_pct=window)[0] == []
     assert _quote(replace(MakerConfig(), objective="spread_capture"),
                   window_pct=window)[0] != []
+
+
+def test_legacy_ask_branch_reads_canonical_target_balance():
+    import warnings
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        intents, why = _quote(_ask_cfg(), window_pct=None)
+
+    assert why == ""
+    assert {i.side: i.price for i in intents} == {"UP": 0.51, "DOWN": 0.46}
+    scoped_legacy = {"target_balance", "max_pair_cost"}
+    for w in recorded:
+        if "quotes.py" in str(w.filename):
+            assert not any(name in str(w.message) for name in scoped_legacy), f"Unexpected warning: {w.message}"
+
