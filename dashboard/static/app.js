@@ -7690,6 +7690,8 @@ function positionsRows(kpi, state, sort) {
 
   if (!entries.length) return otEmptyRow('positions', 'No legs have filled, so nothing is held.');
 
+  const ordersByMarket = groupOrdersByMarket(state && state.orders);
+
   // The held market is the sort unit, for the same reason the pair is in Open
   // Orders: a market renders as one row per held leg, with the market name and
   // all three pair-level numbers spanning them.
@@ -7744,6 +7746,9 @@ function positionsRows(kpi, state, sort) {
     const isInferred = (status !== 'unpaired') && isMarketInferredPosition(cid, kpi, state);
     const pairTags = pairSummary(status, (status === 'unpaired') ? null : m.pair_cost, isInferred);
     const span = legs.length;
+    // The engine's activity on this market, stated once per market on the row
+    // that carries the market cell (issue #656).
+    const activity = marketActivityPill(m, ordersByMarket[cid]);
 
     return legs.map((entry, legIndex) => {
       const rowClass = ['ot-pair-row'];
@@ -7754,7 +7759,7 @@ function positionsRows(kpi, state, sort) {
       // reason the market name does: they describe the pair, not one leg.
       const tsHtml = legIndex === 0 ? timestampCell(ts, { rowspan: span }) : '';
       const pairCells = legIndex === 0
-        ? `<td class="ot-market" rowspan="${span}">${marketCell(m, cid, { categoryCaption: true })}${pairTags}</td>`
+        ? `<td class="ot-market" rowspan="${span}">${marketCell(m, cid, { categoryCaption: true })}${activity}${pairTags}</td>`
         : '';
       // Live cells carry their address (data-cid + data-cell) so the rAF
       // pass can rewrite them without a table rebuild; the `live` class and

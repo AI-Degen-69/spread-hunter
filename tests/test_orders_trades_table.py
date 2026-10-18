@@ -843,6 +843,110 @@ def test_positions_says_so_when_nothing_is_held():
     assert "No legs have filled, so nothing is held." in rendered["html"]
 
 
+def _held_block(rendered: dict, index: int = 1) -> str:
+    """One held market's rows: from its `ot-pair-start` row to the next one."""
+    return rendered["html"].split("ot-pair-start")[index]
+
+
+def _held_resting_order(status: str = "open") -> dict:
+    """An order still working on the held market, posted after the fixtures."""
+    return {"order_id": "ord-held", "condition_id": CID_HELD,
+            "token_id": "tok-h-up", "pair_id": "pair-held", "side": "BUY",
+            "price": 0.58, "original_size": 4.0, "size_matched": 0.0,
+            "size_remaining": 4.0, "status": status, "posted_ts": 1100,
+            "age_sec": 60.0}
+
+
+@requires_node
+def test_positions_quoting_held_market_shows_quoting_pill():
+    # Arrange — the held market has quotes logged and nothing resting on it.
+    rendered = _render("positions", _kpi(), _state())
+
+    # Assert
+    block = _held_block(rendered)
+    assert CID_HELD in block
+    assert 'class="pill quoting-breathing"' in block
+    assert ">QUOTING</span>" in block
+    assert "resting-breathing" not in block
+
+
+@requires_node
+def test_positions_held_market_with_resting_order_shows_resting_pill():
+    # Arrange — an order is still resting on the held market, so RESTING wins
+    # over the quotes the market also logged.
+    state = _state()
+    state["orders"].append(_held_resting_order())
+
+    # Act
+    rendered = _render("positions", _kpi(), state)
+
+    # Assert
+    block = _held_block(rendered)
+    assert 'class="pill resting-breathing"' in block
+    assert ">RESTING</span>" in block
+    assert "quoting-breathing" not in block
+
+
+@requires_node
+def test_positions_unrelated_market_resting_orders_do_not_mark_held_market():
+    # Arrange — every resting order in the store belongs to the market nobody
+    # holds, so the held row must not borrow its activity.
+    rendered = _render("positions", _kpi(), _state())
+
+    # Assert
+    assert "resting-breathing" not in _held_block(rendered)
+
+
+@requires_node
+def test_positions_idle_held_market_keeps_standard_tags():
+    # Arrange — no quotes and no resting orders on the held market.
+    kpi = _kpi()
+    kpi["by_market"][CID_HELD]["quotes_count"] = 0
+
+    # Act
+    rendered = _render("positions", kpi, _state())
+
+    # Assert — no new pill of any kind, and the tags that were there stay.
+    assert "resting-breathing" not in rendered["html"]
+    assert "quoting-breathing" not in rendered["html"]
+    assert "pill stopped" not in rendered["html"]
+    block = _held_block(rendered)
+    assert 'class="pill active"' in block
+    assert "ot-tag" in block
+
+
+@requires_node
+def test_positions_activity_pill_keeps_banding_and_live_cells():
+    # Arrange — two held markets, so the second renders the striped band; the
+    # first has an order resting on it.
+    kpi = _kpi()
+    kpi["by_market"]["0xheld2"] = {**kpi["by_market"][CID_HELD],
+                                    "condition_id": "0xheld2",
+                                    "title": "Second Held Market"}
+    state = _state()
+    state["orders"].append(_held_resting_order())
+
+    # Act
+    rendered = _render("positions", kpi, state)
+    html = rendered["html"]
+
+    # Assert — the pill adds no column and no row.
+    assert rendered["columns"] == ["Timestamp", "Market", "Leg", "Size",
+                                   "Avg Price", "Cost", "Mark Value",
+                                   "Unrealized", "Realized"]
+    assert rendered["rows"] == 4
+    assert "ot-pair-start" in html
+    assert "ot-pair-alt" in html
+    assert 'data-cell="value"' in html
+    assert 'data-cell="unrealized"' in html
+    # The pill rides in the market cell: before the first live cell, and inside
+    # none of the cells the live-marks pass rewrites.
+    assert "resting-breathing" in html.split("data-cell")[0]
+    assert "quoting-breathing" in _held_block(rendered, 2)
+    for cell in html.split('data-cell="')[1:]:
+        assert "breathing" not in cell.split("</td>")[0]
+
+
 # ── Closed trades ──────────────────────────────────────────────────────────
 
 @requires_node
