@@ -100,7 +100,7 @@ unless the operator rejects it before build.
 - **Skill:** test-driven-development. **Depends on:** nothing.
 - **Verify:** new file passes on UNMODIFIED code (run before any config edit).
 
-### T2 — Core-owns-shared refactor [M, Backend/Logic]
+### T2 [x] — Core-owns-shared refactor [M, Backend/Logic]
 - **Target files:** `core_brain/config.py` (+`PICKER_PROFILE`, 1 comment, zero
   default changes), `scoring/config.py` (frozen subclass; keep 8 picker-only +
   5 profile fields; delete the 69 copied identical fields + copied latency
