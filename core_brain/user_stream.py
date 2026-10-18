@@ -29,8 +29,22 @@ SERVICE = "user_stream"
 
 _PARSE_ERRORS = (ValueError, TypeError, KeyError, AttributeError)
 
+try:
+    from dotenv import find_dotenv, load_dotenv
+
+    _env_file = find_dotenv(usecwd=True)
+    if _env_file:
+        load_dotenv(_env_file)
+except ImportError:
+    pass
+except OSError as e:
+    log.warning("user_stream: failed to read .env file at %s: %s", _env_file, e)
+
+
+
 
 class UserStreamCredentialsMissing(RuntimeError):
+
     """Raised when required L2 API credentials are missing from the environment."""
 
 
@@ -526,8 +540,9 @@ class UserStreamClient:
             log.warning("user_stream: telemetry emit failed: %s", e)
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
     import argparse
+    import sys
 
     parser = argparse.ArgumentParser(description="User Account WebSocket stream listener probe")
     parser.add_argument("--listen", action="store_true", help="Start user stream and listen for events")
@@ -537,7 +552,7 @@ if __name__ == "__main__":
         action="append",
         help="Filter by condition ID (can be specified multiple times)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.listen:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -554,7 +569,14 @@ if __name__ == "__main__":
         )
         client.on_state(lambda s, d: print(f"[STATE] {s}: {d}"))
         print("Starting UserStreamClient (Ctrl+C to stop)...")
-        client.start(condition_ids=args.condition_ids)
+        try:
+            client.start(condition_ids=args.condition_ids)
+        except UserStreamCredentialsMissing as e:
+            sys.stderr.write(
+                f"[ERROR] {e}\n"
+                "To run the user stream listener, ensure POLY_API_KEY, POLY_API_SECRET, and POLY_API_PASSPHRASE are set in your environment or .env file.\n"
+            )
+            return 1
         try:
             while True:
                 time.sleep(1.0)
@@ -562,5 +584,14 @@ if __name__ == "__main__":
             print("\nStopping UserStreamClient...")
             client.stop()
             print("Stopped.")
+        return 0
     else:
         parser.print_help()
+        return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())
+
