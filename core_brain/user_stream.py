@@ -35,8 +35,11 @@ try:
     _env_file = find_dotenv(usecwd=True)
     if _env_file:
         load_dotenv(_env_file)
-except (ImportError, OSError):
+except ImportError:
     pass
+except OSError as e:
+    log.warning("user_stream: failed to read .env file at %s: %s", _env_file, e)
+
 
 
 

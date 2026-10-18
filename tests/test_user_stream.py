@@ -484,3 +484,31 @@ def test_main_missing_credentials_graceful_exit(monkeypatch, capsys):
     assert "[ERROR] User stream requires credentials in environment" in captured.err
     assert "POLY_API_KEY" in captured.err
 
+
+def test_main_listen_returns_zero_after_shutdown(monkeypatch):
+    client = MagicMock()
+
+    def interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(user_stream, "UserStreamClient", lambda: client)
+    monkeypatch.setattr(user_stream.time, "sleep", interrupt)
+
+    assert user_stream.main(["--listen"]) == 0
+    client.start.assert_called_once_with(condition_ids=None)
+    client.stop.assert_called_once_with()
+
+
+def test_dotenv_loading_at_import(tmp_path, monkeypatch):
+    import importlib
+    import os
+
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text("POLY_API_KEY=key_from_dotenv_file\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("POLY_API_KEY", raising=False)
+
+    importlib.reload(user_stream)
+    assert os.getenv("POLY_API_KEY") == "key_from_dotenv_file"
+
+
