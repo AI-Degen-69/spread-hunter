@@ -768,7 +768,7 @@ def test_the_i622_arms_file_varies_only_the_refusal_drift():
     arms = json.loads(I622_ARMS.read_text(encoding="utf-8"))
     assert len(arms) == 3, "A/B/C is three arms"
 
-    drift = [a for a in arms if a["env"].get("HUNTER_REFUSAL_HOLD_DRIFT") == "0.02"]
+    drift = [a for a in arms if "HUNTER_REFUSAL_HOLD_DRIFT" in a["env"]]
     assert len(drift) == 1, "exactly one drift arm carries the tolerance"
     assert drift[0]["env"]["HUNTER_REFUSAL_HOLD_DRIFT"] == "0.02"
 
