@@ -385,6 +385,128 @@ def test_canonical_filter_env_overrides_field_and_wins_over_legacy(
         assert getattr(scoring_config.load(), field) == leg_val
 
 
+# ============================================================================
+# #674: canonical `BOT_*` execution environment variable overrides & precedence
+# ============================================================================
+
+EXECUTION_CANONICAL_ENV = [
+    # (canonical_var, legacy_vars, field, can_raw, can_val, leg_raw, leg_val, default_val, needs_pin, needs_rehearsal)
+    ("BOT_MARKET_PINNED_CONDITION_ID", ("HUNTER_MARKET",), "bot_market_pinned_condition_id", "0xcan_pinned", "0xcan_pinned", "0xleg_pinned", "0xleg_pinned", "", False, False),
+    ("BOT_MARKET_TITLE", ("HUNTER_TITLE",), "bot_market_title", "Canonical Title", "Canonical Title", "Legacy Title", "Legacy Title", "", True, False),
+    ("BOT_MARKET_URL", ("HUNTER_URL",), "bot_market_url", "https://polymarket.com/can", "https://polymarket.com/can", "https://polymarket.com/leg", "https://polymarket.com/leg", "", True, False),
+    ("BOT_QUOTE_SIZE_MIN_SHARES", ("HUNTER_MIN_QUOTE_SHARES", "HUNTER_MIN_SIZE"), "bot_quote_size_min_shares", "200", 200, "150", 150, 50, True, False),
+    ("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", ("HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD"), "bot_quote_book_max_spread_from_mid", "25", 0.25, "20", 0.20, 0.045, True, False),
+    ("BOT_QUOTE_GRID_TICK_SIZE_USD", ("HUNTER_PRICE_TICK", "HUNTER_TICK"), "bot_quote_grid_tick_size_usd", "0.005", 0.005, "0.02", 0.02, 0.01, True, False),
+    ("BOT_QUOTE_WIDE_BOOK_TRIAL", ("HUNTER_WIDE_BOOK_TRIAL",), "bot_quote_wide_book_trial", "0.12", 0.12, "0.15", 0.15, None, False, True),
+    ("BOT_RISK_GATE_PAIRS_RULE_ON", ("HUNTER_PAIRS_RULE",), "bot_risk_gate_pairs_rule_on", "off", False, "1", True, True, False, False),
+    ("BOT_LATENCY_NET_ONEWAY_MS", ("HUNTER_NET_ONEWAY_MS", "HUNTER_CANCEL_NET_ONEWAY_MS"), "bot_latency_net_oneway_ms", "9.5", 9.5, "7.5", 7.5, 3.93, False, False),
+    ("BOT_LATENCY_CANCEL_VENUE_ACK_MS", ("HUNTER_CANCEL_VENUE_ACK_MS",), "bot_latency_cancel_venue_ack_ms", "210.0", 210.0, "190.0", 190.0, 150.0, False, False),
+    ("BOT_LATENCY_POST_VENUE_ACCEPT_MS", ("HUNTER_POST_VENUE_ACCEPT_MS",), "bot_latency_post_venue_accept_ms", "95.0", 95.0, "85.0", 85.0, 81.0, False, False),
+    ("BOT_QUOTE_BANK_BASELINE_USD", ("SPREAD_HUNTER_BANKROLL", "HUNTER_BANKROLL"), "bot_quote_bank_baseline_usd", "2500.0", 2500.0, "1500.0", 1500.0, 1000.0, False, False),
+]
+
+
+def _clear_execution_env(monkeypatch):
+    all_vars = [
+        "BOT_MARKET_PINNED_CONDITION_ID", "HUNTER_MARKET",
+        "BOT_MARKET_TITLE", "HUNTER_TITLE",
+        "BOT_MARKET_URL", "HUNTER_URL",
+        "BOT_QUOTE_SIZE_MIN_SHARES", "HUNTER_MIN_QUOTE_SHARES", "HUNTER_MIN_SIZE",
+        "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD",
+        "BOT_QUOTE_GRID_TICK_SIZE_USD", "HUNTER_PRICE_TICK", "HUNTER_TICK",
+        "BOT_QUOTE_WIDE_BOOK_TRIAL", "HUNTER_WIDE_BOOK_TRIAL",
+        "BOT_RISK_GATE_PAIRS_RULE_ON", "HUNTER_PAIRS_RULE",
+        "BOT_LATENCY_NET_ONEWAY_MS", "HUNTER_NET_ONEWAY_MS", "HUNTER_CANCEL_NET_ONEWAY_MS",
+        "BOT_LATENCY_CANCEL_VENUE_ACK_MS", "HUNTER_CANCEL_VENUE_ACK_MS",
+        "BOT_LATENCY_POST_VENUE_ACCEPT_MS", "HUNTER_POST_VENUE_ACCEPT_MS",
+        "BOT_QUOTE_BANK_BASELINE_USD", "SPREAD_HUNTER_BANKROLL", "HUNTER_BANKROLL",
+    ]
+    for v in all_vars:
+        monkeypatch.delenv(v, raising=False)
+
+
+@pytest.mark.parametrize(
+    "can_var,leg_vars,field,can_raw,can_val,leg_raw,leg_val,default_val,needs_pin,needs_rehearsal",
+    EXECUTION_CANONICAL_ENV,
+)
+def test_canonical_execution_env_overrides_field_and_wins_over_legacy(
+        monkeypatch, can_var, leg_vars, field, can_raw, can_val, leg_raw, leg_val, default_val, needs_pin, needs_rehearsal):
+    """#674: each canonical BOT_* execution variable overrides its field and beats legacy HUNTER_*."""
+    _clear_execution_env(monkeypatch)
+    if needs_rehearsal:
+        monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
+
+    def _setup_pin():
+        if needs_pin:
+            monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned_for_test")
+            monkeypatch.setenv("HUNTER_MARKET", "0xpinned_for_test")
+
+    # 1. Unset -> shipped default
+    _setup_pin()
+    assert getattr(scoring_config.load(), field) == default_val
+
+    # 2. Canonical alone -> canonical value
+    monkeypatch.setenv(can_var, can_raw)
+    assert getattr(scoring_config.load(), field) == can_val
+
+    # 3. Both set -> canonical wins over legacy
+    for leg_var in leg_vars:
+        monkeypatch.setenv(leg_var, leg_raw)
+    assert getattr(scoring_config.load(), field) == can_val
+
+    # 4. Blank or whitespace canonical -> falls through to legacy
+    for blank in ("", "   "):
+        monkeypatch.setenv(can_var, blank)
+        assert getattr(scoring_config.load(), field) == leg_val
+
+    # 5. Each legacy var alone with newer cleared -> legacy value still works
+    monkeypatch.delenv(can_var, raising=False)
+    for leg_var in leg_vars:
+        for other in leg_vars:
+            monkeypatch.delenv(other, raising=False)
+        monkeypatch.setenv(leg_var, leg_raw)
+        assert getattr(scoring_config.load(), field) == leg_val
+
+
+def test_execution_coupling_overrides(monkeypatch):
+    """#674: Coupling tests for size (quote_shares floor), bankroll (max_committed_usd), and trial (widen max_spread_from_mid)."""
+    _clear_execution_env(monkeypatch)
+    monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned")
+    monkeypatch.setenv("HUNTER_MARKET", "0xpinned")
+
+    # 1. Size override raises quote_shares to max(n, 120)
+    monkeypatch.setenv("BOT_QUOTE_SIZE_MIN_SHARES", "200")
+    cfg = scoring_config.load()
+    assert cfg.min_quote_shares == 200
+    assert cfg.quote_shares == 200
+
+    monkeypatch.setenv("BOT_QUOTE_SIZE_MIN_SHARES", "50")
+    cfg = scoring_config.load()
+    assert cfg.min_quote_shares == 50
+    assert cfg.quote_shares == 120
+
+    # 2. Bankroll override sets bankroll_usd and max_committed_usd
+    monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "250.0")
+    cfg = scoring_config.load()
+    assert cfg.bankroll_usd == 250.0
+    assert cfg.max_committed_usd == 250.0
+
+    # 3. Wide-book trial override only widens max_spread_from_mid
+    monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
+    monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "5")  # 5 cents = 0.05
+    monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
+    cfg = scoring_config.load()
+    assert cfg.bot_quote_wide_book_trial == 0.12
+    assert cfg.max_book_spread == 0.12
+    assert cfg.max_spread_from_mid == 0.12
+
+    # Smaller trial does not lower max_spread_from_mid
+    monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "20")  # 20 cents = 0.20
+    monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
+    cfg = scoring_config.load()
+    assert cfg.max_spread_from_mid == 0.20
+
+
 @pytest.mark.parametrize("bad_raw", ["abc", "nan", "inf", "-1", ""])
 def test_invalid_live_volume_override_keeps_shipped_default(monkeypatch, bad_raw):
     """`FILTER_LIVE_VOL_MIN_24H_USD` refuses non-finite or negative input."""

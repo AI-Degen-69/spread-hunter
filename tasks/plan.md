@@ -63,7 +63,7 @@ cover the touched code — see T4. Recorded in the PR body.
 
 ## Tasks
 
-### [ ] T1 — Precedence test table: canonical-only and canonical-wins must fail first (RED)
+### [x] T1 — Precedence test table: canonical-only and canonical-wins must fail first (RED)
 - **Size:** S | **Domain:** `[Backend/Logic]` | **Skill:** `test-driven-development`
 - **Depends on:** none
 - **Target files:** `tests/test_config_single_source.py`
