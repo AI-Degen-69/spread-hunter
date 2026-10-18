@@ -101,8 +101,8 @@ def _bounded_float(name: str, raw: str, lo: float, hi: float) -> float:
     return value
 
 
-def resolve_wide_book_trial(raw: str) -> float | None:
-    """Parse `HUNTER_WIDE_BOOK_TRIAL`, refusing outside a declared rehearsal.
+def resolve_wide_book_trial(raw: str, *, var_name: str = "HUNTER_WIDE_BOOK_TRIAL") -> float | None:
+    """Parse `HUNTER_WIDE_BOOK_TRIAL` / `BOT_QUOTE_WIDE_BOOK_TRIAL`, refusing outside a declared rehearsal.
 
     The gate is `rehearsal.is_rehearsal()`, and the choice of question matters.
     The obvious alternative -- "is a signing key reachable?" -- is wrong twice
@@ -133,59 +133,58 @@ def resolve_wide_book_trial(raw: str) -> float | None:
         return None
     if not rehearsal.is_rehearsal():
         raise ValueError(
-            "HUNTER_WIDE_BOOK_TRIAL widens max_book_spread, the gate that "
+            f"{var_name} widens max_book_spread, the gate that "
             "refuses a book where a fill may leave a leg that cannot be "
             "closed. It applies only in a process that has declared itself "
             "unable to place an order: core_brain.shadow_run, whose client "
             "cannot sign, or the ranker's --trial-spread, which only reads "
             "books and writes a market list.")
-    return _bounded_float("HUNTER_WIDE_BOOK_TRIAL", raw, 0.0, 0.30)
+    return _bounded_float(var_name, raw, 0.0, 0.30)
 
 
 def load() -> MakerConfig:
     """Config, with the per-bot fields overridable from the environment.
 
     Four bots run the same code against different markets; each gets its own
-    HUNTER_DB, port and HUNTER_MARKET. Nothing else differs, so a difference in
-    results is a difference in the MARKET, not in the settings.
+    SPREAD_HUNTER_DB / HUNTER_DB, port and BOT_MARKET_PINNED_CONDITION_ID /
+    HUNTER_MARKET. Nothing else differs, so a difference in results is a
+    difference in the MARKET, not in the settings.
     """
     kw: dict = {}
-    cid = os.environ.get("HUNTER_MARKET", "").strip()
+    cid, _ = _env_get("BOT_MARKET_PINNED_CONDITION_ID", "HUNTER_MARKET")
+    cid = (cid or "").strip()
     if cid:
         kw["pinned_condition_id"] = cid
-        kw["market_title"] = os.environ.get("HUNTER_TITLE", "")
-        kw["market_url"] = os.environ.get("HUNTER_URL", "")
+        title, _ = _env_get("BOT_MARKET_TITLE", "HUNTER_TITLE")
+        kw["market_title"] = title or ""
+        url, _ = _env_get("BOT_MARKET_URL", "HUNTER_URL")
+        kw["market_url"] = url or ""
         # Long-dated markets do not close in 15 seconds, and the min-size floor
         # is per-market (20, 50, 100, 200) -- quoting under it earns nothing.
-        ms = os.environ.get("HUNTER_MIN_QUOTE_SHARES")
-        if ms is None:
-            ms = os.environ.get("HUNTER_MIN_SIZE")
-            if ms is not None and ms.strip():
-                logging.getLogger(__name__).warning(
-                    "HUNTER_MIN_SIZE is deprecated (#632); set HUNTER_MIN_QUOTE_SHARES instead."
-                )
+        ms, ms_name = _env_get("BOT_QUOTE_SIZE_MIN_SHARES", "HUNTER_MIN_QUOTE_SHARES", "HUNTER_MIN_SIZE")
+        if ms_name == "HUNTER_MIN_SIZE" and ms and ms.strip():
+            logging.getLogger(__name__).warning(
+                "HUNTER_MIN_SIZE is deprecated (#632); set HUNTER_MIN_QUOTE_SHARES instead."
+            )
         if ms and ms.strip():
             kw["min_quote_shares"] = int(float(ms))
             kw["quote_shares"] = max(int(float(ms)), 120)
-        sp = os.environ.get("HUNTER_MAX_SPREAD_CENTS")
-        if sp is None:
-            sp = os.environ.get("HUNTER_MAX_SPREAD")   # in cents, from the venue
-            if sp is not None and sp.strip():
-                logging.getLogger(__name__).warning(
-                    "HUNTER_MAX_SPREAD is deprecated (#632); set HUNTER_MAX_SPREAD_CENTS instead."
-                )
+        sp, sp_name = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD")
+        if sp_name == "HUNTER_MAX_SPREAD" and sp and sp.strip():
+            logging.getLogger(__name__).warning(
+                "HUNTER_MAX_SPREAD is deprecated (#632); set HUNTER_MAX_SPREAD_CENTS instead."
+            )
         if sp and sp.strip():
             kw["max_spread_from_mid"] = float(sp) / 100.0
-        tk = os.environ.get("HUNTER_PRICE_TICK")
-        if tk is None:
-            tk = os.environ.get("HUNTER_TICK")
-            if tk is not None and tk.strip():
-                logging.getLogger(__name__).warning(
-                    "HUNTER_TICK is deprecated (#632); set HUNTER_PRICE_TICK instead."
-                )
+        tk, tk_name = _env_get("BOT_QUOTE_GRID_TICK_SIZE_USD", "HUNTER_PRICE_TICK", "HUNTER_TICK")
+        if tk_name == "HUNTER_TICK" and tk and tk.strip():
+            logging.getLogger(__name__).warning(
+                "HUNTER_TICK is deprecated (#632); set HUNTER_PRICE_TICK instead."
+            )
         if tk and tk.strip():
             kw["price_tick"] = float(tk)
-    wide = resolve_wide_book_trial(os.environ.get("HUNTER_WIDE_BOOK_TRIAL") or "")
+    wide_raw, wide_name = _env_get("BOT_QUOTE_WIDE_BOOK_TRIAL", "HUNTER_WIDE_BOOK_TRIAL")
+    wide = resolve_wide_book_trial(wide_raw or "", var_name=wide_name or "HUNTER_WIDE_BOOK_TRIAL")
     if wide is not None and wide > 0:
         # The trial moves ONE ceiling; the picker bar follows through the
         # derived property (#572), and the reward window is widened only if
@@ -275,20 +274,20 @@ def load() -> MakerConfig:
             v = 0.0
         if math.isfinite(v) and v >= 0:
             kw["filter_std_vol_min_24h_usd"] = v
-    pr = os.environ.get("HUNTER_PAIRS_RULE") or ""
-    if pr.strip():
+    pr, _ = _env_get("BOT_RISK_GATE_PAIRS_RULE_ON", "HUNTER_PAIRS_RULE")
+    if pr and pr.strip():
         kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
-    cno = os.environ.get("HUNTER_NET_ONEWAY_MS") or os.environ.get("HUNTER_CANCEL_NET_ONEWAY_MS")
+    cno, _ = _env_get("BOT_LATENCY_NET_ONEWAY_MS", "HUNTER_NET_ONEWAY_MS", "HUNTER_CANCEL_NET_ONEWAY_MS")
     if cno and cno.strip():
         kw["net_oneway_ms"] = float(cno)
-    cva = os.environ.get("HUNTER_CANCEL_VENUE_ACK_MS")
+    cva, _ = _env_get("BOT_LATENCY_CANCEL_VENUE_ACK_MS", "HUNTER_CANCEL_VENUE_ACK_MS")
     if cva and cva.strip():
         kw["cancel_venue_ack_ms"] = float(cva)
-    pva = os.environ.get("HUNTER_POST_VENUE_ACCEPT_MS")
+    pva, _ = _env_get("BOT_LATENCY_POST_VENUE_ACCEPT_MS", "HUNTER_POST_VENUE_ACCEPT_MS")
     if pva and pva.strip():
         kw["post_venue_accept_ms"] = float(pva)
-    bk = os.environ.get("SPREAD_HUNTER_BANKROLL") or os.environ.get("HUNTER_BANKROLL") or ""
-    if bk.strip():
+    bk, _ = _env_get("BOT_QUOTE_BANK_BASELINE_USD", "SPREAD_HUNTER_BANKROLL", "HUNTER_BANKROLL")
+    if bk and bk.strip():
         val = float(bk)
         if not math.isfinite(val) or val <= 0:
             raise ValueError(f"Bankroll override must be finite and strictly positive, got: {val}")

@@ -102,7 +102,7 @@ cover the touched code — see T4. Recorded in the PR body.
 - **Checkpoint:** RED evidence exists and is attributable to the missing canonical read, not to a
   fixture mistake.
 
-### [ ] T2 — Rewire the twelve reads in `load()` through `_env_get` (GREEN)
+### [x] T2 — Rewire the twelve reads in `load()` through `_env_get` (GREEN)
 - **Size:** S | **Domain:** `[Backend/Logic]` | **Skill:** `incremental-implementation`
 - **Depends on:** T1
 - **Target files:** `scoring/config.py`
