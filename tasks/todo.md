@@ -1,4 +1,6 @@
-# Todo — Issue #675
+# Todo — Issue #672
 
-- [x] T1 — Guard screener trial bars in `core_brain/config.py:from_env()` with named validation
-- [x] T2 — Add parametrized tests for trial bar rejection and verification in `tests/test_config_single_source.py`
+- [x] T1: Direct canonical attribute reads in `dashboard/server.py:get_parameters`
+- [x] T2: Canonical environment variable badges in `dashboard/server.py:get_parameters`
+- [x] T3: Automated tests in `tests/test_dashboard_server.py` & regression verification
+- [x] T4: Align `dashboard/static/strategy_explainer.html` with canonical env vars (Feedback Iteration)
