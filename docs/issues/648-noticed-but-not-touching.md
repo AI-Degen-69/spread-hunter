@@ -50,9 +50,9 @@ in this diff.
 
 ## Found while building (Station III, 2026-10-18)
 
-| # | candidate | found by | evidence | status |
-|---|---|---|---|---|
-| N1 | `runtime/markets.json` is mostly stale: 9 of its 11 rows are markets the venue no longer returns (checked live 2026-10-18; only the two Brazil election rows resolve). The file feeds the graduated universe, so a sweep of dead rows is worth a small ticket. | T4 live probe | `runtime/markets.json` + `markets.fetch_pinned_market` per row | open |
-| N2 | `level_gap` stayed at **0** across a live run (53 frames, both markets): the per-entry `best_bid`/`best_ask` agreed with the rebuilt book every time. The plan's risk note says the counter can be deleted if it stays at zero; that is still a follow-up decision, not this ticket. | T4 live probe | `tasks/plan.md` → Build-time evidence | open |
-| N3 | The `operation`-frame path is confirmed on the wire, so `live_marks.py`'s close-and-redial `sync_subscription` (and its "INVALID OPERATION" note) can move to differential frames — with the caution that its note contradicts today's observation and should be re-read before trusting either. | T4 live probe | `core_brain/live_marks.py:411-437` | open |
+| ID | candidate | discovering station | evidence | status | resolution |
+|---|---|---|---|---|---|
+| N1 | `runtime/markets.json` is mostly stale: 9 of its 11 rows are markets the venue no longer returns. | Station III (T4 live probe) | `runtime/markets.json` + `markets.fetch_pinned_market` per row | dismissed | Dismissed: screener hasn't run recently; operator refreshes runtime/markets.json on demand via market screener |
+| N2 | `level_gap` stayed at 0 across live run (53 frames): per-entry best_bid/best_ask agreed with rebuilt book. | Station III (T4 live probe) | `tasks/plan.md` → Build-time evidence (`core_brain/market_stream.py:66`) | dismissed | Dismissed: observational counter is benign; kept in code without dedicated ticket |
+| N3 | `live_marks.py`'s close-and-redial `sync_subscription` can move to differential operation frames. | Station III (T4 live probe) | `core_brain/live_marks.py:411-437` | published | #657 |
 
