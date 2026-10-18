@@ -464,3 +464,23 @@ def test_stop_joins_threads_and_emits_stopped():
     assert client.connected is False
     assert mock_app.close.call_count == 1
     assert "user_ws_stopped" in captured_emits
+
+
+def test_main_help_returns_zero(capsys):
+    ret = user_stream.main([])
+    assert ret == 0
+    captured = capsys.readouterr()
+    assert "User Account WebSocket stream listener probe" in captured.out
+
+
+def test_main_missing_credentials_graceful_exit(monkeypatch, capsys):
+    monkeypatch.delenv("POLY_API_KEY", raising=False)
+    monkeypatch.delenv("POLY_API_SECRET", raising=False)
+    monkeypatch.delenv("POLY_API_PASSPHRASE", raising=False)
+
+    ret = user_stream.main(["--listen"])
+    assert ret == 1
+    captured = capsys.readouterr()
+    assert "[ERROR] User stream requires credentials in environment" in captured.err
+    assert "POLY_API_KEY" in captured.err
+
