@@ -169,8 +169,8 @@ def _rank_cmd(top: int = 2, out_dir=None,
     """The ranker invocation, with any staged gate trials from config appended.
 
     The depth trial (U32) and the volume trial (U36) stay opt-in: when
-    `select_min_top3_depth_usd_trial` / `select_min_volume_24h_usd_trial` are
-    set (env HUNTER_DEPTH_TRIAL_USD / HUNTER_VOLUME_TRIAL_USD, or a config
+    `filter_common_vol_min_top3_depth_usd_trial` / `filter_std_vol_min_24h_usd_trial`
+    are set (env HUNTER_DEPTH_TRIAL_USD / HUNTER_VOLUME_TRIAL_USD, or a config
     default), the loop passes the bar through so adopted markets are tagged
     `trial_depth_usd` / `trial_volume_usd` and their markouts are the decision
     evidence. Config is read fresh at process start, so flipping a trial on is
@@ -193,11 +193,11 @@ def _rank_cmd(top: int = 2, out_dir=None,
         cfg = _load_cfg()
         # Admission mode rejects trial bars at the ranker: forwarding a
         # configured trial here would fail every cycle, so skip both.
-        if trial_depth is None and not paired_admission and cfg.select_min_top3_depth_usd_trial:
-            cmd += ["--trial-depth", str(cfg.select_min_top3_depth_usd_trial)]
+        if trial_depth is None and not paired_admission and cfg.filter_common_vol_min_top3_depth_usd_trial:
+            cmd += ["--trial-depth", str(cfg.filter_common_vol_min_top3_depth_usd_trial)]
         if (paired_depth_control_usd is None and not paired_admission
-                and cfg.select_min_volume_24h_usd_trial):
-            cmd += ["--trial-volume", str(cfg.select_min_volume_24h_usd_trial)]
+                and cfg.filter_std_vol_min_24h_usd_trial):
+            cmd += ["--trial-volume", str(cfg.filter_std_vol_min_24h_usd_trial)]
     except Exception as e:
         # A config read failure must not stop the loop -- but a silently
         # disabled trial would be an unmonitored gate change, so say so.
