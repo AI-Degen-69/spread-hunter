@@ -347,6 +347,17 @@ the new tests → the served table shows the pill.
 
 Any of these failing after the change is a regression this station caused.
 
+Station III result, 2026-10-18 (same store, same branch): the six focused suites
+went **209 passed** (baseline 194 + 15 new), the issue's acceptance command
+**2 passed, 130 deselected**, the new source-check selection **2 passed**, and a
+wider sweep (`-k "app_js or positions or stitch or orders_trades"`) **221 passed**.
+In the live page, OPEN POSITIONS rendered 4 held markets — QUOTING for
+`…000003`, RESTING for `…000006`, `…00000b`, `…00001a` — each verdict identical to
+the ACTIVE MARKETS tab for the same condition id, with 8 head columns, 4 rows, no
+pill inside any `data-cell`, and all four pills still in place after several 2 s
+polls. Reduced motion could not be emulated in this session: no CSS is touched,
+and `test_styles_css_reduced_motion_covers_breathing_pills` pins the rule.
+
 ---
 
 ## 7. Constraints
@@ -373,8 +384,13 @@ quoting can still read QUOTING (same behaviour as ACTIVE MARKETS today).
 Read-only dashboard on a shadow store; no menu `start`, no dashboard START, no
 live Trader, no `quote`, no `complete`.
 
-1. Start: `python -m dashboard.server --db data\04_shadow_24-09_test.db --port 8799`,
+1. Start: `python -m dashboard.server --db data\demo_orders.db --port 8799`,
    then open `http://127.0.0.1:8799`. The page shows the SHADOW badge.
+   (Station III note, 2026-10-18: `data\04_shadow_24-09_test.db` is not in this
+   worktree, and the shadow stores that are present carry no held legs.
+   `data\demo_orders.db` is the populated store — 4 held markets, three RESTING
+   and one QUOTING. Also set `PORT=8799` in the environment: `dashboard/server.py`
+   reads `PORT` at import time, and a `PORT=0` in the environment aborts startup.)
 2. Home → **ORDERS & TRADES** → **OPEN POSITIONS**. A held market the engine is
    working now carries a green **RESTING** or **QUOTING** pill with a blinking
    dot beside its title. Failure: no pill on a market that ACTIVE MARKETS lists
