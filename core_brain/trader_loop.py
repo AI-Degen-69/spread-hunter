@@ -23,6 +23,7 @@ import sys
 import time
 import threading
 import uuid
+from collections import deque
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -495,6 +496,23 @@ class VenueSeam:
     #: writes one `market_events` row per flagged visit. Absent = skip the
     #: write; the cancel and discard still happen.
     record_market_event: Optional[Callable[[Any], None]] = None
+    #: WS-book subscription for #650: called once per rotation with the current
+    #: universe (`[market, ...]`). Optional and lazy -- `main()` wires a port
+    #: that resolves each new market's tokens and hands them to `MarketStream`.
+    #: Every caller that leaves it unset behaves exactly as before.
+    subscribe_fn: Optional[Callable[[list], None]] = None
+    #: WS-book read stats for #650: `() -> {"book_source", "book_read_ms", ...}`.
+    #: Optional -- `_visit_one` merges them into the decide row only when the
+    #: port is wired, so unwired seams emit byte-identical rows to before.
+    book_stats_fn: Optional[Callable[[], dict]] = None
+    #: The queued fill events #650 reacts to after each wait: `() -> [event]`.
+    #: Optional -- `main()` wires it to the user-stream queue. Unwired, the
+    #: loop runs rotation-to-rotation exactly as before.
+    fill_events_fn: Optional[Callable[[], list]] = None
+    #: The reconcile the loop runs for one fill event: `() -> Any`. Optional --
+    #: a closure over `(client, registry, maker_address)`, so the reaction keeps
+    #: the 3-argument reconcile port untouched. See `fill_events_fn`.
+    fill_reconcile_fn: Optional[Callable[[], Any]] = None
 
 
 def run(
@@ -509,6 +527,7 @@ def run(
     suspects_box: Optional[dict] = None,
     shutdown_box: Optional[dict] = None,
     spawn_guardian: bool = False,
+    clock_fn: Optional[Callable[[], float]] = None,
 ) -> list[LiveFleetResult]:
     """Rotate over `markets`: reconcile, then decide+submit per market, then sweep.
 
@@ -528,6 +547,11 @@ def run(
         seam.base_cfg = load()
     if sleep_fn is None:
         sleep_fn = time.sleep
+    # Rotation timing (#650): the loop measures what it did and sleeps only
+    # the remainder of the interval, so streamed books that cut the work
+    # actually shorten the wait. Tests inject `clock_fn`; production runs the
+    # wall clock.
+    _now = clock_fn or time.monotonic
     if seam.clob_host is None:
         seam.clob_host = os.environ.get("CLOB_HOST", "https://clob.polymarket.com")
 
@@ -560,6 +584,9 @@ def run(
     # scroll the screen. A restart resets it (safe direction: a fresh loop
     # announces state once, then goes quiet).
     tail_memory: dict[tuple, str] = {}
+    # Trade ids the fill reaction has already handled (#650): a bounded set
+    # so one fill never reconciles twice however often the queue repeats it.
+    _seen_fill_trades: Any = deque(maxlen=512)
     shutdown_reason = "once" if once else "stopped"
     registry = seam.registry
 
@@ -604,6 +631,9 @@ def run(
 
         while True:
             cycle += 1
+            # Rotation timing (#650): stamped before any work so the wait at
+            # the end is `interval - work`, never `interval` on top of work.
+            rot_t0 = _now()
             # Fleet-wide aggregates (naked cost, committed capital, pooled posture)
             # are recomputed once per cycle and merged into the base config, so the
             # fleet-level gates inside decide_quotes see live numbers rather than
@@ -649,6 +679,16 @@ def run(
                         log.warning(
                             "markets_fn returned no markets; keeping the previous %d",
                             len(current_markets))
+
+            # Universe subscription (#650): the WS book cache follows the
+            # markets the loop is actually visiting. A failed subscribe degrades
+            # the rest of the rotation (books may be stale or cold) but never
+            # stops it -- same isolation as reconcile and sweep.
+            if current_markets and seam.subscribe_fn is not None:
+                try:
+                    seam.subscribe_fn(list(current_markets))
+                except Exception as e:
+                    log.warning("subscribe failed: %s: %s", type(e).__name__, e)
 
             cycle_results: list[LiveFleetResult] = []
             rotation_suspects: set[str] = set()
@@ -719,6 +759,17 @@ def run(
             except Exception as e:
                 log.warning("sweep failed: %s: %s", type(e).__name__, e)
 
+            # Rotation accounting (#650): one additive row per rotation with the
+            # measured work, so the dashboard (and the operator) can see when a
+            # rotation is too fat for its interval. Emitted before the `once`
+            # break so smoke runs carry it too.
+            work_sec = _now() - rot_t0
+            emit_fn(service="decide", cycle=cycle, phase="quoting",
+                    action="rotation_complete", market_slug="",
+                    reason="", latency_ms=work_sec * 1000.0,
+                    extra={"markets": len(current_markets),
+                           "suspects": len(rotation_suspects)})
+
             # Heartbeat: re-stamp our slot so a long run never looks stale. An
             # adopted slot means another loop owns the registry now -- stop writing
             # rather than record into a database we no longer own.
@@ -733,7 +784,10 @@ def run(
                 shutdown_reason = "once"
                 break
             try:
-                sleep_fn(max(0.0, interval))
+                # Sleep the remainder of the interval (#650): with streamed
+                # books the work is fast and the loop waits longer; when the
+                # venue is slow the loop skips the wait but never goes negative.
+                sleep_fn(max(0.0, interval - work_sec))
             except KeyboardInterrupt as e:
                 # The shadow deadline sleep subclasses KeyboardInterrupt to
                 # end a time-boxed rehearsal. Matched by class NAME so this
@@ -744,10 +798,148 @@ def run(
                                    if type(e).__name__ == "_Deadline"
                                    else "interrupt")
                 break
+
+            # Fill reaction (#650): drain what the user stream queued while the
+            # loop waited, then react in-loop -- reconcile, visit the filled
+            # market, tell the guardian -- instead of waiting for the next
+            # rotation. Never in `once` mode (a smoke has no queue to drain).
+            # The fill queue is only drained when both ports are wired; either
+            # `None` leaves the loop rotation-to-rotation, exactly as before.
+            # Placed AFTER the `except KeyboardInterrupt` so the shadow
+            # deadline's end-of-rehearsal interrupt never drains: a finished
+            # rehearsal reacts to nothing.
+            drain = seam.fill_events_fn
+            reconcile_port = seam.fill_reconcile_fn
+            if drain is not None and reconcile_port is not None:
+                _react_to_fills(
+                    seam=seam, current_markets=current_markets,
+                    emit_fn=emit_fn, resolved=resolved,
+                    stop_memory=stop_memory, tail_memory=tail_memory,
+                    inventory_recorder=inventory_by_cid.__setitem__,
+                    seen_trade_ids=_seen_fill_trades, live=live)
         stop_workers.set()
 
     _finish_shutdown()
     return once_results if once else last_cycle
+
+
+def _guardian_fill_tick(**kw) -> None:
+    """One risk-guardian tick after a fill event (#650).
+
+    Separated from `run` so the reaction is unit-testable without the loop.
+    `kw` carries the seam's own `client` / `registry` / `base_cfg` from the
+    call site; importing here keeps `run` free of the import at module scope,
+    exactly as `start_risk_guardian` does.
+    """
+    from core_brain.risk_guardian import run_guardian_tick
+    run_guardian_tick(**kw)
+
+
+def _react_to_fills(
+    *,
+    seam: VenueSeam,
+    current_markets: list,
+    emit_fn: Callable,
+    resolved: set,
+    stop_memory: dict,
+    tail_memory: dict,
+    inventory_recorder: Callable,
+    seen_trade_ids: Any,
+    live: bool,
+) -> None:
+    """Drain the user-stream queue and react to each fill (#650).
+
+    Event first, then reaction: every drained event emits `user_fill_received`,
+    then (unless its `status` says FAILED) the loop re-reconciles, re-visits
+    the filled market, and runs a guardian tick. Each step is isolated -- a
+    failure degrades this event, never the loop. Dedup keys on
+    `(trade_id, status)` so a status change (matched -> confirmed, or a later
+    FAILED) still reacts while a repeated identical event does not.
+    """
+    try:
+        events = list(seam.fill_events_fn() or [])
+    except Exception as e:
+        log.warning("fill drain failed: %s: %s", type(e).__name__, e)
+        return
+    for ev in events:
+        trade_id = str(getattr(ev, "trade_id", "") or "")
+        status_key = str(getattr(ev, "status", "") or "").upper()
+        key = (trade_id, status_key)
+        if not trade_id or key in seen_trade_ids:
+            continue
+        seen_trade_ids.append(key)
+        ev_cid = str(getattr(ev, "condition_id", "") or "")
+        matched = next(
+            (s for s in (current_markets or []) if _cid(s) == ev_cid), None)
+        emit_fn(service="decide", cycle=0, phase="reconciling",
+                action="user_fill_received", market_slug="",
+                reason="", latency_ms=0.0,
+                extra={"trade_id": trade_id,
+                       "order_id": str(getattr(ev, "order_id", "") or ""),
+                       "condition_id": ev_cid,
+                       "token_id": str(getattr(ev, "token_id", "") or ""),
+                       "side": str(getattr(ev, "side", "") or ""),
+                       "price": float(getattr(ev, "price", 0.0) or 0.0),
+                       "size": float(getattr(ev, "size", 0.0) or 0.0),
+                       "status": str(getattr(ev, "status", "") or ""),
+                       "matched": matched is not None})
+        status = str(getattr(ev, "status", "") or "").upper()
+        if status == "FAILED":
+            # Telemetry only: nothing on the venue changed, so there is
+            # nothing to reconcile and nothing to re-quote.
+            continue
+        _react_to_one_fill(
+            seam=seam, ev=ev, matched=matched,
+            emit_fn=emit_fn, resolved=resolved, stop_memory=stop_memory,
+            tail_memory=tail_memory, inventory_recorder=inventory_recorder,
+            live=live)
+
+
+def _react_to_one_fill(
+    *,
+    seam: VenueSeam,
+    ev: Any,
+    matched: Any,
+    emit_fn: Callable,
+    resolved: set,
+    stop_memory: dict,
+    tail_memory: dict,
+    inventory_recorder: Callable,
+    live: bool,
+) -> None:
+    """One non-FAILED fill: reconcile, visit, guardian tick (#650).
+
+    Separated from `_react_to_fills` so the loop body stays a flat drain loop
+    and each step's isolation reads as its own `try`. A failed reconcile
+    stops this event (nothing downstream can be trusted); a failed visit
+    still gets its guardian tick.
+    """
+    try:
+        seam.fill_reconcile_fn()
+    except Exception as e:
+        log.warning("fill reconcile failed: %s: %s", type(e).__name__, e)
+        # Return without reacting: nothing downstream of a failed reconcile
+        # can be trusted yet, and the fill is still in the user-stream gap
+        # the next rotation's reconcile will find.
+        return
+    ev_cid = str(getattr(ev, "condition_id", "") or "")
+    if matched is not None and ev_cid and ev_cid.lower() not in resolved:
+        try:
+            _visit_one(
+                seam=seam, spec=matched, live=live, cycle=0,
+                emit_fn=emit_fn, stop_memory=stop_memory,
+                tail_memory=tail_memory,
+                inventory_recorder=inventory_recorder,
+            )
+        except Exception as e:
+            log.warning("fill visit failed: %s: %s", type(e).__name__, e)
+    try:
+        _guardian_fill_tick(
+            client=seam.client, registry=seam.registry,
+            cfg=seam.base_cfg, live=live)
+    except Exception as e:
+        log.warning("fill guardian tick failed: %s: %s",
+                    type(e).__name__, e)
 
 
 def _cancel_dropped_markets(
@@ -1823,6 +2015,17 @@ def _visit_one(
                                error=f"{type(e).__name__}: {e}")
 
     event_extra = {"intent_count": len(intents), "condition_id": cid}
+    # WS-book provenance (#650): when the loop reads books from the stream
+    # cache instead of REST, say so on the row so a quote is traceable to its
+    # source. Unwired seams (shadow, tests, `--no-ws-books`) emit byte-identical
+    # rows to before.
+    if seam.book_stats_fn is not None:
+        try:
+            _stats = seam.book_stats_fn() or {}
+        except Exception:
+            _stats = {}
+        if isinstance(_stats, dict):
+            event_extra.update(_stats)
     if title:
         event_extra["market_title"] = title
     _decide_quotes = []
@@ -2634,6 +2837,177 @@ def _production_reconcile_fn(emit_fn: Any) -> Any:
     return _reconcile
 
 
+def _make_stream_fetch_books(
+    cache: Any,
+    stats_box: dict,
+) -> Callable[[str, str], dict]:
+    """Return a `fetch_books(clob_host, token_id)` reader backed by `MarketBookCache`.
+
+    Times the read with `time.perf_counter()`, records latency and source in
+    `stats_box` (surfaced on the decide row via `book_stats_fn`), and fails
+    closed on `BookNotReady` without falling back to REST. No ring event is
+    emitted per read: at ~2 reads per visit per second the ring would churn,
+    evicting the `rotation_complete` / `user_fill_received` rows the
+    dashboard reads.
+    """
+    from core_brain.market_stream import BookNotReady
+
+    def _fetch_books(clob_host: str, token_id: str) -> dict:
+        t0 = time.perf_counter()
+        try:
+            book = cache.book(token_id)
+        except BookNotReady:
+            raise RuntimeError(f"book stream cold: {token_id}")
+        read_ms = (time.perf_counter() - t0) * 1000.0
+        stats = {
+            "book_source": "stream",
+            "book_read_ms": read_ms,
+            "token_id": token_id,
+        }
+        stats_box.clear()
+        stats_box.update(stats)
+        return book
+
+    return _fetch_books
+
+
+def _make_subscribe_fn(
+    market_stream: Any,
+    cache: Any,
+    fetch_market_fn: Callable[[str], Any],
+    *,
+    timeout_sec: float = 5.0,
+    poll_sec: float = 0.05,
+    time_fn: Callable[[], float] = time.monotonic,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> Callable[[list], None]:
+    """Return a `subscribe_fn(markets)` callable that registers universe tokens on `MarketStream`.
+
+    Dedupes by condition ID so `fetch_market_fn` is only called once per market,
+    calls `ensure_market` and `retain_markets`, and bounds the wait up to 5s
+    for newly added tokens to show up in `cache.ready_tokens()`.
+    """
+    subscribed_cids: set[str] = set()
+
+    def _subscribe(markets: list) -> None:
+        current_cids = []
+        new_tokens = []
+        for m in markets:
+            cid = getattr(m, "condition_id", None) or (
+                m.get("cid") or m.get("condition_id") if isinstance(m, dict) else None
+            )
+            if not cid:
+                continue
+            cid_str = str(cid)
+            current_cids.append(cid_str)
+            if cid_str not in subscribed_cids:
+                try:
+                    resolved = fetch_market_fn(cid_str)
+                    slug = (
+                        getattr(resolved, "market_slug", "")
+                        or getattr(m, "market_slug", "")
+                        or (m.get("market_slug") if isinstance(m, dict) else "")
+                        or ""
+                    )
+                    up_token = str(getattr(resolved, "up_token", ""))
+                    down_token = str(getattr(resolved, "down_token", ""))
+                    market_stream.ensure_market(cid_str, slug, up_token, down_token)
+                    subscribed_cids.add(cid_str)
+                    if up_token:
+                        new_tokens.append(up_token)
+                    if down_token:
+                        new_tokens.append(down_token)
+                except Exception as e:
+                    log.warning(
+                        "failed to resolve market for stream subscription %s: %s: %s",
+                        cid_str, type(e).__name__, e,
+                    )
+
+        market_stream.retain_markets(current_cids)
+        subscribed_cids.intersection_update(current_cids)
+
+        if new_tokens:
+            deadline = time_fn() + timeout_sec
+            needed = set(new_tokens)
+            while time_fn() < deadline:
+                ready = cache.ready_tokens()
+                if needed.issubset(ready):
+                    break
+                sleep_fn(poll_sec)
+
+    return _subscribe
+
+
+def _setup_user_stream(
+    decide_emit: Callable,
+    client: Any,
+    registry: Any,
+    maker: Optional[str],
+    wake: Optional[threading.Event] = None,
+) -> tuple[Optional[Any], Optional[Callable], Optional[Callable], threading.Event]:
+    """Start `UserStreamClient` when credentials are present.
+
+    Returns `(user_client, fill_events_fn, fill_reconcile_fn, wake_event)`.
+    If credentials are missing, logs a message and returns `(None, None, None, wake_event)`.
+    """
+    import queue
+    import threading
+    from core_brain.user_stream import (
+        UserStreamClient, UserStreamCredentialsMissing, get_user_stream_creds,
+    )
+
+    if wake is None:
+        wake = threading.Event()
+
+    try:
+        get_user_stream_creds()
+    except UserStreamCredentialsMissing:
+        log.info("user stream disabled: credentials missing (fill-triggered reconcile off)")
+        return None, None, None, wake
+
+    user_client = UserStreamClient(emit_fn=decide_emit)
+    fill_queue: queue.Queue = queue.Queue()
+
+    user_client.on_trade(lambda ev: (fill_queue.put(ev), wake.set()))
+
+    was_disconnected = False
+
+    def _on_state(state: str, detail: str) -> None:
+        nonlocal was_disconnected
+        if state in ("DISCONNECTED", "RECONNECTING"):
+            was_disconnected = True
+        elif state == "AUTH_OK":
+            if was_disconnected:
+                wake.set()
+                was_disconnected = False
+
+    user_client.on_state(_on_state)
+    user_client.start(None)
+
+    def _drain_fills() -> list:
+        events = []
+        while True:
+            try:
+                events.append(fill_queue.get_nowait())
+            except queue.Empty:
+                break
+        return events
+
+    fill_reconcile = _production_reconcile_fn(decide_emit)
+    fill_reconcile_fn = lambda: fill_reconcile(client, registry, maker)
+
+    return user_client, _drain_fills, fill_reconcile_fn, wake
+
+
+def _make_sleep_fn(wake: threading.Event) -> Callable[[float], None]:
+    """Return a `sleep_fn(seconds)` that waits on `wake` and clears it afterwards."""
+    def _sleep(seconds: float) -> None:
+        wake.wait(max(0.0, seconds))
+        wake.clear()
+
+    return _sleep
+
+
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """The Trader loop's CLI, separated from `main` so the interval contract
     is testable without launching a loop (operator directive 2026-10-12).
@@ -2662,13 +3036,16 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                     help="funder address (default: POLY_FUNDER)")
     ap.add_argument("--no-reconcile", action="store_true",
                     help="skip the reconcile pass (the poll loop owns it when "
-                         "running alongside this fleet)")
+                          "running alongside this fleet)")
     ap.add_argument("--no-sweep", action="store_true",
                     help="skip the account sweep (the poll loop owns it when "
-                         "running alongside this fleet)")
+                          "running alongside this fleet)")
     ap.add_argument("--resolution-interval", type=float, default=600.0,
                     help="seconds between market-resolution sweeps on a "
                          "background, non-blocking thread (default: 600)")
+    ap.add_argument("--ws-books", action=argparse.BooleanOptionalAction, default=None,
+                    help="read order books from the WebSocket market stream instead of "
+                         "REST (default: True in loop mode, False with --once)")
     a = ap.parse_args(argv)
     # The ceiling is enforced HERE, at the CLI boundary, so the loop body
     # never sees a cadence above 1s -- not silently clamped mid-flight
@@ -2693,6 +3070,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     from core_brain.quotes import decide_quotes
 
     a = _parse_args(argv)
+
+    use_ws_books = a.ws_books if a.ws_books is not None else not a.once
+    books_mode = "stream" if use_ws_books else "rest"
 
     logging.basicConfig(
         level=logging.INFO,
@@ -2719,8 +3099,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.warning("no graduated markets in runtime/markets.json; "
                     "run scripts/rank_markets.py first -- idling")
     else:
-        log.info("rotating %d markets (live=%s interval=%ss once=%s)",
-                 len(specs), a.live, a.interval, a.once)
+        log.info("rotating %d markets (live=%s interval=%ss once=%s books=%s)",
+                 len(specs), a.live, a.interval, a.once, books_mode)
 
     db_path = Path(a.db) if a.db else DEFAULT_DB_PATH
     registry = OrderRegistry(db_path=db_path)
@@ -2739,6 +3119,36 @@ def main(argv: Optional[list[str]] = None) -> int:
         client = object()
 
     decide_emit = partial(_emit_cycle_event, db_path=db_path)
+
+    market_stream = None
+    book_stats: dict = {}
+    if use_ws_books:
+        from core_brain.market_stream import MarketBookCache, MarketStream
+        cache = MarketBookCache()
+        market_stream = MarketStream(cache=cache, emit_fn=decide_emit)
+        market_stream.start()
+        fetch_books_fn = _make_stream_fetch_books(cache, book_stats)
+        subscribe_fn = _make_subscribe_fn(market_stream, cache, _fetch_market)
+        book_stats_fn = lambda: dict(book_stats)
+    else:
+        fetch_books_fn = full_book
+        subscribe_fn = None
+        book_stats_fn = None
+
+    user_stream = None
+    fill_events_fn = None
+    fill_reconcile_fn = None
+    wake = threading.Event()
+
+    if not a.once:
+        user_stream, fill_events_fn, fill_reconcile_fn, wake = _setup_user_stream(
+            decide_emit=decide_emit,
+            client=client,
+            registry=registry,
+            maker=maker,
+            wake=wake,
+        )
+
     seam = VenueSeam(
         client=client,
         registry=registry,
@@ -2746,7 +3156,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         maker_address=maker,
         clob_host=os.environ.get("CLOB_HOST", "https://clob.polymarket.com"),
         fetch_market=_fetch_market,
-        fetch_books=full_book,
+        fetch_books=fetch_books_fn,
         decide=decide_quotes,
         submit_fn=_submit_intents,
         cancel_fn=_cancel_orders,
@@ -2774,6 +3184,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         fetch_uma_status=make_uma_status_reader(
             os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")),
         record_market_event=registry.log_market_event,
+        subscribe_fn=subscribe_fn,
+        book_stats_fn=book_stats_fn,
+        fill_events_fn=fill_events_fn,
+        fill_reconcile_fn=fill_reconcile_fn,
     )
     # Resolution detection runs off the critical path on a slow background
     # thread (won't block a 5s rotation). Disabled for --once smoke runs.
@@ -2795,12 +3209,24 @@ def main(argv: Optional[list[str]] = None) -> int:
             seam,
             interval=a.interval, once=a.once, live=a.live, markets=specs,
             markets_fn=lambda: _market_specs(a.max_markets, registry=registry),
+            sleep_fn=_make_sleep_fn(wake),
             suspects_box=suspects_box,
             spawn_guardian=not a.once,
         )
     except InstanceInUse as exc:
         print(f"fleet refused: {exc}", file=sys.stderr)
         return 2
+    finally:
+        if market_stream is not None:
+            try:
+                market_stream.stop()
+            except Exception as e:
+                log.warning("market stream stop failed: %s", e)
+        if user_stream is not None:
+            try:
+                user_stream.stop()
+            except Exception as e:
+                log.warning("user stream stop failed: %s", e)
     return 0 if results else 1
 
 

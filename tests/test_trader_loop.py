@@ -3430,3 +3430,632 @@ def test_visit_one_passes_canonical_dead_band():
     dead_band_warns = [w for w in recorded if "trader_loop.py" in w.filename and "requote_dead_band" in str(w.message)]
     assert dead_band_warns == []
     assert seen["dead_band"] == 0.05
+
+class TestRotationSubscribeAndTiming:
+    """#650: each rotation subscribes the universe and sleeps less by measured work.
+
+    New ports are inert when absent: an unwired seam visits exactly as before,
+    with exactly one additive `rotation_complete` row per rotation.
+    """
+
+    def _seam(self, events, subscribe=None, stats=None):
+        from core_brain.config import MakerConfig
+        return VenueSeam(
+            base_cfg=MakerConfig(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda host, token: {
+                "token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                "bids": {0.59: 100}, "asks": {0.61: 100},
+            },
+            decide=lambda *a: ([], "declined"),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+            subscribe_fn=subscribe,
+            book_stats_fn=stats,
+            emit_fn=lambda **event: events.append(event),
+        )
+
+    def test_run_sleeps_interval_minus_measured_work(self):
+        events = []
+        seam = self._seam(events)
+        sleeps = []
+        ticks = iter([0.0, 0.4])
+
+        def sleep_stop(s):
+            sleeps.append(s)
+            raise KeyboardInterrupt()
+
+        run(seam, interval=1.0, once=False, live=False,
+            markets=[FakeMarket("0xm1")], sleep_fn=sleep_stop,
+            clock_fn=lambda: next(ticks, 0.4))
+        assert sleeps == [pytest.approx(0.6)]
+
+    def test_run_never_sleeps_negative_when_work_exceeds_interval(self):
+        events = []
+        seam = self._seam(events)
+        sleeps = []
+        ticks = iter([0.0, 2.5])
+
+        def sleep_stop(s):
+            sleeps.append(s)
+            raise KeyboardInterrupt()
+
+        run(seam, interval=1.0, once=False, live=False,
+            markets=[FakeMarket("0xm1")], sleep_fn=sleep_stop,
+            clock_fn=lambda: next(ticks, 2.5))
+        assert sleeps == [0.0]
+
+    def test_run_emits_rotation_complete_with_measured_latency(self):
+        events = []
+        seam = self._seam(events)
+        ticks = iter([100.0, 100.25])
+        run(seam, interval=0.0, once=True, live=False,
+            markets=[FakeMarket("0xm1")], sleep_fn=lambda s: None,
+            clock_fn=lambda: next(ticks, 100.25))
+        completions = [e for e in events if e.get("action") == "rotation_complete"]
+        assert len(completions) == 1
+        assert completions[0]["service"] == "decide"
+        assert completions[0]["latency_ms"] == pytest.approx(250.0)
+        assert completions[0]["extra"]["markets"] == 1
+
+
+    def test_run_emits_one_completion_per_rotation_with_cycle_numbers(self):
+        events = []
+        seam = self._seam(events)
+        sleeps = {"n": 0}
+
+        def sleep_stop(s):
+            sleeps["n"] += 1
+            if sleeps["n"] >= 2:
+                raise KeyboardInterrupt()
+
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xm1")], sleep_fn=sleep_stop)
+        completions = [e for e in events if e.get("action") == "rotation_complete"]
+        assert [c["cycle"] for c in completions] == [1, 2]
+
+    def test_run_subscribes_current_universe_each_rotation(self):
+        events = []
+        subscribed = []
+        state = {"n": 0}
+
+        def markets_fn():
+            state["n"] += 1
+            return ([FakeMarket("0xm1")] if state["n"] == 1
+                    else [FakeMarket("0xm1"), FakeMarket("0xm2")])
+
+        seam = self._seam(
+            events, subscribe=lambda ms: subscribed.append(
+                [m.condition_id for m in ms]))
+        sleeps = {"n": 0}
+
+        def sleep_stop(s):
+            sleeps["n"] += 1
+            if sleeps["n"] >= 2:
+                raise KeyboardInterrupt()
+
+        run(seam, interval=0.0, once=False, live=False,
+            markets_fn=markets_fn, sleep_fn=sleep_stop)
+        assert subscribed == [["0xm1"], ["0xm1", "0xm2"]]
+
+
+    def test_failed_refresh_keeps_old_universe_and_subscriptions(self):
+        events = []
+        subscribed = []
+        state = {"n": 0}
+
+        def markets_fn():
+            state["n"] += 1
+            if state["n"] == 2:
+                raise RuntimeError("feed down")
+            return [FakeMarket("0xm1")]
+
+        seam = self._seam(
+            events, subscribe=lambda ms: subscribed.append(
+                [m.condition_id for m in ms]))
+        sleeps = {"n": 0}
+
+        def sleep_stop(s):
+            sleeps["n"] += 1
+            if sleeps["n"] >= 2:
+                raise KeyboardInterrupt()
+
+        run(seam, interval=0.0, once=False, live=False,
+            markets_fn=markets_fn, sleep_fn=sleep_stop)
+        assert subscribed == [["0xm1"], ["0xm1"]]
+
+    def test_subscribe_failure_degrades_the_cycle_and_keeps_the_loop(self):
+        events = []
+        calls = {"n": 0}
+
+        def bad_subscribe(ms):
+            calls["n"] += 1
+            raise RuntimeError("socket closed")
+
+        seam = self._seam(events, subscribe=bad_subscribe)
+        sleeps = {"n": 0}
+
+        def sleep_stop(s):
+            sleeps["n"] += 1
+            if sleeps["n"] >= 2:
+                raise KeyboardInterrupt()
+
+        results = run(seam, interval=0.0, once=False, live=False,
+                      markets=[FakeMarket("0xm1")], sleep_fn=sleep_stop)
+        assert calls["n"] == 2
+        assert results
+
+    def test_unwired_seam_runs_as_before_with_one_additive_completion(self):
+        from core_brain.config import MakerConfig
+        events = []
+        seam = VenueSeam(
+            base_cfg=MakerConfig(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda host, token: {
+                "token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                "bids": {0.59: 100}, "asks": {0.61: 100},
+            },
+            decide=lambda *a: ([], "declined"),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+            emit_fn=lambda **event: events.append(event),
+        )
+        results = run(seam, interval=0.0, once=True, live=False,
+                      markets=[FakeMarket("0xm1")], sleep_fn=lambda s: None)
+        assert [r.status for r in results] == ["DECLINED"]
+        completions = [e for e in events if e.get("action") == "rotation_complete"]
+        assert len(completions) == 1
+
+    def test_decide_row_carries_book_stats_when_port_wired(self):
+        events = []
+        seam = self._seam(
+            events, stats=lambda: {"book_source": "stream", "book_read_ms": 0.4})
+        _visit_one(seam, {"cid": "0xdecide1"}, cycle=1, live=False,
+                   emit_fn=lambda **event: events.append(event))
+        decision = next(e for e in events if e.get("action") == "decide")
+        assert decision["extra"]["book_source"] == "stream"
+        assert decision["extra"]["book_read_ms"] == 0.4
+
+    def test_decide_row_has_no_book_keys_without_stats_port(self):
+        events = []
+        seam = self._seam(events)
+        _visit_one(seam, {"cid": "0xdecide1"}, cycle=1, live=False,
+                   emit_fn=lambda **event: events.append(event))
+        decision = next(e for e in events if e.get("action") == "decide")
+        assert "book_source" not in decision["extra"]
+        assert "book_read_ms" not in decision["extra"]
+
+
+
+class TestFillDrainReactsInLoop:
+    """#650: a fill event during the wait is reconciled, visited and guarded.
+
+    The drain runs only in the long loop (never `once`), deduplicates by
+    `(trade_id, status)`, and isolates each reaction step so one failure cannot stop
+    the loop.
+    """
+
+    def _fill(self, trade="t1", cid="0xfill", status="FILLED"):
+        from core_brain.user_stream import UserTradeEvent
+        return UserTradeEvent(
+            trade_id=trade, order_id="o1", condition_id=cid,
+            token_id="tok-up", side="BUY", price=0.60, size=5.0,
+            status=status, fills=(),
+        )
+
+    def _seam(self, events, fills=(), reconcile=None):
+        from core_brain.config import MakerConfig
+        queue = {"events": list(fills)}
+
+        def fill_events():
+            return list(queue["events"])
+
+        seam = VenueSeam(
+            base_cfg=MakerConfig(),
+            client=object(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda host, token: {
+                "token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                "bids": {0.59: 100}, "asks": {0.61: 100},
+            },
+            decide=lambda *a: ([], "declined"),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+            fill_events_fn=fill_events,
+            fill_reconcile_fn=reconcile,
+            emit_fn=lambda **event: events.append(event),
+        )
+        return seam, queue
+
+    @staticmethod
+    def _fake_visit(order):
+        def visit(seam, spec, **kw):
+            if kw.get("cycle") == 0:
+                order.append("visit")
+            cid = getattr(spec, "condition_id", None) or getattr(spec, "cid", "0xfill")
+            return LiveFleetResult(status="DECLINED", condition_id=str(cid))
+        return visit
+
+    @staticmethod
+    def _stop_after(n):
+        """Stop the loop after `n` normal sleeps."""
+        sleeps = {"n": 0}
+
+        def sleep_stop(s):
+            sleeps["n"] += 1
+            if sleeps["n"] > n:
+                raise KeyboardInterrupt()
+        return sleep_stop
+
+    def test_fill_after_wait_triggers_reconcile_then_visit_then_guardian(
+            self, monkeypatch):
+        events = []
+        order = []
+
+        def recording_reconcile():
+            order.append("reconcile")
+
+        seam, queue = self._seam(
+            events, fills=[self._fill()], reconcile=recording_reconcile)
+
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick",
+            lambda **kw: order.append("guardian") or None)
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == ["reconcile", "visit", "guardian"]
+        received = next(
+            e for e in events if e.get("action") == "user_fill_received")
+        assert received["service"] == "decide"
+        assert received["extra"]["trade_id"] == "t1"
+        assert received["extra"]["matched"] is True
+
+    def test_fill_event_is_deduped_by_trade_id(self, monkeypatch):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events, fills=[self._fill(), self._fill()],
+            reconcile=lambda: order.append("reconcile"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == ["reconcile", "visit"]
+
+    def test_fill_status_change_reacts_again(self, monkeypatch):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events,
+            fills=[self._fill(status="MATCHED"), self._fill(status="CONFIRMED")],
+            reconcile=lambda: order.append("reconcile"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == ["reconcile", "visit", "reconcile", "visit"]
+        received = [e for e in events
+                    if e.get("action") == "user_fill_received"]
+        assert len(received) == 2
+
+    def test_failed_fill_does_not_reconcile(self, monkeypatch):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events, fills=[self._fill(status="FAILED")],
+            reconcile=lambda: order.append("reconcile"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == []
+        received = next(
+            e for e in events if e.get("action") == "user_fill_received")
+        assert received["extra"]["status"] == "FAILED"
+
+    def test_fill_for_unknown_market_still_reconciles_without_visit(
+            self, monkeypatch):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events, fills=[self._fill(cid="0xgone")],
+            reconcile=lambda: order.append("reconcile"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == ["reconcile"]
+        received = next(
+            e for e in events if e.get("action") == "user_fill_received")
+        assert received["extra"]["matched"] is False
+
+    def test_once_mode_never_drains_fills(self):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events, fills=[self._fill()],
+            reconcile=lambda: order.append("reconcile"))
+        run(seam, interval=0.0, once=True, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=lambda s: None)
+        assert order == []
+        assert not [e for e in events
+                    if e.get("action") == "user_fill_received"]
+
+    def test_fill_reconcile_failure_keeps_the_loop_alive(self, monkeypatch):
+        events = []
+
+        def bad_reconcile():
+            raise RuntimeError("registry locked")
+
+        seam, queue = self._seam(
+            events, fills=[self._fill()], reconcile=bad_reconcile)
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one",
+            lambda seam, spec, **kw: LiveFleetResult(
+                status="DECLINED", condition_id="0xfill"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        results = run(seam, interval=0.0, once=False, live=False,
+                      markets=[FakeMarket("0xfill")],
+                      sleep_fn=self._stop_after(2))
+        assert results
+
+    def test_resolved_market_fill_is_not_visited(self, monkeypatch):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events, fills=[self._fill()],
+            reconcile=lambda: order.append("reconcile"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        monkeypatch.setattr(
+            "core_brain.trader_loop.resolved_condition_ids",
+            lambda registry: {"0xfill"})
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == ["reconcile"]
+
+
+class TestMainStreamWiring:
+    """T3: CLI flags, stream cache reader, subscriptions, user stream, and shutdown."""
+
+    def test_parse_args_ws_books_defaults(self):
+        from core_brain.trader_loop import _parse_args
+        # Loop mode defaults to ws_books=None, effective stream
+        a = _parse_args([])
+        assert a.ws_books is None
+        assert (a.ws_books if a.ws_books is not None else not a.once) is True
+
+        # Once mode defaults to ws_books=None, effective REST
+        a_once = _parse_args(["--once"])
+        assert a_once.ws_books is None
+        assert (a_once.ws_books if a_once.ws_books is not None else not a_once.once) is False
+
+        # Explicit overrides
+        a_ws = _parse_args(["--ws-books"])
+        assert a_ws.ws_books is True
+        assert (a_ws.ws_books if a_ws.ws_books is not None else not a_ws.once) is True
+
+        a_once_ws = _parse_args(["--once", "--ws-books"])
+        assert a_once_ws.ws_books is True
+        assert (a_once_ws.ws_books if a_once_ws.ws_books is not None else not a_once_ws.once) is True
+
+        a_no_ws = _parse_args(["--no-ws-books"])
+        assert a_no_ws.ws_books is False
+        assert (a_no_ws.ws_books if a_no_ws.ws_books is not None else not a_no_ws.once) is False
+
+    def test_stream_reader_returns_cache_shape_and_loads_stats(self):
+        from core_brain.trader_loop import _make_stream_fetch_books
+        stats_box = {}
+
+        class FakeCache:
+            def book(self, token_id):
+                return {
+                    "token_id": token_id,
+                    "bids": {0.49: 100},
+                    "asks": {0.51: 100},
+                    "best_bid": 0.49,
+                    "best_ask": 0.51,
+                }
+
+        reader = _make_stream_fetch_books(FakeCache(), stats_box)
+        res = reader("https://clob", "tok-1")
+        assert res["token_id"] == "tok-1"
+        assert res["best_bid"] == 0.49
+        assert stats_box["book_source"] == "stream"
+        assert stats_box["token_id"] == "tok-1"
+        assert stats_box["book_read_ms"] >= 0.0
+
+    def test_cold_cache_raises_book_stream_cold_and_never_calls_rest(self):
+        from core_brain.trader_loop import _make_stream_fetch_books
+        from core_brain.market_stream import BookNotReady
+
+        class ColdCache:
+            def book(self, token_id):
+                raise BookNotReady(f"token {token_id} has no live book")
+
+        stats_box = {}
+        reader = _make_stream_fetch_books(ColdCache(), stats_box)
+        with pytest.raises(RuntimeError, match="book stream cold: tok-cold"):
+            reader("https://clob", "tok-cold")
+        assert not stats_box
+
+    def test_subscribe_dedupes_and_retains(self):
+        from core_brain.trader_loop import _make_subscribe_fn
+
+        ensured = []
+        retained = []
+        fetched = []
+
+        class FakeStream:
+            def ensure_market(self, cid, slug, up_token, down_token):
+                ensured.append((cid, slug, up_token, down_token))
+
+            def retain_markets(self, cids):
+                retained.append(list(cids))
+
+        class FakeCache:
+            def ready_tokens(self):
+                return {"tok-up-1", "tok-dn-1", "tok-up-2", "tok-dn-2"}
+
+        def fake_fetch_market(cid):
+            fetched.append(cid)
+            m = FakeMarket(cid, f"tok-up-{cid}", f"tok-dn-{cid}")
+            m.market_slug = f"slug-{cid}"
+            return m
+
+        sub = _make_subscribe_fn(FakeStream(), FakeCache(), fake_fetch_market)
+
+        universe = [FakeMarket("1"), FakeMarket("2")]
+        sub(universe)
+        assert fetched == ["1", "2"]
+        assert len(ensured) == 2
+        assert retained == [["1", "2"]]
+
+        # Second rotation of the same universe: no new fetch, no new ensure, but retain is called
+        sub(universe)
+        assert fetched == ["1", "2"]
+        assert len(ensured) == 2
+        assert retained == [["1", "2"], ["1", "2"]]
+
+    def test_subscribe_skips_market_whose_fetch_raised(self):
+        from core_brain.trader_loop import _make_subscribe_fn
+
+        ensured = []
+        fetched = []
+
+        class FakeStream:
+            def ensure_market(self, cid, slug, up_token, down_token):
+                ensured.append(cid)
+
+            def retain_markets(self, cids):
+                pass
+
+        class FakeCache:
+            def ready_tokens(self):
+                return {"tok-up-good", "tok-dn-good"}
+
+        def fake_fetch_market(cid):
+            fetched.append(cid)
+            if cid == "bad":
+                raise RuntimeError("503 venue down")
+            m = FakeMarket(cid, "tok-up-good", "tok-dn-good")
+            m.market_slug = "good"
+            return m
+
+        sub = _make_subscribe_fn(FakeStream(), FakeCache(), fake_fetch_market)
+        sub([FakeMarket("bad"), FakeMarket("good")])
+        assert ensured == ["good"]
+        assert fetched == ["bad", "good"]
+
+        # Next rotation: bad is retried because it was not added to subscribed set
+        sub([FakeMarket("bad"), FakeMarket("good")])
+        assert fetched == ["bad", "good", "bad"]
+
+    def test_user_stream_missing_creds_leave_loop_unchanged(self, monkeypatch):
+        from core_brain.trader_loop import _setup_user_stream
+        from core_brain.user_stream import UserStreamCredentialsMissing
+
+        def raise_creds():
+            raise UserStreamCredentialsMissing("missing POLY_API_KEY")
+
+        monkeypatch.setattr("core_brain.user_stream.get_user_stream_creds", raise_creds)
+        client, fill_events, fill_reconcile, wake = _setup_user_stream(
+            decide_emit=lambda **kw: None,
+            client=object(),
+            registry=object(),
+            maker="0xmaker",
+        )
+        assert client is None
+        assert fill_events is None
+        assert fill_reconcile is None
+
+    def test_sleep_fn_wakes_on_event(self):
+        import threading
+        import time
+        from core_brain.trader_loop import _make_sleep_fn
+
+        wake = threading.Event()
+        sleep_fn = _make_sleep_fn(wake)
+
+        # Pre-set event causes sleep to return immediately
+        wake.set()
+        t0 = time.monotonic()
+        sleep_fn(5.0)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 0.5
+        assert not wake.is_set()
+
+    def test_main_finally_stops_market_and_user_streams(self, monkeypatch, tmp_path):
+        import threading
+        from core_brain.trader_loop import main
+        from core_brain.order_registry import InstanceInUse
+
+        market_stopped = []
+        user_stopped = []
+
+        class FakeMarketStream:
+            def start(self):
+                pass
+            def stop(self):
+                market_stopped.append(True)
+
+        class FakeUserStream:
+            def on_trade(self, cb):
+                pass
+            def on_state(self, cb):
+                pass
+            def start(self, cids):
+                pass
+            def stop(self):
+                user_stopped.append(True)
+
+        monkeypatch.setattr("core_brain.market_stream.MarketStream", lambda **kw: FakeMarketStream())
+        monkeypatch.setattr(
+            "core_brain.trader_loop._setup_user_stream",
+            lambda **kw: (FakeUserStream(), lambda: [], lambda: None, threading.Event()),
+        )
+        # Isolate main() from the venue: no .env read, no balance fetch, no
+        # background resolution sweeper thread.
+        monkeypatch.setattr(
+            "core_brain.trader_loop.start_resolution_sweeper",
+            lambda *a, **k: None)
+        monkeypatch.setattr(
+            "core_brain.account.fetch_live_balance", lambda *a, **k: None)
+        monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+        for var in ("POLY_PRIVATE_KEY", "POLY_KEY"):
+            monkeypatch.delenv(var, raising=False)
+
+        def fake_run(*a, **kw):
+            raise InstanceInUse("fleet already active")
+
+        monkeypatch.setattr("core_brain.trader_loop.run", fake_run)
+        monkeypatch.setattr("core_brain.trader_loop._market_specs", lambda *a, **k: [FakeMarket("1")])
+
+        db_file = tmp_path / "test_main.db"
+        # Running main should return 2 on InstanceInUse, and both streams should be stopped
+        ret = main(["--ws-books", "--no-live", "--db", str(db_file)])
+        assert ret == 2
+        assert market_stopped == [True]
+        assert user_stopped == [True]
+
+
+

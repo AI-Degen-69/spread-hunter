@@ -212,6 +212,7 @@ class MarketStream:
         self._want: set[str] = set()
         self._pending: set[str] = set()
         self._reconnected_tokens: set[str] = set()
+        self._landed: dict[str, int] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._heartbeat: threading.Thread | None = None

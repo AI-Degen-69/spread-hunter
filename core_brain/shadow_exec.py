@@ -791,6 +791,7 @@ def settle_market(
     now_fn: Callable[[], float] = time.time,
     book_fn: Optional[Callable] = None,
     clob_host: Optional[str] = None,
+    fill_trade_ids: Optional[set] = None,
 ) -> list[ShadowFill]:
     """Credit this market's resting rows from the tape, then persist the result.
 
@@ -925,6 +926,8 @@ def settle_market(
     owned_by_id = {o.id: o for o in owned}
     for f in fills:
         trade_id = f"{SHADOW_TRADE_PREFIX}{uuid.uuid4().hex[:16]}"
+        if fill_trade_ids is not None:
+            fill_trade_ids.add(trade_id)
         # Telemetry BEFORE the fill row (#531): the tape is consumed once, so a
         # process death between the two writes would otherwise cost this depth
         # sample permanently. An orphan print row matches no fill and is dropped

@@ -1,5 +1,7 @@
-# Todo - Issue #681: Purge surviving maker-rewards formulas and vocabulary from filter_markets.py and scoring
+# TODO — Issue #650
 
-- [x] T1: Delete orphaned `scoring/rewards.py` and lock zero-reference guard
-- [x] T2: Purge reward pool formulas, checks, and income fields from `scripts/filter_markets.py`
-- [x] T3: Clean up screener terminal output and summary banners in `scripts/filter_markets.py`
+- [x] T1 — Rotate on measured work, subscribe the universe (seam ports + loop wiring)
+- [x] T2 — Drain fills after the wait and react in-loop
+- [x] T3 — Wire the streams in `main()`: cache reader, subscriptions, fill queue, shutdown
+- [x] T4 — Shadow rehearsal emits simulated fills
+- [x] Clean up `.tmp_650*.md` / `.tmp_650.json` before the PR
