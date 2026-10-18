@@ -8,6 +8,7 @@ while the book moves.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -352,3 +353,27 @@ def test_stitch_positions_finished_market_has_no_activity_pill():
     assert "No legs have filled" in html
     assert "resting-breathing" not in html
     assert "quoting-breathing" not in html
+
+@requires_node
+def test_stitch_positions_sorted_render_keeps_each_markets_pill():
+    # The pill is decided before the rows are ordered, so clicking a column
+    # header must not drop it, and each market keeps its own verdict.
+    kpi = _two_market_kpi(0.40, 0.80)
+    kpi["by_market"]["0xabc"]["quotes_count"] = 2
+    kpi["by_market"]["0xdef"]["quotes_count"] = 1
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(kpi)};
+    const html = app.stitchPositionsRows(
+        kpi, {{orders: [{json.dumps(_order('0xdef', 'open'))}]}}, {{col: 9, dir: 'desc'}});
+    console.log(JSON.stringify({{html}}));
+    """))
+    html = res["html"]
+
+    # Still sorted by CURRENT PRICE descending: 0xdef at $0.80 first.
+    assert html.index("0xdef") < html.index("0xabc")
+    by_cid = {cid: body for cid, body in re.findall(
+        r'<tr[^>]*data-cid="([^"]+)"[^>]*>(.*?)</tr>', html, re.S)}
+    assert len(by_cid) == 2
+    assert "resting-breathing" in by_cid["0xdef"]
+    assert "quoting-breathing" in by_cid["0xabc"]
+    assert "resting-breathing" not in by_cid["0xabc"]
