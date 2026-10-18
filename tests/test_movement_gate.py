@@ -358,13 +358,13 @@ def test_non_finite_env_overrides_are_refused(monkeypatch):
     # against everything and silently disables the gate.
     from scoring.config import load
 
-    monkeypatch.setenv("HUNTER_MIN_MOVEMENT_USD", "inf")
-    monkeypatch.setenv("HUNTER_MOVEMENT_WINDOW_SEC", "nan")
+    monkeypatch.setenv("FILTER_LIVE_VEL_MIN_USD", "inf")
+    monkeypatch.setenv("FILTER_LIVE_VEL_LOOKBACK_SEC", "nan")
 
     # Act
     cfg = load()
 
     # Assert — the shipped defaults stand (now enforced, per the redesign;
     # movement bar widened to $200 by #416 for live-sports point swings).
-    assert cfg.select_min_movement_usd == 200.0
-    assert cfg.select_movement_window_sec == 1800.0
+    assert cfg.filter_live_vel_min_usd == 200.0
+    assert cfg.filter_live_vel_lookback_sec == 1800.0

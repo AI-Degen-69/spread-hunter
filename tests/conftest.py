@@ -79,7 +79,7 @@ def scrub_credential_env(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def scrub_tuning_env(monkeypatch):
-    """Scrub every `HUNTER_*` knob, so the suite cannot read the operator's .env.
+    """Scrub every `HUNTER_*`, `FILTER_*`, and `BOT_*` knob, so the suite cannot read the operator's .env.
 
     `core_brain.order_manager` calls `load_dotenv` at module import, so the
     first test to import it injects the real `.env` into `os.environ` for the
@@ -92,7 +92,7 @@ def scrub_tuning_env(monkeypatch):
 
     A test that wants a knob sets it itself, after this has run.
     """
-    for var in [v for v in os.environ if v.startswith("HUNTER_")]:
+    for var in [v for v in os.environ if v.startswith(("HUNTER_", "FILTER_", "BOT_"))]:
         monkeypatch.delenv(var, raising=False)
 
 

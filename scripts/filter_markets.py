@@ -94,15 +94,15 @@ MIN_TOP3_DEPTH_USD = _CFG.filter_common_vol_min_top3_depth_usd
 # THE LIVE VOLUME BAR (operator directive 2026-10-06). A market whose event is
 # under way gates on this instead of the permanent floor -- see the field's
 # comment in scoring/config.py for the measurement behind the number.
-MIN_VOLUME_24H_LIVE = getattr(_CFG, "filter_live_vol_min_24h_usd", 10_000.0)
+MIN_VOLUME_24H_LIVE = _CFG.filter_live_vol_min_24h_usd
 MOVEMENT_WINDOW_SEC = _CFG.filter_live_vel_lookback_sec
 MIN_MOVEMENT_USD = _CFG.filter_live_vel_min_usd
 TRADES_API = "https://data-api.polymarket.com/trades"
-MAX_BOOK_SPREAD = _CFG.select_max_book_spread
-MIN_RANGE_CENTS = getattr(_CFG, "filter_live_move_min_range_cents", 2.0)
-VOLATILITY_WINDOW_SEC = getattr(_CFG, "filter_live_move_lookback_sec", 7200.0)
-VELOCITY_GATE_ENABLED = getattr(_CFG, "filter_live_gate_velocity_on", True)
-MIN_ACTIVITY_RATIO = getattr(_CFG, "filter_live_activity_min_ratio", 0.0)
+MAX_BOOK_SPREAD = _CFG.filter_common_spread_max_cents
+MIN_RANGE_CENTS = _CFG.filter_live_move_min_range_cents
+VOLATILITY_WINDOW_SEC = _CFG.filter_live_move_lookback_sec
+VELOCITY_GATE_ENABLED = _CFG.filter_live_gate_velocity_on
+MIN_ACTIVITY_RATIO = _CFG.filter_live_activity_min_ratio
 
 GAMMA = "https://gamma-api.polymarket.com/markets"
 # The live set. `live=true` is a genuine server-side filter; `closed=false` is
@@ -779,7 +779,7 @@ def gamma_universe(session: requests.Session,
     horizon actually removes.
 
     Cost control: the listing is volume-sorted and the ranker gates on
-    `select_min_volume_24h_usd`, so paginating to exhaustion would fetch
+    `filter_std_vol_min_24h_usd`, so paginating to exhaustion would fetch
     thousands of sub-floor rows every rank. The scan stops one BOUNDARY PAGE
     past the first sub-floor row -- enough to audit the volume near-miss tail
     -- and records the truncation in the returned metadata instead of hiding
@@ -1219,9 +1219,9 @@ def queue_bar_reject(m: dict, *, source: str,
     """A rejection row when this market's queue at our price will not clear.
 
     The three bars around it are FLOORS on depth, and from the maker's side
-    depth near mid IS the queue ahead of us: `select_min_top3_depth_usd` and
+    depth near mid IS the queue ahead of us: `filter_common_vol_min_top3_depth_usd` and
     `book_health` protect our ability to EXIT, which is real and points the
-    other way. `select_min_volume_24h_usd` measures market-wide 24-hour tape
+    other way. `filter_std_vol_min_24h_usd` measures market-wide 24-hour tape
     across every price, so a market can clear six figures a day while trading
     nothing at `mid - 2.5c`, the only level our maker order ever sits at.
 
@@ -1230,7 +1230,7 @@ def queue_bar_reject(m: dict, *, source: str,
     `queue_minutes_fn` at all. Measuring costs a tape read per market, and
     paying for a number the caller has already decided not to act on is how a
     ranking pass gets slow for nothing. That is also what "record-only" means
-    at this layer: `enforce_max_queue_minutes` is False by default, `main`
+    at this layer: `filter_std_gate_queue_max_on` is False by default, `main`
     passes no bar, and this function stays inert.
     """
     if not max_queue_minutes or max_queue_minutes <= 0 or queue_minutes_fn is None:
@@ -1586,7 +1586,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         mid = (max(bids)[0] + min(asks)[0]) / 2.0
         # Outside the configured price band the book is one-sided in
         # practice and the position is mostly a bet on a near-settled
-        # outcome. The band is the config's (price_band_low/high), not a
+        # outcome. The band is the config's (bot_quote_price_band_min_cents/max_cents), not a
         # hardcoded pair of edges -- a second hardcoded band here silently
         # ignored whatever the config said (#582). Mirrors the quoter's
         # decided check in core_brain/quotes.py.
@@ -1595,8 +1595,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         # series sits outside the band on its way to a decided market like
         # everything else -- game progress is not evidence about when this
         # market decides, and the band owns that alone.
-        band_low = getattr(_CFG, "bot_quote_price_band_min_cents", 0.10)
-        band_high = getattr(_CFG, "bot_quote_price_band_max_cents", 0.90)
+        band_low = _CFG.bot_quote_price_band_min_cents
+        band_high = _CFG.bot_quote_price_band_max_cents
         if not band_low < mid < band_high:
             return _reject_row(
                 source,
@@ -1715,7 +1715,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "volume_24h": _vol(volume_24h),
         "fetch_truncated": bool(m.get("fetch_truncated")),
         # Recorded on every scanned market, gated or not: the bar for
-        # `select_min_movement_usd` is meant to be chosen from this column.
+        # `filter_live_vel_min_usd` is meant to be chosen from this column.
         "movement_usd": movement_usd,
         "movement_window_sec": MOVEMENT_WINDOW_SEC,
         "range_cents": range_cents,
@@ -2674,7 +2674,7 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         # source so the snapshot schema is preserved without asymmetry.
         "reward_min_income_usd_day": 0.0,
         "spread_min_income_usd_day": 0.0,
-        "max_pair_cost": getattr(_CFG, "max_pair_cost", 0.995),
+        "max_pair_cost": _CFG.max_pair_cost,
         "counts": {
             # LEGACY ACCOUNTING ONLY. In the unified universe the reward pool
             # is gone -- `funded` reports the --legacy-rewards path's size and
@@ -2785,9 +2785,9 @@ def resolve_queue_bar(cfg) -> Optional[float]:
     been found twice on this branch, at two different frames, which is why the
     tests assert the bar at every frame from here down to the predicate.
     """
-    if not getattr(cfg, "enforce_max_queue_minutes", False):
+    if not cfg.filter_std_gate_queue_max_on:
         return None
-    bar = float(getattr(cfg, "select_max_queue_minutes", 0.0) or 0.0)
+    bar = float(cfg.filter_std_queue_max_clear_min or 0.0)
     # `> 0`, not truthiness. A negative bar is truthy, so it would travel down
     # the stack and make `queue_bar_reject` pay for a tape read per market
     # before `maker_queue_allowed` declined to use it -- a disabled rule

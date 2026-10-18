@@ -24,7 +24,7 @@ import os
 from dataclasses import dataclass
 
 from core_brain import rehearsal
-from core_brain.config import PICKER_PROFILE, MakerConfig as CoreMakerConfig
+from core_brain.config import PICKER_PROFILE, MakerConfig as CoreMakerConfig, _env_get
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -194,11 +194,16 @@ def load() -> MakerConfig:
         kw["max_book_spread"] = wide
         window = kw.get("max_spread_from_mid", MakerConfig.max_spread_from_mid)
         kw["max_spread_from_mid"] = max(window, wide)
-    trial = os.environ.get("HUNTER_DEPTH_TRIAL_USD") or ""
-    if trial.strip():
-        kw["filter_common_vol_min_top3_depth_usd_trial"] = float(trial)
-    mvmt = os.environ.get("HUNTER_MIN_MOVEMENT_USD") or ""
-    if mvmt.strip():
+    trial, _ = _env_get("FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", "HUNTER_DEPTH_TRIAL_USD")
+    if trial and trial.strip():
+        try:
+            td = float(trial)
+            if math.isfinite(td) and td >= 0:
+                kw["filter_common_vol_min_top3_depth_usd_trial"] = td
+        except ValueError:
+            pass
+    mvmt, _ = _env_get("FILTER_LIVE_VEL_MIN_USD", "HUNTER_MIN_MOVEMENT_USD")
+    if mvmt and mvmt.strip():
         try:
             bar = float(mvmt)
         except ValueError:
@@ -207,50 +212,63 @@ def load() -> MakerConfig:
         # `nan` compares false against everything, silently disabling the gate.
         if bar is not None and math.isfinite(bar):
             kw["filter_live_vel_min_usd"] = max(0.0, bar)
-    mwin = os.environ.get("HUNTER_MOVEMENT_WINDOW_SEC") or ""
-    if mwin.strip():
+    mwin, _ = _env_get("FILTER_LIVE_VEL_LOOKBACK_SEC", "HUNTER_MOVEMENT_WINDOW_SEC")
+    if mwin and mwin.strip():
         try:
             window = float(mwin)
         except ValueError:
             window = None
         if window is not None and math.isfinite(window) and window > 0:
             kw["filter_live_vel_lookback_sec"] = window
-    vgate = os.environ.get("HUNTER_VELOCITY_GATE") or ""
-    if vgate.strip():
+    vgate, _ = _env_get("FILTER_LIVE_GATE_VELOCITY_ON", "HUNTER_VELOCITY_GATE")
+    if vgate and vgate.strip():
         kw["filter_live_gate_velocity_on"] = vgate.strip().lower() not in ("0", "false", "off", "no")
-    rcents = os.environ.get("HUNTER_MIN_RANGE_CENTS") or ""
-    if rcents.strip():
+    rcents, _ = _env_get("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "HUNTER_MIN_RANGE_CENTS")
+    if rcents and rcents.strip():
         try:
             rc = float(rcents)
             if math.isfinite(rc) and rc >= 0:
                 kw["filter_live_move_min_range_cents"] = rc
         except ValueError:
             pass
-    vwin = os.environ.get("HUNTER_VOLATILITY_WINDOW_SEC") or ""
-    if vwin.strip():
+    vwin, _ = _env_get("FILTER_LIVE_MOVE_LOOKBACK_SEC", "HUNTER_VOLATILITY_WINDOW_SEC")
+    if vwin and vwin.strip():
         try:
             vw = float(vwin)
             if math.isfinite(vw) and vw > 0:
                 kw["filter_live_move_lookback_sec"] = vw
         except ValueError:
             pass
-    vtri = os.environ.get("HUNTER_VOLUME_TRIAL_USD") or ""
-    if vtri.strip():
-        kw["filter_std_vol_min_24h_usd_trial"] = float(vtri)
+    vtri, _ = _env_get("FILTER_STD_VOL_MIN_24H_USD_TRIAL", "HUNTER_VOLUME_TRIAL_USD")
+    if vtri and vtri.strip():
+        try:
+            vt = float(vtri)
+            if math.isfinite(vt) and vt >= 0:
+                kw["filter_std_vol_min_24h_usd_trial"] = vt
+        except ValueError:
+            pass
     # RELATIVE ACTIVITY RATIO GATE (loose baseline). movement_usd / volume_24h.
     # 0.0 (shipped default) disables it. Loose-baseline runs lower the absolute
     # volume floor AND turn this on, so relative recent activity -- not raw 24h
     # size -- is what admits a market.
-    aratio = os.environ.get("HUNTER_MIN_ACTIVITY_RATIO") or ""
-    if aratio.strip():
+    aratio, _ = _env_get("FILTER_LIVE_ACTIVITY_MIN_RATIO", "HUNTER_MIN_ACTIVITY_RATIO")
+    if aratio and aratio.strip():
         try:
             ratio = float(aratio)
         except ValueError:
             ratio = 0.0
         if math.isfinite(ratio) and ratio >= 0:
             kw["filter_live_activity_min_ratio"] = ratio
-    vol = os.environ.get("HUNTER_MIN_VOLUME_24H_USD") or ""
-    if vol.strip():
+    vol_live, _ = _env_get("FILTER_LIVE_VOL_MIN_24H_USD")
+    if vol_live and vol_live.strip():
+        try:
+            vl = float(vol_live)
+            if math.isfinite(vl) and vl >= 0:
+                kw["filter_live_vol_min_24h_usd"] = vl
+        except ValueError:
+            pass
+    vol, _ = _env_get("FILTER_STD_VOL_MIN_24H_USD", "HUNTER_MIN_VOLUME_24H_USD")
+    if vol and vol.strip():
         try:
             v = float(vol)
         except ValueError:

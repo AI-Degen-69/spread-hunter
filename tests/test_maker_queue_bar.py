@@ -4,10 +4,10 @@ Session B of shadow run `run-2809a7161de1` rested 344 orders across 10 markets
 for 30 minutes and filled nothing. Not one order's queue drained. The existing
 selection bars cannot see why:
 
-  * `select_min_volume_24h_usd` measures market-wide 24h tape in dollars,
+  * `filter_std_vol_min_24h_usd` measures market-wide 24h tape in dollars,
     across every price. A market can clear six figures a day and trade nothing
     at `mid - 2.5c`, which is the only level our maker order ever sits at.
-  * `select_min_top3_depth_usd` and `book_health` measure resting size near
+  * `filter_common_vol_min_top3_depth_usd` and `book_health` measure resting size near
     mid -- which, from the maker's side, IS the queue ahead of us. They are
     floors on exactly the quantity that needs a ceiling.
 
@@ -52,7 +52,7 @@ class TestMakerQueueAllowed:
         assert ok, reason
 
     def test_a_queue_exactly_at_the_bar_is_refused(self):
-        # Pinned like `select_min_top3_depth_usd`: a ceiling reached, not
+        # Pinned like `filter_common_vol_min_top3_depth_usd`: a ceiling reached, not
         # approached, the reading every other cap in this repo takes.
         ok, reason = maker_queue_allowed(15.0, max_queue_minutes=15.0)
         assert not ok
@@ -117,8 +117,8 @@ class TestConfigDefaults:
         from scoring.config import MakerConfig
 
         cfg = MakerConfig()
-        assert cfg.select_max_queue_minutes == 15.0
-        assert cfg.enforce_max_queue_minutes is False, (
+        assert cfg.filter_std_queue_max_clear_min == 15.0
+        assert cfg.filter_std_gate_queue_max_on is False, (
             "enforcing on day one refuses every measured market and takes the "
             "bot silent -- record first")
 
@@ -126,9 +126,9 @@ class TestConfigDefaults:
 class TestTheRankerCanActuallyRejectOnIt:
     """A config knob that cannot reject anything is a trap, not a setting.
 
-    `select_max_queue_minutes` and `maker_queue_allowed` existed, but
+    `filter_std_queue_max_clear_min` and `maker_queue_allowed` existed, but
     `scripts/filter_markets.py:evaluate` never called either, so setting
-    `enforce_max_queue_minutes = True` would have changed nothing while
+    `filter_std_gate_queue_max_on = True` would have changed nothing while
     reading as an enforced bar. The knob has to be able to keep a market out
     of `runtime/markets.json` or it should not exist.
     """
@@ -233,13 +233,23 @@ class TestTheBarClimbsTheWholeStack:
         from scripts.filter_markets import resolve_queue_bar
 
         class Cfg:
-            select_max_queue_minutes = 15.0
-            enforce_max_queue_minutes = False
+            filter_std_queue_max_clear_min = 15.0
+            filter_std_gate_queue_max_on = False
 
         assert resolve_queue_bar(Cfg()) is None
 
-        Cfg.enforce_max_queue_minutes = True
+        Cfg.filter_std_gate_queue_max_on = True
         assert resolve_queue_bar(Cfg()) == 15.0
+
+    def test_resolve_queue_bar_raises_when_canonical_field_is_missing(self):
+        """No `getattr(..., <literal>)` fallback: a missing canonical setting fails loudly."""
+        from scripts.filter_markets import resolve_queue_bar
+
+        class IncompleteCfg:
+            pass
+
+        with pytest.raises(AttributeError):
+            resolve_queue_bar(IncompleteCfg())
 
     @pytest.mark.parametrize("bar", [0.0, -1.0, -15.0])
     def test_a_non_positive_limit_is_disabled_even_when_enforced(self, bar):
@@ -250,8 +260,8 @@ class TestTheBarClimbsTheWholeStack:
         from scripts.filter_markets import resolve_queue_bar
 
         class Cfg:
-            select_max_queue_minutes = bar
-            enforce_max_queue_minutes = True
+            filter_std_queue_max_clear_min = bar
+            filter_std_gate_queue_max_on = True
 
         assert resolve_queue_bar(Cfg()) is None
 
@@ -297,8 +307,8 @@ class TestTheBarClimbsTheWholeStack:
 
         monkeypatch.setattr(fm, "score_pool", spy)
         monkeypatch.setattr(fm, "_CFG", dc_replace(
-            fm._CFG, enforce_max_queue_minutes=True,
-            select_max_queue_minutes=15.0))
+            fm._CFG, filter_std_gate_queue_max_on=True,
+            filter_std_queue_max_clear_min=15.0))
         monkeypatch.setattr(fm.requests, "Session", _Session)
         monkeypatch.setattr(fm, "gamma_universe",
                             lambda *a, **k: ([], {"volume_bar": 0.0,

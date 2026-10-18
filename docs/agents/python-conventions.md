@@ -80,8 +80,11 @@ Narrow `except` clauses only (`except sqlite3.Error`, `except OSError`). A bare
   - `_shares` for share counts (`min_book_depth_shares`, `max_quote_shares`).
   - `_sec` for seconds, `_ms` for milliseconds (`cancel_net_oneway_ms`).
   - `_offset` for additive price deltas (`max_skew_offset`).
-- **Canonical environment variables:** Prefixed with `HUNTER_*` and carry strict unit
-  suffixes (`HUNTER_MIN_QUOTE_SHARES`, `HUNTER_MAX_SPREAD_CENTS`, `HUNTER_PRICE_TICK`,
-  `HUNTER_MAX_QUOTE_SHARES`, `HUNTER_STAT_GATE_BANKROLL_PCT`). Legacy environment variables
-  are supported with fallback and log a deprecation warning.
+- **Canonical environment variables:** Each canonical environment variable is the
+  canonical config field name in uppercase (`FILTER_*` for the market screener and
+  `BOT_*` for the trading bot engine, e.g., `FILTER_LIVE_VEL_MIN_USD`,
+  `FILTER_LIVE_MOVE_MIN_RANGE_CENTS`, `BOT_QUOTE_SIZE_MIN_SHARES`,
+  `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID`, `BOT_EVAL_STAT_GATE_BANKROLL_PCT`) and carries
+  strict unit suffixes. Legacy `HUNTER_*` environment variables are supported as
+  deprecated fallback aliases (canonical wins when non-blank).
 
