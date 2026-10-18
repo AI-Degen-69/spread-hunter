@@ -258,7 +258,7 @@ closes the socket, joins with a timeout. All sends serialised by one send lock.
 `…::test_backoff_grows_and_resets_after_a_successful_open`,
 `…::test_stop_joins_the_worker_and_the_heartbeat`.
 
-### T3 — Dynamic universe + telemetry (M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`)
+### T3 — [x] Dynamic universe + telemetry (M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`)
 **Build:** market map `cid → (slug, up, down)`. `ensure_market(...)` sends
 `{"assets_ids": [up, down], "operation": "subscribe"}` for a new market (or
 replays it in the next `on_open` when no socket is open) and emits

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import statistics
 import threading
 import time
 
@@ -64,7 +65,11 @@ class MarketBookCache:
         self.level_gap = 0
 
     def apply_frame(self, msg: dict | list) -> list[str]:
-        """Fold one venue frame (dict or list) in; return the tokens it moved."""
+        """Fold one venue frame (dict or list) in.
+
+        Returns the tokens whose book this frame moved. A frame that dropped a
+        book returns nothing: reads fail closed on the missing book anyway.
+        """
         items = msg if isinstance(msg, list) else [msg]
         changed: list[str] = []
         with self._lock:
@@ -96,6 +101,7 @@ class MarketBookCache:
             # A snapshot whose side is not a level list cannot be trusted at
             # all: drop the token rather than keep half a book.
             self._books.pop(token, None)
+            return []
         return [token]
 
     def _apply_changes(self, item: dict) -> list[str]:
@@ -124,7 +130,7 @@ class MarketBookCache:
             # A level we cannot read leaves this book silently diverged from
             # the venue: drop the token and let the next snapshot refill it.
             del self._books[token]
-            return token
+            return None
         ladder = book["bids"] if side == "BUY" else book["asks"]
         if size > 0:
             ladder[price] = size
@@ -216,18 +222,73 @@ class MarketStream:
         self._backoff = RECONNECT_MIN_SEC
         self._pending_since = 0.0
         self._resends = 0
+        self._last_tick = 0.0
+        self._last_frames = 0
+        self._last_gaps = 0
+        self._frame_errors_at = 0.0
 
     # ── universe ───────────────────────────────────────────────────────────
 
     def ensure_market(self, condition_id, slug, up_token, down_token) -> None:
-        """Register one market's two outcome tokens as wanted on this feed."""
+        """Register one market's two outcome tokens as wanted on this feed.
+
+        On an open socket only the tokens actually new to the universe go out,
+        as a differential `subscribe` frame — the initial `{"type": "market"}`
+        frame is never re-sent, because the venue answers that on an open
+        socket with INVALID OPERATION and streams nothing further.
+        """
         cid, slug = str(condition_id), str(slug)
         up, down = str(up_token), str(down_token)
         with self._lock:
             if self._markets.get(cid) == (slug, up, down):
                 return
             self._markets[cid] = (slug, up, down)
-            self._want.update((up, down))
+            fresh = [t for t in (up, down) if t not in self._want]
+            self._want.update(fresh)
+            app = self._app if fresh else None
+            if app is not None:
+                if not self._pending:
+                    self._pending_since = self._time()
+                    self._resends = 0
+                self._pending.update(fresh)
+        if not fresh:
+            return
+        if app is not None:
+            self._send_frame(app, {"assets_ids": fresh, "operation": "subscribe"})
+        self._emit("market_stream_subscribe", market_slug=slug,
+                   extra={"slug": slug, "tokens": fresh})
+
+    def retain_markets(self, condition_ids) -> None:
+        """Keep only these markets: unsubscribe the rest, on the same socket.
+
+        A token another kept market still needs is not unsubscribed. No book
+        outside the removed markets is touched and the socket never moves.
+        """
+        keep = {str(cid) for cid in condition_ids}
+        with self._lock:
+            gone = [(cid, entry) for cid, entry in self._markets.items()
+                    if cid not in keep]
+            for cid, _ in gone:
+                del self._markets[cid]
+            still = {t for _, (_, up, down) in self._markets.items()
+                     for t in (up, down)}
+            removed = sorted({t for _, (_, up, down) in gone
+                              for t in (up, down) if t not in still})
+            if not removed:
+                return
+            self._want.difference_update(removed)
+            self._pending.difference_update(removed)
+            app = self._app
+            kept = [entry for _, entry in gone
+                    if entry[1] in removed or entry[2] in removed]
+        if app is not None:
+            self._send_frame(app,
+                             {"assets_ids": removed, "operation": "unsubscribe"})
+        self._cache.drop(removed)
+        for slug, up, down in kept:
+            self._emit("market_stream_unsubscribe", market_slug=slug,
+                       extra={"slug": slug,
+                              "tokens": [t for t in (up, down) if t in removed]})
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -298,7 +359,11 @@ class MarketStream:
                 self._cache.clear_all()
             if self._stop.is_set():
                 break
-            self._stop.wait(self._next_backoff())
+            delay = self._next_backoff()
+            self._emit("market_stream_reconnect", reason=self._close_reason,
+                       extra={"delay_sec": delay, "close_code": self._close_code,
+                              "reason": self._close_reason})
+            self._stop.wait(delay)
 
     def _next_backoff(self) -> float:
         """The delay before this redial; a successful open resets the ladder."""
@@ -329,6 +394,35 @@ class MarketStream:
             self._close(app)
             return
         self._send_text(app, PING_TEXT)
+        self._check_snapshots(app)
+        self._maybe_tick()
+
+    def _check_snapshots(self, app) -> None:
+        """A token subscribed on an open socket that never got its book.
+
+        One `subscribe` resend, then one controlled reconnect — the initial
+        frame on a fresh connection is the shape the venue is known to honour,
+        so the recovery cannot silently spin. The token stays not-ready for the
+        whole wait: it holds its orders instead of quoting on a book we lack.
+        """
+        with self._lock:
+            pending = sorted(self._pending)
+        if not pending:
+            return
+        if self._time() - self._pending_since <= SNAPSHOT_TIMEOUT_SEC:
+            return
+        extra = {"reason": "snapshot_timeout", "tokens": pending}
+        if self._resends < SNAPSHOT_RESEND_LIMIT:
+            self._resends += 1
+            self._pending_since = self._time()
+            self._send_frame(app,
+                             {"assets_ids": pending, "operation": "subscribe"})
+            self._emit("market_stream_error", reason="snapshot_timeout",
+                       extra=extra)
+            return
+        self._emit("market_stream_error", reason="snapshot_timeout",
+                   extra={**extra, "action": "reconnect"})
+        self._close(app)
 
     # ── socket callbacks ───────────────────────────────────────────────────
 
@@ -341,7 +435,12 @@ class MarketStream:
         self._pending = set(tokens)
         self._pending_since = self._time()
         self._resends = 0
+        self._last_tick = self._time()
+        self._last_frames = self._cache.frames
+        self._last_gaps = self._cache.level_gap
         self._send_frame(app, {"assets_ids": tokens, "type": "market"})
+        self._emit("market_stream_connected",
+                   extra={"url": MARKET_WS_URL, "tokens": tokens})
 
     def _on_message(self, app, message) -> None:
         self._alive_at = self._time()  # any inbound frame is liveness
@@ -353,9 +452,27 @@ class MarketStream:
         try:
             payload = json.loads(text)
         except ValueError:
-            log.debug("market stream: unparseable frame skipped")
+            self._note_frame_error(text)
             return
-        self._cache.apply_frame(payload)
+        for token in self._cache.apply_frame(payload):
+            self._note_snapshot(token)
+
+    def _note_snapshot(self, token: str) -> None:
+        """A token that was waiting for its first book on this connection.
+
+        A delta cannot move an unknown book, so a token the cache just moved
+        while it was still pending is one the venue just sent a snapshot for.
+        """
+        with self._lock:
+            if token not in self._pending:
+                return
+            self._pending.discard(token)
+            if not self._pending:
+                self._resends = 0
+            slug = next((s for s, up, down in self._markets.values()
+                         if token in (up, down)), "")
+        self._emit("market_stream_snapshot", market_slug=slug,
+                   extra={"slug": slug, "token": token})
 
     def _on_close(self, app, code=None, reason="") -> None:
         self._close_code = code
@@ -365,6 +482,62 @@ class MarketStream:
 
     def _on_error(self, app, error) -> None:
         log.warning("market stream socket error: %s", error)
+
+    # ── telemetry ──────────────────────────────────────────────────────────
+
+    def _emit(self, action, *, market_slug="", reason="", extra=None) -> None:
+        """One lifecycle event. Never raises, never runs under the cache lock."""
+        emit = self._emit_fn
+        if emit is None:
+            return
+        try:
+            emit(0, "stream", action, service=SERVICE, market_slug=market_slug,
+                 reason=reason, extra=extra or {})
+        except Exception as e:
+            log.warning("market stream telemetry failed: %s: %s",
+                        type(e).__name__, e)
+
+    def _note_frame_error(self, text: str) -> None:
+        """A frame we could not read. Rate-limited: the ring is shared 500 lines."""
+        now = self._time()
+        with self._lock:
+            if now - self._frame_errors_at < self._tick_sec:
+                return
+            self._frame_errors_at = now
+        self._emit("market_stream_error", reason="frame_error",
+                   extra={"reason": "frame_error", "detail": text[:120]})
+
+    def _maybe_tick(self) -> None:
+        """At most one summary per window: never one event per venue frame."""
+        now = self._time()
+        with self._lock:
+            if now - self._last_tick < self._tick_sec:
+                return
+            self._last_tick = now
+        ready = self._cache.ready_tokens()
+        reads = []
+        for token in ready[:100]:
+            try:
+                start = time.perf_counter()
+                self._cache.book(token)
+                reads.append((time.perf_counter() - start) * 1e6)
+            except BookNotReady:
+                continue
+        frames = self._cache.frames - self._last_frames
+        gaps = self._cache.level_gap - self._last_gaps
+        self._last_frames = self._cache.frames
+        self._last_gaps = self._cache.level_gap
+        self._emit("market_stream_tick", extra={
+            "books": len(ready),
+            "frames": frames,
+            "level_gap": gaps,
+            "read_us_p50": round(statistics.median(reads), 1) if reads else 0.0,
+        })
+        if gaps:
+            # Observational only: the per-entry best_bid/best_ask disagree with
+            # the book we rebuilt. Evidence for a follow-up, never a trigger.
+            self._emit("market_stream_error", reason="level_gap",
+                       extra={"reason": "level_gap", "count": gaps})
 
     # ── sending ────────────────────────────────────────────────────────────
 

@@ -22,10 +22,17 @@ from core_brain.market_stream import (
     PING_TEXT,
     READ_LATENCY_BUDGET_SEC,
     RECONNECT_MAX_SEC,
+    SNAPSHOT_TIMEOUT_SEC,
     BookNotReady,
     MarketBookCache,
     MarketStream,
 )
+
+FROZEN_ACTIONS = {
+    "market_stream_connected", "market_stream_reconnect",
+    "market_stream_subscribe", "market_stream_unsubscribe",
+    "market_stream_snapshot", "market_stream_error", "market_stream_tick",
+}
 
 
 def _await(predicate, timeout=5.0):
@@ -300,6 +307,34 @@ def _frames(sent, kind="market"):
     return out
 
 
+def _ops(sent, operation):
+    """Parsed differential frames (`subscribe` / `unsubscribe`) in order."""
+    out = []
+    for msg in sent:
+        if not msg.startswith("{"):
+            continue
+        frame = json.loads(msg)
+        if frame.get("operation") == operation:
+            out.append(frame)
+    return out
+
+
+class _Recorder:
+    """Stands in for `cycle_stream.emit`: keeps every call as one dict."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, cycle, phase, action, **kw):
+        self.calls.append({"cycle": cycle, "phase": phase, "action": action, **kw})
+
+    def of(self, action):
+        return [c for c in self.calls if c["action"] == action]
+
+    def actions(self):
+        return [c["action"] for c in self.calls]
+
+
 def test_on_open_sends_the_initial_subscription(stub_socket):
     stream = MarketStream()
     stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
@@ -358,17 +393,20 @@ def test_pong_keeps_the_connection_ready(stub_socket):
     try:
         assert _await(lambda: stream.connected)
         app = stub_socket.apps[0]
+        for token in ("tok-u", "tok-d"):
+            app.feed(json.dumps(_book_frame(token, [_lvl(0.46)], [_lvl(0.50)])))
 
         clock.now += LIVE_WINDOW_SEC - 1.0
         stream._heartbeat_tick()
         assert app.closed is False
-        assert stub_socket.sent[-1] == PING_TEXT
+        pings = stub_socket.sent.count(PING_TEXT)
+        assert pings == 1
 
         clock.now += LIVE_WINDOW_SEC  # the liveness window is long gone
         app.feed("PONG")  # ... and one PONG reply refreshes it
         stream._heartbeat_tick()
         assert app.closed is False
-        assert stub_socket.sent[-1] == PING_TEXT
+        assert stub_socket.sent.count(PING_TEXT) == pings + 1
     finally:
         stream.stop()
 
@@ -425,3 +463,260 @@ def test_stop_joins_the_worker_and_the_heartbeat(stub_socket):
     assert stream.connected is False
     assert not [t for t in threading.enumerate()
                 if t.name.startswith("market-stream")]
+
+
+# ── T3 — dynamic universe + telemetry ──────────────────────────────────────
+
+
+def test_ensure_market_subscribes_only_the_new_pair(stub_socket):
+    rec = _Recorder()
+    stream = MarketStream(emit_fn=rec)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        stream.ensure_market("0xc2", "peru-election", "tok-x", "tok-y")
+        assert _await(lambda: _ops(stub_socket.sent, "subscribe"))
+
+        assert _ops(stub_socket.sent, "subscribe") == [
+            {"assets_ids": ["tok-x", "tok-y"], "operation": "subscribe"}]
+        # The initial frame is sent once per connection, never re-sent.
+        assert len(_frames(stub_socket.sent)) == 1
+
+        # Registering the same market again is a no-op.
+        stream.ensure_market("0xc2", "peru-election", "tok-x", "tok-y")
+        assert len(_ops(stub_socket.sent, "subscribe")) == 1
+        assert [c["extra"]["slug"] for c in rec.of("market_stream_subscribe")] == [
+            "brazil-election", "peru-election"]
+    finally:
+        stream.stop()
+
+
+def test_ensure_market_replays_on_the_next_open_when_offline(stub_socket):
+    stream = MarketStream()
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.ensure_market("0xc2", "peru-election", "tok-x", "tok-y")
+    assert stub_socket.sent == []  # no socket yet: nothing to send to
+
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        assert _frames(stub_socket.sent)[0]["assets_ids"] == [
+            "tok-d", "tok-u", "tok-x", "tok-y"]
+        assert _ops(stub_socket.sent, "subscribe") == []
+    finally:
+        stream.stop()
+
+
+def test_retain_markets_unsubscribes_and_drops_only_the_removed_books(stub_socket):
+    rec = _Recorder()
+    stream = MarketStream(emit_fn=rec)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.ensure_market("0xc2", "peru-election", "tok-x", "tok-y")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        app.feed(json.dumps(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)])))
+        app.feed(json.dumps(_book_frame("tok-x", [_lvl(0.40)], [_lvl(0.60)])))
+        assert _await(lambda: len(stream._cache.ready_tokens()) == 2)
+
+        stream.retain_markets(["0xc2", "0xc-new"])
+
+        assert _ops(stub_socket.sent, "unsubscribe") == [
+            {"assets_ids": ["tok-d", "tok-u"], "operation": "unsubscribe"}]
+        with pytest.raises(BookNotReady):
+            stream._cache.book("tok-u")
+        assert stream._cache.book("tok-x")["best_bid"] == 0.40
+        assert stream.connected is True
+        assert len(stub_socket.apps) == 1
+        assert len(rec.of("market_stream_unsubscribe")) == 1
+        assert rec.of("market_stream_unsubscribe")[0]["extra"]["slug"] == "brazil-election"
+    finally:
+        stream.stop()
+
+
+def test_a_market_swap_keeps_the_socket_and_every_other_book(stub_socket):
+    """The universe rolls over on the same connection: no reconnect, no losses."""
+    rec = _Recorder()
+    stream = MarketStream(emit_fn=rec)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.ensure_market("0xc2", "peru-election", "tok-x", "tok-y")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        app.feed(json.dumps(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)])))
+        app.feed(json.dumps(_book_frame("tok-x", [_lvl(0.40)], [_lvl(0.60)])))
+
+        stream.retain_markets(["0xc2"])
+        stream.ensure_market("0xc3", "chile-election", "tok-p", "tok-q")
+        assert _await(lambda: _ops(stub_socket.sent, "subscribe"))
+
+        assert len(stub_socket.apps) == 1  # the socket never moved
+        assert stream.connected is True
+        assert _ops(stub_socket.sent, "unsubscribe")[0]["assets_ids"] == ["tok-d", "tok-u"]
+        assert _ops(stub_socket.sent, "subscribe")[0]["assets_ids"] == ["tok-p", "tok-q"]
+        with pytest.raises(BookNotReady):
+            stream._cache.book("tok-u")
+        assert stream._cache.book("tok-x")["best_bid"] == 0.40
+        assert rec.actions().count("market_stream_connected") == 1
+    finally:
+        stream.stop()
+
+
+def test_snapshot_timeout_resends_once_then_reconnects_once(stub_socket):
+    clock = _Clock()
+    rec = _Recorder()
+    stream = MarketStream(emit_fn=rec, time_fn=clock, ping_sec=60.0)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+
+        clock.now += SNAPSHOT_TIMEOUT_SEC + 1.0
+        stream._heartbeat_tick()
+        assert _ops(stub_socket.sent, "subscribe") == [
+            {"assets_ids": ["tok-d", "tok-u"], "operation": "subscribe"}]
+        assert app.closed is False
+        assert [c["reason"] for c in rec.of("market_stream_error")] == ["snapshot_timeout"]
+
+        clock.now += SNAPSHOT_TIMEOUT_SEC + 1.0
+        stream._heartbeat_tick()
+        assert app.closed is True  # one controlled reconnect, not a resend storm
+        assert len(_ops(stub_socket.sent, "subscribe")) == 1
+        assert len(rec.of("market_stream_error")) == 2
+        assert rec.of("market_stream_error")[-1]["extra"]["action"] == "reconnect"
+
+        # The token held the whole time: fail closed, never a stale quote.
+        with pytest.raises(BookNotReady):
+            stream._cache.book("tok-u")
+    finally:
+        stream.stop()
+
+
+def test_snapshot_stops_the_timeout_clock(stub_socket):
+    """A token that answers stops counting as missing."""
+    clock = _Clock()
+    rec = _Recorder()
+    stream = MarketStream(emit_fn=rec, time_fn=clock, ping_sec=60.0)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        for token in ("tok-u", "tok-d"):
+            app.feed(json.dumps(_book_frame(token, [_lvl(0.46)], [_lvl(0.50)])))
+        assert _await(lambda: len(rec.of("market_stream_snapshot")) == 2)
+
+        clock.now += SNAPSHOT_TIMEOUT_SEC + 1.0
+        stream._heartbeat_tick()
+        assert _ops(stub_socket.sent, "subscribe") == []
+        assert app.closed is False
+        assert rec.of("market_stream_error") == []
+        snap = rec.of("market_stream_snapshot")[0]
+        assert (snap["extra"]["slug"], snap["extra"]["token"]) == (
+            "brazil-election", "tok-u")
+        assert snap["market_slug"] == "brazil-election"
+    finally:
+        stream.stop()
+
+
+def test_lifecycle_events_carry_the_documented_actions_and_service(stub_socket,
+                                                                  monkeypatch):
+    monkeypatch.setattr(ms, "RECONNECT_MIN_SEC", 0.01)
+    clock = _Clock()
+    rec = _Recorder()
+    stream = MarketStream(emit_fn=rec, time_fn=clock, ping_sec=60.0, tick_sec=10.0)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        for token in ("tok-u", "tok-d"):
+            app.feed(json.dumps(_book_frame(token, [_lvl(0.46)], [_lvl(0.50)])))
+        assert _await(lambda: len(rec.of("market_stream_snapshot")) == 2)
+        app.feed(json.dumps(_change_frame(_change(
+            "tok-u", "BUY", "0.47", "5", best_bid="0.60", best_ask="0.61"))))
+        app.feed("this is not a frame at all")
+        clock.now += 11.0
+        stream._heartbeat_tick()
+        stream.ensure_market("0xc2", "peru-election", "tok-x", "tok-y")
+        stream.retain_markets(["0xc2"])
+
+        app.close()  # the venue drops us: the reconnect event follows
+        assert _await(lambda: rec.of("market_stream_reconnect"))
+
+        for call in rec.calls:
+            assert call["cycle"] == 0
+            assert call["phase"] == "stream"
+            assert call["service"] == "market_stream"
+            assert call["action"] in FROZEN_ACTIONS
+        assert set(rec.actions()) == FROZEN_ACTIONS
+        assert rec.of("market_stream_reconnect")[0]["extra"]["delay_sec"] == 0.01
+        assert rec.of("market_stream_reconnect")[0]["extra"]["close_code"] == 1000
+        assert rec.of("market_stream_connected")[0]["extra"]["url"] == ms.MARKET_WS_URL
+        assert [c["reason"] for c in rec.of("market_stream_error")] == [
+            "frame_error", "level_gap"]
+    finally:
+        stream.stop()
+
+
+def test_tick_summaries_are_rate_limited(stub_socket):
+    clock = _Clock()
+    rec = _Recorder()
+    stream = MarketStream(emit_fn=rec, time_fn=clock, ping_sec=60.0, tick_sec=10.0)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        for token in ("tok-u", "tok-d"):
+            app.feed(json.dumps(_book_frame(token, [_lvl(0.46)], [_lvl(0.50)])))
+        assert _await(lambda: len(stream._cache.ready_tokens()) == 2)
+
+        clock.now += 11.0
+        stream._heartbeat_tick()
+        stream._heartbeat_tick()  # same instant: never a second summary
+        assert len(rec.of("market_stream_tick")) == 1
+
+        clock.now += 11.0
+        stream._heartbeat_tick()
+        ticks = rec.of("market_stream_tick")
+        assert len(ticks) == 2
+        first, last = ticks[0]["extra"], ticks[1]["extra"]
+        assert first["books"] == 2
+        assert first["frames"] == 2  # the two snapshots in this window
+        assert first["level_gap"] == 0
+        assert first["read_us_p50"] > 0
+        assert last["frames"] == 0  # a window delta, not a running total
+    finally:
+        stream.stop()
+
+
+def test_emit_failure_never_kills_the_stream_thread(stub_socket):
+    class Boom:
+        """An emitter that always raises, and counts the attempts."""
+
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, *a, **kw):
+            self.calls += 1
+            raise RuntimeError("the ring is gone")
+
+    boom = Boom()
+    stream = MarketStream(emit_fn=boom, ping_sec=0.01, tick_sec=0.01)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        # Telemetry raised on the worker *and* on the heartbeat, repeatedly.
+        assert _await(lambda: boom.calls > 1)
+        stream.ensure_market("0xc2", "peru-election", "tok-x", "tok-y")
+        assert _await(lambda: _ops(stub_socket.sent, "subscribe"))
+        assert stream.connected is True
+        assert stream._thread.is_alive() and stream._heartbeat.is_alive()
+    finally:
+        stream.stop()
