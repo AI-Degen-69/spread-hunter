@@ -4,16 +4,17 @@ measured fills.
 Source: 56,768 of his BTC/ETH 5-min fills over 2026-07-14..21 (2,970 markets).
 See research/powerwinner_analysis.md.
 
-SINGLE SOURCE (#571). Every setting the picker shares with the live fleet --
-quoting, risk, pacing, markout, economics -- is declared once, on
-`core_brain.config.MakerConfig`, and inherited here. This class declares only
-what the ranker alone reads: the eight picker bars below, and the five values
-the picker deliberately runs at a different level, which it reads from
-`core_brain.config.PICKER_PROFILE`.
+SINGLE SOURCE (#571, #652). Every setting the picker shares with the live fleet
+-- quoting, risk, pacing, markout, economics, and since #652 the eight market
+filter bars -- is declared once, on `core_brain.config.MakerConfig`, and
+inherited here. This class declares only the five values the picker deliberately
+runs at a different level, which it reads from `core_brain.config.PICKER_PROFILE`,
+plus its own `db_path()`.
 
 Do not copy a shared field back into this class. A second declaration is a
 second number, and `tests/test_config_divergence_guard.py` fails on the first
-one that drifts from core's.
+one that drifts from core's -- including a copy that happens to hold the same
+value today, which is the drift a values-only comparison would wave through.
 """
 from __future__ import annotations
 
@@ -57,82 +58,19 @@ class MakerConfig(CoreMakerConfig):
     max_spread_from_mid: float = PICKER_PROFILE["max_spread_from_mid"]
     max_pair_cost: float = PICKER_PROFILE["max_pair_cost"]
 
-    # --- bars only the ranker gates on ------------------------------------
-    # THE MAKER-QUEUE BAR. The three bars around it are FLOORS on depth, and
-    # from the maker's side depth near mid IS the queue ahead of us --
-    # `select_min_top3_depth_usd` and `book_health` both protect our ability to
-    # EXIT, which is real, and both point the wrong way for queueing.
-    # `select_min_volume_24h_usd` measures market-wide 24h tape across every
-    # price, so a market can clear six figures a day while trading nothing at
-    # `mid - 2.5c`, the only level our order ever sits at. None of the three
-    # measures the resting size at OUR price against the volume at OUR price.
-    #
-    # Session B of run-2809a7161de1: 344 orders, 10 markets, 30 minutes, zero
-    # fills, and not one order's queue drained. Minutes of that market's own
-    # observed volume needed to clear its median queue -- bonzi-halys 686,
-    # bellucc-darderi 837, kouame-basavar 924, bolt-ruiz 12,332, rocha-mmoh
-    # 50,397, and four markets with no observed trade at our price at all.
-    #
-    # 15 minutes is anchored to `pairs_exit_window_sec = 900`: a queue that
-    # cannot clear inside the window where a naked leg is still called fresh is
-    # a queue we should never join. 0 disables, as everywhere else here.
-    select_max_queue_minutes: float = 15.0
-    # RECORD-ONLY FIRST. At 15 minutes the measured universe scores 686 at
-    # best, so enforcing on day one refuses every market and takes the bot
-    # silent. That is correct for the run we measured and still the wrong way
-    # to ship it: record the number for a day, then decide with real data.
-    enforce_max_queue_minutes: bool = False
-    # Sister bar: the placement-time queue-clear gate (`max_queue_clear_minutes`
-    # = 60.0, `enforce_queue_clear_gate = False` in `core_brain/config.py`)
-    # judges the same queue minutes at the bid actually posted. Same arithmetic
-    # (`scoring/selector.py`), different moment — see
-    # `docs/issues/398-maker-queue-bars.md` for why the two stay separate.
-
-    # THE MOVEMENT GATE (#74). 24h volume says a market traded SOMETIME; it
-    # says nothing about whether anything is happening now. A shadow run sat
-    # 4.3 hours on a market with 1,777 shares ahead at 0.23 and zero traded --
-    # inside every existing bar, tying up resting capital the whole time.
-    # `select_movement_window_sec` is the lookback, `select_min_movement_usd`
-    # the notional that must have changed hands inside it.
-    #
-    # ENFORCED 2026-09-08 (operator directive, unified-universe redesign).
-    # Shipped 2026-08 at 0.0 -- record only -- so the bar could be chosen from
-    # the recorded `movement_usd` column. The unified universe now pays one
-    # tape read per volume-qualified market BEFORE its two book fetches, so a
-    # stale market costs one request instead of three, and a recorded metric
-    # nobody acted on became a real gate. $200/30min (#416; was $500) stays
-    # far below the $125k/24h volume bar -- whose markets average ~$2.6k per
-    # 30 minutes -- so it refuses multi-hour stalls, not quiet-but-alive or
-    # normally-swinging sports books.
-    # Unmeasured tape stays fail-open: `movement_reject` passes None, because
-    # a failed HTTP call must not empty the universe on one bad minute.
-    select_movement_window_sec: float = 1800.0
-    # WIDENED 2026-10-08 (#416). $500/30m refused ordinary live-sports
-    # point swings: a 5c-8c tennis move on modest size prints roughly
-    # $100-300 of notional per 30m, so an active match read as a stall.
-    # $200 keeps a wide margin above a true stall ($0 printed for hours)
-    # while admitting a normally-trading sports book. The range gate below
-    # is ANDed with this one, so a one-tick flicker still needs real
-    # notional to pass. Operator-tunable without code via
-    # HUNTER_MIN_MOVEMENT_USD.
-    select_min_movement_usd: float = 200.0
-    select_velocity_gate_enabled: bool = True
-    # RELATIVE ACTIVITY RATIO GATE (loose baseline). Absolute 24h volume is
-    # misleading: a flat $1M politics market and an active $10k live sports game
-    # both clear a volume floor, but only one is actually trading. This gate
-    # measures RECENT tape against total size: movement_usd (last movement
-    # window) / volume_24h >= threshold. Loose initial threshold (0.0 = off by
-    # default) so the baseline run observes a wide pool before we tighten it.
-    # Operator-tunable via HUNTER_MIN_ACTIVITY_RATIO. 0.0 disables the gate.
-    select_min_activity_ratio: float = 0.0
-    # Volatility / range gate (#416, #434). 2.0c minimum swing over the volatility
-    # window (default 2h) refuses flat markets while active live sports/eSports
-    # are exempted and prioritized. Operator-tunable via HUNTER_MIN_RANGE_CENTS.
-    select_min_range_cents: float = 2.0
-    # Price volatility lookback window in seconds (#434). Distinct from the
-    # 30-minute volume movement window (`select_movement_window_sec = 1800.0`).
-    # Defaults to 2 hours (7200s). Operator-tunable via HUNTER_VOLATILITY_WINDOW_SEC.
-    select_volatility_window_sec: float = 7200.0
+    # --- the eight market filter bars are core's (#652) -------------------
+    # `filter_live_vel_lookback_sec`, `filter_live_vel_min_usd`,
+    # `filter_live_gate_velocity_on`, `filter_live_activity_min_ratio`,
+    # `filter_live_move_lookback_sec`, `filter_live_move_min_range_cents`,
+    # `filter_std_queue_max_clear_min` and `filter_std_gate_queue_max_on` were
+    # declared here until #652; they are inherited now and their rationale lives
+    # beside them in `core_brain/config.py`. The names this file used for them
+    # (`select_max_queue_minutes`, `enforce_max_queue_minutes`,
+    # `select_movement_window_sec`, `select_min_movement_usd`,
+    # `select_velocity_gate_enabled`, `select_min_activity_ratio`,
+    # `select_min_range_cents`, `select_volatility_window_sec`) still resolve
+    # through `_LEGACY_TO_CANONICAL`, with a DeprecationWarning: the dashboard's
+    # parameter cards and `scripts/filter_markets.py` read them.
 
     def db_path(self) -> Path:
         # The duplicate this ticket keeps on purpose (CONSTRAINTS §4):
@@ -268,7 +206,7 @@ def load() -> MakerConfig:
         # inf/nan are not bars. `inf` would refuse every market on earth and
         # `nan` compares false against everything, silently disabling the gate.
         if bar is not None and math.isfinite(bar):
-            kw["select_min_movement_usd"] = max(0.0, bar)
+            kw["filter_live_vel_min_usd"] = max(0.0, bar)
     mwin = os.environ.get("HUNTER_MOVEMENT_WINDOW_SEC") or ""
     if mwin.strip():
         try:
@@ -276,16 +214,16 @@ def load() -> MakerConfig:
         except ValueError:
             window = None
         if window is not None and math.isfinite(window) and window > 0:
-            kw["select_movement_window_sec"] = window
+            kw["filter_live_vel_lookback_sec"] = window
     vgate = os.environ.get("HUNTER_VELOCITY_GATE") or ""
     if vgate.strip():
-        kw["select_velocity_gate_enabled"] = vgate.strip().lower() not in ("0", "false", "off", "no")
+        kw["filter_live_gate_velocity_on"] = vgate.strip().lower() not in ("0", "false", "off", "no")
     rcents = os.environ.get("HUNTER_MIN_RANGE_CENTS") or ""
     if rcents.strip():
         try:
             rc = float(rcents)
             if math.isfinite(rc) and rc >= 0:
-                kw["select_min_range_cents"] = rc
+                kw["filter_live_move_min_range_cents"] = rc
         except ValueError:
             pass
     vwin = os.environ.get("HUNTER_VOLATILITY_WINDOW_SEC") or ""
@@ -293,7 +231,7 @@ def load() -> MakerConfig:
         try:
             vw = float(vwin)
             if math.isfinite(vw) and vw > 0:
-                kw["select_volatility_window_sec"] = vw
+                kw["filter_live_move_lookback_sec"] = vw
         except ValueError:
             pass
     vtri = os.environ.get("HUNTER_VOLUME_TRIAL_USD") or ""
@@ -310,7 +248,7 @@ def load() -> MakerConfig:
         except ValueError:
             ratio = 0.0
         if math.isfinite(ratio) and ratio >= 0:
-            kw["select_min_activity_ratio"] = ratio
+            kw["filter_live_activity_min_ratio"] = ratio
     vol = os.environ.get("HUNTER_MIN_VOLUME_24H_USD") or ""
     if vol.strip():
         try:
