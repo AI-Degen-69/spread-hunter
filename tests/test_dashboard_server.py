@@ -1963,7 +1963,7 @@ def test_shadow_view_toggle_never_prompts_or_posts_a_start():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -1996,7 +1996,7 @@ def test_master_toggle_controls_shadow_rehearsal_on_shadow_view():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2036,7 +2036,7 @@ def test_master_toggle_controls_live_stack_on_live_view():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2146,7 +2146,7 @@ def test_event_ticker_formats_timestamps_in_local_time():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60, env=env,
+        capture_output=True, text=True, encoding='utf-8', timeout=60, env=env,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2181,7 +2181,7 @@ def test_market_link_generates_safe_hyperlinks():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2487,7 +2487,7 @@ def test_event_stream_trades_tab_shows_only_trade_rows():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2544,6 +2544,61 @@ def test_event_stream_trades_tab_shows_only_trade_rows():
     assert all("ticker-raw" in r for r in out["detailsAfterRebuild"])
 
 
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_app_js_translates_market_stream_events():
+    """Every market-stream action reads as plain words, with no market clause."""
+    harness = Path(__file__).resolve().parent / "js" / "event_stream_harness.cjs"
+    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
+
+    res = subprocess.run(
+        [NODE, str(harness), str(app_js)],
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out.get("exportsOk") is True, out.get("error")
+
+    s = out["marketStreamSentences"]
+    # Exact middot-containing lines are pinned by the JS harness; here we only
+    # check the tag and the ASCII facts so the test stays encoding-independent.
+    assert s["connected"].endswith("[OPEN] 4 tokens")
+    assert s["connectedOne"].endswith("[OPEN] 1 token")
+    assert s["reconnect"].endswith("socket left")
+    assert "[WAIT]" in s["reconnect"] and "[WAIT]" in s["reconnectOne"]
+    assert s["reconnectOne"].endswith("1s")
+    assert "+2 tokens" in s["subscribe"] and "brazil-election" in s["subscribe"]
+    assert "[+]" in s["subscribe"] and "[-]" in s["unsubscribe"]
+    assert s["unsubscribe"].endswith("-1 token")
+    assert "+2 books" in s["snapshot"] and "brazil-election" in s["snapshot"]
+    assert "[BOOK]" in s["snapshot"] and s["snapshotNoSlug"].endswith("+2 books")
+    assert s["problem"].endswith("brazil-election") and "snapshot_timeout" in s["problem"]
+    assert s["problemNoMarket"].endswith("snapshot_timeout")
+    assert "frame_error" in s["frameError"] and "not json" in s["frameError"]
+    assert "level_gap" in s["levelGap"] and "3 gaps" in s["levelGap"]
+    assert s["tick"].endswith("6.3us read") and "4 books" in s["tick"] and "53 frames" in s["tick"]
+    assert s["tickOne"].endswith("2 gaps") and "41us read" in s["tickOne"]
+    assert s["tickNoRead"].endswith("0 frames") and "0 books" in s["tickNoRead"]
+    assert s["unknown"].endswith("something new") and "[?]" in s["unknown"]
+
+    # The convention, not just the content: clock, then a tag field of one fixed
+    # width, then facts. No JSON, no socket URL, no 77-digit token id on the card.
+    for key, line in s.items():
+        assert " — " in line, (key, line)
+        clock, content = line.split(" — ", 1)
+        assert re.search(r"\d{1,2}:\d\d:\d\d", clock), (key, line)
+        assert re.match(r"^\[[^\]]{1,4}\] +\S", content), (key, line)
+        assert len(content) > 7 and content[7] != " ", (key, line)   # facts start in one column
+        assert "{" not in line and "}" not in line, (key, line)
+        assert "ws-subscriptions-clob" not in line, (key, line)
+        assert not re.search(r"\d{20,}", line), (key, line)
+
+    # A hostile stream slug is escaped by the row renderer, never executed.
+    rows = "".join(out["marketStreamRows"])
+    assert rows, "the hostile-slug stream row was not rendered"
+    assert "<img" not in rows
+    assert "&lt;img" in rows
+
+
 def test_event_stream_tabs_harness():
     """Verify multi-process log stream tabs: buffer isolation, caps, and escaping."""
     assert NODE is not None, "node.js executable is required for event stream tabs harness"
@@ -2553,7 +2608,7 @@ def test_event_stream_tabs_harness():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2599,7 +2654,7 @@ def test_master_toggle_renders_every_state():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)

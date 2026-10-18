@@ -1171,6 +1171,73 @@ function isTradeEvent(ev) {
   return false;
 }
 
+/* ── Live market stream: one tagged log line per event ──
+ *
+ * Same convention as the probe's console output (core_brain/market_stream.py
+ * `LOG_TAGS` / `_stream_line`): `[TAG] subject · facts`, tag padded so every
+ * line's facts start in one column. A tag says what happened, the subject is
+ * the market, and the facts are counts and durations. Raw token ids never
+ * appear — a 77-digit id is not something an operator can act on.
+ */
+const STREAM_TAGS = {
+  market_stream_connected: 'OPEN',
+  market_stream_reconnect: 'WAIT',
+  market_stream_subscribe: '+',
+  market_stream_unsubscribe: '-',
+  market_stream_snapshot: 'BOOK',
+  market_stream_error: 'WARN',
+  market_stream_tick: 'TICK',
+};
+
+function streamCount(value, word) {
+  const n = Number(value);
+  if (!isFinite(n)) return `? ${word}s`;
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+function streamNum(value) {
+  const n = Number(value);
+  return isFinite(n) ? String(Math.round(n * 10) / 10) : '?';
+}
+
+function streamSubject(slug, facts) {
+  return slug ? `${slug} · ${facts}` : facts;
+}
+
+function marketStreamLine(action, ex, ev) {
+  const tag = STREAM_TAGS[action] || '?';
+  const slug = ex.slug || (ev && ev.market_slug) || '';
+  const why = (ev && ev.reason) || '';
+  const tokens = (Array.isArray(ex.tokens) ? ex.tokens.length : 0);
+  let body;
+  if (action === 'market_stream_connected') {
+    body = streamCount(tokens, 'token');
+  } else if (action === 'market_stream_reconnect') {
+    body = `${streamNum(ex.delay_sec)}s`;
+    if (why) body += ` · ${why}`;
+  } else if (action === 'market_stream_subscribe') {
+    body = streamSubject(slug, `+${streamCount(tokens, 'token')}`);
+  } else if (action === 'market_stream_unsubscribe') {
+    body = streamSubject(slug, `-${streamCount(tokens, 'token')}`);
+  } else if (action === 'market_stream_snapshot') {
+    body = streamSubject(slug, `+${streamCount(ex.books, 'book')}`);
+  } else if (action === 'market_stream_error') {
+    body = why || ex.reason || 'error';
+    const markets = Array.isArray(ex.markets) ? ex.markets : [];
+    if (markets.length) body += ` · ${markets.join(', ')}`;
+    else if (ex.detail) body += ` · ${String(ex.detail).slice(0, 40)}`;
+    else if (ex.count) body += ` · ${streamCount(ex.count, 'gap')}`;
+  } else if (action === 'market_stream_tick') {
+    body = `${streamCount(ex.books, 'book')} · ${streamCount(ex.frames, 'frame')}`;
+    const read = Number(ex.read_us_p50 || 0);
+    if (read > 0) body += ` · ${streamNum(read)}us read`;
+    if (Number(ex.level_gap || 0) > 0) body += ` · ${streamCount(ex.level_gap, 'gap')}`;
+  } else {
+    body = humanizeAction(String(action).replace('market_stream_', ''));
+  }
+  return `[${tag}]${' '.repeat(Math.max(0, 4 - tag.length))} ${body}`;
+}
+
 function buildStreamSentence(ev, lookup) {
   const action = ((ev && ev.action) || '').toLowerCase();
   const ex = (ev && ev.extra) || {};
@@ -1231,6 +1298,13 @@ function buildStreamSentence(ev, lookup) {
 
   // Static fallbacks for televised-but-unchanged producers.
   const svc = ((ev && ev.service) || '').toLowerCase();
+
+  // The live market stream is a log, not a narration: one tagged line per event,
+  // formatted exactly like the probe's console output.
+  if (svc === 'market_stream') {
+    return `${when}${marketStreamLine(action, ex, ev)}`;
+  }
+
   const key = svc + '|' + action;
   if (EVENT_TRANSLATIONS[key]) {
     const base = EVENT_TRANSLATIONS[key];
@@ -1439,6 +1513,17 @@ function getActiveTickerEvents() {
   return tickerBuffers[activeTickerTab] || [];
 }
 
+/* ── Ticker color coding: tag -> color, neutral stays primary (white) ── */
+function tickerColorClass(ev) {
+  if (!ev || (ev.service || '').toLowerCase() !== 'market_stream') return '';
+  const a = (ev.action || '').toLowerCase();
+  if (a === 'market_stream_connected' || a === 'market_stream_subscribe') return 'ms-good';
+  if (a === 'market_stream_unsubscribe' || a === 'market_stream_error') return 'ms-bad';
+  if (a === 'market_stream_reconnect') return 'ms-warn';
+  if (a === 'market_stream_snapshot') return 'ms-info';
+  return '';   // tick and unknown stay neutral (white)
+}
+
 function renderTickerFeed() {
   tickerEl.innerHTML = '';
   const currentEvents = getActiveTickerEvents();
@@ -1454,8 +1539,9 @@ function renderTickerFeed() {
     const div = document.createElement('div');
     div.className = 'ticker-event';
     if (ev.translation) {
+      const colorCls = tickerColorClass(ev);
       const raw = tickerShowDetails ? `<div class="ticker-raw">${esc(ev.line)}</div>` : '';
-      div.innerHTML = `<div class="ticker-translation">${esc(ev.translation)}</div>${raw}`;
+      div.innerHTML = `<div class="ticker-translation ${colorCls}">${esc(ev.translation)}</div>${raw}`;
     } else {
       div.innerHTML = `<div class="ticker-raw">${esc(ev.line)}</div>`;
     }

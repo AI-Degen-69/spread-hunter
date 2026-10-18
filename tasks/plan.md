@@ -1,180 +1,394 @@
-# Plan — Issue #571: Merge the two settings files that disagree with each other
+# Plan — Issue #648: Live Market WebSocket stream engine replacing HTTP polling for quote evaluation
 
-Branch: i571/refactor-merge-the-two-settings-files-that-disagre | Issue: #571
-Size tier: **Standard** — 3 files changed (`core_brain/config.py`,
-`scoring/config.py`, `core_brain/quotes.py` comments) + 2 new test files, one
-architectural decision (where the five differing values live).
-Task type: **Code** (refactor) + **Debug** (dead-knob audit, resolved from code).
+Branch: i648/live-market-websocket-stream-engine-replacing-http | Issue: #648
+Size tier: **Standard** — 4-5 files changed (`core_brain/market_stream.py` (new),
+`dashboard/static/app.js`, `tests/test_market_stream.py` (new),
+`tests/js/event_stream_harness.cjs`, `tests/test_dashboard_server.py`), one
+architectural decision (where a venue order-book read comes from). Top of the
+Standard band; no new dependency (`websocket-client>=1.7` is already declared),
+no schema change, no public API change.
+Task type: **Code** (primary) + **UX / Copy** (dashboard event sentences).
 
-## Spec (embedded — Standard work, single-issue refactor)
+## Spec (embedded — Standard work, single-issue build)
 
-**Goal:** `core_brain/config.py` owns every shared setting; `scoring/config.py`
-imports it and keeps only picker-only fields. No shipped value changes.
+**Goal:** one long-lived public-socket engine that keeps every active market's
+order book in memory, so a book read costs a dict lookup instead of two blocking
+HTTP `GET /book` calls (~260 ms per visit today).
 
-**Acceptance criteria (from the issue):**
-- [ ] One file owns every shared setting; the other imports it. No value changes.
-- [ ] New guard test `tests/test_config_divergence_guard.py` fails when a shared
-  setting is re-declared with a different value.
-- [ ] Every leftover knob from the Open questions is either covered by a test or removed.
-- [ ] `python -m pytest -q tests/test_market_selection_bars.py tests/test_config_for_display.py` — all pass.
+```
+profit per pair = 1.00 - (avg UP price + avg DOWN price)
+```
 
-**Edge cases:** frozen behaviour preserved; no-arg construction preserved;
-`db_path()` identical under all three env states; derived properties
-(`quote_window_frac` alias, `select_spread_frac`, latency taus) unchanged;
-`filter_markets.py` `getattr` reads keep resolving.
+The stream must never be the reason a pair is assembled off a price that is
+gone, and must never hide a dead feed: an unready book fails closed (the visit
+holds its resting orders) rather than serving a stale one.
 
-**Out of scope:** value changes (#572, #573); close-method cleanup (#558–#560);
-live trading; merging the two `load()`s / helpers; `reward_offset` fallback tests;
-pair-cost / missing-side refusal tests.
+**Acceptance criteria (from the issue) — and where each one lands here:**
+
+| # | Issue criterion | This ticket |
+|---|---|---|
+| 1 | `core_brain/market_stream.py` connects, processes `book` + deltas, sub-ms in-memory reads | ✅ T1–T4 |
+| 2 | `trader_loop.py` consumes the stream without blocking `GET /book` in quote evaluation | ⛔ **Deferred to #650** (see below) — proven at the seam boundary in T4 instead |
+| 3 | `runtime/markets.json` change → differential unsubscribe/subscribe frames, no reconnect | ✅ T3 (engine) + T4 (probe re-reads the file) |
+| 4 | Stream lifecycle events in `runtime/cycle_events.jsonl`, visible in the dashboard card | ✅ T3 (emit) + T5 (plain-word sentences) |
+| 5 | `python -m pytest tests/test_market_stream.py tests/test_quotes.py tests/test_cycle_stream.py -q` | ✅ T1–T5 focused checks; CI runs the full suite |
+
+**Why criterion 2 is deferred (recorded, not dropped):** the operator's Job Guard
+for this station says *"Trader Loop wiring belongs strictly to #650"*, and #650
+(`[REFACTOR] Integrate Market and User WebSocket streams into Trader Loop
+execution engine`) lists exactly that wiring as its In-Scope item 1, plus the
+throttle purge, reactive fill handling and loop-side telemetry. Injection at
+`trader_loop.py:2749` also is not a one-liner: `_market_specs` carries **no token
+ids** (verified 2026-10-18), so wiring needs a `book_stream` port on `VenueSeam`,
+a token-learning hook in the visit path, and start/stop lifecycle ownership —
+i.e. #650's whole job. #648 therefore ships: the engine, the seam-shaped
+`fetch_books` adapter, a standalone `--listen` probe (the hands-on surface the
+Owner needs, same pattern as #649's `user_stream --listen`), and the dashboard
+sentences. #650 flips `fetch_books=full_book` in `main()` to `stream.fetch_books`.
+
+**Edge cases this plan must survive:**
+- a `book` snapshot arriving mid-book must **replace** both sides, never merge;
+- a delta with size `0` removes that price level (a removed level must not stay
+  best bid);
+- unknown frame types (`last_trade_price`, `tick_size_change`, `best_bid_ask`)
+  are ignored, never merged;
+- a garbage level (non-numeric price/size) invalidates that token only;
+- socket closed → every book drops (no stale price survives a dead feed);
+- socket alive but silently dead → the liveness window expires and the socket is
+  closed deliberately to force the reconnect path;
+- a market whose subscribe silently failed → snapshot timeout → one resend, then
+  one controlled reconnect (token stays not-ready the whole time);
+- a token not in the universe is never subscribed, and its book is dropped on
+  unsubscribe;
+- reads never block: no waiting inside `fetch_books`.
+
+**Out of scope:** `trader_loop.py` / `VenueSeam` / `shadow_run.py` (all #650),
+user/private stream (#649), pricing math (`quotes.py`), hard-stop exit reads
+(`single_buy_saver.py`), any HTTP fallback inside the read path, `SPEC.md`
+(project-level, owned by other tickets — this issue's spec is embedded above).
 
 ## CodeRabbit plan intake (read once, costed once)
 
-- **Adopted:** task skeleton (baseline test BEFORE the edit → refactor →
-  guard + red-check); frozen-subclass seam; keep both `load()`s and helpers
-  untouched; keep the four legacy knobs with clarifying comments + coverage;
-  protected-files list; `TOURNAMENT_PRESETS`-style table pattern for the profile.
-- **Rejected:** the "93 shared / 101 fields / six differences" counts — verified
-  against live code on 2026-10-18: **74 shared, 5 differences** (`objective`
-  already agrees). The "guard scans `core_brain/` for stray literals" claim —
-  no such guard found; treated as unconfirmed, and the plan instead forbids
-  adding `1.645`/`1.96` to `core_brain/`.
-- **`[UNVERIFIED]` at intake, now resolved from code:** the ask-branch
-  reachability questions — resolved (see "Open questions — resolved" below).
-  Nothing remains `[UNVERIFIED]`.
+Read from `gh issue view 648 --json comments` (comment 2, ~81 KB; the HTML echo
+below the rendered copy was ignored).
 
-## Open questions — resolved from code (no operator input needed)
+- **Adopted:** the four-task engine split (cache → socket → dynamic
+  subscriptions → events); `price_change` semantics (BUY→bids, SELL→asks, size 0
+  removes) **reusing `markets.parse_book`** so stream output matches REST shape
+  exactly; the fail-closed `BookNotReady` read contract; liveness window
+  (≈30 s / three missed heartbeats); snapshot-timeout resend then one controlled
+  reconnect; send-lock serialising worker/heartbeat/probe sends; backoff reset
+  after a successful open; `phase="stream"` + `service="market_stream"`
+  routing to the live ticker family without rotating the ring; throttled tick
+  summary (never one event per frame); emit calls kept outside the cache lock.
+- **Rejected:** its Task 2.1/2.2/2.3 (live `VenueSeam` injection, `--book-source`
+  on both CLIs, shadow opt-in) → #650's scope, per the Job Guard. Its
+  `best_bid`/`best_ask` cross-check as an *invalidator*: the venue's exact
+  semantics for those per-entry fields could not be verified from the docs, and
+  the failure mode of a wrong comparison is a resubscribe/reconnect storm on a
+  live money path. Kept as an **observational counter only** (`level_gap` in the
+  tick summary) so the theory can be checked against real traffic before any
+  corrective action is built. Its `ws_*` action names → renamed to the issue's
+  own `market_stream_*` names. Its read-side latency telemetry "record real
+  in-memory read timings in cycle telemetry" → folded into the tick summary's
+  `read_us_p50` (loop-side telemetry belongs to #650).
+- **Still `[UNVERIFIED]` (build-time checks, not assumptions):**
+  - the documented `{"assets_ids": [...], "operation": "subscribe"|"unsubscribe"}`
+    frames actually update the outcome set on a live socket. `live_marks.py`'s
+    hand-observed 2026-10-12 note ("a second subscribe on the open socket answers
+    INVALID OPERATION and streams nothing") was measured with the **initial**
+    frame shape `{"assets_ids": [...], "type": "market"}` re-sent, not with the
+    documented `operation` form — so it does not falsify the `operation` frames.
+    T3 sends only `operation` frames and the P3 probe confirms it on the wire;
+    if the venue ignores them, the affected token stays not-ready (fail closed)
+    and the probe prints the timeout — a diagnosed hold, not a stale quote.
+  - whether a `price_change` entry's `best_bid`/`best_ask` are per-token
+    post-change values (the basis of the observational `level_gap` counter).
 
-1. **`ticks_below_ask` / `tick_size` reachable on the mid-priced live path?**
-   NO. `decide_quotes` (`core_brain/quotes.py:750`) returns early via
-   `_decide_quotes_from_mid` for `objective in ("spread_capture", "rewards")`
-   — both shipped objectives. The ask-branch readers (`quotes.py:793,831,872`)
-   run only under the dead `"pair"` objective. Plan: keep as fallback, mark
-   clearly, cover with a test.
-2. **Does anything still read `quote_window_frac` on the live path?** The live
-   evaluator (`quotes.py:1044` + `live_exec.decide`) passes `window_pct=None`
-   for both production callers, and the from-mid path never reads the window.
-   `quote_window_frac` is an alias property for `quote_window_pct` (both files),
-   and `enforce_quote_window` only gates the dead ask-branch. Plan: keep,
-   comment, cover — remove nothing.
+## Resolved from code (this session, 2026-10-18) — no open questions for the operator
 
-## Verified ground truth (2026-10-18, live code)
+1. **`emit_cycle_event()` does not exist.** The issue cites
+   `core_brain/cycle_stream.py:emit_cycle_event()`; the real function is
+   `cycle_stream.emit(cycle, phase, action, *, service, market_slug, reason,
+   latency_ms, extra, ...)`, imported elsewhere as
+   `from core_brain.cycle_stream import emit as _emit_cycle_event`
+   (`trader_loop.py:41`, `order_manager.py:2204`). The engine calls `emit`
+   directly with `service="market_stream"`, `phase="stream"`, `cycle=0`
+   (the same `cycle=0` convention `fill_recorded` uses).
+2. **The ring is a 500-line shared window** (`cycle_stream.MAX_LINES = 500`,
+   `KEEP_LINES = 400`) already churning at ~1 event/leg/rotation — hence the
+   rate-limited tick summary, not one event per frame.
+3. **`VenueSeam.fetch_books` is two-arg** (`fetch_books(clob_host, token_id)`,
+   `trader_loop.py:465`, called at `quotes.py:1020-1021`) — the adapter matches
+   it, which is why no `quotes.py` change is needed.
+4. **The visit reads only three book fields.** The whole productive path uses
+   `book["token_id"]` / `book["best_bid"]` / `book["best_ask"]`
+   (`trader_loop.py:1722-1726`, `:1384-1385`; `quotes.py:195,368,793,830`);
+   depth ladders come from `single_buy_saver` against the live SDK client, and
+   `queue_ahead` from the registry (`trader_loop.py:2318`). Level maps are still
+   kept, because best bid/ask can only be derived from them.
+5. **Nothing to purge in the quoting cycle.** No artificial visit delay, network
+   wait, or HTTP-shaped throttle exists: the only sleeps are the rotation
+   `sleep_fn(interval)` (`trader_loop.py:736`), the resolution sweeper's
+   off-critical-path `time.sleep(max(30.0, interval))` (`:2532`), and
+   `BOOK_TIMEOUT` inside `full_book`. The cycle-time win comes only from not
+   calling `/book` twice per visit. #650 owns the throttle work; the real
+   remaining per-visit HTTP call is `fetch_pinned_market` (one per market per
+   rotation), which this issue does not touch.
+6. **The hard-stop invariant is structural, not incidental.** Live exits go
+   through the SDK client (`single_buy_saver.py:994-995`,
+   `create_and_post_market_order`) and `complete_pair` uses
+   `client.get_order_book()` (`:1071`); the shadow rehearsal passes
+   `book_fn=shadow_fetch_books` (`shadow_run.py:815,845,1242,1208`). None of them
+   go through `VenueSeam.fetch_books`, so leaving those files alone *is* the
+   invariant — pinned by a new guard test (T4).
+7. **A reusable protocol/cache precedent already exists** (`core_brain/live_marks.py`:
+   same URL, same initial subscribe frame, level maps, corrupt-frame drop,
+   backoff, `HUNTER_MARKS_SOURCE`) and a reusable offline test double
+   (`tests/test_live_marks.py:151-171` stubs `websocket.WebSocketApp`). This plan
+   copies that pattern rather than inventing a new one — and leaves `live_marks.py`
+   untouched, because it ignores `price_change` frames (it reads only top-level
+   `bids`/`asks`) and its wanted-set sync deliberately closes the socket.
+8. **`runtime/markets.json` rows carry no token ids** (verified in the file and in
+   `market_feed.GraduatedMarket`): only `cid`, slug, title, sizes. Tokens come
+   from `markets.fetch_pinned_market(cid)`, which is what the probe uses.
+9. **Stale planning set replaced.** `tasks/plan.md`, `tasks/todo.md` and
+   `CONSTRAINTS.md` all belonged to **#571** (merged) and were replaced wholesale.
+   `SPEC.md` is likewise issue-scoped (#632) and is **not** touched here: this
+   issue's spec is embedded above, and rewriting a project doc would only
+   duplicate it.
 
-- `core_brain` 114 fields / `scoring` 82 fields / **74 shared / 5 diffs**
-  (table in CONSTRAINTS.md §2).
-- Scoring-only (8, all picker): `enforce_max_queue_minutes`,
-  `select_max_queue_minutes`, `select_min_activity_ratio`,
-  `select_min_movement_usd`, `select_min_range_cents`,
-  `select_movement_window_sec`, `select_velocity_gate_enabled`,
-  `select_volatility_window_sec`.
-- Core-only (40, incl. `size_mode` and the risk-cap family) — inherited, unread
-  by the picker; allowed as extras.
-- `TOURNAMENT_PRESETS` exists at `core_brain/config.py:1095` — the
-  `PICKER_PROFILE` table follows a real local pattern.
-- Both `ROOT`s resolve to the repo root; both `db_path()`s are identical.
+## Interface contract (locked before build)
 
-## Design decision
+```python
+# core_brain/market_stream.py
+MARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+SERVICE = "market_stream"                 # cycle_stream.emit service
+PING_TEXT = "PING"                        # application-level heartbeat frame
+PING_INTERVAL_SEC = 10.0                  # venue contract: PING every 10 s
+LIVE_WINDOW_SEC = 30.0                    # no inbound frame -> connection suspect
+SNAPSHOT_TIMEOUT_SEC = 10.0               # subscribed token with no snapshot
+SNAPSHOT_RESEND_LIMIT = 1                 # resends before one controlled reconnect
+RECONNECT_MIN_SEC / RECONNECT_MAX_SEC = 1.0 / 30.0
+TICK_SUMMARY_SEC = 10.0                   # rate limit for market_stream_tick
+READ_LATENCY_BUDGET_SEC = 0.001           # the sub-millisecond invariant
 
-`PICKER_PROFILE` table in `core_brain/config.py` (near `TOURNAMENT_PRESETS`)
-holding the five current picker values; `scoring.MakerConfig` becomes a frozen
-subclass of core `MakerConfig` redeclaring ONLY the 8 picker-only fields (own
-literals) + the 5 profile fields (defaults read from `PICKER_PROFILE`).
-Fallback (keep 5 literals in scoring + allowlist) recorded below; primary stands
-unless the operator rejects it before build.
+class BookNotReady(RuntimeError): ...     # fail-closed read error
 
-## Dependency graph
+class MarketBookCache:                    # thread-safe, one lock
+    def apply_frame(self, msg: dict | list) -> list[str]
+    def book(self, token_id: str) -> dict            # parse_book shape, raises BookNotReady
+    def drop(self, token_ids) -> None
+    def clear_all(self) -> None
 
-- T1 → T2 → T3 (T3 needs the refactored class to guard).
-- T4 depends on T2 (config comments land with the refactor) but is otherwise
-  independent of T3 — T3 and T4 may run in either order after T2.
+class MarketStream:
+    def __init__(self, *, cache=None, emit_fn=None, time_fn=time.time,
+                 ping_sec=PING_INTERVAL_SEC, tick_sec=TICK_SUMMARY_SEC)
+    def start(self) -> None
+    def stop(self) -> None
+    def ensure_market(self, condition_id, slug, up_token, down_token) -> None
+    def retain_markets(self, condition_ids) -> None
+    def fetch_books(self, clob_host: str, token_id: str) -> dict   # the seam adapter
+    @property
+    def connected(self) -> bool
+```
+
+Cycle-stream events (all `service="market_stream"`, `phase="stream"`, `cycle=0`):
+
+| action | `extra` |
+|---|---|
+| `market_stream_connected` | `url`, `tokens` |
+| `market_stream_reconnect` | `delay_sec`, `close_code`, `reason` |
+| `market_stream_subscribe` | `slug`, `tokens` |
+| `market_stream_unsubscribe` | `slug`, `tokens` |
+| `market_stream_snapshot` | `slug`, `token` |
+| `market_stream_error` | `reason` (`snapshot_timeout`, `level_gap`, `frame_error`) |
+| `market_stream_tick` | `books`, `frames`, `level_gap`, `read_us_p50` |
+
+CLI (the owner's hands-on surface):
+
+```
+python -m core_brain.market_stream --listen [--markets runtime/markets.json]
+       [--max-markets 2] [--tokens a,b] [--minutes 3] [--refresh-sec 10]
+```
 
 ## Tasks
 
-### T1 [x] — Baseline single-source test (write FIRST, green on old code) [M, Backend/Logic]
-- **Target files:** `tests/test_config_single_source.py` (new).
-- **Build:** hardcoded baseline table generated once from the CURRENT scoring
-  class (82 entries: 74 shared + 8 picker-only) + core table for the 5 diffs;
-  `test_scoring_defaults_unchanged`, `test_core_defaults_unchanged`,
-  `test_derived_values_unchanged` (taus + `db_path()` under 3 env states via
-  `monkeypatch`), `test_loader_output_unchanged` (env stripped),
-  `test_scoring_config_is_frozen` (`FrozenInstanceError`).
-- **Skill:** test-driven-development. **Depends on:** nothing.
-- **Verify:** new file passes on UNMODIFIED code (run before any config edit).
+Dependency graph: **T1 → T2 → T3 → {T4, T5}**. Risk-first: the frame semantics
+(T1) and the socket/liveness contract (T2) are the parts that can be wrong
+cheaply; the probe and the copy are the safe tail.
 
-### T2 [x] — Core-owns-shared refactor [M, Backend/Logic]
-- **Target files:** `core_brain/config.py` (+`PICKER_PROFILE`, 1 comment, zero
-  default changes), `scoring/config.py` (frozen subclass; keep 8 picker-only +
-  5 profile fields; delete the 69 copied identical fields + copied latency
-  properties; keep `ROOT`, `load()`, `_bounded_float`,
-  `resolve_wide_book_trial`, `db_path()`; update the copied-helper comment).
-- **Skill:** incremental-implementation. **Depends on:** T1.
-- **Verify:** T1 baseline passes AFTER the edit with zero table changes; manual
-  check that `filter_markets.py` `getattr` reads resolve and neither class has
-  `merge_gas_usd`.
+---
 
-### T3 [x] — Divergence guard + red-check [S, Backend/Logic]
-- **Target files:** `tests/test_config_divergence_guard.py` (new; the issue's
-  required guard filename).
-- **Build:** shared-default comparison (profile fields assert against
-  `PICKER_PROFILE`, all others against core — message names field + both
-  values); profile-is-exactly-five-known-fields; `ast` class-body check
-  (annotated names ⊆ 8 picker-only + 5 profile; picker-only names ∉ core
-  fields; profile defaults not plain literals); subclass assertion.
-  Red-check: temporarily redeclare `max_book_spread` with a wrong value,
-  confirm the guard fails, revert.
-- **Skill:** test-driven-development. **Depends on:** T2.
-- **Verify:** guard green on new code + observed red during the temporary
-  mis-declaration.
+### T1 — [x] Book cache and frame folding (S/M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`)
+**Build:** `MarketBookCache` + `BookNotReady` + frame folding. `book` frame →
+`markets.parse_book({"bids":…, "asks":…}, token_id)` result stored as the new
+book (replace, never merge). `price_change` frame → walk `price_changes`:
+`side == "BUY"` updates bids, `"SELL"` asks, `size == 0` deletes the level,
+rebuild `best_bid`/`best_ask` and the stored token snapshot. Unparseable level →
+invalidate that token only. Unknown `event_type` ignored. `level_gap` counter
+increments when an entry's `best_bid`/`best_ask` (when both present) disagree
+with the rebuilt book at 4 dp — observational, no action. `book()` raises
+`BookNotReady` when the token is unknown or not ready, and **never** waits.
+`Depends on:` none.
+**Verify (TDD, offline):** `tests/test_market_stream.py::test_book_snapshot_matches_parse_book_shape`,
+`…::test_price_change_buy_and_sell_update_the_right_side`,
+`…::test_zero_size_removes_a_level_and_moves_best_bid`,
+`…::test_multi_entry_price_change_frame`,
+`…::test_unknown_event_type_is_ignored`,
+`…::test_corrupt_level_invalidates_that_token_only`,
+`…::test_unknown_token_raises_book_not_ready`,
+`…::test_read_latency_p50_is_under_a_millisecond` (median over 200 reads).
 
-### T4 [x] — Legacy ask-knob comments + coverage [S, Debug]
-- **Target files:** `core_brain/config.py` (4 knob comments),
-  `core_brain/quotes.py` (1 branch comment, logic untouched),
-  `tests/test_legacy_ask_quotes.py` (new).
-- **Build:** each comment states the knob reads ONLY on the ask-branch under
-  `objective == "pair"`, that shipped objectives never reach it, and that the
-  live evaluator passes `window=None`; `tick_size` comment distinguishes it
-  from live `price_tick`. Test (via `dataclasses.replace` with
-  `objective="pair"`): one-tick-under-ask pricing + window gate/refusal cases +
-  mid-path-ignores-window for both shipped objectives.
-- **Skill:** debugging-and-error-recovery. **Depends on:** T2.
-- **Verify:** new test passes; `tests/test_market_quote.py:98–164` (window-None
-  assertion) untouched and passing.
+### T2 — [x] Socket worker, heartbeat, liveness, reconnect (M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`)
+**Build:** `MarketStream.start/stop` on a daemon thread running
+`websocket.WebSocketApp` (module imported lazily inside the thread, same loud
+missing-package log as `live_marks.py`); `on_open` sends the initial
+`{"assets_ids": [...], "type": "market"}` for every wanted token; a maintenance
+loop sends `PING` every `ping_sec`, treats `PONG`/any inbound frame as liveness,
+and closes the socket deliberately when `LIVE_WINDOW_SEC` lapses; `on_close`
+clears **all** books, records the close code, and reconnects with capped
+exponential backoff (reset after a successful open); `stop()` sets the event,
+closes the socket, joins with a timeout. All sends serialised by one send lock.
+`Depends on:` T1.
+**Verify:** `…::test_on_open_sends_the_initial_subscription`,
+`…::test_heartbeat_sends_ping_text_frames`, `…::test_pong_keeps_the_connection_ready`,
+`…::test_a_silent_socket_is_closed_by_the_liveness_window`,
+`…::test_close_drops_every_book_and_schedules_a_reconnect`,
+`…::test_backoff_grows_and_resets_after_a_successful_open`,
+`…::test_stop_joins_the_worker_and_the_heartbeat`.
+
+### T3 — [x] Dynamic universe + telemetry (M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`)
+**Build:** market map `cid → (slug, up, down)`. `ensure_market(...)` sends
+`{"assets_ids": [up, down], "operation": "subscribe"}` for a new market (or
+replays it in the next `on_open` when no socket is open) and emits
+`market_stream_subscribe`; `retain_markets(cids)` sends
+`{"assets_ids": [...], "operation": "unsubscribe"}`, drops those books, and emits
+`market_stream_unsubscribe`; neither touches other books nor the socket. A
+subscribed token with no snapshot for `SNAPSHOT_TIMEOUT_SEC` gets one
+`operation` resend then **one** controlled reconnect (close → redial), emitting
+`market_stream_error` with `snapshot_timeout`; the token stays not-ready.
+`emit_fn` is injected and called with the `cycle_stream.emit` keyword shape,
+outside the cache lock; emit failures never propagate into the thread. One
+`market_stream_tick` summary at most every `tick_sec` (books, frames, level_gap,
+read_us_p50). `Depends on:` T2.
+**Verify:** `…::test_ensure_market_subscribes_only_the_new_pair`,
+`…::test_ensure_market_replays_on_the_next_open_when_offline`,
+`…::test_retain_markets_unsubscribes_and_drops_only_the_removed_books`,
+`…::test_a_market_swap_keeps_the_socket_and_every_other_book`,
+`…::test_snapshot_timeout_resends_once_then_reconnects_once`,
+`…::test_lifecycle_events_carry_the_documented_actions_and_service`,
+`…::test_tick_summaries_are_rate_limited`,
+`…::test_emit_failure_never_kills_the_stream_thread`.
+
+### T4 — [x] Seam adapter, guard test, and the operator probe (M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`, `tests/test_quotes.py`)
+**Build:** `fetch_books(self, clob_host, token_id)` returns the cached book (host
+ignored) or raises `BookNotReady`. A `__main__` block implements `--listen`
+(resolve up to `--max-markets` rows of `--markets` through
+`core_brain.markets.fetch_pinned_market`, or `--tokens` directly; subscribe;
+re-read the file every `--refresh-sec` and call `ensure_market`/`retain_markets`;
+print one line per lifecycle event and per tick summary with the measured
+read latency; `--minutes` bounded; emitter bound to `cycle_stream.emit`).
+`Depends on:` T3.
+**Verify:** `…::test_fetch_books_matches_the_venue_seam_signature`,
+`…::test_a_seam_built_on_the_stream_never_calls_full_book` — drive
+`quotes.evaluate_market_quote` with `fetch_books=stream.fetch_books` while
+`core_brain.markets._SESSION.get` is monkeypatched to raise, and assert intents
+come back from the cache — plus
+`…::test_single_buy_saver_never_reaches_the_stream` (source-read guard pinning
+the locked invariant) and
+`…::test_probe_parses_the_markets_file_and_bounds_its_run`.
+
+### T5 — [x] Dashboard sentences + parked-items note (S, [UX / Copy], files: `dashboard/static/app.js`, `tests/js/event_stream_harness.cjs`, `tests/test_dashboard_server.py`, `docs/issues/648-noticed-but-not-touching.md`)
+**Build:** one `if (svc === 'market_stream')` block in `buildStreamSentence`
+(after the trade branches, before the `EVENT_TRANSLATIONS` lookup) mapping the
+seven actions to plain sentences with no market clause — the events are
+engine-level, so the table's `(${market})` suffix would print "a market":
+connected / reconnecting (with the delay) / subscribed (token count) /
+unsubscribed / snapshot received (slug) / stream problem (plain reason) / tick
+summary (books + read latency). Every interpolated value goes through `esc()`.
+The parked-items file lists what moved to #650 and #649.
+`Depends on:` T3.
+**Verify:** harness cases added to `tests/js/event_stream_harness.cjs` for the
+seven sentences (asserted from `sentences` in the emitted JSON) plus
+`tests/test_dashboard_server.py::test_app_js_translates_market_stream_events`.
 
 ## Checkpoints
 
-- **CP1 (after T2):** baseline green before AND after with an untouched table —
-  the move changed location, not values.
-- **CP2 (after T4):** guard green + red-check observed; legacy knobs commented
-  and covered; acceptance suites green.
+- **CP0** (after T1): the cache matches REST shape and refuses unready reads.
+  One-line progress note, no pause.
+- **CP1** (after T3): the engine runs end to end against a stubbed
+  `WebSocketApp` — subscribe, snapshot, delta, swap, liveness, reconnect, events.
+- **CP2** (after T5): every focused check green, the probe run hands-on once
+  against the live socket, and the dashboard card showing the events.
 
-## Improvement proposal (adopt-by-default: simplification)
+## How to verify (owner, hands-on — no test commands)
 
-> **Evidence (verbatim):** `scoring/config.py:783` — `def quote_window_frac(self)
-> -> float:` + `"""Backward compatibility alias for quote_window_pct (#632)."""`
-> (identical alias exists at `core_brain/config.py:1043`).
-> The issue's Open question 2 asks "Does anything still read `quote_window_frac`
-> on the live path?" — since it is an alias property, not a separate knob, the
-> plan covers the underlying `quote_window_pct`/`enforce_quote_window` pair and
-> explicitly asserts the alias equals the field in T1's derived-values test,
-> rather than treating the alias as a fourth independent knob. No scope added.
+1. `python -m dashboard.server` in one terminal.
+2. `python -m core_brain.market_stream --listen --minutes 3` in another.
+   Expect a printed line per event and, every ~10 s, a tick summary line
+   carrying the number of books held, frames applied, and the read latency
+   (sub-millisecond). Rows of `runtime/markets.json` whose venue market has
+   already closed print `[skipped]` once, at start; the rest is quiet.
+3. Open `http://127.0.0.1:8799` → **Trades & Positions** → **LIVE EXECUTION &
+   CYCLE EVENT STREAM**. Expect, in plain words: the stream connecting to the
+   venue socket, one subscribed line per market with its token ids, a snapshot
+   line per market with its slug, and a tick summary every ~10 s.
+4. While it runs, edit `runtime/markets.json`: replace one picked row's `cid`
+   and `slug` with another row the probe subscribed (copy from the `[listening]`
+   output above). Within `--refresh-sec` the card must show the old pair
+   unsubscribing and the new pair subscribing, with **no** connected line in
+   between — the socket stayed up and every other book kept ticking.
+5. Stop the probe (Ctrl-C): expect the terminal to exit cleanly and the card to
+   stop.
 
-## Rejected / fallback record
+## Build-time evidence (Station III, 2026-10-18, live socket)
 
-- Fallback design (5 literals in scoring + allowlist, no `PICKER_PROFILE`):
-  rejected as primary because the station goal names core as single source for
-  ALL shared settings; kept as fallback if the operator rejects the new core
-  table before build.
-- "Use core values for the 5 diffs": rejected — changes shipped values owned by
-  #572/#573.
-- Factory-function replacement for scoring `MakerConfig`: rejected — breaks
-  no-arg construction pinned by `test_market_selection_bars.py`.
-- Deleting the ask-branch: rejected — the branch still executes under
-  `objective == "pair"`; removal would change behaviour.
-- New `reward_offset`-fallback / pair-cost-refusal / missing-side tests:
-  excluded per CodeRabbit out-of-scope + issue scope; noted in
-  `docs/issues/571-noticed-but-not-touching.md`.
+The `[UNVERIFIED]` item above is **resolved**, on the wire:
 
-## Handoff
+- initial `{"assets_ids": [...], "type": "market"}` → both tokens' `book`
+  snapshots arrived (`frames=3`, and a full ladder: 19 bids / 68 asks);
+- `{"assets_ids": [...], "operation": "subscribe"}` **on the open socket** →
+  the new market's two snapshots arrived, `market_stream_connected` fired
+  exactly once — the venue honors `operation` frames, no reconnect needed;
+- `{"assets_ids": [...], "operation": "unsubscribe"}` on the open socket → the
+  removed market's books dropped, the other kept ticking (10 frames in the next
+  8 s), `ready=2`;
+- `read_us_p50` 5.9–10.4 µs over that run (budget 1 ms), `malformed=0`,
+  `level_gap=0` — the observational counter stayed at zero in real traffic,
+  which is the evidence the follow-up would need to delete it.
+- 9 of the 11 rows in today's `runtime/markets.json` are closed markets; the
+  probe prints `[skipped]` for those and follows every row by default
+  (`--max-markets 0`).
 
-- Next: **`/iii-build-plan auto`** on branch
-  `i571/refactor-merge-the-two-settings-files-that-disagre`.
-- `tasks/todo.md` mirrors T1–T4 with CP1/CP2 gates.
+## Risks and honest limits
+
+- The `operation`-frame path is documented **and now observed live** (see
+  Build-time evidence). If a future venue change ignores those frames, the new
+  market holds (fails closed) and the probe prints snapshot timeouts — visible,
+  not silent, and `retain_markets`/`ensure_market` can then move to the
+  close-and-redial path `live_marks.py` already proves.
+- Quoting latency does not drop in this ticket: `trader_loop.py` still reads HTTP
+  books until #650 wires the seam. The sub-millisecond claim is proven at the
+  adapter/probe level here.
+- The observational `level_gap` counter is unproven theory kept deliberately
+  inert; if it stays at zero in real traffic it can be deleted, and if it moves
+  it is the evidence a follow-up needs (recorded in the parked-items file).
+
+## Operator decisions recorded during Station III-B (2026-10-18)
+
+1. **Card copy is now a tagged log for `market_stream`.** The operator asked for
+   shorter, structured lines with a square-bracket tag at the start instead of
+   prose, on both the probe terminal and the dashboard card. CONSTRAINTS.md §8
+   was amended to record the exception; the tag vocabulary
+   (`OPEN WAIT + - BOOK WARN TICK ?`) is frozen and lives in both
+   `core_brain/market_stream.py::LOG_TAGS` and
+   `dashboard/static/app.js::STREAM_TAGS`, which must stay byte-identical. The
+   XSS pin (hostile slug escaped by the row renderer) is retained.
+2. **One snapshot event per market.** `_note_snapshot` now waits for all of a
+   market's books before emitting (`extra={"slug", "books"}`), so the card
+   shows one line per market instead of two identical ones. The
+   snapshot-timeout payload now carries `markets` (slugs) instead of token ids.
+3. **`_stream_line` is the single source of the convention in Python; the JS
+   side mirrors it.** Both are pinned by `test_stream_lines_follow_the_tag_convention`
+   and the harness's `marketStreamSentences`.
