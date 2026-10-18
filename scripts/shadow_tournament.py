@@ -98,6 +98,7 @@ class TournamentPlan:
     markets_path: Optional[str] = None
     arms: list[ArmPlan] = field(default_factory=list)
     run_number: Optional[int] = None
+    arms_source: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -112,6 +113,7 @@ class TournamentPlan:
             "results_path": str(self.results_path),
             "log_path": str(self.log_path) if self.log_path is not None else None,
             "markets_path": self.markets_path,
+            "arms_source": self.arms_source,
             "arms": [a.to_dict() for a in self.arms],
         }
 
@@ -216,31 +218,32 @@ def is_port_available(port: int, host: str = "127.0.0.1") -> bool:
 
 
 def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
-    """Convert a tournament preset dict into HUNTER_* environment overrides."""
+    """Convert a tournament preset dict into BOT_* environment overrides.
+
+    Canonical `BOT_*` names win over deprecated `HUNTER_*` aliases
+    (see `.env.example` and `core_brain.config._env_get`). The launcher emits
+    canonical names only; legacy aliases still load through `from_env`.
+    """
     env: dict[str, str] = {}
     if "dynamic_offset_enabled" in preset:
-        env["HUNTER_DYNAMIC_OFFSET"] = "1" if preset["dynamic_offset_enabled"] else "0"
+        env["BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"] = "1" if preset["dynamic_offset_enabled"] else "0"
     if "dynamic_offset_multiplier" in preset:
-        env["HUNTER_DYNAMIC_OFFSET_MULT"] = str(preset["dynamic_offset_multiplier"])
+        env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"] = str(preset["dynamic_offset_multiplier"])
     if "dynamic_offset_min_cents" in preset:
-        env["HUNTER_DYNAMIC_OFFSET_MIN_CENTS"] = str(int(preset["dynamic_offset_min_cents"]))
+        env["BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"] = str(int(preset["dynamic_offset_min_cents"]))
     if "dynamic_offset_max_cents" in preset:
-        env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"] = str(int(preset["dynamic_offset_max_cents"]))
-    # HUNTER_REWARD_OFFSET wiring removed 2026-10-12: the override was purged
-    # (synthetic sub-cent touch-reach). No preset sets reward_offset any more.
-    if "stop_loss_trigger_usd_cents" in preset:
-        env["HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"] = str(preset["stop_loss_trigger_usd_cents"])
-    # Loose-baseline knobs. These three let an arm quote the raw dynamic
+        env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"] = str(int(preset["dynamic_offset_max_cents"]))
+    if "stop_loss_mode" in preset:
+        env["BOT_RISK_STOP_MODE"] = str(preset["stop_loss_mode"])
+    if "drop_cents" in preset:
+        env["BOT_RISK_STOP_ADVERSE_DROP_CENTS"] = str(preset["drop_cents"])
+    # Loose-baseline knobs. These let an arm quote the raw dynamic
     # offset with no upper clamp and no WIDENED snap-back, without touching
     # the shipped defaults or any other arm.
     if "max_spread_from_mid" in preset:
-        env["HUNTER_MAX_SPREAD"] = str(int(round(float(preset["max_spread_from_mid"]) * 100.0)))
+        env["BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID"] = str(int(round(float(preset["max_spread_from_mid"]) * 100.0)))
     if "apply_widen_gate" in preset:
-        env["HUNTER_APPLY_WIDEN_GATE"] = "1" if preset["apply_widen_gate"] else "0"
-    if "dynamic_offset_min_cents" in preset:
-        env["HUNTER_DYNAMIC_OFFSET_MIN_CENTS"] = str(int(preset["dynamic_offset_min_cents"]))
-    if "dynamic_offset_max_cents" in preset:
-        env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"] = str(int(preset["dynamic_offset_max_cents"]))
+        env["BOT_QUOTE_GATE_WIDEN_ON"] = "1" if preset["apply_widen_gate"] else "0"
     return env
 
 
@@ -306,16 +309,35 @@ def build_tournament_plan(
         custom_env = arm_def.get("env")
         if custom_env:
             for k, v in custom_env.items():
-                if not k.startswith("HUNTER_"):
+                if not (k.startswith("BOT_") or k.startswith("HUNTER_")):
                     raise ValueError(
-                        f"Invalid environment override {k!r}: only HUNTER_* overrides are permitted"
+                        f"Invalid environment override {k!r}: only BOT_* (or legacy HUNTER_*) overrides are permitted"
                     )
                 arm_env[k] = str(v)
         # Full-profile selector: applies the whole preset (including the
         # shared queue-hold settings _preset_to_env does not copy). Only
         # for names the config knows; custom arms keep their explicit env.
-        if name in TOURNAMENT_PRESETS:
-            arm_env.setdefault("HUNTER_TOURNAMENT_PRESET", name)
+        if (
+            name in TOURNAMENT_PRESETS
+            and "BOT_QUOTE_TOURNAMENT_PRESET" not in arm_env
+            and "HUNTER_TOURNAMENT_PRESET" not in arm_env
+        ):
+            arm_env["BOT_QUOTE_TOURNAMENT_PRESET"] = name
+        # Fail at plan time, not in the child. An unknown selector kills the arm
+        # at config load (config.from_env), i.e. after the other arms have
+        # already started and the run is half a tournament. The i492 arms file
+        # carried `HUNTER_TOURNAMENT_PRESET=control` from #484's purged preset
+        # and would have lost that arm exactly that way.
+        preset_sel = (
+            arm_env.get("BOT_QUOTE_TOURNAMENT_PRESET")
+            or arm_env.get("HUNTER_TOURNAMENT_PRESET")
+            or ""
+        ).strip().lower()
+        if preset_sel and preset_sel not in TOURNAMENT_PRESETS:
+            raise ValueError(
+                f"Arm {name!r} selects unknown tournament preset "
+                f"{preset_sel!r}; valid presets: {list(TOURNAMENT_PRESETS)}"
+            )
 
         # Port assignment & validation
         dash_port = base_port + (idx - 1)
@@ -478,7 +500,8 @@ def launch_tournament(plan: TournamentPlan) -> int:
         filter_proc = None
         try:
             filter_env = {
-                k: v for k, v in os.environ.items() if not k.startswith("HUNTER_")
+                k: v for k, v in os.environ.items()
+                if not (k.startswith("HUNTER_") or k.startswith("BOT_"))
             }
             filter_env.setdefault("SH_FILTER_INTERVAL_SEC", str(FILTER_INTERVAL_SEC))
             filter_proc = subprocess.Popen(
@@ -496,10 +519,10 @@ def launch_tournament(plan: TournamentPlan) -> int:
         # 1. Spawn dashboard servers if requested
         if plan.dashboards:
             for arm in plan.arms:
-                # Dashboard does not get arm HUNTER_* env overrides
+                # Dashboard does not get arm env overrides
                 dash_env = {
                     k: v for k, v in os.environ.items()
-                    if not k.startswith("HUNTER_")
+                    if not (k.startswith("HUNTER_") or k.startswith("BOT_"))
                 }
                 dash_env["PORT"] = str(arm.dash_port)
                 dash_env["LIVE_DB_PATH"] = str(arm.db_path)
@@ -513,10 +536,10 @@ def launch_tournament(plan: TournamentPlan) -> int:
         # 2. Spawn shadow rehearsal runs
         shadow_procs: list[subprocess.Popen] = []
         for arm in plan.arms:
-            # Strip inherited HUNTER_* variables like Market Filter and dashboard
+            # Strip inherited HUNTER_* and BOT_* variables like Market Filter and dashboard
             clean_env = {
                 k: v for k, v in os.environ.items()
-                if not k.startswith("HUNTER_")
+                if not (k.startswith("HUNTER_") or k.startswith("BOT_"))
             }
             shadow_env = {**clean_env, **arm.env, "SPREAD_HUNTER_DB": str(arm.db_path)}
             p = subprocess.Popen(arm.shadow_argv, env=shadow_env)
@@ -583,8 +606,29 @@ def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
     arms = None
+    arms_source = None
     if args.arms_file:
         arms = json.loads(Path(args.arms_file).read_text(encoding="utf-8"))
+        arms_source = str(args.arms_file)
+        log.info("Tournament arms: %s (%d arms)", args.arms_file, len(arms))
+    elif args.run_number is not None:
+        # Run-number convention (#492): a numbered tournament reads its arm
+        # definitions from configs/tournaments/i<issue>_tournament-<run>_arms.json
+        # when that file exists, so the documented command
+        # (`--issue 492 --run-number 1 --dry-run`) carries the arm list without
+        # an extra flag. An explicit --arms-file always wins, and no file means
+        # the shipped preset defaults.
+        conventional = (
+            ROOT / "configs" / "tournaments"
+            / f"i{args.issue}_tournament-{int(args.run_number)}_arms.json"
+        )
+        if conventional.is_file():
+            arms = json.loads(conventional.read_text(encoding="utf-8"))
+            arms_source = conventional.relative_to(ROOT).as_posix()
+            log.info(
+                "Tournament arms: %s (%d arms)",
+                arms_source, len(arms),
+            )
 
     plan = build_tournament_plan(
         issue=args.issue,
@@ -601,6 +645,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         check_ports=(args.dashboards and not args.no_port_check) if not args.dry_run else False,
     )
 
+    plan.arms_source = arms_source
     if args.log_file:
         plan.log_path = Path(args.log_file)
 

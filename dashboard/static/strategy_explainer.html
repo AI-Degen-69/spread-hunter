@@ -541,43 +541,43 @@
             <tr>
               <td><code>select_min_volume_24h_usd_live</code></td>
               <td><code>$35,000.00</code></td>
-              <td><span class="badge-env">HUNTER_VOLUME_LIVE_USD</span></td>
+              <td><span class="badge-env">FILTER_LIVE_VOL_MIN_24H_USD</span></td>
               <td><strong>Live Event 24h Volume Floor</strong>: Filters out thin in-play matches to protect against dead-flat, untradable tape during ongoing matches.</td>
             </tr>
             <tr>
               <td><code>select_movement_window_sec</code></td>
               <td><code>1800s (30m)</code></td>
-              <td><span class="badge-env">HUNTER_MOVEMENT_WINDOW_SEC</span></td>
+              <td><span class="badge-env">FILTER_LIVE_VEL_LOOKBACK_SEC</span></td>
               <td><strong>Movement Lookback Window</strong>: Evaluates recent trade tape activity to verify active trading before admitting candidates.</td>
             </tr>
             <tr>
               <td><code>select_min_movement_usd</code></td>
               <td><code>$200.00</code></td>
-              <td><span class="badge-env">HUNTER_MIN_MOVEMENT_USD</span></td>
+              <td><span class="badge-env">FILTER_LIVE_VEL_MIN_USD</span></td>
               <td><strong>Min Traded Notional</strong>: Disqualifies quiet markets that traded earlier in the day but have halted trading now.</td>
             </tr>
             <tr>
               <td><code>select_min_activity_ratio</code></td>
               <td><code>0.0% (off)</code></td>
-              <td><span style="color:var(--text-muted)">—</span></td>
+              <td><span class="badge-env">FILTER_LIVE_ACTIVITY_MIN_RATIO</span></td>
               <td><strong>Activity Ratio Bar</strong>: Minimum recent volume turnover relative to total market size (disabled at 0.0%).</td>
             </tr>
             <tr>
               <td><code>select_min_range_cents</code></td>
               <td><code>2.0¢</code></td>
-              <td><span style="color:var(--text-muted)">—</span></td>
+              <td><span class="badge-env">FILTER_LIVE_MOVE_MIN_RANGE_CENTS</span></td>
               <td><strong>Min Price Range Volatility</strong>: Rejects static, pinned markets lacking two-sided price discovery.</td>
             </tr>
             <tr>
               <td><code>select_volatility_window_sec</code></td>
               <td><code>7200s (2h)</code></td>
-              <td><span style="color:var(--text-muted)">—</span></td>
+              <td><span class="badge-env">FILTER_LIVE_MOVE_LOOKBACK_SEC</span></td>
               <td><strong>Volatility Evaluation Horizon</strong>: Measures high-to-low price dispersion across 2-hour rolling window.</td>
             </tr>
             <tr>
               <td><code>select_velocity_gate_enabled</code></td>
               <td><code>True</code></td>
-              <td><span style="color:var(--text-muted)">—</span></td>
+              <td><span class="badge-env">FILTER_LIVE_GATE_VELOCITY_ON</span></td>
               <td><strong>Velocity Gate Active</strong>: Enforces combined volume and price-range filters on live market candidates.</td>
             </tr>
             <tr>
@@ -606,13 +606,13 @@
             <tr>
               <td><code>select_min_volume_24h_usd</code></td>
               <td><code>$125,000.00</code></td>
-              <td><span class="badge-env">HUNTER_VOLUME_USD</span></td>
+              <td><span class="badge-env">FILTER_STD_VOL_MIN_24H_USD</span></td>
               <td><strong>Standard 24h Volume Floor</strong>: Ensures sufficient market-wide liquidity across the full lifecycle before entering.</td>
             </tr>
             <tr>
               <td><code>select_min_top3_depth_usd</code></td>
               <td><code>$500.00</code></td>
-              <td><span class="badge-env">HUNTER_DEPTH_TRIAL_USD</span></td>
+              <td><span class="badge-env">FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL</span></td>
               <td><strong>Top-3 Level Depth Floor</strong>: Refuses books with top-3 bid depth &le; $500 on either leg to guarantee safe exit liquidity.</td>
             </tr>
             <tr>
@@ -667,7 +667,7 @@
               <td><code>bankroll_usd</code></td>
               <td><code>$100.00</code></td>
               <td>Capital Baseline</td>
-              <td>Baseline paper/virtual capital anchor. Env: <span class="badge-env">SPREAD_HUNTER_BANKROLL</span>.</td>
+              <td>Baseline paper/virtual capital anchor. Env: <span class="badge-env">BOT_QUOTE_BANK_BASELINE_USD</span>.</td>
             </tr>
             <tr>
               <td><code>naked_risk_pct</code></td>
@@ -733,25 +733,25 @@
               <td><code>dynamic_offset_enabled</code></td>
               <td><code>True</code></td>
               <td>Dynamic Offsets</td>
-              <td>Enables spread-proportional quote distance scaling.</td>
+              <td>Enables spread-proportional quote distance scaling. Env: <span class="badge-env">BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON</span>.</td>
             </tr>
             <tr>
               <td><code>dynamic_offset_multiplier</code></td>
               <td><code>0.50</code></td>
               <td>Dynamic Offsets</td>
-              <td>Places resting maker quotes at 50% of the inside spread away from mid.</td>
+              <td>Places resting maker quotes at 50% of the inside spread away from mid. Env: <span class="badge-env">BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER</span>.</td>
             </tr>
             <tr>
               <td><code>dynamic_offset_min_cents</code></td>
               <td><code>1¢</code></td>
               <td>Dynamic Offsets</td>
-              <td>Clamps minimum offset to 1 tick below touch.</td>
+              <td>Clamps minimum offset to 1 tick below touch. Env: <span class="badge-env">BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS</span>.</td>
             </tr>
             <tr>
               <td><code>dynamic_offset_max_cents</code></td>
               <td><code>20¢</code></td>
               <td>Dynamic Offsets</td>
-              <td>Clamps maximum offset to 20¢ to ensure quotes remain fillable.</td>
+              <td>Clamps maximum offset to 20¢ to ensure quotes remain fillable. Env: <span class="badge-env">BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS</span>.</td>
             </tr>
             <tr>
               <td><code>tick_size</code></td>
@@ -775,7 +775,7 @@
               <td><code>max_spread_from_mid</code></td>
               <td><code>$0.15 (15¢)</code></td>
               <td>Book Health</td>
-              <td>Resting-offset ceiling preventing quotes placed too deep from ever filling.</td>
+              <td>Resting-offset ceiling preventing quotes placed too deep from ever filling. Env: <span class="badge-env">BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID</span>.</td>
             </tr>
             <tr>
               <td><code>require_two_sided_when_flat</code></td>
@@ -804,13 +804,13 @@
               <td><code>max_pair_cost</code></td>
               <td><code>$0.99</code></td>
               <td>Spread Capture</td>
-              <td><strong>Profit Ceiling</strong>: Hard ceiling on combined maker bids (<code>up_bid + down_bid</code>) to ensure guaranteed profit on merge ($1.00 - cost). Env: <span class="badge-env">HUNTER_PAIR_COST_CAP</span>.</td>
+              <td><strong>Profit Ceiling</strong>: Hard ceiling on combined maker bids (<code>up_bid + down_bid</code>) to ensure guaranteed profit on merge ($1.00 - cost). Env: <span class="badge-env">BOT_POS_PRICE_MAX_PAIR_COST_USD</span>.</td>
             </tr>
             <tr>
               <td><code>max_completable_pair_cost</code></td>
               <td><code>$1.00</code></td>
               <td>Parity Gate</td>
-              <td><strong>Completable-Cost Gate</strong>: Refuses any maker bid if <code>bid + best_ask(other_leg) &ge; 1.00</code>. Guarantees any single fill can be hedged at market ask without loss. Env: <span class="badge-env">HUNTER_COMPLETABLE_CAP</span>.</td>
+              <td><strong>Completable-Cost Gate</strong>: Refuses any maker bid if <code>bid + best_ask(other_leg) &ge; 1.00</code>. Guarantees any single fill can be hedged at market ask without loss. Env: <span class="badge-env">BOT_POS_PRICE_MAX_COMPLETE_USD</span>.</td>
             </tr>
             <tr>
               <td><code>enforce_completable_pair_cost</code></td>
@@ -881,19 +881,19 @@
               <td><code>requote_dead_band</code></td>
               <td><code>$0.03 (3¢)</code></td>
               <td>Queue Protection</td>
-              <td>Suppresses unnecessary cancel-replace churn when target shifts &lt; 3¢. Env: <span class="badge-env">HUNTER_REQUOTE_DEAD_BAND</span>.</td>
+              <td>Suppresses unnecessary cancel-replace churn when target shifts &lt; 3¢. Env: <span class="badge-env">BOT_ORDER_REQUOTE_DEAD_BAND_CENTS</span>.</td>
             </tr>
             <tr>
               <td><code>requote_hold_below_target</code></td>
               <td><code>$0.05 (5¢)</code></td>
               <td>Queue Protection</td>
-              <td>Holds passive resting quote up to 5¢ below target to retain queue priority.</td>
+              <td>Holds passive resting quote up to 5¢ below target to retain queue priority. Env: <span class="badge-env">BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS</span>.</td>
             </tr>
             <tr>
               <td><code>requote_hold_queue_shares</code></td>
               <td><code>0 shares</code></td>
               <td>Queue Protection</td>
-              <td>Protects valuable queue position from replacement based on queue size ahead.</td>
+              <td>Protects valuable queue position from replacement based on queue size ahead. Env: <span class="badge-env">BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES</span>.</td>
             </tr>
             <tr>
               <td><code>poll_interval_sec</code></td>
@@ -905,13 +905,13 @@
               <td><code>sweep_interval</code></td>
               <td><code>Every tick / poll</code></td>
               <td>Reconciliation</td>
-              <td>Cadence for querying on-chain USDC balance and reconciling float marks.</td>
+              <td>Cadence for querying on-chain USDC balance and reconciling float marks. Env: <span class="badge-env">LIVE_SWEEP_INTERVAL</span>.</td>
             </tr>
             <tr>
               <td><code>enable_pairs_rule</code></td>
               <td><code>True</code></td>
               <td>Single-Buy Rescue</td>
-              <td>Enforces 15-minute action window on single-sided fills to complete pair or exit.</td>
+              <td>Enforces 15-minute action window on single-sided fills to complete pair or exit. Env: <span class="badge-env">BOT_RISK_GATE_PAIRS_RULE_ON</span>.</td>
             </tr>
             <tr>
               <td><code>pairs_exit_window_sec</code></td>
@@ -929,37 +929,37 @@
               <td><code>aged_out_rescue_lead_sec</code></td>
               <td><code>900s (15m)</code></td>
               <td>Single-Buy Rescue</td>
-              <td>Forces position closure 15 minutes before market resolution.</td>
+              <td>Forces position closure 15 minutes before market resolution. Env: <span class="badge-env">BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC</span>.</td>
             </tr>
             <tr>
               <td><code>stop_loss_mode</code></td>
               <td><code>NONE</code></td>
               <td>Stop-Loss System</td>
-              <td>Defensive liquidation rule mode (<code>NONE</code>, <code>ABSOLUTE_DROP</code>, <code>PERCENTAGE_DROP</code>). Env: <span class="badge-env">HUNTER_STOP_LOSS_MODE</span>.</td>
+              <td>Defensive liquidation rule mode (<code>NONE</code>, <code>ABSOLUTE_DROP</code>, <code>PERCENTAGE_DROP</code>). Env: <span class="badge-env">BOT_RISK_STOP_MODE</span>.</td>
             </tr>
             <tr>
               <td><code>drop_cents</code></td>
               <td><code>$0.05 (5¢)</code></td>
               <td>Stop-Loss System</td>
-              <td>Triggers defensive exit if mid drops 5¢ below acquisition cost. Env: <span class="badge-env">HUNTER_DROP_CENTS</span>.</td>
+              <td>Triggers defensive exit if mid drops 5¢ below acquisition cost. Env: <span class="badge-env">BOT_RISK_STOP_ADVERSE_DROP_CENTS</span>.</td>
             </tr>
             <tr>
               <td><code>drawdown_pct</code></td>
               <td><code>10.0%</code></td>
               <td>Stop-Loss System</td>
-              <td>Single-market position drawdown threshold. Env: <span class="badge-env">HUNTER_DRAWDOWN_PCT</span>.</td>
+              <td>Single-market position drawdown threshold. Env: <span class="badge-env">BOT_RISK_STOP_MAX_DRAWDOWN_PCT</span>.</td>
             </tr>
             <tr>
               <td><code>emergency_drawdown_pct</code></td>
               <td><code>75.0%</code></td>
               <td>Circuit Breaker</td>
-              <td>Catastrophic market collapse trigger for immediate liquidation. Env: <span class="badge-env">HUNTER_EMERGENCY_DRAWDOWN_PCT</span>.</td>
+              <td>Catastrophic market collapse trigger for immediate liquidation. Env: <span class="badge-env">BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT</span>.</td>
             </tr>
             <tr>
               <td><code>emergency_hedge_pct</code></td>
               <td><code>80% (0.80)</code></td>
               <td>Emergency Defense</td>
-              <td>At 80% of <code>max_naked_usd</code>, authorizes light side to cross spread and take hedge. Env: <span class="badge-env">HUNTER_EMERGENCY_HEDGE_FRAC</span>.</td>
+              <td>At 80% of <code>max_naked_usd</code>, authorizes light side to cross spread and take hedge.</td>
             </tr>
             <tr>
               <td><code>enable_emergency_hedge</code></td>

@@ -3262,5 +3262,87 @@ def test_picker_parameter_cards_show_the_shipped_bars_by_default(client, monkeyp
     assert cards["enforce_max_queue_minutes"]["value"] == "False (Telemetry Only)"
 
 
+def test_parameters_endpoint_emits_no_deprecation_warnings(client):
+    """Verify that calling /api/parameters emits zero DeprecationWarning from dashboard/server.py (#672)."""
+    import warnings
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        response = client.get("/api/parameters")
+        assert response.status_code == 200
+
+        server_warnings = [
+            w for w in recorded
+            if issubclass(w.category, DeprecationWarning)
+            and ("dashboard/server.py" in w.filename.replace("\\", "/") or w.filename.endswith("server.py"))
+        ]
+        assert server_warnings == [], (
+            f"Expected zero DeprecationWarning from dashboard/server.py, got: "
+            f"{[f'{w.filename}:{w.lineno} {w.message}' for w in server_warnings]}"
+        )
 
 
+def test_parameters_cards_canonical_env_var_badges(client):
+    """Verify that all 59 parameter cards have canonical env_var badges matching .env.example (#672)."""
+    expected_badges = {
+        # Scope 1: Market Screener
+        "select_min_volume_24h_usd_live": "FILTER_LIVE_VOL_MIN_24H_USD",
+        "select_movement_window_sec": "FILTER_LIVE_VEL_LOOKBACK_SEC",
+        "select_min_movement_usd": "FILTER_LIVE_VEL_MIN_USD",
+        "select_min_activity_ratio": "FILTER_LIVE_ACTIVITY_MIN_RATIO",
+        "select_min_range_cents": "FILTER_LIVE_MOVE_MIN_RANGE_CENTS",
+        "select_volatility_window_sec": "FILTER_LIVE_MOVE_LOOKBACK_SEC",
+        "select_velocity_gate_enabled": "FILTER_LIVE_GATE_VELOCITY_ON",
+        "select_min_volume_24h_usd": "FILTER_STD_VOL_MIN_24H_USD",
+        # Scope 2: Bot Engine
+        "bankroll_usd": "BOT_QUOTE_BANK_BASELINE_USD",
+        "max_spread_from_mid": "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
+        "dynamic_offset_enabled": "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON",
+        "dynamic_offset_multiplier": "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER",
+        "dynamic_offset_min_cents": "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS",
+        "dynamic_offset_max_cents": "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS",
+        "max_pair_cost": "BOT_POS_PRICE_MAX_PAIR_COST_USD",
+        "max_completable_pair_cost": "BOT_POS_PRICE_MAX_COMPLETE_USD",
+        "requote_dead_band": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS",
+        "requote_hold_below_target": "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS",
+        "requote_hold_queue_shares": "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES",
+        "sweep_interval": "LIVE_SWEEP_INTERVAL",
+        "enable_pairs_rule": "BOT_RISK_GATE_PAIRS_RULE_ON",
+        "aged_out_rescue_lead_sec": "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC",
+        "stop_loss_mode": "BOT_RISK_STOP_MODE",
+        "drop_cents": "BOT_RISK_STOP_ADVERSE_DROP_CENTS",
+        "drawdown_pct": "BOT_RISK_STOP_MAX_DRAWDOWN_PCT",
+        "emergency_drawdown_pct": "BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT",
+    }
+
+    env_example_path = Path(__file__).resolve().parent.parent / ".env.example"
+    assert env_example_path.exists(), f".env.example not found at {env_example_path}"
+    env_example_text = env_example_path.read_text(encoding="utf-8")
+
+    response = client.get("/api/parameters")
+    assert response.status_code == 200
+    params = response.json()["parameters"]
+    assert len(params) == 59
+
+    card_keys = {p["key"] for p in params}
+    assert card_keys >= set(expected_badges.keys())
+
+    for card in params:
+        key = card["key"]
+        env_var = card.get("env_var")
+
+        # 1. Must be a string (never None)
+        assert isinstance(env_var, str), f"Card '{key}' env_var is not a string: {type(env_var)}"
+
+        # 2. No deprecated prefixes
+        assert not env_var.startswith("HUNTER_"), f"Card '{key}' has deprecated badge '{env_var}'"
+        assert not env_var.startswith("SPREAD_HUNTER_"), f"Card '{key}' has deprecated badge '{env_var}'"
+
+        # 3. Matches expected canonical variable or empty string
+        expected = expected_badges.get(key, "")
+        assert env_var == expected, f"Card '{key}' expected badge '{expected}', got '{env_var}'"
+
+        # 4. If non-empty, must exist in .env.example
+        if env_var:
+            assert f"{env_var}=" in env_example_text or env_var in env_example_text, (
+                f"Badge '{env_var}' on card '{key}' not documented in .env.example"
+            )
