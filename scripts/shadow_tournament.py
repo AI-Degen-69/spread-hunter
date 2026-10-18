@@ -317,8 +317,12 @@ def build_tournament_plan(
         # Full-profile selector: applies the whole preset (including the
         # shared queue-hold settings _preset_to_env does not copy). Only
         # for names the config knows; custom arms keep their explicit env.
-        if name in TOURNAMENT_PRESETS:
-            arm_env.setdefault("BOT_QUOTE_TOURNAMENT_PRESET", name)
+        if (
+            name in TOURNAMENT_PRESETS
+            and "BOT_QUOTE_TOURNAMENT_PRESET" not in arm_env
+            and "HUNTER_TOURNAMENT_PRESET" not in arm_env
+        ):
+            arm_env["BOT_QUOTE_TOURNAMENT_PRESET"] = name
         # Fail at plan time, not in the child. An unknown selector kills the arm
         # at config load (config.from_env), i.e. after the other arms have
         # already started and the run is half a tournament. The i492 arms file

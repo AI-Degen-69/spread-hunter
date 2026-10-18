@@ -1056,3 +1056,16 @@ def test_unknown_preset_selector_is_refused_at_plan_time(tmp_path):
                    "env": {"HUNTER_TOURNAMENT_PRESET": "control"}}],
             base_dir=tmp_path, run_number=1, check_ports=False,
         )
+
+
+def test_explicit_legacy_preset_selector_not_overwritten_by_name_default(tmp_path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        issue=492,
+        arms=[{"name": "conservative",
+               "env": {"HUNTER_TOURNAMENT_PRESET": "aggressive"}}],
+        base_dir=tmp_path, run_number=1, check_ports=False,
+    )
+    assert plan.arms[0].env["HUNTER_TOURNAMENT_PRESET"] == "aggressive"
+    assert "BOT_QUOTE_TOURNAMENT_PRESET" not in plan.arms[0].env
