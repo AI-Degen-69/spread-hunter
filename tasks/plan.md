@@ -181,6 +181,12 @@ must-not-change; the reuse above gets the same guarantee with no edit there.
 Dependency graph: `T1 → T2 → T3` (T2 needs T1's helper; T3's source checks
 assert both renderers).
 
+Completion state (Station III marks these; never a task list from `tasks/todo.md`):
+
+- [x] T1 — shared rule + served Stitch Positions table
+- [ ] T2 — pill on the classic `positionsRows` table
+- [ ] T3 — source checks, reduced-motion guard, focused run
+
 ### T1 — the shared rule + the served Stitch Positions table  [Design/UI]
 
 - **Size:** S · **Depends on:** — · **Files:** `dashboard/static/app.js`,

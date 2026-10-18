@@ -7290,6 +7290,28 @@ function marketStatusPill(m, restingHere) {
   return '<span class="pill stopped" title="No quote activity observed">IDLE</span>';
 }
 
+/* The activity pill for a HELD market (issue #656).
+ *
+ * A position row answers "what do I hold", not "is the engine working this
+ * market" -- so a market with quotes or resting hedge orders looked exactly
+ * like a dead one, and finding out meant leaving OPEN POSITIONS to cross-check
+ * ACTIVE MARKETS. This returns the same RESTING / QUOTING badge that tab
+ * shows, and nothing else: a market nobody is working returns an empty string
+ * and the row keeps the tags it already had.
+ *
+ * The show condition is Active Markets' own membership test, term for term
+ * (isQuotedMarket plus its quotes-or-resting clause), so the two tabs cannot
+ * drift apart about the same market. IDLE is unreachable here: reaching
+ * marketStatusPill() means the market is resting or quoting.
+ */
+function marketActivityPill(m, orders) {
+  const list = orders || [];
+  if (!isQuotedMarket(m, list)) return '';
+  const restingHere = list.some(o => isRestingOrder(o));
+  if (!restingHere && !(Number(m && m.quotes_count) > 0)) return '';
+  return marketStatusPill(m, restingHere);
+}
+
 function activeMarketsRows(kpi, state, sort) {
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
   const entries = Object.entries((kpi && kpi.by_market) || {})
@@ -8347,6 +8369,8 @@ function stitchPositionsRows(kpi, state, sort) {
     return `<tr><td colspan="8" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No legs have filled, so nothing is held.</td></tr>`;
   }
 
+  const ordersByMarket = groupOrdersByMarket(state && state.orders);
+
   const rows = entries.map(([cid, m]) => {
     const overlay = liveLegMids(m);
     const mark = positionMarkValue(m, overlay.mids);
@@ -8377,10 +8401,11 @@ function stitchPositionsRows(kpi, state, sort) {
       ?? (dnSh > 0 ? overlay.mids.dn : null) ?? null;
     const ts = latestFillTs(m);
     const category = marketCategory(m);
+    const activity = marketActivityPill(m, ordersByMarket[cid]);
     return {
       cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost: cost, totalSh,
       mark, unrealized, unrealizedPct, legMarks, curSort,
-      status, ts, category,
+      status, ts, category, activity,
       live: overlay.live, liveAgeMs: overlay.ageMs,
     };
   });
@@ -8409,7 +8434,7 @@ function stitchPositionsRows(kpi, state, sort) {
   return sorted.map(({
     cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost, totalSh,
     mark, unrealized, unrealizedPct, legMarks, curSort,
-    status, ts, category, live, liveAgeMs
+    status, ts, category, activity, live, liveAgeMs
   }) => {
     const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
     const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
@@ -8454,6 +8479,7 @@ function stitchPositionsRows(kpi, state, sort) {
         <div class="stitch-market-title">
           <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
         </div>
+        ${activity ? `<div class="stitch-market-meta" style="margin-top:2px;">${activity}</div>` : ''}
         ${(!category || category === 'Uncategorized') ? '' : `<div class="stitch-market-meta" style="margin-top:2px;">
           <span class="stitch-category-pill">${esc(category)}</span>
         </div>`}
@@ -10496,6 +10522,7 @@ if (typeof module !== 'undefined' && module.exports) {
     liveMarks, LIVE_MARK_MAX_AGE_MS, liveMarkMid, applyLiveMarks, clearLiveMarks,
     liveLegMids, paintLiveMarks, scheduleLiveMarksPaint,
     isQuotedMarket, isRestingOrder, tokenLegMap, legForOrder, marketStatusPill,
+    marketActivityPill,
     normalizeLeg, groupOrdersByPair, restingPairCost, restingPairLegs,
     fmtTimestamp, toMs, latestQuoteTs, latestFillTs, closeTsOf, fmtRelAgo, timestampCell,
     pairStatus, PAIR_STATUS, isMarketInferredPosition, pairSummary,
