@@ -83,17 +83,20 @@ def test_funnel_carries_near_miss_counters(tmp_path):
 
 
 def test_funnel_carries_every_gate_bar(tmp_path):
-    """The spread, horizon, payout and pair-cost bars reach the dashboard.
+    """The movement, spread, horizon, payout and pair-cost bars reach the dashboard.
 
     The kanban hero blocks state the contract the screener gated on. Reading
     them from the snapshot is what stops the panel claiming a stale pair-cost
-    cap after the config changes.
+    cap after the config changes -- the movement bar was the one bar still
+    frozen into the markup, so an operator setting HUNTER_MIN_MOVEMENT_USD saw
+    the parameter card move while the lane header kept its old number.
     """
     pipeline = _write(tmp_path / "pipeline.json", {
         "counts": {"funded": 1, "spread_universe": 0, "eligible": 0},
         "rejections": [],
         "depth_gate_usd": 1000.0,
         "volume_gate_usd": 250000.0,
+        "movement_gate_usd": 777.0,
         "spread_gate": 0.06,
         "horizon_gate_days": 30.0,
         "reward_min_income_usd_day": 1.5,
@@ -105,6 +108,7 @@ def test_funnel_carries_every_gate_bar(tmp_path):
                               markets_path=tmp_path / "missing.json")
 
     assert f is not None
+    assert f["movement_gate_usd"] == 777.0
     assert f["spread_gate"] == 0.06
     assert f["horizon_gate_days"] == 30.0
     assert f["reward_min_income_usd_day"] == 1.5

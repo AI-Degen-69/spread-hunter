@@ -1659,13 +1659,16 @@ def test_app_js_reads_every_gate_bar_from_the_funnel():
     """
     app_js = _read_static("app.js")
     for key in ('volume_gate_usd', 'depth_gate_usd', 'spread_gate',
-                'horizon_gate_days'):
+                'horizon_gate_days', 'movement_gate_usd'):
         assert key in app_js, key
     # The literals these replaced must be gone.
     assert '0.0600 (6.00%)' not in app_js
     assert '30.0 days' not in app_js
     assert '$1.50/day' not in app_js
     assert '$0.995' not in app_js
+    # The movement bar was the last one frozen into the markup: both the lane
+    # banner and the stage hero claimed $200 while the scan gated on config.
+    assert '$200 / 30m' not in app_js
 
 
 def test_app_js_states_the_horizon_gate_rule():

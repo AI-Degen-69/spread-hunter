@@ -9576,9 +9576,12 @@ window.setKanbanLane = function(lane) {
   }
 };
 
-function updateLaneBanner(lane, counts = {}) {
+function updateLaneBanner(lane, counts = {}, gates = {}) {
   const banner = document.getElementById('kanban-lane-banner');
   if (!banner) return;
+  // The published bar, never a literal: the same number the parameter card
+  // shows, so a config change cannot leave this banner claiming the old one.
+  const movementGate = gateBar(gates.movement_gate_usd, 200);
   if (lane === 'live') {
     banner.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px">
@@ -9591,7 +9594,7 @@ function updateLaneBanner(lane, counts = {}) {
     banner.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px">
         <span class="lane-banner-badge regular">🏛️ REGULAR MARKETS LANE</span>
-        <span>Standard binary pipeline: <strong>$50,000</strong> volume floor · <strong>30-day</strong> horizon gate · Strict tape velocity (<strong>≥ $200 / 30m</strong>) and range stability (<strong>≤ 35¢</strong>) · Baseline yield ranking.</span>
+        <span>Standard binary pipeline: <strong>$50,000</strong> volume floor · <strong>30-day</strong> horizon gate · Strict tape velocity (<strong>≥ $${Number(movementGate).toLocaleString()} / 30m</strong>) and range stability (<strong>≤ 35¢</strong>) · Baseline yield ranking.</span>
       </div>
       <div class="mono" style="font-size:11px;color:#38bdf8;white-space:nowrap">${counts.regular != null ? counts.regular : 0} active regular markets</div>
     `;
@@ -9612,6 +9615,9 @@ function getStageHero(key, funnel, lane) {
   const depthGate = gateBar(funnel?.trial_depth_usd, gateBar(funnel?.depth_gate_usd, 500));
   const spreadGate = gateBar(funnel?.trial_spread, gateBar(funnel?.spread_gate, 0.0205));
   const horizonDays = gateBar(funnel?.horizon_gate_days, 30);
+  // The notional bar gates live rows too -- the live lane is exempt from the
+  // range/velocity test, not from this -- so both lanes state the same bar.
+  const movementGate = gateBar(funnel?.movement_gate_usd, 200);
 
   switch (key) {
     case 'raw':
@@ -9627,7 +9633,9 @@ function getStageHero(key, funnel, lane) {
     case 'movement':
       return {
         param: activeLane === 'live' ? '⚡ IN-PLAY VOLATILITY' : 'TEST: RECENT TRADED NOTIONAL',
-        value: activeLane === 'live' ? '≥ $200 / 30m · VOLATILITY EXEMPT' : '≥ $200 / 30m · Strict Range (≤ 35¢)',
+        value: activeLane === 'live'
+          ? `≥ $${Number(movementGate).toLocaleString()} / 30m · VOLATILITY EXEMPT`
+          : `≥ $${Number(movementGate).toLocaleString()} / 30m · Strict Range (≤ 35¢)`,
       };
     case 'volume':
       return {
@@ -9950,7 +9958,8 @@ function renderScreener(kpi, scanState, status, engineOpts) {
     btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
   });
 
-  updateLaneBanner(lane, { regular: regularCount, live: liveCount, total: totalCount });
+  updateLaneBanner(lane, { regular: regularCount, live: liveCount, total: totalCount },
+                    { movement_gate_usd: funnel?.movement_gate_usd });
 
   const activeGraduated = (lane === 'all')
     ? graduatedList
