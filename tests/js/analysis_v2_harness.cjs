@@ -1,12 +1,14 @@
 /* Drives dashboard/static/analysis_v2.js against the real /api/kpi payload
  * shape and prints what got painted. Used by tests/test_analysis_v2_binding.py.
  *
- * Hooks are parsed out of the real analysis_v2.html, so a data-bind whose
- * payload path no longer exists is caught here rather than in the browser.
+ * Hooks are parsed out of the #analysis-v2 section of index.html (the Data
+ * Analysis sidebar page, #568), so a data-bind whose payload path no longer
+ * exists is caught here rather than in the browser.
  *
  * Reads a JSON payload from argv[2]; action on argv[3]:
- *   render   full applyAll(kpi) against the stubbed DOM (default)
- *   empty    applyAll({}) -- must not throw and must paint nothing
+ *   render   full renderAnalysisV2(root, kpi) against the stubbed DOM (default)
+ *   empty    renderAnalysisV2(root, {}) -- must not throw and must paint nothing
+ *   toggle   render, then click the confidence pills like the page does
  */
 const fs = require('fs');
 const path = require('path');
@@ -16,7 +18,12 @@ const action = process.argv[3] || 'render';
 const noop = () => {};
 
 const staticDir = path.resolve(__dirname, '..', '..', 'dashboard', 'static');
-const html = fs.readFileSync(path.join(staticDir, 'analysis_v2.html'), 'utf8');
+const indexHtml = fs.readFileSync(path.join(staticDir, 'index.html'), 'utf8');
+/* The sidebar page owns the markup now; the harness parses the same section
+ * the shell mounts, so hook drift fails here instead of in the browser. */
+const sectionStart = indexHtml.indexOf('id="analysis-v2"');
+if (sectionStart === -1) throw new Error('#analysis-v2 missing from index.html');
+const html = indexHtml.slice(sectionStart);
 
 /* --- DOM stub: only the surface applyAll() touches --- */
 function makeEl(tag) {
@@ -161,8 +168,14 @@ const pills = ['95', '98', '99'].map((c, i) => {
 nodeFor.set('.conf-toggle .pill', pills);
 nodeFor.set('.conf-toggle .pill.active', [pills[0]]);
 
+/* The sufficiency progress bar and the CI scale are looked up by id. */
+const suffBarEl = makeEl('i');
+suffBarEl.attrs.id = 'suffBar';
+
 global.document = {
   getElementById: (id) => {
+    if (id === 'ciScale') return ciScaleEl;
+    if (id === 'suffBar') return suffBarEl;
     const f = bindNodes.concat(bandNodes).filter((e) => e.attrs.id === id)[0];
     return f || reg('id:' + id);
   },
@@ -181,15 +194,28 @@ global.document = {
   documentElement: { appendChild: noop },
 };
 
-/* Run the design's own inline scripts (confidence toggle, DB popover)
- * against the stub, exactly as the page does, before analysis_v2.js. */
-const inlineMod = { exports: {} };
-(html.match(/<script>[\s\S]*?<\/script>/g) || []).forEach((block) => {
-  const src = block.replace(/^<script>/, '').replace(/<\/script>$/, '');
-  new Function('module', 'exports', 'document', 'window', 'fetch', src)(
-    inlineMod, inlineMod.exports, global.document, { addEventListener: noop },
-    () => Promise.reject(new Error('fetch is not exercised by the harness')));
-});
+/* The shell wires the confidence toggle once after mount; the harness does
+ * the same through the module's own init, then fires the pills like clicks. */
+const rootStub = {
+  querySelector: (sel) => {
+    const m = /^#(ch[1-5]) (.+)$/.exec(sel);
+    if (m) {
+      const card = chartAreas.filter((c) => c.attrs.id === m[1])[0];
+      if (card) return card.querySelector(m[2]);
+    }
+    if (sel === '#ciScale') return ciScaleEl;
+    if (sel === '#suffBar') return suffBarEl;
+    if (sel === '.conf-toggle .pill.active') return qs(sel);
+    return qs(sel);
+  },
+  querySelectorAll: qsa,
+  getElementById: (id) => {
+    if (id === 'ciScale') return ciScaleEl;
+    if (id === 'suffBar') return suffBarEl;
+    const f = bindNodes.concat(bandNodes).filter((e) => e.attrs.id === id)[0];
+    return f || reg('id:' + id);
+  },
+};
 
 const source = fs.readFileSync(path.join(staticDir, 'analysis_v2.js'), 'utf8');
 const mod = { exports: {} };
@@ -209,7 +235,8 @@ const out = {
 
 try {
   const kpi = action === 'empty' ? {} : (input.kpi || {});
-  app.applyAll(kpi);
+  app.initConfidenceToggle(rootStub);
+  app.renderAnalysisV2(rootStub, kpi);
   bindNodes.forEach((e) => {
     out.painted[e.attrs['data-bind']] = e.innerHTML || e.textContent;
   });
@@ -249,7 +276,7 @@ try {
       pfill: r._cellsOut['.pfill'].style.width,
     });
   });
-  /* The confidence toggle is the design's own IIFE: fire the pills the
+  /* The confidence toggle is the module's own init: fire the pills the
    * way a click does and snapshot the VISIBLE cells at each level. */
   if (action === 'toggle') {
     const snap = () => ssrNodes.map((r) => ({

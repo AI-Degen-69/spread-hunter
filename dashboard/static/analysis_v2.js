@@ -111,7 +111,7 @@ function badgeFrom(band) {
 
 /* ---- decision gates: observed value + verdict, computed from the payload ---- */
 
-const POWER_GATE = 120; // payload has no required_observations; data_analysis.js uses the same default
+const POWER_GATE = 120; // payload has no required_observations; default the gate here
 const DRAWDOWN_LIMIT_PCT = 5.0;
 const MARKOUT_MIN_SAMPLES = 25;
 
