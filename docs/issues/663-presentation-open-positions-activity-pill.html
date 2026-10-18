@@ -184,7 +184,7 @@
         <li>Press <b>ORDERS &amp; TRADES → Open Positions</b>.</li>
         <li>Look beside each market name: a green pill. One market says <b>QUOTING</b>, the rest say <b>RESTING</b>.</li>
         <li>Press <b>Active Markets</b> and find the same four markets — the words must match market for market.</li>
-        <li>Go back to <b>Open Positions</b> and wait a few seconds: <b>CURRENT PRICE</b>, <b>MARK VALUE</b> and <b>UNREALIZED</b> keep moving, the pill stays put.</li>
+        <li>Go back to <b>Open Positions</b> and wait a few seconds: <b>CURRENT PRICE</b>, <b>MARK VALUE</b> and <b>UNREALIZED P&amp;L</b> keep moving, the pill stays put.</li>
         <li>Switch your computer to reduced motion and reload: the pill keeps its colour, the dot stops blinking.</li>
       </ol>
     </div>
@@ -219,6 +219,15 @@
 
   function money(v) { return "$" + v.toFixed(2); }
 
+  // Active Markets prints EDGE as cents and percent, exactly as the app does.
+  function edgeLabel(m) {
+    var cost = m.upAsk + m.dnAsk;
+    var edge = 1 - cost;
+    var pct = cost > 0 ? (edge / cost) * 100 : 0;
+    return (edge >= 0 ? "+" : "") + (edge * 100).toFixed(1) + "c ("
+      + (pct >= 0 ? "+" : "") + pct.toFixed(1) + "%)";
+  }
+
   function pillHtml(verdict) {
     if (!verdict) return "";
     var cls = verdict === "RESTING" ? "resting" : "quoting";
@@ -238,11 +247,13 @@
   function render() {
     var positions = view === "positions";
     headRow.innerHTML = positions
-      ? "<th>MARKET</th><th>LEG</th><th>CURRENT PRICE</th><th>MARK VALUE</th><th>UNREALIZED</th>"
-      : "<th>MARKET</th><th>UP</th><th>DOWN</th><th>PAIR COST</th><th>STATUS</th>";
+      // Headers below are the real ones, quoted from stitchPositionsHeadHtml() and
+      // stitchActiveMarketsHeadHtml() -- a mock that invents its own labels would
+      // teach the reader words the dashboard never shows.
+      ? "<th>MARKET &amp; CLASSIFICATION</th><th>HELD INVENTORY</th><th>CURRENT PRICE</th><th>MARK VALUE</th><th>UNREALIZED P&amp;L</th>"
+      : "<th>MARKET &amp; CATEGORY</th><th>YES PRICE</th><th>NO PRICE</th><th>EDGE</th><th>STATUS</th>";
 
     body.innerHTML = rows().map(function (m) {
-      var pair = (m.upAsk + m.dnAsk).toFixed(2);
       var cells = positions
         ? "<td><div class=\"market\">" + m.name + " " + pillHtml(m.verdict) +
             "</div><div class=\"sub\">" + m.sub + "</div></td>" +
@@ -253,7 +264,7 @@
         : "<td><div class=\"market\">" + m.name + "</div><div class=\"sub\">" + m.sub + "</div></td>" +
           "<td class=\"num\">" + money(m.upAsk) + "</td>" +
           "<td class=\"num\">" + money(m.dnAsk) + "</td>" +
-          "<td class=\"num\">$" + pair + "</td>" +
+          "<td class=\"num\">" + edgeLabel(m) + "</td>" +
           "<td>" + pillHtml(m.verdict) + "</td>";
       return "<tr>" + cells + "</tr>";
     }).join("");
