@@ -3070,4 +3070,23 @@ def test_log_stream_sse_rotation_detected(tmp_path, monkeypatch):
         gen.close()
 
 
+def test_get_parameters_endpoint(client):
+    """Verify /api/parameters returns 200 and expected parameter catalog structure."""
+    response = client.get("/api/parameters")
+    assert response.status_code == 200
+    data = response.json()
+    assert "parameters" in data
+    assert len(data["parameters"]) > 0
+
+    names = {p["name"] for p in data["parameters"]}
+    assert "select_min_volume_24h_usd_live" in names
+    assert "max_pair_cost" in names
+    assert "pairs_exit_window_sec" in names
+
+    first = data["parameters"][0]
+    for required_key in ("name", "display_name", "scope", "value", "category"):
+        assert required_key in first
+
+
+
 

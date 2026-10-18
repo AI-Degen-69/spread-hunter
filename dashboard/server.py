@@ -4280,10 +4280,10 @@ def get_parameters(registry=None):
 
     sweep = resolve_sweep_interval()
 
-    from scoring.config import MakerConfig as ScoringMakerConfig
+    from scoring.config import load as load_scoring
     try:
-        scfg = ScoringMakerConfig()
-    except Exception:
+        scfg = load_scoring()
+    except (TypeError, ValueError):
         scfg = cfg
 
     params = [
@@ -4333,13 +4333,13 @@ def get_parameters(registry=None):
             "scope_label": "Scope 1: Market Screener",
             "subgroup": "active_live",
             "subgroup_label": "Active / In-Play Markets (Live Sports & Esports)",
-            "value": f"${getattr(scfg, 'select_min_movement_usd', 500.0):,.2f}",
-            "raw_value": getattr(scfg, "select_min_movement_usd", 500.0),
-            "default": "$500.00",
+            "value": f"${getattr(scfg, 'select_min_movement_usd', 200.0):,.2f}",
+            "raw_value": getattr(scfg, "select_min_movement_usd", 200.0),
+            "default": "$200.00",
             "env_var": "HUNTER_MIN_MOVEMENT_USD",
             "category": "Velocity Filter",
             "badge": "hard-limit",
-            "trigger": f"Traded volume inside movement window < ${getattr(scfg, 'select_min_movement_usd', 500.0):,.2f}",
+            "trigger": f"Traded volume inside movement window < ${getattr(scfg, 'select_min_movement_usd', 200.0):,.2f}",
             "action": "Disqualifies dead markets that traded previously but have halted now",
         },
         {
@@ -4350,13 +4350,13 @@ def get_parameters(registry=None):
             "scope_label": "Scope 1: Market Screener",
             "subgroup": "active_live",
             "subgroup_label": "Active / In-Play Markets (Live Sports & Esports)",
-            "value": f"{getattr(scfg, 'select_min_activity_ratio', 0.02)*100:.1f}%",
-            "raw_value": getattr(scfg, "select_min_activity_ratio", 0.02),
-            "default": "2.0%",
-            "env_var": None,
+            "value": f"{getattr(scfg, 'select_min_activity_ratio', 0.0)*100:.1f}%",
+            "raw_value": getattr(scfg, "select_min_activity_ratio", 0.0),
+            "default": "0.0% (off)",
+            "env_var": "HUNTER_MIN_ACTIVITY_RATIO",
             "category": "Velocity Filter",
             "badge": "dynamic",
-            "trigger": "Observed activity share relative to market size < 2%",
+            "trigger": f"Observed activity share relative to market size < {getattr(scfg, 'select_min_activity_ratio', 0.0)*100:.1f}%",
             "action": "Demands minimum active trading share before admitting candidate",
         },
         {
@@ -4367,13 +4367,13 @@ def get_parameters(registry=None):
             "scope_label": "Scope 1: Market Screener",
             "subgroup": "active_live",
             "subgroup_label": "Active / In-Play Markets (Live Sports & Esports)",
-            "value": f"{getattr(scfg, 'select_min_range_cents', 1.0):.1f}¢",
-            "raw_value": getattr(scfg, "select_min_range_cents", 1.0),
-            "default": "1.0¢",
-            "env_var": None,
+            "value": f"{getattr(scfg, 'select_min_range_cents', 2.0):.1f}¢",
+            "raw_value": getattr(scfg, "select_min_range_cents", 2.0),
+            "default": "2.0¢",
+            "env_var": "HUNTER_MIN_RANGE_CENTS",
             "category": "Volatility Filter",
             "badge": "hard-limit",
-            "trigger": "Observed price range within window < 1.0¢",
+            "trigger": f"Observed price range within window < {getattr(scfg, 'select_min_range_cents', 2.0):.1f}¢",
             "action": "Rejects static, pinned markets lacking two-sided price discovery",
         },
         {
@@ -4900,7 +4900,7 @@ def get_parameters(registry=None):
             "env_var": "HUNTER_PAIR_COST_CAP",
             "category": "Pricing Safeguard",
             "badge": "hard-limit",
-            "trigger": f"Combined UP + DOWN maker buy cost reaches or exceeds ${cfg.max_pair_cost:.2f}",
+            "trigger": f"Combined UP + DOWN maker buy cost exceeds ${cfg.max_pair_cost:.2f}",
             "action": "Refuses to quote pair to ensure guaranteed positive spread profit on merge ($1.00 - cost)",
         },
         {
@@ -5167,7 +5167,7 @@ def get_parameters(registry=None):
             "category": "Single-Buy Safety",
             "badge": "safety",
             "trigger": "Single-buy (one leg filled) event occurs",
-            "action": "Enforces 15-minute action window to complete pair or execute emergency exit",
+            "action": "Dates a 15-minute action window off the last fill; an older naked leg is left alone, not force-exited",
         },
         {
             "name": "pairs_exit_window_sec",

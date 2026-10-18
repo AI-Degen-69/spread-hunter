@@ -75,8 +75,15 @@ Map all legacy variables to the new canonical names across the codebase:
 - `min_couple_usd`                   -> `BOT_QUOTE_SIZE_COUPLE_MIN_USD`
 - `naked_risk_pct`                   -> `BOT_QUOTE_SIZE_NAKED_RISK_PCT`
 - `max_naked_usd`                    -> `BOT_QUOTE_SIZE_NAKED_MAX_USD`
-- `min_quote_shares`                 -> `BOT_QUOTE_VENUE_MIN_SHARES`
+- `quote_both_sides`                 -> `BOT_QUOTE_BOTH_SIDES_ON`
+- `ticks_below_ask`                  -> `BOT_QUOTE_TICKS_BELOW_ASK`
 - `tick_size`                        -> `BOT_QUOTE_VENUE_TICK_CENTS`
+- `price_tick`                       -> `BOT_QUOTE_GRID_TICK_SIZE_USD`
+- `size_mode`                        -> `BOT_QUOTE_SIZE_MODE`
+- `quote_shares`                     -> `BOT_QUOTE_SIZE_SHARES`
+- `max_quote_shares`                 -> `BOT_QUOTE_SIZE_MAX_SHARES`
+- `min_quote_shares`                 -> `BOT_QUOTE_VENUE_MIN_SHARES`
+- `apply_widen_gate`                 -> `BOT_QUOTE_GATE_WIDEN_ON`
 - `dynamic_offset_enabled`           -> `BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON`
 - `dynamic_offset_multiplier`        -> `BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER`
 - `dynamic_offset_min_cents`         -> `BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS`

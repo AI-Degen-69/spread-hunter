@@ -2901,6 +2901,8 @@ function compareParams(a, b, col, dir) {
     } else {
       res = String(a.value || '').localeCompare(String(b.value || ''));
     }
+  } else if (col === 'default') {
+    res = String(a.default || '').localeCompare(String(b.default || ''));
   } else if (col === 'env_var') {
     const envA = a.env_var || '';
     const envB = b.env_var || '';
@@ -3049,6 +3051,7 @@ function renderParametersView() {
                   </div>
                   <div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap" class="param-value-box">
                     <span class="param-val">${esc(p.value)}</span>
+                    <span class="mono" style="font-size:11px;color:var(--text-muted);background:rgba(255,255,255,0.04);padding:2px 6px;border-radius:4px">Default: ${esc(p.default || '—')}</span>
                     ${renderCategoryBadge(p.category)}
                     ${envHtml}
                   </div>
@@ -3098,6 +3101,7 @@ function renderParametersView() {
                     <tr>
                       ${renderSortableTh('name', 'Parameter / Variable', 'min-width:210px')}
                       ${renderSortableTh('value', 'Active Value', 'min-width:130px;white-space:nowrap')}
+                      ${renderSortableTh('default', 'Default', 'min-width:110px;white-space:nowrap')}
                       ${renderSortableTh('category', 'Category', '', 'col-category')}
                       ${renderSortableTh('env_var', 'Env Override', 'min-width:120px;white-space:nowrap')}
                       ${renderSortableTh('trigger', 'Trigger Condition', 'min-width:260px')}
@@ -3122,6 +3126,9 @@ function renderParametersView() {
                 </td>
                 <td style="white-space:nowrap">
                   <span class="mono" style="font-weight:700;color:#38bdf8;font-size:13px">${esc(p.value)}</span>
+                </td>
+                <td style="white-space:nowrap">
+                  <span class="mono" style="font-size:12px;color:var(--text-muted)">${esc(p.default || '—')}</span>
                 </td>
                 <td class="col-category">
                   ${renderCategoryBadge(p.category)}

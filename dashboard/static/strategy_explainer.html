@@ -546,33 +546,33 @@
             </tr>
             <tr>
               <td><code>select_movement_window_sec</code></td>
-              <td><code>300s (5m)</code></td>
+              <td><code>1800s (30m)</code></td>
               <td><span class="badge-env">HUNTER_MOVEMENT_WINDOW_SEC</span></td>
               <td><strong>Movement Lookback Window</strong>: Evaluates recent trade tape activity to verify active trading before admitting candidates.</td>
             </tr>
             <tr>
               <td><code>select_min_movement_usd</code></td>
-              <td><code>$500.00</code></td>
+              <td><code>$200.00</code></td>
               <td><span class="badge-env">HUNTER_MIN_MOVEMENT_USD</span></td>
               <td><strong>Min Traded Notional</strong>: Disqualifies quiet markets that traded earlier in the day but have halted trading now.</td>
             </tr>
             <tr>
               <td><code>select_min_activity_ratio</code></td>
-              <td><code>2.0% (0.02)</code></td>
+              <td><code>0.0% (off)</code></td>
               <td><span style="color:var(--text-muted)">—</span></td>
-              <td><strong>Activity Ratio Bar</strong>: Demands at least 2% recent volume turnover relative to total market size.</td>
+              <td><strong>Activity Ratio Bar</strong>: Minimum recent volume turnover relative to total market size (disabled at 0.0%).</td>
             </tr>
             <tr>
               <td><code>select_min_range_cents</code></td>
-              <td><code>1.0¢</code></td>
+              <td><code>2.0¢</code></td>
               <td><span style="color:var(--text-muted)">—</span></td>
               <td><strong>Min Price Range Volatility</strong>: Rejects static, pinned markets lacking two-sided price discovery.</td>
             </tr>
             <tr>
               <td><code>select_volatility_window_sec</code></td>
-              <td><code>900s (15m)</code></td>
+              <td><code>7200s (2h)</code></td>
               <td><span style="color:var(--text-muted)">—</span></td>
-              <td><strong>Volatility Evaluation Horizon</strong>: Measures high-to-low price dispersion across 15-minute rolling window.</td>
+              <td><strong>Volatility Evaluation Horizon</strong>: Measures high-to-low price dispersion across 2-hour rolling window.</td>
             </tr>
             <tr>
               <td><code>select_velocity_gate_enabled</code></td>

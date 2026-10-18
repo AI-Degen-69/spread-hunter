@@ -193,7 +193,11 @@ class _ConfigBase:
                 if ro_prop in kw:
                     raise TypeError(f"MakerConfig.__init__() got an unexpected keyword argument {ro_prop!r}")
             if args:
-                field_list = [f for f in fields(cls) if not isinstance(getattr_static(cls, f.name, None), (property, _LegacyProperty))]
+                field_list = [
+                    f for f in fields(cls)
+                    if f.name not in _LEGACY_TO_CANONICAL
+                    and not (isinstance(getattr_static(cls, f.name, None), property) or type(getattr_static(cls, f.name, None)).__name__ == "_LegacyProperty")
+                ]
                 for f, val in zip(field_list, args):
                     kw[f.name] = val
             # Map canonical profile args to legacy fields
@@ -214,9 +218,11 @@ class _ConfigBase:
                         kw[can] = leg_val
             # Fill default values for any fields not supplied
             for f in fields(cls):
+                if f.name in _LEGACY_TO_CANONICAL:
+                    continue
                 if f.name not in kw and hasattr(cls, f.name):
                     raw_val = getattr_static(cls, f.name, None)
-                    if not isinstance(raw_val, (property, _LegacyProperty)):
+                    if not (isinstance(raw_val, property) or type(raw_val).__name__ == "_LegacyProperty"):
                         kw[f.name] = getattr(cls, f.name)
             for k, v in kw.items():
                 object.__setattr__(self, k, v)
