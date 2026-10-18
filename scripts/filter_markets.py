@@ -1634,9 +1634,9 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         skip_identity=bool(admission_trial and admission_role),
         live_event=bool(m.get("_live_event") or m.get("live_event")))
 
-    eligible = bool(can_trade and movement_usd is not None and movement_usd > 0)
+    eligible = bool(can_trade)
     if not why and not eligible:
-        why = "no movement"
+        why = "not tradeable"
 
     row = {
         "source": source,
