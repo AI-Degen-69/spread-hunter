@@ -924,9 +924,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     config = config_module.load()
     min_volume = (args.min_volume_usd if args.min_volume_usd is not None
-                  else float(config.select_min_volume_24h_usd))
+                  else float(config.filter_std_vol_min_24h_usd))
     max_days = (args.max_days if args.max_days is not None
-                else float(config.select_max_days_to_resolve))
+                else float(config.filter_std_time_max_days_to_resolve))
     run_id = args.run_id or time.strftime("probe-%d-%m_%H-%M")
     log.info("run %s: %.1fh every %.0fmin, %d candidates/cycle, "
              "gates volume>=%.0f horizon<=%.0fd -> %s",
