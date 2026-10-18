@@ -409,6 +409,71 @@ def test_invalid_trial_override_keeps_shipped_default(monkeypatch, can_var, bad_
     assert cfg.filter_std_vol_min_24h_usd_trial is None
 
 
+@pytest.mark.parametrize(
+    "var_name",
+    [
+        "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL",
+        "HUNTER_DEPTH_TRIAL_USD",
+        "FILTER_STD_VOL_MIN_24H_USD_TRIAL",
+        "HUNTER_VOLUME_TRIAL_USD",
+    ],
+)
+@pytest.mark.parametrize("bad_raw", ["abc", "nan", "inf", "-1"])
+def test_engine_invalid_trial_override_raises_named_error(monkeypatch, var_name, bad_raw):
+    """#675: Engine fails loud on invalid trial values, with ValueError naming the variable."""
+    _clear_screener_canonical_env(monkeypatch)
+    monkeypatch.setenv(var_name, bad_raw)
+
+    with pytest.raises(ValueError) as exc_info:
+        CoreMakerConfig.from_env()
+
+    assert var_name in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "can_var,leg_var,field",
+    [
+        (
+            "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL",
+            "HUNTER_DEPTH_TRIAL_USD",
+            "select_min_top3_depth_usd_trial",
+        ),
+        (
+            "FILTER_STD_VOL_MIN_24H_USD_TRIAL",
+            "HUNTER_VOLUME_TRIAL_USD",
+            "select_min_volume_24h_usd_trial",
+        ),
+    ],
+)
+def test_engine_valid_trial_override_populates_field(monkeypatch, can_var, leg_var, field):
+    """#675: Valid positive finite floats populate engine trial fields; unset/empty stays None."""
+    _clear_screener_canonical_env(monkeypatch)
+
+    # 1. Unset -> None
+    cfg = CoreMakerConfig.from_env()
+    assert getattr(cfg, field) is None
+
+    # 2. Empty string -> None
+    monkeypatch.setenv(can_var, "   ")
+    cfg = CoreMakerConfig.from_env()
+    assert getattr(cfg, field) is None
+
+    # 3. Canonical valid float -> parsed correctly
+    monkeypatch.setenv(can_var, "1234.5")
+    cfg = CoreMakerConfig.from_env()
+    assert getattr(cfg, field) == 1234.5
+
+    # 4. Canonical beats legacy
+    monkeypatch.setenv(leg_var, "999.0")
+    cfg = CoreMakerConfig.from_env()
+    assert getattr(cfg, field) == 1234.5
+
+    # 5. Legacy alone works
+    monkeypatch.delenv(can_var, raising=False)
+    cfg = CoreMakerConfig.from_env()
+    assert getattr(cfg, field) == 999.0
+
+
 def test_env_example_documents_only_real_canonical_variables():
     """Every `FILTER_*` and `BOT_*` variable in `.env.example` is read by a loader."""
     import re

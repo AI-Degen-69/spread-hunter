@@ -1,5 +1,4 @@
-# Todo — Issue #653
+# Todo — Issue #675
 
-- [x] T1: Canonical `FILTER_*` environment overrides in `scoring/config.py` and precedence tests
-- [x] T2: Direct canonical attribute reads in screener scripts and test fixture migration
-- [x] T3: Document canonical `FILTER_*` and `BOT_*` variables in `.env.example` and `docs/agents/python-conventions.md`
+- [x] T1 — Guard screener trial bars in `core_brain/config.py:from_env()` with named validation
+- [x] T2 — Add parametrized tests for trial bar rejection and verification in `tests/test_config_single_source.py`
