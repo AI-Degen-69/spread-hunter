@@ -21,10 +21,14 @@ because a dead feed must not keep serving prices.
 """
 from __future__ import annotations
 
+import json
+import logging
 import threading
 import time
 
 from core_brain import markets
+
+log = logging.getLogger("market_stream")
 
 MARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 SERVICE = "market_stream"
@@ -178,3 +182,207 @@ class MarketBookCache:
     def ready_tokens(self) -> list[str]:
         with self._lock:
             return list(self._books)
+
+
+class MarketStream:
+    """One long-lived socket feeding a `MarketBookCache`; reads never block.
+
+    Two daemon threads: the worker owns the socket and its reconnect loop, the
+    heartbeat keeps the venue's `PING` cadence and hangs up on a feed that has
+    gone silent. `stop()` is the only way to end both.
+    """
+
+    def __init__(self, *, cache=None, emit_fn=None, time_fn=time.time,
+                 ping_sec=PING_INTERVAL_SEC, tick_sec=TICK_SUMMARY_SEC):
+        self._cache = cache if cache is not None else MarketBookCache(
+            time_fn=time_fn)
+        self._emit_fn = emit_fn
+        self._time = time_fn
+        self._ping_sec = ping_sec
+        self._tick_sec = tick_sec
+        self._lock = threading.Lock()
+        self._send_lock = threading.Lock()
+        self._markets: dict[str, tuple[str, str, str]] = {}
+        self._want: set[str] = set()
+        self._pending: set[str] = set()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._heartbeat: threading.Thread | None = None
+        self._app = None
+        self._connected = False
+        self._alive_at = 0.0
+        self._close_code = None
+        self._close_reason = ""
+        self._backoff = RECONNECT_MIN_SEC
+        self._pending_since = 0.0
+        self._resends = 0
+
+    # ── universe ───────────────────────────────────────────────────────────
+
+    def ensure_market(self, condition_id, slug, up_token, down_token) -> None:
+        """Register one market's two outcome tokens as wanted on this feed."""
+        cid, slug = str(condition_id), str(slug)
+        up, down = str(up_token), str(down_token)
+        with self._lock:
+            if self._markets.get(cid) == (slug, up, down):
+                return
+            self._markets[cid] = (slug, up, down)
+            self._want.update((up, down))
+
+    # ── lifecycle ──────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run, name="market-stream", daemon=True)
+        self._heartbeat = threading.Thread(
+            target=self._heartbeat_loop, name="market-stream-heartbeat",
+            daemon=True)
+        self._thread.start()
+        self._heartbeat.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        app, self._app = self._app, None
+        if app is not None:
+            self._close(app)
+        for attr in ("_thread", "_heartbeat"):
+            thread = getattr(self, attr)
+            setattr(self, attr, None)
+            if (thread is not None and thread.is_alive()
+                    and thread is not threading.current_thread()):
+                thread.join(timeout=5.0)
+        self._connected = False
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    def _run(self) -> None:
+        """Dial, subscribe, and redial on a capped backoff until stopped."""
+        try:
+            import websocket  # local: no venue work at module import time
+        except ImportError as e:
+            # Loud, not silent: without the declared dependency this module
+            # would serve an empty feed and hold every order for no reason.
+            log.error(
+                "market stream disabled: missing 'websocket-client' package "
+                "(%s). Install requirements so books stop needing HTTP.", e)
+            return
+
+        while not self._stop.is_set():
+            app = None
+            try:
+                app = websocket.WebSocketApp(
+                    MARKET_WS_URL,
+                    on_open=self._on_open,
+                    on_message=self._on_message,
+                    on_close=self._on_close,
+                    on_error=self._on_error,
+                )
+                with self._lock:
+                    self._app = app
+                # The venue's contract is an application-level text PING, so the
+                # library's own protocol ping stays off: one heartbeat, not two.
+                app.run_forever(ping_interval=0)
+            except Exception as e:
+                log.warning("market stream socket failed: %s: %s",
+                            type(e).__name__, e)
+            finally:
+                with self._lock:
+                    if self._app is app:
+                        self._app = None
+                self._connected = False
+                self._cache.clear_all()
+            if self._stop.is_set():
+                break
+            self._stop.wait(self._next_backoff())
+
+    def _next_backoff(self) -> float:
+        """The delay before this redial; a successful open resets the ladder."""
+        delay = self._backoff
+        self._backoff = min(delay * 2.0, RECONNECT_MAX_SEC)
+        return delay
+
+    def _heartbeat_loop(self) -> None:
+        while not self._stop.wait(self._ping_sec):
+            try:
+                self._heartbeat_tick()
+            except Exception as e:
+                # Telemetry and venue hiccups must never kill the heartbeat.
+                log.warning("market stream heartbeat failed: %s: %s",
+                            type(e).__name__, e)
+
+    def _heartbeat_tick(self) -> None:
+        """Keep the PING cadence, or hang up on a feed that has gone quiet.
+
+        Nothing inbound inside the window means the socket is a zombie we are
+        still reading prices from: closing it deliberately is what makes the
+        reconnect path run.
+        """
+        app = self._app
+        if app is None:
+            return
+        if self._time() - self._alive_at > LIVE_WINDOW_SEC:
+            self._close(app)
+            return
+        self._send_text(app, PING_TEXT)
+
+    # ── socket callbacks ───────────────────────────────────────────────────
+
+    def _on_open(self, app) -> None:
+        self._connected = True
+        self._alive_at = self._time()
+        self._backoff = RECONNECT_MIN_SEC
+        with self._lock:
+            tokens = sorted(self._want)
+        self._pending = set(tokens)
+        self._pending_since = self._time()
+        self._resends = 0
+        self._send_frame(app, {"assets_ids": tokens, "type": "market"})
+
+    def _on_message(self, app, message) -> None:
+        self._alive_at = self._time()  # any inbound frame is liveness
+        if isinstance(message, (bytes, bytearray)):
+            message = message.decode("utf-8", "replace")
+        text = str(message).strip()
+        if not text or text.upper() == "PONG":
+            return
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            log.debug("market stream: unparseable frame skipped")
+            return
+        self._cache.apply_frame(payload)
+
+    def _on_close(self, app, code=None, reason="") -> None:
+        self._close_code = code
+        self._close_reason = str(reason or "")
+        self._connected = False
+        self._cache.clear_all()
+
+    def _on_error(self, app, error) -> None:
+        log.warning("market stream socket error: %s", error)
+
+    # ── sending ────────────────────────────────────────────────────────────
+
+    def _send_text(self, app, text: str) -> bool:
+        """One send lock: the worker, the heartbeat and callers all send here."""
+        with self._send_lock:
+            try:
+                app.send(text)
+            except Exception as e:
+                log.debug("market stream send failed: %s", e)
+                return False
+            return True
+
+    def _send_frame(self, app, payload: dict) -> bool:
+        return self._send_text(app, json.dumps(payload))
+
+    def _close(self, app) -> None:
+        try:
+            app.close()
+        except Exception as e:
+            log.debug("market stream close failed: %s", e)

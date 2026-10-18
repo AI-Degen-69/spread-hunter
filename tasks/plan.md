@@ -240,7 +240,7 @@ with the rebuilt book at 4 dp — observational, no action. `book()` raises
 `…::test_unknown_token_raises_book_not_ready`,
 `…::test_read_latency_p50_is_under_a_millisecond` (median over 200 reads).
 
-### T2 — Socket worker, heartbeat, liveness, reconnect (M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`)
+### T2 — [x] Socket worker, heartbeat, liveness, reconnect (M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`)
 **Build:** `MarketStream.start/stop` on a daemon thread running
 `websocket.WebSocketApp` (module imported lazily inside the thread, same loud
 missing-package log as `live_marks.py`); `on_open` sends the initial
