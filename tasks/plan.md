@@ -57,7 +57,7 @@ Migrate trading lifecycle and engine consumers off legacy `MakerConfig` attribut
   - In `tests/test_legacy_ask_quotes.py`: add `test_legacy_ask_branch_reads_canonical_target_balance`.
 - **Verification:** `python -m pytest tests/test_quotes.py tests/test_dynamic_offset.py tests/test_legacy_ask_quotes.py -q`
 
-### [Backend/Logic] Task 1.2: Position, pair-cost & completable gate migration
+### [Backend/Logic] [x] Task 1.2: Position, pair-cost & completable gate migration
 - **Depends on:** Task 1.1
 - **Size:** S
 - **Files:** `core_brain/order_manager.py`, `core_brain/risk.py`, `core_brain/trader_loop.py`, `tests/test_completable_pair_gate.py`, `tests/test_trader_loop.py`

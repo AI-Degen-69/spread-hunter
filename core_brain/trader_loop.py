@@ -1389,7 +1389,7 @@ def _lifecycle_quote_context(
         decision = evaluate_single_leg_lifecycle(
             position,
             registry,
-            max_pair_cost=float(cfg.max_pair_cost),
+            max_pair_cost=float(cfg.bot_pos_price_max_pair_cost_usd),
             stop_loss_mode=str(cfg.stop_loss_mode),
             drop_cents=float(cfg.drop_cents),
             drawdown_pct=float(cfg.drawdown_pct),
@@ -2173,7 +2173,7 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
 
     now_ms = int(time.time() * 1000)
     pair_id = f"pair-{uuid.uuid4().hex[:12]}"
-    max_pair_cost = getattr(cfg, "max_pair_cost", 0.995)
+    max_pair_cost = getattr(cfg, "bot_pos_price_max_pair_cost_usd", 0.995)
 
     # A carried pair_id means this batch REPLACES one leg of an existing pair
     # whose complement still rests: the replacement must join that pair, not

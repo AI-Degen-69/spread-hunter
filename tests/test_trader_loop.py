@@ -1185,7 +1185,7 @@ class TestVisitOnePassesTheDeadBand:
         books = {"tok-up": up, "tok-dn": down}
         seam = VenueSeam(
             base_cfg=MakerConfig(requote_dead_band=0.03,
-                                 max_completable_pair_cost=1.00),
+                                 bot_pos_price_max_complete_usd=1.00),
             fetch_market=lambda cid: market,
             fetch_books=lambda host, tok: books[tok],
             decide=lambda *a, **k: ([_intent(price=0.49)], ""),
@@ -2339,7 +2339,7 @@ def _lifecycle_visit_seam(tmp_path, pairs, *, up_bid=0.45, decide):
         size_mode="shares",
         quote_shares=120,
         min_quote_shares=5,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
         max_naked_usd=100.0,
         reward_offset=0.02,
     )
