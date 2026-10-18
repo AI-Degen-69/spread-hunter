@@ -211,6 +211,7 @@ class MarketStream:
         self._markets: dict[str, tuple[str, str, str]] = {}
         self._want: set[str] = set()
         self._pending: set[str] = set()
+        self._reconnected_tokens: set[str] = set()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._heartbeat: threading.Thread | None = None
@@ -245,6 +246,7 @@ class MarketStream:
             self._markets[cid] = (slug, up, down)
             fresh = [t for t in (up, down) if t not in self._want]
             self._want.update(fresh)
+            self._reconnected_tokens.difference_update(fresh)
             app = self._app if fresh else None
             if app is not None:
                 if not self._pending:
@@ -253,6 +255,8 @@ class MarketStream:
                 self._pending.update(fresh)
         if not fresh:
             return
+        # A book left over from an earlier subscription is not this one's.
+        self._cache.drop(fresh)
         if app is not None:
             self._send_frame(app, {"assets_ids": fresh, "operation": "subscribe"})
         self._emit("market_stream_subscribe", market_slug=slug,
@@ -279,6 +283,7 @@ class MarketStream:
                 return
             self._want.difference_update(removed)
             self._pending.difference_update(removed)
+            self._reconnected_tokens.difference_update(removed)
             app = self._app
             kept = [entry for _, entry in gone
                     if entry[1] in removed or entry[2] in removed]
@@ -423,9 +428,26 @@ class MarketStream:
             self._emit("market_stream_error", reason="snapshot_timeout",
                        extra=extra)
             return
-        self._emit("market_stream_error", reason="snapshot_timeout",
-                   extra={**extra, "action": "reconnect"})
-        self._close(app)
+
+        with self._lock:
+            can_reconnect = [t for t in pending if t not in self._reconnected_tokens]
+            already_reconnected = [t for t in pending if t in self._reconnected_tokens]
+            if already_reconnected:
+                self._pending.difference_update(already_reconnected)
+            if can_reconnect:
+                self._reconnected_tokens.update(can_reconnect)
+
+        if already_reconnected:
+            abandoned_slugs = self._slugs_for(already_reconnected)
+            self._emit("market_stream_error", reason="snapshot_timeout",
+                       extra={"reason": "snapshot_timeout", "markets": abandoned_slugs,
+                              "action": "abandoned"})
+        if can_reconnect:
+            reconnect_slugs = self._slugs_for(can_reconnect)
+            self._emit("market_stream_error", reason="snapshot_timeout",
+                       extra={"reason": "snapshot_timeout", "markets": reconnect_slugs,
+                              "action": "reconnect"})
+            self._close(app)
 
     # ── socket callbacks ───────────────────────────────────────────────────
 
@@ -435,13 +457,13 @@ class MarketStream:
         self._backoff = RECONNECT_MIN_SEC
         with self._lock:
             tokens = sorted(self._want)
-        self._pending = set(tokens)
-        self._pending_since = self._time()
-        self._resends = 0
-        self._landed = {}
-        self._last_tick = self._time()
-        self._last_frames = self._cache.frames
-        self._last_gaps = self._cache.level_gap
+            self._pending = set(tokens)
+            self._pending_since = self._time()
+            self._resends = 0
+            self._landed = {}
+            self._last_tick = self._time()
+            self._last_frames = self._cache.frames
+            self._last_gaps = self._cache.level_gap
         self._send_frame(app, {"assets_ids": tokens, "type": "market"})
         self._emit("market_stream_connected",
                    extra={"url": MARKET_WS_URL, "tokens": tokens})
@@ -458,8 +480,14 @@ class MarketStream:
         except ValueError:
             self._note_frame_error(text)
             return
-        for token in self._cache.apply_frame(payload):
-            self._note_snapshot(token)
+        changed = self._cache.apply_frame(payload)
+        with self._lock:
+            stray = [t for t in changed if t not in self._want]
+        if stray:
+            self._cache.drop(stray)
+        for token in changed:
+            if token not in stray:
+                self._note_snapshot(token)
 
     def _note_snapshot(self, token: str) -> None:
         """One snapshot event per market, once all of its books have landed.
@@ -473,6 +501,7 @@ class MarketStream:
             if token not in self._pending:
                 return
             self._pending.discard(token)
+            self._reconnected_tokens.discard(token)
             if not self._pending:
                 self._resends = 0
             cid = self._market_of(token)
@@ -589,6 +618,10 @@ class MarketStream:
         for the other. The host is ignored — the book is already here — and a
         token with no live book raises `BookNotReady` instead of fetching one.
         """
+        if not self._connected:
+            raise BookNotReady(f"market stream is not connected ({token_id})")
+        if self._time() - self._alive_at > LIVE_WINDOW_SEC:
+            raise BookNotReady(f"market stream went silent ({token_id})")
         return self._cache.book(token_id)
 
     def _close(self, app) -> None:
@@ -787,7 +820,11 @@ def main(argv=None, emit_fn=None) -> int:
             time.sleep(min(args.refresh_sec, remaining))
             if raw_tokens:
                 continue
-            rows = _probe_rows(args.markets, args.max_markets)
+            try:
+                rows = _probe_rows(args.markets, args.max_markets)
+            except (OSError, ValueError) as e:
+                print(f"[refresh skipped] {args.markets}: {e}", flush=True)
+                continue
             keep = [row["cid"] for row in rows]
             stream.retain_markets(keep)
             # Resolve a row once. A market that leaves the file and comes back

@@ -78,7 +78,7 @@ below the rendered copy was ignored).
   exactly; the fail-closed `BookNotReady` read contract; liveness window
   (≈30 s / three missed heartbeats); snapshot-timeout resend then one controlled
   reconnect; send-lock serialising worker/heartbeat/probe sends; backoff reset
-  after a successful open; `phase="market_stream"` + `service="market_stream"`
+  after a successful open; `phase="stream"` + `service="market_stream"`
   routing to the live ticker family without rotating the ring; throttled tick
   summary (never one event per frame); emit calls kept outside the cache lock.
 - **Rejected:** its Task 2.1/2.2/2.3 (live `VenueSeam` injection, `--book-source`

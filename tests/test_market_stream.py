@@ -739,6 +739,8 @@ def test_fetch_books_matches_the_venue_seam_signature():
     assert params == ["self", "clob_host", "token_id"]
 
     stream = MarketStream()
+    stream._connected = True
+    stream._alive_at = stream._time()
     stream._cache.apply_frame(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)]))
     # The host is ignored: the book is local, and that is the whole point.
     assert stream.fetch_books("http://anything", "tok-u")["best_bid"] == 0.46
@@ -751,6 +753,8 @@ def test_a_seam_built_on_the_stream_never_calls_full_book(monkeypatch):
     from core_brain import quotes
 
     stream = MarketStream()
+    stream._connected = True
+    stream._alive_at = stream._time()
     stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
     stream._cache.apply_frame(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)]))
     stream._cache.apply_frame(_book_frame("tok-d", [_lvl(0.50)], [_lvl(0.54)]))
@@ -916,3 +920,126 @@ def test_probe_parses_the_markets_file_and_bounds_its_run(stub_socket, tmp_path)
     src = (Path(__file__).resolve().parent.parent / "core_brain"
            / "market_stream.py").read_text(encoding="utf-8")
     assert "import emit as emit_cycle_event" in src
+
+
+def test_fetch_books_fails_closed_when_disconnected_or_stale():
+    clock = _Clock()
+    stream = MarketStream(time_fn=clock)
+    # 1. When disconnected, fetch_books raises BookNotReady immediately.
+    assert stream.connected is False
+    with pytest.raises(BookNotReady, match="market stream is not connected"):
+        stream.fetch_books("http://clob", "tok-u")
+
+    # 2. When connected, book is ready.
+    stream._connected = True
+    stream._alive_at = clock.now
+    stream._cache.apply_frame(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)]))
+    assert stream.fetch_books("http://clob", "tok-u")["best_bid"] == 0.46
+
+    # 3. When time advances past LIVE_WINDOW_SEC without any frame or heartbeat:
+    clock.now += ms.LIVE_WINDOW_SEC + 1.0
+    with pytest.raises(BookNotReady, match="market stream went silent"):
+        stream.fetch_books("http://clob", "tok-u")
+
+
+def test_ensure_market_drops_stale_cache_and_on_message_drops_stray_tokens(stub_socket):
+    rec = _Recorder()
+    stream = MarketStream(emit_fn=rec)
+    # Simulate a leftover book from an earlier session sitting in cache.
+    stream._cache.apply_frame(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)]))
+    assert stream._cache.book("tok-u")["best_bid"] == 0.46
+
+    # Subscribing freshly drops the old book so it cannot be read prematurely.
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    with pytest.raises(BookNotReady):
+        stream._cache.book("tok-u")
+
+    # Start socket to simulate receiving a stray frame for an unsubscribed token.
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        # Feed frame for stray token "tok-stray" not in _want.
+        app.feed(json.dumps(_book_frame("tok-stray", [_lvl(0.10)], [_lvl(0.20)])))
+        with pytest.raises(BookNotReady):
+            stream._cache.book("tok-stray")
+    finally:
+        stream.stop()
+
+
+def test_snapshot_timeout_abandons_token_after_one_reconnect(stub_socket):
+    """A permanently missing snapshot reconnects once, then abandons without loop."""
+    clock = _Clock()
+    rec = _Recorder()
+    stream = MarketStream(emit_fn=rec, time_fn=clock, ping_sec=60.0)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app1 = stub_socket.apps[0]
+
+        # First timeout: resend subscribe.
+        clock.now += SNAPSHOT_TIMEOUT_SEC + 1.0
+        stream._heartbeat_tick()
+        assert app1.closed is False
+        assert [c["reason"] for c in rec.of("market_stream_error")] == ["snapshot_timeout"]
+
+        # Second timeout: controlled reconnect.
+        clock.now += SNAPSHOT_TIMEOUT_SEC + 1.0
+        stream._heartbeat_tick()
+        assert app1.closed is True
+        assert rec.of("market_stream_error")[-1]["extra"]["action"] == "reconnect"
+
+        # Now simulate reconnect with app2.
+        assert _await(lambda: len(stub_socket.apps) >= 2)
+        app2 = stub_socket.apps[1]
+        assert stream.connected is True
+
+        # Healthy token tok-healthy is also added and receives its snapshot on app2.
+        stream.ensure_market("0xc2", "healthy-market", "tok-h-u", "tok-h-d")
+        app2.feed(json.dumps(_book_frame("tok-h-u", [_lvl(0.40)], [_lvl(0.60)])))
+        app2.feed(json.dumps(_book_frame("tok-h-d", [_lvl(0.40)], [_lvl(0.60)])))
+        assert _await(lambda: stream._cache.book("tok-h-u")["best_bid"] == 0.40)
+
+        # On app2, the bad tokens tok-u, tok-d timeout again (resend 1).
+        clock.now += SNAPSHOT_TIMEOUT_SEC + 1.0
+        stream._heartbeat_tick()
+        assert app2.closed is False
+
+        # Next timeout on app2: since tok-u and tok-d already had their reconnect,
+        # they are abandoned. The socket app2 is NOT closed, preserving tok-h-u!
+        clock.now += SNAPSHOT_TIMEOUT_SEC + 1.0
+        stream._heartbeat_tick()
+        assert app2.closed is False
+        assert rec.of("market_stream_error")[-1]["extra"]["action"] == "abandoned"
+
+        # Healthy market is still alive in cache on the open connection.
+        assert stream._cache.book("tok-h-u")["best_bid"] == 0.40
+        # Bad market is still not ready.
+        with pytest.raises(BookNotReady):
+            stream._cache.book("tok-u")
+    finally:
+        stream.stop()
+
+
+def test_probe_refresh_ignores_oserror_or_malformed_file(monkeypatch, capsys):
+    """A half-written file during probe refresh does not crash the probe."""
+    rec = _Recorder()
+    calls = 0
+
+    def mock_probe_rows(path, limit):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return [{"cid": "0xc1", "slug": "brazil-election"}]
+        raise ValueError("corrupt json during save")
+
+    monkeypatch.setattr(ms, "_probe_rows", mock_probe_rows)
+    monkeypatch.setattr(markets, "fetch_pinned_market",
+                        lambda cid: SimpleNamespace(up_token="tok-u", down_token="tok-d"))
+
+    assert ms.main(["--listen", "--markets", "runtime/markets.json",
+                    "--minutes", "0.05", "--refresh-sec", "0.01"], emit_fn=rec) == 0
+    captured = capsys.readouterr()
+    assert "[refresh skipped]" in captured.out
+    assert "corrupt json during save" in captured.out
