@@ -196,7 +196,7 @@ def load() -> MakerConfig:
         kw["max_spread_from_mid"] = max(window, wide)
     trial = os.environ.get("HUNTER_DEPTH_TRIAL_USD") or ""
     if trial.strip():
-        kw["select_min_top3_depth_usd_trial"] = float(trial)
+        kw["filter_common_vol_min_top3_depth_usd_trial"] = float(trial)
     mvmt = os.environ.get("HUNTER_MIN_MOVEMENT_USD") or ""
     if mvmt.strip():
         try:
@@ -236,7 +236,7 @@ def load() -> MakerConfig:
             pass
     vtri = os.environ.get("HUNTER_VOLUME_TRIAL_USD") or ""
     if vtri.strip():
-        kw["select_min_volume_24h_usd_trial"] = float(vtri)
+        kw["filter_std_vol_min_24h_usd_trial"] = float(vtri)
     # RELATIVE ACTIVITY RATIO GATE (loose baseline). movement_usd / volume_24h.
     # 0.0 (shipped default) disables it. Loose-baseline runs lower the absolute
     # volume floor AND turn this on, so relative recent activity -- not raw 24h
@@ -256,7 +256,7 @@ def load() -> MakerConfig:
         except ValueError:
             v = 0.0
         if math.isfinite(v) and v >= 0:
-            kw["select_min_volume_24h_usd"] = v
+            kw["filter_std_vol_min_24h_usd"] = v
     pr = os.environ.get("HUNTER_PAIRS_RULE") or ""
     if pr.strip():
         kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")

@@ -88,21 +88,21 @@ C = 3.0                 # venue's one-sided penalty
 # TRADABILITY AND HORIZON (U6). Sourced from config so the ranker and the
 # fleet cannot drift, exactly as the payout floor was.
 _CFG = _load_cfg()
-MIN_VOLUME_24H = _CFG.select_min_volume_24h_usd
-MAX_DAYS_TO_RESOLVE = _CFG.select_max_days_to_resolve
-MIN_TOP3_DEPTH_USD = _CFG.select_min_top3_depth_usd
+MIN_VOLUME_24H = _CFG.filter_std_vol_min_24h_usd
+MAX_DAYS_TO_RESOLVE = _CFG.filter_std_time_max_days_to_resolve
+MIN_TOP3_DEPTH_USD = _CFG.filter_common_vol_min_top3_depth_usd
 # THE LIVE VOLUME BAR (operator directive 2026-10-06). A market whose event is
 # under way gates on this instead of the permanent floor -- see the field's
 # comment in scoring/config.py for the measurement behind the number.
-MIN_VOLUME_24H_LIVE = getattr(_CFG, "select_min_volume_24h_usd_live", 10_000.0)
-MOVEMENT_WINDOW_SEC = _CFG.select_movement_window_sec
-MIN_MOVEMENT_USD = _CFG.select_min_movement_usd
+MIN_VOLUME_24H_LIVE = getattr(_CFG, "filter_live_vol_min_24h_usd", 10_000.0)
+MOVEMENT_WINDOW_SEC = _CFG.filter_live_vel_lookback_sec
+MIN_MOVEMENT_USD = _CFG.filter_live_vel_min_usd
 TRADES_API = "https://data-api.polymarket.com/trades"
 MAX_BOOK_SPREAD = _CFG.select_max_book_spread
-MIN_RANGE_CENTS = getattr(_CFG, "select_min_range_cents", 2.0)
-VOLATILITY_WINDOW_SEC = getattr(_CFG, "select_volatility_window_sec", 7200.0)
-VELOCITY_GATE_ENABLED = getattr(_CFG, "select_velocity_gate_enabled", True)
-MIN_ACTIVITY_RATIO = getattr(_CFG, "select_min_activity_ratio", 0.0)
+MIN_RANGE_CENTS = getattr(_CFG, "filter_live_move_min_range_cents", 2.0)
+VOLATILITY_WINDOW_SEC = getattr(_CFG, "filter_live_move_lookback_sec", 7200.0)
+VELOCITY_GATE_ENABLED = getattr(_CFG, "filter_live_gate_velocity_on", True)
+MIN_ACTIVITY_RATIO = getattr(_CFG, "filter_live_activity_min_ratio", 0.0)
 
 GAMMA = "https://gamma-api.polymarket.com/markets"
 # The live set. `live=true` is a genuine server-side filter; `closed=false` is
@@ -1595,8 +1595,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         # series sits outside the band on its way to a decided market like
         # everything else -- game progress is not evidence about when this
         # market decides, and the band owns that alone.
-        band_low = getattr(_CFG, "price_band_low", 0.10)
-        band_high = getattr(_CFG, "price_band_high", 0.90)
+        band_low = getattr(_CFG, "bot_quote_price_band_min_cents", 0.10)
+        band_high = getattr(_CFG, "bot_quote_price_band_max_cents", 0.90)
         if not band_low < mid < band_high:
             return _reject_row(
                 source,
@@ -2163,7 +2163,7 @@ def _publish_paired_bundle(out_dir: Path, bundle: dict,
 def _effective_depth_bar(cli_trial_usd: Optional[float]) -> float:
     """The depth bar this run gates on: CLI trial > config trial > permanent.
 
-    `select_min_top3_depth_usd_trial` (env HUNTER_DEPTH_TRIAL_USD) lets an
+    `filter_common_vol_min_top3_depth_usd_trial` (env HUNTER_DEPTH_TRIAL_USD) lets an
     operator stage the trial without touching the permanent config; an explicit
     `--trial-depth` on the command line wins over both because it is the most
     deliberate of the three. A non-positive trial value is a mistake, not a
@@ -2171,7 +2171,7 @@ def _effective_depth_bar(cli_trial_usd: Optional[float]) -> float:
     """
     trial = cli_trial_usd
     if trial is None:
-        trial = _CFG.select_min_top3_depth_usd_trial
+        trial = _CFG.filter_common_vol_min_top3_depth_usd_trial
     if trial is not None and trial > 0:
         return float(trial)
     return MIN_TOP3_DEPTH_USD
@@ -2181,12 +2181,12 @@ def _effective_volume_bar(cli_trial_usd: Optional[float]) -> float:
     """The volume bar this run gates on: CLI trial > config trial > permanent.
 
     Mirrors `_effective_depth_bar` for the VOLUME-GATE TRIAL (U36): the
-    permanent `select_min_volume_24h_usd` never changes, and a non-positive
+    permanent `filter_std_vol_min_24h_usd` never changes, and a non-positive
     trial value is a mistake, not a signal.
     """
     trial = cli_trial_usd
     if trial is None:
-        trial = _CFG.select_min_volume_24h_usd_trial
+        trial = _CFG.filter_std_vol_min_24h_usd_trial
     if trial is not None and trial > 0:
         return float(trial)
     return MIN_VOLUME_24H

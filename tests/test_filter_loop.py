@@ -64,8 +64,8 @@ def test_paired_admission_skips_configured_trial_bars(monkeypatch, tmp_path):
     import scoring.config as scoring_config
 
     monkeypatch.setattr(scoring_config, "load", lambda: SimpleNamespace(
-        select_min_top3_depth_usd_trial=250.0,
-        select_min_volume_24h_usd_trial=50_000.0))
+        filter_common_vol_min_top3_depth_usd_trial=250.0,
+        filter_std_vol_min_24h_usd_trial=50_000.0))
 
     cmd = filter_loop._rank_cmd(2, out_dir=tmp_path / "adm",
                                 paired_admission=True)
@@ -80,8 +80,8 @@ def test_rank_cmd_without_flags_carries_no_new_options(monkeypatch):
     import scoring.config as scoring_config
 
     monkeypatch.setattr(scoring_config, "load", lambda: SimpleNamespace(
-        select_min_top3_depth_usd_trial=None,
-        select_min_volume_24h_usd_trial=None))
+        filter_common_vol_min_top3_depth_usd_trial=None,
+        filter_std_vol_min_24h_usd_trial=None))
 
     cmd = filter_loop._rank_cmd(2)
     assert cmd == [filter_loop.sys.executable, "-m",
@@ -191,8 +191,8 @@ def test_cli_trial_depth_overrides_the_configured_trial(monkeypatch):
     import scoring.config as scoring_config
 
     monkeypatch.setattr(scoring_config, "load", lambda: SimpleNamespace(
-        select_min_top3_depth_usd_trial=500.0,
-        select_min_volume_24h_usd_trial=None))
+        filter_common_vol_min_top3_depth_usd_trial=500.0,
+        filter_std_vol_min_24h_usd_trial=None))
 
     cmd = filter_loop._rank_cmd(2, trial_depth=250.0)
     depths = [cmd[i + 1] for i, a in enumerate(cmd)
