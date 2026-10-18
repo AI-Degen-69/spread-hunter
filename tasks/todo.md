@@ -1,4 +1,6 @@
-# Todo — Issue #675
+# Todo — Issue #674
 
-- [x] T1 — Guard screener trial bars in `core_brain/config.py:from_env()` with named validation
-- [x] T2 — Add parametrized tests for trial bar rejection and verification in `tests/test_config_single_source.py`
+- [ ] T1 — Precedence test table in `tests/test_config_single_source.py`: canonical-only and canonical-wins must fail first (RED)
+- [ ] T2 — Rewire the twelve execution reads in `scoring/config.py:load()` through `_env_get`, thread `var_name` into `resolve_wide_book_trial` (GREEN)
+- [ ] T3 — Warning / blank-fallthrough / refusal-naming tests plus the canonical `.env` → ranker subprocess case
+- [ ] T4 — `docs/issues/674-noticed-but-not-touching.md`, corrected targeted suite run, Station III handoff
