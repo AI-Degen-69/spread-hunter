@@ -89,7 +89,7 @@ Migrate trading lifecycle and engine consumers off legacy `MakerConfig` attribut
     - In `tests/test_stop_loss_config.py`: `test_legacy_emergency_read_still_works`.
 - **Verification:** `python -m pytest tests/test_single_leg_lifecycle.py tests/test_trader_loop.py tests/test_single_buy_saver.py tests/test_stop_loss_config.py tests/test_dual_stop_loss.py tests/test_aged_out_rescue.py -q`
 
-### [Verification] Task 2.2: Full regression and baseline comparison check
+### [Verification] [x] Task 2.2: Full regression and baseline comparison check
 - **Depends on:** Task 2.1
 - **Size:** XS
 - **Files:** None (read-only verification)
