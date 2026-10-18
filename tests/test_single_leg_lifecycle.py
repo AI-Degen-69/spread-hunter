@@ -351,7 +351,7 @@ def test_stop_trigger_refuses_drawdown_pct_outside_the_contract(pct):
 
 @pytest.mark.parametrize("pct", [0.0, 100.1, float("nan"), float("inf")])
 def test_stop_trigger_refuses_emergency_pct_outside_the_contract(pct):
-    with pytest.raises(ValueError, match="emergency_drawdown_pct"):
+    with pytest.raises(ValueError, match="bot_risk_circuit_max_drawdown_pct"):
         stop_trigger(0.50, "NONE", 0.05, 10.0, pct)
 
 
@@ -437,8 +437,8 @@ def test_transition_refuses_an_unknown_stop_mode():
      {"drop_cents": 0.91},
      {"drawdown_pct": 0.0},
      {"drawdown_pct": float("nan")},
-     {"emergency_drawdown_pct": 101.0},
-     {"emergency_drawdown_pct": float("nan")}],
+     {"bot_risk_circuit_max_drawdown_pct": 101.0},
+     {"bot_risk_circuit_max_drawdown_pct": float("nan")}],
 )
 def test_transition_refuses_out_of_range_stop_knobs(knobs):
     decision = transition(
@@ -449,6 +449,26 @@ def test_transition_refuses_out_of_range_stop_knobs(knobs):
     )
 
     assert decision.action == "refused"
+
+
+def test_transition_accepts_canonical_drawdown_keyword():
+    decision = transition(
+        _position(up_size=2.0, down_size=0.0, up_avg=0.50, up_bid=0.45),
+        LegState.PATIENT_WAIT,
+        max_pair_cost=0.99,
+        bot_risk_circuit_max_drawdown_pct=50.0,
+    )
+    assert decision.action != "refused"
+
+
+def test_legacy_drawdown_keyword_is_rejected():
+    with pytest.raises(TypeError, match="unexpected keyword argument 'emergency_drawdown_pct'"):
+        transition(
+            _position(up_size=2.0, down_size=0.0, up_avg=0.50, up_bid=0.45),
+            LegState.PATIENT_WAIT,
+            max_pair_cost=0.99,
+            emergency_drawdown_pct=50.0,
+        )
 
 
 def test_evaluate_forwards_the_stop_knobs(tmp_path):

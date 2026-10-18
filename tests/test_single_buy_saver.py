@@ -2037,4 +2037,21 @@ def test_hard_stop_partial_exit_keeps_hard_stop(registry: OrderRegistry):
     assert rec.state == "HARD_STOP"
 
 
-
+def test_saver_forwards_canonical_emergency_drawdown(registry: OrderRegistry):
+    from unittest.mock import MagicMock, patch
+    cfg = MakerConfig(
+        enable_pairs_rule=True,
+        bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_circuit_max_drawdown_pct=60.0,
+    )
+    _trig525_pair(registry, TRIG525_NOW)
+    venue = DecisionThenExecutionBook(decision_bid=0.15, execution_bid=0.14)
+    with patch("core_brain.single_leg_lifecycle.transition") as mock_trans:
+        mock_trans.return_value = MagicMock(action="balanced")
+        lp.manage_single_leg_positions(
+            venue, registry, cfg, live=False, now=TRIG525_NOW / 1000.0 + 10.0,
+            venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+        )
+        assert mock_trans.called
+        assert mock_trans.call_args[1]["bot_risk_circuit_max_drawdown_pct"] == 60.0
+        assert "emergency_drawdown_pct" not in mock_trans.call_args[1]

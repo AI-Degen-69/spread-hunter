@@ -229,7 +229,7 @@ def test_tournament_preset_leaves_the_stop_to_the_operator_env():
         assert cfg.stop_loss_mode == "NONE"
         assert cfg.drop_cents == 0.05
         assert cfg.drawdown_pct == 10.0
-        assert cfg.emergency_drawdown_pct == 75.0
+        assert cfg.bot_risk_circuit_max_drawdown_pct == 75.0
 
 
 def test_preset_env_no_longer_emits_the_retired_stop_var():

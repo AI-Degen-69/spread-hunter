@@ -199,7 +199,7 @@ def test_the_floor_is_never_below_one_cent(registry):
     client = FakeClient(best_ask=0.03, best_bid=0.01)
 
     results = auto_manage_pairs(
-        client, registry, _cfg(emergency_drawdown_pct=100.0), now=now_s,
+        client, registry, _cfg(bot_risk_circuit_max_drawdown_pct=100.0), now=now_s,
     )
 
     assert _stop_exit(results[0])

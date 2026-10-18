@@ -1393,7 +1393,7 @@ def _lifecycle_quote_context(
             stop_loss_mode=str(cfg.stop_loss_mode),
             drop_cents=float(cfg.drop_cents),
             drawdown_pct=float(cfg.drawdown_pct),
-            emergency_drawdown_pct=float(cfg.emergency_drawdown_pct),
+            bot_risk_circuit_max_drawdown_pct=float(cfg.bot_risk_circuit_max_drawdown_pct),
             tick_size=float(cfg.price_tick),
         )
         decisions.append((pair_id, position, decision))
@@ -1778,7 +1778,7 @@ def _visit_one(
                 visit_outcome.value,
                 why, 1, emit_fn)
         plan_kwargs = {
-            "dead_band": float(getattr(cfg, "requote_dead_band", 0.0)),
+            "dead_band": float(getattr(cfg, "bot_order_requote_dead_band_cents", 0.0)),
             "cfg": cfg,
             "hedge_asks": hedge_asks,
             "hedge_held": hedge_held,

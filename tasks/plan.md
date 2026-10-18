@@ -73,7 +73,7 @@ Migrate trading lifecycle and engine consumers off legacy `MakerConfig` attribut
   - In `tests/test_trader_loop.py`: update setups using canonical keywords.
 - **Verification:** `python -m pytest tests/test_completable_pair_gate.py tests/test_order_manager.py tests/test_trader_loop.py -q`
 
-### [Backend/Logic] Task 2.1: Lifecycle emergency drawdown & requote dead band migration
+### [Backend/Logic] [x] Task 2.1: Lifecycle emergency drawdown & requote dead band migration
 - **Depends on:** Task 1.2
 - **Size:** M
 - **Files:** `core_brain/single_leg_lifecycle.py`, `core_brain/trader_loop.py`, `core_brain/single_buy_saver.py`, `scripts/stream_market_decisions.py`, `scripts/verify_loose_baseline_tape.py`, `tests/test_single_leg_lifecycle.py`, `tests/test_stop_loss_config.py`, `tests/test_dual_stop_loss.py`, `tests/test_aged_out_rescue.py`, `tests/test_single_buy_saver.py`
