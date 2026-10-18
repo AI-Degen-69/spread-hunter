@@ -247,6 +247,53 @@ def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
     return env
 
 
+#: Retired `HUNTER_*` overrides an arm may still carry from a superseded run.
+#: `core_brain.config` logs "retired and ignored" for these (or, for
+#: `HUNTER_REWARD_OFFSET`, never reads them at all), so an arm that sets one
+#: measures the shipped default while the file claims otherwise -- a silent A/B
+#: between two identical arms (#684). Supported `HUNTER_*` aliases are NOT in
+#: this map and keep working. Each value is the actionable replacement, or an
+#: explicit statement that none exists.
+RETIRED_ENV_OVERRIDES: dict[str, str] = {
+    "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": (
+        "retired (#619); the stop is entry-relative now: set "
+        "BOT_RISK_STOP_MODE=ABSOLUTE_DROP plus "
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS (dollars per share, so 0.05 means "
+        "five cents)"
+    ),
+    "HUNTER_STOP_LOSS_TRIGGER_PCT": (
+        "retired (#619); the stop is entry-relative now: set "
+        "BOT_RISK_STOP_MODE=PERCENTAGE_DROP plus "
+        "BOT_RISK_STOP_MAX_DRAWDOWN_PCT (percent of the entry)"
+    ),
+    "HUNTER_SINGLE_BUY_MAX_LOSS_USD": (
+        "retired (#573 renamed it, #619 replaced it); set "
+        "BOT_RISK_STOP_MODE=ABSOLUTE_DROP plus "
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS"
+    ),
+    "HUNTER_SINGLE_BUY_MAX_LOSS_PCT": (
+        "retired (#573 renamed it, #619 replaced it); set "
+        "BOT_RISK_STOP_MODE=PERCENTAGE_DROP plus "
+        "BOT_RISK_STOP_MAX_DRAWDOWN_PCT"
+    ),
+    "HUNTER_SINGLE_BUY_GRACE_SEC": (
+        "retired (#619) with no equivalent; "
+        "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC is a different timing setting, "
+        "review it before using it"
+    ),
+    "HUNTER_REFUSAL_HOLD_POLICY": (
+        "retired (#622) with no replacement; remove it"
+    ),
+    "HUNTER_REFUSAL_HOLD_DRIFT": (
+        "retired (#622) with no replacement; remove it"
+    ),
+    "HUNTER_REWARD_OFFSET": (
+        "purged 2026-10-12 with no environment replacement; the static "
+        "offset is a shipped field default, remove it"
+    ),
+}
+
+
 def build_tournament_plan(
     issue: int = 371,
     arms: Optional[list[dict[str, Any]]] = None,
@@ -309,6 +356,15 @@ def build_tournament_plan(
         custom_env = arm_def.get("env")
         if custom_env:
             for k, v in custom_env.items():
+                guidance = RETIRED_ENV_OVERRIDES.get(k)
+                if guidance is not None:
+                    raise ValueError(
+                        f"Arm {name!r} carries retired environment override "
+                        f"{k!r}: {guidance}. core_brain.config warns and "
+                        f"ignores retired keys, so this arm would silently "
+                        f"measure the shipped default instead of the value in "
+                        f"the file (#684)"
+                    )
                 if not (k.startswith("BOT_") or k.startswith("HUNTER_")):
                     raise ValueError(
                         f"Invalid environment override {k!r}: only BOT_* (or legacy HUNTER_*) overrides are permitted"

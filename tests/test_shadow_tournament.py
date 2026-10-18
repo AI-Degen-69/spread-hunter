@@ -740,31 +740,40 @@ I622_ARMS = (Path(__file__).resolve().parent.parent
 #: tolerance carried by the drift arm.
 I622_VARYING = ("HUNTER_REFUSAL_HOLD_DRIFT",)
 
+#: A three-arm definition carrying only live overrides, used by the plan-shape
+#: tests below. The i622 file itself can no longer be planned: it still carries
+#: HUNTER_REFUSAL_HOLD_DRIFT, which #684 refuses at plan time (see
+#: test_the_i622_arms_file_is_refused_at_plan_time).
+SUPPORTED_ARMS = [
+    {"name": "hold-remove", "env": {"HUNTER_BANKROLL": "100"}},
+    {"name": "hold-keep", "env": {"HUNTER_BANKROLL": "100"}},
+    {"name": "hold-drift", "env": {"HUNTER_BANKROLL": "100"}},
+]
 
-def _i622_plan(tmp_path):
+
+def _supported_plan(tmp_path):
     from scripts.shadow_tournament import build_tournament_plan
 
-    arms = json.loads(I622_ARMS.read_text(encoding="utf-8"))
-    return build_tournament_plan(issue=622, arms=arms, base_dir=tmp_path,
+    return build_tournament_plan(issue=684, arms=SUPPORTED_ARMS, base_dir=tmp_path,
                                  run_number=1, check_ports=False)
 
 
-def test_the_i622_arms_file_varies_only_the_refusal_drift(tmp_path):
+def test_the_i622_arms_file_varies_only_the_refusal_drift():
     """#622/#683: the refusal-hold arms file shares everything but drift.
 
     #683 purged HUNTER_REFUSAL_HOLD_POLICY from every arm; the three arms now
-    share every setting, with the drift arm carrying its 0.02 tolerance.
+    share every setting, with the drift arm carrying its 0.02 tolerance. The file
+    is read directly because #684 refuses to plan it while that key is present.
     """
-    plan = _i622_plan(tmp_path)
-    assert len(plan.arms) == 3, "A/B/C is three arms"
+    arms = json.loads(I622_ARMS.read_text(encoding="utf-8"))
+    assert len(arms) == 3, "A/B/C is three arms"
 
-    drift = [a for a in plan.arms
-             if a.env.get("HUNTER_REFUSAL_HOLD_DRIFT") == "0.02"]
+    drift = [a for a in arms if a["env"].get("HUNTER_REFUSAL_HOLD_DRIFT") == "0.02"]
     assert len(drift) == 1, "exactly one drift arm carries the tolerance"
-    assert drift[0].env["HUNTER_REFUSAL_HOLD_DRIFT"] == "0.02"
+    assert drift[0]["env"]["HUNTER_REFUSAL_HOLD_DRIFT"] == "0.02"
 
-    shared = [{k: v for k, v in a.env.items() if k != "HUNTER_REFUSAL_HOLD_DRIFT"}
-              for a in plan.arms]
+    shared = [{k: v for k, v in a["env"].items() if k not in I622_VARYING}
+              for a in arms]
     assert shared[0] == shared[1] == shared[2], (
         "the arms must share everything except the refusal-drift knob; anything "
         "else and the result measures two changes at once"
@@ -782,15 +791,14 @@ def test_the_i622_arms_file_varies_only_the_refusal_drift(tmp_path):
     )
 
 
-def test_no_i622_arm_is_pointed_at_the_production_registry(tmp_path):
-    plan = _i622_plan(tmp_path)
-    for arm in plan.arms:
+def test_no_arm_is_pointed_at_the_production_registry(tmp_path):
+    for arm in _supported_plan(tmp_path).arms:
         assert Path(arm.db_path).name != "orders.db"
         assert "tournament" in Path(arm.db_path).name
 
 
-def test_every_i622_arm_names_a_distinct_store_and_run(tmp_path):
-    plan = _i622_plan(tmp_path)
+def test_every_arm_names_a_distinct_store_and_run(tmp_path):
+    plan = _supported_plan(tmp_path)
     assert len({str(a.db_path) for a in plan.arms}) == 3
     assert len({a.run_id for a in plan.arms}) == 3
 
@@ -1036,13 +1044,17 @@ def test_run_numbered_dry_run_reads_the_conventional_arms_file(tmp_path, capsys)
 def test_explicit_arms_file_beats_the_convention(tmp_path, capsys):
     from scripts.shadow_tournament import main
 
+    arms_file = tmp_path / "explicit_arms.json"
+    arms_file.write_text(json.dumps(SUPPORTED_ARMS), encoding="utf-8")
     rc = main([
         "--issue", "492", "--run-number", "1", "--dry-run",
-        "--base-dir", str(tmp_path), "--arms-file", str(I622_ARMS),
+        "--base-dir", str(tmp_path), "--arms-file", str(arms_file),
     ])
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
-    assert len(data["arms"]) == 3, "an explicit arms file wins over the convention"
+    assert [a["name"] for a in data["arms"]] == [
+        "hold-remove-1", "hold-keep-1", "hold-drift-1",
+    ], "an explicit arms file wins over the i492 convention"
 
 
 def test_unknown_preset_selector_is_refused_at_plan_time(tmp_path):
@@ -1075,3 +1087,142 @@ def test_explicit_legacy_preset_selector_not_overwritten_by_name_default(tmp_pat
     )
     assert plan.arms[0].env["HUNTER_TOURNAMENT_PRESET"] == "aggressive"
     assert "BOT_QUOTE_TOURNAMENT_PRESET" not in plan.arms[0].env
+
+
+# --- Issue #684: retired legacy env names are refused at plan time ----------
+#
+# `core_brain.config` warns and ignores these keys (or, for the purged reward
+# offset, never reads them). An arm that carries one measures the shipped
+# default, so the run compares two identical arms while the file says otherwise.
+# The planner refuses them before anything starts.
+
+#: The canonical replacement for each retired key, as substrings the message must
+#: contain. Keys with no replacement must say so instead of inventing one.
+RETIRED_GUIDANCE = {
+    "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": (
+        "BOT_RISK_STOP_MODE", "ABSOLUTE_DROP", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"),
+    "HUNTER_STOP_LOSS_TRIGGER_PCT": (
+        "BOT_RISK_STOP_MODE", "PERCENTAGE_DROP", "BOT_RISK_STOP_MAX_DRAWDOWN_PCT"),
+    "HUNTER_SINGLE_BUY_MAX_LOSS_USD": ("BOT_RISK_STOP_ADVERSE_DROP_CENTS",),
+    "HUNTER_SINGLE_BUY_MAX_LOSS_PCT": ("BOT_RISK_STOP_MAX_DRAWDOWN_PCT",),
+    "HUNTER_SINGLE_BUY_GRACE_SEC": ("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC",),
+    "HUNTER_REFUSAL_HOLD_POLICY": ("no replacement",),
+    "HUNTER_REFUSAL_HOLD_DRIFT": ("no replacement",),
+    "HUNTER_REWARD_OFFSET": ("no environment replacement",),
+}
+
+
+def _plan_one(env, tmp_path, name="arm-one"):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    return build_tournament_plan(issue=684, arms=[{"name": name, "env": env}],
+                                 base_dir=tmp_path, run_number=1, check_ports=False)
+
+
+def test_retired_env_inventory_matches_the_i492_inventory():
+    from scripts.shadow_tournament import RETIRED_ENV_OVERRIDES
+
+    assert set(RETIRED_GUIDANCE) == I492_RETIRED_KNOBS
+    assert set(RETIRED_ENV_OVERRIDES) == I492_RETIRED_KNOBS, (
+        "the planner's refusal list and the config-loader inventory must not drift"
+    )
+    assert all(g.strip() for g in RETIRED_ENV_OVERRIDES.values()), (
+        "every refused key needs actionable guidance"
+    )
+
+
+@pytest.mark.parametrize("key", sorted(I492_RETIRED_KNOBS))
+@pytest.mark.parametrize("value", ["", " ", "0", "0.05"])
+def test_a_retired_env_key_is_refused_at_plan_time(key, value, tmp_path):
+    with pytest.raises(ValueError) as exc:
+        _plan_one({key: value}, tmp_path)
+    message = str(exc.value)
+    assert "arm-one" in message, "the refusal must name the offending arm"
+    assert key in message, "the refusal must quote the retired key"
+    assert "retired" in message.lower()
+
+
+def test_a_retired_key_is_refused_even_with_its_replacement_present(tmp_path):
+    # A correct replacement does not redeem the dead key: leaving both in place
+    # hides which one actually took effect.
+    with pytest.raises(ValueError, match="HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"):
+        _plan_one({
+            "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+            "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.045",
+            "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": "4.5",
+        }, tmp_path)
+
+
+def test_a_retired_key_in_a_later_arm_is_refused(tmp_path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    arms = [
+        {"name": "clean", "env": {"HUNTER_BANKROLL": "100"}},
+        {"name": "dead", "env": {"HUNTER_REFUSAL_HOLD_DRIFT": "0.02"}},
+    ]
+    with pytest.raises(ValueError, match="'dead'"):
+        build_tournament_plan(issue=684, arms=arms, base_dir=tmp_path,
+                              run_number=1, check_ports=False)
+
+
+def test_a_supported_legacy_alias_still_plans(tmp_path):
+    # The purge is per key, not per prefix: these HUNTER_* names still load and
+    # must keep working inside an arm.
+    plan = _plan_one({"HUNTER_REQUOTE_HOLD_QUEUE": "500",
+                      "HUNTER_DROP_CENTS": "0.05",
+                      "HUNTER_PRICE_RISK_WIDEN": "0.02"}, tmp_path)
+    env = plan.arms[0].env
+    assert env["HUNTER_REQUOTE_HOLD_QUEUE"] == "500"
+    assert env["HUNTER_DROP_CENTS"] == "0.05"
+    assert env["HUNTER_PRICE_RISK_WIDEN"] == "0.02"
+
+
+def test_the_refusal_names_the_replacement_or_says_there_is_none(tmp_path):
+    assert set(RETIRED_GUIDANCE) == I492_RETIRED_KNOBS
+    for key, expected in RETIRED_GUIDANCE.items():
+        with pytest.raises(ValueError) as exc:
+            _plan_one({key: "1"}, tmp_path)
+        message = str(exc.value)
+        for fragment in expected:
+            assert fragment in message, f"{key} guidance must mention {fragment!r}"
+
+    # The reward offset has no env knob at all; never advertise one as a fix.
+    with pytest.raises(ValueError) as exc:
+        _plan_one({"HUNTER_REWARD_OFFSET": "0.005"}, tmp_path)
+    assert "BOT_QUOTE_SPREAD_STATIC_OFFSET_CENTS" not in str(exc.value)
+
+
+def test_the_i622_arms_file_is_refused_at_plan_time(tmp_path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    arms = json.loads(I622_ARMS.read_text(encoding="utf-8"))
+    with pytest.raises(ValueError) as exc:
+        build_tournament_plan(issue=622, arms=arms, base_dir=tmp_path,
+                              run_number=1, check_ports=False)
+    message = str(exc.value)
+    assert "'hold-drift'" in message, "the third arm is the offender"
+    assert "HUNTER_REFUSAL_HOLD_DRIFT" in message
+
+
+def test_a_retired_arm_is_refused_before_anything_launches(tmp_path, monkeypatch,
+                                                          capsys):
+    import scripts.shadow_tournament as st
+
+    def _explode(*_args, **_kwargs):
+        raise AssertionError("nothing may launch when the plan is refused")
+
+    monkeypatch.setattr(st, "launch_tournament", _explode)
+    monkeypatch.setattr(st.subprocess, "Popen", _explode)
+
+    arms_file = tmp_path / "retired_arms.json"
+    arms_file.write_text(json.dumps([
+        {"name": "dead", "env": {"HUNTER_REFUSAL_HOLD_DRIFT": "0.02"}},
+    ]), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="HUNTER_REFUSAL_HOLD_DRIFT"):
+        st.main(["--issue", "684", "--run-number", "1",
+                 "--base-dir", str(tmp_path), "--arms-file", str(arms_file)])
+
+    assert capsys.readouterr().out.strip() == "", "no plan JSON may be printed"
+
+
