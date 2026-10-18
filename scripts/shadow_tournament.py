@@ -98,6 +98,7 @@ class TournamentPlan:
     markets_path: Optional[str] = None
     arms: list[ArmPlan] = field(default_factory=list)
     run_number: Optional[int] = None
+    arms_source: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -112,6 +113,7 @@ class TournamentPlan:
             "results_path": str(self.results_path),
             "log_path": str(self.log_path) if self.log_path is not None else None,
             "markets_path": self.markets_path,
+            "arms_source": self.arms_source,
             "arms": [a.to_dict() for a in self.arms],
         }
 
@@ -316,6 +318,17 @@ def build_tournament_plan(
         # for names the config knows; custom arms keep their explicit env.
         if name in TOURNAMENT_PRESETS:
             arm_env.setdefault("HUNTER_TOURNAMENT_PRESET", name)
+        # Fail at plan time, not in the child. An unknown selector kills the arm
+        # at config load (config.from_env), i.e. after the other arms have
+        # already started and the run is half a tournament. The i492 arms file
+        # carried `HUNTER_TOURNAMENT_PRESET=control` from #484's purged preset
+        # and would have lost that arm exactly that way.
+        preset_sel = (arm_env.get("HUNTER_TOURNAMENT_PRESET") or "").strip().lower()
+        if preset_sel and preset_sel not in TOURNAMENT_PRESETS:
+            raise ValueError(
+                f"Arm {name!r} selects unknown HUNTER_TOURNAMENT_PRESET="
+                f"{preset_sel!r}; valid presets: {list(TOURNAMENT_PRESETS)}"
+            )
 
         # Port assignment & validation
         dash_port = base_port + (idx - 1)
@@ -583,8 +596,29 @@ def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
     arms = None
+    arms_source = None
     if args.arms_file:
         arms = json.loads(Path(args.arms_file).read_text(encoding="utf-8"))
+        arms_source = str(args.arms_file)
+        log.info("Tournament arms: %s (%d arms)", args.arms_file, len(arms))
+    elif args.run_number is not None:
+        # Run-number convention (#492): a numbered tournament reads its arm
+        # definitions from configs/tournaments/i<issue>_tournament-<run>_arms.json
+        # when that file exists, so the documented command
+        # (`--issue 492 --run-number 1 --dry-run`) carries the arm list without
+        # an extra flag. An explicit --arms-file always wins, and no file means
+        # the shipped preset defaults.
+        conventional = (
+            ROOT / "configs" / "tournaments"
+            / f"i{args.issue}_tournament-{int(args.run_number)}_arms.json"
+        )
+        if conventional.is_file():
+            arms = json.loads(conventional.read_text(encoding="utf-8"))
+            arms_source = conventional.relative_to(ROOT).as_posix()
+            log.info(
+                "Tournament arms: %s (%d arms)",
+                arms_source, len(arms),
+            )
 
     plan = build_tournament_plan(
         issue=args.issue,
@@ -601,6 +635,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         check_ports=(args.dashboards and not args.no_port_check) if not args.dry_run else False,
     )
 
+    plan.arms_source = arms_source
     if args.log_file:
         plan.log_path = Path(args.log_file)
 
