@@ -79,7 +79,7 @@ anything reacts — the exact window a single-buy rescue has to win.
 
 ## Tasks
 
-### [ ] T1 — Rotate on measured work, subscribe the universe (seam ports + loop wiring)
+### [x] T1 — Rotate on measured work, subscribe the universe (seam ports + loop wiring)
 - **Size:** M | **Domain:** `[Backend/Logic]` | **Skill:** `test-driven-development`
 - **Depends on:** none
 - **Target files:** `core_brain/trader_loop.py`, `tests/test_trader_loop.py`
@@ -117,7 +117,7 @@ anything reacts — the exact window a single-buy rescue has to win.
   - `test_decide_row_carries_book_source_when_stats_port_wired`.
 - **Verification:** `python -m pytest -q tests/test_trader_loop.py`
 
-### [ ] T2 — Drain fills after the wait and react in-loop
+### [x] T2 — Drain fills after the wait and react in-loop
 - **Size:** M | **Domain:** `[Backend/Logic]` | **Skill:** `test-driven-development`
 - **Depends on:** T1
 - **Target files:** `core_brain/trader_loop.py`, `tests/test_trader_loop.py`

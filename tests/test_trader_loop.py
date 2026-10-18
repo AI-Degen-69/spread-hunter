@@ -3629,3 +3629,189 @@ class TestRotationSubscribeAndTiming:
         assert "book_source" not in decision["extra"]
         assert "book_read_ms" not in decision["extra"]
 
+
+
+class TestFillDrainReactsInLoop:
+    """#650: a fill event during the wait is reconciled, visited and guarded.
+
+    The drain runs only in the long loop (never `once`), deduplicates by
+    `trade_id`, and isolates each reaction step so one failure cannot stop
+    the loop.
+    """
+
+    def _fill(self, trade="t1", cid="0xfill", status="FILLED"):
+        from core_brain.user_stream import UserTradeEvent
+        return UserTradeEvent(
+            trade_id=trade, order_id="o1", condition_id=cid,
+            token_id="tok-up", side="BUY", price=0.60, size=5.0,
+            status=status, fills=(),
+        )
+
+    def _seam(self, events, fills=(), reconcile=None):
+        from core_brain.config import MakerConfig
+        queue = {"events": list(fills)}
+
+        def fill_events():
+            return list(queue["events"])
+
+        seam = VenueSeam(
+            base_cfg=MakerConfig(),
+            client=object(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda host, token: {
+                "token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                "bids": {0.59: 100}, "asks": {0.61: 100},
+            },
+            decide=lambda *a: ([], "declined"),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+            fill_events_fn=fill_events,
+            fill_reconcile_fn=reconcile,
+            emit_fn=lambda **event: events.append(event),
+        )
+        return seam, queue
+
+    @staticmethod
+    def _fake_visit(order):
+        def visit(seam, spec, **kw):
+            if kw.get("cycle") == 0:
+                order.append("visit")
+            cid = getattr(spec, "condition_id", None) or getattr(spec, "cid", "0xfill")
+            return LiveFleetResult(status="DECLINED", condition_id=str(cid))
+        return visit
+
+    @staticmethod
+    def _stop_after(n):
+        """Stop the loop after `n` normal sleeps."""
+        sleeps = {"n": 0}
+
+        def sleep_stop(s):
+            sleeps["n"] += 1
+            if sleeps["n"] > n:
+                raise KeyboardInterrupt()
+        return sleep_stop
+
+    def test_fill_after_wait_triggers_reconcile_then_visit_then_guardian(
+            self, monkeypatch):
+        events = []
+        order = []
+
+        def recording_reconcile():
+            order.append("reconcile")
+
+        seam, queue = self._seam(
+            events, fills=[self._fill()], reconcile=recording_reconcile)
+
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick",
+            lambda **kw: order.append("guardian") or None)
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == ["reconcile", "visit", "guardian"]
+        received = next(
+            e for e in events if e.get("action") == "user_fill_received")
+        assert received["service"] == "decide"
+        assert received["extra"]["trade_id"] == "t1"
+        assert received["extra"]["matched"] is True
+
+    def test_fill_event_is_deduped_by_trade_id(self, monkeypatch):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events, fills=[self._fill(), self._fill()],
+            reconcile=lambda: order.append("reconcile"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == ["reconcile", "visit"]
+
+    def test_failed_fill_does_not_reconcile(self, monkeypatch):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events, fills=[self._fill(status="FAILED")],
+            reconcile=lambda: order.append("reconcile"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == []
+        received = next(
+            e for e in events if e.get("action") == "user_fill_received")
+        assert received["extra"]["status"] == "FAILED"
+
+    def test_fill_for_unknown_market_still_reconciles_without_visit(
+            self, monkeypatch):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events, fills=[self._fill(cid="0xgone")],
+            reconcile=lambda: order.append("reconcile"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == ["reconcile"]
+        received = next(
+            e for e in events if e.get("action") == "user_fill_received")
+        assert received["extra"]["matched"] is False
+
+    def test_once_mode_never_drains_fills(self):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events, fills=[self._fill()],
+            reconcile=lambda: order.append("reconcile"))
+        run(seam, interval=0.0, once=True, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=lambda s: None)
+        assert order == []
+        assert not [e for e in events
+                    if e.get("action") == "user_fill_received"]
+
+    def test_fill_reconcile_failure_keeps_the_loop_alive(self, monkeypatch):
+        events = []
+
+        def bad_reconcile():
+            raise RuntimeError("registry locked")
+
+        seam, queue = self._seam(
+            events, fills=[self._fill()], reconcile=bad_reconcile)
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one",
+            lambda seam, spec, **kw: LiveFleetResult(
+                status="DECLINED", condition_id="0xfill"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        results = run(seam, interval=0.0, once=False, live=False,
+                      markets=[FakeMarket("0xfill")],
+                      sleep_fn=self._stop_after(2))
+        assert results
+
+    def test_resolved_market_fill_is_not_visited(self, monkeypatch):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events, fills=[self._fill()],
+            reconcile=lambda: order.append("reconcile"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        monkeypatch.setattr(
+            "core_brain.trader_loop.resolved_condition_ids",
+            lambda registry: {"0xfill"})
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == ["reconcile"]
+

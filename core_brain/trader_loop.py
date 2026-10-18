@@ -23,6 +23,7 @@ import sys
 import time
 import threading
 import uuid
+from collections import deque
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -504,6 +505,14 @@ class VenueSeam:
     #: Optional -- `_visit_one` merges them into the decide row only when the
     #: port is wired, so unwired seams emit byte-identical rows to before.
     book_stats_fn: Optional[Callable[[], dict]] = None
+    #: The queued fill events #650 reacts to after each wait: `() -> [event]`.
+    #: Optional -- `main()` wires it to the user-stream queue. Unwired, the
+    #: loop runs rotation-to-rotation exactly as before.
+    fill_events_fn: Optional[Callable[[], list]] = None
+    #: The reconcile the loop runs for one fill event: `() -> Any`. Optional --
+    #: a closure over `(client, registry, maker_address)`, so the reaction keeps
+    #: the 3-argument reconcile port untouched. See `fill_events_fn`.
+    fill_reconcile_fn: Optional[Callable[[], Any]] = None
 
 
 def run(
@@ -575,6 +584,9 @@ def run(
     # scroll the screen. A restart resets it (safe direction: a fresh loop
     # announces state once, then goes quiet).
     tail_memory: dict[tuple, str] = {}
+    # Trade ids the fill reaction has already handled (#650): a bounded set
+    # so one fill never reconciles twice however often the queue repeats it.
+    _seen_fill_trades: Any = deque(maxlen=512)
     shutdown_reason = "once" if once else "stopped"
     registry = seam.registry
 
@@ -786,10 +798,145 @@ def run(
                                    if type(e).__name__ == "_Deadline"
                                    else "interrupt")
                 break
+
+            # Fill reaction (#650): drain what the user stream queued while the
+            # loop waited, then react in-loop -- reconcile, visit the filled
+            # market, tell the guardian -- instead of waiting for the next
+            # rotation. Never in `once` mode (a smoke has no queue to drain).
+            # The fill queue is only drained when both ports are wired; either
+            # `None` leaves the loop rotation-to-rotation, exactly as before.
+            # Placed AFTER the `except KeyboardInterrupt` so the shadow
+            # deadline's end-of-rehearsal interrupt never drains: a finished
+            # rehearsal reacts to nothing.
+            drain = seam.fill_events_fn
+            reconcile_port = seam.fill_reconcile_fn
+            if drain is not None and reconcile_port is not None:
+                _react_to_fills(
+                    seam=seam, current_markets=current_markets,
+                    emit_fn=emit_fn, resolved=resolved,
+                    stop_memory=stop_memory, tail_memory=tail_memory,
+                    inventory_recorder=inventory_by_cid.__setitem__,
+                    seen_trade_ids=_seen_fill_trades, live=live)
         stop_workers.set()
 
     _finish_shutdown()
     return once_results if once else last_cycle
+
+
+def _guardian_fill_tick(**kw) -> None:
+    """One risk-guardian tick after a fill event (#650).
+
+    Separated from `run` so the reaction is unit-testable without the loop.
+    `kw` carries the seam's own `client` / `registry` / `base_cfg` from the
+    call site; importing here keeps `run` free of the import at module scope,
+    exactly as `start_risk_guardian` does.
+    """
+    from core_brain.risk_guardian import run_guardian_tick
+    run_guardian_tick(**kw)
+
+
+def _react_to_fills(
+    *,
+    seam: VenueSeam,
+    current_markets: list,
+    emit_fn: Callable,
+    resolved: set,
+    stop_memory: dict,
+    tail_memory: dict,
+    inventory_recorder: Callable,
+    seen_trade_ids: Any,
+    live: bool,
+) -> None:
+    """Drain the user-stream queue and react to each fill (#650).
+
+    Event first, then reaction: every drained event emits `user_fill_received`,
+    then (unless its `status` says FAILED) the loop re-reconciles, re-visits
+    the filled market, and runs a guardian tick. Each step is isolated -- a
+    failure degrades this event, never the loop. Repeats of the same
+    `trade_id` are dropped so one fill never reconciles twice.
+    """
+    try:
+        events = list(seam.fill_events_fn() or [])
+    except Exception as e:
+        log.warning("fill drain failed: %s: %s", type(e).__name__, e)
+        return
+    for ev in events:
+        trade_id = str(getattr(ev, "trade_id", "") or "")
+        if not trade_id or trade_id in seen_trade_ids:
+            continue
+        seen_trade_ids.append(trade_id)
+        ev_cid = str(getattr(ev, "condition_id", "") or "")
+        matched = next(
+            (s for s in (current_markets or []) if _cid(s) == ev_cid), None)
+        emit_fn(service="decide", cycle=0, phase="reconciling",
+                action="user_fill_received", market_slug="",
+                reason="", latency_ms=0.0,
+                extra={"trade_id": trade_id,
+                       "order_id": str(getattr(ev, "order_id", "") or ""),
+                       "condition_id": ev_cid,
+                       "token_id": str(getattr(ev, "token_id", "") or ""),
+                       "side": str(getattr(ev, "side", "") or ""),
+                       "price": float(getattr(ev, "price", 0.0) or 0.0),
+                       "size": float(getattr(ev, "size", 0.0) or 0.0),
+                       "status": str(getattr(ev, "status", "") or ""),
+                       "matched": matched is not None})
+        status = str(getattr(ev, "status", "") or "").upper()
+        if status == "FAILED":
+            # Telemetry only: nothing on the venue changed, so there is
+            # nothing to reconcile and nothing to re-quote.
+            continue
+        _react_to_one_fill(
+            seam=seam, ev=ev, matched=matched,
+            emit_fn=emit_fn, resolved=resolved, stop_memory=stop_memory,
+            tail_memory=tail_memory, inventory_recorder=inventory_recorder,
+            live=live)
+
+
+def _react_to_one_fill(
+    *,
+    seam: VenueSeam,
+    ev: Any,
+    matched: Any,
+    emit_fn: Callable,
+    resolved: set,
+    stop_memory: dict,
+    tail_memory: dict,
+    inventory_recorder: Callable,
+    live: bool,
+) -> None:
+    """One non-FAILED fill: reconcile, visit, guardian tick (#650).
+
+    Separated from `_react_to_fills` so the loop body stays a flat drain loop
+    and each step's isolation reads as its own `try`. A failed reconcile
+    stops this event (nothing downstream can be trusted); a failed visit
+    still gets its guardian tick.
+    """
+    try:
+        seam.fill_reconcile_fn()
+    except Exception as e:
+        log.warning("fill reconcile failed: %s: %s", type(e).__name__, e)
+        # Return without reacting: nothing downstream of a failed reconcile
+        # can be trusted yet, and the fill is still in the user-stream gap
+        # the next rotation's reconcile will find.
+        return
+    ev_cid = str(getattr(ev, "condition_id", "") or "")
+    if matched is not None and ev_cid and ev_cid.lower() not in resolved:
+        try:
+            _visit_one(
+                seam=seam, spec=matched, live=live, cycle=0,
+                emit_fn=emit_fn, stop_memory=stop_memory,
+                tail_memory=tail_memory,
+                inventory_recorder=inventory_recorder,
+            )
+        except Exception as e:
+            log.warning("fill visit failed: %s: %s", type(e).__name__, e)
+    try:
+        _guardian_fill_tick(
+            client=seam.client, registry=seam.registry,
+            cfg=seam.base_cfg, live=live)
+    except Exception as e:
+        log.warning("fill guardian tick failed: %s: %s",
+                    type(e).__name__, e)
 
 
 def _cancel_dropped_markets(
