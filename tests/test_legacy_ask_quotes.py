@@ -140,12 +140,19 @@ def test_the_ask_branch_is_the_only_place_the_window_bites():
 def test_legacy_ask_branch_reads_canonical_target_balance():
     import warnings
 
+    up, dn = _books()
+    # Unbalanced inventory: heavy on UP (100 shares vs 10 shares DOWN).
+    # Balance ratio 0.1 is below bot_pos_skew_target_balance_ratio (0.8),
+    # so line 868 will evaluate the target-balance check and skip UP.
+    inv = Inventory(up_shares=100.0, down_shares=10.0, up_cost=40.0, down_cost=4.0)
+
     with warnings.catch_warnings(record=True) as recorded:
         warnings.simplefilter("always")
-        intents, why = _quote(_ask_cfg(), window_pct=None)
+        intents, why = decide_quotes(_ask_cfg(), up, dn, inv, 3600.0, None)
 
     assert why == ""
-    assert {i.side: i.price for i in intents} == {"UP": 0.51, "DOWN": 0.46}
+    # Heavier UP side is skipped; only lighter DOWN side is quoted
+    assert {i.side: i.price for i in intents} == {"DOWN": 0.46}
     scoped_legacy = {"target_balance", "max_pair_cost"}
     for w in recorded:
         if "quotes.py" in str(w.filename):

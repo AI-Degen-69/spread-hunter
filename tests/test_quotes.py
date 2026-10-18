@@ -97,7 +97,28 @@ class TestEntryPairCostCap:
 
     def test_canonical_pair_cap_refuses_from_mid_pair_without_warning(self):
         import warnings
-        cfg = _flat_cfg(enforce_completable_pair_cost=False, bot_pos_price_max_pair_cost_usd=0.99)
+
+        base_cfg = _flat_cfg(enforce_completable_pair_cost=False)
+
+        class ControlledPairCapConfig:
+            def __init__(self, base):
+                self._base = base
+                self.bot_pos_price_max_pair_cost_usd = 0.99
+
+            @property
+            def max_pair_cost(self):
+                warnings.warn(
+                    "Legacy property max_pair_cost accessed",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                return 1.05
+
+            def __getattr__(self, name):
+                return getattr(self._base, name)
+
+        cfg = ControlledPairCapConfig(base_cfg)
+
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter("always")
             intents, why = decide_quotes(cfg, _WIDE_UP, _WIDE_DOWN, Inventory(), 1e9, None)
@@ -111,6 +132,7 @@ class TestEntryPairCostCap:
             "strict_paired_inventory",
             "enable_emergency_hedge",
             "min_reward_offset",
+            "max_pair_cost",
         }
         for w in recorded:
             if "quotes.py" in str(w.filename):

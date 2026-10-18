@@ -156,8 +156,13 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
     if base < cfg.min_quote_shares:
         return 0
 
+    _strict_pairs = getattr(cfg, "bot_pos_gate_strict_pairs_on", None)
+    if _strict_pairs is None:
+        _strict_pairs = getattr(cfg, "strict_paired_inventory", True)
+    _strict_pairs = bool(_strict_pairs)
+
     if naked_side(inv) != side:
-        if getattr(cfg, "strict_paired_inventory", True) and naked_side(inv) is not None:
+        if _strict_pairs and naked_side(inv) is not None:
             excess = abs(inv.up_shares - inv.down_shares)
             if excess > 0:
                 deficit_sz = int(excess)
@@ -166,7 +171,7 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
                 return min(base, deficit_sz)
         return base
 
-    if getattr(cfg, "strict_paired_inventory", True):
+    if _strict_pairs:
         return 0
 
     size = base * (1.0 - risk_utilization(cfg, inv, side)) ** 2

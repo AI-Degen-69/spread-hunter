@@ -2038,6 +2038,7 @@ def test_hard_stop_partial_exit_keeps_hard_stop(registry: OrderRegistry):
 
 
 def test_saver_forwards_canonical_emergency_drawdown(registry: OrderRegistry):
+    import warnings
     from unittest.mock import MagicMock, patch
     cfg = MakerConfig(
         enable_pairs_rule=True,
@@ -2046,12 +2047,17 @@ def test_saver_forwards_canonical_emergency_drawdown(registry: OrderRegistry):
     )
     _trig525_pair(registry, TRIG525_NOW)
     venue = DecisionThenExecutionBook(decision_bid=0.15, execution_bid=0.14)
-    with patch("core_brain.single_leg_lifecycle.transition") as mock_trans:
-        mock_trans.return_value = MagicMock(action="balanced")
-        lp.manage_single_leg_positions(
-            venue, registry, cfg, live=False, now=TRIG525_NOW / 1000.0 + 10.0,
-            venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
-        )
-        assert mock_trans.called
-        assert mock_trans.call_args[1]["bot_risk_circuit_max_drawdown_pct"] == 60.0
-        assert "emergency_drawdown_pct" not in mock_trans.call_args[1]
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        with patch("core_brain.single_leg_lifecycle.transition") as mock_trans:
+            mock_trans.return_value = MagicMock(action="balanced")
+            lp.manage_single_leg_positions(
+                venue, registry, cfg, live=False, now=TRIG525_NOW / 1000.0 + 10.0,
+                venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+            )
+            assert mock_trans.called
+            assert mock_trans.call_args[1]["bot_risk_circuit_max_drawdown_pct"] == 60.0
+            assert "emergency_drawdown_pct" not in mock_trans.call_args[1]
+
+    for w in recorded:
+        assert "emergency_drawdown_pct is deprecated" not in str(w.message)
