@@ -97,12 +97,39 @@ def test_analysis_v2_module_never_fetches():
     assert "renderAnalysisV2" in src
 
 
+def _panel(html: str) -> str:
+    """`#analysis-v2` and everything inside it, bounded by balanced <div> tags.
+
+    Splitting on the first `</section>` stopped inside the first KPI strip: the
+    panel nests <section> and <div> blocks, so ids such as `ciScale` and
+    `ch1`..`ch5` were never reached by the duplicate-id check, and mock numbers
+    further down the page were never seen.
+    """
+    at = html.index('id="analysis-v2"')
+    open_at = html.rindex("<div", 0, at)
+    depth = 0
+    pos = open_at
+    while True:
+        next_open = html.find("<div", pos + 4)
+        next_close = html.find("</div>", pos + 4)
+        if next_close == -1:
+            raise AssertionError("#analysis-v2 has no closing </div>")
+        if next_open != -1 and next_open < next_close:
+            depth += 1
+            pos = next_open
+        elif depth == 0:
+            return html[open_at:next_close + len("</div>")]
+        else:
+            depth -= 1
+            pos = next_close
+
+
 def test_analysis_ids_unique():
     """Every id inside #analysis-v2 occurs exactly once in the document."""
     import re
 
     html = INDEX.read_text(encoding="utf-8")
-    section = html.split('id="analysis-v2"')[1].split("</section>")[0]
+    section = _panel(html)
     ids = re.findall(r'id="([^"]+)"', section)
     assert ids, "no ids found inside #analysis-v2"
     for ident in set(ids):
@@ -137,7 +164,7 @@ def test_every_bind_hook_paints_a_real_value(tmp_path, live_payload):
 def test_no_mock_value_survives_on_the_page():
     """The design's hardcoded numbers must not still be in the markup."""
     html = INDEX.read_text(encoding="utf-8")
-    section = html.split('id="analysis-v2"')[1].split("</section>")[0]
+    section = _panel(html)
     # Only the pure telemetry mocks: "9W / 6L" is a legitimate tooltip
     # value; default sufficiency-table cells repaint from the payload.
     for mock in ("-6.76%", "-$0.41", "60.0%", "-$1.30", "+$0.32"):

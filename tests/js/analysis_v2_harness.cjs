@@ -20,10 +20,28 @@ const noop = () => {};
 const staticDir = path.resolve(__dirname, '..', '..', 'dashboard', 'static');
 const indexHtml = fs.readFileSync(path.join(staticDir, 'index.html'), 'utf8');
 /* The sidebar page owns the markup now; the harness parses the same section
- * the shell mounts, so hook drift fails here instead of in the browser. */
+ * the shell mounts, so hook drift fails here instead of in the browser.
+ *
+ * The slice stops at the panel's own closing </div>. Reading on to the end of
+ * index.html would count hooks that follow the panel (the trailing <script>
+ * tags, and any tab added after tab 4) as Data Analysis hooks, which inflates
+ * hookCount and hides a hook that went missing. */
+function panelSlice(src, markerAt) {
+  const openAt = src.lastIndexOf('<div', markerAt);
+  let depth = 0;
+  let at = openAt;
+  for (;;) {
+    const nextOpen = src.indexOf('<div', at + 4);
+    const nextClose = src.indexOf('</div>', at + 4);
+    if (nextClose === -1) throw new Error('unbalanced <div> around #analysis-v2');
+    if (nextOpen !== -1 && nextOpen < nextClose) { depth += 1; at = nextOpen; }
+    else if (depth === 0) return src.slice(openAt, nextClose + '</div>'.length);
+    else { depth -= 1; at = nextClose; }
+  }
+}
 const sectionStart = indexHtml.indexOf('id="analysis-v2"');
 if (sectionStart === -1) throw new Error('#analysis-v2 missing from index.html');
-const html = indexHtml.slice(sectionStart);
+const html = panelSlice(indexHtml, sectionStart);
 
 /* --- DOM stub: only the surface applyAll() touches --- */
 function makeEl(tag) {

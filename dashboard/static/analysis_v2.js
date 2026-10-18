@@ -208,7 +208,7 @@ function derived(kpi) {
   const stageLabel = (s, unit) => {
     if (!s) return '—';
     const markets = num(s.markets);
-    return `${s.legs} ${unit}${markets != null ? ` · ${markets} markets` : ''}`;
+    return `${esc(s.legs)} ${unit}${markets != null ? ` · ${markets} markets` : ''}`;
   };
   const dropLabel = (d, tail) => {
     if (!d) return '—';
@@ -333,6 +333,15 @@ function bandPath(lo, hi) {
   return 'M' + top.join(' L') + ' L' + bot.join(' L') + ' Z';
 }
 
+/* Escape payload-derived text before it reaches innerHTML. The html format and
+ * the chart badges build markup in code, but they interpolate strings that come
+ * from /api/kpi (stage labels such as `legs`), so those values must not be able
+ * to inject elements into the dashboard. */
+function esc(value) {
+  return String(value).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
 function svg(body, vb) {
   return `<svg viewBox="0 0 ${vb || '400 200'}" preserveAspectRatio="none">${body}</svg>`;
 }
@@ -363,8 +372,11 @@ function paintBinds(root, kpi, d) {
     if (path.charAt(0) === '_') value = d[path];
     else value = resolve(kpi, path);
     if (value === null || value === undefined) continue; // leave the design's own placeholder
-    if (fmt === 'html') el.innerHTML = String(value);
-    else el.textContent = format(value, fmt);
+    if (fmt === 'html') {
+      /* Derived entries (`_winloss`, `_ci95`, ...) are markup this module builds
+       * from numbers; a direct payload path may carry a string, so escape it. */
+      el.innerHTML = path.charAt(0) === '_' ? String(value) : esc(value);
+    } else el.textContent = format(value, fmt);
     if (el.getAttribute('data-sign')) setSign(el, value);
   }
 

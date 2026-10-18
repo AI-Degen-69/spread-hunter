@@ -1,7 +1,10 @@
 /* analysis_v2.css — scoped under #analysis-v2 (Data Analysis sidebar page, #568).
    Custom properties live on the wrapper so they never leak into the shell;
-   responsive breakpoints are container queries against the sidebar width. */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+   responsive breakpoints are container queries against the sidebar width.
+
+   No webfont import here: index.html already loads IBM Plex Sans and JetBrains
+   Mono for the whole dashboard, so this sheet pulls no extra stylesheet from a
+   third party and stays readable offline once the shell's fonts are cached. */
 #analysis-v2{container-type:inline-size;max-width:1400px;margin:0 auto;padding:22px 20px 56px}
 /* =====================================================================
    Spread Hunter — Data Analysis  ·  Dark Obsidian Quant Dashboard
@@ -27,7 +30,7 @@
   --purple:#6D28D9;
   --radius:8px;
   --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
-  --font-sans:'Inter',system-ui,-apple-system,sans-serif;
+  --font-sans:'IBM Plex Sans','Inter',system-ui,-apple-system,sans-serif;
 }
 #analysis-v2, #analysis-v2 *{box-sizing:border-box;margin:0;padding:0}
 #analysis-v2 .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}

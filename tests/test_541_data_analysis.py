@@ -27,6 +27,32 @@ requires_node = pytest.mark.skipif(shutil.which("node") is None,
                                    reason="node is not installed on this host")
 
 
+def _section(html: str, marker: str) -> str:
+    """The outermost <section> that contains `marker`, bounded by balanced tags.
+
+    Splitting on the first `</section>` stopped at the first nested block: tab 4
+    holds a dozen nested <section> elements, so a first-close slice saw only the
+    KPI strip and could not tell what else the tab contained.
+    """
+    at = html.index(marker)
+    open_at = html.rindex("<section", 0, at)
+    depth = 0
+    pos = open_at
+    while True:
+        next_open = html.find("<section", pos + 8)
+        next_close = html.find("</section>", pos + 8)
+        if next_close == -1:
+            raise AssertionError(f"unbalanced <section> around {marker}")
+        if next_open != -1 and next_open < next_close:
+            depth += 1
+            pos = next_open
+        elif depth == 0:
+            return html[open_at:next_close + len("</section>")]
+        else:
+            depth -= 1
+            pos = next_close
+
+
 def _run(payload: dict, action: str = "render", tmp_path=None) -> dict:
     target = Path(str(tmp_path or ".")) / f"av2_harness_{action}.json"
     target.write_text(json.dumps({"kpi": payload}), encoding="utf-8")
@@ -53,7 +79,7 @@ def test_old_surface_removed():
 def test_single_analysis_surface_in_tab4():
     """Tab 4 holds exactly one analysis surface: #analysis-v2."""
     html = INDEX_HTML.read_text(encoding="utf-8")
-    tab4 = html.split('id="tab-4"')[1].split("</section>")[0]
+    tab4 = _section(html, 'id="tab-4"')
     assert tab4.count('id="analysis-v2"') == 1
     assert "da-surface" not in tab4
 
