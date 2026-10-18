@@ -250,6 +250,21 @@ def test_an_unknown_stored_page_falls_back_to_home():
 
 
 @requires_node
+def test_the_analysis_page_clicks_open_and_restores():
+    # Arrange — the #568 cutover keeps the rail entry; the panel behind it moved.
+    clicked = _nav(clicks=["analysis"])
+
+    # Act / Assert — click shows the page with aria-current on its button.
+    assert clicked["visible"] == ["analysis"]
+    assert clicked["current"] == ["analysis"]
+
+    # A reload with the stored page reopens it.
+    reloaded = _nav(stored="analysis")
+    assert reloaded["visible"] == ["analysis"]
+    assert reloaded["current"] == ["analysis"]
+
+
+@requires_node
 def test_choosing_a_page_closes_the_narrow_screen_drawer():
     # Arrange — on a narrow window the rail sits over the page, so a chosen
     # page that leaves it open hides the thing just selected.
@@ -344,8 +359,26 @@ def test_the_served_page_loads_the_layout_assets():
     index = (_STATIC / "index.html").read_text(encoding="utf-8")
 
     # Assert — after app.js, so the panels exist before they are moved.
+    # The analysis page owns its stylesheet, loaded after the shell's own
+    # so the scoped #analysis-v2 rules win; analysis_v2.js sits between
+    # app.js (the poll that feeds it) and prototype.js (the rail that moves it).
     assert '/static/prototype.css' in index
-    assert index.index('/static/app.js') < index.index('/static/prototype.js')
+    assert '/static/analysis_v2.css' in index
+    assert index.index('/static/styles.css') < index.index('/static/analysis_v2.css')
+    assert index.index('/static/app.js') < index.index('/static/analysis_v2.js')
+    assert index.index('/static/analysis_v2.js') < index.index('/static/prototype.js')
+
+
+def test_the_analysis_entry_keeps_its_identity():
+    # Arrange — the #568 cutover moves the panel, never the rail entry.
+    layout = _layout()
+    entry = [e for e in layout["layout"] if e["page"] == "analysis"][0]
+
+    # Act / Assert
+    assert entry["label"] == "Data Analysis"
+    assert entry["selectors"] == ["#analysis-v2"]
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    assert html.count('id="analysis-v2"') == 1
 
 
 def test_the_layout_stylesheet_is_inert_on_the_live_page():
@@ -379,10 +412,12 @@ def test_the_live_dashboard_is_still_served_at_the_root():
     root = client.get("/")
     proto = client.get("/prototype")
 
-    # Assert — both answer, and the root still carries the live panels.
+    # Assert — both answer, and the root still carries the live panels
+    # plus the single analysis surface.
     assert root.status_code == 200
     assert proto.status_code == 200
     assert 'id="orders-trades-table"' in root.text
+    assert 'id="analysis-v2"' in root.text
 
 
 def test_the_prototype_path_serves_the_live_document_with_its_token():

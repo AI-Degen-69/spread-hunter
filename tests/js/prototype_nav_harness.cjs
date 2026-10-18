@@ -11,7 +11,7 @@ const path = require('path');
 const input = JSON.parse(process.argv[2]);
 const noop = () => {};
 
-const PAGES = ['home', 'data-markets', 'strategy', 'trades', 'reports'];
+const PAGES = ['home', 'data-markets', 'strategy', 'trades', 'reports', 'analysis'];
 
 const sections = {};
 const buttons = [];

@@ -1,12 +1,13 @@
-"""#541 T3: the Data Analysis tab renders once-claimed stats with units.
+"""#541/#568: the Data Analysis sidebar page renders once-placed stats with units.
 
-Drives dashboard/static/data_analysis.js (plus app.js shared renderers) through
-tests/js/data_analysis_harness.cjs against the T1 fixture payload.
+Drives dashboard/static/analysis_v2.js through
+tests/js/analysis_v2_harness.cjs against the T1 fixture payload. Every figure
+sits in exactly one card under #analysis-v2; the shell poll feeds the page
+from the same GET /api/kpi snapshot as every other surface.
 """
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,18 +18,44 @@ from core_brain.kpi import report as kpi_report
 
 from tests.stat_541_fixture import RUN_ID_541, build_fixed_run
 
-HARNESS = Path(__file__).resolve().parent / "js" / "data_analysis_harness.cjs"
+HARNESS = Path(__file__).resolve().parent / "js" / "analysis_v2_harness.cjs"
 STATIC = Path(__file__).resolve().parent.parent / "dashboard" / "static"
-DA_JS = STATIC / "data_analysis.js"
+V2_JS = STATIC / "analysis_v2.js"
 INDEX_HTML = STATIC / "index.html"
 
 requires_node = pytest.mark.skipif(shutil.which("node") is None,
                                    reason="node is not installed on this host")
 
 
+def _section(html: str, marker: str) -> str:
+    """The outermost <section> that contains `marker`, bounded by balanced tags.
+
+    Splitting on the first `</section>` stopped at the first nested block: tab 4
+    holds a dozen nested <section> elements, so a first-close slice saw only the
+    KPI strip and could not tell what else the tab contained.
+    """
+    at = html.index(marker)
+    open_at = html.rindex("<section", 0, at)
+    depth = 0
+    pos = open_at
+    while True:
+        next_open = html.find("<section", pos + 8)
+        next_close = html.find("</section>", pos + 8)
+        if next_close == -1:
+            raise AssertionError(f"unbalanced <section> around {marker}")
+        if next_open != -1 and next_open < next_close:
+            depth += 1
+            pos = next_open
+        elif depth == 0:
+            return html[open_at:next_close + len("</section>")]
+        else:
+            depth -= 1
+            pos = next_close
+
+
 def _run(payload: dict, action: str = "render", tmp_path=None) -> dict:
-    target = Path(str(tmp_path or ".")) / f"da_harness_{action}.json"
-    target.write_text(json.dumps(payload), encoding="utf-8")
+    target = Path(str(tmp_path or ".")) / f"av2_harness_{action}.json"
+    target.write_text(json.dumps({"kpi": payload}), encoding="utf-8")
     out = subprocess.run([shutil.which("node"), str(HARNESS),
                           str(target), action],
                          capture_output=True, text=True, check=True,
@@ -38,23 +65,32 @@ def _run(payload: dict, action: str = "render", tmp_path=None) -> dict:
 
 def _fixture_payload(tmp_path) -> dict:
     db = build_fixed_run(tmp_path / "da.db")
-    return {"kpi": kpi_report(db, run_id=RUN_ID_541)}
+    return kpi_report(db, run_id=RUN_ID_541)
 
 
-@requires_node
-def test_da_renders_every_block_exactly_once(tmp_path):
-    rendered = _run(_fixture_payload(tmp_path), tmp_path=tmp_path)
-    assert rendered["errors"] == []
-    assert sorted(rendered["claimed"]) == sorted(rendered["registryBlocks"])
-    assert len(rendered["claimed"]) == 16
+def test_old_surface_removed():
+    """The #541 STAT_REGISTRY implementation is retired, not shadowed."""
+    assert not (STATIC / "data_analysis.js").exists()
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    assert "da-surface" not in html
+    assert "STAT_REGISTRY" not in (STATIC / "app.js").read_text(encoding="utf-8")
 
 
-@requires_node
-def test_da_double_claim_of_a_block_throws(tmp_path):
-    rendered = _run(_fixture_payload(tmp_path), action="double-claim", tmp_path=tmp_path)
-    assert rendered["errors"] == []
-    assert rendered["doubleClaimThrew"] is True
-    assert "da-quant" in rendered["doubleClaimMessage"]
+def test_single_analysis_surface_in_tab4():
+    """Tab 4 holds exactly one analysis surface: #analysis-v2."""
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    tab4 = _section(html, 'id="tab-4"')
+    assert tab4.count('id="analysis-v2"') == 1
+    assert "da-surface" not in tab4
+
+
+def test_shell_poll_feeds_analysis_v2():
+    """Both poll call sites feed the cached snapshot to the v2 renderer."""
+    src = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert src.count("renderAnalysisV2(") >= 2
+    assert "renderDataAnalysis" not in src
+    js = (STATIC / "prototype.js").read_text(encoding="utf-8")
+    assert "'#analysis-v2'" in js
 
 
 @requires_node
@@ -64,87 +100,44 @@ def test_da_empty_payload_mounts_without_throwing(tmp_path):
 
 
 @requires_node
-def test_da_headline_gates_and_quant_carry_units_and_values(tmp_path):
+def test_da_fixture_close_count_and_units_in_headline_and_gates(tmp_path):
+    """8 closes (5W/2L); headline, gates and capital carry units and values."""
     rendered = _run(_fixture_payload(tmp_path), tmp_path=tmp_path)
-    html = rendered["html"]
-    assert "Mean Return Per Trade (%)" in html["headline"]
-    assert "8 Closes (5W / 2L)" in html["headline"]
-    assert "8 Closes" in rendered["samplePill"]
-    assert "Max Drawdown Guard" in html["gates"]
-    assert "Statistical Power Target" in html["gates"]
-    assert "Mathematical Expectancy ($)" in html["quant"]
-    assert "Win Rate &amp; Wilson CI (%)" in html["quant"]
+    assert rendered["errors"] == []
+    p = rendered["painted"]
+    assert p["trade_analytics.n_closes"] == "8"
+    assert p["_winloss"] == "5W / 2L"
+    # Units ride on the values: % / $ / x families all present.
+    assert p["trade_analytics.mean_return_pct"].endswith("%")
+    assert p["trade_analytics.expectancy_usd"].startswith(("$", "-", "+"))
+    assert "x" in p["trade_analytics.profit_factor"]
+    assert rendered["gates"]["power"]["observed"].startswith("8 / ")
+    assert rendered["gates"]["drawdown_guard"]["observed"] != ""
 
 
 @requires_node
-def test_da_capital_names_the_account_curve_not_the_equity_curve(tmp_path):
+def test_da_capital_keeps_account_curve_meaning(tmp_path):
+    """Drawdown language stays dollar-signed with an honest recovery state."""
     rendered = _run(_fixture_payload(tmp_path), tmp_path=tmp_path)
-    capital = rendered["html"]["capital"]
-    assert "account curve" in capital
-    assert "on the equity curve" not in capital
-    assert "has no points yet" not in capital  # fixture has points; guard text absent
+    p = rendered["painted"]
+    assert "$" in p["statistical_analytics.capital_risk.drawdown_recovery.deepest_usd"]
+    assert p["_ddRecovered"] in ("regained", "still open")
 
 
 @requires_node
-def test_da_charts_paint_into_their_own_containers(tmp_path):
+def test_da_charts_each_get_their_own_series(tmp_path):
+    """ch1-ch4 draw their own series; ch5 blanks honestly with no matured fills."""
     rendered = _run(_fixture_payload(tmp_path), tmp_path=tmp_path)
-    html = rendered["html"]
-    for key in ("dist", "distFooter", "paircost", "mc", "bell", "markout"):
-        assert html[key].strip(), f"chart block {key} rendered blank"
-
-
-def test_da_registry_blocks_exist_in_the_tab_markup():
-    html = INDEX_HTML.read_text(encoding="utf-8")
-    for block in ("da-headline", "da-pnl-ci", "da-sufficiency", "da-funnel", "da-gates",
-                  "da-fillpath", "da-rescue", "da-queue", "da-robustness", "da-capital",
-                  "da-quant", "da-dist-container", "da-paircost-container",
-                  "da-mc-container", "da-bell-container", "da-markout-container"):
-        assert f'id="{block}"' in html, f"registry block {block} has no container"
-
-
-def test_da_required_observations_has_one_read_site():
-    lines = [ln for ln in DA_JS.read_text(encoding="utf-8").splitlines()
-             if "ta.required_observations" in ln]
-    assert len(lines) == 1, f"want 1 read site, got {len(lines)}: {lines}"
-
-
-def test_da_registry_entries_all_carry_a_unit_and_valid_refs():
-    src = DA_JS.read_text(encoding="utf-8").split("STAT_REPORT_ONLY")[0]
-    ids = re.findall(r"'([\w.]+)': \{ producer:", src)
-    assert len(ids) >= 40, f"registry looks thin: {len(ids)} entries"
-    for stat_id in ids:
-        assert re.search(r"'%s': \{[^}]*unit: '[^']+'" % re.escape(stat_id), src), \
-            f"{stat_id} has no unit"
-    for ref in re.findall(r"refOf: '([\w.]+)'", src):
-        assert ref in ids, f"refOf target {ref} is not a registry id"
-
-
-def test_da_registry_blocks_all_have_containers_and_vice_versa():
-    html = INDEX_HTML.read_text(encoding="utf-8")
-    tab4 = html.split('id="tab-4"')[1].split("</section>")[0]
-    src = DA_JS.read_text(encoding="utf-8")
-    placed = re.findall(r"'([\w.]+)': \{ producer: '([^']+)', block: '([^']+)'", src)
-    assert placed, "no placed registry entries found"
-    blocks = {block for _, _, block in placed}
-    for block in blocks:
-        assert f'id="{block}"' in tab4, f"registry block {block} has no tab-4 container"
-    containers = set(re.findall(r'id="(da-[\w-]+)"', tab4))
-    # Root panel and headline pill carry no stats themselves: the pill is
-    # painted by renderDAHeadline, whose stats register under da-headline.
-    structural = {"da-surface", "da-sample-count"}
-    for container in containers:
-        stem = re.sub(r"-(footer|badge|banner)$", "", container)
-        block = stem if stem in blocks else stem + "-container"
-        assert container in blocks or container in structural or block in blocks, \
-            f"tab-4 container {container} claims no registry stat"
-
-
-def test_da_report_only_entries_name_producer_and_reason():
-    src = DA_JS.read_text(encoding="utf-8")
-    entries = re.findall(r"'([\w.]+)': \{ producer: '([^']+)', reason: '([^']+)'", src)
-    assert len(entries) >= 8, f"report-only list looks thin: {len(entries)}"
-    for stat_id, producer, reason in entries:
-        assert reason.strip(), f"{stat_id} has an empty reason"
-        assert any(loc in producer for loc in (
-            "core_brain/", "scripts/", "statistical_validation_run/", "dashboard")), \
-            f"{stat_id} producer {producer} points nowhere"
+    assert rendered["errors"] == []
+    charts = {c["id"]: c for c in rendered["charts"]}
+    assert set(charts) == {"ch1", "ch2", "ch3", "ch4", "ch5"}
+    for cid in ("ch1", "ch2", "ch3", "ch4"):
+        c = charts[cid]
+        assert c["svg"].startswith("<svg"), f"{cid} painted no svg"
+        assert "<path" in c["svg"] or "<rect" in c["svg"], f"{cid} drew no series"
+        assert c["badge"], f"{cid} has no badge"
+        assert c["stats"], f"{cid} has no stats line"
+    # ch5 (markout by horizon) needs matured fills the 8-close fixture has
+    # none of: it must blank, never fabricate. The demo-DB binding suite
+    # (test_all_five_charts_paint_real_series) proves ch5 draws with data.
+    assert charts["ch5"]["svg"] == "" and charts["ch5"]["badge"] == ""

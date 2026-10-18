@@ -311,13 +311,16 @@ def test_page_never_prints_an_unmeasured_leg_as_zero():
 
 
 def test_page_uses_only_defined_css_variables():
-    """Every var() the page uses must resolve to a token defined in styles.css
-    -- an undefined var(--token) silently inherits and never looks muted."""
+    """Every var() the page uses must resolve to a token defined in a sheet the
+    page loads -- an undefined var(--token) silently inherits and never looks
+    muted. The Data Analysis page ships its own token block in analysis_v2.css
+    (#568), scoped to #analysis-v2, so its definitions count too."""
     import re
 
-    css = _read_static("styles.css")
+    html = _read_static("index.html")
+    css = _read_static("styles.css") + "\n" + _read_static("analysis_v2.css")
     defined = set(re.findall(r"(--[a-z0-9-]+):", css))
-    used = set(re.findall(r"var\((--[a-z0-9-]+)\)", css + "\n" + _read_static("index.html")))
+    used = set(re.findall(r"var\((--[a-z0-9-]+)\)", css + "\n" + html))
     assert used - defined == set()
 
 

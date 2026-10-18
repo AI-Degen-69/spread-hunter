@@ -93,7 +93,7 @@ const PAGE_LAYOUT = [
     label: 'Data Analysis',
     icon: 'M2.4 13.6h11.2 M4.6 7.4l2.2 2.2 3-3.6 3.4 3.4',
     note: 'Every project statistic, each shown once (#541).',
-    selectors: ['#da-surface'],
+    selectors: ['#analysis-v2'],
   },
 ];
 

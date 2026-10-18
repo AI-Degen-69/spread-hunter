@@ -705,11 +705,11 @@ function renderCachedSections() {
   if (paintable(tab2, document.getElementById('analytics-surface')) && currentKpi) {
     try { renderAnalyticsSurface(currentKpi, lastStatus); } catch (e) { console.error('Error rendering cached analytics surface', e); }
   }
-  // Tab 4: DATA ANALYSIS (#541 canonical page). Painted from the same cache;
-  // the renderer lives in data_analysis.js and no-ops when the tab is absent.
-  if (typeof renderDataAnalysis === 'function'
-      && paintable(tab4, document.getElementById('da-surface')) && currentKpi) {
-    renderDataAnalysis(currentKpi, lastStatus);
+  // Tab 4: DATA ANALYSIS (analysis-v2 content, #568). Painted from the same
+  // cache; the renderer lives in analysis_v2.js and no-ops when absent.
+  if (typeof renderAnalysisV2 === 'function'
+      && paintable(tab4, document.getElementById('analysis-v2')) && currentKpi) {
+    try { renderAnalysisV2(document.getElementById('analysis-v2'), currentKpi); } catch (e) { console.error('Error rendering cached analysis-v2 surface', e); }
   }
   // Tab 3: MARKET FILTER (kanban → rail Data & Markets page). The readiness
   // banner lives on this tab, so it refreshes with it; the poll loop still
@@ -10467,10 +10467,10 @@ async function pollStatus() {
       renderKPIs(currentKpi, status);
     }
 
-    // Render the Data Analysis tab (Tab 4, #541) from the same poll snapshot.
-    if (typeof renderDataAnalysis === 'function'
-        && paintable(tab4, document.getElementById('da-surface')) && currentKpi) {
-      renderDataAnalysis(currentKpi, status);
+    // Render the Data Analysis tab (Tab 4, analysis-v2 content #568) from the same poll snapshot.
+    if (typeof renderAnalysisV2 === 'function'
+        && paintable(tab4, document.getElementById('analysis-v2')) && currentKpi) {
+      renderAnalysisV2(document.getElementById('analysis-v2'), currentKpi);
     }
 
     // Render the Market Filter kanban (Tab 3 → rail Data & Markets page)

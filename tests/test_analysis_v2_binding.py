@@ -1,12 +1,13 @@
-"""The redesigned Data Analysis surface paints live telemetry, not mock numbers.
+"""The Data Analysis sidebar page paints live telemetry, not mock numbers.
 
 Drives dashboard/static/analysis_v2.js through tests/js/analysis_v2_harness.cjs
 against the real `core_brain.kpi.report()` payload shape, so every data-bind
-hook in the markup is checked against a field that actually exists.
+hook in the sidebar markup is checked against a field that actually exists.
 
-The page is read-only by construction: its only telemetry read is
-GET /api/kpi (plus ?run_id=), served on its own /analysis-v2 route. The
-live-operations dashboard and the #541 Data Analysis tab are untouched.
+The page is read-only by construction: its only telemetry read is the shell's
+existing GET /api/kpi poll (plus ?run_id=), which feeds renderAnalysisV2.
+The module itself never fetches. (#568: analysis-v2 IS the Data Analysis
+sidebar page; the standalone /analysis-v2 route is retired.)
 """
 from __future__ import annotations
 
@@ -21,8 +22,9 @@ from core_brain.kpi import report as kpi_report
 
 HARNESS = Path(__file__).resolve().parent / "js" / "analysis_v2_harness.cjs"
 STATIC = Path(__file__).resolve().parent.parent / "dashboard" / "static"
-PAGE = STATIC / "analysis_v2.html"
+INDEX = STATIC / "index.html"
 PAGE_JS = STATIC / "analysis_v2.js"
+PAGE_CSS = STATIC / "analysis_v2.css"
 DEMO_DB = Path("data/demo_orders.db")
 
 requires_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
@@ -53,24 +55,85 @@ def live_payload() -> dict:
 
 
 def test_page_and_assets_are_served_from_static():
-    """The route and the static mount must both find the files."""
-    assert PAGE.is_file(), "analysis_v2.html missing from dashboard/static/"
-    assert (STATIC / "analysis_v2.css").is_file()
+    """The sidebar page owns the markup; the static mount serves the assets."""
+    assert 'id="analysis-v2"' in INDEX.read_text(encoding="utf-8")
+    assert PAGE_CSS.is_file()
     assert PAGE_JS.is_file()
-    # The stylesheet must be absolute: a relative "styles.css" would resolve to
-    # the live dashboard's own 97K stylesheet when served from /static/.
-    assert 'href="/static/analysis_v2.css"' in PAGE.read_text(encoding="utf-8")
+    # The stylesheet link must be absolute: a relative "styles.css" would
+    # resolve against whatever path serves the document. The ?v= bump keeps a
+    # browser that cached the retired /analysis-v2 page (which served these
+    # two unversioned, with unscoped :root/* rules) from reusing that copy.
+    assert 'href="/static/analysis_v2.css?v=1"' in INDEX.read_text(encoding="utf-8")
+    assert '<script src="/static/analysis_v2.js?v=1">' in INDEX.read_text(encoding="utf-8")
 
 
-def test_server_exposes_the_analysis_v2_route():
-    """/analysis-v2 exists and the legacy routes are untouched."""
+def test_standalone_page_removed():
+    """No second copy of the page remains on disk or in the shell."""
+    assert not (STATIC / "analysis_v2.html").exists()
+    html = INDEX.read_text(encoding="utf-8")
+    assert "da-surface" not in html
+    assert "data_analysis.js" not in html
+    js = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert "renderDataAnalysis" not in js
+
+
+def test_standalone_route_removed():
+    """/analysis-v2 is retired; the legacy routes are untouched."""
     from dashboard import server
 
     paths = {getattr(r, "path", None) for r in server.app.routes}
-    assert "/analysis-v2" in paths
+    assert "/analysis-v2" not in paths
     # Guardrails: nothing the operator relies on moved or vanished.
     for legacy in ("/", "/prototype", "/api/kpi", "/api/state", "/api/system/status"):
         assert legacy in paths, f"regression: {legacy} disappeared"
+
+
+def test_analysis_v2_module_never_fetches():
+    """One data owner: the shell poll fetches; the renderer only paints."""
+    src = PAGE_JS.read_text(encoding="utf-8")
+    assert "fetch(" not in src
+    assert "XMLHttpRequest" not in src
+    assert "EventSource(" not in src
+    assert "renderAnalysisV2" in src
+
+
+def _panel(html: str) -> str:
+    """`#analysis-v2` and everything inside it, bounded by balanced <div> tags.
+
+    Splitting on the first `</section>` stopped inside the first KPI strip: the
+    panel nests <section> and <div> blocks, so ids such as `ciScale` and
+    `ch1`..`ch5` were never reached by the duplicate-id check, and mock numbers
+    further down the page were never seen.
+    """
+    at = html.index('id="analysis-v2"')
+    open_at = html.rindex("<div", 0, at)
+    depth = 0
+    pos = open_at
+    while True:
+        next_open = html.find("<div", pos + 4)
+        next_close = html.find("</div>", pos + 4)
+        if next_close == -1:
+            raise AssertionError("#analysis-v2 has no closing </div>")
+        if next_open != -1 and next_open < next_close:
+            depth += 1
+            pos = next_open
+        elif depth == 0:
+            return html[open_at:next_close + len("</div>")]
+        else:
+            depth -= 1
+            pos = next_close
+
+
+def test_analysis_ids_unique():
+    """Every id inside #analysis-v2 occurs exactly once in the document."""
+    import re
+
+    html = INDEX.read_text(encoding="utf-8")
+    section = _panel(html)
+    ids = re.findall(r'id="([^"]+)"', section)
+    assert ids, "no ids found inside #analysis-v2"
+    for ident in set(ids):
+        assert html.count(f'id="{ident}"') == 1, f"id {ident} occurs more than once"
 
 
 @requires_node
@@ -100,12 +163,12 @@ def test_every_bind_hook_paints_a_real_value(tmp_path, live_payload):
 
 def test_no_mock_value_survives_on_the_page():
     """The design's hardcoded numbers must not still be in the markup."""
-    html = PAGE.read_text(encoding="utf-8")
+    html = INDEX.read_text(encoding="utf-8")
+    section = _panel(html)
     # Only the pure telemetry mocks: "9W / 6L" is a legitimate tooltip
-    # value and the .db names are DB-switcher chrome, where run-switching
-    # was deliberately not wired.
+    # value; default sufficiency-table cells repaint from the payload.
     for mock in ("-6.76%", "-$0.41", "60.0%", "-$1.30", "+$0.32"):
-        assert mock not in html, f"mock value still hardcoded in markup: {mock}"
+        assert mock not in section, f"mock value still hardcoded in markup: {mock}"
 
 
 @requires_node
@@ -119,6 +182,27 @@ def test_units_and_signs_match_the_payload(tmp_path, live_payload):
     assert p["trade_analytics.mean_return_pct"].startswith("-")      # negative pct
     assert p["trade_analytics.profit_factor"] == "0.39x"             # positive x, no '+'
     assert p["trade_analytics.max_drawdown_pct"] == "6.33%"
+
+
+@requires_node
+def test_unmeasured_sufficiency_rows_blank_rather_than_keep_design_numbers(tmp_path):
+    """No status for a row must read '—', never the design's sample 82 / 15%.
+
+    An empty registry still renders the four rows; if the payload carries no
+    level for one, the markup's shipped numbers would otherwise survive as a
+    measurement nobody made.
+    """
+    out = _run({}, "empty", tmp_path)
+    assert not out["errors"], out["errors"]
+    rows = out["sufficiency"]
+    assert {r["key"] for r in rows} == {
+        "pnl_expectancy", "stop_loss_rate", "merge_rate", "fill_rate",
+    }
+    for r in rows:
+        assert r["req"] == "—", r
+        assert r["rem"] == "—", r
+        assert r["pct"] == "—", r
+        assert r["pfill"] == "0%", r
 
 
 @requires_node
@@ -167,8 +251,8 @@ def test_sufficiency_table_fills_from_the_payload(tmp_path, live_payload):
 def test_sufficiency_toggle_repaints_visible_cells(tmp_path, live_payload):
     """Clicking 98/99 repaints the visible .req/.rem/.pct cells, not just data.
 
-    The toggle is the design's own IIFE; the harness executes it against
-    the stub and fires the pills the way a click does.
+    The toggle is the module's own init; the harness wires it and fires the
+    pills the way a click does.
     """
     out = _run(live_payload, "toggle", tmp_path)
     assert not out["errors"], out["errors"]
@@ -287,7 +371,6 @@ def test_empty_payload_mounts_without_throwing(tmp_path):
 @requires_node
 def test_formatters_handle_the_fraction_and_percent_families():
     """pct takes a percentage; pctmul takes a 0..1 fraction."""
-    import subprocess as sp
 
     probe = (
         "const m={exports:{}};"
@@ -299,7 +382,7 @@ def test_formatters_handle_the_fraction_and_percent_families():
         "f(-0.414,'usd'), f(0.457,'usd'), f(-6.21,'cents'), f(0.39,'x'),"
         "f(15,'int'), f(300,'sec'), f(null,'pct'), f('n/a','raw')]))"
     )
-    proc = sp.run(["node", "-e", probe], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    proc = subprocess.run(["node", "-e", probe], capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr[:1000]
     got = json.loads(proc.stdout.strip().splitlines()[-1])
     assert got == ["-6.76%", "60.0%", "0.2%", "100.0%",

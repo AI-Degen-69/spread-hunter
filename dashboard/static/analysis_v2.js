@@ -1,15 +1,13 @@
-/* analysis_v2.js — live data binding for the redesigned Data Analysis page.
+/* analysis_v2.js — data binding for the Data Analysis sidebar page (#568).
  *
- * Served at /analysis-v2. This file is the ONLY thing that reads telemetry;
- * the markup stays the design's own, annotated with data-bind / data-fmt /
- * data-sign / data-band hooks. Nothing here writes to the venue, the order
- * registry, or any worker state -- it is a read-only consumer of GET /api/kpi
- * (which itself accepts ?run_id=, mirroring the dashboard's own calls).
+ * The markup lives in index.html under #analysis-v2; this file never reads
+ * telemetry itself. The dashboard shell's existing GET /api/kpi poll owns the
+ * single fetch and calls renderAnalysisV2(root, kpi) with the cached payload.
+ * Nothing here writes to the venue, the order registry, or any worker state.
  *
  * Two layers, deliberately separate so both are testable from node:
  *   pure  — resolve / format / series->svg-path maths (no DOM)
- *   apply — walk the annotated DOM and paint (needs a document)
- * Only the apply layer auto-runs; the pure layer is exported for the harness.
+ *   apply — walk the annotated DOM under `root` and paint
  */
 'use strict';
 
@@ -113,7 +111,7 @@ function badgeFrom(band) {
 
 /* ---- decision gates: observed value + verdict, computed from the payload ---- */
 
-const POWER_GATE = 120; // payload has no required_observations; data_analysis.js uses the same default
+const POWER_GATE = 120; // payload has no required_observations; default the gate here
 const DRAWDOWN_LIMIT_PCT = 5.0;
 const MARKOUT_MIN_SAMPLES = 25;
 
@@ -210,7 +208,7 @@ function derived(kpi) {
   const stageLabel = (s, unit) => {
     if (!s) return '—';
     const markets = num(s.markets);
-    return `${s.legs} ${unit}${markets != null ? ` · ${markets} markets` : ''}`;
+    return `${esc(s.legs)} ${unit}${markets != null ? ` · ${markets} markets` : ''}`;
   };
   const dropLabel = (d, tail) => {
     if (!d) return '—';
@@ -335,6 +333,15 @@ function bandPath(lo, hi) {
   return 'M' + top.join(' L') + ' L' + bot.join(' L') + ' Z';
 }
 
+/* Escape payload-derived text before it reaches innerHTML. The html format and
+ * the chart badges build markup in code, but they interpolate strings that come
+ * from /api/kpi (stage labels such as `legs`), so those values must not be able
+ * to inject elements into the dashboard. */
+function esc(value) {
+  return String(value).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
 function svg(body, vb) {
   return `<svg viewBox="0 0 ${vb || '400 200'}" preserveAspectRatio="none">${body}</svg>`;
 }
@@ -365,8 +372,11 @@ function paintBinds(root, kpi, d) {
     if (path.charAt(0) === '_') value = d[path];
     else value = resolve(kpi, path);
     if (value === null || value === undefined) continue; // leave the design's own placeholder
-    if (fmt === 'html') el.innerHTML = String(value);
-    else el.textContent = format(value, fmt);
+    if (fmt === 'html') {
+      /* Derived entries (`_winloss`, `_ci95`, ...) are markup this module builds
+       * from numbers; a direct payload path may carry a string, so escape it. */
+      el.innerHTML = path.charAt(0) === '_' ? String(value) : esc(value);
+    } else el.textContent = format(value, fmt);
     if (el.getAttribute('data-sign')) setSign(el, value);
   }
 
@@ -398,16 +408,34 @@ function paintBinds(root, kpi, d) {
   }
 }
 
-/* Sufficiency table: the design's own toggle IIFE reads data-r95/98/99,
- * data-rem* and data-p* off each <tr>, so filling those attributes is the
- * whole integration -- no second renderer to keep in sync. */
-function paintSufficiency(kpi) {
+/* Sufficiency table: the confidence-toggle init in initConfidenceToggle reads
+ * data-r95/98/99, data-rem* and data-p* off each <tr>, so filling those
+ * attributes is the whole integration — no second renderer to keep in sync. */
+function paintSufficiency(root, kpi) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope) return;
   const statuses = (resolve(kpi, 'trade_analytics.sample_size_sufficiency.statuses') || {});
-  const rows = document.querySelectorAll('tr.ssr');
+  const rows = scope.querySelectorAll('tr.ssr');
   for (let i = 0; i < rows.length; i++) {
     const key = rows[i].getAttribute('data-suff');
     const st = statuses[key];
-    if (!st) continue;
+    if (!st) {
+      /* No status for this row: blank it. The markup ships the design's sample
+       * numbers both as cell text and as data-r95/rem95/p95 attributes, so both
+       * have to go or a repaint puts an unmeasured number back on screen. */
+      const req0 = rows[i].querySelector('.req');
+      const rem0 = rows[i].querySelector('.rem');
+      const fill0 = rows[i].querySelector('.pfill');
+      const pct0 = rows[i].querySelector('.pct');
+      if (req0) req0.textContent = '—';
+      if (rem0) rem0.textContent = '—';
+      if (fill0) fill0.style.width = '0%';
+      if (pct0) pct0.textContent = '—';
+      Object.keys(rows[i].dataset).forEach(function (k) {
+        if (/^(r|rem|p)(95|98|99)$/.test(k)) delete rows[i].dataset[k];
+      });
+      continue;
+    }
     (st.levels || []).forEach((lv) => {
       const c = String(lv.confidence_pct);
       rows[i].dataset['r' + c] = String(lv.required_n);
@@ -421,33 +449,39 @@ function paintSufficiency(kpi) {
   }
 
   /* The KPI-3 progress bar reads the same 95% row the table defaults to. */
-  const bar = document.getElementById('suffBar');
+  const bar = scope.querySelector ? scope.querySelector('#suffBar')
+    : (typeof document !== 'undefined' && document.getElementById
+      ? document.getElementById('suffBar') : null);
   const lvl = (statuses.pnl_expectancy && statuses.pnl_expectancy.levels || [])
     .filter((l) => l.confidence_pct === 95)[0];
   if (bar && lvl) bar.style.width = String(Math.max(0, Math.min(100, lvl.progress_pct))) + '%';
 
   // Re-render the currently active confidence column after the swap.
-  const active = document.querySelector('.conf-toggle .pill.active');
+  const active = scope.querySelector ? scope.querySelector('.conf-toggle .pill.active') : null;
   if (active && active.click) active.click();
 }
 
-function paintCharts(kpi) {
+function paintCharts(root, kpi) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope) return;
   const stats = kpi.statistical_analytics || {};
   const ta = kpi.trade_analytics || {};
+  const q = (sel) => (scope.querySelector ? scope.querySelector(sel)
+    : (typeof document !== 'undefined' ? document.querySelector(sel) : null));
   const set = (id, body, vb) => {
-    const area = document.querySelector('#' + id + ' .chart-area');
+    const area = q('#' + id + ' .chart-area');
     if (area) area.innerHTML = svg(body, vb);
   };
   const badge = (id, html, cls) => {
-    const el = document.querySelector('#' + id + ' .chart-badge');
+    const el = q('#' + id + ' .chart-badge');
     if (el) { el.innerHTML = html; if (cls) el.className = 'chart-badge ' + cls; }
   };
   const foot = (id, html) => {
-    const el = document.querySelector('#' + id + ' .chart-foot');
+    const el = q('#' + id + ' .chart-foot');
     if (el) el.innerHTML = html;
   };
   const statsLine = (id, html) => {
-    const el = document.querySelector('#' + id + ' .chart-stats');
+    const el = q('#' + id + ' .chart-stats');
     if (el) el.innerHTML = html;
   };
 
@@ -557,25 +591,17 @@ function paintCharts(kpi) {
   }
 }
 
-function paintChrome(kpi) {
-  const el = (id) => (typeof document !== 'undefined' ? document.getElementById(id) : null);
-  const name = el('dbName');
-  if (name && kpi.active_run_id) name.textContent = String(kpi.active_run_id);
-  const stamp = el('liveStamp');
-  const ts = resolve(kpi, 'portfolio.account.ts');
-  if (stamp && ts !== null && ts !== undefined) {
-    const dt = new Date(Number(ts) * 1000);
-    stamp.textContent = Number.isNaN(dt.getTime()) ? '—' : dt.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
-  }
-}
-
 /* The CI scale's track spans the 95% band; every tick and label sits at
  * the payload's own value mapped onto that span. Unmeasured (no closes,
- * or a degenerate band) hides the scale outright -- static geometry would
+ * or a degenerate band) hides the scale outright — static geometry would
  * keep drawing the last payload's positions and lie about this one. */
-function paintCiScale(kpi) {
-  if (typeof document === 'undefined' || !document.getElementById) return;
-  const scale = document.getElementById('ciScale');
+function paintCiScale(root, kpi) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope) return;
+  const q = (sel) => (scope.querySelector ? scope.querySelector(sel) : null);
+  const qa = (sel) => (scope.querySelectorAll ? scope.querySelectorAll(sel) : []);
+  const scale = (scope.getElementById ? scope.getElementById('ciScale')
+    : null) || q('#ciScale');
   if (!scale) return;
   const ta = (kpi && kpi.trade_analytics) || {};
   const ci = ta.mean_pnl_ci || {};
@@ -602,48 +628,77 @@ function paintCiScale(kpi) {
   };
   Object.keys(marks).forEach((key) => {
     const at = pct(marks[key]).toFixed(1) + '%';
-    scale.querySelectorAll(`.tick[data-ci="${key}"]`).forEach((t) => { t.style.left = at; });
-    const labs = scale.querySelectorAll(`.lab[data-ci="${key}"]`);
+    qa(`.tick[data-ci="${key}"]`).forEach((t) => { t.style.left = at; });
+    const labs = qa(`.lab[data-ci="${key}"]`);
     labs.forEach((l) => { l.style.left = at; });
     if (labs.length) labs[0].textContent = labels[key];
   });
 }
 
-function applyAll(kpi) {
+function applyAll(root, kpi) {
   if (!kpi) return;
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope) return;
   const d = derived(kpi);
-  paintBinds(document, kpi, d);
-  paintSufficiency(kpi);
-  paintCharts(kpi);
-  paintChrome(kpi);
-  paintCiScale(kpi);
+  paintBinds(scope, kpi, d);
+  paintSufficiency(scope, kpi);
+  paintCharts(scope, kpi);
+  paintCiScale(scope, kpi);
+}
+
+/* Confidence toggle: one wiring pass over the pills under `root`. Idempotent
+ * (re-runs on every poll repaint would stack a listener per paint), so
+ * paintSufficiency's trailing `.click()` swaps columns only after the wiring
+ * exists. renderAnalysisV2 calls it on every paint; the data-av2wired guard
+ * keeps that to one wiring pass. */
+function initConfidenceToggle(root) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope || !scope.querySelectorAll) return;
+  const pills = scope.querySelectorAll('.conf-toggle .pill');
+  const rows = scope.querySelectorAll('tr.ssr');
+  if (!pills || !pills.forEach || pills.length === 0) return;
+  if (pills[0].dataset && pills[0].dataset.av2wired) return;
+  pills.forEach(function (p) {
+    if (p.dataset) p.dataset.av2wired = '1';
+    p.addEventListener('click', function () {
+      pills.forEach(function (x) { x.classList.remove('active'); });
+      p.classList.add('active');
+      const c = p.dataset.conf;
+      rows.forEach(function (r) {
+        /* A row whose level the payload never carried has no r/rem/p triple;
+         * skip it so paintSufficiency's blanked dashes survive the repaint. */
+        const req = r.dataset['r' + c];
+        const rem = r.dataset['rem' + c];
+        const pct = r.dataset['p' + c];
+        if (req === undefined || rem === undefined || pct === undefined) return;
+        r.querySelector('.req').textContent = req;
+        r.querySelector('.rem').textContent = rem;
+        r.querySelector('.pfill').style.width = pct + '%';
+        r.querySelector('.pct').textContent = pct + '%';
+      });
+    });
+  });
+}
+
+/* The single shell entry point: wire the confidence toggle once (the guard
+ * inside initConfidenceToggle makes the repeat calls free) and paint the
+ * cached poll payload into #analysis-v2. Guards on the section so a missing
+ * node costs one skipped paint, not the whole batch. */
+function renderAnalysisV2(root, kpi) {
+  const scope = root
+    || (typeof document !== 'undefined' && document.getElementById
+      ? document.getElementById('analysis-v2') : null);
+  if (!scope || !kpi) return;
+  initConfidenceToggle(scope);
+  applyAll(scope, kpi);
 }
 
 /* ------------------------------------------------------------------ boot */
-
-async function load(runId) {
-  const url = '/api/kpi' + (runId ? '?run_id=' + encodeURIComponent(runId) : '');
-  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-  if (!res.ok) throw new Error('/api/kpi -> HTTP ' + res.status);
-  const kpi = await res.json();
-  applyAll(kpi);
-  return kpi;
-}
-
-if (typeof document !== 'undefined' && document.getElementById) {
-  // The two design IIFEs have already run by the time this file loads (it is
-  // referenced last in <body>), so their listeners are live when we repaint.
-  load().catch((err) => {
-    const banner = document.createElement('div');
-    banner.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--foreground);font:12px ui-monospace,monospace';
-    banner.textContent = '⚠ analysis-v2: telemetry unavailable — ' + err.message;
-    (document.body || document.documentElement).appendChild(banner);
-  });
-}
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     resolve, format, signClass, bandStyle, gateVerdicts, derived,
     chartScales, barsFromBins, bellPath, linePath, bandPath, applyAll,
+    renderAnalysisV2, initConfidenceToggle,
   };
 }
