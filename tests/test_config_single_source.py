@@ -478,18 +478,18 @@ def test_execution_coupling_overrides(monkeypatch):
     monkeypatch.setenv("BOT_QUOTE_SIZE_MIN_SHARES", "200")
     cfg = scoring_config.load()
     assert cfg.min_quote_shares == 200
-    assert cfg.quote_shares == 200
+    assert cfg.bot_quote_size_shares == 200
 
     monkeypatch.setenv("BOT_QUOTE_SIZE_MIN_SHARES", "50")
     cfg = scoring_config.load()
     assert cfg.min_quote_shares == 50
-    assert cfg.quote_shares == 120
+    assert cfg.bot_quote_size_shares == 120
 
     # 2. Bankroll override sets bankroll_usd and max_committed_usd
     monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "250.0")
     cfg = scoring_config.load()
     assert cfg.bankroll_usd == 250.0
-    assert cfg.max_committed_usd == 250.0
+    assert cfg.bot_risk_exposure_max_committed_usd == 250.0
 
     # 3. Wide-book trial override only widens max_spread_from_mid
     monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)

@@ -187,8 +187,8 @@ def test_the_ranker_loads_the_env_file_before_it_builds_its_config():
         "the staged trial would never reach the config")
 
 
-def _cfg_field_with_generated_env(tmp_path: Path, contents: str, field_expr: str) -> str:
-    """Read a field of fm._CFG after staging a controlled .env and running _load_repo_env."""
+def _cfg_field_with_generated_env(tmp_path: Path, contents: str, attr: str) -> str:
+    """Print one `fm._CFG` attribute after staging a controlled `.env`."""
     import os
 
     (tmp_path / ".env").write_text(contents, encoding="utf-8")
@@ -202,7 +202,7 @@ def _cfg_field_with_generated_env(tmp_path: Path, contents: str, field_expr: str
                 os.environ.pop(k, None)
         fm._load_repo_env({str(tmp_path)!r})
         fm._CFG = scoring.config.load()
-        print(eval({field_expr!r}, {{"fm": fm, "cfg": fm._CFG}}))
+        print(getattr(fm._CFG, {attr!r}))
     """)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("HUNTER_", "FILTER_", "BOT_", "SPREAD_HUNTER_"))}
     proc = subprocess.run([sys.executable, "-c", code], cwd=tmp_path,
@@ -216,8 +216,10 @@ def test_canonical_bot_env_file_reaches_ranker_config(tmp_path):
         "BOT_MARKET_PINNED_CONDITION_ID=0xfeedbeef\n"
         "BOT_QUOTE_SIZE_MIN_SHARES=200\n"
     )
-    val = _cfg_field_with_generated_env(tmp_path, env_content, "cfg.min_quote_shares")
+    val = _cfg_field_with_generated_env(tmp_path, env_content, "min_quote_shares")
     assert val == "200"
 
-    pinned = _cfg_field_with_generated_env(tmp_path, env_content, "cfg.bot_market_pinned_condition_id")
+    pinned = _cfg_field_with_generated_env(
+        tmp_path, env_content, "bot_market_pinned_condition_id"
+    )
     assert pinned == "0xfeedbeef"
