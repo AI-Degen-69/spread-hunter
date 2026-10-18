@@ -32,7 +32,8 @@ Branch: `i652/rename-picker-filter-bars` | Plan: [tasks/plan.md](tasks/plan.md)
 - [x] Derived-cap pins: 0.0205 default, `== select_max_book_spread`, 0.1025 at `max_book_spread=0.30`,
       0.15 at `wide_book_trial=0.15`, `TypeError` from the constructor, absent from fields,
       `AttributeError` on assignment — on both classes
-- [x] Confirm each new test fails without T2+T3 (16 failed with the config reverted)
+- [x] Confirm each new test fails without T2+T3 (17 of 27 new cases fail with the config reverted; the
+      10 that pass either way are the values and refusal pins)
 
 ## T4b — coverage from the `tdd-guide` persona review
 - [x] Dashboard cards: overrides show `$777.00` / `900s` / `False`; defaults show `15.0m` +

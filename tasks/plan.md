@@ -359,8 +359,9 @@ and the `_cents` suffix convention question CodeRabbit raised. Neither blocks th
       `dataclasses.fields()`, and cannot be assigned.
 - [x] **T3** — scoring inherits. The class body holds only the five `PICKER_PROFILE` fields plus
       `db_path`; the six `load()` keys are canonical.
-- [x] **T4** — regression pins added. Reverting only the two config modules makes 16 of the new tests
-      fail, so the change is what makes them pass.
+- [x] **T4** — regression pins added. 27 new cases; reverting only the two config modules makes **17**
+      of them fail, so the change is what makes them pass. The 10 that pass either way are the deliberate
+      values and refusal pins, guarding behaviour this ticket must not alter (measured at Station IV).
 - [x] **T4b** — added after the `tdd-guide` persona review (T1/T4 were test-writing-heavy): the two
       dashboard-card endpoint tests and the refused-value fallbacks. Mutation-checked — deleting one
       alias entry from `_LEGACY_TO_CANONICAL` makes the card test fail on the silent fallback.
