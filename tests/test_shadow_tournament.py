@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -174,7 +175,7 @@ def test_build_tournament_plan_rejects_non_hunter_env():
     bad_env_arms = [
         {"name": "arm-one", "env": {"NOT_HUNTER": "123"}},
     ]
-    with pytest.raises(ValueError, match="only HUNTER_.*overrides are permitted"):
+    with pytest.raises(ValueError, match=r"only BOT_\* \(or legacy HUNTER_\*\) overrides are permitted"):
         build_tournament_plan(issue=371, arms=bad_env_arms, check_ports=False)
 
 
@@ -243,7 +244,7 @@ def test_default_arms_set_preset_selector(tmp_path: Path):
         check_ports=False,
     )
     for arm in plan.arms:
-        assert arm.env["HUNTER_TOURNAMENT_PRESET"] == arm.name
+        assert arm.env["BOT_QUOTE_TOURNAMENT_PRESET"] == arm.name
 
 
 def test_default_arm_offsets_agree_with_presets(tmp_path: Path):
@@ -259,20 +260,20 @@ def test_default_arm_offsets_agree_with_presets(tmp_path: Path):
     )
     for arm in plan.arms:
         preset = TOURNAMENT_PRESETS[arm.name]
-        assert arm.env["HUNTER_DYNAMIC_OFFSET"] == ("1" if preset["dynamic_offset_enabled"] else "0")
+        assert arm.env["BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"] == ("1" if preset["dynamic_offset_enabled"] else "0")
         if "dynamic_offset_multiplier" in preset:
-            assert float(arm.env["HUNTER_DYNAMIC_OFFSET_MULT"]) == preset["dynamic_offset_multiplier"]
+            assert float(arm.env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"]) == preset["dynamic_offset_multiplier"]
         if "dynamic_offset_min_cents" in preset:
-            assert int(arm.env["HUNTER_DYNAMIC_OFFSET_MIN_CENTS"]) == preset["dynamic_offset_min_cents"]
+            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"]) == preset["dynamic_offset_min_cents"]
         if "dynamic_offset_max_cents" in preset:
-            assert int(arm.env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"]) == preset["dynamic_offset_max_cents"]
+            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"]) == preset["dynamic_offset_max_cents"]
     by_name = {a.name: a for a in plan.arms}
-    assert float(by_name["prudent"].env["HUNTER_DYNAMIC_OFFSET_MULT"]) == 0.60
-    assert int(by_name["prudent"].env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"]) == 4
+    assert float(by_name["prudent"].env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"]) == 0.60
+    assert int(by_name["prudent"].env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"]) == 4
     # The legacy capped control arm was purged; every surviving arm runs
     # dynamic offset ON (the loose system baseline).
     for name in ("conservative", "balanced", "aggressive", "prudent"):
-        assert by_name[name].env.get("HUNTER_DYNAMIC_OFFSET") == "1"
+        assert by_name[name].env.get("BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON") == "1"
 
 
 def test_default_arm_ports_and_paths(tmp_path: Path):
@@ -786,3 +787,285 @@ def test_every_i622_arm_names_a_distinct_store_and_run(tmp_path):
     plan = _i622_plan(tmp_path)
     assert len({str(a.db_path) for a in plan.arms}) == 3
     assert len({a.run_id for a in plan.arms}) == 3
+
+
+# --- Issue #492: the original #484/#485 ten-arm rerun -----------------------
+
+I492_ARMS = (
+    Path(__file__).resolve().parent.parent
+    / "configs" / "tournaments" / "i492_tournament-1_arms.json"
+)
+
+# The first run's per-leg stop cap was `single_buy_max_loss_usd`, in DOLLARS.
+# #573 renamed it to `HUNTER_STOP_LOSS_TRIGGER_USD_CENTS` (same magnitude, x100
+# units) and #619 replaced it with the entry-relative ABSOLUTE_DROP trigger,
+# which reads `HUNTER_DROP_CENTS` in dollars again. Re-expressing the original
+# 4.5c cap as ABSOLUTE_DROP + 0.045 keeps the dimension the arm was measuring;
+# dropping it would silently disable every arm's stop, changing more than the
+# two script fixes this rerun exists to isolate.
+#
+# #619 also retired `HUNTER_SINGLE_BUY_GRACE_SEC` with no like-for-like
+# replacement, so the grace dimension is gone from all ten arms.
+# `docs/runs/2026-10-18-492-tournament-rerun.md` records that loss (snapstop now
+# differs from aggressive only by its 3.0c stop).
+I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
+    "control": {
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.045",
+    },
+    "conservative": {
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.75",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "5",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.030",
+        "BOT_QUOTE_TOURNAMENT_PRESET": "conservative",
+    },
+    "balanced": {
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.5",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.050",
+        "BOT_QUOTE_TOURNAMENT_PRESET": "balanced",
+    },
+    "aggressive": {
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.25",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.065",
+        "BOT_QUOTE_TOURNAMENT_PRESET": "aggressive",
+    },
+    "prudent": {
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.6",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.038",
+        "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
+    },
+    "stickhold": {
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.25",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
+        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0",
+        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "0",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.065",
+    },
+    "queuehug": {
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.50",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
+        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "1.0",
+        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "800",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.050",
+    },
+    "deadband-tight": {
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.75",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "5",
+        "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.01",
+        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500",
+        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.08",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.030",
+    },
+    "deadband-wide": {
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.50",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
+        "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.06",
+        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500",
+        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.08",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.050",
+    },
+    "snapstop": {
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.25",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
+        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500",
+        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.08",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.030",
+    },
+}
+
+# Knobs `core_brain.config` names and ignores with a warning (#619, #622) or
+# dropped outright. A baseline that carries them measures the shipped defaults,
+# not the value written in the file.
+I492_RETIRED_KNOBS = {
+    "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS",
+    "HUNTER_STOP_LOSS_TRIGGER_PCT",
+    "HUNTER_SINGLE_BUY_GRACE_SEC",
+    "HUNTER_SINGLE_BUY_MAX_LOSS_USD",
+    "HUNTER_SINGLE_BUY_MAX_LOSS_PCT",
+    "HUNTER_REWARD_OFFSET",
+    "HUNTER_REFUSAL_HOLD_POLICY",
+    "HUNTER_REFUSAL_HOLD_DRIFT",
+}
+
+# #487 hypothesises one changed catalyst per arm. Each value below IS the tweak,
+# so its presence here would mean the rerun is no longer the baseline #487 is
+# compared against.
+I487_TWEAKS = {
+    ("control", "HUNTER_DROP_CENTS"): "0.060",
+    ("conservative", "HUNTER_DROP_CENTS"): "0.045",
+    ("balanced", "HUNTER_DYNAMIC_OFFSET_MULT"): "0.25",
+    ("aggressive", "HUNTER_DROP_CENTS"): "0.045",
+    ("prudent", "HUNTER_DYNAMIC_OFFSET_MULT"): "0.30",
+    ("stickhold", "HUNTER_REQUOTE_HOLD_QUEUE"): "500",
+    ("queuehug", "HUNTER_REQUOTE_HOLD_BELOW"): "0.08",
+    ("deadband-tight", "HUNTER_REQUOTE_DEAD_BAND"): "0.05",
+    ("deadband-wide", "HUNTER_DYNAMIC_OFFSET_MULT"): "0.25",
+    ("snapstop", "HUNTER_SINGLE_BUY_GRACE_SEC"): "45",
+}
+
+
+def _i492_arms() -> list[dict]:
+    return json.loads(I492_ARMS.read_text(encoding="utf-8"))
+
+
+def test_i492_arms_restore_the_first_run_dimensions():
+    arms = _i492_arms()
+    assert [a["name"] for a in arms] == list(I492_EXPECTED_ENV)
+    for arm in arms:
+        assert arm["env"] == I492_EXPECTED_ENV[arm["name"]], arm["name"]
+
+
+def test_i492_arms_carry_no_retired_knob():
+    for arm in _i492_arms():
+        offenders = I492_RETIRED_KNOBS & set(arm["env"])
+        assert not offenders, f"{arm['name']} carries retired knobs {sorted(offenders)}"
+
+
+def test_i492_arms_carry_no_487_catalyst_tweak():
+    env_by_arm = {a["name"]: a["env"] for a in _i492_arms()}
+    for (arm, knob), tweak in I487_TWEAKS.items():
+        assert env_by_arm[arm].get(knob) != tweak, (
+            f"{arm} carries the #487 tweak {knob}={tweak}"
+        )
+
+
+
+def test_every_i492_arm_loads_its_own_config():
+    """A plan the children cannot load is not a tournament.
+
+    The file shipped `HUNTER_TOURNAMENT_PRESET=control` long after #484's
+    control preset was purged. `config.from_env` raises on an unknown preset, so
+    that arm would have died at startup while the other nine kept posting --
+    the exact failure the plan now refuses up front.
+    """
+    from core_brain.config import load
+
+    for arm in _i492_arms():
+        for key, value in arm["env"].items():
+            os.environ[key] = value
+        try:
+            cfg = load()
+            assert cfg.bot_risk_stop_mode == "ABSOLUTE_DROP", arm["name"]
+            assert cfg.bot_risk_stop_adverse_drop_cents == pytest.approx(
+                float(arm["env"]["BOT_RISK_STOP_ADVERSE_DROP_CENTS"])), arm["name"]
+            if "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER" in arm["env"]:
+                assert cfg.bot_quote_spread_offset_multiplier == pytest.approx(
+                    float(arm["env"]["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"])), arm["name"]
+        finally:
+            for key in arm["env"]:
+                os.environ.pop(key, None)
+
+
+def test_i492_plan_names_ten_fresh_stores_and_ports(tmp_path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    arms = _i492_arms()
+    plan = build_tournament_plan(issue=492, arms=arms, base_dir=tmp_path,
+                                 run_number=1, check_ports=False)
+    assert [a.name for a in plan.arms] == [f"{a['name']}-1" for a in arms]
+    assert [a.dash_port for a in plan.arms] == list(range(8801, 8811))
+    assert len({str(a.db_path) for a in plan.arms}) == 10
+    assert len({a.run_id for a in plan.arms}) == 10
+    for arm in plan.arms:
+        name = Path(arm.db_path).name
+        assert name.startswith("i492_tournament-1_"), name
+        assert name != "orders.db"
+
+
+def test_run_numbered_dry_run_reads_the_conventional_arms_file(tmp_path, capsys):
+    """The issue's acceptance command must carry the ten arms, not the default four."""
+    from scripts.shadow_tournament import main
+
+    rc = main([
+        "--issue", "492", "--minutes", "720", "--run-number", "1",
+        "--dry-run", "--base-dir", str(tmp_path),
+    ])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["run_number"] == 1
+    assert [a["name"] for a in data["arms"]] == [
+        f"{name}-1" for name in I492_EXPECTED_ENV
+    ]
+    assert [a["dash_port"] for a in data["arms"]] == list(range(8801, 8811))
+    assert data["record_path"].replace("\\", "/") == (
+        "runtime/tournaments/i492_tournament-1.json")
+    assert data["results_path"].replace("\\", "/") == (
+        "reports/tournaments/i492_tournament-1_results.json")
+    assert data["log_path"].replace("\\", "/") == (
+        "runtime/tournaments/i492_tournament-1.log")
+    assert data["arms_source"] == "configs/tournaments/i492_tournament-1_arms.json"
+
+
+def test_explicit_arms_file_beats_the_convention(tmp_path, capsys):
+    from scripts.shadow_tournament import main
+
+    rc = main([
+        "--issue", "492", "--run-number", "1", "--dry-run",
+        "--base-dir", str(tmp_path), "--arms-file", str(I622_ARMS),
+    ])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert len(data["arms"]) == 3, "an explicit arms file wins over the convention"
+
+
+def test_unknown_preset_selector_is_refused_at_plan_time(tmp_path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    with pytest.raises(ValueError, match="unknown tournament preset"):
+        build_tournament_plan(
+            issue=492,
+            arms=[{"name": "control",
+                   "env": {"BOT_QUOTE_TOURNAMENT_PRESET": "control"}}],
+            base_dir=tmp_path, run_number=1, check_ports=False,
+        )
+    with pytest.raises(ValueError, match="unknown tournament preset"):
+        build_tournament_plan(
+            issue=492,
+            arms=[{"name": "control",
+                   "env": {"HUNTER_TOURNAMENT_PRESET": "control"}}],
+            base_dir=tmp_path, run_number=1, check_ports=False,
+        )
+
+
+def test_explicit_legacy_preset_selector_not_overwritten_by_name_default(tmp_path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        issue=492,
+        arms=[{"name": "conservative",
+               "env": {"HUNTER_TOURNAMENT_PRESET": "aggressive"}}],
+        base_dir=tmp_path, run_number=1, check_ports=False,
+    )
+    assert plan.arms[0].env["HUNTER_TOURNAMENT_PRESET"] == "aggressive"
+    assert "BOT_QUOTE_TOURNAMENT_PRESET" not in plan.arms[0].env

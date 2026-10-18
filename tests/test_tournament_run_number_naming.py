@@ -103,7 +103,7 @@ def test_build_plan_run_number_scheme(tmp_path: Path):
     assert plan.to_dict()["log_path"] == str(plan.log_path)
     assert "stamp" not in plan.arms[0].db_path.name
     # Base name still drives the preset selector, not the suffixed slug.
-    assert plan.arms[0].env["HUNTER_TOURNAMENT_PRESET"] == "baseline"
+    assert plan.arms[0].env["BOT_QUOTE_TOURNAMENT_PRESET"] == "baseline"
 
 
 def test_build_plan_run_number_two(tmp_path: Path):
