@@ -347,3 +347,31 @@ display check; it spends nothing.
 Recorded in `docs/issues/652-noticed-but-not-touching.md`: the `dataclasses.replace()` precedence limitation
 that this change makes reachable for eight more names (pre-existing shared behaviour, needs its own ticket),
 and the `_cents` suffix convention question CodeRabbit raised. Neither blocks this ticket.
+
+---
+
+## 9. Progress (Station III)
+
+- [x] **T1** — guard repointed. RED confirmed against the pre-change class body: `3 failed, 11 passed`,
+      naming the eight leftover fields, the class-body re-declaration and the empty alias entries.
+- [x] **T2** — core owns the eight pairs and the derived alias. `filter_common_spread_max_cents` reads
+      0.0205 / 0.1025 / 0.15 on both classes, refuses the constructor with `TypeError`, is absent from
+      `dataclasses.fields()`, and cannot be assigned.
+- [x] **T3** — scoring inherits. The class body holds only the five `PICKER_PROFILE` fields plus
+      `db_path`; the six `load()` keys are canonical.
+- [x] **T4** — regression pins added. Reverting only the two config modules makes 16 of the new tests
+      fail, so the change is what makes them pass.
+- [x] **T4b** — added after the `tdd-guide` persona review (T1/T4 were test-writing-heavy): the two
+      dashboard-card endpoint tests and the refused-value fallbacks. Mutation-checked — deleting one
+      alias entry from `_LEGACY_TO_CANONICAL` makes the card test fail on the silent fallback.
+
+**Checks (agent-run, all green):** 66 passed (`divergence_guard`, `single_source`, `market_selection_bars`),
+215 passed (the eight reader/regression files), 186 passed (`dashboard_server` plus the config sweep).
+The full `python -m pytest -q` suite stays with GitHub CI on Ubuntu and Windows.
+
+**Extra evidence beyond the test files:** the real `/api/parameters` payload is byte-identical before and
+after the change, including with `HUNTER_MIN_MOVEMENT_USD=777` set — so no dashboard card moved. With the
+override set the card reads `$777.00` rather than its `$200.00` fallback literal, which is the hands-on check
+that distinguishes a resolved alias from the hard-coded default.
+
+**Commits:** `dfa3237` (plan) · `2ae507e` (T1) · `b5de375` (T2+T3) · `eee3415` (T4) · `b0d30eb` (T4b).
