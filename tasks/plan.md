@@ -150,7 +150,7 @@ anything reacts — the exact window a single-buy rescue has to win.
 - **Verification:** `python -m pytest -q tests/test_trader_loop.py`
 
 
-### [ ] T3 — Wire the streams in `main()`: cache reader, subscriptions, fill queue, shutdown
+### [x] T3 — Wire the streams in `main()`: cache reader, subscriptions, fill queue, shutdown
 - **Size:** L | **Domain:** `[Backend/Logic]` | **Skill:** `test-driven-development`
 - **Depends on:** T1, T2
 - **Target files:** `core_brain/trader_loop.py`, `tests/test_trader_loop.py`

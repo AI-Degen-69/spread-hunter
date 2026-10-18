@@ -3815,3 +3815,232 @@ class TestFillDrainReactsInLoop:
             markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
         assert order == ["reconcile"]
 
+
+class TestMainStreamWiring:
+    """T3: CLI flags, stream cache reader, subscriptions, user stream, and shutdown."""
+
+    def test_parse_args_ws_books_defaults(self):
+        from core_brain.trader_loop import _parse_args
+        # Loop mode defaults to ws_books=None, effective stream
+        a = _parse_args([])
+        assert a.ws_books is None
+        assert (a.ws_books if a.ws_books is not None else not a.once) is True
+
+        # Once mode defaults to ws_books=None, effective REST
+        a_once = _parse_args(["--once"])
+        assert a_once.ws_books is None
+        assert (a_once.ws_books if a_once.ws_books is not None else not a_once.once) is False
+
+        # Explicit overrides
+        a_ws = _parse_args(["--ws-books"])
+        assert a_ws.ws_books is True
+        assert (a_ws.ws_books if a_ws.ws_books is not None else not a_ws.once) is True
+
+        a_once_ws = _parse_args(["--once", "--ws-books"])
+        assert a_once_ws.ws_books is True
+        assert (a_once_ws.ws_books if a_once_ws.ws_books is not None else not a_once_ws.once) is True
+
+        a_no_ws = _parse_args(["--no-ws-books"])
+        assert a_no_ws.ws_books is False
+        assert (a_no_ws.ws_books if a_no_ws.ws_books is not None else not a_no_ws.once) is False
+
+    def test_stream_reader_returns_cache_shape_and_loads_stats(self):
+        from core_brain.trader_loop import _make_stream_fetch_books
+        events = []
+        stats_box = {}
+
+        class FakeCache:
+            def book(self, token_id):
+                return {
+                    "token_id": token_id,
+                    "bids": {0.49: 100},
+                    "asks": {0.51: 100},
+                    "best_bid": 0.49,
+                    "best_ask": 0.51,
+                }
+
+        reader = _make_stream_fetch_books(
+            FakeCache(),
+            lambda **e: events.append(e),
+            stats_box,
+        )
+        res = reader("https://clob", "tok-1")
+        assert res["token_id"] == "tok-1"
+        assert res["best_bid"] == 0.49
+        assert stats_box["book_source"] == "stream"
+        assert stats_box["token_id"] == "tok-1"
+        assert stats_box["book_read_ms"] >= 0.0
+        assert len(events) == 1
+        ev = events[0]
+        assert ev["action"] == "ws_book_read"
+        assert ev["service"] == "decide"
+        assert ev["phase"] == "quoting"
+        assert ev["latency_ms"] >= 0.0
+        assert ev["extra"]["book_source"] == "stream"
+        assert ev["extra"]["token_id"] == "tok-1"
+
+    def test_cold_cache_raises_book_stream_cold_and_never_calls_rest(self):
+        from core_brain.trader_loop import _make_stream_fetch_books
+        from core_brain.market_stream import BookNotReady
+
+        class ColdCache:
+            def book(self, token_id):
+                raise BookNotReady(f"token {token_id} has no live book")
+
+        stats_box = {}
+        reader = _make_stream_fetch_books(ColdCache(), lambda **e: None, stats_box)
+        with pytest.raises(RuntimeError, match="book stream cold: tok-cold"):
+            reader("https://clob", "tok-cold")
+        assert not stats_box
+
+    def test_subscribe_dedupes_and_retains(self):
+        from core_brain.trader_loop import _make_subscribe_fn
+
+        ensured = []
+        retained = []
+        fetched = []
+
+        class FakeStream:
+            def ensure_market(self, cid, slug, up_token, down_token):
+                ensured.append((cid, slug, up_token, down_token))
+
+            def retain_markets(self, cids):
+                retained.append(list(cids))
+
+        class FakeCache:
+            def ready_tokens(self):
+                return {"tok-up-1", "tok-dn-1", "tok-up-2", "tok-dn-2"}
+
+        def fake_fetch_market(cid):
+            fetched.append(cid)
+            m = FakeMarket(cid, f"tok-up-{cid}", f"tok-dn-{cid}")
+            m.market_slug = f"slug-{cid}"
+            return m
+
+        sub = _make_subscribe_fn(FakeStream(), FakeCache(), fake_fetch_market)
+
+        universe = [FakeMarket("1"), FakeMarket("2")]
+        sub(universe)
+        assert fetched == ["1", "2"]
+        assert len(ensured) == 2
+        assert retained == [["1", "2"]]
+
+        # Second rotation of the same universe: no new fetch, no new ensure, but retain is called
+        sub(universe)
+        assert fetched == ["1", "2"]
+        assert len(ensured) == 2
+        assert retained == [["1", "2"], ["1", "2"]]
+
+    def test_subscribe_skips_market_whose_fetch_raised(self):
+        from core_brain.trader_loop import _make_subscribe_fn
+
+        ensured = []
+        fetched = []
+
+        class FakeStream:
+            def ensure_market(self, cid, slug, up_token, down_token):
+                ensured.append(cid)
+
+            def retain_markets(self, cids):
+                pass
+
+        class FakeCache:
+            def ready_tokens(self):
+                return {"tok-up-good", "tok-dn-good"}
+
+        def fake_fetch_market(cid):
+            fetched.append(cid)
+            if cid == "bad":
+                raise RuntimeError("503 venue down")
+            m = FakeMarket(cid, "tok-up-good", "tok-dn-good")
+            m.market_slug = "good"
+            return m
+
+        sub = _make_subscribe_fn(FakeStream(), FakeCache(), fake_fetch_market)
+        sub([FakeMarket("bad"), FakeMarket("good")])
+        assert ensured == ["good"]
+        assert fetched == ["bad", "good"]
+
+        # Next rotation: bad is retried because it was not added to subscribed set
+        sub([FakeMarket("bad"), FakeMarket("good")])
+        assert fetched == ["bad", "good", "bad"]
+
+    def test_user_stream_missing_creds_leave_loop_unchanged(self, monkeypatch):
+        from core_brain.trader_loop import _setup_user_stream
+        from core_brain.user_stream import UserStreamCredentialsMissing
+
+        def raise_creds():
+            raise UserStreamCredentialsMissing("missing POLY_API_KEY")
+
+        monkeypatch.setattr("core_brain.user_stream.get_user_stream_creds", raise_creds)
+        client, fill_events, fill_reconcile, wake = _setup_user_stream(
+            decide_emit=lambda **kw: None,
+            client=object(),
+            registry=object(),
+            maker="0xmaker",
+        )
+        assert client is None
+        assert fill_events is None
+        assert fill_reconcile is None
+
+    def test_sleep_fn_wakes_on_event(self):
+        import threading
+        import time
+        from core_brain.trader_loop import _make_sleep_fn
+
+        wake = threading.Event()
+        sleep_fn = _make_sleep_fn(wake)
+
+        # Pre-set event causes sleep to return immediately
+        wake.set()
+        t0 = time.monotonic()
+        sleep_fn(5.0)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 0.5
+        assert not wake.is_set()
+
+    def test_main_finally_stops_market_and_user_streams(self, monkeypatch, tmp_path):
+        import threading
+        from core_brain.trader_loop import main
+        from core_brain.order_registry import InstanceInUse
+
+        market_stopped = []
+        user_stopped = []
+
+        class FakeMarketStream:
+            def start(self):
+                pass
+            def stop(self):
+                market_stopped.append(True)
+
+        class FakeUserStream:
+            def on_trade(self, cb):
+                pass
+            def on_state(self, cb):
+                pass
+            def start(self, cids):
+                pass
+            def stop(self):
+                user_stopped.append(True)
+
+        monkeypatch.setattr("core_brain.market_stream.MarketStream", lambda **kw: FakeMarketStream())
+        monkeypatch.setattr(
+            "core_brain.trader_loop._setup_user_stream",
+            lambda **kw: (FakeUserStream(), lambda: [], lambda: None, threading.Event()),
+        )
+
+        def fake_run(*a, **kw):
+            raise InstanceInUse("fleet already active")
+
+        monkeypatch.setattr("core_brain.trader_loop.run", fake_run)
+        monkeypatch.setattr("core_brain.trader_loop._market_specs", lambda *a, **k: [FakeMarket("1")])
+
+        db_file = tmp_path / "test_main.db"
+        # Running main should return 2 on InstanceInUse, and both streams should be stopped
+        ret = main(["--ws-books", "--no-live", "--db", str(db_file)])
+        assert ret == 2
+        assert market_stopped == [True]
+        assert user_stopped == [True]
+
+
+

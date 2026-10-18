@@ -2834,6 +2834,183 @@ def _production_reconcile_fn(emit_fn: Any) -> Any:
     return _reconcile
 
 
+def _make_stream_fetch_books(
+    cache: Any,
+    emit_fn: Callable[..., Any],
+    stats_box: dict,
+) -> Callable[[str, str], dict]:
+    """Return a `fetch_books(clob_host, token_id)` reader backed by `MarketBookCache`.
+
+    Times the read with `time.perf_counter()`, records latency and source in
+    `stats_box`, emits a `ws_book_read` event through `emit_fn`, and fails
+    closed on `BookNotReady` without falling back to REST.
+    """
+    from core_brain.market_stream import BookNotReady
+
+    def _fetch_books(clob_host: str, token_id: str) -> dict:
+        t0 = time.perf_counter()
+        try:
+            book = cache.book(token_id)
+        except BookNotReady:
+            raise RuntimeError(f"book stream cold: {token_id}")
+        read_ms = (time.perf_counter() - t0) * 1000.0
+        stats = {
+            "book_source": "stream",
+            "book_read_ms": read_ms,
+            "token_id": token_id,
+        }
+        stats_box.clear()
+        stats_box.update(stats)
+        emit_fn(
+            service="decide",
+            cycle=0,
+            phase="quoting",
+            action="ws_book_read",
+            latency_ms=read_ms,
+            extra=dict(stats),
+        )
+        return book
+
+    return _fetch_books
+
+
+def _make_subscribe_fn(
+    market_stream: Any,
+    cache: Any,
+    fetch_market_fn: Callable[[str], Any],
+    *,
+    timeout_sec: float = 5.0,
+    poll_sec: float = 0.05,
+    time_fn: Callable[[], float] = time.monotonic,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> Callable[[list], None]:
+    """Return a `subscribe_fn(markets)` callable that registers universe tokens on `MarketStream`.
+
+    Dedupes by condition ID so `fetch_market_fn` is only called once per market,
+    calls `ensure_market` and `retain_markets`, and bounds the wait up to 5s
+    for newly added tokens to show up in `cache.ready_tokens()`.
+    """
+    subscribed_cids: set[str] = set()
+
+    def _subscribe(markets: list) -> None:
+        current_cids = []
+        new_tokens = []
+        for m in markets:
+            cid = getattr(m, "condition_id", None) or (
+                m.get("cid") or m.get("condition_id") if isinstance(m, dict) else None
+            )
+            if not cid:
+                continue
+            cid_str = str(cid)
+            current_cids.append(cid_str)
+            if cid_str not in subscribed_cids:
+                try:
+                    resolved = fetch_market_fn(cid_str)
+                    slug = (
+                        getattr(resolved, "market_slug", "")
+                        or getattr(m, "market_slug", "")
+                        or (m.get("market_slug") if isinstance(m, dict) else "")
+                        or ""
+                    )
+                    up_token = str(getattr(resolved, "up_token", ""))
+                    down_token = str(getattr(resolved, "down_token", ""))
+                    market_stream.ensure_market(cid_str, slug, up_token, down_token)
+                    subscribed_cids.add(cid_str)
+                    if up_token:
+                        new_tokens.append(up_token)
+                    if down_token:
+                        new_tokens.append(down_token)
+                except Exception as e:
+                    log.warning(
+                        "failed to resolve market for stream subscription %s: %s: %s",
+                        cid_str, type(e).__name__, e,
+                    )
+
+        market_stream.retain_markets(current_cids)
+        subscribed_cids.intersection_update(current_cids)
+
+        if new_tokens:
+            deadline = time_fn() + timeout_sec
+            needed = set(new_tokens)
+            while time_fn() < deadline:
+                ready = cache.ready_tokens()
+                if needed.issubset(ready):
+                    break
+                sleep_fn(poll_sec)
+
+    return _subscribe
+
+
+def _setup_user_stream(
+    decide_emit: Callable,
+    client: Any,
+    registry: Any,
+    maker: Optional[str],
+    wake: Optional[threading.Event] = None,
+) -> tuple[Optional[Any], Optional[Callable], Optional[Callable], threading.Event]:
+    """Start `UserStreamClient` when credentials are present.
+
+    Returns `(user_client, fill_events_fn, fill_reconcile_fn, wake_event)`.
+    If credentials are missing, logs a message and returns `(None, None, None, wake_event)`.
+    """
+    import queue
+    import threading
+    from core_brain.user_stream import (
+        UserStreamClient, UserStreamCredentialsMissing, get_user_stream_creds,
+    )
+
+    if wake is None:
+        wake = threading.Event()
+
+    try:
+        get_user_stream_creds()
+    except UserStreamCredentialsMissing:
+        log.info("user stream disabled: credentials missing (fill-triggered reconcile off)")
+        return None, None, None, wake
+
+    user_client = UserStreamClient(emit_fn=decide_emit)
+    fill_queue: queue.Queue = queue.Queue()
+
+    user_client.on_trade(lambda ev: (fill_queue.put(ev), wake.set()))
+
+    was_disconnected = False
+
+    def _on_state(state: str, detail: str) -> None:
+        nonlocal was_disconnected
+        if state in ("DISCONNECTED", "RECONNECTING"):
+            was_disconnected = True
+        elif state == "AUTH_OK":
+            if was_disconnected:
+                wake.set()
+                was_disconnected = False
+
+    user_client.on_state(_on_state)
+    user_client.start(None)
+
+    def _drain_fills() -> list:
+        events = []
+        while True:
+            try:
+                events.append(fill_queue.get_nowait())
+            except queue.Empty:
+                break
+        return events
+
+    fill_reconcile = _production_reconcile_fn(decide_emit)
+    fill_reconcile_fn = lambda: fill_reconcile(client, registry, maker)
+
+    return user_client, _drain_fills, fill_reconcile_fn, wake
+
+
+def _make_sleep_fn(wake: threading.Event) -> Callable[[float], None]:
+    """Return a `sleep_fn(seconds)` that waits on `wake` and clears it afterwards."""
+    def _sleep(seconds: float) -> None:
+        wake.wait(max(0.0, seconds))
+        wake.clear()
+
+    return _sleep
+
+
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """The Trader loop's CLI, separated from `main` so the interval contract
     is testable without launching a loop (operator directive 2026-10-12).
@@ -2862,13 +3039,16 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                     help="funder address (default: POLY_FUNDER)")
     ap.add_argument("--no-reconcile", action="store_true",
                     help="skip the reconcile pass (the poll loop owns it when "
-                         "running alongside this fleet)")
+                          "running alongside this fleet)")
     ap.add_argument("--no-sweep", action="store_true",
                     help="skip the account sweep (the poll loop owns it when "
-                         "running alongside this fleet)")
+                          "running alongside this fleet)")
     ap.add_argument("--resolution-interval", type=float, default=600.0,
                     help="seconds between market-resolution sweeps on a "
                          "background, non-blocking thread (default: 600)")
+    ap.add_argument("--ws-books", action=argparse.BooleanOptionalAction, default=None,
+                    help="read order books from the WebSocket market stream instead of "
+                         "REST (default: True in loop mode, False with --once)")
     a = ap.parse_args(argv)
     # The ceiling is enforced HERE, at the CLI boundary, so the loop body
     # never sees a cadence above 1s -- not silently clamped mid-flight
@@ -2893,6 +3073,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     from core_brain.quotes import decide_quotes
 
     a = _parse_args(argv)
+
+    use_ws_books = a.ws_books if a.ws_books is not None else not a.once
+    books_mode = "stream" if use_ws_books else "rest"
 
     logging.basicConfig(
         level=logging.INFO,
@@ -2919,8 +3102,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.warning("no graduated markets in runtime/markets.json; "
                     "run scripts/rank_markets.py first -- idling")
     else:
-        log.info("rotating %d markets (live=%s interval=%ss once=%s)",
-                 len(specs), a.live, a.interval, a.once)
+        log.info("rotating %d markets (live=%s interval=%ss once=%s books=%s)",
+                 len(specs), a.live, a.interval, a.once, books_mode)
 
     db_path = Path(a.db) if a.db else DEFAULT_DB_PATH
     registry = OrderRegistry(db_path=db_path)
@@ -2939,6 +3122,36 @@ def main(argv: Optional[list[str]] = None) -> int:
         client = object()
 
     decide_emit = partial(_emit_cycle_event, db_path=db_path)
+
+    market_stream = None
+    book_stats: dict = {}
+    if use_ws_books:
+        from core_brain.market_stream import MarketBookCache, MarketStream
+        cache = MarketBookCache()
+        market_stream = MarketStream(cache=cache, emit_fn=decide_emit)
+        market_stream.start()
+        fetch_books_fn = _make_stream_fetch_books(cache, decide_emit, book_stats)
+        subscribe_fn = _make_subscribe_fn(market_stream, cache, _fetch_market)
+        book_stats_fn = lambda: dict(book_stats)
+    else:
+        fetch_books_fn = full_book
+        subscribe_fn = None
+        book_stats_fn = None
+
+    user_stream = None
+    fill_events_fn = None
+    fill_reconcile_fn = None
+    wake = threading.Event()
+
+    if not a.once:
+        user_stream, fill_events_fn, fill_reconcile_fn, wake = _setup_user_stream(
+            decide_emit=decide_emit,
+            client=client,
+            registry=registry,
+            maker=maker,
+            wake=wake,
+        )
+
     seam = VenueSeam(
         client=client,
         registry=registry,
@@ -2946,7 +3159,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         maker_address=maker,
         clob_host=os.environ.get("CLOB_HOST", "https://clob.polymarket.com"),
         fetch_market=_fetch_market,
-        fetch_books=full_book,
+        fetch_books=fetch_books_fn,
         decide=decide_quotes,
         submit_fn=_submit_intents,
         cancel_fn=_cancel_orders,
@@ -2974,6 +3187,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         fetch_uma_status=make_uma_status_reader(
             os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")),
         record_market_event=registry.log_market_event,
+        subscribe_fn=subscribe_fn,
+        book_stats_fn=book_stats_fn,
+        fill_events_fn=fill_events_fn,
+        fill_reconcile_fn=fill_reconcile_fn,
     )
     # Resolution detection runs off the critical path on a slow background
     # thread (won't block a 5s rotation). Disabled for --once smoke runs.
@@ -2995,12 +3212,24 @@ def main(argv: Optional[list[str]] = None) -> int:
             seam,
             interval=a.interval, once=a.once, live=a.live, markets=specs,
             markets_fn=lambda: _market_specs(a.max_markets, registry=registry),
+            sleep_fn=_make_sleep_fn(wake),
             suspects_box=suspects_box,
             spawn_guardian=not a.once,
         )
     except InstanceInUse as exc:
         print(f"fleet refused: {exc}", file=sys.stderr)
         return 2
+    finally:
+        if market_stream is not None:
+            try:
+                market_stream.stop()
+            except Exception as e:
+                log.warning("market stream stop failed: %s", e)
+        if user_stream is not None:
+            try:
+                user_stream.stop()
+            except Exception as e:
+                log.warning("user stream stop failed: %s", e)
     return 0 if results else 1
 
 
