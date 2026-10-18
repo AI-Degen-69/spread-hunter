@@ -4,7 +4,7 @@ Paths are relative to this repo: the log lands in runtime/rerank.log, the cycle 
 lives in runtime/, and the filter writes runtime/markets.json for the Trader to adopt.
 The scoring rules it leans on live in scoring/.
 
-The Trader adopts runtime/markets.json every `rerank_interval_sec`, but
+The Trader adopts runtime/markets.json every `filter_std_rerank_interval_sec`, but
 nothing regenerates that file -- and the U6 universe is short-dated by
 construction, so every market in it resolves within a day. Left alone, the
 fleet re-reads the same file until its whole universe has settled and then

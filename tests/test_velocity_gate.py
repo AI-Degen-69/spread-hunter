@@ -278,14 +278,17 @@ def test_volatility_config_defaults_and_env(monkeypatch):
     import scoring.config as sc
 
     cfg = sc.MakerConfig()
-    assert cfg.select_min_range_cents == 2.0
-    assert cfg.select_volatility_window_sec == 7200.0
+    assert cfg.filter_live_move_min_range_cents == 2.0
+    assert cfg.filter_live_move_lookback_sec == 7200.0
+    assert cfg.filter_live_gate_velocity_on is True
 
-    monkeypatch.setenv("HUNTER_VOLATILITY_WINDOW_SEC", "3600.0")
-    monkeypatch.setenv("HUNTER_MIN_RANGE_CENTS", "3.5")
+    monkeypatch.setenv("FILTER_LIVE_MOVE_LOOKBACK_SEC", "3600.0")
+    monkeypatch.setenv("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "3.5")
+    monkeypatch.setenv("FILTER_LIVE_GATE_VELOCITY_ON", "false")
     loaded = sc.load()
-    assert loaded.select_volatility_window_sec == 3600.0
-    assert loaded.select_min_range_cents == 3.5
+    assert loaded.filter_live_move_lookback_sec == 3600.0
+    assert loaded.filter_live_move_min_range_cents == 3.5
+    assert loaded.filter_live_gate_velocity_on is False
 
 
 def test_velocity_gate_range_exempt_skips_flat_rejection_but_keeps_velocity():

@@ -326,3 +326,89 @@ def test_the_eight_picker_bars_keep_their_shipped_defaults(monkeypatch):
     shipped = [getattr(loaded, canonical) for canonical in PICKER_BAR_OLD_NAMES.values()]
 
     assert shipped == [200.0, 1800.0, True, 0.0, 2.0, 7200.0, 15.0, False]
+
+
+# ============================================================================
+# #653: canonical `FILTER_*` environment variable overrides & precedence
+# ============================================================================
+
+SCREENER_CANONICAL_ENV = [
+    # (canonical_var, legacy_var, field, canonical_raw, canonical_val, legacy_raw, legacy_val, default_val)
+    ("FILTER_LIVE_VEL_MIN_USD", "HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "888.0", 888.0, "777.0", 777.0, 200.0),
+    ("FILTER_LIVE_VEL_LOOKBACK_SEC", "HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "600.0", 600.0, "900.0", 900.0, 1800.0),
+    ("FILTER_LIVE_GATE_VELOCITY_ON", "HUNTER_VELOCITY_GATE", "filter_live_gate_velocity_on", "false", False, "true", True, True),
+    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "4.5", 4.5, "3.5", 3.5, 2.0),
+    ("FILTER_LIVE_MOVE_LOOKBACK_SEC", "HUNTER_VOLATILITY_WINDOW_SEC", "filter_live_move_lookback_sec", "5400.0", 5400.0, "3600.0", 3600.0, 7200.0),
+    ("FILTER_LIVE_ACTIVITY_MIN_RATIO", "HUNTER_MIN_ACTIVITY_RATIO", "filter_live_activity_min_ratio", "0.35", 0.35, "0.25", 0.25, 0.0),
+    ("FILTER_LIVE_VOL_MIN_24H_USD", None, "filter_live_vol_min_24h_usd", "50000.0", 50000.0, None, None, 35_000.0),
+    ("FILTER_STD_VOL_MIN_24H_USD", "HUNTER_MIN_VOLUME_24H_USD", "filter_std_vol_min_24h_usd", "250000.0", 250000.0, "150000.0", 150000.0, 125_000.0),
+    ("FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", "HUNTER_DEPTH_TRIAL_USD", "filter_common_vol_min_top3_depth_usd_trial", "300.0", 300.0, "250.0", 250.0, None),
+    ("FILTER_STD_VOL_MIN_24H_USD_TRIAL", "HUNTER_VOLUME_TRIAL_USD", "filter_std_vol_min_24h_usd_trial", "75000.0", 75000.0, "50000.0", 50000.0, None),
+]
+
+
+def _clear_screener_canonical_env(monkeypatch):
+    for can_var, leg_var, *_ in SCREENER_CANONICAL_ENV:
+        monkeypatch.delenv(can_var, raising=False)
+        if leg_var is not None:
+            monkeypatch.delenv(leg_var, raising=False)
+
+
+@pytest.mark.parametrize(
+    "can_var,leg_var,field,can_raw,can_val,leg_raw,leg_val,default_val",
+    SCREENER_CANONICAL_ENV,
+)
+def test_canonical_filter_env_overrides_field_and_wins_over_legacy(
+        monkeypatch, can_var, leg_var, field, can_raw, can_val, leg_raw, leg_val, default_val):
+    """#653: each canonical `FILTER_*` overrides its field and beats `HUNTER_*`."""
+    _clear_screener_canonical_env(monkeypatch)
+
+    # 1. Unset -> shipped default
+    assert getattr(scoring_config.load(), field) == default_val
+
+    # 2. Canonical alone -> canonical value
+    monkeypatch.setenv(can_var, can_raw)
+    assert getattr(scoring_config.load(), field) == can_val
+
+    if leg_var is not None:
+        # 3. Both set -> canonical wins over legacy
+        monkeypatch.setenv(leg_var, leg_raw)
+        assert getattr(scoring_config.load(), field) == can_val
+
+        # 4. Blank or whitespace canonical -> falls through to legacy
+        for blank in ("", "   "):
+            monkeypatch.setenv(can_var, blank)
+            assert getattr(scoring_config.load(), field) == leg_val
+
+        # 5. Legacy alone -> legacy value still works
+        monkeypatch.delenv(can_var, raising=False)
+        assert getattr(scoring_config.load(), field) == leg_val
+
+
+@pytest.mark.parametrize("bad_raw", ["abc", "nan", "inf", "-1", ""])
+def test_invalid_live_volume_override_keeps_shipped_default(monkeypatch, bad_raw):
+    """`FILTER_LIVE_VOL_MIN_24H_USD` refuses non-finite or negative input."""
+    _clear_screener_canonical_env(monkeypatch)
+    monkeypatch.setenv("FILTER_LIVE_VOL_MIN_24H_USD", bad_raw)
+
+    assert scoring_config.load().filter_live_vol_min_24h_usd == 35_000.0
+
+
+def test_env_example_documents_only_real_canonical_variables():
+    """Every `FILTER_*` and `BOT_*` variable in `.env.example` is read by a loader."""
+    import re
+    from core_brain import config as core_config
+
+    repo_root = Path(scoring_config.__file__).resolve().parent.parent
+    env_example = (repo_root / ".env.example").read_text(encoding="utf-8")
+    scoring_src = Path(scoring_config.__file__).read_text(encoding="utf-8")
+    core_src = Path(core_config.__file__).read_text(encoding="utf-8")
+
+    documented = re.findall(r"^#\s*((?:FILTER|BOT)_[A-Z0-9_]+)=", env_example, re.MULTILINE)
+    assert len(documented) >= 10, "expected canonical FILTER_* and BOT_* entries in .env.example"
+
+    unread = [
+        var for var in documented
+        if f'"{var}"' not in scoring_src and f'"{var}"' not in core_src
+    ]
+    assert not unread, f".env.example documents variables no loader reads: {unread}"
