@@ -82,3 +82,12 @@ def test_bankroll_override_survives_the_allocator_purge(monkeypatch):
     cfg = load_scoring()
     assert cfg.bankroll_usd == 2000
     assert not hasattr(cfg, "allocation_budget")
+
+
+def test_scoring_rewards_module_is_deleted():
+    """scoring.rewards was orphaned Polymarket liquidity reward math;
+    Issue #681 purges it permanently."""
+    import importlib.util
+    spec = importlib.util.find_spec("scoring.rewards")
+    assert spec is None, "scoring.rewards must be completely deleted (#681)"
+
