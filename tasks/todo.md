@@ -2,4 +2,4 @@
 
 - [x] T1: Delete orphaned `scoring/rewards.py` and lock zero-reference guard
 - [x] T2: Purge reward pool formulas, checks, and income fields from `scripts/filter_markets.py`
-- [ ] T3: Clean up screener terminal output and summary banners in `scripts/filter_markets.py`
+- [x] T3: Clean up screener terminal output and summary banners in `scripts/filter_markets.py`

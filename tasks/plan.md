@@ -60,7 +60,7 @@ Purge legacy maker rebate/liquidity reward program formulas, calculations, and t
 - **Verification:**
   - `python -m pytest -q tests/test_rewards_purge.py tests/test_unified_universe.py tests/test_redesigned_filter_pipeline.py tests/test_rank_score.py tests/test_paired_depth.py`
 
-### T3: Clean up screener terminal output and summary banners [UX/Copy] [Size: S]
+### T3: Clean up screener terminal output and summary banners [UX/Copy] [Size: S] [x]
 - **Depends on:** T2
 - **Files touched:**
   - `scripts/filter_markets.py`

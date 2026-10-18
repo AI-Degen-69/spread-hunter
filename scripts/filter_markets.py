@@ -2230,15 +2230,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         "needs. The universe file records whether a scan was "
                         "truncated either way.")
     p.add_argument("--legacy-rewards", action="store_true",
-                   help="run the retired two-path scan once for comparison: "
-                        "/sampling-markets reward candidates, scored against "
-                        "their venue emission with income > $0/day, "
-                        "alongside the unified universe. The reward path pays "
-                        "nothing on the markets that actually trade (they "
-                        "publish clobRewards: 0) and is deleted from the "
-                        "unified scan; this flag exists only to measure that "
-                        "claim against the live funnel before the code comes "
-                        "out.")
+                   help="retired: the legacy rewards path was deleted; "
+                        "the unified spread universe is the only scan")
     p.add_argument("--min-trades", type=int, default=None, metavar="N",
                    help="minimum trades in 30m required by the velocity gate (default: unconstrained unless set)")
     p.add_argument("--max-last-trade-sec", type=float, default=None, metavar="SEC",
@@ -3063,8 +3056,6 @@ def main() -> None:
                 except OSError:
                     pass
 
-    ti = sum(r["est_income"] for r in picked)
-    tc = sum(r["est_capital"] for r in picked)
     # Rejections grouped by cause. A run that returns nothing must say whether
     # the venue had no tradeable market today or the filters are set wrong --
     # a bare count cannot, and a silent empty universe is how the fleet ended
@@ -3098,8 +3089,7 @@ def main() -> None:
              f"{' (TRIAL)' if spread_trial_active else ''}, "
              f"resolves within {MAX_DAYS_TO_RESOLVE:.0f}d, "
              f"movement >= ${movement_bar:,.0f}/"
-             f"{int(round(MOVEMENT_WINDOW_SEC / 60.0))}m, "
-             f"income > $0/day\n")
+             f"{int(round(MOVEMENT_WINDOW_SEC / 60.0))}m\n")
     print(gates)
     if trial_active:
         print(f"DEPTH-GATE TRIAL: gating on ${trial_bar:,.0f} instead of "
@@ -3143,18 +3133,24 @@ def main() -> None:
         if n_vols:
             print(f"volume-rejects logged: {n_vols} measured "
                   "(volume near-miss tracker)")
-    n_spread = sum(1 for r in picked if r["source"] == "spread")
-    print(f"picked {n_spread} spread / {len(picked) - n_spread} reward\n")
-    print(f"{'market':<40}{'src':>7}{'$/day':>7}{'capital':>9}{'ret%/d':>8}")
+    print(f"picked {len(picked)} spread markets\n")
+    print(f"{'market':<42}{'spread':>8}{'vol_24h':>10}{'move_30m':>10}{'depth':>9}")
     for r in picked:
         # Windows consoles default to a legacy codepage; market titles carry
         # curly quotes and accents that crash a plain print AFTER the file is
         # already written, which looks like a failed run when it succeeded.
-        title = r["title"][:40].encode("ascii", "replace").decode("ascii")
-        print(f"{title:<40}{r['source'][:6]:>7}{r['est_income']:>7.2f}"
-              f"{r['est_capital']:>9.0f}{r['return_pct_day']:>8.2f}")
-    if tc:
-        print(f"\nTOTAL capital ${tc:,.0f}  income ${ti:,.2f}/day  = {100*ti/tc:.2f}%/day")
+        title = r.get("title", "")[:40].encode("ascii", "replace").decode("ascii")
+        sp = r.get("spread")
+        sp_str = f"{sp:.4f}" if sp is not None else "-"
+        vol = r.get("volume_24h")
+        vol_str = f"${vol:,.0f}" if vol else "-"
+        mv = r.get("movement_usd")
+        mv_str = f"${mv:,.0f}" if mv else "-"
+        yd = r.get("yes_depth_usd") or 0.0
+        nd = r.get("no_depth_usd") or 0.0
+        dp = min(yd, nd) if (yd and nd) else max(yd, nd)
+        dp_str = f"${dp:,.0f}" if dp else "-"
+        print(f"{title:<42}{sp_str:>8}{vol_str:>10}{mv_str:>10}{dp_str:>9}")
 
 
 if __name__ == "__main__":

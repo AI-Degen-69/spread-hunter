@@ -146,4 +146,37 @@ def test_evaluate_produces_spread_metrics_without_reward_pool_math():
     assert res["their_score"] == 0.0
 
 
+def test_screener_terminal_output_has_no_reward_terms(tmp_path, monkeypatch, capsys):
+    """filter_markets.main() terminal output must not print reward vocabulary (#681)."""
+    import scripts.filter_markets as fm
+
+    winner = {
+        "cid": "0xtest", "title": "Test Spread Market", "source": "spread",
+        "eligible": True, "spread": 0.025, "volume_24h": 150_000.0,
+        "movement_usd": 1200.0, "yes_depth_usd": 800.0, "no_depth_usd": 750.0,
+        "est_income": 0.0, "est_capital": 0.0, "return_pct_day": 0.0,
+    }
+    monkeypatch.setattr(fm, "RUN", tmp_path / "shared")
+    monkeypatch.setattr(fm, "gamma_universe", lambda s, min_volume_usd=None, full_scan=False: (
+        [], {"pages_fetched": 0, "rows_scanned": 0, "truncated": False, "cheap_rejects": {}}))
+    monkeypatch.setattr(fm, "_score_universe", lambda *a, **k: ([winner], 1))
+    monkeypatch.setattr(fm, "_write_universe_file", lambda *a, **k: None)
+    monkeypatch.setattr(fm, "_write_pipeline_snapshot", lambda *a, **k: None)
+    monkeypatch.setattr(fm, "_log_rank_near_misses", lambda *a, **k: 0)
+    monkeypatch.setattr(fm, "_log_rank_volume_near_misses", lambda *a, **k: 0)
+    monkeypatch.setattr("sys.argv", ["filter_markets", "--dry-run"])
+
+    fm.main()
+    out = capsys.readouterr().out
+
+    for forbidden in ("income > $0/day", "$/day", "ret%/d", "TOTAL capital", "spread / 0 reward", "reward"):
+        assert forbidden not in out, f"Terminal output contained purged reward term '{forbidden}' (#681)"
+    assert "picked 1 spread markets" in out
+    assert "spread" in out
+    assert "vol_24h" in out
+    assert "move_30m" in out
+    assert "depth" in out
+
+
+
 
