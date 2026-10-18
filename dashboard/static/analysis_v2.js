@@ -1,15 +1,13 @@
-/* analysis_v2.js — live data binding for the redesigned Data Analysis page.
+/* analysis_v2.js — data binding for the Data Analysis sidebar page (#568).
  *
- * Served at /analysis-v2. This file is the ONLY thing that reads telemetry;
- * the markup stays the design's own, annotated with data-bind / data-fmt /
- * data-sign / data-band hooks. Nothing here writes to the venue, the order
- * registry, or any worker state -- it is a read-only consumer of GET /api/kpi
- * (which itself accepts ?run_id=, mirroring the dashboard's own calls).
+ * The markup lives in index.html under #analysis-v2; this file never reads
+ * telemetry itself. The dashboard shell's existing GET /api/kpi poll owns the
+ * single fetch and calls renderAnalysisV2(root, kpi) with the cached payload.
+ * Nothing here writes to the venue, the order registry, or any worker state.
  *
  * Two layers, deliberately separate so both are testable from node:
  *   pure  — resolve / format / series->svg-path maths (no DOM)
- *   apply — walk the annotated DOM and paint (needs a document)
- * Only the apply layer auto-runs; the pure layer is exported for the harness.
+ *   apply — walk the annotated DOM under `root` and paint
  */
 'use strict';
 
@@ -398,12 +396,14 @@ function paintBinds(root, kpi, d) {
   }
 }
 
-/* Sufficiency table: the design's own toggle IIFE reads data-r95/98/99,
- * data-rem* and data-p* off each <tr>, so filling those attributes is the
- * whole integration -- no second renderer to keep in sync. */
-function paintSufficiency(kpi) {
+/* Sufficiency table: the confidence-toggle init in initConfidenceToggle reads
+ * data-r95/98/99, data-rem* and data-p* off each <tr>, so filling those
+ * attributes is the whole integration — no second renderer to keep in sync. */
+function paintSufficiency(root, kpi) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope) return;
   const statuses = (resolve(kpi, 'trade_analytics.sample_size_sufficiency.statuses') || {});
-  const rows = document.querySelectorAll('tr.ssr');
+  const rows = scope.querySelectorAll('tr.ssr');
   for (let i = 0; i < rows.length; i++) {
     const key = rows[i].getAttribute('data-suff');
     const st = statuses[key];
@@ -421,33 +421,39 @@ function paintSufficiency(kpi) {
   }
 
   /* The KPI-3 progress bar reads the same 95% row the table defaults to. */
-  const bar = document.getElementById('suffBar');
+  const bar = scope.querySelector ? scope.querySelector('#suffBar')
+    : (typeof document !== 'undefined' && document.getElementById
+      ? document.getElementById('suffBar') : null);
   const lvl = (statuses.pnl_expectancy && statuses.pnl_expectancy.levels || [])
     .filter((l) => l.confidence_pct === 95)[0];
   if (bar && lvl) bar.style.width = String(Math.max(0, Math.min(100, lvl.progress_pct))) + '%';
 
   // Re-render the currently active confidence column after the swap.
-  const active = document.querySelector('.conf-toggle .pill.active');
+  const active = scope.querySelector ? scope.querySelector('.conf-toggle .pill.active') : null;
   if (active && active.click) active.click();
 }
 
-function paintCharts(kpi) {
+function paintCharts(root, kpi) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope) return;
   const stats = kpi.statistical_analytics || {};
   const ta = kpi.trade_analytics || {};
+  const q = (sel) => (scope.querySelector ? scope.querySelector(sel)
+    : (typeof document !== 'undefined' ? document.querySelector(sel) : null));
   const set = (id, body, vb) => {
-    const area = document.querySelector('#' + id + ' .chart-area');
+    const area = q('#' + id + ' .chart-area');
     if (area) area.innerHTML = svg(body, vb);
   };
   const badge = (id, html, cls) => {
-    const el = document.querySelector('#' + id + ' .chart-badge');
+    const el = q('#' + id + ' .chart-badge');
     if (el) { el.innerHTML = html; if (cls) el.className = 'chart-badge ' + cls; }
   };
   const foot = (id, html) => {
-    const el = document.querySelector('#' + id + ' .chart-foot');
+    const el = q('#' + id + ' .chart-foot');
     if (el) el.innerHTML = html;
   };
   const statsLine = (id, html) => {
-    const el = document.querySelector('#' + id + ' .chart-stats');
+    const el = q('#' + id + ' .chart-stats');
     if (el) el.innerHTML = html;
   };
 
@@ -557,25 +563,17 @@ function paintCharts(kpi) {
   }
 }
 
-function paintChrome(kpi) {
-  const el = (id) => (typeof document !== 'undefined' ? document.getElementById(id) : null);
-  const name = el('dbName');
-  if (name && kpi.active_run_id) name.textContent = String(kpi.active_run_id);
-  const stamp = el('liveStamp');
-  const ts = resolve(kpi, 'portfolio.account.ts');
-  if (stamp && ts !== null && ts !== undefined) {
-    const dt = new Date(Number(ts) * 1000);
-    stamp.textContent = Number.isNaN(dt.getTime()) ? '—' : dt.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
-  }
-}
-
 /* The CI scale's track spans the 95% band; every tick and label sits at
  * the payload's own value mapped onto that span. Unmeasured (no closes,
- * or a degenerate band) hides the scale outright -- static geometry would
+ * or a degenerate band) hides the scale outright — static geometry would
  * keep drawing the last payload's positions and lie about this one. */
-function paintCiScale(kpi) {
-  if (typeof document === 'undefined' || !document.getElementById) return;
-  const scale = document.getElementById('ciScale');
+function paintCiScale(root, kpi) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope) return;
+  const q = (sel) => (scope.querySelector ? scope.querySelector(sel) : null);
+  const qa = (sel) => (scope.querySelectorAll ? scope.querySelectorAll(sel) : []);
+  const scale = (scope.getElementById ? scope.getElementById('ciScale')
+    : null) || q('#ciScale');
   if (!scale) return;
   const ta = (kpi && kpi.trade_analytics) || {};
   const ci = ta.mean_pnl_ci || {};
@@ -602,48 +600,69 @@ function paintCiScale(kpi) {
   };
   Object.keys(marks).forEach((key) => {
     const at = pct(marks[key]).toFixed(1) + '%';
-    scale.querySelectorAll(`.tick[data-ci="${key}"]`).forEach((t) => { t.style.left = at; });
-    const labs = scale.querySelectorAll(`.lab[data-ci="${key}"]`);
+    qa(`.tick[data-ci="${key}"]`).forEach((t) => { t.style.left = at; });
+    const labs = qa(`.lab[data-ci="${key}"]`);
     labs.forEach((l) => { l.style.left = at; });
     if (labs.length) labs[0].textContent = labels[key];
   });
 }
 
-function applyAll(kpi) {
+function applyAll(root, kpi) {
   if (!kpi) return;
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope) return;
   const d = derived(kpi);
-  paintBinds(document, kpi, d);
-  paintSufficiency(kpi);
-  paintCharts(kpi);
-  paintChrome(kpi);
-  paintCiScale(kpi);
+  paintBinds(scope, kpi, d);
+  paintSufficiency(scope, kpi);
+  paintCharts(scope, kpi);
+  paintCiScale(scope, kpi);
+}
+
+/* Confidence toggle: one wiring pass over the pills under `root`. Idempotent
+ * (re-runs on every poll repaint would stack a listener per paint), so the
+ * shell calls it once after mount and never again. */
+function initConfidenceToggle(root) {
+  const scope = root || (typeof document !== 'undefined' ? document : null);
+  if (!scope || !scope.querySelectorAll) return;
+  const pills = scope.querySelectorAll('.conf-toggle .pill');
+  const rows = scope.querySelectorAll('tr.ssr');
+  if (!pills || !pills.forEach || pills.length === 0) return;
+  if (pills[0].dataset && pills[0].dataset.av2wired) return;
+  pills.forEach(function (p) {
+    if (p.dataset) p.dataset.av2wired = '1';
+    p.addEventListener('click', function () {
+      pills.forEach(function (x) { x.classList.remove('active'); });
+      p.classList.add('active');
+      const c = p.dataset.conf;
+      rows.forEach(function (r) {
+        r.querySelector('.req').textContent = r.dataset['r' + c];
+        r.querySelector('.rem').textContent = r.dataset['rem' + c];
+        const pct = r.dataset['p' + c];
+        r.querySelector('.pfill').style.width = pct + '%';
+        r.querySelector('.pct').textContent = pct + '%';
+      });
+    });
+  });
+}
+
+/* The single shell entry point: paint the cached poll payload into #analysis-v2.
+ * Guards on the section so a missing node costs one skipped paint, not the
+ * whole batch. `init` runs the one-time toggle wiring; plain `render` is the
+ * per-poll repaint. */
+function renderAnalysisV2(root, kpi) {
+  const scope = root
+    || (typeof document !== 'undefined' && document.getElementById
+      ? document.getElementById('analysis-v2') : null);
+  if (!scope || !kpi) return;
+  applyAll(scope, kpi);
 }
 
 /* ------------------------------------------------------------------ boot */
-
-async function load(runId) {
-  const url = '/api/kpi' + (runId ? '?run_id=' + encodeURIComponent(runId) : '');
-  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-  if (!res.ok) throw new Error('/api/kpi -> HTTP ' + res.status);
-  const kpi = await res.json();
-  applyAll(kpi);
-  return kpi;
-}
-
-if (typeof document !== 'undefined' && document.getElementById) {
-  // The two design IIFEs have already run by the time this file loads (it is
-  // referenced last in <body>), so their listeners are live when we repaint.
-  load().catch((err) => {
-    const banner = document.createElement('div');
-    banner.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--foreground);font:12px ui-monospace,monospace';
-    banner.textContent = '⚠ analysis-v2: telemetry unavailable — ' + err.message;
-    (document.body || document.documentElement).appendChild(banner);
-  });
-}
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     resolve, format, signClass, bandStyle, gateVerdicts, derived,
     chartScales, barsFromBins, bellPath, linePath, bandPath, applyAll,
+    renderAnalysisV2, initConfidenceToggle,
   };
 }

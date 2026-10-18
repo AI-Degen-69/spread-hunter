@@ -48,6 +48,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
   <link rel="stylesheet" href="/static/styles.css?v=5">
+  <link rel="stylesheet" href="/static/analysis_v2.css">
   <!-- Sidebar-pages layout. Every rule is scoped to a class `prototype.js`
        only adds on /prototype, so this is inert on the live page. -->
   <link rel="stylesheet" href="/static/prototype.css?v=10">
@@ -796,77 +797,316 @@
     </div>
   </section>
 
-  <!-- ── Tab 4: Data Analysis (#541 canonical statistics page) ── -->
-  <!-- Tab 2 stays frozen as the legacy page; every figure below is placed once,
-       claimed in the STAT_REGISTRY in data_analysis.js. -->
+  <!-- ── Tab 4: Data Analysis (analysis-v2 content, #568) ── -->
   <section id="tab-4" role="tabpanel" aria-labelledby="tab-btn-4" hidden>
-    <div id="da-surface">
-      <div class="da-head">
-        <div>
-          <div class="da-title">DATA ANALYSIS</div>
-          <div class="da-sub">Every project statistic, each shown once · <span id="da-sample-count"></span></div>
-        </div>
+<div id="analysis-v2">
+
+  <!-- ===================== 1. MACRO KPI STRIP ===================== -->
+  <section class="grid col-3">
+    <article class="card kpi">
+      <div class="card-head">
+        <span class="kpi-label">Mean Return Per Trade</span>
+        <span class="info" data-tooltip="Arithmetic mean of per-close percentage returns across the executed sample. σ is the sample standard deviation; dollar-weighted re-weights each close by its realised dollar PnL."></span>
       </div>
-      <div class="da-grid" id="da-headline"></div>
-      <div class="da-grid da-grid-2">
-        <div class="da-card" id="da-pnl-ci"></div>
-        <div class="da-card" id="da-sufficiency"></div>
+      <div class="kpi-value mono" data-bind="trade_analytics.mean_return_pct" data-fmt="pct" data-sign="1"></div>
+      <div class="kpi-note">± <span data-bind="trade_analytics.stdev_return_pct" data-fmt="pct"></span> (σ) <span class="sep">·</span> <span data-bind="trade_analytics.dollar_weighted_return_pct" data-fmt="pct"></span> dollar-weighted</div>
+    </article>
+
+    <article class="card kpi">
+      <div class="card-head">
+        <span class="kpi-label">Executed Sample Size</span>
+        <span class="info" data-tooltip="Count of closed round-trips in the live sample. 9W / 6L = winning vs losing closes. Empirical win rate = wins ÷ closes."></span>
       </div>
-      <div class="da-card" id="da-funnel"></div>
-      <div class="da-card da-gates" id="da-gates"></div>
-      <div class="da-grid da-grid-2">
-        <div class="da-card" id="da-fillpath"></div>
-        <div class="da-card" id="da-rescue"></div>
+      <div class="kpi-value mono"><span data-bind="trade_analytics.n_closes" data-fmt="int"></span> <span class="dim" style="font-size:18px">Closes</span> <span style="font-size:16px" data-bind="_winloss" data-fmt="html"></span></div>
+      <div class="kpi-note"><span data-bind="trade_analytics.n_measured_returns" data-fmt="int"></span> measured <span class="sep">·</span> Empirical Win Rate: <b data-bind="trade_analytics.win_rate" data-fmt="pctmul" data-sign="1"></b></div>
+    </article>
+
+    <article class="card kpi">
+      <div class="card-head">
+        <span class="kpi-label">Sample Sufficiency Progress</span>
+        <span class="info" data-tooltip="Observations collected toward the 120-close gate required to reject the null hypothesis at the target statistical power (sequential SPRT)."></span>
       </div>
-      <div class="da-grid da-grid-2">
-        <div class="da-card" id="da-queue"></div>
-        <div class="da-card" id="da-robustness"></div>
-      </div>
-      <div class="da-card" id="da-capital"></div>
-      <div class="da-card" id="da-quant"></div>
-      <!-- 6. Statistical Charts Grid (2 columns; markout full-width below) -->
-      <div class="da-grid da-grid-2" style="margin-top:14px">
-        <div class="da-card">
-          <div class="da-card-header">
-            <span class="da-card-title font-display">RETURN DISTRIBUTION &amp; CONFIDENCE INTERVALS</span>
-            <div id="da-dist-badge"></div>
+      <div class="kpi-value mono"><span data-bind="trade_analytics.n_closes" data-fmt="int"></span> / <span data-bind="_required" data-fmt="int"></span> <span class="dim" style="font-size:18px">closes</span></div>
+      <div class="kpi-progress"><i id="suffBar" style="width:0%"></i></div>
+      <div class="kpi-progress-meta"><span id="suffPct" data-bind="_suffPct" data-fmt="html">0% of the gate</span><span class="neu">SPRT ACTIVE</span></div>
+    </article>
+  </section>
+
+  <!-- ===================== 2. TIER 1 METRICS ===================== -->
+  <section class="section">
+    <div class="section-label">Tier 1 Metrics</div>
+    <div class="grid col-2-wide">
+
+      <!-- Card 1: Average Close & CI -->
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Average Close &amp; Confidence Interval</div>
+            <div class="card-value mono" data-bind="trade_analytics.expectancy_usd" data-fmt="usd" data-sign="1"></div>
+            <div class="card-sub">Mean realised PnL per close · <span data-bind="trade_analytics.n_closes" data-fmt="int"></span> closes</div>
           </div>
-          <div id="da-dist-banner"></div>
-          <div id="da-dist-container" class="chart-canvas-container"></div>
-          <div id="da-dist-footer" class="chart-footer-metrics"></div>
+          <span class="info" data-tooltip="Bootstrap confidence interval around the mean realised PnL per close. 90% and 95% bounds shown; the dashed line marks the $0.00 breakeven."></span>
         </div>
-        <div class="da-card">
-          <div class="da-card-header">
-            <span class="da-card-title font-display">PAIR COST &amp; SPREAD DISTRIBUTION ($)</span>
-            <div id="da-paircost-badge"></div>
+
+        <div class="ci-scale" id="ciScale">
+          <div class="track"></div>
+          <!-- ticks -->
+          <div class="tick" data-ci="lo95" style="left:0%;background:var(--crimson)"></div>
+          <div class="tick" data-ci="lo90" style="left:9%;background:var(--crimson)"></div>
+          <div class="tick mean" data-ci="mean" style="left:50%"></div>
+          <div class="tick be" data-ci="be" style="left:73%"></div>
+          <div class="tick" data-ci="hi90" style="left:91%;background:var(--emerald)"></div>
+          <div class="tick" data-ci="hi95" style="left:100%;background:var(--emerald)"></div>
+          <!-- labels -->
+          <span class="lab top neg l" data-ci="lo95" style="left:0%"></span>
+          <span class="lab mid neg" data-ci="lo90" style="left:9%"></span>
+          <span class="lab top" data-ci="mean" style="left:50%"></span>
+          <span class="lab top mute" data-ci="be" style="left:73%"></span>
+          <span class="lab mid pos" data-ci="hi90" style="left:91%"></span>
+          <span class="lab top pos r" data-ci="hi95" style="left:100%"></span>
+          <span class="lab bot2 mute" data-ci="be" style="left:73%">breakeven</span>
+        </div>
+
+        <div class="ci-legend">
+          <span><b class="neg">90%</b> · <span data-bind="_ci90" data-fmt="html"></span></span>
+          <span><b class="neg">95%</b> · <span data-bind="_ci95" data-fmt="html"></span></span>
+        </div>
+
+        <div class="verdict" data-bind="_ciVerdict" data-fmt="html"></div>
+      </article>
+
+      <!-- Card 2: Sample Size Sufficiency -->
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Sample Size Sufficiency Progress</div>
+            <div class="card-sub">Closes required to reach target confidence per metric</div>
           </div>
-          <div id="da-paircost-container" class="chart-canvas-container"></div>
-          <div id="da-paircost-footer" class="chart-footer-metrics"></div>
+          <span class="info" data-tooltip="Required closes to estimate each parameter within the desired confidence band. Remaining = required − measured. Progress = measured ÷ required. Toggle the confidence level to recompute each metric."></span>
         </div>
-        <div class="da-card">
-          <div class="da-card-header">
-            <span class="da-card-title font-display">MONTE CARLO TRAJECTORY (1,000 PATHS) ($)</span>
+        <div class="conf-toggle">
+          <span class="conf-label">Confidence</span>
+          <div class="pills">
+            <button class="pill active" data-conf="95" type="button">95%</button>
+            <button class="pill" data-conf="98" type="button">98%</button>
+            <button class="pill" data-conf="99" type="button">99%</button>
           </div>
-          <div id="da-mc-container" class="chart-canvas-container"></div>
-          <div id="da-mc-footer" class="chart-footer-metrics"></div>
         </div>
-        <div class="da-card">
-          <div class="da-card-header">
-            <span class="da-card-title font-display">OUTCOME PROBABILITY &amp; LIQUIDITY SKEW</span>
-            <div id="da-bell-badge"></div>
-          </div>
-          <div id="da-bell-container" class="chart-canvas-container"></div>
-          <div id="da-bell-footer" class="chart-footer-metrics"></div>
-        </div>
-        <div class="da-card" style="grid-column: 1 / -1">
-          <div class="da-card-header">
-            <span class="da-card-title font-display">POST-FILL MARKOUT &amp; ADVERSE SELECTION (BPS)</span>
-          </div>
-          <div id="da-markout-container" class="chart-canvas-container"></div>
-          <div id="da-markout-footer" class="chart-footer-metrics"></div>
-        </div>
-      </div>
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th class="lab">Metric</th><th class="lab">Current</th><th class="num">Required</th><th class="num">Remaining</th><th>Progress</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="ssr" data-suff="pnl_expectancy" data-r95="97" data-r98="136" data-r99="166" data-rem95="82" data-rem98="121" data-rem99="151" data-p95="15" data-p98="11" data-p99="9">
+              <td class="lab">PnL Expectancy</td><td class="num cur">15 closes</td><td class="num req">97</td><td class="num rem neg">82</td><td><div class="pcell"><div class="pbar"><i class="pfill" style="width:15%"></i></div><span class="pct">15%</span></div></td>
+            </tr>
+            <tr class="ssr" data-suff="stop_loss_rate" data-r95="385" data-r98="542" data-r99="664" data-rem95="370" data-rem98="527" data-rem99="649" data-p95="4" data-p98="3" data-p99="2">
+              <td class="lab">Stop Loss Rate</td><td class="num cur">15 closes</td><td class="num req">385</td><td class="num rem neg">370</td><td><div class="pcell"><div class="pbar"><i class="pfill" style="width:4%"></i></div><span class="pct">4%</span></div></td>
+            </tr>
+            <tr class="ssr" data-suff="merge_rate" data-r95="385" data-r98="542" data-r99="664" data-rem95="370" data-rem98="527" data-rem99="649" data-p95="4" data-p98="3" data-p99="2">
+              <td class="lab">Merge Rate</td><td class="num cur">15 closes</td><td class="num req">385</td><td class="num rem neg">370</td><td><div class="pcell"><div class="pbar"><i class="pfill" style="width:4%"></i></div><span class="pct">4%</span></div></td>
+            </tr>
+            <tr class="ssr" data-suff="fill_rate" data-r95="385" data-r98="542" data-r99="664" data-rem95="358" data-rem98="515" data-rem99="637" data-p95="7" data-p98="5" data-p99="4">
+              <td class="lab">Fill Rate <span class="sub">orders</span></td><td class="num cur">27 orders</td><td class="num req">385</td><td class="num rem neg">358</td><td><div class="pcell"><div class="pbar"><i class="pfill" style="width:7%"></i></div><span class="pct">7%</span></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </article>
     </div>
+  </section>
+
+  <!-- ===================== 3. EXECUTION FUNNEL & DECISION GATES ===================== -->
+  <section class="section">
+    <div class="section-label">Execution Funnel &amp; Decision Gates</div>
+    <div class="grid col-2-wide">
+
+      <!-- Funnel -->
+      <article class="card">
+        <div class="card-head">
+          <div class="card-title">Stepped Execution Funnel</div>
+          <span class="info" data-tooltip="Lifecycle of a quoted spread: quoted → filled → closed → merged. Drop tags show legs lost at each transition."></span>
+        </div>
+        <div class="funnel">
+          <div class="fstep s1"><span class="idx">01</span><span class="name">Quoted</span><span class="stat" data-bind="_f0" data-fmt="html"></span></div>
+          <div class="farrow"><span class="alab" data-bind="_fdrop0" data-fmt="html"></span><svg width="12" height="10"><path d="M6 0 L6 8 M2 5 L6 9 L10 5" stroke="#64748B" stroke-width="1.4" fill="none"/></svg></div>
+          <div class="fstep s2"><span class="idx">02</span><span class="name">Filled</span><span class="stat" data-bind="_f1" data-fmt="html"></span><span class="tag drop">worst drop</span></div>
+          <div class="farrow"><span class="alab" data-bind="_fdrop1" data-fmt="html"></span><svg width="12" height="10"><path d="M6 0 L6 8 M2 5 L6 9 L10 5" stroke="#64748B" stroke-width="1.4" fill="none"/></svg></div>
+          <div class="fstep s3"><span class="idx">03</span><span class="name">Closed</span><span class="stat" data-bind="_f2" data-fmt="html"></span></div>
+          <div class="farrow"><span class="alab" data-bind="_fdrop2" data-fmt="html"></span><svg width="12" height="10"><path d="M6 0 L6 8 M2 5 L6 9 L10 5" stroke="#64748B" stroke-width="1.4" fill="none"/></svg></div>
+          <div class="fstep s4"><span class="idx">04</span><span class="name">Merged</span><span class="stat" data-bind="_f3" data-fmt="html"></span><span class="tag ok">merged</span></div>
+        </div>
+        <div class="ffoot"><span>PAIR_COST 1</span><span>QUEUE 1</span><span>LIFECYCLE 1</span></div>
+      </article>
+
+      <!-- Decision Gates -->
+      <article class="card">
+        <div class="card-head">
+          <div class="card-title">Statistical Decision Gates &amp; Hypothesis Testing</div>
+          <span class="info" data-tooltip="Each gate tests a precondition for live trading. Verdicts: GO (pass), NO-GO (fail), ACCUMULATING (awaiting sample), ACTIVE RULE (enforced constraint)."></span>
+        </div>
+        <table class="tbl">
+          <thead>
+            <tr><th class="lab">Hypothesis / Gate</th><th class="lab">Parameter &amp; Standard</th><th class="lab">Required</th><th class="lab">Observed</th><th>Verdict</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="lab">Strategy Pricing Band</td><td>Implied contract probability sweet-spot filter</td><td class="num">$0.15 ≤ P ≤ $0.85</td><td class="num" data-bind="_gateBand" data-fmt="html"></td><td><span class="badge badge--active" data-band="gates.band">Active Rule</span></td>
+            </tr>
+            <tr>
+              <td class="lab">Edge Viability <span class="sub">H₁: μ &gt; 0</span></td><td>90% confidence lower bound of realised spread</td><td class="num">&gt; 0.00% (strictly positive)</td><td class="num" data-bind="trade_analytics.ci90_lower_pct" data-fmt="pct" data-sign="1"></td><td><span class="badge badge--accum" data-band="gates.edge_viability">Accumulating</span></td>
+            </tr>
+            <tr>
+              <td class="lab">Directional Neutrality <span class="sub">win rate</span></td><td>Closed round-trips merged at $1.00</td><td class="num">&gt; 50.0%</td><td class="num" data-bind="trade_analytics.win_rate" data-fmt="pctmul" data-sign="1"></td><td><span class="badge badge--go" data-band="gates.neutrality">Go</span></td>
+            </tr>
+            <tr>
+              <td class="lab">Statistical Power Target</td><td>Observations required to reject the null hypothesis</td><td class="num">≥ 120 closes</td><td class="num" data-bind="_gatePower" data-fmt="html"></td><td><span class="badge badge--accum" data-band="gates.power">Accumulating</span></td>
+            </tr>
+            <tr>
+              <td class="lab">Adverse Selection Markout</td><td>Post-trade price drift across the matured horizon</td><td class="num">≥ 25 matured fills, drift ≥ 0</td><td class="num" data-bind="_gateMarkout" data-fmt="html"></td><td><span class="badge badge--nogo" data-band="gates.markout">No-Go</span></td>
+            </tr>
+            <tr>
+              <td class="lab">Max Drawdown Guard</td><td>Peak-to-trough equity degradation envelope</td><td class="num">≤ 5.00%</td><td class="num" data-bind="trade_analytics.max_drawdown_pct" data-fmt="pct" data-sign="1"></td><td><span class="badge badge--nogo" data-band="gates.drawdown_guard">No-Go</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </article>
+    </div>
+  </section>
+
+  <!-- ===================== 4. MICROSTRUCTURE & EXECUTION (BENTO) ===================== -->
+  <section class="section">
+    <div class="section-label">Microstructure &amp; Execution Quality</div>
+    <div class="bento">
+
+      <!-- Block 1: Fill-Path Edge -->
+      <div class="card block">
+        <div class="card-head">
+          <div class="card-title">Fill-Path Edge</div>
+          <span class="info" data-tooltip="Per-close expectancy split by outcome path. Merge = legs that paired to $1.00; Rescue = legs unwound individually. Net = weighted blend."></span>
+        </div>
+        <div class="subgrid sg-2">
+          <div class="tile"><div class="tlabel">Merge Expectancy ($)</div><div class="tval" data-bind="statistical_analytics.fill_path_edge.merge_expectancy_usd" data-fmt="usd" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="fp.merge_expectancy"></span><div class="tsub">per close · <span data-bind="statistical_analytics.fill_path_edge.merge_count" data-fmt="int"></span> closes</div></div>
+          <div class="tile"><div class="tlabel">Rescue Expectancy ($)</div><div class="tval" data-bind="statistical_analytics.fill_path_edge.rescue_expectancy_usd" data-fmt="usd" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="fp.rescue_expectancy"></span><div class="tsub">per close · <span data-bind="statistical_analytics.fill_path_edge.rescue_count" data-fmt="int"></span> closes</div></div>
+          <div class="tile"><div class="tlabel">Rescue Rate (%)</div><div class="tval" data-bind="statistical_analytics.fill_path_edge.rescue_rate" data-fmt="pctmul"></div><span class="badge" style="align-self:flex-start" data-band="fp.rescue_rate"></span><div class="tsub"><span data-bind="statistical_analytics.fill_path_edge.rescue_count" data-fmt="int"></span> of <span data-bind="_rescueTotal" data-fmt="int"></span> closes rescued</div></div>
+          <div class="tile"><div class="tlabel">Net Expectancy ($)</div><div class="tval" data-bind="statistical_analytics.fill_path_edge.net_expectancy_usd" data-fmt="usd" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="fp.net_expectancy"></span><div class="tsub">weighted blend · <span data-bind="trade_analytics.n_closes" data-fmt="int"></span> closes</div></div>
+        </div>
+      </div>
+
+      <!-- Block 2: Rescue Friction -->
+      <div class="card block">
+        <div class="card-head">
+          <div class="card-title">Rescue Friction</div>
+          <span class="info" data-tooltip="Execution slippage components on rescue (unwind) legs. SLED = trigger price vs received; drag = cumulative friction; overshoot = multiplier beyond quoted depth."></span>
+        </div>
+        <div class="subgrid sg-3">
+          <div class="tile"><div class="tlabel">SLED (¢)</div><div class="tval" data-bind="statistical_analytics.rescue_friction.mean_sled_cents" data-fmt="cents" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="fr.sled"></span><div class="tsub">trigger → what we got</div></div>
+          <div class="tile"><div class="tlabel">Latency Drag (¢)</div><div class="tval" data-bind="statistical_analytics.rescue_friction.mean_latency_drag_cents" data-fmt="cents" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="fr.latency"></span><div class="tsub">quote-stale slippage</div></div>
+          <div class="tile"><div class="tlabel">Execution Drag (¢)</div><div class="tval" data-bind="statistical_analytics.rescue_friction.mean_execution_drag_cents" data-fmt="cents" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="fr.execution"></span><div class="tsub">taker + walk + fee</div></div>
+          <div class="tile"><div class="tlabel">Taker Cost Ratio (%)</div><div class="tval" data-bind="statistical_analytics.rescue_friction.mean_tcdr" data-fmt="pctmul"></div><span class="badge" style="align-self:flex-start" data-band="fr.tcdr"></span><div class="tsub">taker ÷ total cost</div></div>
+          <div class="tile"><div class="tlabel">Overshoot (x)</div><div class="tval" data-bind="statistical_analytics.rescue_friction.mean_overshoot_ratio" data-fmt="x" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="fr.overshoot"></span><div class="tsub">depth beyond quote</div></div>
+        </div>
+      </div>
+
+      <!-- Block 3: Queue Realism & Robustness -->
+      <div class="card block">
+        <div class="card-head">
+          <div class="card-title">Queue Realism &amp; Robustness</div>
+          <span class="info" data-tooltip="Fill-latency distribution and post-fill robustness. Markout 5m = median adverse drift 5 min after fill; MAE = max adverse excursion; SQN = System Quality Number."></span>
+        </div>
+        <div class="subgrid sg-3">
+          <div class="tile"><div class="tlabel">Fill Latency (Median, s)</div><div class="tval" data-bind="statistical_analytics.queue_realism.fill_latency.median_sec" data-fmt="sec"></div><span class="badge" style="align-self:flex-start" data-band="_neu"></span><div class="tsub">quote → fill</div></div>
+          <div class="tile"><div class="tlabel">Fill Latency (P90, s)</div><div class="tval" data-bind="statistical_analytics.queue_realism.fill_latency.p90_sec" data-fmt="sec"></div><span class="badge" style="align-self:flex-start" data-band="_neu"></span><div class="tsub">tail of distribution</div></div>
+          <div class="tile"><div class="tlabel">Markout 5m (¢)</div><div class="tval" data-bind="_mo5" data-fmt="cents" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="rb.markout5"></span><div class="tsub">median · <span data-bind="_mo5n" data-fmt="int"></span> fills</div></div>
+          <div class="tile"><div class="tlabel">MAE (¢)</div><div class="tval" data-bind="statistical_analytics.robustness.mae.median_cents" data-fmt="cents"></div><span class="badge" style="align-self:flex-start" data-band="_neu"></span><div class="tsub">max adverse excursion</div></div>
+          <div class="tile"><div class="tlabel">SQN</div><div class="tval" data-bind="statistical_analytics.robustness.sqn.sqn" data-fmt="num" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="rb.sqn"></span><div class="tsub">system quality number</div></div>
+        </div>
+      </div>
+
+      <!-- Block 4: Capital Risk -->
+      <div class="card block">
+        <div class="card-head">
+          <div class="card-title">Capital Risk</div>
+          <span class="info" data-tooltip="Drawdown and return-distribution shape. Deepest DD = worst peak-to-trough on the account curve; Drawdowns Regained = recovered / still open; Skewness & Sortino describe tail risk."></span>
+        </div>
+        <div class="subgrid sg-3">
+          <div class="tile"><div class="tlabel">Deepest DD ($)</div><div class="tval" data-bind="statistical_analytics.capital_risk.drawdown_recovery.deepest_usd" data-fmt="usd" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="_neu"></span><div class="tsub"><span data-bind="statistical_analytics.capital_risk.drawdown_recovery.deepest_pct" data-fmt="pct"></span> of peak · <span data-bind="_ddRecovered" data-fmt="html"></span></div></div>
+          <div class="tile"><div class="tlabel">Drawdowns Regained</div><div class="tval" data-bind="_ddRegained" data-fmt="html"></div><span class="badge" style="align-self:flex-start" data-band="_neu"></span><div class="tsub">regained / still open</div></div>
+          <div class="tile"><div class="tlabel">Skewness</div><div class="tval" data-bind="statistical_analytics.capital_risk.pnl_skewness.pnl_skewness" data-fmt="num" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="cr.skew"></span><div class="tsub">left-tailed returns</div></div>
+          <div class="tile"><div class="tlabel">Sortino</div><div class="tval" data-bind="statistical_analytics.capital_risk.sortino_ratio.sortino_ratio" data-fmt="num" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="cr.sortino"></span><div class="tsub">Sharpe <span data-bind="trade_analytics.sharpe_ratio" data-fmt="num"></span> · downside-dev</div></div>
+          <div class="tile"><div class="tlabel">Profit Factor &amp; Payoff (×)</div><div class="tval" data-bind="trade_analytics.profit_factor" data-fmt="x" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="_neu"></span><div class="tsub">Payoff Ratio: <span data-bind="trade_analytics.payoff_ratio" data-fmt="x"></span></div></div>
+          <div class="tile"><div class="tlabel">Kelly Optimal Sizing (%)</div><div class="tval" data-bind="trade_analytics.kelly_fraction" data-fmt="pctmul" data-sign="1"></div><span class="badge" style="align-self:flex-start" data-band="_neu"></span><div class="tsub">Half-Kelly: <span data-bind="trade_analytics.half_kelly" data-fmt="pctmul"></span> (Conservative)</div><div class="tsub" style="margin-top:2px">95% VaR (1D): <span data-bind="_var" data-fmt="html"></span> · CVaR <span data-bind="_cvar" data-fmt="html"></span></div></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ===================== 5. STATISTICAL CHARTS GRID ===================== -->
+  <section class="section">
+    <div class="section-label">Statistical Distribution &amp; Simulation</div>
+    <div class="charts">
+
+      <!-- Chart 1: Return Distribution -->
+      <article class="card chart-card" id="ch1">
+        <div class="chart-head">
+          <div class="card-title">Return Distribution &amp; Confidence Intervals</div>
+          <span class="chart-badge warn"></span>
+        </div>
+        <div class="chart-stats"></div>
+        <div class="chart-area"></div>
+        <div class="chart-foot"></div>
+      </article>
+
+      <!-- Chart 2: Pair Cost & Spread Distribution -->
+      <article class="card chart-card" id="ch2">
+        <div class="chart-head">
+          <div class="card-title">Pair Cost &amp; Spread Distribution ($)</div>
+          <span class="chart-badge"></span>
+        </div>
+        <div class="chart-stats"></div>
+        <div class="chart-area"></div>
+        <div class="chart-foot"></div>
+      </article>
+
+      <!-- Chart 3: Monte Carlo Trajectory -->
+      <article class="card chart-card" id="ch3">
+        <div class="chart-head">
+          <div class="card-title">Monte Carlo Trajectory (1,000 Paths) ($)</div>
+          <span class="chart-badge warn"></span>
+        </div>
+        <div class="chart-stats"></div>
+        <div class="chart-area"></div>
+        <div class="chart-foot"></div>
+      </article>
+
+      <!-- Chart 4: Implied Odds Bell Curve -->
+      <article class="card chart-card" id="ch4">
+        <div class="chart-head">
+          <div class="card-title">Outcome Probability &amp; Liquidity Skew</div>
+          <span class="chart-badge good"></span>
+        </div>
+        <div class="chart-stats"></div>
+        <div class="chart-area"></div>
+        <div class="chart-foot"></div>
+      </article>
+
+      <!-- Chart 5 (full width): Adverse Selection Markout -->
+      <article class="card chart-card full" id="ch5">
+        <div class="chart-head">
+          <div class="card-title">Post-Fill Markout &amp; Adverse Selection (BPS)</div>
+          <span class="chart-badge good"></span>
+        </div>
+        <div class="chart-stats"></div>
+        <div class="chart-area"></div>
+        <div class="chart-foot"></div>
+      </article>
+
+    </div>
+  </section>
+
+</div>
   </section>
 
 </div>
@@ -906,7 +1146,7 @@
   const CONTROL_TOKEN = "__LIVE_DASH_CONTROL_TOKEN__";
 </script>
 <script src="/static/app.js?v=11"></script>
-<script src="/static/data_analysis.js?v=1"></script>
+<script src="/static/analysis_v2.js"></script>
 <!-- Runs after app.js has bound every panel, and only on /prototype: it moves
      those same nodes into the sidebar pages rather than re-rendering them. -->
 <script src="/static/prototype.js?v=6"></script>
