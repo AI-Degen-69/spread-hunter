@@ -48,7 +48,7 @@ Size Tier: Standard | Task Types: Code, Refactor
   3. Ensure all format specifiers, units (e.g. `¢`, `days`, `s (30m)`, `m`), and trigger f-strings preserve identical values.
 - **Verification:** Save baseline `/api/parameters` response and verify no changes to `value`, `raw_value`, `default`, `trigger`, or `action`.
 
-### [ ] T2 — Canonical environment variable badges in `dashboard/server.py:get_parameters`
+### [x] T2 — Canonical environment variable badges in `dashboard/server.py:get_parameters`
 - **Size:** S | **Domain:** `[Backend/Logic]` | **Skill:** `api-and-interface-design`
 - **Depends on:** T1
 - **Target files:** `dashboard/server.py`
