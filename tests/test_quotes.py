@@ -435,6 +435,7 @@ class TestMakerConfigNamingStandardization:
         assert cfg.couple_risk_frac == 0.02
         assert cfg.quote_window_frac == 0.50
         assert cfg.stat_gate_bankroll_fraction == 0.02
+        assert cfg.select_spread_frac == 41.0 / 120.0
 
     def test_read_aliases_scoring_config(self):
         from scoring.config import MakerConfig as ScoringMakerConfig
@@ -448,6 +449,7 @@ class TestMakerConfigNamingStandardization:
         assert cfg.min_book_depth_sh == 300.0
         assert cfg.emergency_hedge_frac == 0.75
         assert cfg.quote_window_frac == 0.50
+        assert cfg.select_spread_frac == 41.0 / 120.0
 
     def test_alias_set_raises_attribute_error(self):
         from core_brain.config import MakerConfig
@@ -463,4 +465,6 @@ class TestMakerConfigNamingStandardization:
             MakerConfig(emergency_hedge_frac=0.8)
         with pytest.raises(TypeError):
             MakerConfig(max_skew=0.015)
+        with pytest.raises(TypeError):
+            MakerConfig(select_spread_frac=41.0 / 120.0)
 

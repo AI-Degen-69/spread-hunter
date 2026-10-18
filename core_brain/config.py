@@ -173,13 +173,18 @@ class MakerConfig:
     # spread, so landing in it means being the most exposed order in the book
     # -- measured on a 0.26/0.42 market, six cents better than anyone else.
     # 6c leaves margin under that arithmetic.
-    max_book_spread: float = 0.06
-    # WIDE-BOOK TRIAL (#145). When set, this REPLACES the three ceilings that
-    # together decide whether a wide book can be quoted at all. It is not a
-    # tuning knob and it has no permanent counterpart: the shipped values above
-    # never change, and a run either carries the trial or it does not.
     #
-    # Why one knob moves three numbers. Run 145 measured `mid_UP + mid_DOWN` at
+    # THIS IS THE ONE SPREAD CEILING (#572). The ranker's picking bar is a
+    # documented share of it (`select_spread_pct`, derived below) rather than
+    # a second absolute, so picking and quoting cannot disagree about which
+    # books are tradable, and the wide-book trial moves this field alone.
+    max_book_spread: float = 0.06
+    # WIDE-BOOK TRIAL (#145). When set, this REPLACES the ceilings that together
+    # decide whether a wide book can be quoted at all. It is not a tuning knob
+    # and it has no permanent counterpart: the shipped values above never
+    # change, and a run either carries the trial or it does not.
+    #
+    # Why one knob moves three gates. Run 145 measured `mid_UP + mid_DOWN` at
     # 1.0000 in 1,247 of 1,247 samples and the touch pair at or above
     # `max_pair_cost` in every one of them, so a one-tick book has no pair to
     # assemble at any offset. The only sub-$0.99 touch pairs the run saw --
@@ -187,7 +192,9 @@ class MakerConfig:
     # ~2.8c. Three separate gates refuse that regime, and leaving any one of
     # them at its shipped value makes the trial measure nothing:
     #
-    #   * `select_max_book_spread` -- the ranker never offers the market;
+    #   * `select_max_book_spread` -- the ranker never offers the market.
+    #     Derived from `max_book_spread` since #572, so it moves without being
+    #     written;
     #   * `max_book_spread` -- `risk.book_health` refuses to quote it
     #     ("book too wide 13.0c > 6.0c", observed in run 145's own log);
     #   * `max_spread_from_mid` -- on a wide book the `best_bid + tick` cap in
@@ -465,12 +472,33 @@ class MakerConfig:
     # measured high-to-low price-range telemetry lands and replaces volume as
     # the movement proxy.
     select_min_volume_24h_usd_live: float = 35_000.0
-    # Tightened 2026-10-09 (#432) to 2.05 cents (0.0205 in price units) to
-    # prevent entry into wide/slippage-heavy books.
-    select_max_book_spread: float = 0.0205
+    # The picker's SHARE of the live gate above (#572), not a second absolute:
+    # 41/120 of `max_book_spread` is exactly the 2.05c the ranker has gated on
+    # since 2026-10-09 (#432), so `select_max_book_spread` is derived from it
+    # and there is no second number to edit out of step. The two ceilings are
+    # one decision: the picker may never offer a book the gate would refuse.
+    select_spread_pct: float = 41.0 / 120.0
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
     select_max_days_to_resolve: float = 30.0
+
+    @property
+    def select_max_book_spread(self) -> float:
+        """The picking bar: the live gate times the picking share (#572).
+
+        DERIVED, never handed in. `max_book_spread` owns the number; this is
+        the fraction of it the ranker will still offer. `round(..., 6)` is
+        load-bearing: binary64 `0.06 * (41.0/120.0)` is `0.0204999...`, and
+        the boundary pins compare the bar to exactly `0.0205`.
+
+        Under the wide-book trial the bar IS the trial window, not a share of
+        it. The trial exists to admit books the ranker would otherwise never
+        offer, and a scaled share would leave it refusing the very books the
+        trial was staged to measure.
+        """
+        if self.wide_book_trial is not None:
+            return self.wide_book_trial
+        return round(self.max_book_spread * self.select_spread_pct, 6)
 
     # How long to average competitor depth before sizing a position. One
     # snapshot sized the whole fleet on 2026-07-29 and read a competing score
@@ -1022,6 +1050,11 @@ class MakerConfig:
         return self.stat_gate_bankroll_pct
 
     @property
+    def select_spread_frac(self) -> float:
+        """Backward compatibility alias for select_spread_pct (#632, #572)."""
+        return self.select_spread_pct
+
+    @property
     def tau_cancel_sec(self) -> float:
         return (self.net_oneway_ms + self.cancel_venue_ack_ms) / 1000.0
 
@@ -1347,12 +1380,12 @@ def load(*, for_display: bool = False) -> MakerConfig:
     wide = resolve_wide_book_trial(
         os.environ.get("HUNTER_WIDE_BOOK_TRIAL") or "", for_display=for_display)
     if wide is not None and wide > 0:
-        # All three ceilings move together. The reward window is widened only
-        # if the trial is wider than it already is -- a trial NARROWER than
-        # 4.5c must not quietly tighten where we may quote.
+        # The trial moves ONE ceiling. The picker bar follows it through the
+        # derived property (#572), and the reward window is widened only if
+        # the trial is wider than it already is -- a trial NARROWER than 4.5c
+        # must not quietly tighten where we may quote.
         kw["wide_book_trial"] = wide
         kw["max_book_spread"] = wide
-        kw["select_max_book_spread"] = wide
         # Read whatever the per-bot `HUNTER_MAX_SPREAD` block above may have
         # set, not the class default, so a venue-supplied window is widened
         # rather than replaced.

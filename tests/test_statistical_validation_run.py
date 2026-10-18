@@ -426,6 +426,8 @@ class TestEndToEndHarness:
         snapshot = json.loads(
             (report_dir / "config_snapshot.json").read_text(encoding="utf-8"))
         assert snapshot["bankroll_usd"] == 100.0
+        # Derived property (#572): asdict() drops it, so the snapshot must add it back.
+        assert snapshot["select_max_book_spread"] == round(snapshot["max_book_spread"] * snapshot["select_spread_pct"], 6) == 0.0205
 
     def test_underpowered_run_exits_inconclusive_without_go_verdict(self, tmp_path, caplog):
         """Acceptance Criteria: run with target-closes 999 exits INCONCLUSIVE with underpowered reason."""

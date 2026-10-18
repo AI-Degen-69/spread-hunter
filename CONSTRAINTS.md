@@ -1,36 +1,60 @@
-# Constraints - #576 (remove settings that nothing in the bot reads)
+# Constraints - #572 (one spread ceiling from picking to placing)
 
-Branch: feat/576-remove-unread-settings | Issue: #576
+Branch: i572/use-one-spread-limit-picking-to-placing | Issue: #572
 
-Replaces #639-scoped file wholesale (Step 0A.0: stale issue scope).
+Replaces #576-scoped file wholesale (Step 0A.0: stale issue scope).
 
-## Zero regressions
-- Targeted test suites:
-  `python -m pytest -q tests/test_config_for_display.py tests/test_stat_gate.py tests/test_market_selection_bars.py tests/test_statistical_validation_run.py`
-  Full suite = CI gate on push.
-- Retained fields MUST remain present, untampered, and with identical defaults:
-  - `core_brain/config.py`: `stat_gate_deltas`, `stat_gate_threshold_pct`, `stat_gate_bankroll_pct`, `stat_gate_target_closes`, `single_buy_grace_sec`, `stranded_max_wait_sec`, `pairs_exit_window_sec`, `wide_book_trial`.
-  - `scoring/config.py`: `select_min_top3_depth_usd`, `select_max_book_spread`.
-- Strategy and execution invariants:
-  - ZERO changes to active pricing, risk sizing, quoting logic, or venue interaction.
-  - ZERO order placement; zero live trader calls; data/orders.db untouched.
+## Scope lock
+- One spread ceiling owned by the live safety gate `max_book_spread = 0.06`
+  (`core_brain/config.py:176`, mirrored in `scoring/config.py:115`).
+- Market picking derives from it via a documented fraction
+  (`select_spread_pct`, alias `select_spread_frac`), yielding exactly `0.0205` at baseline. No second absolute.
+- The wide-book trial keeps working from its single knob
+  (`HUNTER_WIDE_BOOK_TRIAL`).
+- Boundary tests stay pinned; effective accept/refuse behavior is unchanged.
 
-## Deliberate contracts (not regressions)
-- Exactly 10 unread fields are purged from `MakerConfig`:
-  1. `float_mark_retention_days`
-  2. `scarcity_close_threshold`
-  3. `est_reward_pool_usd` (docs cleanup only; code already purged in #594)
-  4. `stat_gate_alpha`
-  5. `stat_gate_beta`
-  6. `experiment_census_markets`
-  7. `experiment_verdict_markets`
-  8. `hedge_fillable_min_rate`
-  9. `balance_hedge_sec` (confirmed no hardcoded timer exists; deleted)
-  10. `sim_only`
-- 24 extra unread candidate settings discovered during audit MUST NOT be deleted in this PR (parked in `docs/issues/576-noticed-but-not-touching.md` to prevent scope inflation).
-- `return_pct_day` dict key in `scripts/filter_markets.py` is preserved for telemetry/dashboard stability; docstrings in `evaluate()` and `rank_score()` updated to reflect post-rebate spread-capture movement notional.
+## Mathematical invariant (non-negotiable)
+- `round(0.06 * select_spread_pct, 6) == 0.0205` exactly under default config.
+- Canonical fraction: `41.0 / 120.0` (= 0.0205 / 0.06 in real arithmetic).
+- `tests/test_market_selection_bars.py:131-132` pass WITHOUT relaxing market quality.
+
+## Trial invariant (non-negotiable)
+- Passing the wide-book trial value must adjust the full chain coherently:
+  live gate, picker bar, and the `max(window, wide)` reward-window widening.
+- No orphaned knobs: after consolidation exactly ONE absolute (`max_book_spread`)
+  plus the fraction may exist in each config module.
+
+## Ownership (answers the issue's open question; binds #571)
+- The LIVE SAFETY GATE owns the absolute number (`max_book_spread`).
+  Rationale: it is the gate that refuses an uncloseable book, and the trial
+  already sets it directly.
+- Picking takes a SHARE of it (`select_max_book_spread` becomes derived).
+- `max_spread_from_mid` is NOT part of the book-width chain: it is the
+  score-window width `v` (core_brain default 0.15) / venue rebate window
+  (scoring default 0.045). Two different concepts share the field name;
+  renaming is out of scope (see 572-noticed-but-not-touching.md).
+- #571 (settings-file merge) MUST NOT be done here. #571 imports the unified
+  property/fraction terms verbatim: `max_book_spread` owns, `select_spread_pct`
+  is the picker share (with `select_spread_frac` alias), `select_max_book_spread` is the derived bar.
+
+## Forbidden
+- Changing live order placement logic or the pair-cost arithmetic
+  `round(p_up + p_down, 4) <= round(cfg.max_pair_cost, 4)`.
+- Loosening or tightening effective behavior (same books admitted/refused).
+- Merging the two config files (that is #571).
+- Touching `data/orders.db`; zero live trader calls.
+
+## Targeted suites (agent runs silently; never operator steps)
+- `python -m pytest -q tests/test_market_selection_bars.py tests/test_wide_book_trial.py`
+- Regression watch: `tests/test_config_for_display.py tests/test_unified_universe.py`
+  `tests/test_loose_baseline.py tests/test_reward_offset_override.py`
+  `tests/test_queue_clear_gate.py tests/test_risk.py`
+- Full `python -m pytest -q` is the CI merge gate, not a local loop.
+
+## Out-of-scope home
+- `docs/issues/572-noticed-but-not-touching.md` — every entry with owner + when.
 
 ## Anti-cheat
-- No skipped or disabled tests, no weakened assertions.
-- No modifying existing tests to force green passes if a removed setting turns out to have an active reader.
-- Guard test verifies deletion of the 10 fields while asserting presence of retained neighbors.
+- No skipped/disabled tests, no weakened assertions, no relaxing boundary pins.
+- Every changed behavior ships with a test that fails without the change.
+

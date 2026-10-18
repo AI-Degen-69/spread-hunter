@@ -163,6 +163,10 @@ def test_a_narrow_trial_never_tightens_the_reward_window(mod, monkeypatch):
     cfg = _load_with(mod, monkeypatch, HUNTER_WIDE_BOOK_TRIAL="0.02")
 
     assert cfg.max_book_spread == 0.02
+    # A narrow trial narrows the picking bar with it -- the trial is one
+    # decision, and the picker reads the same knob (#572). What it must NOT do
+    # is shrink the reward window below the shipped value.
+    assert cfg.select_max_book_spread == 0.02
     expected = 0.15 if mod is core_config else 0.045
     assert cfg.max_spread_from_mid == expected
 
@@ -205,20 +209,28 @@ def test_book_health_refuses_a_wide_book_at_the_shipped_ceiling():
     assert "book too wide 13.0c > 6.0c" in health.reason
 
 
-def test_book_health_admits_the_same_book_under_the_trial(monkeypatch):
-    # The observed refusal in run 145 was exactly this book width. With the
-    # trial in force the same book passes, which is the whole point.
+@BOTH
+def test_a_13c_book_clears_the_ranker_bar_and_the_live_gate_under_the_trial(
+        mod, monkeypatch):
+    # The observed refusal in run 145 was exactly this book width. Widening one
+    # gate is not enough: the ranker has to offer the market AND `book_health`
+    # has to admit it, or the trial measures nothing. Both move here, from ONE
+    # knob -- this is the chain #572 makes permanent.
     from core_brain import risk
+    from scoring.selector import book_allowed
 
     rehearsal.declare_rehearsal()
-    monkeypatch.delenv("HUNTER_MARKET", raising=False)
-    monkeypatch.setenv("HUNTER_WIDE_BOOK_TRIAL", "0.15")
-    cfg = importlib.reload(core_config).load()
+    cfg = _load_with(mod, monkeypatch, HUNTER_WIDE_BOOK_TRIAL="0.15")
+
     book = {"best_bid": 0.435, "best_ask": 0.565, "bids": {0.435: 5000.0}}
 
-    health = risk.book_health(book, cfg)
+    assert risk.book_health(book, cfg).ok, risk.book_health(book, cfg).reason
 
-    assert health.ok, health.reason
+    ok, reason, _, spread = book_allowed(
+        {0.435: 5000.0}, {0.565: 5000.0}, min_depth_usd=1000.0,
+        max_spread=cfg.select_max_book_spread)
+    assert spread == 0.13
+    assert ok, reason
 
 
 # --- the ranker frames --------------------------------------------------------
