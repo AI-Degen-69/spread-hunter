@@ -220,7 +220,7 @@ cheaply; the probe and the copy are the safe tail.
 
 ---
 
-### T1 — Book cache and frame folding (S/M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`)
+### T1 — [x] Book cache and frame folding (S/M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`)
 **Build:** `MarketBookCache` + `BookNotReady` + frame folding. `book` frame →
 `markets.parse_book({"bids":…, "asks":…}, token_id)` result stored as the new
 book (replace, never merge). `price_change` frame → walk `price_changes`:
