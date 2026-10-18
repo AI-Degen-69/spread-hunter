@@ -3134,14 +3134,12 @@ def main() -> None:
             print(f"volume-rejects logged: {n_vols} measured "
                   "(volume near-miss tracker)")
     print(f"picked {len(picked)} spread markets\n")
-    print(f"{'market':<42}{'spread':>8}{'vol_24h':>10}{'move_30m':>10}{'depth':>9}")
+    print(f"{'market':<46}{'move_30m':>12}{'vol_24h':>12}{'depth':>10}")
     for r in picked:
         # Windows consoles default to a legacy codepage; market titles carry
         # curly quotes and accents that crash a plain print AFTER the file is
         # already written, which looks like a failed run when it succeeded.
-        title = r.get("title", "")[:40].encode("ascii", "replace").decode("ascii")
-        sp = r.get("spread")
-        sp_str = f"{sp:.4f}" if sp is not None else "-"
+        title = r.get("title", "")[:44].encode("ascii", "replace").decode("ascii")
         vol = r.get("volume_24h")
         vol_str = f"${vol:,.0f}" if vol else "-"
         mv = r.get("movement_usd")
@@ -3150,7 +3148,7 @@ def main() -> None:
         nd = r.get("no_depth_usd") or 0.0
         dp = min(yd, nd) if (yd and nd) else max(yd, nd)
         dp_str = f"${dp:,.0f}" if dp else "-"
-        print(f"{title:<42}{sp_str:>8}{vol_str:>10}{mv_str:>10}{dp_str:>9}")
+        print(f"{title:<46}{mv_str:>12}{vol_str:>12}{dp_str:>10}")
 
 
 if __name__ == "__main__":

@@ -172,10 +172,10 @@ def test_screener_terminal_output_has_no_reward_terms(tmp_path, monkeypatch, cap
     for forbidden in ("income > $0/day", "$/day", "ret%/d", "TOTAL capital", "spread / 0 reward", "reward"):
         assert forbidden not in out, f"Terminal output contained purged reward term '{forbidden}' (#681)"
     assert "picked 1 spread markets" in out
-    assert "spread" in out
-    assert "vol_24h" in out
     assert "move_30m" in out
+    assert "vol_24h" in out
     assert "depth" in out
+    assert "market                                            move_30m     vol_24h     depth" in out
 
 
 
