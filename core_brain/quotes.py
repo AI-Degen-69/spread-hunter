@@ -7,15 +7,13 @@ collateral, which pays exactly $1.00. The profit is the discount:
     profit per pair = 1.00 - (avg_up + avg_dn)
 
 Measured on the paper-run database: 476 merge closes, +$1,172.35, average pair cost
-$0.96006. Maker rebates over the same run accrued ~$0.22/day against $566
-committed -- four hundredths of a percent. Rebates are extra; the pair discount
-is the income, and it is what "spread hunter" names.
+$0.96006. Graduated spread markets carry $0.00 maker rewards; income derives strictly
+from merge spread capture ($1.00 - pair cost).
 
 Everything below follows from that. Quote BOTH outcomes so a pair can assemble;
 stay ~92% balanced so no leg rides naked; never let the pair cost reach $1.00,
 because a pair bought at >= 1.00 is a booked loss on an instrument that pays
-exactly $1.00; and keep quotes inside the 4.5c reward window (>= min size) so the
-rebate accrues while we wait.
+exactly $1.00; and keep quotes within max_spread_from_mid to maintain book competitiveness.
 
 The universe is NOT the BTC 5-minute series. The fleet quotes the ranker's
 graduated list (runtime/markets.json, via core_brain/market_feed.py) -- liquid sports,
@@ -807,7 +805,7 @@ def decide_quotes(
             # because it was almost never the binding constraint.
             if abs(mid - p) > cfg.max_spread_from_mid:
                 blocked.append(f"{side}: {100*abs(mid-p):.1f}c from mid > "
-                               f"{100*cfg.max_spread_from_mid:.1f}c rebate window")
+                               f"{100*cfg.max_spread_from_mid:.1f}c spread window")
                 continue
             if not _in_band(cfg, p):
                 blocked.append(f"{side}: {p:.2f} outside band "
@@ -839,8 +837,8 @@ def decide_quotes(
         if price <= 0.0 or price >= 1.0:
             continue
 
-        # Rebate window: must be within 4.5c of mid, else no rebate and the
-        # whole point of being a maker is gone.
+        # Spread window: must be within max_spread_from_mid of mid, else quote
+        # is too far from the touch to fill.
         if abs(mid - price) > cfg.max_spread_from_mid:
             continue
 

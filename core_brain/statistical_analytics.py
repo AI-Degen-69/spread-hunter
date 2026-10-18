@@ -1,4 +1,4 @@
-﻿"""The statistics surface the analytics charts read, built from the registry.
+"""The statistics surface the analytics charts read, built from the registry.
 
 The Performance & Analytics tab has five charts â€” position-return distribution,
 pair-cost density, outcome-probability bell, post-fill markout, Monte Carlo â€”
@@ -130,8 +130,8 @@ PAIR_COST_CEILING = 1.00
 PAIR_COST_BINS = 12
 
 # The quoting band the strategy targets. `renderProbabilityBellChart` shades it.
-SWEET_SPOT_LOW = 0.15
-SWEET_SPOT_HIGH = 0.85
+SWEET_SPOT_LOW = 0.10
+SWEET_SPOT_HIGH = 0.90
 BELL_BINS = 18
 
 # Below this many closed positions a bootstrap is resampling noise. The chart

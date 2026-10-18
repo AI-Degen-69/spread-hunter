@@ -2808,89 +2808,372 @@ const PARAM_HUMAN_NAMES = {
   'sweep_interval': 'Account Sync & Balance Cadence',
 };
 
-const PARAM_CATEGORIES = {
-  'max_pair_cost': { category: 'Pricing Safeguard', badge: 'hard-limit', label: 'Hard Limit' },
-  'max_naked_usd': { category: 'Inventory Risk', badge: 'dynamic', label: 'Dynamic %' },
-  'max_order_usd': { category: 'Order Sizing', badge: 'dynamic', label: 'Dynamic %' },
-  'max_total_usd': { category: 'Global Fleet Cap', badge: 'dynamic', label: 'Dynamic %' },
-  'min_quote_shares': { category: 'Venue Protocol', badge: 'cadence', label: 'Protocol Min' },
-  'sweep_interval': { category: 'Reconciliation', badge: 'cadence', label: 'Cadence' },
+const CATEGORY_STYLES = {
+  // Universe & Screening (Teal & Sky)
+  'Live Screening':       { bg: 'rgba(6, 182, 212, 0.15)', text: '#22d3ee', border: 'rgba(6, 182, 212, 0.35)' },
+  'Universe Screening':   { bg: 'rgba(14, 165, 233, 0.15)', text: '#38bdf8', border: 'rgba(14, 165, 233, 0.35)' },
+  'Velocity Filter':      { bg: 'rgba(20, 184, 166, 0.15)', text: '#2dd4bf', border: 'rgba(20, 184, 166, 0.35)' },
+  'Volatility Filter':    { bg: 'rgba(45, 212, 191, 0.15)', text: '#5eead4', border: 'rgba(45, 212, 191, 0.35)' },
+  'Spread Gate':          { bg: 'rgba(16, 185, 129, 0.15)', text: '#34d399', border: 'rgba(16, 185, 129, 0.35)' },
+  'Gate Switch':          { bg: 'rgba(52, 211, 153, 0.15)', text: '#6ee7b7', border: 'rgba(52, 211, 153, 0.35)' },
+
+  // Capital & Order Sizing (Amber & Gold)
+  'Capital Baseline':     { bg: 'rgba(245, 158, 11, 0.15)', text: '#fcd34d', border: 'rgba(245, 158, 11, 0.35)' },
+  'Order Sizing':         { bg: 'rgba(251, 191, 36, 0.15)', text: '#fbbf24', border: 'rgba(251, 191, 36, 0.35)' },
+  'Global Fleet Cap':     { bg: 'rgba(217, 119, 6, 0.18)', text: '#f59e0b', border: 'rgba(217, 119, 6, 0.4)' },
+  'Liquidity Floor':      { bg: 'rgba(234, 88, 12, 0.15)', text: '#fb923c', border: 'rgba(234, 88, 12, 0.35)' },
+
+  // Pricing & Book Health (Green & Mint)
+  'Pricing Band':         { bg: 'rgba(34, 197, 94, 0.15)', text: '#4ade80', border: 'rgba(34, 197, 94, 0.35)' },
+  'Pricing Safeguard':    { bg: 'rgba(74, 222, 128, 0.15)', text: '#86efac', border: 'rgba(74, 222, 128, 0.35)' },
+  'Quote Pricing':        { bg: 'rgba(5, 150, 105, 0.15)', text: '#34d399', border: 'rgba(5, 150, 105, 0.35)' },
+  'Book Health':          { bg: 'rgba(13, 148, 136, 0.15)', text: '#2dd4bf', border: 'rgba(13, 148, 136, 0.35)' },
+
+  // Inventory & Merge (Purple & Violet)
+  'Inventory Risk':       { bg: 'rgba(192, 132, 252, 0.15)', text: '#c084fc', border: 'rgba(192, 132, 252, 0.35)' },
+  'Inventory Management': { bg: 'rgba(168, 85, 247, 0.15)', text: '#d8b4fe', border: 'rgba(168, 85, 247, 0.35)' },
+  'Merge Parity':         { bg: 'rgba(147, 51, 234, 0.15)', text: '#c084fc', border: 'rgba(147, 51, 234, 0.35)' },
+  'Single-Buy Safety':    { bg: 'rgba(139, 92, 246, 0.15)', text: '#a78bfa', border: 'rgba(139, 92, 246, 0.35)' },
+
+  // Defense, Stop-Loss & Circuit Breakers (Rose & Red)
+  'Circuit Breaker':      { bg: 'rgba(225, 29, 72, 0.2)', text: '#fda4af', border: 'rgba(225, 29, 72, 0.4)' },
+  'Emergency Defense':    { bg: 'rgba(244, 63, 94, 0.2)', text: '#fb7185', border: 'rgba(244, 63, 94, 0.4)' },
+  'Stop-Loss System':     { bg: 'rgba(239, 68, 68, 0.2)', text: '#fca5a5', border: 'rgba(239, 68, 68, 0.4)' },
+
+  // Cadence, Queue & Execution (Indigo & Blue)
+  'Capital Horizon':      { bg: 'rgba(99, 102, 241, 0.15)', text: '#a5b4fc', border: 'rgba(99, 102, 241, 0.35)' },
+  'Execution Cadence':    { bg: 'rgba(79, 70, 229, 0.15)', text: '#818cf8', border: 'rgba(79, 70, 229, 0.35)' },
+  'Reconciliation':       { bg: 'rgba(129, 140, 248, 0.15)', text: '#c7d2fe', border: 'rgba(129, 140, 248, 0.35)' },
+  'Requote Cadence':      { bg: 'rgba(59, 130, 246, 0.15)', text: '#93c5fd', border: 'rgba(59, 130, 246, 0.35)' },
+  'Requote Policy':       { bg: 'rgba(37, 99, 235, 0.15)', text: '#60a5fa', border: 'rgba(37, 99, 235, 0.35)' },
+  'Queue Priority':       { bg: 'rgba(96, 165, 250, 0.15)', text: '#bfdbfe', border: 'rgba(96, 165, 250, 0.35)' },
+  'Queue Realism':        { bg: 'rgba(147, 197, 253, 0.15)', text: '#dbeafe', border: 'rgba(147, 197, 253, 0.35)' },
+  'Venue Protocol':       { bg: 'rgba(100, 116, 139, 0.2)', text: '#cbd5e1', border: 'rgba(100, 116, 139, 0.4)' },
+  'Telemetry':            { bg: 'rgba(148, 163, 184, 0.15)', text: '#94a3b8', border: 'rgba(148, 163, 184, 0.35)' }
 };
+
+function getCategoryTagStyle(cat) {
+  if (cat && CATEGORY_STYLES[cat]) return CATEGORY_STYLES[cat];
+  let hash = 0;
+  const str = String(cat || 'General');
+  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  const hue = Math.abs(hash) % 360;
+  return {
+    bg: `hsla(${hue}, 65%, 45%, 0.15)`,
+    text: `hsl(${hue}, 75%, 75%)`,
+    border: `hsla(${hue}, 65%, 45%, 0.35)`
+  };
+}
+
+function renderCategoryBadge(cat) {
+  const catName = cat || 'Safeguard Rule';
+  const s = getCategoryTagStyle(catName);
+  return `<span class="param-badge" style="background:${s.bg};color:${s.text};border:1px solid ${s.border};white-space:nowrap;display:inline-block">${esc(catName)}</span>`;
+}
+
+let cachedParameters = [];
+let activeParamScope = 'all';
+let paramSortCol = 'category'; // Default view: sorted a-z asc by category
+let paramSortDir = 'asc';       // Default view: asc
+
+function compareParams(a, b, col, dir) {
+  let res = 0;
+  if (col === 'category') {
+    // 1st level: Category A-Z
+    const catA = a.category || '';
+    const catB = b.category || '';
+    res = catA.localeCompare(catB);
+    // 2nd level: Parameter / Variable name
+    if (res === 0) {
+      const nameA = a.display_name || a.name || '';
+      const nameB = b.display_name || b.name || '';
+      res = nameA.localeCompare(nameB);
+    }
+  } else if (col === 'name') {
+    const nameA = a.display_name || a.name || '';
+    const nameB = b.display_name || b.name || '';
+    res = nameA.localeCompare(nameB);
+  } else if (col === 'value') {
+    const valA = a.raw_value !== undefined && a.raw_value !== null ? Number(a.raw_value) : NaN;
+    const valB = b.raw_value !== undefined && b.raw_value !== null ? Number(b.raw_value) : NaN;
+    if (!isNaN(valA) && !isNaN(valB)) {
+      res = valA - valB;
+    } else {
+      res = String(a.value || '').localeCompare(String(b.value || ''));
+    }
+  } else if (col === 'env_var') {
+    const envA = a.env_var || '';
+    const envB = b.env_var || '';
+    res = envA.localeCompare(envB);
+  } else if (col === 'trigger') {
+    res = String(a.trigger || '').localeCompare(String(b.trigger || ''));
+  } else if (col === 'action') {
+    res = String(a.action || '').localeCompare(String(b.action || ''));
+  }
+
+  // Fallback 2nd level tie-breaker: display name
+  if (res === 0 && col !== 'name') {
+    const nameA = a.display_name || a.name || '';
+    const nameB = b.display_name || b.name || '';
+    res = nameA.localeCompare(nameB);
+  }
+
+  return dir === 'desc' ? -res : res;
+}
+
+function renderSortableTh(colKey, label, extraStyle = '', extraClass = '') {
+  const isActive = paramSortCol === colKey;
+  const ariaSort = isActive ? ` aria-sort="${paramSortDir === 'asc' ? 'ascending' : 'descending'}"` : '';
+  const arrow = isActive ? (paramSortDir === 'asc' ? '▲' : '▼') : '↕';
+  const classAttr = extraClass ? ` class="${extraClass}"` : '';
+  const styleAttr = extraStyle ? ` style="${extraStyle}"` : '';
+
+  return `<th${classAttr}${styleAttr}${ariaSort}>`
+    + `<button type="button" class="ot-sort-btn param-sort-btn" data-param-sort="${colKey}" title="Sort by ${esc(label)} (${isActive && paramSortDir === 'asc' ? 'descending' : 'ascending'})">`
+    + `<span class="ot-sort-label">${esc(label)}</span>`
+    + `<span class="ot-sort-arrow" aria-hidden="true">${arrow}</span>`
+    + `</button></th>`;
+}
+
+const CANONICAL_SUBGROUP_TITLES = {
+  active_live: "1. Active / In-Play Markets (Live Sports & Esports via /events?live=true)",
+  standard: "2. Standard / Pre-Match & Long-Dated Markets (Politics, Macro, Pre-Match Sports)",
+  quoting_phase: "1. Quoting Phase (Entry, Sizing & Book Health)",
+  open_positions: "2. Open Positions Management Phase (Inventory & Merge)",
+  protection_lifecycle: "3. Protection, Stops, Requotes & Order Lifecycle Phase",
+  protection_phase: "3. Protection, Stops, Requotes & Order Lifecycle Phase"
+};
+
+const CANONICAL_SCOPE_CONFIG = {
+  market_screener: {
+    title: "SCOPE 1: MARKET FILTERING (MARKET SCREENER)",
+    badge: "scoring/config.py",
+    badgeClass: "screener"
+  },
+  bot_engine: {
+    title: "SCOPE 2: BOT ENGINE (SHARED EQUALLY: LIVE TRADING & SHADOW MODE)",
+    badge: "core_brain/config.py",
+    badgeClass: "engine"
+  }
+};
+
+function renderParametersView() {
+  const params = cachedParameters || [];
+  const filtered = activeParamScope === 'all'
+    ? params
+    : params.filter(p => p.scope === activeParamScope);
+
+  const scopeOrder = ['market_screener', 'bot_engine'];
+  const subgroupOrder = {
+    market_screener: ['active_live', 'standard'],
+    bot_engine: ['quoting_phase', 'open_positions', 'protection_lifecycle']
+  };
+
+  // Build ordered groups
+  const renderedGroups = [];
+  for (const sKey of scopeOrder) {
+    const sItems = filtered.filter(p => p.scope === sKey);
+    if (!sItems.length) continue;
+
+    const sMeta = CANONICAL_SCOPE_CONFIG[sKey] || {
+      title: sKey.toUpperCase(),
+      badge: 'config.py',
+      badgeClass: 'engine'
+    };
+
+    const subList = [];
+    const knownSubs = subgroupOrder[sKey] || [];
+    for (const subKey of knownSubs) {
+      const subItems = sItems.filter(p => p.subgroup === subKey || (subKey === 'protection_lifecycle' && p.subgroup === 'protection_phase'));
+      if (subItems.length) {
+        subList.push({
+          subgroup: subKey,
+          title: CANONICAL_SUBGROUP_TITLES[subKey] || subItems[0].subgroup_label || subKey,
+          items: subItems
+        });
+      }
+    }
+    const otherItems = sItems.filter(p => !knownSubs.includes(p.subgroup) && !(p.subgroup === 'protection_phase' && knownSubs.includes('protection_lifecycle')));
+    if (otherItems.length) {
+      subList.push({
+        subgroup: 'other',
+        title: 'Additional Rules',
+        items: otherItems
+      });
+    }
+
+    if (subList.length) {
+      renderedGroups.push({
+        scope: sKey,
+        meta: sMeta,
+        subgroups: subList
+      });
+    }
+  }
+
+  // Render Bento Cards
+  const cardsContainer = document.getElementById('params-cards-container');
+  if (cardsContainer) {
+    if (!renderedGroups.length) {
+      cardsContainer.innerHTML = '<div class="empty-state-msg" style="grid-column:1/-1">No variables found for this scope.</div>';
+    } else {
+      let paramCardsHtml = '';
+      for (const sg of renderedGroups) {
+        paramCardsHtml += `
+          <div style="grid-column: 1 / -1; margin-top: 10px; margin-bottom: 4px;">
+            <div class="param-scope-header">
+              <span class="param-scope-title">${esc(sg.meta.title)}</span>
+              <span class="param-scope-badge ${sg.meta.badgeClass}">${esc(sg.meta.badge)}</span>
+            </div>
+          </div>`;
+
+        for (const sub of sg.subgroups) {
+          paramCardsHtml += `
+            <div style="grid-column: 1 / -1; margin-top: 6px; margin-bottom: 2px;">
+              <h4 style="font-family:var(--font-display);font-size:12px;color:#38bdf8;letter-spacing:0.04em">${esc(sub.title)}</h4>
+            </div>`;
+
+          const sortedItems = [...sub.items].sort((a, b) => compareParams(a, b, paramSortCol, paramSortDir));
+          for (const p of sortedItems) {
+            const rawKey = p.key || p.code || p.name;
+            const displayName = p.display_name || (p.name && p.name !== rawKey ? p.name : (PARAM_HUMAN_NAMES[rawKey] || rawKey));
+            const envHtml = p.env_var ? `<span class="param-badge" style="font-family:monospace;font-size:9.5px;color:#a78bfa;background:rgba(167,139,250,0.12);border:1px solid rgba(167,139,250,0.3);white-space:nowrap;display:inline-block">ENV: ${esc(p.env_var)}</span>` : '';
+            const subHtml = p.subgroup_label ? `<span class="param-badge" style="font-size:9.5px;color:var(--text-secondary);background:rgba(255,255,255,0.06);white-space:nowrap;display:inline-block">${esc(p.subgroup_label)}</span>` : '';
+
+            paramCardsHtml += `
+              <div class="param-card">
+                <div>
+                  <div class="param-card-top">
+                    <div class="param-title">${esc(displayName)}</div>
+                    <span class="param-code-pill">${esc(rawKey)}</span>
+                  </div>
+                  <div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap" class="param-value-box">
+                    <span class="param-val">${esc(p.value)}</span>
+                    ${renderCategoryBadge(p.category)}
+                    ${envHtml}
+                  </div>
+                  <div style="margin-top:6px">
+                    ${subHtml}
+                  </div>
+                </div>
+                <div style="margin-top:10px">
+                  <div class="param-rule-text" style="margin-bottom:6px">
+                    <span style="color:var(--text-muted);font-weight:600;font-size:10px;text-transform:uppercase">Trigger:</span>
+                    ${esc(p.trigger)}
+                  </div>
+                  <div class="param-action-text">
+                    <span style="font-weight:700">Enforcement:</span> ${esc(p.action)}
+                  </div>
+                </div>
+              </div>`;
+          }
+        }
+      }
+      cardsContainer.innerHTML = paramCardsHtml;
+    }
+  }
+
+  // Render Detailed Split Tables
+  const tableContainer = document.getElementById('params-table-container');
+  if (tableContainer) {
+    if (!renderedGroups.length) {
+      tableContainer.innerHTML = '<div class="empty-state-msg">No variables found for this scope.</div>';
+    } else {
+      let tablesHtml = '';
+      for (const sg of renderedGroups) {
+        tablesHtml += `
+          <div class="param-scope-block">
+            <div class="param-scope-header">
+              <span class="param-scope-title">${esc(sg.meta.title)}</span>
+              <span class="param-scope-badge ${sg.meta.badgeClass}">${esc(sg.meta.badge)}</span>
+            </div>`;
+
+        for (const sub of sg.subgroups) {
+          tablesHtml += `
+            <div class="param-subgroup-block">
+              <div class="param-subgroup-title">${esc(sub.title)}</div>
+              <div style="overflow-x:auto">
+                <table class="param-subgroup-table">
+                  <thead>
+                    <tr>
+                      ${renderSortableTh('name', 'Parameter / Variable', 'min-width:210px')}
+                      ${renderSortableTh('value', 'Active Value', 'min-width:130px;white-space:nowrap')}
+                      ${renderSortableTh('category', 'Category', '', 'col-category')}
+                      ${renderSortableTh('env_var', 'Env Override', 'min-width:120px;white-space:nowrap')}
+                      ${renderSortableTh('trigger', 'Trigger Condition', 'min-width:260px')}
+                      ${renderSortableTh('action', 'Automated Action', 'min-width:260px')}
+                    </tr>
+                  </thead>
+                  <tbody>`;
+
+          const sortedItems = [...sub.items].sort((a, b) => compareParams(a, b, paramSortCol, paramSortDir));
+          for (const p of sortedItems) {
+            const rawKey = p.key || p.code || p.name;
+            const displayName = p.display_name || (p.name && p.name !== rawKey ? p.name : (PARAM_HUMAN_NAMES[rawKey] || rawKey));
+            const envCell = p.env_var
+              ? `<span class="mono" style="font-size:10px;color:#a78bfa;background:rgba(167,139,250,0.12);padding:2px 6px;border-radius:4px;border:1px solid rgba(167,139,250,0.3);white-space:nowrap;display:inline-block">${esc(p.env_var)}</span>`
+              : `<span style="color:var(--text-muted);font-size:11px">—</span>`;
+
+            tablesHtml += `
+              <tr>
+                <td>
+                  <div style="font-weight:700;color:var(--text-primary);font-size:13px">${esc(displayName)}</div>
+                  <div class="mono" style="font-size:10.5px;color:var(--text-muted);margin-top:2px"><code>${esc(rawKey)}</code></div>
+                </td>
+                <td style="white-space:nowrap">
+                  <span class="mono" style="font-weight:700;color:#38bdf8;font-size:13px">${esc(p.value)}</span>
+                </td>
+                <td class="col-category">
+                  ${renderCategoryBadge(p.category)}
+                </td>
+                <td style="white-space:nowrap">${envCell}</td>
+                <td style="font-size:12px;color:var(--text-secondary);line-height:1.4">${esc(p.trigger)}</td>
+                <td style="font-size:12px;color:#34d399;line-height:1.4">${esc(p.action)}</td>
+              </tr>`;
+          }
+
+          tablesHtml += `
+                  </tbody>
+                </table>
+              </div>
+            </div>`;
+        }
+
+        tablesHtml += `</div>`;
+      }
+      tableContainer.innerHTML = tablesHtml;
+    }
+  }
+}
 
 async function renderParameters() {
   try {
     const res = await fetch('/api/parameters');
     if (!res.ok) return;
     const data = await res.json();
-    const params = data.parameters || [];
-
-    // Render Bento Cards
-    const cardsContainer = document.getElementById('params-cards-container');
-    if (cardsContainer) {
-      cardsContainer.innerHTML = '';
-      let paramCardsHtml = '';
-      for (const p of params) {
-        const rawKey = p.key || p.code || p.name;
-        const displayName = p.name && p.name !== rawKey ? p.name : (PARAM_HUMAN_NAMES[rawKey] || rawKey);
-        const meta = PARAM_CATEGORIES[rawKey] || { category: p.category || 'Safeguard Rule', badge: 'dynamic', label: p.badge || 'Config' };
-
-        paramCardsHtml += `
-          <div class="param-card">
-            <div>
-              <div class="param-card-top">
-                <div class="param-title">${esc(displayName)}</div>
-                <span class="param-code-pill">${esc(rawKey)}</span>
-              </div>
-              <div style="margin-top:8px" class="param-value-box">
-                <span class="param-val">${esc(p.value)}</span>
-                <span class="param-badge ${meta.badge}">${esc(meta.label)}</span>
-              </div>
-            </div>
-            <div>
-              <div class="param-rule-text" style="margin-bottom:6px">
-                <span style="color:var(--text-muted);font-weight:600;font-size:10px;text-transform:uppercase">Trigger:</span>
-                ${esc(p.trigger)}
-              </div>
-              <div class="param-action-text">
-                <span style="font-weight:700">Enforcement:</span> ${esc(p.action)}
-              </div>
-            </div>
-          </div>`;
-      }
-      cardsContainer.innerHTML = paramCardsHtml;
-    }
-
-    // Render Detailed Table
-    const body = document.getElementById('params-body');
-    if (body) {
-      body.innerHTML = '';
-      let paramsRowsHtml = '';
-      for (const p of params) {
-        const rawKey = p.key || p.code || p.name;
-        const displayName = p.name && p.name !== rawKey ? p.name : (PARAM_HUMAN_NAMES[rawKey] || rawKey);
-        const meta = PARAM_CATEGORIES[rawKey] || { category: p.category || 'Safeguard Rule', badge: 'dynamic', label: p.badge || 'Config' };
-
-        paramsRowsHtml += `<tr>
-          <td>
-            <div style="font-weight:700;color:var(--text-primary)">${esc(displayName)}</div>
-            <div class="mono" style="font-size:10px;color:var(--text-muted)">${esc(rawKey)}</div>
-          </td>
-          <td>
-            <span class="mono" style="font-weight:700;color:#38bdf8;font-size:13px">${esc(p.value)}</span>
-          </td>
-          <td>
-            <span class="param-badge ${meta.badge}">${esc(meta.category)}</span>
-          </td>
-          <td style="font-size:12px;color:var(--text-secondary)">${esc(p.trigger)}</td>
-          <td style="font-size:12px;color:#34d399">${esc(p.action)}</td>
-        </tr>`;
-      }
-      body.innerHTML = paramsRowsHtml;
-    }
+    cachedParameters = data.parameters || [];
+    renderParametersView();
   } catch (e) {
     console.debug('Failed to render parameters:', e);
   }
 }
+
+// Wire up Parameter Sort Buttons (A-Z Asc/Desc)
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.param-sort-btn');
+  if (btn) {
+    const col = btn.dataset.paramSort;
+    if (col) {
+      if (paramSortCol === col) {
+        paramSortDir = paramSortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        paramSortCol = col;
+        paramSortDir = 'asc';
+      }
+      renderParametersView();
+    }
+  }
+});
 
 // Wire up Parameter View switch (Grid vs Table)
 const paramGridBtn = document.getElementById('param-view-grid-btn');
@@ -2912,6 +3195,17 @@ if (paramGridBtn && paramTableBtn) {
     if (paramsTableContainer) paramsTableContainer.style.display = 'block';
   });
 }
+
+// Wire up Parameter Scope switch (All vs Bot Engine vs Market Screener)
+document.addEventListener('click', (e) => {
+  const scopeBtn = e.target.closest('.param-scope-btn');
+  if (scopeBtn) {
+    document.querySelectorAll('.param-scope-btn').forEach(b => b.classList.remove('active'));
+    scopeBtn.classList.add('active');
+    activeParamScope = scopeBtn.dataset.scope || 'all';
+    renderParametersView();
+  }
+});
 
 
 /* ── Render: Exposure Bar (DT3) ── */
@@ -4432,17 +4726,17 @@ function renderProbabilityBellChart(stats, ids) {
     bellPoints.push(`${x + step / 2},${pdfY}`);
   });
 
-  // Sweet spot range (0.15 to 0.85)
-  const sweetLeft = padL + (0.10 / 0.90) * plotW;
-  const sweetRight = padL + (0.80 / 0.90) * plotW;
+  // Sweet spot range (0.10 to 0.90)
+  const sweetLeft = padL + 0.10 * plotW;
+  const sweetRight = padL + 0.90 * plotW;
 
   const bellPath = bellPoints.length > 1 ? `M ${bellPoints.join(' L ')}` : '';
 
   container.innerHTML = `
     <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Implied Odds Bell Curve">
-      <!-- Sweet Spot Shaded Background (15% to 85%) -->
+      <!-- Sweet Spot Shaded Background (10% to 90%) -->
       <rect x="${sweetLeft}" y="${padT}" width="${sweetRight - sweetLeft}" height="${plotH}" fill="rgba(56, 189, 248, 0.06)" rx="4"/>
-      <text x="${sweetLeft + 6}" y="${padT - 8}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="700">SWEET SPOT (15%–85%)</text>
+      <text x="${sweetLeft + 6}" y="${padT - 8}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="700">SWEET SPOT (10%–90%)</text>
 
       <!-- Center 50% Fair Odds Line Anchored at Middle -->
       <line x1="${padL + plotW / 2}" y1="${padT}" x2="${padL + plotW / 2}" y2="${padT + plotH}" stroke="#38bdf8" stroke-width="2"/>
@@ -4724,8 +5018,8 @@ function decisionGatesRows(ta, stats, n, kpi) {
       group: 'Constant settings',
       name: 'Strategy Pricing Band',
       standard: 'Implied contract probability sweet-spot filter',
-      threshold: '$0.15 &le; P &le; $0.85',
-      observed: sweetSpot != null ? `$0.15 – $0.85 (${Number(sweetSpot).toFixed(1)}% in band)` : '$0.15 – $0.85',
+      threshold: '$0.10 &le; P &le; $0.90',
+      observed: sweetSpot != null ? `$0.10 – $0.90 (${Number(sweetSpot).toFixed(1)}% in band)` : '$0.10 – $0.90',
       measured: true,
       state: 'active',
     },
@@ -9204,7 +9498,7 @@ function getStageHero(key, funnel, lane) {
     case 'identity':
       return {
         param: 'TEST: CONTRACT & KEYWORDS',
-        value: activeLane === 'live' ? 'Main-Line Sports (Moneyline / In-Play)' : 'Binary · Mid [0.15, 0.85]',
+        value: activeLane === 'live' ? 'Main-Line Sports (Moneyline / In-Play)' : 'Binary · Mid [0.10, 0.90]',
       };
     case 'movement':
       return {

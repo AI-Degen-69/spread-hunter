@@ -205,37 +205,33 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
           <div class="font-display" style="font-size:15px;letter-spacing:0.04em;color:var(--text-primary)">
-            STRATEGY RISK LIMITS &amp; SAFEGUARD RULES
+            STRATEGY CONFIGURATION &amp; SAFEGUARD RULES
           </div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:2px">
-            Dynamic capital caps and automated circuit breakers (core_brain/config.py)
+            Canonical engine parameters and market screening thresholds (core_brain/config.py)
           </div>
         </div>
-        <div class="analytics-ci-buttons" style="margin:0" role="group" aria-label="Parameters view mode">
-          <button id="param-view-grid-btn" class="active" type="button">CARDS VIEW</button>
-          <button id="param-view-table-btn" type="button">TABLE VIEW</button>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div class="ticker-filters" role="group" aria-label="Parameters scope filter" style="display:flex;gap:4px">
+            <button class="param-scope-btn active" data-scope="all" type="button">ALL SCOPES</button>
+            <button class="param-scope-btn" data-scope="bot_engine" type="button">BOT ENGINE (LIVE &amp; SHADOW)</button>
+            <button class="param-scope-btn" data-scope="market_screener" type="button">MARKET FILTER</button>
+          </div>
+          <div class="analytics-ci-buttons" style="margin:0" role="group" aria-label="Parameters view mode">
+            <button id="param-view-grid-btn" type="button">CARDS VIEW</button>
+            <button id="param-view-table-btn" class="active" type="button">TABLE VIEW</button>
+          </div>
         </div>
       </div>
 
       <!-- Bento Cards View -->
-      <div id="params-cards-container" class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px">
+      <div id="params-cards-container" class="card-grid" style="display:none;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px">
         <!-- Rendered by JS -->
       </div>
 
-      <!-- Detailed Table View -->
-      <div id="params-table-container" style="display:none;overflow-x:auto">
-        <table id="params-table">
-          <thead>
-            <tr>
-              <th style="min-width:200px">Safeguard Rule</th>
-              <th style="min-width:130px">Active Threshold</th>
-              <th style="min-width:110px">Category</th>
-              <th style="min-width:260px">Trigger Condition</th>
-              <th style="min-width:260px">Automated Action</th>
-            </tr>
-          </thead>
-          <tbody id="params-body"></tbody>
-        </table>
+      <!-- Detailed Table View (Split by Scope & Subgroup) -->
+      <div id="params-table-container" style="display:block">
+        <!-- Rendered dynamically by JS into canonical split tables -->
       </div>
     </div>
 

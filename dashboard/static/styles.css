@@ -2895,9 +2895,12 @@ th[aria-sort] .ot-sort-btn {
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
-  padding: 2px 6px;
+  padding: 3px 8px;
   border-radius: 4px;
   letter-spacing: 0.04em;
+  white-space: nowrap;
+  display: inline-block;
+  line-height: 1.25;
 }
 .param-badge.hard-limit {
   background: var(--red-bg);
@@ -2927,6 +2930,124 @@ th[aria-sort] .ot-sort-btn {
   padding: 5px 8px;
   border-radius: 0 4px 4px 0;
   line-height: 1.35;
+}
+
+/* Parameter Group Headers & Split Tables */
+.param-scope-block {
+  margin-bottom: 24px;
+}
+.param-scope-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.param-scope-title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-primary);
+}
+.param-scope-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.param-scope-badge.screener {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+.param-scope-badge.engine {
+  background: rgba(167, 139, 250, 0.12);
+  color: #a78bfa;
+  border: 1px solid rgba(167, 139, 250, 0.3);
+}
+.param-subgroup-block {
+  margin-bottom: 16px;
+  background: rgba(10, 15, 29, 0.45);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.param-subgroup-title {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  color: #38bdf8;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-subtle);
+  letter-spacing: 0.03em;
+}
+.param-subgroup-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.param-subgroup-table th {
+  background: rgba(15, 23, 42, 0.5);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.param-subgroup-table th.col-category,
+.param-subgroup-table td.col-category {
+  width: 1%;
+  white-space: nowrap;
+}
+.param-subgroup-table th .ot-sort-btn {
+  padding: 2px 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.param-subgroup-table th .ot-sort-btn:hover {
+  background: var(--bg-surface-raised);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+.param-subgroup-table th[aria-sort] .ot-sort-btn {
+  color: var(--open);
+}
+.param-subgroup-table th .ot-sort-arrow {
+  font-size: 10px;
+  line-height: 1;
+}
+.param-subgroup-table th:not([aria-sort]) .ot-sort-arrow {
+  opacity: 0.35;
+}
+.param-subgroup-table th:not([aria-sort]):hover .ot-sort-arrow {
+  opacity: 0.8;
+}
+.param-subgroup-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: middle;
+}
+.param-subgroup-table tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
 }
 
 /* Ticker filter chips */
