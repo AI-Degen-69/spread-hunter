@@ -101,16 +101,17 @@ Kept-token marks must survive sync (mid intact, `reset_generation` unchanged)
 
 ## 5. Tasks (dependency order, risk-first)
 
-- [ ] T1 (S, [Backend/Logic], focused pytest) — RED baseline + test rewrite.
+- [x] T1 (S, [Backend/Logic], focused pytest) — RED baseline + test rewrite.
   Rewrite drift test into delta cases: unchanged→no frame/False/no close;
   add→1 subscribe/True/no close/1 app/sent=={a,b}; remove via TTL clock→1
   unsubscribe; mixed→subscribe-before-unsubscribe; kept-mark→mid intact and
   generation unchanged; send-fail→False/closed/baseline kept/second app opens
   full type:market frame. Focused suite → new cases FAIL. Depends on: none.
-- [ ] T2 (S, [Backend/Logic], focused pytest) — GREEN implementation. Rewrite
+- [x] T2 (S, [Backend/Logic], focused pytest) — GREEN implementation. Rewrite
   `sync_subscription` per section 1 + docstring; private frame helper, no
   import from `market_stream.py`. Focused suite → all pass. Depends on: T1.
-- [ ] T3 (XS, [Backend/Logic], focused re-run) — regression sweep of the file;
+- [x] T3 (XS, [Backend/Logic], focused re-run) — regression sweep of the file;
   missing-websocket + cache tests untouched-green. Depends on: T2.
 
 Checkpoints: after T1 (red proof); after T3 (green file, handoff to build).
+
