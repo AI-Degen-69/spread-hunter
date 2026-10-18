@@ -8,6 +8,7 @@ while the book moves.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -50,7 +51,8 @@ const app = mod.exports;
     return out.stdout.strip()
 
 
-def _kpi(up_sh=10.0, up_cost=8.0, up_mid=0.76, dn_sh=0.0, dn_cost=0.0, dn_mid=None):
+def _kpi(up_sh=10.0, up_cost=8.0, up_mid=0.76, dn_sh=0.0, dn_cost=0.0, dn_mid=None,
+         quotes_count=0):
     quotes = []
     if up_sh > 0:
         quotes.append({"side": "UP", "price": 0.80, "mid": up_mid,
@@ -72,6 +74,7 @@ def _kpi(up_sh=10.0, up_cost=8.0, up_mid=0.76, dn_sh=0.0, dn_cost=0.0, dn_mid=No
                 "total_cost": up_cost + dn_cost,
                 "total_sh": up_sh + dn_sh,
                 "realized_pnl": 0.0,
+                "quotes_count": quotes_count,
                 "quotes": quotes,
             }
         }
@@ -123,7 +126,7 @@ def test_live_overlay_moves_the_per_leg_lines():
     # Quote mid says $0.84 (the frozen case); a fresh venue mark at $0.77
     # must win on the next render.
     res = json.loads(_eval_js(f"""
-    const kpi = {json.dumps(_kpi(up_mid=0.84))};
+    const kpi = {json.dumps(_kpi(up_mid=0.84, quotes_count=2))};
     const nowMs = Date.now();
     app.applyLiveMarks(
         {{marks: [{{token_id: 'tok-up', bid: 0.76, ask: 0.78, mid: 0.77,
@@ -136,6 +139,10 @@ def test_live_overlay_moves_the_per_leg_lines():
     assert "YES $0.77" in html
     assert "-$0.30" in html
     assert "live mark" in html
+    # #656: the activity pill is not a live cell -- the marks pass leaves it in
+    # place, and it never lands inside a cell paintLiveMarks() rewrites.
+    assert 'class="pill quoting-breathing"' in html
+    assert "quoting-breathing" in html.split("data-cell")[0]
 
 
 @requires_node
@@ -223,3 +230,150 @@ def test_current_price_sort_follows_a_mark_update():
     """))
     assert res["before"].index("0xdef") < res["before"].index("0xabc")
     assert res["after"].index("0xabc") < res["after"].index("0xdef")
+
+
+# ── #656: the active-trading pill on a held market ──────────────────────────
+
+
+def _order(cid, status):
+    return {"order_id": f"ord-{cid}-{status}", "condition_id": cid,
+            "status": status}
+
+
+@requires_node
+def test_market_activity_pill_prefers_resting_and_stays_empty_when_idle():
+    # One rule, three answers: a market nobody is working gets no markup at
+    # all, a quoted market gets QUOTING, and RESTING wins when both are true.
+    res = json.loads(_eval_js("""
+    console.log(JSON.stringify({
+        idle: app.marketActivityPill({quotes_count: 0}, []),
+        quoting: app.marketActivityPill({quotes_count: 2}, []),
+        resting: app.marketActivityPill({quotes_count: 2}, [{status: 'open'}])
+    }));
+    """))
+    assert res["idle"] == ""
+    assert "quoting-breathing" in res["quoting"]
+    assert "resting-breathing" in res["resting"]
+    assert "quoting-breathing" not in res["resting"]
+
+
+@requires_node
+@pytest.mark.parametrize("status", ["open", "partial", "pending", "Open"])
+def test_stitch_positions_resting_order_shows_resting_pill(status):
+    # isRestingOrder reads its three live statuses case-insensitively.
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_kpi())};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(
+            kpi, {{orders: [{json.dumps(_order('0xabc', status))}]}}, null)
+    }}));
+    """))
+    html = res["html"]
+    assert 'class="pill resting-breathing"' in html
+    assert ">RESTING</span>" in html
+    assert "quoting-breathing" not in html
+
+
+@requires_node
+def test_stitch_positions_resting_wins_over_quoting():
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_kpi(quotes_count=3))};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(
+            kpi, {{orders: [{json.dumps(_order('0xabc', 'open'))}]}}, null)
+    }}));
+    """))
+    html = res["html"]
+    assert "resting-breathing" in html
+    assert "quoting-breathing" not in html
+
+
+@requires_node
+def test_stitch_positions_quoting_only_shows_quoting_pill():
+    # Filled and cancelled orders are not resting, so the market reads QUOTING.
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_kpi(quotes_count=1))};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(kpi, {{orders: [
+            {json.dumps(_order('0xabc', 'filled'))},
+            {json.dumps(_order('0xabc', 'cancelled'))}]}}, null)
+    }}));
+    """))
+    html = res["html"]
+    assert 'class="pill quoting-breathing"' in html
+    assert ">QUOTING</span>" in html
+    assert "resting-breathing" not in html
+
+
+@requires_node
+def test_stitch_positions_idle_market_keeps_standard_tags():
+    # No quotes and no resting orders: the row keeps the tags it already had,
+    # and no new grey IDLE pill appears.
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_kpi())};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(kpi, {{orders: []}}, null)
+    }}));
+    """))
+    html = res["html"]
+    assert "resting-breathing" not in html
+    assert "quoting-breathing" not in html
+    assert "pill stopped" not in html
+    assert "stitch-status-badge" in html
+
+
+@requires_node
+def test_stitch_positions_other_market_orders_do_not_mark_held_market():
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_kpi())};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(
+            kpi, {{orders: [{json.dumps(_order('0xdef', 'open'))}]}}, null)
+    }}));
+    """))
+    html = res["html"]
+    assert "resting-breathing" not in html
+    assert "quoting-breathing" not in html
+
+
+@requires_node
+def test_stitch_positions_finished_market_has_no_activity_pill():
+    # A settled market leaves the held table entirely, so an order still open
+    # on it cannot put a pill on a row that is not rendered.
+    kpi = _kpi(quotes_count=4)
+    kpi["by_market"]["0xabc"]["resolved"] = True
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(kpi)};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(
+            kpi, {{orders: [{json.dumps(_order('0xabc', 'open'))}]}}, null)
+    }}));
+    """))
+    html = res["html"]
+    assert "No legs have filled" in html
+    assert "resting-breathing" not in html
+    assert "quoting-breathing" not in html
+
+@requires_node
+def test_stitch_positions_sorted_render_keeps_each_markets_pill():
+    # The pill is decided before the rows are ordered, so clicking a column
+    # header must not drop it, and each market keeps its own verdict.
+    kpi = _two_market_kpi(0.40, 0.80)
+    kpi["by_market"]["0xabc"]["quotes_count"] = 2
+    kpi["by_market"]["0xdef"]["quotes_count"] = 1
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(kpi)};
+    const html = app.stitchPositionsRows(
+        kpi, {{orders: [{json.dumps(_order('0xdef', 'open'))}]}}, {{col: 9, dir: 'desc'}});
+    console.log(JSON.stringify({{html}}));
+    """))
+    html = res["html"]
+
+    # Still sorted by CURRENT PRICE descending: 0xdef at $0.80 first.
+    assert html.index("0xdef") < html.index("0xabc")
+    by_cid = {cid: body for cid, body in re.findall(
+        r'<tr[^>]*data-cid="([^"]+)"[^>]*>(.*?)</tr>', html, re.S)}
+    assert len(by_cid) == 2
+    assert "resting-breathing" in by_cid["0xdef"]
+    assert "quoting-breathing" in by_cid["0xabc"]
+    assert "resting-breathing" not in by_cid["0xabc"]

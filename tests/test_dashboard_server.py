@@ -1406,6 +1406,67 @@ def test_market_table_has_clickable_role(tmp_path):
     assert "function renderMarkets(" not in _read_static("app.js")
 
 
+# ── Issue #656: the activity pill on OPEN POSITIONS ─────────────────────────
+
+def _js_function_body(source: str, name: str) -> str:
+    """One top-level `function <name>(...)`, up to the next top-level function."""
+    start = source.index(f"function {name}(")
+    nxt = source.find("\nfunction ", start + 1)
+    return source[start:nxt if nxt != -1 else len(source)]
+
+
+def _reduced_motion_block(css: str, selector: str) -> str:
+    """The `@media (prefers-reduced-motion: reduce)` block covering `selector`."""
+    marker = "@media (prefers-reduced-motion: reduce) {"
+    # The stylesheet carries several reduce blocks; the one that matters is the
+    # one that names the breathing pills, never simply the first one.
+    for chunk in css.split(marker)[1:]:
+        block = chunk.split("\n}")[0]
+        if selector in block:
+            return block
+    raise AssertionError(f"no reduced-motion block covers {selector}")
+
+
+def test_positions_renderers_wire_activity_pill():
+    """Both OPEN POSITIONS tables wear the ACTIVE MARKETS RESTING/QUOTING pill."""
+    app_js = _read_static("app.js")
+
+    # One shared rule, beside the pill helper it wraps.
+    assert "function marketActivityPill(" in app_js
+
+    for name in ("positionsRows", "stitchPositionsRows"):
+        body = _js_function_body(app_js, name)
+        # Orders are grouped once per render and the pill comes from the shared
+        # rule: a renderer missing either line silently loses the indicator.
+        assert "groupOrdersByMarket(" in body, name
+        assert "marketActivityPill(" in body, name
+        # Decided before the row is assembled, so the pill can only ride in the
+        # market cell -- never in a cell paintLiveMarks() rewrites.
+        assert body.index("marketActivityPill(") < body.index("data-cell"), name
+
+
+def test_styles_css_reduced_motion_covers_breathing_pills():
+    """The 1 Hz breathing dots stay opt-out for reduced-motion users (#656)."""
+    css = _read_static("styles.css")
+
+    # Both pills still blink on the shared keyframes, and the keyframes are the
+    # ones the issue froze.
+    assert css.count("animation: hb-blink 1s steps(1, end) infinite") >= 2
+    assert "@keyframes hb-blink" in css
+    assert "0%, 49.9%" in css
+    assert "50%, 100%" in css
+    assert "opacity: 0.15" in css
+
+    # Every breathing dot in the reduce block is switched off, not just the
+    # bright one: a new pill class must not ship a blink nobody can stop.
+    block = _reduced_motion_block(css, ".pill.resting-breathing::before")
+    for selector in (".pill.resting-breathing::before",
+                     ".pill.quoting-breathing.resting::before",
+                     ".pill.quoting-breathing::before"):
+        assert selector in block
+    assert "animation: none" in block
+
+
 # ── Screener kanban tab (Tab 3) ──
 
 def test_html_has_market_filter_tab_button():
