@@ -1,54 +1,56 @@
-# CONSTRAINTS — Issue #652 (locked at Station II, 2026-10-18)
+# CONSTRAINTS — #656
 
-Scope: the two config modules and the tests that police them. Branch `i652/rename-picker-filter-bars`.
+Branch: i656/active-trading-green-pills | Plan: `tasks/plan.md`
 
-## 1. Zero value drift — the hard contract
+The bar this change is held to. Weakening any line to reach green is a failure,
+not a fix.
 
-Every one of the eight canonical defaults stays exactly `200.0 / 1800.0 / True / 0.0 / 2.0 / 7200.0 /
-15.0 / False`. No figure in `tests/test_config_single_source.py::SCORING_DEFAULTS` (82 entries) is edited,
-and no entry is renamed — all 82 resolve after the change (measured pre-change at Station II). A value
-change is a different ticket (#572 / #573 precedent).
+## 1. Zero regressions
+- Baseline on HEAD `01157a3`: 134 passed (`test_stitch_positions_marks.py`,
+  `test_orders_trades_table.py`, `test_positions_live_marks.py`), 194 passed
+  across the six focused suites, 2 passed / 128 deselected for the issue's
+  acceptance command. All must still pass.
+- Every new behaviour ships with a test that fails without the change. The only
+  deliberate exception is the reduced-motion/`hb-blink` guard, which is a
+  boundary tripwire and passes on both sides; it is labelled as such in
+  `tasks/plan.md` §T3.
 
-## 2. Zero regressions
+## 2. Anti-cheat
+- No `skip`, `xfail`, or deleted/weakened assertions.
+- No `# type: ignore`, `# noqa`, `eslint-disable`, or any other suppression.
+- No edits to `tests/js/*.cjs` unless a fixture genuinely cannot reach the
+  renderer; both harnesses already accept `kpi`/`state`/`view`.
+- If a Node test skips because `node` is missing, that run proves nothing —
+  `node --version` must succeed before a green result is reported.
 
-- Targeted suites covering the touched files pass before review and again after review fixes:
-  `python -m pytest -q tests/test_config_divergence_guard.py tests/test_config_single_source.py tests/test_market_selection_bars.py`
-- The reader/regression selection stays green and **unmodified**: `tests/test_velocity_gate.py`,
-  `tests/test_movement_gate.py`, `tests/test_maker_queue_bar.py`, `tests/test_filter_loop.py`,
-  `tests/test_config_for_display.py`, `tests/test_queue_clear_gate.py`, `tests/test_wide_book_trial.py`,
-  `tests/test_loose_baseline.py`. Their call sites are not edited to make anything pass.
-- Every changed behaviour carries a test that fails without the change: the guard repoint (A5), the
-  six env overrides end to end (A4), old-name reads + warnings (A2), the derived-cap alias (A1).
-- The full `python -m pytest -q` suite runs in GitHub CI on Ubuntu and Windows; it is not repeated locally
-  for this ticket.
+## 3. Dependencies
+- No new external dependency, no new tooling, no packaging change.
 
-## 3. Guard integrity — no passing because empty
+## 4. Frozen surfaces (any edit here fails the review)
+- `dashboard/static/styles.css` — including `@keyframes hb-blink`
+  (`styles.css:433`) and the reduced-motion block (`styles.css:599-603`).
+- `dashboard/static/index.html`, `dashboard/static/prototype.js`,
+  `dashboard/static/prototype.css`, `dashboard/server.py`,
+  everything under `core_brain/`, `data/orders.db`.
+- In `dashboard/static/app.js`: `marketStatusPill`, `isQuotedMarket`,
+  `isRestingOrder`, `groupOrdersByMarket`, `heldMarketEntries`,
+  `activeMarketsRows`, `stitchActiveMarketsRows`, `renderScreener`,
+  `paintLiveMarks`.
+- The two named acceptance tests.
 
-The divergence guard's class-body allow-list is `PROFILE_NAMES` **only**. Re-declaring a canonical bar in
-the scoring class body fails even when the value is identical. `CORE_OWNED_PICKER_BARS` may never be used
-as an excuse list for the class body, and the guard may never be satisfied by an empty set without an
-affirmative counterpart assertion.
+## 5. DOM contract (hard boundary)
+- No new table column in either positions table; the classic positions head and
+  the stitch 8-column head are unchanged, as are row counts and band classes
+  (`ot-pair-start`, `ot-pair-alt`).
+- The pill carries no `data-cell`, no `data-cid`, and no `live` class, and no
+  `data-cell` cell may contain a breathing class — `paintLiveMarks` owns those
+  cells.
+- Idle held markets emit no pill markup at all, and the IDLE (`pill stopped`)
+  badge must never appear in either positions table.
+- The pill appears on exactly the markets the ACTIVE MARKETS tab lists, with the
+  same RESTING-versus-QUOTING verdict.
 
-## 4. Untouched surfaces
-
-`dashboard/server.py`, `dashboard/static/strategy_explainer.html`, `scripts/filter_markets.py`: **zero
-edits** — correct aliases keep their reads right. The `bot_*` execution side, the class name,
-`filter_std_spread_max_book`, the `#632` `_frac`/`_fraction` properties, the constructor wrapper's
-precedence rule and `docs/ideas/variable-names-refactor.md`: out of scope.
-
-## 5. Anti-cheat
-
-No skipping, xfailing, deleting or weakening a test, no removed assertion, no `filterwarnings` rule added to
-`pytest.ini` to silence `DeprecationWarning`, no linter/type suppression, no stub or placeholder. The
-deprecation warnings are the designed behaviour of the alias mechanism — tests assert them, they do not
-suppress them.
-
-## 6. Dependencies and performance
-
-No new external dependency, no new env var (specifically none for the two queue bars, which had none before),
-no new mechanism: the alias table, its descriptor and its synthetic-field wiring are reused as shipped.
-
-## 7. Interface freeze
-
-The eight old names, `filter_common_spread_max_cents`, and every existing canonical name keep the contract
-in `tasks/plan.md` §4. Any change to that contract is a scope change and needs the operator.
+## 6. Performance
+- One `groupOrdersByMarket(state && state.orders)` call per render, matching the
+  calls `activeMarketsRows`, `ordersTradesCounts` and `renderOrdersTrades`
+  already make. No per-row map rebuild inside a leg loop.

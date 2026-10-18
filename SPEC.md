@@ -1,24 +1,24 @@
-# SPEC - #652: Rename the picker's legacy filter bars to the canonical config names
+# SPEC - #656: Surface active trading breathing green pills in Traded Positions
 
-Branch: `i652/rename-picker-filter-bars` | Issue: #652
+Branch: i656/active-trading-green-pills | Issue: #656
 
 ## Goal
-The market picker's last eight legacy bars (`select_*`, `enforce_max_queue_minutes`) stop being declared
-on `scoring.config.MakerConfig` and are inherited from `core_brain.config.MakerConfig`. Old names stay
-readable through `_LEGACY_TO_CANONICAL`, and `filter_common_spread_max_cents` is added as a read-only
-alias for the derived picking cap. Full detail lives in `tasks/plan.md` (Spec + Interface contract); this
-file is the stable pointer so Station III never re-derives scope.
+A held market in ORDERS & TRADES → OPEN POSITIONS shows the same green
+`RESTING` / `QUOTING` pill ACTIVE MARKETS already shows when the engine is
+working that market, so the operator stops leaving the tab to find out.
+Both positions renderers carry it: `stitchPositionsRows` (the served page) and
+`positionsRows` (the classic layout the issue names). Full detail lives in
+`tasks/plan.md` (seams, interface contract, tasks); this file is the stable
+pointer so Station III never re-derives scope.
 
 ## Non-behavior contract
-No value changes: 200.0 / 1800.0 / True / 0.0 / 2.0 / 7200.0 / 15.0 / False and all 82 pinned
-`SCORING_DEFAULTS` entries hold. Parsing, clamping, finite checks and fallbacks are untouched. Legacy
-aliases and their `DeprecationWarning` are kept.
-
-## Sequencing
-The ticket's own Open Question 4 is stale: PR #651 is merged into `main` (`214d196`, an ancestor of
-`01157a3`), so this work branches from `main`, not from a stacked branch.
+One new helper, `marketActivityPill(m, orders)`, whose show/not-show condition is
+the ACTIVE MARKETS membership test term for term. No CSS, keyframe, server, engine
+or payload change. Idle held markets emit byte-identical markup to today. No new
+column, no `data-cell`, no `live` class, no IDLE pill in either positions table.
+Market Scan / Kanban cards are deferred to a follow-up.
 
 ## Out of scope
-Value changes, the `bot_*` side, dashboard keys, `scripts/filter_markets.py`, the class name, the
-constructor's `replace()` precedence rule, `docs/ideas/variable-names-refactor.md`, `data/orders.db`,
-opening commands.
+`renderScreener` and the Kanban board; `styles.css` and `hb-blink`;
+`dashboard/server.py`; `core_brain/**`; `data/orders.db`; Active Markets
+renderers; opening commands.

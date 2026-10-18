@@ -1,382 +1,402 @@
-# Plan — Issue #652 `[REFACTOR] Rename the picker's legacy filter bars to the canonical config names`
+# Plan — #656 Surface active trading breathing green pills in Traded Positions and Market Scans
 
-Branch: `i652/rename-picker-filter-bars` | Issue: [#652](https://github.com/AI-Degen-69/spread-hunter/issues/652)
+Branch: i656/active-trading-green-pills | Issue: #656
 
-- Size tier: **Standard** (2 config modules + 3 test files, internal module change, one architectural decision)
-- Task type: **Code** — refactor with a test/guard component. Execution tag per task: `[Backend/Logic]`
-- Language/runtime: Python 3, test runner `pytest` (`pytest.ini`, `testpaths = tests`)
-- Base: **`main` at `01157a3`** (see "Sequencing" below — the issue's default is stale)
-- Verified by: agent-run focused `pytest` selections (Station III/IV). Full suite stays in GitHub CI.
+Right-sizing: **Standard** (1 source file + 3 test files, one shared rule, one
+architectural decision: where the "is this market being worked" rule lives).
+Task type: **Design/UI + Core** (renderer markup; verified through the Node
+render harnesses and a real browser view, plus source-level guards).
+
+CodeRabbit intake (read once, on `gh issue view 656 --comments`):
+
+- **Adopted:** the served-table-first order; the `stitchPositionsRows` scope
+  addition (Assumption 1, verified below); "no new IDLE pill" (Assumption 2);
+  the small shared helper (Assumption 4); the test matrix and the two
+  `tests/test_dashboard_server.py` source checks.
+- **Changed:** the show/not-show condition (see Improvement proposal) and one
+  impossible assertion: its Task 1.2 test asks for `ot-pair-alt` on a
+  single-market fixture, which never produces that class.
+- **Rejected:** nothing material. `tests/js/orders_trades_harness.cjs` and
+  `tests/js/live_marks_harness.cjs` are edited by no task.
+- **Left `[UNVERIFIED]`:** none. Every file, function and line cited below was
+  read directly in the live tree on this branch's HEAD `01157a3`.
 
 ---
 
-## 1. Spec
+## 1. Spec (Small/Standard — embedded; the stable pointer is `SPEC.md`)
 
-### Goal
+### The problem, in operator terms
 
-`scoring/config.py` and `core_brain/config.py` name every market-picker filter bar the same way.
-The eight legacy `select_*` / `enforce_*` declarations leave the scoring class body and are inherited
-from `core_brain.config.MakerConfig`; the legacy spellings keep resolving for the dashboard, the
-ranker scripts and the existing tests. **No numeric value moves.**
+A held market that the engine is actively quoting or holding orders on looks
+exactly like a dead one in ORDERS & TRADES → OPEN POSITIONS. To find out,
+the operator leaves the tab and cross-checks ACTIVE MARKETS.
 
-### The eight bars (verified against live code, HEAD `01157a3`)
+### The change
 
-| old name (readable after, via alias) | canonical core field | value (unchanged) | `scoring.load()` env var |
-| --- | --- | --- | --- |
-| `select_min_movement_usd` | `filter_live_vel_min_usd` | 200.0 | `HUNTER_MIN_MOVEMENT_USD` |
-| `select_movement_window_sec` | `filter_live_vel_lookback_sec` | 1800.0 | `HUNTER_MOVEMENT_WINDOW_SEC` |
-| `select_velocity_gate_enabled` | `filter_live_gate_velocity_on` | True | `HUNTER_VELOCITY_GATE` |
-| `select_min_activity_ratio` | `filter_live_activity_min_ratio` | 0.0 | `HUNTER_MIN_ACTIVITY_RATIO` |
-| `select_min_range_cents` | `filter_live_move_min_range_cents` | 2.0 | `HUNTER_MIN_RANGE_CENTS` |
-| `select_volatility_window_sec` | `filter_live_move_lookback_sec` | 7200.0 | `HUNTER_VOLATILITY_WINDOW_SEC` |
-| `select_max_queue_minutes` | `filter_std_queue_max_clear_min` | 15.0 | — (none; do not add one) |
-| `enforce_max_queue_minutes` | `filter_std_gate_queue_max_on` | False | — (none; do not add one) |
+OPEN POSITIONS shows the same green RESTING / QUOTING pill the ACTIVE MARKETS
+tab already shows, on the held market that the engine is working. Everything
+else about the row is unchanged.
 
-Plus one **additive** name: `filter_common_spread_max_cents`, a read-only alias for the derived cap
-`select_max_book_spread` (0.0205). `select_max_book_spread` keeps working; nothing is renamed away.
+### Acceptance criteria (from the issue) and where each is satisfied
 
-> Naming trap: the station brief said `select_velocity_gate`. **That name does not exist anywhere in the
-> repo** (`grep -rnw select_velocity_gate` → 0 hits). The shipped field is `select_velocity_gate_enabled`
-> (`scoring/config.py:119`, pinned at `tests/test_config_single_source.py:59`,
-> `tests/test_config_divergence_guard.py:31`). Plan uses the real name.
-
-### Acceptance criteria → the test that proves each
-
-| # | Criterion (from the issue) | Proven by |
-| --- | --- | --- |
-| A1 | Each bar exists once, on `core_brain.config.MakerConfig`; the scoring class body declares only the five `PICKER_PROFILE` fields plus `db_path` | `tests/test_config_divergence_guard.py::test_the_class_body_declares_only_the_pickers_own_fields` (allow-list narrowed to `PROFILE_NAMES`) + new `test_the_class_body_declares_no_other_property_or_method` |
-| A2 | Reading each old name off a `scoring.config.load()` config returns the canonical value **and emits the deprecation warning** | new parametrised test in `tests/test_config_single_source.py`, `pytest.warns(DeprecationWarning)` |
-| A3 | No default moved: 200.0 / 1800.0 / True / 0.0 / 2.0 / 7200.0 / 15.0 / False, and every pinned `SCORING_DEFAULTS` value still holds | new pristine-load test + existing `test_scoring_defaults_unchanged` / `test_every_pinned_field_still_exists`, **untouched** |
-| A4 | Each of the six env overrides reaches the canonical field end to end | new parametrised test (set one var, clear the other five, `scoring.config.load()`, assert the canonical field) |
-| A5 | The repointed guard fails against the pre-change class body and passes after | written RED first (T1), run before and after T2+T3 |
-| A6 | The three focused test files pass | agent-run `pytest` selection |
-| A7 | The six reader/regression files still pass | agent-run `pytest` selection |
-| A8 | Hands-on: dashboard picker cards show configured values, not the hard-coded fallbacks | operator walkthrough (§7) |
-
-### Edge cases that must hold
-
-- `dataclasses.replace(cfg, select_max_queue_minutes=5.0)` and
-  `replace(cfg, enforce_max_queue_minutes=True, select_max_queue_minutes=15.0)` — the two live call sites
-  (`tests/test_queue_clear_gate.py:664`, `tests/test_maker_queue_bar.py:299-301`) — keep working unchanged.
-- `MakerConfig(**{"select_min_movement_usd": 777.0})` (legacy keyword) must reach the canonical field.
-- `filter_common_spread_max_cents` must be **refused** by the constructor, absent from `dataclasses.fields()`,
-  and unassignable on an instance.
-- `scoring.config.MakerConfig` field set must equal core's exactly — including the ~110 synthetic
-  legacy fields — with no name left over on either side.
+| # | Criterion | Satisfied by |
+|---|---|---|
+| 1 | Held positions whose market is actively quoted or has resting orders display `.pill.resting-breathing` or `.pill.quoting-breathing` | T1 (served table) + T2 (classic table) |
+| 2 | Idle or finished markets keep their standard non-animated tags | T1.4, T1.6, T2.4 — no pill is emitted at all; no IDLE pill exists in this view |
+| 3 | `prefers-reduced-motion: reduce` keeps suppressing the animation | Already true in `dashboard/static/styles.css:599-603`; nothing in this change touches CSS. Pinned by T3's guard test |
+| 4 | The named acceptance command passes | T3 |
 
 ### Explicitly out of scope
 
-- Any numeric value, any parsing/clamping/finite-check rule, any fallback in `load()`. A value change is
-  its own ticket (#572 / #573 precedent, `tests/test_config_single_source.py:9-12`).
-- The `bot_*` execution side — already canonical.
-- `dashboard/server.py`, `dashboard/static/strategy_explainer.html`, `scripts/filter_markets.py`:
-  **zero edits**. The aliases keep their reads correct.
-- `filter_std_spread_max_book` and the `#632` `_frac`/`_fraction` properties: leave alone.
-- The constructor wrapper's default-sensitive precedence rule: shared behaviour from the canonical pass,
-  applies to every entry in the table. Rewriting it is a separate ticket (see N2).
-- The class name (`ScoringConfig` is only a test-local alias at `tests/test_market_selection_bars.py:17`).
-- `docs/ideas/variable-names-refactor.md` — stale, not edited.
+- Market Scan / Kanban cards. The issue title names them; the "In scope" list
+  and all four acceptance criteria cover positions only. The follow-up needs
+  `state` threaded into `renderScreener` (`app.js:9776`) and activity added to
+  the board fingerprint; neither is in this change.
+- `dashboard/static/styles.css`, `dashboard/static/index.html`,
+  `dashboard/static/prototype.js`, `dashboard/static/prototype.css`,
+  `dashboard/server.py`, everything under `core_brain/`, `data/orders.db`.
+- Active Markets: `marketStatusPill`, `activeMarketsRows`,
+  `stitchActiveMarketsRows`, `isQuotedMarket`, `isRestingOrder`,
+  `heldMarketEntries`, `paintLiveMarks` — all read, none edited.
 
 ---
 
-## 2. Intake — CodeRabbit plan triage (read once, costed here so Stations III–V never re-read it)
+## 2. Verified seams (line numbers on HEAD `01157a3`)
 
-**Adopted** (all spot-checked against live code): the alias-table location; migrating the six `load()`
-keys to canonical names; `filter_common_spread_max_cents` as an additive read-only property forwarding
-`select_max_book_spread`; adding that name to the read-only refusal set; the affirmative guard rewrite;
-the pinned old→canonical map; the six end-to-end env tests; the derived-cap pins; the hands-on
-verification block.
-
-**Rejected / corrected:**
-
-1. **Task 1 "Start from the correct base branch" — WRONG, and the highest-value correction in this plan.**
-   It says "The canonical schema exists only on PR `#651`. Branch from it, not from `main`."
-   On this checkout `214d196 [ADD] Group market and bot settings on the parameters page (#651)` **is an
-   ancestor of `HEAD`** (`git merge-base --is-ancestor 214d196 HEAD` → true), `_LEGACY_TO_CANONICAL` lives
-   at `core_brain/config.py:35`, and the eight canonical fields at `core_brain/config.py:249-266`.
-   There is no stacked branch: **base is `main`**, and a branch off `#651` would be wrong (it would
-   re-import already-merged work). Its "Phase 2 first, then Phase 1" ordering and the pinned `#651`
-   PR-base note in the PR body are dropped with it.
-2. **Its "82 fields: 74 shared + 8 picker-only" arithmetic** is a pre-change statement; keep the pin file
-   untouched and let the tests speak (see §4).
-3. **`select_velocity_gate_enabled` vs the brief's `select_velocity_gate`** — CodeRabbit used the real name;
-   the brief did not. Plan uses CodeRabbit's.
-4. **`docs/ideas/variable-names-refactor.md:28-29`** is cited for a `_cents` suffix contract. The file is
-   stale relative to the shipped table; its uppercase vocabulary is not authority. The `_cents` question
-   stays an operator note, not a rename.
-
-**Left `[UNVERIFIED]` deliberately:** none. Every seam above was read in the working tree on `01157a3`.
+| Seam | Where | Verified fact |
+|---|---|---|
+| `marketStatusPill(m, restingHere)` | `app.js:7286-7291` | returns `pill resting-breathing` / `pill quoting-breathing` / `pill stopped` (IDLE) |
+| `isRestingOrder(o)` | `app.js:7033-7036` | true for `open`, `partial`, `pending` (case-insensitive) |
+| `isQuotedMarket(m, orders)` | `app.js:7029-7032` | `(m.quotes_count || 0) > 0 \|\| orders.some(isActiveOrder)`; false for finished markets |
+| `isActiveOrder(o)` | `app.js:6344-6346` | `!isCancelledStatus(status) && !isMergedOrder(o)` — much broader than "resting" |
+| `groupOrdersByMarket(orders)` | `app.js:6291-6300` | `{condition_id: [orders]}` |
+| `positionsRows(kpi, state, sort)` | `app.js:7666-7759` | market `<td class="ot-market" rowspan>` built at **7735**; `pairTags` at 7723; render map opens at 7713 |
+| `stitchPositionsRows(kpi, state, sort)` | `app.js:8343-8516` | **`state` is accepted and never used** (only `kpi` is); market cell at **8453-8462** |
+| Dispatcher | `app.js:8940-8961` | `proto-body` + `positions` → `stitchPositionsRows`; otherwise → `ordersTradesRows` → `positionsRows` |
+| `proto-body` | `prototype.js:27,579,603` | added on `/` and `/prototype` → the served page always takes the **stitch** path |
+| Breathing CSS | `styles.css:574-598` | both pills blink with `hb-blink 1s steps(1, end) infinite` |
+| Reduced motion | `styles.css:599-603` | covers `.pill.resting-breathing::before`, `.pill.quoting-breathing.resting::before`, `.pill.quoting-breathing::before` → `animation: none` |
+| `@keyframes hb-blink` | `styles.css:433` | `0%,49.9% {opacity:1} 50%,100% {opacity:.15}` — not edited |
+| `paintLiveMarks` | `app.js:6868-7033` | rewrites only `td[data-cell="value"|"cur-price"|"unrealized"]` inside `#orders-trades-body` |
+| Exports | `app.js:10498`, `app.js:10527` | `marketStatusPill, isQuotedMarket, isRestingOrder` exported; `stitchPositionsRows` exported |
 
 ---
 
-## 3. Resolved open questions (all four answered **from code**, no operator round needed)
+## 3. Interface contract (locked before code)
 
-**Q1 — Where the aliases live → `_LEGACY_TO_CANONICAL` (the issue's default), and `load()` migrates to
-canonical keys.** Proven, not assumed: `_ConfigBase._wrapped_init` (`core_brain/config.py:209-218`) only
-translates a legacy keyword through that table, and the "fill defaults" loop explicitly skips table names
-(`:219-227`). A probe that injected the eight pairs into the running module and constructed a
-post-change subclass showed the legacy keyword reaching the canonical field (`777.0`), while an unmapped
-keyword is silently stored by `object.__setattr__`. Hand-written `@property` aliases in `scoring/config.py`
-would have made `HUNTER_MIN_MOVEMENT_USD` and its five siblings **inert**. Widening the touched files to
-`core_brain/config.py` is therefore required, not optional.
+### 3.1 New function — the single shared rule
 
-**Q2 — Derived cap name → additive read-only property, name kept as requested.**
-`select_max_book_spread` (`core_brain/config.py:425-430`) is `round(max_book_spread * select_spread_pct, 6)`
-with a `wide_book_trial` pass-through; verified 0.0205 default, 0.1025 at `max_book_spread=0.30`, 0.15 at
-`wide_book_trial=0.15`. The suffix reads as fraction, as `bot_quote_price_band_min_cents = 0.10`
-(`core_brain/config.py:284`) and `bot_quote_spread_static_offset_cents = 0.020` (`:294`) already do. Keep the requested name, document the unit in the
-docstring, and surface the suffix question to the operator in the PR body. **Not** a blocker.
+```js
+/* One rule for both held-positions tables: the Active Markets activity pill,
+ * and only for a market the engine is actually working. */
+function marketActivityPill(m, orders) -> string   // '' | '<span class="pill …">…</span>'
+```
 
-**Q3 — Which vocabulary wins → the shipped `_LEGACY_TO_CANONICAL` table.**
-The idea doc proposes `FILTER_LIVE_VEL_MIN_NOTIONAL_USD` / `FILTER_COMMON_QUEUE_MAX_WAIT_MIN`; the code has
-`filter_live_vel_min_usd` / `filter_std_queue_max_clear_min`. The table ships, the doc does not. Untouched.
+- **Placed** directly after `marketStatusPill` (`app.js:7292`, between line
+  7291's `}` and line 7293's `function activeMarketsRows`).
+- **Exported** by adding `marketActivityPill,` to the export line that already
+  carries `marketStatusPill` (`app.js:10498`), so the precedence rule can be
+  pinned directly.
+- **Show/not-show condition — identical, term for term, to the ACTIVE MARKETS
+  membership test** (`app.js:7296-7299`):
 
-**Q4 — Sequencing → resolved: `#651` IS MERGED. Branch from `main`.**
-See §2 rejection 1 for the evidence. This removes the stacked-merge risk that `docs/agents/git-workflow.md`
-warns about and makes the ticket standalone.
+  ```js
+  const list = orders || [];
+  if (!isQuotedMarket(m, list)) return '';
+  const restingHere = list.some(o => isRestingOrder(o));
+  if (!restingHere && !(Number(m && m.quotes_count) > 0)) return '';
+  return marketStatusPill(m, restingHere);
+  ```
+
+  A resting order implies `isActiveOrder`, so this is equivalent to
+  "resting here, or `quotes_count > 0`" — and it cannot drift from the tab it
+  mirrors.
+- **Never returns the IDLE pill**: reaching `marketStatusPill` means `restingHere`
+  or `quotes_count > 0`, so the third branch is unreachable.
+- `marketStatusPill`, `isQuotedMarket`, `isRestingOrder`,
+  `groupOrdersByMarket`, `heldMarketEntries` are **not modified**.
+
+### 3.2 DOM contract — classic table (`positionsRows`)
+
+Inserted inside the existing market cell, on the `ot-pair-start` leg row only:
+
+```html
+<td class="ot-market" rowspan="N">${marketCell(...)}${activity}${pairTags}</td>
+```
+
+- `activity` is `''` when idle → byte-identical markup to today.
+- **No** new column, **no** `data-cell`, **no** `data-cid`, **no** `live`
+  class on the pill or its cell.
+
+### 3.3 DOM contract — served stitch table (`stitchPositionsRows`)
+
+A new sibling of the existing `.stitch-market-meta` rows, rendered only when
+non-empty:
+
+```html
+<div class="stitch-market-meta" style="margin-top:2px;">${activity}</div>
+```
+
+…placed between the `.stitch-market-title` `</div>` (line 8456) and the
+category-pill conditional (line 8457). The PAIRED / PARTIAL / UNPAIRED badge,
+`data-cell` cells, `rowspan`s and the 8-column head are untouched.
+
+### 3.4 Invariants the tests pin
+
+1. Idle held market ⇒ no `resting-breathing`, no `quoting-breathing`, no `pill stopped`.
+2. RESTING beats QUOTING on the same market.
+3. Orders belonging to another market never mark the held one.
+4. Finished markets stay out (`heldMarketEntries(kpi, false)` already excludes them).
+5. Column set, row count and band classes are unchanged; the pill is never inside a `data-cell`.
 
 ---
 
-## 4. Interface contract (locked before any edit)
+## 4. Improvement proposal (Step 5 — one, evidence-based)
 
-### 4.1 `core_brain/config.py` — eight new entries in the existing table
+**Evidence (verbatim, `app.js:7296-7299`, the ACTIVE MARKETS filter):**
 
-Add a clearly labelled picker block to `_LEGACY_TO_CANONICAL` (`:35-150`). The wiring loop at
-`:766-774` already installs the `_LegacyProperty` descriptor and the synthetic dataclass field per entry —
-**do not touch the loop**, and do not add a second mechanism.
-
-```python
-    # Picker filter bars (#652): the eight names the ranker used to declare for
-    # itself. Core owns the value; these stay readable for the dashboard cards
-    # (dashboard/server.py:4312-4508), scripts/filter_markets.py and the tests.
-    "select_max_queue_minutes": "filter_std_queue_max_clear_min",
-    "enforce_max_queue_minutes": "filter_std_gate_queue_max_on",
-    "select_movement_window_sec": "filter_live_vel_lookback_sec",
-    "select_min_movement_usd": "filter_live_vel_min_usd",
-    "select_velocity_gate_enabled": "filter_live_gate_velocity_on",
-    "select_min_activity_ratio": "filter_live_activity_min_ratio",
-    "select_min_range_cents": "filter_live_move_min_range_cents",
-    "select_volatility_window_sec": "filter_live_move_lookback_sec",
+```js
+    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid])
+      && ((m.quotes_count || 0) > 0
+        || (ordersByMarket[cid] || []).some(o => isRestingOrder(o))));
 ```
 
-Contract: for each pair, `getattr(scoring_cfg, old)` emits `DeprecationWarning` and returns the canonical
-value; `MakerConfig(**{old: v})` reaches the canonical field; `old` appears in `dataclasses.fields(scoring)`
-and `dataclasses.fields(core)`; `old not in _READ_ONLY_PROPERTIES`.
+**Proposal (simplification + edge-case hardening — adopted by default):** the
+new helper reuses that exact condition — `isQuotedMarket` plus the same
+`quotes_count || resting` term — instead of a fresh `quotes_count > 0` test.
+Two tabs that answer "is this market being worked?" then share one definition
+and cannot disagree about a held market, and the IDLE branch stays unreachable
+by construction rather than by convention. Cost: two lines. `activeMarketsRows`
+itself is not edited.
 
-### 4.2 `core_brain/config.py` — the derived cap alias
-
-Next to `select_max_book_spread` (`core_brain/config.py:425-430`), getter only:
-
-```python
-    @property
-    def filter_common_spread_max_cents(self) -> float:
-        """The picking bar, canonically named. A price FRACTION, not whole cents:
-        same convention as `bot_quote_price_band_min_cents` and
-        `bot_quote_spread_static_offset_cents`. Read-only; forwards the derived
-        value so the trial pass-through and six-decimal rounding live in one place."""
-        return self.select_max_book_spread
-```
-
-and add `"filter_common_spread_max_cents"` to the `_READ_ONLY_PROPERTIES` set literal in
-`_wrapped_init` (`:185-191`).
-
-Contract, all four measured on live code:
-- default 0.0205, equal to `select_max_book_spread`;
-- `= 0.1025` at `max_book_spread=0.30`; `= 0.15` at `wide_book_trial=0.15`;
-- **constructor refuses it with `TypeError`** — "got an unexpected keyword argument" — the same shape as
-  `select_max_book_spread` today. *Without* the refusal entry the call fails with the confusing
-  `AttributeError: property 'MakerConfig' object has no setter` raised inside `object.__setattr__`, measured;
-  that is why the entry is part of the change, not optional polish;
-- not a dataclass field; instance assignment raises `FrozenInstanceError` (a subclass of `AttributeError`).
-
-No setter, no dataclass field, no `_LEGACY_TO_CANONICAL` entry for this name.
-
-### 4.3 `scoring/config.py` — nothing declared, everything inherited
-
-- Delete the eight declarations and their local comments (today `:79-135`). Move a bar's explanation to
-  the canonical core field only where it says something the core comment does not (queue bar ↔
-  `pairs_exit_window_sec`, movement gate ↔ `#416`); do not duplicate prose.
-- Keep the five `PICKER_PROFILE` overrides and `db_path()` **byte-identical**.
-- Update the module docstring (`:7-16`), which currently promises "the eight picker bars below", and the
-  `# --- bars only the ranker gates on ---` heading.
-- In `load()`, six dictionary keys become canonical — keys only:
-
-| line | from | to |
-| --- | --- | --- |
-| `:271` | `kw["select_min_movement_usd"]` | `kw["filter_live_vel_min_usd"]` |
-| `:279` | `kw["select_movement_window_sec"]` | `kw["filter_live_vel_lookback_sec"]` |
-| `:282` | `kw["select_velocity_gate_enabled"]` | `kw["filter_live_gate_velocity_on"]` |
-| `:288` | `kw["select_min_range_cents"]` | `kw["filter_live_move_min_range_cents"]` |
-| `:296` | `kw["select_volatility_window_sec"]` | `kw["filter_live_move_lookback_sec"]` |
-| `:313` | `kw["select_min_activity_ratio"]` | `kw["filter_live_activity_min_ratio"]` |
-
-Local variable names, parsing, `math.isfinite` checks, clamping, bounds and fallbacks stay exactly as they
-are. No env var is added for the two queue bars.
-
-### 4.4 `tests/test_config_divergence_guard.py` — the guard contract
-
-```python
-# The eight bars core now owns for the picker. They must be real core fields,
-# reachable on the picker at the same default, and reachable by their old names.
-CORE_OWNED_PICKER_BARS = frozenset({...the eight canonical names...})
-
-# Pinned old -> canonical, so re-pointing an alias at a different field fails here.
-PICKER_BAR_ALIASES = {  # the eight pairs, written out
-    ...}
-```
-
-- `PICKER_ONLY` is **deleted**; the class-body allow-list becomes `PROFILE_NAMES` only (see §5).
-- `test_picker_only_fields_do_not_exist_on_core` is **replaced** by an affirmative test asserting, for each
-  canonical name: it is a core dataclass field; it is a scoring dataclass field; both defaults are equal;
-  `PICKER_BAR_ALIASES[old] == _LEGACY_TO_CANONICAL[old]`.
-- New reverse-reachability test: `scoring_fields - core_fields == set()`.
-- New `test_the_class_body_declares_no_other_property_or_method`: collect `FunctionDef`/`AsyncFunctionDef`
-  names from the scoring class body and assert the set is `{db_path}`.
-
-**Which assertions carry the RED** (measured today, `01157a3`): the scoring class body declares exactly 13
-annotated names — the five `PICKER_PROFILE` fields plus the eight bars — with zero unannotated assignments
-and `functions == ["db_path"]`. So the narrowed allow-list test fails today with the eight old names as its
-excess (RED), the reverse-reachability test fails, and the alias-table assertion fails (none of the eight is
-in the table yet). The `{db_path}` method check passes on both sides — it is hardening, not RED — and no
-existing test in the file other than the two being replaced changes meaning.
+**Rejected proposal, recorded so it does not resurface:** extracting the shared
+predicate out of `activeMarketsRows` into a named function used by both call
+sites. Rejected — the issue's scope guard names the Active Markets renderer as
+must-not-change; the reuse above gets the same guarantee with no edit there.
 
 ---
 
-## 5. The one improvement proposal (adopted — edge-case hardening, not scope expansion)
+## 5. Tasks
 
-**Evidence, verbatim from `tests/test_config_divergence_guard.py:24-33, 123-129`:**
+Dependency graph: `T1 → T2 → T3` (T2 needs T1's helper; T3's source checks
+assert both renderers).
 
-```python
-PICKER_ONLY = frozenset({
-    "enforce_max_queue_minutes",
-    "select_max_queue_minutes",
-    ...
-})
-...
-extra = set(_declared_names()) - PICKER_ONLY - PROFILE_NAMES
-```
+### T1 — the shared rule + the served Stitch Positions table  [Design/UI]
 
-**The hole:** the ticket says to repoint `PICKER_ONLY` to the canonical names. Do that naively and the
-allow-list becomes the canonical names — so re-declaring `filter_live_vel_min_usd: float = 200.0` in the
-scoring class body is **no longer flagged**: it is a member of the allowed set. That is the exact failure
-the guard exists to prevent, and it is the ticket's own warning made concrete — the issue says *"a guard
-that passes because its set is empty is worse than no guard"*.
+- **Size:** S · **Depends on:** — · **Files:** `dashboard/static/app.js`,
+  `tests/test_stitch_positions_marks.py`
+- **Build:**
+  1. `app.js:7292` — add `marketActivityPill` exactly as specified in §3.1.
+  2. `app.js:10498` — add `marketActivityPill,` to the export line beside
+     `marketStatusPill`.
+  3. `app.js:8349` — in `stitchPositionsRows`, **after** the empty-state early
+     `return` at 8346-8348 (so the empty view does no work) and before the
+     `const rows = entries.map(...)` at 8350, add
+     `const ordersByMarket = groupOrdersByMarket(state && state.orders);`
+     — this is what finally uses the renderer's `state` argument.
+  4. `app.js:8381-8385` — the per-market row object gains
+     `activity: marketActivityPill(m, ordersByMarket[cid]),`.
+  5. `app.js:8409-8413` — add `activity` to the destructuring parameter list of
+     `sorted.map(({ … }) => {`.
+  6. `app.js:8456-8457` — insert
+     `${activity ? `<div class="stitch-market-meta" style="margin-top:2px;">${activity}</div>` : ''}`
+     between the `</div>` that closes `.stitch-market-title` and the
+     category-pill conditional. **Anchor the edit on the multi-line boundary**
+     (`</div>` + newline + the `${(!category || category === 'Uncategorized') ? '' : `<div class="stitch-market-meta" style="margin-top:2px;">` line):
+     the stitch ACTIVE MARKETS cell (8242-8250) has the same shape without that
+     inline `margin-top:2px`, and `stitchClosedTradesRows` (8813-8820) has a
+     third variant. The three must not be confused.
+- **Tests (`tests/test_stitch_positions_marks.py`, inline Node `_eval_js`,
+  `app.stitchPositionsRows(kpi, state, null)`):**
+  - Fixture: `_kpi()` gains a `quotes_count=0` parameter and emits
+    `"quotes_count": quotes_count` on `0xabc`. Default `0` keeps every existing
+    test in the file passing untouched.
+  - `test_market_activity_pill_prefers_resting_and_stays_empty_when_idle` —
+    direct calls: `app.marketActivityPill(m, [])` for `{quotes_count: 0}` → `''`;
+    `{quotes_count: 2}` → contains `quoting-breathing`; `{quotes_count: 2}` with
+    one `open` order → contains `resting-breathing` and not `quoting-breathing`.
+  - `test_stitch_positions_resting_order_shows_resting_pill` — parametrized
+    `open`, `partial`, `pending`, `Open`; one matching order, `quotes_count: 0`
+    → `class="pill resting-breathing"` and `>RESTING<`.
+  - `test_stitch_positions_resting_wins_over_quoting` — one `open` order plus
+    `quotes_count: 3` → `resting-breathing` present, `quoting-breathing` absent.
+  - `test_stitch_positions_quoting_only_shows_quoting_pill` —
+    `quotes_count: 1`, orders only `filled` and `cancelled` →
+    `quoting-breathing` present, `resting-breathing` absent.
+  - `test_stitch_positions_idle_market_keeps_standard_tags` — `quotes_count: 0`,
+    no orders → no `resting-breathing`, no `quoting-breathing`, no
+    `pill stopped`, and `stitch-status-badge` still present.
+  - `test_stitch_positions_other_market_orders_do_not_mark_held_market` — one
+    `open` order on `0xdef`, `quotes_count: 0` on `0xabc` → no breathing class.
+  - `test_stitch_positions_finished_market_has_no_activity_pill` — `0xabc` with
+    `resolved: true` plus an `open` order → `No legs have filled` empty state,
+    no breathing class.
+  - Extend `test_live_overlay_moves_the_per_leg_lines` (currently lines
+    122-140): give the fixture `quotes_count: 2`, keep its live-mark
+    assertions, then add — the pill is still present after the marks apply, and
+    it sits before the first `data-cell` in the output
+    (`html.split('data-cell')[0]` contains `quoting-breathing`).
+- **Verify:** `python -m pytest -q tests/test_stitch_positions_marks.py`
+  (RED before the code, GREEN after).
 
-**Fix (folded into T1):** the class-body allow-list becomes `PROFILE_NAMES` alone. A re-declared bar fails
-even when its value is identical, which is the property the guard is supposed to have. The canonical names
-move to the affirmative test in §4.4, where they belong. Cost: one constant's usage, not a new file.
+### T2 — the pill on the classic `positionsRows` table  [Design/UI]
 
-**Rejected alternative, recorded so it does not resurface:** adding `filter_common_spread_max_cents` to the
-dashboard parameter-card registry. No evidence in the issue or the code asks for a new card; the ticket says
-"rename no dashboard key". Not proposed.
+- **Size:** S · **Depends on:** T1 · **Files:** `dashboard/static/app.js`,
+  `tests/test_orders_trades_table.py`
+- **Build:**
+  1. `app.js:7670` — **after** the empty-state early `return` at line 7669, add
+     `const ordersByMarket = groupOrdersByMarket(state && state.orders);`
+     (once per render, matching `activeMarketsRows`, `ordersTradesCounts` and
+     `renderOrdersTrades`, which each already do this).
+  2. `app.js:7724-7726` — inside the per-market `sorted.map` callback, after
+     `const span = legs.length;` and before `return legs.map(...)`, add
+     `const activity = marketActivityPill(m, ordersByMarket[cid]);`.
+  3. `app.js:7735` — `…${marketCell(m, cid, { categoryCaption: true })}${activity}${pairTags}</td>`.
+  - No new column (`otSortGroups` switch, cases 0-8, `app.js:7695-7709` — each
+    case maps to a fixed column),
+    no background on the pill or the cell (banding is `.ot-pair-alt > td`,
+    `styles.css:1881`), no finished-market logic (`heldMarketEntries` handles it).
+- **Tests (`tests/test_orders_trades_table.py` via
+  `tests/js/orders_trades_harness.cjs`, `_render('positions', kpi, state)`):**
+  - Shared fixtures are reused as-is. `CID_HELD` already carries
+    `quotes_count: 2` with only `filled`/`cancelled` orders; `CID_QUOTED`
+    carries the two resting orders (`partial` + `open`) and holds nothing.
+  - Slice per market: `html.split('ot-pair-start')[1]` for a single held market
+    (assert `'0xheld'` is in the slice before asserting on it), and the
+    `split('ot-pair-start')[1]` / `[2]` blocks for the two-market banding test.
+  - `test_positions_quoting_held_market_shows_quoting_pill` — baseline render →
+    `class="pill quoting-breathing"` in the slice, `resting-breathing` absent.
+  - `test_positions_held_market_with_resting_order_shows_resting_pill` — deep-copy
+    `_kpi()`/`_state()`, append an `open` order on `CID_HELD` →
+    `resting-breathing` present, `quoting-breathing` absent.
+  - `test_positions_unrelated_market_resting_orders_do_not_mark_held_market` —
+    baseline fixtures → no `resting-breathing` in the `CID_HELD` slice.
+  - `test_positions_idle_held_market_keeps_standard_tags` — `CID_HELD`
+    `quotes_count` set to `0` → no `resting-breathing`, no `quoting-breathing`,
+    no `pill stopped`; `class="pill active"` (UP leg) and the `ot-tag` pair
+    tags still present.
+  - `test_positions_activity_pill_keeps_banding_and_live_cells` — baseline plus
+    an `open` order on `CID_HELD`, and a **second** held market cloned under a
+    new condition id (`quotes_count: 2`, no orders, `total_sh` non-zero) so the
+    second market renders the `ot-pair-alt` band:
+    `rendered["columns"]` equals the unchanged positions list
+    `['Timestamp','Market','Leg','Size','Avg Price','Cost','Mark Value','Unrealized','Realized']`;
+    `ot-pair-start` and `ot-pair-alt` are both present; `data-cell="value"` and
+    `data-cell="unrealized"` are present; the `ot-pair-alt` slice contains the
+    quoting pill; and no `data-cell` cell contains a breathing class.
+  - `tests/js/orders_trades_harness.cjs` is **not** edited (it already passes
+    `kpi`, `state` and `view`).
+- **Verify:** `python -m pytest -q tests/test_orders_trades_table.py tests/test_positions_live_marks.py`
+  (the second file drives the same classic path through
+  `tests/js/live_marks_harness.cjs` and must stay green with no edits).
+
+**Checkpoint A** (after T1): `tests/test_stitch_positions_marks.py` green with
+the new tests → the served table shows the pill.
+**Checkpoint B** (after T2): both positions files green → both tables agree.
+
+### T3 — source checks, reduced-motion guard, and the full focused run  [Core]
+
+- **Size:** XS · **Depends on:** T1, T2 · **Files:** `tests/test_dashboard_server.py`
+- **Build:**
+  - `test_positions_renderers_wire_activity_pill` — read `app.js`, cut the body
+    of `positionsRows` and of `stitchPositionsRows` (from `function <name>(`
+    to the next `\nfunction `), assert each body contains `marketActivityPill(`
+    and `groupOrdersByMarket(`. Fails on HEAD, passes after.
+  - `test_styles_css_reduced_motion_covers_breathing_pills` — read
+    `styles.css` via `_read_static("styles.css")` (helper at line 45) and select
+    the `@media (prefers-reduced-motion: reduce)` block **that contains
+    `.pill.resting-breathing::before`** (`styles.css:599-603`) — the file has
+    seven such media blocks, so select by content and never by the first match;
+    assert it also covers `.pill.quoting-breathing.resting::before` and
+    `.pill.quoting-breathing::before` with `animation: none`; assert both
+    breathing rules (`styles.css:575-598`) still declare
+    `animation: hb-blink 1s steps(1, end) infinite` and that
+    `@keyframes hb-blink` (`styles.css:433`) is unchanged. **This is a boundary
+    guard: it passes on HEAD and must pass after.** It is the `hb-blink` /
+    reduced-motion tripwire the issue's criteria 3 rests on. (Existing patterns
+    to follow: `tests/test_dashboard_server.py:1338-1392` for source slices,
+    1696-1701 for the reduced-motion JS precedent, and
+    `test_styles_css_has_kanban_styles` at 1703-1744 for `styles.css` asserts.)
+  - `test_app_js_has_expandable_market_rows` (1338) and
+    `test_styles_css_has_expandable_row_styles` (1383) are left untouched.
+- **Verify (all four green during development and again after review fixes):**
+  1. `python -m pytest -q tests/test_stitch_positions_marks.py tests/test_orders_trades_table.py tests/test_positions_live_marks.py tests/test_stitch_active_markets.py tests/test_sidebar_prototype.py tests/test_dashboard_input_lag.py`
+  2. `python -m pytest -q tests/test_dashboard_server.py -k "test_positions_renderers_wire_activity_pill or test_styles_css_reduced_motion_covers_breathing_pills"`
+  3. the issue's acceptance command:
+     `python -m pytest -q tests/test_dashboard_server.py -k "test_app_js_has_expandable_market_rows or test_styles_css_has_expandable_row_styles"`
+  4. Node must be present or every harness test skips silently:
+     `node --version` (v24.14.1 on this host).
+
+**Checkpoint C** (after T3): all four runs above green; the full
+`python -m pytest -q` suite stays with GitHub CI on Ubuntu and Windows.
 
 ---
 
-## 6. Tasks (dependency graph first, riskiest first)
+## 6. Baseline recorded on HEAD `01157a3` (before any edit)
 
-```
-T1 (guard, RED)  ──►  T2 (core owns)  ──►  T3 (picker inherits)  ──►  T4 (regression pins)
-                         └──────── land together, one commit ────────┘
-```
+- `tests/test_stitch_positions_marks.py tests/test_orders_trades_table.py tests/test_positions_live_marks.py`
+  → **134 passed** in 8.68s.
+- Six focused suites together → **194 passed** in 10.76s.
+- Acceptance command → **2 passed, 128 deselected**.
 
-| ID | Size | Domain | Files | What is built | Depends on | Verification |
-| --- | --- | --- | --- | --- | --- | --- |
-| **T1** | S | `[Backend/Logic]` | `tests/test_config_divergence_guard.py` | Replace `PICKER_ONLY` with `CORE_OWNED_PICKER_BARS` + pinned `PICKER_BAR_ALIASES`; replace the negative core-field test with the affirmative one; narrow the class-body allow-list to `PROFILE_NAMES`; add reverse reachability and the `{db_path}` method check. | — | **RED**, agent-run: `python -m pytest -q tests/test_config_divergence_guard.py` must FAIL on the pre-change class body. Capture the failure output. |
-| **T2** | M | `[Backend/Logic]` | `core_brain/config.py` | The eight alias pairs (§4.1) + `filter_common_spread_max_cents` property and its read-only refusal entry (§4.2). Wiring loop (`:766-774`) and every canonical default untouched. | T1 | Guard `test_every_...` passes; probe: `scoring`/`core` field sets equal. Lands **with** T3. |
-| **T3** | M | `[Backend/Logic]` | `scoring/config.py` | Delete the eight declarations and refresh the docstring; migrate the six `load()` keys to canonical. Values, parsing and fallbacks unchanged. | T2 (same commit) | `python -m pytest -q tests/test_config_divergence_guard.py tests/test_config_single_source.py tests/test_market_selection_bars.py` — all green, `SCORING_DEFAULTS` untouched. |
-| **T4** | S | `[Backend/Logic]` | `tests/test_config_single_source.py`, `tests/test_market_selection_bars.py` | Six parametrised end-to-end env tests (clear the other five, set one, assert canonical + `pytest.warns` on the old name, `"off"` → `False` for the gate); the all-eight old-name warning/default test; the pristine-load defaults; the derived-cap pins (§4.2 contract). | T3 | Agent-run focused selections (§7); each new test verified to fail without T2+T3. |
-
-**Checkpoints:** after T3 → one-line progress report: guard green, the three focused files green, the pin
-file untouched. After T4 → the six reader/regression files green, then hand off to Station IV.
-
-**Commit shape:** T2+T3 are one logical change (the two config modules keep the picker's values only
-together) → one `refactor(config): ...` commit. T1 alone is one `test(config): ...` commit; T4 one more.
-`docs/agents/git-workflow.md` type/scope conventions apply; the plan files travel with the branch.
+Any of these failing after the change is a regression this station caused.
 
 ---
 
-## 7. Verification
+## 7. Constraints
 
-### Agent-run focused checks (never handed to the operator)
-
-```bash
-# after T3 (and again after any review fix touching the config modules)
-python -m pytest -q tests/test_config_divergence_guard.py tests/test_config_single_source.py tests/test_market_selection_bars.py
-
-# after T4
-python -m pytest -q tests/test_velocity_gate.py tests/test_movement_gate.py \
-  tests/test_maker_queue_bar.py tests/test_filter_loop.py tests/test_config_for_display.py \
-  tests/test_queue_clear_gate.py tests/test_wide_book_trial.py tests/test_loose_baseline.py
-```
-
-The full `python -m pytest -q` suite is the GitHub CI merge gate on Ubuntu and Windows — not run locally here.
-
-### Evidence already gathered for this plan (non-destructive, no file edited)
-
-A throwaway probe injected the eight pairs into the running module objects and built a post-change replica
-of `scoring.config.MakerConfig`. Measured: field sets equal (238 = 238, scoring-minus-core empty); all
-eight old-name reads return the canonical value and warn; legacy constructor keyword reaches the canonical
-field; both live `replace()` call sites behave; pristine defaults exactly `200.0 / 1800.0 / True / 0.0 /
-2.0 / 7200.0 / 15.0 / False`; **all 82 `SCORING_DEFAULTS` names present and value-identical with zero
-mismatches**, so that pin passes untouched. The probe script was deleted; its numbers are the basis for
-A3/A4 and for leaving the pin file alone.
-
-### How to verify (operator, hands-on — no pytest)
-
-```powershell
-# 1. Fresh shell: drop any inherited overrides
-Get-ChildItem Env:HUNTER_* | ForEach-Object { Remove-Item "Env:$($_.Name)" }
-
-# 2. Push the movement bar to a value the fallback can never produce
-$env:HUNTER_MIN_MOVEMENT_USD = "777"
-
-# 3. Dashboard only
-python -m dashboard.server --host 127.0.0.1 --port 8799
-```
-
-1. Open `http://127.0.0.1:8799` and find the market-picker parameter cards.
-2. Expect **Movement Lookback Window 1800s (30m)**, **Movement bar $777.00** (the override above — a
-   `$200.00` card here means the alias stopped resolving), and the queue card **15.0m** with
-   **"Telemetry Only"**.
-3. Failure signal: a card shows the hard-coded fallback literal from `dashboard/server.py:4312-4508`
-   instead of a configured value — that means an alias stopped resolving.
-
-Do **not** click START, do not launch the Trader, do not set `BRIDGE_CONTROL=1`. This is a read-only
-display check; it spends nothing.
+See `CONSTRAINTS.md`: zero regressions, no new dependencies, no skipped or
+weakened tests, no CSS/keyframe edits, no suppression flags, and the DOM
+contract of §3.4 as a hard boundary.
 
 ---
 
-## 8. Out of scope / noticed but not touching
+## 8. Noticed but not touching
 
-Recorded in `docs/issues/652-noticed-but-not-touching.md`: the `dataclasses.replace()` precedence limitation
-that this change makes reachable for eight more names (pre-existing shared behaviour, needs its own ticket),
-and the `_cents` suffix convention question CodeRabbit raised. Neither blocks this ticket.
+Recorded in `docs/issues/656-noticed-but-not-touching.md` (owner + timeline per
+row): the stale root `SPEC.md` inherited from issue #632, the
+`test_dashboard_server.py:734-754` line drift, the third un-pilled
+`ot-market` cell in `openOrdersRows` (`app.js:7539`), and the fact that
+`quotes_count` is a whole-run counter so a market the engine has stopped
+quoting can still read QUOTING (same behaviour as ACTIVE MARKETS today).
 
 ---
 
-## 9. Progress (Station III)
+## 9. How to verify (operator, hands-on — nothing here spends money)
 
-- [x] **T1** — guard repointed. RED confirmed against the pre-change class body: `3 failed, 11 passed`,
-      naming the eight leftover fields, the class-body re-declaration and the empty alias entries.
-- [x] **T2** — core owns the eight pairs and the derived alias. `filter_common_spread_max_cents` reads
-      0.0205 / 0.1025 / 0.15 on both classes, refuses the constructor with `TypeError`, is absent from
-      `dataclasses.fields()`, and cannot be assigned.
-- [x] **T3** — scoring inherits. The class body holds only the five `PICKER_PROFILE` fields plus
-      `db_path`; the six `load()` keys are canonical.
-- [x] **T4** — regression pins added. 27 new cases; reverting only the two config modules makes **17**
-      of them fail, so the change is what makes them pass. The 10 that pass either way are the deliberate
-      values and refusal pins, guarding behaviour this ticket must not alter (measured at Station IV).
-- [x] **T4b** — added after the `tdd-guide` persona review (T1/T4 were test-writing-heavy): the two
-      dashboard-card endpoint tests and the refused-value fallbacks. Mutation-checked — deleting one
-      alias entry from `_LEGACY_TO_CANONICAL` makes the card test fail on the silent fallback.
+Read-only dashboard on a shadow store; no menu `start`, no dashboard START, no
+live Trader, no `quote`, no `complete`.
 
-**Checks (agent-run, all green):** 66 passed (`divergence_guard`, `single_source`, `market_selection_bars`),
-215 passed (the eight reader/regression files), 186 passed (`dashboard_server` plus the config sweep).
-The full `python -m pytest -q` suite stays with GitHub CI on Ubuntu and Windows.
+1. Start: `python -m dashboard.server --db data\04_shadow_24-09_test.db --port 8799`,
+   then open `http://127.0.0.1:8799`. The page shows the SHADOW badge.
+2. Home → **ORDERS & TRADES** → **OPEN POSITIONS**. A held market the engine is
+   working now carries a green **RESTING** or **QUOTING** pill with a blinking
+   dot beside its title. Failure: no pill on a market that ACTIVE MARKETS lists
+   as RESTING/QUOTING, or the zebra row bands look broken.
+3. Compare the same market on **ACTIVE MARKETS**: the two tabs must never
+   disagree about RESTING vs QUOTING. Failure: they disagree.
+4. A held market with no quotes and no resting orders looks exactly as before —
+   no green pill, no new grey IDLE pill. (If the store has no idle held market,
+   skip.) Failure: it grew a pill.
+5. Watch **MARK VALUE** and **UNREALIZED P&L** for a few seconds: prices still
+   change and the pill stays put. Failure: the pill disappears or moves when a
+   price updates.
+6. Turn on your OS "reduce motion" setting and reload: the pills stay green and
+   the dot stops blinking. Failure: the dot still blinks.
 
-**Extra evidence beyond the test files:** the real `/api/parameters` payload is byte-identical before and
-after the change, including with `HUNTER_MIN_MOVEMENT_USD=777` set — so no dashboard card moved. With the
-override set the card reads `$777.00` rather than its `$200.00` fallback literal, which is the hands-on check
-that distinguishes a resolved alias from the hard-coded default.
+---
 
-**Commits:** `dfa3237` (plan) · `2ae507e` (T1) · `b5de375` (T2+T3) · `eee3415` (T4) · `b0d30eb` (T4b).
+## 10. Assumptions and risks (one line each)
+
+- `proto-body` is always on for the served page, so the stitch table is the one
+  the operator sees; the classic table is still changed because the ticket names
+  `positionsRows()` and the harnesses drive it.
+- `quotes_count` counts quotes logged in the selected run, so a market the
+  engine has stopped quoting can read QUOTING — identical to ACTIVE MARKETS
+  today, unchanged here.
+- `state.orders` spans the whole database while `kpi.by_market` spans one run, so
+  a resting order from another run in the same DB can mark a held market
+  RESTING — identical to ACTIVE MARKETS today.
+- Node-based tests skip when `node` is missing; a skip is not a pass.
+- A shadow store may contain no active markets; showing no green pill there is
+  the correct result, not a failure.
