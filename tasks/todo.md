@@ -1,5 +1,5 @@
-# Todo — Issue #653
+# Todo — Issue #672
 
-- [x] T1: Canonical `FILTER_*` environment overrides in `scoring/config.py` and precedence tests
-- [x] T2: Direct canonical attribute reads in screener scripts and test fixture migration
-- [x] T3: Document canonical `FILTER_*` and `BOT_*` variables in `.env.example` and `docs/agents/python-conventions.md`
+- [x] T1: Direct canonical attribute reads in `dashboard/server.py:get_parameters`
+- [ ] T2: Canonical environment variable badges in `dashboard/server.py:get_parameters`
+- [ ] T3: Automated tests in `tests/test_dashboard_server.py` & regression verification
