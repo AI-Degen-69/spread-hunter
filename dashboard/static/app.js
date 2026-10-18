@@ -1513,6 +1513,17 @@ function getActiveTickerEvents() {
   return tickerBuffers[activeTickerTab] || [];
 }
 
+/* ── Ticker color coding: tag -> color, neutral stays primary (white) ── */
+function tickerColorClass(ev) {
+  if (!ev || (ev.service || '').toLowerCase() !== 'market_stream') return '';
+  const a = (ev.action || '').toLowerCase();
+  if (a === 'market_stream_connected' || a === 'market_stream_subscribe') return 'ms-good';
+  if (a === 'market_stream_unsubscribe' || a === 'market_stream_error') return 'ms-bad';
+  if (a === 'market_stream_reconnect') return 'ms-warn';
+  if (a === 'market_stream_snapshot') return 'ms-info';
+  return '';   // tick and unknown stay neutral (white)
+}
+
 function renderTickerFeed() {
   tickerEl.innerHTML = '';
   const currentEvents = getActiveTickerEvents();
@@ -1528,8 +1539,9 @@ function renderTickerFeed() {
     const div = document.createElement('div');
     div.className = 'ticker-event';
     if (ev.translation) {
+      const colorCls = tickerColorClass(ev);
       const raw = tickerShowDetails ? `<div class="ticker-raw">${esc(ev.line)}</div>` : '';
-      div.innerHTML = `<div class="ticker-translation">${esc(ev.translation)}</div>${raw}`;
+      div.innerHTML = `<div class="ticker-translation ${colorCls}">${esc(ev.translation)}</div>${raw}`;
     } else {
       div.innerHTML = `<div class="ticker-raw">${esc(ev.line)}</div>`;
     }
