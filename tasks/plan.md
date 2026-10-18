@@ -111,7 +111,7 @@ unless the operator rejects it before build.
   check that `filter_markets.py` `getattr` reads resolve and neither class has
   `merge_gas_usd`.
 
-### T3 — Divergence guard + red-check [S, Backend/Logic]
+### T3 [x] — Divergence guard + red-check [S, Backend/Logic]
 - **Target files:** `tests/test_config_divergence_guard.py` (new; the issue's
   required guard filename).
 - **Build:** shared-default comparison (profile fields assert against
