@@ -270,6 +270,7 @@ class MarketStream:
                     if cid not in keep]
             for cid, _ in gone:
                 del self._markets[cid]
+                self._landed.pop(cid, None)
             still = {t for _, (_, up, down) in self._markets.items()
                      for t in (up, down)}
             removed = sorted({t for _, (_, up, down) in gone
@@ -407,11 +408,13 @@ class MarketStream:
         """
         with self._lock:
             pending = sorted(self._pending)
+            slugs = self._slugs_for(pending)
         if not pending:
             return
         if self._time() - self._pending_since <= SNAPSHOT_TIMEOUT_SEC:
             return
-        extra = {"reason": "snapshot_timeout", "tokens": pending}
+        # Slugs, not token ids: the log has to name the market that went quiet.
+        extra = {"reason": "snapshot_timeout", "markets": slugs}
         if self._resends < SNAPSHOT_RESEND_LIMIT:
             self._resends += 1
             self._pending_since = self._time()
@@ -435,6 +438,7 @@ class MarketStream:
         self._pending = set(tokens)
         self._pending_since = self._time()
         self._resends = 0
+        self._landed = {}
         self._last_tick = self._time()
         self._last_frames = self._cache.frames
         self._last_gaps = self._cache.level_gap
@@ -458,10 +462,12 @@ class MarketStream:
             self._note_snapshot(token)
 
     def _note_snapshot(self, token: str) -> None:
-        """A token that was waiting for its first book on this connection.
+        """One snapshot event per market, once all of its books have landed.
 
         A delta cannot move an unknown book, so a token the cache just moved
         while it was still pending is one the venue just sent a snapshot for.
+        The event waits for the market's whole pair: one line per market with
+        both books in the count, instead of two identical lines.
         """
         with self._lock:
             if token not in self._pending:
@@ -469,10 +475,32 @@ class MarketStream:
             self._pending.discard(token)
             if not self._pending:
                 self._resends = 0
-            slug = next((s for s, up, down in self._markets.values()
-                         if token in (up, down)), "")
+            cid = self._market_of(token)
+            if cid is None:
+                return
+            slug, up, down = self._markets[cid]
+            wanted = {up, down}
+            landed = self._landed.get(cid, 0) + 1
+            self._landed[cid] = landed
+            if landed < len(wanted) or (wanted & self._pending):
+                return
         self._emit("market_stream_snapshot", market_slug=slug,
-                   extra={"slug": slug, "token": token})
+                   extra={"slug": slug, "books": len(wanted)})
+
+    def _market_of(self, token: str):
+        """The condition id that owns a token, or None."""
+        for cid, (_slug, up, down) in self._markets.items():
+            if token in (up, down):
+                return cid
+        return None
+
+    def _slugs_for(self, tokens) -> list[str]:
+        """Distinct market slugs behind a token set — the handle a log can use."""
+        out: list[str] = []
+        for slug, up, down in self._markets.values():
+            if any(t in (up, down) for t in tokens) and slug not in out:
+                out.append(slug)
+        return out
 
     def _on_close(self, app, code=None, reason="") -> None:
         self._close_code = code
@@ -603,22 +631,113 @@ def _run_seconds(minutes) -> float:
         return 0.0
 
 
-def _probe_emit(cycle, phase, action, **kw) -> None:
-    """One printed line per event plus the dashboard's cycle-event feed."""
+# ── log convention, shared with the dashboard card ─────────────────────────
+#
+#   [TAG] subject · facts
+#
+# A tag says what happened, the subject is the market a slug can name, and the
+# facts are counts and durations. Raw token ids never appear: a 77-digit id is
+# not something an operator can act on. `dashboard/static/app.js`
+# (`marketStreamLine`) formats the same seven events the same way.
+
+LOG_TAGS = {
+    "market_stream_connected": "OPEN",
+    "market_stream_reconnect": "WAIT",
+    "market_stream_subscribe": "+",
+    "market_stream_unsubscribe": "-",
+    "market_stream_snapshot": "BOOK",
+    "market_stream_error": "WARN",
+    "market_stream_tick": "TICK",
+}
+
+
+def _tagged(tag: str, body: str) -> str:
+    """`[TAG] body`, padded so every tag's facts start in the same column."""
+    return f"[{tag}]{' ' * max(0, 4 - len(tag))} {body}"
+
+
+def _count(value, word: str) -> str:
+    """`4 books` / `1 book` — short, pluralised correctly."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return f"? {word}s"
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _num(value) -> str:
+    """A short number: no trailing `.0`, no scientific notation."""
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _subject(slug: str, facts: str) -> str:
+    """`slug · facts`, or just the facts when the event names no market."""
+    return f"{slug} · {facts}" if slug else facts
+
+
+def _stream_line(action: str, kw: dict) -> str:
+    """One fixed-shape log line for one lifecycle event."""
     extra = kw.get("extra") or {}
-    detail = " ".join(f"{key}={extra[key]}" for key in sorted(extra))
-    print(f"[{action}] {detail}".rstrip(), flush=True)
+    tag = LOG_TAGS.get(action)
+    if tag is None:
+        return _tagged("?", str(action).replace("market_stream_", ""))
+    slug = extra.get("slug") or kw.get("market_slug") or ""
+    tokens = extra.get("tokens") or []
+    if action == "market_stream_connected":
+        body = _count(len(tokens), "token")
+    elif action == "market_stream_reconnect":
+        body = f"{_num(extra.get('delay_sec', 0))}s"
+        if kw.get("reason"):
+            body += f" · {kw['reason']}"
+    elif action == "market_stream_subscribe":
+        body = _subject(slug, f"+{_count(len(tokens), 'token')}")
+    elif action == "market_stream_unsubscribe":
+        body = _subject(slug, f"-{_count(len(tokens), 'token')}")
+    elif action == "market_stream_snapshot":
+        body = _subject(slug, f"+{_count(extra.get('books', 0), 'book')}")
+    elif action == "market_stream_error":
+        body = str(kw.get("reason") or "error")
+        markets = extra.get("markets") or []
+        if markets:
+            body += " · " + ", ".join(str(m) for m in markets)
+        elif extra.get("detail"):
+            body += f" · {str(extra['detail'])[:40]}"
+        elif extra.get("count"):
+            body += f" · {_count(extra['count'], 'gap')}"
+    else:
+        body = (f"{_count(extra.get('books', 0), 'book')}"
+                f" · {_count(extra.get('frames', 0), 'frame')}")
+        read = extra.get("read_us_p50") or 0
+        if read:
+            body += f" · {_num(read)}us read"
+        if extra.get("level_gap"):
+            body += f" · {_count(extra['level_gap'], 'gap')}"
+    return _tagged(tag, body)
+
+
+def _probe_emit(cycle, phase, action, **kw) -> None:
+    """One tagged line per event, plus the dashboard's cycle-event feed."""
+    print(_stream_line(action, kw), flush=True)
     try:
         from core_brain.cycle_stream import emit as emit_cycle_event
         emit_cycle_event(cycle, phase, action, **kw)
     except Exception as e:
-        print(f"WARNING: cycle event dropped: {e}", file=sys.stderr)
+        print(_tagged("WARN", f"cycle event dropped: {e}"),
+              file=sys.stderr, flush=True)
+
+
+def _skip_line(row) -> str:
+    """A file row the venue does not have: once, at start, then silence."""
+    return _tagged("SKIP", f"{row['slug']} · no venue market")
 
 
 def _probe_add(stream, row) -> None:
     market = markets.fetch_pinned_market(row["cid"])
     if market is None:
-        print(f"[skipped] {row['slug']}: no venue market {row['cid']}", flush=True)
+        print(_skip_line(row), flush=True)
         return
     stream.ensure_market(row["cid"], row["slug"], market.up_token,
                          market.down_token)
@@ -658,7 +777,7 @@ def main(argv=None, emit_fn=None) -> int:
 
     seconds = _run_seconds(args.minutes)
     stream.start()
-    print(f"[listening] {MARKET_WS_URL} for {seconds:.0f}s", flush=True)
+    print(_tagged("RUN", f"{MARKET_WS_URL} · {seconds:.0f}s"), flush=True)
     deadline = time.monotonic() + seconds
     try:
         while True:
@@ -680,7 +799,7 @@ def main(argv=None, emit_fn=None) -> int:
                     tried.add(row["cid"])
                     _probe_add(stream, row)
     except KeyboardInterrupt:
-        print("[stopped] interrupted", flush=True)
+        print(_tagged("STOP", "interrupted"), flush=True)
     finally:
         stream.stop()
     return 0

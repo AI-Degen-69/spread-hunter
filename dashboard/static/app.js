@@ -1171,6 +1171,73 @@ function isTradeEvent(ev) {
   return false;
 }
 
+/* ── Live market stream: one tagged log line per event ──
+ *
+ * Same convention as the probe's console output (core_brain/market_stream.py
+ * `LOG_TAGS` / `_stream_line`): `[TAG] subject · facts`, tag padded so every
+ * line's facts start in one column. A tag says what happened, the subject is
+ * the market, and the facts are counts and durations. Raw token ids never
+ * appear — a 77-digit id is not something an operator can act on.
+ */
+const STREAM_TAGS = {
+  market_stream_connected: 'OPEN',
+  market_stream_reconnect: 'WAIT',
+  market_stream_subscribe: '+',
+  market_stream_unsubscribe: '-',
+  market_stream_snapshot: 'BOOK',
+  market_stream_error: 'WARN',
+  market_stream_tick: 'TICK',
+};
+
+function streamCount(value, word) {
+  const n = Number(value);
+  if (!isFinite(n)) return `? ${word}s`;
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+function streamNum(value) {
+  const n = Number(value);
+  return isFinite(n) ? String(Math.round(n * 10) / 10) : '?';
+}
+
+function streamSubject(slug, facts) {
+  return slug ? `${slug} · ${facts}` : facts;
+}
+
+function marketStreamLine(action, ex, ev) {
+  const tag = STREAM_TAGS[action] || '?';
+  const slug = ex.slug || (ev && ev.market_slug) || '';
+  const why = (ev && ev.reason) || '';
+  const tokens = (Array.isArray(ex.tokens) ? ex.tokens.length : 0);
+  let body;
+  if (action === 'market_stream_connected') {
+    body = streamCount(tokens, 'token');
+  } else if (action === 'market_stream_reconnect') {
+    body = `${streamNum(ex.delay_sec)}s`;
+    if (why) body += ` · ${why}`;
+  } else if (action === 'market_stream_subscribe') {
+    body = streamSubject(slug, `+${streamCount(tokens, 'token')}`);
+  } else if (action === 'market_stream_unsubscribe') {
+    body = streamSubject(slug, `-${streamCount(tokens, 'token')}`);
+  } else if (action === 'market_stream_snapshot') {
+    body = streamSubject(slug, `+${streamCount(ex.books, 'book')}`);
+  } else if (action === 'market_stream_error') {
+    body = why || ex.reason || 'error';
+    const markets = Array.isArray(ex.markets) ? ex.markets : [];
+    if (markets.length) body += ` · ${markets.join(', ')}`;
+    else if (ex.detail) body += ` · ${String(ex.detail).slice(0, 40)}`;
+    else if (ex.count) body += ` · ${streamCount(ex.count, 'gap')}`;
+  } else if (action === 'market_stream_tick') {
+    body = `${streamCount(ex.books, 'book')} · ${streamCount(ex.frames, 'frame')}`;
+    const read = Number(ex.read_us_p50 || 0);
+    if (read > 0) body += ` · ${streamNum(read)}us read`;
+    if (Number(ex.level_gap || 0) > 0) body += ` · ${streamCount(ex.level_gap, 'gap')}`;
+  } else {
+    body = humanizeAction(String(action).replace('market_stream_', ''));
+  }
+  return `[${tag}]${' '.repeat(Math.max(0, 4 - tag.length))} ${body}`;
+}
+
 function buildStreamSentence(ev, lookup) {
   const action = ((ev && ev.action) || '').toLowerCase();
   const ex = (ev && ev.extra) || {};
@@ -1232,48 +1299,10 @@ function buildStreamSentence(ev, lookup) {
   // Static fallbacks for televised-but-unchanged producers.
   const svc = ((ev && ev.service) || '').toLowerCase();
 
-  // The live market stream is engine-level: its lines carry no market clause,
-  // because the table's "(market)" suffix would print "a market" on all seven.
+  // The live market stream is a log, not a narration: one tagged line per event,
+  // formatted exactly like the probe's console output.
   if (svc === 'market_stream') {
-    const tokens = Array.isArray(ex.tokens) ? ex.tokens.length : 0;
-    const unit = tokens === 1 ? 'outcome token' : 'outcome tokens';
-    if (action === 'market_stream_connected') {
-      return `${when}Connected to the live market feed for ${tokens} ${unit}.`;
-    }
-    if (action === 'market_stream_reconnect') {
-      const delay = Math.max(1, Math.round(Number(ex.delay_sec) || 0));
-      return `${when}Reconnecting to the live market feed in ${delay} ${delay === 1 ? 'second' : 'seconds'}.`;
-    }
-    if (action === 'market_stream_subscribe') {
-      return `${when}Added ${tokens} ${unit} to the live market feed.`;
-    }
-    if (action === 'market_stream_unsubscribe') {
-      return `${when}Dropped ${tokens} ${unit} from the live market feed.`;
-    }
-    if (action === 'market_stream_snapshot') {
-      const name = streamMarketName(ev, lookup);
-      // Never "a market": the engine names the market on every snapshot.
-      return name === 'a market'
-        ? `${when}Received an order book from the live market feed.`
-        : `${when}Received the order book for ${name}.`;
-    }
-    if (action === 'market_stream_error') {
-      const why = {
-        snapshot_timeout: 'a market never sent its order book',
-        frame_error: 'a feed message could not be read',
-        level_gap: 'the venue sent a best price that disagrees with ours',
-      }[reason] || 'the feed reported a problem';
-      return `${when}Live market feed problem: ${why}.`;
-    }
-    if (action === 'market_stream_tick') {
-      const books = Number(ex.books || 0);
-      const us = Number(ex.read_us_p50 || 0);
-      const read = us > 0
-        ? ` Local reads take ${us < 10 ? us.toFixed(1) : Math.round(us)} microseconds.`
-        : '';
-      return `${when}Live market feed is holding ${books} order ${books === 1 ? 'book' : 'books'}.${read}`;
-    }
-    return `${when}Live market feed update: ${humanizeAction(action.replace('market_stream_', ''))}.`;
+    return `${when}${marketStreamLine(action, ex, ev)}`;
   }
 
   const key = svc + '|' + action;

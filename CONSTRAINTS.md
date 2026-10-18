@@ -108,5 +108,12 @@ at the bottom of `tasks/plan.md`.
 
 - Sentences are plain words: no underscores, no codes, no JSON, no raw token ids
   unless a count is what the operator needs.
+- Exception, by explicit operator decision (2026-10-18, Station III-B): the
+  `market_stream` service mirrors the probe's tagged log convention
+  (`[TAG] subject · facts`) on the card, because the two surfaces are the same
+  feed read in two places and one convention beats two. The tag vocabulary is
+  frozen at `OPEN WAIT + - BOOK WARN TICK ?` and lives in both
+  `core_brain/market_stream.py::LOG_TAGS` and
+  `dashboard/static/app.js::STREAM_TAGS`; they must stay byte-identical.
 - Reuse `buildStreamSentence`; add no new table and no new filter/tab. Every
   interpolated value goes through `esc()`; never `innerHTML +=`.

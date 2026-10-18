@@ -6,6 +6,7 @@ and nothing here touches the venue or `data/orders.db`.
 from __future__ import annotations
 
 import json
+import re
 import statistics
 import sys
 import threading
@@ -589,6 +590,10 @@ def test_snapshot_timeout_resends_once_then_reconnects_once(stub_socket):
         assert len(_ops(stub_socket.sent, "subscribe")) == 1
         assert len(rec.of("market_stream_error")) == 2
         assert rec.of("market_stream_error")[-1]["extra"]["action"] == "reconnect"
+        # The payload names the market that went quiet, never 77-digit ids.
+        assert rec.of("market_stream_error")[0]["extra"]["markets"] == [
+            "brazil-election"]
+        assert "tok-" not in json.dumps(rec.of("market_stream_error"))
 
         # The token held the whole time: fail closed, never a stale quote.
         with pytest.raises(BookNotReady):
@@ -609,7 +614,7 @@ def test_snapshot_stops_the_timeout_clock(stub_socket):
         app = stub_socket.apps[0]
         for token in ("tok-u", "tok-d"):
             app.feed(json.dumps(_book_frame(token, [_lvl(0.46)], [_lvl(0.50)])))
-        assert _await(lambda: len(rec.of("market_stream_snapshot")) == 2)
+        assert _await(lambda: len(rec.of("market_stream_snapshot")) == 1)
 
         clock.now += SNAPSHOT_TIMEOUT_SEC + 1.0
         stream._heartbeat_tick()
@@ -617,8 +622,8 @@ def test_snapshot_stops_the_timeout_clock(stub_socket):
         assert app.closed is False
         assert rec.of("market_stream_error") == []
         snap = rec.of("market_stream_snapshot")[0]
-        assert (snap["extra"]["slug"], snap["extra"]["token"]) == (
-            "brazil-election", "tok-u")
+        # One line per market, carrying both books -- not one line per token.
+        assert snap["extra"] == {"slug": "brazil-election", "books": 2}
         assert snap["market_slug"] == "brazil-election"
     finally:
         stream.stop()
@@ -637,7 +642,7 @@ def test_lifecycle_events_carry_the_documented_actions_and_service(stub_socket,
         app = stub_socket.apps[0]
         for token in ("tok-u", "tok-d"):
             app.feed(json.dumps(_book_frame(token, [_lvl(0.46)], [_lvl(0.50)])))
-        assert _await(lambda: len(rec.of("market_stream_snapshot")) == 2)
+        assert _await(lambda: len(rec.of("market_stream_snapshot")) == 1)
         app.feed(json.dumps(_change_frame(_change(
             "tok-u", "BUY", "0.47", "5", best_bid="0.60", best_ask="0.61"))))
         app.feed("this is not a frame at all")
@@ -787,6 +792,96 @@ def test_single_buy_saver_never_reaches_the_stream():
     root = Path(__file__).resolve().parent.parent / "core_brain"
     for name in ("single_buy_saver.py", "shadow_run.py", "shadow_exec.py"):
         assert "market_stream" not in (root / name).read_text(encoding="utf-8")
+
+
+def test_one_snapshot_line_per_market(stub_socket):
+    """Two books, one line. And a re-land after a swap still reports once."""
+    rec = _Recorder()
+    stream = MarketStream(emit_fn=rec, ping_sec=60.0)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.ensure_market("manual:tok-solo", "manual", "tok-solo", "tok-solo")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        for token in ("tok-u", "tok-d", "tok-solo"):
+            app.feed(json.dumps(_book_frame(token, [_lvl(0.46)], [_lvl(0.50)])))
+        assert _await(lambda: len(rec.of("market_stream_snapshot")) == 2)
+
+        pairs = {c["extra"]["slug"]: c["extra"]["books"]
+                 for c in rec.of("market_stream_snapshot")}
+        assert pairs == {"brazil-election": 2, "manual": 1}
+
+        # More deltas must not produce more lines.
+        app.feed(json.dumps(_change_frame(_change("tok-u", "BUY", "0.47", "5"))))
+        assert len(rec.of("market_stream_snapshot")) == 2
+
+        # Rolled off and back on: one more line, not zero and not two.
+        stream.retain_markets(["manual:tok-solo"])
+        stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+        for token in ("tok-u", "tok-d"):
+            app.feed(json.dumps(_book_frame(token, [_lvl(0.48)], [_lvl(0.50)])))
+        assert _await(lambda: len(rec.of("market_stream_snapshot")) == 3)
+    finally:
+        stream.stop()
+
+
+def test_stream_lines_follow_the_tag_convention():
+    """`[TAG] subject · facts`, shared with the dashboard card."""
+    line = ms._stream_line
+    ev = lambda action, extra=None, **kw: (  # noqa: E731
+        line(action, {"extra": extra or {}, **kw}))
+
+    assert ev("market_stream_connected", {"tokens": ["t1", "t2", "t3", "t4"]}) \
+        == "[OPEN] 4 tokens"
+    assert ev("market_stream_connected", {"tokens": ["t1"]}) == "[OPEN] 1 token"
+    assert ev("market_stream_reconnect", {"delay_sec": 2.0, "close_code": 1006},
+              reason="socket left") == "[WAIT] 2s · socket left"
+    assert ev("market_stream_reconnect", {"delay_sec": 30}) == "[WAIT] 30s"
+    assert ev("market_stream_subscribe",
+              {"slug": "brazil-election", "tokens": ["t1", "t2"]}) \
+        == "[+]    brazil-election · +2 tokens"
+    assert ev("market_stream_unsubscribe",
+              {"slug": "brazil-election", "tokens": ["t1"]}) \
+        == "[-]    brazil-election · -1 token"
+    assert ev("market_stream_snapshot",
+              {"slug": "brazil-election", "books": 2}) \
+        == "[BOOK] brazil-election · +2 books"
+    assert ev("market_stream_error", {"markets": ["brazil-election"]},
+              reason="snapshot_timeout") \
+        == "[WARN] snapshot_timeout · brazil-election"
+    assert ev("market_stream_error", {"detail": "not json"}, reason="frame_error") \
+        == "[WARN] frame_error · not json"
+    assert ev("market_stream_error", {"count": 3}, reason="level_gap") \
+        == "[WARN] level_gap · 3 gaps"
+    assert ev("market_stream_tick",
+              {"books": 6, "frames": 53, "level_gap": 0, "read_us_p50": 4.7}) \
+        == "[TICK] 6 books · 53 frames · 4.7us read"
+    assert ev("market_stream_tick",
+              {"books": 1, "frames": 1, "level_gap": 2, "read_us_p50": 41.0}) \
+        == "[TICK] 1 book · 1 frame · 41us read · 2 gaps"
+    assert ev("market_stream_something_new") == "[?]    something_new"
+
+    # The convention, not just the content: every tag pads to one column, and
+    # no line ever leaks an action name, a JSON blob or a token id.
+    for action in ms.LOG_TAGS:
+        out = ev(action, {"tokens": ["t"], "slug": "s", "books": 1,
+                          "delay_sec": 1, "detail": "d", "count": 1,
+                          "markets": ["s"], "frames": 1, "read_us_p50": 1.0})
+        assert re.match(r"^\[[^\]]{1,4}\]\s+\S", out), out
+        assert out[6] == " " and out[7] != " ", out  # facts in one column
+        assert "market_stream" not in out
+        assert "{" not in out and "}" not in out
+    assert ms._skip_line({"slug": "ufc-eri3-jas3-2026-10-17"}) == (
+        "[SKIP] ufc-eri3-jas3-2026-10-17 · no venue market")
+    assert ms._tagged("RUN", "wss://x · 180s") == "[RUN]  wss://x · 180s"
+    assert ms._tagged("STOP", "interrupted") == "[STOP] interrupted"
+
+    # The dashboard formats the same seven tags.
+    app_js = (Path(__file__).resolve().parent.parent / "dashboard" / "static"
+              / "app.js").read_text(encoding="utf-8")
+    for tag in ms.LOG_TAGS.values():
+        assert f"'{tag}'" in app_js or f'"{tag}"' in app_js, tag
 
 
 def test_probe_parses_the_markets_file_and_bounds_its_run(stub_socket, tmp_path):

@@ -374,3 +374,21 @@ The `[UNVERIFIED]` item above is **resolved**, on the wire:
 - The observational `level_gap` counter is unproven theory kept deliberately
   inert; if it stays at zero in real traffic it can be deleted, and if it moves
   it is the evidence a follow-up needs (recorded in the parked-items file).
+
+## Operator decisions recorded during Station III-B (2026-10-18)
+
+1. **Card copy is now a tagged log for `market_stream`.** The operator asked for
+   shorter, structured lines with a square-bracket tag at the start instead of
+   prose, on both the probe terminal and the dashboard card. CONSTRAINTS.md §8
+   was amended to record the exception; the tag vocabulary
+   (`OPEN WAIT + - BOOK WARN TICK ?`) is frozen and lives in both
+   `core_brain/market_stream.py::LOG_TAGS` and
+   `dashboard/static/app.js::STREAM_TAGS`, which must stay byte-identical. The
+   XSS pin (hostile slug escaped by the row renderer) is retained.
+2. **One snapshot event per market.** `_note_snapshot` now waits for all of a
+   market's books before emitting (`extra={"slug", "books"}`), so the card
+   shows one line per market instead of two identical ones. The
+   snapshot-timeout payload now carries `markets` (slugs) instead of token ids.
+3. **`_stream_line` is the single source of the convention in Python; the JS
+   side mirrors it.** Both are pinned by `test_stream_lines_follow_the_tag_convention`
+   and the harness's `marketStreamSentences`.

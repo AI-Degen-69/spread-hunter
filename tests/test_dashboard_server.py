@@ -1963,7 +1963,7 @@ def test_shadow_view_toggle_never_prompts_or_posts_a_start():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -1996,7 +1996,7 @@ def test_master_toggle_controls_shadow_rehearsal_on_shadow_view():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2036,7 +2036,7 @@ def test_master_toggle_controls_live_stack_on_live_view():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2146,7 +2146,7 @@ def test_event_ticker_formats_timestamps_in_local_time():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60, env=env,
+        capture_output=True, text=True, encoding='utf-8', timeout=60, env=env,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2181,7 +2181,7 @@ def test_market_link_generates_safe_hyperlinks():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2487,7 +2487,7 @@ def test_event_stream_trades_tab_shows_only_trade_rows():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2552,37 +2552,43 @@ def test_app_js_translates_market_stream_events():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
     assert out.get("exportsOk") is True, out.get("error")
 
     s = out["marketStreamSentences"]
-    assert s["connected"].endswith(
-        "Connected to the live market feed for 4 outcome tokens.")
-    assert "for 1 outcome token." in s["connectedOne"]
-    assert "Reconnecting to the live market feed in 2 seconds." in s["reconnect"]
-    assert "Reconnecting to the live market feed in 1 second." in s["reconnectOne"]
-    assert "Added 2 outcome tokens to the live market feed." in s["subscribe"]
-    assert "Dropped 2 outcome tokens from the live market feed." in s["unsubscribe"]
-    assert "Received the order book for brazil election." in s["snapshot"]
-    assert "no market" not in s["snapshot"] and "a market." not in s["snapshot"]
-    assert "an order book from the live market feed." in s["snapshotNoSlug"]
-    assert "problem: a market never sent its order book." in s["problem"]
-    assert "problem: a feed message could not be read." in s["frameError"]
-    assert "problem: the venue sent a best price that disagrees with ours." in s["levelGap"]
-    assert "holding 4 order books." in s["tick"]
-    assert "Local reads take 6.3 microseconds." in s["tick"]
-    assert "holding 1 order book." in s["tickOne"]
-    assert "Local reads take 41 microseconds." in s["tickOne"]
-    assert "update: something new." in s["unknown"]
+    # Exact middot-containing lines are pinned by the JS harness; here we only
+    # check the tag and the ASCII facts so the test stays encoding-independent.
+    assert s["connected"].endswith("[OPEN] 4 tokens")
+    assert s["connectedOne"].endswith("[OPEN] 1 token")
+    assert s["reconnect"].endswith("socket left")
+    assert "[WAIT]" in s["reconnect"] and "[WAIT]" in s["reconnectOne"]
+    assert s["reconnectOne"].endswith("1s")
+    assert "+2 tokens" in s["subscribe"] and "brazil-election" in s["subscribe"]
+    assert "[+]" in s["subscribe"] and "[-]" in s["unsubscribe"]
+    assert s["unsubscribe"].endswith("-1 token")
+    assert "+2 books" in s["snapshot"] and "brazil-election" in s["snapshot"]
+    assert "[BOOK]" in s["snapshot"] and s["snapshotNoSlug"].endswith("+2 books")
+    assert s["problem"].endswith("brazil-election") and "snapshot_timeout" in s["problem"]
+    assert s["problemNoMarket"].endswith("snapshot_timeout")
+    assert "frame_error" in s["frameError"] and "not json" in s["frameError"]
+    assert "level_gap" in s["levelGap"] and "3 gaps" in s["levelGap"]
+    assert s["tick"].endswith("6.3us read") and "4 books" in s["tick"] and "53 frames" in s["tick"]
+    assert s["tickOne"].endswith("2 gaps") and "41us read" in s["tickOne"]
+    assert s["tickNoRead"].endswith("0 frames") and "0 books" in s["tickNoRead"]
+    assert s["unknown"].endswith("something new") and "[?]" in s["unknown"]
 
-    # Plain words only: no codes, no json, and never the shared "(a market)" tail.
+    # The convention, not just the content: clock, then a tag field of one fixed
+    # width, then facts. No JSON, no socket URL, no 77-digit token id on the card.
     for key, line in s.items():
-        assert "_" not in line, (key, line)
+        assert re.match(r"^\d\d:\d\d:\d\d ", line), (key, line)
+        assert re.search(r"\[[^\]]{1,4}\] +\S", line), (key, line)
+        assert line[18] != " ", (key, line)   # facts start in one column
         assert "{" not in line and "}" not in line, (key, line)
         assert "ws-subscriptions-clob" not in line, (key, line)
+        assert not re.search(r"\d{20,}", line), (key, line)
 
     # A hostile stream slug is escaped by the row renderer, never executed.
     rows = "".join(out["marketStreamRows"])
@@ -2600,7 +2606,7 @@ def test_event_stream_tabs_harness():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
@@ -2646,7 +2652,7 @@ def test_master_toggle_renders_every_state():
 
     res = subprocess.run(
         [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
