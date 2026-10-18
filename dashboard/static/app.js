@@ -2123,12 +2123,12 @@ const SERVICE_DEFS = [
   // code in-process against a signer-less client, so these two stay STOPPED
   // for the whole rehearsal and that is the correct reading, not a fault.
   { key: 'query', name: 'Venue Engine & Order Poller', cmd: 'python -m core_brain.order_manager poll --interval 0.5',
-    tag: '0.5s CLOB FEED',
-    desc: 'Queries CLOB every 0.5s, reconciles fills, and executes periodic balance sweeps.',
+    tag: 'ORDER RECONCILER',
+    desc: 'Reconciles venue orders & fills every 0.5s, updates registry state, and executes periodic balance sweeps.',
     liveOnly: true },
   { key: 'decide', name: 'Execution Loop & Maker Quoter', cmd: 'python -m core_brain.trader_loop --live --no-reconcile --no-sweep --interval 5',
     tag: 'SPREAD QUOTER',
-    desc: 'Runs the trading loop (dual-sided maker quotes -> merge execution) every 5s across approved markets.',
+    desc: 'Runs the trading loop (dual-sided maker quotes -> merge execution) across approved markets with live WebSocket pricing.',
     liveOnly: true },
   { key: 'shadow', name: 'Shadow Rehearsal Quoter', cmd: 'python -m core_brain.shadow_run',
     tag: 'REHEARSAL ENGINE',
