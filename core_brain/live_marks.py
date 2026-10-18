@@ -410,12 +410,13 @@ class LiveMarkWorker:
 
     def _send_differential_frame(self, app, ids: list[str], operation: str) -> bool:
         """Send one differential membership frame (subscribe / unsubscribe)."""
+        import websocket
+
         payload = json.dumps({"assets_ids": sorted(ids), "operation": operation})
         try:
             app.send(payload)
             return True
-        except (OSError, Exception) as e:
-            # Catch OSError, websocket.WebSocketException or socket errors.
+        except (OSError, websocket.WebSocketException) as e:
             log.debug("live-marks differential send failed: %s", e)
             return False
 
@@ -434,6 +435,8 @@ class LiveMarkWorker:
         Returns True if differential frame(s) were sent cleanly, False if no-op or
         if socket send failed (which closes the socket to trigger reconnect recovery).
         """
+        import websocket
+
         app = self._app
         if app is None:
             return False
@@ -443,8 +446,8 @@ class LiveMarkWorker:
             # Baseline never established on this connection: close socket to redial
             try:
                 app.close()
-            except Exception:
-                pass
+            except (OSError, websocket.WebSocketException) as exc:
+                log.warning("Failed to close WebSocket after sync failure: %s", exc)
             return False
 
         if self._sent_ids == wanted:
@@ -459,8 +462,8 @@ class LiveMarkWorker:
             if not self._send_differential_frame(app, added, "subscribe"):
                 try:
                     app.close()
-                except Exception:
-                    pass
+                except (OSError, websocket.WebSocketException) as exc:
+                    log.warning("Failed to close WebSocket after sync failure: %s", exc)
                 return False
             current_sent.update(added)
             self._sent_ids = frozenset(current_sent)
@@ -469,8 +472,8 @@ class LiveMarkWorker:
             if not self._send_differential_frame(app, removed, "unsubscribe"):
                 try:
                     app.close()
-                except Exception:
-                    pass
+                except (OSError, websocket.WebSocketException) as exc:
+                    log.warning("Failed to close WebSocket after sync failure: %s", exc)
                 return False
             current_sent.difference_update(removed)
             self._sent_ids = frozenset(current_sent)
