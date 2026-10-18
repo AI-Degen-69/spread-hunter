@@ -125,19 +125,19 @@ def test_source_switch_parses_venue_off_sim(monkeypatch):
         live_marks_source()
 
 
-def test_venue_subscribes_on_open_and_resyncs_on_drift(monkeypatch):
-    """The socket subscribes on every (re)connect and follows the wanted set.
+def test_venue_subscribes_on_open_and_sends_differential_frames(monkeypatch):
+    """The socket subscribes on open and sends differential frames on drift.
 
-    Offline: a stub WebSocketApp records what would leave the socket.
-    Without the on-open subscribe the venue path connects but never hears
-    a frame; without the sync a newly opened leg waits for the next blip.
-
-    The venue honors exactly one subscription per connection: a second
-    subscribe on the open socket answers INVALID OPERATION and streams
-    nothing (observed live 2026-10-12), while reporting success to the
-    sender. Sync therefore closes the drifted socket instead of
-    re-sending; the reconnect loop dials again and on-open subscribes the
-    current set on the fresh connection.
+    Offline: a stub WebSocketApp records what leaves the socket.
+    1. Initial connect: full {"assets_ids": [...], "type": "market"} frame.
+    2. Unchanged set: sync_subscription() is False, 0 frames sent, no socket close.
+    3. Add token: sync_subscription() is True, sends differential subscribe frame
+       {"assets_ids": ["tok-b"], "operation": "subscribe"}, socket not closed,
+       _sent_ids updated to {"tok-a", "tok-b"}, single app instance.
+    4. Kept tokens: cache marks and generation remain intact across sync.
+    5. Mixed add and remove: subscribe sent before unsubscribe, both with sorted ids.
+    6. Send failure: sync_subscription() returns False, socket is closed,
+       _sent_ids not corrupted, reconnect recovers with full market frame.
     """
     import json
     import time
@@ -146,13 +146,13 @@ def test_venue_subscribes_on_open_and_resyncs_on_drift(monkeypatch):
 
     sent = []
     apps = []
-    closed = {"closed": False}
 
     class FakeApp:
         def __init__(self, url, on_open=None, on_message=None, on_close=None):
             assert url == lm.MARK_WS_URL
             self.on_open = on_open
             self._closed = False
+            self.fail_send = False
             apps.append(self)
 
         def run_forever(self, **kwargs):
@@ -161,14 +161,18 @@ def test_venue_subscribes_on_open_and_resyncs_on_drift(monkeypatch):
                 time.sleep(0.01)
 
         def send(self, msg):
+            if self.fail_send:
+                raise OSError("socket send failure")
             sent.append(json.loads(msg))
 
         def close(self):
-            closed["closed"] = True
             self._closed = True
 
+    class FakeWebSocketException(Exception):
+        pass
+
     monkeypatch.setitem(__import__("sys").modules, "websocket",
-                        type("WS", (), {"WebSocketApp": FakeApp}))
+                        type("WS", (), {"WebSocketApp": FakeApp, "WebSocketException": FakeWebSocketException}))
 
     cache = lm.LiveMarkCache()
     cache.update_wanted({"tok-a"})
@@ -178,23 +182,73 @@ def test_venue_subscribes_on_open_and_resyncs_on_drift(monkeypatch):
         deadline = time.time() + 5.0
         while not sent and time.time() < deadline:
             time.sleep(0.01)
-        assert [m["assets_ids"] for m in sent] == [["tok-a"]]
-        assert sent[0]["type"] == "market"
-        # Same set again: no work.
+        assert len(apps) == 1
+        assert apps[0]._closed is False
+        assert len(sent) == 1
+        assert sent[0] == {"assets_ids": ["tok-a"], "type": "market"}
+
+        # 1. Unchanged set: no work, no frames, no close.
         assert worker.sync_subscription() is False
         assert len(sent) == 1
-        assert closed["closed"] is False
-        # Holdings drift: the drifted socket closes (a second subscribe on
-        # it would answer INVALID OPERATION) and the reconnect loop dials
-        # again; on-open subscribes the current set on the fresh socket.
+        assert apps[0]._closed is False
+
+        # Set a mark on tok-a to verify it survives sync without disconnect/reset
+        cache.apply_message(_book("tok-a", [_lvl(0.48)], [_lvl(0.52)]))
+        seq_before, marks_before = cache.snapshot()
+        gen_before = cache._reset_generation
+        assert len(marks_before) == 1
+
+        # 2. Add token: sends differential subscribe frame on existing socket
         cache.update_wanted({"tok-a", "tok-b"})
         assert worker.sync_subscription() is True
-        assert closed["closed"] is True
+        assert len(sent) == 2
+        assert sent[1] == {"assets_ids": ["tok-b"], "operation": "subscribe"}
+        assert len(apps) == 1
+        assert apps[0]._closed is False
+        assert worker._sent_ids == frozenset({"tok-a", "tok-b"})
+
+        # Kept token marks and reset generation are untouched
+        _seq_after, marks_after = cache.snapshot()
+        assert cache._reset_generation == gen_before
+        assert any(m["token_id"] == "tok-a" and m["mid"] == 0.50 for m in marks_after)
+
+        # 3. Multi-ID addition sends sorted assets_ids in subscribe frame
+        cache.update_wanted({"tok-a", "tok-b", "tok-z", "tok-m"})
+        assert worker.sync_subscription() is True
+        assert len(sent) == 3
+        assert sent[2] == {"assets_ids": ["tok-m", "tok-z"], "operation": "subscribe"}
+        assert worker._sent_ids == frozenset({"tok-a", "tok-b", "tok-m", "tok-z"})
+
+        # 4. Mixed add and remove: tok-b expires via TTL clock, tok-c added.
+        # Subscribe for tok-c must precede unsubscribe for tok-b, tok-m, tok-z.
+        cache.update_wanted({"tok-b", "tok-m", "tok-z"}, now=1000.0)
+        cache.update_wanted({"tok-a"}, now=1100.0)
+        assert cache.expire_wanted(now=1220.0) is True
+        cache.update_wanted({"tok-a", "tok-c"})
+        assert worker.sync_subscription() is True
+        assert len(sent) == 5
+        assert sent[3] == {"assets_ids": ["tok-c"], "operation": "subscribe"}
+        assert sent[4] == {"assets_ids": ["tok-b", "tok-m", "tok-z"], "operation": "unsubscribe"}
+        assert len(apps) == 1
+        assert apps[0]._closed is False
+        assert worker._sent_ids == frozenset({"tok-a", "tok-c"})
+
+        # 5. Send failure: socket closed, returns False, reconnect recovers
+        apps[0].fail_send = True
+        cache.update_wanted({"tok-a", "tok-c", "tok-d"})
+        assert worker.sync_subscription() is False
+        assert apps[0]._closed is True
+        assert worker._sent_ids == frozenset({"tok-a", "tok-c"})
+
+        # Wait for reconnect loop to open second app and resubscribe full set
         deadline = time.time() + 8.0
-        while len(sent) < 2 and time.time() < deadline:
+        while len(apps) < 2 and time.time() < deadline:
             time.sleep(0.01)
-        assert [m["assets_ids"] for m in sent] == [["tok-a"], ["tok-a", "tok-b"]]
         assert len(apps) == 2
+        # After reconnect, second app sends full type:market frame
+        while len(sent) < 6 and time.time() < deadline:
+            time.sleep(0.01)
+        assert sent[-1] == {"assets_ids": ["tok-a", "tok-c", "tok-d"], "type": "market"}
     finally:
         worker.stop()
     assert not worker.running

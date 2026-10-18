@@ -408,30 +408,74 @@ class LiveMarkWorker:
         self._sent_ids = frozenset(self._cache.wanted())
         return True
 
+    def _send_differential_frame(self, app, ids: list[str], operation: str) -> bool:
+        """Send one differential membership frame (subscribe / unsubscribe)."""
+        import websocket
+
+        payload = json.dumps({"assets_ids": sorted(ids), "operation": operation})
+        try:
+            app.send(payload)
+            return True
+        except (OSError, websocket.WebSocketException) as e:
+            log.debug("live-marks differential send failed: %s", e)
+            return False
+
     def sync_subscription(self) -> bool:
-        """Follow a drifted wanted set; True when a reconnect was kicked off.
+        """Follow a drifted wanted set via differential frames on the live socket.
 
-        Thread-safe nudge for the serving path: holdings change on KPI
-        polls while the socket stays up, so without this a newly opened
-        leg would wait for the next venue blip before its marks arrive.
-        A no-op unless the worker is connected and the set actually moved.
+        Thread-safe nudge for the serving path: holdings change on KPI polls while
+        the socket stays up, so newly opened or closed legs are synchronized
+        immediately without dropping mid-market marks or tearing down the connection.
 
-        Implemented as close-and-redial, never as a second subscribe: the
-        venue honors exactly one subscription per connection and answers a
-        second subscribe on the open socket with INVALID OPERATION while
-        streaming nothing further. The reconnect loop dials again within
-        RECONNECT_MIN_SEC and on-open subscribes the current set on the
-        fresh connection; the loop's disconnect step emits the reset frame
-        browsers already handle, so cells briefly fall back to quote mids
-        and then track the new marks.
+        A repeated full `{"assets_ids": [...], "type": "market"}` frame on an open
+        socket yields INVALID OPERATION from the venue; differential frames with
+        `operation: "subscribe"` and `operation: "unsubscribe"` are the supported
+        path (matching market_stream).
+
+        Returns True if differential frame(s) were sent cleanly, False if no-op or
+        if socket send failed (which closes the socket to trigger reconnect recovery).
         """
+        import websocket
+
         app = self._app
         if app is None:
             return False
-        if self._sent_ids is not None and set(self._sent_ids) == self._cache.wanted():
+
+        wanted = self._cache.wanted()
+        if self._sent_ids is None:
+            # Baseline never established on this connection: close socket to redial
+            try:
+                app.close()
+            except (OSError, websocket.WebSocketException) as exc:
+                log.warning("Failed to close WebSocket after sync failure: %s", exc)
             return False
-        try:
-            app.close()
-        except Exception:
+
+        if self._sent_ids == wanted:
             return False
-        return True
+
+        added = sorted(wanted - self._sent_ids)
+        removed = sorted(self._sent_ids - wanted)
+
+        current_sent = set(self._sent_ids)
+
+        if added:
+            if not self._send_differential_frame(app, added, "subscribe"):
+                try:
+                    app.close()
+                except (OSError, websocket.WebSocketException) as exc:
+                    log.warning("Failed to close WebSocket after sync failure: %s", exc)
+                return False
+            current_sent.update(added)
+            self._sent_ids = frozenset(current_sent)
+
+        if removed:
+            if not self._send_differential_frame(app, removed, "unsubscribe"):
+                try:
+                    app.close()
+                except (OSError, websocket.WebSocketException) as exc:
+                    log.warning("Failed to close WebSocket after sync failure: %s", exc)
+                return False
+            current_sent.difference_update(removed)
+            self._sent_ids = frozenset(current_sent)
+
+        return bool(added or removed)
