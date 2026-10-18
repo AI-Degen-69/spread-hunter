@@ -816,8 +816,7 @@ def test_evaluate_populates_rate_from_tape_when_initial_rate_is_zero():
     )
 
     assert result["eligible"] is True
-    assert result["est_income"] > 0
-    assert result["return_pct_day"] > 0
+    assert result["movement_usd"] > 0
     assert result["reject_reason"] == ""
 
 

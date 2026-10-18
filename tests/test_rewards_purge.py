@@ -9,8 +9,11 @@ never throttle the window again.
 """
 from __future__ import annotations
 
-from dataclasses import replace
+import importlib.util
+import time
+from datetime import datetime, timedelta, timezone
 
+import scripts.filter_markets as fm
 from core_brain.config import MakerConfig
 from core_brain.trader_loop import _market_cfg as spec_to_cfg
 from scoring.config import load as load_scoring
@@ -82,3 +85,92 @@ def test_bankroll_override_survives_the_allocator_purge(monkeypatch):
     cfg = load_scoring()
     assert cfg.bankroll_usd == 2000
     assert not hasattr(cfg, "allocation_budget")
+
+
+def test_scoring_rewards_module_is_deleted():
+    """scoring.rewards was orphaned Polymarket liquidity reward math;
+    Issue #681 purges it permanently."""
+    spec = importlib.util.find_spec("scoring.rewards")
+    assert spec is None, "scoring.rewards must be completely deleted (#681)"
+
+
+def test_filter_markets_has_no_order_score_or_q_min():
+    """scripts.filter_markets must not define order_score or q_min (#681)."""
+    assert not hasattr(fm, "order_score"), "order_score must be purged (#681)"
+    assert not hasattr(fm, "q_min"), "q_min must be purged (#681)"
+
+
+def test_evaluate_produces_spread_metrics_without_reward_pool_math():
+    """evaluate() ranks on spread/movement and does not calculate reward pool splits (#681)."""
+    class FakeSession:
+        def get(self, url, params=None, timeout=None):
+            if "trades" in url:
+                return type("Resp", (), {
+                    "json": lambda self: [{"timestamp": time.time(), "price": 0.5, "size": 1000.0}],
+                    "raise_for_status": lambda self: None,
+                })()
+            return type("Resp", (), {
+                "json": lambda self: {
+                    "bids": [{"price": "0.48", "size": "1000"}],
+                    "asks": [{"price": "0.52", "size": "1000"}],
+                },
+                "raise_for_status": lambda self: None,
+            })()
+
+    cand = {
+        "condition_id": "0xtest_pure_spread",
+        "question": "Binary Question?",
+        "tokens": [{"token_id": "tok1"}, {"token_id": "tok2"}],
+        "rewards": {"max_spread": 0.5, "min_size": 1000, "rate": 500.0},  # tight reward window
+        "minimum_tick_size": 0.01,
+        "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=5)).isoformat(),
+        "_order_min": 5,
+        "_spread": 0.04,
+        "closed": False,
+        "accepting_orders": True,
+    }
+
+    res = fm.evaluate(FakeSession(), rate=0.0, m=cand, volume_24h=100_000.0,
+                      source="spread", min_volume_usd=1000.0, min_depth_usd=100.0,
+                      max_spread=0.08)
+
+    assert res["eligible"] is True
+    assert res["movement_usd"] == 500.0
+    assert res["est_income"] == 0.0
+    assert res["est_capital"] == 0.0
+    assert res["return_pct_day"] == 0.0
+    assert res["their_score"] == 0.0
+
+
+def test_screener_terminal_output_has_no_reward_terms(tmp_path, monkeypatch, capsys):
+    """filter_markets.main() terminal output must not print reward vocabulary (#681)."""
+    winner = {
+        "cid": "0xtest", "title": "Test Spread Market", "source": "spread",
+        "eligible": True, "spread": 0.025, "volume_24h": 150_000.0,
+        "movement_usd": 1200.0, "yes_depth_usd": 800.0, "no_depth_usd": 750.0,
+        "est_income": 0.0, "est_capital": 0.0, "return_pct_day": 0.0,
+    }
+    monkeypatch.setattr(fm, "RUN", tmp_path / "shared")
+    monkeypatch.setattr(fm, "gamma_universe", lambda s, min_volume_usd=None, full_scan=False: (
+        [], {"pages_fetched": 0, "rows_scanned": 0, "truncated": False, "cheap_rejects": {}}))
+    monkeypatch.setattr(fm, "_score_universe", lambda *a, **k: ([winner], 1))
+    monkeypatch.setattr(fm, "_write_universe_file", lambda *a, **k: None)
+    monkeypatch.setattr(fm, "_write_pipeline_snapshot", lambda *a, **k: None)
+    monkeypatch.setattr(fm, "_log_rank_near_misses", lambda *a, **k: 0)
+    monkeypatch.setattr(fm, "_log_rank_volume_near_misses", lambda *a, **k: 0)
+    monkeypatch.setattr("sys.argv", ["filter_markets", "--dry-run"])
+
+    fm.main()
+    out = capsys.readouterr().out
+
+    for forbidden in ("income > $0/day", "$/day", "ret%/d", "TOTAL capital", "spread / 0 reward", "reward"):
+        assert forbidden not in out, f"Terminal output contained purged reward term '{forbidden}' (#681)"
+    assert "picked 1 spread markets" in out
+    assert "move_30m" in out
+    assert "vol_24h" in out
+    assert "depth" in out
+    assert "market                                            move_30m     vol_24h     depth" in out
+
+
+
+

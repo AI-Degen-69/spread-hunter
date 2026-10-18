@@ -82,8 +82,6 @@ def _load_repo_env(root: Path | str = ROOT) -> None:
 _load_repo_env()
 
 RUN = ROOT / "runtime"
-OFFSET = 0.020          # where we intend to quote, in price units
-C = 3.0                 # venue's one-sided penalty
 
 # TRADABILITY AND HORIZON (U6). Sourced from config so the ranker and the
 # fleet cannot drift, exactly as the payout floor was.
@@ -143,11 +141,6 @@ def _pid_is_running(pid: int) -> bool:
             return True
     except (OSError, ProcessLookupError, ValueError):
         return False
-
-
-def q_min(a: float, b: float) -> float:
-    return max(min(a, b), max(a / C, b / C))
-
 
 
 def resolve_state(closed: object = None,
@@ -532,9 +525,10 @@ def rank_score(row: dict) -> float:
     purge, #597): the venue's `gameStartTime` contradicts its own `live`
     flag on multi-day events, so a clock read would rank a match in play
     as not-started. Missing fields fail safe to unboosted baseline
-    (bare return_pct_day movement-notional score).
+    (movement_usd score or bare return_pct_day fixture baseline).
     """
-    base = float(row.get("return_pct_day") or 0.0)
+    ret = row.get("return_pct_day")
+    base = float(ret if ret else (row.get("movement_usd") or 0.0))
     movement = row.get("movement_usd")
     trades = row.get("trade_count")
     days = row.get("days_to_resolve")
@@ -1202,18 +1196,6 @@ def merge_live_event_markets(universe: list[dict],
     return merged, stats
 
 
-# The old two-path discovery (`gamma_spread_universe`, rewards-only
-# /sampling-markets + reward-excluding gamma scan) is deleted with the reward
-# path; `--legacy-rewards` reconstructs its candidate list inline in `main()`
-# for one comparison period.
-
-
-def order_score(v: float, s: float, size: float, min_size: float) -> float:
-    if s < 0 or s > v or size < min_size:
-        return 0.0
-    return ((v - s) / v) ** 2 * size
-
-
 def queue_bar_reject(m: dict, *, source: str,
                      max_queue_minutes, queue_minutes_fn):
     """A rejection row when this market's queue at our price will not clear.
@@ -1354,7 +1336,6 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     (time-of-game purge, #597): a game's start, quarter, half or end says
     nothing about when this market decides, so no gate may key off it.
     """
-    rw = m.get("rewards") or {}
     identity_ok, identity_reason = identity_allowed(
         m.get("question"), m.get("market_slug") or m.get("slug"),
         m.get("category"), m.get("market_type"),
@@ -1450,14 +1431,12 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     if queue_row is not None:
         return queue_row
 
-    v = (rw.get("max_spread") or 3.5) / 100.0
-    min_size = rw.get("min_size") or 50
+    min_size = m.get("_order_min", 5)
     toks = [t.get("token_id") for t in (m.get("tokens") or [])]
-    if len(toks) != 2 or OFFSET >= v:
+    if len(toks) != 2:
         return _reject_row(
             source,
-            "no score window: two tokens and a window wider than the "
-            "quote offset are required",
+            "not a binary market: exactly two tokens required",
             m, volume_24h)
 
     # THE MOVEMENT GATE, BEFORE the two book fetches. A market whose tape is
@@ -1540,8 +1519,6 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                            trade_count=trade_count,
                            volatility_exempt=is_volatility_exempt)
 
-    q1 = q2 = 0.0
-    capital_per_share = 0.0
     mids: dict[int, float] = {}
     best_bids: dict[int, float] = {}
     book_spreads: dict[int, float] = {}
@@ -1608,16 +1585,6 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         best_bids[j] = max(bids)[0]
         book_spreads[j] = min(asks)[0] - max(bids)[0]
         book_depths[j] = top_depth_usd(bids)
-        capital_per_share += mid
-        for levels, sign, is_bid in ((bids, 1.0, True), (asks, -1.0, False)):
-            for p, s in levels:
-                d = (mid - p) * sign
-                if 0 <= d <= v and s >= min_size:
-                    sc = ((v - d) / v) ** 2 * s
-                    if is_bid == (j == 0):
-                        q1 += sc
-                    else:
-                        q2 += sc
 
     # The depth bar is injectable so a DEPTH-GATE TRIAL run can gate on a
     # lower bar without touching the permanent config value. None (the normal
@@ -1635,12 +1602,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
             "source": source, "eligible": False,
             "reject_reason": books_reason,
             "volume_24h": _vol(volume_24h),
-            # The book WAS readable -- this market failed the depth/spread
-            # gate, not the fetch -- so the competition reading an adopted
-            # fleet would average over its window is already in hand here.
-            # Carried so the pipeline view can estimate what the allocator
-            # would have said had this market been admitted.
-            "their_score": round(q_min(q1, q2), 1),
+            "their_score": 0.0,
             "spread": round(float(m.get("_spread") or 0.0), 4) or None,
             "cid": m.get("condition_id"),
             "title": m.get("question", "")[:90],
@@ -1651,32 +1613,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
             **_book_stats(book_spreads, book_depths),
         }
 
-    theirs = q_min(q1, q2)
     n = max(min_size, 120)
-
-    # Score the price we would ACTUALLY quote, not the price we would like to.
-    # The bot never bids more than one tick above the best bid (see
-    # quotes._decide_quotes_rewards): on a wide book, mid-minus-offset sits
-    # deep inside the spread, and a market whose reward window is empty is
-    # usually empty because quoting there means being the most exposed order in
-    # the book. Ranking on the uncapped price overstated those markets badly --
-    # one showed 15%/day for a quote six cents above the next best bid.
-    tick = m.get("minimum_tick_size") or 0.01
-    sides = []
-    for j in range(2):
-        mid = mids[j]
-        want = mid - OFFSET
-        price = min(want, best_bids[j] + tick)
-        s = mid - price
-        sides.append(order_score(v, s, n, min_size))
-    ours = q_min(sides[0], sides[1])
-    if ours <= 0:
-        return _reject_row(
-            source, "cannot score here without overbidding the book", m,
-            volume_24h, movement_usd=movement_usd,
-            **_book_stats(book_spreads, book_depths))
-    income = rate * ours / (ours + theirs)
-    capital = n * capital_per_share
 
     # U6. A market must be able to produce the observations before its yield
     # is worth comparing. Both reasons are recorded rather than dropped, so
@@ -1696,21 +1633,17 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                             uma_statuses=m.get("uma_resolution_statuses") or m.get("umaResolutionStatuses")),
         skip_identity=bool(admission_trial and admission_role),
         live_event=bool(m.get("_live_event") or m.get("live_event")))
-    # The movement gate has already been enforced above, before the book
-    # fetches -- `flat` cannot be true here. The income gate requires
-    # positive income: a market whose measured movement scales to nothing
-    # earns nothing.
-    pays = income > 0 or (source == "spread" and movement_usd is not None and movement_usd > 0 and ours > 0)
-    if not why and not pays:
-        why = ("no reward income" if source == "rewards" else "no spread income")
+
+    eligible = bool(can_trade)
+    if not why and not eligible:
+        why = "not tradeable"
 
     row = {
         "source": source,
         "spread": round(float(m.get("_spread") or 0.0), 4) or None,
-        # Below the payout floor this market pays exactly zero, however good
-        # its return_pct_day looks. Recorded rather than filtered here so the
-        # report can show what was rejected and why.
-        "eligible": pays and can_trade,
+        # Recorded rather than filtered here so the report can show what was
+        # rejected and why.
+        "eligible": eligible,
         "reject_reason": why,
         "volume_24h": _vol(volume_24h),
         "fetch_truncated": bool(m.get("fetch_truncated")),
@@ -1746,10 +1679,10 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "min_size": m.get("_order_min", 5),
         "tick": m.get("minimum_tick_size") or 0.01,
         "shares": n,
-        "est_income": round(income, 3),
-        "est_capital": round(capital, 2),
-        "return_pct_day": round(100 * income / capital, 3) if capital else 0,
-        "their_score": round(theirs, 1),
+        "est_income": 0.0,
+        "est_capital": 0.0,
+        "return_pct_day": 0.0,
+        "their_score": 0.0,
         "yes_spread": round(book_spreads[0], 4),
         "no_spread": round(book_spreads[1], 4),
         "yes_depth_usd": round(book_depths[0], 2),
@@ -2035,7 +1968,7 @@ def build_paired_admission_bundle(
     if top < 1:
         raise ValueError("paired admission top must be at least one")
     refused = list(refused or [])
-    ordered = sorted(eligible, key=lambda r: -float(r.get("return_pct_day") or 0.0))
+    ordered = sorted(eligible, key=lambda r: -rank_score(r))
     control = [r for r in ordered if not r.get("shipped_identity_reason")][:top]
 
     by_event: dict[str, list[dict]] = {}
@@ -2065,7 +1998,7 @@ def build_paired_admission_bundle(
         treatment.append((subs[0], "fallback", reason))
     # Top-N across events by the same score control uses, so the two arms
     # differ only in admission, never in score order.
-    treatment.sort(key=lambda item: -float(item[0].get("return_pct_day") or 0.0))
+    treatment.sort(key=lambda item: -rank_score(item[0]))
     treatment = treatment[:top]
 
     def arm_rows(picks: list[dict], arm: str) -> list[dict]:
@@ -2297,15 +2230,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         "needs. The universe file records whether a scan was "
                         "truncated either way.")
     p.add_argument("--legacy-rewards", action="store_true",
-                   help="run the retired two-path scan once for comparison: "
-                        "/sampling-markets reward candidates, scored against "
-                        "their venue emission with income > $0/day, "
-                        "alongside the unified universe. The reward path pays "
-                        "nothing on the markets that actually trade (they "
-                        "publish clobRewards: 0) and is deleted from the "
-                        "unified scan; this flag exists only to measure that "
-                        "claim against the live funnel before the code comes "
-                        "out.")
+                   help="retired: the legacy rewards path was deleted; "
+                        "the unified spread universe is the only scan")
     p.add_argument("--min-trades", type=int, default=None, metavar="N",
                    help="minimum trades in 30m required by the velocity gate (default: unconstrained unless set)")
     p.add_argument("--max-last-trade-sec", type=float, default=None, metavar="SEC",
@@ -3130,8 +3056,6 @@ def main() -> None:
                 except OSError:
                     pass
 
-    ti = sum(r["est_income"] for r in picked)
-    tc = sum(r["est_capital"] for r in picked)
     # Rejections grouped by cause. A run that returns nothing must say whether
     # the venue had no tradeable market today or the filters are set wrong --
     # a bare count cannot, and a silent empty universe is how the fleet ended
@@ -3165,8 +3089,7 @@ def main() -> None:
              f"{' (TRIAL)' if spread_trial_active else ''}, "
              f"resolves within {MAX_DAYS_TO_RESOLVE:.0f}d, "
              f"movement >= ${movement_bar:,.0f}/"
-             f"{int(round(MOVEMENT_WINDOW_SEC / 60.0))}m, "
-             f"income > $0/day\n")
+             f"{int(round(MOVEMENT_WINDOW_SEC / 60.0))}m\n")
     print(gates)
     if trial_active:
         print(f"DEPTH-GATE TRIAL: gating on ${trial_bar:,.0f} instead of "
@@ -3210,18 +3133,22 @@ def main() -> None:
         if n_vols:
             print(f"volume-rejects logged: {n_vols} measured "
                   "(volume near-miss tracker)")
-    n_spread = sum(1 for r in picked if r["source"] == "spread")
-    print(f"picked {n_spread} spread / {len(picked) - n_spread} reward\n")
-    print(f"{'market':<40}{'src':>7}{'$/day':>7}{'capital':>9}{'ret%/d':>8}")
+    print(f"picked {len(picked)} spread markets\n")
+    print(f"{'market':<46}{'move_30m':>12}{'vol_24h':>12}{'depth':>10}")
     for r in picked:
         # Windows consoles default to a legacy codepage; market titles carry
         # curly quotes and accents that crash a plain print AFTER the file is
         # already written, which looks like a failed run when it succeeded.
-        title = r["title"][:40].encode("ascii", "replace").decode("ascii")
-        print(f"{title:<40}{r['source'][:6]:>7}{r['est_income']:>7.2f}"
-              f"{r['est_capital']:>9.0f}{r['return_pct_day']:>8.2f}")
-    if tc:
-        print(f"\nTOTAL capital ${tc:,.0f}  income ${ti:,.2f}/day  = {100*ti/tc:.2f}%/day")
+        title = r.get("title", "")[:44].encode("ascii", "replace").decode("ascii")
+        vol = r.get("volume_24h")
+        vol_str = f"${vol:,.0f}" if vol else "-"
+        mv = r.get("movement_usd")
+        mv_str = f"${mv:,.0f}" if mv else "-"
+        yd = r.get("yes_depth_usd") or 0.0
+        nd = r.get("no_depth_usd") or 0.0
+        dp = min(yd, nd) if (yd and nd) else max(yd, nd)
+        dp_str = f"${dp:,.0f}" if dp else "-"
+        print(f"{title:<46}{mv_str:>12}{vol_str:>12}{dp_str:>10}")
 
 
 if __name__ == "__main__":
