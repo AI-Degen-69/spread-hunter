@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import types
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -720,3 +721,103 @@ def test_emit_failure_never_kills_the_stream_thread(stub_socket):
         assert stream._thread.is_alive() and stream._heartbeat.is_alive()
     finally:
         stream.stop()
+
+
+# ── T4 — seam adapter, hard-stop guard, operator probe ─────────────────────
+
+
+def test_fetch_books_matches_the_venue_seam_signature():
+    """`VenueSeam.fetch_books(clob_host, token_id)` — same two arguments."""
+    import inspect
+
+    params = list(inspect.signature(MarketStream.fetch_books).parameters)
+    assert params == ["self", "clob_host", "token_id"]
+
+    stream = MarketStream()
+    stream._cache.apply_frame(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)]))
+    # The host is ignored: the book is local, and that is the whole point.
+    assert stream.fetch_books("http://anything", "tok-u")["best_bid"] == 0.46
+    with pytest.raises(BookNotReady):
+        stream.fetch_books("http://anything", "tok-nope")
+
+
+def test_a_seam_built_on_the_stream_never_calls_full_book(monkeypatch):
+    """A quoting pass over the stream reaches no HTTP book endpoint."""
+    from core_brain import quotes
+
+    stream = MarketStream()
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream._cache.apply_frame(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)]))
+    stream._cache.apply_frame(_book_frame("tok-d", [_lvl(0.50)], [_lvl(0.54)]))
+
+    def no_http(*a, **kw):
+        raise AssertionError("a book read reached HTTP")
+
+    monkeypatch.setattr(markets._SESSION, "get", no_http)
+    market = SimpleNamespace(condition_id="0xc1", up_token="tok-u",
+                             down_token="tok-d", t_remaining=lambda: 0.0)
+    seen = {}
+
+    def decide(cfg, up_book, down_book, inv, *rest, **kw):
+        seen["up"], seen["down"] = up_book, down_book
+        return [{"side": "UP"}], "quoted"
+
+    def run():
+        return quotes.evaluate_market_quote(
+            "0xc1", None, "http://clob",
+            fetch_market=lambda cid: market,
+            fetch_books=stream.fetch_books,
+            inventory_for=lambda m: None,
+            decide=decide,
+        )
+
+    result = run()
+    assert result.intents == [{"side": "UP"}]
+    assert seen["up"]["token_id"] == "tok-u"
+    assert seen["up"]["best_bid"] == 0.46 and seen["down"]["best_ask"] == 0.54
+
+    # A dead feed holds the orders: the seam fails closed, never stale.
+    stream._cache.clear_all()
+    with pytest.raises(quotes.MarketQuoteError):
+        run()
+
+
+def test_single_buy_saver_never_reaches_the_stream():
+    """The locked hard-stop invariant: exits keep their own fresh venue read."""
+    root = Path(__file__).resolve().parent.parent / "core_brain"
+    for name in ("single_buy_saver.py", "shadow_run.py", "shadow_exec.py"):
+        assert "market_stream" not in (root / name).read_text(encoding="utf-8")
+
+
+def test_probe_parses_the_markets_file_and_bounds_its_run(stub_socket, tmp_path):
+    rows = [{"cid": "0xc1", "slug": "brazil-election"},
+            {"cid": "0xc2", "slug": "peru-election"},
+            {"slug": "a-row-with-no-condition-id"},
+            {"cid": "0xc3", "slug": "chile-election"}]
+    path = tmp_path / "markets.json"
+    path.write_text(json.dumps(rows), encoding="utf-8")
+    assert [r["cid"] for r in ms._probe_rows(str(path), 2)] == ["0xc1", "0xc2"]
+    assert [r["cid"] for r in ms._probe_rows(str(path), 0)] == [
+        "0xc1", "0xc2", "0xc3"]
+
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"markets": []}', encoding="utf-8")
+    with pytest.raises(ValueError):
+        ms._probe_rows(str(bad), 2)
+
+    rec = _Recorder()
+    assert ms.main(["--tokens", "tok-u,tok-d"], emit_fn=rec) == 2  # --listen is required
+
+    started = time.monotonic()
+    assert ms.main(["--listen", "--tokens", "tok-u,tok-d", "--minutes", "0.01",
+                    "--refresh-sec", "0.05"], emit_fn=rec) == 0
+    assert time.monotonic() - started < 5.0
+    assert _frames(stub_socket.sent)[0]["assets_ids"] == ["tok-d", "tok-u"]
+    assert len(stub_socket.apps) == 1
+    assert not [t for t in threading.enumerate()
+                if t.name.startswith("market-stream")]
+
+    # The probe's default emitter is the real cycle-stream feed.
+    src = (Path(__file__).resolve().parent.parent / "core_brain"
+           / "market_stream.py").read_text(encoding="utf-8")
+    assert "import emit as emit_cycle_event" in src

@@ -281,7 +281,7 @@ read_us_p50). `Depends on:` T2.
 `…::test_tick_summaries_are_rate_limited`,
 `…::test_emit_failure_never_kills_the_stream_thread`.
 
-### T4 — Seam adapter, guard test, and the operator probe (M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`, `tests/test_quotes.py`)
+### T4 — [x] Seam adapter, guard test, and the operator probe (M, [Backend/Logic], files: `core_brain/market_stream.py`, `tests/test_market_stream.py`, `tests/test_quotes.py`)
 **Build:** `fetch_books(self, clob_host, token_id)` returns the cached book (host
 ignored) or raises `BookNotReady`. A `__main__` block implements `--listen`
 (resolve up to `--max-markets` rows of `--markets` through
@@ -328,25 +328,43 @@ seven sentences (asserted from `sentences` in the emitted JSON) plus
 2. `python -m core_brain.market_stream --listen --minutes 3` in another.
    Expect a printed line per event and, every ~10 s, a tick summary line
    carrying the number of books held, frames applied, and the read latency
-   (sub-millisecond).
+   (sub-millisecond). Rows of `runtime/markets.json` whose venue market has
+   already closed print `[skipped]` once, at start; the rest is quiet.
 3. Open `http://127.0.0.1:8799` → **Trades & Positions** → **LIVE EXECUTION &
    CYCLE EVENT STREAM**. Expect, in plain words: the stream connecting to the
    venue socket, one subscribed line per market with its token ids, a snapshot
-   line per market with its slug, and a tick summary every ~10 s. With the
-   default `--markets runtime/markets.json` the probe subscribes the first two
-   graduated markets.
-4. While it runs, edit `runtime/markets.json`: copy another row's `cid` and
-   `slug` over one of the two rows the probe picked (the file carries no token
-   ids — the probe resolves them). Within `--refresh-sec` the card must show the
-   old pair unsubscribing and the new pair subscribing, with **no** connected
-   line in between — the socket stayed up and every other book kept ticking.
+   line per market with its slug, and a tick summary every ~10 s.
+4. While it runs, edit `runtime/markets.json`: replace one picked row's `cid`
+   and `slug` with another row the probe subscribed (copy from the `[listening]`
+   output above). Within `--refresh-sec` the card must show the old pair
+   unsubscribing and the new pair subscribing, with **no** connected line in
+   between — the socket stayed up and every other book kept ticking.
 5. Stop the probe (Ctrl-C): expect the terminal to exit cleanly and the card to
    stop.
 
+## Build-time evidence (Station III, 2026-10-18, live socket)
+
+The `[UNVERIFIED]` item above is **resolved**, on the wire:
+
+- initial `{"assets_ids": [...], "type": "market"}` → both tokens' `book`
+  snapshots arrived (`frames=3`, and a full ladder: 19 bids / 68 asks);
+- `{"assets_ids": [...], "operation": "subscribe"}` **on the open socket** →
+  the new market's two snapshots arrived, `market_stream_connected` fired
+  exactly once — the venue honors `operation` frames, no reconnect needed;
+- `{"assets_ids": [...], "operation": "unsubscribe"}` on the open socket → the
+  removed market's books dropped, the other kept ticking (10 frames in the next
+  8 s), `ready=2`;
+- `read_us_p50` 5.9–10.4 µs over that run (budget 1 ms), `malformed=0`,
+  `level_gap=0` — the observational counter stayed at zero in real traffic,
+  which is the evidence the follow-up would need to delete it.
+- 9 of the 11 rows in today's `runtime/markets.json` are closed markets; the
+  probe prints `[skipped]` for those and follows every row by default
+  (`--max-markets 0`).
+
 ## Risks and honest limits
 
-- The `operation`-frame path is documented but not yet observed by this repo on
-  the wire (see `[UNVERIFIED]`); if the venue ignores those frames, the new
+- The `operation`-frame path is documented **and now observed live** (see
+  Build-time evidence). If a future venue change ignores those frames, the new
   market holds (fails closed) and the probe prints snapshot timeouts — visible,
   not silent, and `retain_markets`/`ensure_market` can then move to the
   close-and-redial path `live_marks.py` already proves.

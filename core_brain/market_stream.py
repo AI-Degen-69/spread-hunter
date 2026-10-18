@@ -21,9 +21,11 @@ because a dead feed must not keep serving prices.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import statistics
+import sys
 import threading
 import time
 
@@ -554,8 +556,137 @@ class MarketStream:
     def _send_frame(self, app, payload: dict) -> bool:
         return self._send_text(app, json.dumps(payload))
 
+    def fetch_books(self, clob_host: str, token_id: str) -> dict:
+        """The `VenueSeam.fetch_books(clob_host, token_id)` adapter.
+
+        Same two arguments as the HTTP read it replaces, so a seam can swap one
+        for the other. The host is ignored — the book is already here — and a
+        token with no live book raises `BookNotReady` instead of fetching one.
+        """
+        return self._cache.book(token_id)
+
     def _close(self, app) -> None:
         try:
             app.close()
         except Exception as e:
             log.debug("market stream close failed: %s", e)
+
+
+# ── the operator's hands-on probe ──────────────────────────────────────────
+
+
+def _probe_rows(path: str, limit: int) -> list[dict]:
+    """`cid`/`slug` for the usable rows of a markets file, capped at `limit`.
+
+    A row without a condition id is not a market and is skipped. `limit <= 0`
+    means every usable row: the file IS the universe, so following all of it is
+    the useful default. The file carries no outcome tokens — the probe resolves
+    those from the venue, the same call the quoting loop makes.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        rows = json.load(fh)
+    if not isinstance(rows, list):
+        raise ValueError(f"{path} is not a market list")
+    out: list[dict] = []
+    for row in rows:
+        if 0 < limit <= len(out):
+            break
+        if isinstance(row, dict) and row.get("cid"):
+            out.append({"cid": str(row["cid"]),
+                        "slug": str(row.get("slug") or row["cid"])})
+    return out
+
+
+def _run_seconds(minutes) -> float:
+    """How long `--listen` runs; an unusable bound means no run at all."""
+    try:
+        return max(0.0, float(minutes)) * 60.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _probe_emit(cycle, phase, action, **kw) -> None:
+    """One printed line per event plus the dashboard's cycle-event feed."""
+    extra = kw.get("extra") or {}
+    detail = " ".join(f"{key}={extra[key]}" for key in sorted(extra))
+    print(f"[{action}] {detail}".rstrip(), flush=True)
+    try:
+        from core_brain.cycle_stream import emit as emit_cycle_event
+        emit_cycle_event(cycle, phase, action, **kw)
+    except Exception as e:
+        print(f"WARNING: cycle event dropped: {e}", file=sys.stderr)
+
+
+def _probe_add(stream, row) -> None:
+    market = markets.fetch_pinned_market(row["cid"])
+    if market is None:
+        print(f"[skipped] {row['slug']}: no venue market {row['cid']}", flush=True)
+        return
+    stream.ensure_market(row["cid"], row["slug"], market.up_token,
+                         market.down_token)
+
+
+def main(argv=None, emit_fn=None) -> int:
+    """`python -m core_brain.market_stream --listen` — watch the feed by hand."""
+    parser = argparse.ArgumentParser(prog="python -m core_brain.market_stream")
+    parser.add_argument("--listen", action="store_true",
+                        help="run the live socket probe for --minutes")
+    parser.add_argument("--markets", default="runtime/markets.json",
+                        help="market file to follow (its rows carry no tokens)")
+    parser.add_argument("--max-markets", type=int, default=0,
+                        help="cap the file rows used (0 = follow every row)")
+    parser.add_argument("--tokens", default="",
+                        help="comma-separated outcome tokens instead of a file")
+    parser.add_argument("--minutes", type=float, default=3.0)
+    parser.add_argument("--refresh-sec", type=float, default=10.0)
+    args = parser.parse_args(argv)
+
+    if not args.listen:
+        parser.print_usage()
+        print("--listen is required: without it there is nothing to watch.")
+        return 2
+
+    emit = emit_fn if emit_fn is not None else _probe_emit
+    stream = MarketStream(emit_fn=emit)
+    tried: set[str] = set()
+    raw_tokens = [t.strip() for t in args.tokens.split(",") if t.strip()]
+    if raw_tokens:
+        for token in raw_tokens:
+            stream.ensure_market(f"manual:{token}", "manual", token, token)
+    else:
+        for row in _probe_rows(args.markets, args.max_markets):
+            tried.add(row["cid"])
+            _probe_add(stream, row)
+
+    seconds = _run_seconds(args.minutes)
+    stream.start()
+    print(f"[listening] {MARKET_WS_URL} for {seconds:.0f}s", flush=True)
+    deadline = time.monotonic() + seconds
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(args.refresh_sec, remaining))
+            if raw_tokens:
+                continue
+            rows = _probe_rows(args.markets, args.max_markets)
+            keep = [row["cid"] for row in rows]
+            stream.retain_markets(keep)
+            # Resolve a row once. A market that leaves the file and comes back
+            # is looked up again; one the venue does not have is not re-asked
+            # on every refresh, so the run stays quiet.
+            tried.intersection_update(keep)
+            for row in rows:
+                if row["cid"] not in tried:
+                    tried.add(row["cid"])
+                    _probe_add(stream, row)
+    except KeyboardInterrupt:
+        print("[stopped] interrupted", flush=True)
+    finally:
+        stream.stop()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
