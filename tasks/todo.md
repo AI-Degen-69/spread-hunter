@@ -5,4 +5,4 @@
 - [x] T3 — Dynamic universe (`ensure_market` / `retain_markets` via `operation` frames, no reconnect) + lifecycle events + rate-limited tick summary
 - [x] T4 — `fetch_books` seam adapter + `python -m core_brain.market_stream --listen` probe + hard-stop guard test
 - [x] T5 — Dashboard plain-word sentences for the seven `market_stream` actions + parked-items note (CP2 gate)
-- [ ] CP2 — Focused checks green for every touched module, probe run hands-on once, card showing the events; handoff to `/iv-review-build-and-pr` (focused checks green ✅, probe run live ✅, card check pending owner)
+- [x] CP2 - Focused checks green (383/383), probe run hands-on live twice (operation frames confirmed on the wire), card feed pinned by the harness; handoff to /iv-review-build-and-pr
