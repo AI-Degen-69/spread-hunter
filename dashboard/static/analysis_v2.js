@@ -407,7 +407,23 @@ function paintSufficiency(root, kpi) {
   for (let i = 0; i < rows.length; i++) {
     const key = rows[i].getAttribute('data-suff');
     const st = statuses[key];
-    if (!st) continue;
+    if (!st) {
+      /* No status for this row: blank it. The markup ships the design's sample
+       * numbers both as cell text and as data-r95/rem95/p95 attributes, so both
+       * have to go or a repaint puts an unmeasured number back on screen. */
+      const req0 = rows[i].querySelector('.req');
+      const rem0 = rows[i].querySelector('.rem');
+      const fill0 = rows[i].querySelector('.pfill');
+      const pct0 = rows[i].querySelector('.pct');
+      if (req0) req0.textContent = '—';
+      if (rem0) rem0.textContent = '—';
+      if (fill0) fill0.style.width = '0%';
+      if (pct0) pct0.textContent = '—';
+      Object.keys(rows[i].dataset).forEach(function (k) {
+        if (/^(r|rem|p)(95|98|99)$/.test(k)) delete rows[i].dataset[k];
+      });
+      continue;
+    }
     (st.levels || []).forEach((lv) => {
       const c = String(lv.confidence_pct);
       rows[i].dataset['r' + c] = String(lv.required_n);
@@ -619,8 +635,10 @@ function applyAll(root, kpi) {
 }
 
 /* Confidence toggle: one wiring pass over the pills under `root`. Idempotent
- * (re-runs on every poll repaint would stack a listener per paint), so the
- * shell calls it once after mount and never again. */
+ * (re-runs on every poll repaint would stack a listener per paint), so
+ * paintSufficiency's trailing `.click()` swaps columns only after the wiring
+ * exists. renderAnalysisV2 calls it on every paint; the data-av2wired guard
+ * keeps that to one wiring pass. */
 function initConfidenceToggle(root) {
   const scope = root || (typeof document !== 'undefined' ? document : null);
   if (!scope || !scope.querySelectorAll) return;
@@ -635,9 +653,14 @@ function initConfidenceToggle(root) {
       p.classList.add('active');
       const c = p.dataset.conf;
       rows.forEach(function (r) {
-        r.querySelector('.req').textContent = r.dataset['r' + c];
-        r.querySelector('.rem').textContent = r.dataset['rem' + c];
+        /* A row whose level the payload never carried has no r/rem/p triple;
+         * skip it so paintSufficiency's blanked dashes survive the repaint. */
+        const req = r.dataset['r' + c];
+        const rem = r.dataset['rem' + c];
         const pct = r.dataset['p' + c];
+        if (req === undefined || rem === undefined || pct === undefined) return;
+        r.querySelector('.req').textContent = req;
+        r.querySelector('.rem').textContent = rem;
         r.querySelector('.pfill').style.width = pct + '%';
         r.querySelector('.pct').textContent = pct + '%';
       });
@@ -645,15 +668,16 @@ function initConfidenceToggle(root) {
   });
 }
 
-/* The single shell entry point: paint the cached poll payload into #analysis-v2.
- * Guards on the section so a missing node costs one skipped paint, not the
- * whole batch. `init` runs the one-time toggle wiring; plain `render` is the
- * per-poll repaint. */
+/* The single shell entry point: wire the confidence toggle once (the guard
+ * inside initConfidenceToggle makes the repeat calls free) and paint the
+ * cached poll payload into #analysis-v2. Guards on the section so a missing
+ * node costs one skipped paint, not the whole batch. */
 function renderAnalysisV2(root, kpi) {
   const scope = root
     || (typeof document !== 'undefined' && document.getElementById
       ? document.getElementById('analysis-v2') : null);
   if (!scope || !kpi) return;
+  initConfidenceToggle(scope);
   applyAll(scope, kpi);
 }
 

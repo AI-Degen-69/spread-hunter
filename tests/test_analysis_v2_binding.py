@@ -60,9 +60,11 @@ def test_page_and_assets_are_served_from_static():
     assert PAGE_CSS.is_file()
     assert PAGE_JS.is_file()
     # The stylesheet link must be absolute: a relative "styles.css" would
-    # resolve against whatever path serves the document.
-    assert 'href="/static/analysis_v2.css"' in INDEX.read_text(encoding="utf-8")
-    assert '<script src="/static/analysis_v2.js">' in INDEX.read_text(encoding="utf-8")
+    # resolve against whatever path serves the document. The ?v= bump keeps a
+    # browser that cached the retired /analysis-v2 page (which served these
+    # two unversioned, with unscoped :root/* rules) from reusing that copy.
+    assert 'href="/static/analysis_v2.css?v=1"' in INDEX.read_text(encoding="utf-8")
+    assert '<script src="/static/analysis_v2.js?v=1">' in INDEX.read_text(encoding="utf-8")
 
 
 def test_standalone_page_removed():
@@ -153,6 +155,27 @@ def test_units_and_signs_match_the_payload(tmp_path, live_payload):
     assert p["trade_analytics.mean_return_pct"].startswith("-")      # negative pct
     assert p["trade_analytics.profit_factor"] == "0.39x"             # positive x, no '+'
     assert p["trade_analytics.max_drawdown_pct"] == "6.33%"
+
+
+@requires_node
+def test_unmeasured_sufficiency_rows_blank_rather_than_keep_design_numbers(tmp_path):
+    """No status for a row must read '—', never the design's sample 82 / 15%.
+
+    An empty registry still renders the four rows; if the payload carries no
+    level for one, the markup's shipped numbers would otherwise survive as a
+    measurement nobody made.
+    """
+    out = _run({}, "empty", tmp_path)
+    assert not out["errors"], out["errors"]
+    rows = out["sufficiency"]
+    assert {r["key"] for r in rows} == {
+        "pnl_expectancy", "stop_loss_rate", "merge_rate", "fill_rate",
+    }
+    for r in rows:
+        assert r["req"] == "—", r
+        assert r["rem"] == "—", r
+        assert r["pct"] == "—", r
+        assert r["pfill"] == "0%", r
 
 
 @requires_node

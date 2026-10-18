@@ -194,8 +194,9 @@ global.document = {
   documentElement: { appendChild: noop },
 };
 
-/* The shell wires the confidence toggle once after mount; the harness does
- * the same through the module's own init, then fires the pills like clicks. */
+/* renderAnalysisV2 owns the one-time confidence-toggle wiring, exactly as the
+ * dashboard shell uses it; the harness never wires the pills itself, so a
+ * renderer that forgets to init fails the toggle test instead of passing. */
 const rootStub = {
   querySelector: (sel) => {
     const m = /^#(ch[1-5]) (.+)$/.exec(sel);
@@ -235,7 +236,6 @@ const out = {
 
 try {
   const kpi = action === 'empty' ? {} : (input.kpi || {});
-  app.initConfidenceToggle(rootStub);
   app.renderAnalysisV2(rootStub, kpi);
   bindNodes.forEach((e) => {
     out.painted[e.attrs['data-bind']] = e.innerHTML || e.textContent;
