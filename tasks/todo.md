@@ -1,6 +1,6 @@
 # Todo — Issue #652
 
-Branch: `i652/rename-picker-filter-bars` | Plan: [tasks/plan.md](tasks/plan.md)
+Branch: `i652/rename-picker-filter-bars` | Plan: [plan.md](plan.md)
 
 ## T1 — Guard repointed and written RED first  `[Backend/Logic]` · S
 - [x] Delete `PICKER_ONLY`; add `CORE_OWNED_PICKER_BARS` (eight canonical names)

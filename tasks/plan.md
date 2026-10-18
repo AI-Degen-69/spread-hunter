@@ -327,14 +327,18 @@ A3/A4 and for leaving the pin file alone.
 # 1. Fresh shell: drop any inherited overrides
 Get-ChildItem Env:HUNTER_* | ForEach-Object { Remove-Item "Env:$($_.Name)" }
 
-# 2. Dashboard only
+# 2. Push the movement bar to a value the fallback can never produce
+$env:HUNTER_MIN_MOVEMENT_USD = "777"
+
+# 3. Dashboard only
 python -m dashboard.server --host 127.0.0.1 --port 8799
 ```
 
-3. Open `http://127.0.0.1:8799` and find the market-picker parameter cards.
-4. Expect **Movement Lookback Window 1800s (30m)**, **Movement bar $200.00**, and the queue card
-   **15.0m** with **"Telemetry Only"**.
-5. Failure signal: a card shows the hard-coded fallback literal from `dashboard/server.py:4312-4508`
+1. Open `http://127.0.0.1:8799` and find the market-picker parameter cards.
+2. Expect **Movement Lookback Window 1800s (30m)**, **Movement bar $777.00** (the override above — a
+   `$200.00` card here means the alias stopped resolving), and the queue card **15.0m** with
+   **"Telemetry Only"**.
+3. Failure signal: a card shows the hard-coded fallback literal from `dashboard/server.py:4312-4508`
    instead of a configured value — that means an alias stopped resolving.
 
 Do **not** click START, do not launch the Trader, do not set `BRIDGE_CONTROL=1`. This is a read-only
