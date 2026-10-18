@@ -56,8 +56,7 @@ class BookNotReady(RuntimeError):
 class MarketBookCache:
     """Thread-safe books, keyed by token id, in `parse_book` shape."""
 
-    def __init__(self, time_fn=time.time):
-        self._time = time_fn
+    def __init__(self):
         self._lock = threading.RLock()
         self._books: dict[str, dict] = {}
         # Counters read as deltas by the tick summary. One lock, one writer
@@ -202,8 +201,7 @@ class MarketStream:
 
     def __init__(self, *, cache=None, emit_fn=None, time_fn=time.time,
                  ping_sec=PING_INTERVAL_SEC, tick_sec=TICK_SUMMARY_SEC):
-        self._cache = cache if cache is not None else MarketBookCache(
-            time_fn=time_fn)
+        self._cache = cache if cache is not None else MarketBookCache()
         self._emit_fn = emit_fn
         self._time = time_fn
         self._ping_sec = ping_sec
