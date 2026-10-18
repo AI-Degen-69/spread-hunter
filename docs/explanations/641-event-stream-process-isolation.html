@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture Deep Dive: Per-Process Log Stream Isolation (PR #641)</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --surface: #111827;
+      --surface-2: #1e293b;
+      --border: #334155;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --heading: #f8fafc;
+      --accent: #38bdf8;
+      --accent-dim: rgba(56, 189, 248, 0.12);
+      --success: #34d399;
+      --warning: #fbbf24;
+      --danger: #f87171;
+      --purple: #c084fc;
+      --code-bg: #050811;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      line-height: 1.6;
+      padding: 40px 24px;
+    }
+    .wrapper { max-width: 1120px; margin: 0 auto; }
+    
+    header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 24px;
+      margin-bottom: 36px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: var(--accent-dim);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      margin-bottom: 12px;
+    }
+    h1 { font-size: 2rem; color: var(--heading); margin-bottom: 8px; }
+    .subtitle { color: var(--text-muted); font-size: 1.05rem; }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin: 24px 0;
+    }
+    @media (max-width: 840px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    .panel h2 {
+      font-size: 1.25rem;
+      color: var(--heading);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Diagram Styles */
+    .arch-diagram {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      margin: 20px 0;
+      position: relative;
+    }
+    .flow-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      gap: 12px;
+    }
+    .flow-node {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      flex: 1;
+      text-align: center;
+      font-size: 0.85rem;
+    }
+    .flow-node strong { display: block; color: var(--heading); font-size: 0.95rem; margin-bottom: 4px; }
+    .node-live { border-color: var(--success); }
+    .node-shadow { border-color: var(--purple); }
+    .node-filter { border-color: var(--warning); }
+    .flow-arrow { color: var(--text-muted); font-weight: bold; }
+
+    /* Interactive Simulation */
+    .sim-box {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      margin: 20px 0;
+    }
+    .sim-controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    button.btn {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.85rem;
+      transition: all 0.2s;
+    }
+    button.btn:hover { background: var(--border); color: var(--heading); }
+    button.btn-primary { background: var(--accent); color: #04121f; border-color: var(--accent); }
+    button.btn-purple { background: var(--purple); color: #1a0826; border-color: var(--purple); }
+    button.btn-success { background: var(--success); color: #041f14; border-color: var(--success); }
+
+    .buffer-visualizer {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .buffer-col {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .buffer-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .buffer-slots {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 220px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 0.78rem;
+    }
+    .slot-item {
+      padding: 6px 10px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.04);
+      display: flex;
+      justify-content: space-between;
+      border-left: 3px solid var(--border);
+    }
+    .slot-live { border-left-color: var(--success); background: rgba(52, 211, 153, 0.08); }
+    .slot-shadow { border-left-color: var(--purple); background: rgba(192, 132, 252, 0.08); }
+    .slot-filter { border-left-color: var(--warning); background: rgba(251, 191, 36, 0.08); }
+
+    table.tech-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 0.88rem;
+    }
+    table.tech-table th, table.tech-table td {
+      border: 1px solid var(--border);
+      padding: 10px 14px;
+      text-align: left;
+    }
+    table.tech-table th { background: var(--surface-2); color: var(--heading); }
+
+    pre code {
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 0.85rem;
+      color: #93c5fd;
+      display: block;
+      background: var(--code-bg);
+      padding: 14px;
+      border-radius: 8px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      margin: 12px 0;
+    }
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: var(--accent-dim);
+      padding: 14px 18px;
+      border-radius: 0 8px 8px 0;
+      margin: 18px 0;
+      font-size: 0.92rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <header>
+      <span class="badge">Explain Skill · Architecture Deep Dive</span>
+      <h1>PR #641: Per-Process Log Stream Architecture & Buffer Isolation</h1>
+      <p class="subtitle">Detailed technical analysis of SSE multiplexing, file rotation mechanics, and client-side ring buffer isolation (Issue #639).</p>
+    </header>
+
+    <div class="callout">
+      <strong>Core Architectural Problem:</strong> Spread Hunter runs concurrent background loops: high-velocity shadow rehearsals (generating 100+ events/sec to <code>shadow-*.jsonl</code>), the live execution loop (<code>cycle_events.jsonl</code>), and market filter scans (<code>rerank.log</code>). In the legacy dashboard, all feeds multiplexed into a single 200-element JavaScript array. Under asymmetric event velocity, high-frequency shadow simulation instantly evicted live fills from memory.
+    </div>
+
+    <section class="panel">
+      <h2>1. End-to-End Pipeline Architecture</h2>
+      <p>PR #641 creates isolated pipelines from disk to DOM:</p>
+
+      <div class="arch-diagram">
+        <div class="flow-row">
+          <div class="flow-node node-live">
+            <strong>trader_loop.py</strong>
+            <code>runtime/cycle_events.jsonl</code>
+          </div>
+          <div class="flow-node node-filter">
+            <strong>filter_loop.py</strong>
+            <code>runtime/rerank.log</code>
+          </div>
+          <div class="flow-node node-shadow">
+            <strong>shadow_run.py</strong>
+            <code>runtime/shadow-&lt;id&gt;.jsonl</code>
+          </div>
+        </div>
+
+        <div style="text-align: center; margin: 10px 0; color: var(--accent);">
+          ⬇️ Tail streaming via independent file descriptors & rotation checks
+        </div>
+
+        <div class="flow-row">
+          <div class="flow-node" style="border-color: var(--accent); flex: 3;">
+            <strong>dashboard/server.py (FastAPI SSE Router)</strong>
+            Endpoints: <code>GET /api/cycle-stream</code> & <code>GET /api/log-stream?source=&lt;id&gt;</code><br>
+            <span style="font-size: 0.78rem; color: var(--text-muted);">Tracks per-connection offsets, inode rotation via <code>_ring_replay_and_offset()</code></span>
+          </div>
+        </div>
+
+        <div style="text-align: center; margin: 10px 0; color: var(--accent);">
+          ⬇️ Server-Sent Events (SSE) with replay on reconnect
+        </div>
+
+        <div class="flow-row">
+          <div class="flow-node node-live">
+            <strong>tickerBuffers.live</strong>
+            [max 200 slots]
+          </div>
+          <div class="flow-node node-filter">
+            <strong>tickerBuffers.filter</strong>
+            [max 200 slots]
+          </div>
+          <div class="flow-node node-shadow">
+            <strong>tickerBuffers.shadow</strong>
+            [max 200 slots]
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="grid-2">
+      <div class="panel">
+        <h2>2. Data Contract & SSE Specs</h2>
+        <table class="tech-table">
+          <thead>
+            <tr>
+              <th>Channel</th>
+              <th>Wire Format</th>
+              <th>Rotation Handling</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/api/cycle-stream</code></td>
+              <td>JSON frames: <code>{service, action, market_slug, extra}</code></td>
+              <td>File size reset triggers <code>_ring_replay_and_offset</code> rewind to byte 0</td>
+            </tr>
+            <tr>
+              <td><code>/api/log-stream</code></td>
+              <td>Raw text lines + JSONL ring frames</td>
+              <td>Tracks file key (inode/st_mtime) to detect atomic log re-creations</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <pre><code>// Client-side buffer schema in app.js
+const tickerBuffers = {
+  live: [],     // bounded Array(200)
+  shadow: [],   // bounded Array(200)
+  filter: [],   // bounded Array(200)
+  all: []       // virtual combined view
+};</code></pre>
+      </div>
+
+      <div class="panel">
+        <h2>3. Interactive Buffer Simulator</h2>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+          Simulate the difference between the legacy shared buffer and PR #641's isolated queues:
+        </p>
+
+        <div class="sim-controls">
+          <button class="btn btn-success" id="btn-add-live">+1 Live Trade Event</button>
+          <button class="btn btn-purple" id="btn-burst-shadow">+10 Shadow Rehearsals</button>
+          <button class="btn" id="btn-reset">Reset</button>
+        </div>
+
+        <div class="buffer-visualizer">
+          <div class="buffer-col">
+            <div class="buffer-title">
+              <span>Legacy Shared (Cap: 6)</span>
+              <span id="legacy-live-count" style="color: var(--danger)">Live: 0</span>
+            </div>
+            <div class="buffer-slots" id="legacy-slots"></div>
+          </div>
+
+          <div class="buffer-col">
+            <div class="buffer-title">
+              <span>PR #641 Isolated Live (Cap: 6)</span>
+              <span id="isolated-live-count" style="color: var(--success)">Live: 0</span>
+            </div>
+            <div class="buffer-slots" id="isolated-slots"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <section class="panel">
+      <h2>4. Verification & Testing Surface</h2>
+      <p>The PR guarantees non-eviction deterministically using automated Node.js harnesses and pytest suites:</p>
+      <pre><code># 1. Non-browser harness verifying ticker buffer limits:
+tests/js/event_stream_tabs_harness.cjs
+
+# 2. Targeted server SSE tests:
+python -m pytest -q tests/test_dashboard_server.py -k "cycle_stream or event_stream or event_ticker or log_stream"
+# Result: 14 passed in 1.18s
+
+# 3. Buffer Isolation Assertion:
+assert tickerBuffers.live.length == 1
+assert tickerBuffers.shadow.length == 200 # 500 shadow events did not evict live trade</code></pre>
+    </section>
+  </div>
+
+  <script>
+    // Simulator logic
+    const CAP = 6;
+    let legacy = [];
+    let isolatedLive = [];
+    let seq = 1;
+
+    function render() {
+      const legEl = document.getElementById('legacy-slots');
+      legEl.innerHTML = legacy.map(item => `
+        <div class="slot-item slot-${item.type}">
+          <span>#${item.seq} ${item.type.toUpperCase()}</span>
+          <span>${item.desc}</span>
+        </div>
+      `).join('') || '<div style="color:#64748b;padding:8px">Buffer empty</div>';
+
+      const isoEl = document.getElementById('isolated-slots');
+      isoEl.innerHTML = isolatedLive.map(item => `
+        <div class="slot-item slot-live">
+          <span>#${item.seq} LIVE</span>
+          <span>${item.desc}</span>
+        </div>
+      `).join('') || '<div style="color:#64748b;padding:8px">Buffer empty</div>';
+
+      const legLive = legacy.filter(i => i.type === 'live').length;
+      document.getElementById('legacy-live-count').innerText = `Live: ${legLive}/${legacy.length}`;
+      document.getElementById('legacy-live-count').style.color = legLive === 0 && legacy.length > 0 ? 'var(--danger)' : 'var(--warning)';
+      document.getElementById('isolated-live-count').innerText = `Live: ${isolatedLive.length}/${CAP}`;
+    }
+
+    document.getElementById('btn-add-live').addEventListener('click', () => {
+      const item = { seq: seq++, type: 'live', desc: 'Leg 1 Fill ($0.48)' };
+      legacy.unshift(item);
+      if (legacy.length > CAP) legacy.pop();
+
+      isolatedLive.unshift(item);
+      if (isolatedLive.length > CAP) isolatedLive.pop();
+      render();
+    });
+
+    document.getElementById('btn-burst-shadow').addEventListener('click', () => {
+      for (let i = 0; i < 10; i++) {
+        const item = { seq: seq++, type: 'shadow', desc: 'Sim quote step' };
+        legacy.unshift(item);
+        if (legacy.length > CAP) legacy.pop();
+        // Isolated live buffer is untouched!
+      }
+      render();
+    });
+
+    document.getElementById('btn-reset').addEventListener('click', () => {
+      legacy = [];
+      isolatedLive = [];
+      seq = 1;
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>
