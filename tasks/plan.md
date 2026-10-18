@@ -185,7 +185,7 @@ Completion state (Station III marks these; never a task list from `tasks/todo.md
 
 - [x] T1 — shared rule + served Stitch Positions table
 - [x] T2 — pill on the classic `positionsRows` table
-- [ ] T3 — source checks, reduced-motion guard, focused run
+- [x] T3 — source checks, reduced-motion guard, focused run
 
 ### T1 — the shared rule + the served Stitch Positions table  [Design/UI]
 
