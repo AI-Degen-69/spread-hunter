@@ -8,13 +8,13 @@ Replaces #576-scoped file wholesale (Step 0A.0: stale issue scope).
 - One spread ceiling owned by the live safety gate `max_book_spread = 0.06`
   (`core_brain/config.py:176`, mirrored in `scoring/config.py:115`).
 - Market picking derives from it via a documented fraction
-  (`select_spread_frac`), yielding exactly `0.0205` at baseline. No second absolute.
+  (`select_spread_pct`, alias `select_spread_frac`), yielding exactly `0.0205` at baseline. No second absolute.
 - The wide-book trial keeps working from its single knob
   (`HUNTER_WIDE_BOOK_TRIAL`).
 - Boundary tests stay pinned; effective accept/refuse behavior is unchanged.
 
 ## Mathematical invariant (non-negotiable)
-- `round(0.06 * select_spread_frac, 6) == 0.0205` exactly under default config.
+- `round(0.06 * select_spread_pct, 6) == 0.0205` exactly under default config.
 - Canonical fraction: `41.0 / 120.0` (= 0.0205 / 0.06 in real arithmetic).
 - `tests/test_market_selection_bars.py:131-132` pass WITHOUT relaxing market quality.
 
@@ -34,8 +34,8 @@ Replaces #576-scoped file wholesale (Step 0A.0: stale issue scope).
   (scoring default 0.045). Two different concepts share the field name;
   renaming is out of scope (see 572-noticed-but-not-touching.md).
 - #571 (settings-file merge) MUST NOT be done here. #571 imports the unified
-  property/fraction terms verbatim: `max_book_spread` owns, `select_spread_frac`
-  is the picker share, `select_max_book_spread` is the derived bar.
+  property/fraction terms verbatim: `max_book_spread` owns, `select_spread_pct`
+  is the picker share (with `select_spread_frac` alias), `select_max_book_spread` is the derived bar.
 
 ## Forbidden
 - Changing live order placement logic or the pair-cost arithmetic

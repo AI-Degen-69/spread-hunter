@@ -114,7 +114,7 @@ class MakerConfig:
     # 6c leaves margin under that arithmetic.
     #
     # THIS IS THE ONE SPREAD CEILING (#572). The picking bar is a documented
-    # share of it (`select_spread_frac`, derived below) rather than a second
+    # share of it (`select_spread_pct`, derived below) rather than a second
     # absolute, and `scripts.filter_markets` loads this module -- so the bar
     # the ranker publishes and the bar the fleet quotes under are one decision.
     max_book_spread: float = 0.06
@@ -467,7 +467,7 @@ class MakerConfig:
     # and there is no second number to edit out of step. This is the module
     # `scripts.filter_markets` loads, so the bar the ranker publishes and the
     # bar the fleet quotes under are the same decision.
-    select_spread_frac: float = 41.0 / 120.0
+    select_spread_pct: float = 41.0 / 120.0
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
     select_max_days_to_resolve: float = 30.0
@@ -487,7 +487,7 @@ class MakerConfig:
         """
         if self.wide_book_trial is not None:
             return self.wide_book_trial
-        return round(self.max_book_spread * self.select_spread_frac, 6)
+        return round(self.max_book_spread * self.select_spread_pct, 6)
 
     # How long to average competitor depth before sizing a position. One
     # snapshot sized the whole fleet on 2026-07-29 and read a competing score
@@ -783,6 +783,11 @@ class MakerConfig:
     def quote_window_frac(self) -> float:
         """Backward compatibility alias for quote_window_pct (#632)."""
         return self.quote_window_pct
+
+    @property
+    def select_spread_frac(self) -> float:
+        """Backward compatibility alias for select_spread_pct (#632, #572)."""
+        return self.select_spread_pct
 
     def db_path(self) -> Path:
         return Path(os.environ.get("SPREAD_HUNTER_DB") or os.environ.get("HUNTER_DB", str(ROOT / "hunter.db")))

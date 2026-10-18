@@ -138,9 +138,10 @@ def test_the_picker_bar_is_a_share_of_the_live_gate():
     out of step with the gate it has to stay under."""
     for cfg in (ScoringConfig(), MakerConfig()):
         assert cfg.max_book_spread == 0.06
+        assert cfg.select_spread_pct == 41.0 / 120.0
         assert cfg.select_spread_frac == 41.0 / 120.0
         assert cfg.select_max_book_spread == round(
-            cfg.max_book_spread * cfg.select_spread_frac, 6) == 0.0205
+            cfg.max_book_spread * cfg.select_spread_pct, 6) == 0.0205
 
 
 def test_moving_the_live_gate_moves_the_picker_bar():
@@ -148,11 +149,11 @@ def test_moving_the_live_gate_moves_the_picker_bar():
     to be found and edited."""
     for cls in (ScoringConfig, MakerConfig):
         broad = cls(max_book_spread=0.30)
-        assert broad.select_max_book_spread == round(0.30 * broad.select_spread_frac, 6)
+        assert broad.select_max_book_spread == round(0.30 * broad.select_spread_pct, 6)
         assert broad.select_max_book_spread == 0.1025
 
         # The share's one escape hatch: pick exactly as wide as the gate.
-        assert cls(select_spread_frac=1.0).select_max_book_spread == 0.06
+        assert cls(select_spread_pct=1.0).select_max_book_spread == 0.06
 
 
 def test_the_picker_bar_is_derived_not_settable():

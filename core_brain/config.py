@@ -175,7 +175,7 @@ class MakerConfig:
     # 6c leaves margin under that arithmetic.
     #
     # THIS IS THE ONE SPREAD CEILING (#572). The ranker's picking bar is a
-    # documented share of it (`select_spread_frac`, derived below) rather than
+    # documented share of it (`select_spread_pct`, derived below) rather than
     # a second absolute, so picking and quoting cannot disagree about which
     # books are tradable, and the wide-book trial moves this field alone.
     max_book_spread: float = 0.06
@@ -477,7 +477,7 @@ class MakerConfig:
     # since 2026-10-09 (#432), so `select_max_book_spread` is derived from it
     # and there is no second number to edit out of step. The two ceilings are
     # one decision: the picker may never offer a book the gate would refuse.
-    select_spread_frac: float = 41.0 / 120.0
+    select_spread_pct: float = 41.0 / 120.0
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
     select_max_days_to_resolve: float = 30.0
@@ -498,7 +498,7 @@ class MakerConfig:
         """
         if self.wide_book_trial is not None:
             return self.wide_book_trial
-        return round(self.max_book_spread * self.select_spread_frac, 6)
+        return round(self.max_book_spread * self.select_spread_pct, 6)
 
     # How long to average competitor depth before sizing a position. One
     # snapshot sized the whole fleet on 2026-07-29 and read a competing score
@@ -1048,6 +1048,11 @@ class MakerConfig:
     def stat_gate_bankroll_fraction(self) -> float:
         """Backward compatibility alias for stat_gate_bankroll_pct (#632)."""
         return self.stat_gate_bankroll_pct
+
+    @property
+    def select_spread_frac(self) -> float:
+        """Backward compatibility alias for select_spread_pct (#632, #572)."""
+        return self.select_spread_pct
 
     @property
     def tau_cancel_sec(self) -> float:
