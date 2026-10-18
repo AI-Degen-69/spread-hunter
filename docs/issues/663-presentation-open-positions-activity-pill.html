@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A market you hold now tells you if the engine is working it</title>
+<style>
+  :root {
+    --bg: #141021;
+    --panel: #1d1730;
+    --panel-2: #241c3a;
+    --line: #352a55;
+    --ink: #ece8f6;
+    --muted: #a99fc4;
+    --accent: #a78bfa;
+    /* The two greens below are the real pill colours from the dashboard stylesheet. */
+    --rest-ink: #34d399;
+    --rest-line: #059669;
+    --quote-ink: #059669;
+    --quote-line: rgba(5, 150, 105, .38);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background:
+      radial-gradient(900px 520px at 50% -180px, #2a2046 0%, transparent 70%),
+      var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    line-height: 1.55;
+    padding: 28px 18px 64px;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+    font-size: 12.5px; color: var(--muted); margin-bottom: 22px;
+  }
+  .meta a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted rgba(167,139,250,.55); }
+  .meta a:hover { color: #cbb8ff; }
+  .merged {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--line); background: rgba(167,139,250,.10);
+    padding: 3px 9px; border-radius: 999px; font-size: 11.5px; letter-spacing: .04em;
+    text-transform: uppercase; color: #d9ccff;
+  }
+  .merged i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  h1 {
+    font-size: clamp(27px, 4.6vw, 42px); line-height: 1.12; margin: 0 0 14px;
+    letter-spacing: -.015em; font-weight: 700;
+  }
+  h1 span { color: var(--accent); }
+  .lead { font-size: clamp(15px, 2vw, 17.5px); color: #d6cde8; margin: 0 0 30px; max-width: 62ch; }
+  .lead b { color: #fff; font-weight: 600; }
+
+  /* ── centerpiece: a working copy of the two tabs ───────────────────── */
+  .demo {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    padding: 18px 18px 14px; box-shadow: 0 24px 60px -34px #000;
+  }
+  .demo-head { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .demo-title { font-size: 12px; letter-spacing: .12em; color: #cbbfe6; text-transform: uppercase; font-weight: 600; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tab {
+    font: inherit; font-size: 12.5px; color: #cfc4e6; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px; cursor: pointer;
+    display: inline-flex; gap: 7px; align-items: center;
+  }
+  .tab:hover { border-color: #4b3d72; color: #fff; }
+  .tab[aria-selected="true"] { background: rgba(167,139,250,.16); border-color: var(--accent); color: #fff; }
+  .tab .count { font-variant-numeric: tabular-nums; font-size: 11px; color: var(--muted); }
+  .tab[aria-selected="true"] .count { color: #e6dcff; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; font-size: 10px; letter-spacing: .1em; color: #9187ad;
+    font-weight: 600; padding: 8px 8px; border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  td { padding: 11px 8px; border-bottom: 1px solid rgba(53,42,85,.6); font-size: 13.5px; vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  .market { font-weight: 600; color: #f3effa; }
+  .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .num { font-variant-numeric: tabular-nums; color: #d8d0ea; font-size: 12.5px; white-space: nowrap; }
+  .up { color: #6ee7b7; }
+
+  /* the pill itself — same words, same greens, same blinking dot as the app */
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 8px;
+    border-radius: 999px; border: 1px solid; font-size: 10.5px; font-weight: 700;
+    letter-spacing: .06em; white-space: nowrap; vertical-align: middle;
+  }
+  .pill::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+    animation: blink 1s steps(1, end) infinite;
+  }
+  .pill.resting { color: var(--rest-ink); border-color: var(--rest-line); background: rgba(52,211,153,.07); }
+  .pill.quoting { color: var(--quote-ink); border-color: var(--quote-line); background: rgba(5,150,105,.10); }
+  @keyframes blink { 0%, 49.9% { opacity: 1; } 50%, 100% { opacity: .15; } }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 14px; padding-top: 13px; border-top: 1px dashed var(--line); }
+  .check { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: #cfc4e6; cursor: pointer; }
+  .check input { accent-color: var(--accent); width: 15px; height: 15px; }
+  .demo-note { font-size: 12px; color: var(--muted); flex: 1 1 260px; min-width: 0; }
+  .demo-note b { color: #e4dbf7; font-weight: 600; }
+  .keys { font-size: 11.5px; color: #8f85ad; margin: 10px 2px 0; }
+
+  /* ── support: the one-line truth + the real app steps ──────────────── */
+  .support { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 26px; }
+  @media (max-width: 720px) { .support { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 17px; }
+  .card h2 { font-size: 12px; letter-spacing: .11em; text-transform: uppercase; color: #b9aed4; margin: 0 0 10px; font-weight: 600; }
+  .card p { margin: 0 0 10px; font-size: 13.5px; color: #ddd4ef; }
+  .card p:last-child { margin-bottom: 0; }
+  .steps { counter-reset: s; list-style: none; padding: 0; margin: 0; }
+  .steps li { counter-increment: s; position: relative; padding-left: 28px; margin-bottom: 11px; font-size: 13.2px; color: #ddd4ef; }
+  .steps li:last-child { margin-bottom: 0; }
+  .steps li::before {
+    content: counter(s); position: absolute; left: 0; top: 1px; width: 19px; height: 19px;
+    border-radius: 50%; background: rgba(167,139,250,.18); border: 1px solid rgba(167,139,250,.5);
+    color: #d9ccff; font-size: 11px; font-weight: 700; display: grid; place-items: center;
+  }
+  .steps b { color: #fff; font-weight: 600; }
+  code {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px;
+    background: #120e1e; border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; color: #cbb8ff;
+  }
+  .foot { margin-top: 26px; font-size: 12px; color: #8b81a8; text-align: center; }
+  .foot a { color: var(--accent); text-decoration: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pill::before { animation: none; opacity: 1; }
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="meta">
+    <span class="merged"><i></i> Update put live</span>
+    <a href="https://github.com/AI-Degen-69/spread-hunter/pull/663">The change that shipped</a>
+    <a href="https://github.com/AI-Degen-69/spread-hunter/issues/656">The problem it solves</a>
+  </div>
+
+  <h1>A market you hold now tells you whether the engine is <span>working it</span></h1>
+  <p class="lead">
+    Before, a market you own looked identical whether the strategy was busy on it or had walked away.
+    You had to leave the table you were reading and cross-check another screen.
+    <b>Now the answer sits next to the market name.</b>
+  </p>
+
+  <!-- ── centerpiece ───────────────────────────────────────────────────── -->
+  <section class="demo" aria-label="A working copy of the two dashboard tabs">
+    <div class="demo-head">
+      <div class="demo-title">ORDERS &amp; TRADES</div>
+      <div class="tabs" role="tablist" aria-label="Choose a tab">
+        <button class="tab" type="button" role="tab" id="tab-pos" aria-selected="false" aria-controls="demo-table">Open Positions <span class="count">4</span></button>
+        <button class="tab" type="button" role="tab" id="tab-active" aria-selected="true" aria-controls="demo-table">Active Markets <span class="count" id="active-count">4</span></button>
+      </div>
+    </div>
+
+    <table id="demo-table">
+      <thead><tr id="demo-head-row"></tr></thead>
+      <tbody id="demo-body"></tbody>
+    </table>
+
+    <div class="controls">
+      <label class="check"><input type="checkbox" id="idle-toggle"> Add a market nobody is working</label>
+      <div class="demo-note" id="demo-note"></div>
+    </div>
+    <div class="keys" id="demo-keys"></div>
+  </section>
+
+  <div class="support">
+    <div class="card">
+      <h2>What you get now</h2>
+      <p>A green <b>RESTING</b> or <b>QUOTING</b> pill sits beside every held market that the engine is working on, with the same blinking dot you already know from <b>Active Markets</b>.</p>
+      <p>A market nobody is working gets <b>nothing at all</b> — no grey label, no new column, no empty space. Nothing there means nothing happening.</p>
+      <p>The two tabs read the verdict from one shared rule, so they cannot give you two different answers about the same market.</p>
+    </div>
+
+    <div class="card">
+      <h2>Check it yourself in the real app</h2>
+      <ol class="steps">
+        <li>Open <code>http://127.0.0.1:8801</code> in your browser.</li>
+        <li>Press <b>ORDERS &amp; TRADES → Open Positions</b>.</li>
+        <li>Look beside each market name: a green pill. One market says <b>QUOTING</b>, the rest say <b>RESTING</b>.</li>
+        <li>Press <b>Active Markets</b> and find the same four markets — the words must match market for market.</li>
+        <li>Go back to <b>Open Positions</b> and wait a few seconds: <b>CURRENT PRICE</b>, <b>MARK VALUE</b> and <b>UNREALIZED</b> keep moving, the pill stays put.</li>
+        <li>Switch your computer to reduced motion and reload: the pill keeps its colour, the dot stops blinking.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="foot">
+    Shipped in <a href="https://github.com/AI-Degen-69/spread-hunter/pull/663">PR #663</a>
+    for <a href="https://github.com/AI-Degen-69/spread-hunter/issues/656">Issue #656</a>.
+  </div>
+</div>
+
+<script>
+  // The four markets and their verdicts mirror the demo store the walkthrough uses.
+  // upAsk / dnAsk are the venue's own asking prices, which is what Active Markets prints.
+  var MARKETS = [
+    { name: "Fed Cut Dec",            sub: "Economics", verdict: "QUOTING", upAsk: 0.86, dnAsk: 0.13, value: 12.90, pnl: "+1.10" },
+    { name: "Waiting For Other Side", sub: "Crypto",    verdict: "RESTING", upAsk: 0.41, dnAsk: 0.58, value: 6.15,  pnl: "-0.35" },
+    { name: "Strike Friday",          sub: "Politics",  verdict: "RESTING", upAsk: 0.64, dnAsk: 0.35, value: 9.60,  pnl: "+0.42" },
+    { name: "Oscar Best Picture",     sub: "Culture",   verdict: "RESTING", upAsk: 0.28, dnAsk: 0.71, value: 4.20,  pnl: "-0.12" }
+  ];
+  var IDLE = { name: "Quiet Market", sub: "Science", verdict: null, upAsk: 0.52, dnAsk: 0.47, value: 5.20, pnl: "+0.05" };
+
+  var view = "active-markets";
+  var withIdle = false;
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var headRow = document.getElementById("demo-head-row");
+  var body = document.getElementById("demo-body");
+  var note = document.getElementById("demo-note");
+  var keys = document.getElementById("demo-keys");
+  var activeCount = document.getElementById("active-count");
+
+  function money(v) { return "$" + v.toFixed(2); }
+
+  function pillHtml(verdict) {
+    if (!verdict) return "";
+    var cls = verdict === "RESTING" ? "resting" : "quoting";
+    var why = verdict === "RESTING"
+      ? "orders are resting on the book"
+      : "the engine is quoting this market, with no orders resting right now";
+    return '<span class="pill ' + cls + '" title="' + why + '">' + verdict + "</span>";
+  }
+
+  // Active Markets lists only markets being worked, so the idle one is simply absent there.
+  function rows() {
+    var list = MARKETS.slice();
+    if (withIdle) list = list.concat([IDLE]);
+    return view === "positions" ? list : list.filter(function (m) { return m.verdict; });
+  }
+
+  function render() {
+    var positions = view === "positions";
+    headRow.innerHTML = positions
+      ? "<th>MARKET</th><th>LEG</th><th>CURRENT PRICE</th><th>MARK VALUE</th><th>UNREALIZED</th>"
+      : "<th>MARKET</th><th>UP</th><th>DOWN</th><th>PAIR COST</th><th>STATUS</th>";
+
+    body.innerHTML = rows().map(function (m) {
+      var pair = (m.upAsk + m.dnAsk).toFixed(2);
+      var cells = positions
+        ? "<td><div class=\"market\">" + m.name + " " + pillHtml(m.verdict) +
+            "</div><div class=\"sub\">" + m.sub + "</div></td>" +
+          "<td class=\"num\">YES ×10<br>NO ×10</td>" +
+          "<td class=\"num\" data-live data-up=\"" + m.upAsk + "\">" + money(m.upAsk) + "</td>" +
+          "<td class=\"num\">" + money(m.value) + "</td>" +
+          "<td class=\"num up\">" + m.pnl + "</td>"
+        : "<td><div class=\"market\">" + m.name + "</div><div class=\"sub\">" + m.sub + "</div></td>" +
+          "<td class=\"num\">" + money(m.upAsk) + "</td>" +
+          "<td class=\"num\">" + money(m.dnAsk) + "</td>" +
+          "<td class=\"num\">$" + pair + "</td>" +
+          "<td>" + pillHtml(m.verdict) + "</td>";
+      return "<tr>" + cells + "</tr>";
+    }).join("");
+
+    activeCount.textContent = String(MARKETS.length);
+
+    note.innerHTML = positions
+      ? "This is the answer you were missing: <b>a pill, or nothing</b>."
+      : "Active Markets lists only markets being worked. The words here are the ones the other tab copies.";
+
+    keys.textContent = withIdle
+      ? "Added “Quiet Market”: no quotes, no resting orders. Open Positions shows nothing for it, and Active Markets does not list it at all."
+      : "Four markets, the same four on both tabs.";
+  }
+
+  function select(next) {
+    view = next;
+    document.getElementById("tab-pos").setAttribute("aria-selected", String(next === "positions"));
+    document.getElementById("tab-active").setAttribute("aria-selected", String(next === "active-markets"));
+    render();
+  }
+
+  document.getElementById("tab-pos").addEventListener("click", function () { select("positions"); });
+  document.getElementById("tab-active").addEventListener("click", function () { select("active-markets"); });
+  document.getElementById("idle-toggle").addEventListener("change", function (e) {
+    withIdle = e.target.checked;
+    render();
+  });
+
+  // Live prices keep moving; the pill never does. That contrast is the point.
+  var tick = 0;
+  if (!reduceMotion) {
+    setInterval(function () {
+      tick += 1;
+      var cells = body.querySelectorAll("[data-live]");
+      for (var i = 0; i < cells.length; i++) {
+        var base = Number(cells[i].getAttribute("data-up")) || 0.5;
+        var wobble = Math.sin((tick + i) / 3) * 0.01;
+        cells[i].textContent = money(base + wobble);
+      }
+    }, 2000);
+  }
+
+  render();
+</script>
+</body>
+</html>
