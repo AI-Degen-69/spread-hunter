@@ -289,6 +289,34 @@ def test_all_eight_picker_bars_read_the_canonical_value_by_their_old_name(monkey
             assert getattr(loaded, old) == getattr(loaded, canonical), old
 
 
+# Values that must be REFUSED rather than carried: not a number, not finite, or
+# a non-positive window. Each keeps the shipped bar, which is the parsing
+# behaviour #652 promised not to touch (the keys moved, nothing else).
+PICKER_BAR_REFUSED_INPUT = [
+    ("HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "abc", 200.0),
+    ("HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "nan", 200.0),
+    ("HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "0", 1800.0),
+    ("HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "abc", 1800.0),
+    ("HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "-1", 2.0),
+    ("HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "inf", 2.0),
+    ("HUNTER_VOLATILITY_WINDOW_SEC", "filter_live_move_lookback_sec", "0", 7200.0),
+    ("HUNTER_MIN_ACTIVITY_RATIO", "filter_live_activity_min_ratio", "-0.5", 0.0),
+    ("HUNTER_VELOCITY_GATE", "filter_live_gate_velocity_on", "no", False),
+]
+
+
+@pytest.mark.parametrize("var,field,raw,expected", PICKER_BAR_REFUSED_INPUT)
+def test_a_refused_picker_bar_value_keeps_the_shipped_bar(
+        monkeypatch, var, field, raw, expected):
+    """A typo must not silently widen a gate, and a negative bar must not travel."""
+    _clear_picker_bar_env(monkeypatch)
+    monkeypatch.setenv(var, raw)
+
+    loaded = scoring_config.load()
+
+    assert getattr(loaded, field) == expected
+
+
 def test_the_eight_picker_bars_keep_their_shipped_defaults(monkeypatch):
     """The values the issue pins, read off a loaded config with nothing set."""
     _clear_picker_bar_env(monkeypatch)

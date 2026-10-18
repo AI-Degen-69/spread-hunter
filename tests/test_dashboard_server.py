@@ -3143,5 +3143,60 @@ def test_get_parameters_endpoint(client):
         assert required_key in first
 
 
+# The eight picker filter bars' card keys (#652).
+PICKER_BAR_CARD_KEYS = (
+    "select_movement_window_sec",
+    "select_min_movement_usd",
+    "select_min_activity_ratio",
+    "select_min_range_cents",
+    "select_volatility_window_sec",
+    "select_velocity_gate_enabled",
+    "select_max_queue_minutes",
+    "enforce_max_queue_minutes",
+)
+
+
+def _picker_cards(client) -> dict:
+    data = client.get("/api/parameters").json()
+    return {p["key"]: p for p in data["parameters"] if p.get("key") in PICKER_BAR_CARD_KEYS}
+
+
+def test_picker_parameter_cards_read_the_configured_bars(client, monkeypatch):
+    """#652: the cards must show the config, not the hard-coded fallback.
+
+    `get_parameters` reads these bars as `getattr(scfg, "select_*", <literal>)`,
+    so a name that stops resolving does not crash the panel -- it silently shows
+    the shipped literal instead. Setting two overrides makes those two outcomes
+    distinguishable: a card showing `$777.00` resolved the config, and a card
+    still showing the `$200.00` fallback did not.
+    """
+    monkeypatch.setenv("HUNTER_MIN_MOVEMENT_USD", "777")
+    monkeypatch.setenv("HUNTER_MOVEMENT_WINDOW_SEC", "900")
+    monkeypatch.setenv("HUNTER_VELOCITY_GATE", "off")
+
+    cards = _picker_cards(client)
+
+    assert set(cards) == set(PICKER_BAR_CARD_KEYS)
+    assert cards["select_min_movement_usd"]["raw_value"] == 777.0
+    assert cards["select_min_movement_usd"]["value"] == "$777.00"
+    assert cards["select_movement_window_sec"]["raw_value"] == 900.0
+    assert cards["select_velocity_gate_enabled"]["raw_value"] is False
+
+
+def test_picker_parameter_cards_show_the_shipped_bars_by_default(client, monkeypatch):
+    """With nothing set, the queue cards keep their bars and their wording."""
+    for var in ("HUNTER_MIN_MOVEMENT_USD", "HUNTER_MOVEMENT_WINDOW_SEC",
+                "HUNTER_VELOCITY_GATE"):
+        monkeypatch.delenv(var, raising=False)
+
+    cards = _picker_cards(client)
+
+    assert cards["select_min_movement_usd"]["raw_value"] == 200.0
+    assert cards["select_movement_window_sec"]["value"] == "1800s (30m)"
+    assert cards["select_max_queue_minutes"]["raw_value"] == 15.0
+    assert cards["enforce_max_queue_minutes"]["raw_value"] is False
+    assert cards["enforce_max_queue_minutes"]["value"] == "False (Telemetry Only)"
+
+
 
 
