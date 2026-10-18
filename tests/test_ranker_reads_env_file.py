@@ -185,3 +185,41 @@ def test_the_ranker_loads_the_env_file_before_it_builds_its_config():
     assert call_line < cfg_line, (
         f"_load_repo_env() at line {call_line} runs after _CFG at line {cfg_line}; "
         "the staged trial would never reach the config")
+
+
+def _cfg_field_with_generated_env(tmp_path: Path, contents: str, attr: str) -> str:
+    """Print one `fm._CFG` attribute after staging a controlled `.env`."""
+    import os
+
+    (tmp_path / ".env").write_text(contents, encoding="utf-8")
+    code = textwrap.dedent(f"""
+        import os, sys
+        sys.path.insert(0, {str(REPO)!r})
+        import scripts.filter_markets as fm
+        import scoring.config
+        for k in list(os.environ.keys()):
+            if k.startswith(("HUNTER_", "FILTER_", "BOT_", "SPREAD_HUNTER_")):
+                os.environ.pop(k, None)
+        fm._load_repo_env({str(tmp_path)!r})
+        fm._CFG = scoring.config.load()
+        print(getattr(fm._CFG, {attr!r}))
+    """)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("HUNTER_", "FILTER_", "BOT_", "SPREAD_HUNTER_"))}
+    proc = subprocess.run([sys.executable, "-c", code], cwd=tmp_path,
+                          capture_output=True, text=True, env=env, check=True)
+    return proc.stdout.strip().splitlines()[-1]
+
+
+def test_canonical_bot_env_file_reaches_ranker_config(tmp_path):
+    """#674: Ranker subprocess sees canonical BOT_* overrides staged in .env."""
+    env_content = (
+        "BOT_MARKET_PINNED_CONDITION_ID=0xfeedbeef\n"
+        "BOT_QUOTE_SIZE_MIN_SHARES=200\n"
+    )
+    val = _cfg_field_with_generated_env(tmp_path, env_content, "min_quote_shares")
+    assert val == "200"
+
+    pinned = _cfg_field_with_generated_env(
+        tmp_path, env_content, "bot_market_pinned_condition_id"
+    )
+    assert pinned == "0xfeedbeef"
