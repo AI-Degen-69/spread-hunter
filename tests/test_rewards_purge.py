@@ -91,3 +91,59 @@ def test_scoring_rewards_module_is_deleted():
     spec = importlib.util.find_spec("scoring.rewards")
     assert spec is None, "scoring.rewards must be completely deleted (#681)"
 
+
+def test_filter_markets_has_no_order_score_or_q_min():
+    """scripts.filter_markets must not define order_score or q_min (#681)."""
+    import scripts.filter_markets as fm
+    assert not hasattr(fm, "order_score"), "order_score must be purged (#681)"
+    assert not hasattr(fm, "q_min"), "q_min must be purged (#681)"
+
+
+def test_evaluate_produces_spread_metrics_without_reward_pool_math():
+    """evaluate() ranks on spread/movement and does not calculate reward pool splits (#681)."""
+    import time
+    import scripts.filter_markets as fm
+
+    class FakeSession:
+        def get(self, url, params=None, timeout=None):
+            if "trades" in url:
+                return type("Resp", (), {
+                    "json": lambda self: [{"timestamp": time.time(), "price": 0.5, "size": 1000.0}],
+                    "raise_for_status": lambda self: None,
+                })()
+            return type("Resp", (), {
+                "json": lambda self: {
+                    "bids": [{"price": "0.48", "size": "1000"}],
+                    "asks": [{"price": "0.52", "size": "1000"}],
+                },
+                "raise_for_status": lambda self: None,
+            })()
+
+    from datetime import datetime, timezone, timedelta
+
+    cand = {
+        "condition_id": "0xtest_pure_spread",
+        "question": "Binary Question?",
+        "tokens": [{"token_id": "tok1"}, {"token_id": "tok2"}],
+        "rewards": {"max_spread": 0.5, "min_size": 1000, "rate": 500.0},  # tight reward window
+        "minimum_tick_size": 0.01,
+        "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=5)).isoformat(),
+        "_order_min": 5,
+        "_spread": 0.04,
+        "closed": False,
+        "accepting_orders": True,
+    }
+
+    res = fm.evaluate(FakeSession(), rate=0.0, m=cand, volume_24h=100_000.0,
+                      source="spread", min_volume_usd=1000.0, min_depth_usd=100.0,
+                      max_spread=0.08)
+
+    assert res["eligible"] is True
+    assert res["movement_usd"] == 500.0
+    assert res["est_income"] == 0.0
+    assert res["est_capital"] == 0.0
+    assert res["return_pct_day"] == 0.0
+    assert res["their_score"] == 0.0
+
+
+

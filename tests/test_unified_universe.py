@@ -325,7 +325,8 @@ class _ZeroScoreSession:
         })
 
 
-def test_a_zero_ours_score_is_retained_as_a_rejection_row():
+def test_spread_market_is_not_rejected_by_venue_reward_spread_limit():
+    """Binary spread markets must not be rejected by legacy venue reward windows (#681)."""
     market = _universe_candidate("0xzero")
     market["rewards"]["max_spread"] = 2.1
     market["minimum_tick_size"] = 0.001
@@ -333,9 +334,8 @@ def test_a_zero_ours_score_is_retained_as_a_rejection_row():
     row = evaluate(_ZeroScoreSession(), 5.0, market,
                    volume_24h=250_000.0, source="spread", max_spread=0.06)
 
-    assert row["eligible"] is False
-    assert row["reject_reason"] == (
-        "cannot score here without overbidding the book")
+    assert row["eligible"] is True
+    assert row["reject_reason"] == ""
     assert row["cid"] == "0xzero"
     assert row["movement_usd"] == pytest.approx(2000.0)
 

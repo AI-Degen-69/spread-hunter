@@ -37,7 +37,7 @@ Purge legacy maker rebate/liquidity reward program formulas, calculations, and t
 - **Verification:**
   - `python -m pytest -q tests/test_rewards_purge.py`
 
-### T2: Purge reward pool formulas, checks, and income fields from filter_markets.py [Backend/Logic] [Size: M]
+### T2: Purge reward pool formulas, checks, and income fields from filter_markets.py [Backend/Logic] [Size: M] [x]
 - **Depends on:** T1
 - **Files touched:**
   - `scripts/filter_markets.py`
