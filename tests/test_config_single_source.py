@@ -507,6 +507,107 @@ def test_execution_coupling_overrides(monkeypatch):
     assert cfg.max_spread_from_mid == 0.20
 
 
+@pytest.mark.parametrize(
+    "oldest_var,newer_var,canonical_var,val_raw,warn_text",
+    [
+        (
+            "HUNTER_MIN_SIZE",
+            "HUNTER_MIN_QUOTE_SHARES",
+            "BOT_QUOTE_SIZE_MIN_SHARES",
+            "100",
+            "HUNTER_MIN_SIZE is deprecated (#632); set HUNTER_MIN_QUOTE_SHARES instead.",
+        ),
+        (
+            "HUNTER_MAX_SPREAD",
+            "HUNTER_MAX_SPREAD_CENTS",
+            "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
+            "10",
+            "HUNTER_MAX_SPREAD is deprecated (#632); set HUNTER_MAX_SPREAD_CENTS instead.",
+        ),
+        (
+            "HUNTER_TICK",
+            "HUNTER_PRICE_TICK",
+            "BOT_QUOTE_GRID_TICK_SIZE_USD",
+            "0.02",
+            "HUNTER_TICK is deprecated (#632); set HUNTER_PRICE_TICK instead.",
+        ),
+    ],
+)
+def test_execution_legacy_deprecation_warnings(
+        monkeypatch, caplog, oldest_var, newer_var, canonical_var, val_raw, warn_text):
+    """#674: Oldest legacy variable emits #632 warning only when it is the winning source."""
+    import logging
+
+    _clear_execution_env(monkeypatch)
+    monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned")
+
+    # 1. Oldest legacy alone -> warning emitted
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        monkeypatch.setenv(oldest_var, val_raw)
+        scoring_config.load()
+    assert warn_text in caplog.text
+
+    # 2. Canonical set alongside -> no warning emitted (canonical wins)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        monkeypatch.setenv(canonical_var, val_raw)
+        scoring_config.load()
+    assert warn_text not in caplog.text
+
+    # 3. Newer legacy alone -> no warning emitted
+    monkeypatch.delenv(canonical_var, raising=False)
+    monkeypatch.delenv(oldest_var, raising=False)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        monkeypatch.setenv(newer_var, val_raw)
+        scoring_config.load()
+    assert warn_text not in caplog.text
+
+
+def test_blank_canonical_fallthrough_fires_legacy_warning(monkeypatch, caplog):
+    """#674: Blank canonical falls through to oldest legacy and still emits the #632 warning."""
+    import logging
+
+    _clear_execution_env(monkeypatch)
+    monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned")
+    monkeypatch.setenv("BOT_QUOTE_SIZE_MIN_SHARES", "   ")
+    monkeypatch.setenv("HUNTER_MIN_SIZE", "200")
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        cfg = scoring_config.load()
+
+    assert cfg.min_quote_shares == 200
+    assert "HUNTER_MIN_SIZE is deprecated (#632)" in caplog.text
+
+
+def test_wide_book_trial_refusal_names_variable(monkeypatch):
+    """#674: Wide-book trial refusal outside rehearsal names the variable that was set."""
+    _clear_execution_env(monkeypatch)
+    monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: False)
+
+    # 1. Canonical variable set outside rehearsal
+    monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
+    with pytest.raises(ValueError) as exc1:
+        scoring_config.load()
+    assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens max_book_spread" in str(exc1.value)
+
+    # 2. Legacy variable set outside rehearsal
+    monkeypatch.delenv("BOT_QUOTE_WIDE_BOOK_TRIAL", raising=False)
+    monkeypatch.setenv("HUNTER_WIDE_BOOK_TRIAL", "0.12")
+    with pytest.raises(ValueError) as exc2:
+        scoring_config.load()
+    assert "HUNTER_WIDE_BOOK_TRIAL widens max_book_spread" in str(exc2.value)
+
+    # 3. Inside rehearsal, value exceeding 0.30 is rejected
+    monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
+    monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.31")
+    with pytest.raises(ValueError) as exc3:
+        scoring_config.load()
+    assert "is outside 0..0.3" in str(exc3.value)
+
+
 @pytest.mark.parametrize("bad_raw", ["abc", "nan", "inf", "-1", ""])
 def test_invalid_live_volume_override_keeps_shipped_default(monkeypatch, bad_raw):
     """`FILTER_LIVE_VOL_MIN_24H_USD` refuses non-finite or negative input."""

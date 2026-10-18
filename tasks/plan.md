@@ -145,7 +145,7 @@ cover the touched code — see T4. Recorded in the PR body.
 - **Checkpoint:** all twelve canonical rows and all legacy rows green; divergence guard untouched and
   green, proving no logic leaked into the class body.
 
-### [ ] T3 — Prove warnings, blank fallthrough, refusal naming, and the ranker's `.env` path
+### [x] T3 — Prove warnings, blank fallthrough, refusal naming, and the ranker's `.env` path
 - **Size:** S | **Domain:** `[Backend/Logic]` | **Skill:** `test-driven-development`
 - **Depends on:** T2
 - **Target files:** `tests/test_config_single_source.py`, `tests/test_ranker_reads_env_file.py`
