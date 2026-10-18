@@ -53,10 +53,19 @@ def _scoring_class_body() -> list[ast.stmt]:
     raise AssertionError(f"no `class {SCORING_CLASS}` found in {scoring_config.__file__}")
 
 
-def _declared_names() -> list[str]:
-    """Annotated names in the scoring class body, in source order."""
-    return [stmt.target.id for stmt in _scoring_class_body()
-            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)]
+def _declared_names(body: list[ast.stmt] | None = None) -> list[str]:
+    """Assigned or annotated names in the scoring class body, in source order."""
+    if body is None:
+        body = _scoring_class_body()
+    names: list[str] = []
+    for stmt in body:
+        if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            names.append(stmt.target.id)
+        elif isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    names.append(target.id)
+    return names
 
 
 def _defaults(cls) -> dict[str, object]:
@@ -142,3 +151,11 @@ def test_profile_defaults_read_the_table_instead_of_a_literal():
     assert not wrong, (
         "profile field(s) hold a literal instead of reading PICKER_PROFILE: "
         f"{wrong}")
+
+
+def test_declared_names_catches_unannotated_assigns():
+    """Unannotated assignments in class body must also be captured."""
+    src = "class Foo:\n    x: int = 1\n    y = 2\n"
+    cls_def = ast.parse(src).body[0]
+    assert isinstance(cls_def, ast.ClassDef)
+    assert _declared_names(cls_def.body) == ["x", "y"]
