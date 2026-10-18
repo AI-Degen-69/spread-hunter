@@ -203,3 +203,126 @@ def test_scoring_config_is_frozen():
 
     with pytest.raises(FrozenInstanceError):
         cfg.max_pair_cost = 0.5
+
+
+# ============================================================================
+# #652: the picker's eight filter bars, now owned by core.
+#
+# `SCORING_DEFAULTS` above is the values pin and stays untouched -- all 82 names
+# still resolve, because the old spellings became alias-backed dataclass fields.
+# These tests cover the half a values pin cannot see: that each override reaches
+# the field core now owns, and that the old name still reads it back.
+# ============================================================================
+
+# The six overrides `scoring.config.load()` still honours: variable, the
+# canonical field it must land on, a valid non-default raw value, and the parsed
+# expectation. The two queue bars are absent on purpose -- they never had an
+# override, and adding one is out of scope for #652.
+PICKER_BAR_ENV = [
+    ("HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "777.0", 777.0),
+    ("HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "900.0", 900.0),
+    ("HUNTER_VELOCITY_GATE", "filter_live_gate_velocity_on", "off", False),
+    ("HUNTER_MIN_ACTIVITY_RATIO", "filter_live_activity_min_ratio", "0.25", 0.25),
+    ("HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "3.5", 3.5),
+    ("HUNTER_VOLATILITY_WINDOW_SEC", "filter_live_move_lookback_sec", "3600.0", 3600.0),
+]
+
+# The old picker name of each bar. Insertion order is the issue's order.
+PICKER_BAR_OLD_NAMES: dict[str, str] = {
+    "select_min_movement_usd": "filter_live_vel_min_usd",
+    "select_movement_window_sec": "filter_live_vel_lookback_sec",
+    "select_velocity_gate_enabled": "filter_live_gate_velocity_on",
+    "select_min_activity_ratio": "filter_live_activity_min_ratio",
+    "select_min_range_cents": "filter_live_move_min_range_cents",
+    "select_volatility_window_sec": "filter_live_move_lookback_sec",
+    "select_max_queue_minutes": "filter_std_queue_max_clear_min",
+    "enforce_max_queue_minutes": "filter_std_gate_queue_max_on",
+}
+
+_OLD_NAME_OF = {canonical: old for old, canonical in PICKER_BAR_OLD_NAMES.items()}
+
+
+def _clear_picker_bar_env(monkeypatch):
+    """Clear every override these tests touch, so a shell value cannot leak in."""
+    for var, _field, _raw, _expected in PICKER_BAR_ENV:
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.mark.parametrize("var,field,raw,expected", PICKER_BAR_ENV)
+def test_each_picker_bar_override_reaches_the_canonical_field(
+        monkeypatch, var, field, raw, expected):
+    """#652's silent no-op guard: the override must land on the field core owns.
+
+    `_wrapped_init` maps a legacy keyword through `_LEGACY_TO_CANONICAL`; a name
+    that is not in that table is stored as a stray attribute and the bar keeps
+    its default. That is the failure this asserts against, end to end through
+    the real `load()` and the real environment.
+    """
+    _clear_picker_bar_env(monkeypatch)
+    monkeypatch.setenv(var, raw)
+
+    loaded = scoring_config.load()
+
+    assert getattr(loaded, field) == expected
+
+
+@pytest.mark.parametrize("var,field,raw,expected", PICKER_BAR_ENV)
+def test_each_picker_bar_override_is_readable_by_its_old_name(
+        monkeypatch, var, field, raw, expected):
+    """The dashboard's `getattr(scfg, "select_*", <fallback>)` must not fall back."""
+    _clear_picker_bar_env(monkeypatch)
+    monkeypatch.setenv(var, raw)
+
+    loaded = scoring_config.load()
+
+    with pytest.warns(DeprecationWarning):
+        assert getattr(loaded, _OLD_NAME_OF[field]) == expected
+
+
+def test_all_eight_picker_bars_read_the_canonical_value_by_their_old_name(monkeypatch):
+    _clear_picker_bar_env(monkeypatch)
+
+    loaded = scoring_config.load()
+
+    for old, canonical in PICKER_BAR_OLD_NAMES.items():
+        with pytest.warns(DeprecationWarning):
+            assert getattr(loaded, old) == getattr(loaded, canonical), old
+
+
+# Values that must be REFUSED rather than carried: not a number, not finite, or
+# a non-positive window. Each keeps the shipped bar, which is the parsing
+# behaviour #652 promised not to touch (the keys moved, nothing else).
+PICKER_BAR_REFUSED_INPUT = [
+    ("HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "abc", 200.0),
+    ("HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "nan", 200.0),
+    ("HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "0", 1800.0),
+    ("HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "abc", 1800.0),
+    ("HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "-1", 2.0),
+    ("HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "inf", 2.0),
+    ("HUNTER_VOLATILITY_WINDOW_SEC", "filter_live_move_lookback_sec", "0", 7200.0),
+    ("HUNTER_MIN_ACTIVITY_RATIO", "filter_live_activity_min_ratio", "-0.5", 0.0),
+    ("HUNTER_VELOCITY_GATE", "filter_live_gate_velocity_on", "no", False),
+]
+
+
+@pytest.mark.parametrize("var,field,raw,expected", PICKER_BAR_REFUSED_INPUT)
+def test_a_refused_picker_bar_value_keeps_the_shipped_bar(
+        monkeypatch, var, field, raw, expected):
+    """A typo must not silently widen a gate, and a negative bar must not travel."""
+    _clear_picker_bar_env(monkeypatch)
+    monkeypatch.setenv(var, raw)
+
+    loaded = scoring_config.load()
+
+    assert getattr(loaded, field) == expected
+
+
+def test_the_eight_picker_bars_keep_their_shipped_defaults(monkeypatch):
+    """The values the issue pins, read off a loaded config with nothing set."""
+    _clear_picker_bar_env(monkeypatch)
+
+    loaded = scoring_config.load()
+
+    shipped = [getattr(loaded, canonical) for canonical in PICKER_BAR_OLD_NAMES.values()]
+
+    assert shipped == [200.0, 1800.0, True, 0.0, 2.0, 7200.0, 15.0, False]

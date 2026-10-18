@@ -214,6 +214,50 @@ def test_book_allowed_default_spread_gate_boundary():
     assert "spread 0.0206 > 0.0205" in reason
 
 
+# --- #652: the derived picking cap's canonical name --------------------------
+
+
+def test_the_canonical_picking_bar_name_holds_the_same_number():
+    """`filter_common_spread_max_cents` is a second NAME for one value, not a copy.
+
+    The value is a price fraction (0.0205), the way
+    `bot_quote_price_band_min_cents` (0.10) and
+    `bot_quote_spread_static_offset_cents` (0.020) already read.
+    """
+    for cls in (ScoringConfig, MakerConfig):
+        cfg = cls()
+        assert cfg.filter_common_spread_max_cents == cfg.select_max_book_spread
+        assert cfg.filter_common_spread_max_cents == 0.0205
+
+
+def test_the_canonical_picking_bar_name_follows_the_live_gate_and_the_trial():
+    for cls in (ScoringConfig, MakerConfig):
+        assert cls(max_book_spread=0.30).filter_common_spread_max_cents == 0.1025
+        assert cls(wide_book_trial=0.15).filter_common_spread_max_cents == 0.15
+
+
+def test_the_canonical_picking_bar_name_is_derived_not_settable():
+    """Read-only on both classes: refused at construction, refused on assignment."""
+    import pytest
+
+    for cls in (ScoringConfig, MakerConfig):
+        with pytest.raises(TypeError):
+            cls(filter_common_spread_max_cents=0.05)
+
+        cfg = cls()
+        with pytest.raises(AttributeError):
+            cfg.filter_common_spread_max_cents = 0.05
+
+
+def test_the_canonical_picking_bar_name_is_not_a_stored_field():
+    """A field would be a second number the constructor could be handed."""
+    import dataclasses
+
+    for cls in (ScoringConfig, MakerConfig):
+        assert "filter_common_spread_max_cents" not in {
+            f.name for f in dataclasses.fields(cls)}
+
+
 def test_pair_books_allowed_refuses_wide_book_by_default():
     from scoring.selector import pair_books_allowed
 

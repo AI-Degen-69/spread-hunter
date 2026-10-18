@@ -42,6 +42,19 @@ _LEGACY_TO_CANONICAL: dict[str, str] = {
     "select_max_days_to_resolve": "filter_std_time_max_days_to_resolve",
     "rank_sample_window_sec": "filter_std_rank_sample_window_sec",
     "rerank_interval_sec": "filter_std_rerank_interval_sec",
+    # Picker filter bars (#652). These eight were declared a second time in
+    # `scoring/config.py` until #652. Core owns the value now; the old picker
+    # names stay readable for the dashboard cards, `scripts/filter_markets.py`
+    # and the tests. Beware the real field is `select_velocity_gate_enabled` --
+    # there is no `select_velocity_gate` anywhere in the repo.
+    "select_max_queue_minutes": "filter_std_queue_max_clear_min",
+    "enforce_max_queue_minutes": "filter_std_gate_queue_max_on",
+    "select_movement_window_sec": "filter_live_vel_lookback_sec",
+    "select_min_movement_usd": "filter_live_vel_min_usd",
+    "select_velocity_gate_enabled": "filter_live_gate_velocity_on",
+    "select_min_activity_ratio": "filter_live_activity_min_ratio",
+    "select_min_range_cents": "filter_live_move_min_range_cents",
+    "select_volatility_window_sec": "filter_live_move_lookback_sec",
     # Quoting
     "quote_both_sides": "bot_quote_both_sides_on",
     "ticks_below_ask": "bot_quote_ticks_below_ask",
@@ -187,6 +200,7 @@ class _ConfigBase:
                 "cancel_net_oneway_ms", "min_book_depth_sh", "couple_risk_frac",
                 "quote_window_frac", "stat_gate_bankroll_fraction",
                 "select_max_book_spread", "filter_std_spread_max_book",
+                "filter_common_spread_max_cents",
                 "tau_cancel_sec", "tau_post_sec",
             }
             for ro_prop in _READ_ONLY_PROPERTIES:
@@ -246,11 +260,48 @@ class MakerConfig(_ConfigBase):
     # =========================================================================
     # 1. Active / In-Play Markets (Live Sports & Esports)
     filter_live_vol_min_24h_usd: float = 35_000.0
+    # THE MOVEMENT GATE (#74, #416). 24h volume says a market traded SOMETIME;
+    # it says nothing about whether anything is happening now. A shadow run sat
+    # 4.3 hours on a market with 1,777 shares ahead at 0.23 and zero traded --
+    # inside every existing bar, tying up resting capital the whole time.
+    # `filter_live_vel_lookback_sec` is the lookback, `filter_live_vel_min_usd`
+    # the notional that must have changed hands inside it.
+    #
+    # ENFORCED 2026-09-08 (operator directive, unified-universe redesign).
+    # Shipped 2026-08 at 0.0 -- record only -- so the bar could be chosen from
+    # the recorded `movement_usd` column. The unified universe now pays one tape
+    # read per volume-qualified market BEFORE its two book fetches, so a stale
+    # market costs one request instead of three, and a recorded metric nobody
+    # acted on became a real gate.
+    #
+    # WIDENED 2026-10-08 (#416). $500/30m refused ordinary live-sports point
+    # swings: a 5c-8c tennis move on modest size prints roughly $100-300 of
+    # notional per 30m, so an active match read as a stall. $200 keeps a wide
+    # margin above a true stall ($0 printed for hours) while admitting a
+    # normally-trading sports book, and stays far below the $125k/24h volume bar
+    # -- whose markets average ~$2.6k per 30 minutes. The range gate below is
+    # ANDed with this one, so a one-tick flicker still needs real notional.
+    # Operator-tunable without code via HUNTER_MIN_MOVEMENT_USD and
+    # HUNTER_MOVEMENT_WINDOW_SEC. Unmeasured tape stays fail-open:
+    # `movement_reject` passes None, because a failed HTTP call must not empty
+    # the universe on one bad minute.
     filter_live_vel_lookback_sec: float = 1800.0        # 30m lookback window
     filter_live_vel_min_usd: float = 200.0
+    # Volatility / range gate (#416, #434). 2.0c minimum swing over the
+    # volatility window refuses flat markets while active live sports/eSports
+    # are exempted and prioritized. That window is distinct from the 30-minute
+    # movement window above -- 2h by default. Operator-tunable via
+    # HUNTER_MIN_RANGE_CENTS and HUNTER_VOLATILITY_WINDOW_SEC.
     filter_live_move_lookback_sec: float = 7200.0       # 2h lookback window
     filter_live_move_min_range_cents: float = 2.0
     filter_live_gate_velocity_on: bool = True
+    # RELATIVE ACTIVITY RATIO GATE (loose baseline). Absolute 24h volume is
+    # misleading: a flat $1M politics market and an active $10k live sports game
+    # both clear a volume floor, but only one is actually trading. This gate
+    # measures RECENT tape against total size: movement_usd (last movement
+    # window) / volume_24h >= threshold. Loose initial threshold (0.0 = off by
+    # default) so the baseline run observes a wide pool before we tighten it.
+    # Operator-tunable via HUNTER_MIN_ACTIVITY_RATIO. 0.0 disables the gate.
     filter_live_activity_min_ratio: float = 0.0
 
     # 2. Standard / Pre-Match & Long-Dated Markets
@@ -262,8 +313,35 @@ class MakerConfig(_ConfigBase):
     filter_std_time_max_days_to_resolve: float = 30.0
     filter_std_rank_sample_window_sec: float = 1800.0
     filter_std_rerank_interval_sec: float = 600.0
+    # THE MAKER-QUEUE BAR (#652 moved this from `scoring/config.py`; the picker
+    # gated on it, the fleet did not). The three bars around it are FLOORS on
+    # depth, and from the maker's side depth near mid IS the queue ahead of us --
+    # the depth bars protect our ability to EXIT, which is real, and both point
+    # the wrong way for queueing. 24h volume measures market-wide tape across
+    # every price, so a market can clear six figures a day while trading nothing
+    # at `mid - 2.5c`, the only level our order ever sits at. None of the three
+    # measures the resting size at OUR price against the volume at OUR price.
+    #
+    # Session B of run-2809a7161de1: 344 orders, 10 markets, 30 minutes, zero
+    # fills, and not one order's queue drained. Minutes of that market's own
+    # observed volume needed to clear its median queue -- bonzi-halys 686,
+    # bellucc-darderi 837, kouame-basavar 924, bolt-ruiz 12,332, rocha-mmoh
+    # 50,397, and four markets with no observed trade at our price at all.
+    #
+    # 15 minutes is anchored to `bot_risk_pairs_exit_window_sec` = 900: a queue
+    # that cannot clear inside the window where a naked leg is still called
+    # fresh is a queue we should never join. 0 disables, as everywhere else.
     filter_std_queue_max_clear_min: float = 15.0
+    # RECORD-ONLY FIRST. At 15 minutes the measured universe scores 686 at
+    # best, so enforcing on day one refuses every market and takes the bot
+    # silent. That is correct for the run we measured and still the wrong way
+    # to ship it: record the number for a day, then decide with real data.
     filter_std_gate_queue_max_on: bool = False
+    # Sister bar: the placement-time queue-clear gate
+    # (`bot_order_queue_max_clear_min` = 60.0, `bot_order_gate_queue_clear_on`
+    # = False) judges the same queue minutes at the bid actually posted. Same
+    # arithmetic (`scoring/selector.py`), different moment -- see
+    # `docs/issues/398-maker-queue-bars.md` for why the two stay separate.
 
     # =========================================================================
     # SCOPE 2: BOT ENGINE (SHARED EQUALLY BY LIVE TRADING & SHADOW PAPER MODE)
@@ -428,6 +506,18 @@ class MakerConfig(_ConfigBase):
         if self.wide_book_trial is not None:
             return self.wide_book_trial
         return round(self.max_book_spread * self.select_spread_pct, 6)
+
+    @property
+    def filter_common_spread_max_cents(self) -> float:
+        """The picking bar's canonical name (#652), forwarding the derived value.
+
+        Read-only, and a price FRACTION rather than whole cents -- the same
+        convention `bot_quote_price_band_min_cents` (0.10) and
+        `bot_quote_spread_static_offset_cents` (0.020) already use. Forwarding
+        `select_max_book_spread` keeps the rehearsal trial pass-through and the
+        six-decimal rounding in one place instead of a second derivation.
+        """
+        return self.select_max_book_spread
 
     @property
     def cancel_net_oneway_ms(self) -> float:
