@@ -195,6 +195,9 @@
     }
     .scope-venue { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
     .scope-maker { background: rgba(14, 165, 233, 0.15); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.3); }
+    .scope-screener { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
+    .scope-engine { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+    .badge-env { background: rgba(167, 139, 250, 0.15); color: #c084fc; border: 1px solid rgba(167, 139, 250, 0.3); font-family: var(--font-mono); font-size: 0.68rem; padding: 0.1rem 0.35rem; border-radius: 4px; display: inline-block; }
 
     .grid-2 {
       display: grid;
@@ -496,87 +499,477 @@
       </div>
     </section>
 
-    <!-- Section 3: Core Risk Parameters -->
+    <!-- Section 3: Canonical Strategy & Risk Configuration -->
     <section id="risk-params" class="section-card">
       <div class="card-header">
         <h2 class="card-title">
-          <span>3.</span> Core Brain Risk Parameters
+          <span>3.</span> Canonical Strategy &amp; Screener Parameters
         </h2>
-        <span class="pill pill-purple">Configured in core_brain/</span>
+        <span class="pill pill-purple">Single-Source Config (core_brain &amp; scoring)</span>
       </div>
 
-      <table>
-        <thead>
-          <tr>
-            <th>Parameter Name</th>
-            <th>Default Value</th>
-            <th>Enforcement Location</th>
-            <th>Operational Role &amp; Protection</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>max_completable_pair_cost</code> <span class="unit-badge badge-usd">[USD]</span></td>
-            <td><code>1.00</code> ($1.00)</td>
-            <td><code>core_brain/risk.py</code></td>
-            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Completable-Cost Gate</strong>: Refuses any maker bid if <code>bid + best_ask(other_leg) &ge; 1.00</code>. Guarantees a single fill can be hedged at market ask without loss.</td>
-          </tr>
-          <tr>
-            <td><code>max_pair_cost</code> <span class="unit-badge badge-usd">[USD]</span></td>
-            <td><code>0.99</code> ($0.99)</td>
-            <td><code>core_brain/config.py</code></td>
-            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Profit Condition</strong>: Hard ceiling on combined both-maker bids (<code>up_bid + down_bid</code>) to ensure net merge profit.</td>
-          </tr>
-          <tr>
-            <td><code>max_naked_usd</code> <span class="unit-badge badge-usd">[USD]</span></td>
-            <td><code>6%</code> of portfolio ($5.40 at $90, $6.00 at $100)</td>
-            <td><code>core_brain/risk.py</code></td>
-            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Dynamic Directional Cap</strong>: Maker risk budget (6% of account value). Denominator for quadratic size ladder &amp; inventory skew spring; hard block halts quoting when exceeded.</td>
-          </tr>
-          <tr>
-            <td><code>max_order_usd</code> <span class="unit-badge badge-usd">[USD]</span></td>
-            <td><code>25%</code> of portfolio ($22.50 at $90, $25.00 at $100)</td>
-            <td><code>core_brain/venue.py</code></td>
-            <td><span class="scope-badge scope-venue">Venue Scope</span> <strong>Dynamic Single Order Ceiling</strong>: 25% of account value ($1.00 minimum floor). Enforced per-order via <code>order_caps()</code> and <code>derive_dynamic_caps</code> across 3 order managers/enforcers to prevent single-fill blowout.</td>
-          </tr>
-          <tr>
-            <td><code>max_total_usd</code> <span class="unit-badge badge-usd">[USD]</span></td>
-            <td><code>90%</code> of portfolio ($81.00 at $90, $90.00 at $100)</td>
-            <td><code>core_brain/venue.py</code></td>
-            <td><span class="scope-badge scope-venue">Venue Scope</span> <strong>Dynamic Bankroll Ceiling</strong>: 90% of total portfolio value deployed across all open orders and unmerged inventory. Enforced at venue level.</td>
-          </tr>
-          <tr>
-            <td><code>max_skew_offset</code> <span class="unit-badge badge-offset">[cents Offset]</span></td>
-            <td><code>0.015</code> (1.5¢)</td>
-            <td><code>core_brain/risk.py</code></td>
-            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Inventory Skew Spring</strong>: Pushes heavy-leg bid outward and pulls light-leg bid closer to mid by up to 1.5¢ offset to accelerate inventory flattening.</td>
-          </tr>
-          <tr>
-            <td><code>emergency_hedge_pct</code> <span class="unit-badge badge-pct">[% Ratio 0..1]</span></td>
-            <td><code>0.8</code> (80%)</td>
-            <td><code>core_brain/quotes.py</code></td>
-            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Taker Cross Trigger</strong>: At 80% (0.80 ratio) of <code>max_naked_usd</code>, permits the light side to cross the spread and take the hedge before cap freezes.</td>
-          </tr>
-          <tr>
-            <td><code>max_book_spread</code> <span class="unit-badge badge-offset">[cents Offset]</span></td>
-            <td><code>0.06</code> (6¢)</td>
-            <td><code>core_brain/config.py</code></td>
-            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Book Health Spread Gate</strong>: Rejects books with bid-ask spread wider than 6¢ to prevent quoting into illiquid spreads.</td>
-          </tr>
-          <tr>
-            <td><code>min_book_depth_shares</code> <span class="unit-badge badge-shares">[Shares]</span></td>
-            <td><code>200.0</code> shares</td>
-            <td><code>core_brain/config.py</code></td>
-            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Book Depth Floor</strong>: Rejects markets with less than 200 shares in top-3 levels to guarantee exit liquidity.</td>
-          </tr>
-          <tr>
-            <td><code>decided_price</code> <span class="unit-badge badge-usd">[USD]</span></td>
-            <td><code>0.02</code> (2¢ / 98¢)</td>
-            <td><code>core_brain/config.py</code></td>
-            <td><span class="scope-badge scope-maker">Maker Scope</span> <strong>Decided Outcome Gate</strong>: Refuses to quote markets priced &le; 0.02 or &ge; 0.98 where outcome is resolved.</td>
-          </tr>
-        </tbody>
-      </table>
+      <p style="margin-bottom: 1.5rem; color: var(--text-secondary); font-size: 0.95rem;">
+        Variables are organized into strict canonical scopes. <strong>The Bot Engine runs the exact same parameters whether in Live Mode (Real Trading) or Shadow Mode (Paper Trading)</strong>; the only distinction is the execution adapter (signed live orders vs. paper fill simulator). All profit derives strictly from pair-assembly merge arbitrage (<code>$1.00 - pair cost</code>); graduated spread markets carry $0.00 maker rewards and rebate accrual is disabled.
+      </p>
+
+      <!-- Scope 1: Market Screener -->
+      <div style="margin-bottom: 2rem;">
+        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem;">
+          <h3 style="font-family:var(--font-display);font-size:1.25rem;color:var(--text-primary)">
+            SCOPE 1: MARKET FILTERING (MARKET SCREENER)
+          </h3>
+          <span class="scope-badge scope-screener">scoring/config.py</span>
+        </div>
+        <p style="font-size:0.88rem;color:var(--text-muted);margin-bottom:1rem;">
+          Filters the universe before the bot ever considers quoting. Separated into active in-play and standard pre-match conditions.
+        </p>
+
+        <!-- Subgroup 1: Active / In-Play Markets -->
+        <h4 style="font-family:var(--font-display);font-size:1.05rem;color:#38bdf8;margin:1rem 0 0.5rem 0;">
+          1. Active / In-Play Markets (Live Sports &amp; Esports via /events?live=true)
+        </h4>
+        <table>
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Active Value</th>
+              <th>Env Override</th>
+              <th>Operational Role &amp; Enforcement Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>select_min_volume_24h_usd_live</code></td>
+              <td><code>$35,000.00</code></td>
+              <td><span class="badge-env">HUNTER_VOLUME_LIVE_USD</span></td>
+              <td><strong>Live Event 24h Volume Floor</strong>: Filters out thin in-play matches to protect against dead-flat, untradable tape during ongoing matches.</td>
+            </tr>
+            <tr>
+              <td><code>select_movement_window_sec</code></td>
+              <td><code>1800s (30m)</code></td>
+              <td><span class="badge-env">HUNTER_MOVEMENT_WINDOW_SEC</span></td>
+              <td><strong>Movement Lookback Window</strong>: Evaluates recent trade tape activity to verify active trading before admitting candidates.</td>
+            </tr>
+            <tr>
+              <td><code>select_min_movement_usd</code></td>
+              <td><code>$200.00</code></td>
+              <td><span class="badge-env">HUNTER_MIN_MOVEMENT_USD</span></td>
+              <td><strong>Min Traded Notional</strong>: Disqualifies quiet markets that traded earlier in the day but have halted trading now.</td>
+            </tr>
+            <tr>
+              <td><code>select_min_activity_ratio</code></td>
+              <td><code>0.0% (off)</code></td>
+              <td><span style="color:var(--text-muted)">—</span></td>
+              <td><strong>Activity Ratio Bar</strong>: Minimum recent volume turnover relative to total market size (disabled at 0.0%).</td>
+            </tr>
+            <tr>
+              <td><code>select_min_range_cents</code></td>
+              <td><code>2.0¢</code></td>
+              <td><span style="color:var(--text-muted)">—</span></td>
+              <td><strong>Min Price Range Volatility</strong>: Rejects static, pinned markets lacking two-sided price discovery.</td>
+            </tr>
+            <tr>
+              <td><code>select_volatility_window_sec</code></td>
+              <td><code>7200s (2h)</code></td>
+              <td><span style="color:var(--text-muted)">—</span></td>
+              <td><strong>Volatility Evaluation Horizon</strong>: Measures high-to-low price dispersion across 2-hour rolling window.</td>
+            </tr>
+            <tr>
+              <td><code>select_velocity_gate_enabled</code></td>
+              <td><code>True</code></td>
+              <td><span style="color:var(--text-muted)">—</span></td>
+              <td><strong>Velocity Gate Active</strong>: Enforces combined volume and price-range filters on live market candidates.</td>
+            </tr>
+            <tr>
+              <td><code>select_max_days_to_resolve</code></td>
+              <td><code>30.0 days</code></td>
+              <td><span style="color:var(--text-muted)">—</span></td>
+              <td><strong>Max Resolution Horizon</strong>: Live events typically resolve same-day; 30-day ceiling excludes long-dated contracts.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Subgroup 2: Standard Markets -->
+        <h4 style="font-family:var(--font-display);font-size:1.05rem;color:#38bdf8;margin:1.5rem 0 0.5rem 0;">
+          2. Standard / Pre-Match &amp; Long-Dated Markets (Politics, Macro, Pre-Match Sports)
+        </h4>
+        <table>
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Active Value</th>
+              <th>Env Override</th>
+              <th>Operational Role &amp; Enforcement Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>select_min_volume_24h_usd</code></td>
+              <td><code>$125,000.00</code></td>
+              <td><span class="badge-env">HUNTER_VOLUME_USD</span></td>
+              <td><strong>Standard 24h Volume Floor</strong>: Ensures sufficient market-wide liquidity across the full lifecycle before entering.</td>
+            </tr>
+            <tr>
+              <td><code>select_min_top3_depth_usd</code></td>
+              <td><code>$500.00</code></td>
+              <td><span class="badge-env">HUNTER_DEPTH_TRIAL_USD</span></td>
+              <td><strong>Top-3 Level Depth Floor</strong>: Refuses books with top-3 bid depth &le; $500 on either leg to guarantee safe exit liquidity.</td>
+            </tr>
+            <tr>
+              <td><code>select_max_book_spread</code></td>
+              <td><code>2.05¢ (0.0205)</code></td>
+              <td><span style="color:var(--text-muted)">Derived</span></td>
+              <td><strong>Derived Picking Spread Cap</strong>: Derived as <code>max_book_spread * 41/120</code> (2.05¢); ensures bot only picks tight touches.</td>
+            </tr>
+            <tr>
+              <td><code>select_max_queue_minutes</code></td>
+              <td><code>15.0m</code></td>
+              <td><span style="color:var(--text-muted)">—</span></td>
+              <td><strong>Maker Queue Bar</strong>: Screens out congested queues where estimated queue drain time exceeds pairs action window (15m).</td>
+            </tr>
+            <tr>
+              <td><code>enforce_max_queue_minutes</code></td>
+              <td><code>False</code></td>
+              <td><span style="color:var(--text-muted)">—</span></td>
+              <td><strong>Queue Bar Enforcement</strong>: Currently record-only telemetry to prevent taking bot silent during calibration.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Scope 2: Bot Engine -->
+      <div>
+        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem;">
+          <h3 style="font-family:var(--font-display);font-size:1.25rem;color:var(--text-primary)">
+            SCOPE 2: BOT ENGINE (SHARED EQUALLY BY LIVE TRADING &amp; SHADOW MODE)
+          </h3>
+          <span class="scope-badge scope-engine">core_brain/config.py</span>
+        </div>
+        <p style="font-size:0.88rem;color:var(--text-muted);margin-bottom:1rem;">
+          The bot's execution rules are identical across Live Trading and Shadow Paper Mode, grouped across the three trading lifecycle phases.
+        </p>
+
+        <!-- Phase 1: Quoting Phase -->
+        <h4 style="font-family:var(--font-display);font-size:1.05rem;color:#10b981;margin:1rem 0 0.5rem 0;">
+          1. Quoting Phase (Entry, Sizing &amp; Book Health)
+        </h4>
+        <table>
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Active Value</th>
+              <th>Category</th>
+              <th>Operational Role &amp; Enforcement Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>bankroll_usd</code></td>
+              <td><code>$100.00</code></td>
+              <td>Capital Baseline</td>
+              <td>Baseline paper/virtual capital anchor. Env: <span class="badge-env">SPREAD_HUNTER_BANKROLL</span>.</td>
+            </tr>
+            <tr>
+              <td><code>naked_risk_pct</code></td>
+              <td><code>6.0%</code></td>
+              <td>Dynamic Risk</td>
+              <td>Allocates 6% of portfolio value ($5.40 at $90, $6.00 at $100 baseline) as max unhedged single-leg budget.</td>
+            </tr>
+            <tr>
+              <td><code>order_risk_pct</code></td>
+              <td><code>25.0%</code></td>
+              <td>Dynamic Risk</td>
+              <td>Enforces 25% portfolio ceiling on any individual order size calculation ($22.50 at $90).</td>
+            </tr>
+            <tr>
+              <td><code>bankroll_ceiling_pct</code></td>
+              <td><code>90.0%</code></td>
+              <td>Dynamic Risk</td>
+              <td>Global fleet ceiling: halts all new quotes across all markets if open notional reaches 90% of account value.</td>
+            </tr>
+            <tr>
+              <td><code>max_order_usd</code></td>
+              <td><code>$25.00</code></td>
+              <td>Venue Limit</td>
+              <td>Hard ceiling on order notional enforced at venue level via <code>venue.py:order_caps</code>.</td>
+            </tr>
+            <tr>
+              <td><code>max_total_usd</code></td>
+              <td><code>$90.00</code></td>
+              <td>Venue Limit</td>
+              <td>Hard ceiling on total fleet notional enforced at venue level via <code>venue.py:order_caps</code>.</td>
+            </tr>
+            <tr>
+              <td><code>couple_risk_pct</code></td>
+              <td><code>1.0%</code></td>
+              <td>Sizing Grid</td>
+              <td>1% fractional couple limit controlling notional commitment per round-trip opportunity.</td>
+            </tr>
+            <tr>
+              <td><code>min_couple_usd</code></td>
+              <td><code>$10.00</code></td>
+              <td>Sizing Grid</td>
+              <td>Minimum capital allocation floor required to engage a new candidate market.</td>
+            </tr>
+            <tr>
+              <td><code>price_band_low</code></td>
+              <td><code>$0.10 (10¢)</code></td>
+              <td>Pricing Band</td>
+              <td><strong>Lower Probability Bound</strong>: Rejects bids below 10¢ where adverse selection risk spikes.</td>
+            </tr>
+            <tr>
+              <td><code>price_band_high</code></td>
+              <td><code>$0.90 (90¢)</code></td>
+              <td>Pricing Band</td>
+              <td><strong>Upper Probability Bound</strong>: Rejects bids above 90¢ where spread capture margin is negligible.</td>
+            </tr>
+            <tr>
+              <td><code>enforce_price_band</code></td>
+              <td><code>True</code></td>
+              <td>Pricing Band</td>
+              <td>Restricts all quoting strictly within the implied odds sweet-spot band: <code>$0.10 &le; P &le; $0.90</code>.</td>
+            </tr>
+            <tr>
+              <td><code>dynamic_offset_enabled</code></td>
+              <td><code>True</code></td>
+              <td>Dynamic Offsets</td>
+              <td>Enables spread-proportional quote distance scaling.</td>
+            </tr>
+            <tr>
+              <td><code>dynamic_offset_multiplier</code></td>
+              <td><code>0.50</code></td>
+              <td>Dynamic Offsets</td>
+              <td>Places resting maker quotes at 50% of the inside spread away from mid.</td>
+            </tr>
+            <tr>
+              <td><code>dynamic_offset_min_cents</code></td>
+              <td><code>1¢</code></td>
+              <td>Dynamic Offsets</td>
+              <td>Clamps minimum offset to 1 tick below touch.</td>
+            </tr>
+            <tr>
+              <td><code>dynamic_offset_max_cents</code></td>
+              <td><code>20¢</code></td>
+              <td>Dynamic Offsets</td>
+              <td>Clamps maximum offset to 20¢ to ensure quotes remain fillable.</td>
+            </tr>
+            <tr>
+              <td><code>tick_size</code></td>
+              <td><code>$0.01 (1¢)</code></td>
+              <td>Venue Grid</td>
+              <td>Enforces 1¢ price discretization across all resting quotes.</td>
+            </tr>
+            <tr>
+              <td><code>min_quote_shares</code></td>
+              <td><code>5 shares</code></td>
+              <td>Venue Protocol</td>
+              <td>Venue minimum order size protocol floor. Refuses smaller orders.</td>
+            </tr>
+            <tr>
+              <td><code>max_book_spread</code></td>
+              <td><code>$0.06 (6¢)</code></td>
+              <td>Book Health</td>
+              <td>Continuous gate: rejects books with bid-ask spread wider than 6¢ to prevent illiquid quotes.</td>
+            </tr>
+            <tr>
+              <td><code>max_spread_from_mid</code></td>
+              <td><code>$0.15 (15¢)</code></td>
+              <td>Book Health</td>
+              <td>Resting-offset ceiling preventing quotes placed too deep from ever filling.</td>
+            </tr>
+            <tr>
+              <td><code>require_two_sided_when_flat</code></td>
+              <td><code>True</code></td>
+              <td>Book Health</td>
+              <td>Requires both UP and DOWN order books to have active bids before entering flat positions.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Phase 2: Open Positions Management -->
+        <h4 style="font-family:var(--font-display);font-size:1.05rem;color:#10b981;margin:1.5rem 0 0.5rem 0;">
+          2. Open Positions Management Phase (Inventory &amp; Merge)
+        </h4>
+        <table>
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Active Value</th>
+              <th>Category</th>
+              <th>Operational Role &amp; Enforcement Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>max_pair_cost</code></td>
+              <td><code>$0.99</code></td>
+              <td>Spread Capture</td>
+              <td><strong>Profit Ceiling</strong>: Hard ceiling on combined maker bids (<code>up_bid + down_bid</code>) to ensure guaranteed profit on merge ($1.00 - cost). Env: <span class="badge-env">HUNTER_PAIR_COST_CAP</span>.</td>
+            </tr>
+            <tr>
+              <td><code>max_completable_pair_cost</code></td>
+              <td><code>$1.00</code></td>
+              <td>Parity Gate</td>
+              <td><strong>Completable-Cost Gate</strong>: Refuses any maker bid if <code>bid + best_ask(other_leg) &ge; 1.00</code>. Guarantees any single fill can be hedged at market ask without loss. Env: <span class="badge-env">HUNTER_COMPLETABLE_CAP</span>.</td>
+            </tr>
+            <tr>
+              <td><code>enforce_completable_pair_cost</code></td>
+              <td><code>True</code></td>
+              <td>Parity Gate</td>
+              <td>Strictly gates maker bids on instantaneous taker hedge viability.</td>
+            </tr>
+            <tr>
+              <td><code>strict_paired_inventory</code></td>
+              <td><code>True</code></td>
+              <td>Inventory Skew</td>
+              <td>Blocks quoting the heavy leg during inventory imbalance; sizes light leg strictly to balance.</td>
+            </tr>
+            <tr>
+              <td><code>target_balance</code></td>
+              <td><code>92% (0.92)</code></td>
+              <td>Inventory Skew</td>
+              <td>Inventory balance target (min_leg / max_leg). Triggers skew spring when balance drops under 92%.</td>
+            </tr>
+            <tr>
+              <td><code>max_skew_offset</code></td>
+              <td><code>$0.015 (1.5¢)</code></td>
+              <td>Inventory Skew</td>
+              <td>Pushes heavy-leg outward and pulls light-leg closer to mid by up to 1.5¢ to accelerate rebalancing.</td>
+            </tr>
+            <tr>
+              <td><code>min_reward_offset</code></td>
+              <td><code>$0.005 (0.5¢)</code></td>
+              <td>Inventory Skew</td>
+              <td>Enforces minimum 0.5¢ resting margin from mid.</td>
+            </tr>
+            <tr>
+              <td><code>merge_max_loss_per_share</code></td>
+              <td><code>$0.01 (1¢)</code></td>
+              <td>Capital Efficiency</td>
+              <td>Prevents merging pairs at a loss; holds pair until parity conditions are met.</td>
+            </tr>
+            <tr>
+              <td><code>merge_velocity_hold_days</code></td>
+              <td><code>30.0 days</code></td>
+              <td>Capital Efficiency</td>
+              <td>Maximum inventory hold duration before initiating capital recycling.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Phase 3: Protection, Stops & Lifecycle -->
+        <h4 style="font-family:var(--font-display);font-size:1.05rem;color:#10b981;margin:1.5rem 0 0.5rem 0;">
+          3. Protection, Stops, Requotes &amp; Order Lifecycle Phase
+        </h4>
+        <table>
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Active Value</th>
+              <th>Category</th>
+              <th>Operational Role &amp; Enforcement Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>requote_interval_sec</code></td>
+              <td><code>2.0s</code></td>
+              <td>Order Cadence</td>
+              <td>Minimum amendment cadence to prevent venue rate limit exhaustion.</td>
+            </tr>
+            <tr>
+              <td><code>requote_dead_band</code></td>
+              <td><code>$0.03 (3¢)</code></td>
+              <td>Queue Protection</td>
+              <td>Suppresses unnecessary cancel-replace churn when target shifts &lt; 3¢. Env: <span class="badge-env">HUNTER_REQUOTE_DEAD_BAND</span>.</td>
+            </tr>
+            <tr>
+              <td><code>requote_hold_below_target</code></td>
+              <td><code>$0.05 (5¢)</code></td>
+              <td>Queue Protection</td>
+              <td>Holds passive resting quote up to 5¢ below target to retain queue priority.</td>
+            </tr>
+            <tr>
+              <td><code>requote_hold_queue_shares</code></td>
+              <td><code>0 shares</code></td>
+              <td>Queue Protection</td>
+              <td>Protects valuable queue position from replacement based on queue size ahead.</td>
+            </tr>
+            <tr>
+              <td><code>poll_interval_sec</code></td>
+              <td><code>1.0s</code></td>
+              <td>Fleet Cadence</td>
+              <td>Trader loop evaluation frequency rotating active markets and float marks.</td>
+            </tr>
+            <tr>
+              <td><code>sweep_interval</code></td>
+              <td><code>Every tick / poll</code></td>
+              <td>Reconciliation</td>
+              <td>Cadence for querying on-chain USDC balance and reconciling float marks.</td>
+            </tr>
+            <tr>
+              <td><code>enable_pairs_rule</code></td>
+              <td><code>True</code></td>
+              <td>Single-Buy Rescue</td>
+              <td>Enforces 15-minute action window on single-sided fills to complete pair or exit.</td>
+            </tr>
+            <tr>
+              <td><code>pairs_exit_window_sec</code></td>
+              <td><code>900s (15m)</code></td>
+              <td>Single-Buy Rescue</td>
+              <td>15-minute window from last fill timestamp before naked leg is classified aged-out.</td>
+            </tr>
+            <tr>
+              <td><code>enable_aged_out_rescue</code></td>
+              <td><code>True</code></td>
+              <td>Single-Buy Rescue</td>
+              <td>Activates automated liquidator for unhedged legs exceeding the action window.</td>
+            </tr>
+            <tr>
+              <td><code>aged_out_rescue_lead_sec</code></td>
+              <td><code>900s (15m)</code></td>
+              <td>Single-Buy Rescue</td>
+              <td>Forces position closure 15 minutes before market resolution.</td>
+            </tr>
+            <tr>
+              <td><code>stop_loss_mode</code></td>
+              <td><code>NONE</code></td>
+              <td>Stop-Loss System</td>
+              <td>Defensive liquidation rule mode (<code>NONE</code>, <code>ABSOLUTE_DROP</code>, <code>PERCENTAGE_DROP</code>). Env: <span class="badge-env">HUNTER_STOP_LOSS_MODE</span>.</td>
+            </tr>
+            <tr>
+              <td><code>drop_cents</code></td>
+              <td><code>$0.05 (5¢)</code></td>
+              <td>Stop-Loss System</td>
+              <td>Triggers defensive exit if mid drops 5¢ below acquisition cost. Env: <span class="badge-env">HUNTER_DROP_CENTS</span>.</td>
+            </tr>
+            <tr>
+              <td><code>drawdown_pct</code></td>
+              <td><code>10.0%</code></td>
+              <td>Stop-Loss System</td>
+              <td>Single-market position drawdown threshold. Env: <span class="badge-env">HUNTER_DRAWDOWN_PCT</span>.</td>
+            </tr>
+            <tr>
+              <td><code>emergency_drawdown_pct</code></td>
+              <td><code>75.0%</code></td>
+              <td>Circuit Breaker</td>
+              <td>Catastrophic market collapse trigger for immediate liquidation. Env: <span class="badge-env">HUNTER_EMERGENCY_DRAWDOWN_PCT</span>.</td>
+            </tr>
+            <tr>
+              <td><code>emergency_hedge_pct</code></td>
+              <td><code>80% (0.80)</code></td>
+              <td>Emergency Defense</td>
+              <td>At 80% of <code>max_naked_usd</code>, authorizes light side to cross spread and take hedge. Env: <span class="badge-env">HUNTER_EMERGENCY_HEDGE_FRAC</span>.</td>
+            </tr>
+            <tr>
+              <td><code>enable_emergency_hedge</code></td>
+              <td><code>True</code></td>
+              <td>Emergency Defense</td>
+              <td>Authorizes spread-crossing defensive hedge orders under severe exposure deficit.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <!-- Section 4: Architecture Diagram with Timings -->

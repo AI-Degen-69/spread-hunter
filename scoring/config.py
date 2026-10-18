@@ -46,13 +46,13 @@ class MakerConfig(CoreMakerConfig):
     bankroll_usd: float = PICKER_PROFILE["bankroll_usd"]
     max_naked_usd: float = PICKER_PROFILE["max_naked_usd"]
 
-    # Rebate qualification (research/btc_5min_market_spec.md):
-    #   rewardsMinSize = 50 shares, rewardsMaxSpread = 4.5c from mid.
-    # Quotes outside these earn no rebate, so they must not be posted casually.
-    # THE VENUE'S FACT, not our policy: core's `max_spread_from_mid` is 0.15,
-    # the fleet's own resting-offset ceiling (loose baseline, 2026-10-12).
-    # `min_quote_shares` and `max_pair_cost` below are the same kind of thing --
-    # picker-side numbers with no shared owner.
+    # Market screener depth qualification & spread velocity filters:
+    #   min_quote_shares: 50 shares minimum depth floor to filter thin order books.
+    #   max_spread_from_mid: 4.5c maximum offset from mid to guarantee competitive,
+    #   tight trading touches.
+    #   max_pair_cost: 0.995 candidate pair-cost ceiling for candidate selection.
+    # Note: Bot Engine operates strictly on pair-assembly merge arbitrage ($1.00 - pair cost).
+    # Maker rewards/rebates are $0.00 in graduated spread markets; accrual is disabled.
     min_quote_shares: int = PICKER_PROFILE["min_quote_shares"]
     max_spread_from_mid: float = PICKER_PROFILE["max_spread_from_mid"]
     max_pair_cost: float = PICKER_PROFILE["max_pair_cost"]

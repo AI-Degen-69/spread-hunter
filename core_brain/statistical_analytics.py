@@ -1,4 +1,4 @@
-﻿"""The statistics surface the analytics charts read, built from the registry.
+"""The statistics surface the analytics charts read, built from the registry.
 
 The Performance & Analytics tab has five charts â€” position-return distribution,
 pair-cost density, outcome-probability bell, post-fill markout, Monte Carlo â€”
