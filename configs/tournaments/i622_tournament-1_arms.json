@@ -2,7 +2,6 @@
   {
     "name": "hold-remove",
     "env": {
-      "HUNTER_REFUSAL_HOLD_POLICY": "remove",
       "HUNTER_BANKROLL": "100",
       "HUNTER_STOP_LOSS_MODE": "NONE",
       "HUNTER_DROP_CENTS": "0.05",
@@ -13,7 +12,6 @@
   {
     "name": "hold-keep",
     "env": {
-      "HUNTER_REFUSAL_HOLD_POLICY": "keep",
       "HUNTER_BANKROLL": "100",
       "HUNTER_STOP_LOSS_MODE": "NONE",
       "HUNTER_DROP_CENTS": "0.05",
@@ -24,7 +22,6 @@
   {
     "name": "hold-drift",
     "env": {
-      "HUNTER_REFUSAL_HOLD_POLICY": "drift",
       "HUNTER_REFUSAL_HOLD_DRIFT": "0.02",
       "HUNTER_BANKROLL": "100",
       "HUNTER_STOP_LOSS_MODE": "NONE",

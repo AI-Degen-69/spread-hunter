@@ -1,15 +1,11 @@
 [
   {
     "name": "the-accountant",
-    "env": {
-      "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": "2.0"
-    }
+    "env": {}
   },
   {
     "name": "the-patient-one",
-    "env": {
-      "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": "8.0"
-    }
+    "env": {}
   },
   {
     "name": "the-surgeon",
@@ -50,15 +46,10 @@
   },
   {
     "name": "the-graceful",
-    "env": {
-      "HUNTER_SINGLE_BUY_GRACE_SEC": "45"
-    }
+    "env": {}
   },
   {
     "name": "the-strict-parent",
-    "env": {
-      "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": "2.0",
-      "HUNTER_SINGLE_BUY_GRACE_SEC": "0"
-    }
+    "env": {}
   }
 ]

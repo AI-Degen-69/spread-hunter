@@ -628,17 +628,20 @@ def test_i608_character_arms_plan(tmp_path: Path):
     assert [a.dash_port for a in plan.arms] == list(range(8801, 8811))
 
     # One knob per character; the-gambler and the-strict-parent define two.
+    # #683 purged HUNTER_STOP_LOSS_TRIGGER_USD_CENTS and
+    # HUNTER_SINGLE_BUY_GRACE_SEC; the-accountant, the-patient-one,
+    # the-graceful and the-strict-parent therefore carry no knobs.
     expected_knobs = {
-        "the-accountant": {"HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"},
-        "the-patient-one": {"HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"},
+        "the-accountant": set(),
+        "the-patient-one": set(),
         "the-surgeon": {"HUNTER_DYNAMIC_OFFSET_MULT"},
         "the-daydreamer": {"HUNTER_DYNAMIC_OFFSET_MULT"},
         "the-regular": {"HUNTER_DYNAMIC_OFFSET_MAX_CENTS"},
         "the-metronome": {"HUNTER_REQUOTE_DEAD_BAND"},
         "the-gambler": {"HUNTER_REQUOTE_HOLD_BELOW", "HUNTER_REQUOTE_HOLD_QUEUE"},
         "the-chaperone": {"HUNTER_REQUOTE_HOLD_QUEUE"},
-        "the-graceful": {"HUNTER_SINGLE_BUY_GRACE_SEC"},
-        "the-strict-parent": {"HUNTER_STOP_LOSS_TRIGGER_USD_CENTS", "HUNTER_SINGLE_BUY_GRACE_SEC"},
+        "the-graceful": set(),
+        "the-strict-parent": set(),
     }
     assert {a["name"] for a in arms} == set(expected_knobs)
     for a in arms:
@@ -732,8 +735,10 @@ I622_ARMS = (Path(__file__).resolve().parent.parent
              / "configs" / "tournaments" / "i622_tournament-1_arms.json")
 
 #: The only keys an arm may differ on. Everything else must be identical, or the
-#: comparison measures two changes at once.
-I622_VARYING = ("HUNTER_REFUSAL_HOLD_POLICY", "HUNTER_REFUSAL_HOLD_DRIFT")
+#: comparison measures two changes at once. After the #683 purge of
+#: HUNTER_REFUSAL_HOLD_POLICY, the only remaining divergence is the drift
+#: tolerance carried by the drift arm.
+I622_VARYING = ("HUNTER_REFUSAL_HOLD_DRIFT",)
 
 
 def _i622_plan(tmp_path):
@@ -744,36 +749,37 @@ def _i622_plan(tmp_path):
                                  run_number=1, check_ports=False)
 
 
-def test_the_i622_arms_file_varies_only_the_refusal_policy(tmp_path):
+def test_the_i622_arms_file_varies_only_the_refusal_drift(tmp_path):
+    """#622/#683: the refusal-hold arms file shares everything but drift.
+
+    #683 purged HUNTER_REFUSAL_HOLD_POLICY from every arm; the three arms now
+    share every setting, with the drift arm carrying its 0.02 tolerance.
+    """
     plan = _i622_plan(tmp_path)
     assert len(plan.arms) == 3, "A/B/C is three arms"
 
-    policies = {a.env["HUNTER_REFUSAL_HOLD_POLICY"] for a in plan.arms}
-    assert policies == {"remove", "keep", "drift"}
-    assert "drift" in {a.env["HUNTER_REFUSAL_HOLD_POLICY"] for a in plan.arms}
+    drift = [a for a in plan.arms
+             if a.env.get("HUNTER_REFUSAL_HOLD_DRIFT") == "0.02"]
+    assert len(drift) == 1, "exactly one drift arm carries the tolerance"
+    assert drift[0].env["HUNTER_REFUSAL_HOLD_DRIFT"] == "0.02"
 
-    shared = [{k: v for k, v in a.env.items() if k not in I622_VARYING}
+    shared = [{k: v for k, v in a.env.items() if k != "HUNTER_REFUSAL_HOLD_DRIFT"}
               for a in plan.arms]
     assert shared[0] == shared[1] == shared[2], (
-        "the arms must differ ONLY in the refusal policy; anything else and the "
-        "result measures two changes at once"
+        "the arms must share everything except the refusal-drift knob; anything "
+        "else and the result measures two changes at once"
     )
     assert shared[0]["HUNTER_BANKROLL"] == "100"
     assert shared[0]["HUNTER_EMERGENCY_DRAWDOWN_PCT"] == "75.0"
 
-    # The four live stop settings are pinned, and the retired one is not carried
-    # over from the i492 presets.
+    # The four live stop settings are pinned identically across arms, and the
+    # retired stop knob is not carried over from the i492 presets.
     for key in ("HUNTER_STOP_LOSS_MODE", "HUNTER_DROP_CENTS",
                 "HUNTER_DRAWDOWN_PCT", "HUNTER_EMERGENCY_DRAWDOWN_PCT"):
         assert key in shared[0], f"{key} must be pinned identically across arms"
     assert "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS" not in shared[0], (
-        "that stop setting is retired; config warns and ignores it"
+        "that stop setting is retired; the arm env is purged of it"
     )
-    # The drift arm states its tolerance instead of inheriting a default that
-    # could change under it.
-    drift = [a for a in plan.arms
-             if a.env["HUNTER_REFUSAL_HOLD_POLICY"] == "drift"][0]
-    assert drift.env["HUNTER_REFUSAL_HOLD_DRIFT"] == "0.02"
 
 
 def test_no_i622_arm_is_pointed_at_the_production_registry(tmp_path):
