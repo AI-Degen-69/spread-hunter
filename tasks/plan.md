@@ -299,7 +299,7 @@ come back from the cache — plus
 the locked invariant) and
 `…::test_probe_parses_the_markets_file_and_bounds_its_run`.
 
-### T5 — Dashboard sentences + parked-items note (S, [UX / Copy], files: `dashboard/static/app.js`, `tests/js/event_stream_harness.cjs`, `tests/test_dashboard_server.py`, `docs/issues/648-noticed-but-not-touching.md`)
+### T5 — [x] Dashboard sentences + parked-items note (S, [UX / Copy], files: `dashboard/static/app.js`, `tests/js/event_stream_harness.cjs`, `tests/test_dashboard_server.py`, `docs/issues/648-noticed-but-not-touching.md`)
 **Build:** one `if (svc === 'market_stream')` block in `buildStreamSentence`
 (after the trade branches, before the `EVENT_TRANSLATIONS` lookup) mapping the
 seven actions to plain sentences with no market clause — the events are

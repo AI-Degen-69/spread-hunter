@@ -1231,6 +1231,51 @@ function buildStreamSentence(ev, lookup) {
 
   // Static fallbacks for televised-but-unchanged producers.
   const svc = ((ev && ev.service) || '').toLowerCase();
+
+  // The live market stream is engine-level: its lines carry no market clause,
+  // because the table's "(market)" suffix would print "a market" on all seven.
+  if (svc === 'market_stream') {
+    const tokens = Array.isArray(ex.tokens) ? ex.tokens.length : 0;
+    const unit = tokens === 1 ? 'outcome token' : 'outcome tokens';
+    if (action === 'market_stream_connected') {
+      return `${when}Connected to the live market feed for ${tokens} ${unit}.`;
+    }
+    if (action === 'market_stream_reconnect') {
+      const delay = Math.max(1, Math.round(Number(ex.delay_sec) || 0));
+      return `${when}Reconnecting to the live market feed in ${delay} ${delay === 1 ? 'second' : 'seconds'}.`;
+    }
+    if (action === 'market_stream_subscribe') {
+      return `${when}Added ${tokens} ${unit} to the live market feed.`;
+    }
+    if (action === 'market_stream_unsubscribe') {
+      return `${when}Dropped ${tokens} ${unit} from the live market feed.`;
+    }
+    if (action === 'market_stream_snapshot') {
+      const name = streamMarketName(ev, lookup);
+      // Never "a market": the engine names the market on every snapshot.
+      return name === 'a market'
+        ? `${when}Received an order book from the live market feed.`
+        : `${when}Received the order book for ${name}.`;
+    }
+    if (action === 'market_stream_error') {
+      const why = {
+        snapshot_timeout: 'a market never sent its order book',
+        frame_error: 'a feed message could not be read',
+        level_gap: 'the venue sent a best price that disagrees with ours',
+      }[reason] || 'the feed reported a problem';
+      return `${when}Live market feed problem: ${why}.`;
+    }
+    if (action === 'market_stream_tick') {
+      const books = Number(ex.books || 0);
+      const us = Number(ex.read_us_p50 || 0);
+      const read = us > 0
+        ? ` Local reads take ${us < 10 ? us.toFixed(1) : Math.round(us)} microseconds.`
+        : '';
+      return `${when}Live market feed is holding ${books} order ${books === 1 ? 'book' : 'books'}.${read}`;
+    }
+    return `${when}Live market feed update: ${humanizeAction(action.replace('market_stream_', ''))}.`;
+  }
+
   const key = svc + '|' + action;
   if (EVENT_TRANSLATIONS[key]) {
     const base = EVENT_TRANSLATIONS[key];

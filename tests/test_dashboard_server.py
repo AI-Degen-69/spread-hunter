@@ -2544,6 +2544,53 @@ def test_event_stream_trades_tab_shows_only_trade_rows():
     assert all("ticker-raw" in r for r in out["detailsAfterRebuild"])
 
 
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_app_js_translates_market_stream_events():
+    """Every market-stream action reads as plain words, with no market clause."""
+    harness = Path(__file__).resolve().parent / "js" / "event_stream_harness.cjs"
+    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
+
+    res = subprocess.run(
+        [NODE, str(harness), str(app_js)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out.get("exportsOk") is True, out.get("error")
+
+    s = out["marketStreamSentences"]
+    assert s["connected"].endswith(
+        "Connected to the live market feed for 4 outcome tokens.")
+    assert "for 1 outcome token." in s["connectedOne"]
+    assert "Reconnecting to the live market feed in 2 seconds." in s["reconnect"]
+    assert "Reconnecting to the live market feed in 1 second." in s["reconnectOne"]
+    assert "Added 2 outcome tokens to the live market feed." in s["subscribe"]
+    assert "Dropped 2 outcome tokens from the live market feed." in s["unsubscribe"]
+    assert "Received the order book for brazil election." in s["snapshot"]
+    assert "no market" not in s["snapshot"] and "a market." not in s["snapshot"]
+    assert "an order book from the live market feed." in s["snapshotNoSlug"]
+    assert "problem: a market never sent its order book." in s["problem"]
+    assert "problem: a feed message could not be read." in s["frameError"]
+    assert "problem: the venue sent a best price that disagrees with ours." in s["levelGap"]
+    assert "holding 4 order books." in s["tick"]
+    assert "Local reads take 6.3 microseconds." in s["tick"]
+    assert "holding 1 order book." in s["tickOne"]
+    assert "Local reads take 41 microseconds." in s["tickOne"]
+    assert "update: something new." in s["unknown"]
+
+    # Plain words only: no codes, no json, and never the shared "(a market)" tail.
+    for key, line in s.items():
+        assert "_" not in line, (key, line)
+        assert "{" not in line and "}" not in line, (key, line)
+        assert "ws-subscriptions-clob" not in line, (key, line)
+
+    # A hostile stream slug is escaped by the row renderer, never executed.
+    rows = "".join(out["marketStreamRows"])
+    assert rows, "the hostile-slug stream row was not rendered"
+    assert "<img" not in rows
+    assert "&lt;img" in rows
+
+
 def test_event_stream_tabs_harness():
     """Verify multi-process log stream tabs: buffer isolation, caps, and escaping."""
     assert NODE is not None, "node.js executable is required for event stream tabs harness"

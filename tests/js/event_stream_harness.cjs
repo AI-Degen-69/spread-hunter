@@ -179,6 +179,49 @@ try {
   app.setTickerFilter('all');
   out.escapedRows = rows();
 
+  // Live market stream sentences: engine-level lines, no market clause.
+  const mse = (action, extra, rest) => Object.assign(
+    { ts: '2024-01-15T14:28:00Z', service: 'market_stream', action, extra },
+    rest || {});
+  out.marketStreamSentences = {
+    connected: app.buildStreamSentence(mse('market_stream_connected',
+      { url: 'wss://ws-subscriptions-clob.polymarket.com/ws/market',
+        tokens: ['t1', 't2', 't3', 't4'] })),
+    connectedOne: app.buildStreamSentence(mse('market_stream_connected',
+      { tokens: ['t1'] })),
+    reconnect: app.buildStreamSentence(mse('market_stream_reconnect',
+      { delay_sec: 2, close_code: 1006, reason: 'socket left' })),
+    reconnectOne: app.buildStreamSentence(mse('market_stream_reconnect',
+      { delay_sec: 1 })),
+    subscribe: app.buildStreamSentence(mse('market_stream_subscribe',
+      { slug: 'brazil-election', tokens: ['t1', 't2'] })),
+    unsubscribe: app.buildStreamSentence(mse('market_stream_unsubscribe',
+      { slug: 'brazil-election', tokens: ['t1', 't2'] })),
+    snapshot: app.buildStreamSentence(mse('market_stream_snapshot',
+      { slug: 'brazil-election', token: 't1' },
+      { market_slug: 'brazil-election' })),
+    snapshotNoSlug: app.buildStreamSentence(
+      mse('market_stream_snapshot', { token: 't1' })),
+    problem: app.buildStreamSentence(mse('market_stream_error',
+      { reason: 'snapshot_timeout' }, { reason: 'snapshot_timeout' })),
+    frameError: app.buildStreamSentence(mse('market_stream_error',
+      { reason: 'frame_error' }, { reason: 'frame_error' })),
+    levelGap: app.buildStreamSentence(mse('market_stream_error',
+      { reason: 'level_gap' }, { reason: 'level_gap' })),
+    tick: app.buildStreamSentence(mse('market_stream_tick',
+      { books: 4, frames: 53, level_gap: 0, read_us_p50: 6.3 })),
+    tickOne: app.buildStreamSentence(mse('market_stream_tick',
+      { books: 1, frames: 1, level_gap: 0, read_us_p50: 41 })),
+    unknown: app.buildStreamSentence(mse('market_stream_something_new', {})),
+  };
+
+  // A hostile stream slug must not break out of the row either.
+  send({ ts: '2024-01-15T14:31:00Z', service: 'market_stream',
+         action: 'market_stream_snapshot', market_slug: '<img src=x onerror=alert(1)>',
+         extra: { slug: '<img src=x onerror=alert(1)>' } });
+  app.setTickerFilter('all');
+  out.marketStreamRows = rows().filter((r) => r.includes('order book'));
+
   // Market-name precedence: cached ledger titles beat slug words.
   app.noteStreamTitles({ '0xcc': { title: 'Cached Market' } });
   out.cachedName = app.buildStreamSentence(
