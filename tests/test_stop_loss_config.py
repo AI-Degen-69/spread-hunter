@@ -18,7 +18,22 @@ def test_defaults_are_none_mode_and_the_spec_numbers():
     assert cfg.stop_loss_mode == "NONE"
     assert cfg.drop_cents == 0.05
     assert cfg.drawdown_pct == 10.0
-    assert cfg.emergency_drawdown_pct == 75.0
+    assert cfg.bot_risk_circuit_max_drawdown_pct == 75.0
+
+
+def test_legacy_emergency_read_still_works():
+    import warnings
+    cfg = MakerConfig()
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        val = cfg.emergency_drawdown_pct
+    assert val == 75.0
+    legacy_warns = [
+        w for w in recorded
+        if issubclass(w.category, DeprecationWarning)
+        and "emergency_drawdown_pct" in str(w.message)
+    ]
+    assert len(legacy_warns) == 1
 
 
 @pytest.mark.parametrize(
@@ -57,7 +72,7 @@ def test_drop_cents_env_is_parsed_and_bounded(monkeypatch):
 @pytest.mark.parametrize(
     ("name", "field"),
     [("HUNTER_DRAWDOWN_PCT", "drawdown_pct"),
-     ("HUNTER_EMERGENCY_DRAWDOWN_PCT", "emergency_drawdown_pct")],
+     ("HUNTER_EMERGENCY_DRAWDOWN_PCT", "bot_risk_circuit_max_drawdown_pct")],
 )
 def test_drawdown_pct_env_is_an_open_lower_interval(monkeypatch, name, field):
     monkeypatch.setenv(name, "33.5")

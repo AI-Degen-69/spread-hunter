@@ -1184,8 +1184,8 @@ class TestVisitOnePassesTheDeadBand:
                 "bids": {0.46: 5000.0}, "asks": {0.48: 5000.0}}
         books = {"tok-up": up, "tok-dn": down}
         seam = VenueSeam(
-            base_cfg=MakerConfig(requote_dead_band=0.03,
-                                 max_completable_pair_cost=1.00),
+            base_cfg=MakerConfig(bot_order_requote_dead_band_cents=0.03,
+                                 bot_pos_price_max_complete_usd=1.00),
             fetch_market=lambda cid: market,
             fetch_books=lambda host, tok: books[tok],
             decide=lambda *a, **k: ([_intent(price=0.49)], ""),
@@ -1259,8 +1259,8 @@ class TestReGateRespectsHeldInventory:
         # only the UP token -- stands down from the re-gate.
         inv = Inventory(down_shares=100.0, down_cost=43.0)
         seam = VenueSeam(
-            base_cfg=MakerConfig(requote_dead_band=0.03,
-                                 max_completable_pair_cost=1.00),
+            base_cfg=MakerConfig(bot_order_requote_dead_band_cents=0.03,
+                                 bot_pos_price_max_complete_usd=1.00),
             fetch_market=lambda cid: market,
             fetch_books=lambda host, tok: books[tok],
             decide=lambda *a, **k: ([_intent(price=0.49)], ""),
@@ -1286,8 +1286,8 @@ class TestReGateRespectsHeldInventory:
                 "bids": {0.46: 5000.0}, "asks": {0.48: 5000.0}}
         books = {"tok-up": up, "tok-dn": down}
         seam = VenueSeam(
-            base_cfg=MakerConfig(requote_dead_band=0.03,
-                                 max_completable_pair_cost=1.00),
+            base_cfg=MakerConfig(bot_order_requote_dead_band_cents=0.03,
+                                 bot_pos_price_max_complete_usd=1.00),
             fetch_market=lambda cid: market,
             fetch_books=lambda host, tok: books[tok],
             decide=lambda *a, **k: ([_intent(price=0.49)], ""),
@@ -2339,7 +2339,7 @@ def _lifecycle_visit_seam(tmp_path, pairs, *, up_bid=0.45, decide):
         size_mode="shares",
         quote_shares=120,
         min_quote_shares=5,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
         max_naked_usd=100.0,
         reward_offset=0.02,
     )
@@ -3354,3 +3354,79 @@ def test_stopped_out_pair_does_not_block_fresh_quote(tmp_path):
     assert len(submitted_tokens) == 2
 
 
+def test_lifecycle_quote_context_passes_canonical_drawdown():
+    from unittest.mock import MagicMock, patch
+    from core_brain.config import MakerConfig
+    from core_brain.quotes import Inventory
+    from core_brain.single_leg_lifecycle import LifecycleDecision, LegState
+    from core_brain.trader_loop import _lifecycle_quote_context
+
+    seam = MagicMock()
+    seam.registry.get_orders_by_pair.return_value = [
+        MagicMock(condition_id="0xcond", side="BUY", token_id="tok-up", id="ord-1")
+    ]
+    seam.registry.get_size_matched.return_value = 10.0
+    seam.registry.get_matched_notional.return_value = 5.0
+    seam.registry.get_lifecycle_state.return_value = None
+
+    market = MagicMock()
+    market.condition_id = "0xcond"
+    market.up_token = "tok-up"
+    market.down_token = "tok-dn"
+
+    cfg = MakerConfig(bot_risk_circuit_max_drawdown_pct=65.0)
+    up_book = {"best_bid": 0.50, "best_ask": 0.52}
+    down_book = {"best_bid": 0.46, "best_ask": 0.48}
+    inventory = Inventory()
+    open_orders = [{"pair_id": "pair-1", "id": "ord-1", "token_id": "tok-up"}]
+
+    mock_decision = LifecycleDecision(
+        action="refused",
+        state=LegState.DUAL_RESTING,
+        reason="test",
+        held_token_id="tok-up",
+    )
+
+    with patch("core_brain.trader_loop.evaluate_single_leg_lifecycle", return_value=mock_decision) as mock_eval:
+        ctx = _lifecycle_quote_context(
+            seam, market, cfg, up_book, down_book, inventory, open_orders,
+            cycle=1, title="test", emit_fn=MagicMock()
+        )
+        assert mock_eval.called
+        call_kwargs = mock_eval.call_args[1]
+        assert call_kwargs["bot_risk_circuit_max_drawdown_pct"] == 65.0
+        assert "emergency_drawdown_pct" not in call_kwargs
+
+
+def test_visit_one_passes_canonical_dead_band():
+    import warnings
+    from core_brain.config import MakerConfig
+    from core_brain.trader_loop import _visit_one, VenueSeam
+
+    market = FakeMarket()
+    books = {
+        "tok-up": {"token_id": "tok-up", "best_bid": 0.50, "best_ask": 0.52, "bids": {0.50: 100}, "asks": {0.52: 100}},
+        "tok-dn": {"token_id": "tok-dn", "best_bid": 0.46, "best_ask": 0.48, "bids": {0.46: 100}, "asks": {0.48: 100}},
+    }
+    seen = {}
+
+    def spy(open_orders, intents, price_eps=1e-9, **kw):
+        seen.update(kw)
+        return [], []
+
+    cfg = MakerConfig(bot_order_requote_dead_band_cents=0.05)
+    seam = VenueSeam(
+        base_cfg=cfg,
+        fetch_market=lambda cid: market,
+        fetch_books=lambda host, tok: books[tok],
+        decide=lambda *a, **k: ([_intent(price=0.49)], ""),
+        open_orders_fn=lambda m: [_open(price=0.51)],
+    )
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=False, plan_fn=spy)
+
+    dead_band_warns = [w for w in recorded if "trader_loop.py" in w.filename and "requote_dead_band" in str(w.message)]
+    assert dead_band_warns == []
+    assert seen["dead_band"] == 0.05

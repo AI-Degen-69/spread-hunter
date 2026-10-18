@@ -92,7 +92,7 @@ class Inventory:
 
 def _in_band(cfg: MakerConfig, price: float) -> bool:
     """Is this a price worth resting at? 54% of powerwinner's volume is here."""
-    if not cfg.enforce_price_band:
+    if not cfg.bot_quote_gate_price_band_on:
         return True
     return cfg.price_band_low <= price <= cfg.price_band_high
 
@@ -127,27 +127,27 @@ def dynamic_offset_for(
     When disabled or telemetry is stale/missing, returns (cfg.reward_offset, "static").
     When active, returns (clamped_cents / 100.0, f"dynamic_{clamped_cents}c").
     """
-    if not getattr(cfg, "dynamic_offset_enabled", False):
-        return cfg.reward_offset, "static"
+    if not getattr(cfg, "bot_quote_gate_dynamic_offset_on", False):
+        return cfg.bot_quote_spread_static_offset_cents, "static"
 
-    range_cents = getattr(cfg, "range_cents", None)
+    range_cents = getattr(cfg, "bot_quote_telemetry_range_cents", None)
     if range_cents is None:
-        return cfg.reward_offset, "static_missing_range"
+        return cfg.bot_quote_spread_static_offset_cents, "static_missing_range"
 
-    measured_at = getattr(cfg, "velocity_measured_at", None)
+    measured_at = getattr(cfg, "bot_quote_telemetry_velocity_measured_at", None)
     if measured_at is not None:
         t_now = now if now is not None else time.time()
         age = t_now - float(measured_at)
-        max_age = getattr(cfg, "dynamic_offset_max_age_sec", 900.0)
+        max_age = getattr(cfg, "bot_quote_spread_offset_max_age_sec", 900.0)
         if age > max_age:
-            return cfg.reward_offset, "static_stale_range"
+            return cfg.bot_quote_spread_static_offset_cents, "static_stale_range"
 
-    mult = getattr(cfg, "dynamic_offset_multiplier", 0.50)
+    mult = getattr(cfg, "bot_quote_spread_offset_multiplier", 0.50)
     raw_cents = mult * float(range_cents)
     int_cents = int(round(raw_cents))
 
-    min_cents = getattr(cfg, "dynamic_offset_min_cents", 2)
-    max_cents = getattr(cfg, "dynamic_offset_max_cents", 4)
+    min_cents = getattr(cfg, "bot_quote_spread_offset_min_cents", 2)
+    max_cents = getattr(cfg, "bot_quote_spread_offset_max_cents", 4)
     clamped_cents = max(min_cents, min(max_cents, int_cents))
 
     dynamic_base = round(clamped_cents / 100.0, 4)
@@ -210,7 +210,7 @@ def quote_resting_price(
     skew = risk.skew_offset(cfg, inv, side)
     band = risk.band_risk_factor(cfg, provisional)
     desired = base + skew + band.extra_offset
-    offset = max(cfg.min_reward_offset, min(cfg.max_spread_from_mid, desired))
+    offset = max(cfg.bot_pos_skew_min_reward_offset_cents, min(cfg.max_spread_from_mid, desired))
     truncated = 1.0
     if desired > offset > 0:
         truncated = offset / desired
@@ -357,7 +357,7 @@ def _decide_quotes_from_mid(
     if p_up_calc is not None and p_dn_calc is not None and p_up_calc > 0 and p_dn_calc > 0:
         calc_pair_price = round(p_up_calc + p_dn_calc, 4)
 
-    if (getattr(cfg, "dynamic_offset_enabled", False)
+    if (getattr(cfg, "bot_quote_gate_dynamic_offset_on", False)
             and calc_pair_price is not None
             and calc_pair_price >= 1.00):
         return [], f"dynamic_pair_sum: combined pair price {calc_pair_price:.4f} >= 1.00"
@@ -405,14 +405,14 @@ def _decide_quotes_from_mid(
         deficit = -imbalance
         heavy = "DOWN" if side == "UP" else "UP"
         deficit_usd = deficit * inv.avg(heavy) if deficit > 0 else 0.0
-        if (cfg.enable_emergency_hedge and ba is not None and ba < 1.0
+        if (cfg.bot_risk_gate_emergency_hedge_on and ba is not None and ba < 1.0
                 and cfg.max_naked_usd > 0
                 and deficit_usd >= cfg.max_naked_usd * cfg.emergency_hedge_frac):
             heavy_book = down_book if side == "UP" else up_book
             heavy_mid = mid_price(heavy_book.get("best_bid"),
                                   heavy_book.get("best_ask"))
             heavy_avg = inv.avg(heavy)
-            pair_cap = getattr(cfg, "max_pair_cost", 0.99)
+            pair_cap = getattr(cfg, "bot_pos_price_max_pair_cost_usd", 0.99)
             if heavy_mid is not None and heavy_avg > 0 and heavy_mid < heavy_avg:
                 if (heavy_avg + ba) <= pair_cap:
                     out.append(QuoteIntent(
@@ -428,7 +428,7 @@ def _decide_quotes_from_mid(
                     continue
 
         # STRICT PAIRED INVENTORY: Block adding to the heavy side when unhedged inventory exists
-        if getattr(cfg, "strict_paired_inventory", True) and imbalance > 0:
+        if getattr(cfg, "bot_pos_gate_strict_pairs_on", True) and imbalance > 0:
             blocked.append(
                 f"{side}: unhedged inventory exists ({imbalance:.1f} excess {side} shares) -- "
                 f"strict paired inventory blocks heavy quote"
@@ -513,7 +513,7 @@ def _decide_quotes_from_mid(
 
         # THE SIZE LADDER (strategy/risk.py). Sized in couple shares.
         ladder = risk.size_for(cfg, inv, side, price, pair_price=calc_pair_price)
-        if getattr(cfg, "strict_paired_inventory", True) and imbalance < 0:
+        if getattr(cfg, "bot_pos_gate_strict_pairs_on", True) and imbalance < 0:
             size = ladder
         else:
             size = int(ladder * band.size_mult * truncated)
@@ -586,10 +586,10 @@ def _decide_quotes_from_mid(
     # arrived here.
     if (len(out) == 2
             and all(not i.crossed and i.pair_id is None for i in out)
-            and pair_cost_over_cap([i.price for i in out], cfg.max_pair_cost)):
+            and pair_cost_over_cap([i.price for i in out], cfg.bot_pos_price_max_pair_cost_usd)):
         combined = sum((Decimal(str(i.price)) for i in out), Decimal("0"))
         return [], (f"entry_pair_cost: combined {combined:.4f} > "
-                    f"${cfg.max_pair_cost:.3f} cap -- pays exactly $1.00")
+                    f"${cfg.bot_pos_price_max_pair_cost_usd:.3f} cap -- pays exactly $1.00")
 
     # Lone survivor on a flat book: the two-sided gate below refuses it, so
     # carry the blocked side's reason into that refusal instead of dropping
@@ -629,10 +629,10 @@ def _decide_lifecycle_escalation(
             or override.size <= 0):
         return [], "lifecycle escalation size must be a positive integer"
 
-    if (not math.isfinite(cfg.max_pair_cost)
-            or cfg.max_pair_cost <= 0):
+    if (not math.isfinite(cfg.bot_pos_price_max_pair_cost_usd)
+            or cfg.bot_pos_price_max_pair_cost_usd <= 0):
         return [], "lifecycle pair cap must be finite and positive"
-    cap = min(Decimal("0.99"), Decimal(str(cfg.max_pair_cost)))
+    cap = min(Decimal("0.99"), Decimal(str(cfg.bot_pos_price_max_pair_cost_usd)))
     pair_cost = (
         Decimal(str(override.held_average_price))
         + Decimal(str(override.price))
@@ -643,7 +643,7 @@ def _decide_lifecycle_escalation(
     try:
         maximum_bid = max_profitable_hedge_bid(
             override.held_average_price,
-            cfg.max_pair_cost,
+            cfg.bot_pos_price_max_pair_cost_usd,
             cfg.price_tick,
         )
     except ValueError as exc:
@@ -703,7 +703,7 @@ def _decide_lifecycle_escalation(
     band = risk.band_risk_factor(cfg, override.price)
     size_factor = (
         1.0
-        if getattr(cfg, "strict_paired_inventory", True)
+        if getattr(cfg, "bot_pos_gate_strict_pairs_on", True)
         else band.size_mult
     )
     size = int(min(override.size, ladder, residual_size) * size_factor)
@@ -780,7 +780,7 @@ def decide_quotes(
     # imbalance we happened to hold -- the single biggest loss driver. Buying
     # the light side REDUCES exposure, so the cap must not block it.
     balancing_only = inv.cost >= cfg.max_cost_per_market
-    if balancing_only and inv.balance >= cfg.target_balance:
+    if balancing_only and inv.balance >= cfg.bot_pos_skew_target_balance_ratio:
         return [], f"cost cap ${cfg.max_cost_per_market:.0f} reached and balanced"
 
     # Fresh market: only open a position if BOTH sides can be filled at a pair
@@ -816,7 +816,7 @@ def decide_quotes(
             else:
                 p_dn = p
         if p_up is not None and p_dn is not None:
-            if (p_up + p_dn) >= cfg.max_pair_cost:
+            if (p_up + p_dn) >= cfg.bot_pos_price_max_pair_cost_usd:
                 return [], "no fillable sub-$1.00 pair at touch -- sitting out"
         else:
             return [], ("only one side quotable at touch -- no pair to hedge; "
@@ -857,7 +857,7 @@ def decide_quotes(
         # markets where no fillable sub-$1.00 pair exists.
         other = "DOWN" if side == "UP" else "UP"
         other_avg = inv.avg(other)
-        if other_avg > 0 and (price + other_avg) >= cfg.max_pair_cost:
+        if other_avg > 0 and (price + other_avg) >= cfg.bot_pos_price_max_pair_cost_usd:
             continue
 
         # Inventory control: if we're already heavy on this side, only quote
@@ -865,7 +865,7 @@ def decide_quotes(
         mine = inv.up_shares if side == "UP" else inv.down_shares
         theirs = inv.down_shares if side == "UP" else inv.up_shares
         if (inv.up_shares > 0 or inv.down_shares > 0):
-            if mine > theirs and inv.balance < cfg.target_balance:
+            if mine > theirs and inv.balance < cfg.bot_pos_skew_target_balance_ratio:
                 continue
         # Past the cost cap we ONLY add to the light side, never the heavy one.
         if balancing_only and mine >= theirs:

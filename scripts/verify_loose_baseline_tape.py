@@ -177,7 +177,7 @@ def main():
     fill = price                       # assume we get filled at our resting bid
     trigger_price, trigger_source = stop_trigger(
         fill, cfg.stop_loss_mode, cfg.drop_cents, cfg.drawdown_pct,
-        cfg.emergency_drawdown_pct,
+        cfg.bot_risk_circuit_max_drawdown_pct,
     )
     trigger_cent = math.floor(trigger_price * 100.0 + 1e-9) / 100.0
     print("\n--- STOP LOSS (entry-relative, mode %s) ---" % cfg.stop_loss_mode)
@@ -193,7 +193,7 @@ def main():
     for ex_fill in (0.10, 0.12, 0.14):
         ex_price, ex_source = stop_trigger(
             ex_fill, cfg.stop_loss_mode, cfg.drop_cents, cfg.drawdown_pct,
-            cfg.emergency_drawdown_pct,
+            cfg.bot_risk_circuit_max_drawdown_pct,
         )
         ex_cent = math.floor(ex_price * 100.0 + 1e-9) / 100.0
         print(f"  low entry {ex_fill:.2f}  -> cut at {ex_cent:.2f} "

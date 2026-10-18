@@ -156,8 +156,13 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
     if base < cfg.min_quote_shares:
         return 0
 
+    _strict_pairs = getattr(cfg, "bot_pos_gate_strict_pairs_on", None)
+    if _strict_pairs is None:
+        _strict_pairs = getattr(cfg, "strict_paired_inventory", True)
+    _strict_pairs = bool(_strict_pairs)
+
     if naked_side(inv) != side:
-        if getattr(cfg, "strict_paired_inventory", True) and naked_side(inv) is not None:
+        if _strict_pairs and naked_side(inv) is not None:
             excess = abs(inv.up_shares - inv.down_shares)
             if excess > 0:
                 deficit_sz = int(excess)
@@ -166,7 +171,7 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
                 return min(base, deficit_sz)
         return base
 
-    if getattr(cfg, "strict_paired_inventory", True):
+    if _strict_pairs:
         return 0
 
     size = base * (1.0 - risk_utilization(cfg, inv, side)) ** 2
@@ -348,9 +353,9 @@ def completable_pair_block(cfg, price: float,
     is a booked loss or a fill slot worth nothing. A ceiling reached, not
     approached -- the same reading every other cap in this module takes.
     """
-    if not getattr(cfg, "enforce_completable_pair_cost", True):
+    if not getattr(cfg, "bot_pos_gate_complete_cost_on", True):
         return None
-    cap = float(getattr(cfg, "max_completable_pair_cost", 0.0))
+    cap = float(getattr(cfg, "bot_pos_price_max_complete_usd", 0.0))
     if cap <= 0:
         return None
     if hedge_ask is None or float(hedge_ask) <= 0:
@@ -514,7 +519,7 @@ def hard_block(
     pair_cost_block = None
     if other_avg > 0:
         pair_cost = Decimal(str(price)) + Decimal(str(other_avg))
-        pair_cost_cap = Decimal(str(cfg.max_pair_cost))
+        pair_cost_cap = Decimal(str(cfg.bot_pos_price_max_pair_cost_usd))
         pair_cost_blocked = (
             pair_cost > pair_cost_cap
             if allow_pair_cost_equal
@@ -524,7 +529,7 @@ def hard_block(
             comparison = ">" if allow_pair_cost_equal else ">="
             pair_cost_block = (
                 f"pair {price:.3f}+{other_avg:.3f}=${pair_cost:.4f} "
-                f"{comparison} ${cfg.max_pair_cost:.3f} cap -- pays exactly $1.00")
+                f"{comparison} ${cfg.bot_pos_price_max_pair_cost_usd:.3f} cap -- pays exactly $1.00")
 
     if _shares(inv, side) < _shares(inv, other) and not lifecycle_escalation:
         return pair_cost_block
@@ -555,7 +560,7 @@ def hard_block(
     # that refused its own stated endpoints would quietly be narrower than the
     # config says. Switchable for the same reason it always was: a gate that
     # cannot be turned off cannot be attributed a result.
-    if cfg.enforce_price_band and not (
+    if cfg.bot_quote_gate_price_band_on and not (
             cfg.price_band_low <= price <= cfg.price_band_high):
         return (f"{price:.3f} outside band {cfg.price_band_low:.2f}-"
                 f"{cfg.price_band_high:.2f}")

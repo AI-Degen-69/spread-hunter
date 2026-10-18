@@ -493,7 +493,7 @@ def quote(condition_id: str, price: float, size: float, live: bool,
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     pair_id = f"pair-{_uuid.uuid4().hex[:12]}"
-    max_pair_cost = strategy_config.load().max_pair_cost
+    max_pair_cost = strategy_config.load().bot_pos_price_max_pair_cost_usd
     now_ms = int(time.time() * 1000)
 
     # Indexed, not getattr-with-default. A silent fallback to GTC would turn a
@@ -2667,7 +2667,7 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
     try:
         result = exit_naked_leg(
             _clob, registry, pair_id,
-            max_pair_cost=strategy_config.load().max_pair_cost,
+            max_pair_cost=strategy_config.load().bot_pos_price_max_pair_cost_usd,
             live=live,
             venue_positions=venue_positions,
         )
@@ -2787,7 +2787,7 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
         max_order_usd, _ = order_caps()
         result = complete_pair(
             client(), registry, pair_id,
-            max_pair_cost=strategy_config.load().max_pair_cost,
+            max_pair_cost=strategy_config.load().bot_pos_price_max_pair_cost_usd,
             live=live,
             max_order_usd=max_order_usd,
         )
@@ -3379,7 +3379,7 @@ def _evaluate_single_market_quote(
     # Telemetry logging to orders.db (Amendment 4: decide stays strictly read-only on orders, logs telemetry only)
     from core_brain.order_registry import HedgeCensusRecord, MarketEventRecord, get_run_id
     pair_touch = round(ba_up + ba_dn - 0.02, 4) if (ba_up is not None and ba_dn is not None) else None
-    fillable_sub = 1.0 if (pair_touch is not None and pair_touch < cfg.max_pair_cost) else 0.0
+    fillable_sub = 1.0 if (pair_touch is not None and pair_touch < cfg.bot_pos_price_max_pair_cost_usd) else 0.0
     registry.log_hedge_census(HedgeCensusRecord(
         condition_id=m.condition_id,
         market_slug=slug,

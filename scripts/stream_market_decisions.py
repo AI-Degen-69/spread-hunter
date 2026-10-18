@@ -170,7 +170,7 @@ def main():
             # longer cut the instant it fills.
             trig, trig_source = stop_trigger(
                 up_q, cfg.stop_loss_mode, cfg.drop_cents, cfg.drawdown_pct,
-                cfg.emergency_drawdown_pct,
+                cfg.bot_risk_circuit_max_drawdown_pct,
             )
             print(f"  STOP  if up fills {up_q:.2f}, naked-leg cut at bid <= {trig:.2f} "
                   f"({cfg.stop_loss_mode} / {trig_source})")

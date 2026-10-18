@@ -249,7 +249,7 @@ def _validated_stop_knobs(
     mode: str,
     drop_cents: float,
     drawdown_pct: float,
-    emergency_drawdown_pct: float,
+    bot_risk_circuit_max_drawdown_pct: float,
 ) -> tuple[str, Decimal, Decimal, Decimal]:
     """The canonical mode and its three knobs, or a ValueError.
 
@@ -277,11 +277,11 @@ def _validated_stop_knobs(
             f"drawdown_pct must be above zero and at most 100, "
             f"got {drawdown_pct!r}"
         )
-    emergency_value = float(emergency_drawdown_pct)
+    emergency_value = float(bot_risk_circuit_max_drawdown_pct)
     if not math.isfinite(emergency_value) or not 0 < emergency_value <= 100:
         raise ValueError(
-            f"emergency_drawdown_pct must be above zero and at most 100, "
-            f"got {emergency_drawdown_pct!r}"
+            f"bot_risk_circuit_max_drawdown_pct must be above zero and at most 100, "
+            f"got {bot_risk_circuit_max_drawdown_pct!r}"
         )
     return (
         candidate,
@@ -296,7 +296,7 @@ def stop_trigger(
     mode: str,
     drop_cents: float,
     drawdown_pct: float,
-    emergency_drawdown_pct: float,
+    bot_risk_circuit_max_drawdown_pct: float,
 ) -> tuple[float, str]:
     """The bid at which a held leg must be sold, and which rule set it.
 
@@ -323,7 +323,7 @@ def stop_trigger(
         )
     normalised, drop_value, drawdown_value, emergency_value = (
         _validated_stop_knobs(mode, drop_cents, drawdown_pct,
-                              emergency_drawdown_pct)
+                              bot_risk_circuit_max_drawdown_pct)
     )
 
     entry_decimal = Decimal(str(entry_value))
@@ -356,7 +356,7 @@ def transition(
     stop_loss_mode: str = "NONE",
     drop_cents: float = 0.05,
     drawdown_pct: float = 10.0,
-    emergency_drawdown_pct: float = 75.0,
+    bot_risk_circuit_max_drawdown_pct: float = 75.0,
     escalation_multiple: float = 2.0,
     tick_size: float = 0.01,
 ) -> LifecycleDecision:
@@ -366,7 +366,7 @@ def transition(
         return _refused(previous_state, "pair cap must be finite and positive")
     try:
         _validated_stop_knobs(
-            stop_loss_mode, drop_cents, drawdown_pct, emergency_drawdown_pct,
+            stop_loss_mode, drop_cents, drawdown_pct, bot_risk_circuit_max_drawdown_pct,
         )
     except ValueError as exc:
         return _refused(previous_state, str(exc))
@@ -448,7 +448,7 @@ def transition(
     }
     active_trigger, trigger_source = stop_trigger(
         held_average, stop_loss_mode, drop_cents, drawdown_pct,
-        emergency_drawdown_pct,
+        bot_risk_circuit_max_drawdown_pct,
     )
     if held_bid is not None and held_bid <= active_trigger:
         return LifecycleDecision(
@@ -579,7 +579,7 @@ def evaluate(
     stop_loss_mode: str = "NONE",
     drop_cents: float = 0.05,
     drawdown_pct: float = 10.0,
-    emergency_drawdown_pct: float = 75.0,
+    bot_risk_circuit_max_drawdown_pct: float = 75.0,
     tick_size: float = 0.01,
 ) -> LifecycleDecision:
     """Load sticky state, decide for one pair, and persist state changes."""
@@ -601,7 +601,7 @@ def evaluate(
         stop_loss_mode=stop_loss_mode,
         drop_cents=drop_cents,
         drawdown_pct=drawdown_pct,
-        emergency_drawdown_pct=emergency_drawdown_pct,
+        bot_risk_circuit_max_drawdown_pct=bot_risk_circuit_max_drawdown_pct,
         tick_size=tick_size,
     )
     if decision.action == "refused" or decision.state is previous_state:

@@ -197,7 +197,7 @@ def test_no_unrelated_shipped_default_moved():
     assert cfg.stop_loss_mode == "NONE"
     assert cfg.drop_cents == 0.05
     assert cfg.drawdown_pct == 10.0
-    assert cfg.emergency_drawdown_pct == 75.0
+    assert cfg.bot_risk_circuit_max_drawdown_pct == 75.0
 
 
 def test_the_lead_knob_has_an_env_override(monkeypatch):
