@@ -495,6 +495,15 @@ class VenueSeam:
     #: writes one `market_events` row per flagged visit. Absent = skip the
     #: write; the cancel and discard still happen.
     record_market_event: Optional[Callable[[Any], None]] = None
+    #: WS-book subscription for #650: called once per rotation with the current
+    #: universe (`[market, ...]`). Optional and lazy -- `main()` wires a port
+    #: that resolves each new market's tokens and hands them to `MarketStream`.
+    #: Every caller that leaves it unset behaves exactly as before.
+    subscribe_fn: Optional[Callable[[list], None]] = None
+    #: WS-book read stats for #650: `() -> {"book_source", "book_read_ms", ...}`.
+    #: Optional -- `_visit_one` merges them into the decide row only when the
+    #: port is wired, so unwired seams emit byte-identical rows to before.
+    book_stats_fn: Optional[Callable[[], dict]] = None
 
 
 def run(
@@ -509,6 +518,7 @@ def run(
     suspects_box: Optional[dict] = None,
     shutdown_box: Optional[dict] = None,
     spawn_guardian: bool = False,
+    clock_fn: Optional[Callable[[], float]] = None,
 ) -> list[LiveFleetResult]:
     """Rotate over `markets`: reconcile, then decide+submit per market, then sweep.
 
@@ -528,6 +538,11 @@ def run(
         seam.base_cfg = load()
     if sleep_fn is None:
         sleep_fn = time.sleep
+    # Rotation timing (#650): the loop measures what it did and sleeps only
+    # the remainder of the interval, so streamed books that cut the work
+    # actually shorten the wait. Tests inject `clock_fn`; production runs the
+    # wall clock.
+    _now = clock_fn or time.monotonic
     if seam.clob_host is None:
         seam.clob_host = os.environ.get("CLOB_HOST", "https://clob.polymarket.com")
 
@@ -604,6 +619,9 @@ def run(
 
         while True:
             cycle += 1
+            # Rotation timing (#650): stamped before any work so the wait at
+            # the end is `interval - work`, never `interval` on top of work.
+            rot_t0 = _now()
             # Fleet-wide aggregates (naked cost, committed capital, pooled posture)
             # are recomputed once per cycle and merged into the base config, so the
             # fleet-level gates inside decide_quotes see live numbers rather than
@@ -649,6 +667,16 @@ def run(
                         log.warning(
                             "markets_fn returned no markets; keeping the previous %d",
                             len(current_markets))
+
+            # Universe subscription (#650): the WS book cache follows the
+            # markets the loop is actually visiting. A failed subscribe degrades
+            # the rest of the rotation (books may be stale or cold) but never
+            # stops it -- same isolation as reconcile and sweep.
+            if current_markets and seam.subscribe_fn is not None:
+                try:
+                    seam.subscribe_fn(list(current_markets))
+                except Exception as e:
+                    log.warning("subscribe failed: %s: %s", type(e).__name__, e)
 
             cycle_results: list[LiveFleetResult] = []
             rotation_suspects: set[str] = set()
@@ -719,6 +747,17 @@ def run(
             except Exception as e:
                 log.warning("sweep failed: %s: %s", type(e).__name__, e)
 
+            # Rotation accounting (#650): one additive row per rotation with the
+            # measured work, so the dashboard (and the operator) can see when a
+            # rotation is too fat for its interval. Emitted before the `once`
+            # break so smoke runs carry it too.
+            work_sec = _now() - rot_t0
+            emit_fn(service="decide", cycle=cycle, phase="quoting",
+                    action="rotation_complete", market_slug="",
+                    reason="", latency_ms=work_sec * 1000.0,
+                    extra={"markets": len(current_markets),
+                           "suspects": len(rotation_suspects)})
+
             # Heartbeat: re-stamp our slot so a long run never looks stale. An
             # adopted slot means another loop owns the registry now -- stop writing
             # rather than record into a database we no longer own.
@@ -733,7 +772,10 @@ def run(
                 shutdown_reason = "once"
                 break
             try:
-                sleep_fn(max(0.0, interval))
+                # Sleep the remainder of the interval (#650): with streamed
+                # books the work is fast and the loop waits longer; when the
+                # venue is slow the loop skips the wait but never goes negative.
+                sleep_fn(max(0.0, interval - work_sec))
             except KeyboardInterrupt as e:
                 # The shadow deadline sleep subclasses KeyboardInterrupt to
                 # end a time-boxed rehearsal. Matched by class NAME so this
@@ -1823,6 +1865,17 @@ def _visit_one(
                                error=f"{type(e).__name__}: {e}")
 
     event_extra = {"intent_count": len(intents), "condition_id": cid}
+    # WS-book provenance (#650): when the loop reads books from the stream
+    # cache instead of REST, say so on the row so a quote is traceable to its
+    # source. Unwired seams (shadow, tests, `--no-ws-books`) emit byte-identical
+    # rows to before.
+    if seam.book_stats_fn is not None:
+        try:
+            _stats = seam.book_stats_fn() or {}
+        except Exception:
+            _stats = {}
+        if isinstance(_stats, dict):
+            event_extra.update(_stats)
     if title:
         event_extra["market_title"] = title
     _decide_quotes = []

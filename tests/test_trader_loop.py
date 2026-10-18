@@ -3430,3 +3430,202 @@ def test_visit_one_passes_canonical_dead_band():
     dead_band_warns = [w for w in recorded if "trader_loop.py" in w.filename and "requote_dead_band" in str(w.message)]
     assert dead_band_warns == []
     assert seen["dead_band"] == 0.05
+
+class TestRotationSubscribeAndTiming:
+    """#650: each rotation subscribes the universe and sleeps less by measured work.
+
+    New ports are inert when absent: an unwired seam visits exactly as before,
+    with exactly one additive `rotation_complete` row per rotation.
+    """
+
+    def _seam(self, events, subscribe=None, stats=None):
+        from core_brain.config import MakerConfig
+        return VenueSeam(
+            base_cfg=MakerConfig(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda host, token: {
+                "token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                "bids": {0.59: 100}, "asks": {0.61: 100},
+            },
+            decide=lambda *a: ([], "declined"),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+            subscribe_fn=subscribe,
+            book_stats_fn=stats,
+            emit_fn=lambda **event: events.append(event),
+        )
+
+    def test_run_sleeps_interval_minus_measured_work(self):
+        events = []
+        seam = self._seam(events)
+        sleeps = []
+        ticks = iter([0.0, 0.4])
+
+        def sleep_stop(s):
+            sleeps.append(s)
+            raise KeyboardInterrupt()
+
+        run(seam, interval=1.0, once=False, live=False,
+            markets=[FakeMarket("0xm1")], sleep_fn=sleep_stop,
+            clock_fn=lambda: next(ticks, 0.4))
+        assert sleeps == [pytest.approx(0.6)]
+
+    def test_run_never_sleeps_negative_when_work_exceeds_interval(self):
+        events = []
+        seam = self._seam(events)
+        sleeps = []
+        ticks = iter([0.0, 2.5])
+
+        def sleep_stop(s):
+            sleeps.append(s)
+            raise KeyboardInterrupt()
+
+        run(seam, interval=1.0, once=False, live=False,
+            markets=[FakeMarket("0xm1")], sleep_fn=sleep_stop,
+            clock_fn=lambda: next(ticks, 2.5))
+        assert sleeps == [0.0]
+
+    def test_run_emits_rotation_complete_with_measured_latency(self):
+        events = []
+        seam = self._seam(events)
+        ticks = iter([100.0, 100.25])
+        run(seam, interval=0.0, once=True, live=False,
+            markets=[FakeMarket("0xm1")], sleep_fn=lambda s: None,
+            clock_fn=lambda: next(ticks, 100.25))
+        completions = [e for e in events if e.get("action") == "rotation_complete"]
+        assert len(completions) == 1
+        assert completions[0]["service"] == "decide"
+        assert completions[0]["latency_ms"] == pytest.approx(250.0)
+        assert completions[0]["extra"]["markets"] == 1
+
+
+    def test_run_emits_one_completion_per_rotation_with_cycle_numbers(self):
+        events = []
+        seam = self._seam(events)
+        sleeps = {"n": 0}
+
+        def sleep_stop(s):
+            sleeps["n"] += 1
+            if sleeps["n"] >= 2:
+                raise KeyboardInterrupt()
+
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xm1")], sleep_fn=sleep_stop)
+        completions = [e for e in events if e.get("action") == "rotation_complete"]
+        assert [c["cycle"] for c in completions] == [1, 2]
+
+    def test_run_subscribes_current_universe_each_rotation(self):
+        events = []
+        subscribed = []
+        state = {"n": 0}
+
+        def markets_fn():
+            state["n"] += 1
+            return ([FakeMarket("0xm1")] if state["n"] == 1
+                    else [FakeMarket("0xm1"), FakeMarket("0xm2")])
+
+        seam = self._seam(
+            events, subscribe=lambda ms: subscribed.append(
+                [m.condition_id for m in ms]))
+        sleeps = {"n": 0}
+
+        def sleep_stop(s):
+            sleeps["n"] += 1
+            if sleeps["n"] >= 2:
+                raise KeyboardInterrupt()
+
+        run(seam, interval=0.0, once=False, live=False,
+            markets_fn=markets_fn, sleep_fn=sleep_stop)
+        assert subscribed == [["0xm1"], ["0xm1", "0xm2"]]
+
+
+    def test_failed_refresh_keeps_old_universe_and_subscriptions(self):
+        events = []
+        subscribed = []
+        state = {"n": 0}
+
+        def markets_fn():
+            state["n"] += 1
+            if state["n"] == 2:
+                raise RuntimeError("feed down")
+            return [FakeMarket("0xm1")]
+
+        seam = self._seam(
+            events, subscribe=lambda ms: subscribed.append(
+                [m.condition_id for m in ms]))
+        sleeps = {"n": 0}
+
+        def sleep_stop(s):
+            sleeps["n"] += 1
+            if sleeps["n"] >= 2:
+                raise KeyboardInterrupt()
+
+        run(seam, interval=0.0, once=False, live=False,
+            markets_fn=markets_fn, sleep_fn=sleep_stop)
+        assert subscribed == [["0xm1"], ["0xm1"]]
+
+    def test_subscribe_failure_degrades_the_cycle_and_keeps_the_loop(self):
+        events = []
+        calls = {"n": 0}
+
+        def bad_subscribe(ms):
+            calls["n"] += 1
+            raise RuntimeError("socket closed")
+
+        seam = self._seam(events, subscribe=bad_subscribe)
+        sleeps = {"n": 0}
+
+        def sleep_stop(s):
+            sleeps["n"] += 1
+            if sleeps["n"] >= 2:
+                raise KeyboardInterrupt()
+
+        results = run(seam, interval=0.0, once=False, live=False,
+                      markets=[FakeMarket("0xm1")], sleep_fn=sleep_stop)
+        assert calls["n"] == 2
+        assert results
+
+    def test_unwired_seam_runs_as_before_with_one_additive_completion(self):
+        from core_brain.config import MakerConfig
+        events = []
+        seam = VenueSeam(
+            base_cfg=MakerConfig(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda host, token: {
+                "token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                "bids": {0.59: 100}, "asks": {0.61: 100},
+            },
+            decide=lambda *a: ([], "declined"),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+            emit_fn=lambda **event: events.append(event),
+        )
+        results = run(seam, interval=0.0, once=True, live=False,
+                      markets=[FakeMarket("0xm1")], sleep_fn=lambda s: None)
+        assert [r.status for r in results] == ["DECLINED"]
+        completions = [e for e in events if e.get("action") == "rotation_complete"]
+        assert len(completions) == 1
+
+    def test_decide_row_carries_book_stats_when_port_wired(self):
+        events = []
+        seam = self._seam(
+            events, stats=lambda: {"book_source": "stream", "book_read_ms": 0.4})
+        _visit_one(seam, {"cid": "0xdecide1"}, cycle=1, live=False,
+                   emit_fn=lambda **event: events.append(event))
+        decision = next(e for e in events if e.get("action") == "decide")
+        assert decision["extra"]["book_source"] == "stream"
+        assert decision["extra"]["book_read_ms"] == 0.4
+
+    def test_decide_row_has_no_book_keys_without_stats_port(self):
+        events = []
+        seam = self._seam(events)
+        _visit_one(seam, {"cid": "0xdecide1"}, cycle=1, live=False,
+                   emit_fn=lambda **event: events.append(event))
+        decision = next(e for e in events if e.get("action") == "decide")
+        assert "book_source" not in decision["extra"]
+        assert "book_read_ms" not in decision["extra"]
+
