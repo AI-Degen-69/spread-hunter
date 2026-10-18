@@ -170,7 +170,7 @@ cover the touched code — see T4. Recorded in the PR body.
   tests/test_ranker_reads_env_file.py tests/test_wide_book_trial.py`.
 - **Checkpoint:** every acceptance criterion in `SPEC.md` maps to at least one passing assertion.
 
-### [ ] T4 — Record the divergences, run the targeted suite, hand off
+### [x] T4 — Record the divergences, run the targeted suite, hand off
 - **Size:** XS | **Domain:** `[Backend/Logic]` | **Skill:** `documentation-and-adrs`
 - **Depends on:** T3
 - **Target files:** `docs/issues/674-noticed-but-not-touching.md`
