@@ -196,7 +196,12 @@ def load() -> MakerConfig:
         kw["max_spread_from_mid"] = max(window, wide)
     trial, _ = _env_get("FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", "HUNTER_DEPTH_TRIAL_USD")
     if trial and trial.strip():
-        kw["filter_common_vol_min_top3_depth_usd_trial"] = float(trial)
+        try:
+            td = float(trial)
+            if math.isfinite(td) and td >= 0:
+                kw["filter_common_vol_min_top3_depth_usd_trial"] = td
+        except ValueError:
+            pass
     mvmt, _ = _env_get("FILTER_LIVE_VEL_MIN_USD", "HUNTER_MIN_MOVEMENT_USD")
     if mvmt and mvmt.strip():
         try:
@@ -236,7 +241,12 @@ def load() -> MakerConfig:
             pass
     vtri, _ = _env_get("FILTER_STD_VOL_MIN_24H_USD_TRIAL", "HUNTER_VOLUME_TRIAL_USD")
     if vtri and vtri.strip():
-        kw["filter_std_vol_min_24h_usd_trial"] = float(vtri)
+        try:
+            vt = float(vtri)
+            if math.isfinite(vt) and vt >= 0:
+                kw["filter_std_vol_min_24h_usd_trial"] = vt
+        except ValueError:
+            pass
     # RELATIVE ACTIVITY RATIO GATE (loose baseline). movement_usd / volume_24h.
     # 0.0 (shipped default) disables it. Loose-baseline runs lower the absolute
     # volume floor AND turn this on, so relative recent activity -- not raw 24h

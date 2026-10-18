@@ -394,6 +394,21 @@ def test_invalid_live_volume_override_keeps_shipped_default(monkeypatch, bad_raw
     assert scoring_config.load().filter_live_vol_min_24h_usd == 35_000.0
 
 
+@pytest.mark.parametrize(
+    "can_var",
+    ["FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", "FILTER_STD_VOL_MIN_24H_USD_TRIAL"],
+)
+@pytest.mark.parametrize("bad_raw", ["abc", "nan", "inf", "-1"])
+def test_invalid_trial_override_keeps_shipped_default(monkeypatch, can_var, bad_raw):
+    """Trial knobs refuse non-numeric, non-finite, or negative input instead of crashing."""
+    _clear_screener_canonical_env(monkeypatch)
+    monkeypatch.setenv(can_var, bad_raw)
+
+    cfg = scoring_config.load()
+    assert cfg.filter_common_vol_min_top3_depth_usd_trial is None
+    assert cfg.filter_std_vol_min_24h_usd_trial is None
+
+
 def test_env_example_documents_only_real_canonical_variables():
     """Every `FILTER_*` and `BOT_*` variable in `.env.example` is read by a loader."""
     import re
