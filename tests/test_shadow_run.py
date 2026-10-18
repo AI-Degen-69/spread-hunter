@@ -2515,3 +2515,90 @@ class TestStartingBankrollCli:
 
         assert forwarded == MakerConfig.__dataclass_fields__["bankroll_usd"].default
         assert forwarded == 100.0
+
+
+class TestShadowSimulatedFillTelemetry:
+    """T4: Shadow rehearsal emits simulated user_fill_received events on new trades."""
+
+    def test_shadow_settle_emits_simulated_fill_for_each_new_trade(
+            self, tmp_path, monkeypatch):
+        from core_brain.quotes import QuoteIntent
+        from core_brain.shadow_run import build_shadow_seam
+
+        events = []
+        monkeypatch.setattr(
+            "core_brain.cycle_stream.emit",
+            lambda cycle, phase, action, **kw: events.append(
+                {"cycle": cycle, "phase": phase, "action": action, **kw}
+            ),
+        )
+
+        db = tmp_path / "shadow.db"
+        market = FakeMarket("0xabc")
+
+        def mock_traded(cid, seen):
+            if "t1" not in seen:
+                seen.add("t1")
+                return {"tok-up": {0.47: 10.0}}
+            return {}
+
+        seam = build_shadow_seam(
+            db_path=db,
+            client_fn=lambda: object(),
+            traded_fn=mock_traded,
+            fetch_books=lambda host, tok: {
+                "token_id": tok, "best_bid": 0.47, "best_ask": 0.49,
+                "bids": {0.47: 100}, "asks": {0.49: 100},
+            },
+        )
+
+        intents = [QuoteIntent(side="UP", token_id="tok-up", price=0.47,
+                               size=10, mid=0.48, edge_vs_mid=0.01)]
+        seam.submit_fn(seam.client, seam.registry, market, intents, seam.base_cfg)
+
+        # First settle: "t1" is new -> exactly one user_fill_received
+        seam.inventory_fn(market)
+
+        fill_events = [e for e in events if e.get("action") == "user_fill_received"]
+        assert len(fill_events) == 1
+        ev = fill_events[0]
+        assert ev["phase"] == "reconciling"
+        assert ev["service"] == "decide"
+        assert ev["extra"]["simulated"] is True
+        assert ev["extra"]["trade_id"] == "t1"
+        assert ev["extra"]["condition_id"] == "0xabc"
+        assert ev["extra"]["cycle"] == 1
+
+        # Second settle: "t1" already in seen -> no new fills emitted
+        seam.inventory_fn(market)
+        fill_events_after = [e for e in events if e.get("action") == "user_fill_received"]
+        assert len(fill_events_after) == 1
+
+    def test_shadow_settle_failure_emits_no_fill(self, tmp_path, monkeypatch):
+        from core_brain.shadow_run import build_shadow_seam
+
+        events = []
+        monkeypatch.setattr(
+            "core_brain.cycle_stream.emit",
+            lambda cycle, phase, action, **kw: events.append(
+                {"cycle": cycle, "phase": phase, "action": action, **kw}
+            ),
+        )
+
+        db = tmp_path / "shadow.db"
+        market = FakeMarket("0xabc")
+
+        def failing_traded(cid, seen):
+            seen.add("t_fail")
+            raise RuntimeError("tape endpoint unavailable")
+
+        seam = build_shadow_seam(
+            db_path=db,
+            client_fn=lambda: object(),
+            traded_fn=failing_traded,
+        )
+
+        seam.inventory_fn(market)
+        fill_events = [e for e in events if e.get("action") == "user_fill_received"]
+        assert fill_events == []
+

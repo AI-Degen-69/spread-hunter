@@ -200,7 +200,7 @@ anything reacts — the exact window a single-buy rescue has to win.
   - `test_sleep_fn_wakes_on_event` (fake event with `wait` returning True immediately).
 - **Verification:** `python -m pytest -q tests/test_trader_loop.py tests/test_market_stream.py tests/test_user_stream.py`
 
-### [ ] T4 — Shadow rehearsal emits simulated fills
+### [x] T4 — Shadow rehearsal emits simulated fills
 - **Size:** S | **Domain:** `[Backend/Logic]` | **Skill:** `test-driven-development`
 - **Depends on:** T2 (event shape)
 - **Target files:** `core_brain/shadow_run.py`, `tests/test_shadow_run.py`

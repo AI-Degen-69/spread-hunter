@@ -795,6 +795,10 @@ def build_shadow_seam(
     # closes over this same dict rather than being handed a position.
     last_inventory_by_market: dict[str, Any] = {}
 
+    emit_fn = _make_logging_emit(
+        db_path, inventory_lookup=last_inventory_by_market.get,
+        run_id=getattr(registry, "run_id", None))
+
     def settling_inventory_fn(market):
         """Settle this market, then report what it now holds.
 
@@ -805,6 +809,7 @@ def build_shadow_seam(
         market_cycles[market.condition_id] = \
             market_cycles.get(market.condition_id, 0) + 1
         cycle = market_cycles[market.condition_id]
+        before = set(seen)
         try:
             # `shadow_fetch_books` is the same source the rest of this seam
             # decides against, so an injected book drives the telemetry too.
@@ -814,6 +819,17 @@ def build_shadow_seam(
                           traded_fn=resolved_traded_fn, seen=seen,
                           book_fn=shadow_fetch_books, clob_host=clob_host,
                           cycle=cycle)
+            for tid in sorted(seen - before):
+                emit_fn(
+                    cycle, "reconciling", "user_fill_received",
+                    service="decide",
+                    extra={
+                        "simulated": True,
+                        "trade_id": tid,
+                        "condition_id": market.condition_id,
+                        "cycle": cycle,
+                    },
+                )
         except (sqlite3.Error, OSError, ValueError, RuntimeError) as e:
             # Degrade, do not stop: an unsettled visit decides against a stale
             # inventory, which the next visit corrects. Raising here would take
@@ -987,9 +1003,7 @@ def build_shadow_seam(
         sweep_fn=noop_sweep,
         inventory_fn=settling_inventory_fn,
         open_orders_fn=_make_open_orders_fn(registry),
-        emit_fn=_make_logging_emit(
-            db_path, inventory_lookup=last_inventory_by_market.get,
-            run_id=getattr(registry, "run_id", None)),
+        emit_fn=emit_fn,
         markets_fn_empty_is_routine=markets_fn_empty_is_routine,
         flow_fn=flow_fn,
         fetch_uma_status=fetch_uma_status,
