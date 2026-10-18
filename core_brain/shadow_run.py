@@ -809,7 +809,7 @@ def build_shadow_seam(
         market_cycles[market.condition_id] = \
             market_cycles.get(market.condition_id, 0) + 1
         cycle = market_cycles[market.condition_id]
-        before = set(seen)
+        fill_trade_ids: set[str] = set()
         try:
             # `shadow_fetch_books` is the same source the rest of this seam
             # decides against, so an injected book drives the telemetry too.
@@ -818,8 +818,10 @@ def build_shadow_seam(
             settle_market(registry, market, db_path=db_path,
                           traded_fn=resolved_traded_fn, seen=seen,
                           book_fn=shadow_fetch_books, clob_host=clob_host,
-                          cycle=cycle)
-            for tid in sorted(seen - before):
+                          cycle=cycle, fill_trade_ids=fill_trade_ids)
+            # Only real recorded fills emit: `seen` also grows with unrelated
+            # public prints, which must never look like our fills.
+            for tid in sorted(fill_trade_ids):
                 emit_fn(
                     cycle, "reconciling", "user_fill_received",
                     service="decide",

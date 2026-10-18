@@ -2523,6 +2523,7 @@ class TestShadowSimulatedFillTelemetry:
     def test_shadow_settle_emits_simulated_fill_for_each_new_trade(
             self, tmp_path, monkeypatch):
         from core_brain.quotes import QuoteIntent
+        from core_brain.shadow_exec import SHADOW_TRADE_PREFIX
         from core_brain.shadow_run import build_shadow_seam
 
         events = []
@@ -2539,7 +2540,7 @@ class TestShadowSimulatedFillTelemetry:
         def mock_traded(cid, seen):
             if "t1" not in seen:
                 seen.add("t1")
-                return {"tok-up": {0.47: 10.0}}
+                return {"tok-up": {0.46: 10.0}}
             return {}
 
         seam = build_shadow_seam(
@@ -2556,7 +2557,8 @@ class TestShadowSimulatedFillTelemetry:
                                size=10, mid=0.48, edge_vs_mid=0.01)]
         seam.submit_fn(seam.client, seam.registry, market, intents, seam.base_cfg)
 
-        # First settle: "t1" is new -> exactly one user_fill_received
+        # First settle: "t1" is new and fills our resting quote -> exactly one
+        # user_fill_received carrying the recorded shadow- id, not the tape id.
         seam.inventory_fn(market)
 
         fill_events = [e for e in events if e.get("action") == "user_fill_received"]
@@ -2565,7 +2567,7 @@ class TestShadowSimulatedFillTelemetry:
         assert ev["phase"] == "reconciling"
         assert ev["service"] == "decide"
         assert ev["extra"]["simulated"] is True
-        assert ev["extra"]["trade_id"] == "t1"
+        assert ev["extra"]["trade_id"].startswith(SHADOW_TRADE_PREFIX)
         assert ev["extra"]["condition_id"] == "0xabc"
         assert ev["extra"]["cycle"] == 1
 
@@ -2573,6 +2575,43 @@ class TestShadowSimulatedFillTelemetry:
         seam.inventory_fn(market)
         fill_events_after = [e for e in events if e.get("action") == "user_fill_received"]
         assert len(fill_events_after) == 1
+
+    def test_shadow_settle_emits_no_fill_without_a_recorded_fill(
+            self, tmp_path, monkeypatch):
+        from core_brain.shadow_run import build_shadow_seam
+
+        events = []
+        monkeypatch.setattr(
+            "core_brain.cycle_stream.emit",
+            lambda cycle, phase, action, **kw: events.append(
+                {"cycle": cycle, "phase": phase, "action": action, **kw}
+            ),
+        )
+
+        db = tmp_path / "shadow.db"
+        market = FakeMarket("0xabc")
+
+        def unrelated_traded(cid, seen):
+            if "t-stranger" not in seen:
+                seen.add("t-stranger")
+                return {}
+            return {}
+
+        seam = build_shadow_seam(
+            db_path=db,
+            client_fn=lambda: object(),
+            traded_fn=unrelated_traded,
+            fetch_books=lambda host, tok: {
+                "token_id": tok, "best_bid": 0.47, "best_ask": 0.49,
+                "bids": {0.47: 100}, "asks": {0.49: 100},
+            },
+        )
+
+        # No resting quote submitted: the tape stages a new public id but no
+        # shadow fill is recorded -> no telemetry.
+        seam.inventory_fn(market)
+        fill_events = [e for e in events if e.get("action") == "user_fill_received"]
+        assert fill_events == []
 
     def test_shadow_settle_failure_emits_no_fill(self, tmp_path, monkeypatch):
         from core_brain.shadow_run import build_shadow_seam

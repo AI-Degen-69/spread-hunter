@@ -3635,7 +3635,7 @@ class TestFillDrainReactsInLoop:
     """#650: a fill event during the wait is reconciled, visited and guarded.
 
     The drain runs only in the long loop (never `once`), deduplicates by
-    `trade_id`, and isolates each reaction step so one failure cannot stop
+    `(trade_id, status)`, and isolates each reaction step so one failure cannot stop
     the loop.
     """
 
@@ -3731,6 +3731,24 @@ class TestFillDrainReactsInLoop:
         run(seam, interval=0.0, once=False, live=False,
             markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
         assert order == ["reconcile", "visit"]
+
+    def test_fill_status_change_reacts_again(self, monkeypatch):
+        events = []
+        order = []
+        seam, queue = self._seam(
+            events,
+            fills=[self._fill(status="MATCHED"), self._fill(status="CONFIRMED")],
+            reconcile=lambda: order.append("reconcile"))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._visit_one", self._fake_visit(order))
+        monkeypatch.setattr(
+            "core_brain.trader_loop._guardian_fill_tick", lambda **kw: None)
+        run(seam, interval=0.0, once=False, live=False,
+            markets=[FakeMarket("0xfill")], sleep_fn=self._stop_after(1))
+        assert order == ["reconcile", "visit", "reconcile", "visit"]
+        received = [e for e in events
+                    if e.get("action") == "user_fill_received"]
+        assert len(received) == 2
 
     def test_failed_fill_does_not_reconcile(self, monkeypatch):
         events = []
@@ -3846,7 +3864,6 @@ class TestMainStreamWiring:
 
     def test_stream_reader_returns_cache_shape_and_loads_stats(self):
         from core_brain.trader_loop import _make_stream_fetch_books
-        events = []
         stats_box = {}
 
         class FakeCache:
@@ -3859,25 +3876,13 @@ class TestMainStreamWiring:
                     "best_ask": 0.51,
                 }
 
-        reader = _make_stream_fetch_books(
-            FakeCache(),
-            lambda **e: events.append(e),
-            stats_box,
-        )
+        reader = _make_stream_fetch_books(FakeCache(), stats_box)
         res = reader("https://clob", "tok-1")
         assert res["token_id"] == "tok-1"
         assert res["best_bid"] == 0.49
         assert stats_box["book_source"] == "stream"
         assert stats_box["token_id"] == "tok-1"
         assert stats_box["book_read_ms"] >= 0.0
-        assert len(events) == 1
-        ev = events[0]
-        assert ev["action"] == "ws_book_read"
-        assert ev["service"] == "decide"
-        assert ev["phase"] == "quoting"
-        assert ev["latency_ms"] >= 0.0
-        assert ev["extra"]["book_source"] == "stream"
-        assert ev["extra"]["token_id"] == "tok-1"
 
     def test_cold_cache_raises_book_stream_cold_and_never_calls_rest(self):
         from core_brain.trader_loop import _make_stream_fetch_books
@@ -3888,7 +3893,7 @@ class TestMainStreamWiring:
                 raise BookNotReady(f"token {token_id} has no live book")
 
         stats_box = {}
-        reader = _make_stream_fetch_books(ColdCache(), lambda **e: None, stats_box)
+        reader = _make_stream_fetch_books(ColdCache(), stats_box)
         with pytest.raises(RuntimeError, match="book stream cold: tok-cold"):
             reader("https://clob", "tok-cold")
         assert not stats_box
@@ -4028,6 +4033,16 @@ class TestMainStreamWiring:
             "core_brain.trader_loop._setup_user_stream",
             lambda **kw: (FakeUserStream(), lambda: [], lambda: None, threading.Event()),
         )
+        # Isolate main() from the venue: no .env read, no balance fetch, no
+        # background resolution sweeper thread.
+        monkeypatch.setattr(
+            "core_brain.trader_loop.start_resolution_sweeper",
+            lambda *a, **k: None)
+        monkeypatch.setattr(
+            "core_brain.account.fetch_live_balance", lambda *a, **k: None)
+        monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+        for var in ("POLY_PRIVATE_KEY", "POLY_KEY"):
+            monkeypatch.delenv(var, raising=False)
 
         def fake_run(*a, **kw):
             raise InstanceInUse("fleet already active")

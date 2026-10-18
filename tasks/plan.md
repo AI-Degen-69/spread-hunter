@@ -99,9 +99,10 @@ anything reacts — the exact window a single-buy rescue has to win.
      the old subscriptions) is kept, as today.
   4. Additive ring events through `emit_fn`, both `service="decide"`:
      `rotation_complete` (`phase="quoting"`, `latency_ms=work*1000`, `extra={"markets": len(current_markets), "suspects": len(rotation_suspects)}`) emitted once per rotation before the
-     `once` check so smoke runs emit it too; `ws_book_read`
-     (`phase="quoting"`, `latency_ms=<read ms>`, `extra={"book_source": "stream", "token_id": ...}`)
-     is T3's — emitted by the live adapter, never by `run()`.
+     `once` check so smoke runs emit it too. No per-read ring event: the stream
+     reader records `book_source` / `book_read_ms` in the stats cell that lands
+     on the decide row, and a per-read `ws_book_read` row would churn the
+     500-line ring (~20/s at 10 markets) and evict the rows the dashboard reads.
   5. `_visit_one` merges `seam.book_stats_fn()` (when wired) into the `extra` of the two
      `action="decide"` emits after `evaluate_market_quote` (`:1819`, `:1851`); absent port →
      rows unchanged.
@@ -126,7 +127,7 @@ anything reacts — the exact window a single-buy rescue has to win.
      `fill_reconcile_fn: Optional[Callable[[], Any]] = None` seam fields.
   2. Immediately after `sleep_fn(...)` returns (never in `once` mode, never inside the
      `except KeyboardInterrupt` branch), drain the queue. Bounded dedupe:
-     `deque(maxlen=512)` of `trade_id`; a repeat id is dropped silently.
+     `deque(maxlen=512)` of `(trade_id, STATUS)`; a same-status repeat is dropped, a status change reacts again.
   3. Per event, in this order, each step isolated:
      `emit_fn(service="decide", phase="reconciling", action="user_fill_received",
      extra={"trade_id", "order_id", "condition_id", "token_id", "side", "price", "size",
@@ -142,6 +143,7 @@ anything reacts — the exact window a single-buy rescue has to win.
   - `test_fill_after_wait_triggers_reconcile_then_visit_then_guardian` (recording fakes;
     assert call order, not just presence).
   - `test_fill_event_is_deduped_by_trade_id` (same id twice → one reconcile, one visit).
+  - `test_fill_status_change_reacts_again` (same id, new status -> reacts again).
   - `test_failed_fill_does_not_reconcile` (telemetry only).
   - `test_fill_for_unknown_market_still_reconciles_without_visit`.
   - `test_once_mode_never_drains_fills`.
@@ -161,8 +163,8 @@ anything reacts — the exact window a single-buy rescue has to win.
   2. Stream mode: `cache = MarketBookCache()`, `market_stream = MarketStream(cache=cache,
      emit_fn=decide_emit)`, `.start()`. `fetch_books` becomes a reader that times the read
      with `time.perf_counter()`, stores `{"book_source": "stream", "book_read_ms": ms,
-     "token_id": ...}` in a mutable stats cell (surfaced via `seam.book_stats_fn`), emits
-     `ws_book_read`, and returns `cache.book(token_id)`; `BookNotReady` →
+     "token_id": ...}` in a mutable stats cell (surfaced via `seam.book_stats_fn`),
+     and returns `cache.book(token_id)`; `BookNotReady` →
      `RuntimeError(f"book stream cold: {token_id}")` (no REST retry).
   3. `subscribe_fn`: dedupe by condition id in the trader loop (the HTTP read is the
      expensive part; `ensure_market` is already idempotent per `(slug, up, down)` —
@@ -191,7 +193,7 @@ anything reacts — the exact window a single-buy rescue has to win.
   - `test_parse_args_ws_books_defaults`: `--once` → REST, loop → stream,
     `--ws-books` / `--no-ws-books` override both.
   - `test_stream_reader_returns_cache_shape_and_loads_stats`: fake cache →
-    `full_book` keys, `book_stats` populated, `ws_book_read` emitted with the measured ms.
+    `full_book` keys, `book_stats` populated, no ring event emitted.
   - `test_cold_cache_raises_book_stream_cold_and_never_calls_rest`.
   - `test_subscribe_dedupes_and_retains`: two rotations of the same universe → one
     `ensure_market` per market, `retain_markets` every call, no second `_fetch_market`.
@@ -203,14 +205,17 @@ anything reacts — the exact window a single-buy rescue has to win.
 ### [x] T4 — Shadow rehearsal emits simulated fills
 - **Size:** S | **Domain:** `[Backend/Logic]` | **Skill:** `test-driven-development`
 - **Depends on:** T2 (event shape)
-- **Target files:** `core_brain/shadow_run.py`, `tests/test_shadow_run.py`
+- **Target files:** `core_brain/shadow_run.py`, `core_brain/shadow_exec.py`,
+  `tests/test_shadow_run.py`
 - **What is built:**
-  1. In `build_shadow_seam`'s `settling_inventory_fn` (`:800-824`): snapshot
-     `before = set(seen)` around the `settle_market(...)` call; for every id in
-     `seen - before` emit through the seam's ring emit
-     (`emit_fn(cycle, "reconciling", "user_fill_received", extra=...)` — the closure at
-     `:569`, so `event.get("simulated") is True`): `extra={"simulated": True, "trade_id":
-     tid, "condition_id": market.condition_id, "cycle": cycle}`.
+  1. `settle_market` accepts an optional `fill_trade_ids` out-set and adds each
+     generated `shadow-` trade id it records; `build_shadow_seam`'s
+     `settling_inventory_fn` passes one in and emits `user_fill_received`
+     (through the seam's ring emit — the closure at `:569`, so
+     `event.get("simulated") is True`) only for those ids:
+     `extra={"simulated": True, "trade_id": tid, "condition_id":
+     market.condition_id, "cycle": cycle}`. Emitting on `seen` growth would
+     fake a fill for every unrelated public print the tape walk stages.
   2. No stream clients in shadow (it holds no credentials and reads only), no
      `subscribe_fn`, no fill queue: the rehearsal shows the event shape, never a live
      socket.
@@ -218,7 +223,9 @@ anything reacts — the exact window a single-buy rescue has to win.
 - **Tests (write first):**
   - `test_shadow_settle_emits_simulated_fill_for_each_new_trade`: seeded shadow store that
     fills a resting quote → exactly one `user_fill_received`, `simulated: True`, its
-    `trade_id` in the emitted set; a second settle of the same book adds none.
+    `trade_id` the recorded `shadow-` id (not the tape id); a second settle of the same book adds none.
+  - `test_shadow_settle_emits_no_fill_without_a_recorded_fill`: new public tape id but no
+    resting quote → no `user_fill_received`.
   - `test_shadow_settle_failure_emits_no_fill`.
 - **Verification:** `python -m pytest -q tests/test_shadow_run.py`
 
@@ -228,11 +235,12 @@ anything reacts — the exact window a single-buy rescue has to win.
 ## Files Touched / Not Touched
 
 **Touched:** `core_brain/trader_loop.py`, `core_brain/shadow_run.py`,
-`tests/test_trader_loop.py`, `tests/test_shadow_run.py`, plus this plan,
+`core_brain/shadow_exec.py`, `core_brain/market_stream.py` (one-line `__init__`
+fix only), `tests/test_trader_loop.py`, `tests/test_shadow_run.py`, plus this plan,
 `CONSTRAINTS.md`, `docs/issues/650-noticed-but-not-touching.md`.
 
 **Not touched (invariants):** `core_brain/quotes.py`, `core_brain/markets.py`,
-`core_brain/market_stream.py`, `core_brain/user_stream.py`,
+`core_brain/user_stream.py`,
 `core_brain/risk_guardian.py`, `core_brain/cycle_stream.py`, `dashboard/**`,
 `data/orders.db`, `runtime/**`.
 
@@ -240,8 +248,8 @@ anything reacts — the exact window a single-buy rescue has to win.
 
 - **Book staleness:** the cache serves the last snapshot even if the socket has been quiet —
   a stale spread is a stale quote. Accepting that is the issue's premise (the venue pushes
-  on change); the mitigation is telemetry (`ws_book_read` + `rotation_complete`), not a
-  silent REST re-read (CONSTRAINTS §3).
+  on change); the mitigation is telemetry (`book_source` on the decide row +
+  `rotation_complete`), not a silent REST re-read (CONSTRAINTS §3).
 - **Reactive visit vs. cadence:** a fill-triggered visit runs outside the rotation, so one
   market may be visited twice in a second. Both visits read fresh inventory and the registry
   gates duplicates; the loop's resident instance lock still owns writes.

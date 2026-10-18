@@ -852,8 +852,9 @@ def _react_to_fills(
     Event first, then reaction: every drained event emits `user_fill_received`,
     then (unless its `status` says FAILED) the loop re-reconciles, re-visits
     the filled market, and runs a guardian tick. Each step is isolated -- a
-    failure degrades this event, never the loop. Repeats of the same
-    `trade_id` are dropped so one fill never reconciles twice.
+    failure degrades this event, never the loop. Dedup keys on
+    `(trade_id, status)` so a status change (matched -> confirmed, or a later
+    FAILED) still reacts while a repeated identical event does not.
     """
     try:
         events = list(seam.fill_events_fn() or [])
@@ -862,9 +863,11 @@ def _react_to_fills(
         return
     for ev in events:
         trade_id = str(getattr(ev, "trade_id", "") or "")
-        if not trade_id or trade_id in seen_trade_ids:
+        status_key = str(getattr(ev, "status", "") or "").upper()
+        key = (trade_id, status_key)
+        if not trade_id or key in seen_trade_ids:
             continue
-        seen_trade_ids.append(trade_id)
+        seen_trade_ids.append(key)
         ev_cid = str(getattr(ev, "condition_id", "") or "")
         matched = next(
             (s for s in (current_markets or []) if _cid(s) == ev_cid), None)
@@ -2836,14 +2839,16 @@ def _production_reconcile_fn(emit_fn: Any) -> Any:
 
 def _make_stream_fetch_books(
     cache: Any,
-    emit_fn: Callable[..., Any],
     stats_box: dict,
 ) -> Callable[[str, str], dict]:
     """Return a `fetch_books(clob_host, token_id)` reader backed by `MarketBookCache`.
 
     Times the read with `time.perf_counter()`, records latency and source in
-    `stats_box`, emits a `ws_book_read` event through `emit_fn`, and fails
-    closed on `BookNotReady` without falling back to REST.
+    `stats_box` (surfaced on the decide row via `book_stats_fn`), and fails
+    closed on `BookNotReady` without falling back to REST. No ring event is
+    emitted per read: at ~2 reads per visit per second the ring would churn,
+    evicting the `rotation_complete` / `user_fill_received` rows the
+    dashboard reads.
     """
     from core_brain.market_stream import BookNotReady
 
@@ -2861,14 +2866,6 @@ def _make_stream_fetch_books(
         }
         stats_box.clear()
         stats_box.update(stats)
-        emit_fn(
-            service="decide",
-            cycle=0,
-            phase="quoting",
-            action="ws_book_read",
-            latency_ms=read_ms,
-            extra=dict(stats),
-        )
         return book
 
     return _fetch_books
@@ -3130,7 +3127,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         cache = MarketBookCache()
         market_stream = MarketStream(cache=cache, emit_fn=decide_emit)
         market_stream.start()
-        fetch_books_fn = _make_stream_fetch_books(cache, decide_emit, book_stats)
+        fetch_books_fn = _make_stream_fetch_books(cache, book_stats)
         subscribe_fn = _make_subscribe_fn(market_stream, cache, _fetch_market)
         book_stats_fn = lambda: dict(book_stats)
     else:
