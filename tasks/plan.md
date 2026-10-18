@@ -125,7 +125,7 @@ unless the operator rejects it before build.
 - **Verify:** guard green on new code + observed red during the temporary
   mis-declaration.
 
-### T4 — Legacy ask-knob comments + coverage [S, Debug]
+### T4 [x] — Legacy ask-knob comments + coverage [S, Debug]
 - **Target files:** `core_brain/config.py` (4 knob comments),
   `core_brain/quotes.py` (1 branch comment, logic untouched),
   `tests/test_legacy_ask_quotes.py` (new).

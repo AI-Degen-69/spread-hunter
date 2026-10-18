@@ -582,9 +582,24 @@ class MakerConfig:
     # market making expressed as buys only. He never sells (0 SELLs in 56,768).
     quote_both_sides: bool = True
 
+    # THE ASK BRANCH (#571) -- NOT READ ON THE LIVE PATH. These two price a
+    # quote off the ASK (`best_ask - ticks_below_ask * tick_size`) and are read
+    # nowhere else. `decide_quotes` returns before them for both shipped
+    # objectives ("spread_capture", "rewards"), and `trader_loop.spec_to_cfg`
+    # pins `objective="spread_capture"`, so no shipped run reaches either knob.
+    # The branch is kept rather than deleted because it still executes for the
+    # dead "pair" objective; `tests/test_legacy_ask_quotes.py` pins that and the
+    # two knobs' values. "pair" was measured dead: resting half a spread ABOVE
+    # mid puts the pair at 1.00 + spread by construction.
+    #
     # How far below the best ask to rest. 1 tick = passive, at the touch.
     # Deeper = better price but far lower fill probability.
     ticks_below_ask: int = 1
+    # The ASK-BRANCH grid, NOT the live one. `tick_size` scales only
+    # `ticks_below_ask` above and prices nothing else; `price_tick` below is the
+    # live grid every quote floors to. Both read 1c today, so they look
+    # interchangeable -- they are not, and collapsing them would give the dead
+    # branch a vote on live prices.
     tick_size: float = 0.01
     # THE HARD PRICE GRID (operator directive 2026-10-12): Polymarket resting
     # orders sit on a standard 1-cent grid. 0.001 sub-penny math is retired
@@ -692,6 +707,12 @@ class MakerConfig:
     # A passive order needs time to be reached; posting late means resting into
     # the minutes when the price is converging on the outcome, which is exactly
     # when a fill is most likely to be adverse.
+    #
+    # The ASK BRANCH is the only reader (#571). Both shipped objectives return
+    # from mid before the line that consults it, so `objective == "pair"` is the
+    # sole objective that can reach this knob -- and it was measured dead. Even
+    # there it stays disarmed on the live path: `evaluate_market` passes
+    # `window_pct=None`, and None means "no window known, never refuse".
     quote_window_pct: float = 0.40
     # Both rules are switchable so their effect can be measured one at a time
     # rather than bundled -- a previous run changed two things at once and the
@@ -703,6 +724,10 @@ class MakerConfig:
     # on the objective the fleet actually runs it never executed. Measured
     # 2026-08-05: fills averaged 0.8152 against this nominal 0.30-0.70 band.
     enforce_price_band: bool = True
+    # The ASK BRANCH's switch for `quote_window_pct` above, and the only thing
+    # that turns it on (#571). Unlike `enforce_price_band` -- which runs on both
+    # objectives as of U4 -- no shipped objective reads this one, so toggling it
+    # changes nothing outside the dead "pair" objective.
     enforce_quote_window: bool = True
 
     # The ENDGAME PROXIMITY GATE (#240), the kickoff clock, the assumed

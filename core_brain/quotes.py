@@ -751,6 +751,13 @@ def decide_quotes(
                                                t_remaining,
                                                lifecycle_override)
         return _require_two_sided(cfg, inv, intents, why)
+    # --- LEGACY ASK BRANCH (#571) -----------------------------------------
+    # Everything below prices off the ASK (`best_ask - ticks_below_ask *
+    # tick_size`) and runs only for an objective outside the two shipped ones --
+    # in practice the dead "pair" objective (measured: resting half a spread
+    # above mid puts the pair at 1.00 + spread by construction). Do not add a
+    # live rule down here, it would never fire; live pricing is
+    # `_decide_quotes_from_mid` above.
     if lifecycle_override is not None:
         return [], "lifecycle escalation requires the from-mid quote objective"
 
