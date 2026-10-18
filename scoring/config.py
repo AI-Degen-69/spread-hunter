@@ -164,7 +164,7 @@ def load() -> MakerConfig:
         ms, ms_name = _env_get("BOT_QUOTE_SIZE_MIN_SHARES", "HUNTER_MIN_QUOTE_SHARES", "HUNTER_MIN_SIZE")
         if ms_name == "HUNTER_MIN_SIZE" and ms and ms.strip():
             logging.getLogger(__name__).warning(
-                "HUNTER_MIN_SIZE is deprecated (#632); set HUNTER_MIN_QUOTE_SHARES instead."
+                "HUNTER_MIN_SIZE is deprecated (#632); set BOT_QUOTE_SIZE_MIN_SHARES instead."
             )
         if ms and ms.strip():
             kw["min_quote_shares"] = int(float(ms))
@@ -172,14 +172,14 @@ def load() -> MakerConfig:
         sp, sp_name = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD")
         if sp_name == "HUNTER_MAX_SPREAD" and sp and sp.strip():
             logging.getLogger(__name__).warning(
-                "HUNTER_MAX_SPREAD is deprecated (#632); set HUNTER_MAX_SPREAD_CENTS instead."
+                "HUNTER_MAX_SPREAD is deprecated (#632); set BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID instead."
             )
         if sp and sp.strip():
             kw["max_spread_from_mid"] = float(sp) / 100.0
         tk, tk_name = _env_get("BOT_QUOTE_GRID_TICK_SIZE_USD", "HUNTER_PRICE_TICK", "HUNTER_TICK")
         if tk_name == "HUNTER_TICK" and tk and tk.strip():
             logging.getLogger(__name__).warning(
-                "HUNTER_TICK is deprecated (#632); set HUNTER_PRICE_TICK instead."
+                "HUNTER_TICK is deprecated (#632); set BOT_QUOTE_GRID_TICK_SIZE_USD instead."
             )
         if tk and tk.strip():
             kw["price_tick"] = float(tk)
