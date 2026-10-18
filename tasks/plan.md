@@ -25,11 +25,11 @@ Size Tier: Small | Task Types: Code, Debug
      trial, trial_name = _env_get("FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", "HUNTER_DEPTH_TRIAL_USD")
      if trial and trial.strip():
          # Screener defaults to None (fails open); engine raises and fails loud with variable name.
-         kw["select_min_top3_depth_usd_trial"] = _bounded_float(trial_name or "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", trial.strip(), 0.0, 1e12)
+         kw["select_min_top3_depth_usd_trial"] = _bounded_float(trial_name or "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", trial.strip(), 0.0, float("inf"))
 
      vtri, vtri_name = _env_get("FILTER_STD_VOL_MIN_24H_USD_TRIAL", "HUNTER_VOLUME_TRIAL_USD")
      if vtri and vtri.strip():
-         kw["select_min_volume_24h_usd_trial"] = _bounded_float(vtri_name or "FILTER_STD_VOL_MIN_24H_USD_TRIAL", vtri.strip(), 0.0, 1e12)
+         kw["select_min_volume_24h_usd_trial"] = _bounded_float(vtri_name or "FILTER_STD_VOL_MIN_24H_USD_TRIAL", vtri.strip(), 0.0, float("inf"))
      ```
   2. Document the deliberate asymmetry in code comments as required by acceptance criteria.
 - **Verification:** Unit test verification and CLI checks.
