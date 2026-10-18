@@ -9,8 +9,11 @@ never throttle the window again.
 """
 from __future__ import annotations
 
-from dataclasses import replace
+import importlib.util
+import time
+from datetime import datetime, timedelta, timezone
 
+import scripts.filter_markets as fm
 from core_brain.config import MakerConfig
 from core_brain.trader_loop import _market_cfg as spec_to_cfg
 from scoring.config import load as load_scoring
@@ -87,23 +90,18 @@ def test_bankroll_override_survives_the_allocator_purge(monkeypatch):
 def test_scoring_rewards_module_is_deleted():
     """scoring.rewards was orphaned Polymarket liquidity reward math;
     Issue #681 purges it permanently."""
-    import importlib.util
     spec = importlib.util.find_spec("scoring.rewards")
     assert spec is None, "scoring.rewards must be completely deleted (#681)"
 
 
 def test_filter_markets_has_no_order_score_or_q_min():
     """scripts.filter_markets must not define order_score or q_min (#681)."""
-    import scripts.filter_markets as fm
     assert not hasattr(fm, "order_score"), "order_score must be purged (#681)"
     assert not hasattr(fm, "q_min"), "q_min must be purged (#681)"
 
 
 def test_evaluate_produces_spread_metrics_without_reward_pool_math():
     """evaluate() ranks on spread/movement and does not calculate reward pool splits (#681)."""
-    import time
-    import scripts.filter_markets as fm
-
     class FakeSession:
         def get(self, url, params=None, timeout=None):
             if "trades" in url:
@@ -118,8 +116,6 @@ def test_evaluate_produces_spread_metrics_without_reward_pool_math():
                 },
                 "raise_for_status": lambda self: None,
             })()
-
-    from datetime import datetime, timezone, timedelta
 
     cand = {
         "condition_id": "0xtest_pure_spread",
@@ -148,8 +144,6 @@ def test_evaluate_produces_spread_metrics_without_reward_pool_math():
 
 def test_screener_terminal_output_has_no_reward_terms(tmp_path, monkeypatch, capsys):
     """filter_markets.main() terminal output must not print reward vocabulary (#681)."""
-    import scripts.filter_markets as fm
-
     winner = {
         "cid": "0xtest", "title": "Test Spread Market", "source": "spread",
         "eligible": True, "spread": 0.025, "volume_24h": 150_000.0,

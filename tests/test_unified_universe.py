@@ -23,8 +23,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import scripts.filter_markets as fm
-from scripts.filter_markets import (evaluate, expired_at_intake,
-                                    gamma_universe, resolve_state)
+from scripts.filter_markets import (
+    evaluate,
+    expired_at_intake,
+    gamma_universe,
+    resolve_state,
+)
 
 
 class _Resp:
