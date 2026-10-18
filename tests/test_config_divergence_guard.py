@@ -1,10 +1,14 @@
-"""#571: no shared setting may be re-declared with a different value.
+"""#571/#652: no shared setting may be re-declared with a different value.
 
 The two config modules used to carry 69 copies of the same number, held together
 by nothing but a test that compared a handful of them. `scoring.config` now
 inherits every shared field, so the only way to bring a second declaration back
 is to write one into the scoring class body. This file reads that class body
 with `ast` to catch it, and compares the defaults themselves for the values.
+
+#652 moved the last eight bars -- the picker's filter bars -- onto core too. The
+scoring class body now declares the five `PICKER_PROFILE` fields and `db_path`,
+nothing else.
 """
 from __future__ import annotations
 
@@ -18,19 +22,34 @@ from scoring import config as scoring_config
 
 SCORING_CLASS = "MakerConfig"
 
-# The eight fields ONLY the ranker reads. Everything else declared in the
-# scoring class body must be one of these or one of the five profile fields --
-# a shared field restated here is a second number, whichever value it carries.
-PICKER_ONLY = frozenset({
-    "enforce_max_queue_minutes",
-    "select_max_queue_minutes",
-    "select_min_activity_ratio",
-    "select_min_movement_usd",
-    "select_min_range_cents",
-    "select_movement_window_sec",
-    "select_velocity_gate_enabled",
-    "select_volatility_window_sec",
+# The eight picker filter bars that now live on core (#652). Each one must be a
+# real core dataclass field, reachable on the picker at the same default, and
+# reachable by its old picker name through the alias table. This set is used by
+# the affirmative checks only -- it is NEVER an excuse list for the class body.
+CORE_OWNED_PICKER_BARS = frozenset({
+    "filter_live_vel_lookback_sec",
+    "filter_live_vel_min_usd",
+    "filter_live_gate_velocity_on",
+    "filter_live_move_lookback_sec",
+    "filter_live_move_min_range_cents",
+    "filter_live_activity_min_ratio",
+    "filter_std_queue_max_clear_min",
+    "filter_std_gate_queue_max_on",
 })
+
+# The old picker name of each bar, pinned old -> canonical. Spelled out instead
+# of read from `_LEGACY_TO_CANONICAL`, so that re-pointing an alias at a
+# different field fails here rather than silently following the new target.
+PICKER_BAR_ALIASES = {
+    "select_max_queue_minutes": "filter_std_queue_max_clear_min",
+    "enforce_max_queue_minutes": "filter_std_gate_queue_max_on",
+    "select_movement_window_sec": "filter_live_vel_lookback_sec",
+    "select_min_movement_usd": "filter_live_vel_min_usd",
+    "select_velocity_gate_enabled": "filter_live_gate_velocity_on",
+    "select_min_activity_ratio": "filter_live_activity_min_ratio",
+    "select_min_range_cents": "filter_live_move_min_range_cents",
+    "select_volatility_window_sec": "filter_live_move_lookback_sec",
+}
 
 # The five values the picker deliberately runs at a different level. Spelled out
 # here rather than read from the table, so adding a sixth to `PICKER_PROFILE`
@@ -42,6 +61,11 @@ PROFILE_NAMES = frozenset({
     "max_spread_from_mid",
     "max_pair_cost",
 })
+
+# The one method the scoring class body is allowed to keep: the `db_path()`
+# duplicate of core's, pinned by `test_config_single_source.py` under three env
+# states. Anything else declared as a function here could shadow a core field.
+SCORING_OWN_METHODS = frozenset({"db_path"})
 
 
 def _scoring_class_body() -> list[ast.stmt]:
@@ -68,8 +92,22 @@ def _declared_names(body: list[ast.stmt] | None = None) -> list[str]:
     return names
 
 
+def _defined_function_names(body: list[ast.stmt] | None = None) -> list[str]:
+    """Functions defined in the scoring class body, in source order."""
+    if body is None:
+        body = _scoring_class_body()
+    return [
+        stmt.name for stmt in body
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+
+
 def _defaults(cls) -> dict[str, object]:
     return {f.name: getattr(cls(), f.name) for f in dataclasses.fields(cls)}
+
+
+def _field_names(cls) -> set[str]:
+    return {f.name for f in dataclasses.fields(cls)}
 
 
 def test_the_picker_is_core_config():
@@ -103,9 +141,20 @@ def test_no_shared_setting_has_diverged():
 
 def test_every_core_setting_is_still_reachable_on_the_picker():
     """Inheritance has to hand the picker the whole surface, not most of it."""
-    scoring_fields = {f.name for f in dataclasses.fields(scoring_config.MakerConfig)}
+    assert _field_names(core_config.MakerConfig) <= _field_names(scoring_config.MakerConfig)
 
-    assert set(_defaults(core_config.MakerConfig)) <= scoring_fields
+
+def test_the_picker_declares_no_field_core_does_not_have():
+    """The reverse direction: nothing may be left behind on the picker alone.
+
+    #652's end state is one field set, not two that happen to overlap -- a
+    leftover declaration is a second number whatever its value.
+    """
+    extra = _field_names(scoring_config.MakerConfig) - _field_names(core_config.MakerConfig)
+
+    assert not extra, (
+        "scoring.config.MakerConfig declares field(s) core does not have; "
+        f"they belong on core: {sorted(extra)}")
 
 
 def test_the_profile_is_exactly_these_five_fields():
@@ -121,19 +170,61 @@ def test_the_profile_is_exactly_these_five_fields():
 
 
 def test_the_class_body_declares_only_the_pickers_own_fields():
-    """A shared field restated here is the drift this ticket exists to stop."""
-    extra = set(_declared_names()) - PICKER_ONLY - PROFILE_NAMES
+    """A shared field restated here is the drift this ticket exists to stop.
+
+    The allowed set is `PROFILE_NAMES` alone -- deliberately NOT
+    `CORE_OWNED_PICKER_BARS`. Those names are core fields now, so allowing them
+    here would let a re-declared bar with the identical value through, which is
+    exactly the second declaration this guard exists to catch.
+    """
+    extra = set(_declared_names()) - PROFILE_NAMES
 
     assert not extra, (
         "scoring.config.MakerConfig re-declares shared field(s); delete them "
         f"and inherit instead: {sorted(extra)}")
 
 
-def test_picker_only_fields_do_not_exist_on_core():
-    """They are the picker's alone -- core declaring one means two numbers."""
-    core_names = {f.name for f in dataclasses.fields(core_config.MakerConfig)}
+def test_the_class_body_defines_no_other_method_or_property():
+    """A function here can shadow a core field. Only `db_path` may stay."""
+    defined = set(_defined_function_names())
 
-    assert not (PICKER_ONLY & core_names), sorted(PICKER_ONLY & core_names)
+    assert defined <= SCORING_OWN_METHODS, (
+        "scoring.config.MakerConfig defines method(s) beside the allowed "
+        f"{sorted(SCORING_OWN_METHODS)}: {sorted(defined - SCORING_OWN_METHODS)}")
+
+
+def test_the_core_owned_picker_bars_exist_once_on_core():
+    """Each bar is a real core dataclass field, and there is no second copy."""
+    core_names = _field_names(core_config.MakerConfig)
+
+    assert CORE_OWNED_PICKER_BARS <= core_names, sorted(CORE_OWNED_PICKER_BARS - core_names)
+
+
+def test_the_core_owned_picker_bars_are_inherited_at_the_same_default():
+    """Reachable on the picker, same default on both sides, no local override."""
+    scoring_defaults = _defaults(scoring_config.MakerConfig)
+    core_defaults = _defaults(core_config.MakerConfig)
+
+    for name in sorted(CORE_OWNED_PICKER_BARS):
+        assert name in scoring_defaults, name
+        assert scoring_defaults[name] == core_defaults[name], name
+
+
+def test_the_old_picker_names_still_resolve_through_the_alias_table():
+    """The old spelling reads the bar core owns, and the mapping is exact."""
+    table = core_config._LEGACY_TO_CANONICAL
+
+    for old, canonical in sorted(PICKER_BAR_ALIASES.items()):
+        assert table.get(old) == canonical, old
+        assert canonical in CORE_OWNED_PICKER_BARS, old
+
+
+def test_the_old_picker_names_still_read_the_canonical_value():
+    """The dashboard's `getattr(scfg, "select_*", <fallback>)` must resolve."""
+    scoring_defaults = _defaults(scoring_config.MakerConfig)
+
+    for old, canonical in sorted(PICKER_BAR_ALIASES.items()):
+        assert scoring_defaults[old] == scoring_defaults[canonical], old
 
 
 def test_profile_defaults_read_the_table_instead_of_a_literal():
@@ -159,3 +250,21 @@ def test_declared_names_catches_unannotated_assigns():
     cls_def = ast.parse(src).body[0]
     assert isinstance(cls_def, ast.ClassDef)
     assert _declared_names(cls_def.body) == ["x", "y"]
+
+
+def test_defined_function_names_catches_methods_and_properties():
+    """The method guard must see plain functions, `async def` and properties."""
+    src = (
+        "class Foo:\n"
+        "    x: int = 1\n"
+        "    def a(self):\n"
+        "        pass\n"
+        "    async def b(self):\n"
+        "        pass\n"
+        "    @property\n"
+        "    def c(self):\n"
+        "        return 1\n"
+    )
+    cls_def = ast.parse(src).body[0]
+    assert isinstance(cls_def, ast.ClassDef)
+    assert _defined_function_names(cls_def.body) == ["a", "b", "c"]
