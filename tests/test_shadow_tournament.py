@@ -175,7 +175,7 @@ def test_build_tournament_plan_rejects_non_hunter_env():
     bad_env_arms = [
         {"name": "arm-one", "env": {"NOT_HUNTER": "123"}},
     ]
-    with pytest.raises(ValueError, match="only HUNTER_.*overrides are permitted"):
+    with pytest.raises(ValueError, match=r"only BOT_\* \(or legacy HUNTER_\*\) overrides are permitted"):
         build_tournament_plan(issue=371, arms=bad_env_arms, check_ports=False)
 
 
@@ -244,7 +244,7 @@ def test_default_arms_set_preset_selector(tmp_path: Path):
         check_ports=False,
     )
     for arm in plan.arms:
-        assert arm.env["HUNTER_TOURNAMENT_PRESET"] == arm.name
+        assert arm.env["BOT_QUOTE_TOURNAMENT_PRESET"] == arm.name
 
 
 def test_default_arm_offsets_agree_with_presets(tmp_path: Path):
@@ -260,20 +260,20 @@ def test_default_arm_offsets_agree_with_presets(tmp_path: Path):
     )
     for arm in plan.arms:
         preset = TOURNAMENT_PRESETS[arm.name]
-        assert arm.env["HUNTER_DYNAMIC_OFFSET"] == ("1" if preset["dynamic_offset_enabled"] else "0")
+        assert arm.env["BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"] == ("1" if preset["dynamic_offset_enabled"] else "0")
         if "dynamic_offset_multiplier" in preset:
-            assert float(arm.env["HUNTER_DYNAMIC_OFFSET_MULT"]) == preset["dynamic_offset_multiplier"]
+            assert float(arm.env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"]) == preset["dynamic_offset_multiplier"]
         if "dynamic_offset_min_cents" in preset:
-            assert int(arm.env["HUNTER_DYNAMIC_OFFSET_MIN_CENTS"]) == preset["dynamic_offset_min_cents"]
+            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"]) == preset["dynamic_offset_min_cents"]
         if "dynamic_offset_max_cents" in preset:
-            assert int(arm.env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"]) == preset["dynamic_offset_max_cents"]
+            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"]) == preset["dynamic_offset_max_cents"]
     by_name = {a.name: a for a in plan.arms}
-    assert float(by_name["prudent"].env["HUNTER_DYNAMIC_OFFSET_MULT"]) == 0.60
-    assert int(by_name["prudent"].env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"]) == 4
+    assert float(by_name["prudent"].env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"]) == 0.60
+    assert int(by_name["prudent"].env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"]) == 4
     # The legacy capped control arm was purged; every surviving arm runs
     # dynamic offset ON (the loose system baseline).
     for name in ("conservative", "balanced", "aggressive", "prudent"):
-        assert by_name[name].env.get("HUNTER_DYNAMIC_OFFSET") == "1"
+        assert by_name[name].env.get("BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON") == "1"
 
 
 def test_default_arm_ports_and_paths(tmp_path: Path):
@@ -810,97 +810,97 @@ I492_ARMS = (
 # differs from aggressive only by its 3.0c stop).
 I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
     "control": {
-        "HUNTER_DYNAMIC_OFFSET": "0",
-        "HUNTER_STOP_LOSS_MODE": "ABSOLUTE_DROP",
-        "HUNTER_DROP_CENTS": "0.045",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.045",
     },
     "conservative": {
-        "HUNTER_DYNAMIC_OFFSET": "1",
-        "HUNTER_DYNAMIC_OFFSET_MULT": "0.75",
-        "HUNTER_DYNAMIC_OFFSET_MIN_CENTS": "2",
-        "HUNTER_DYNAMIC_OFFSET_MAX_CENTS": "5",
-        "HUNTER_STOP_LOSS_MODE": "ABSOLUTE_DROP",
-        "HUNTER_DROP_CENTS": "0.030",
-        "HUNTER_TOURNAMENT_PRESET": "conservative",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.75",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "5",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.030",
+        "BOT_QUOTE_TOURNAMENT_PRESET": "conservative",
     },
     "balanced": {
-        "HUNTER_DYNAMIC_OFFSET": "1",
-        "HUNTER_DYNAMIC_OFFSET_MULT": "0.5",
-        "HUNTER_DYNAMIC_OFFSET_MIN_CENTS": "2",
-        "HUNTER_DYNAMIC_OFFSET_MAX_CENTS": "4",
-        "HUNTER_STOP_LOSS_MODE": "ABSOLUTE_DROP",
-        "HUNTER_DROP_CENTS": "0.050",
-        "HUNTER_TOURNAMENT_PRESET": "balanced",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.5",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.050",
+        "BOT_QUOTE_TOURNAMENT_PRESET": "balanced",
     },
     "aggressive": {
-        "HUNTER_DYNAMIC_OFFSET": "1",
-        "HUNTER_DYNAMIC_OFFSET_MULT": "0.25",
-        "HUNTER_DYNAMIC_OFFSET_MIN_CENTS": "2",
-        "HUNTER_DYNAMIC_OFFSET_MAX_CENTS": "3",
-        "HUNTER_STOP_LOSS_MODE": "ABSOLUTE_DROP",
-        "HUNTER_DROP_CENTS": "0.065",
-        "HUNTER_TOURNAMENT_PRESET": "aggressive",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.25",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.065",
+        "BOT_QUOTE_TOURNAMENT_PRESET": "aggressive",
     },
     "prudent": {
-        "HUNTER_DYNAMIC_OFFSET": "1",
-        "HUNTER_DYNAMIC_OFFSET_MULT": "0.6",
-        "HUNTER_DYNAMIC_OFFSET_MIN_CENTS": "2",
-        "HUNTER_DYNAMIC_OFFSET_MAX_CENTS": "4",
-        "HUNTER_STOP_LOSS_MODE": "ABSOLUTE_DROP",
-        "HUNTER_DROP_CENTS": "0.038",
-        "HUNTER_TOURNAMENT_PRESET": "prudent",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.6",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.038",
+        "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
     },
     "stickhold": {
-        "HUNTER_DYNAMIC_OFFSET": "1",
-        "HUNTER_DYNAMIC_OFFSET_MULT": "0.25",
-        "HUNTER_DYNAMIC_OFFSET_MIN_CENTS": "2",
-        "HUNTER_DYNAMIC_OFFSET_MAX_CENTS": "3",
-        "HUNTER_REQUOTE_HOLD_BELOW": "0",
-        "HUNTER_REQUOTE_HOLD_QUEUE": "0",
-        "HUNTER_STOP_LOSS_MODE": "ABSOLUTE_DROP",
-        "HUNTER_DROP_CENTS": "0.065",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.25",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
+        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0",
+        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "0",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.065",
     },
     "queuehug": {
-        "HUNTER_DYNAMIC_OFFSET": "1",
-        "HUNTER_DYNAMIC_OFFSET_MULT": "0.50",
-        "HUNTER_DYNAMIC_OFFSET_MIN_CENTS": "2",
-        "HUNTER_DYNAMIC_OFFSET_MAX_CENTS": "4",
-        "HUNTER_REQUOTE_HOLD_BELOW": "1.0",
-        "HUNTER_REQUOTE_HOLD_QUEUE": "800",
-        "HUNTER_STOP_LOSS_MODE": "ABSOLUTE_DROP",
-        "HUNTER_DROP_CENTS": "0.050",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.50",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
+        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "1.0",
+        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "800",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.050",
     },
     "deadband-tight": {
-        "HUNTER_DYNAMIC_OFFSET": "1",
-        "HUNTER_DYNAMIC_OFFSET_MULT": "0.75",
-        "HUNTER_DYNAMIC_OFFSET_MIN_CENTS": "2",
-        "HUNTER_DYNAMIC_OFFSET_MAX_CENTS": "5",
-        "HUNTER_REQUOTE_DEAD_BAND": "0.01",
-        "HUNTER_REQUOTE_HOLD_QUEUE": "500",
-        "HUNTER_REQUOTE_HOLD_BELOW": "0.08",
-        "HUNTER_STOP_LOSS_MODE": "ABSOLUTE_DROP",
-        "HUNTER_DROP_CENTS": "0.030",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.75",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "5",
+        "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.01",
+        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500",
+        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.08",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.030",
     },
     "deadband-wide": {
-        "HUNTER_DYNAMIC_OFFSET": "1",
-        "HUNTER_DYNAMIC_OFFSET_MULT": "0.50",
-        "HUNTER_DYNAMIC_OFFSET_MIN_CENTS": "2",
-        "HUNTER_DYNAMIC_OFFSET_MAX_CENTS": "4",
-        "HUNTER_REQUOTE_DEAD_BAND": "0.06",
-        "HUNTER_REQUOTE_HOLD_QUEUE": "500",
-        "HUNTER_REQUOTE_HOLD_BELOW": "0.08",
-        "HUNTER_STOP_LOSS_MODE": "ABSOLUTE_DROP",
-        "HUNTER_DROP_CENTS": "0.050",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.50",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
+        "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.06",
+        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500",
+        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.08",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.050",
     },
     "snapstop": {
-        "HUNTER_DYNAMIC_OFFSET": "1",
-        "HUNTER_DYNAMIC_OFFSET_MULT": "0.25",
-        "HUNTER_DYNAMIC_OFFSET_MIN_CENTS": "2",
-        "HUNTER_DYNAMIC_OFFSET_MAX_CENTS": "3",
-        "HUNTER_REQUOTE_HOLD_QUEUE": "500",
-        "HUNTER_REQUOTE_HOLD_BELOW": "0.08",
-        "HUNTER_STOP_LOSS_MODE": "ABSOLUTE_DROP",
-        "HUNTER_DROP_CENTS": "0.030",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+        "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.25",
+        "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
+        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500",
+        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.08",
+        "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.030",
     },
 }
 
@@ -978,10 +978,10 @@ def test_every_i492_arm_loads_its_own_config():
             cfg = load()
             assert cfg.bot_risk_stop_mode == "ABSOLUTE_DROP", arm["name"]
             assert cfg.bot_risk_stop_adverse_drop_cents == pytest.approx(
-                float(arm["env"]["HUNTER_DROP_CENTS"])), arm["name"]
-            if "HUNTER_DYNAMIC_OFFSET_MULT" in arm["env"]:
+                float(arm["env"]["BOT_RISK_STOP_ADVERSE_DROP_CENTS"])), arm["name"]
+            if "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER" in arm["env"]:
                 assert cfg.bot_quote_spread_offset_multiplier == pytest.approx(
-                    float(arm["env"]["HUNTER_DYNAMIC_OFFSET_MULT"])), arm["name"]
+                    float(arm["env"]["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"])), arm["name"]
         finally:
             for key in arm["env"]:
                 os.environ.pop(key, None)
@@ -1042,7 +1042,14 @@ def test_explicit_arms_file_beats_the_convention(tmp_path, capsys):
 def test_unknown_preset_selector_is_refused_at_plan_time(tmp_path):
     from scripts.shadow_tournament import build_tournament_plan
 
-    with pytest.raises(ValueError, match="unknown HUNTER_TOURNAMENT_PRESET"):
+    with pytest.raises(ValueError, match="unknown tournament preset"):
+        build_tournament_plan(
+            issue=492,
+            arms=[{"name": "control",
+                   "env": {"BOT_QUOTE_TOURNAMENT_PRESET": "control"}}],
+            base_dir=tmp_path, run_number=1, check_ports=False,
+        )
+    with pytest.raises(ValueError, match="unknown tournament preset"):
         build_tournament_plan(
             issue=492,
             arms=[{"name": "control",

@@ -85,10 +85,10 @@ Size Tier: Standard | Task Types: Config, Code, Test, Docs
 - **Size:** S | **Domain:** `[Config]` | **Skill:** `constraint-driven-development`
 - **Depends on:** none
 - **Target files:** `configs/tournaments/i492_tournament-1_arms.json`
-- **What is built:** ten arms in #484→#485 order. Retired stop knob → `ABSOLUTE_DROP` +
-  `HUNTER_DROP_CENTS`; grace and `HUNTER_REWARD_OFFSET` dropped; `control` no longer names a
+- **What is built:** ten arms in #484→#485 order. Retired stop knob → canonical `BOT_RISK_STOP_MODE=ABSOLUTE_DROP` +
+  `BOT_RISK_STOP_ADVERSE_DROP_CENTS`; grace and `HUNTER_REWARD_OFFSET` dropped; `control` no longer names a
   preset. Every live value (offset mult/min/max, dead band, hold queue, hold-below) is the
-  first run's, unchanged.
+  first run's, using canonical `BOT_*` environment variables.
 - **Verification:** `test_i492_arms_restore_the_first_run_dimensions`,
   `test_i492_arms_carry_no_retired_knob`, `test_i492_arms_carry_no_487_catalyst_tweak`.
 
@@ -143,7 +143,7 @@ Size Tier: Standard | Task Types: Config, Code, Test, Docs
 ## How to verify (operator — no tests)
 
 1. Open `configs/tournaments/i492_tournament-1_arms.json`: ten entries, `control` first,
-   `snapstop` last, every arm carrying `HUNTER_STOP_LOSS_MODE` + `HUNTER_DROP_CENTS`, and no
+   `snapstop` last, every arm carrying canonical `BOT_RISK_STOP_MODE` + `BOT_RISK_STOP_ADVERSE_DROP_CENTS`, and no
    grace key anywhere.
 2. Run `python -m scripts.shadow_tournament --issue 492 --minutes 720 --run-number 1 --dry-run`
    and read the JSON: `arms` has the ten slugs `control-1` … `snapstop-1`, ports 8801–8810,

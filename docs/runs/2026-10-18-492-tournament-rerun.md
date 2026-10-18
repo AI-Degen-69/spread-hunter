@@ -16,7 +16,7 @@ tweak-vs-baseline claim built on it can be trusted.
 
 | Dimension | First run (#484/#485) | This rerun | Why |
 | --- | --- | --- | --- |
-| Per-leg stop | `HUNTER_SINGLE_BUY_MAX_LOSS_USD` 0.045 / 0.030 / 0.050 / 0.065 / 0.038 | `HUNTER_STOP_LOSS_MODE=ABSOLUTE_DROP` + `HUNTER_DROP_CENTS` 0.045 / 0.030 / 0.050 / 0.065 / 0.038 | #573 renamed the knob to cents, #619 replaced it with the entry-relative trigger. Same threshold, current units. Leaving it out would run every arm with no stop at all. |
+| Per-leg stop | `HUNTER_SINGLE_BUY_MAX_LOSS_USD` 0.045 / 0.030 / 0.050 / 0.065 / 0.038 | `BOT_RISK_STOP_MODE=ABSOLUTE_DROP` + `BOT_RISK_STOP_ADVERSE_DROP_CENTS` 0.045 / 0.030 / 0.050 / 0.065 / 0.038 | #573 renamed the knob to cents, #619 replaced it with the entry-relative trigger, and variables use the canonical `BOT_*` names. Same threshold, current units. Leaving it out would run every arm with no stop at all. |
 | Single-buy grace | 45 s (0 s on snapstop) | **not expressible** | `HUNTER_SINGLE_BUY_GRACE_SEC` retired by #619; `aged_out_rescue_lead_sec` is a different mechanism. snapstop now differs from aggressive only by its 3.0¢ stop. |
 | Control's static 2¢ offset | `HUNTER_REWARD_OFFSET=0.02` | field default 0.020 | the env override was purged; the effective value is unchanged. |
 | Hard-stop exit price | prior rotation's `queue_marks` snapshot | book read inside the exit call | `e7ddc45` — the first defect being measured. |
