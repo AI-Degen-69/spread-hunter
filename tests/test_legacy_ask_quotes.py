@@ -1,13 +1,13 @@
 """The ask branch of `decide_quotes`: measured dead, reachable, and documented.
 
 `core_brain/quotes.decide_quotes` returns early for `objective` in
-`("spread_capture", "rewards")` -- both values any shipped run can carry -- so
-everything below that return is reached only by a config with another
-`objective`. Four knobs are read down there and nowhere else: `ticks_below_ask`
-and `tick_size` (the price), `quote_window_pct` and `enforce_quote_window` (the
-clock). #571's open questions asked whether anything on the live path reads
-them; this file is the answer in executable form, so the next reader does not
-have to re-derive it.
+`("spread_capture", "rewards")` -- both mid-priced objectives, and every shipped
+run carries `spread_capture` -- so everything below that return is reached only
+by a config with another `objective`. Four knobs are read down there and nowhere
+else: `ticks_below_ask` and `tick_size` (the price), `quote_window_pct` and
+`enforce_quote_window` (the clock). #571's open questions asked whether anything
+on the live path reads them; this file is the answer in executable form, so the
+next reader does not have to re-derive it.
 
 Nothing here is new behaviour -- the branch is unchanged. It is pinned because
 the comments added to `core_brain/config.py` now claim these four knobs are
@@ -115,9 +115,9 @@ def test_a_missing_clock_skips_the_window_rule_on_this_branch():
 
 
 @pytest.mark.parametrize("objective", ["spread_capture", "rewards"])
-def test_the_shipped_objectives_never_read_the_clock(objective):
-    """Both shipped objectives take the from-mid path, which has no window rule:
-    the same books quote identically at 9% and at 99% into the window."""
+def test_the_mid_priced_objectives_never_read_the_clock(objective):
+    """Both mid-priced objectives take the from-mid path, which has no window
+    rule: the same books quote identically at 9% and at 99% into the window."""
     cfg = replace(MakerConfig(), objective=objective)
 
     early, _ = _quote(cfg, window_pct=0.09)

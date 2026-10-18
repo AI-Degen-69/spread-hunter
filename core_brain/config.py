@@ -584,9 +584,11 @@ class MakerConfig:
 
     # THE ASK BRANCH (#571) -- NOT READ ON THE LIVE PATH. These two price a
     # quote off the ASK (`best_ask - ticks_below_ask * tick_size`) and are read
-    # nowhere else. `decide_quotes` returns before them for both shipped
-    # objectives ("spread_capture", "rewards"), and `trader_loop.spec_to_cfg`
-    # pins `objective="spread_capture"`, so no shipped run reaches either knob.
+    # nowhere else. `decide_quotes` returns before them for both mid-priced
+    # objectives -- `objective` is `"spread_capture"` on every shipped run, and
+    # the retained `"rewards"` string takes the same path -- while
+    # `trader_loop._market_cfg` pins it per market, so no shipped run reaches
+    # either knob.
     # The branch is kept rather than deleted because it still executes for the
     # dead "pair" objective; `tests/test_legacy_ask_quotes.py` pins that and the
     # two knobs' values. "pair" was measured dead: resting half a spread ABOVE
