@@ -2583,9 +2583,11 @@ def test_app_js_translates_market_stream_events():
     # The convention, not just the content: clock, then a tag field of one fixed
     # width, then facts. No JSON, no socket URL, no 77-digit token id on the card.
     for key, line in s.items():
-        assert re.match(r"^\d\d:\d\d:\d\d ", line), (key, line)
-        assert re.search(r"\[[^\]]{1,4}\] +\S", line), (key, line)
-        assert line[18] != " ", (key, line)   # facts start in one column
+        assert " — " in line, (key, line)
+        clock, content = line.split(" — ", 1)
+        assert re.search(r"\d{1,2}:\d\d:\d\d", clock), (key, line)
+        assert re.match(r"^\[[^\]]{1,4}\] +\S", content), (key, line)
+        assert len(content) > 7 and content[7] != " ", (key, line)   # facts start in one column
         assert "{" not in line and "}" not in line, (key, line)
         assert "ws-subscriptions-clob" not in line, (key, line)
         assert not re.search(r"\d{20,}", line), (key, line)
