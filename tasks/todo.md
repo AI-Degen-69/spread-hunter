@@ -1,0 +1,17 @@
+# Checklist: Issue #695 (absorbing #694)
+
+- [ ] Task 1: Create data-only shared module `core_brain/retired_env.py`
+  - [ ] Define `RetiredEnvKey` frozen dataclass
+  - [ ] Define `RETIRED_ENV_KEYS` with canonical `BOT_*` replacements (#694)
+  - [ ] Define `RETIRED_ENV_OVERRIDES` dictionary
+  - [ ] Define `iter_runtime_warnings()` helper
+- [ ] Task 2: Connect consumers to `core_brain/retired_env.py`
+  - [ ] In `core_brain/config.py`: import `iter_runtime_warnings` and replace 3 loops with 1 loop
+  - [ ] In `scripts/shadow_tournament.py`: import `RETIRED_ENV_OVERRIDES` from `core_brain.retired_env`
+  - [ ] Verify `test_env_example_documents_only_real_canonical_variables` and existing tests pass
+- [ ] Task 3: Comprehensive test suite & cross-check pinning
+  - [ ] Create `tests/test_retired_env.py` (AST imports check, vocabulary check, runtime warning checks, silence checks)
+  - [ ] Update `tests/test_shadow_tournament.py` (assert dictionary object identity and runtime warning subset)
+  - [ ] Run targeted tests: `tests/test_retired_env.py`, `tests/test_shadow_tournament.py`, `tests/test_stop_loss_config.py`
+- [ ] Task 4: Documentation & noticed ledger update
+  - [ ] Update `docs/issues/684-noticed-but-not-touching.md` lines 14-15 to mark #694 and #695 resolved
