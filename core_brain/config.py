@@ -781,11 +781,17 @@ class MakerConfig(_ConfigBase):
             kw["stat_gate_threshold_pct"] = _bounded_float(
                 sgt_name or "HUNTER_STAT_GATE_THRESHOLD_PCT", sgt, -100.0, 100.0)
 
-        sgb, sgb_name = _env_get("BOT_EVAL_STAT_GATE_BANKROLL_PCT", "HUNTER_STAT_GATE_BANKROLL_PCT",
-                                   "HUNTER_STAT_GATE_BANKROLL_FRACTION")
+        sgb, sgb_name = _env_get("BOT_EVAL_STAT_GATE_BANKROLL_PCT", "HUNTER_STAT_GATE_BANKROLL_PCT")
+        if sgb is None:
+            sgb = os.environ.get("HUNTER_STAT_GATE_BANKROLL_FRACTION")
+            if sgb is not None and sgb.strip():
+                logging.getLogger(__name__).warning(
+                    "HUNTER_STAT_GATE_BANKROLL_FRACTION is deprecated (#632); set HUNTER_STAT_GATE_BANKROLL_PCT instead."
+                )
+                sgb_name = "HUNTER_STAT_GATE_BANKROLL_FRACTION"
         if sgb and sgb.strip():
             kw["stat_gate_bankroll_pct"] = _bounded_float(
-                sgb_name or "BOT_EVAL_STAT_GATE_BANKROLL_PCT", sgb, 0.0, 1.0)
+                sgb_name or "HUNTER_STAT_GATE_BANKROLL_PCT", sgb, 0.0, 1.0)
 
         stc, stc_name = _env_get("BOT_EVAL_STAT_GATE_TARGET_CLOSES", "HUNTER_STAT_GATE_TARGET_CLOSES")
         if stc and stc.strip():
