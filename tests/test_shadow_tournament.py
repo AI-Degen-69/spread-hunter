@@ -1246,6 +1246,11 @@ def test_cockpit_hybrid_blueprint_tab_purged():
             stripped = line.strip()
             assert stripped.startswith("#"), f"Pair cap must be comment-only in .env snippet: {line}"
 
+    # Discredited #484 primary winner claims absent from full cockpit HTML
+    assert "Primary Winner" not in html
+    assert "control (Issue #484)" not in html
+
+
 
 
 

@@ -1628,7 +1628,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 # 1. Interactive Menu - Select Preset "hybrid":
 .\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset hybrid -Minutes 60
 
-# 2. Or Direct Tournament / Python Rehearsal with hybrid preset:
+# 2. Or Multi-Arm Tournament Rehearsal (Default Arms):
 python -m scripts.shadow_tournament --minutes 60.0 --interval 1.0
 
 # 3. Tournament Analytics Cockpit:
@@ -1722,11 +1722,10 @@ BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
 <div id="tab-recommendations" class="tab-pane">
   <div class="decision-grid">
     <div class="decision-box" style="border-left: 4px solid var(--green);">
-      <h3 style="color: var(--green);">🌟 Recommended Production Configuration (Fixed Run Evaluation Notes)</h3>
+      <h3 style="color: var(--green);">🌟 Recommended Production Configuration (Benchmark Evaluation Notes)</h3>
       <ul>
-        <li><strong>Primary Winner: <code>control</code> (Issue #484)</strong> — Highest realized PnL in initial run (+$18.38), highest win rate (65%), controlled drawdown ($7.66), and robust EV per trade.</li>
-        <li><strong>Best Execution Mechanic: <code>deadband-wide</code> (Issue #485)</strong> — Outperformed tight deadbands by +$26.65 PnL difference! Why: A 2-cent requote deadband avoids burning queue priority on micro-fluctuations.</li>
-        <li><strong>The Optimal Hybrid Synthesis:</strong> Combine <code>control</code> baseline pricing (fixed 2c offset, 4.5c single-buy loss cap) with <code>deadband-wide</code> (2c requote deadband) for maximum order stability and minimum queue churn.</li>
+        <li><strong>Execution Mechanic: <code>deadband-wide</code> (Issue #485)</strong> — Disciplined requote deadband avoids burning queue priority on micro-fluctuations.</li>
+        <li><strong>Hybrid Configuration:</strong> Combines static offset pricing with <code>deadband-wide</code> queue priority defense and automated orphan risk management for maximum order stability and minimum queue churn.</li>
       </ul>
     </div>
     <div class="decision-box" style="border-left: 4px solid var(--red);">
