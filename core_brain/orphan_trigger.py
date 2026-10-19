@@ -82,7 +82,7 @@ class OrphanTriggerBoard:
         watches = self._watches
         if not watches or not prices:
             return
-        crossed: list[tuple[ str, Watch, float]] = []
+        crossed: list[tuple[str, Watch, float]] = []
         for token, pair in prices.items():
             watch = watches.get(str(token))
             if watch is None or pair is None:
@@ -106,21 +106,22 @@ class OrphanTriggerBoard:
         should_wake = False
         with self._lock:
             for token, watch, price in crossed:
-                # Re-verify against current watches under lock
+                # Re-verify against current watches under lock so a concurrent
+                # publish that replaced the watch level or kind is respected.
                 current_watch = self._watches.get(token)
-                if current_watch is None or current_watch.condition_id != watch.condition_id:
+                if current_watch != watch:
                     continue
-                cid = watch.condition_id
+                cid = current_watch.condition_id
                 muted_until = self._muted_until.get(cid)
                 if muted_until is not None and now < muted_until:
                     continue
                 self._muted_until[cid] = now + self._mute_sec
                 self._triggers.append({
                     "condition_id": cid,
-                    "token_id": watch.token_id or token,
-                    "kind": watch.kind,
-                    "source": watch.source,
-                    "level": float(watch.level),
+                    "token_id": current_watch.token_id or token,
+                    "kind": current_watch.kind,
+                    "source": current_watch.source,
+                    "level": float(current_watch.level),
                     "price": price,
                     "triggered_at": now,
                 })

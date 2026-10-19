@@ -170,7 +170,8 @@ def build_watches(
         )
 
         if stranded_completion_on:
-            hedge_level = round(max_pair_cost - held_avg, 4)
+            hedge_cap = min(0.99, max_pair_cost)
+            hedge_level = round(hedge_cap - held_avg, 4)
             if hedge_level > 0.0:
                 watches[light_token] = Watch(
                     condition_id=cid,

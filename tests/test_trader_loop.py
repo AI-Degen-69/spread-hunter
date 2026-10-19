@@ -4190,6 +4190,56 @@ class TestGuardianReactiveWake:
         thread.join(timeout=2.0)
         assert not thread.is_alive()
 
+    def test_run_reconcile_interrupt_Still_stops_and_joins_guardian(self, monkeypatch):
+        import threading
+        from unittest.mock import MagicMock
+        from core_brain.trader_loop import run
+
+        joined = []
+
+        class FakeGuardianThread:
+            def is_alive(self):
+                return True
+            def join(self, timeout=None):
+                joined.append(timeout)
+
+        monkeypatch.setattr("core_brain.trader_loop.start_settlement_sweeper", lambda **kw: None)
+        monkeypatch.setattr(
+            "core_brain.trader_loop.start_risk_guardian",
+            lambda **kw: FakeGuardianThread(),
+        )
+
+        seam = VenueSeam(
+            base_cfg=MakerConfig(),
+            client=object(),
+            registry=MagicMock(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda host, token: {
+                "token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                "bids": {0.59: 100}, "asks": {0.61: 100},
+            },
+            decide=lambda *a: ([], "declined"),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()),
+            sweep_fn=lambda: None,
+        )
+        guardian_wake = threading.Event()
+
+        with pytest.raises(KeyboardInterrupt):
+            run(
+                seam,
+                interval=1.0,
+                once=False,
+                live=False,
+                markets=[FakeMarket("1")],
+                spawn_guardian=True,
+                guardian_wake=guardian_wake,
+            )
+
+        assert guardian_wake.is_set()
+        assert joined == [2.0]
+
     def test_disabled_modes_leave_board_and_price_listener_none(self, monkeypatch, tmp_path):
         import threading
         from unittest.mock import MagicMock

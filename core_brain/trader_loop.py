@@ -634,203 +634,205 @@ def run(
             )
             log.info("risk guardian sentry started (every 1.0s, background)")
 
-        while True:
-            cycle += 1
-            # Rotation timing (#650): stamped before any work so the wait at
-            # the end is `interval - work`, never `interval` on top of work.
-            rot_t0 = _now()
-            # Fleet-wide aggregates (naked cost, committed capital, pooled posture)
-            # are recomputed once per cycle and merged into the base config, so the
-            # fleet-level gates inside decide_quotes see live numbers rather than
-            # their 0.0 defaults. A failure here degrades to the defaults.
-            if seam.fleet_state_fn is not None:
-                try:
-                    seam.base_cfg = replace(seam.base_cfg, **seam.fleet_state_fn(seam.registry))
-                except Exception as e:
-                    log.warning("fleet state failed: %s: %s", type(e).__name__, e)
+        try:
+            while True:
+                cycle += 1
+                # Rotation timing (#650): stamped before any work so the wait at
+                # the end is `interval - work`, never `interval` on top of work.
+                rot_t0 = _now()
+                # Fleet-wide aggregates (naked cost, committed capital, pooled posture)
+                # are recomputed once per cycle and merged into the base config, so the
+                # fleet-level gates inside decide_quotes see live numbers rather than
+                # their 0.0 defaults. A failure here degrades to the defaults.
+                if seam.fleet_state_fn is not None:
+                    try:
+                        seam.base_cfg = replace(seam.base_cfg, **seam.fleet_state_fn(seam.registry))
+                    except Exception as e:
+                        log.warning("fleet state failed: %s: %s", type(e).__name__, e)
 
-            try:
-                seam.reconcile_fn(seam.client, seam.registry, seam.maker_address)
-            except KeyboardInterrupt:
-                shutdown_reason = "interrupt"
-                _finish_shutdown()
-                raise
-            except Exception as e:
-                log.warning("reconcile failed: %s: %s", type(e).__name__, e)
-
-            # An empty refresh is never obeyed. `load_graduated_markets` raises on a
-            # missing, empty, malformed or stale feed, but a well-formed `[]` -- the
-            # ranker finding nothing that cycle -- returns cleanly. Adopting it would
-            # empty the active universe and hand every resting order to the dropped-
-            # market cleanup below, cancelling the whole book on a transient scan.
-            if markets_fn is not None:
                 try:
-                    fresh = markets_fn()
+                    seam.reconcile_fn(seam.client, seam.registry, seam.maker_address)
+                except KeyboardInterrupt:
+                    shutdown_reason = "interrupt"
+                    _finish_shutdown()
+                    raise
                 except Exception as e:
-                    log.warning("markets_fn failed: %s: %s", type(e).__name__, e)
-                else:
-                    if fresh:
-                        current_markets = list(fresh)
-                    elif seam.markets_fn_empty_is_routine:
-                        # Normal for this caller (see the seam field). Still
-                        # logged, still counted -- just not dressed as a fault,
-                        # which is what filled a four-hour trial's stderr with
-                        # one alarming line per rotation and read as a dead feed.
-                        log.info(
-                            "markets_fn returned no markets (expected for this "
-                            "feed); keeping the previous %d",
-                            len(current_markets))
+                    log.warning("reconcile failed: %s: %s", type(e).__name__, e)
+
+                # An empty refresh is never obeyed. `load_graduated_markets` raises on a
+                # missing, empty, malformed or stale feed, but a well-formed `[]` -- the
+                # ranker finding nothing that cycle -- returns cleanly. Adopting it would
+                # empty the active universe and hand every resting order to the dropped-
+                # market cleanup below, cancelling the whole book on a transient scan.
+                if markets_fn is not None:
+                    try:
+                        fresh = markets_fn()
+                    except Exception as e:
+                        log.warning("markets_fn failed: %s: %s", type(e).__name__, e)
                     else:
-                        log.warning(
-                            "markets_fn returned no markets; keeping the previous %d",
-                            len(current_markets))
+                        if fresh:
+                            current_markets = list(fresh)
+                        elif seam.markets_fn_empty_is_routine:
+                            # Normal for this caller (see the seam field). Still
+                            # logged, still counted -- just not dressed as a fault,
+                            # which is what filled a four-hour trial's stderr with
+                            # one alarming line per rotation and read as a dead feed.
+                            log.info(
+                                "markets_fn returned no markets (expected for this "
+                                "feed); keeping the previous %d",
+                                len(current_markets))
+                        else:
+                            log.warning(
+                                "markets_fn returned no markets; keeping the previous %d",
+                                len(current_markets))
 
-            # Universe subscription (#650): the WS book cache follows the
-            # markets the loop is actually visiting. A failed subscribe degrades
-            # the rest of the rotation (books may be stale or cold) but never
-            # stops it -- same isolation as reconcile and sweep.
-            if current_markets and seam.subscribe_fn is not None:
+                # Universe subscription (#650): the WS book cache follows the
+                # markets the loop is actually visiting. A failed subscribe degrades
+                # the rest of the rotation (books may be stale or cold) but never
+                # stops it -- same isolation as reconcile and sweep.
+                if current_markets and seam.subscribe_fn is not None:
+                    try:
+                        seam.subscribe_fn(list(current_markets))
+                    except Exception as e:
+                        log.warning("subscribe failed: %s: %s", type(e).__name__, e)
+
+                cycle_results: list[LiveFleetResult] = []
+                rotation_suspects: set[str] = set()
+                # Resolved markets are never visited again (#402): one durable
+                # read per rotation, before any market-data or book fetch. The
+                # guard reads the in-memory universe, so a stale feed retaining
+                # the market, a reappearing feed, and a restart all stay quiet.
+                resolved = resolved_condition_ids(registry)
+                # Held markets first (#505): naked, then balanced, then flat
+                # quoting-only -- stable within each rank, every market exactly
+                # once. `current_markets` itself is untouched: dropped-market
+                # cancellation and empty-refresh retention must keep seeing the
+                # original universe. Ordering changes only visit order; each visit
+                # still reads fresh inventory.
+                visit_list = order_by_exposure(
+                    list(current_markets or []), inventory_by_cid, _cid)
+                for spec in visit_list:
+                    cid = _cid(spec)
+                    if cid and cid.lower() in resolved:
+                        title = (spec.get("title", "")
+                                 if isinstance(spec, dict) else "")
+                        _note_lifecycle_stop(
+                            seam, cid, title, LifecycleStop.RESOLVED,
+                            "market resolved; books are never polled again",
+                            stop_memory, cycle, emit_fn)
+                        cycle_results.append(LiveFleetResult(
+                            status="SKIPPED", condition_id=cid,
+                            why="resolved_market_skipped"))
+                        continue
+                    res = _visit_one(
+                        seam=seam, spec=spec, live=live, cycle=cycle,
+                        emit_fn=emit_fn,
+                        stop_memory=stop_memory,
+                        tail_memory=tail_memory,
+                        inventory_recorder=inventory_by_cid.__setitem__,
+                    )
+                    if res.status == "ERROR" and "book fetch error" in (res.error or ""):
+                        rotation_suspects.add(cid)
+                    elif classify_refusal(res.why or "") in (
+                            LifecycleStop.SETTLED_BOOK,
+                            LifecycleStop.COUNTDOWN_EXPIRED):
+                        rotation_suspects.add(cid)
+                    cycle_results.append(res)
+                if suspects_box is not None:
+                    suspects_box["cids"] = frozenset(rotation_suspects)
+
+                # An empty universe is not evidence that every market was dropped: it is
+                # the state before the first successful refresh, or after one that
+                # graduated nothing. "Dropped" is only meaningful against a real set.
+                if (live and current_markets and seam.registry is not None
+                        and seam.cancel_fn is not None):
+                    cycle_results.extend(_cancel_dropped_markets(
+                        seam=seam, current_markets=current_markets, cycle=cycle,
+                        emit_fn=emit_fn,
+                        resolved_cids=resolved, stop_memory=stop_memory,
+                    ))
+
+                last_cycle = cycle_results
+                if once:
+                    once_results.extend(cycle_results)
+
                 try:
-                    seam.subscribe_fn(list(current_markets))
+                    seam.sweep_fn()
+                except KeyboardInterrupt:
+                    shutdown_reason = "interrupt"
+                    _finish_shutdown()
+                    raise
                 except Exception as e:
-                    log.warning("subscribe failed: %s: %s", type(e).__name__, e)
+                    log.warning("sweep failed: %s: %s", type(e).__name__, e)
 
-            cycle_results: list[LiveFleetResult] = []
-            rotation_suspects: set[str] = set()
-            # Resolved markets are never visited again (#402): one durable
-            # read per rotation, before any market-data or book fetch. The
-            # guard reads the in-memory universe, so a stale feed retaining
-            # the market, a reappearing feed, and a restart all stay quiet.
-            resolved = resolved_condition_ids(registry)
-            # Held markets first (#505): naked, then balanced, then flat
-            # quoting-only -- stable within each rank, every market exactly
-            # once. `current_markets` itself is untouched: dropped-market
-            # cancellation and empty-refresh retention must keep seeing the
-            # original universe. Ordering changes only visit order; each visit
-            # still reads fresh inventory.
-            visit_list = order_by_exposure(
-                list(current_markets or []), inventory_by_cid, _cid)
-            for spec in visit_list:
-                cid = _cid(spec)
-                if cid and cid.lower() in resolved:
-                    title = (spec.get("title", "")
-                             if isinstance(spec, dict) else "")
-                    _note_lifecycle_stop(
-                        seam, cid, title, LifecycleStop.RESOLVED,
-                        "market resolved; books are never polled again",
-                        stop_memory, cycle, emit_fn)
-                    cycle_results.append(LiveFleetResult(
-                        status="SKIPPED", condition_id=cid,
-                        why="resolved_market_skipped"))
-                    continue
-                res = _visit_one(
-                    seam=seam, spec=spec, live=live, cycle=cycle,
-                    emit_fn=emit_fn,
-                    stop_memory=stop_memory,
-                    tail_memory=tail_memory,
-                    inventory_recorder=inventory_by_cid.__setitem__,
-                )
-                if res.status == "ERROR" and "book fetch error" in (res.error or ""):
-                    rotation_suspects.add(cid)
-                elif classify_refusal(res.why or "") in (
-                        LifecycleStop.SETTLED_BOOK,
-                        LifecycleStop.COUNTDOWN_EXPIRED):
-                    rotation_suspects.add(cid)
-                cycle_results.append(res)
-            if suspects_box is not None:
-                suspects_box["cids"] = frozenset(rotation_suspects)
+                # Rotation accounting (#650): one additive row per rotation with the
+                # measured work, so the dashboard (and the operator) can see when a
+                # rotation is too fat for its interval. Emitted before the `once`
+                # break so smoke runs carry it too.
+                work_sec = _now() - rot_t0
+                emit_fn(service="decide", cycle=cycle, phase="quoting",
+                        action="rotation_complete", market_slug="",
+                        reason="", latency_ms=work_sec * 1000.0,
+                        extra={"markets": len(current_markets),
+                               "suspects": len(rotation_suspects)})
 
-            # An empty universe is not evidence that every market was dropped: it is
-            # the state before the first successful refresh, or after one that
-            # graduated nothing. "Dropped" is only meaningful against a real set.
-            if (live and current_markets and seam.registry is not None
-                    and seam.cancel_fn is not None):
-                cycle_results.extend(_cancel_dropped_markets(
-                    seam=seam, current_markets=current_markets, cycle=cycle,
-                    emit_fn=emit_fn,
-                    resolved_cids=resolved, stop_memory=stop_memory,
-                ))
+                # Heartbeat: re-stamp our slot so a long run never looks stale. An
+                # adopted slot means another loop owns the registry now -- stop writing
+                # rather than record into a database we no longer own.
+                if holder is not None and not registry.refresh_instance_lock(
+                        "fleet", holder, int(time.time() * 1000)):
+                    log.error("instance slot adopted by another loop; stopping "
+                              "before further writes")
+                    shutdown_reason = "lock_lost"
+                    break
 
-            last_cycle = cycle_results
-            if once:
-                once_results.extend(cycle_results)
+                if once:
+                    shutdown_reason = "once"
+                    break
+                try:
+                    # Sleep the remainder of the interval (#650): with streamed
+                    # books the work is fast and the loop waits longer; when the
+                    # venue is slow the loop skips the wait but never goes negative.
+                    sleep_fn(max(0.0, interval - work_sec))
+                except KeyboardInterrupt as e:
+                    # The shadow deadline sleep subclasses KeyboardInterrupt to
+                    # end a time-boxed rehearsal. Matched by class NAME so this
+                    # module never imports the shadow runner.
+                    shutdown_reason = ("finish_line"
+                                       if type(e).__name__ == "_FinishLine"
+                                       else "deadline"
+                                       if type(e).__name__ == "_Deadline"
+                                       else "interrupt")
+                    break
 
-            try:
-                seam.sweep_fn()
-            except KeyboardInterrupt:
-                shutdown_reason = "interrupt"
-                _finish_shutdown()
-                raise
-            except Exception as e:
-                log.warning("sweep failed: %s: %s", type(e).__name__, e)
-
-            # Rotation accounting (#650): one additive row per rotation with the
-            # measured work, so the dashboard (and the operator) can see when a
-            # rotation is too fat for its interval. Emitted before the `once`
-            # break so smoke runs carry it too.
-            work_sec = _now() - rot_t0
-            emit_fn(service="decide", cycle=cycle, phase="quoting",
-                    action="rotation_complete", market_slug="",
-                    reason="", latency_ms=work_sec * 1000.0,
-                    extra={"markets": len(current_markets),
-                           "suspects": len(rotation_suspects)})
-
-            # Heartbeat: re-stamp our slot so a long run never looks stale. An
-            # adopted slot means another loop owns the registry now -- stop writing
-            # rather than record into a database we no longer own.
-            if holder is not None and not registry.refresh_instance_lock(
-                    "fleet", holder, int(time.time() * 1000)):
-                log.error("instance slot adopted by another loop; stopping "
-                          "before further writes")
-                shutdown_reason = "lock_lost"
-                break
-
-            if once:
-                shutdown_reason = "once"
-                break
-            try:
-                # Sleep the remainder of the interval (#650): with streamed
-                # books the work is fast and the loop waits longer; when the
-                # venue is slow the loop skips the wait but never goes negative.
-                sleep_fn(max(0.0, interval - work_sec))
-            except KeyboardInterrupt as e:
-                # The shadow deadline sleep subclasses KeyboardInterrupt to
-                # end a time-boxed rehearsal. Matched by class NAME so this
-                # module never imports the shadow runner.
-                shutdown_reason = ("finish_line"
-                                   if type(e).__name__ == "_FinishLine"
-                                   else "deadline"
-                                   if type(e).__name__ == "_Deadline"
-                                   else "interrupt")
-                break
-
-            # Fill reaction (#650): drain what the user stream queued while the
-            # loop waited, then react in-loop -- reconcile, visit the filled
-            # market, tell the guardian -- instead of waiting for the next
-            # rotation. Never in `once` mode (a smoke has no queue to drain).
-            # The fill queue is only drained when both ports are wired; either
-            # `None` leaves the loop rotation-to-rotation, exactly as before.
-            # Placed AFTER the `except KeyboardInterrupt` so the shadow
-            # deadline's end-of-rehearsal interrupt never drains: a finished
-            # rehearsal reacts to nothing.
-            drain = seam.fill_events_fn
-            reconcile_port = seam.fill_reconcile_fn
-            if drain is not None and reconcile_port is not None:
-                _react_to_fills(
-                    seam=seam, current_markets=current_markets,
-                    emit_fn=emit_fn, resolved=resolved,
-                    stop_memory=stop_memory, tail_memory=tail_memory,
-                    inventory_recorder=inventory_by_cid.__setitem__,
-                    seen_trade_ids=_seen_fill_trades, live=live,
-                    trigger_board=trigger_board)
-        stop_workers.set()
-        if guardian_wake is not None:
-            guardian_wake.set()
-        if (guardian_thread is not None
-                and hasattr(guardian_thread, "is_alive")
-                and guardian_thread.is_alive()
-                and guardian_thread is not threading.current_thread()):
-            guardian_thread.join(timeout=2.0)
+                # Fill reaction (#650): drain what the user stream queued while the
+                # loop waited, then react in-loop -- reconcile, visit the filled
+                # market, tell the guardian -- instead of waiting for the next
+                # rotation. Never in `once` mode (a smoke has no queue to drain).
+                # The fill queue is only drained when both ports are wired; either
+                # `None` leaves the loop rotation-to-rotation, exactly as before.
+                # Placed AFTER the `except KeyboardInterrupt` so the shadow
+                # deadline's end-of-rehearsal interrupt never drains: a finished
+                # rehearsal reacts to nothing.
+                drain = seam.fill_events_fn
+                reconcile_port = seam.fill_reconcile_fn
+                if drain is not None and reconcile_port is not None:
+                    _react_to_fills(
+                        seam=seam, current_markets=current_markets,
+                        emit_fn=emit_fn, resolved=resolved,
+                        stop_memory=stop_memory, tail_memory=tail_memory,
+                        inventory_recorder=inventory_by_cid.__setitem__,
+                        seen_trade_ids=_seen_fill_trades, live=live,
+                        trigger_board=trigger_board)
+        finally:
+            stop_workers.set()
+            if guardian_wake is not None:
+                guardian_wake.set()
+            if (guardian_thread is not None
+                    and hasattr(guardian_thread, "is_alive")
+                    and guardian_thread.is_alive()
+                    and guardian_thread is not threading.current_thread()):
+                guardian_thread.join(timeout=2.0)
 
     _finish_shutdown()
     return once_results if once else last_cycle
