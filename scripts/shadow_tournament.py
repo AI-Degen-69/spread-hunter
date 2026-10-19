@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core_brain.config import TOURNAMENT_PRESETS
+from core_brain.retired_env import RETIRED_ENV_OVERRIDES
 from core_brain.kpi import MERGE_METHODS, NON_TRADE_CLOSE_METHODS
 from core_brain.shadow_guard import assert_not_production_registry
 from core_brain.shadow_run import (
@@ -245,53 +246,6 @@ def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
     if "apply_widen_gate" in preset:
         env["BOT_QUOTE_GATE_WIDEN_ON"] = "1" if preset["apply_widen_gate"] else "0"
     return env
-
-
-#: Retired `HUNTER_*` overrides an arm may still carry from a superseded run.
-#: `core_brain.config` logs "retired and ignored" for these (or, for
-#: `HUNTER_REWARD_OFFSET`, never reads them at all), so an arm that sets one
-#: measures the shipped default while the file claims otherwise -- a silent A/B
-#: between two identical arms (#684). Supported `HUNTER_*` aliases are NOT in
-#: this map and keep working. Each value is the actionable replacement, or an
-#: explicit statement that none exists.
-RETIRED_ENV_OVERRIDES: dict[str, str] = {
-    "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": (
-        "retired (#619); the stop is entry-relative now: set "
-        "BOT_RISK_STOP_MODE=ABSOLUTE_DROP plus "
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS (dollars per share, so 0.05 means "
-        "five cents)"
-    ),
-    "HUNTER_STOP_LOSS_TRIGGER_PCT": (
-        "retired (#619); the stop is entry-relative now: set "
-        "BOT_RISK_STOP_MODE=PERCENTAGE_DROP plus "
-        "BOT_RISK_STOP_MAX_DRAWDOWN_PCT (percent of the entry)"
-    ),
-    "HUNTER_SINGLE_BUY_MAX_LOSS_USD": (
-        "retired (#573 renamed it, #619 replaced it); set "
-        "BOT_RISK_STOP_MODE=ABSOLUTE_DROP plus "
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS"
-    ),
-    "HUNTER_SINGLE_BUY_MAX_LOSS_PCT": (
-        "retired (#573 renamed it, #619 replaced it); set "
-        "BOT_RISK_STOP_MODE=PERCENTAGE_DROP plus "
-        "BOT_RISK_STOP_MAX_DRAWDOWN_PCT"
-    ),
-    "HUNTER_SINGLE_BUY_GRACE_SEC": (
-        "retired (#619) with no equivalent; "
-        "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC is a different timing setting, "
-        "review it before using it"
-    ),
-    "HUNTER_REFUSAL_HOLD_POLICY": (
-        "retired (#622) with no replacement; remove it"
-    ),
-    "HUNTER_REFUSAL_HOLD_DRIFT": (
-        "retired (#622) with no replacement; remove it"
-    ),
-    "HUNTER_REWARD_OFFSET": (
-        "purged 2026-10-12 with no environment replacement; the static "
-        "offset is a shipped field default, remove it"
-    ),
-}
 
 
 def build_tournament_plan(

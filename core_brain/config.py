@@ -23,6 +23,7 @@ from dataclasses import dataclass, fields, Field, MISSING, _FIELD
 from pathlib import Path
 
 from core_brain import rehearsal
+from core_brain.retired_env import iter_runtime_warnings
 from core_brain.single_leg_lifecycle import (
     DROP_CENTS_MAX,
     DROP_CENTS_MIN,
@@ -757,28 +758,9 @@ class MakerConfig(_ConfigBase):
                     )
                 kw[_field] = _val
 
-        for _old_env, _replacement in (
-            ("HUNTER_SINGLE_BUY_GRACE_SEC", "HUNTER_AGED_OUT_RESCUE_LEAD_SEC (patience)"),
-            ("HUNTER_STOP_LOSS_TRIGGER_USD_CENTS", "HUNTER_DROP_CENTS (dollars) or HUNTER_DRAWDOWN_PCT"),
-            ("HUNTER_STOP_LOSS_TRIGGER_PCT", "HUNTER_DRAWDOWN_PCT"),
-        ):
+        for _old_env, _template, _args in iter_runtime_warnings():
             if os.environ.get(_old_env):
-                logging.getLogger(__name__).warning(
-                    "%s is retired and ignored (#619); set %s instead.",
-                    _old_env, _replacement)
-
-        for _old_env in ("HUNTER_REFUSAL_HOLD_POLICY", "HUNTER_REFUSAL_HOLD_DRIFT"):
-            if os.environ.get(_old_env):
-                logging.getLogger(__name__).warning(
-                    "%s is retired and ignored (#622); it has no replacement.",
-                    _old_env)
-
-        for _old_env in ("HUNTER_SINGLE_BUY_MAX_LOSS_PCT", "HUNTER_SINGLE_BUY_MAX_LOSS_USD"):
-            if os.environ.get(_old_env):
-                logging.getLogger(__name__).warning(
-                    "%s is deprecated and ignored (#573 renamed it); #619 replaced "
-                    "both with the entry-relative stop: set HUNTER_STOP_LOSS_MODE "
-                    "plus HUNTER_DROP_CENTS / HUNTER_DRAWDOWN_PCT instead.", _old_env)
+                logging.getLogger(__name__).warning(_template, _old_env, *_args)
 
         aorl, _ = _env_get("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "HUNTER_AGED_OUT_RESCUE_LEAD_SEC")
         if aorl and aorl.strip():

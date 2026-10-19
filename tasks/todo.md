@@ -5,10 +5,10 @@
   - [x] Define `RETIRED_ENV_KEYS` with canonical `BOT_*` replacements (#694)
   - [x] Define `RETIRED_ENV_OVERRIDES` dictionary
   - [x] Define `iter_runtime_warnings()` helper
-- [ ] Task 2: Connect consumers to `core_brain/retired_env.py`
-  - [ ] In `core_brain/config.py`: import `iter_runtime_warnings` and replace 3 loops with 1 loop
-  - [ ] In `scripts/shadow_tournament.py`: import `RETIRED_ENV_OVERRIDES` from `core_brain.retired_env`
-  - [ ] Verify `test_env_example_documents_only_real_canonical_variables` and existing tests pass
+- [x] Task 2: Connect consumers to `core_brain/retired_env.py`
+  - [x] In `core_brain/config.py`: import `iter_runtime_warnings` and replace 3 loops with 1 loop
+  - [x] In `scripts/shadow_tournament.py`: import `RETIRED_ENV_OVERRIDES` from `core_brain.retired_env`
+  - [x] Verify `test_env_example_documents_only_real_canonical_variables` and existing tests pass
 - [ ] Task 3: Comprehensive test suite & cross-check pinning
   - [ ] Create `tests/test_retired_env.py` (AST imports check, vocabulary check, runtime warning checks, silence checks)
   - [ ] Update `tests/test_shadow_tournament.py` (assert dictionary object identity and runtime warning subset)
