@@ -322,17 +322,30 @@ def test_price_change_refreshes_timestamp():
     cache = LiveMarkCache(time_fn=lambda: clock[0])
     cache.update_wanted({"tok-u"})
     cache.apply_message(_book("tok-u", [_lvl(0.47)], [_lvl(0.50)]))
-    assert cache.snapshot()[1][0]["ts"] == 100.0
+    seq0, marks0 = cache.snapshot()
+    assert marks0[0]["ts"] == 100.0
+    assert seq0 == 1
 
-    # Same price levels arriving at a later time
-    clock[0] = 125.0
+    # Before boundary (< 10.0s elapsed): unchanged price levels do not bump seq or ts
+    clock[0] = 105.0
     msg = {
         "event_type": "price_change",
         "price_changes": [
             {"asset_id": "tok-u", "side": "BUY", "price": "0.47", "size": "10.0"}
         ],
     }
-    cache.apply_message(msg)
-    # Timestamp is refreshed to 125.0 so the mark doesn't expire
-    assert cache.snapshot()[1][0]["ts"] == 125.0
+    changed = cache.apply_message(msg)
+    assert changed == []
+    seq1, marks1 = cache.snapshot()
+    assert seq1 == 1
+    assert marks1[0]["ts"] == 100.0
+
+    # At or past boundary (>= 10.0s elapsed): replaces mark and advances seq
+    clock[0] = 110.0
+    changed = cache.apply_message(msg)
+    assert changed == ["tok-u"]
+    seq2, marks2 = cache.snapshot()
+    assert seq2 == 2
+    assert marks2[0]["ts"] == 110.0
+
 

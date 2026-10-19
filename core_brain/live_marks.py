@@ -153,10 +153,9 @@ class LiveMarkCache:
             return before is not None
         mid = (bid + ask) / 2.0
         now = self._time()
-        if before is not None and before["mid"] == mid and before["bid"] == bid and before["ask"] == ask:
-            if now - before.get("ts", 0.0) < 10.0:
-                before["ts"] = now
-                return False
+        if (before is not None and before["mid"] == mid and before["bid"] == bid
+                and before["ask"] == ask and now - before.get("ts", 0.0) < 10.0):
+            return False
         self._marks[token_id] = {
             "token_id": token_id, "bid": bid, "ask": ask, "mid": mid,
             "ts": now, "seq": self._seq + 1,
