@@ -165,3 +165,81 @@ def test_manage_single_leg_positions_is_reentrant_under_guard():
     calls["n"] += 1
     assert out == []
     assert calls["n"] == 1
+
+
+def test_wake_driven_guardian_and_rotation_pass_serialize_under_guard(monkeypatch):
+    """A reactive-wake guardian pass and a rotation pass hitting lifecycle_mutation_guard never overlap (#699)."""
+    from unittest.mock import MagicMock
+    from core_brain.quotes import Inventory
+    from core_brain.single_buy_saver import lifecycle_mutation_guard
+    from core_brain.trader_loop import start_risk_guardian
+
+    registry = MagicMock()
+    registry.get_all_quotes.return_value = [
+        {"condition_id": "0x1", "side": "UP", "token_id": "tok-u", "ts": 1.0},
+        {"condition_id": "0x1", "side": "DOWN", "token_id": "tok-d", "ts": 1.0},
+    ]
+    monkeypatch.setattr(
+        "core_brain.risk_guardian.inventory_from_registry",
+        lambda **kw: Inventory(up_shares=10.0, down_shares=0.0, up_cost=5.0),
+    )
+
+    initial_done = threading.Event()
+    barrier = threading.Barrier(2)
+    inside = 0
+    peak = 0
+    peak_lock = threading.Lock()
+    call_idx = 0
+
+    def saver(client, reg, cfg, live=False):
+        nonlocal call_idx, inside, peak
+        call_idx += 1
+        if call_idx == 1:
+            initial_done.set()
+            return []
+        barrier.wait(timeout=2.0)
+        with lifecycle_mutation_guard():
+            with peak_lock:
+                inside += 1
+                peak = max(peak, inside)
+            time.sleep(0.05)
+            with peak_lock:
+                inside -= 1
+        return []
+
+    stop_evt = threading.Event()
+    wake_evt = threading.Event()
+    guardian_thread = start_risk_guardian(
+        client=MagicMock(),
+        registry=registry,
+        cfg=MagicMock(),
+        interval=3600.0,
+        live=False,
+        single_buy_saver_fn=saver,
+        stop_event=stop_evt,
+        wake_event=wake_evt,
+    )
+
+    def rotation_pass():
+        barrier.wait(timeout=2.0)
+        with lifecycle_mutation_guard():
+            with peak_lock:
+                nonlocal inside, peak
+                inside += 1
+                peak = max(peak, inside)
+            time.sleep(0.05)
+            with peak_lock:
+                inside -= 1
+
+    try:
+        assert initial_done.wait(2.0)
+        rot_thread = threading.Thread(target=rotation_pass)
+        rot_thread.start()
+        wake_evt.set()
+        rot_thread.join(timeout=2.0)
+        assert peak == 1
+    finally:
+        stop_evt.set()
+        wake_evt.set()
+        guardian_thread.join(timeout=2.0)
+

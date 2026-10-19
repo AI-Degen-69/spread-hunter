@@ -528,6 +528,8 @@ def run(
     shutdown_box: Optional[dict] = None,
     spawn_guardian: bool = False,
     clock_fn: Optional[Callable[[], float]] = None,
+    guardian_wake: Optional[threading.Event] = None,
+    trigger_board: Optional[Any] = None,
 ) -> list[LiveFleetResult]:
     """Rotate over `markets`: reconcile, then decide+submit per market, then sweep.
 
@@ -606,6 +608,7 @@ def run(
         else nullcontext(None)
     )
     stop_workers = threading.Event()
+    guardian_thread = None
     with lock_cm as holder:
         if spawn_guardian and registry is not None:
             from core_brain.order_manager import merge as live_merge
@@ -619,13 +622,15 @@ def run(
             )
             log.info("settlement sweeper started (every 60s, background)")
 
-            start_risk_guardian(
+            guardian_thread = start_risk_guardian(
                 client=seam.client,
                 registry=registry,
                 cfg=seam.base_cfg,
                 interval=1.0,
                 live=live,
                 stop_event=stop_workers,
+                wake_event=guardian_wake,
+                trigger_board=trigger_board,
             )
             log.info("risk guardian sentry started (every 1.0s, background)")
 
@@ -816,8 +821,16 @@ def run(
                     emit_fn=emit_fn, resolved=resolved,
                     stop_memory=stop_memory, tail_memory=tail_memory,
                     inventory_recorder=inventory_by_cid.__setitem__,
-                    seen_trade_ids=_seen_fill_trades, live=live)
+                    seen_trade_ids=_seen_fill_trades, live=live,
+                    trigger_board=trigger_board)
         stop_workers.set()
+        if guardian_wake is not None:
+            guardian_wake.set()
+        if (guardian_thread is not None
+                and hasattr(guardian_thread, "is_alive")
+                and guardian_thread.is_alive()
+                and guardian_thread is not threading.current_thread()):
+            guardian_thread.join(timeout=2.0)
 
     _finish_shutdown()
     return once_results if once else last_cycle
@@ -846,6 +859,7 @@ def _react_to_fills(
     inventory_recorder: Callable,
     seen_trade_ids: Any,
     live: bool,
+    trigger_board: Optional[Any] = None,
 ) -> None:
     """Drain the user-stream queue and react to each fill (#650).
 
@@ -892,7 +906,7 @@ def _react_to_fills(
             seam=seam, ev=ev, matched=matched,
             emit_fn=emit_fn, resolved=resolved, stop_memory=stop_memory,
             tail_memory=tail_memory, inventory_recorder=inventory_recorder,
-            live=live)
+            live=live, trigger_board=trigger_board)
 
 
 def _react_to_one_fill(
@@ -906,6 +920,7 @@ def _react_to_one_fill(
     tail_memory: dict,
     inventory_recorder: Callable,
     live: bool,
+    trigger_board: Optional[Any] = None,
 ) -> None:
     """One non-FAILED fill: reconcile, visit, guardian tick (#650).
 
@@ -934,9 +949,14 @@ def _react_to_one_fill(
         except Exception as e:
             log.warning("fill visit failed: %s: %s", type(e).__name__, e)
     try:
-        _guardian_fill_tick(
-            client=seam.client, registry=seam.registry,
-            cfg=seam.base_cfg, live=live)
+        if trigger_board is not None:
+            _guardian_fill_tick(
+                client=seam.client, registry=seam.registry,
+                cfg=seam.base_cfg, live=live, trigger_board=trigger_board)
+        else:
+            _guardian_fill_tick(
+                client=seam.client, registry=seam.registry,
+                cfg=seam.base_cfg, live=live)
     except Exception as e:
         log.warning("fill guardian tick failed: %s: %s",
                     type(e).__name__, e)
@@ -2782,16 +2802,67 @@ def start_risk_guardian(
     live: bool = True,
     single_buy_saver_fn: Optional[Callable] = None,
     stop_event: Optional[Any] = None,
+    wake_event: Optional[Any] = None,
+    trigger_board: Optional[Any] = None,
+    emit_fn: Optional[Callable] = None,
+    ring_path: Optional[Path | str] = None,
 ) -> Any:
     """Run the high-alert risk guardian sentry on a tight <=1.0s background cadence."""
     import threading
     from core_brain.risk_guardian import run_guardian_tick
 
     evt = stop_event if stop_event is not None else threading.Event()
+    wait_evt = wake_event if wake_event is not None else evt
+    db_path = getattr(registry, "db_path", getattr(registry, "_db_path", None))
+    if not isinstance(db_path, (str, Path)):
+        db_path = None
 
     def _loop() -> None:
         while not evt.is_set():
+            if wake_event is not None:
+                wake_event.clear()
             t0 = time.monotonic()
+            if trigger_board is not None:
+                for trig in trigger_board.pop_triggers():
+                    triggered_at = float(trig.get("triggered_at", t0))
+                    latency_ms = max(0.0, (t0 - triggered_at) * 1000.0)
+                    extra = {
+                        "condition_id": trig.get("condition_id"),
+                        "token_id": trig.get("token_id"),
+                        "kind": trig.get("kind"),
+                        "source": trig.get("source"),
+                        "level": trig.get("level"),
+                        "price": trig.get("price"),
+                        "latency_ms": round(latency_ms, 3),
+                    }
+                    try:
+                        if emit_fn is not None:
+                            emit_fn(
+                                0,
+                                "guardian",
+                                "guardian_reactive_wake",
+                                service="guardian",
+                                reason=str(trig.get("kind") or ""),
+                                latency_ms=latency_ms,
+                                extra=extra,
+                            )
+                        else:
+                            _emit_cycle_event(
+                                0,
+                                "guardian",
+                                "guardian_reactive_wake",
+                                service="guardian",
+                                reason=str(trig.get("kind") or ""),
+                                latency_ms=latency_ms,
+                                extra=extra,
+                                ring_path=Path(ring_path) if ring_path else None,
+                                db_path=Path(db_path) if db_path else None,
+                            )
+                    except Exception as emit_exc:
+                        log.warning(
+                            "guardian_reactive_wake emit failed: %s: %s",
+                            type(emit_exc).__name__, emit_exc,
+                        )
             try:
                 run_guardian_tick(
                     client=client,
@@ -2799,11 +2870,14 @@ def start_risk_guardian(
                     cfg=cfg,
                     live=live,
                     single_buy_saver_fn=single_buy_saver_fn,
+                    trigger_board=trigger_board,
                 )
             except Exception as e:
                 log.warning("risk guardian tick failed: %s: %s", type(e).__name__, e)
+            if evt.is_set():
+                break
             elapsed = time.monotonic() - t0
-            evt.wait(max(0.01, interval - elapsed))
+            wait_evt.wait(max(0.01, interval - elapsed))
 
     thread = threading.Thread(
         daemon=True, name="risk-guardian-sentry", target=_loop)
@@ -2876,6 +2950,7 @@ def _make_subscribe_fn(
     cache: Any,
     fetch_market_fn: Callable[[str], Any],
     *,
+    trigger_board: Optional[Any] = None,
     timeout_sec: float = 5.0,
     poll_sec: float = 0.05,
     time_fn: Callable[[], float] = time.monotonic,
@@ -2923,8 +2998,12 @@ def _make_subscribe_fn(
                         cid_str, type(e).__name__, e,
                     )
 
-        market_stream.retain_markets(current_cids)
-        subscribed_cids.intersection_update(current_cids)
+        if trigger_board is not None:
+            retained_cids = list(dict.fromkeys([*current_cids, *sorted(trigger_board.condition_ids())]))
+        else:
+            retained_cids = current_cids
+        market_stream.retain_markets(retained_cids)
+        subscribed_cids.intersection_update(retained_cids)
 
         if new_tokens:
             deadline = time_fn() + timeout_sec
@@ -3122,13 +3201,25 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     market_stream = None
     book_stats: dict = {}
+    guardian_wake = None
+    trigger_board = None
     if use_ws_books:
         from core_brain.market_stream import MarketBookCache, MarketStream
+        if not a.once:
+            from core_brain.orphan_trigger import OrphanTriggerBoard
+            guardian_wake = threading.Event()
+            trigger_board = OrphanTriggerBoard(guardian_wake)
         cache = MarketBookCache()
-        market_stream = MarketStream(cache=cache, emit_fn=decide_emit)
+        market_stream = MarketStream(
+            cache=cache,
+            emit_fn=decide_emit,
+            price_listener=trigger_board.observe if trigger_board is not None else None,
+        )
         market_stream.start()
         fetch_books_fn = _make_stream_fetch_books(cache, book_stats)
-        subscribe_fn = _make_subscribe_fn(market_stream, cache, _fetch_market)
+        subscribe_fn = _make_subscribe_fn(
+            market_stream, cache, _fetch_market, trigger_board=trigger_board,
+        )
         book_stats_fn = lambda: dict(book_stats)
     else:
         fetch_books_fn = full_book
@@ -3212,6 +3303,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             sleep_fn=_make_sleep_fn(wake),
             suspects_box=suspects_box,
             spawn_guardian=not a.once,
+            guardian_wake=guardian_wake,
+            trigger_board=trigger_board,
         )
     except InstanceInUse as exc:
         print(f"fleet refused: {exc}", file=sys.stderr)

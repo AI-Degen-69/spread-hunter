@@ -87,9 +87,19 @@ def build_watches(
     if not token_pairs:
         return {}
 
-    stop_loss_mode = str(getattr(cfg, "stop_loss_mode", "NONE") or "NONE")
-    drop_cents = float(getattr(cfg, "drop_cents", 0.05) or 0.05)
-    drawdown_pct = float(getattr(cfg, "drawdown_pct", 10.0) or 10.0)
+    stop_loss_mode = str(
+        getattr(cfg, "bot_risk_stop_mode", None)
+        or getattr(cfg, "stop_loss_mode", "NONE")
+        or "NONE"
+    )
+    _dc = getattr(cfg, "bot_risk_stop_adverse_drop_cents", None)
+    if _dc is None:
+        _dc = getattr(cfg, "drop_cents", 0.05)
+    drop_cents = float(_dc if _dc is not None else 0.05)
+    _ddp = getattr(cfg, "bot_risk_stop_max_drawdown_pct", None)
+    if _ddp is None:
+        _ddp = getattr(cfg, "drawdown_pct", 10.0)
+    drawdown_pct = float(_ddp if _ddp is not None else 10.0)
     _edp = getattr(cfg, "bot_risk_circuit_max_drawdown_pct", None)
     if _edp is None:
         _edp = getattr(cfg, "emergency_drawdown_pct", 75.0)
@@ -99,7 +109,10 @@ def build_watches(
     if _mpc is None:
         _mpc = getattr(cfg, "max_pair_cost", 0.995)
     max_pair_cost = float(_mpc if _mpc is not None else 0.995)
-    stranded_completion_on = bool(getattr(cfg, "stranded_completion_enabled", False))
+    _sc = getattr(cfg, "bot_risk_stranded_completion_on", None)
+    if _sc is None:
+        _sc = getattr(cfg, "stranded_completion_enabled", False)
+    stranded_completion_on = bool(_sc)
 
     real_db = db_path or getattr(registry, "db_path", getattr(registry, "_db_path", None))
     watches: dict[str, Watch] = {}
