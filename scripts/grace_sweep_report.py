@@ -1,6 +1,6 @@
 """Every grace value at once, from a single run held at the longest one.
 
-A four-arm sweep of `single_buy_grace_sec` would split an already thin fill
+A four-arm sweep of rescue timing (`pairs_exit_window_sec` / `aged_out_rescue_lead_sec`, historically `single_buy_grace_sec`) would split an already thin fill
 count four ways and reproduce the confound the #138 sweep could not remove:
 arm and hour never separated. This reads one run held at the MAXIMUM grace and
 recovers every shorter value from it, because a longer grace CONTAINS the

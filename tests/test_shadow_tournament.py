@@ -1202,5 +1202,51 @@ def test_explicit_interval_retention_and_clamping(tmp_path: Path, caplog):
     assert "5.0" in warnings[0].message and "1.0" in warnings[0].message
 
 
+def test_cockpit_hybrid_blueprint_tab_purged():
+    from scripts.tournament_cockpit_server import generate_cockpit_html
+
+    html = generate_cockpit_html({"arms": [], "tourney_key": "492"})
+    start_marker = "<!-- TAB: HYBRID CONFIGURATION BLUEPRINT -->"
+    end_marker = "<!-- TAB 2: PNL CURVES -->"
+    start_idx = html.find(start_marker)
+    end_idx = html.find(end_marker)
+    assert start_idx != -1 and end_idx != -1
+    blueprint = html[start_idx:end_idx]
+
+    canonical_keys = [
+        "BOT_QUOTE_TOURNAMENT_PRESET=hybrid",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0",
+        "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS",
+        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES",
+        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS",
+        "BOT_RISK_STOP_MODE=ABSOLUTE_DROP",
+        "BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
+        "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC",
+        "BOT_POS_PRICE_MAX_PAIR_COST_USD",
+    ]
+    for key in canonical_keys:
+        assert key in blueprint, f"Expected canonical key {key!r} in blueprint"
+
+    # Preserved benchmark and preset references
+    assert "Static benchmark synthesis" in blueprint
+    assert 'TOURNAMENT_PRESETS["hybrid"]' in blueprint
+
+    # Interval 1.0 vs 5.0
+    assert "--interval 1.0" in blueprint
+    assert "--interval 5.0" not in blueprint
+
+    # Purged / dead knobs & misleading labels absent
+    assert "HUNTER_" not in blueprint
+    assert "max_pair_cost_cap" not in blueprint
+    assert "0.08 (8%)" not in blueprint
+
+    # Pair cap comment-only guard in .env block
+    for line in blueprint.splitlines():
+        if "BOT_POS_PRICE_MAX_PAIR_COST_USD=" in line:
+            stripped = line.strip()
+            assert stripped.startswith("#"), f"Pair cap must be comment-only in .env snippet: {line}"
+
+
+
 
 
