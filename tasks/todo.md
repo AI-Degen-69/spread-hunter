@@ -13,5 +13,5 @@
   - [x] Create `tests/test_retired_env.py` (AST imports check, vocabulary check, runtime warning checks, silence checks)
   - [x] Update `tests/test_shadow_tournament.py` (assert dictionary object identity and runtime warning subset)
   - [x] Run targeted tests: `tests/test_retired_env.py`, `tests/test_shadow_tournament.py`, `tests/test_stop_loss_config.py`
-- [ ] Task 4: Documentation & noticed ledger update
-  - [ ] Update `docs/issues/684-noticed-but-not-touching.md` lines 14-15 to mark #694 and #695 resolved
+- [x] Task 4: Documentation & noticed ledger update
+  - [x] Update `docs/issues/684-noticed-but-not-touching.md` lines 14-15 to mark #694 and #695 resolved
