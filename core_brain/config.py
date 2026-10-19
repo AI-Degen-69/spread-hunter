@@ -23,7 +23,7 @@ from dataclasses import dataclass, fields, Field, MISSING, _FIELD
 from pathlib import Path
 
 from core_brain import rehearsal
-from core_brain.retired_env import iter_runtime_warnings
+
 from core_brain.single_leg_lifecycle import (
     DROP_CENTS_MAX,
     DROP_CENTS_MIN,
@@ -758,9 +758,6 @@ class MakerConfig(_ConfigBase):
                     )
                 kw[_field] = _val
 
-        for _old_env, _template, _args in iter_runtime_warnings():
-            if os.environ.get(_old_env):
-                logging.getLogger(__name__).warning(_template, _old_env, *_args)
 
         aorl, _ = _env_get("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "HUNTER_AGED_OUT_RESCUE_LEAD_SEC")
         if aorl and aorl.strip():
@@ -771,17 +768,12 @@ class MakerConfig(_ConfigBase):
                     f"non-negative, got: {val}")
             kw["aged_out_rescue_lead_sec"] = val
 
-        mqs, _ = _env_get("BOT_QUOTE_SIZE_MAX_SHARES", "HUNTER_MAX_QUOTE_SHARES")
-        if mqs is None:
-            mqs = os.environ.get("HUNTER_MAX_SHARES") or os.environ.get("SPREAD_HUNTER_MAX_SHARES")
-            if mqs is not None and mqs.strip():
-                logging.getLogger(__name__).warning(
-                    "HUNTER_MAX_SHARES is deprecated (#632); set HUNTER_MAX_QUOTE_SHARES instead."
-                )
+        mqs, _ = _env_get("BOT_QUOTE_SIZE_MAX_SHARES", "HUNTER_MAX_QUOTE_SHARES",
+                           "HUNTER_MAX_SHARES", "SPREAD_HUNTER_MAX_SHARES")
         if mqs and mqs.strip():
             val = float(mqs)
             if not math.isfinite(val) or val <= 0:
-                raise ValueError(f"HUNTER_MAX_QUOTE_SHARES must be strictly positive, got: {val}")
+                raise ValueError(f"BOT_QUOTE_SIZE_MAX_SHARES must be strictly positive, got: {val}")
             kw["max_quote_shares"] = val
 
         sgt, sgt_name = _env_get("BOT_EVAL_STAT_GATE_THRESHOLD_PCT", "HUNTER_STAT_GATE_THRESHOLD_PCT")
@@ -789,17 +781,11 @@ class MakerConfig(_ConfigBase):
             kw["stat_gate_threshold_pct"] = _bounded_float(
                 sgt_name or "HUNTER_STAT_GATE_THRESHOLD_PCT", sgt, -100.0, 100.0)
 
-        sgb, sgb_name = _env_get("BOT_EVAL_STAT_GATE_BANKROLL_PCT", "HUNTER_STAT_GATE_BANKROLL_PCT")
-        if sgb is None:
-            sgb = os.environ.get("HUNTER_STAT_GATE_BANKROLL_FRACTION")
-            if sgb is not None and sgb.strip():
-                logging.getLogger(__name__).warning(
-                    "HUNTER_STAT_GATE_BANKROLL_FRACTION is deprecated (#632); set HUNTER_STAT_GATE_BANKROLL_PCT instead."
-                )
-                sgb_name = "HUNTER_STAT_GATE_BANKROLL_FRACTION"
+        sgb, sgb_name = _env_get("BOT_EVAL_STAT_GATE_BANKROLL_PCT", "HUNTER_STAT_GATE_BANKROLL_PCT",
+                                   "HUNTER_STAT_GATE_BANKROLL_FRACTION")
         if sgb and sgb.strip():
             kw["stat_gate_bankroll_pct"] = _bounded_float(
-                sgb_name or "HUNTER_STAT_GATE_BANKROLL_PCT", sgb, 0.0, 1.0)
+                sgb_name or "BOT_EVAL_STAT_GATE_BANKROLL_PCT", sgb, 0.0, 1.0)
 
         stc, stc_name = _env_get("BOT_EVAL_STAT_GATE_TARGET_CLOSES", "HUNTER_STAT_GATE_TARGET_CLOSES")
         if stc and stc.strip():
