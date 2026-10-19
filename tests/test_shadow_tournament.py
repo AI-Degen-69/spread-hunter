@@ -133,6 +133,7 @@ def test_build_tournament_plan_defaults(tmp_path: Path):
     )
     assert plan.issue == 371
     assert plan.stamp == "20261005-032000"
+    assert plan.interval == 1.0
     assert len(plan.arms) == 4
     # Default order (control purged 2026-10-12): conservative, balanced, aggressive, prudent
     arm_names = [a.name for a in plan.arms]
@@ -1110,6 +1111,96 @@ def test_a_supported_legacy_alias_still_plans(tmp_path):
     assert env["HUNTER_REQUOTE_HOLD_QUEUE"] == "500"
     assert env["HUNTER_DROP_CENTS"] == "0.05"
     assert env["HUNTER_PRICE_RISK_WIDEN"] == "0.02"
+
+
+def test_default_plan_interval_matches_max_rotation_ceiling(tmp_path: Path):
+    from core_brain.config import MAX_ROTATION_INTERVAL_SEC
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        base_dir=tmp_path,
+        stamp="20261019-120000",
+        check_ports=False,
+    )
+    assert plan.interval == MAX_ROTATION_INTERVAL_SEC == 1.0
+    for arm in plan.arms:
+        idx = arm.shadow_argv.index("--interval")
+        assert arm.shadow_argv[idx + 1] == "1.0"
+
+
+def test_tournament_main_dry_run_default_interval(tmp_path: Path, capsys):
+    from scripts.shadow_tournament import main
+
+    exit_code = main(["--dry-run", "--base-dir", str(tmp_path), "--no-port-check"])
+    assert exit_code == 0
+    captured = capsys.readouterr().out
+    data = json.loads(captured)
+    assert data["interval"] == 1.0
+    for arm in data["arms"]:
+        idx = arm["shadow_argv"].index("--interval")
+        assert arm["shadow_argv"][idx + 1] == "1.0"
+
+
+def test_worker_argument_interval_passes_silently_to_shadow_run(tmp_path: Path, caplog):
+    import logging
+    from core_brain.shadow_run import _parse_args
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        base_dir=tmp_path,
+        stamp="20261019-120000",
+        check_ports=False,
+    )
+    first_arm = plan.arms[0]
+    idx = first_arm.shadow_argv.index("--interval")
+    interval_val = first_arm.shadow_argv[idx + 1]
+
+    with caplog.at_level(logging.WARNING, logger="core_brain.config"):
+        parsed = _parse_args(["--db", "data/x_shadow_test.db", "--interval", interval_val])
+    assert parsed.interval == 1.0
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_explicit_interval_retention_and_clamping(tmp_path: Path, caplog):
+    import logging
+    from core_brain.shadow_run import _parse_args
+    from scripts.shadow_tournament import build_tournament_plan
+
+    # Explicit 0.25 (below ceiling): plan retains it, parsed returns 0.25, no warnings
+    plan_fast = build_tournament_plan(
+        base_dir=tmp_path,
+        interval=0.25,
+        stamp="20261019-120001",
+        check_ports=False,
+    )
+    assert plan_fast.interval == 0.25
+    idx_fast = plan_fast.arms[0].shadow_argv.index("--interval")
+    assert plan_fast.arms[0].shadow_argv[idx_fast + 1] == "0.25"
+
+    with caplog.at_level(logging.WARNING, logger="core_brain.config"):
+        parsed_fast = _parse_args(["--db", "data/x_shadow_test.db", "--interval", "0.25"])
+    assert parsed_fast.interval == 0.25
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    # Explicit 5.0 (above ceiling): plan retains 5.0, worker parser clamps to 1.0 with exactly one warning
+    caplog.clear()
+    plan_slow = build_tournament_plan(
+        base_dir=tmp_path,
+        interval=5.0,
+        stamp="20261019-120002",
+        check_ports=False,
+    )
+    assert plan_slow.interval == 5.0
+    idx_slow = plan_slow.arms[0].shadow_argv.index("--interval")
+    assert plan_slow.arms[0].shadow_argv[idx_slow + 1] == "5.0"
+
+    with caplog.at_level(logging.WARNING, logger="core_brain.config"):
+        parsed_slow = _parse_args(["--db", "data/x_shadow_test.db", "--interval", "5.0"])
+    assert parsed_slow.interval == 1.0
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert "5.0" in warnings[0].message and "1.0" in warnings[0].message
+
 
 
 
