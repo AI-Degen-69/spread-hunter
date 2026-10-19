@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Update #695 — Single Source of Truth for Retired Settings</title>
+<style>
+:root {
+  --ink:#eaf1f6; --muted:#9aabb8; --bg:#0b1117; --panel:#121c25; --panel2:#172530;
+  --line:#29404d; --accent:#55d6c2; --accent-ink:#06281f; --red:#f87171; --amber:#fbbf24;
+  --shadow:0 20px 55px rgba(0,0,0,.28);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{color:var(--ink);background:var(--bg);font:16px/1.7 system-ui,-apple-system,"Segoe UI",Roboto,"Heebo",Arial,sans-serif}
+a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+main{max-width:1060px;margin:auto;padding:40px 20px 80px}
+/* HERO */
+.hero{text-align:center;padding:48px 0 36px}
+.hero-tag{display:inline-block;font-size:.75rem;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:rgba(85,214,194,.12);border:1px solid rgba(85,214,194,.25);border-radius:20px;padding:.3rem .9rem;margin-bottom:16px}
+.hero h1{font-size:2rem;font-weight:800;line-height:1.2;margin-bottom:12px}
+.hero .subtitle{font-size:1.05rem;color:var(--muted);max-width:620px;margin:0 auto 24px}
+.meta-bar{display:flex;justify-content:center;gap:14px;flex-wrap:wrap;font-size:.82rem}
+.meta-chip{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:.3rem .9rem;color:var(--muted)}
+.meta-chip a{color:var(--ink)}
+/* PANEL */
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:28px;margin-top:24px;box-shadow:var(--shadow)}
+.panel h2{font-size:1.1rem;font-weight:700;margin-bottom:16px;color:var(--accent)}
+/* TABS */
+.tab-bar{display:flex;gap:6px;margin-bottom:18px}
+.tab-btn{padding:.45rem 1.2rem;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:.85rem;cursor:pointer;transition:.15s}
+.tab-btn.active{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+.tab-pane{display:none}.tab-pane.active{display:block}
+/* ARCH DIAGRAM */
+.arch{display:flex;flex-direction:column;gap:10px}
+.arch-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.arch-box{border-radius:10px;padding:10px 16px;font-size:.82rem;font-weight:600;white-space:nowrap;border:1px solid var(--line)}
+.arch-box.source{background:var(--panel2);border-color:var(--line)}
+.arch-box.warn{background:rgba(248,113,113,.12);border-color:var(--red);color:var(--red)}
+.arch-box.good{background:rgba(85,214,194,.1);border-color:var(--accent);color:var(--accent)}
+.arch-box.module{background:rgba(85,214,194,.15);border-color:var(--accent);color:var(--accent);font-size:.9rem}
+.arch-arrow{font-size:1.2rem;color:var(--muted)}
+.arch-section-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:4px}
+.arch-problem{background:rgba(248,113,113,.07);border:1px solid rgba(248,113,113,.2);border-radius:12px;padding:14px 16px;font-size:.83rem;color:var(--muted);margin-top:10px}
+.arch-gain{background:rgba(85,214,194,.07);border:1px solid rgba(85,214,194,.2);border-radius:12px;padding:14px 16px;font-size:.83rem;color:var(--muted);margin-top:10px}
+code{font-family:ui-monospace,monospace;font-size:.82em;background:rgba(255,255,255,.07);padding:.1em .4em;border-radius:4px}
+/* RETIRED KEYS EXPLORER */
+.key-list{display:flex;flex-direction:column;gap:8px}
+.key-item{border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;transition:.15s}
+.key-item:hover{border-color:var(--accent)}
+.key-header{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--panel2)}
+.key-badge{font-size:.7rem;font-weight:700;border-radius:6px;padding:.2rem .6rem;white-space:nowrap}
+.badge-warned{background:rgba(251,191,36,.15);color:var(--amber);border:1px solid rgba(251,191,36,.3)}
+.badge-purged{background:rgba(248,113,113,.15);color:var(--red);border:1px solid rgba(248,113,113,.3)}
+.key-name{font-family:ui-monospace,monospace;font-size:.85rem;font-weight:700;color:var(--ink);flex:1;direction:ltr;text-align:right}
+.key-chevron{font-size:.8rem;color:var(--muted);transition:.2s}
+.key-item.open .key-chevron{transform:rotate(90deg)}
+.key-body{display:none;padding:12px 16px;border-top:1px solid var(--line);background:var(--bg)}
+.key-item.open .key-body{display:block}
+.key-row{display:flex;gap:10px;margin-bottom:8px;align-items:flex-start;font-size:.83rem}
+.key-row-label{color:var(--muted);min-width:80px;flex-shrink:0;font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;padding-top:.15em}
+.key-row-val{color:var(--ink);direction:ltr;text-align:right;flex:1}
+.key-row-val.canonical{color:var(--accent)}
+.no-warn{color:var(--red);font-size:.8rem;font-style:italic}
+/* VERIFY */
+.verify-steps{counter-reset:step;display:flex;flex-direction:column;gap:10px}
+.verify-step{display:flex;gap:14px;align-items:flex-start}
+.step-num{min-width:28px;height:28px;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-weight:800;font-size:.8rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:.15em}
+.step-body{font-size:.9rem}
+.step-body strong{color:var(--ink)}
+.callout{border-right:3px solid var(--accent);background:rgba(255,255,255,.04);padding:.9rem 1.2rem;border-radius:8px 0 0 8px;margin-top:18px;font-size:.88rem}
+/* responsive */
+@media(max-width:640px){.hero h1{font-size:1.5rem}.arch-row{flex-direction:column;align-items:flex-start}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-tag">Update שוּלָּח · PR #701 · Issue #695</div>
+  <h1>מעכשיו יש מקום אחד לכל ההגדרות הישנות</h1>
+  <p class="subtitle">
+    המערכת ידעה לזהות הגדרות סביבה שבוטלו — אבל ההנחיות שהיא הציגה למפעיל היו שגויות, ולעתים קרובות מועתקות ממקומות שונים שלא תמיד הסכימו ביניהם.
+  </p>
+  <div class="meta-bar">
+    <span class="meta-chip"><a href="https://github.com/AI-Degen-69/spread-hunter/pull/701" target="_blank">PR #701</a></span>
+    <span class="meta-chip"><a href="https://github.com/AI-Degen-69/spread-hunter/issues/695" target="_blank">Issue #695</a></span>
+    <span class="meta-chip"><a href="https://github.com/AI-Degen-69/spread-hunter/issues/694" target="_blank">Issue #694</a> — נסגר גם הוא</span>
+    <span class="meta-chip">שוּלָּח 2026-10-19</span>
+  </div>
+</div>
+
+<!-- CENTERPIECE: Before / After tabs -->
+<div class="panel">
+  <h2>לפני ואחרי — איך החלקים מתחברים</h2>
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('before',this)">לפני</button>
+    <button class="tab-btn" onclick="switchTab('after',this)">אחרי</button>
+  </div>
+
+  <!-- BEFORE -->
+  <div class="tab-pane active" id="tab-before">
+    <div class="arch">
+      <div>
+        <div class="arch-section-label">שני מקורות נפרדים — כל אחד עם רשימה משלו</div>
+        <div class="arch-row">
+          <div class="arch-box warn"><span dir="ltr">scripts/shadow_tournament.py</span></div>
+          <span class="arch-arrow">→</span>
+          <div class="arch-box source">רשימת <code dir="ltr">RETIRED_ENV_OVERRIDES</code> מוטמעת ישירות בקובץ</div>
+        </div>
+        <div class="arch-row" style="margin-top:8px">
+          <div class="arch-box warn"><span dir="ltr">core_brain/config.py</span></div>
+          <span class="arch-arrow">→</span>
+          <div class="arch-box source">3 לולאות אזהרה נפרדות, עם טקסטים שהציגו שמות <code dir="ltr">HUNTER_*</code> ישנים כהמלצה</div>
+        </div>
+      </div>
+      <div class="arch-problem">
+        ⚠️ <strong>הבעיה:</strong> כשהמפעיל הגדיר משתנה בוטל כגון <code dir="ltr">HUNTER_STOP_LOSS_TRIGGER_USD_CENTS</code>, הוא קיבל הנחיה לשנות ל־<code dir="ltr">HUNTER_*</code> — שהוא עצמו שם ישן. כדי לתקן את אחת הרשימות צריך היה לזכור לתקן גם את השנייה, מה שלא תמיד קרה.
+      </div>
+    </div>
+  </div>
+
+  <!-- AFTER -->
+  <div class="tab-pane" id="tab-after">
+    <div class="arch">
+      <div>
+        <div class="arch-section-label">מקור אחד — שני צרכנים</div>
+        <div class="arch-row" style="margin-bottom:4px">
+          <div class="arch-box module">✦ <span dir="ltr">core_brain/retired_env.py</span> — המקור היחיד</div>
+        </div>
+        <div class="arch-row" style="margin-top:4px;padding-right:20px">
+          <div class="arch-box good"><span dir="ltr">shadow_tournament.py</span><br><span style="font-weight:400;font-size:.75rem">מייבא <code>RETIRED_ENV_OVERRIDES</code></span></div>
+          <span class="arch-arrow">←</span>
+          <div class="arch-box good" style="flex:1;text-align:center">ספריית הנתונים<br><span style="font-weight:400;font-size:.75rem"><code dir="ltr">RETIRED_ENV_KEYS</code> + <code dir="ltr">iter_runtime_warnings()</code></span></div>
+          <span class="arch-arrow">→</span>
+          <div class="arch-box good"><span dir="ltr">config.py</span><br><span style="font-weight:400;font-size:.75rem">לולאה אחת</span></div>
+        </div>
+      </div>
+      <div class="arch-gain">
+        ✅ <strong>התוצאה:</strong> כל הנחיה מציינת את שם <code dir="ltr">BOT_*</code> הנכון. עדכון ברשימה מגיע אוטומטית לשני הצרכנים. המפעיל מקבל הנחיה נכונה, ולא שם ישן.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SUPPORT 1: Retired keys explorer -->
+<div class="panel">
+  <h2>8 הגדרות שבוטלו — לחצו לפרטים</h2>
+  <div class="key-list" id="key-list"></div>
+</div>
+
+<!-- SUPPORT 2: Real-app verification -->
+<div class="panel">
+  <h2>איך לבדוק זאת בפועל</h2>
+  <div class="verify-steps">
+    <div class="verify-step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>פתחו טרמינל</strong> בתיקיית הפרויקט.
+      </div>
+    </div>
+    <div class="verify-step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>הגדירו הגדרה בוטלת</strong> — לדוגמה:<br>
+        <code dir="ltr" style="display:block;margin-top:6px;padding:8px 12px;border-radius:8px;background:rgba(255,255,255,.06)">$env:HUNTER_STOP_LOSS_TRIGGER_USD_CENTS = "1"</code>
+      </div>
+    </div>
+    <div class="verify-step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>הפעילו את הסטטוס:</strong><br>
+        <code dir="ltr" style="display:block;margin-top:6px;padding:8px 12px;border-radius:8px;background:rgba(255,255,255,.06)">python -m core_brain.order_manager status --no-live</code>
+      </div>
+    </div>
+    <div class="verify-step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>ראו בפלט</strong> אזהרה המכילה את השמות <strong>החדשים</strong>:<br>
+        <code dir="ltr" style="display:block;margin-top:6px;padding:8px 12px;border-radius:8px;background:rgba(255,255,255,.06)">BOT_RISK_STOP_MODE=ABSOLUTE_DROP plus BOT_RISK_STOP_ADVERSE_DROP_CENTS</code>
+        במקום השמות הישנים <code dir="ltr">HUNTER_*</code>.
+      </div>
+    </div>
+    <div class="verify-step">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <strong>בדקו גם את ה"תורניר-צל":</strong><br>
+        <code dir="ltr" style="display:block;margin-top:6px;padding:8px 12px;border-radius:8px;background:rgba(255,255,255,.06)">python scripts/shadow_tournament.py --dry-run</code>
+        <br>המערכת תדחה את ההגדרה הבוטלת עם הנחיה זהה.
+      </div>
+    </div>
+  </div>
+  <div class="callout">
+    🔒 <strong>חשוב:</strong> הגדרת <code dir="ltr">HUNTER_REWARD_OFFSET</code> בוטלה לחלוטין ב-2026-10-12 ואין לה תחליף — <strong>לא</strong> תופיע אזהרה בריצה, זה מכוון.
+  </div>
+</div>
+
+</main>
+
+<script>
+// ── Data ──────────────────────────────────────────────────────────────────
+const KEYS = [
+  {
+    name:"HUNTER_SINGLE_BUY_GRACE_SEC",
+    status:"warned",
+    issue:"#619",
+    guidance:"בוטל ללא תחליף — הסר אותו. הגדרת BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC היא דבר אחר לגמרי.",
+    canonical:null,
+    runtime:"כן — הפלט כולל הנחיה להסיר"
+  },
+  {
+    name:"HUNTER_STOP_LOSS_TRIGGER_USD_CENTS",
+    status:"warned",
+    issue:"#619",
+    guidance:"Stop-loss עכשיו יחסי לנקודת הכניסה.",
+    canonical:"BOT_RISK_STOP_MODE=ABSOLUTE_DROP + BOT_RISK_STOP_ADVERSE_DROP_CENTS",
+    runtime:"כן — האזהרה כוללת את השמות החדשים"
+  },
+  {
+    name:"HUNTER_STOP_LOSS_TRIGGER_PCT",
+    status:"warned",
+    issue:"#619",
+    guidance:"Stop-loss עכשיו יחסי לנקודת הכניסה.",
+    canonical:"BOT_RISK_STOP_MODE=PERCENTAGE_DROP + BOT_RISK_STOP_MAX_DRAWDOWN_PCT",
+    runtime:"כן — האזהרה כוללת את השמות החדשים"
+  },
+  {
+    name:"HUNTER_REFUSAL_HOLD_POLICY",
+    status:"warned",
+    issue:"#622",
+    guidance:"בוטל ללא תחליף — הסר אותו.",
+    canonical:null,
+    runtime:"כן"
+  },
+  {
+    name:"HUNTER_REFUSAL_HOLD_DRIFT",
+    status:"warned",
+    issue:"#622",
+    guidance:"בוטל ללא תחליף — הסר אותו.",
+    canonical:null,
+    runtime:"כן"
+  },
+  {
+    name:"HUNTER_SINGLE_BUY_MAX_LOSS_PCT",
+    status:"warned",
+    issue:"#573 / #619",
+    guidance:"שמה שונה ב-#573 ואחר כך הוחלף ב-#619.",
+    canonical:"BOT_RISK_STOP_MODE=PERCENTAGE_DROP + BOT_RISK_STOP_MAX_DRAWDOWN_PCT",
+    runtime:"כן"
+  },
+  {
+    name:"HUNTER_SINGLE_BUY_MAX_LOSS_USD",
+    status:"warned",
+    issue:"#573 / #619",
+    guidance:"שמה שונה ב-#573 ואחר כך הוחלף ב-#619.",
+    canonical:"BOT_RISK_STOP_MODE=ABSOLUTE_DROP + BOT_RISK_STOP_ADVERSE_DROP_CENTS",
+    runtime:"כן"
+  },
+  {
+    name:"HUNTER_REWARD_OFFSET",
+    status:"purged",
+    issue:"2026-10-12",
+    guidance:"הוסר לחלוטין; ברירת המחדל קבועה בקוד — הסר אותו.",
+    canonical:null,
+    runtime:"לא — מכוון, לא מופיעה אזהרה בריצה"
+  },
+];
+
+// ── Render key list ────────────────────────────────────────────────────────
+const container = document.getElementById('key-list');
+KEYS.forEach((k, i) => {
+  const item = document.createElement('div');
+  item.className = 'key-item';
+  item.innerHTML = `
+    <div class="key-header" onclick="toggleKey(${i})">
+      <span class="key-badge ${k.status==='purged'?'badge-purged':'badge-warned'}">${k.status==='purged'?'הוסר':'הוזהר'}</span>
+      <span class="key-name" dir="ltr">${k.name}</span>
+      <span class="key-chevron">›</span>
+    </div>
+    <div class="key-body">
+      <div class="key-row">
+        <span class="key-row-label">בעיה</span>
+        <span class="key-row-val">${k.issue}</span>
+      </div>
+      <div class="key-row">
+        <span class="key-row-label">הנחיה</span>
+        <span class="key-row-val">${k.guidance}</span>
+      </div>
+      ${k.canonical ? `<div class="key-row">
+        <span class="key-row-label">במקומו</span>
+        <span class="key-row-val canonical" dir="ltr">${k.canonical}</span>
+      </div>` : ''}
+      <div class="key-row">
+        <span class="key-row-label">אזהרה חיה</span>
+        <span class="key-row-val ${k.runtime.startsWith('לא')?'no-warn':''}">${k.runtime}</span>
+      </div>
+    </div>
+  `;
+  container.appendChild(item);
+});
+
+function toggleKey(i) {
+  const items = document.querySelectorAll('.key-item');
+  items[i].classList.toggle('open');
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────
+function switchTab(id, btn) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-'+id).classList.add('active');
+  btn.classList.add('active');
+}
+</script>
+</body>
+</html>
