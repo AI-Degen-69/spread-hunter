@@ -283,3 +283,69 @@ def test_missing_websocket_package_fails_loud_not_silent(monkeypatch, caplog):
     with caplog.at_level(logging.ERROR, logger="core_brain.live_marks"):
         worker._run_venue()  # must not raise
     assert "websocket-client" in caplog.text
+
+
+def test_price_change_message_updates_levels_and_mid():
+    cache = LiveMarkCache()
+    cache.update_wanted({"tok-u"})
+    # Initial snapshot
+    cache.apply_message(_book("tok-u", [_lvl(0.47)], [_lvl(0.50)]))
+    assert cache.snapshot()[1][0]["mid"] == 0.485
+
+    # Incremental update via price_change event
+    msg = {
+        "event_type": "price_change",
+        "price_changes": [
+            {"asset_id": "tok-u", "side": "BUY", "price": "0.48", "size": "15.0"}
+        ],
+    }
+    changed = cache.apply_message(msg)
+    assert changed == ["tok-u"]
+    m = cache.snapshot()[1][0]
+    assert (m["bid"], m["ask"], m["mid"]) == (0.48, 0.50, 0.49)
+
+    # Size 0 removes the level
+    msg_remove = {
+        "event_type": "price_change",
+        "price_changes": [
+            {"asset_id": "tok-u", "side": "BUY", "price": "0.48", "size": "0"}
+        ],
+    }
+    changed = cache.apply_message(msg_remove)
+    assert changed == ["tok-u"]
+    m = cache.snapshot()[1][0]
+    assert (m["bid"], m["ask"], m["mid"]) == (0.47, 0.50, 0.485)
+
+
+def test_price_change_refreshes_timestamp():
+    clock = [100.0]
+    cache = LiveMarkCache(time_fn=lambda: clock[0])
+    cache.update_wanted({"tok-u"})
+    cache.apply_message(_book("tok-u", [_lvl(0.47)], [_lvl(0.50)]))
+    seq0, marks0 = cache.snapshot()
+    assert marks0[0]["ts"] == 100.0
+    assert seq0 == 1
+
+    # Before boundary (< 10.0s elapsed): unchanged price levels do not bump seq or ts
+    clock[0] = 105.0
+    msg = {
+        "event_type": "price_change",
+        "price_changes": [
+            {"asset_id": "tok-u", "side": "BUY", "price": "0.47", "size": "10.0"}
+        ],
+    }
+    changed = cache.apply_message(msg)
+    assert changed == []
+    seq1, marks1 = cache.snapshot()
+    assert seq1 == 1
+    assert marks1[0]["ts"] == 100.0
+
+    # At or past boundary (>= 10.0s elapsed): replaces mark and advances seq
+    clock[0] = 110.0
+    changed = cache.apply_message(msg)
+    assert changed == ["tok-u"]
+    seq2, marks2 = cache.snapshot()
+    assert seq2 == 2
+    assert marks2[0]["ts"] == 110.0
+
+

@@ -152,11 +152,13 @@ class LiveMarkCache:
             self._marks.pop(token_id, None)
             return before is not None
         mid = (bid + ask) / 2.0
-        if before is not None and before["mid"] == mid:
+        now = self._time()
+        if (before is not None and before["mid"] == mid and before["bid"] == bid
+                and before["ask"] == ask and now - before.get("ts", 0.0) < 10.0):
             return False
         self._marks[token_id] = {
             "token_id": token_id, "bid": bid, "ask": ask, "mid": mid,
-            "ts": self._time(), "seq": self._seq + 1,
+            "ts": now, "seq": self._seq + 1,
         }
         return True
 
@@ -173,6 +175,41 @@ class LiveMarkCache:
             for item in items:
                 if not isinstance(item, dict):
                     continue
+
+                # Handle incremental streaming updates: {"event_type": "price_change", "price_changes": [...]}
+                if "price_changes" in item:
+                    for row in item.get("price_changes") or []:
+                        if not isinstance(row, dict):
+                            continue
+                        token_id = row.get("asset_id")
+                        if token_id is None or str(token_id) not in want:
+                            continue
+                        token_id = str(token_id)
+                        side = str(row.get("side") or "").upper()
+                        if side not in ("BUY", "SELL"):
+                            continue
+                        book = self._books.setdefault(
+                            token_id, {"bids": {}, "asks": {}})
+                        try:
+                            price = round(float(row["price"]), 4)
+                            size = float(row["size"])
+                            if not (math.isfinite(price) and math.isfinite(size)):
+                                continue
+                        except (TypeError, ValueError, KeyError):
+                            continue
+                        target_side = "bids" if side == "BUY" else "asks"
+                        if size > 0:
+                            book[target_side][price] = size
+                        else:
+                            book[target_side].pop(price, None)
+                        if self._recompute_locked(token_id):
+                            if token_id in self._marks:
+                                self._marks[token_id]["seq"] = self._seq + 1
+                            if token_id not in changed:
+                                changed.append(token_id)
+                    continue
+
+                # Handle snapshot updates: {"asset_id": ..., "bids": [...], "asks": [...]}
                 token_id = item.get("asset_id")
                 if token_id is None or str(token_id) not in want:
                     continue
@@ -196,7 +233,8 @@ class LiveMarkCache:
                 if self._recompute_locked(token_id):
                     if token_id in self._marks:
                         self._marks[token_id]["seq"] = self._seq + 1
-                    changed.append(token_id)
+                    if token_id not in changed:
+                        changed.append(token_id)
             if changed:
                 self._bump_locked()
         return changed
