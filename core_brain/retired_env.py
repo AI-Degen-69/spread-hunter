@@ -6,8 +6,8 @@ and scripts/shadow_tournament.py (plan-time refusal guards).
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator, Optional
 
 
 @dataclass(frozen=True)
@@ -22,12 +22,12 @@ class RetiredEnvKey:
     """
     name: str
     plan_guidance: str
-    runtime_warning: Optional[str] = None
+    runtime_warning: str | None = None
     runtime_warning_args: tuple[str, ...] = ()
 
 
 RETIRED_ENV_KEYS: tuple[RetiredEnvKey, ...] = (
-    # 1. HUNTER_SINGLE_BUY_GRACE_SEC (warned, #619) -> BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC
+    # 1. HUNTER_SINGLE_BUY_GRACE_SEC (warned, #619) -> no equivalent timing replacement
     RetiredEnvKey(
         name="HUNTER_SINGLE_BUY_GRACE_SEC",
         plan_guidance=(
@@ -35,8 +35,11 @@ RETIRED_ENV_KEYS: tuple[RetiredEnvKey, ...] = (
             "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC is a different timing setting, "
             "review it before using it"
         ),
-        runtime_warning="%s is retired and ignored (#619); set %s instead.",
-        runtime_warning_args=("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC (patience)",),
+        runtime_warning=(
+            "%s is retired and ignored (#619) with no equivalent; "
+            "remove it (review BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC separately)."
+        ),
+        runtime_warning_args=(),
     ),
     # 2. HUNTER_STOP_LOSS_TRIGGER_USD_CENTS (warned, #619) -> BOT_RISK_STOP_ADVERSE_DROP_CENTS / BOT_RISK_STOP_MAX_DRAWDOWN_PCT
     RetiredEnvKey(
@@ -48,7 +51,12 @@ RETIRED_ENV_KEYS: tuple[RetiredEnvKey, ...] = (
             "five cents)"
         ),
         runtime_warning="%s is retired and ignored (#619); set %s instead.",
-        runtime_warning_args=("BOT_RISK_STOP_ADVERSE_DROP_CENTS (dollars) or BOT_RISK_STOP_MAX_DRAWDOWN_PCT",),
+        runtime_warning_args=(
+            (
+                "BOT_RISK_STOP_MODE=ABSOLUTE_DROP plus BOT_RISK_STOP_ADVERSE_DROP_CENTS (dollars) or "
+                "BOT_RISK_STOP_MODE=PERCENTAGE_DROP plus BOT_RISK_STOP_MAX_DRAWDOWN_PCT"
+            ),
+        ),
     ),
     # 3. HUNTER_STOP_LOSS_TRIGGER_PCT (warned, #619) -> BOT_RISK_STOP_MAX_DRAWDOWN_PCT
     RetiredEnvKey(
@@ -59,7 +67,9 @@ RETIRED_ENV_KEYS: tuple[RetiredEnvKey, ...] = (
             "BOT_RISK_STOP_MAX_DRAWDOWN_PCT (percent of the entry)"
         ),
         runtime_warning="%s is retired and ignored (#619); set %s instead.",
-        runtime_warning_args=("BOT_RISK_STOP_MAX_DRAWDOWN_PCT",),
+        runtime_warning_args=(
+            "BOT_RISK_STOP_MODE=PERCENTAGE_DROP plus BOT_RISK_STOP_MAX_DRAWDOWN_PCT",
+        ),
     ),
     # 4. HUNTER_REFUSAL_HOLD_POLICY (warned, #622) -> no replacement
     RetiredEnvKey(

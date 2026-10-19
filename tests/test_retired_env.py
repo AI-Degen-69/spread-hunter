@@ -11,12 +11,11 @@ from __future__ import annotations
 
 import ast
 import logging
-import sys
 from pathlib import Path
 
 import pytest
 
-import core_brain.retired_env as retired_env
+from core_brain import retired_env
 from core_brain.config import load
 from core_brain.retired_env import (
     RETIRED_ENV_KEYS,
@@ -36,12 +35,11 @@ def test_retired_env_leaf_module_purity():
         if isinstance(node, ast.Import):
             for alias in node.names:
                 imported_modules.add(alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imported_modules.add(node.module.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module.split(".")[0])
 
     # Allowable imports: standard library only, plus __future__
-    allowed_standard_libs = {"__future__", "dataclasses", "typing"}
+    allowed_standard_libs = {"__future__", "dataclasses", "typing", "collections"}
     assert imported_modules <= allowed_standard_libs, (
         f"core_brain/retired_env.py imports non-standard modules: {imported_modules - allowed_standard_libs}"
     )
@@ -93,15 +91,29 @@ def test_runtime_warning_emits_canonical_vocabulary(monkeypatch, caplog, name, t
     assert len(matching_messages) >= 1, f"Expected warning for {name}, got {records}"
 
     msg = matching_messages[0]
-    expected_msg = template % ((name,) + args)
+    expected_msg = template % (name, *args)
     assert msg == expected_msg, f"Message mismatch for {name}: {msg!r} != {expected_msg!r}"
 
-    # For stop loss keys, ensure canonical BOT_* names are mentioned instead of legacy HUNTER_*
+    # For stop loss keys and grace sec, ensure canonical BOT_* names and required modes are mentioned
     if name in ("HUNTER_SINGLE_BUY_MAX_LOSS_PCT", "HUNTER_SINGLE_BUY_MAX_LOSS_USD"):
         assert "BOT_RISK_STOP_MODE" in msg
         assert "BOT_RISK_STOP_ADVERSE_DROP_CENTS" in msg
+        assert "BOT_RISK_STOP_MAX_DRAWDOWN_PCT" in msg
         assert "HUNTER_STOP_LOSS_MODE" not in msg
+    elif name == "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS":
+        assert "BOT_RISK_STOP_MODE=ABSOLUTE_DROP" in msg
+        assert "BOT_RISK_STOP_ADVERSE_DROP_CENTS" in msg
+        assert "BOT_RISK_STOP_MODE=PERCENTAGE_DROP" in msg
+        assert "BOT_RISK_STOP_MAX_DRAWDOWN_PCT" in msg
+        assert "HUNTER_DROP_CENTS" not in msg
+        assert "HUNTER_DRAWDOWN_PCT" not in msg
+    elif name == "HUNTER_STOP_LOSS_TRIGGER_PCT":
+        assert "BOT_RISK_STOP_MODE=PERCENTAGE_DROP" in msg
+        assert "BOT_RISK_STOP_MAX_DRAWDOWN_PCT" in msg
+        assert "HUNTER_DRAWDOWN_PCT" not in msg
     elif name == "HUNTER_SINGLE_BUY_GRACE_SEC":
+        assert "no equivalent" in msg
+        assert "remove it" in msg
         assert "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC" in msg
         assert "HUNTER_AGED_OUT_RESCUE_LEAD_SEC" not in msg
 
