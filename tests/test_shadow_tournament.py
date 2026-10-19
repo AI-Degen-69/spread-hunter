@@ -1121,7 +1121,14 @@ def _plan_one(env, tmp_path, name="arm-one"):
 
 def test_retired_env_inventory_matches_the_i492_inventory():
     from scripts.shadow_tournament import RETIRED_ENV_OVERRIDES
+    from core_brain.retired_env import (
+        RETIRED_ENV_KEYS,
+        RETIRED_ENV_OVERRIDES as CORE_RETIRED_ENV_OVERRIDES,
+    )
 
+    assert RETIRED_ENV_OVERRIDES is CORE_RETIRED_ENV_OVERRIDES, (
+        "scripts.shadow_tournament must import RETIRED_ENV_OVERRIDES directly from core_brain.retired_env"
+    )
     assert set(RETIRED_GUIDANCE) == I492_RETIRED_KNOBS
     assert set(RETIRED_ENV_OVERRIDES) == I492_RETIRED_KNOBS, (
         "the planner's refusal list and the config-loader inventory must not drift"
@@ -1129,6 +1136,8 @@ def test_retired_env_inventory_matches_the_i492_inventory():
     assert all(g.strip() for g in RETIRED_ENV_OVERRIDES.values()), (
         "every refused key needs actionable guidance"
     )
+    warned_keys = {k.name for k in RETIRED_ENV_KEYS if k.runtime_warning is not None}
+    assert warned_keys == I492_RETIRED_KNOBS - {"HUNTER_REWARD_OFFSET"}
 
 
 @pytest.mark.parametrize("key", sorted(I492_RETIRED_KNOBS))
