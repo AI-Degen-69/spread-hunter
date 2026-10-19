@@ -8,13 +8,38 @@ Sleeps / idles when exposure is zero.
 from __future__ import annotations
 
 import logging
-import time
-from typing import Any, Callable, Optional, Sequence
+import math
 from pathlib import Path
+from typing import Any, Callable, Optional
 
 from core_brain.order_registry import OrderRegistry, inventory_from_registry
+from core_brain.orphan_trigger import Watch
+from core_brain.single_leg_lifecycle import stop_trigger
 
 log = logging.getLogger("risk_guardian")
+
+
+def _group_condition_tokens(registry: OrderRegistry) -> dict[str, dict[str, str]]:
+    """Group the latest UP and DOWN token IDs per condition_id from the quotes ledger."""
+    all_quotes = registry.get_all_quotes()
+    latest: dict[str, dict[str, tuple[float, str]]] = {}
+    for q in all_quotes:
+        cid = q.get("condition_id")
+        side = str(q.get("side") or "").upper()
+        tok = q.get("token_id")
+        if not cid or side not in ("UP", "DOWN") or not tok:
+            continue
+        cid_str = str(cid)
+        tok_str = str(tok)
+        ts = float(q.get("ts") or 0.0)
+        prior = latest.setdefault(cid_str, {}).get(side)
+        if prior is None or ts >= prior[0]:
+            latest[cid_str][side] = (ts, tok_str)
+
+    return {
+        cid: {side: pair[1] for side, pair in sides.items()}
+        for cid, sides in latest.items()
+    }
 
 
 def detect_unhedged_positions(
@@ -22,15 +47,7 @@ def detect_unhedged_positions(
     db_path: Optional[Path | str] = None,
 ) -> list[dict[str, Any]]:
     """Identify all active conditions that hold single-leg exposure (up_shares != down_shares)."""
-    all_quotes = registry.get_all_quotes()
-    token_pairs: dict[str, dict[str, str]] = {}
-    for q in all_quotes:
-        cid = q.get("condition_id")
-        side = str(q.get("side") or "").upper()
-        tok = q.get("token_id")
-        if cid and side in ("UP", "DOWN") and tok:
-            token_pairs.setdefault(cid, {})[side] = tok
-
+    token_pairs = _group_condition_tokens(registry)
     unhedged = []
     real_db = db_path or getattr(registry, "db_path", getattr(registry, "_db_path", None))
     for cid, tokens in token_pairs.items():
@@ -52,10 +69,119 @@ def detect_unhedged_positions(
                 "down_token": down_token,
                 "up_shares": inv.up_shares,
                 "down_shares": inv.down_shares,
+                "up_cost": getattr(inv, "up_cost", 0.0),
+                "down_cost": getattr(inv, "down_cost", 0.0),
                 "naked_shares": diff,
                 "heavy_side": "UP" if inv.up_shares > inv.down_shares else "DOWN",
             })
     return unhedged
+
+
+def build_watches(
+    registry: OrderRegistry,
+    cfg: Any,
+    db_path: Optional[Path | str] = None,
+) -> dict[str, Watch]:
+    """Build the token-to-Watch map for all currently unhedged positions."""
+    token_pairs = _group_condition_tokens(registry)
+    if not token_pairs:
+        return {}
+
+    stop_loss_mode = str(
+        getattr(cfg, "bot_risk_stop_mode", None)
+        or getattr(cfg, "stop_loss_mode", "NONE")
+        or "NONE"
+    )
+    _dc = getattr(cfg, "bot_risk_stop_adverse_drop_cents", None)
+    if _dc is None:
+        _dc = getattr(cfg, "drop_cents", 0.05)
+    drop_cents = float(_dc if _dc is not None else 0.05)
+    _ddp = getattr(cfg, "bot_risk_stop_max_drawdown_pct", None)
+    if _ddp is None:
+        _ddp = getattr(cfg, "drawdown_pct", 10.0)
+    drawdown_pct = float(_ddp if _ddp is not None else 10.0)
+    _edp = getattr(cfg, "bot_risk_circuit_max_drawdown_pct", None)
+    if _edp is None:
+        _edp = getattr(cfg, "emergency_drawdown_pct", 75.0)
+    emergency_drawdown_pct = float(_edp if _edp is not None else 75.0)
+
+    _mpc = getattr(cfg, "bot_pos_price_max_pair_cost_usd", None)
+    if _mpc is None:
+        _mpc = getattr(cfg, "max_pair_cost", 0.995)
+    max_pair_cost = float(_mpc if _mpc is not None else 0.995)
+    _sc = getattr(cfg, "bot_risk_stranded_completion_on", None)
+    if _sc is None:
+        _sc = getattr(cfg, "stranded_completion_enabled", False)
+    stranded_completion_on = bool(_sc)
+
+    real_db = db_path or getattr(registry, "db_path", getattr(registry, "_db_path", None))
+    watches: dict[str, Watch] = {}
+
+    for cid, tokens in token_pairs.items():
+        if "UP" not in tokens or "DOWN" not in tokens:
+            continue
+        up_token = tokens["UP"]
+        down_token = tokens["DOWN"]
+        inv = inventory_from_registry(
+            condition_id=cid,
+            up_token=up_token,
+            down_token=down_token,
+            db_path=real_db,
+        )
+        up_shares = float(getattr(inv, "up_shares", 0.0) or 0.0)
+        down_shares = float(getattr(inv, "down_shares", 0.0) or 0.0)
+        if abs(up_shares - down_shares) < 1e-4:
+            continue
+
+        if up_shares > down_shares:
+            heavy_token = up_token
+            light_token = down_token
+            heavy_shares = up_shares
+            heavy_cost = float(getattr(inv, "up_cost", 0.0) or 0.0)
+        else:
+            heavy_token = down_token
+            light_token = up_token
+            heavy_shares = down_shares
+            heavy_cost = float(getattr(inv, "down_cost", 0.0) or 0.0)
+
+        if heavy_shares <= 0.0 or heavy_cost <= 0.0:
+            continue
+        held_avg = heavy_cost / heavy_shares
+        if not math.isfinite(held_avg) or not (0.0 < held_avg <= 1.0):
+            continue
+
+        try:
+            stop_level, stop_source = stop_trigger(
+                held_avg,
+                stop_loss_mode,
+                drop_cents,
+                drawdown_pct,
+                emergency_drawdown_pct,
+            )
+        except ValueError:
+            continue
+
+        watches[heavy_token] = Watch(
+            condition_id=cid,
+            kind="stop",
+            level=float(stop_level),
+            source=stop_source,
+            token_id=heavy_token,
+        )
+
+        if stranded_completion_on:
+            hedge_cap = min(0.99, max_pair_cost)
+            hedge_level = round(hedge_cap - held_avg, 4)
+            if hedge_level > 0.0:
+                watches[light_token] = Watch(
+                    condition_id=cid,
+                    kind="hedge",
+                    level=float(hedge_level),
+                    source="stranded_hedge",
+                    token_id=light_token,
+                )
+
+    return watches
 
 
 def run_guardian_tick(
@@ -65,16 +191,26 @@ def run_guardian_tick(
     *,
     live: bool = False,
     single_buy_saver_fn: Optional[Callable] = None,
+    trigger_board: Optional[Any] = None,
 ) -> list[dict[str, Any]]:
     """Execute one high-alert defense evaluation pass across all unhedged positions."""
+    gen = trigger_board.next_generation() if trigger_board is not None else None
     unhedged = detect_unhedged_positions(registry)
     if not unhedged:
+        if trigger_board is not None:
+            trigger_board.publish({}, generation=gen)
         return []
 
     log.debug("Risk guardian active on %d unhedged condition(s)", len(unhedged))
-    if single_buy_saver_fn is not None:
-        return single_buy_saver_fn(client, registry, cfg, live=live)
+    try:
+        if single_buy_saver_fn is not None:
+            return single_buy_saver_fn(client, registry, cfg, live=live)
 
-    # Fallback to direct single_buy_saver
-    from core_brain.single_buy_saver import manage_single_leg_positions
-    return manage_single_leg_positions(client, registry, cfg, live=live)
+        from core_brain.single_buy_saver import manage_single_leg_positions
+        return manage_single_leg_positions(client, registry, cfg, live=live)
+    finally:
+        if trigger_board is not None:
+            try:
+                trigger_board.publish(build_watches(registry, cfg), generation=gen)
+            except Exception as exc:
+                log.warning("trigger board watch refresh failed: %s: %s", type(exc).__name__, exc)

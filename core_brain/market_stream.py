@@ -190,6 +190,17 @@ class MarketBookCache:
         with self._lock:
             return list(self._books)
 
+    def best_prices(self, tokens) -> dict[str, tuple]:
+        """Return `{token: (best_bid, best_ask)}` for ready books in `tokens`."""
+        with self._lock:
+            out: dict[str, tuple] = {}
+            for token in tokens:
+                key = str(token)
+                book = self._books.get(key)
+                if book is not None:
+                    out[key] = (book["best_bid"], book["best_ask"])
+            return out
+
 
 class MarketStream:
     """One long-lived socket feeding a `MarketBookCache`; reads never block.
@@ -200,12 +211,15 @@ class MarketStream:
     """
 
     def __init__(self, *, cache=None, emit_fn=None, time_fn=time.time,
-                 ping_sec=PING_INTERVAL_SEC, tick_sec=TICK_SUMMARY_SEC):
+                 ping_sec=PING_INTERVAL_SEC, tick_sec=TICK_SUMMARY_SEC,
+                 price_listener=None):
         self._cache = cache if cache is not None else MarketBookCache()
         self._emit_fn = emit_fn
         self._time = time_fn
         self._ping_sec = ping_sec
         self._tick_sec = tick_sec
+        self._price_listener = price_listener
+        self.listener_errors = 0
         self._lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._markets: dict[str, tuple[str, str, str]] = {}
@@ -486,9 +500,26 @@ class MarketStream:
             stray = [t for t in changed if t not in self._want]
         if stray:
             self._cache.drop(stray)
-        for token in changed:
-            if token not in stray:
-                self._note_snapshot(token)
+        wanted_changed = [t for t in changed if t not in stray]
+        for token in wanted_changed:
+            self._note_snapshot(token)
+        if self._price_listener is not None and wanted_changed:
+            prices = self._cache.best_prices(wanted_changed)
+            if prices:
+                try:
+                    self._price_listener(prices)
+                except Exception as e:
+                    self.listener_errors += 1
+                    log.warning("market stream price listener failed: %s: %s",
+                                type(e).__name__, e)
+                    self._emit(
+                        "market_stream_error",
+                        reason="listener_error",
+                        extra={
+                            "reason": "listener_error",
+                            "detail": f"{type(e).__name__}: {e}"[:120],
+                        },
+                    )
 
     def _note_snapshot(self, token: str) -> None:
         """One snapshot event per market, once all of its books have landed.

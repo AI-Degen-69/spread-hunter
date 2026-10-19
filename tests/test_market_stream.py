@@ -1043,3 +1043,134 @@ def test_probe_refresh_ignores_oserror_or_malformed_file(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "[refresh skipped]" in captured.out
     assert "corrupt json during save" in captured.out
+
+
+# ── T3 — price listener (#699) ─────────────────────────────────────────────
+
+
+def test_price_listener_gets_new_best_bid_and_ask(stub_socket):
+    heard = []
+    stream = MarketStream(price_listener=heard.append)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        app.feed(json.dumps(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)])))
+        heard.clear()
+
+        app.feed(json.dumps(_change_frame(_change("tok-u", "BUY", "0.48", "12"))))
+        assert len(heard) == 1
+        book = stream._cache.book("tok-u")
+        assert heard[0] == {"tok-u": (book["best_bid"], book["best_ask"])}
+        assert heard[0]["tok-u"] == (0.48, 0.50)
+    finally:
+        stream.stop()
+
+
+def test_price_listener_skips_token_without_snapshot(stub_socket):
+    heard = []
+    stream = MarketStream(price_listener=heard.append)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        app.feed(json.dumps(_change_frame(_change("tok-u", "BUY", "0.48", "12"))))
+        assert heard == []
+    finally:
+        stream.stop()
+
+
+def test_price_listener_skips_stray_token(stub_socket):
+    heard = []
+    stream = MarketStream(price_listener=heard.append)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        app.feed(json.dumps(_book_frame("tok-stray", [_lvl(0.46)], [_lvl(0.50)])))
+        assert heard == []
+    finally:
+        stream.stop()
+
+
+def test_raising_listener_keeps_stream_alive(stub_socket):
+    rec = _Recorder()
+    calls = 0
+
+    def bad_listener(prices):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("boom in listener")
+
+    stream = MarketStream(emit_fn=rec, price_listener=bad_listener)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        app.feed(json.dumps(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)])))
+        assert calls == 1
+        assert len(rec.of("market_stream_error")) == 1
+        assert stream._thread is not None and stream._thread.is_alive()
+
+        app.feed(json.dumps(_change_frame(_change("tok-u", "BUY", "0.48", "12"))))
+        assert calls == 2
+        assert stream._cache.book("tok-u")["best_bid"] == 0.48
+        assert stream._thread.is_alive()
+    finally:
+        stream.stop()
+
+
+def test_listener_runs_outside_cache_lock(stub_socket):
+    probe_done = []
+
+    stream_ref = {}
+
+    def listener(prices):
+        def reader():
+            b = stream_ref["s"]._cache.book("tok-u")
+            probe_done.append(b["best_bid"])
+
+        t = threading.Thread(target=reader)
+        t.start()
+        t.join(timeout=1.0)
+        assert not t.is_alive()
+
+    stream = MarketStream(price_listener=listener)
+    stream_ref["s"] = stream
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app = stub_socket.apps[0]
+        app.feed(json.dumps(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)])))
+        assert probe_done == [0.46]
+    finally:
+        stream.stop()
+
+
+def test_fresh_book_after_reconnect_reaches_listener(stub_socket):
+    heard = []
+    stream = MarketStream(price_listener=heard.append)
+    stream.ensure_market("0xc1", "brazil-election", "tok-u", "tok-d")
+    stream.start()
+    try:
+        assert _await(lambda: stream.connected)
+        app1 = stub_socket.apps[0]
+        app1.feed(json.dumps(_book_frame("tok-u", [_lvl(0.46)], [_lvl(0.50)])))
+        assert len(heard) == 1
+        heard.clear()
+
+        # Simulate reconnect (_on_open on new socket followed by fresh book frame)
+        stream._on_close(app1, 1006, "dropped")
+        stream._on_open(app1)
+        app1.feed(json.dumps(_book_frame("tok-u", [_lvl(0.44)], [_lvl(0.52)])))
+        assert len(heard) == 1
+        assert heard[0] == {"tok-u": (0.44, 0.52)}
+    finally:
+        stream.stop()
+

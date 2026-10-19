@@ -4058,4 +4058,411 @@ class TestMainStreamWiring:
         assert user_stopped == [True]
 
 
+class TestGuardianReactiveWake:
+    """T3 (#699): Guardian reactive wake, burst coalescing, retention, and end-to-end stream wake."""
+
+    @staticmethod
+    def _await(predicate, timeout=3.0):
+        import time
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.01)
+        return predicate()
+
+    def test_wake_tick_fires_without_waiting_for_timer(self, monkeypatch):
+        import threading
+        from unittest.mock import MagicMock
+        from core_brain.trader_loop import start_risk_guardian
+        from core_brain.quotes import Inventory
+
+        registry = MagicMock()
+        registry.get_all_quotes.return_value = [
+            {"condition_id": "0x1", "side": "UP", "token_id": "tok-u", "ts": 1.0},
+            {"condition_id": "0x1", "side": "DOWN", "token_id": "tok-d", "ts": 1.0},
+        ]
+        monkeypatch.setattr(
+            "core_brain.risk_guardian.inventory_from_registry",
+            lambda **kw: Inventory(up_shares=10.0, down_shares=0.0, up_cost=5.0),
+        )
+
+        saver = MagicMock(return_value=[{"action": "patient_wait"}])
+        stop_evt = threading.Event()
+        wake_evt = threading.Event()
+
+        thread = start_risk_guardian(
+            client=MagicMock(),
+            registry=registry,
+            cfg=MagicMock(),
+            interval=3600.0,
+            live=False,
+            single_buy_saver_fn=saver,
+            stop_event=stop_evt,
+            wake_event=wake_evt,
+        )
+        try:
+            # First initial tick runs on thread start
+            assert self._await(lambda: saver.call_count >= 1)
+            # Trigger wake during the 3600s sleep
+            wake_evt.set()
+            assert self._await(lambda: saver.call_count >= 2)
+        finally:
+            stop_evt.set()
+            wake_evt.set()
+            thread.join(timeout=2.0)
+
+    def test_burst_wakes_coalesce_while_saver_in_flight(self, monkeypatch):
+        import threading
+        import time
+        from unittest.mock import MagicMock
+        from core_brain.trader_loop import start_risk_guardian
+        from core_brain.quotes import Inventory
+
+        registry = MagicMock()
+        registry.get_all_quotes.return_value = [
+            {"condition_id": "0x1", "side": "UP", "token_id": "tok-u", "ts": 1.0},
+            {"condition_id": "0x1", "side": "DOWN", "token_id": "tok-d", "ts": 1.0},
+        ]
+        monkeypatch.setattr(
+            "core_brain.risk_guardian.inventory_from_registry",
+            lambda **kw: Inventory(up_shares=10.0, down_shares=0.0, up_cost=5.0),
+        )
+
+        entered = threading.Event()
+        gate = threading.Event()
+        calls = []
+
+        def gated_saver(client, reg, cfg, live=False):
+            calls.append(1)
+            entered.set()
+            gate.wait(2.0)
+            return []
+
+        stop_evt = threading.Event()
+        wake_evt = threading.Event()
+        thread = start_risk_guardian(
+            client=MagicMock(),
+            registry=registry,
+            cfg=MagicMock(),
+            interval=3600.0,
+            live=False,
+            single_buy_saver_fn=gated_saver,
+            stop_event=stop_evt,
+            wake_event=wake_evt,
+        )
+        try:
+            assert entered.wait(2.0)
+            for _ in range(20):
+                wake_evt.set()
+            gate.set()
+            # The burst must produce exactly one extra tick.
+            assert self._await(lambda: len(calls) >= 2)
+            assert len(calls) == 2
+        finally:
+            stop_evt.set()
+            wake_evt.set()
+            gate.set()
+            thread.join(timeout=2.0)
+
+    def test_shutdown_stops_and_joins_within_timeout(self):
+        import threading
+        import time
+        from unittest.mock import MagicMock
+        from core_brain.trader_loop import start_risk_guardian
+
+        registry = MagicMock()
+        registry.get_all_quotes.return_value = []
+        stop_evt = threading.Event()
+        wake_evt = threading.Event()
+
+        thread = start_risk_guardian(
+            client=MagicMock(),
+            registry=registry,
+            cfg=MagicMock(),
+            interval=3600.0,
+            live=False,
+            stop_event=stop_evt,
+            wake_event=wake_evt,
+        )
+        time.sleep(0.05)
+        stop_evt.set()
+        wake_evt.set()
+        thread.join(timeout=2.0)
+        assert not thread.is_alive()
+
+    def test_run_reconcile_interrupt_Still_stops_and_joins_guardian(self, monkeypatch):
+        import threading
+        from unittest.mock import MagicMock
+        from core_brain.trader_loop import run
+
+        joined = []
+
+        class FakeGuardianThread:
+            def is_alive(self):
+                return True
+            def join(self, timeout=None):
+                joined.append(timeout)
+
+        monkeypatch.setattr("core_brain.trader_loop.start_settlement_sweeper", lambda **kw: None)
+        monkeypatch.setattr(
+            "core_brain.trader_loop.start_risk_guardian",
+            lambda **kw: FakeGuardianThread(),
+        )
+
+        seam = VenueSeam(
+            base_cfg=MakerConfig(),
+            client=object(),
+            registry=MagicMock(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda host, token: {
+                "token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                "bids": {0.59: 100}, "asks": {0.61: 100},
+            },
+            decide=lambda *a: ([], "declined"),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()),
+            sweep_fn=lambda: None,
+        )
+        guardian_wake = threading.Event()
+
+        with pytest.raises(KeyboardInterrupt):
+            run(
+                seam,
+                interval=1.0,
+                once=False,
+                live=False,
+                markets=[FakeMarket("1")],
+                spawn_guardian=True,
+                guardian_wake=guardian_wake,
+            )
+
+        assert guardian_wake.is_set()
+        assert joined == [2.0]
+
+    def test_disabled_modes_leave_board_and_price_listener_none(self, monkeypatch, tmp_path):
+        import threading
+        from unittest.mock import MagicMock
+        from core_brain.trader_loop import main
+
+        captured_stream_kwargs = []
+        captured_run_kwargs = []
+
+        class FakeMarketStream:
+            def __init__(self, **kw):
+                captured_stream_kwargs.append(kw)
+            def start(self):
+                pass
+            def stop(self):
+                pass
+
+        monkeypatch.setattr("core_brain.market_stream.MarketStream", FakeMarketStream)
+        monkeypatch.setattr(
+            "core_brain.trader_loop._setup_user_stream",
+            lambda **kw: (None, None, None, threading.Event()),
+        )
+        monkeypatch.setattr("core_brain.trader_loop.start_resolution_sweeper", lambda *a, **k: None)
+        monkeypatch.setattr("core_brain.account.fetch_live_balance", lambda *a, **k: None)
+        monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+        for var in ("POLY_PRIVATE_KEY", "POLY_KEY"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setattr("core_brain.trader_loop._market_specs", lambda *a, **k: [FakeMarket("1")])
+
+        def fake_run(*a, **kw):
+            captured_run_kwargs.append(kw)
+            return [MagicMock()]
+
+        monkeypatch.setattr("core_brain.trader_loop.run", fake_run)
+
+        db_file = tmp_path / "disabled_modes.db"
+        # 1. --once with --ws-books -> no trigger_board, price_listener is None
+        main(["--once", "--ws-books", "--no-live", "--db", str(db_file)])
+        assert captured_stream_kwargs[-1].get("price_listener") is None
+        assert captured_run_kwargs[-1].get("trigger_board") is None
+
+        # 2. --no-ws-books -> no MarketStream created, trigger_board is None
+        captured_stream_kwargs.clear()
+        main(["--no-ws-books", "--no-live", "--db", str(db_file)])
+        assert captured_stream_kwargs == []
+        assert captured_run_kwargs[-1].get("trigger_board") is None
+
+    def test_subscribe_retains_union_of_universe_and_board_conditions(self):
+        import threading
+        from core_brain.trader_loop import _make_subscribe_fn
+        from core_brain.orphan_trigger import OrphanTriggerBoard, Watch
+
+        retained = []
+
+        class FakeStream:
+            def ensure_market(self, cid, slug, up_token, down_token):
+                pass
+            def retain_markets(self, cids):
+                retained.append(set(cids))
+
+        class FakeCache:
+            def ready_tokens(self):
+                return {"tok-up-1", "tok-dn-1"}
+
+        def fake_fetch_market(cid):
+            m = FakeMarket(cid, f"tok-up-{cid}", f"tok-dn-{cid}")
+            m.market_slug = f"slug-{cid}"
+            return m
+
+        board = OrphanTriggerBoard(threading.Event())
+        board.publish(
+            {
+                "tok-orphan": Watch(
+                    condition_id="0xorphan",
+                    kind="stop",
+                    level=0.45,
+                    source="strategy",
+                    token_id="tok-orphan",
+                )
+            },
+            generation=board.next_generation(),
+        )
+
+        sub = _make_subscribe_fn(FakeStream(), FakeCache(), fake_fetch_market, trigger_board=board)
+        sub([FakeMarket("1")])
+        assert retained == [{"1", "0xorphan"}]
+
+    def test_end_to_end_stream_frame_wakes_guardian_and_emits_ring_event(
+        self, monkeypatch, tmp_path
+    ):
+        import json
+        import sys
+        import threading
+        import time
+        import types
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from core_brain import market_stream as ms
+        from core_brain.market_stream import MarketStream
+        from core_brain.orphan_trigger import OrphanTriggerBoard
+        from core_brain.trader_loop import start_risk_guardian
+        from core_brain.quotes import Inventory
+
+        apps = []
+
+        class StubApp:
+            def __init__(self, url, on_open=None, on_message=None, on_close=None, on_error=None):
+                self.on_open = on_open
+                self.on_message = on_message
+                self.on_close = on_close
+                self.closed = False
+                self._park = threading.Event()
+                apps.append(self)
+
+            def run_forever(self, **kwargs):
+                if self.on_open:
+                    self.on_open(self)
+                self._park.wait(10.0)
+
+            def send(self, msg):
+                pass
+
+            def close(self):
+                self._park.set()
+                self.closed = True
+                if self.on_close:
+                    self.on_close(self, 1000, "closed")
+
+            def feed(self, msg):
+                if self.on_message:
+                    self.on_message(self, msg)
+
+        monkeypatch.setitem(sys.modules, "websocket", types.SimpleNamespace(WebSocketApp=StubApp))
+
+        registry = MagicMock()
+        registry.get_all_quotes.return_value = [
+            {"condition_id": "0x1", "side": "UP", "token_id": "tok-u", "ts": 1.0},
+            {"condition_id": "0x1", "side": "DOWN", "token_id": "tok-d", "ts": 1.0},
+        ]
+        inv = Inventory(up_shares=10.0, down_shares=0.0, up_cost=5.20, down_cost=0.0)
+        monkeypatch.setattr(
+            "core_brain.risk_guardian.inventory_from_registry",
+            lambda **kw: inv,
+        )
+
+        cfg = SimpleNamespace(
+            stop_loss_mode="ABSOLUTE_DROP",
+            drop_cents=0.05,
+            drawdown_pct=10.0,
+            bot_risk_circuit_max_drawdown_pct=75.0,
+            max_pair_cost=0.99,
+            stranded_completion_enabled=False,
+        )
+
+        saver = MagicMock(return_value=[{"action": "exited"}])
+        stop_evt = threading.Event()
+        wake_evt = threading.Event()
+        board = OrphanTriggerBoard(wake_evt)
+        ring_file = tmp_path / "cycle_events.jsonl"
+
+        stream = MarketStream(price_listener=board.observe)
+        stream.ensure_market("0x1", "slug-1", "tok-u", "tok-d")
+        stream.start()
+
+        thread = start_risk_guardian(
+            client=MagicMock(),
+            registry=registry,
+            cfg=cfg,
+            interval=3600.0,
+            live=False,
+            single_buy_saver_fn=saver,
+            stop_event=stop_evt,
+            wake_event=wake_evt,
+            trigger_board=board,
+            ring_path=ring_file,
+        )
+        try:
+            # Wait for initial guardian pass to populate the board watches (stop level = 0.47)
+            assert self._await(lambda: saver.call_count >= 1 and "tok-u" in board.watches())
+            assert self._await(lambda: stream.connected)
+            app = apps[0]
+
+            # Initial book snapshot in safe band (best_bid = 0.50 > 0.47)
+            app.feed(json.dumps({
+                "event_type": "book",
+                "asset_id": "tok-u",
+                "bids": [{"price": "0.50", "size": "10"}],
+                "asks": [{"price": "0.54", "size": "10"}],
+            }))
+            time.sleep(0.05)
+            assert saver.call_count == 1
+
+            # Feed price_change dropping best_bid from 0.50 to 0.46 (<= 0.47 stop level)
+            app.feed(json.dumps({
+                "event_type": "price_change",
+                "price_changes": [
+                    {"asset_id": "tok-u", "side": "BUY", "price": "0.50", "size": "0"},
+                    {"asset_id": "tok-u", "side": "BUY", "price": "0.46", "size": "10"},
+                ],
+            }))
+            assert self._await(lambda: saver.call_count >= 2)
+
+            lines = [
+                json.loads(line)
+                for line in ring_file.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            wake_lines = [r for r in lines if r.get("action") == "guardian_reactive_wake"]
+            assert len(wake_lines) == 1
+            extra = wake_lines[0]["extra"]
+            assert extra["condition_id"] == "0x1"
+            assert extra["token_id"] == "tok-u"
+            assert extra["kind"] == "stop"
+            assert extra["source"] == "strategy"
+            assert extra["level"] == 0.47
+            assert extra["price"] == 0.46
+            assert "latency_ms" in extra
+        finally:
+            stop_evt.set()
+            wake_evt.set()
+            thread.join(timeout=2.0)
+            stream.stop()
+
+
+
 
