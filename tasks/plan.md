@@ -66,20 +66,12 @@ Branch: i699/trigger-orphan-leg-stop-loss-and-hedge-completion- | Issue: #699
   - `kind: str` (`"stop"` | `"hedge"`)
   - `level: float`
   - `source: str` (`"strategy"` | `"emergency"` | `"stranded_hedge"`)
-- `@dataclass(frozen=True) class TriggerEvent:`
-  - `condition_id: str`
-  - `token_id: str`
-  - `kind: str`
-  - `source: str`
-  - `level: float`
-  - `price: float`
-  - `triggered_at: float`
 - `class OrphanTriggerBoard:`
   - `__init__(self, wake_event: threading.Event, clock: Callable[[], float] = time.monotonic, mute_sec: float = 2.0)`
   - `next_generation(self) -> int`
   - `publish(self, watches: Mapping[str, Watch], generation: Optional[int] = None) -> bool`
   - `observe(self, prices: Mapping[str, tuple[Optional[float], Optional[float]]]) -> None`
-  - `pop_triggers(self) -> list[dict[str, Any]]`
+  - `pop_triggers(self) -> list[dict[str, Any]]` (returns fired triggers as plain dicts with `condition_id`, `token_id`, `kind`, `source`, `level`, `price`, `triggered_at`)
   - `condition_ids(self) -> set[str]`
   - `watches(self) -> dict[str, Watch]`
 

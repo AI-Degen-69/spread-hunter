@@ -4156,8 +4156,9 @@ class TestGuardianReactiveWake:
             for _ in range(20):
                 wake_evt.set()
             gate.set()
-            time.sleep(0.08)
-            assert len(calls) <= 2
+            # The burst must produce exactly one extra tick.
+            assert self._await(lambda: len(calls) >= 2)
+            assert len(calls) == 2
         finally:
             stop_evt.set()
             wake_evt.set()
