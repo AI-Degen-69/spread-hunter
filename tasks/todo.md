@@ -1,17 +1,13 @@
-# Checklist: Issue #695 (absorbing #694)
+# Todo Tasks: Issue #698 (absorbing #693)
 
-- [x] Task 1: Create data-only shared module `core_brain/retired_env.py`
-  - [x] Define `RetiredEnvKey` frozen dataclass
-  - [x] Define `RETIRED_ENV_KEYS` with canonical `BOT_*` replacements (#694)
-  - [x] Define `RETIRED_ENV_OVERRIDES` dictionary
-  - [x] Define `iter_runtime_warnings()` helper
-- [x] Task 2: Connect consumers to `core_brain/retired_env.py`
-  - [x] In `core_brain/config.py`: import `iter_runtime_warnings` and replace 3 loops with 1 loop
-  - [x] In `scripts/shadow_tournament.py`: import `RETIRED_ENV_OVERRIDES` from `core_brain.retired_env`
-  - [x] Verify `test_env_example_documents_only_real_canonical_variables` and existing tests pass
-- [x] Task 3: Comprehensive test suite & cross-check pinning
-  - [x] Create `tests/test_retired_env.py` (AST imports check, vocabulary check, runtime warning checks, silence checks)
-  - [x] Update `tests/test_shadow_tournament.py` (assert dictionary object identity and runtime warning subset)
-  - [x] Run targeted tests: `tests/test_retired_env.py`, `tests/test_shadow_tournament.py`, `tests/test_stop_loss_config.py`
-- [x] Task 4: Documentation & noticed ledger update
-  - [x] Update `docs/issues/684-noticed-but-not-touching.md` lines 14-15 to mark #694 and #695 resolved
+- [x] Task 1: Update launcher interval default to `MAX_ROTATION_INTERVAL_SEC` and add interval tests
+  - [x] 1.1 Import `MAX_ROTATION_INTERVAL_SEC` in `scripts/shadow_tournament.py` and update function & CLI defaults
+  - [x] 1.2 Add tests in `tests/test_shadow_tournament.py` for default interval and warning-free parsing
+- [x] Task 2: Blueprint Modernization & Docstring Sweep
+  - [x] 2.1 Update blueprint table, commands, and `.env` block in `scripts/tournament_cockpit_server.py`
+  - [x] 2.2 Reword docstring in `scripts/grace_sweep_report.py:3`
+  - [x] 2.3 Reword comment in `core_brain/statistical_analytics.py:119-124`
+  - [x] 2.4 Add test for cockpit HTML blueprint tab assertions in `tests/test_shadow_tournament.py`
+- [x] Task 3: Regression Verification & Operator Steps
+  - [x] 3.1 Run targeted test suites (`test_shadow_tournament.py`, `test_rotation_interval_cap.py`, `test_tournament_cockpit_funnel.py`)
+  - [x] 3.2 Formulate zero-risk hands-on operator verification guide

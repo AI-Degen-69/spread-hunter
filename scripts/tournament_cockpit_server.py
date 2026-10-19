@@ -1542,10 +1542,10 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.08), rgba(0, 176, 255, 0.08)); border: 1px solid rgba(0, 230, 118, 0.3); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
       <div>
-        <span class="badge badge-green" style="font-size: 12px; padding: 4px 10px; margin-bottom: 6px;">🌟 EMPIRICAL WINNER SYNTHESIS (FIXED RUN EVALUATION NOTES)</span>
+        <span class="badge badge-green" style="font-size: 12px; padding: 4px 10px; margin-bottom: 6px;">🌟 BENCHMARK SYNTHESIS</span>
         <h2 style="font-size: 18px; font-weight: 700; color: #f0f4fc;">Production HYBRID Configuration Blueprint</h2>
         <p style="color: var(--text-muted); font-size: 12.5px; margin-top: 4px;">
-          Note: Static benchmark synthesis from initial 12h run evaluation. Combines Issue #484 <strong>Control pricing edge</strong> (+$25.34 PnL, $0.180 EV/trade) with Issue #485 <strong>Deadband-Wide queue defense</strong> (+$14.36 PnL, $7.50 max DD, zero queue churn).
+          Note: Static benchmark synthesis combining disciplined requote defense with automated orphan risk management.
         </p>
       </div>
       <div style="text-align: right;">
@@ -1568,60 +1568,53 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
       </thead>
       <tbody>
         <tr>
-          <td><strong>Pricing Offset</strong></td>
-          <td class="tabular positive" style="font-size: 14px;"><strong>0.020 (2.0¢)</strong></td>
-          <td><code>HUNTER_REWARD_OFFSET</code></td>
-          <td><span class="badge badge-green">#484 control</span></td>
-          <td>Rests quotes exactly 2¢ below mid-market on both legs. When mid UP + mid DN ≈ $1.00, targets pair cost ≤ $0.96 ($0.04 spread gross edge). High enough fill velocity without giving up spread margin.</td>
-        </tr>
-        <tr>
           <td><strong>Requote Deadband</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>0.060 (6.0¢)</strong></td>
-          <td><code>HUNTER_REQUOTE_DEAD_BAND</code></td>
+          <td><code>BOT_ORDER_REQUOTE_DEAD_BAND_CENTS</code></td>
           <td><span class="badge badge-green">#485 deadband-wide</span></td>
           <td><strong>Queue Priority Defender:</strong> Suppresses cancellation &amp; requote when book shifts ≤ 6¢. Eliminates excessive requoting churn seen in tighter deadbands, ensuring our order stays in front of the venue queue.</td>
         </tr>
         <tr>
-          <td><strong>Single-Buy Stop Cap</strong></td>
+          <td><strong>Single-Buy Stop Drop</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>$0.045 (4.5¢)</strong></td>
-          <td><code>HUNTER_STOP_LOSS_TRIGGER_USD_CENTS</code></td>
-          <td><span class="badge badge-green">#484 control</span></td>
-          <td>Hard loss stop on orphan legs. If one leg fills and second leg drifts beyond safety cap, exits before adverse drift exceeds 4.5¢. Prevented catastrophic directional tail loss.</td>
+          <td><code>BOT_RISK_STOP_MODE=ABSOLUTE_DROP</code><br><code>BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045</code></td>
+          <td><span class="badge badge-green">Risk Guardian</span></td>
+          <td>Hard loss stop on orphan legs under absolute drop mode. Trigger is entry price minus 0.045, rounded up to a whole cent; emergency floor can set a higher trigger.</td>
         </tr>
         <tr>
-          <td><strong>Single-Buy Grace Window</strong></td>
+          <td><strong>Aged-Out Rescue Lead</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>45.0s</strong></td>
-          <td><code>HUNTER_SINGLE_BUY_GRACE_SEC</code></td>
-          <td><span class="badge badge-green">#485 deadband-wide</span></td>
-          <td>Patient wait window allowing natural organic second-leg fill. Fast 30s stops panicking too early generated negative PnL ($19.88 DD in snapstop). 45s allows full pair merge completion.</td>
+          <td><code>BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC</code></td>
+          <td><span class="badge badge-green">Rescue Lead</span></td>
+          <td>Lead time before market resolution to trigger emergency unwinding of orphan legs. Prioritizes position liquidation before resolution freeze.</td>
         </tr>
         <tr>
           <td><strong>Dynamic Offset</strong></td>
           <td class="tabular" style="font-size: 14px; color: #8b9bb4;"><strong>False (Disabled)</strong></td>
-          <td><code>HUNTER_DYNAMIC_OFFSET=0</code></td>
-          <td><span class="badge badge-green">#484 control</span></td>
-          <td>Static offset decisively beat volatility-scaling (+25.34 vs -2.82 balanced). Volatility-scaling widened quotes precisely during profitable flow, causing missed fills.</td>
+          <td><code>BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0</code></td>
+          <td><span class="badge badge-green">Static Base</span></td>
+          <td>Static offset avoids widening quotes during volatile yet profitable flow, keeping fill velocity predictable.</td>
         </tr>
         <tr>
           <td><strong>Queue Hold Threshold</strong></td>
           <td class="tabular" style="font-size: 14px;"><strong>500.0 shares</strong></td>
-          <td><code>HUNTER_REQUOTE_HOLD_QUEUE</code></td>
+          <td><code>BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES</code></td>
           <td><span class="badge badge-green">Shared Defense</span></td>
           <td>Do not cancel resting quote if 500+ shares are ahead in the queue at the current price level. Prevents resetting queue line.</td>
         </tr>
         <tr>
           <td><strong>Hold Deviation Buffer</strong></td>
-          <td class="tabular" style="font-size: 14px;"><strong>0.08 (8%)</strong></td>
-          <td><code>HUNTER_REQUOTE_HOLD_BELOW</code></td>
+          <td class="tabular" style="font-size: 14px;"><strong>0.080 (8.0¢)</strong></td>
+          <td><code>BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS</code></td>
           <td><span class="badge badge-green">Shared Defense</span></td>
-          <td>Maintains resting quote if mid shift is less than 8% of target offset, avoiding high frequency order cancellations.</td>
+          <td>Maintains resting quote if mid shift is less than 8¢ per share, avoiding high frequency order cancellations.</td>
         </tr>
         <tr>
           <td><strong>Absolute Pair Cap</strong></td>
           <td class="tabular" style="font-size: 14px; color: var(--amber);"><strong>$0.990</strong></td>
-          <td><code>max_pair_cost_cap</code></td>
+          <td><code>BOT_POS_PRICE_MAX_PAIR_COST_USD</code></td>
           <td><span class="badge badge-amber">Core Safety Law</span></td>
-          <td>Under no circumstances can UP + DOWN cost combined exceed $0.99. Targets a minimum $0.01 gross margin per pair before fees and gas ($1.00 payout).</td>
+          <td>Shipped default: under no circumstances can UP + DOWN cost combined exceed $0.99 (overrides are rehearsal-only). Targets a minimum $0.01 gross margin per pair before fees and gas ($1.00 payout).</td>
         </tr>
       </tbody>
     </table>
@@ -1635,8 +1628,8 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 # 1. Interactive Menu - Select Preset "hybrid":
 .\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset hybrid -Minutes 60
 
-# 2. Or Direct Tournament / Python Rehearsal with hybrid preset:
-python -m scripts.shadow_tournament --minutes 60.0 --interval 5.0
+# 2. Or Multi-Arm Tournament Rehearsal (Default Arms):
+python -m scripts.shadow_tournament --minutes 60.0 --interval 1.0
 
 # 3. Tournament Analytics Cockpit:
 python -m scripts.tournament_cockpit_server --port 8800
@@ -1648,14 +1641,15 @@ python -m scripts.tournament_cockpit_server --port 8800
       <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Exact settings injected for live execution:</p>
       <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #81d4fa; overflow-x: auto;">
 # --- Spread Hunter HYBRID Champion Config ---
-HUNTER_TOURNAMENT_PRESET=hybrid
-HUNTER_DYNAMIC_OFFSET=0
-HUNTER_REWARD_OFFSET=0.02
-HUNTER_REQUOTE_DEAD_BAND=0.06
-HUNTER_STOP_LOSS_TRIGGER_USD_CENTS=4.5
-HUNTER_SINGLE_BUY_GRACE_SEC=45
-HUNTER_REQUOTE_HOLD_QUEUE=500
-HUNTER_REQUOTE_HOLD_BELOW=0.08
+BOT_QUOTE_TOURNAMENT_PRESET=hybrid
+BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0
+BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06
+BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES=500
+BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS=0.08
+BOT_RISK_STOP_MODE=ABSOLUTE_DROP
+BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045
+BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
+# BOT_POS_PRICE_MAX_PAIR_COST_USD=0.99  # Shipped default (0.99); do not set outside rehearsal
       </pre>
     </div>
   </div>
@@ -1728,11 +1722,10 @@ HUNTER_REQUOTE_HOLD_BELOW=0.08
 <div id="tab-recommendations" class="tab-pane">
   <div class="decision-grid">
     <div class="decision-box" style="border-left: 4px solid var(--green);">
-      <h3 style="color: var(--green);">🌟 Recommended Production Configuration (Fixed Run Evaluation Notes)</h3>
+      <h3 style="color: var(--green);">🌟 Recommended Production Configuration (Benchmark Evaluation Notes)</h3>
       <ul>
-        <li><strong>Primary Winner: <code>control</code> (Issue #484)</strong> — Highest realized PnL in initial run (+$18.38), highest win rate (65%), controlled drawdown ($7.66), and robust EV per trade.</li>
-        <li><strong>Best Execution Mechanic: <code>deadband-wide</code> (Issue #485)</strong> — Outperformed tight deadbands by +$26.65 PnL difference! Why: A 2-cent requote deadband avoids burning queue priority on micro-fluctuations.</li>
-        <li><strong>The Optimal Hybrid Synthesis:</strong> Combine <code>control</code> baseline pricing (fixed 2c offset, 4.5c single-buy loss cap) with <code>deadband-wide</code> (2c requote deadband) for maximum order stability and minimum queue churn.</li>
+        <li><strong>Execution Mechanic: <code>deadband-wide</code> (Issue #485)</strong> — Disciplined requote deadband avoids burning queue priority on micro-fluctuations.</li>
+        <li><strong>Hybrid Configuration:</strong> Combines static offset pricing with <code>deadband-wide</code> queue priority defense and automated orphan risk management for maximum order stability and minimum queue churn.</li>
       </ul>
     </div>
     <div class="decision-box" style="border-left: 4px solid var(--red);">

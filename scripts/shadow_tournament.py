@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core_brain.config import TOURNAMENT_PRESETS
+from core_brain.config import MAX_ROTATION_INTERVAL_SEC, TOURNAMENT_PRESETS
 
 from core_brain.kpi import MERGE_METHODS, NON_TRADE_CLOSE_METHODS
 from core_brain.shadow_guard import assert_not_production_registry
@@ -253,7 +253,7 @@ def build_tournament_plan(
     arms: Optional[list[dict[str, Any]]] = None,
     base_port: int = 8801,
     minutes: float = 5.0,
-    interval: float = 5.0,
+    interval: float = MAX_ROTATION_INTERVAL_SEC,
     dashboards: bool = False,
     max_markets: Optional[int] = None,
     markets_path: Optional[str | Path] = None,
@@ -586,7 +586,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--issue", type=int, default=371, help="Issue number (default: 371)")
     parser.add_argument("--arms-file", type=str, default=None, help="JSON file with custom arms list")
     parser.add_argument("--minutes", type=float, default=5.0, help="Time box per arm in minutes (default: 5.0)")
-    parser.add_argument("--interval", type=float, default=5.0, help="Cycle rotation interval in seconds (default: 5.0)")
+    parser.add_argument("--interval", type=float, default=MAX_ROTATION_INTERVAL_SEC, help="Cycle rotation interval in seconds (default: 1.0)")
     parser.add_argument("--base-port", type=int, default=8801, help="Starting dashboard port (default: 8801)")
     parser.add_argument("--dashboards", action="store_true", help="Launch isolated dashboard monitors")
     parser.add_argument("--max-markets", type=int, default=None, help="Cap number of rotated markets")

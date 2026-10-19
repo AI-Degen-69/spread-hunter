@@ -117,10 +117,9 @@ TCDR_BAD_AT_OR_ABOVE = 0.10
 OVERSHOOT_BAD_ABOVE = 1.0
 
 # The assumed stop reference for a rescue close that recorded no `trigger_bid`. It is an
-# ASSUMPTION, not an observed price: it equals the system default in `core_brain/config.py`
-# (`stop_loss_trigger_usd_cents = 4.0` = $0.04, promoted 2026-10-12), a per-share loss
-# limit that profile presets move (3.0-6.5 cents). Every figure derived from it is tagged
-# `assumed_offset` and counted apart from the recorded ones.
+# ASSUMPTION, not an observed price: an assumed fallback ($0.04 per share, reflecting typical
+# historical adverse-drop boundaries) for unrecorded rescue closes. Every figure derived from
+# it is tagged `assumed_offset` and counted apart from the recorded ones.
 STOP_OFFSET_FALLBACK = 0.04
 
 # The venue pays exactly $1.00 for a merged pair, so pair cost lives just under
