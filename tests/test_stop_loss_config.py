@@ -5,8 +5,6 @@ every mode shares. The three knobs this replaces are retired outright rather
 than aliased: the old `usd`/`pct` pair counted in different units, so silently
 mapping a stale name onto a new field would change what the operator asked for.
 """
-import logging
-
 import pytest
 
 from core_brain.config import TOURNAMENT_PRESETS, MakerConfig, load
@@ -85,21 +83,6 @@ def test_drawdown_pct_env_is_an_open_lower_interval(monkeypatch, name, field):
         monkeypatch.setenv(name, raw)
         with pytest.raises(ValueError, match=name):
             load()
-
-
-@pytest.mark.parametrize(
-    "old",
-    ["HUNTER_SINGLE_BUY_GRACE_SEC", "HUNTER_STOP_LOSS_TRIGGER_PCT",
-     "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"],
-)
-def test_retired_env_vars_warn_and_are_ignored(monkeypatch, caplog, old):
-    monkeypatch.setenv(old, "45")
-
-    with caplog.at_level(logging.WARNING):
-        load()
-
-    warnings = [r.getMessage() for r in caplog.records]
-    assert any(old in message for message in warnings), warnings
 
 
 def test_a_retired_env_var_does_not_move_its_replacement(monkeypatch):

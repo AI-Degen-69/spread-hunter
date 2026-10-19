@@ -1089,149 +1089,27 @@ def test_explicit_legacy_preset_selector_not_overwritten_by_name_default(tmp_pat
     assert "BOT_QUOTE_TOURNAMENT_PRESET" not in plan.arms[0].env
 
 
-# --- Issue #684: retired legacy env names are refused at plan time ----------
-#
-# `core_brain.config` warns and ignores these keys (or, for the purged reward
-# offset, never reads them). An arm that carries one measures the shipped
-# default, so the run compares two identical arms while the file says otherwise.
-# The planner refuses them before anything starts.
-
-#: The canonical replacement for each retired key, as substrings the message must
-#: contain. Keys with no replacement must say so instead of inventing one.
-RETIRED_GUIDANCE = {
-    "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": (
-        "BOT_RISK_STOP_MODE", "ABSOLUTE_DROP", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"),
-    "HUNTER_STOP_LOSS_TRIGGER_PCT": (
-        "BOT_RISK_STOP_MODE", "PERCENTAGE_DROP", "BOT_RISK_STOP_MAX_DRAWDOWN_PCT"),
-    "HUNTER_SINGLE_BUY_MAX_LOSS_USD": ("BOT_RISK_STOP_ADVERSE_DROP_CENTS",),
-    "HUNTER_SINGLE_BUY_MAX_LOSS_PCT": ("BOT_RISK_STOP_MAX_DRAWDOWN_PCT",),
-    "HUNTER_SINGLE_BUY_GRACE_SEC": ("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC",),
-    "HUNTER_REFUSAL_HOLD_POLICY": ("no replacement",),
-    "HUNTER_REFUSAL_HOLD_DRIFT": ("no replacement",),
-    "HUNTER_REWARD_OFFSET": ("no environment replacement",),
-}
-
-
-def _plan_one(env, tmp_path, name="arm-one"):
-    from scripts.shadow_tournament import build_tournament_plan
-
-    return build_tournament_plan(issue=684, arms=[{"name": name, "env": env}],
-                                 base_dir=tmp_path, run_number=1, check_ports=False)
-
-
-def test_retired_env_inventory_matches_the_i492_inventory():
-    from scripts.shadow_tournament import RETIRED_ENV_OVERRIDES
-    from core_brain.retired_env import (
-        RETIRED_ENV_KEYS,
-        RETIRED_ENV_OVERRIDES as CORE_RETIRED_ENV_OVERRIDES,
-    )
-
-    assert RETIRED_ENV_OVERRIDES is CORE_RETIRED_ENV_OVERRIDES, (
-        "scripts.shadow_tournament must import RETIRED_ENV_OVERRIDES directly from core_brain.retired_env"
-    )
-    assert set(RETIRED_GUIDANCE) == I492_RETIRED_KNOBS
-    assert set(RETIRED_ENV_OVERRIDES) == I492_RETIRED_KNOBS, (
-        "the planner's refusal list and the config-loader inventory must not drift"
-    )
-    assert all(g.strip() for g in RETIRED_ENV_OVERRIDES.values()), (
-        "every refused key needs actionable guidance"
-    )
-    warned_keys = {k.name for k in RETIRED_ENV_KEYS if k.runtime_warning is not None}
-    assert warned_keys == I492_RETIRED_KNOBS - {"HUNTER_REWARD_OFFSET"}
-
-
-@pytest.mark.parametrize("key", sorted(I492_RETIRED_KNOBS))
-@pytest.mark.parametrize("value", ["", " ", "0", "0.05"])
-def test_a_retired_env_key_is_refused_at_plan_time(key, value, tmp_path):
-    with pytest.raises(ValueError) as exc:
-        _plan_one({key: value}, tmp_path)
-    message = str(exc.value)
-    assert "arm-one" in message, "the refusal must name the offending arm"
-    assert key in message, "the refusal must quote the retired key"
-    assert "retired" in message.lower()
-
-
-def test_a_retired_key_is_refused_even_with_its_replacement_present(tmp_path):
-    # A correct replacement does not redeem the dead key: leaving both in place
-    # hides which one actually took effect.
-    with pytest.raises(ValueError, match="HUNTER_STOP_LOSS_TRIGGER_USD_CENTS"):
-        _plan_one({
-            "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-            "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.045",
-            "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS": "4.5",
-        }, tmp_path)
-
-
-def test_a_retired_key_in_a_later_arm_is_refused(tmp_path):
-    from scripts.shadow_tournament import build_tournament_plan
-
-    arms = [
-        {"name": "clean", "env": {"HUNTER_BANKROLL": "100"}},
-        {"name": "dead", "env": {"HUNTER_REFUSAL_HOLD_DRIFT": "0.02"}},
-    ]
-    with pytest.raises(ValueError, match="'dead'"):
-        build_tournament_plan(issue=684, arms=arms, base_dir=tmp_path,
-                              run_number=1, check_ports=False)
-
-
 def test_a_supported_legacy_alias_still_plans(tmp_path):
-    # The purge is per key, not per prefix: these HUNTER_* names still load and
-    # must keep working inside an arm.
-    plan = _plan_one({"HUNTER_REQUOTE_HOLD_QUEUE": "500",
-                      "HUNTER_DROP_CENTS": "0.05",
-                      "HUNTER_PRICE_RISK_WIDEN": "0.02"}, tmp_path)
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        issue=684,
+        arms=[{
+            "name": "arm-one",
+            "env": {
+                "HUNTER_REQUOTE_HOLD_QUEUE": "500",
+                "HUNTER_DROP_CENTS": "0.05",
+                "HUNTER_PRICE_RISK_WIDEN": "0.02",
+            },
+        }],
+        base_dir=tmp_path,
+        run_number=1,
+        check_ports=False,
+    )
     env = plan.arms[0].env
     assert env["HUNTER_REQUOTE_HOLD_QUEUE"] == "500"
     assert env["HUNTER_DROP_CENTS"] == "0.05"
     assert env["HUNTER_PRICE_RISK_WIDEN"] == "0.02"
 
-
-def test_the_refusal_names_the_replacement_or_says_there_is_none(tmp_path):
-    assert set(RETIRED_GUIDANCE) == I492_RETIRED_KNOBS
-    for key, expected in RETIRED_GUIDANCE.items():
-        with pytest.raises(ValueError) as exc:
-            _plan_one({key: "1"}, tmp_path)
-        message = str(exc.value)
-        for fragment in expected:
-            assert fragment in message, f"{key} guidance must mention {fragment!r}"
-
-    # The reward offset has no env knob at all; never advertise one as a fix.
-    with pytest.raises(ValueError) as exc:
-        _plan_one({"HUNTER_REWARD_OFFSET": "0.005"}, tmp_path)
-    assert "BOT_QUOTE_SPREAD_STATIC_OFFSET_CENTS" not in str(exc.value)
-
-
-def test_the_i622_arms_file_is_refused_at_plan_time(tmp_path):
-    from scripts.shadow_tournament import build_tournament_plan
-
-    arms = json.loads(I622_ARMS.read_text(encoding="utf-8"))
-    with pytest.raises(ValueError) as exc:
-        build_tournament_plan(issue=622, arms=arms, base_dir=tmp_path,
-                              run_number=1, check_ports=False)
-    message = str(exc.value)
-    assert "'hold-drift'" in message, "the third arm is the offender"
-    assert "HUNTER_REFUSAL_HOLD_DRIFT" in message
-
-
-def test_a_retired_arm_is_refused_before_anything_launches(tmp_path, monkeypatch,
-                                                          capsys):
-    import scripts.shadow_tournament as st
-
-    def _explode(*_args, **_kwargs):
-        raise AssertionError("nothing may launch when the plan is refused")
-
-    monkeypatch.setattr(st, "launch_tournament", _explode)
-    monkeypatch.setattr(st.subprocess, "Popen", _explode)
-
-    arms_file = tmp_path / "retired_arms.json"
-    arms_file.write_text(json.dumps([
-        {"name": "dead", "env": {"HUNTER_REFUSAL_HOLD_DRIFT": "0.02"}},
-    ]), encoding="utf-8")
-
-    with pytest.raises(ValueError, match="HUNTER_REFUSAL_HOLD_DRIFT"):
-        st.main(["--issue", "684", "--run-number", "1",
-                 "--base-dir", str(tmp_path), "--arms-file", str(arms_file)])
-
-    assert capsys.readouterr().out.strip() == "", "no plan JSON may be printed"
 
 

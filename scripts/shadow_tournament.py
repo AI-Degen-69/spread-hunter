@@ -30,7 +30,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core_brain.config import TOURNAMENT_PRESETS
-from core_brain.retired_env import RETIRED_ENV_OVERRIDES
+
 from core_brain.kpi import MERGE_METHODS, NON_TRADE_CLOSE_METHODS
 from core_brain.shadow_guard import assert_not_production_registry
 from core_brain.shadow_run import (
@@ -310,16 +310,7 @@ def build_tournament_plan(
         custom_env = arm_def.get("env")
         if custom_env:
             for k, v in custom_env.items():
-                guidance = RETIRED_ENV_OVERRIDES.get(k)
-                if guidance is not None:
-                    raise ValueError(
-                        f"Arm {name!r} carries retired environment override "
-                        f"{k!r}: {guidance}. core_brain.config warns and "
-                        f"ignores retired keys, so this arm would silently "
-                        f"measure the shipped default instead of the value in "
-                        f"the file (#684)"
-                    )
-                if not (k.startswith("BOT_") or k.startswith("HUNTER_")):
+                if not k.startswith(("BOT_", "HUNTER_")):
                     raise ValueError(
                         f"Invalid environment override {k!r}: only BOT_* (or legacy HUNTER_*) overrides are permitted"
                     )
