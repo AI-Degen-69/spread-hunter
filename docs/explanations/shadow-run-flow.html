@@ -146,7 +146,7 @@
       <tr><td>Spent ≥ <strong>$400</strong> but lopsided</td><td><strong>Light side only.</strong> Buying the light side reduces exposure.</td></tr>
       <tr><td>Fresh market (0 fills): both sides quotable at touch <strong>and</strong> UP + DOWN &lt; <strong>$0.99</strong></td><td><strong>Quote both</strong> at ask − 1¢.</td></tr>
       <tr><td>Fresh market but only one side quotable, or pair ≥ <strong>$0.99</strong></td><td><strong>Sit out.</strong> A lone leg is a bet nobody approved.</td></tr>
-      <tr><td>Quote would sit &gt; <strong>4.5¢</strong> from mid, or outside band <strong>0.10–0.90</strong></td><td><strong>Skip that side.</strong> Too far from mid to fill, or settled-outcome pricing.</td></tr>
+      <tr><td>Quote would sit &gt; <strong>15¢</strong> from mid (the engine default — <code>BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID</code> can widen it), or outside band <strong>0.10–0.90</strong></td><td><strong>Skip that side.</strong> Too far from mid to fill, or settled-outcome pricing.</td></tr>
       <tr><td>Naked leg and fill cost + opposing ask &lt; <strong>$0.99</strong></td><td><strong>Complete the pair</strong> (buy the light side).</td></tr>
       <tr><td>Naked leg but completion would cost ≥ <strong>$0.99</strong>, or no opposing ask at all</td><td><strong>Unwind the leg</strong> (exit). Never hold on hope.</td></tr>
       <tr><td>Both legs matched, equal size</td><td><strong>Merge</strong> → +$1.00 of collateral (paper in shadow).</td></tr>
