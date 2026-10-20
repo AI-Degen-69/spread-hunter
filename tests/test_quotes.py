@@ -537,7 +537,7 @@ def test_retired_reward_vocabulary_stays_out_of_quotes():
     text = pathlib.Path("core_brain/quotes.py").read_text(encoding="utf-8")
     for retired in ("reward " + "window", "reward " + "quote", "reward " + "minimum"):
         assert retired not in text
-    import core_brain.quotes as quotes
+    from core_brain import quotes
     assert not hasattr(quotes, "reward_" + "score")
 
 
