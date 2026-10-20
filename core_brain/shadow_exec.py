@@ -1669,6 +1669,72 @@ def shadow_positions(registry: OrderRegistry, db_path: Path | str) -> dict[str, 
     return {token: shares for (_cid, token), shares in held.items() if shares > 0}
 
 
+def shadow_reset_ports(registry: OrderRegistry, db_path: Path | str,
+                       condition_id: str, up_token_id: str,
+                       down_token_id: str):
+    """`ResetPorts` over the shadow store (#646).
+
+    Cancel runs the store's own path -- the same
+    `update_order_status(..., status="cancelled")` write
+    `ShadowExecutionClient.cancel_order` performs -- and verification reads
+    the store's active-order query. Reconciliation is a fresh store reread:
+    the store is the source of truth here, so readability IS the check.
+    `shadow_positions` returns positive holdings only, so an absent token is
+    an explicit zero with no read-semantics caveat.
+    """
+    from core_brain.lifecycle_reset import ResetPorts
+    from core_brain.order_registry import inventory_from_registry
+
+    cid = str(condition_id or "").lower()
+    store = Path(db_path)
+
+    def _active_rows() -> list:
+        return [r for r in registry.get_active_orders()
+                if str(r.condition_id or "").lower() == cid and r.order_id]
+
+    def _read_inventory() -> tuple[float, float]:
+        inv = inventory_from_registry(
+            condition_id, up_token_id, down_token_id, db_path=store)
+        return (float(inv.up_shares or 0.0), float(inv.down_shares or 0.0))
+
+    def _watermark() -> tuple:
+        return registry.fill_watermark(condition_id)
+
+    def _active_order_ids() -> list[str]:
+        return [str(r.order_id) for r in _active_rows()]
+
+    def _cancel(order_ids: list[str]) -> None:
+        import time as _time
+        wanted = set(map(str, order_ids))
+        now_ms = int(_time.time() * 1000)
+        for row in _active_rows():
+            if str(row.order_id) in wanted:
+                registry.update_order_status(
+                    row.id, status="cancelled", last_polled_ts=now_ms)
+
+    def _verify_cancelled() -> bool:
+        return not _active_rows()
+
+    def _reconcile_fills() -> None:
+        with closing(get_connection(store)) as conn:
+            conn.execute("SELECT COUNT(*) FROM fills").fetchone()
+
+    def _read_balances() -> tuple[float, float]:
+        held = shadow_positions(registry, store)
+        return (float(held.get(up_token_id, 0.0)),
+                float(held.get(down_token_id, 0.0)))
+
+    return ResetPorts(
+        read_inventory=_read_inventory,
+        fill_watermark=_watermark,
+        active_order_ids=_active_order_ids,
+        cancel=_cancel,
+        verify_cancelled=_verify_cancelled,
+        reconcile_fills=_reconcile_fills,
+        read_balances=_read_balances,
+    )
+
+
 def record_shadow_merges(
     registry: OrderRegistry,
     db_path: Path | str,

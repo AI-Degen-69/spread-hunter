@@ -1323,6 +1323,22 @@ class OrderRegistry:
             conn.commit()
             return cur.rowcount > 0
 
+    def fill_watermark(self, condition_id: str) -> tuple[int, int]:
+        """Identity of the latest recorded fill for one market.
+
+        Returns `(fill count, max recorded_ts_ms)`. Any newly recorded fill
+        changes it, so a reset can tell a late fill landed after cancel.
+        """
+        cid = str(condition_id or "").lower()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n, COALESCE(MAX(f.recorded_ts), 0) AS ts "
+                "FROM fills f JOIN orders o ON o.id = f.order_uuid "
+                "WHERE LOWER(o.condition_id) = ?",
+                (cid,),
+            ).fetchone()
+            return (int(row["n"]), int(row["ts"]))
+
     def get_order_by_venue_id(self, venue_order_id: str) -> Optional[OrderRecord]:
         """Fetch order record by venue order_id."""
         with self._conn() as conn:

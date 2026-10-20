@@ -164,8 +164,18 @@ def reset_condition(
                 _log.warning("reset abandon failed for %s: %s", condition_id, exc)
             return outcome
         reset_ts_ms = int(time.time() * 1000)
-        if not registry.finish_lifecycle_reset(
-                condition_id, generation, reset_ts_ms):
+        try:
+            finished = registry.finish_lifecycle_reset(
+                condition_id, generation, reset_ts_ms)
+        except sqlite3.Error as exc:
+            try:
+                registry.abandon_lifecycle_reset(condition_id, generation)
+            except sqlite3.Error as abandon_exc:
+                _log.warning("reset abandon failed for %s: %s",
+                             condition_id, abandon_exc)
+            return ResetOutcome(
+                status=UNAVAILABLE, reason=f"registry unreadable: {exc}")
+        if not finished:
             return ResetOutcome(
                 status=REFUSED, reason="superseded by a newer reset")
         return outcome

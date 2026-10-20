@@ -262,6 +262,132 @@ def fetch_positions(funder: str, timeout: float = 10.0) -> dict[str, float]:
     return positions
 
 
+def fetch_token_balances(funder: str, up_token_id: str, down_token_id: str,
+                         timeout: float = 10.0) -> tuple[float, float]:
+    """Strict two-token balance read for the reset proof (#646).
+
+    Same Data API pages as `fetch_positions`, but strict: any failed page,
+    non-list payload, or malformed row raises `ExposureUnavailable` instead
+    of being skipped. A token absent from a complete, successful read is an
+    explicit zero -- the API omits tokens no longer held, and only a full
+    read earns the right to say so.
+    """
+    balances: dict[str, float] = {}
+    offset = 0
+    try:
+        while True:
+            url = (
+                f"{DATA_API_BASE}/positions?user={funder}"
+                f"&sizeThreshold=0&limit={POSITIONS_PAGE_SIZE}&offset={offset}"
+            )
+            req = urllib.request.Request(url, headers={"User-Agent": "spread-hunter"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            if not isinstance(payload, list):
+                raise ExposureUnavailable(
+                    f"token balance read returned {type(payload).__name__}, not a list")
+            for row in payload:
+                if not isinstance(row, dict):
+                    raise ExposureUnavailable(
+                        f"token balance row is {type(row).__name__}, not an object")
+                token = str(row.get("asset") or row.get("tokenId")
+                            or row.get("token_id") or "")
+                if not token:
+                    raise ExposureUnavailable("token balance row carries no token id")
+                try:
+                    balances[token] = float(row.get("size", 0.0) or 0.0)
+                except (TypeError, ValueError) as exc:
+                    raise ExposureUnavailable(
+                        f"token balance size for {token!r} is not numeric") from exc
+            if len(payload) < POSITIONS_PAGE_SIZE:
+                break
+            offset += POSITIONS_PAGE_SIZE
+    except ExposureUnavailable:
+        raise
+    except Exception as exc:
+        # Translation boundary: the HTTP/JSON stack raises whatever it
+        # raises; the reset proof only understands ExposureUnavailable.
+        # Nothing is swallowed -- the failure still blocks the reset.
+        raise ExposureUnavailable(f"token balance read failed: {exc}") from exc
+    return (balances.get(up_token_id, 0.0), balances.get(down_token_id, 0.0))
+
+
+def live_reset_ports(client, funder: str, registry: OrderRegistry,
+                     condition_id: str, up_token_id: str,
+                     down_token_id: str):
+    """`ResetPorts` over the live venue and registry (#646).
+
+    Imported lazily by callers: `lifecycle_reset` imports this module at top
+    level, so a top-level import back would be a cycle.
+    """
+    from core_brain.lifecycle_reset import ResetPorts
+    from core_brain.order_registry import (
+        ReconcileInProgress,
+        inventory_from_registry,
+        reconcile_orders,
+    )
+
+    cid = str(condition_id or "").lower()
+    db_path = getattr(registry, "db_path", None)
+
+    def _active_rows() -> list:
+        return [r for r in registry.get_active_orders()
+                if str(r.condition_id or "").lower() == cid and r.order_id]
+
+    def _read_inventory() -> tuple[float, float]:
+        inv = inventory_from_registry(
+            condition_id, up_token_id, down_token_id,
+            **({"db_path": db_path} if db_path is not None else {}))
+        return (float(inv.up_shares or 0.0), float(inv.down_shares or 0.0))
+
+    def _watermark() -> tuple:
+        return registry.fill_watermark(condition_id)
+
+    def _active_order_ids() -> list[str]:
+        return [str(r.order_id) for r in _active_rows()]
+
+    def _cancel(order_ids: list[str]) -> None:
+        wanted = set(map(str, order_ids))
+        rows = [r for r in _active_rows() if str(r.order_id) in wanted]
+        _cancel_orders(client, rows, f"reset {condition_id}")
+
+    def _verify_cancelled() -> bool:
+        # An unreadable book is not an empty book: exception or None reads
+        # as "still resting", which refuses the reset rather than proving it.
+        if not hasattr(client, "get_open_orders"):
+            return False
+        try:
+            raw = client.get_open_orders()
+        except Exception:
+            return False
+        if raw is None:
+            return False
+        venue_ids = {str(o.get("id") or o.get("order_id") or o.get("orderID") or "")
+                     for o in raw if isinstance(o, dict)}
+        known = {str(r.order_id) for r in _active_rows()}
+        return not (known & venue_ids)
+
+    def _reconcile_fills() -> None:
+        try:
+            reconcile_orders(client, registry, maker_address=funder)
+        except (ReconcileInProgress, PermissionError) as exc:
+            raise ExposureUnavailable(
+                f"cannot reconcile before reset: {exc}") from exc
+
+    def _read_balances() -> tuple[float, float]:
+        return fetch_token_balances(funder, up_token_id, down_token_id)
+
+    return ResetPorts(
+        read_inventory=_read_inventory,
+        fill_watermark=_watermark,
+        active_order_ids=_active_order_ids,
+        cancel=_cancel,
+        verify_cancelled=_verify_cancelled,
+        reconcile_fills=_reconcile_fills,
+        read_balances=_read_balances,
+    )
+
+
 def load_condition_exposure(
     client,
     registry: OrderRegistry,
