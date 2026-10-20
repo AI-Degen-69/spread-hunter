@@ -9824,6 +9824,24 @@ function renderScreener(kpi, scanState, status, engineOpts) {
 
   const funnel = kpi?.funnel;
 
+  // Tournament preset pill (#687): the preset the ranker actually scored
+  // under, read from the snapshot funnel -- never the dashboard process's
+  // own environment. Hidden on preset-free runs (absent reads as absent,
+  // not as "default"). Updates every poll, like the pills above.
+  const presetPill = document.getElementById('screener-preset-pill');
+  if (presetPill) {
+    const preset = funnel?.tournament_preset;
+    if (typeof preset === 'string' && preset) {
+      const safe = preset.replace(/[^a-z0-9-]/gi, '').toUpperCase();
+      presetPill.style.display = '';
+      presetPill.className = 'pill state-running mono';
+      presetPill.title = 'Tournament preset the ranker scored under: ' + preset;
+      presetPill.innerHTML = '<span class="pill-value">PRESET ' + safe + '</span>';
+    } else {
+      presetPill.style.display = 'none';
+    }
+  }
+
   if (headerAge) {
     const SCAN_INTERVAL_SEC = scanIntervalSec(status);
     const cycleMin = Math.round(SCAN_INTERVAL_SEC / 60);
@@ -9884,6 +9902,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
     funnel?.raw,
     funnel?.discovery,
     funnel?.gates,
+    funnel?.tournament_preset,
     funnel?.depth_gate_usd,
     funnel?.volume_gate_usd,
     funnel?.trial_volume_usd,

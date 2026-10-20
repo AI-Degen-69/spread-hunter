@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from core_brain import rehearsal   # noqa: E402
+from core_brain.config import resolve_tournament_preset_name  # noqa: E402
 from core_brain.market_resolution import (  # noqa: E402
     extract_uma_resolution_status,
     parse_uma_resolution_status,
@@ -2605,6 +2606,11 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         "reward_min_income_usd_day": 0.0,
         "spread_min_income_usd_day": 0.0,
         "max_pair_cost": _CFG.max_pair_cost,
+        # Which tournament preset this ranker scored under (#687), or None on
+        # a preset-free run. Resolved from the environment at snapshot time --
+        # the same selector the scoring loader applied -- so the dashboard
+        # reports what the ranker actually loaded, not its own environment.
+        "tournament_preset": resolve_tournament_preset_name(),
         "counts": {
             # LEGACY ACCOUNTING ONLY. In the unified universe the reward pool
             # is gone -- `funded` reports the --legacy-rewards path's size and
