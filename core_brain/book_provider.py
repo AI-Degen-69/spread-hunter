@@ -81,6 +81,13 @@ class BookProvider:
         self._lock = threading.Lock()
         self._last_emit_at = 0.0
         self._suppressed = 0
+        # Read provenance, counted rather than last-write-wins. `stats_box`
+        # holds only the latest read, which is enough for a live decide row
+        # and useless for a rehearsal that must state how much of a run priced
+        # off the stream and how much off the REST fallback.
+        self._reads = {BOOK_SOURCE_STREAM: 0, BOOK_SOURCE_REST: 0}
+        self._fallbacks = {REASON_NOT_CONNECTED: 0, REASON_STALE: 0,
+                           REASON_NOT_READY: 0}
 
     # ── reads ──────────────────────────────────────────────────────────
 
@@ -102,6 +109,7 @@ class BookProvider:
         t0 = time.perf_counter()
         stream = self._stream
         source = BOOK_SOURCE_REST
+        reason = None
         if stream is not None:
             try:
                 book = stream.fetch_books(self._clob_host, token_id)
@@ -112,6 +120,9 @@ class BookProvider:
                 book = self._rest_reader(rest_host, token_id)
         else:
             book = self._rest_reader(rest_host, token_id)
+        # Counted after the read, never before it: a REST reader that raises
+        # must not leave the mix claiming a source it never returned.
+        self._count_read(source, reason)
         self._note_stats(token_id, source, (time.perf_counter() - t0) * 1000.0)
         return book
 
@@ -189,6 +200,33 @@ class BookProvider:
         except TypeError:
             return REASON_NOT_READY
         return REASON_NOT_READY
+
+    def _count_read(self, source: str, reason: str | None) -> None:
+        """Add one read to the provenance tally, and one fallback reason.
+
+        Separate from `_note_fallback` on purpose: that one is rate-limited
+        telemetry and does nothing when no emit hook is wired, while this is
+        the record a rehearsal reads back. `read_stats` is the only reader.
+        """
+        with self._lock:
+            self._reads[source] = self._reads.get(source, 0) + 1
+            if reason is not None:
+                self._fallbacks[reason] = self._fallbacks.get(reason, 0) + 1
+
+    def read_stats(self) -> dict:
+        """Where this provider's books came from, as counts.
+
+        `stream` plus `rest` equals the reads served; `fallback` splits the
+        REST reads by why the stream could not serve them. A rehearsal writes
+        this into its heartbeat so a run can never claim stream coverage it
+        did not have.
+        """
+        with self._lock:
+            return {
+                "stream": self._reads.get(BOOK_SOURCE_STREAM, 0),
+                "rest": self._reads.get(BOOK_SOURCE_REST, 0),
+                "fallback": {k: v for k, v in self._fallbacks.items() if v},
+            }
 
     def _note_fallback(self, token_id: str, reason: str, detail: str) -> None:
         """Rate-limited fallback event on the `market_stream` emit hook.

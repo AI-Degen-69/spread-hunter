@@ -178,6 +178,7 @@ store automatically.
 - `--interval` — rotation cadence (default `1.0`; values above 1.0 are clamped)
 - `--db` — required, explicit per-run shadow store (for example, `data/04_shadow_24-09_test.db`); `data/orders.db` is refused
 - `--max-markets N` — cap rotation universe
+- `--no-stream` — read every book over REST instead of the live market socket. The socket is the **default** (#659 N2); this flag exists to reproduce a rehearsal recorded before it. Either way the run's heartbeat carries `book_source_mix` (stream/rest read counts and the fallback reasons), so a stream run can never look like it had coverage it did not
 - `--funder ADDR` — kept for compatibility; it does **not** set the shadow bankroll
 - `--starting-bankroll-usd USD` — override the starting bankroll for this run (`--paired-starting-bankroll-usd` is the old name and still works)
 

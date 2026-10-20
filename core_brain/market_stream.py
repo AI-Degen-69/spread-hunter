@@ -243,6 +243,16 @@ class MarketStream:
         self._last_gaps = 0
         self._frame_errors_at = 0.0
 
+    @property
+    def cache(self):
+        """The book cache this stream feeds.
+
+        A reader that has to wait for tokens to become ready (the subscribe
+        seam) shares this cache rather than keeping its own; exposing it keeps
+        that wiring off `_cache`.
+        """
+        return self._cache
+
     # ── universe ───────────────────────────────────────────────────────────
 
     def ensure_market(self, condition_id, slug, up_token, down_token) -> None:
