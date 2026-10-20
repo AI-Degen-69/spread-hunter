@@ -26,9 +26,9 @@ batching a day's edits.
 
 ## Branches
 
-Never commit straight to `main`. One branch per change, named `<type>/<short-kebab-desc>`
-using the commit type — `fix/pair-completion-sizing`, `feat/live-portfolio-card`,
-`docs/agent-handbook-refresh`.
+Never commit straight to `main`. One branch per change, named `i<number>/<short-kebab-desc>`
+with `<slug>` derived from the issue title — `i705/dashboard-parameter-card-suffix`,
+`i690/apply-spread-bar-at-market-filter`.
 
 ## Pull requests
 
@@ -42,15 +42,15 @@ gh pr create --title "fix(dashboard): anchor portfolio card to database marks" -
   agent. The `[TAG]` placeholder vocabulary was retired 2026-09-22 — CodeRabbit's UI
   auto-title instructions (if still configured) will simply not match; that is expected
   and harmless.
-- **Body: must contain the line `@coderabbitai summary`.** This is the high-level summary
-  placeholder. CodeRabbit replaces that line with a five-bullet plain-English summary. The
-  rest of the body is yours.
+- **Body: `## Why`, `## Test output`, `## How to verify` (see docs/agents/verifying.md),
+  plus a `Closes #<issue>` line.** There is no summary placeholder: the `@coderabbitai
+  summary` body line was dropped 2026-10 (PRs 701–704) — CodeRabbit writes its own summary
+  at review time, and the review is triggered with a separate `@coderabbitai review`
+  comment, not at creation.
 
 Body template:
 
 ````markdown
-@coderabbitai summary
-
 ## Why
 
 One or two sentences. What was wrong, or what was missing.
@@ -70,13 +70,8 @@ full-suite output is not required at the review/PR stations.
 <the same How to verify block given to the operator — see docs/agents/verifying.md>
 ````
 
-After opening, check the PR: if the body still reads `@coderabbitai summary` after a few
-minutes, CodeRabbit did not process it — re-post the line as its own comment rather than
-leaving an unprocessed placeholder.
-
-**These two placeholders are the only permitted uses of the `@coderabbitai` handle at PR
-creation.** They do not trigger a review. The review must be triggered explicitly after the
-PR is opened, as described below.
+After opening, post `@coderabbitai review` as its own comment — that is what triggers the
+review; creating the PR does not.
 
 ## Review by CodeRabbit
 
@@ -91,8 +86,7 @@ would silently override every UI setting.
 
 | Use | Where |
 | --- | --- |
-| `@coderabbitai summary` | one line in the PR **body**, set once at creation |
-| `@coderabbitai review` | its own comment, **only** to answer a "Trigger review" notice |
+| `@coderabbitai review` | its own comment, posted right after the PR opens |
 | `@coderabbitai resolve` | its own comment, closing only replied-to threads |
 
 Every other use is banned, and `full review` is the one that costs real money.
