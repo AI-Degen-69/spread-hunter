@@ -16,7 +16,9 @@ import pytest
 
 from core_brain.pnl_crosscheck import (
     ACTIVITY_PAGE_SIZE,
+    ACTIVITY_TYPES,
     ASC_TYPES,
+    CREDIT_TYPES,
     Replay,
     cross_check,
     format_report,
@@ -60,6 +62,96 @@ def test_platform_credits_are_kept_out_of_trading_cashflow():
     # Assert
     assert trading == pytest.approx(5.0)
     assert credits == pytest.approx(3.0)
+
+
+def test_bare_rebate_is_not_a_known_type():
+    # Arrange — bare REBATE is deliberately absent: the documented /activity
+    # type enum has no bare REBATE value, so the replay must not know it.
+    rows = [_trade("SELL", 5.0), _event("REBATE", 1.0)]
+
+    # Act
+    trading, credits, seen, unreadable = replay_rows(rows)
+
+    # Assert — the row is counted, not guessed, and never credited.
+    assert trading == pytest.approx(5.0)
+    assert credits == 0.0
+    assert seen == 2
+    assert unreadable == 1
+
+
+def test_bare_rebate_with_surrounding_whitespace_is_not_a_known_type():
+    # Arrange — the classifier strips and uppercases, so " rebate " takes
+    # the same path as "REBATE" and must end up equally unknown.
+    rows = [_event(" rebate ", 1.0)]
+
+    # Act
+    trading, credits, seen, unreadable = replay_rows(rows)
+
+    # Assert
+    assert trading == 0.0
+    assert credits == 0.0
+    assert seen == 1
+    assert unreadable == 1
+
+
+def test_bare_rebate_in_feed_makes_replay_incomplete(monkeypatch):
+    # Arrange — a bare REBATE row smuggled inside another type's walk.
+    from core_brain import pnl_crosscheck as pc
+
+    def _get_json(path, params, timeout):
+        return [{"type": "REBATE", "usdcSize": 1.0}]
+
+    monkeypatch.setattr(pc, "_get_json", _get_json)
+
+    # Act
+    replay = replay_cashflow(FUNDER, open_value_fn=lambda: 0.0,
+                             types=("REWARD",))
+
+    # Assert — loud and incomplete, adding nothing to inclusive PnL.
+    assert replay.credits == 0.0
+    assert replay.unreadable_rows == 1
+    assert replay.complete is False
+    assert replay.pnl_inclusive == replay.pnl
+
+
+def test_credit_types_are_all_requested():
+    # Arrange — the subset invariant: every credit type must also be a
+    # requested type, so a credit can never go missing from the cashflow.
+    # Act / Assert
+    assert "REBATE" not in CREDIT_TYPES
+    assert set(CREDIT_TYPES) <= set(ACTIVITY_TYPES)
+
+
+def test_remaining_credit_types_still_count_as_credits():
+    # Arrange — the survivors, positive and negative (absolute-value rule).
+    # Act / Assert
+    for kind in ("MAKER_REBATE", "REWARD", "REFERRAL_REWARD", "CONVERSION"):
+        assert replay_rows([_event(kind, 2.0)]) == (0.0, 2.0, 1, 0)
+        assert replay_rows([_event(kind, -2.0)]) == (0.0, 2.0, 1, 0)
+
+
+def test_default_request_vocabulary(monkeypatch):
+    # Arrange — the replay asks for exactly its documented vocabulary.
+    from core_brain import pnl_crosscheck as pc
+
+    requests: list[dict] = []
+
+    def _get_json(path, params, timeout):
+        requests.append(dict(params))
+        return []
+
+    monkeypatch.setattr(pc, "_get_json", _get_json)
+
+    # Act
+    replay_cashflow(FUNDER, open_value_fn=lambda: 0.0)
+
+    # Assert — literal set, not the production constant, so the decision
+    # is preserved independently of the code under test.
+    requested = [r["type"] for r in requests]
+    assert set(requested) == {"TRADE", "MERGE", "SPLIT", "REDEEM", "REWARD",
+                              "MAKER_REBATE", "REFERRAL_REWARD", "CONVERSION"}
+    assert len(requested) == len(set(requested))
+    assert "REBATE" not in requested
 
 
 def test_a_row_whose_direction_cannot_be_read_is_counted_not_guessed():
