@@ -659,30 +659,6 @@ def test_a_typo_in_the_spread_window_keeps_its_per_path_behaviour(mod, monkeypat
         _spread_window(mod, monkeypatch, "wide", pinned=True)
 
 
-# ============================================================================
-# #706: `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID` is the only accepted name
-# ============================================================================
-
-
-@_BOTH_LOADERS
-@_BOTH_PATHS
-@pytest.mark.parametrize(
-    "ghost", ["HUNTER_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "BOT_QUOTE_BOOK_MAX_SPREAD"],
-    ids=["hunter_prefixed", "missing_from_mid"],
-)
-def test_a_name_that_is_not_the_canonical_one_leaves_the_window_shipped(
-        mod, monkeypatch, pinned, ghost):
-    """#706: an unknown name is inert, never an error and never a fallback.
-
-    The loader cannot tell an operator's stale shell from a typo, and the
-    ticket's own acceptance criterion is that a name it does not publish has
-    zero effect -- so the shipped window stands and nothing is raised.
-    """
-    shipped = 0.15 if mod is core_config else 0.045
-    assert _spread_window(mod, monkeypatch, "40", pinned=pinned, var=ghost) \
-        .max_spread_from_mid == shipped
-
-
 @pytest.mark.parametrize(
     "oldest_var,newer_var,canonical_var,val_raw,warn_text",
     [
@@ -884,3 +860,27 @@ def test_env_example_documents_only_real_canonical_variables():
         if f'"{var}"' not in scoring_src and f'"{var}"' not in core_src
     ]
     assert not unread, f".env.example documents variables no loader reads: {unread}"
+
+
+# ============================================================================
+# #706: `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID` is the only accepted name
+# ============================================================================
+
+
+@_BOTH_LOADERS
+@_BOTH_PATHS
+@pytest.mark.parametrize(
+    "ghost", ["HUNTER_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "BOT_QUOTE_BOOK_MAX_SPREAD"],
+    ids=["hunter_prefixed", "missing_from_mid"],
+)
+def test_a_name_that_is_not_the_canonical_one_leaves_the_window_shipped(
+        mod, monkeypatch, pinned, ghost):
+    """#706: an unknown name is inert, never an error and never a fallback.
+
+    The loader cannot tell an operator's stale shell from a typo, and the
+    ticket's own acceptance criterion is that a name it does not publish has
+    zero effect -- so the shipped window stands and nothing is raised.
+    """
+    shipped = 0.15 if mod is core_config else 0.045
+    assert _spread_window(mod, monkeypatch, "40", pinned=pinned, var=ghost) \
+        .max_spread_from_mid == shipped

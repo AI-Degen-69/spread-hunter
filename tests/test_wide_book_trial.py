@@ -116,9 +116,10 @@ def test_trial_refuses_a_non_number(mod):
 
 
 def _load_with(mod, monkeypatch, **env):
-    # Cleared through BOTH names of every knob the cases below touch. The canonical
-    # `BOT_*` spread name became live on unpinned runs in #690, so leaving it set
-    # here would let the developer's shell decide what a test asserts.
+    # Cleared through every name, canonical and legacy, of each knob the cases
+    # below touch. The spread name became live on unpinned runs in #690, so
+    # leaving it set here would let the developer's shell decide what a test
+    # asserts.
     for name in ("HUNTER_MARKET", "BOT_MARKET_PINNED_CONDITION_ID",
                  "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
                  "HUNTER_WIDE_BOOK_TRIAL", "BOT_QUOTE_WIDE_BOOK_TRIAL"):
