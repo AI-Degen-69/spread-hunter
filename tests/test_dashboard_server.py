@@ -3282,6 +3282,23 @@ def test_max_spread_from_mid_card_shows_configured_value_exactly(client, monkeyp
     assert card["default"] == "$0.15"
 
 
+def test_no_parameter_card_value_restates_the_default_in_another_unit(client):
+    """#705 class guard: no card may append a hardcoded "unit restatement" suffix.
+
+    The regression above pins one card; this additionally rejects every member
+    of the class — a suffix in cents (`(15¢)`) or a millisecond/hour restatement
+    (`(30m)`, `(2h)`) after the value. Literals that carry information the bare
+    number does not, like `0.50 (50% of spread)` or `False (Telemetry Only)`,
+    do not match and stay legal.
+    """
+    data = client.get("/api/parameters").json()
+    offenders = [
+        p["key"] for p in data["parameters"]
+        if re.search(r" \([^)]*¢\)$", p["value"]) or re.search(r" \d+(?:\.\d+)?[mh]\)$", p["value"])
+    ]
+    assert offenders == [], f"cards still restating their default: {offenders}"
+
+
 def test_parameters_endpoint_emits_no_deprecation_warnings(client):
     """Verify that calling /api/parameters emits zero DeprecationWarning from dashboard/server.py (#672)."""
     import warnings

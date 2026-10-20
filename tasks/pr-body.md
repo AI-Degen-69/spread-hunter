@@ -42,5 +42,5 @@ O1 in `docs/issues/705-noticed-but-not-touching.md`.
      a suffix (e.g. `(6¢)`, `(30m)`) hanging off other cards it does not match —
      e.g. set `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID=20`, restart only the
      dashboard, and the card must read `$0.20`, never `$0.20 (15¢)`.
-4. Sanity: the "Price Offset Multiplier" card should still read `0.50 (50% of
-   spread)` — that literal is information, not a restatement.
+4. Sanity: the "Half-Spread Offset Multiplier" card should still read `0.50 (50%
+   of spread)` — that literal is information, not a restatement.
