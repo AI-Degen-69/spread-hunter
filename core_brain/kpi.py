@@ -829,6 +829,7 @@ def _funnel_from_pipeline(
         "reward_min_income_usd_day": snap.get("reward_min_income_usd_day"),
         "spread_min_income_usd_day": snap.get("spread_min_income_usd_day"),
         "max_pair_cost": snap.get("max_pair_cost"),
+        "tournament_preset": snap.get("tournament_preset"),
     }
 
 
