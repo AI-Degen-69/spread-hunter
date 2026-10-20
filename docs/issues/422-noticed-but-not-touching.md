@@ -1,5 +1,0 @@
-# 422 — noticed but not touching
-
-| ID | candidate (one line) | discovering station | evidence (path:line) | status | resolution |
-|----|----------------------|---------------------|----------------------|--------|------------|
-| N1 | An explicit `--starting-bankroll-usd` replaces only `bankroll_usd`, so an environment-derived `max_committed_usd` / `allocation_budget` can stay stale and the committed-capital gate can disagree with the bankroll the run reports | IV | bankroll pin in `core_brain/shadow_run.py`; `core_brain/config.py:1527-1528`; committed-cap gate at `core_brain/quotes.py:455-461` | dismissed | Dismissed per operator confirmation: all active risk gates (order 25%, naked 6%, total ceiling 90%) scale dynamically in `derive_dynamic_caps(cfg, portfolio_usd)` with live portfolio mark on every cycle. Static `max_committed_usd` (default $1000) is inert at small bankrolls where the 90% dynamic ceiling catches first, and re-deriving it in shadow runs would break pilot baselines. |
