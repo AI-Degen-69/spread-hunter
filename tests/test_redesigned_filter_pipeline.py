@@ -20,6 +20,7 @@ from unittest.mock import patch
 import pytest
 
 import scripts.filter_markets as fm
+from scoring import config as scoring_config
 from scripts.filter_markets import _cause
 
 
@@ -308,6 +309,74 @@ def test_spread_edge_precedes_thin_depth_failure():
     assert result["eligible"] is False
     assert result["reject_reason"] == "YES: spread 0.0400 > 0.0200"
     assert _cause(result["reject_reason"]) == "YES spread"
+
+
+def test_the_shipped_two_point_zero_five_cent_bar_rejects_a_fifty_fifty_three_book():
+    """#690: the issue's own example, on the bar the ranker actually ships.
+
+    0.50 / 0.53 is three cents wide. The ceiling is `filter_common_spread_max_cents`
+    (2.05c), derived from `max_book_spread * select_spread_pct` -- NOT
+    `max_spread_from_mid`, which measures distance from mid and is never read here.
+    No `max_spread` argument is passed: that is the shipped bar, not an override.
+    """
+    assert fm.MAX_BOOK_SPREAD == 0.0205
+
+    now_ts = time.time()
+    now_iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
+    cid = "0xfiftyfiftythree"
+    cand = _candidate(cid)
+
+    yes_book, no_book = _books(0.50, 0.53, depth_usd=2400.0)
+    session = _FakeSession(
+        trades=_active_tape(now_ts),
+        books_by_token={f"{cid}-yes": yes_book, f"{cid}-no": no_book},
+    )
+
+    result = fm.evaluate(
+        session, rate=50.0, m=cand, volume_24h=cand["_volume_24h"],
+        source="spread", velocity_gate_enabled=True, now_iso=now_iso,
+    )
+
+    assert result["eligible"] is False
+    assert result["reject_reason"] == "YES: spread 0.0300 > 0.0205"
+    assert _cause(result["reject_reason"]) == "YES spread"
+
+
+def test_a_wide_quote_window_never_widens_the_book_gate(monkeypatch):
+    """#690: the two spread settings stay separate.
+
+    The quote window can be set to 50c and the book gate must still refuse a 3c
+    book for the same reason. `MAX_BOOK_SPREAD` is a module constant, so the
+    config assertions are the load-bearing half of this test: they fail the moment
+    the ceiling is derived from `max_spread_from_mid`.
+    """
+    monkeypatch.delenv("BOT_MARKET_PINNED_CONDITION_ID", raising=False)
+    monkeypatch.delenv("HUNTER_MARKET", raising=False)
+    monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "50")
+
+    cfg = scoring_config.load()
+    assert cfg.max_spread_from_mid == 0.50
+    assert cfg.filter_common_spread_max_cents == 0.0205
+    assert fm.MAX_BOOK_SPREAD == fm._CFG.filter_common_spread_max_cents == 0.0205
+
+    now_ts = time.time()
+    now_iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
+    cid = "0xwidewindow"
+    cand = _candidate(cid)
+
+    yes_book, no_book = _books(0.50, 0.53, depth_usd=2400.0)
+    session = _FakeSession(
+        trades=_active_tape(now_ts),
+        books_by_token={f"{cid}-yes": yes_book, f"{cid}-no": no_book},
+    )
+
+    result = fm.evaluate(
+        session, rate=50.0, m=cand, volume_24h=cand["_volume_24h"],
+        source="spread", velocity_gate_enabled=True, now_iso=now_iso,
+    )
+
+    assert result["eligible"] is False
+    assert result["reject_reason"] == "YES: spread 0.0300 > 0.0205"
 
 
 # ==============================================================================

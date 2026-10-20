@@ -1,13 +1,21 @@
-# Todo Tasks: Issue #698 (absorbing #693)
+# Todo Tasks: Issue #690 (#674 follow-up N2)
 
-- [x] Task 1: Update launcher interval default to `MAX_ROTATION_INTERVAL_SEC` and add interval tests
-  - [x] 1.1 Import `MAX_ROTATION_INTERVAL_SEC` in `scripts/shadow_tournament.py` and update function & CLI defaults
-  - [x] 1.2 Add tests in `tests/test_shadow_tournament.py` for default interval and warning-free parsing
-- [x] Task 2: Blueprint Modernization & Docstring Sweep
-  - [x] 2.1 Update blueprint table, commands, and `.env` block in `scripts/tournament_cockpit_server.py`
-  - [x] 2.2 Reword docstring in `scripts/grace_sweep_report.py:3`
-  - [x] 2.3 Reword comment in `core_brain/statistical_analytics.py:119-124`
-  - [x] 2.4 Add test for cockpit HTML blueprint tab assertions in `tests/test_shadow_tournament.py`
-- [x] Task 3: Regression Verification & Operator Steps
-  - [x] 3.1 Run targeted test suites (`test_shadow_tournament.py`, `test_rotation_interval_cap.py`, `test_tournament_cockpit_funnel.py`)
-  - [x] 3.2 Formulate zero-risk hands-on operator verification guide
+- [x] Task 1: Lift the `max_spread_from_mid` read out of the pinned branch (`scoring/config.py`)
+  - [x] 1.1 Hoist the `_env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD")` call above the wide-book trial block
+  - [x] 1.2 Keep the pinned parse strict (`float(v) / 100.0`); add the unpinned tolerant parse mirroring `core_brain/config.py:636-642`
+  - [x] 1.3 Keep the `HUNTER_MAX_SPREAD` deprecation warning once per load on both paths
+  - [x] 1.4 Comment the deliberate scoring-vs-engine default split (0.045 vs 0.15) without changing it
+- [x] Task 2: Loader-parity and trial matrix tests
+  - [x] 2.1 `tests/test_config_single_source.py`: unpinned matrix (canonical, both legacy names, precedence, blank fallback 0.045, malformed, zero, negative)
+  - [x] 2.2 `tests/test_config_single_source.py`: parity against `core_brain.config.load()` under one unpinned env
+  - [x] 2.3 `tests/test_wide_book_trial.py`: unpinned override + active trial → `max(window, wide)` both directions
+  - [x] 2.4 `tests/test_wide_book_trial.py`: widen `_load_with`'s cleared-var list to include the canonical and `HUNTER_MAX_SPREAD_CENTS` names
+- [x] Task 3: Ranker rejection proof, reason path, stale comments
+  - [x] 3.1 `tests/test_redesigned_filter_pipeline.py`: 50/53 with no `max_spread` override → `YES: spread 0.0300 > 0.0205`, `_cause` == `YES spread`
+  - [x] 3.2 Same file: unpinned `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID=50` still rejects identically
+  - [x] 3.3 `tests/test_dashboard_server.py` (or `core_brain/kpi.py` test): reason survives at `funnel.filters[].examples[].reason`
+  - [x] 3.4 `scripts/filter_markets.py`: note at `MAX_BOOK_SPREAD` that the ceiling is not `max_spread_from_mid`; drop the stale reward-width clause at 766-768
+- [x] Task 4: Ledger and guards
+  - [x] 4.1 Mark N2 `fixed #690` in `docs/issues/674-noticed-but-not-touching.md`
+  - [x] 4.2 Land `docs/issues/690-noticed-but-not-touching.md`
+- [x] Task 5: Report — targeted checks run, plus a hands-on-only "How to verify" block

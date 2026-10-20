@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from core_brain import config as core_config
 from core_brain.config import MakerConfig as CoreMakerConfig
 from scoring import config as scoring_config
 from scoring.config import MakerConfig as ScoringMakerConfig
@@ -505,6 +506,96 @@ def test_execution_coupling_overrides(monkeypatch):
     monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
     cfg = scoring_config.load()
     assert cfg.max_spread_from_mid == 0.20
+
+
+# ============================================================================
+# #690: the spread window is read on EVERY run, pinned or not (N2 of #674)
+# ============================================================================
+
+
+def test_unpinned_runs_read_the_spread_window_from_the_environment(monkeypatch):
+    """#690: without a pin the picker reads the same override the engine does.
+
+    The whole read used to live inside `if cid:`, so an unpinned ranker run kept
+    the picker's 4.5c default while the engine honoured the operator's setting.
+    """
+    _clear_execution_env(monkeypatch)
+
+    # Nothing set: the picker's own shipped window (4.5c), never core's 15c.
+    assert scoring_config.load().max_spread_from_mid == 0.045
+
+    monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "25")
+    assert scoring_config.load().max_spread_from_mid == 0.25
+
+    monkeypatch.delenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
+    monkeypatch.setenv("HUNTER_MAX_SPREAD_CENTS", "20")
+    assert scoring_config.load().max_spread_from_mid == 0.20
+
+    monkeypatch.delenv("HUNTER_MAX_SPREAD_CENTS")
+    monkeypatch.setenv("HUNTER_MAX_SPREAD", "20")
+    assert scoring_config.load().max_spread_from_mid == 0.20
+
+    # Canonical wins over both legacy names when all three are present.
+    monkeypatch.setenv("HUNTER_MAX_SPREAD_CENTS", "20")
+    monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "25")
+    assert scoring_config.load().max_spread_from_mid == 0.25
+
+
+def test_unpinned_bad_spread_values_are_inactive_not_enforced(monkeypatch):
+    """#690: garbage, zero and negatives fall back to the default -- they do not raise.
+
+    The pinned branch stays strict and raises; this is the engine's tolerant rule,
+    adopted for unpinned runs so a ranker that starts cleanly today cannot start
+    crashing on a typo. A blank name counts as unset.
+    """
+    _clear_execution_env(monkeypatch)
+    for raw in ("", "wide", "0", "-5"):
+        monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", raw)
+        assert scoring_config.load().max_spread_from_mid == 0.045, raw
+
+
+def test_unpinned_legacy_spread_warns_once(monkeypatch, caplog):
+    """#690: the #632 warning now reaches unpinned runs, once, with the same text."""
+    import logging
+
+    _clear_execution_env(monkeypatch)
+    monkeypatch.setenv("HUNTER_MAX_SPREAD", "20")
+
+    with caplog.at_level(logging.WARNING):
+        cfg = scoring_config.load()
+
+    assert cfg.max_spread_from_mid == 0.20
+    warnings = [r.getMessage() for r in caplog.records
+                if "HUNTER_MAX_SPREAD is deprecated" in r.getMessage()]
+    assert warnings == [
+        "HUNTER_MAX_SPREAD is deprecated (#632); set BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID instead."
+    ]
+
+
+def test_unpinned_scoring_and_engine_load_the_same_window(monkeypatch):
+    """#690: parity with `core_brain.config.load()`, including its quirks.
+
+    `inf` is in the matrix on purpose: the engine's tolerant read applies any
+    `cents > 0`, and `inf` passes. Scoring mirrors that instead of inventing a
+    stricter rule the money path does not follow. An unusable value is inactive on
+    both sides, so each keeps its own default -- the assertion there is
+    "unchanged", not "equal", because the two defaults differ by design.
+    """
+    _clear_execution_env(monkeypatch)
+
+    for raw in ("22", "7.5"):
+        monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", raw)
+        expected = float(raw) / 100.0
+        assert scoring_config.load().max_spread_from_mid == pytest.approx(expected)
+        assert core_config.load().max_spread_from_mid == pytest.approx(expected)
+
+    monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "wide")
+    assert scoring_config.load().max_spread_from_mid == 0.045
+    assert core_config.load().max_spread_from_mid == 0.15
+
+    monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "inf")
+    assert scoring_config.load().max_spread_from_mid == float("inf")
+    assert core_config.load().max_spread_from_mid == float("inf")
 
 
 @pytest.mark.parametrize(

@@ -3346,3 +3346,55 @@ def test_parameters_cards_canonical_env_var_badges(client):
             assert f"{env_var}=" in env_example_text or env_var in env_example_text, (
                 f"Badge '{env_var}' on card '{key}' not documented in .env.example"
             )
+
+
+# ==============================================================================
+# #690: the spread rejection reason survives the screener -> /api/kpi hop
+# ==============================================================================
+
+def test_kpi_funnel_keeps_the_full_spread_rejection_reason(client, monkeypatch, tmp_path):
+    """#690: the operator sees *why* a wide book was dropped, verbatim.
+
+    The dashboard's spread column is picked by `categorizeGate(cause)` and the
+    example text comes from `examples[].reason`. Both are read from the snapshot
+    `_funnel_from_pipeline` parses and returned across GET /api/kpi, so this pins
+    both the funnel parser and route-level serialization.
+    """
+    from core_brain.kpi import _funnel_from_pipeline
+
+    reason = "YES: spread 0.0300 > 0.0205"
+    snap = {
+        "ts": time.time(),
+        "counts": {"spread_universe": 12, "eligible": 0},
+        "rejections": [
+            {
+                "cause": "YES spread",
+                "n": 1,
+                "would_fund": 0,
+                "traps": 0,
+                "examples": [
+                    {"title": "Will it happen?", "slug": "will-it-happen", "reason": reason},
+                ],
+            }
+        ],
+    }
+    pipeline = tmp_path / "pipeline.json"
+    pipeline.write_text(json.dumps(snap), encoding="utf-8")
+
+    funnel = _funnel_from_pipeline(
+        {}, pipeline_path=pipeline, markets_path=tmp_path / "markets.json",
+    )
+
+    assert funnel is not None
+    assert funnel["filters"][0]["cause"] == "YES spread"
+    assert funnel["filters"][0]["examples"][0]["reason"] == reason
+
+    # Route-level check: GET /api/kpi preserves the funnel filters and example reason verbatim.
+    monkeypatch.setattr("core_brain.kpi._is_pipeline_shadow_db", lambda _path: True)
+    monkeypatch.setattr("core_brain.kpi._funnel_from_pipeline", lambda *args, **kwargs: funnel)
+    res = client.get("/api/kpi")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload.get("funnel") is not None
+    assert payload["funnel"]["filters"][0]["cause"] == "YES spread"
+    assert payload["funnel"]["filters"][0]["examples"][0]["reason"] == reason

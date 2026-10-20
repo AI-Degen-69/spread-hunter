@@ -96,6 +96,10 @@ MIN_VOLUME_24H_LIVE = _CFG.filter_live_vol_min_24h_usd
 MOVEMENT_WINDOW_SEC = _CFG.filter_live_vel_lookback_sec
 MIN_MOVEMENT_USD = _CFG.filter_live_vel_min_usd
 TRADES_API = "https://data-api.polymarket.com/trades"
+# The book gate: a bid-ask WIDTH, derived from `max_book_spread *
+# select_spread_pct` (2.05c, #572). NOT `max_spread_from_mid`, which is the
+# distance from mid we allow a resting quote to sit at -- a different
+# measurement, read only by the quoting code and never by this ranker (#690).
 MAX_BOOK_SPREAD = _CFG.filter_common_spread_max_cents
 MIN_RANGE_CENTS = _CFG.filter_live_move_min_range_cents
 VOLATILITY_WINDOW_SEC = _CFG.filter_live_move_lookback_sec
@@ -764,8 +768,8 @@ def gamma_universe(session: requests.Session,
     markets, 48 tape prints in 11.6 hours, nine of them never traded at all.
     The distinction is gone: discovery is Gamma `/markets` ordered by 24h
     volume, and reward state is NOT a filter -- `clobRewards` rows are scored
-    on the same spread terms as everything else (their reward config still
-    feeds the score-window width, nothing else).
+    on the same spread terms as everything else. Nothing in this module reads a
+    market's reward config; the score is spread and movement, full stop (#681).
 
     The end-date range is likewise no longer a discovery parameter: long-dated
     markets are fetched, then refused auditably by the horizon gate in
