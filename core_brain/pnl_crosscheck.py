@@ -6,8 +6,10 @@ with every other number, and all of them would be wrong. The only check worth
 having is one that does not read the registry at all.
 
 This replays the wallet's cashflow from the venue's activity feed — every BUY,
-SELL, MERGE, SPLIT, REDEEM and rebate — adds the current mark on what is still
-open, and reports the gap against the registry's own figure.
+SELL, MERGE, SPLIT, REDEEM and venue credit — adds the current mark on what is still
+open, and reports the gap against the registry's own figure. Venue credits (rebates,
+rewards, referrals) are money the venue actually paid, so the replay keeps them apart
+from the trading cashflow they are not: `credits` is reported on its own line.
 
 Three things it refuses to do, because each one turns a check into a rubber
 stamp:
@@ -22,6 +24,11 @@ stamp:
 * **Present a truncated walk as a total.** The activity feed repeats rather than
   ending past its offset ceiling, so a walk that hits the cap is reported
   incomplete, per type, and the verdict says so.
+
+`cross_check()` takes an optional `maker_rebates` adjustment: the expected gap is
+`taker fees − maker rebates`, so a caller that knows what the venue paid can hand
+that figure over. The command-line tool does not pass it today — not even with
+`--inclusive` — so a CLI run reports the gap without that adjustment.
 
 Read-only. No signer, no writes, nothing that can reach an order.
 """
