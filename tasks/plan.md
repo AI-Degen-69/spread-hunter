@@ -1,163 +1,135 @@
-Branch: i717/remove-retired-reward-vocabulary | Issue: #717
+Branch: i687/ranker-tournament-preset | Issue: #687
 
-# Plan — #717 Remove the retired reward vocabulary from the quoting engine
+# Plan — #687 ranker tournament preset (N3 from #674)
 
-- Size: **Small** — one function deleted, four visible strings reworded, four test pins
-  re-pointed, plus the comment/docstring sweep the acceptance search forces. No logic, no
-  new module, no new dependency.
-- Task type: **Code** (wording + dead-code removal on the money path) + **Docs**
-  (operator-facing prose that names the retired model).
-- Labels: `ready-for-agent` only — no `quick-fix` label, so no lane divert (Step 0C skipped
-  per rule 1).
-- Base: `origin/main` @ `4e12ce6` (HEAD == `origin/main` at branch time; `main` itself is
-  checked out in another worktree, so the branch was cut from the same SHA instead of
-  switching).
+## Size tier & task type
 
-## CodeRabbit plan intake (read once, verified against the tree)
+- **Tier: Standard** — 4–6 files (core_brain/config.py, scoring/config.py,
+  scripts/filter_markets.py snapshot, dashboard server + JS, tests), one
+  architectural decision (where preset lives + precedence rule).
+- **Task type: Code + UX / Copy** — loader logic plus the visible "preset
+  loaded" pill on the screener board.
 
-- **Adopted:** the wording map (distance refusal → "quote window"; truncation refusal →
-  "quote window truncated"; price-risk refusal → "venue minimum"; success reason →
-  "quote {distance}c under mid {mid}" with the waiver and dynamic-offset suffixes kept);
-  "venue minimum" over "quote minimum" because the same output already says "venue floor"
-  and "venue minimum"; dropping the stale "4.5c" figure from `unhedged_stop_loss.py` (the
-  shipped engine window default is 0.15, so a plain word swap would write a new false
-  claim); the 3-task shape; the "re-point, never delete" rule for the test pins; the
-  four-command acceptance proof.
-- **Rejected:** CodeRabbit's optional phase (an added assertion, a document sync, a
-  shadow-only operator check). The document sync is folded into T3 anyway, because
-  `docs/agents/strategy.md:83` names `quotes.reward_score()` and that sentence becomes
-  false the moment the function is deleted. The added assertion and the shadow check are
-  not requested by the issue and are skipped.
-- **Verified seams (all exist verbatim, read in this session):** `reward_score()` at
-  `core_brain/quotes.py:108` (def at 108, docstring 109-119, body 120-122); the call site
-  at `core_brain/quotes.py:574`; the distance refusal at `:511-513`; the truncation refusal
-  at `:559-562`; the price-risk refusal at `:563-566`; the success reason at `:572-576`;
-  the ZERO ALLOCATION comment at `:342-353`; `risk.size_for` at `core_brain/risk.py:87` with
-  the `quote_shares <= 0` guard at `:123-124` **before** the sizing-mode branch, so the
-  guard holds in shares mode *and* dollars mode; `market_lifecycle.LifecycleStop` markers
-  (`core_brain/market_lifecycle.py:26-36`) — none of them contains "reward", "quote" or
-  "window", so no reworded string can accidentally match a terminal stop;
-  the four pins at `tests/test_trader_loop.py:1517-1518`, `:1530-1531`, `:3198-3199` and
-  `tests/test_shadow_run.py:1652-1653`.
-- **`[UNVERIFIED]` from code:** none left open. CodeRabbit's claim that the venue's
-  "rewardsMinSize is 50" floor is what `min_quote_shares` came from was checked against
-  `core_brain/risk.py:109-112` — that docstring still carries the retired rationale and is
-  recorded as an out-of-scope row, not edited here.
+## Issue summary
 
-## Spec (embedded — Small tier, no SPEC.md)
+`BOT_QUOTE_TOURNAMENT_PRESET` (`core_brain/config.py:577`) reaches the engine
+only. Scoring has no preset knob, so a preset-run ranker scores with default
+bars instead of preset-specific ones, and the UI shows nothing about a preset.
 
-- **Goal:** the quoting engine stops speaking a retired liquidity-reward model, and the
-  operator-visible strings say what they actually measure.
-- **The strings, old → new (numbers unchanged, order unchanged, suffixes unchanged):**
+## CodeRabbit plan intake (1 comment, read once — echo ignored)
 
-  | Site | Old | New |
-  |---|---|---|
-  | distance refusal (`quotes.py:513`) | `"{side}: {d}c from mid > {w}c reward window"` | `"{side}: {d}c from mid > {w}c quote window"` |
-  | truncation refusal (`quotes.py:560`) | `"{side}: reward window truncated the quote to {p}% of the distance asked for, cutting {ladder}sh under the {min}sh minimum"` | `"{side}: quote window truncated the quote to {p}% of the distance asked for, cutting {ladder}sh under the {min}sh minimum"` |
-  | price-risk refusal (`quotes.py:566`) | `"{side}: price risk at {price} cut {ladder}sh to under the {min}sh reward minimum"` | `"{side}: price risk at {price} cut {ladder}sh to under the {min}sh venue minimum"` |
-  | success reason (`quotes.py:573-576`) | `"reward quote {d}c under mid {mid}, score {N}{waived}{dyn_note}"` | `"quote {d}c under mid {mid}{waived}{dyn_note}"` |
+- **Adopted:** shared preset-name resolver in core (canonical
+  `BOT_QUOTE_TOURNAMENT_PRESET` → legacy `HUNTER_TOURNAMENT_PRESET`, trim +
+  lowercase, blank → None, unknown → existing `ValueError` text);
+  `SCREENER_PRESETS` registry in `core_brain/config.py` (same six names as
+  `TOURNAMENT_PRESETS`); scoring `load()` precedence defaults → preset →
+  explicit env; ranker publishes loaded preset in `pipeline.json` → KPI
+  funnel → dashboard pill; tournament shared filter stays preset-free.
+- **Rejected:** inventing a conservative→aggressive tightness scale for
+  screener bars — the ticket says the screener needs "its own defaults to
+  pick", and no product decision ties preset names to tighter/looser bars.
+- **[UNVERIFIED]:** the plan's claim that `baseline` should copy
+  "loose-baseline screener values" (`filter_live_activity_min_ratio` + lowered
+  `filter_std_vol_min_24h_usd`) from "existing wiring + run record".
+  Verified against the code: shipped defaults are `0.0` / `125_000.0`
+  (`core_brain/config.py:314,317`); no env wiring or run record
+  (`docs/runs/2026-10-14-loose-baseline-i569.md`) documents preset-specific
+  screener numbers. Task 2 resolves this by starting `baseline` with shipped
+  bars and flagging the numbers as an operator product decision.
+- Cost record: skeleton + seams borrowed (registry location, resolver sharing,
+  snapshot reporting path); all cited paths spot-checked; task list merged
+  from CodeRabbit's 4+ phases into 7 atomic tasks below.
 
-- **Dead code:** `reward_score()` and its docstring are deleted. The function had exactly one
-  caller (the score figure in the success reason) and fed no sizing decision.
-- **Stale comment:** the ZERO ALLOCATION comment stops crediting `reallocate`, a function
-  that exists nowhere in the tree, and stops crediting the retired `U4` milestone. It keeps
-  the headline, states today's fact (a nonpositive `quote_shares` is an explicit no-quote
-  signal, and `risk.size_for` returns 0 for it in every sizing mode so a 0 can never be
-  promoted to a minimum-size order), and keeps one line of the past incident.
-- **Edge cases:**
-  - The refusal classifier must keep its verdict: no reworded string contains a
-    `LifecycleStop` marker, so every one of them stays transient.
-  - The waiver suffix (`", price-risk taper x… waived: …sh is under the {min}sh venue
-    floor"`) is asserted verbatim by `tests/test_live_quotes.py:159-160` and must not move.
-  - The couple-allocation refusal (`"… below the venue minimum of {min}sh"`) is asserted
-    verbatim by `tests/test_live_quotes.py:177` and must not move.
-  - The `"clamped"` note is appended later, in `_require_two_sided`
-    (`core_brain/quotes.py:929`), and is asserted by `tests/test_live_quotes.py:295`.
-  - The zero-allocation refusal text (`"unfunded by the allocator -- quoting nothing"`) is
-    a `LifecycleStop` marker and must not move.
-- **Out of scope:** the KPI / PnL cross-check / venue-fee contracts, the `rebate_est`
-  schema, any default, env var name, price, size, gate or message on the money path, the
-  `reward_offset` family of config key names, the venue's own `rewards` payload fields, and
-  the #708 ledger's history rows.
+## Open questions — resolved from code
 
-## Interface contracts (frozen before build)
+1. *Where do preset-specific screener numbers come from?* Nowhere in the
+   repo — no wiring, no run record. Resolution: ship the mechanism with
+   shipped bars; numbers are opt-in operator input, not invented.
+2. *Does the scoring class body accept new fields?* No —
+   `tests/test_config_divergence_guard.py` fails on any new declaration.
+   Resolution: registry + resolver live in `core_brain/config.py`; scoring
+   `load()` only merges into `kw`.
+3. *Which UI surface shows the preset?* The screener board (Market Filter
+   tab, funnel from `/api/kpi`) — pill reads the ranker's published value,
+   never the dashboard process env.
+4. *#674 ledger N3 closeout?* No `docs/issues/674*` ledger exists in the
+   repo (closed-issue artifacts were pruned). Nothing to close here; noted
+   so Station VI does not chase a missing file.
 
-- `core_brain.quotes` **loses** the name `reward_score`. Every other public name in the
-  module stays: `mid_price`, `dynamic_offset_for`, `quote_resting_price`, `decide_quotes`,
-  `QuoteIntent`, `pair_cost_over_cap`, `max_profitable_hedge_bid`.
-- `QuoteIntent.reason` stays a `str` and stays a free-text operator-facing sentence. Its
-  shape changes only by the removal of the `"reward quote …, score N"` prefix.
-- `decide_quotes(...)` keeps its signature, its return shape and every refusal string that
-  is not listed in the spec table above — byte-identical.
-- `risk.size_for(...)` keeps its signature and its `quote_shares <= 0 → 0` guard.
-- `market_lifecycle.classify_refusal(...)` keeps its signature and its marker table.
+## Spec (embedded — Small ceremony for a registry + precedence change)
 
-## Improvement proposal (adopt-by-default, hardening)
+**Goals:** preset toggle covers the ranker; preset-off runs are byte-identical
+to today; the screener board shows which preset the ranker loaded.
 
-- **Proposal:** add one guard test that asserts the retired vocabulary stays out of the
-  code tree, so a future string cannot reintroduce it silently.
-- **Evidence (issue Acceptance criteria, verbatim):** "`git grep -n \"reward window\\|reward
-  quote\\|reward minimum\" -- core_brain/ tests/` returns nothing." A grep the agent runs
-  once at review time proves the ticket; a test in the suite proves it forever.
-- **Classification:** simplification / drift prevention, no behaviour change, no new
-  production code. Adopt-by-default into T2.
+**Acceptance:**
+- Preset-on ranker scores with preset bars (observable via effective config
+  + `pipeline.json` preset field).
+- Preset-off run is unchanged (no selector → defaults, today's numbers).
+- UI flag visible on the screener board when a preset is loaded; absent (not
+  "default") when none is.
+- Engine behavior and error text unchanged; `baseline` keeps the 0.045 picker
+  window (no `PICKER_PROFILE` field in any preset).
 
-## Dependency graph & tasks (risk-first, 3 tasks)
+**Out of scope:** new screener bar numbers beyond shipped defaults (operator
+decision); touching the tournament shared filter (stays preset-free by
+design); any live/opening command; any write to `data/orders.db`.
 
-T1 (the money path) unblocks T2 (the sweep + the guard) unblocks T3 (the docs).
+## Improvement proposal (adopted by default — hardening, not scope)
 
-- [x] **T1 (S) [Backend/Logic]** — Reword the four visible strings in `core_brain/quotes.py`,
-  delete `reward_score()` and its call site, and rewrite the ZERO ALLOCATION comment so it
-  names no function that does not exist.
-  Targets: `core_brain/quotes.py` only.
-  Depends on: —. Skill: `test-driven-development` (existing pins), `code-simplification`.
-  Verify: `python -m pytest -q tests/test_quotes.py tests/test_live_quotes.py
-  tests/test_legacy_ask_quotes.py tests/test_dynamic_offset.py
-  tests/test_completable_pair_gate.py tests/test_market_quote.py`
-  plus `python -c "import core_brain.quotes as q; assert not hasattr(q, 'reward_score')"`.
-- [x] **T2 (S) [Backend/Logic]** — Clear every remaining acceptance-search hit in
-  `core_brain/` and `tests/`, re-point the four transient-refusal pins, and add the
-  vocabulary guard test.
-  Targets: `core_brain/risk.py:280`, `core_brain/trader_loop.py:118`,
-  `core_brain/unhedged_stop_loss.py:8,106`, `core_brain/config.py:921` (the "15c score
-  window" preset description), `tests/test_trader_loop.py:1517-1518,1530-1531,3198-3199`,
-  `tests/test_shadow_run.py:1652-1653`, `tests/test_rewards_purge.py:132`,
-  `tests/test_unified_universe.py:333`, and a new guard in `tests/test_quotes.py`.
-  Depends on: T1. Skill: `test-driven-development`, `incremental-implementation`.
-  Verify: `python -m pytest -q tests/test_trader_loop.py tests/test_shadow_run.py
-  tests/test_live_quotes.py tests/test_quotes.py tests/test_risk.py
-  tests/test_wide_book_trial.py tests/test_rewards_purge.py
-  tests/test_unified_universe.py` + the acceptance greps.
-- [x] **T3 (S) [Docs]** — Drop the retired vocabulary from the operator-facing prose the
-  change makes false, and record the out-of-scope findings in the ledger.
-  Targets: `docs/agents/strategy.md:83` (names `quotes.reward_score()` — false once T1
-  lands), `scripts/book_tape_recorder.py:22`, `docs/explanations/grace-hold-explainer.html`
-  (×2, mirrors `trader_loop.py:118`),
-  `docs/explanations/prudent_profile_and_strategy_guide.html` (the Hebrew "Reward Window
-  … Liquidity Rewards" claim), `docs/issues/717-noticed-but-not-touching.md` (new ledger).
-  Depends on: T1, T2. Skill: `documentation-and-adrs`, `humanizer`.
-  Verify: the acceptance greps stay empty, `python -m pytest -q tests/test_docs_layout.py`
-  passes, and the whole-repo case-insensitive grep is reviewed by hand.
+> Exclude all five `PICKER_PROFILE` fields from every `SCREENER_PRESETS`
+> entry — in particular `max_spread_from_mid`, which the engine `baseline`
+> preset sets to 0.15 (a quoting-window field, not a screener bar) and which
+> would clobber the picker's deliberate 0.045 window.
+> Evidence, verbatim: `scoring/config.py:65`
+> `max_spread_from_mid: float = PICKER_PROFILE["max_spread_from_mid"]` and
+> CodeRabbit Task 2 "Do not put the picker's five `PICKER_PROFILE` fields in
+> any preset. In particular, keep the 0.045 window." A registry test pins it.
+
+## Dependency graph & task order (risk-first)
+
+- T1 (resolver + engine refactor) → T2 (registry) → T3 (scoring load) →
+  T4 (snapshot + funnel) → T5 (UI pill) → T6 (menu passthrough verify) →
+  T7 (tests pin both paths).
+- T1 is riskiest (shared loader both paths use) → runs first. T2's
+  baseline-numbers question is decided above, so T2 is S.
+
+## Tasks
+
+- [x] **T1 [Backend/Logic] (M)** — Shared preset resolver in
+  `core_brain/config.py`; `MakerConfig.from_env()` (~L574-585) calls it.
+  Target: `core_brain/config.py`. Skill: test-driven-development.
+  Depends on: —. Verify: `tests/test_dynamic_offset.py` unchanged-green.
+- [x] **T2 [Backend/Logic] (S)** — `SCREENER_PRESETS` dict next to
+  `TOURNAMENT_PRESETS`: same six names, `description` + scoring-field
+  overrides only, zero `PICKER_PROFILE` fields. Non-baseline entries carry
+  no overrides (shipped bars); `baseline` carries shipped bars too, Pending
+  operator numbers. Target: `core_brain/config.py`. Depends on: T1.
+  Verify: registry test (names match, keys are real fields).
+- [x] **T3 [Backend/Logic] (M)** — `scoring/config.py::load()` merges preset
+  into `kw` right after `kw = {}`; explicit env reads after it keep winning;
+  class body untouched. Target: `scoring/config.py`. Depends on: T2.
+  Verify: precedence tests (preset applies, explicit overrides, unknown
+  raises, blank falls back, off unchanged).
+- [x] **T4 [Backend/Logic] (S)** — Ranker publishes loaded preset in
+  `pipeline.json` snapshot; value flows through the KPI funnel
+  (`core_brain/kpi.py` / `scripts/filter_markets.py` snapshot builder).
+  Shared-filter tournament path stays preset-free. Depends on: T3.
+  Verify: snapshot contains preset name on preset runs, absent/null off.
+- [x] **T5 [Design/UI] (S)** — Screener board preset pill (dashboard server +
+  static JS): shows ranker-reported preset, hidden when none.
+  Verification mode: browser preview. Depends on: T4.
+- [x] **T6 [Backend/Logic] (XS)** — Verify the menu-started ranker receives
+  the selector (env passthrough, same pattern as
+  `tests/test_ranker_reads_env_file.py`); no change if it already flows.
+  Depends on: T3. Verify: generated-`.env` subprocess test.
+- [x] **T7 [Backend/Logic] (M)** — Tests pin both paths: preset-on scores
+  with preset bars, preset-off unchanged, `baseline` keeps 0.045 window.
+  Depends on: T1–T6. Verify: focused suites green
+  (`test_config_single_source`, `test_config_divergence_guard`,
+  `test_dynamic_offset`, `test_ranker_reads_env_file`, new preset tests).
 
 ## Checkpoints
 
-- After T1: the four strings carry the new wording, `reward_score` is gone from the module
-  namespace, the quoting suites are green.
-- After T2: the acceptance search over `core_brain/` and `tests/` is empty, the four pins
-  hold the new text and still assert transient, and the guard test fails if the vocabulary
-  comes back.
-- After T3: the operator-facing prose matches the code, and the ledger carries every
-  out-of-scope find with an owner and a when.
-
-## Acceptance proof (run at T2 and again after any review fix)
-
-1. `git grep -n "reward window\|reward quote\|reward minimum" -- core_brain/ tests/` → empty
-2. `git grep -n -i "reward window\|reward quote\|reward minimum" -- core_brain/ tests/` → empty
-3. `git grep -n "reward_score" -- core_brain/ tests/ scripts/ dashboard/` → empty
-4. `python -c "import core_brain.quotes as q; assert not hasattr(q, 'reward_score')"` → ok
-5. `python -m pytest -q tests/test_trader_loop.py tests/test_shadow_run.py
-   tests/test_live_quotes.py` → green (the issue's own command)
-6. `git diff -U0 | grep -E "^[-+].*(rebate_est|total_with_rebate|ACTIVITY_TYPES|maker_rebates|
-   expected_gap|fee_rate|reward_offset|unfunded by the allocator)"` → empty, except the
-   allowed `reward_offset` context inside `core_brain/config.py`'s preset description is
-   NOT touched — the diff must show no `reward_offset` line at all
+- After T3: loader precedence demonstrable via focused config tests.
+- After T5: pill visible in dashboard preview against a preset snapshot.
+- After T7: all focused suites green; ready for Station IV.
