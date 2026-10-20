@@ -128,6 +128,9 @@ def test_unread_settings_purged_from_maker_configs():
         "hedge_fillable_min_rate",
         "balance_hedge_sec",
         "sim_only",
+        # #686: the 15s remaining-time floor is gone from both configs.
+        "bot_order_min_t_remaining_sec",
+        "min_t_remaining_sec",
     }
 
     core_fields = {f.name for f in dataclasses.fields(core_config.MakerConfig)}

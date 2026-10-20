@@ -831,3 +831,69 @@ def test_decide_quotes_decided_band_follows_custom_config_band():
     assert "decided market" not in why
     assert "outside [0.05,0.95]" not in why
 
+
+
+# --- the clock: only an ENDED market is refused -------------------------------
+# The 15s floor is gone (#686). Price is not a substitute for it -- an expired
+# market can still print a mid-range book -- so the quote layer keeps a fixed
+# refusal at and past the end time, and nothing wider.
+
+
+def _expiry_cfg() -> MakerConfig:
+    return MakerConfig(
+        objective="rewards",
+        size_mode="shares",
+        quote_shares=120,
+        min_quote_shares=50,
+        price_band_low=0.10,
+        price_band_high=0.90,
+    )
+
+
+def _expiry_books(up: tuple[float, float], down: tuple[float, float]):
+    def book(token, bid, ask):
+        return {"token_id": token, "best_bid": bid, "best_ask": ask,
+                "bids": {bid: 1000.0}, "asks": {ask: 1000.0}}
+    return book("tok_up", *up), book("tok_down", *down)
+
+
+def test_a_market_inside_the_last_seconds_still_quotes():
+    """10s to close at mid-range prices: the clock is not a reason to sit out."""
+    up_book, down_book = _expiry_books((0.59, 0.61), (0.39, 0.41))
+
+    intents, why = decide_quotes(_expiry_cfg(), up_book, down_book,
+                                 Inventory(), 10.0, None)
+
+    assert why == ""
+    assert len(intents) == 2
+
+
+def test_a_market_past_its_end_is_refused():
+    up_book, down_book = _expiry_books((0.59, 0.61), (0.39, 0.41))
+
+    intents, why = decide_quotes(_expiry_cfg(), up_book, down_book,
+                                 Inventory(), -5.0, None)
+
+    assert intents == []
+    assert "t_remaining" in why
+
+
+def test_a_market_exactly_at_its_end_is_refused():
+    up_book, down_book = _expiry_books((0.59, 0.61), (0.39, 0.41))
+
+    intents, why = decide_quotes(_expiry_cfg(), up_book, down_book,
+                                 Inventory(), 0.0, None)
+
+    assert intents == []
+    assert "t_remaining" in why
+
+
+def test_the_band_still_refuses_a_settled_book_inside_the_last_seconds():
+    up_book, down_book = _expiry_books((0.08, 0.10), (0.90, 0.92))
+
+    intents, why = decide_quotes(_expiry_cfg(), up_book, down_book,
+                                 Inventory(), 10.0, None)
+
+    assert intents == []
+    assert "decided market" in why
+    assert "t_remaining" not in why

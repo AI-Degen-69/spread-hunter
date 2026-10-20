@@ -158,3 +158,42 @@ def test_legacy_ask_branch_reads_canonical_target_balance():
         if "quotes.py" in str(w.filename):
             assert not any(name in str(w.message) for name in scoped_legacy), f"Unexpected warning: {w.message}"
 
+
+
+# --- the clock: only an ENDED market is refused (#686) ------------------------
+# The 15s floor is gone. `t_remaining` stays in the refusal text because
+# `market_lifecycle.classify_refusal` matches it to the countdown stop.
+
+
+def _quote_at(t_remaining, books=None):
+    up, dn = books or _books()
+    return decide_quotes(_ask_cfg(), up, dn, Inventory(), t_remaining, None)
+
+
+def test_the_branch_still_quotes_inside_the_last_seconds():
+    intents, why = _quote_at(10.0)
+
+    assert why == ""
+    assert len(intents) == 2
+
+
+def test_the_branch_refuses_a_market_past_its_end():
+    intents, why = _quote_at(-5.0)
+
+    assert intents == []
+    assert "t_remaining" in why
+
+
+def test_the_branch_refuses_a_market_exactly_at_its_end():
+    intents, why = _quote_at(0.0)
+
+    assert intents == []
+    assert "t_remaining" in why
+
+
+def test_the_band_refusal_on_this_branch_does_not_read_the_clock():
+    intents, why = _quote_at(10.0, books=_books(up_ask=0.10, dn_ask=0.92))
+
+    assert intents == []
+    assert "outside band" in why
+    assert "t_remaining" not in why

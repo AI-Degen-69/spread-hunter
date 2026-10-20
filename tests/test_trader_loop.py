@@ -1505,7 +1505,7 @@ class TestClassifyRefusal:
         "DOWN: mid 0.050 outside [0.10,0.90] -- decided market",
         "UP: hedge token DOWN not tradeable (settled book 0.999/0.001) "
         "-- a fill here could not be closed",
-        "t_remaining 0s < 0s",
+        "t_remaining 0s: market ended",
         "market exited: fills still lost money after widening",
         "unfunded by the allocator -- quoting nothing",
         "hit 25 fills for this market",
