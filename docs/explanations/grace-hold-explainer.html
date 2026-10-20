@@ -99,8 +99,8 @@
   <div class="node q"><strong>Visit market, no intents.</strong> Lifecycle preserve-ids? → follow lifecycle, grace not involved. Otherwise:</div>
   <div class="arrow">▼ classify <code>why</code> — <code>_classify_refusal</code> (<code>:135</code>)</div>
   <div class="node act-cancel"><strong>Terminal refusal</strong> (settled, expired, exited, unfunded…) → <code>REFUSED_TERMINAL</code> → <strong>cancel immediately</strong> via <code>not_quoted</code>. No grace, ever. (<code>:426-433</code>)</div>
-  <div class="arrow">▼ else <strong>transient</strong> (wide book, cap, reward window…) → <code>REFUSED_TRANSIENT</code></div>
-  <div class="node act-cancel"><strong>Transient refusal</strong> (wide book, cap, reward window…) → <code>REFUSED_TRANSIENT</code><br>
+  <div class="arrow">▼ else <strong>transient</strong> (wide book, cap, quote window…) → <code>REFUSED_TRANSIENT</code></div>
+  <div class="node act-cancel"><strong>Transient refusal</strong> (wide book, cap, quote window…) → <code>REFUSED_TRANSIENT</code><br>
     <strong>Post-#622 Purge:</strong> Transient refusals cancel immediately on the first cycle. All grace cycles, hold policies, and streak tracking were completely deleted. Resting orders cancel via <code>not_quoted</code>.</div>
   <div class="arrow">▼ after the visit</div>
   <div class="node"><strong>Visit accounting:</strong> Every refused visit is recorded in <code>market_events</code> as a <code>refusal_visit</code> for rate denominator tracking. No streak counter or hold state exists.</div>

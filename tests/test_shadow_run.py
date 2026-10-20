@@ -1649,8 +1649,8 @@ def test_admission_cli_parses_and_rejects_depth_combo(tmp_path):
 class TestRefusedHoldShadow:
     """#390 end to end: a refused cycle holds, a dead market cancels."""
 
-    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
-                     "DOWN: 8.0c from mid > 4.5c reward window")
+    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c quote window; "
+                     "DOWN: 8.0c from mid > 4.5c quote window")
 
     def _held_pair(self):
         return [QuoteIntent(side="UP", token_id="tok-up", price=0.60, size=5,

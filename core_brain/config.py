@@ -918,7 +918,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "apply_widen_gate": False,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "description": "Loose baseline: raw dynamic offset (0.5x range), 1c floor, 20c ceiling, no widen snap-back, 15c score window",
+        "description": "Loose baseline: raw dynamic offset (0.5x range), 1c floor, 20c ceiling, no widen snap-back, 15c quote window",
     },
 }
 

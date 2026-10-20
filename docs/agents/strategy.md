@@ -80,7 +80,7 @@ cost together, never on one axis.
 No reward-economics knob reaches live code. `reward_min_payout_usd`,
 `reward_floor_multiple`, `rebate_rate`, `marginal_return_floor`,
 `allocation_budget` and `max_pct` are read by nothing in `core_brain/` or
-`dashboard/`. `quotes.reward_score()` formats a log string and feeds no sizing decision.
+`dashboard/`. Nothing in the quoting path computes a reward score.
 
 ## The two failure modes
 
