@@ -114,7 +114,7 @@ def test_portfolio_aggregates_every_market_not_just_one(seeded_db):
     data = report(db_path=seeded_db, run_id=RUN)
     p = data["portfolio"]
 
-    start = kpi_mod._CFG.bankroll_usd
+    start = kpi_mod._CFG.bot_quote_bank_baseline_usd
     assert p["starting_capital"] == start
     assert p["realized_pnl"] == pytest.approx(0.40)      # 0.30 + 0.10, both markets
     assert p["unrealized_usd"] == pytest.approx(2.50)    # latest float mark
@@ -127,7 +127,7 @@ def test_portfolio_pnl_pct_is_percent_of_starting_capital(seeded_db):
     data = report(db_path=seeded_db, run_id=RUN)
     p = data["portfolio"]
 
-    start = kpi_mod._CFG.bankroll_usd
+    start = kpi_mod._CFG.bot_quote_bank_baseline_usd
     assert p["total_pnl"] == pytest.approx(0.40 + 2.50)
     assert p["pnl_pct"] == pytest.approx(100.0 * (0.40 + 2.50) / start)
 
@@ -135,7 +135,7 @@ def test_portfolio_pnl_pct_is_percent_of_starting_capital(seeded_db):
 def test_portfolio_pnl_pct_is_null_when_starting_capital_is_zero(seeded_db, monkeypatch):
     """A zero bankroll yields NULL, never a divide-by-zero or a fake 0.0%."""
     # MakerConfig is a frozen dataclass; swap the whole config, not one field.
-    monkeypatch.setattr(kpi_mod, "_CFG", dataclasses.replace(kpi_mod._CFG, bankroll_usd=0.0))
+    monkeypatch.setattr(kpi_mod, "_CFG", dataclasses.replace(kpi_mod._CFG, bot_quote_bank_baseline_usd=0.0))
     data = report(db_path=seeded_db, run_id=RUN)
     assert data["portfolio"]["pnl_pct"] is None
 
@@ -145,7 +145,7 @@ def test_portfolio_zero_state_on_empty_database(temp_db):
     data = report(db_path=temp_db)
     p = data["portfolio"]
 
-    assert p["total_value"] == pytest.approx(kpi_mod._CFG.bankroll_usd)
+    assert p["total_value"] == pytest.approx(kpi_mod._CFG.bot_quote_bank_baseline_usd)
     assert p["realized_pnl"] == 0.0
     # NULL, not 0.0: no sweep has ever marked the open book.
     assert p["unrealized_usd"] is None
@@ -172,7 +172,7 @@ def test_unmarked_open_float_is_null_not_zero(temp_db):
     assert p["unrealized_usd"] is None
     assert p["unrealized_measured"] is False
     # The total still stands on what WAS measured: the realised close.
-    assert p["total_value"] == pytest.approx(kpi_mod._CFG.bankroll_usd + 0.30)
+    assert p["total_value"] == pytest.approx(kpi_mod._CFG.bot_quote_bank_baseline_usd + 0.30)
 
 
 def test_float_mark_older_than_the_last_close_is_not_counted(temp_db):
@@ -194,7 +194,7 @@ def test_float_mark_older_than_the_last_close_is_not_counted(temp_db):
     assert p["unrealized_measured"] is False
     assert p["unrealized_usd"] is None
     # Not 100.30 + 2.50: the 2.50 became the 0.30 that is already banked.
-    assert p["total_value"] == pytest.approx(kpi_mod._CFG.bankroll_usd + 0.30)
+    assert p["total_value"] == pytest.approx(kpi_mod._CFG.bot_quote_bank_baseline_usd + 0.30)
 
 
 def test_markets_only_refused_are_not_counted_as_traded(seeded_db):
@@ -231,7 +231,7 @@ def test_equity_series_steps_on_each_close_and_mark(seeded_db):
     assert ts == sorted(ts)
     assert {pt["type"] for pt in series} == {"close", "mark"}
 
-    start = kpi_mod._CFG.bankroll_usd
+    start = kpi_mod._CFG.bot_quote_bank_baseline_usd
     # First close: bankroll + 0.30, no float recorded yet.
     assert series[0]["type"] == "close"
     assert series[0]["v"] == pytest.approx(start + 0.30)
@@ -583,7 +583,7 @@ def test_starting_capital_ts_is_null_on_bankroll_fallback(temp_db):
 
     data = report(db_path=temp_db, run_id="run-bare")
     p = data["portfolio"]
-    assert p["starting_capital"] == pytest.approx(kpi_mod._CFG.bankroll_usd)
+    assert p["starting_capital"] == pytest.approx(kpi_mod._CFG.bot_quote_bank_baseline_usd)
     assert p["starting_capital_ts"] is None
 
 

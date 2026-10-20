@@ -51,7 +51,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--bankroll",
         type=float,
         default=None,
-        help="Starting capital (USD). Defaults to config bankroll_usd.",
+        help="Starting capital (USD). Defaults to config bot_quote_bank_baseline_usd.",
     )
     parser.add_argument(
         "--json",
@@ -66,8 +66,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     cfg = load_cfg()
-    sigma = args.sigma if args.sigma is not None else cfg.stat_gate_deltas[1]
-    bankroll = args.bankroll if args.bankroll is not None else cfg.bankroll_usd
+    sigma = args.sigma if args.sigma is not None else cfg.bot_eval_stat_gate_deltas[1]
+    bankroll = args.bankroll if args.bankroll is not None else cfg.bot_quote_bank_baseline_usd
 
     if not math.isfinite(sigma) or sigma <= 0:
         parser.error(f"sigma must be finite and strictly positive, got {sigma}")
@@ -76,7 +76,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     pt = power_table(
         sigma=sigma,
-        deltas=cfg.stat_gate_deltas,
+        deltas=cfg.bot_eval_stat_gate_deltas,
         z_alpha=Z_ALPHA_90_ONE_SIDED,
         z_beta=Z_BETA_80_POWER,
     )

@@ -33,7 +33,7 @@ def test_no_fills_stays_dual_resting():
     decision = transition(
         _position(up_size=0.0, down_size=0.0, up_avg=0.0, up_bid=0.48),
         None,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is LegState.DUAL_RESTING
@@ -44,7 +44,7 @@ def test_first_fill_enters_patient_wait_and_keeps_target():
     decision = transition(
         _position(up_size=2.0, down_size=0.0, up_avg=0.48, up_bid=0.47),
         LegState.DUAL_RESTING,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is LegState.PATIENT_WAIT
@@ -58,7 +58,7 @@ def test_drawdown_below_escalation_threshold_remains_patient():
         _position(up_size=2.0, down_size=0.0, up_avg=0.48,
                   up_bid=0.401, base_offset=0.04),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is LegState.PATIENT_WAIT
@@ -69,7 +69,7 @@ def test_drawdown_above_escalation_threshold_escalates():
         _position(up_size=2.0, down_size=0.0, up_avg=0.48,
                   up_bid=0.399, base_offset=0.04),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is LegState.ESCALATED_HEDGE
@@ -80,7 +80,7 @@ def test_escalates_at_threshold_to_tick_floored_pair_ceiling():
         _position(up_size=2.0, down_size=0.0, up_avg=0.48,
                   up_bid=0.40, base_offset=0.04),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is LegState.ESCALATED_HEDGE
@@ -94,7 +94,7 @@ def test_escalated_state_stays_sticky_after_price_recovers():
         _position(up_size=2.0, down_size=0.0, up_avg=0.48,
                   up_bid=0.47, base_offset=0.04),
         LegState.ESCALATED_HEDGE,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is LegState.ESCALATED_HEDGE
@@ -107,7 +107,7 @@ def test_hard_stop_at_the_entry_relative_floor_precedes_escalation():
         _position(up_size=2.0, down_size=0.0, up_avg=0.48,
                   up_bid=0.12, base_offset=0.04),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is LegState.HARD_STOP
@@ -119,7 +119,7 @@ def test_unreadable_held_bid_does_not_escalate_or_hard_stop():
         up_size=2.0, down_size=0.0, up_avg=0.48, up_bid=None,
     )
 
-    decision = transition(position, LegState.PATIENT_WAIT, max_pair_cost=0.99)
+    decision = transition(position, LegState.PATIENT_WAIT, bot_pos_price_max_pair_cost_usd=0.99)
 
     assert decision.state is LegState.PATIENT_WAIT
     assert decision.action == "wait"
@@ -130,7 +130,7 @@ def test_partial_opposite_fill_remains_a_naked_position():
         _position(up_size=2.0, down_size=1.0, up_avg=0.48,
                   down_avg=0.48, up_bid=0.40),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is LegState.ESCALATED_HEDGE
@@ -142,7 +142,7 @@ def test_equal_filled_legs_at_ninety_nine_cents_are_pair_locked():
         _position(up_size=2.0, down_size=2.0, up_avg=0.48,
                   down_avg=0.51, up_bid=0.48, down_bid=0.51),
         LegState.ESCALATED_HEDGE,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is LegState.PAIR_LOCKED
@@ -154,7 +154,7 @@ def test_equal_filled_legs_above_cap_are_not_pair_locked():
         _position(up_size=2.0, down_size=2.0, up_avg=0.50,
                   down_avg=0.50, up_bid=0.50, down_bid=0.50),
         LegState.ESCALATED_HEDGE,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is not LegState.PAIR_LOCKED
@@ -166,7 +166,7 @@ def test_escalation_without_a_positive_capped_tick_is_refused():
         _position(up_size=2.0, down_size=0.0, up_avg=0.99,
                   up_bid=0.90, base_offset=0.04),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is LegState.ESCALATED_HEDGE
@@ -178,7 +178,7 @@ def test_settlement_fallback_follows_hard_stop_precedence():
     decision = transition(
         _position(up_size=2.0, down_size=0.0, up_avg=0.48, up_bid=0.12),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
         settlement_due=True,
     )
 
@@ -297,15 +297,15 @@ def test_stop_trigger_floors_at_one_cent():
 
 
 @pytest.mark.parametrize(
-    ("drop_cents", "expected", "source"),
+    ("bot_risk_stop_adverse_drop_cents", "expected", "source"),
     # 0.50 - 0.90 is below zero, so the 0.125 emergency floor protects --
     # rounded up to the 0.13 cent.
     [(0.01, 0.49, "strategy"), (0.90, 0.13, "emergency")],
 )
-def test_stop_trigger_accepts_both_drop_cents_endpoints(drop_cents, expected,
+def test_stop_trigger_accepts_both_drop_cents_endpoints(bot_risk_stop_adverse_drop_cents, expected,
                                                        source):
     trigger, got_source = stop_trigger(
-        0.50, "ABSOLUTE_DROP", drop_cents, 10.0, 75.0,
+        0.50, "ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents, 10.0, 75.0,
     )
 
     assert trigger == pytest.approx(expected)
@@ -336,16 +336,16 @@ def test_stop_trigger_refuses_non_canonical_modes(mode):
 
 
 @pytest.mark.parametrize(
-    "drop_cents", [0.0, 0.009, 0.91, float("nan"), float("inf")]
+    "bot_risk_stop_adverse_drop_cents", [0.0, 0.009, 0.91, float("nan"), float("inf")]
 )
-def test_stop_trigger_refuses_drop_cents_outside_the_contract(drop_cents):
-    with pytest.raises(ValueError, match="drop_cents"):
-        stop_trigger(0.50, "ABSOLUTE_DROP", drop_cents, 10.0, 75.0)
+def test_stop_trigger_refuses_drop_cents_outside_the_contract(bot_risk_stop_adverse_drop_cents):
+    with pytest.raises(ValueError, match="bot_risk_stop_adverse_drop_cents"):
+        stop_trigger(0.50, "ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents, 10.0, 75.0)
 
 
 @pytest.mark.parametrize("pct", [0.0, -1.0, 100.1, float("nan")])
 def test_stop_trigger_refuses_drawdown_pct_outside_the_contract(pct):
-    with pytest.raises(ValueError, match="drawdown_pct"):
+    with pytest.raises(ValueError, match="bot_risk_stop_max_drawdown_pct"):
         stop_trigger(0.50, "PERCENTAGE_DROP", 0.05, pct, 75.0)
 
 
@@ -381,7 +381,7 @@ def test_none_mode_stops_a_ten_cent_entry_at_the_floored_emergency(
         _position(up_size=2.0, down_size=0.0, up_avg=entry, up_bid=bid,
                   base_offset=0.04),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is expected
@@ -396,7 +396,7 @@ def test_low_entries_are_no_longer_liquidated_on_fill(entry, bid):
         _position(up_size=2.0, down_size=0.0, up_avg=entry, up_bid=bid,
                   base_offset=0.04),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert decision.state is LegState.PATIENT_WAIT
@@ -408,9 +408,9 @@ def test_hard_stop_reason_names_the_trigger_that_fired():
         _position(up_size=2.0, down_size=0.0, up_avg=0.60, up_bid=0.54,
                   base_offset=0.04),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
-        stop_loss_mode="PERCENTAGE_DROP",
-        drawdown_pct=10.0,
+        bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_stop_mode="PERCENTAGE_DROP",
+        bot_risk_stop_max_drawdown_pct=10.0,
     )
 
     assert decision.state is LegState.HARD_STOP
@@ -422,8 +422,8 @@ def test_transition_refuses_an_unknown_stop_mode():
     decision = transition(
         _position(up_size=2.0, down_size=0.0, up_avg=0.50, up_bid=0.45),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
-        stop_loss_mode="ABSOLUTE",
+        bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_stop_mode="ABSOLUTE",
     )
 
     assert decision.state is LegState.PATIENT_WAIT
@@ -433,10 +433,10 @@ def test_transition_refuses_an_unknown_stop_mode():
 
 @pytest.mark.parametrize(
     "knobs",
-    [{"drop_cents": 0.0},
-     {"drop_cents": 0.91},
-     {"drawdown_pct": 0.0},
-     {"drawdown_pct": float("nan")},
+    [{"bot_risk_stop_adverse_drop_cents": 0.0},
+     {"bot_risk_stop_adverse_drop_cents": 0.91},
+     {"bot_risk_stop_max_drawdown_pct": 0.0},
+     {"bot_risk_stop_max_drawdown_pct": float("nan")},
      {"bot_risk_circuit_max_drawdown_pct": 101.0},
      {"bot_risk_circuit_max_drawdown_pct": float("nan")}],
 )
@@ -444,7 +444,7 @@ def test_transition_refuses_out_of_range_stop_knobs(knobs):
     decision = transition(
         _position(up_size=2.0, down_size=0.0, up_avg=0.50, up_bid=0.45),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
         **knobs,
     )
 
@@ -455,18 +455,19 @@ def test_transition_accepts_canonical_drawdown_keyword():
     decision = transition(
         _position(up_size=2.0, down_size=0.0, up_avg=0.50, up_bid=0.45),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
         bot_risk_circuit_max_drawdown_pct=50.0,
     )
     assert decision.action != "refused"
 
 
 def test_legacy_drawdown_keyword_is_rejected():
+    """The retired keyword is not a keyword any more."""
     with pytest.raises(TypeError, match="unexpected keyword argument 'emergency_drawdown_pct'"):
         transition(
             _position(up_size=2.0, down_size=0.0, up_avg=0.50, up_bid=0.45),
             LegState.PATIENT_WAIT,
-            max_pair_cost=0.99,
+            bot_pos_price_max_pair_cost_usd=0.99,
             emergency_drawdown_pct=50.0,
         )
 
@@ -479,8 +480,8 @@ def test_evaluate_forwards_the_stop_knobs(tmp_path):
     )
 
     decision = evaluate(
-        position, registry, max_pair_cost=0.99,
-        stop_loss_mode="PERCENTAGE_DROP", drawdown_pct=10.0,
+        position, registry, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_stop_mode="PERCENTAGE_DROP", bot_risk_stop_max_drawdown_pct=10.0,
     )
 
     assert decision.state is LegState.HARD_STOP
@@ -494,7 +495,7 @@ def test_settlement_due_uses_fallback_without_overriding_hard_stop():
         _position(up_size=2.0, down_size=0.0, up_avg=0.48,
                   up_bid=0.40),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
         settlement_due=True,
     )
 
@@ -512,7 +513,7 @@ def test_evaluate_persists_sticky_escalation_and_does_not_duplicate_transition(
     )
     registry = OrderRegistry(db_path=db_path)
 
-    first = evaluate(position, registry, max_pair_cost=0.99)
+    first = evaluate(position, registry, bot_pos_price_max_pair_cost_usd=0.99)
     first_record = registry.get_lifecycle_state("pair-1")
 
     assert first.state is LegState.ESCALATED_HEDGE
@@ -524,7 +525,7 @@ def test_evaluate_persists_sticky_escalation_and_does_not_duplicate_transition(
         up_size=2.0, down_size=0.0, up_avg=0.48,
         up_bid=0.47, base_offset=0.04,
     )
-    second = evaluate(recovered_position, reopened, max_pair_cost=0.99)
+    second = evaluate(recovered_position, reopened, bot_pos_price_max_pair_cost_usd=0.99)
 
     assert second.state is LegState.ESCALATED_HEDGE
     assert reopened.get_lifecycle_state("pair-1") == first_record
@@ -542,7 +543,7 @@ def test_evaluate_propagates_lifecycle_state_write_errors():
         evaluate(
             _position(up_size=2.0, down_size=0.0, up_avg=0.48, up_bid=0.47),
             BrokenRegistry(),
-            max_pair_cost=0.99,
+            bot_pos_price_max_pair_cost_usd=0.99,
         )
 
 
@@ -591,7 +592,7 @@ def test_patient_wait_never_cancels():
     decision = transition(
         _position(up_size=2.0, down_size=0.0, up_avg=0.48, up_bid=0.47),
         LegState.PATIENT_WAIT,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
     assert decision.state is LegState.PATIENT_WAIT
     assert decision.action == "wait"
@@ -603,7 +604,7 @@ def test_escalated_hedge_never_cancels():
     decision = transition(
         _position(up_size=2.0, down_size=0.0, up_avg=0.48, up_bid=0.39, base_offset=0.04),
         LegState.ESCALATED_HEDGE,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
     assert decision.state is LegState.ESCALATED_HEDGE
     assert decision.action == "hedge"

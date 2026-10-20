@@ -48,7 +48,7 @@ from scripts.family_probe import family_key   # noqa: E402
 def _load_repo_env(root: Path | str = ROOT) -> None:
     """Make the repo's `.env` visible to config, as scripts/filter_loop does.
 
-    A staged gate trial lives in `.env` (HUNTER_VOLUME_TRIAL_USD and friends),
+    A staged gate trial lives in `.env` (FILTER_STD_VOL_MIN_24H_USD_TRIAL and friends),
     and `_effective_volume_bar` already falls back to it through config -- but
     only if something put the file's values in the environment first. Nothing
     here did, so a direct `python -m scripts.filter_markets` gated on the
@@ -2103,7 +2103,7 @@ def _publish_paired_bundle(out_dir: Path, bundle: dict,
 def _effective_depth_bar(cli_trial_usd: Optional[float]) -> float:
     """The depth bar this run gates on: CLI trial > config trial > permanent.
 
-    `filter_common_vol_min_top3_depth_usd_trial` (env HUNTER_DEPTH_TRIAL_USD) lets an
+    `filter_common_vol_min_top3_depth_usd_trial` (env FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL) lets an
     operator stage the trial without touching the permanent config; an explicit
     `--trial-depth` on the command line wins over both because it is the most
     deliberate of the three. A non-positive trial value is a mistake, not a
@@ -2188,7 +2188,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--trial-depth", type=float, default=None, metavar="USD",
                    help="DEPTH-GATE TRIAL (U32): gate on this top-3 bid depth "
                         "bar instead of the permanent one ($%.0f). Wins over "
-                        "HUNTER_DEPTH_TRIAL_USD; the permanent config value is "
+                        "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL; the permanent config value is "
                         "never changed. Adopted markets are tagged "
                         "trial_depth_usd in runtime/markets.json so their "
                         "markouts can be watched before the bar is loosened "
@@ -2211,19 +2211,19 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--trial-spread", type=float, default=None, metavar="SPREAD",
                    help="WIDE-BOOK TRIAL (#145): admit books up to this spread "
                         "instead of the permanent ceiling (%.2f). Run 145 "
-                        "measured the touch pair at or above max_pair_cost in "
+                        "measured the touch pair at or above bot_pos_price_max_pair_cost_usd in "
                         "1247 of 1247 samples on one-tick books, and the only "
                         "sub-$0.99 pairs it saw came from books that had "
                         "widened. Adopted markets are tagged trial_spread in "
                         "runtime/markets.json. The ranker places no orders, so "
                         "this flag declares the process a rehearsal; the same "
                         "ceiling in a QUOTING process needs "
-                        "HUNTER_WIDE_BOOK_TRIAL under core_brain.shadow_run."
+                        "BOT_QUOTE_WIDE_BOOK_TRIAL under core_brain.shadow_run."
                         % MAX_BOOK_SPREAD)
     p.add_argument("--trial-volume", type=float, default=None, metavar="USD",
                    help="VOLUME-GATE TRIAL (U36): gate 24h volume on this bar "
                         "instead of the permanent one ($%.0f). Wins over "
-                        "HUNTER_VOLUME_TRIAL_USD; the permanent config value is "
+                        "FILTER_STD_VOL_MIN_24H_USD_TRIAL; the permanent config value is "
                         "never changed. Adopted markets are tagged "
                         "trial_volume_usd in runtime/markets.json so their "
                         "markouts can be watched before the bar is loosened "
@@ -2607,7 +2607,7 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         # source so the snapshot schema is preserved without asymmetry.
         "reward_min_income_usd_day": 0.0,
         "spread_min_income_usd_day": 0.0,
-        "max_pair_cost": _CFG.max_pair_cost,
+        "bot_pos_price_max_pair_cost_usd": _CFG.bot_pos_price_max_pair_cost_usd,
         # Which tournament preset this ranker scored under (#687), or None on
         # a preset-free run. Resolved from the environment at snapshot time --
         # the same selector the scoring loader applied -- so the dashboard

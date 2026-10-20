@@ -42,31 +42,31 @@ def registry(tmp_path):
 
 def test_shadow_run_keeps_the_configured_exit(monkeypatch):
     """A rehearsal that discards the exit knobs cannot sweep them."""
-    monkeypatch.setenv("HUNTER_AGED_OUT_RESCUE_LEAD_SEC", "1234")
-    monkeypatch.setenv("HUNTER_STOP_LOSS_MODE", "PERCENTAGE_DROP")
-    monkeypatch.setenv("HUNTER_DRAWDOWN_PCT", "20")
+    monkeypatch.setenv("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "1234")
+    monkeypatch.setenv("BOT_RISK_STOP_MODE", "PERCENTAGE_DROP")
+    monkeypatch.setenv("BOT_RISK_STOP_MAX_DRAWDOWN_PCT", "20")
 
     from core_brain.config import load
     from core_brain.shadow_run import shadow_cfg
 
-    assert load().aged_out_rescue_lead_sec == 1234.0
-    assert shadow_cfg().aged_out_rescue_lead_sec == 1234.0
-    assert shadow_cfg().stop_loss_mode == "PERCENTAGE_DROP"
-    assert shadow_cfg().drawdown_pct == 20.0
+    assert load().bot_risk_aged_out_rescue_lead_sec == 1234.0
+    assert shadow_cfg().bot_risk_aged_out_rescue_lead_sec == 1234.0
+    assert shadow_cfg().bot_risk_stop_mode == "PERCENTAGE_DROP"
+    assert shadow_cfg().bot_risk_stop_max_drawdown_pct == 20.0
 
 
 def test_shadow_run_exit_defaults_when_unset(monkeypatch):
     """Unset stays the shipped baseline, so existing rehearsals do not move."""
-    for name in ("HUNTER_AGED_OUT_RESCUE_LEAD_SEC", "HUNTER_STOP_LOSS_MODE",
+    for name in ("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "BOT_RISK_STOP_MODE",
                  "HUNTER_DRAWDOWN_PCT"):
         monkeypatch.delenv(name, raising=False)
 
     from core_brain.shadow_run import shadow_cfg
 
     cfg = shadow_cfg()
-    assert cfg.aged_out_rescue_lead_sec == 900.0
-    assert cfg.stop_loss_mode == "NONE"
-    assert cfg.drawdown_pct == 10.0
+    assert cfg.bot_risk_aged_out_rescue_lead_sec == 900.0
+    assert cfg.bot_risk_stop_mode == "NONE"
+    assert cfg.bot_risk_stop_max_drawdown_pct == 10.0
 
 
 # --- 2. the rehearsed SELL must fill against the book ---------------------
@@ -151,7 +151,7 @@ def test_rehearsed_buy_walks_the_ask_ladder_and_records_a_short_fill(registry):
                     mid=0.5, edge_vs_mid=0.0),
     ]
     record_submit(
-        object(), reg, market, intents, SimpleNamespace(max_pair_cost=0.995),
+        object(), reg, market, intents, SimpleNamespace(bot_pos_price_max_pair_cost_usd=0.995),
         db_path=db, book_fn=lambda _host, _token: {"bids": {}},
     )
     settle_market(

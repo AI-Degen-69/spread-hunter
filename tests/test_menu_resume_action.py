@@ -293,16 +293,16 @@ def test_r_branch_validates_preset_before_stopping_session():
 
 
 def test_resume_rehearsal_env_passes_and_cleans_tournament_preset():
-    """Invoke-WithRehearsalTrialEnv injects HUNTER_TOURNAMENT_PRESET and cleans up in finally."""
+    """Invoke-WithRehearsalTrialEnv injects BOT_QUOTE_TOURNAMENT_PRESET and cleans up in finally."""
     src = _menu_source()
     helper = src.split("function Invoke-WithRehearsalTrialEnv {", 1)[1].split("\nfunction ", 1)[0]
     # Injects before execution
-    assert 'Set-Item "Env:HUNTER_TOURNAMENT_PRESET" $script:ShadowPreset' in helper
+    assert 'Set-Item "Env:BOT_QUOTE_TOURNAMENT_PRESET" $script:ShadowPreset' in helper
     # Execution wrapped in try
     assert 'try { & $Action }' in helper
     # Cleanup happens unconditionally in finally
     assert 'finally {' in helper
-    assert 'Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue' in helper
+    assert 'Remove-Item "Env:BOT_QUOTE_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue' in helper
 
 
 def test_resume_stores_distinguishes_standard_and_prudent_runs():

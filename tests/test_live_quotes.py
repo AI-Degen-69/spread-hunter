@@ -31,13 +31,13 @@ def test_decide_quotes_basic_two_sided():
     # about the pilot's dollar allocation, so it names the mode rather than
     # inheriting whichever one is currently the default.
     cfg = MakerConfig(
-        objective="rewards",
-        size_mode="shares",
-        quote_shares=120,
-        min_quote_shares=50,
-        reward_offset=0.02,
-        price_band_low=0.10,
-        price_band_high=0.90,
+        bot_pos_objective="rewards",
+        bot_quote_size_mode="shares",
+        bot_quote_size_shares=120,
+        bot_quote_size_min_shares=50,
+        bot_quote_spread_static_offset_cents=0.02,
+        bot_quote_price_band_min_cents=0.10,
+        bot_quote_price_band_max_cents=0.90,
     )
     up_book = {
         "best_bid": 0.50, "best_ask": 0.52,
@@ -63,11 +63,11 @@ def test_decide_quotes_basic_two_sided():
 
 def test_decide_quotes_outside_band_or_settled_declined():
     cfg = MakerConfig(
-        objective="rewards",
-        quote_shares=120,
-        min_quote_shares=50,
-        price_band_low=0.10,
-        price_band_high=0.90,
+        bot_pos_objective="rewards",
+        bot_quote_size_shares=120,
+        bot_quote_size_min_shares=50,
+        bot_quote_price_band_min_cents=0.10,
+        bot_quote_price_band_max_cents=0.90,
     )
     # Severe one-sided market outside band / settled
     up_book = {
@@ -124,15 +124,15 @@ def test_decide_quotes_dollars_mode_characterisation():
     """Pin the behaviour of dollars mode under frozen book and config."""
     # 1. Normal couple sizing with taper waived at coin-flip
     cfg_waived = MakerConfig(
-        objective="rewards",
-        size_mode="dollars",
-        bankroll_usd=100.0,
-        couple_risk_pct=0.01,
-        min_couple_usd=6.0,
-        min_quote_shares=5,
-        quote_shares=120,
-        reward_offset=0.02,
-        waive_attenuation_below_floor=True,
+        bot_pos_objective="rewards",
+        bot_quote_size_mode="dollars",
+        bot_quote_bank_baseline_usd=100.0,
+        bot_quote_alloc_couple_pct=0.01,
+        bot_quote_alloc_couple_min_usd=6.0,
+        bot_quote_size_min_shares=5,
+        bot_quote_size_shares=120,
+        bot_quote_spread_static_offset_cents=0.02,
+        bot_quote_waive_attenuation_below_floor_on=True,
     )
     up_book = {
         "best_bid": 0.51, "best_ask": 0.52,
@@ -161,14 +161,14 @@ def test_decide_quotes_dollars_mode_characterisation():
 
     # 2. Allocation cannot clear the venue floor
     cfg_shortfall = MakerConfig(
-        objective="rewards",
-        size_mode="dollars",
-        bankroll_usd=10.0,
-        couple_risk_pct=0.01,
-        min_couple_usd=2.0,
-        min_quote_shares=5,
-        quote_shares=120,
-        reward_offset=0.02,
+        bot_pos_objective="rewards",
+        bot_quote_size_mode="dollars",
+        bot_quote_bank_baseline_usd=10.0,
+        bot_quote_alloc_couple_pct=0.01,
+        bot_quote_alloc_couple_min_usd=2.0,
+        bot_quote_size_min_shares=5,
+        bot_quote_size_shares=120,
+        bot_quote_spread_static_offset_cents=0.02,
     )
     intents_short, why_short = decide_quotes(cfg_shortfall, up_book, down_book, inv, 1e9, None)
     assert len(intents_short) == 0
@@ -181,12 +181,12 @@ def test_decide_quotes_dollars_mode_characterisation():
 def test_decide_quotes_dollars_mode_defunded():
     """quote_shares == 0 in dollars mode means defunded: quote nothing."""
     cfg_defunded = MakerConfig(
-        objective="rewards",
-        size_mode="dollars",
-        quote_shares=0,
-        bankroll_usd=100.0,
-        min_couple_usd=6.0,
-        min_quote_shares=5,
+        bot_pos_objective="rewards",
+        bot_quote_size_mode="dollars",
+        bot_quote_size_shares=0,
+        bot_quote_bank_baseline_usd=100.0,
+        bot_quote_alloc_couple_min_usd=6.0,
+        bot_quote_size_min_shares=5,
     )
     up_book = {
         "best_bid": 0.50, "best_ask": 0.52,
@@ -212,7 +212,7 @@ def test_flat_inventory_refuses_a_lone_leg():
     from dataclasses import replace
     from core_brain.config import load
 
-    cfg = replace(load(), bankroll_usd=5000.0, price_band_low=0.30, price_band_high=0.70)
+    cfg = replace(load(), bot_quote_bank_baseline_usd=5000.0, bot_quote_price_band_min_cents=0.30, bot_quote_price_band_max_cents=0.70)
     flat = Inventory(up_shares=0, down_shares=0, up_cost=0.0, down_cost=0.0)
     # UP is blocked by price band (mid 0.25 -> price ~0.23 < 0.30) while
     # DOWN (mid 0.65 -> price ~0.63) passes. Both mids inside [0.20,0.80]
@@ -244,7 +244,7 @@ def test_flat_lone_leg_refusal_names_blocked_side():
     from dataclasses import replace
     from core_brain.config import load
 
-    cfg = replace(load(), bankroll_usd=5000.0, price_band_low=0.30, price_band_high=0.70)
+    cfg = replace(load(), bot_quote_bank_baseline_usd=5000.0, bot_quote_price_band_min_cents=0.30, bot_quote_price_band_max_cents=0.70)
     flat = Inventory(up_shares=0, down_shares=0, up_cost=0.0, down_cost=0.0)
     up = {"best_bid": 0.24, "best_ask": 0.26,
           "bids": {0.24: 9999.0}, "asks": {0.26: 9999.0}}
@@ -267,13 +267,13 @@ def test_flat_pair_sizes_harmonize_to_minimum():
     leaves a naked surplus that cannot merge, so both legs clamp to the min.
     """
     cfg = MakerConfig(
-        objective="rewards",
-        size_mode="shares",
-        quote_shares=120,
-        min_quote_shares=5,
-        reward_offset=0.02,
-        price_band_low=0.10,
-        price_band_high=0.90,
+        bot_pos_objective="rewards",
+        bot_quote_size_mode="shares",
+        bot_quote_size_shares=120,
+        bot_quote_size_min_shares=5,
+        bot_quote_spread_static_offset_cents=0.02,
+        bot_quote_price_band_min_cents=0.10,
+        bot_quote_price_band_max_cents=0.90,
     )
     up_book = {
         "best_bid": 0.54, "best_ask": 0.56,
@@ -302,7 +302,7 @@ def test_harmonized_pair_below_floor_drops_both():
     with an informative reason rather than resting a single leg.
     """
     from core_brain.quotes import _require_two_sided
-    cfg = MakerConfig(min_quote_shares=5)
+    cfg = MakerConfig(bot_quote_size_min_shares=5)
     intents = [
         QuoteIntent(side="UP", token_id="tok_up", price=0.50, size=4,
                     mid=0.52, edge_vs_mid=0.02),
@@ -322,13 +322,13 @@ def test_unbalanced_deficit_leg_keeps_its_size():
     """
     from core_brain.quotes import _require_two_sided
     cfg = MakerConfig(
-        objective="rewards",
-        size_mode="shares",
-        quote_shares=120,
-        min_quote_shares=5,
-        reward_offset=0.02,
-        price_band_low=0.10,
-        price_band_high=0.90,
+        bot_pos_objective="rewards",
+        bot_quote_size_mode="shares",
+        bot_quote_size_shares=120,
+        bot_quote_size_min_shares=5,
+        bot_quote_spread_static_offset_cents=0.02,
+        bot_quote_price_band_min_cents=0.10,
+        bot_quote_price_band_max_cents=0.90,
     )
     heavy = Inventory(up_shares=40, down_shares=0, up_cost=4.0, down_cost=0.0)
     up_book = {
@@ -356,23 +356,25 @@ def test_unbalanced_deficit_leg_keeps_its_size():
     assert all("clamped" not in i.reason for i in out)
 
 
-def _lifecycle_quote_case(*, price=0.51, size=10, price_band_low=0.10,
-                          quote_shares=120, bid_depth=1000.0,
-                          max_pair_cost=0.99, enable_hard_blocks=True):
+def _lifecycle_quote_case(*, price=0.51, size=10,
+                          bot_quote_price_band_min_cents=0.10,
+                          bot_quote_size_shares=120, bid_depth=1000.0,
+                          bot_pos_price_max_pair_cost_usd=0.99,
+                          bot_risk_gate_hard_blocks_on=True):
     cfg = MakerConfig(
-        objective="rewards",
-        size_mode="shares",
-        quote_shares=quote_shares,
-        min_quote_shares=5,
-        reward_offset=0.02,
-        max_spread_from_mid=0.045,
-        max_pair_cost=max_pair_cost,
-        max_naked_usd=100.0,
-        enable_hard_blocks=enable_hard_blocks,
-        enforce_price_band=True,
-        price_band_low=price_band_low,
-        price_band_high=0.90,
-        min_book_depth_shares=1.0,
+        bot_pos_objective="rewards",
+        bot_quote_size_mode="shares",
+        bot_quote_size_shares=bot_quote_size_shares,
+        bot_quote_size_min_shares=5,
+        bot_quote_spread_static_offset_cents=0.02,
+        bot_quote_book_max_spread_from_mid=0.045,
+        bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
+        bot_risk_exposure_max_naked_usd=100.0,
+        bot_risk_gate_hard_blocks_on=bot_risk_gate_hard_blocks_on,
+        bot_quote_gate_price_band_on=True,
+        bot_quote_price_band_min_cents=bot_quote_price_band_min_cents,
+        bot_quote_price_band_max_cents=0.90,
+        bot_quote_book_min_depth_shares=1.0,
     )
     up_book = {
         "token_id": "token-up",
@@ -407,7 +409,7 @@ def _lifecycle_quote_case(*, price=0.51, size=10, price_band_low=0.10,
 
 def test_lifecycle_escalation_bypasses_only_spread_distance_and_keeps_pair_id():
     cfg, up, down, inventory, override = _lifecycle_quote_case(
-        max_pair_cost=0.995,
+        bot_pos_price_max_pair_cost_usd=0.995,
     )
 
     intents, why = decide_quotes(
@@ -506,7 +508,7 @@ def test_lifecycle_escalation_refuses_a_heavy_side_override():
 def test_lifecycle_pair_cap_never_exceeds_ninety_nine_cents():
     cfg, up, down, inventory, override = _lifecycle_quote_case(
         price=0.511,
-        max_pair_cost=0.995,
+        bot_pos_price_max_pair_cost_usd=0.995,
     )
 
     intents, why = decide_quotes(
@@ -543,7 +545,7 @@ def test_lifecycle_escalation_keeps_book_health_checks_active():
 def test_lifecycle_book_health_cannot_be_disabled_by_ordinary_gate_toggle():
     cfg, up, down, inventory, override = _lifecycle_quote_case(
         bid_depth=0.0,
-        enable_hard_blocks=False,
+        bot_risk_gate_hard_blocks_on=False,
     )
 
     intents, why = decide_quotes(
@@ -557,7 +559,7 @@ def test_lifecycle_book_health_cannot_be_disabled_by_ordinary_gate_toggle():
 
 def test_lifecycle_escalation_keeps_price_band_checks_active():
     cfg, up, down, inventory, override = _lifecycle_quote_case(
-        price_band_low=0.52,
+        bot_quote_price_band_min_cents=0.52,
     )
 
     intents, why = decide_quotes(
@@ -571,7 +573,7 @@ def test_lifecycle_escalation_keeps_price_band_checks_active():
 
 def test_lifecycle_escalation_respects_zero_allocation():
     cfg, up, down, inventory, override = _lifecycle_quote_case(
-        quote_shares=0,
+        bot_quote_size_shares=0,
     )
 
     intents, why = decide_quotes(
@@ -722,13 +724,13 @@ def test_custom_decision_port_cannot_silently_drop_lifecycle_override():
 
 def test_decide_quotes_admits_mid_between_15_and_20_cents():
     cfg = MakerConfig(
-        objective="rewards",
-        size_mode="shares",
-        quote_shares=120,
-        min_quote_shares=50,
-        reward_offset=0.02,
-        price_band_low=0.10,
-        price_band_high=0.90,
+        bot_pos_objective="rewards",
+        bot_quote_size_mode="shares",
+        bot_quote_size_shares=120,
+        bot_quote_size_min_shares=50,
+        bot_quote_spread_static_offset_cents=0.02,
+        bot_quote_price_band_min_cents=0.10,
+        bot_quote_price_band_max_cents=0.90,
     )
     # Mid 0.17 for UP, Mid 0.83 for DOWN - inside [0.10, 0.90]
     up_book = {
@@ -749,11 +751,11 @@ def test_decide_quotes_admits_mid_between_15_and_20_cents():
 
 def test_decide_quotes_refuses_mid_outside_configured_band():
     cfg = MakerConfig(
-        objective="rewards",
-        quote_shares=120,
-        min_quote_shares=50,
-        price_band_low=0.10,
-        price_band_high=0.90,
+        bot_pos_objective="rewards",
+        bot_quote_size_shares=120,
+        bot_quote_size_min_shares=50,
+        bot_quote_price_band_min_cents=0.10,
+        bot_quote_price_band_max_cents=0.90,
     )
     # Mid 0.1499 for UP, Mid 0.8501 for DOWN - inside the configured
     # [0.10, 0.90] band, so the decided-market gate must NOT refuse them.
@@ -775,11 +777,11 @@ def test_decide_quotes_refuses_mid_outside_configured_band():
 
 def test_decide_quotes_refuses_mid_outside_configured_band_edges():
     cfg = MakerConfig(
-        objective="rewards",
-        quote_shares=120,
-        min_quote_shares=50,
-        price_band_low=0.10,
-        price_band_high=0.90,
+        bot_pos_objective="rewards",
+        bot_quote_size_shares=120,
+        bot_quote_size_min_shares=50,
+        bot_quote_price_band_min_cents=0.10,
+        bot_quote_price_band_max_cents=0.90,
     )
     # Mid 0.09 for UP, Mid 0.91 for DOWN - outside the configured band.
     up_book = {
@@ -803,15 +805,15 @@ def test_decide_quotes_decided_band_follows_custom_config_band():
     """The gate reads the config, not a hardcoded pair of edges: a wider
     custom band admits a mid the shipped band would refuse."""
     cfg = MakerConfig(
-        objective="rewards",
-        quote_shares=120,
-        min_quote_shares=50,
+        bot_pos_objective="rewards",
+        bot_quote_size_shares=120,
+        bot_quote_size_min_shares=50,
         # Size in shares, not dollars: the shipped dollar mode funds a $10
         # couple allocation that buys 10sh, under the 50sh venue floor, so the
         # books would be refused by sizing and never reach the band at all.
-        size_mode="shares",
-        price_band_low=0.05,
-        price_band_high=0.95,
+        bot_quote_size_mode="shares",
+        bot_quote_price_band_min_cents=0.05,
+        bot_quote_price_band_max_cents=0.95,
     )
     up_book = {
         "token_id": "tok_up",
@@ -841,12 +843,12 @@ def test_decide_quotes_decided_band_follows_custom_config_band():
 
 def _expiry_cfg() -> MakerConfig:
     return MakerConfig(
-        objective="rewards",
-        size_mode="shares",
-        quote_shares=120,
-        min_quote_shares=50,
-        price_band_low=0.10,
-        price_band_high=0.90,
+        bot_pos_objective="rewards",
+        bot_quote_size_mode="shares",
+        bot_quote_size_shares=120,
+        bot_quote_size_min_shares=50,
+        bot_quote_price_band_min_cents=0.10,
+        bot_quote_price_band_max_cents=0.90,
     )
 
 

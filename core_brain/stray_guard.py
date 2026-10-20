@@ -81,7 +81,7 @@ def _best_ask_from_book(book: dict | None) -> Optional[float]:
 def classify_market_orders(
     orders: list[OrderRecord],
     books: dict[str, Any] | None = None,
-    max_pair_cost: float = 0.99,
+    bot_pos_price_max_pair_cost_usd: float = 0.99,
     market_tokens: dict[str, tuple[str, str]] | None = None,
     protected_order_ids: set[str] | frozenset[str] | None = None,
 ) -> ClassificationResult:
@@ -133,7 +133,7 @@ def classify_market_orders(
                     continue
                 if o1.token_id != o2.token_id:
                     cost = o1.price + o2.price
-                    if cost <= max_pair_cost and cost < best_cost:
+                    if cost <= bot_pos_price_max_pair_cost_usd and cost < best_cost:
                         matched_partner = o2
                         best_cost = cost
 
@@ -162,11 +162,11 @@ def classify_market_orders(
             ask = _best_ask_from_book(opposing_book)
 
             if ask is not None:
-                if (o.price + ask) >= max_pair_cost:
+                if (o.price + ask) >= bot_pos_price_max_pair_cost_usd:
                     result.hopeless_strays.append(
                         HopelessStray(
                             order=o,
-                            reason=f"cost_exceeds_cap: price={o.price:.4f} + ask={ask:.4f} >= {max_pair_cost:.4f}",
+                            reason=f"cost_exceeds_cap: price={o.price:.4f} + ask={ask:.4f} >= {bot_pos_price_max_pair_cost_usd:.4f}",
                             opposing_ask=ask,
                         )
                     )
@@ -315,7 +315,7 @@ def remediate_stray_positions(
     client: Any,
     registry: Any,
     stray_orders_or_positions: list[OrderRecord],
-    max_pair_cost: float = 0.99,
+    bot_pos_price_max_pair_cost_usd: float = 0.99,
     live: bool = True,
     venue_positions: Optional[dict[str, float]] = None,
 ) -> list[dict[str, Any]]:
@@ -349,7 +349,7 @@ def remediate_stray_positions(
                 client,
                 registry,
                 pair_id,
-                max_pair_cost=max_pair_cost,
+                bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
                 live=live,
                 venue_positions=venue_positions,
             )
@@ -411,7 +411,7 @@ def run_stray_guard(
             cfg = _load_cfg()
         except Exception:
             cfg = None
-    max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.99)) if cfg else 0.99
+    bot_pos_price_max_pair_cost_usd = float(getattr(cfg, "bot_pos_price_max_pair_cost_usd", 0.99)) if cfg else 0.99
 
     if resolved_cids is None:
         resolved_cids = resolved_condition_ids(registry)
@@ -530,7 +530,7 @@ def run_stray_guard(
     classification = classify_market_orders(
         candidate_orders,
         books=books,
-        max_pair_cost=max_pair_cost,
+        bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
         market_tokens=market_tokens,
         protected_order_ids=protected_order_ids,
     )
@@ -572,7 +572,7 @@ def run_stray_guard(
             client,
             registry,
             remaining_strays,
-            max_pair_cost=max_pair_cost,
+            bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
             live=live,
             venue_positions=venue_positions,
         )

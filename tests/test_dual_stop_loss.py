@@ -43,9 +43,9 @@ def registry(tmp_path: Path) -> OrderRegistry:
 
 def _cfg(**kw) -> MakerConfig:
     base = dict(
-        enable_pairs_rule=True,
-        pairs_exit_window_sec=900.0,
-        max_pair_cost=MAX_PAIR_COST,
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_pairs_exit_window_sec=900.0,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
     )
     base.update(kw)
     return MakerConfig(**base)
@@ -216,7 +216,7 @@ def test_percentage_mode_cuts_at_the_drawdown_not_the_floor(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(stop_loss_mode="PERCENTAGE_DROP", drawdown_pct=10.0),
+        _cfg(bot_risk_stop_mode="PERCENTAGE_DROP", bot_risk_stop_max_drawdown_pct=10.0),
         now=now_s,
     )
 
@@ -233,7 +233,7 @@ def test_percentage_mode_does_not_cut_above_its_trigger(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(stop_loss_mode="PERCENTAGE_DROP", drawdown_pct=10.0),
+        _cfg(bot_risk_stop_mode="PERCENTAGE_DROP", bot_risk_stop_max_drawdown_pct=10.0),
         now=now_s,
     )
 
@@ -249,7 +249,7 @@ def test_absolute_mode_cuts_a_fixed_cent_drop(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(stop_loss_mode="ABSOLUTE_DROP", drop_cents=0.05),
+        _cfg(bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents=0.05),
         now=now_s,
     )
 
@@ -265,7 +265,7 @@ def test_the_floor_wins_when_the_mode_trigger_is_below_it(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(stop_loss_mode="ABSOLUTE_DROP", drop_cents=0.90),
+        _cfg(bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents=0.90),
         now=now_s,
     )
 
@@ -282,7 +282,7 @@ def test_the_floor_does_not_cut_below_its_own_level(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(stop_loss_mode="ABSOLUTE_DROP", drop_cents=0.90),
+        _cfg(bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents=0.90),
         now=now_s,
     )
 
@@ -300,7 +300,7 @@ def test_a_live_stop_exit_is_an_explicit_fill_or_kill_sell(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(stop_loss_mode="PERCENTAGE_DROP", drawdown_pct=10.0),
+        _cfg(bot_risk_stop_mode="PERCENTAGE_DROP", bot_risk_stop_max_drawdown_pct=10.0),
         now=now_s,
     )
 
@@ -339,7 +339,7 @@ def test_the_shadow_branch_keeps_its_own_exit_call(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(stop_loss_mode="PERCENTAGE_DROP", drawdown_pct=10.0),
+        _cfg(bot_risk_stop_mode="PERCENTAGE_DROP", bot_risk_stop_max_drawdown_pct=10.0),
         now=now_s,
     )
 
@@ -355,7 +355,7 @@ def test_a_stop_exit_books_its_own_close_with_the_decision_bid(registry):
 
     auto_manage_pairs(
         client, registry,
-        _cfg(stop_loss_mode="PERCENTAGE_DROP", drawdown_pct=10.0),
+        _cfg(bot_risk_stop_mode="PERCENTAGE_DROP", bot_risk_stop_max_drawdown_pct=10.0),
         now=now_s,
     )
 
@@ -375,7 +375,7 @@ def test_a_stop_sells_the_whole_naked_leg_and_never_buys(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(stop_loss_mode="PERCENTAGE_DROP", drawdown_pct=10.0),
+        _cfg(bot_risk_stop_mode="PERCENTAGE_DROP", bot_risk_stop_max_drawdown_pct=10.0),
         now=now_s,
     )
 
@@ -394,7 +394,7 @@ def test_a_book_too_thin_to_hold_the_leg_refuses_the_stop(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(stop_loss_mode="PERCENTAGE_DROP", drawdown_pct=10.0),
+        _cfg(bot_risk_stop_mode="PERCENTAGE_DROP", bot_risk_stop_max_drawdown_pct=10.0),
         now=now_s,
     )
 
@@ -502,7 +502,7 @@ def test_oversized_completable_leg_still_waits_without_attempting_a_buy(registry
     now_s = (FILL_TS_MS / 1000.0) + 15.0
     client = FakeClient(best_ask=0.38, best_bid=0.58)
     # max_order_usd is $25.0
-    cfg = _cfg(max_order_usd=25.0)
+    cfg = _cfg(bot_risk_exposure_max_order_usd=25.0)
     results = auto_manage_pairs(client, registry, cfg, now=now_s)
 
     assert len(results) == 1

@@ -1,7 +1,7 @@
 """Venue-sourced account value and P&L.
 
 The dashboard's headline number used to be `config.bankroll_usd + realized_pnl`.
-`bankroll_usd` is a paper-run parameter -- nobody deposited it -- so the tile
+`bot_quote_bank_baseline_usd` is a paper-run parameter -- nobody deposited it -- so the tile
 reported $100.30 for an account the venue valued at $101.88. This module reads
 the account from the venue instead, and a sweep records what it read into the
 registry so the dashboard can keep its "zero venue network calls" contract.

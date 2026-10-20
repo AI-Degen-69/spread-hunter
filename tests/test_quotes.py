@@ -48,10 +48,10 @@ def _book(mid: float, token: str) -> dict:
 
 
 def _cfg(**kw) -> MakerConfig:
-    base = dict(objective="rewards", size_mode="shares", quote_shares=120,
-                min_quote_shares=50, reward_offset=0.02,
-                price_band_low=0.10, price_band_high=0.90,
-                max_pair_cost=0.99, max_completable_pair_cost=1.00)
+    base = dict(bot_pos_objective="rewards", bot_quote_size_mode="shares", bot_quote_size_shares=120,
+                bot_quote_size_min_shares=50, bot_quote_spread_static_offset_cents=0.02,
+                bot_quote_price_band_min_cents=0.10, bot_quote_price_band_max_cents=0.90,
+                bot_pos_price_max_pair_cost_usd=0.99, bot_pos_price_max_complete_usd=1.00)
     base.update(kw)
     return MakerConfig(**base)
 
@@ -67,17 +67,17 @@ def _flat_cfg(**kw) -> MakerConfig:
 
     With `dynamic_offset_enabled=True` (the shipped default) `dynamic_pair_sum`
     already refuses any pair that rounds to $1.00 or more, so the new entry cap
-    is the binding one on the dynamic-off preset (`HUNTER_DYNAMIC_OFFSET=false`)
+    is the binding one on the dynamic-off preset (`BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=false`)
     and in the band the completable arm cannot see.
     """
-    return _cfg(dynamic_offset_enabled=False, **kw)
+    return _cfg(bot_quote_gate_dynamic_offset_on=False, **kw)
 
 
 class TestEntryPairCostCap:
     def test_over_cap_from_mid_pair_is_refused_at_entry(self):
         # Arrange -- first look at the prices the gate will judge, with the cap
         # moved out of the way so both legs actually post.
-        loose = _flat_cfg(enforce_completable_pair_cost=False, max_pair_cost=1.10)
+        loose = _flat_cfg(bot_pos_gate_complete_cost_on=False, bot_pos_price_max_pair_cost_usd=1.10)
         intents, why = decide_quotes(loose, _WIDE_UP, _WIDE_DOWN, Inventory(),
                                      1e9, None)
         assert [i.price for i in intents] == [0.27, 0.75]
@@ -85,7 +85,7 @@ class TestEntryPairCostCap:
         assert not why
 
         # Act -- the shipped cap.
-        cfg = _flat_cfg(enforce_completable_pair_cost=False)
+        cfg = _flat_cfg(bot_pos_gate_complete_cost_on=False)
         intents, why = decide_quotes(cfg, _WIDE_UP, _WIDE_DOWN, Inventory(),
                                      1e9, None)
 
@@ -98,21 +98,18 @@ class TestEntryPairCostCap:
     def test_canonical_pair_cap_refuses_from_mid_pair_without_warning(self):
         import warnings
 
-        base_cfg = _flat_cfg(enforce_completable_pair_cost=False)
+        base_cfg = _flat_cfg(bot_pos_gate_complete_cost_on=False)
 
         class ControlledPairCapConfig:
+            """A config whose canonical pair cap is 0.99, and nothing else.
+
+            The retired alias is gone, so there is no legacy property left to
+            warn about: the canonical field is the only one there is.
+            """
+
             def __init__(self, base):
                 self._base = base
                 self.bot_pos_price_max_pair_cost_usd = 0.99
-
-            @property
-            def max_pair_cost(self):
-                warnings.warn(
-                    "Legacy property max_pair_cost accessed",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                return 1.05
 
             def __getattr__(self, name):
                 return getattr(self._base, name)
@@ -141,7 +138,7 @@ class TestEntryPairCostCap:
     def test_a_pair_exactly_at_the_cap_is_quoted(self):
         # The issue states the rule as `<= max_pair_cost`, so the tie is
         # allowed: 0.29 + 0.70 = $0.99 on a $0.99 cap posts both legs.
-        cfg = _cfg(enforce_completable_pair_cost=False)
+        cfg = _cfg(bot_pos_gate_complete_cost_on=False)
         intents, why = decide_quotes(cfg, _EDGE_UP, _EDGE_DOWN, Inventory(),
                                      1e9, None)
         assert [i.price for i in intents] == [0.29, 0.70]
@@ -163,7 +160,7 @@ class TestEntryPairCostCap:
         # pair being assembled is still $1.02, and that is what the cap judges.
         inv = Inventory(up_shares=100.0, up_cost=10.0,
                         down_shares=100.0, down_cost=10.0)
-        cfg = _flat_cfg(enforce_completable_pair_cost=False)
+        cfg = _flat_cfg(bot_pos_gate_complete_cost_on=False)
 
         intents, why = decide_quotes(cfg, _WIDE_UP, _WIDE_DOWN, inv, 1e9, None)
 
@@ -177,7 +174,7 @@ class TestEntryPairCostCap:
         # that would buy the missing leg must survive (#622's `not_quoted` rule
         # would otherwise cancel the leg that fixes the imbalance).
         inv = Inventory(up_shares=100.0, up_cost=10.0)
-        cfg = _flat_cfg(enforce_completable_pair_cost=False)
+        cfg = _flat_cfg(bot_pos_gate_complete_cost_on=False)
 
         intents, why = decide_quotes(cfg, _WIDE_UP, _WIDE_DOWN, inv, 1e9, None)
 
@@ -432,20 +429,20 @@ class TestMakerConfigNamingStandardization:
     def test_canonical_fields_and_defaults_core_config(self):
         from core_brain.config import MakerConfig
         cfg = MakerConfig()
-        assert cfg.max_skew_offset == 0.015
-        assert cfg.min_book_depth_shares == 200.0
-        assert cfg.emergency_hedge_pct == 0.8
-        assert cfg.couple_risk_pct == 0.01
-        assert cfg.quote_window_pct == 0.40
-        assert cfg.stat_gate_bankroll_pct == 0.01
+        assert cfg.bot_pos_skew_max_offset_cents == 0.015
+        assert cfg.bot_quote_book_min_depth_shares == 200.0
+        assert cfg.bot_risk_hedge_emergency_pct == 0.8
+        assert cfg.bot_quote_alloc_couple_pct == 0.01
+        assert cfg.bot_quote_window_max_pct == 0.40
+        assert cfg.bot_eval_stat_gate_bankroll_pct == 0.01
 
     def test_canonical_fields_and_defaults_scoring_config(self):
         from scoring.config import MakerConfig as ScoringMakerConfig
         cfg = ScoringMakerConfig()
-        assert cfg.max_skew_offset == 0.015
-        assert cfg.min_book_depth_shares == 200.0
-        assert cfg.emergency_hedge_pct == 0.8
-        assert cfg.quote_window_pct == 0.40
+        assert cfg.bot_pos_skew_max_offset_cents == 0.015
+        assert cfg.bot_quote_book_min_depth_shares == 200.0
+        assert cfg.bot_risk_hedge_emergency_pct == 0.8
+        assert cfg.bot_quote_window_max_pct == 0.40
 
     def test_no_frac_or_fraction_fields_on_both_classes(self):
         from dataclasses import fields
@@ -465,51 +462,52 @@ class TestMakerConfigNamingStandardization:
     def test_read_aliases_core_config(self):
         from core_brain.config import MakerConfig
         cfg = MakerConfig(
-            max_skew_offset=0.02,
-            min_book_depth_shares=300.0,
-            emergency_hedge_pct=0.75,
-            couple_risk_pct=0.02,
-            quote_window_pct=0.50,
-            stat_gate_bankroll_pct=0.02,
+            bot_pos_skew_max_offset_cents=0.02,
+            bot_quote_book_min_depth_shares=300.0,
+            bot_risk_hedge_emergency_pct=0.75,
+            bot_quote_alloc_couple_pct=0.02,
+            bot_quote_window_max_pct=0.50,
+            bot_eval_stat_gate_bankroll_pct=0.02,
         )
-        assert cfg.max_skew == 0.02
-        assert cfg.min_book_depth_sh == 300.0
-        assert cfg.emergency_hedge_frac == 0.75
-        assert cfg.couple_risk_frac == 0.02
-        assert cfg.quote_window_frac == 0.50
-        assert cfg.stat_gate_bankroll_fraction == 0.02
-        assert cfg.select_spread_frac == 41.0 / 120.0
+        assert cfg.bot_pos_skew_max_offset_cents == 0.02
+        assert cfg.bot_quote_book_min_depth_shares == 300.0
+        assert cfg.bot_risk_hedge_emergency_pct == 0.75
+        assert cfg.bot_quote_alloc_couple_pct == 0.02
+        assert cfg.bot_quote_window_max_pct == 0.50
+        assert cfg.bot_eval_stat_gate_bankroll_pct == 0.02
+        assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
 
     def test_read_aliases_scoring_config(self):
         from scoring.config import MakerConfig as ScoringMakerConfig
         cfg = ScoringMakerConfig(
-            max_skew_offset=0.02,
-            min_book_depth_shares=300.0,
-            emergency_hedge_pct=0.75,
-            quote_window_pct=0.50,
+            bot_pos_skew_max_offset_cents=0.02,
+            bot_quote_book_min_depth_shares=300.0,
+            bot_risk_hedge_emergency_pct=0.75,
+            bot_quote_window_max_pct=0.50,
         )
-        assert cfg.max_skew == 0.02
-        assert cfg.min_book_depth_sh == 300.0
-        assert cfg.emergency_hedge_frac == 0.75
-        assert cfg.quote_window_frac == 0.50
-        assert cfg.select_spread_frac == 41.0 / 120.0
+        assert cfg.bot_pos_skew_max_offset_cents == 0.02
+        assert cfg.bot_quote_book_min_depth_shares == 300.0
+        assert cfg.bot_risk_hedge_emergency_pct == 0.75
+        assert cfg.bot_quote_window_max_pct == 0.50
+        assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
 
     def test_alias_set_raises_attribute_error(self):
         from core_brain.config import MakerConfig
         cfg = MakerConfig()
         with pytest.raises(AttributeError):
-            setattr(cfg, "max_skew", 0.05)
+            setattr(cfg, "bot_pos_skew_max_offset_cents", 0.05)
         with pytest.raises(AttributeError):
-            setattr(cfg, "emergency_hedge_frac", 0.5)
+            setattr(cfg, "bot_risk_hedge_emergency_pct", 0.5)
 
     def test_legacy_keyword_raises_type_error(self):
+        """A retired keyword is not a keyword: the constructor refuses it."""
         from core_brain.config import MakerConfig
         with pytest.raises(TypeError):
-            MakerConfig(emergency_hedge_frac=0.8)
+            MakerConfig(emergency_hedge_pct=0.8)
         with pytest.raises(TypeError):
-            MakerConfig(max_skew=0.015)
+            MakerConfig(max_skew_offset=0.015)
         with pytest.raises(TypeError):
-            MakerConfig(select_spread_frac=41.0 / 120.0)
+            MakerConfig(select_spread_pct=41.0 / 120.0)
 
 
 def test_in_band_reads_canonical_gate():

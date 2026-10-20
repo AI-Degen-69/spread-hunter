@@ -20,15 +20,15 @@ class TestConfigKnobs:
         cfg = MakerConfig()
         assert cfg.bot_pos_price_max_complete_usd == 1.00
         assert cfg.bot_pos_gate_complete_cost_on is True
-        assert cfg.requote_dead_band == 0.03
+        assert cfg.bot_order_requote_dead_band_cents == 0.03
 
     def test_completable_cap_is_overridable_from_the_environment(self):
-        with mock.patch.dict(os.environ, {"HUNTER_COMPLETABLE_CAP": "0.98"}):
+        with mock.patch.dict(os.environ, {"BOT_POS_PRICE_MAX_COMPLETE_USD": "0.98"}):
             assert load().bot_pos_price_max_complete_usd == 0.98
 
     def test_dead_band_is_overridable_from_the_environment(self):
-        with mock.patch.dict(os.environ, {"HUNTER_REQUOTE_DEAD_BAND": "0.0"}):
-            assert load().requote_dead_band == 0.0
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.0"}):
+            assert load().bot_order_requote_dead_band_cents == 0.0
 
 
 class TestCompletablePairBlock:
@@ -99,9 +99,9 @@ def _healthy_book(bid, ask, token="tok"):
 
 
 def _gate_cfg(**kw):
-    base = dict(objective="rewards", size_mode="shares", quote_shares=120,
-                min_quote_shares=50, reward_offset=0.02,
-                price_band_low=0.10, price_band_high=0.90,
+    base = dict(bot_pos_objective="rewards", bot_quote_size_mode="shares", bot_quote_size_shares=120,
+                bot_quote_size_min_shares=50, bot_quote_spread_static_offset_cents=0.02,
+                bot_quote_price_band_min_cents=0.10, bot_quote_price_band_max_cents=0.90,
                 bot_pos_price_max_complete_usd=1.00)
     base.update(kw)
     return MakerConfig(**base)
@@ -132,7 +132,7 @@ class TestGateInDecideQuotes:
         assert not why
 
     def test_switching_the_gate_off_restores_the_wide_market_quote(self):
-        cfg = _gate_cfg(enforce_completable_pair_cost=False)
+        cfg = _gate_cfg(bot_pos_gate_complete_cost_on=False)
         up = _healthy_book(0.55, 0.57, "tok-up")
         down = _healthy_book(0.43, 0.46, "tok-dn")
         intents, _ = decide_quotes(cfg, up, down, Inventory(), 1e9, None)
@@ -163,77 +163,77 @@ class TestOverrideValidation:
     @pytest.mark.parametrize("bad", ["nan", "NaN", "inf", "-inf", "abc", ""])
     def test_a_non_finite_or_unparseable_cap_is_refused(self, bad):
         # "" is the one blank that must NOT raise -- it means "unset".
-        with mock.patch.dict(os.environ, {"HUNTER_COMPLETABLE_CAP": bad}):
+        with mock.patch.dict(os.environ, {"BOT_POS_PRICE_MAX_COMPLETE_USD": bad}):
             if bad == "":
-                assert load().max_completable_pair_cost == 1.00
+                assert load().bot_pos_price_max_complete_usd == 1.00
             else:
-                with pytest.raises(ValueError, match="HUNTER_COMPLETABLE_CAP"):
+                with pytest.raises(ValueError, match="BOT_POS_PRICE_MAX_COMPLETE_USD"):
                     load()
 
     @pytest.mark.parametrize("bad", ["1.05", "-0.01"])
     def test_a_cap_outside_zero_to_a_dollar_is_refused(self, bad):
-        with mock.patch.dict(os.environ, {"HUNTER_COMPLETABLE_CAP": bad}):
-            with pytest.raises(ValueError, match="HUNTER_COMPLETABLE_CAP"):
+        with mock.patch.dict(os.environ, {"BOT_POS_PRICE_MAX_COMPLETE_USD": bad}):
+            with pytest.raises(ValueError, match="BOT_POS_PRICE_MAX_COMPLETE_USD"):
                 load()
 
     def test_zero_still_disables_the_cap(self):
-        with mock.patch.dict(os.environ, {"HUNTER_COMPLETABLE_CAP": "0"}):
-            assert load().max_completable_pair_cost == 0.0
+        with mock.patch.dict(os.environ, {"BOT_POS_PRICE_MAX_COMPLETE_USD": "0"}):
+            assert load().bot_pos_price_max_complete_usd == 0.0
 
     def test_a_dollar_is_still_accepted(self):
-        with mock.patch.dict(os.environ, {"HUNTER_COMPLETABLE_CAP": "1.0"}):
-            assert load().max_completable_pair_cost == 1.0
+        with mock.patch.dict(os.environ, {"BOT_POS_PRICE_MAX_COMPLETE_USD": "1.0"}):
+            assert load().bot_pos_price_max_complete_usd == 1.0
 
     @pytest.mark.parametrize("bad", ["nan", "inf", "-0.01", "1.5", "abc"])
     def test_a_non_finite_negative_or_oversized_dead_band_is_refused(self, bad):
-        with mock.patch.dict(os.environ, {"HUNTER_REQUOTE_DEAD_BAND": bad}):
-            with pytest.raises(ValueError, match="HUNTER_REQUOTE_DEAD_BAND"):
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": bad}):
+            with pytest.raises(ValueError, match="BOT_ORDER_REQUOTE_DEAD_BAND_CENTS"):
                 load()
 
     def test_a_zero_dead_band_is_accepted(self):
-        with mock.patch.dict(os.environ, {"HUNTER_REQUOTE_DEAD_BAND": "0"}):
-            assert load().requote_dead_band == 0.0
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0"}):
+            assert load().bot_order_requote_dead_band_cents == 0.0
 
     def test_the_dead_band_ceiling_is_accepted(self):
         # Both ends of the bound, so a future tightening cannot move the
         # ceiling without a test saying so. 1.00 is the instrument's whole
         # price range and already means "never re-quote"; it is the last
         # value that is a setting rather than a typo.
-        with mock.patch.dict(os.environ, {"HUNTER_REQUOTE_DEAD_BAND": "1.0"}):
-            assert load().requote_dead_band == 1.0
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "1.0"}):
+            assert load().bot_order_requote_dead_band_cents == 1.0
 
     def test_the_queue_hold_ships_off(self):
         # The threshold #304 picked off the recorded cancels is 200, but the
         # shipped default stays 0.0: this is a lever on real money and the
         # repo moves those from a recorded rehearsal, not from reading a
-        # prior store. A rehearsal sets HUNTER_REQUOTE_HOLD_QUEUE.
-        assert MakerConfig().requote_hold_queue_shares == 0.0
+        # prior store. A rehearsal sets BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES.
+        assert MakerConfig().bot_order_requote_hold_queue_shares == 0.0
 
     def test_the_queue_hold_is_turnable_on_for_one_rehearsal(self):
-        with mock.patch.dict(os.environ, {"HUNTER_REQUOTE_HOLD_QUEUE": "200"}):
-            assert load().requote_hold_queue_shares == 200.0
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "200"}):
+            assert load().bot_order_requote_hold_queue_shares == 200.0
 
     def test_zero_turns_the_queue_hold_back_off(self):
         # 0 must be accepted and must mean OFF, not "hold nothing ever": it is
         # how a rehearsal restores the symmetric re-quote and gets a result it
         # can attribute to the hold alone.
-        with mock.patch.dict(os.environ, {"HUNTER_REQUOTE_HOLD_QUEUE": "0"}):
-            assert load().requote_hold_queue_shares == 0.0
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "0"}):
+            assert load().bot_order_requote_hold_queue_shares == 0.0
 
     @pytest.mark.parametrize("bad", ["nan", "inf", "-0.01", "abc"])
     def test_a_non_finite_negative_or_unparseable_queue_threshold_is_refused(self, bad):
-        with mock.patch.dict(os.environ, {"HUNTER_REQUOTE_HOLD_QUEUE": bad}):
-            with pytest.raises(ValueError, match="HUNTER_REQUOTE_HOLD_QUEUE"):
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": bad}):
+            with pytest.raises(ValueError, match="BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"):
                 load()
 
     def test_the_queue_threshold_ceiling_is_accepted(self):
         # The bound is a share count, not a price. The largest queue measured
         # on this venue was 1,999,936 shares, so 2,000,000 is the last value
         # that is a setting; past it the hold would keep every order forever.
-        with mock.patch.dict(os.environ, {"HUNTER_REQUOTE_HOLD_QUEUE": "2000000"}):
-            assert load().requote_hold_queue_shares == 2000000.0
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "2000000"}):
+            assert load().bot_order_requote_hold_queue_shares == 2000000.0
 
     def test_a_queue_threshold_past_the_ceiling_is_refused(self):
-        with mock.patch.dict(os.environ, {"HUNTER_REQUOTE_HOLD_QUEUE": "2000001"}):
-            with pytest.raises(ValueError, match="HUNTER_REQUOTE_HOLD_QUEUE"):
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "2000001"}):
+            with pytest.raises(ValueError, match="BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"):
                 load()

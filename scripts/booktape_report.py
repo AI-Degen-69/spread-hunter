@@ -135,7 +135,7 @@ def report(db_path: Path) -> str:
     out.append("THE TOUCH PAIR -- best_bid(UP) + best_bid(DOWN)")
     ptotal = sum(p[1] for p in pairs) or 0
     for cost, n in pairs:
-        verdict = ("REFUSED by max_pair_cost" if cost >= MAX_PAIR_COST
+        verdict = ("REFUSED by bot_pos_price_max_pair_cost_usd" if cost >= MAX_PAIR_COST
                    else "tradeable")
         out.append(f"  ${cost:.4f}  n={n:<6} {_pct(n, ptotal)}  {verdict}")
     refused = sum(n for c, n in pairs if c >= MAX_PAIR_COST)

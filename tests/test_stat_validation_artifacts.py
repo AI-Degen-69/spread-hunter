@@ -77,7 +77,7 @@ def _write_bundle(tmp_path: Path, closes: list[dict], out_name: str = "stat_bund
     stat = resolve_verdict(
         gate_rows=rows, kpi=kpi,
         underpowered=False, underpowered_reasons=[],
-        threshold_pct=cfg.stat_gate_threshold_pct,
+        threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
     )
     out = tmp_path / out_name
     write_artifacts(
@@ -159,7 +159,7 @@ class TestGateRowsAndVerdict:
         verdict = resolve_verdict(
             gate_rows=rows, kpi=kpi,
             underpowered=False, underpowered_reasons=[],
-            threshold_pct=cfg.stat_gate_threshold_pct,
+            threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
         )
         assert verdict["verdict"] == "GO"
         primary = next(r for r in rows if "Primary" in r["gate"])
@@ -180,7 +180,7 @@ class TestGateRowsAndVerdict:
         verdict = resolve_verdict(
             gate_rows=rows, kpi=kpi,
             underpowered=False, underpowered_reasons=[],
-            threshold_pct=cfg.stat_gate_threshold_pct,
+            threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
         )
         assert verdict["verdict"] == "NO-GO"
         assert "primary gate failed" in verdict["verdict_reason"]
@@ -199,7 +199,7 @@ class TestGateRowsAndVerdict:
             gate_rows=rows, kpi=kpi,
             underpowered=True,
             underpowered_reasons=["closes 1 < 50", "markouts 10 < 25"],
-            threshold_pct=cfg.stat_gate_threshold_pct,
+            threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
         )
         assert verdict["verdict"] == "INCONCLUSIVE"
         assert "underpowered" in verdict["verdict_reason"]
@@ -218,20 +218,20 @@ class TestGateRowsAndVerdict:
                 target_closes=None, matured_markouts=None, min_markouts=None,
             ), kpi
 
-        rows, kpi = rows_for(cfg.stat_gate_threshold_pct)  # exactly at the boundary
+        rows, kpi = rows_for(cfg.bot_eval_stat_gate_threshold_pct)  # exactly at the boundary
         primary = next(r for r in rows if "Primary" in r["gate"])
         assert primary["passed"] is False
         assert resolve_verdict(
             gate_rows=rows, kpi=kpi,
             underpowered=False, underpowered_reasons=[],
-            threshold_pct=cfg.stat_gate_threshold_pct,
+            threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
         )["verdict"] == "NO-GO"
 
-        rows, kpi = rows_for(cfg.stat_gate_threshold_pct + 0.0001)  # just above
+        rows, kpi = rows_for(cfg.bot_eval_stat_gate_threshold_pct + 0.0001)  # just above
         assert resolve_verdict(
             gate_rows=rows, kpi=kpi,
             underpowered=False, underpowered_reasons=[],
-            threshold_pct=cfg.stat_gate_threshold_pct,
+            threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
         )["verdict"] == "GO"
 
     def test_single_close_is_inconclusive(self, tmp_path):
@@ -247,7 +247,7 @@ class TestGateRowsAndVerdict:
         verdict = resolve_verdict(
             gate_rows=rows, kpi=kpi,
             underpowered=False, underpowered_reasons=[],
-            threshold_pct=cfg.stat_gate_threshold_pct,
+            threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
         )
         assert verdict["verdict"] == "INCONCLUSIVE"
         assert "fewer than 2 closes" in verdict["verdict_reason"]
@@ -334,7 +334,7 @@ class TestArtifactBundle:
         stat = resolve_verdict(
             gate_rows=rows, kpi=kpi,
             underpowered=False, underpowered_reasons=[],
-            threshold_pct=cfg.stat_gate_threshold_pct,
+            threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
         )
         out = tmp_path / "stat_csvs"
         write_artifacts(

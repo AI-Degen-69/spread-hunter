@@ -135,7 +135,7 @@ def main():
 
             tape = _tape(s, args.cid, window_sec=args.window)
             rng = tape["range_cents"]
-            cfg = MakerConfig(range_cents=rng, velocity_measured_at=time.time())
+            cfg = MakerConfig(bot_quote_telemetry_range_cents=rng, bot_quote_telemetry_velocity_measured_at=time.time())
             dyn_off, dyn_tag = dynamic_offset_for(cfg)
 
             print(f"[{ts}] cycle {cycle}")
@@ -169,11 +169,11 @@ def main():
             # the emergency floor as the backstop, so a $0.10-$0.14 fill is no
             # longer cut the instant it fills.
             trig, trig_source = stop_trigger(
-                up_q, cfg.stop_loss_mode, cfg.drop_cents, cfg.drawdown_pct,
+                up_q, cfg.bot_risk_stop_mode, cfg.bot_risk_stop_adverse_drop_cents, cfg.bot_risk_stop_max_drawdown_pct,
                 cfg.bot_risk_circuit_max_drawdown_pct,
             )
             print(f"  STOP  if up fills {up_q:.2f}, naked-leg cut at bid <= {trig:.2f} "
-                  f"({cfg.stop_loss_mode} / {trig_source})")
+                  f"({cfg.bot_risk_stop_mode} / {trig_source})")
             print("-" * 68)
         except Exception as e:  # noqa: BLE001 - observer never dies on one bad read
             print(f"[{ts}] cycle {cycle}: read error {type(e).__name__}: {e}")

@@ -33,28 +33,28 @@ def _row(**extra):
 
 
 def test_feed_row_reward_field_does_not_cap_the_window():
-    base = MakerConfig(max_spread_from_mid=0.15)
+    base = MakerConfig(bot_quote_book_max_spread_from_mid=0.15)
     # The venue's rewardsMaxSpread as the ranker wrote it for years.
     cfg = spec_to_cfg(base, _row(max_spread=2.5))
-    assert cfg.max_spread_from_mid == 0.15
+    assert cfg.bot_quote_book_max_spread_from_mid == 0.15
 
 
 def test_no_daily_income_field_on_the_market_config():
     base = MakerConfig()
     cfg = spec_to_cfg(base, _row(daily=1234.5))
     assert not hasattr(cfg, "market_daily_rate")
-    assert cfg.max_spread_from_mid == base.max_spread_from_mid
+    assert cfg.bot_quote_book_max_spread_from_mid == base.bot_quote_book_max_spread_from_mid
 
 
 def test_engine_window_override_survives_through_the_ranker_row():
-    base = MakerConfig(max_spread_from_mid=0.20)
+    base = MakerConfig(bot_quote_book_max_spread_from_mid=0.20)
     cfg = spec_to_cfg(base, _row(max_spread=6.5, daily=99.0))
-    assert cfg.max_spread_from_mid == 0.20
+    assert cfg.bot_quote_book_max_spread_from_mid == 0.20
 
 
 def test_objective_is_spread_capture_only():
     cfg = spec_to_cfg(MakerConfig(), _row())
-    assert cfg.objective == "spread_capture"
+    assert cfg.bot_pos_objective == "spread_capture"
 
 
 def test_rewards_mode_fields_are_gone():
@@ -72,18 +72,17 @@ def test_venue_fee_fields_stay():
     completions); maker_fee is the venue's takerOnly fact. Neither is a
     rebate and both survive the purge."""
     base = MakerConfig()
-    assert base.fee_rate == 0.07
-    assert base.maker_fee == 0.0
+    assert base.bot_econ_fee_rate == 0.07
+    assert base.bot_econ_maker_fee == 0.0
 
 
 def test_bankroll_override_survives_the_allocator_purge(monkeypatch):
     """The purge deleted allocation_budget but its bankroll writer stayed
     behind: load() with a bankroll override crashed with TypeError on the
     unknown kwarg. The override now lands on bankroll_usd only (#594)."""
-    monkeypatch.setenv("SPREAD_HUNTER_BANKROLL", "2000")
-    monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
+    monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "2000")
     cfg = load_scoring()
-    assert cfg.bankroll_usd == 2000
+    assert cfg.bot_quote_bank_baseline_usd == 2000
     assert not hasattr(cfg, "allocation_budget")
 
 

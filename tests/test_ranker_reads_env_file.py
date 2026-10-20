@@ -70,7 +70,7 @@ def _bar_with_generated_env(tmp_path: Path, contents: str) -> float:
         # environment and override=False would never replace it. Clear it: this
         # test controls the file, not the checkout it happens to run in.
         os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
-        os.environ.pop("HUNTER_VOLUME_TRIAL_USD", None)
+        os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
         # Re-run the loader against the generated root and rebuild the config
         # exactly as import does, so the fallback chain is exercised end to end.
         fm._load_repo_env({str(tmp_path)!r})
@@ -90,7 +90,7 @@ def test_a_trial_staged_in_the_env_file_is_honoured(tmp_path):
     reaches the environment and the bar stays at the permanent one.
     """
     # Arrange / Act
-    bar = _bar_with_generated_env(tmp_path, "HUNTER_VOLUME_TRIAL_USD=50000\n")
+    bar = _bar_with_generated_env(tmp_path, "FILTER_STD_VOL_MIN_24H_USD_TRIAL=50000\n")
 
     # Assert
     assert bar == 50000.0
@@ -122,7 +122,7 @@ def test_a_missing_env_file_is_not_an_error(tmp_path):
         # environment and override=False would never replace it. Clear it: this
         # test controls the file, not the checkout it happens to run in.
         os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
-        os.environ.pop("HUNTER_VOLUME_TRIAL_USD", None)
+        os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
         fm._load_repo_env({str(tmp_path)!r})
         fm._CFG = scoring.config.load()
         print(fm._effective_volume_bar(None))
@@ -138,7 +138,7 @@ def test_a_missing_env_file_is_not_an_error(tmp_path):
 
 def test_the_process_environment_wins_over_the_file():
     # Arrange / Act -- a bar no `.env` in this repo would ever stage.
-    bar = _child_bar({"HUNTER_VOLUME_TRIAL_USD": "77000"})
+    bar = _child_bar({"FILTER_STD_VOL_MIN_24H_USD_TRIAL": "77000"})
 
     # Assert -- override=False, the same contract filter_loop keeps.
     assert bar == 77000.0
@@ -150,7 +150,7 @@ def test_a_non_positive_trial_falls_back_to_the_permanent_bar():
     from scripts.filter_markets import MIN_VOLUME_24H
 
     # Act
-    bar = _child_bar({"HUNTER_VOLUME_TRIAL_USD": "0"})
+    bar = _child_bar({"FILTER_STD_VOL_MIN_24H_USD_TRIAL": "0"})
 
     # Assert
     assert bar == MIN_VOLUME_24H
@@ -216,7 +216,7 @@ def test_canonical_bot_env_file_reaches_ranker_config(tmp_path):
         "BOT_MARKET_PINNED_CONDITION_ID=0xfeedbeef\n"
         "BOT_QUOTE_SIZE_MIN_SHARES=200\n"
     )
-    val = _cfg_field_with_generated_env(tmp_path, env_content, "min_quote_shares")
+    val = _cfg_field_with_generated_env(tmp_path, env_content, "bot_quote_size_min_shares")
     assert val == "200"
 
     pinned = _cfg_field_with_generated_env(

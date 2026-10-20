@@ -167,8 +167,8 @@ def test_the_new_knobs_are_on_by_default():
     cfg = MakerConfig()
 
     # Assert
-    assert cfg.enable_aged_out_rescue is True
-    assert cfg.aged_out_rescue_lead_sec == 900.0
+    assert cfg.bot_risk_gate_aged_out_rescue_on is True
+    assert cfg.bot_risk_aged_out_rescue_lead_sec == 900.0
 
 
 def test_the_repeating_wait_verdicts_are_the_quiet_ones():
@@ -189,30 +189,30 @@ def test_no_unrelated_shipped_default_moved():
     cfg = MakerConfig()
 
     # Act / Assert
-    assert cfg.pairs_exit_window_sec == 900.0
-    assert cfg.max_pair_cost == 0.99
-    assert cfg.enable_pairs_rule is True
+    assert cfg.bot_risk_pairs_exit_window_sec == 900.0
+    assert cfg.bot_pos_price_max_pair_cost_usd == 0.99
+    assert cfg.bot_risk_gate_pairs_rule_on is True
     # #619 replaced the static cent stop with the entry-relative one; these are
     # the new shipped defaults, asserted here so they cannot drift unnoticed.
-    assert cfg.stop_loss_mode == "NONE"
-    assert cfg.drop_cents == 0.05
-    assert cfg.drawdown_pct == 10.0
+    assert cfg.bot_risk_stop_mode == "NONE"
+    assert cfg.bot_risk_stop_adverse_drop_cents == 0.05
+    assert cfg.bot_risk_stop_max_drawdown_pct == 10.0
     assert cfg.bot_risk_circuit_max_drawdown_pct == 75.0
 
 
 def test_the_lead_knob_has_an_env_override(monkeypatch):
     # Arrange - the operator can retune the deadline without a code change.
-    monkeypatch.setenv("HUNTER_AGED_OUT_RESCUE_LEAD_SEC", "120")
+    monkeypatch.setenv("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "120")
 
     from core_brain.config import load
 
     # Act / Assert
-    assert load().aged_out_rescue_lead_sec == 120.0
+    assert load().bot_risk_aged_out_rescue_lead_sec == 120.0
 
 
 def test_a_negative_lead_override_is_refused(monkeypatch):
     # Arrange - a negative lead would fire the deadline after the market ended.
-    monkeypatch.setenv("HUNTER_AGED_OUT_RESCUE_LEAD_SEC", "-5")
+    monkeypatch.setenv("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "-5")
 
     from core_brain.config import load
 
@@ -242,9 +242,9 @@ def registry(tmp_path: Path):
 
 
 def _cfg(**kw) -> MakerConfig:
-    base = dict(enable_pairs_rule=True, pairs_exit_window_sec=900.0,
-                enable_aged_out_rescue=True, aged_out_rescue_lead_sec=LEAD_SEC,
-                max_pair_cost=MAX_PAIR_COST)
+    base = dict(bot_risk_gate_pairs_rule_on=True, bot_risk_pairs_exit_window_sec=900.0,
+                bot_risk_gate_aged_out_rescue_on=True, bot_risk_aged_out_rescue_lead_sec=LEAD_SEC,
+                bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST)
     base.update(kw)
     return MakerConfig(**base)
 
@@ -547,7 +547,7 @@ def test_the_knob_off_means_off_and_no_market_read(registry):
 
     # Act
     results = rescue_aged_out_legs(
-        client, registry, _cfg(enable_aged_out_rescue=False), now=NOW_S,
+        client, registry, _cfg(bot_risk_gate_aged_out_rescue_on=False), now=NOW_S,
         market_state_fn=fn)
 
     # Assert

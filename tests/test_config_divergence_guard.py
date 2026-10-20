@@ -16,6 +16,8 @@ import ast
 import dataclasses
 from pathlib import Path
 
+import pytest
+
 from core_brain import config as core_config
 from core_brain.config import PICKER_PROFILE
 from scoring import config as scoring_config
@@ -38,8 +40,9 @@ CORE_OWNED_PICKER_BARS = frozenset({
 })
 
 # The old picker name of each bar, pinned old -> canonical. Spelled out instead
-# of read from `_LEGACY_TO_CANONICAL`, so that re-pointing an alias at a
-# different field fails here rather than silently following the new target.
+# of read from a table, so that a bar cannot quietly change meaning. These names
+# are GONE: the purge removed the alias table, so each one must now be neither a
+# field nor a readable attribute.
 PICKER_BAR_ALIASES = {
     "select_max_queue_minutes": "filter_std_queue_max_clear_min",
     "enforce_max_queue_minutes": "filter_std_gate_queue_max_on",
@@ -55,11 +58,11 @@ PICKER_BAR_ALIASES = {
 # here rather than read from the table, so adding a sixth to `PICKER_PROFILE`
 # fails this file instead of quietly widening the disagreement.
 PROFILE_NAMES = frozenset({
-    "bankroll_usd",
-    "max_naked_usd",
-    "min_quote_shares",
-    "max_spread_from_mid",
-    "max_pair_cost",
+    "bot_quote_bank_baseline_usd",
+    "bot_risk_exposure_max_naked_usd",
+    "bot_quote_size_min_shares",
+    "bot_quote_book_max_spread_from_mid",
+    "bot_pos_price_max_pair_cost_usd",
 })
 
 # The one method the scoring class body is allowed to keep: the `db_path()`
@@ -210,21 +213,21 @@ def test_the_core_owned_picker_bars_are_inherited_at_the_same_default():
         assert scoring_defaults[name] == core_defaults[name], name
 
 
-def test_the_old_picker_names_still_resolve_through_the_alias_table():
-    """The old spelling reads the bar core owns, and the mapping is exact."""
-    table = core_config._LEGACY_TO_CANONICAL
+def test_the_old_picker_names_are_gone():
+    """The retired picker names are neither fields nor readable attributes."""
+    core_names = _field_names(core_config.MakerConfig)
+    scoring_names = _field_names(scoring_config.MakerConfig)
+    core_cfg = core_config.MakerConfig()
+    scoring_cfg = scoring_config.MakerConfig()
 
     for old, canonical in sorted(PICKER_BAR_ALIASES.items()):
-        assert table.get(old) == canonical, old
         assert canonical in CORE_OWNED_PICKER_BARS, old
-
-
-def test_the_old_picker_names_still_read_the_canonical_value():
-    """The dashboard's `getattr(scfg, "select_*", <fallback>)` must resolve."""
-    scoring_defaults = _defaults(scoring_config.MakerConfig)
-
-    for old, canonical in sorted(PICKER_BAR_ALIASES.items()):
-        assert scoring_defaults[old] == scoring_defaults[canonical], old
+        assert old not in core_names, old
+        assert old not in scoring_names, old
+        with pytest.raises(AttributeError):
+            getattr(core_cfg, old)
+        with pytest.raises(AttributeError):
+            getattr(scoring_cfg, old)
 
 
 def test_profile_defaults_read_the_table_instead_of_a_literal():
