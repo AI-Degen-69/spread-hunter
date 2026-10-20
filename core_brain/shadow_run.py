@@ -296,6 +296,7 @@ def write_shadow_heartbeat(
     dash_port: Optional[int] = None,
     code_revision: Optional[dict] = None,
     shutdown_reason: str = "",
+    book_sources: Optional[dict] = None,
     path: Optional[Path] = None,
 ) -> Optional[Path]:
     """Publish (or refresh) the rehearsal's heartbeat file.
@@ -339,6 +340,13 @@ def write_shadow_heartbeat(
         payload["dash_port"] = int(dash_port)
     if code_revision is not None:
         payload["code_revision"] = dict(code_revision)
+    # Where this run's books actually came from (#659 N2). The rehearsal can
+    # read the live market socket, and a stream only serves tokens it has
+    # been subscribed to -- everything else silently drops to REST per read.
+    # Reported here so a run can never imply stream coverage it lacked, and
+    # so a stream run is comparable to the older REST-only corpus.
+    if book_sources is not None:
+        payload["book_source_mix"] = dict(book_sources)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".tmp")
@@ -651,6 +659,7 @@ def build_shadow_seam(
     decide_fn: Optional[Callable] = None,
     fetch_market: Optional[Callable] = None,
     fetch_books: Optional[Callable] = None,
+    stream: Optional[Any] = None,
     traded_fn: Optional[Callable[[str, set], Any]] = None,
     flow_fn: Optional[Callable[[str, float], Any]] = None,
     fetch_uma_status: Optional[Callable[[str], Any]] = None,
@@ -992,12 +1001,19 @@ def build_shadow_seam(
                         type(e).__name__, e)
 
     # One unified pricing seam (#659): every shadow read flows through the
-    # provider, stream-first with REST fallback. The rehearsal wires no
-    # stream, so this reads REST exactly as before — same books, one
-    # contract, and the lifecycle pass below reuses it for decision reads.
+    # provider, stream-first with REST fallback. `stream` is passed straight
+    # through and is None for any caller that does not own a socket -- the
+    # API keeps that default so a test or an injected caller never opens a
+    # connection it did not ask for. The entrypoint (`main`) is what wires a
+    # live `MarketStream` by default (#659 N2).
+    #
+    # A stream-backed rehearsal is NOT REST-equivalent: the stream only serves
+    # tokens it has been subscribed to, and everything else drops to REST one
+    # read at a time. That is why `read_stats()` is reported on the heartbeat
+    # -- the mix inside a run has to be visible, never inferred.
     from core_brain.book_provider import BookProvider
     book_provider = BookProvider(
-        stream=None,
+        stream=stream,
         rest_reader=shadow_fetch_books,
         clob_host=clob_host,
     )
@@ -1034,6 +1050,7 @@ def run_shadow(
     client_fn: Optional[Callable[[], Any]] = None,
     decide_fn: Optional[Callable] = None,
     fetch_books: Optional[Callable] = None,
+    stream: Optional[Any] = None,
     flow_fn: Optional[Callable[[str, float], Any]] = None,
     fetch_uma_status: Optional[Callable[[str], Any]] = None,
     record_market_event: Optional[Callable[[Any], None]] = None,
@@ -1154,9 +1171,37 @@ def run_shadow(
     markets = resolved_markets_fn()
     markets_holder = [markets]
 
+    # A stream serves only what it was told about. Every refresh of the
+    # universe registers its markets (and `retain_markets` drops the ones
+    # that fell out), exactly as the live loop's subscribe seam does -- so a
+    # stream run covers the markets it rotates, not a stale starting set.
+    subscribe_fn = None
+    if stream is not None:
+        try:
+            from core_brain.trader_loop import _make_subscribe_fn
+            cache = getattr(stream, "cache", None)
+            subscribe_fn = _make_subscribe_fn(
+                stream, cache, _lookup_fetch_market(lambda: markets_holder[0]))
+        except Exception as e:  # noqa: BLE001 - a rehearsal must still run
+            log.warning("shadow stream subscribe wiring failed: %s: %s"
+                        " -- the run reads REST per read", type(e).__name__, e)
+            subscribe_fn = None
+
+    def _subscribe(rows) -> None:
+        if subscribe_fn is None:
+            return
+        try:
+            subscribe_fn(rows or [])
+        except Exception as e:  # noqa: BLE001 - never block a rotation
+            log.warning("shadow stream subscribe failed: %s: %s",
+                        type(e).__name__, e)
+
+    _subscribe(markets)
+
     def dynamic_markets_fn():
         current = resolved_markets_fn()
         markets_holder[0] = current
+        _subscribe(current)
         if (paired_depth_arm is not None or paired_admission_arm is not None) and not current:
             from core_brain.paired_shadow import record_paired_feed_event
             record_paired_feed_event(
@@ -1203,6 +1248,7 @@ def run_shadow(
         decide_fn=decide_fn,
         fetch_market=_lookup_fetch_market(lambda: markets_holder[0]),
         fetch_books=fetch_books,
+        stream=stream,
         flow_fn=flow_fn,
         fetch_uma_status=fetch_uma_status,
         record_market_event=record_market_event,
@@ -1449,7 +1495,26 @@ def run_shadow(
     heartbeat_kwargs = dict(db_path=db_path, run_id=run_id, minutes=minutes,
                             interval=interval, started_at=started_at,
                             dash_port=dash_port, code_revision=code_revision)
-    write_shadow_heartbeat(**heartbeat_kwargs, cycle=0)
+
+    def _heartbeat(cycle: int, *, finished: bool = False,
+                   shutdown_reason: str = "") -> None:
+        """Publish the heartbeat with this run's book-source mix (#659 N2).
+
+        The mix travels with the heartbeat rather than only the final result:
+        an operator watching a rehearsal can see it pricing off the stream, and
+        a run that fell back to REST the whole time says so while it runs.
+        """
+        kwargs = dict(heartbeat_kwargs)
+        provider = getattr(seam, "book_provider", None)
+        if provider is not None:
+            try:
+                kwargs["book_sources"] = provider.read_stats()
+            except Exception:  # noqa: BLE001 - a heartbeat must never fail a run
+                pass
+        write_shadow_heartbeat(**kwargs, cycle=cycle, finished=finished,
+                               shutdown_reason=shutdown_reason)
+
+    _heartbeat(0)
 
     rotations = 0
 
@@ -1457,7 +1522,7 @@ def run_shadow(
         """Refresh the heartbeat once per rotation, then sleep as before."""
         nonlocal rotations
         rotations += 1
-        write_shadow_heartbeat(**heartbeat_kwargs, cycle=rotations)
+        _heartbeat(rotations)
         if finish_line_trades is not None or finish_line_merges is not None or finish_line_reliable:
             try:
                 from core_brain.run_scorer import score_run
@@ -1494,8 +1559,8 @@ def run_shadow(
     # Only a clean end is marked finished. A crash leaves the heartbeat
     # unrefreshed, which the reader calls ended once it goes stale -- so the
     # two endings stay distinguishable.
-    write_shadow_heartbeat(**heartbeat_kwargs, cycle=rotations, finished=True,
-                           shutdown_reason=str(shutdown_box.get("reason", "")))
+    _heartbeat(rotations, finished=True,
+               shutdown_reason=str(shutdown_box.get("reason", "")))
     if paired_depth_arm is not None:
         # Snapshot-level coverage must be audited before the run is marked
         # finished: a max-market visit cap, a market lookup failure, or an
@@ -1569,6 +1634,24 @@ def sample_shadow_markouts(
     except Exception as e:  # noqa: BLE001 - degrade, never stop the sweep
         log.warning("shadow markout sampling failed: %s", e)
         return 0
+
+
+def _start_shadow_stream() -> Any | None:
+    """The rehearsal's live book stream, already started, or None.
+
+    Returning None is a supported outcome, not a failure path to hide: the run
+    then reads REST on every read and its heartbeat reports a rest-only mix.
+    Never raises -- a rehearsal that cannot open the socket should still run.
+    """
+    try:
+        from core_brain.market_stream import MarketStream
+        stream = MarketStream()
+        stream.start()
+        return stream
+    except Exception as e:  # noqa: BLE001 - degrade to REST, say so
+        log.warning("shadow market stream unavailable (%s: %s) -- this run "
+                    "reads REST on every read", type(e).__name__, e)
+        return None
 
 
 def _default_markets_fn() -> Callable[..., list]:
@@ -1709,6 +1792,11 @@ def _parse_args(argv: Optional[list[str]] = None):
                          "the db, stats store and report. Defaults to shadow_run_id()")
     ap.add_argument("--max-markets", type=int, default=None,
                     help="cap the number of markets rotated (default: all)")
+    ap.add_argument("--no-stream", action="store_true", default=False,
+                    help="read every book over REST instead of the live market "
+                         "socket. The socket is the default; use this only to "
+                         "reproduce a rehearsal recorded before #659 N2. A stream "
+                         "run reports its stream/REST mix on the heartbeat")
     ap.add_argument("--markets-path", default=None,
                     help="read the universe from this feed file instead of the "
                          "default runtime/markets.json (a trial run's own "
@@ -1751,6 +1839,7 @@ def main(
     client_fn: Optional[Callable[[], Any]] = None,
     decide_fn: Optional[Callable] = None,
     fetch_books: Optional[Callable] = None,
+    stream_factory: Optional[Callable[[], Any]] = None,
     flow_fn: Optional[Callable[[str, float], Any]] = None,
     fetch_uma_status: Optional[Callable[[str], Any]] = None,
 ) -> int:
@@ -1809,13 +1898,34 @@ def main(
     else:
         resolved_markets_fn = (lambda max_markets=None:
                                _default_markets_fn()(a.max_markets))
+    # Books come from the live market socket by default (#659 N2); --no-stream
+    # reproduces a pre-#659 rehearsal. Either way the heartbeat carries the
+    # stream/REST mix, so the two are distinguishable after the fact.
+    #
+    # An injected REST reader means the caller brought its own source: opening a
+    # socket underneath it would be the "live read by surprise" this module
+    # refuses at `flow_fn`. The CLI injects nothing, so the operator's rehearsal
+    # gets the stream while an embedding caller or a test that supplied
+    # `fetch_books` keeps reading exactly what it wired.
+    #
+    # `stream_factory` is the way out of both rules, for a caller that wants a
+    # stream with its own reader and for a test that must stay off the network
+    # (the socket starts a thread eagerly -- unlike the other live ports, it
+    # cannot wait for a lazy read).
+    make_stream = stream_factory if stream_factory is not None else _start_shadow_stream
+    if a.no_stream or fetch_books is not None:
+        shadow_stream = None
+    else:
+        shadow_stream = make_stream()
+
     log.warning(
         "SHADOW RUN starting: mode=shadow minutes=%s interval=%ss store=%s "
-        "max_markets=%s markets_path=%s code=%s -- NO SIGNER LOADED: this process cannot place, cancel "
+        "max_markets=%s markets_path=%s code=%s books=%s -- NO SIGNER LOADED: this process cannot place, cancel "
         "or merge anything. Numbers below are rehearsal, not results.",
         a.minutes, a.interval, db, a.max_markets,
         a.markets_path if a.markets_path is not None else "default",
-        revision_label(code_revision_record))
+        revision_label(code_revision_record),
+        "rest (--no-stream)" if shadow_stream is None else "stream-first, REST fallback")
 
     if a.starting_bankroll_usd is not None:
         starting_bankroll = a.starting_bankroll_usd
@@ -1825,38 +1935,52 @@ def main(
     else:
         starting_bankroll = None
 
-    result = run_shadow(
-        minutes=a.minutes,
-        db_path=db,
-        markets_fn=resolved_markets_fn,
-        client_fn=client_fn,
-        decide_fn=decide_fn,
-        fetch_books=fetch_books or _default_fetch_books(),
-        # The queue-clear gate's tape reader, wired here with the other live
-        # sources -- this is the rehearsal an operator launches, so it is the
-        # one that must actually exercise the gate. It reads the public trades
-        # endpoint only, never the CLOB client the proxy guards, and the gate
-        # calls it lazily: a market with a clear front pays nothing.
-        flow_fn=flow_fn or _default_flow_fn(),
-        # The UMA re-check gate's Gamma reader, wired here with the other
-        # live sources -- this is the rehearsal an operator launches, so it
-        # is the one that must actually exercise the gate. Public Gamma only,
-        # no signer, lazy per visit through the 30s TTL cache.
-        fetch_uma_status=fetch_uma_status or _default_uma_status_fn(),
-        interval=a.interval,
-        funder=a.funder,
-        run_id=a.run_id,
-        markets_path=a.markets_path,
-        paired_depth_arm=a.paired_depth_arm,
-        paired_depth_cutoff_usd=a.paired_depth_cutoff_usd,
-        paired_admission_arm=a.paired_admission_arm,
-        starting_bankroll_usd=starting_bankroll,
-        dash_port=a.dash_port,
-        code_revision=code_revision_record,
-        finish_line_trades=a.finish_line_trades,
-        finish_line_merges=a.finish_line_merges,
-        finish_line_reliable=a.finish_line_reliable,
-    )
+    try:
+        result = run_shadow(
+            minutes=a.minutes,
+            db_path=db,
+            markets_fn=resolved_markets_fn,
+            client_fn=client_fn,
+            decide_fn=decide_fn,
+            fetch_books=fetch_books or _default_fetch_books(),
+            stream=shadow_stream,
+            # The queue-clear gate's tape reader, wired here with the other live
+            # sources -- this is the rehearsal an operator launches, so it is the
+            # one that must actually exercise the gate. It reads the public trades
+            # endpoint only, never the CLOB client the proxy guards, and the gate
+            # calls it lazily: a market with a clear front pays nothing.
+            flow_fn=flow_fn or _default_flow_fn(),
+            # The UMA re-check gate's Gamma reader, wired here with the other
+            # live sources -- this is the rehearsal an operator launches, so it
+            # is the one that must actually exercise the gate. Public Gamma only,
+            # no signer, lazy per visit through the 30s TTL cache.
+            fetch_uma_status=fetch_uma_status or _default_uma_status_fn(),
+            interval=a.interval,
+            funder=a.funder,
+            run_id=a.run_id,
+            markets_path=a.markets_path,
+            paired_depth_arm=a.paired_depth_arm,
+            paired_depth_cutoff_usd=a.paired_depth_cutoff_usd,
+            paired_admission_arm=a.paired_admission_arm,
+            starting_bankroll_usd=starting_bankroll,
+            dash_port=a.dash_port,
+            code_revision=code_revision_record,
+            finish_line_trades=a.finish_line_trades,
+            finish_line_merges=a.finish_line_merges,
+            finish_line_reliable=a.finish_line_reliable,
+        )
+    finally:
+        # The socket is a daemon thread and would die with the process
+        # anyway; stopping it here means a clean exit for the run and no
+        # lingering connection for a caller that embeds `main`. It runs on
+        # the error paths too: `run_shadow` can raise before its loop
+        # starts, and the production-registry guard is exactly that case.
+        if shadow_stream is not None:
+            try:
+                shadow_stream.stop()
+            except Exception as e:  # noqa: BLE001 - exit must not fail on teardown
+                log.warning("shadow market stream stop failed: %s: %s",
+                            type(e).__name__, e)
 
     quoted = sum(1 for r in result.results if r.status == "QUOTED")
     declined = sum(1 for r in result.results if r.status == "DECLINED")

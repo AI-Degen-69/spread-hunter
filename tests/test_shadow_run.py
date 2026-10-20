@@ -2673,3 +2673,212 @@ def test_shadow_seam_reads_through_unified_book_provider(tmp_path):
     assert seam.book_provider.get_mid("tok") == 0.48
     levels = seam.book_provider.get_levels_book("tok")
     assert levels["bids"] == [{"price": 0.46, "size": 10.0}]
+
+
+class ShadowFakeCache:
+    """Enough of MarketBookCache for the subscribe seam to wait on."""
+
+    def __init__(self):
+        self.tokens: list[str] = []
+
+    def ready_tokens(self):
+        return list(self.tokens)
+
+
+class ShadowFakeStream:
+    """Duck-typed MarketStream: ready books for the tokens it was told about."""
+
+    def __init__(self, *, connected=True):
+        self.connected = connected
+        self.cache = ShadowFakeCache()
+        self.ensured: list[tuple] = []
+        self.retained: list = []
+        self.started = False
+        self.stopped = False
+
+    def fetch_books(self, clob_host, token_id):
+        from core_brain.market_stream import BookNotReady
+
+        if not self.connected:
+            raise BookNotReady(f"market stream is not connected ({token_id})")
+        if str(token_id) not in self.cache.tokens:
+            raise BookNotReady(f"no live book for token {token_id}")
+        return _books(clob_host, token_id)
+
+    def ensure_market(self, condition_id, slug, up_token, down_token):
+        self.ensured.append((condition_id, slug, up_token, down_token))
+        self.cache.tokens.extend(t for t in (up_token, down_token) if t)
+
+    def retain_markets(self, condition_ids):
+        self.retained = list(condition_ids)
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+
+class TestShadowReadsTheLiveBook:
+    """#659 N2: the rehearsal reads the market socket by default."""
+
+    def test_the_seam_serves_books_from_the_stream(self, tmp_path):
+        from core_brain.shadow_run import build_shadow_seam
+
+        stream = ShadowFakeStream()
+        seam = build_shadow_seam(
+            db_path=tmp_path / "shadow.db",
+            stream=stream,
+            intents_sink=[],
+        )
+        stream.cache.tokens.append("tok-up")
+
+        assert seam.fetch_books("https://clob", "tok-up")["best_bid"] == 0.47
+        assert seam.book_provider.read_stats()["stream"] == 1
+
+    def test_the_heartbeat_reports_the_book_source_mix(self, tmp_path):
+        """A stream run must never be reported as if it saw no socket."""
+        import json
+
+        from core_brain.shadow_run import run_shadow, shadow_heartbeat_path
+
+        run_id = "shadow-659n2-mix"
+        stream = ShadowFakeStream()
+        run_shadow(
+            minutes=0,
+            db_path=tmp_path / "shadow.db",
+            markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+            fetch_books=_books,
+            stream=stream,
+            run_id=run_id,
+        )
+
+        payload = json.loads(
+            shadow_heartbeat_path(run_id=run_id).read_text(encoding="utf-8"))
+        mix = payload["book_source_mix"]
+        assert set(mix) == {"stream", "rest", "fallback"}
+        assert isinstance(mix["stream"], int)
+        assert isinstance(mix["rest"], int)
+
+    def test_the_mix_is_rest_only_without_a_stream(self, tmp_path):
+        import json
+
+        from core_brain.shadow_run import run_shadow, shadow_heartbeat_path
+
+        run_id = "shadow-659n2-rest"
+        run_shadow(
+            minutes=0,
+            db_path=tmp_path / "shadow.db",
+            markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+            fetch_books=_books,
+            run_id=run_id,
+        )
+
+        payload = json.loads(
+            shadow_heartbeat_path(run_id=run_id).read_text(encoding="utf-8"))
+        assert payload["book_source_mix"]["stream"] == 0
+
+    def test_main_wires_the_live_stream_by_default(
+            self, tmp_path, monkeypatch):
+        """No --no-stream, no injected REST reader: the socket is opened."""
+        import core_brain.shadow_run as shadow_mod
+
+        opened: list = []
+
+        def factory():
+            opened.append(True)
+            return None  # None is a supported outcome; the mix then says REST
+
+        monkeypatch.setattr(shadow_mod, "_start_shadow_stream", factory)
+        monkeypatch.setattr(shadow_mod, "_default_fetch_books", lambda: _books)
+
+        rc = shadow_mod.main(
+            ["--minutes", "0", "--db", str(tmp_path / "shadow.db")],
+            markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+        )
+
+        assert rc == 0
+        assert opened == [True]
+
+    def test_main_does_not_open_a_socket_under_no_stream(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        import core_brain.shadow_run as shadow_mod
+
+        def factory():
+            raise AssertionError("--no-stream must not start a socket")
+
+        monkeypatch.setattr(shadow_mod, "_start_shadow_stream", factory)
+
+        with caplog.at_level(logging.INFO, logger="shadow_run"):
+            rc = shadow_mod.main(
+                ["--minutes", "0", "--db", str(tmp_path / "shadow.db"),
+                 "--no-stream"],
+                markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+                client_fn=lambda: object(),
+                decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+                fetch_books=_books,
+            )
+
+        assert rc == 0
+        assert "rest (--no-stream)" in caplog.text.lower()
+
+    def test_an_injected_rest_reader_keeps_its_own_source(
+            self, tmp_path, monkeypatch):
+        """A caller that brought a reader is not handed a live socket.
+
+        Same rule the module already applies to `flow_fn`: no live read by
+        surprise.
+        """
+        import core_brain.shadow_run as shadow_mod
+
+        def factory():
+            raise AssertionError("an injected REST reader must not open a socket")
+
+        monkeypatch.setattr(shadow_mod, "_start_shadow_stream", factory)
+
+        rc = shadow_mod.main(
+            ["--minutes", "0", "--db", str(tmp_path / "shadow.db")],
+            markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+            fetch_books=_books,
+        )
+
+        assert rc == 0
+
+    def test_a_failed_run_stops_the_stream_it_opened(self, tmp_path):
+        """The socket closes on the error path, not only after a clean run.
+
+        The production-registry guard raises inside `run_shadow`, after `main`
+        has already started the stream. Without the `finally`, that exception
+        left a live `market-stream` thread behind -- and a later test asserting
+        no stream threads remain failed because of it.
+        """
+        import threading
+
+        import core_brain.shadow_run as shadow_mod
+        from core_brain.order_registry import DEFAULT_DB_PATH
+        from core_brain.shadow_guard import ShadowSafetyViolation
+
+        stream = ShadowFakeStream()
+
+        with pytest.raises(ShadowSafetyViolation, match="production registry"):
+            shadow_mod.main(
+                ["--minutes", "0", "--db", str(DEFAULT_DB_PATH)],
+                markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+                client_fn=lambda: object(),
+                decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+                stream_factory=lambda: stream,
+            )
+
+        assert stream.stopped is True
+        assert not [t for t in threading.enumerate()
+                    if "market-stream" in str(t.name)]

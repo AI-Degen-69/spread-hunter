@@ -280,3 +280,63 @@ def test_only_owning_provider_stops_stream():
     owned = FakeStream()
     BookProvider(stream=owned, rest_reader=_rest(), owns_stream=True).stop()
     assert owned.stopped is True
+
+
+def test_read_stats_count_stream_and_rest_reads_by_source():
+    """A rehearsal reports where its books came from, not just the last one.
+
+    `stats_box` keeps only the latest read, so before #659 N2 a run that fell
+    back to REST on half its reads looked identical in the record to one that
+    never touched the fallback.
+    """
+    from core_brain.book_provider import BookProvider
+
+    provider = BookProvider(
+        stream=FakeStream(connected=True, books={"tok": STREAM_BOOK}),
+        rest_reader=_rest(),
+    )
+    provider.get_book("tok")
+    provider.get_book("missing")  # stream has no book -> REST
+    provider.get_book("tok")
+
+    assert provider.read_stats() == {
+        "stream": 2,
+        "rest": 1,
+        "fallback": {"not_ready": 1},
+    }
+
+
+def test_read_stats_report_a_rest_only_provider():
+    from core_brain.book_provider import BookProvider
+
+    provider = BookProvider(stream=None, rest_reader=_rest())
+    provider.get_book("tok")
+    provider.get_book("tok")
+
+    assert provider.read_stats() == {"stream": 0, "rest": 2, "fallback": {}}
+
+
+def test_read_stats_name_each_fallback_reason():
+    from core_brain.book_provider import BookProvider
+
+    provider = BookProvider(
+        stream=FakeStream(connected=False),
+        rest_reader=_rest(),
+    )
+    provider.get_book("tok")
+
+    assert provider.read_stats()["fallback"] == {"not_connected": 1}
+
+
+def test_read_stats_do_not_count_a_failed_rest_read():
+    """A REST reader that raises returned no book, so it is not a read."""
+    from core_brain.book_provider import BookProvider
+
+    def boom(clob_host, token_id):
+        raise RuntimeError("rest down")
+
+    provider = BookProvider(stream=None, rest_reader=boom)
+    with pytest.raises(RuntimeError):
+        provider.get_book("tok")
+
+    assert provider.read_stats() == {"stream": 0, "rest": 0, "fallback": {}}
