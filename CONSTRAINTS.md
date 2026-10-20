@@ -1,44 +1,70 @@
-Branch: i718/settle-bare-rebate-type | Issue: #718
+Branch: i717/remove-retired-reward-vocabulary | Issue: #717
 
-# Constraints - #718 settle the bare REBATE activity type in the PnL cross-check
+# Constraints — #717 Remove the retired reward vocabulary from the quoting engine
 
-`CREDIT_TYPES` counts a bare `REBATE` as a venue credit but `ACTIVITY_TYPES`
-never requests one, so the two lists disagree about a type the feed may or may
-not send. One of them has to give.
+The venues we trade are graduated spread markets: they pay **$0.00** in maker rewards and the
+KPI report does not estimate them. The quoting engine still speaks that retired model's
+language. This ticket is a wording-and-dead-code change only.
 
 ## The bar
 
-- The two lists agree about bare `REBATE`, and the reason is written in the
-  comment above them, citing venue evidence (the documented `/activity` type
-  enum), not code.
-- Bare `REBATE` is removed from `CREDIT_TYPES`; `ACTIVITY_TYPES` is unchanged.
-  Remaining credit order stays: `MAKER_REBATE, REWARD, REFERRAL_REWARD,
-  CONVERSION`.
-- A test pins the decision: a bare `REBATE` row is not a type the replay knows
-  (unreadable, `UNJUDGED`, never silently dropped).
-- `python -m pytest -q tests/test_pnl_crosscheck.py tests/test_venue_fees.py`
-  passes.
-- Total-preserving invariant holds: credits stay apart from trading cashflow;
-  `pnl_inclusive` adds them back. No change to how a credit is counted.
+- **The retired vocabulary is gone from the code tree.**
+  `git grep -n "reward window\|reward quote\|reward minimum" -- core_brain/ tests/` returns
+  nothing, and the case-insensitive form returns nothing either.
+- **`quotes.reward_score()` is deleted** — the function, its docstring and its call site. No
+  importer anywhere (`git grep -n "reward_score" -- core_brain/ tests/ scripts/ dashboard/`
+  returns nothing).
+- **The zero-allocation comment names no function that does not exist.** `reallocate` is
+  gone from it, and the comment describes today's facts.
+- **Every pinned test is re-pointed, never deleted.** The four transient-refusal pins
+  (`tests/test_trader_loop.py` ×3, `tests/test_shadow_run.py` ×1) carry the new wording and
+  every assertion stays.
+- **No behaviour change beyond the text of the strings.** No default, env var name, price,
+  size, gate, threshold, comparison or money-path message moves. No numeric literal in a
+  message changes.
+- **The visible messages keep their meaning.** The distance refusal still says how far from
+  mid the quote sat and what the window is; the truncation refusal still carries the
+  percentage, the ladder shares and the minimum; the price-risk refusal still carries the
+  price, the ladder and the venue floor; the success reason still says where the quote sits
+  and still carries the waiver suffix and the dynamic-offset tag.
 
 ## Deliberate non-changes (a later reviewer must not "fix" these back)
 
-- `ACTIVITY_TYPES`, `ASC_TYPES`, `ACTIVITY_PAGE_SIZE`, the row cap: untouched.
-- `_cash_delta()`, `replay_rows()`, `_walk_type()`, `_get_json()`,
-  `replay_cashflow()`, `Replay`: no logic change.
-- `main()` CLI, `--inclusive` behaviour, the `maker_rebates` adjustment: untouched.
-- KPI report (`core_brain/kpi.py`), fee math (`core_brain/venue_fees.py`),
-  `venue.py`, `statistics_report.py`, validation artifacts: untouched.
-- `tests/test_venue_fees.py`: untouched, must still pass.
-- `docs/issues/708-noticed-but-not-touching.md` (incl. N4): untouched ledger.
-- No other activity type added or removed (`DEPOSIT`, `WITHDRAWAL`, `YIELD`,
-  `TAKER_REBATE` stay out of scope even though the docs list them).
+- **`core_brain/kpi.py`'s `rebate_est` / `rebate_est_note` / `total_with_rebate` stay.** They
+  are the emitted schema and `None` is the honest value on graduated spread markets.
+- **`core_brain/pnl_crosscheck.py`'s `CREDIT_TYPES` / `ACTIVITY_TYPES` / `maker_rebates`
+  stay.** Real venue credits flow through them.
+- **`reward_offset` / `min_reward_offset` / `bot_pos_skew_min_reward_offset_cents` keep their
+  names.** They are config keys read by live code and by the dashboard; renaming them is the
+  `docs/ideas/variable-names-refactor.md` ticket's job, not this one's.
+- **The venue's own `rewards` payload fields keep their names.** `rewards.max_spread`,
+  `rewardsMinSize` and `rewards_daily_rate` are the venue's field names, read from the
+  market payload.
+- **`docs/issues/708-noticed-but-not-touching.md` rows N1/N2/N6 keep their text.** They are
+  the #708 record of what this ticket was published from. Only Station VI resolves rows.
+- **No KPI / PnL cross-check / venue-fee contract moves.** Out of scope by the issue.
+
+## #708 supersession (read this before "restoring" anything)
+
+`CONSTRAINTS.md` for #708 said, in its deliberate non-changes: *"The visible message strings
+in `core_brain/quotes.py` that say 'reward window' and 'reward quote ... score N' are output
+the operator reads. Rewording them is a separate change to visible output"* and *"`quotes.
+reward_score()` stays: a legacy diagnostic that feeds no sizing decision."*
+
+**#717 is that separate change.** Both sentences are superseded by this file. #708's ledger
+(`docs/issues/708-noticed-but-not-touching.md`, rows N1, N2, N6) is what published this
+ticket. Do not read the #708 wording as a reason to put the strings or the function back.
 
 ## Process
 
-- No live command, no venue call, no write to `data/orders.db`. No
-  `python -m core_brain.pnl_crosscheck` CLI run (it makes network reads and can
-  create/migrate the registry DB); verification is replay-level only.
-- No direct push to `main`; the change ships through a PR.
+- No live/opening command: no `quote`, no `complete`, no Trader loop, no dashboard START.
+  No venue call.
+- `data/orders.db` is the production registry: read-only, never rewritten.
+- Shadow rehearsals use a fresh isolated DB under `data/`, never `data/orders.db`.
 - Targeted suites locally only; GitHub CI on Ubuntu and Windows is the merge gate.
 - No `pytest` / `gh` / `git` step inside the operator's "How to verify".
+- Out-of-scope findings become an `open` row in
+  `docs/issues/717-noticed-but-not-touching.md` with owner + when. Never touched mid-build.
+- Anti-cheat: no skipped or disabled test, no deleted assertion, no silenced linter, no
+  loosened threshold to get green.
+- No new external dependency.
