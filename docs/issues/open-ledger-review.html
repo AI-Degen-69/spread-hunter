@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>סקירת תיק פתוח — 15 שורות</title>
+<title>סקירת תיק פתוח — 25 שורות, 1 פתוחה</title>
 <style>
 :root{
   --ink:#eaf1f6;--muted:#9aabb8;--bg:#0b1117;--panel:#121c25;--panel-2:#172530;
@@ -48,358 +48,174 @@ ul.consider li{margin:.35rem 0}
 .suggest{margin-top:14px;background:rgba(85,214,194,.06);border-right:3px solid var(--accent);border-radius:8px 0 0 8px;padding:.9rem 1.1rem;font-size:.95rem}
 .suggest strong{color:var(--accent)}
 .mono{font-family:'Courier New',monospace;font-size:.85rem}
-@media(max-width:700px){h1{font-size:1.6rem}}
+table{width:100%;border-collapse:collapse;margin-top:12px;font-size:.88rem}
+th,td{text-align:right;padding:.55rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-size:.75rem;letter-spacing:.03em;font-weight:600}
+td.rid{font-family:'Courier New',monospace;color:var(--accent);white-space:nowrap}
+.chip{border-radius:8px;padding:.1rem .55rem;font-size:.72rem;font-weight:700;white-space:nowrap;display:inline-block}
+.c-done{background:rgba(74,222,128,.12);color:var(--green);border:1px solid rgba(74,222,128,.35)}
+.c-drop{background:var(--panel-2);color:var(--muted);border:1px solid var(--line)}
+.c-tick{background:rgba(85,214,194,.1);color:var(--accent);border:1px solid rgba(85,214,194,.35)}
+.c-open{background:rgba(248,113,113,.14);color:var(--red);border:1px solid rgba(248,113,113,.35)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.78rem;color:var(--muted);margin-top:12px}
+@media(max-width:700px){h1{font-size:1.6rem}th,td{padding:.45rem .35rem;font-size:.8rem}}
 </style>
 </head>
 <body>
 <main>
 <!-- HEADER -->
-<h1>סקירת תיק פתוח — 15 שורות שמחכות להחלטה שלך</h1>
+<h1>סקירת תיק פתוח — 25 שורות, 1 פתוחה</h1>
 <div class="meta">
-  <span class="badge">15 פתוחות</span>
-  <span class="badge">5 גיליונות</span>
-  <span class="badge">2 מומלצות לסגירה</span>
-  <span class="badge" style="border-color:var(--green);color:var(--green)">1 נפתרה (717 · N1)</span>
+  <span class="badge" style="border-color:var(--red);color:var(--red)">1 פתוחה (חסומה)</span>
+  <span class="badge" style="border-color:var(--accent);color:var(--accent)">2 עם כרטיס GitHub</span>
+  <span class="badge" style="border-color:var(--green);color:var(--green)">22 הוכרעו</span>
+  <span class="badge">6 גיליונות</span>
 </div>
 <div class="callout">
-  <strong>מה הדף הזה:</strong> חמישה גיליונות תיעדו ממצאים ש"שמנו לב אבל לא נוגעים" — 15 שורות פתוחות, כל אחת עם בעלים ("אתה") ומועד. המקור האמיתי הוא חמישה קבצי לדג. כאן כל שורה מסודרת כך שתוכל להחליט מהר: מה פתוח, למה זה בכלל עניין, מה לשקול, טווח ההשפעה, והצעה לעבודה. <strong>ההחלטה היא תמיד שלך</strong> — רק שלב <span class="mono">Station VI</span> סוגר שורה במערכת, והדף הזה הוא ייעוץ בלבד.
+  <strong>מה השתנה בדף הזה:</strong> הוא הציג 15 שורות פתוחות מול תיק של 25. כל שורה קיבלה עכשיו <em>הכרעה כתובה</em> בתא שלה — לא "בטיפול", לא "מתישהו". שורה שנסגרה נושאת את הנימוק; שורה שנדחתה נושאת למה לא; שורה שנשלחה לכרטיס נושאת את המספר. <strong>הדף הזה נגזר מהגיליונות</strong>, והוא לא אמור לספר סיפור אחר מהם. שורה אחת נשארה פתוחה, והיא חסומה על מדידה ולא עלייך.
 </div>
 
 <!-- STATS -->
 <div class="stat-grid">
-  <div class="stat-card"><div class="stat-num">15</div><div class="stat-label">שורות פתוחות</div></div>
-  <div class="stat-card"><div class="stat-num">5</div><div class="stat-label">גיליונות לדג</div></div>
-  <div class="stat-card"><div class="stat-num">2</div><div class="stat-label">מומלצות לסגירה</div></div>
-  <div class="stat-card"><div class="stat-num">1</div><div class="stat-label">נפתרה השבוע</div></div>
-  <div class="stat-card"><div class="stat-num" style="color:var(--amber)">6</div><div class="stat-label">עם יורש (#621/#657)</div></div>
+  <div class="stat-card"><div class="stat-num">25</div><div class="stat-label">שורות בסך הכול</div></div>
+  <div class="stat-card"><div class="stat-num" style="color:var(--green)">22</div><div class="stat-label">נפתרו / נדחו</div></div>
+  <div class="stat-card"><div class="stat-num">2</div><div class="stat-label">נשלחו לכרטיס</div></div>
+  <div class="stat-card"><div class="stat-num" style="color:var(--red)">1</div><div class="stat-label">פתוחה, חסומה</div></div>
+  <div class="stat-card"><div class="stat-num" style="color:var(--amber)">0</div><div class="stat-label">מחכות להחלטה שלך</div></div>
 </div>
 
 <!-- QUICK MAP -->
 <div class="panel">
-  <h2>מפת השורות</h2>
+  <h2>מפת השורות — הכול, לפי גיליון</h2>
   <div class="map-list">
-    <div class="map-row"><span class="map-id">717·N2</span><span>“שכירות” ~$50/יום — איור לא נמדד</span></div>
-    <div class="map-row"><span class="map-id">717·N3</span><span>אוצר מילים “rent/income” בשער העצירה</span></div>
-    <div class="map-row"><span class="map-id">717·N4</span><span>מסנן השווקים עדיין “מדבר” reward-score</span></div>
-    <div class="map-row"><span class="map-id">718·N1</span><span>4 סוגי פעולה חסרים ברשימות ה-replay</span></div>
-    <div class="map-row"><span class="map-id">687·N1</span><span>אין מספרי פס לפי פרסט</span></div>
-    <div class="map-row"><span class="map-id">687·N2</span><span>אין לדג ל-#674 (רישום)</span></div>
-    <div class="map-row"><span class="map-id">646·N1</span><span>Poller REST מדורג + חשיפת עומס (#621)</span></div>
-    <div class="map-row"><span class="map-id">646·N2</span><span>תמחור מחדש רגל שנייה אחרי מילוי חלקי</span></div>
-    <div class="map-row"><span class="map-id">646·N3</span><span>מדידת החלקת עצירה ביציאות קשות</span></div>
-    <div class="map-row"><span class="map-id">646·N4</span><span>רשימת הדרגות של #621</span></div>
-    <div class="map-row"><span class="map-id">646·N5</span><span>יציאות חלקיות ללא מבט זירה</span></div>
-    <div class="map-row"><span class="map-id">659·N1</span><span>הגנת poll-loop של order_manager לזרם</span></div>
-    <div class="map-row"><span class="map-id">659·N2</span><span>חזרה עם MarketStream חי</span></div>
-    <div class="map-row"><span class="map-id">659·N3</span><span>בנייה מחדש של live_marks (#657)</span></div>
-    <div class="map-row"><span class="map-id">659·N4</span><span>מילוי שווה-מחיר וזיכוי מילוי</span></div>
+    <div class="map-row"><span class="map-id">646·N1</span><span>screener cache יכול לתמחר שוק שכבר נפתר</span><span class="chip c-done">נפתר</span></div>
+    <div class="map-row"><span class="map-id">646·N2</span><span>תמחור מחדש של רגל שנשארה אחרי מילוי חלקי</span><span class="chip c-open">פתוח · חסום</span></div>
+    <div class="map-row"><span class="map-id">646·N3</span><span>מדידת החלקת עצירה ביציאות קשות</span><span class="chip c-tick">#730</span></div>
+    <div class="map-row"><span class="map-id">646·N4</span><span>יציאות ונתיבי תקלה קוראים ספרים בשני מסלולים</span><span class="chip c-drop">נדחה</span></div>
+    <div class="map-row"><span class="map-id">646·N5</span><span>שער הסיכון פעל בלי ארנק — רגל שנשארה נדלגה</span><span class="chip c-done">נפתר</span></div>
+    <div class="map-row"><span class="map-id">659·N1</span><span>הגנת poll-loop של order_manager דרך זרם</span><span class="chip c-drop">נדחה</span></div>
+    <div class="map-row"><span class="map-id">659·N2</span><span>חזרה עם MarketStream חי</span><span class="chip c-done">נפתר</span></div>
+    <div class="map-row"><span class="map-id">659·N3</span><span>בנייה מחדש של live_marks מעל הזרם</span><span class="chip c-drop">נדחה</span></div>
+    <div class="map-row"><span class="map-id">659·N4</span><span>מילוי שווה-מחיר וזיכוי מילוי מהדפוסים</span><span class="chip c-drop">נדחה · #474</span></div>
+    <div class="map-row"><span class="map-id">687·N1</span><span>אין מספרי פס סורק לפי פרסט</span><span class="chip c-done">נפתר</span></div>
+    <div class="map-row"><span class="map-id">687·N2</span><span>אין גיליון #674 לסגור</span><span class="chip c-done">נפתר</span></div>
+    <div class="map-row"><span class="map-id">708·N1–N6</span><span>תיקון vocabulary ב-rebate, תוצאה לכל אחד</span><span class="chip c-done">6 נסגרו</span></div>
+    <div class="map-row"><span class="map-id">708·N7</span><span>שני שואוקייסים מחוץ ל-docs/issues</span><span class="chip c-tick">#719</span></div>
+    <div class="map-row"><span class="map-id">717·N1–N6</span><span>מינוח פרסים בדימוס: 4 נפתרו, 2 נדחו</span><span class="chip c-done">6 נסגרו</span></div>
+    <div class="map-row"><span class="map-id">718·N1</span><span>DEPOSIT/WITHDRAWAL בריצה</span><span class="chip c-drop">נדחה</span></div>
+  </div>
+  <div class="legend">
+    <span><span class="chip c-done">נפתר</span> הקוד או הטקסט שונו</span>
+    <span><span class="chip c-drop">נדחה</span> הוכרע שלא לעשות, עם נימוק</span>
+    <span><span class="chip c-tick">#N</span> יש כרטיס GitHub</span>
+    <span><span class="chip c-open">פתוח</span> ממתין לקלט שאינו שלך</span>
   </div>
 </div>
 
-<!-- ISSUE 717 -->
-<div class="issue-head">
-  <span class="issue-num">#717</span>
-  <strong>מינוח פרסים בדימוס — 3 שורות פתוחות</strong>
-  <span class="badge">מועד: מעבר אוצר מילים הבא</span>
-  <a href="https://github.com/AI-Degen-69/spread-hunter/issues/717" target="_blank" class="badge">בעיה #717</a>
-</div>
-
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">717 · N2</span><strong>“שכירות” ~$50/יום — איור לא נמדד</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body">ב-<span class="mono">core_brain/quotes.py:326-330</span> נימוק היציאה משוק יוצא: <span class="mono">"Giving up the rent is the point: rent is worth ~$50/day across the fleet"</span>. מדובר באיור שאיש לא מדד — וזו החלטה על נתונים, לא על ניסוח.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>המספר נכתב פעם, לא הופק מריצות; הצי עשוי להיות אחר היום.</li>
-      <li>אפשר למדוד מחדש (רווח/הפסד בפועל מרכישות) או לוותר על המספר ולנסח איכותית.</li>
-      <li>מדובר בטקסט ש-operator רואה בנימוק סירוב — דיוק שלו הוא עניין אמון.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-data">מדידה / נתונים</span>
-    <span class="impact-badge ib-vocab">טקסט בלבד</span>
-    <span>השפעה: נמוכה — אפס שינוי התנהגות.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> באותו מעבר אוצר מילים כמו N3 — או מודדים את הנתון מ-30 הימים האחרונים ומציבים אותו, או מניחים ניסוח איכותית כמו "רווח המיזוג שהצי מוותר עליו". לא להשאיר איור בלתי-מאומת.</div>
-</div>
-
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">717 · N3</span><strong>אוצר מילים “rent/income” בשער העצירה</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body">ב-<span class="mono">core_brain/unhedged_stop_loss.py:5-10,100-110</span> מופיעים "only the second is worth giving up the rent for", "a WIDENED market still earns", "the only state that forfeits income". במילים של היום, "שכירות/הכנסה" = לכידת מרווח מיזוג, לא פרסי זירה.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>המילים מעצבות איך קוראים את הגיון שער העצירה — יש להחליף בניסוח חד-משמעי.</li>
-      <li>החלטת תוכן: מה השער "מוותר עליו" בעצם — מרווח מיזוג שנותר על השולחן.</li>
-      <li>מומלץ לבדוק מול <span class="mono">docs/agents/glossary.md</span> כדי לא ליצור עוד מינוח חדש.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-vocab">תוכן / מינוח</span>
-    <span>השפעה: נמוכה-בינונית — תיעוד ומסכים; אפס חישוב.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> לאמץ מונח אחיד (למשל "רווח מיזוג" / <span class="mono">merge-spread capture</span>) ולהחיל אותו בכל שלושת המקומות באותו תיקון, יחד עם N2 ו-N4.</div>
-</div>
-
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">717 · N4</span><strong>מסנן השווקים עדיין “מדבר” reward-score</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body">ב-<span class="mono">scripts/filter_markets.py:8,587,763-793,926</span> הנרטיב סביב <span class="mono">rewards</span> עדיין במונחי "reward score" / "reward-funded". ה-payload עצמו הוא שדה חי של הזירה שהמסנן קורא.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>קודם צריך לקבוע מה ה-payload הזה באמת עושה היום במסנן — מבקיע? שוער? מתעלם?</li>
-      <li>בלי מפה של השימוש בפועל, כל ניסוח מחדש יהיה ניחוש סמנטי.</li>
-      <li>מדובר ב-operator-visible output חלקית (מסנן → משפך).</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-vocab">תוכן / מינוח</span>
-    <span>השפעה: בינונית — ההיגיון לא משתנה, אבל הנרטיב מעצב חקירות עתידיות.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> כרטיס המשך קטן "filter rewards-prose pass": קודם למפות מה ה-payload מזין (חקירה קריאה בלבד), אחר כך לנסח מחדש. אין לשער משמעות בפרוזה.</div>
-</div>
-
-<!-- ISSUE 718 -->
-<div class="issue-head">
-  <span class="issue-num">#718</span>
-  <strong>סוגי פעולה חסרים ב-replay — שורה אחת פתוחה</strong>
-  <span class="badge">מועד: שפורסם</span>
-  <a href="https://github.com/AI-Degen-69/spread-hunter/issues/718" target="_blank" class="badge">בעיה #718</a>
-</div>
-
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">718 · N1</span><strong>4 סוגי פעולה חסרים בשתי הרשימות</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body">אנום ה-<span class="mono">/activity</span> המתועד מנה גם <span class="mono">DEPOSIT</span>, <span class="mono">WITHDRAWAL</span>, <span class="mono">YIELD</span> ו-<span class="mono">TAKER_REBATE</span> — ואף אחד מהם לא ב-<span class="mono">CREDIT_TYPES</span> וגם לא ב-<span class="mono">ACTIVITY_TYPES</span>. ה-replay לא מבקש אותם ולא מזכה אותם.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>זו החלטה של מסלול כסף: האם ה-replay צריך לבקש את הסוגים, והאם צריך לזכות אותם ב-PnL?</li>
-      <li>הפקדות ומשיכות אסור שיופיעו כקרדיט ב-PnL — זה היה מנפח/מכווץ את המספר.</li>
-      <li><span class="mono">TAKER_REBATE</span> ו-<span class="mono">YIELD</span> עשויים להיות תזרימי מזומנים אמיתיים שכן משפיעים על התמונה.</li>
-      <li>צריך ראיה מהזירה: האם הפיד בכלל פולט את הסוגים האלה, ובאיזה סימן?</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-money">כסף</span>
-    <span>השפעה: גבוהה — אם מזכים לא נכון, מספרי ה-PnL משתנים.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> לפני החלטה — חקירה קריאה-בלבד על פיד הפעילות (האם הסוגים מופיעים בפועל). התמונה הסבירה: לבקש את כל הסוגים לשלמות, אבל לזכות רק <span class="mono">TAKER_REBATE</span> ו-<span class="mono">YIELD</span> אם הם אמיתיים; לעולם לא הפקדות/משיכות. לתעד את הממצאים בכרטיס ולהחליט על פיהם.</div>
-</div>
-
-<!-- ISSUE 687 -->
-<div class="issue-head">
-  <span class="issue-num">#687</span>
-  <strong>פרסטים ומסנן — 2 שורות פתוחות</strong>
-  <span class="badge">מועד: כשתחליט על הפסים</span>
-  <a href="https://github.com/AI-Degen-69/spread-hunter/issues/687" target="_blank" class="badge">בעיה #687</a>
-</div>
-
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">687 · N1</span><strong>אין מספרי פס לפי פרסט — הכל על הפסים המשולחים</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body">אין מספרים ייעודיים לפרסטים במסנן: ששת <span class="mono">SCREENER_PRESETS</span> משייטים על הפסים המשולחים (<span class="mono">filter_live_activity_min_ratio=0.0</span>, <span class="mono">filter_std_vol_min_24h_usd=125_000.0</span>). רשומת ריצה (<span class="mono">docs/runs/2026-10-14-loose-baseline-i569.md</span>) לא נושאת פסים.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>בחירת פסים רפים/הדוקים יותר לפרסט היא החלטת מוצר, לא רפקטורינג.</li>
-      <li>להמציא סולם שמרני→אגרסיבי = לנחש מספרים שהאסטרטגיה מעולם לא מדדה.</li>
-      <li>פסים לא נכונים משנים אילו שווקים מגיעים למשפך ולתנת הצגת המסנן — ובעקיפין מה אפשר לצטט.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-product">מוצר</span>
-    <span>השפעה: בינונית — תוצר המסנן/המשפך; אין כסף עד שמצוטט שוק.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> לא להמציא. להשאיר את הפסים המשולחים, ולתעד "פסים: TBD" בתיעוד הפרסט עד שיהיו נתוני ריצה נמדדים לבחירת מספרים.</div>
-</div>
-
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">687 · N2</span><strong>אין לדג ל-#674 — שורה של רישום</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body">אין קובץ <span class="mono">docs/issues/674*</span> בעץ (ארטיפקטים של Issues סגורים נגזמו), כך שאין תא לדג לסגירה של פריט #674-N3. הסגירה מתועדת ב-<span class="mono">tasks/plan.md</span>.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>אין מה לערוך — זו תצפית על מצב התיעוד.</li>
-      <li>הסגירה כבר רשומה במקום אחר (plan.md); השורה הזו היא רק ניהול רשומות.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-info">מידע / רישום</span>
-    <span>השפעה: אין.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> לסגור את השורה בלדג כ"מתועד במקום אחר" — אין כאן החלטה, רק סידור רשומות. בשורה זו מומלץ לסגירה.</div>
-</div>
-
-<!-- ISSUE 646 -->
+<!-- THE ONE OPEN ROW -->
 <div class="issue-head">
   <span class="issue-num">#646</span>
-  <strong>אתחול מוגן — 5 שורות פתוחות</strong>
-  <span class="badge">מועד: עם יורש של #621 / כרטיסים עתידיים</span>
+  <strong>השורה הפתוחה היחידה</strong>
+  <span class="badge" style="border-color:var(--red);color:var(--red)">חסומה על #730</span>
   <a href="https://github.com/AI-Degen-69/spread-hunter/issues/646" target="_blank" class="badge">בעיה #646</a>
 </div>
 
 <div class="row-card">
-  <div class="row-head"><span class="id-badge">646 · N1</span><strong>Poller REST מדורג + חשיפת עומס (#621)</strong></div>
+  <div class="row-head"><span class="id-badge">646 · N2</span><strong>תמחור מחדש של הרגל שנשארה אחרי מילוי חלקי</strong></div>
   <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body"><span class="mono">#621</span> נסגר כ"הוחלף בפניית WebSocket"; ה-poller המדורג ומדידת החשיפה נותרו מחוץ לחוזה של #646 — האתחול הוא דרישת בטיחות מחזור חיים, לא תכונת סקר.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
+    <div class="q-body">כשמילוי חלקי משאיר רגל לבדה, היא ממשיכה להחזיק את מחיר הגבול המקורי שלה עד ששער העצירה יוצא ממנה. אין חוק תמחור מחדש — כלומר הבחירה בפועל היא "לחכות" או "להיעצר", ושתיהן לא נבחרו במכוון.</div></div>
+  <div class="q"><div class="q-label">למה לא הכרעתי עכשיו</div>
+    <div class="q-body">ההכרעה חייבת מספר שאיש לא אסף: כמה מפסידה יציאת עצירה בפועל מול הרצפה שהפעילה אותה. בלי המספר הזה, "לתמחר מחדש" הוא ניחוש שנוגע בפקודה חיה על ספר שזז, וההשוואה בין שני ענפים בפעולה לא הייתה ניתנת להגנה.</div></div>
+  <div class="q"><div class="q-label">מה לשקול כשיהיה המספר</div>
     <ul class="consider">
-      <li>אם פניית ה-WebSocket נוחתת, כרטיס יורש יחליט על סקר וניטור.</li>
-      <li>לא לבנות עכשיו — זה מחוץ לחוזה.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-arch">ארכיטקטורה</span>
-    <span>השפעה: בינונית — תפעול/סקיילביליות.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> לחכות ליורש של #621 ולפתוח שם כרטיס; לא לבנות כעת.</div>
-</div>
-
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">646 · N2</span><strong>תמחור מחדש של רגל שנייה אחרי מילוי חלקי</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body">אחרי מילוי חלקי או יציאה חלקית, היתרה יוצאת בשער העצירה — אף פעם לא מתומחרת מחדש. תיעוד: "השארית יוצאת בעצירה, אף פעם לא מתומחרת מחדש".</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>תמחור מחדש של רגל חלקית עשוי לשפר את האדג' — אבל גם להחזיר סיכון של הימור חד-צדדי.</li>
-      <li>כדי לשקול נכון צריך נתון: באיזו תדירות מילוי חלקי בכלל מתרחש (ניתן לשלוף מ-<span class="mono">data/orders.db</span>).</li>
+      <li><strong>מה #730 יגיד:</strong> אם יציאה קשה כבר מפסידה סנטים שלמים, תמחור מחדש של השארית הוא החלטה גדולה בהרבה ממה שזה נראה.</li>
+      <li><strong>תקרת מחיר הזוג:</strong> <span class="mono">max_pair_cost = 0.99</span>. תמחור מחדש מועיל רק אם הזוג נשאר מתחת לתקרה — אחרת הוא בונה זוג בהפסד מובטח, וזה הכשל הראשון שהמערכת קיימת כדי למנוע.</li>
+      <li><strong>גבול מול שוק:</strong> רגל בודדת שנייה היא הימור כיווני שאיש לא בחר בו. עדיף לאבד סנט מאשר להחזיק פוזיציה פתוחה בזמן שהספר מתרחק.</li>
     </ul></div>
   <div class="impact-row">
     <span class="impact-badge ib-money">כסף</span>
-    <span>השפעה: בינונית — התנהגות כספית של רגל פתוחה.</span>
+    <span class="impact-badge ib-arch">נתיב פקודות</span>
+    <span>השפעה: גבוהה אם ייבנה, אפסית כל עוד הוא חסום — החסם לא עושה כלום היום.</span>
   </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> כרטיס עתידי; קודם למדוד תדירות מילוי חלקי מהמסד ולקבוע סדר עדיפות לפיה.</div>
+  <div class="suggest"><strong>הצעה שלי:</strong> לא לבנות אותו לפני #730. ברגע שהמספר קיים, N2 הוא החלטה של שעה: או שהוא ממטב את הדליפה הקטנה ויש לו דרך, או שהוא מיותר כי העצירה כבר זולה.</div>
 </div>
 
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">646 · N3</span><strong>מדידת החלקת עצירה ביציאות קשות</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body">החלקת ה-<span class="mono">hard-stop</span> (הפרש בין מחיר העצירה למחיר הביצוע) אינה נמדדת.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>מדידה זולה ובקריאה בלבד, ומזינה את תכנון העצירה (לימיט מול מרקט, גודל רוחב ביטחון).</li>
-      <li>אין שינוי התנהגות — רק מטריקה בלוגים.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-data">מדידה</span>
-    <span>השפעה: נמוכה — מדידה בלבד.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> כרטיס עתידי קטן: להוסיף מטריקת החלקה ללוגי היציאה. בלי שינוי התנהגות.</div>
-</div>
-
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">646 · N4</span><strong>רשימת הדרגות של #621</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body">רשימת הדרגות של #621 נדחתה במפורש; <span class="mono">requalification_marks()</span> מתועדת כחוזה אבל לא נבנית רשימה. אם #621 נוחת ראשון, הוא יחבר בעצמו את התנאים המסומנים/מודרים.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>אין לבנות לפני #621 — התלות הדדית.</li>
-      <li>המסמך כבר מתעד את החוזה; אין חוסר.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-arch">ארכיטקטורה</span>
-    <span>השפעה: בינונית — תלויה ב-#621.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> עם יורש של #621: כרטיס. לא עכשיו.</div>
-</div>
-
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">646 · N5</span><strong>יציאות חלקיות ללא מבט זירה — דילוג על חותמת זמן</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body">מעברים ללא מבט זירה (למשל <span class="mono">risk_guardian</span> בלי funder) ממשיכים לדלג על ה-close-timestamp הישן. בלי עמדת זירה, היציאה הייתה מתמחרת על בסיס מילויים שפרשו כבר (#326: netting צריך את פער הזירה).</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>בטיחות: ניהול יציאות כאלה דורש עבודת גודל יציאה משלה — זה שינוי נפרד.</li>
-      <li>אם לא מנוהל, נשאר סיכון של שארית כיוונית שלא אישרו.</li>
-      <li>מעברים עם מבט (poll עם funder, shadow עם <span class="mono">shadow_positions</span>) נשארים מנוהלים.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-money">כסף / בטיחות</span>
-    <span>השפעה: גבוהה — שארית לא מנוהלת = הימור כיווני שלא הוחלט עליו.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> כרטיס עתידי בעדיפות גבוהה אחרי #621: "יציאה ללא מבט — גודל ויציאה". עד אז לתעד את הדילוג במפורש בקוד ולוודא שהמכסות סיכון מכסות אותו.</div>
-</div>
-
-<!-- ISSUE 659 -->
+<!-- TRACKED -->
 <div class="issue-head">
-  <span class="issue-num">#659</span>
-  <strong>איחוד תמחור בזמן אמת — 4 שורות פתוחות</strong>
-  <span class="badge">מועד: אחרי חיווט ה-Trader Loop / #657 / החלטתך</span>
-  <a href="https://github.com/AI-Degen-69/spread-hunter/issues/659" target="_blank" class="badge">בעיה #659</a>
+  <span class="issue-num">2</span>
+  <strong>שתי שורות שיצאו מהתיק אל GitHub</strong>
 </div>
 
 <div class="row-card">
-  <div class="row-head"><span class="id-badge">659 · N1</span><strong>הגנת poll-loop של order_manager לזרם מקומי</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body"><span class="mono">manage_single_leg_positions</span> (<span class="mono">order_manager.py:2493</span>), <span class="mono">run_stray_guard</span> (<span class="mono">order_manager.py:413</span>) ו-<span class="mono">order_registry.py:2335</span> עובדים על poll. חיווט לזרם נתמך-תהליך דורש מחזור חיים משלו של <span class="mono">MarketStream</span> — לא העברה פסיבית.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>קודם חיווט ה-Trader Loop, אחר כך poll-loop — סדר תלות מוגדר בלדג.</li>
-      <li>זה שיפור חוסן ארכיטקטוני, לא תיקון באג.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-arch">ארכיטקטורה</span>
-    <span>השפעה: בינונית — חוסן/תחזוקה.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> אחרי חיווט ה-Trader Loop — כרטיס עם היקף מחזור חיים עצמאי (לא port pass-through).</div>
+  <div class="row-head"><span class="id-badge">646 · N3 → #730</span>
+    <a href="https://github.com/AI-Degen-69/spread-hunter/issues/730" target="_blank" class="badge">כרטיס #730</a></div>
+  <div class="q"><div class="q-label">מה זה</div>
+    <div class="q-body">כל יציאת עצירה חוצה את הספר ברצפה <span class="mono">best_bid − MAX_SELL_SLIPPAGE</span> ומקליטה את המילוי שקבלה. שום דבר לא מקליט את <strong>ההפרש</strong>. כלומר הכרית של 2 סנטים היא ניחוש שאיש לא תימחר.</div></div>
+  <div class="q"><div class="q-label">למה זה הכרטיס הנכון עכשיו</div>
+    <div class="q-body">מדידה בלבד: אפס פקודות חדשות, אפס ספים שזזים. והיא חוסמת את N2, את 646 ככרטיס אב, ואת כל ויכוח על "יציאה יקרה מדי" — בלי המספר, כל ויכוח כזה הוא דעה.</div></div>
+  <div class="impact-row"><span class="impact-badge ib-data">מדידה</span><span>השפעה: מיידית על איכות ההחלטות, אפסית על התנהגות.</span></div>
 </div>
 
 <div class="row-card">
-  <div class="row-head"><span class="id-badge">659 · N2</span><strong>חזרה (shadow) עם MarketStream חי</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body"><span class="mono">run_shadow</span> (<span class="mono">shadow_run.py:998</span>, <span class="mono">stream=None</span>) רץ על ספק REST בלבד. חיבור עומק חי מאבד דטרמיניזם.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>פשרה: חזרות דטרמיניסטיות (טובות ל-CI ולחזרתיות) מול נאמנות עומק בזמן אמת.</li>
-      <li>ב-CI ובחזרות רגילות בדרך כלל רוצים דטרמיניזם; אפשרות לדגל אופציונלי <span class="mono">--live-depth</span>.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-arch">ארכיטקטורה</span>
-    <span>השפעה: נמוכה-בינונית — נאמנות החזרה.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> לשמור על ברירת מחדל REST דטרמיניסטית, ולהוסיף דגל אופציונלי לעומק חי. ההחלטה הזו שלך — מתי N1 נוחת.</div>
+  <div class="row-head"><span class="id-badge">708 · N7 → #719</span>
+    <a href="https://github.com/AI-Degen-69/spread-hunter/issues/719" target="_blank" class="badge">כרטיס #719</a></div>
+  <div class="q"><div class="q-label">מה זה</div>
+    <div class="q-body">שני שואוקייסים של בעיות סגורות יושבים מחוץ ל-<span class="mono">docs/issues/</span>: <span class="mono">docs/presentations/695-…</span> ו-<span class="mono">docs/explanations/498-…</span>. חוזה הפריסה אומר שהם שייכים לשם, ו-<span class="mono">test_docs_layout</span> סורק רק את הרמה העליונה של <span class="mono">docs/</span> — ולכן לא רואה אותם.</div></div>
+  <div class="q"><div class="q-label">למה זה עדיין פתוח</div>
+    <div class="q-body">הם שאריות של סחיטה (<span class="mono">e2f648e</span>) שלא כיסתה אותם, ולכן הם דורשים <strong>סחיטה</strong>, לא העברה. העברתם הייתה משאירה שני קבצים של בעיות סגורות בתיקייה שמוחקת אותם.</div></div>
+  <div class="impact-row"><span class="impact-badge ib-info">ניקיון</span><span>השפעה: אפסית על הכסף, מזיקה קלות למי שמחפש בגיליונות.</span></div>
 </div>
 
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">659 · N3</span><strong>בנייה מחדש של live_marks על market_stream</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body"><span class="mono">core_brain/live_marks.py</span> במרכז הבמה: בנייה מחדש על <span class="mono">market_stream</span> חסומה על מסגרות דיפרנציאליות של <span class="mono">#657</span>.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>עד ש-#657 נוחת — הכרטיס הזה רק משקף את כלל תקפות ה-mid; אין לבנות קדימה.</li>
-      <li>התלות מוגדרת, אין חוסר.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-arch">ארכיטקטורה</span>
-    <span>השפעה: בינונית — סימונים בזמן אמת בלוח המחוונים.</span>
+<!-- CLOSED -->
+<div class="panel">
+  <h2>22 ההכרעות — שורה ושורה, עם הנימוק</h2>
+  <table>
+    <thead><tr><th>שורה</th><th>ההכרעה</th><th>למה</th></tr></thead>
+    <tbody>
+      <tr><td class="rid">646·N1</td><td><span class="chip c-done">נפתר</span></td><td>שער הבדיקה מחדש של UMA קורא Gamma בכל ביקור דרך cache של 30 שניות, כך ששוק שנפתר נדחה לפני התמחור — ה-cache של הסורק כבר לא המסנן האחרון.</td></tr>
+      <tr><td class="rid">646·N4</td><td><span class="chip c-drop">נדחה</span></td><td>BookProvider סוגר את זה מבנית: <span class="mono">fetch_fresh_books</span>/<span class="mono">get_fresh_book</span> הם הקריאה REST-only שכל נתיב ביצוע מקבל, לא משנה איזה seam הורכב מעליו.</td></tr>
+      <tr><td class="rid">646·N5</td><td><span class="chip c-done">נפתר</span></td><td><strong>השורה הגבוהה ביותר בתיק.</strong> `manage_single_leg_positions` קורא את מצב הזירה רק כשיש לו ארנק. בלי אחד כזה, זוג שהיתרה שלו לא ניתנת להוכחה על הרישום בלבד — כלומר שארית של יציאה חלקית — נדלג ב-`continue` שקט. התהליך שכל תכליתו להגן על רגליים נטושות היה היחיד שלא יכול למכור אותן. עכשיו הוא מקבל `funder`, והלולאה מוסרת לו את ארנק ה-seam.</td></tr>
+      <tr><td class="rid">659·N1</td><td><span class="chip c-drop">נדחה</span></td><td>השורה מבקשת את הדבר הלא נכון. כל מה שהיא מונה הוא <em>הגנה</em>: יציאת עצירה ותיקון יתומים. אלה בדיוק שני המקומות שבהם ספר מה-cache הוא סכנה, והם נשארים REST-only — יש להם גם בדיקה נעולה.</td></tr>
+      <tr><td class="rid">659·N2</td><td><span class="chip c-done">נפתר</span></td><td>הזרם הוא ברירת המחדל בריצת חזרה; <span class="mono">--no-stream</span> משחזר ריצה ישנה, וכל heartbeat נושא <span class="mono">book_source_mix</span> כך שריצה לא יכולה להציג כיסוי שלא היה לה.</td></tr>
+      <tr><td class="rid">659·N3</td><td><span class="chip c-drop">נדחה</span></td><td>#657 הביא את המסגרות הדיפרנציאליות לתוך live_marks עצמו, ולכן החסם שהשורה נוקבת בו נעלם והבנייה מחדש כבר לא נדרשת.</td></tr>
+      <tr><td class="rid">659·N4</td><td><span class="chip c-drop">נדחה · #474</span></td><td>זו בדיוק השאלה של #474 הפתוח ("כיול מודל מילוי: מדומה מול נצפה"). הכרעה כאן הייתה מכניסה מספר כיול לתוך מיגרציית תעבורה — המקום היחיד שאסור לו לחיות בו.</td></tr>
+      <tr><td class="rid">687·N1</td><td><span class="chip c-done">נפתר</span></td><td>לא יומצאו מספרים. הפגם האמיתי היה שהרג'יסטרי <em>רמז</em> שמספרים ממתינים, כך שמי שבוחר "aggressive" חשב שהוא מרפה את הסורק. עכשיו כל ערך אומר "Uses shipped screener bars" וזה מתועד בהערה. הרג'יסטרי נשאר כ-seam.</td></tr>
+      <tr><td class="rid">687·N2</td><td><span class="chip c-done">נפתר</span></td><td>אין תא לתקן: סחיטת e2f648e מחקה את גיליונות הבעיות הסגורות, ואין להחיות אחד מהם בשביל שורה אחת.</td></tr>
+      <tr><td class="rid">708·N1</td><td><span class="chip c-done">נפתר</span></td><td>#717 סגר: ארבע המחרוזות הגלויות קוראות "quote window" / "venue minimum", וה-<span class="mono">score N</span> ירד יחד עם הפונקציה.</td></tr>
+      <tr><td class="rid">708·N2</td><td><span class="chip c-done">נפתר</span></td><td><span class="mono">quotes.reward_score()</span> הוסר מהעץ כולו, ו-strategy.md מציין ששום דבר בנתיב התמחור לא מחשב ציון פרסים.</td></tr>
+      <tr><td class="rid">708·N3</td><td><span class="chip c-drop">נדחה</span></td><td>שמות <span class="mono">reward_offset</span> כבר מכוסים ב-<span class="mono">variable-names-refactor.md</span> (SCOPE 2, פאזה 2); כרטיס שני היה כפילות.</td></tr>
+      <tr><td class="rid">708·N4</td><td><span class="chip c-done">נפתר</span></td><td>#718 הוכיח את זה מהצד השני: <span class="mono">REBATE</span> בודד יצא גם מ-<span class="mono">CREDIT_TYPES</span>, ושורה לא קריאה מכריחה <span class="mono">UNJUDGED</span> במקום להיעלם.</td></tr>
+      <tr><td class="rid">708·N5</td><td><span class="chip c-drop">נדחה</span></td><td>הסיומת הקשיחה נעלמה מהכרטיס בדשבורד; #705 סגור.</td></tr>
+      <tr><td class="rid">708·N6</td><td><span class="chip c-done">נפתר</span></td><td>ההערה של ZERO ALLOCATION נכתבה מחדש לעובדה של היום: <span class="mono">quote_shares</span> לא חיובי הוא אות מפורש של "אין תמחור". <span class="mono">reallocate</span> לא קיים בעץ.</td></tr>
+      <tr><td class="rid">717·N1</td><td><span class="chip c-done">נפתר</span></td><td>המחרוזות שראית בדשבורד וב-skip log הוחלפו; אותה משמעות, אוצר מילים של המנוע.</td></tr>
+      <tr><td class="rid">717·N2</td><td><span class="chip c-done">נפתר</span></td><td>~$50/יום <strong>הוסר</strong>, לא נמדד מחדש. לשמור את המספר ולנקות סביבו היה מפרסם איור לא-מאומת במקום שבו קוראים החלטת כסף. ההערה אומרת עכשיו במפורש למה אין מספר.</td></tr>
+      <tr><td class="rid">717·N3</td><td><span class="chip c-done">נפתר</span></td><td>"rent" ← "spread capture", "still earns" ← "still captures its merge spread". אלה כבר המונחים של strategy.md, ולכן לשער אין אוצר מילים שני לאותו כסף.</td></tr>
+      <tr><td class="rid">717·N4</td><td><span class="chip c-done">נפתר</span></td><td>המעבר מצא <em>טענה שקרית אחת</em>, לא בעיית מינוח: הדוקסטרינג של <span class="mono">gamma_universe</span> טען ש-<span class="mono">evaluate</span> קורא <span class="mono">rewards</span> — לא נכתב כזה מפתח ולא נקרא. תוקן. <span class="mono">reward_min_income_usd_day</span> נשאר: kpi.py קורא אותו וזה סכמת פלט.</td></tr>
+      <tr><td class="rid">717·N5</td><td><span class="chip c-drop">נדחה</span></td><td>מפתחות <span class="mono">reward_offset</span> הם משטח התצורה והדשבורד; השינוי שלהם שייך ל-<span class="mono">variable-names-refactor.md</span>.</td></tr>
+      <tr><td class="rid">717·N6</td><td><span class="chip c-drop">נדחה</span></td><td>אלה שמות השדות של הזירה, לא שלנו. שינוי שם בצד שלנו היה שובר את הקריאה.</td></tr>
+      <tr><td class="rid">718·N1</td><td><span class="chip c-drop">נדחה</span></td><td>אין העברות כספים בזמן ריצה, ולכן <span class="mono">DEPOSIT</span>/<span class="mono">WITHDRAWAL</span> לא יכולים להזיז <span class="mono">open_value</span>. ההכרעה שלך, מתועדת בתא.</td></tr>
+    </tbody>
+  </table>
+  <div class="legend">
+    <span>22 הכרעות, 0 "בטיפול". כל אחת ניתנת לבדיקה מחדש: התא בגיליון נושא את הנימוק.</span>
   </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> חסום עד #657; אחר כך כרטיס.</div>
 </div>
 
-<div class="row-card">
-  <div class="row-head"><span class="id-badge">659 · N4</span><strong>מילוי שווה-מחיר וזיכוי מילוי — שינוי מדיניות מילוי</strong></div>
-  <div class="q"><div class="q-label">מה פתוח</div>
-    <div class="q-body">המלצות CodeRabbit (Design Choices 1–2 על #659): מילוי שווה-מחיר בחזרה + זיכוי מילוי מהזרם. זה שינוי במדיניות המילוי — לא בהובלה.</div></div>
-  <div class="q"><div class="q-label">מה לשקול</div>
-    <ul class="consider">
-      <li>זה משנה איך תוצאות החזרה מחושבות ומזוכות — משפיע על מסקנות מחקר ועל PnL מוקרן.</li>
-      <li>רגיש לכסף; אסור שיהיה תוצר לוואי של הגירת הובלה.</li>
-      <li>לפני הטמעה: לכמת באיזו תדירות מילוי שווה-מחיר קורה מול חצייה.</li>
-    </ul></div>
-  <div class="impact-row">
-    <span class="impact-badge ib-money">כסף</span>
-    <span>השפעה: גבוהה — אמינות מחקר ו-PnL מוקרן.</span>
-  </div>
-  <div class="suggest"><strong>הצעה שלי:</strong> החלטה נפרדת ורגישה. קודם לכמת את התדירות, אחר כך להגדיר מדיניות מתועדת (למשל: קבלת מילוי שווה-מחיר בחזרה עם שבירת שוויון ידידותית ל-taker) ולפתוח כרטיס.</div>
-</div>
-
-<!-- FOOTER -->
-<div class="panel" style="margin-top:42px">
-  <h2>פעולות מומלצות — לפי סדר</h2>
-  <ul class="consider">
-    <li><strong>סגירת 687·N2</strong> — רישום בלבד, מומלץ לסגור עכשיו (אני יכול לבצע בלדג עם אישורך).</li>
-    <li><strong>חקירת 718·N1</strong> — קריאה בלבד על פיד הפעילות: האם <span class="mono">DEPOSIT/WITHDRAWAL/YIELD/TAKER_REBATE</span> מופיעים בפועל? ואז החלטה מבוססת ראיות.</li>
-    <li><strong>מעבר אוצר מילים (717·N2/N3/N4)</strong> — אני יכול להכין ניסוח מוצע לאישורך בלי לגעת בקוד.</li>
-    <li><strong>כרטיסים בעדיפות:</strong> 646·N5 (בטיחות) → עיון מדיניות 659·N4 → יתר כרטיסי ההמשך.</li>
+<!-- SOURCES -->
+<div class="panel">
+  <h2>מקור האמת — שישה קבצים</h2>
+  <ul>
+    <li><a href="646-noticed-but-not-touching.md">646-noticed-but-not-touching.md</a> — 5 שורות: 3 נפתרו/נדחו, 1 פתוחה (N2), 1 בכרטיס (#730)</li>
+    <li><a href="659-noticed-but-not-touching.md">659-noticed-but-not-touching.md</a> — 4 שורות, כולן הוכרעו</li>
+    <li><a href="687-noticed-but-not-touching.md">687-noticed-but-not-touching.md</a> — 2 שורות, שתיהן נפתרו</li>
+    <li><a href="708-noticed-but-not-touching.md">708-noticed-but-not-touching.md</a> — 7 שורות: 6 הוכרעו, 1 בכרטיס (#719)</li>
+    <li><a href="717-noticed-but-not-touching.md">717-noticed-but-not-touching.md</a> — 6 שורות, כולן הוכרעו</li>
+    <li><a href="718-noticed-but-not-touching.md">718-noticed-but-not-touching.md</a> — שורה אחת, נדחתה בהכרעה שלך</li>
   </ul>
   <div class="callout" style="margin-bottom:0">
-    <strong>כלל:</strong> רק שלב Station VI סוגר שורות בלדג. הדף הזה הוא ייעוץ — ההחלטות הן שלך.
+    <strong>הבא בתור, ולא שלך שיחה:</strong> #730 (מדידה) הוא מה שמשחרר את N2. #719 (סחיטה) הוא ניקיון. שום דבר בתיק הזה לא מחכה להחלטה — הוא מחכה לעבודה או למספר.
   </div>
 </div>
-
 </main>
 </body>
 </html>
-

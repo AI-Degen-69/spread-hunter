@@ -791,8 +791,10 @@ def gamma_universe(session: requests.Session,
     Cheap per-row filters (active/closed/archived, order book, accepting
     orders, binary, quoted spread) are applied here, and the rows they refuse
     are COUNTED and SAMPLED in the metadata rather than scored. Returned rows
-    use CLOB field names (`condition_id`, `tokens`, `rewards`) because
-    `evaluate` reads them, plus the gamma-only figures the spread pot needs.
+    use CLOB field names (`condition_id`, `tokens`) because `evaluate` reads
+    them, plus the gamma-only figures the spread pot needs. `rewards` is NOT
+    among them: nothing here or downstream reads a market's reward config
+    (#681), so a row that carried it would be a field read by nobody.
 
     IN-PLAY MARKETS ARE NOT THIS FUNCTION'S JOB. An earlier attempt widened the
     scan to walk the sub-floor tail looking for started matches; that admitted

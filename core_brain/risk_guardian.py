@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -192,8 +193,19 @@ def run_guardian_tick(
     live: bool = False,
     single_buy_saver_fn: Optional[Callable] = None,
     trigger_board: Optional[Any] = None,
+    funder: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """Execute one high-alert defense evaluation pass across all unhedged positions."""
+    """Execute one high-alert defense evaluation pass across all unhedged positions.
+
+    `funder` is the wallet the lifecycle pass nets exits against (#646 N5).
+    Without it the pass has no venue view, and a pair whose close predates its
+    last fill stays skipped even when a partial exit left a remainder -- which
+    is a naked leg nobody manages. Resolved here from the same env var the
+    loop itself uses when the caller does not pass one, because a guardian
+    with no view is the case this parameter exists to remove.
+    """
+    if funder is None:
+        funder = (os.environ.get("POLY_FUNDER") or "").strip() or None
     gen = trigger_board.next_generation() if trigger_board is not None else None
     unhedged = detect_unhedged_positions(registry)
     if not unhedged:
@@ -207,7 +219,8 @@ def run_guardian_tick(
             return single_buy_saver_fn(client, registry, cfg, live=live)
 
         from core_brain.single_buy_saver import manage_single_leg_positions
-        return manage_single_leg_positions(client, registry, cfg, live=live)
+        return manage_single_leg_positions(client, registry, cfg, live=live,
+                                           funder=funder)
     finally:
         if trigger_board is not None:
             try:

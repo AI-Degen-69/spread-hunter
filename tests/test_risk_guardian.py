@@ -358,3 +358,77 @@ def test_run_guardian_tick_publishes_empty_when_nothing_unhedged(monkeypatch):
     assert board.watches() == {}
     assert client.mock_calls == []
 
+
+
+# ── #646 N5 — the guardian pass needs a venue view ─────────────────────────
+
+def _unhedged_registry(monkeypatch, *, up=5.0, down=0.0):
+    registry = MagicMock()
+    registry.get_all_quotes.return_value = [
+        {"condition_id": "0x123", "side": "UP", "token_id": "tok_up"},
+        {"condition_id": "0x123", "side": "DOWN", "token_id": "tok_dn"},
+    ]
+    mock_inv = Inventory()
+    mock_inv.up_shares = up
+    mock_inv.down_shares = down
+    monkeypatch.setattr(
+        "core_brain.risk_guardian.inventory_from_registry",
+        lambda condition_id, up_token, down_token, db_path=None: mock_inv
+    )
+    return registry
+
+
+def test_the_default_saver_path_is_handed_the_funder(monkeypatch):
+    """Without it the pass sizes exits off fills a close already retired."""
+    import core_brain.single_buy_saver as sbs
+
+    seen: dict = {}
+
+    def fake_saver(client, registry, cfg, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(sbs, "manage_single_leg_positions", fake_saver)
+    registry = _unhedged_registry(monkeypatch)
+
+    run_guardian_tick(MagicMock(), registry, MagicMock(), live=True,
+                      funder="0xfunder")
+
+    assert seen["funder"] == "0xfunder"
+
+
+def test_the_funder_falls_back_to_the_same_env_var_the_loop_uses(monkeypatch):
+    """A guardian started without the parameter still gets a view."""
+    import core_brain.single_buy_saver as sbs
+
+    seen: dict = {}
+
+    def fake_saver(client, registry, cfg, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(sbs, "manage_single_leg_positions", fake_saver)
+    monkeypatch.setenv("POLY_FUNDER", "0xfromenv")
+    registry = _unhedged_registry(monkeypatch)
+
+    run_guardian_tick(MagicMock(), registry, MagicMock(), live=True)
+
+    assert seen["funder"] == "0xfromenv"
+
+
+def test_no_funder_anywhere_passes_none_rather_than_guessing(monkeypatch):
+    import core_brain.single_buy_saver as sbs
+
+    seen: dict = {}
+
+    def fake_saver(client, registry, cfg, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(sbs, "manage_single_leg_positions", fake_saver)
+    monkeypatch.delenv("POLY_FUNDER", raising=False)
+    registry = _unhedged_registry(monkeypatch)
+
+    run_guardian_tick(MagicMock(), registry, MagicMock(), live=True)
+
+    assert seen["funder"] is None

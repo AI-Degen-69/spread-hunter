@@ -4743,3 +4743,44 @@ def test_guardian_saver_fn_routes_decisions_through_provider(monkeypatch):
     plain_fn = _make_guardian_saver_fn(None)
     assert plain_fn(object(), object(), object(), live=False) == []
     assert "decision_book_fn" not in captured
+
+
+def test_the_guardian_saver_carries_the_funder_it_is_given(monkeypatch):
+    """#646 N5: the guardian's saver fn is the one that sizes the exit.
+
+    Without the funder the pass reaches `manage_single_leg_positions` with no
+    venue view, and a partial exit's remainder is skipped instead of sold.
+    """
+    import core_brain.single_buy_saver as sbs
+    from core_brain.trader_loop import _make_guardian_saver_fn
+
+    seen: dict = {}
+
+    def fake(client, registry, cfg, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(sbs, "manage_single_leg_positions", fake)
+    saver = _make_guardian_saver_fn(None, funder="0xmaker")
+
+    saver(object(), object(), object(), live=True)
+
+    assert seen["funder"] == "0xmaker"
+
+
+def test_the_guardian_saver_omits_the_funder_when_there_is_none(monkeypatch):
+    """No wallet is not the same as an empty-string wallet heading to a read."""
+    import core_brain.single_buy_saver as sbs
+    from core_brain.trader_loop import _make_guardian_saver_fn
+
+    seen: dict = {}
+
+    def fake(client, registry, cfg, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(sbs, "manage_single_leg_positions", fake)
+    _make_guardian_saver_fn(None, funder=None)(object(), object(), object(),
+                                               live=True)
+
+    assert "funder" not in seen

@@ -305,8 +305,12 @@ def _decide_quotes_from_mid(
         return [], f"t_remaining {t_remaining:.0f}s: market ended"
 
     # A market that kept picking us off AFTER we widened is not mispriced, it
-    # is toxic. Giving up the rent is the point: rent is worth ~$50/day across
-    # the fleet, and the exposure a bad market builds is worth multiples of it.
+    # is toxic. Giving up the spread capture is the point: what a market like
+    # this earns is the merge spread on the pairs it completes, and the
+    # exposure it builds while losing is worth multiples of that. (No dollar
+    # figure is quoted here on purpose -- the fleet number this used to carry
+    # was never derived from a run, and an unmeasured figure in a money-path
+    # rationale reads as evidence when it is not.)
     if getattr(cfg, "gate_state", unhedged_stop_loss.NORMAL) == unhedged_stop_loss.EXITED:
         return [], "market exited: fills still lost money after widening"
 
