@@ -1,46 +1,32 @@
-fix(dashboard): drop hardcoded spread suffix from parameter cards (#705)
+docs: sync git-workflow branch/review conventions; align explainer notation
 
-Closes #705
+Resolves the two ledger rows in `docs/issues/705-noticed-but-not-touching.md`
+(O1 and O2, recorded while shipping #705).
 
 ## Why
 
-The parameter cards in `dashboard/server.py` built their value strings with
-hardcoded literal suffixes that only restated the shipped default in another
-unit. `max_spread_from_mid`, for example, rendered
-`f"${cfg.max_spread_from_mid:.2f} (15¢)"`, so a configured 0.20 produced the
-self-contradicting `$0.20 (15¢)`. The same "restated default" pattern existed at
-15 sites (30m/2h/15m/10¢/90¢/1¢/6¢/15¢/1.5¢/0.5¢/3¢/5¢), so this fixes the class
-behind one rule: strip every suffix that merely restates the default; keep
-literals that carry information the bare number does not (`(50% of spread)`,
-`(Telemetry Only)`). `default`, `raw_value`, config loading, quoting logic and
-the frontend renderer (`app.js` renders the server strings verbatim) are
-untouched, as are all money-path configuration values.
-
-Test changes: the `"1800s (30m)"` pin at `tests/test_dashboard_server.py` was
-pinning exactly this stale format and is repinned to `"1800s"` with a comment;
-one exact-string regression test added for the `max_spread_from_mid` card.
-
-O1 in `docs/issues/705-noticed-but-not-touching.md`.
+- O1: `docs/agents/git-workflow.md` still prescribed `<type>/<slug>` branches and an
+  `@coderabbitai summary` PR-body placeholder, but the last five merged PRs (701–704, and
+  #705's #710) use `i<number>/<slug>` branches, omit the placeholder, and trigger review
+  with a separate `@coderabbitai review` comment. The doc now matches the practice that
+  actually merges.
+- O2: `dashboard/static/strategy_explainer.html` used the same `$X.xx (N¢)` restatement
+  tails the parameter cards used to wear. Same rule as #705, applied uniformly: tails that
+  restate a default in another unit (11 table cells, incl. `2.05¢ (0.0205)`) are stripped;
+  explanatory prose that carries derivation information (`Derived as max_book_spread *
+  41/120 (2.05¢)`) stays.
 
 ## Test output
 
-- RED proof: with the ` (15¢)` literal re-applied,
-  `test_max_spread_from_mid_card_shows_configured_value_exactly` fails with
-  `assert '$0.20 (15¢)' == '$0.20'`; green after the fix.
-- Focused suite: `python -m pytest -q tests/test_dashboard_server.py`
-  → 138 passed.
+Docs/static-copy only — no runtime behaviour touched, no test to run. GitHub CI's full
+`python -m pytest -q` regression suite (Ubuntu + Windows) is the merge gate and must pass.
 
 ## How to verify
 
-1. Start the dashboard (`.\scripts\spread-hunter-menu.ps1 start`, SHADOW badge
-   visible — no Trader, no START button, nothing spent).
-2. Open http://127.0.0.1:8799 → Parameters tab.
-3. Find the "Max Resting Spread From Mid" card.
-   - Expected: the value shows only the configured dollar amount (with the
-     shipped setting: `$0.15`, and "Default: $0.15").
-   - What a failure looks like: any `… (15¢)` suffix after the dollar value, or
-     a suffix (e.g. `(6¢)`, `(30m)`) hanging off other cards it does not match —
-     e.g. set `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID=20`, restart only the
-     dashboard, and the card must read `$0.20`, never `$0.20 (15¢)`.
-4. Sanity: the "Half-Spread Offset Multiplier" card should still read `0.50 (50%
-   of spread)` — that literal is information, not a restatement.
+Open the dashboard (#705 is on `main`, so any local dashboard on current `main`) → the
+strategy explainer page → the parameter tables. Every default cell now reads like
+`$0.15`, `$2.05¢`-style single-unit values — no `(N¢)` tail after a dollar figure. The
+"Derived Picking Spread Cap" prose still explains itself. For the doc: open
+`docs/agents/git-workflow.md` — branch naming says `i<number>/<slug>` with examples
+`i705/...`, the body template has no `@coderabbitai summary` line, and the handle table
+lists `@coderabbitai review` as the post-open trigger.
