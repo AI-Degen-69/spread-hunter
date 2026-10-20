@@ -1793,13 +1793,15 @@ class DecisionThenExecutionBook:
         return {"success": True, "orderID": f"venue-{verb}"}
 
 
-def _trig525_route(registry, venue, now_s, *, market_state_fn=None):
+def _trig525_route(registry, venue, now_s, *, market_state_fn=None,
+                   funder=None):
     """One unified-lifecycle pass over the #525 pair, with the venue position
     the exit's divergence gate needs (UP 10 held, DOWN nothing)."""
     results = lp.manage_single_leg_positions(
         venue, registry, _trig525_cfg(), live=True, now=now_s,
         venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
         market_state_fn=market_state_fn,
+        funder=funder,
     )
     assert len(results) == 1
     return results[0]
@@ -2002,17 +2004,51 @@ def test_hard_stop_exit_refuses_when_cancel_fails(registry: OrderRegistry):
     assert not any(c.startswith("sell:") for c in client.calls)
 
 
-def test_hard_stop_full_exit_resets_lifecycle(registry: OrderRegistry):
-    """#628: When all shares are sold on hard stop, lifecycle row resets to DUAL_RESTING."""
+def test_hard_stop_full_exit_resets_lifecycle(registry: OrderRegistry, monkeypatch):
+    """#646: reset now deletes the row and marks re-qualification.
+
+    Was #628's DUAL_RESTING write off an assumed-flat read; only the shared
+    proof clears the row now, so this venue proves flat (empty book, empty
+    trades, empty balances) instead of merely selling.
+    """
+    import json as _json
+    import urllib.request as _urlopen_mod
+
     _trig525_pair(registry, TRIG525_NOW)
     venue = DecisionThenExecutionBook(decision_bid=0.15, execution_bid=0.14)
-    routed = _trig525_route(registry, venue, TRIG525_NOW / 1000.0 + 10.0)
+    venue.creds = object()
+    venue.open_orders = [{"id": "venue-up"}, {"id": "venue-dn"}]
+    venue.get_open_orders = lambda: list(venue.open_orders)
+    venue.get_trades = lambda params=None: []
+    _orig_cancel = venue.cancel_order
+
+    def _proving_cancel(payload):
+        out = _orig_cancel(payload)
+        oid = str(getattr(payload, "orderID", payload))
+        venue.open_orders = [o for o in venue.open_orders if o["id"] != oid]
+        return out
+
+    venue.cancel_order = _proving_cancel
+
+    class _Resp:
+        def read(self):
+            return _json.dumps([]).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(
+        _urlopen_mod, "urlopen", lambda req, timeout=None: _Resp())
+    routed = _trig525_route(registry, venue, TRIG525_NOW / 1000.0 + 10.0,
+                            funder="0xfunder")
 
     assert routed["action"] == "exited"
-    rec = registry.get_lifecycle_state(TRIG525_PAIR)
-    assert rec is not None
-    assert rec.state == "DUAL_RESTING"
-    assert rec.reason == "hard_stop_exited"
+    assert routed["reset_status"] == "RESET"
+    assert registry.get_lifecycle_state(TRIG525_PAIR) is None
+    assert registry.requalification_marks()[TRIG525_COND].status == "awaiting"
 
 
 def test_hard_stop_partial_exit_keeps_hard_stop(registry: OrderRegistry):

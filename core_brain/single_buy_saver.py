@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import time
 import threading
 import urllib.error
@@ -1595,6 +1596,64 @@ def _latest_close_ms_by_condition(registry) -> dict[str, int]:
     return latest_close_ms
 
 
+def _reset_tokens_for_condition(quoted_tokens: dict,
+                                 condition_id: str) -> tuple[Optional[str], Optional[str]]:
+    """UP/DOWN token ids for one market from the quotes ledger, if known."""
+    sides = quoted_tokens.get(condition_id) or {}
+    up = sides.get("UP")
+    down = sides.get("DOWN")
+    return (up[1] if up else None, down[1] if down else None)
+
+
+def _net_leftover_above_eps(registry, condition_id: str,
+                            up_token_id: str,
+                            down_token_id: str) -> bool:
+    """Whether fills minus closes still leave shares on either token (#646)."""
+    from core_brain.order_registry import inventory_from_registry
+    db_path = getattr(registry, "db_path", None)
+    kwargs = {"db_path": db_path} if db_path is not None else {}
+    inv = inventory_from_registry(condition_id, up_token_id, down_token_id,
+                                  **kwargs)
+    return (abs(float(inv.up_shares or 0.0)) > SIZE_EPS
+            or abs(float(inv.down_shares or 0.0)) > SIZE_EPS)
+
+
+def _retry_pending_reset(client, funder, live: bool, registry,
+                         condition_id: str, up_token_id: str,
+                         down_token_id: str, now_ms: int):
+    """Retry a reset an earlier pass could not prove (#646).
+
+    Runs when a lifecycle row or a `resetting` block still exists for the
+    condition -- e.g. the Data API still showed sold shares at exit time.
+    Returns the `ResetOutcome`, or None when nothing is pending (or when a
+    live retry has no funder to read balances with).
+    """
+    from core_brain.lifecycle_reset import reset_condition
+    pending = registry.has_lifecycle_for_condition(condition_id)
+    if not pending:
+        try:
+            marks = registry.requalification_marks()
+        except sqlite3.Error:
+            return None
+        mark = marks.get(str(condition_id or "").lower())
+        pending = mark is not None and mark.status == "resetting"
+    if not pending:
+        return None
+    if live:
+        if not funder:
+            return None
+        ports = live_reset_ports(client, funder, registry, condition_id,
+                                 up_token_id, down_token_id)
+    else:
+        from core_brain.shadow_exec import shadow_reset_ports
+        db_path = (getattr(client, "_db_path", None)
+                   or getattr(registry, "db_path", None))
+        ports = shadow_reset_ports(registry, db_path, condition_id,
+                                   up_token_id, down_token_id)
+    return reset_condition(registry, condition_id, up_token_id, down_token_id,
+                           ports, reason="reset_retry", now_ms=now_ms)
+
+
 def _last_fill_ms_by_pair(registry) -> tuple[dict[str, int], dict[str, str]]:
     """The newest fill time per pair, and the condition each pair belongs to.
 
@@ -1822,7 +1881,31 @@ def _manage_single_leg_positions_locked(
             continue
         if (condition_id
                 and last_fill_ms <= latest_close_ms.get(condition_id, 0)):
-            continue
+            # A close covering the latest fill is not proof the market is
+            # flat: a partial exit leaves a remainder (#646). Skip only when
+            # the net leftover inventory is also gone; otherwise fall through
+            # and stay managed. A pending reset is retried on the way out so
+            # a delayed balance read can complete without a new scheduler.
+            # Unknown tokens fail closed: without them there is no inventory
+            # to check, so the pair stays managed.
+            up_tok, down_tok = _reset_tokens_for_condition(
+                quoted_tokens, condition_id)
+            if up_tok is None or down_tok is None:
+                continue
+            if _net_leftover_above_eps(registry, condition_id, up_tok,
+                                       down_tok):
+                # A partial exit stays managed -- but only with a venue view:
+                # exit sizing nets prior closes against it (#326), and
+                # without a view the sale would size off fills the close
+                # already retired. No view means no safe sale, so keep
+                # the old skip on that path.
+                if venue_positions is None:
+                    continue
+            else:
+                _retry_pending_reset(client, funder, live, registry, condition_id,
+                                     up_tok, down_tok,
+                                     now_ms=int(now_s * 1000.0))
+                continue
 
         is_aged_out = (
             last_fill_ms > 0
@@ -1934,47 +2017,41 @@ def _manage_single_leg_positions_locked(
                 )
                 if result.get("action") == "exited":
                     sold_size = float(result.get("size", 0.0) or 0.0)
-                    requested_size = float(result.get("requested_size", 0.0) or 0.0)
                     heavy_tok = result.get("token_id")
                     if (venue_positions is not None
                             and heavy_tok and heavy_tok in venue_positions):
                         venue_positions[heavy_tok] = max(
                             0.0, float(venue_positions[heavy_tok]) - sold_size)
-                    opp_tok = getattr(position, "opposite_token_id", None)
-                    remaining_heavy = (
-                        float(venue_positions.get(heavy_tok, 0.0))
-                        if venue_positions is not None and heavy_tok
-                        else max(0.0, requested_size - sold_size)
+                    # #646: the old block wrote DUAL_RESTING here off an
+                    # assumed-flat read (`venue_positions is None` fell back
+                    # to `requested - sold`, and `opposite_token_id` does not
+                    # exist on SingleLegPosition so the other leg read 0.0).
+                    # The shared proof replaces it: only a market flat on
+                    # both ledger and venue clears its row. Anything else
+                    # keeps the row and stays managed.
+                    from core_brain.lifecycle_reset import reset_condition
+                    if live:
+                        ports = live_reset_ports(
+                            client, funder, registry, position.condition_id,
+                            position.up_token_id, position.down_token_id)
+                    else:
+                        from core_brain.shadow_exec import shadow_reset_ports
+                        db_path = (getattr(client, "_db_path", None)
+                                   or getattr(registry, "db_path", None))
+                        ports = shadow_reset_ports(
+                            registry, db_path, position.condition_id,
+                            position.up_token_id, position.down_token_id)
+                    reset_outcome = reset_condition(
+                        registry, position.condition_id,
+                        position.up_token_id, position.down_token_id,
+                        ports, reason="hard_stop_exited",
+                        now_ms=int(time.time() * 1000))
+                    result.update(
+                        reset_status=reset_outcome.status,
+                        reset_reason=reset_outcome.reason,
                     )
-                    remaining_opp = (
-                        float(venue_positions.get(opp_tok, 0.0))
-                        if venue_positions is not None and opp_tok
-                        else 0.0
-                    )
-                    if (requested_size > 0
-                            and sold_size >= requested_size - SIZE_EPS
-                            and remaining_heavy <= SIZE_EPS
-                            and remaining_opp <= SIZE_EPS):
-                        if (registry is not None
-                                and callable(getattr(registry, "save_lifecycle_state", None))):
-                            from core_brain.order_registry import LifecycleStateRecord
-                            registry.save_lifecycle_state(
-                                LifecycleStateRecord(
-                                    pair_id=pair_id,
-                                    condition_id=position.condition_id,
-                                    state="DUAL_RESTING",
-                                    reason="hard_stop_exited",
-                                    updated_ts_ms=int(time.time() * 1000),
-                                    evidence_json=json.dumps({
-                                        "previous_state": "HARD_STOP",
-                                        "state": "DUAL_RESTING",
-                                        "action": "exited",
-                                        "sold_size": sold_size,
-                                        "requested_size": requested_size,
-                                        "reason": "hard_stop_exited",
-                                    }, sort_keys=True, separators=(",", ":")),
-                                )
-                            )
+                    if reset_outcome.status == "RESET":
+                        result.update(lifecycle_state=None)
                 out.append(result)
                 continue
 
