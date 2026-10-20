@@ -86,22 +86,7 @@ class BookProvider:
 
     def get_book(self, token_id: str) -> dict:
         """The token's book: stream first, REST when the stream cannot serve."""
-        token_id = str(token_id)
-        t0 = time.perf_counter()
-        stream = self._stream
-        source = BOOK_SOURCE_REST
-        if stream is not None:
-            try:
-                book = stream.fetch_books(self._clob_host, token_id)
-                source = BOOK_SOURCE_STREAM
-            except BookNotReady as e:
-                reason = self._fallback_reason(stream, token_id)
-                self._note_fallback(token_id, reason, str(e))
-                book = self._rest_reader(self._clob_host, token_id)
-        else:
-            book = self._rest_reader(self._clob_host, token_id)
-        self._note_stats(token_id, source, (time.perf_counter() - t0) * 1000.0)
-        return book
+        return self._read(str(token_id), self._clob_host)
 
     def fetch_books(self, clob_host: str, token_id: str) -> dict:
         """The `VenueSeam.fetch_books(clob_host, token_id)` adapter.
@@ -110,7 +95,10 @@ class BookProvider:
         accept the provider unchanged. The stream ignores the host (the book
         is already in memory); the REST fallback uses the passed host.
         """
-        token_id = str(token_id)
+        return self._read(str(token_id), str(clob_host))
+
+    def _read(self, token_id: str, rest_host: str) -> dict:
+        """One stream-first read; `rest_host` serves the fallback only."""
         t0 = time.perf_counter()
         stream = self._stream
         source = BOOK_SOURCE_REST
@@ -121,9 +109,9 @@ class BookProvider:
             except BookNotReady as e:
                 reason = self._fallback_reason(stream, token_id)
                 self._note_fallback(token_id, reason, str(e))
-                book = self._rest_reader(str(clob_host), token_id)
+                book = self._rest_reader(rest_host, token_id)
         else:
-            book = self._rest_reader(str(clob_host), token_id)
+            book = self._rest_reader(rest_host, token_id)
         self._note_stats(token_id, source, (time.perf_counter() - t0) * 1000.0)
         return book
 

@@ -3327,14 +3327,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"fleet refused: {exc}", file=sys.stderr)
         return 2
     finally:
+        # The provider owns the stream whenever one is up, so stopping it
+        # joins both threads; `market_stream` is never set without one.
         if book_provider is not None:
             try:
                 book_provider.stop()
-            except Exception as e:
-                log.warning("market stream stop failed: %s", e)
-        elif market_stream is not None:
-            try:
-                market_stream.stop()
             except Exception as e:
                 log.warning("market stream stop failed: %s", e)
         if user_stream is not None:
