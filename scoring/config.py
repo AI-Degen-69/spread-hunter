@@ -24,7 +24,13 @@ import os
 from dataclasses import dataclass
 
 from core_brain import rehearsal
-from core_brain.config import PICKER_PROFILE, MakerConfig as CoreMakerConfig, _env_get
+from core_brain.config import (
+    PICKER_PROFILE,
+    SCREENER_PRESETS,
+    MakerConfig as CoreMakerConfig,
+    _env_get,
+    resolve_tournament_preset_name,
+)
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -158,6 +164,14 @@ def load() -> MakerConfig:
     difference in the MARKET, not in the settings.
     """
     kw: dict = {}
+    # TOURNAMENT PRESET (#687). Defaults first, then the preset, then the
+    # explicit environment reads below -- an explicit setting always wins over
+    # the preset. The resolver raises on an unknown name, so a typo fails here
+    # instead of silently scoring on default bars. Reads nothing from the five
+    # PICKER_PROFILE fields, so the 0.045 quote window is never clobbered.
+    preset_name = resolve_tournament_preset_name()
+    if preset_name:
+        kw.update({k: v for k, v in SCREENER_PRESETS[preset_name].items() if k != "description"})
     cid, _ = _env_get("BOT_MARKET_PINNED_CONDITION_ID", "HUNTER_MARKET")
     cid = (cid or "").strip()
     if cid:
