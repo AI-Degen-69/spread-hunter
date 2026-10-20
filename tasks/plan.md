@@ -90,7 +90,7 @@ The issue carries a CodeRabbit coding plan (`gh issue view 690 --comments`).
 
 ## 5. Task decomposition
 
-### Task 1 — Lift the read out of the pinned branch  `[Backend/Logic]` size **S**  · XS–M scale
+### [x] Task 1 — Lift the read out of the pinned branch  `[Backend/Logic]` size **S**
 **Files:** `scoring/config.py` (`load()`), only.
 **Depends on:** —
 - Hoist `sp, sp_name = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "HUNTER_MAX_SPREAD_CENTS",
@@ -112,7 +112,7 @@ The issue carries a CodeRabbit coding plan (`gh issue view 690 --comments`).
 **Verify:** `python -m pytest -q tests/test_config_single_source.py tests/test_wide_book_trial.py`
 (existing tests must stay green before Task 2 adds new ones).
 
-### Task 2 — Loader-parity and trial matrix tests  `[Backend/Logic]` size **S**
+### [x] Task 2 — Loader-parity and trial matrix tests  `[Backend/Logic]` size **S**
 **Files:** `tests/test_config_single_source.py`, `tests/test_wide_book_trial.py`.
 **Depends on:** Task 1.
 - `tests/test_config_single_source.py` — new test(s) next to `test_execution_coupling_overrides`,
@@ -138,7 +138,7 @@ The issue carries a CodeRabbit coding plan (`gh issue view 690 --comments`).
 
 **Checkpoint A** (after 1–2): parity proven; no ranker behaviour to show yet.
 
-### Task 3 — Ranker rejection proof, reason path, and stale comments  `[Debug]` size **S**
+### [x] Task 3 — Ranker rejection proof, reason path, and stale comments  `[Debug]` size **S**
 **Files:** `tests/test_redesigned_filter_pipeline.py`, `tests/test_dashboard_server.py` (or a
 `core_brain/kpi.py` test), `scripts/filter_markets.py` (comments only).
 **Depends on:** Task 1 (for the unpinned guard case).
@@ -169,7 +169,7 @@ The issue carries a CodeRabbit coding plan (`gh issue view 690 --comments`).
 **Checkpoint B** (after 3): the 50/53 rejection, its reason text, and its dashboard path are each
 pinned by a test; comments no longer conflate the two settings.
 
-### Task 4 — Ledger and guards  `[Docs]` size **XS**
+### [x] Task 4 — Ledger and guards  `[Docs]` size **XS**
 **Files:** `docs/issues/674-noticed-but-not-touching.md`, `docs/issues/690-noticed-but-not-touching.md`.
 **Depends on:** Tasks 1–3 (wording must match shipped behaviour).
 - N2 row → status `fixed #690`, with the note that the read moved out of the pinned branch, that
