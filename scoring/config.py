@@ -166,8 +166,8 @@ def load() -> MakerConfig:
         kw["market_title"] = title or ""
         url, _ = _env_get("BOT_MARKET_URL", "HUNTER_URL")
         kw["market_url"] = url or ""
-        # Long-dated markets do not close in 15 seconds, and the min-size floor
-        # is per-market (20, 50, 100, 200) -- quoting under it earns nothing.
+        # The min-size floor is per-market (20, 50, 100, 200) -- quoting under
+        # it earns nothing.
         ms, ms_name = _env_get("BOT_QUOTE_SIZE_MIN_SHARES", "HUNTER_MIN_QUOTE_SHARES", "HUNTER_MIN_SIZE")
         if ms_name == "HUNTER_MIN_SIZE" and ms and ms.strip():
             logging.getLogger(__name__).warning(
