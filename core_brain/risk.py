@@ -485,7 +485,7 @@ def hard_block(
     other = OTHER[side]
 
     # THE PAIR-COST CAP is evaluated BEFORE enable_hard_blocks so it always
-    # rejects pairs at or above max_pair_cost, regardless of the flag.
+    # rejects pairs at or above the pair-cost ceiling, regardless of the flag.
     # R4 exempts the light side from the exposure arms because buying the
     # light side REDUCES exposure -- but the pair-cost arm is not an exposure
     # bound. A light-side fill that assembles the pair at/over `bot_pos_price_max_pair_cost_usd`

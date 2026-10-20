@@ -730,14 +730,14 @@ def test_wide_book_trial_refusal_names_variable(monkeypatch):
     monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
     with pytest.raises(ValueError) as exc1:
         scoring_config.load()
-    assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens max_book_spread" in str(exc1.value)
+    assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens bot_quote_book_max_spread_cents" in str(exc1.value)
 
     # 2. Legacy variable set outside rehearsal
     monkeypatch.delenv("BOT_QUOTE_WIDE_BOOK_TRIAL", raising=False)
     monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
     with pytest.raises(ValueError) as exc2:
         scoring_config.load()
-    assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens max_book_spread" in str(exc2.value)
+    assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens bot_quote_book_max_spread_cents" in str(exc2.value)
 
     # 3. Inside rehearsal, value exceeding 0.30 is rejected
     monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
