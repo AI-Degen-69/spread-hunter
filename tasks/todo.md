@@ -1,19 +1,11 @@
-# Todo — #705
+# Checklist — #707 Validate BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID range
 
-## Task 1 — Strip literal suffixes from parameter card values (server.py)
-- [ ] Remove ` (30m)` at 4319, ` (2h)` at 4387, ` (10¢)` at 4684, ` (90¢)` at 4701,
-      ` (1¢)` at 4805, ` (6¢)` at 4841, ` (15¢)` at 4858, ` (1.5¢)` at 4984,
-      ` (0.5¢)` at 5001, ` (1¢)` at 5020, ` (3¢)` at 5076, ` (5¢)` at 5093,
-      ` (15m)` at 5180, ` (15m)` at 5214, ` (5¢)` at 5250.
-- [ ] Leave `(50% of spread)` (4754) and `(Telemetry Only)` untouched.
-- [ ] Do not touch `default`, `raw_value`, `trigger`, `action`, quoting logic, config loader, or frontend.
+Branch: `i707/validate-max-spread-from-mid-range` | Issue: #707
 
-## Task 2 — Tests (test_dashboard_server.py)
-- [ ] Repin 3259: `"1800s (30m)"` → `"1800s"` with a comment naming why the old pin was wrong.
-- [ ] Leave 3245 (`"$777.00"`) and 3262 (`"False (Telemetry Only)"`) untouched.
-- [ ] New test: `max_spread_from_mid` card with `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID=20`
-      → raw 0.20, value exactly `"$0.20"`, default `"$0.15"`.
-
-## Task 3 — Verify
-- [ ] RED/GREEN: new test fails before suffix strip, passes after.
-- [ ] Focused suite: `python -m pytest -q tests/test_dashboard_server.py`.
+- [x] T1 engine loader: both reads validate 1..99 cents, name the winning variable
+- [x] T2 scoring loader: same rule, pinned strict, unpinned tolerant of non-numbers only
+- [x] T3 `.env.example` range + error note; #690 ledger O3 -> fixed #707
+- [x] T4 tests: boundaries, rejections, alias naming, per-path typo pin; two #690 tests repinned
+- [x] Focused suites green; full suite green at build time
+- [ ] PR opened, one CodeRabbit review round, CI green, merged
+- [ ] Closeout: clean tree on `main`, issue closed
