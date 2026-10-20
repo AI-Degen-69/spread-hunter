@@ -1393,9 +1393,11 @@ class TestMarketSpecsPath:
 
         def spy(path=None, max_age_sec=None):
             seen["path"] = path
-            return []
+            # #646: the plain path loads through the snapshot reader now.
+            return feed_mod.GraduatedSnapshot(
+                rows=[], published_mtime_ns=0, condition_ids=frozenset())
 
-        monkeypatch.setattr(feed_mod, "load_graduated_markets", spy)
+        monkeypatch.setattr(feed_mod, "load_graduated_snapshot", spy)
 
         assert _market_specs() == []
         assert seen["path"] is None
@@ -4474,6 +4476,224 @@ class TestGuardianReactiveWake:
             wake_evt.set()
             thread.join(timeout=2.0)
             stream.stop()
+
+
+class TestRequalificationGate:
+    """No new entry quotes for a reset market until a newer publication (#646)."""
+
+    CID = "0xRequal"
+
+    def _reg(self, tmp_path):
+        from core_brain.order_registry import OrderRegistry
+        return OrderRegistry(db_path=tmp_path / "t.db")
+
+    def _mark_awaiting(self, reg, cid, reset_ts_ms):
+        gen = reg.begin_lifecycle_reset(cid, "test", now_ms=reset_ts_ms)
+        assert reg.finish_lifecycle_reset(cid, gen, reset_ts_ms=reset_ts_ms)
+        return gen
+
+    def _books(self, token="tok-up"):
+        return {"token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                "bids": {0.59: 100}, "asks": {0.61: 100}}
+
+    def _seam(self, reg, submitted):
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            return [_intent()], ""
+
+        return VenueSeam(
+            client=object(),
+            registry=reg,
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda host, token: self._books(token),
+            decide=decide,
+            submit_fn=lambda c, r, m, i, cfg: submitted.append(
+                [x.side for x in i]) or len(i),
+            cancel_fn=lambda c, r, o: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+        )
+
+    def _specs(self, *cids, published_ns, cids_in_pub):
+        from core_brain.trader_loop import MarketSpecList
+        return MarketSpecList(
+            [FakeMarket(cid) for cid in cids],
+            published_mtime_ns=published_ns,
+            condition_ids=frozenset(cids_in_pub))
+
+    def _run_once(self, reg, submitted, specs):
+        return run(
+            self._seam(reg, submitted), interval=0.0, once=True, live=True,
+            markets_fn=lambda: specs, sleep_fn=lambda s: None)
+
+    def test_a_marked_market_gets_no_entry_quote(self, tmp_path):
+        """#646: an older publication leaves the block in place."""
+        import time
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        self._mark_awaiting(reg, self.CID, reset_ms)
+        submitted = []
+        specs = self._specs(self.CID, published_ns=reset_ms * 1_000_000 - 1,
+                            cids_in_pub={self.CID.lower()})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert [(r.status, r.why) for r in results] == [
+            ("SKIPPED", "awaiting_requalification")]
+        assert submitted == []
+        assert self.CID.lower() in reg.requalification_marks()
+
+    def test_an_equal_publication_time_does_not_clear(self, tmp_path):
+        """#646: strictly newer is the rule; equal keeps the mark."""
+        import time
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        self._mark_awaiting(reg, self.CID, reset_ms)
+        submitted = []
+        specs = self._specs(self.CID, published_ns=reset_ms * 1_000_000,
+                            cids_in_pub={self.CID.lower()})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert results[0].status == "SKIPPED"
+        assert self.CID.lower() in reg.requalification_marks()
+
+    def test_a_newer_publication_including_the_market_clears(self, tmp_path):
+        """#646: quoting resumes once the filter re-qualifies the market."""
+        import time
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        self._mark_awaiting(reg, self.CID, reset_ms)
+        submitted = []
+        specs = self._specs(self.CID,
+                            published_ns=int(time.time() * 1_000_000_000),
+                            cids_in_pub={self.CID.lower()})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert results[0].status == "QUOTED"
+        assert submitted == [["UP"]]
+        assert reg.requalification_marks() == {}
+
+    def test_a_newer_publication_excluding_the_market_drops_it(self, tmp_path):
+        """#646: dropped from trading, but the block stays recorded."""
+        import time
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        self._mark_awaiting(reg, self.CID, reset_ms)
+        submitted = []
+        specs = self._specs("0xother",
+                            published_ns=int(time.time() * 1_000_000_000),
+                            cids_in_pub={"0xother"})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert all(r.condition_id != self.CID for r in results)
+        mark = reg.requalification_marks()[self.CID.lower()]
+        assert mark.status == "awaiting"
+        assert mark.excluded_publication_ns is not None
+
+    def test_an_empty_publication_never_readmits(self, tmp_path):
+        """#646: keeping the old universe is not re-qualification."""
+        import time
+        reg = self._reg(tmp_path)
+        self._mark_awaiting(reg, self.CID, int(time.time() * 1000) - 60_000)
+
+        results = self._run_once(reg, [], [])
+
+        assert results == []
+        assert self.CID.lower() in reg.requalification_marks()
+
+    def test_a_legacy_supplier_never_clears_a_mark(self, tmp_path):
+        """#646: a plain list carries no publication time, so no clearing."""
+        import time
+        reg = self._reg(tmp_path)
+        self._mark_awaiting(reg, self.CID, int(time.time() * 1000) - 60_000)
+        submitted = []
+
+        results = self._run_once(reg, submitted, [FakeMarket(self.CID)])
+
+        assert [(r.status, r.why) for r in results] == [
+            ("SKIPPED", "awaiting_requalification")]
+        assert submitted == []
+        assert self.CID.lower() in reg.requalification_marks()
+
+    def test_the_block_ignores_case(self, tmp_path):
+        """#646: 0xABC marked still blocks a 0xabc quote."""
+        import time
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        self._mark_awaiting(reg, "0xABC", reset_ms)
+        submitted = []
+        specs = self._specs("0xabc", published_ns=reset_ms * 1_000_000 - 1,
+                            cids_in_pub={"0xabc"})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert results[0].status == "SKIPPED"
+        assert submitted == []
+
+    def test_a_hedge_intent_is_submitted_while_resetting(self, tmp_path):
+        """#646: the final gate keeps lifecycle-context submits."""
+        import time
+        from core_brain.trader_loop import _enforce_entry_gate
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        gen = reg.begin_lifecycle_reset(self.CID, "test", now_ms=reset_ms)
+        assert gen == 1
+        seam = self._seam(reg, [])
+        hedge = _intent(pair_id="pair-9")
+        fresh = _intent()
+
+        kept, blocked = _enforce_entry_gate(
+            seam, self.CID, [hedge, fresh], "pair-9")
+
+        assert blocked is True
+        assert kept == [hedge]
+
+        kept, _ = _enforce_entry_gate(seam, self.CID, [fresh], None)
+        assert kept == []
+
+    def test_a_reset_between_planning_and_submission_drops_entries(
+            self, tmp_path):
+        """#646: the guarded reread catches a mark the visit skip missed."""
+        import time
+        reg = self._reg(tmp_path)
+        real_marks = reg.requalification_marks
+        calls = {"n": 0}
+        reset_ms = int(time.time() * 1000) - 60_000
+
+        def _flaky_marks():
+            # Reads 1-2 are evaluation plus the visit-loop skip (both miss
+            # the mark); read 3 is the guarded final check (catches it).
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                return {}
+            return real_marks()
+
+        reg.requalification_marks = _flaky_marks
+        self._mark_awaiting(reg, self.CID, reset_ms)
+        submitted = []
+        specs = self._specs(self.CID, published_ns=reset_ms * 1_000_000 - 1,
+                            cids_in_pub={self.CID.lower()})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert results[0].status == "DECLINED"
+        assert results[0].why == "awaiting_requalification"
+        assert submitted == []
+
+    def test_market_specs_carries_publication_metadata(self, tmp_path):
+        """#646: the production feed path mints metadata-carrying lists."""
+        import json
+        from core_brain.trader_loop import _market_specs
+        path = tmp_path / "markets.json"
+        path.write_text(json.dumps([{"cid": "0xMeta"}]), encoding="utf-8")
+
+        specs = _market_specs(path=path)
+
+        assert [s["cid"] for s in specs] == ["0xMeta"]
+        assert specs.published_mtime_ns == path.stat().st_mtime_ns
+        assert specs.publication_condition_ids == frozenset({"0xmeta"})
 
 
 

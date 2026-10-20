@@ -1,9 +1,12 @@
-# #687 checklist (derived from tasks/plan.md — Station III selects from plan.md, not this file)
+# Todo — #646
 
-- [ ] T1 shared preset resolver + engine from_env refactor
-- [ ] T2 SCREENER_PRESETS registry (same six names, no PICKER_PROFILE fields)
-- [ ] T3 scoring load() preset merge (defaults → preset → explicit)
-- [ ] T4 pipeline.json preset publish + KPI funnel
-- [ ] T5 screener board preset pill
-- [ ] T6 menu ranker env passthrough verify
-- [ ] T7 tests pin preset-on / preset-off / 0.045 window
+- [ ] T1 registry reset state + tests
+- [ ] T2 shared reset_condition + fake-port tests
+- [ ] T3 live + shadow port adapters + tests
+- [ ] T4 stop-exit route + skip fix + retry + tests
+- [ ] T5 live-merge route + tests
+- [ ] T6 shadow-merge route + tests
+- [ ] T7 feed snapshot + tests + arch note
+- [ ] T8 trader re-qualification + entry gate + tests
+- [ ] T9 status section (hands-on check)
+- [ ] T10 out-of-scope ledger

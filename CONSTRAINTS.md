@@ -1,42 +1,56 @@
-Branch: i687/ranker-tournament-preset | Issue: #687
+Branch: i646/unified-reset-path | Issue: #646
 
-# Constraints - #687 ranker tournament preset (N3 from #674)
+# Constraints — #646 unified reset path with filter re-qualification
 
-Preset toggle covers the ranker; engine/scoring defaults stay independent.
+One guarded reset that live merges, shadow merges, and stop exits all go
+through: prove flat from real reads, clear the lifecycle row, mark the market
+awaiting re-qualification. No new entry quotes until a newer published
+universe includes the market.
 
 ## The bar
 
-- **Zero regressions:** `tests/test_dynamic_offset.py`,
-  `tests/test_config_divergence_guard.py`, `tests/test_config_single_source.py`
-  and `tests/test_ranker_reads_env_file.py` pass unchanged in intent; new
-  behavior (preset-on scoring, UI pill) ships with tests that fail without
-  the change.
-- **Engine behavior frozen:** `MakerConfig.from_env()` precedence
-  (defaults → preset → explicit) and the unknown-preset `ValueError` text
-  stay byte-identical in behavior; the refactor only shares the resolver.
-- **Scoring class body untouched:** no new declaration in
-  `scoring.config.MakerConfig` — the divergence guard owns this. Registry +
-  resolver live in `core_brain/config.py`.
-- **Defaults independence:** preset-off runs produce today's numbers;
-  no `PICKER_PROFILE` field (especially the 0.045 `max_spread_from_mid`
-  window) appears in any `SCREENER_PRESETS` entry — pinned by a registry test.
-- **No invented numbers:** `baseline` (and all other presets) start on shipped
-  screener bars; preset-specific bar values arrive only as an explicit
-  operator decision, never guessed.
-- **Dashboard honesty:** the pill renders what the ranker published in
-  `pipeline.json`, never the dashboard process's own environment.
+- Reset proves flat from **real reads only**: net ledger inventory
+  (`inventory_from_registry`, fills minus closes) **and** both token balances
+  at or below `SIZE_EPS`. A `venue_positions is None` read never counts as
+  zero — it yields `UNAVAILABLE`/`REFUSED` and the market stays managed.
+- `PAIR_LOCKED`, `route_to_merge`, and `exited` alone are **never** proof of
+  flat. Only the reads count.
+- `finish` is atomic: delete of all `single_leg_lifecycle` rows for the
+  condition + `awaiting` mark land in **one `BEGIN IMMEDIATE` transaction**,
+  conditional on the generation. Stale generations clear nothing.
+- Begin (`resetting`) blocks fresh entries **before** cancellation starts; any
+  non-`RESET` outcome abandons the block and leaves lifecycle rows untouched.
+- Live merge resets only after `EXECUTED` **and** a successful `log_close`
+  write. Shadow merge resets only after close + leg writes commit. Stop exit
+  resets only after `_record_exit_close` on `action="exited"`.
+- Partial/unequal merges, partial stops, and late fills after cancel
+  **block** the reset; the market stays under the existing manager.
+- Entry gate fails closed: a `sqlite3.Error` from `requalification_marks()`
+  blocks fresh entries for the cycle. Hedges, exits, and restores keep
+  working. Legacy no-metadata `markets_fn` suppliers never clear a mark.
+- Only a publication **strictly newer** than `reset_ts_ms` that includes the
+  market clears its mark; a newer publication that excludes it drops the
+  market from trading but keeps the mark.
+- The `#634` lifecycle assertions in `tests/test_single_leg_lifecycle.py`
+  and `tests/test_single_buy_saver.py` stay green, or change only
+  deliberately with the reason recorded in the plan.
+- Every new behavior ships with a test that **fails without the change**.
 
 ## Deliberate non-changes (a later reviewer must not "fix" these back)
 
-- Tournament shared filter stays preset-free by design (one filter serves
-  several arms with different presets).
-- `data/orders.db` is read-only; no live/opening commands during this work.
-- No `docs/issues/674*` ledger exists (closed-issue artifacts pruned) — N3
-  closeout is recorded in the plan, not chased as a missing file.
+- Orders, fills, and closes history are never rewritten by a reset.
+- `scripts/filter_markets.py` and `_publish_json` are untouched; the filter
+  loop stays the only publication entry point, file stays a bare JSON list.
+- No tiered poller, no second-leg repricing, no slippage measurement
+  (out-of-scope rows go to `docs/issues/646-noticed-but-not-touching.md`).
+- No tier list for #621 is built here; `requalification_marks()` (incl.
+  exclusion records) is the documented contract #621 will read.
 
 ## Process
 
-- No live command, no venue call, no write to `data/orders.db`.
-- No direct push to `main`; the change ships through a PR.
-- Targeted suites locally only; GitHub CI on Ubuntu and Windows is the merge gate.
+- No live/opening commands (`quote`, `complete`, Trader loop, START).
+- Never touch `data/orders.db`; shadow work uses a fresh isolated store.
+- Targeted suites locally only; GitHub CI (Ubuntu + Windows) is the merge gate.
 - No `pytest` / `gh` / `git` step inside the operator's "How to verify".
+- Narrow `except` clauses only (`PairExitRefused`, `ExposureUnavailable`,
+  `sqlite3.Error`); unit-suffixed time names (`now_ms`, `reset_ts_ms`).

@@ -7,10 +7,11 @@ Handles missing, empty, or stale feed files explicitly.
 from __future__ import annotations
 
 import json
+import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import FrozenSet, Optional
 
 from core_brain.runtime_paths import resolve_runtime_file, runtime_file
 
@@ -304,6 +305,71 @@ def _paired_bundle_format(target: Path) -> str:
     return fmt if isinstance(fmt, str) else ""
 
 
+@dataclass(frozen=True)
+class GraduatedSnapshot:
+    """One validated publication plus the instant it was published (#646).
+
+    `published_mtime_ns` is the file modification time in nanoseconds, read
+    with `fstat()` from the SAME open file the bytes were parsed from -- so
+    the timestamp and the rows can never describe two different files.
+
+    Why mtime and not a field: the file is a bare JSON list (readers expect
+    that shape, and a valid `[]` carries no rows to hang a field on), the
+    filter publishes via atomic replace (`_publish_json`), so every
+    publication is a new file with its own mtime, and trader and filter share
+    one machine and one wall clock. Only a publication strictly NEWER than a
+    reset (mtime_ns > reset wall-clock ms * 1e6) can re-qualify its market.
+    """
+
+    rows: list = field(default_factory=list)
+    published_mtime_ns: int = 0
+    condition_ids: FrozenSet[str] = frozenset()
+
+
+def load_graduated_snapshot(
+    path: Path | str | None = None,
+    max_age_sec: Optional[float] = DEFAULT_MAX_STALENESS_SEC,
+) -> GraduatedSnapshot:
+    """Read the graduated-markets publication with its publish instant.
+
+    Same errors as `load_graduated_markets` for missing, empty, malformed
+    and stale files. A valid `[]` is an empty universe with a real timestamp:
+    it never readmits a reset market, it only drops it from trading.
+    """
+    target = Path(path) if path is not None else default_markets_path()
+    try:
+        fd = os.open(target, os.O_RDONLY)
+    except OSError:
+        raise MarketFeedAbsentError(
+            f"graduated markets feed missing at {target}. Run scripts/rank_markets.py first."
+        )
+    with os.fdopen(fd, "rb") as handle:
+        stat = os.fstat(handle.fileno())
+        if stat.st_size == 0:
+            raise MarketFeedError(
+                f"graduated markets feed at {target} is empty (0 bytes)")
+        # 0 or None disables the staleness check
+        if max_age_sec is not None and max_age_sec > 0:
+            age = time.time() - stat.st_mtime
+            if age > max_age_sec:
+                raise MarketFeedStaleError(
+                    f"graduated markets feed at {target} is stale: age {age:.0f}s "
+                    f"> {max_age_sec:.0f}s"
+                )
+        raw = handle.read()
+    published_mtime_ns = stat.st_mtime_ns
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception as e:
+        raise MarketFeedError(f"failed to parse JSON from {target}: {e}") from e
+    rows = _graduated_rows(data, target)
+    return GraduatedSnapshot(
+        rows=rows,
+        published_mtime_ns=published_mtime_ns,
+        condition_ids=frozenset(str(m.cid).lower() for m in rows),
+    )
+
+
 def load_graduated_markets(
     path: Path | str | None = None,
     max_age_sec: Optional[float] = DEFAULT_MAX_STALENESS_SEC,
@@ -327,33 +393,8 @@ def load_graduated_markets(
         return _load_paired_depth_feed(target, arm=paired_arm,
                                        max_age_sec=max_age_sec)
 
-    if not target.is_file():
-        raise MarketFeedAbsentError(
-            f"graduated markets feed missing at {target}. Run scripts/rank_markets.py first."
-        )
-
-    try:
-        stat = target.stat()
-    except OSError as e:
-        raise MarketFeedAbsentError(f"unable to stat {target}: {e}") from e
-
-    if stat.st_size == 0:
-        raise MarketFeedError(f"graduated markets feed at {target} is empty (0 bytes)")
-
-    # 0 or None disables the staleness check
-    if max_age_sec is not None and max_age_sec > 0:
-        age = time.time() - stat.st_mtime
-        if age > max_age_sec:
-            raise MarketFeedStaleError(
-                f"graduated markets feed at {target} is stale: age {age:.0f}s > {max_age_sec:.0f}s"
-            )
-
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise MarketFeedError(f"failed to parse JSON from {target}: {e}") from e
-
-    return _graduated_rows(data, target)
+    return load_graduated_snapshot(path=target,
+                                   max_age_sec=max_age_sec).rows
 
 
 def get_market_by_cid(

@@ -85,6 +85,25 @@ exit retains venue-position, cancellation, fill-reread, residual-size, depth, an
 slippage protections. `unhedged_stop_loss.py` remains the separate per-market markout gate;
 it does not replace the pair lifecycle.
 
+## Unified reset and re-qualification (#646)
+
+One guarded reset (`core_brain/lifecycle_reset.py`, caller-injected ports) serves
+live merges, shadow merges, and stop exits. It proves the market flat -- net
+ledger inventory AND both token balances at or below `SIZE_EPS`, no resting
+orders, no late fill -- then atomically clears the condition's lifecycle rows
+and marks it awaiting re-qualification (`lifecycle_requalification` table,
+generation-guarded). Anything less than proof leaves the row and the market
+stays managed. `requalification_marks()` (including exclusion records) is the
+contract #621's tier list will read.
+
+Freshness is the file mtime in nanoseconds (`load_graduated_snapshot`, single
+open + `fstat()` so timestamp and rows never describe different files). No
+publish-timestamp field exists: the file is a bare JSON list, the filter
+publishes by atomic replace so every publication is a new file with its own
+mtime, and trader and filter share one machine and clock. Only a publication
+strictly newer than the reset clears the mark when it includes the market; a
+newer one that excludes it drops the market from trading but keeps the mark.
+
 ## Where generated files go
 
 Every writer names an absolute destination anchored to the repo, never a path

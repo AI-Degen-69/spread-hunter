@@ -1606,13 +1606,18 @@ def _leg_cost_removed(leg_costs: list[tuple[str, float]],
     return half, half
 
 
-def shadow_positions(registry: OrderRegistry, db_path: Path | str) -> dict[str, float]:
+def shadow_positions(registry: OrderRegistry, db_path: Path | str,
+                     side_of: dict[tuple[str, str], str] | None = None) -> dict[str, float]:
     """Positions as the shadow store knows them, shaped like `fetch_positions`.
 
     Passed to `auto_manage_pairs` explicitly so the pass never reaches for the
     Data API. That read fails the pass closed on any error, and failing closed
     on every cycle would keep the pairs pass from ever running in a rehearsal
     that has no funder to read a live position from.
+
+    `side_of` is an optional precomputed `_side_by_token` map. Callers that
+    already paid for the quotes-ledger scan (the merge pass, the reset proof)
+    pass it so the balance reread does not pay again.
     """
     with closing(get_connection(Path(db_path))) as conn:
         # A SELL never reaches this store today -- `record_submit` writes BUY
@@ -1641,7 +1646,8 @@ def shadow_positions(registry: OrderRegistry, db_path: Path | str) -> dict[str, 
 
     # An exit records its leg by which price field is set, so it needs to know
     # which token is UP.
-    side_of = _side_by_token(registry)
+    if side_of is None:
+        side_of = _side_by_token(registry)
 
     for cr in close_rows:
         shares = float(cr["shares"] or 0.0)
@@ -1667,6 +1673,73 @@ def shadow_positions(registry: OrderRegistry, db_path: Path | str) -> dict[str, 
             held[key] = max(0.0, held[key] - shares)
 
     return {token: shares for (_cid, token), shares in held.items() if shares > 0}
+
+
+def shadow_reset_ports(registry: OrderRegistry, db_path: Path | str,
+                       condition_id: str, up_token_id: str,
+                       down_token_id: str,
+                       side_of: dict[tuple[str, str], str] | None = None):
+    """`ResetPorts` over the shadow store (#646).
+
+    Cancel runs the store's own path -- the same
+    `update_order_status(..., status="cancelled")` write
+    `ShadowExecutionClient.cancel_order` performs -- and verification reads
+    the store's active-order query. Reconciliation is a fresh store reread:
+    the store is the source of truth here, so readability IS the check.
+    `shadow_positions` returns positive holdings only, so an absent token is
+    an explicit zero with no read-semantics caveat.
+    """
+    from core_brain.lifecycle_reset import ResetPorts
+    from core_brain.order_registry import inventory_from_registry
+
+    cid = str(condition_id or "").lower()
+    store = Path(db_path)
+
+    def _active_rows() -> list:
+        return [r for r in registry.get_active_orders()
+                if str(r.condition_id or "").lower() == cid and r.order_id]
+
+    def _read_inventory() -> tuple[float, float]:
+        inv = inventory_from_registry(
+            condition_id, up_token_id, down_token_id, db_path=store)
+        return (float(inv.up_shares or 0.0), float(inv.down_shares or 0.0))
+
+    def _watermark() -> tuple:
+        return registry.fill_watermark(condition_id)
+
+    def _active_order_ids() -> list[str]:
+        return [str(r.order_id) for r in _active_rows()]
+
+    def _cancel(order_ids: list[str]) -> None:
+        import time as _time
+        wanted = set(map(str, order_ids))
+        now_ms = int(_time.time() * 1000)
+        for row in _active_rows():
+            if str(row.order_id) in wanted:
+                registry.update_order_status(
+                    row.id, status="cancelled", last_polled_ts=now_ms)
+
+    def _verify_cancelled() -> bool:
+        return not _active_rows()
+
+    def _reconcile_fills() -> None:
+        with closing(get_connection(store)) as conn:
+            conn.execute("SELECT COUNT(*) FROM fills").fetchone()
+
+    def _read_balances() -> tuple[float, float]:
+        held = shadow_positions(registry, store, side_of=side_of)
+        return (float(held.get(up_token_id, 0.0)),
+                float(held.get(down_token_id, 0.0)))
+
+    return ResetPorts(
+        read_inventory=_read_inventory,
+        fill_watermark=_watermark,
+        active_order_ids=_active_order_ids,
+        cancel=_cancel,
+        verify_cancelled=_verify_cancelled,
+        reconcile_fills=_reconcile_fills,
+        read_balances=_read_balances,
+    )
 
 
 def record_shadow_merges(
@@ -1872,4 +1945,44 @@ def record_shadow_merges(
             )
             conn.commit()
 
+    # Unified reset (#646): only after BOTH writes committed. A failed close
+    # or leg write raises above, so no reset runs on a half-recorded merge.
+    # An unequal merge leaves its excess leg behind, and the proof returns
+    # RESIDUAL on it -- the market stays managed.
+    if merged:
+        from core_brain.lifecycle_reset import reset_condition
+        merged_cids: dict[str, str] = {}
+        for pair_id in merged:
+            for leg in by_pair.get(pair_id, []):
+                merged_cids[pair_id] = str(leg["condition_id"])
+        # Reuse the loop's scan: a merge already paid for it above, and the
+        # ledger-scan test pins that cost at one.
+        reset_side_of = side_of if side_of is not None else _side_by_token(
+            registry)
+        for pair_id in merged:
+            condition_id = merged_cids.get(pair_id)
+            if not condition_id:
+                continue
+            up_token_id = next(
+                (tok for (cid, tok), side in reset_side_of.items()
+                 if cid == condition_id and side == "UP"), "")
+            down_token_id = next(
+                (tok for (cid, tok), side in reset_side_of.items()
+                 if cid == condition_id and side == "DOWN"), "")
+            if not up_token_id or not down_token_id:
+                continue
+            reset_condition(
+                registry, condition_id, up_token_id, down_token_id,
+                shadow_reset_ports(registry, db_path, condition_id,
+                                   up_token_id, down_token_id,
+                                   side_of=reset_side_of),
+                reason="shadow_merge", now_ms=int(time.time() * 1000))
+
     return merged
+
+
+# Plug the shadow factory into the live fill engine's hook (#646). The live
+# side declares the hook so it never imports this module -- the boundary
+# guard forbids it -- and the shadow side registers on import.
+from core_brain.single_buy_saver import register_shadow_reset_ports as _register
+_register(shadow_reset_ports)
