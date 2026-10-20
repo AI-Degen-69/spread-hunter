@@ -392,11 +392,13 @@ def test_canonical_filter_env_overrides_field_and_wins_over_legacy(
 
 EXECUTION_CANONICAL_ENV = [
     # (canonical_var, legacy_vars, field, can_raw, can_val, leg_raw, leg_val, default_val, needs_pin, needs_rehearsal)
+    # An empty legacy tuple means the variable has no alias left, so its row
+    # answers the canonical and blank-canonical questions only.
     ("BOT_MARKET_PINNED_CONDITION_ID", ("HUNTER_MARKET",), "bot_market_pinned_condition_id", "0xcan_pinned", "0xcan_pinned", "0xleg_pinned", "0xleg_pinned", "", False, False),
     ("BOT_MARKET_TITLE", ("HUNTER_TITLE",), "bot_market_title", "Canonical Title", "Canonical Title", "Legacy Title", "Legacy Title", "", True, False),
     ("BOT_MARKET_URL", ("HUNTER_URL",), "bot_market_url", "https://polymarket.com/can", "https://polymarket.com/can", "https://polymarket.com/leg", "https://polymarket.com/leg", "", True, False),
     ("BOT_QUOTE_SIZE_MIN_SHARES", ("HUNTER_MIN_QUOTE_SHARES", "HUNTER_MIN_SIZE"), "bot_quote_size_min_shares", "200", 200, "150", 150, 50, True, False),
-    ("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", ("HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD"), "bot_quote_book_max_spread_from_mid", "25", 0.25, "20", 0.20, 0.045, True, False),
+    ("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", (), "bot_quote_book_max_spread_from_mid", "25", 0.25, None, None, 0.045, True, False),
     ("BOT_QUOTE_GRID_TICK_SIZE_USD", ("HUNTER_PRICE_TICK", "HUNTER_TICK"), "bot_quote_grid_tick_size_usd", "0.005", 0.005, "0.02", 0.02, 0.01, True, False),
     ("BOT_QUOTE_WIDE_BOOK_TRIAL", ("HUNTER_WIDE_BOOK_TRIAL",), "bot_quote_wide_book_trial", "0.12", 0.12, "0.15", 0.15, None, False, True),
     ("BOT_RISK_GATE_PAIRS_RULE_ON", ("HUNTER_PAIRS_RULE",), "bot_risk_gate_pairs_rule_on", "off", False, "1", True, True, False, False),
@@ -413,7 +415,7 @@ def _clear_execution_env(monkeypatch):
         "BOT_MARKET_TITLE", "HUNTER_TITLE",
         "BOT_MARKET_URL", "HUNTER_URL",
         "BOT_QUOTE_SIZE_MIN_SHARES", "HUNTER_MIN_QUOTE_SHARES", "HUNTER_MIN_SIZE",
-        "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD",
+        "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
         "BOT_QUOTE_GRID_TICK_SIZE_USD", "HUNTER_PRICE_TICK", "HUNTER_TICK",
         "BOT_QUOTE_WIDE_BOOK_TRIAL", "HUNTER_WIDE_BOOK_TRIAL",
         "BOT_RISK_GATE_PAIRS_RULE_ON", "HUNTER_PAIRS_RULE",
@@ -455,18 +457,20 @@ def test_canonical_execution_env_overrides_field_and_wins_over_legacy(
         monkeypatch.setenv(leg_var, leg_raw)
     assert getattr(scoring_config.load(), field) == can_val
 
-    # 4. Blank or whitespace canonical -> falls through to legacy
+    # 4. Blank or whitespace canonical -> falls through to legacy, and to the
+    #    shipped default for a variable that has no alias left (#706)
     for blank in ("", "   "):
         monkeypatch.setenv(can_var, blank)
-        assert getattr(scoring_config.load(), field) == leg_val
+        assert getattr(scoring_config.load(), field) == (leg_val if leg_vars else default_val)
 
     # 5. Each legacy var alone with newer cleared -> legacy value still works
-    monkeypatch.delenv(can_var, raising=False)
-    for leg_var in leg_vars:
-        for other in leg_vars:
-            monkeypatch.delenv(other, raising=False)
-        monkeypatch.setenv(leg_var, leg_raw)
-        assert getattr(scoring_config.load(), field) == leg_val
+    if leg_vars:
+        monkeypatch.delenv(can_var, raising=False)
+        for leg_var in leg_vars:
+            for other in leg_vars:
+                monkeypatch.delenv(other, raising=False)
+            monkeypatch.setenv(leg_var, leg_raw)
+            assert getattr(scoring_config.load(), field) == leg_val
 
 
 def test_execution_coupling_overrides(monkeypatch):
@@ -527,18 +531,9 @@ def test_unpinned_runs_read_the_spread_window_from_the_environment(monkeypatch):
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "25")
     assert scoring_config.load().max_spread_from_mid == 0.25
 
-    monkeypatch.delenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
-    monkeypatch.setenv("HUNTER_MAX_SPREAD_CENTS", "20")
-    assert scoring_config.load().max_spread_from_mid == 0.20
-
-    monkeypatch.delenv("HUNTER_MAX_SPREAD_CENTS")
-    monkeypatch.setenv("HUNTER_MAX_SPREAD", "20")
-    assert scoring_config.load().max_spread_from_mid == 0.20
-
-    # Canonical wins over both legacy names when all three are present.
-    monkeypatch.setenv("HUNTER_MAX_SPREAD_CENTS", "20")
-    monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "25")
-    assert scoring_config.load().max_spread_from_mid == 0.25
+    # Blank is unset on this path too, so the picker's own window stands.
+    monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "   ")
+    assert scoring_config.load().max_spread_from_mid == 0.045
 
 
 def test_unpinned_bad_spread_values_are_inactive_not_enforced(monkeypatch):
@@ -554,24 +549,6 @@ def test_unpinned_bad_spread_values_are_inactive_not_enforced(monkeypatch):
     for raw in ("", "wide"):
         monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", raw)
         assert scoring_config.load().max_spread_from_mid == 0.045, raw
-
-
-def test_unpinned_legacy_spread_warns_once(monkeypatch, caplog):
-    """#690: the #632 warning now reaches unpinned runs, once, with the same text."""
-    import logging
-
-    _clear_execution_env(monkeypatch)
-    monkeypatch.setenv("HUNTER_MAX_SPREAD", "20")
-
-    with caplog.at_level(logging.WARNING):
-        cfg = scoring_config.load()
-
-    assert cfg.max_spread_from_mid == 0.20
-    warnings = [r.getMessage() for r in caplog.records
-                if "HUNTER_MAX_SPREAD is deprecated" in r.getMessage()]
-    assert warnings == [
-        "HUNTER_MAX_SPREAD is deprecated (#632); set BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID instead."
-    ]
 
 
 def test_unpinned_scoring_and_engine_load_the_same_window(monkeypatch):
@@ -610,7 +587,8 @@ def _spread_window(mod, monkeypatch, raw, *, pinned, var="BOT_QUOTE_BOOK_MAX_SPR
     """Load `mod` with the window set through `var`, blank raw meaning unset.
 
     The value is in CENTS: `1` is `0.01`, `99` is `0.99`. The rejection names the
-    variable the operator actually set, so the alias cases set `var` too.
+    variable the operator actually set, so a caller checking a name that is not the
+    canonical one passes it in `var`.
     """
     _clear_execution_env(monkeypatch)
     if pinned:
@@ -668,15 +646,6 @@ def test_spread_window_rejection_names_the_variable_and_the_value(mod, monkeypat
 
 
 @_BOTH_LOADERS
-@_BOTH_PATHS
-@pytest.mark.parametrize("var", ["HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD"])
-def test_spread_window_rejection_names_the_alias_that_supplied_it(mod, monkeypatch, pinned, var):
-    """#707 validates the RESOLVED value, so the error names the winning alias (#706 keeps them)."""
-    with pytest.raises(ValueError, match=f"{var}='inf' is not finite"):
-        _spread_window(mod, monkeypatch, "inf", pinned=pinned, var=var)
-
-
-@_BOTH_LOADERS
 def test_a_typo_in_the_spread_window_keeps_its_per_path_behaviour(mod, monkeypatch):
     """#690's rule survives #707: unpinned a typo is inactive, pinned it still raises.
 
@@ -690,6 +659,30 @@ def test_a_typo_in_the_spread_window_keeps_its_per_path_behaviour(mod, monkeypat
         _spread_window(mod, monkeypatch, "wide", pinned=True)
 
 
+# ============================================================================
+# #706: `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID` is the only accepted name
+# ============================================================================
+
+
+@_BOTH_LOADERS
+@_BOTH_PATHS
+@pytest.mark.parametrize(
+    "ghost", ["HUNTER_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "BOT_QUOTE_BOOK_MAX_SPREAD"],
+    ids=["hunter_prefixed", "missing_from_mid"],
+)
+def test_a_name_that_is_not_the_canonical_one_leaves_the_window_shipped(
+        mod, monkeypatch, pinned, ghost):
+    """#706: an unknown name is inert, never an error and never a fallback.
+
+    The loader cannot tell an operator's stale shell from a typo, and the
+    ticket's own acceptance criterion is that a name it does not publish has
+    zero effect -- so the shipped window stands and nothing is raised.
+    """
+    shipped = 0.15 if mod is core_config else 0.045
+    assert _spread_window(mod, monkeypatch, "40", pinned=pinned, var=ghost) \
+        .max_spread_from_mid == shipped
+
+
 @pytest.mark.parametrize(
     "oldest_var,newer_var,canonical_var,val_raw,warn_text",
     [
@@ -699,13 +692,6 @@ def test_a_typo_in_the_spread_window_keeps_its_per_path_behaviour(mod, monkeypat
             "BOT_QUOTE_SIZE_MIN_SHARES",
             "100",
             "HUNTER_MIN_SIZE is deprecated (#632); set BOT_QUOTE_SIZE_MIN_SHARES instead.",
-        ),
-        (
-            "HUNTER_MAX_SPREAD",
-            "HUNTER_MAX_SPREAD_CENTS",
-            "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
-            "10",
-            "HUNTER_MAX_SPREAD is deprecated (#632); set BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID instead.",
         ),
         (
             "HUNTER_TICK",

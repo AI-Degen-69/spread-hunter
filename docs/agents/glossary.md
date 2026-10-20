@@ -96,7 +96,6 @@ Commit scopes follow the package name: `fix(core_brain): ...`, not `fix(engine):
 | `MAX_ORDER_USD` | `max_order_usd` | $25.0 baseline single order ceiling ($1.00 min floor) |
 | `MAX_TOTAL_USD` | `max_total_usd` | $90.0 baseline total portfolio ceiling |
 | `HUNTER_MIN_SIZE` | `HUNTER_MIN_QUOTE_SHARES` | Canonical environment variable |
-| `HUNTER_MAX_SPREAD` | `HUNTER_MAX_SPREAD_CENTS` | Canonical environment variable |
 | `HUNTER_TICK` | `HUNTER_PRICE_TICK` | Canonical environment variable |
 | `HUNTER_MAX_SHARES` | `HUNTER_MAX_QUOTE_SHARES` | Canonical environment variable |
 | `HUNTER_STAT_GATE_BANKROLL_FRACTION` | `HUNTER_STAT_GATE_BANKROLL_PCT` | Canonical environment variable |
