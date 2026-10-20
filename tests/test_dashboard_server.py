@@ -3256,10 +3256,30 @@ def test_picker_parameter_cards_show_the_shipped_bars_by_default(client, monkeyp
     cards = _picker_cards(client)
 
     assert cards["select_min_movement_usd"]["raw_value"] == 200.0
-    assert cards["select_movement_window_sec"]["value"] == "1800s (30m)"
+    # #705: was "1800s (30m)" — the "(30m)" was a hardcoded literal that only
+    # restated the 1800s default; on a non-default setting the card contradicted
+    # itself. The suffix is removed from all such cards, so the pin follows.
+    assert cards["select_movement_window_sec"]["value"] == "1800s"
     assert cards["select_max_queue_minutes"]["raw_value"] == 15.0
     assert cards["enforce_max_queue_minutes"]["raw_value"] is False
     assert cards["enforce_max_queue_minutes"]["value"] == "False (Telemetry Only)"
+
+
+def test_max_spread_from_mid_card_shows_configured_value_exactly(client, monkeypatch):
+    """#705: the card value must equal the configured dollar amount, no suffix.
+
+    The old value string appended a hardcoded " (15¢)" literal, so a configured
+    0.20 rendered the self-contradicting "$0.20 (15¢)". An exact-string
+    assertion rejects that stale format; a prefix check would not.
+    """
+    monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "20")
+
+    data = client.get("/api/parameters").json()
+    card = next(p for p in data["parameters"] if p["key"] == "max_spread_from_mid")
+
+    assert card["raw_value"] == 0.20
+    assert card["value"] == "$0.20"
+    assert card["default"] == "$0.15"
 
 
 def test_parameters_endpoint_emits_no_deprecation_warnings(client):
