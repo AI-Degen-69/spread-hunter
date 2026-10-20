@@ -1606,13 +1606,18 @@ def _leg_cost_removed(leg_costs: list[tuple[str, float]],
     return half, half
 
 
-def shadow_positions(registry: OrderRegistry, db_path: Path | str) -> dict[str, float]:
+def shadow_positions(registry: OrderRegistry, db_path: Path | str,
+                     side_of: dict[tuple[str, str], str] | None = None) -> dict[str, float]:
     """Positions as the shadow store knows them, shaped like `fetch_positions`.
 
     Passed to `auto_manage_pairs` explicitly so the pass never reaches for the
     Data API. That read fails the pass closed on any error, and failing closed
     on every cycle would keep the pairs pass from ever running in a rehearsal
     that has no funder to read a live position from.
+
+    `side_of` is an optional precomputed `_side_by_token` map. Callers that
+    already paid for the quotes-ledger scan (the merge pass, the reset proof)
+    pass it so the balance reread does not pay again.
     """
     with closing(get_connection(Path(db_path))) as conn:
         # A SELL never reaches this store today -- `record_submit` writes BUY
@@ -1641,7 +1646,8 @@ def shadow_positions(registry: OrderRegistry, db_path: Path | str) -> dict[str, 
 
     # An exit records its leg by which price field is set, so it needs to know
     # which token is UP.
-    side_of = _side_by_token(registry)
+    if side_of is None:
+        side_of = _side_by_token(registry)
 
     for cr in close_rows:
         shares = float(cr["shares"] or 0.0)
@@ -1671,7 +1677,8 @@ def shadow_positions(registry: OrderRegistry, db_path: Path | str) -> dict[str, 
 
 def shadow_reset_ports(registry: OrderRegistry, db_path: Path | str,
                        condition_id: str, up_token_id: str,
-                       down_token_id: str):
+                       down_token_id: str,
+                       side_of: dict[tuple[str, str], str] | None = None):
     """`ResetPorts` over the shadow store (#646).
 
     Cancel runs the store's own path -- the same
@@ -1720,7 +1727,7 @@ def shadow_reset_ports(registry: OrderRegistry, db_path: Path | str,
             conn.execute("SELECT COUNT(*) FROM fills").fetchone()
 
     def _read_balances() -> tuple[float, float]:
-        held = shadow_positions(registry, store)
+        held = shadow_positions(registry, store, side_of=side_of)
         return (float(held.get(up_token_id, 0.0)),
                 float(held.get(down_token_id, 0.0)))
 
@@ -1937,5 +1944,38 @@ def record_shadow_merges(
                 leg_writes,
             )
             conn.commit()
+
+    # Unified reset (#646): only after BOTH writes committed. A failed close
+    # or leg write raises above, so no reset runs on a half-recorded merge.
+    # An unequal merge leaves its excess leg behind, and the proof returns
+    # RESIDUAL on it -- the market stays managed.
+    if merged:
+        from core_brain.lifecycle_reset import reset_condition
+        merged_cids: dict[str, str] = {}
+        for pair_id in merged:
+            for leg in by_pair.get(pair_id, []):
+                merged_cids[pair_id] = str(leg["condition_id"])
+        # Reuse the loop's scan: a merge already paid for it above, and the
+        # ledger-scan test pins that cost at one.
+        reset_side_of = side_of if side_of is not None else _side_by_token(
+            registry)
+        for pair_id in merged:
+            condition_id = merged_cids.get(pair_id)
+            if not condition_id:
+                continue
+            up_token_id = next(
+                (tok for (cid, tok), side in reset_side_of.items()
+                 if cid == condition_id and side == "UP"), "")
+            down_token_id = next(
+                (tok for (cid, tok), side in reset_side_of.items()
+                 if cid == condition_id and side == "DOWN"), "")
+            if not up_token_id or not down_token_id:
+                continue
+            reset_condition(
+                registry, condition_id, up_token_id, down_token_id,
+                shadow_reset_ports(registry, db_path, condition_id,
+                                   up_token_id, down_token_id,
+                                   side_of=reset_side_of),
+                reason="shadow_merge", now_ms=int(time.time() * 1000))
 
     return merged
