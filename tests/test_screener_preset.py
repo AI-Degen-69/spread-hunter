@@ -120,6 +120,16 @@ def test_preset_on_loads_cleanly_and_keeps_picker_window(monkeypatch):
         assert cfg.max_spread_from_mid == 0.045, (
             f"preset {name!r} must not touch the picker's 0.045 window"
         )
+    # Precedence probe: a temporary in-test bar proves the preset merge in
+    # scoring.config.load() exists. Monkeypatch restores the registry after
+    # the test, so no shipped product value is chosen here. Without the
+    # merge, the loader ignores the registry and the first assertion fails.
+    monkeypatch.setitem(
+        SCREENER_PRESETS["balanced"], "filter_std_vol_min_24h_usd", 77_000.0)
+    monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "balanced")
+    assert scoring_config.load().filter_std_vol_min_24h_usd == 77_000.0
+    monkeypatch.setenv("FILTER_STD_VOL_MIN_24H_USD", "200000")
+    assert scoring_config.load().filter_std_vol_min_24h_usd == 200000.0
 
 
 def test_explicit_setting_overrides_the_preset(monkeypatch):
