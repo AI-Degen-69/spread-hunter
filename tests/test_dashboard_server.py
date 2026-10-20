@@ -13,6 +13,7 @@ Verifies the single-cycle dashboard behavior across all essential operational st
 """
 import datetime
 import json
+import logging
 import os
 import re
 import shutil
@@ -3297,6 +3298,73 @@ def test_no_parameter_card_value_restates_the_default_in_another_unit(client):
         if re.search(r" \([^)]*¢\)$", p["value"]) or re.search(r" \d+(?:\.\d+)?[mh]\)$", p["value"])
     ]
     assert offenders == [], f"cards still restating their default: {offenders}"
+
+
+def test_scoring_load_failure_marks_screener_cards(client, monkeypatch, caplog):
+    """#709: a scoring-config load failure must not show engine numbers as screener config.
+
+    `BOT_QUOTE_WIDE_BOOK_TRIAL` is the deterministic trigger in a non-rehearsal
+    process: the engine config survives it (`for_display=True`), the ranker
+    config raises ValueError. The panel must log the reason at WARNING, render
+    a visible marker card, and withhold every engine value from the screener
+    scope -- the old code silently substituted `cfg` and showed `$0.15`.
+    """
+    monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.20")
+
+    with caplog.at_level(logging.WARNING, logger="dashboard.server"):
+        response = client.get("/api/parameters")
+    assert response.status_code == 200
+
+    assert any(
+        "scoring config" in r.message.lower() and r.levelno == logging.WARNING
+        for r in caplog.records
+    ), "scoring load failure was not logged at WARNING"
+
+    params = response.json()["parameters"]
+    screener = [p for p in params if p.get("scope") == "market_screener"]
+    marker_cards = [p for p in screener if p["key"] == "scoring_config_load_failed"]
+    assert len(marker_cards) == 1
+    assert "⚠" in marker_cards[0]["value"]
+    assert "BOT_QUOTE_WIDE_BOOK_TRIAL" in marker_cards[0]["value"], (
+        "the marker card must name the failing variable at a glance"
+    )
+    assert marker_cards[0]["env_var"] == ""
+
+    for p in screener:
+        assert "$0.15" not in p["value"], (
+            f"engine value leaked under the screener scope: {p['key']}"
+        )
+
+    # Named scoring-backed keys must show the marker in BOTH fields, so a
+    # different stray engine value on any of them cannot pass silently.
+    scoring_backed_keys = (
+        "select_movement_window_sec",
+        "select_min_movement_usd",
+        "select_min_activity_ratio",
+        "select_min_range_cents",
+        "select_volatility_window_sec",
+        "select_velocity_gate_enabled",
+    )
+    by_key = {p["key"]: p for p in screener}
+    for k in scoring_backed_keys:
+        assert k in by_key, f"scoring-backed card missing on failure path: {k}"
+        card = by_key[k]
+        assert "⚠" in card["value"], f"{k} value missing the marker: {card['value']!r}"
+        assert "⚠" in str(card["raw_value"]), (
+            f"{k} raw_value missing the marker: {card['raw_value']!r}"
+        )
+        assert card["env_var"] != "", f"{k} lost its env_var badge"
+
+
+def test_scoring_load_healthy_screener_cards_unchanged(client, monkeypatch):
+    """#709: with no trigger set, the panel keeps exactly its 13 screener cards."""
+    monkeypatch.delenv("BOT_QUOTE_WIDE_BOOK_TRIAL", raising=False)
+
+    params = client.get("/api/parameters").json()["parameters"]
+    screener = [p for p in params if p.get("scope") == "market_screener"]
+
+    assert [p for p in screener if p["key"] == "scoring_config_load_failed"] == []
+    assert len(screener) == 13
 
 
 def test_parameters_endpoint_emits_no_deprecation_warnings(client):

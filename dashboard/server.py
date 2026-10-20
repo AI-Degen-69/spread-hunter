@@ -41,6 +41,33 @@ from starlette.middleware.gzip import GZipMiddleware
 
 logger = logging.getLogger(__name__)
 
+
+class _NoScoringValue(str):
+    """Formats as the marker text regardless of the card's format spec (#709)."""
+
+    def __format__(self, spec: str) -> str:
+        return str(self)
+
+    def __mul__(self, other):
+        return self
+
+    __rmul__ = __mul__
+
+
+class _NoScoringConfig:
+    """Placeholder the params panel uses when `scoring.config.load()` failed (#709).
+
+    Every attribute reads as the marker, so the screener cards show the failure
+    instead of engine values silently substituted from `core_brain.config`.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def __getattr__(self, name: str) -> _NoScoringValue:
+        return _NoScoringValue("⚠ scoring config unavailable — see dashboard log")
+
+
 # live/, one level up from live/dash/. Everything this page reads lives under it.
 LIVE_ROOT = Path(__file__).resolve().parent.parent
 # Launching this file by path (`python live/dash/live_dash.py`) puts live/dash/ on
@@ -4281,10 +4308,20 @@ def get_parameters(registry=None):
     sweep = resolve_sweep_interval()
 
     from scoring.config import load as load_scoring
+    scoring_error = None
     try:
         scfg = load_scoring()
-    except (TypeError, ValueError):
-        scfg = cfg
+    except (TypeError, ValueError) as exc:
+        scoring_error = f"{type(exc).__name__}: {exc}"
+        logger.warning(
+            "get_parameters: scoring config load failed; screener cards show a "
+            "placeholder instead of engine values (%s)",
+            scoring_error,
+        )
+        # Every scfg read renders the marker, so no engine value is ever
+        # presented under the screener scope (#709). The __format__ override
+        # lets all 19 f-string read sites keep their format specs.
+        scfg = _NoScoringConfig(scoring_error)
 
     params = [
         # =====================================================================
@@ -5325,6 +5362,24 @@ def get_parameters(registry=None):
             "action": "Authorizes spread-crossing defensive hedge orders under severe deficit",
         },
     ]
+    if scoring_error is not None:
+        params.insert(0, {
+            "name": "scoring_config_load_failed",
+            "key": "scoring_config_load_failed",
+            "display_name": "⚠ Scoring Config Failed To Load",
+            "scope": "market_screener",
+            "scope_label": "Scope 1: Market Screener",
+            "subgroup": "active_live",
+            "subgroup_label": "Active / In-Play Markets (Live Sports & Esports)",
+            "value": f"⚠ {scoring_error}",
+            "raw_value": None,
+            "default": "",
+            "env_var": "",
+            "category": "Config Load Failure",
+            "badge": "safety",
+            "trigger": "scoring.config.load() raised",
+            "action": "Scope 1 shows a placeholder, not engine values. Fix the named variable and restart the dashboard.",
+        })
     return JSONResponse({"parameters": params})
 
 
