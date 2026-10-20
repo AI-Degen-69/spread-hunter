@@ -41,6 +41,20 @@ REASON_NOT_READY = "not_ready"
 TELEMETRY_WINDOW_SEC = 60.0
 
 
+def _side_to_levels(side: Any, *, reverse: bool) -> list[dict]:
+    """Price-keyed `{price: size}` map → sorted `[{"price", "size"}]` levels."""
+    if not isinstance(side, dict):
+        return []
+    rows = []
+    for price, size in side.items():
+        try:
+            rows.append({"price": float(price), "size": float(size)})
+        except (TypeError, ValueError):
+            continue
+    rows.sort(key=lambda r: r["price"], reverse=reverse)
+    return rows
+
+
 class BookProvider:
     """Stream-first, REST-fallback book reads with a seam-shaped adapter."""
 
@@ -54,12 +68,14 @@ class BookProvider:
         owns_stream: bool = False,
         time_fn: Callable[[], float] = time.time,
         telemetry_window_sec: float = TELEMETRY_WINDOW_SEC,
+        stats_box: dict | None = None,
     ) -> None:
         self._stream = stream
         self._rest_reader = rest_reader if rest_reader is not None else markets.full_book
         self._clob_host = clob_host
         self._emit_fn = emit_fn
         self._owns_stream = owns_stream
+        self._stats_box = stats_box
         self._time = time_fn
         self._telemetry_window_sec = telemetry_window_sec
         self._lock = threading.Lock()
@@ -71,14 +87,21 @@ class BookProvider:
     def get_book(self, token_id: str) -> dict:
         """The token's book: stream first, REST when the stream cannot serve."""
         token_id = str(token_id)
+        t0 = time.perf_counter()
         stream = self._stream
+        source = BOOK_SOURCE_REST
         if stream is not None:
             try:
-                return stream.fetch_books(self._clob_host, token_id)
+                book = stream.fetch_books(self._clob_host, token_id)
+                source = BOOK_SOURCE_STREAM
             except BookNotReady as e:
                 reason = self._fallback_reason(stream, token_id)
                 self._note_fallback(token_id, reason, str(e))
-        return self._rest_reader(self._clob_host, token_id)
+                book = self._rest_reader(self._clob_host, token_id)
+        else:
+            book = self._rest_reader(self._clob_host, token_id)
+        self._note_stats(token_id, source, (time.perf_counter() - t0) * 1000.0)
+        return book
 
     def fetch_books(self, clob_host: str, token_id: str) -> dict:
         """The `VenueSeam.fetch_books(clob_host, token_id)` adapter.
@@ -88,18 +111,49 @@ class BookProvider:
         is already in memory); the REST fallback uses the passed host.
         """
         token_id = str(token_id)
+        t0 = time.perf_counter()
         stream = self._stream
+        source = BOOK_SOURCE_REST
         if stream is not None:
             try:
-                return stream.fetch_books(self._clob_host, token_id)
+                book = stream.fetch_books(self._clob_host, token_id)
+                source = BOOK_SOURCE_STREAM
             except BookNotReady as e:
                 reason = self._fallback_reason(stream, token_id)
                 self._note_fallback(token_id, reason, str(e))
-        return self._rest_reader(str(clob_host), token_id)
+                book = self._rest_reader(str(clob_host), token_id)
+        else:
+            book = self._rest_reader(str(clob_host), token_id)
+        self._note_stats(token_id, source, (time.perf_counter() - t0) * 1000.0)
+        return book
+
+    def fetch_fresh_books(self, clob_host: str, token_id: str) -> dict:
+        """REST-only read with the seam signature, for execution paths.
+
+        Same arguments as `fetch_books` so execution call sites accept it
+        unchanged; never touches the stream cache.
+        """
+        return self._rest_reader(str(clob_host), str(token_id))
 
     def get_fresh_book(self, token_id: str) -> dict:
         """Always-REST read for execution paths. Never touches the cache."""
         return self._rest_reader(self._clob_host, str(token_id))
+
+    def get_levels_book(self, token_id: str) -> dict:
+        """Stream-first book in SDK levels shape, for `get_order_book` callers.
+
+        Defense readers (`single_buy_saver`, `stray_guard`) consume books
+        through `client.get_order_book(token_id)`, which returns levels
+        lists (`[{"price", "size"}]`) per side — not the price-keyed dicts
+        of `parse_book`. This adapts the unified read into that shape so
+        those call sites need no parsing change.
+        """
+        book = self.get_book(token_id)
+        return {
+            "token_id": book.get("token_id", str(token_id)),
+            "bids": _side_to_levels(book.get("bids"), reverse=True),
+            "asks": _side_to_levels(book.get("asks"), reverse=False),
+        }
 
     def get_mid(self, token_id: str) -> float | None:
         """Mid price under the `live_marks` validity rule, else None.
@@ -174,6 +228,21 @@ class BookProvider:
         except Exception as e:
             log.warning("book provider telemetry failed: %s: %s",
                         type(e).__name__, e)
+
+    def _note_stats(self, token_id: str, source: str, read_ms: float) -> None:
+        """Record the last read for the decide row (`book_stats_fn`).
+
+        One dict, overwritten per read: the dashboard shows where the book
+        came from without a per-read ring event churning the log.
+        """
+        box = self._stats_box
+        if box is not None:
+            box.clear()
+            box.update({
+                "book_source": source,
+                "book_read_ms": read_ms,
+                "token_id": token_id,
+            })
 
     # ── lifecycle passthrough ──────────────────────────────────────────
 

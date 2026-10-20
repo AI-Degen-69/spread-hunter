@@ -225,6 +225,51 @@ def test_fallback_telemetry_is_rate_limited():
     assert len(emitted) == 1
 
 
+def test_stats_box_records_source_per_read():
+    from core_brain.book_provider import BookProvider
+
+    stats: dict = {}
+    provider = BookProvider(
+        stream=FakeStream(connected=True, books={"tok": STREAM_BOOK}),
+        rest_reader=_rest(),
+        stats_box=stats,
+    )
+    provider.get_book("tok")
+    assert stats["book_source"] == "stream"
+    assert stats["token_id"] == "tok"
+    assert stats["book_read_ms"] >= 0.0
+
+    provider2 = BookProvider(
+        stream=FakeStream(connected=False), rest_reader=_rest(), stats_box=stats
+    )
+    provider2.get_book("tok")
+    assert stats["book_source"] == "rest"
+
+
+def test_fetch_fresh_books_is_rest_only_with_seam_shape():
+    from core_brain.book_provider import BookProvider
+
+    stream = FakeStream(connected=True, books={"tok": STREAM_BOOK})
+    calls: list = []
+    provider = BookProvider(stream=stream, rest_reader=_rest(calls=calls))
+    assert provider.fetch_fresh_books("https://clob", "tok") == REST_BOOK
+    assert stream.fetch_calls == []
+    assert calls == [("https://clob", "tok")]
+
+
+def test_get_levels_book_adapts_to_sdk_shape():
+    from core_brain.book_provider import BookProvider
+    from core_brain.single_buy_saver import best_bid, best_ask
+
+    provider = BookProvider(
+        stream=FakeStream(connected=True, books={"tok": STREAM_BOOK}),
+        rest_reader=_rest(),
+    )
+    levels = provider.get_levels_book("tok")
+    assert best_bid(levels) == pytest.approx(0.40)
+    assert best_ask(levels) == pytest.approx(0.42)
+
+
 def test_only_owning_provider_stops_stream():
     from core_brain.book_provider import BookProvider
 

@@ -511,6 +511,11 @@ class VenueSeam:
     #: a closure over `(client, registry, maker_address)`, so the reaction keeps
     #: the 3-argument reconcile port untouched. See `fill_events_fn`.
     fill_reconcile_fn: Optional[Callable[[], Any]] = None
+    #: Unified pricing seam for #659: the `BookProvider` behind `fetch_books`.
+    #: Optional -- `main()` sets it when the stream is up so the risk guardian
+    #: thread evaluates defense against the same books the quotes use. Unset,
+    #: the guardian decides against the client, exactly as before.
+    book_provider: Optional[Any] = None
 
 
 def run(
@@ -629,6 +634,8 @@ def run(
                 stop_event=stop_workers,
                 wake_event=guardian_wake,
                 trigger_board=trigger_board,
+                single_buy_saver_fn=_make_guardian_saver_fn(
+                    getattr(seam, "book_provider", None)),
             )
             log.info("risk guardian sentry started (every 1.0s, background)")
 
@@ -2911,38 +2918,27 @@ def _production_reconcile_fn(emit_fn: Any) -> Any:
     return _reconcile
 
 
-def _make_stream_fetch_books(
-    cache: Any,
-    stats_box: dict,
-) -> Callable[[str, str], dict]:
-    """Return a `fetch_books(clob_host, token_id)` reader backed by `MarketBookCache`.
+BOOK_SOURCE_DEFAULT = "stream"
 
-    Times the read with `time.perf_counter()`, records latency and source in
-    `stats_box` (surfaced on the decide row via `book_stats_fn`), and fails
-    closed on `BookNotReady` without falling back to REST. No ring event is
-    emitted per read: at ~2 reads per visit per second the ring would churn,
-    evicting the `rotation_complete` / `user_fill_received` rows the
-    dashboard reads.
+
+def _make_guardian_saver_fn(book_provider: Any) -> Callable[..., Any]:
+    """Guardian defense with stream-first decision reads (#659).
+
+    The held-leg bid the lifecycle poll evaluates comes from the provider
+    (WS books, REST fallback); exits and completions keep their own fresh
+    venue reads inside `manage_single_leg_positions`. Without a provider
+    the decision read stays on the client, exactly as before.
     """
-    from core_brain.market_stream import BookNotReady
+    from core_brain.single_buy_saver import manage_single_leg_positions
 
-    def _fetch_books(clob_host: str, token_id: str) -> dict:
-        t0 = time.perf_counter()
-        try:
-            book = cache.book(token_id)
-        except BookNotReady:
-            raise RuntimeError(f"book stream cold: {token_id}")
-        read_ms = (time.perf_counter() - t0) * 1000.0
-        stats = {
-            "book_source": "stream",
-            "book_read_ms": read_ms,
-            "token_id": token_id,
-        }
-        stats_box.clear()
-        stats_box.update(stats)
-        return book
+    def _saver(client: Any, registry: Any, cfg: Any, live: bool = True) -> Any:
+        kwargs: dict[str, Any] = {}
+        if book_provider is not None:
+            kwargs["decision_book_fn"] = book_provider.get_levels_book
+        return manage_single_leg_positions(client, registry, cfg, live=live,
+                                           **kwargs)
 
-    return _fetch_books
+    return _saver
 
 
 def _make_subscribe_fn(
@@ -3125,6 +3121,11 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     ap.add_argument("--ws-books", action=argparse.BooleanOptionalAction, default=None,
                     help="read order books from the WebSocket market stream instead of "
                          "REST (default: True in loop mode, False with --once)")
+    ap.add_argument("--book-source", choices=("stream", "rest"),
+                    default=BOOK_SOURCE_DEFAULT,
+                    help="book source with REST fallback (default: stream). "
+                         "--book-source rest is the one-flag undo: today's "
+                         "REST-only behavior, no socket.")
     a = ap.parse_args(argv)
     # The ceiling is enforced HERE, at the CLI boundary, so the loop body
     # never sees a cadence above 1s -- not silently clamped mid-flight
@@ -3151,6 +3152,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     a = _parse_args(argv)
 
     use_ws_books = a.ws_books if a.ws_books is not None else not a.once
+    if a.book_source == "rest":
+        use_ws_books = False
     books_mode = "stream" if use_ws_books else "rest"
 
     logging.basicConfig(
@@ -3200,10 +3203,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     decide_emit = partial(_emit_cycle_event, db_path=db_path)
 
     market_stream = None
+    book_provider = None
     book_stats: dict = {}
     guardian_wake = None
     trigger_board = None
     if use_ws_books:
+        from core_brain.book_provider import BookProvider
         from core_brain.market_stream import MarketBookCache, MarketStream
         if not a.once:
             from core_brain.orphan_trigger import OrphanTriggerBoard
@@ -3216,7 +3221,18 @@ def main(argv: Optional[list[str]] = None) -> int:
             price_listener=trigger_board.observe if trigger_board is not None else None,
         )
         market_stream.start()
-        fetch_books_fn = _make_stream_fetch_books(cache, book_stats)
+        # Stream first, REST fallback (#659): a cold or silent feed reads
+        # from REST instead of holding every quote. The provider owns the
+        # stream, so `stop()` below joins both threads.
+        book_provider = BookProvider(
+            stream=market_stream,
+            rest_reader=full_book,
+            clob_host=os.environ.get("CLOB_HOST", "https://clob.polymarket.com"),
+            emit_fn=decide_emit,
+            owns_stream=True,
+            stats_box=book_stats,
+        )
+        fetch_books_fn = book_provider.fetch_books
         subscribe_fn = _make_subscribe_fn(
             market_stream, cache, _fetch_market, trigger_board=trigger_board,
         )
@@ -3249,6 +3265,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         fetch_market=_fetch_market,
         fetch_books=fetch_books_fn,
         decide=decide_quotes,
+        book_provider=book_provider,
         submit_fn=_submit_intents,
         cancel_fn=_cancel_orders,
         reconcile_fn=(
@@ -3310,7 +3327,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"fleet refused: {exc}", file=sys.stderr)
         return 2
     finally:
-        if market_stream is not None:
+        if book_provider is not None:
+            try:
+                book_provider.stop()
+            except Exception as e:
+                log.warning("market stream stop failed: %s", e)
+        elif market_stream is not None:
             try:
                 market_stream.stop()
             except Exception as e:
