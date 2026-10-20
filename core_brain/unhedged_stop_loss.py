@@ -2,12 +2,15 @@
 
 A market priced one cent too aggressively and a market full of informed flow
 look identical on a single reading. Only the second stays negative after we
-back off, and only the second is worth giving up the rent for -- so the
+back off, and only the second is worth giving up spread capture for -- so the
 response is graduated rather than a single kill switch.
 
-Widening keeps us inside the configured quote window, which means a WIDENED market
-still earns. EXITED is the only state that forfeits income, and it is reached
-only after the market has been given a second full sample to recover.
+Widening keeps us inside the configured quote window, which means a WIDENED
+market still captures its merge spread. EXITED is the only state that gives
+that capture up. For an ordinary loss it is reached only after the market has
+been given a second full sample to recover; a loss past
+`markout_catastrophic_threshold` skips that second sample and exits from
+whichever state it is in, because there is no ambiguity left to resolve.
 """
 from __future__ import annotations
 
@@ -50,8 +53,8 @@ def fleet_posture(pooled: dict, cfg) -> str:
         2026-08-02 the pool read -4.75c/share while every market individually
         sat at WIDENED, because none of them ever reached a sample of its own.
       * Past `markout_widen_threshold` -> WIDENED. A loss a wider quote can
-        still trade its way out of, inside the 4.5c window, so the rent keeps
-        coming while we back off.
+        still trade its way out of, inside the 4.5c window, so the merge spread
+        keeps arriving while we back off.
 
     The caller decides what a posture DOES. `quotes._decide_quotes_from_mid`
     reads HALTED as "no additions to the heavy side anywhere", and deliberately
@@ -79,10 +82,10 @@ def next_state(state: str, stats: dict, cfg) -> str:
 
       * `insufficient_sample` never moves the state. On a thin, long-dated
         book a handful of fills is noise, and evicting a sound market on noise
-        costs real rent for no reason.
+        gives up real spread capture for no reason.
       * Leaving WIDENED for EXITED demands twice `markout_min_sample`. One
-        sample got us into WIDENED; surrendering the income needs more
-        evidence than that.
+        sample got us into WIDENED; giving that capture up needs more evidence
+        than that.
 
     Both concessions are arguments about SMALL losses, and neither survives a
     catastrophic one -- see the magnitude bypass below.

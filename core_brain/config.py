@@ -945,9 +945,11 @@ def resolve_tournament_preset_name() -> str | None:
 # fields (in particular `max_spread_from_mid`: the engine `baseline` preset
 # sets 0.15 there, a quoting-window value that must not clobber the picker's
 # deliberate 0.045 window). Entries with no overrides keep the shipped screener
-# bars. `baseline` also ships on the shipped bars: no run record documents
-# preset-specific screener numbers, so they arrive only as an explicit operator
-# decision, never invented here.
+# bars, and today that is EVERY entry, `baseline` included: no run record
+# documents preset-specific screener numbers, and inventing a
+# conservative-to-aggressive scale would be guessing numbers the strategy has
+# never measured (#687 N1). If such numbers are ever measured, they arrive as
+# an explicit operator decision and an override on the entry that earned them.
 SCREENER_PRESETS: dict[str, dict] = {
     "conservative": {
         "description": "Uses shipped screener bars",
@@ -965,7 +967,7 @@ SCREENER_PRESETS: dict[str, dict] = {
         "description": "Uses shipped screener bars",
     },
     "baseline": {
-        "description": "Uses shipped screener bars (preset-specific numbers pending operator decision)",
+        "description": "Uses shipped screener bars (no preset has measured bars)",
     },
 }
 

@@ -635,7 +635,13 @@ def run(
                 wake_event=guardian_wake,
                 trigger_board=trigger_board,
                 single_buy_saver_fn=_make_guardian_saver_fn(
-                    getattr(seam, "book_provider", None)),
+                    getattr(seam, "book_provider", None),
+                    # The wallet the exit sizing nets against (#646 N5). The
+                    # seam already carries it -- it is what reconcile is
+                    # handed -- and without it the guardian manages blind.
+                    funder=seam.maker_address,
+                ),
+                funder=seam.maker_address,
             )
             log.info("risk guardian sentry started (every 1.0s, background)")
 
@@ -978,14 +984,19 @@ def _react_to_one_fill(
         except Exception as e:
             log.warning("fill visit failed: %s: %s", type(e).__name__, e)
     try:
+        # Same wallet the background sentry gets (#646 N5). Without it the
+        # fill-triggered tick would have to fall back to POLY_FUNDER, and a
+        # pass with no venue view skips a partial exit's remainder instead
+        # of sizing it -- the one moment a remainder is most likely to exist.
         if trigger_board is not None:
             _guardian_fill_tick(
                 client=seam.client, registry=seam.registry,
-                cfg=seam.base_cfg, live=live, trigger_board=trigger_board)
+                cfg=seam.base_cfg, live=live, trigger_board=trigger_board,
+                funder=seam.maker_address)
         else:
             _guardian_fill_tick(
                 client=seam.client, registry=seam.registry,
-                cfg=seam.base_cfg, live=live)
+                cfg=seam.base_cfg, live=live, funder=seam.maker_address)
     except Exception as e:
         log.warning("fill guardian tick failed: %s: %s",
                     type(e).__name__, e)
@@ -2971,6 +2982,7 @@ def start_risk_guardian(
     trigger_board: Optional[Any] = None,
     emit_fn: Optional[Callable] = None,
     ring_path: Optional[Path | str] = None,
+    funder: Optional[str] = None,
 ) -> Any:
     """Run the high-alert risk guardian sentry on a tight <=1.0s background cadence."""
     import threading
@@ -3036,6 +3048,7 @@ def start_risk_guardian(
                     live=live,
                     single_buy_saver_fn=single_buy_saver_fn,
                     trigger_board=trigger_board,
+                    funder=funder,
                 )
             except Exception as e:
                 log.warning("risk guardian tick failed: %s: %s", type(e).__name__, e)
@@ -3079,13 +3092,19 @@ def _production_reconcile_fn(emit_fn: Any) -> Any:
 BOOK_SOURCE_DEFAULT = "stream"
 
 
-def _make_guardian_saver_fn(book_provider: Any) -> Callable[..., Any]:
+def _make_guardian_saver_fn(book_provider: Any,
+                            funder: Optional[str] = None) -> Callable[..., Any]:
     """Guardian defense with stream-first decision reads (#659).
 
     The held-leg bid the lifecycle poll evaluates comes from the provider
     (WS books, REST fallback); exits and completions keep their own fresh
     venue reads inside `manage_single_leg_positions`. Without a provider
     the decision read stays on the client, exactly as before.
+
+    `funder` is the venue view the exit sizing needs (#646 N5). It is what
+    separates "this pair is already flat" from "this pair's close retired
+    fills that left a remainder": without it a partial exit reached by the
+    guardian is skipped outright and its naked leg keeps sitting there.
     """
     from core_brain.single_buy_saver import manage_single_leg_positions
 
@@ -3093,6 +3112,8 @@ def _make_guardian_saver_fn(book_provider: Any) -> Callable[..., Any]:
         kwargs: dict[str, Any] = {}
         if book_provider is not None:
             kwargs["decision_book_fn"] = book_provider.get_levels_book
+        if funder:
+            kwargs["funder"] = funder
         return manage_single_leg_positions(client, registry, cfg, live=live,
                                            **kwargs)
 
