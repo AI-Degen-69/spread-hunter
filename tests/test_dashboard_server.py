@@ -3352,13 +3352,13 @@ def test_parameters_cards_canonical_env_var_badges(client):
 # #690: the spread rejection reason survives the screener -> /api/kpi hop
 # ==============================================================================
 
-def test_kpi_funnel_keeps_the_full_spread_rejection_reason(tmp_path):
+def test_kpi_funnel_keeps_the_full_spread_rejection_reason(client, monkeypatch, tmp_path):
     """#690: the operator sees *why* a wide book was dropped, verbatim.
 
     The dashboard's spread column is picked by `categorizeGate(cause)` and the
     example text comes from `examples[].reason`. Both are read from the snapshot
-    `_funnel_from_pipeline` parses, so this pins the one hop that could mangle
-    the number the operator is looking at.
+    `_funnel_from_pipeline` parses and returned across GET /api/kpi, so this pins
+    both the funnel parser and route-level serialization.
     """
     from core_brain.kpi import _funnel_from_pipeline
 
@@ -3388,3 +3388,13 @@ def test_kpi_funnel_keeps_the_full_spread_rejection_reason(tmp_path):
     assert funnel is not None
     assert funnel["filters"][0]["cause"] == "YES spread"
     assert funnel["filters"][0]["examples"][0]["reason"] == reason
+
+    # Route-level check: GET /api/kpi preserves the funnel filters and example reason verbatim.
+    monkeypatch.setattr("core_brain.kpi._is_pipeline_shadow_db", lambda _path: True)
+    monkeypatch.setattr("core_brain.kpi._funnel_from_pipeline", lambda *args, **kwargs: funnel)
+    res = client.get("/api/kpi")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload.get("funnel") is not None
+    assert payload["funnel"]["filters"][0]["cause"] == "YES spread"
+    assert payload["funnel"]["filters"][0]["examples"][0]["reason"] == reason
