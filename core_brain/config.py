@@ -584,14 +584,8 @@ class MakerConfig(_ConfigBase):
     def from_env(cls, *, for_display: bool = False) -> MakerConfig:
         """Config loader checking canonical uppercase env var first, falling back to HUNTER_*."""
         kw: dict = {}
-        preset_raw, _ = _env_get("BOT_QUOTE_TOURNAMENT_PRESET", "HUNTER_TOURNAMENT_PRESET")
-        preset_name = (preset_raw or "").strip().lower()
+        preset_name = resolve_tournament_preset_name()
         if preset_name:
-            if preset_name not in TOURNAMENT_PRESETS:
-                raise ValueError(
-                    f"HUNTER_TOURNAMENT_PRESET={preset_name!r} is unknown. "
-                    f"Valid presets: {list(TOURNAMENT_PRESETS.keys())}"
-                )
             kw.update({k: v for k, v in TOURNAMENT_PRESETS[preset_name].items() if k != "description"})
 
         cid, _ = _env_get("BOT_MARKET_PINNED_CONDITION_ID", "HUNTER_MARKET")
@@ -921,6 +915,28 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "description": "Loose baseline: raw dynamic offset (0.5x range), 1c floor, 20c ceiling, no widen snap-back, 15c quote window",
     },
 }
+
+
+def resolve_tournament_preset_name() -> str | None:
+    """The shared tournament-preset selector for the engine and the ranker (#687).
+
+    Canonical `BOT_QUOTE_TOURNAMENT_PRESET` wins, legacy
+    `HUNTER_TOURNAMENT_PRESET` is the fallback (`_env_get` skips blank values,
+    so a blank canonical falls through to the legacy). Trimmed and lowercased;
+    `None` when neither is set. An unknown name raises the engine's existing
+    `ValueError` text, so a typo fails the same way on both loaders instead of
+    silently running the ranker on default bars.
+    """
+    preset_raw, _ = _env_get("BOT_QUOTE_TOURNAMENT_PRESET", "HUNTER_TOURNAMENT_PRESET")
+    preset_name = (preset_raw or "").strip().lower()
+    if not preset_name:
+        return None
+    if preset_name not in TOURNAMENT_PRESETS:
+        raise ValueError(
+            f"HUNTER_TOURNAMENT_PRESET={preset_name!r} is unknown. "
+            f"Valid presets: {list(TOURNAMENT_PRESETS.keys())}"
+        )
+    return preset_name
 
 
 def apply_tournament_preset(config: MakerConfig, preset_name: str) -> MakerConfig:
