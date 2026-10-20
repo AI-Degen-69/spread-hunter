@@ -939,6 +939,37 @@ def resolve_tournament_preset_name() -> str | None:
     return preset_name
 
 
+# The ranker's own preset bars (#687). Same six names as TOURNAMENT_PRESETS so
+# one selector drives the engine and the ranker together; scoring-only field
+# overrides, never engine quoting fields and never the five PICKER_PROFILE
+# fields (in particular `max_spread_from_mid`: the engine `baseline` preset
+# sets 0.15 there, a quoting-window value that must not clobber the picker's
+# deliberate 0.045 window). Entries with no overrides keep the shipped screener
+# bars. `baseline` also ships on the shipped bars: no run record documents
+# preset-specific screener numbers, so they arrive only as an explicit operator
+# decision, never invented here.
+SCREENER_PRESETS: dict[str, dict] = {
+    "conservative": {
+        "description": "Uses shipped screener bars",
+    },
+    "balanced": {
+        "description": "Uses shipped screener bars",
+    },
+    "aggressive": {
+        "description": "Uses shipped screener bars",
+    },
+    "prudent": {
+        "description": "Uses shipped screener bars",
+    },
+    "hybrid": {
+        "description": "Uses shipped screener bars",
+    },
+    "baseline": {
+        "description": "Uses shipped screener bars (preset-specific numbers pending operator decision)",
+    },
+}
+
+
 def apply_tournament_preset(config: MakerConfig, preset_name: str) -> MakerConfig:
     """Return a new MakerConfig instance with the specified tournament preset applied."""
     if preset_name not in TOURNAMENT_PRESETS:
