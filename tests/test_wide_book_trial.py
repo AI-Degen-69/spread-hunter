@@ -133,7 +133,7 @@ def _load_with(mod, monkeypatch, **env):
 def test_load_moves_all_three_ceilings_together(mod, monkeypatch):
     # Any one of the three left at its shipped value makes the trial measure
     # nothing: the ranker never offers the market, `book_health` refuses to
-    # quote it, or the reward window refuses the price the bid cap produces.
+    # quote it, or the quote window refuses the price the bid cap produces.
     rehearsal.declare_rehearsal()
 
     cfg = _load_with(mod, monkeypatch, HUNTER_WIDE_BOOK_TRIAL="0.15")
@@ -151,16 +151,16 @@ def test_load_leaves_the_ceilings_alone_when_unset(mod, monkeypatch):
     assert cfg.wide_book_trial is None
     assert cfg.max_book_spread == 0.06
     assert cfg.select_max_book_spread == 0.0205
-    # Two different concepts share this field name. core_brain's is our
-    # resting-offset ceiling, promoted to 0.15 (loose baseline, 2026-10-12).
-    # scoring's is the venue REBATE-qualification window (rewardsMaxSpread =
-    # 4.5c) -- a venue program fact, not our policy, so it stays 0.045.
+    # Both copies of the field are the same thing: the quote window, the
+    # largest distance from the book midpoint our resting quote may sit at.
+    # The two shipped defaults are deliberate -- 0.15 for the engine, 0.045
+    # for the picker.
     expected = 0.15 if mod is core_config else 0.045
     assert cfg.max_spread_from_mid == expected
 
 
 @BOTH
-def test_a_narrow_trial_never_tightens_the_reward_window(mod, monkeypatch):
+def test_a_narrow_trial_never_tightens_the_quote_window(mod, monkeypatch):
     # The window is widened only if the trial is wider than it already is. A
     # trial NARROWER than the shipped ceiling is a narrower BOOK ceiling, and
     # must not quietly shrink where we are allowed to quote.
@@ -171,7 +171,7 @@ def test_a_narrow_trial_never_tightens_the_reward_window(mod, monkeypatch):
     assert cfg.max_book_spread == 0.02
     # A narrow trial narrows the picking bar with it -- the trial is one
     # decision, and the picker reads the same knob (#572). What it must NOT do
-    # is shrink the reward window below the shipped value.
+    # is shrink the quote window below the shipped value.
     assert cfg.select_max_book_spread == 0.02
     expected = 0.15 if mod is core_config else 0.045
     assert cfg.max_spread_from_mid == expected

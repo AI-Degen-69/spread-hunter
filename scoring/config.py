@@ -49,12 +49,19 @@ class MakerConfig(CoreMakerConfig):
 
     # Market screener depth qualification & spread velocity filters:
     #   min_quote_shares: 50 shares minimum depth floor to filter thin order books.
-    #   max_spread_from_mid: 4.5c maximum offset from mid to guarantee competitive,
-    #   tight trading touches.
     #   max_pair_cost: 0.995 candidate pair-cost ceiling for candidate selection.
     # Note: Bot Engine operates strictly on pair-assembly merge arbitrage ($1.00 - pair cost).
     # Maker rewards/rebates are $0.00 in graduated spread markets; accrual is disabled.
     min_quote_shares: int = PICKER_PROFILE["min_quote_shares"]
+    # THE QUOTE WINDOW. `max_spread_from_mid` is the largest allowed distance
+    # between the book midpoint and our resting quote. Prices are dollars on the
+    # 0-1 scale; the env value is cents. The quoting engine refuses or skips a
+    # quote outside the window and clamps the dynamic offset to it. It is NOT a
+    # filter on which markets we quote -- `filter_common_spread_max_cents`
+    # (2.05c) is the wide-book rejection bar (see CONSTRAINTS.md). The two
+    # shipped defaults are deliberate: 0.15 for the engine, 0.045 for the
+    # picker, whose copy the ranker does not gate on; both loaders read the
+    # same variable the same way.
     max_spread_from_mid: float = PICKER_PROFILE["max_spread_from_mid"]
     max_pair_cost: float = PICKER_PROFILE["max_pair_cost"]
 
@@ -217,7 +224,7 @@ def load() -> MakerConfig:
     wide = resolve_wide_book_trial(wide_raw or "", var_name=wide_name or "HUNTER_WIDE_BOOK_TRIAL")
     if wide is not None and wide > 0:
         # The trial moves ONE ceiling; the picker bar follows through the
-        # derived property (#572), and the reward window is widened only if
+        # derived property (#572), and the quote window is widened only if
         # the trial is wider than it already is.
         kw["wide_book_trial"] = wide
         kw["max_book_spread"] = wide
