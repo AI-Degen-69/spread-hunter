@@ -105,24 +105,6 @@ def mid_price(best_bid: Optional[float], best_ask: Optional[float]) -> Optional[
     return (best_bid + best_ask) / 2.0
 
 
-def reward_score(cfg: MakerConfig, spread_from_mid: float, size: float) -> float:
-    """Legacy liquidity-reward score for one resting order.
-
-        S(v, s) = ((v - s) / v)^2 * size,    v = the quote window (max_spread_from_mid)
-
-    A legacy diagnostic: the number is printed in the quote reason and feeds no
-    sizing decision. `v` is the quote window -- the largest distance from the
-    book midpoint our resting quote may sit at -- not a venue reward window.
-
-    Quadratic, so it collapses fast: at 2c of a 4.5c window an order keeps only
-    30% of the score it would earn at the touch. Orders outside v score nothing.
-    """
-    v = cfg.max_spread_from_mid
-    if spread_from_mid < 0 or spread_from_mid > v or size < cfg.min_quote_shares:
-        return 0.0
-    return ((v - spread_from_mid) / v) ** 2 * size
-
-
 def dynamic_offset_for(
     cfg: MakerConfig,
     now: Optional[float] = None,
@@ -339,16 +321,14 @@ def _decide_quotes_from_mid(
     if inv.fills >= cfg.max_fills_per_market:
         return [], f"hit {cfg.max_fills_per_market} fills for this market"
 
-    # ZERO ALLOCATION MEANS QUOTE NOTHING. `reallocate` has always documented
-    # that an unfunded market "gets 0 and stops quoting", and it never did:
-    # `size = max(quote_shares, min_quote_shares)` below silently promoted a 0
-    # back to the venue minimum, so a market the allocator had deliberately
-    # defunded carried on posting 50-share orders.
+    # ZERO ALLOCATION MEANS QUOTE NOTHING. A nonpositive `quote_shares` is an
+    # explicit no-quote signal from the market spec "shares" value: the
+    # allocator deliberately left this market unfunded, so it gets 0 and stops
+    # quoting. `risk.size_for` returns 0 for it in every sizing mode, so a 0
+    # is never promoted to a minimum-size order.
     #
-    # Harmless while every market was fundable. Not harmless once U4 defunds
-    # markets that cannot clear the payout floor -- measured on the first
-    # smoke run, 17 markets kept quoting while 4 were funded, putting $2,108
-    # of offers against a $2,000 committed cap before a share was bought.
+    # Past incident, kept as a reminder: defunded markets once kept posting
+    # orders past the committed cap.
     if cfg.quote_shares <= 0:
         return [], "unfunded by the allocator -- quoting nothing"
 
@@ -510,7 +490,7 @@ def _decide_quotes_from_mid(
         s = mid - price
         if s > cfg.max_spread_from_mid + 1e-9:
             blocked.append(f"{side}: {100*s:.1f}c from mid > "
-                           f"{100*cfg.max_spread_from_mid:.1f}c reward window")
+                           f"{100*cfg.max_spread_from_mid:.1f}c quote window")
             continue
 
         if inv.cost >= cfg.max_cost_per_market and mine >= theirs:
@@ -557,22 +537,21 @@ def _decide_quotes_from_mid(
             elif (truncated < 1.0
                     and int(ladder * band.size_mult) >= cfg.min_quote_shares):
                 blocked.append(
-                    f"{side}: reward window truncated the quote to "
+                    f"{side}: quote window truncated the quote to "
                     f"{100*truncated:.0f}% of the distance asked for, cutting "
                     f"{ladder}sh under the {cfg.min_quote_shares}sh minimum")
             else:
                 blocked.append(
                     f"{side}: price risk at {price:.3f} cut {ladder}sh to "
-                    f"under the {cfg.min_quote_shares}sh reward minimum")
+                    f"under the {cfg.min_quote_shares}sh venue minimum")
             continue
         _, dyn_tag = dynamic_offset_for(cfg)
         dyn_note = f"; {dyn_tag}" if dyn_tag.startswith("dynamic_") else ""
         out.append(QuoteIntent(
             side=side, token_id=book.get("token_id"), price=price, size=size,
             mid=mid, edge_vs_mid=mid - price,
-            reason=(f"reward quote {100*s:.1f}c under mid {mid:.3f}, "
-                    f"score {reward_score(cfg, s, size):.0f}{waived}"
-                    f"{dyn_note}"),
+            reason=(f"quote {100*s:.1f}c under mid {mid:.3f}"
+                    f"{waived}{dyn_note}"),
         ))
 
     if not out:
