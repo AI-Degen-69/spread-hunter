@@ -106,9 +106,9 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
         price -- the same confusion of units that made the old share cap $72 of
         risk at 0.20 and $293 at 0.8152. With it, one order can never buy more
         exposure than the budget it is walking toward.
-      * THE FLOOR at `min_quote_shares`. rewardsMinSize is 50: below it an
-        order earns no score at all while still buying inventory, so the honest
-        answer is 0 -- post nothing -- rather than a token order. This is what
+      * THE FLOOR at `min_quote_shares`. Below the venue's order minimum an
+        order cannot be posted at all, so the honest answer is 0 -- post
+        nothing -- rather than a token order. This is what
         makes the tail of the ladder terminate instead of trickling.
 
     The light side is never tapered (R4). It is the only resting order that
