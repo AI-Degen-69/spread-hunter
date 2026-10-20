@@ -116,7 +116,13 @@ def test_trial_refuses_a_non_number(mod):
 
 
 def _load_with(mod, monkeypatch, **env):
-    for name in ("HUNTER_MARKET", "HUNTER_MAX_SPREAD", "HUNTER_WIDE_BOOK_TRIAL"):
+    # Cleared through BOTH names of every knob the cases below touch. The canonical
+    # `BOT_*` spread name became live on unpinned runs in #690, so leaving it set
+    # here would let the developer's shell decide what a test asserts.
+    for name in ("HUNTER_MARKET", "BOT_MARKET_PINNED_CONDITION_ID",
+                 "HUNTER_MAX_SPREAD", "HUNTER_MAX_SPREAD_CENTS",
+                 "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
+                 "HUNTER_WIDE_BOOK_TRIAL", "BOT_QUOTE_WIDE_BOOK_TRIAL"):
         monkeypatch.delenv(name, raising=False)
     for k, v in env.items():
         monkeypatch.setenv(k, v)
@@ -169,6 +175,23 @@ def test_a_narrow_trial_never_tightens_the_reward_window(mod, monkeypatch):
     assert cfg.select_max_book_spread == 0.02
     expected = 0.15 if mod is core_config else 0.045
     assert cfg.max_spread_from_mid == expected
+
+
+@BOTH
+def test_an_unpinned_override_is_what_the_trial_compares_against(mod, monkeypatch):
+    # #690: without a pin, `max(window, wide)` used to compare against the class
+    # default (4.5c picker / 15c engine) because nothing had written the kwarg.
+    rehearsal.declare_rehearsal()
+
+    wider = _load_with(mod, monkeypatch, BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID="22",
+                       HUNTER_WIDE_BOOK_TRIAL="0.12")
+    assert wider.max_book_spread == 0.12
+    assert wider.max_spread_from_mid == 0.22
+
+    # The trial still wins when it is the wider of the two.
+    narrower = _load_with(mod, monkeypatch, BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID="5",
+                          HUNTER_WIDE_BOOK_TRIAL="0.12")
+    assert narrower.max_spread_from_mid == 0.12
 
 
 @BOTH
