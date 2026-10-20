@@ -531,3 +531,13 @@ def test_in_band_reads_canonical_gate():
             assert "enforce_price_band" not in str(w.message)
 
 
+def test_retired_reward_vocabulary_stays_out_of_quotes():
+    """#717: the quoting engine no longer speaks the retired reward model."""
+    import pathlib
+    text = pathlib.Path("core_brain/quotes.py").read_text(encoding="utf-8")
+    for retired in ("reward " + "window", "reward " + "quote", "reward " + "minimum"):
+        assert retired not in text
+    import core_brain.quotes as quotes
+    assert not hasattr(quotes, "reward_" + "score")
+
+

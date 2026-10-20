@@ -277,7 +277,7 @@ def book_health(book: dict, cfg) -> BookHealth:
         tested against both quotes -- the recorded failure was a 0.999 bid
         against a 0.001 ask, an inverted shape no single arm catches.
       * TOO WIDE / TOO THIN. A spread wider than `max_book_spread` puts the
-        whole reward window inside it, so quoting there means being the most
+        whole quote window inside it, so quoting there means being the most
         exposed order in the book. Summed bid depth under `min_book_depth_sh`
         means nothing is there to absorb an exit.
     """

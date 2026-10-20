@@ -1514,8 +1514,8 @@ class TestClassifyRefusal:
         assert _classify_refusal(why) is VisitOutcome.REFUSED_TERMINAL
 
     @pytest.mark.parametrize("why", [
-        "UP: 8.0c from mid > 4.5c reward window; "
-        "DOWN: 8.0c from mid > 4.5c reward window",
+        "UP: 8.0c from mid > 4.5c quote window; "
+        "DOWN: 8.0c from mid > 4.5c quote window",
         "no side quotable",
         "",
     ])
@@ -1527,8 +1527,8 @@ class TestRefusedHold:
     """#390: a visited-but-refused market holds resting orders; only a dropped
     market, a terminal refusal, or an expired grace cancels."""
 
-    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
-                     "DOWN: 8.0c from mid > 4.5c reward window")
+    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c quote window; "
+                     "DOWN: 8.0c from mid > 4.5c quote window")
     TERMINAL_WHY = ("UP: mid 0.950 outside [0.10,0.90] -- decided market; "
                     "DOWN: mid 0.050 outside [0.10,0.90] -- decided market")
 
@@ -3195,8 +3195,8 @@ class TestRefusalVisitRows:
     apart from "this arm had more chances to".
     """
 
-    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
-                     "DOWN: 8.0c from mid > 4.5c reward window")
+    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c quote window; "
+                     "DOWN: 8.0c from mid > 4.5c quote window")
 
     def _seam(self, tmp_path, decide, books=None):
         reg, _db = _t3_registry(tmp_path)

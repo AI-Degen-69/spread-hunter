@@ -115,7 +115,7 @@ def _classify_refusal(why: str) -> VisitOutcome:
 
     Delegates to the single enumerated list in `market_lifecycle`: a named
     stop refuses for good, everything else (wide book, completable cap,
-    reward window, mid band, ...) is transient -- the book moved, not the
+    quote window, mid band, ...) is transient -- the book moved, not the
     market. Matched case-insensitively.
     """
     if classify_refusal(why) is not None:
