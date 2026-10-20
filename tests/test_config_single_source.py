@@ -636,14 +636,16 @@ def test_spread_window_accepts_one_to_ninety_nine_cents(mod, monkeypatch, pinned
 @_BOTH_LOADERS
 @_BOTH_PATHS
 @pytest.mark.parametrize(
-    "raw", ["0", "100", "inf", "nan", "-inf", "-5", "0.5"],
-    ids=["zero", "one_dollar", "pos_inf", "nan", "neg_inf", "negative", "half_a_cent"],
+    "raw", ["0", "100", "99.5", "inf", "nan", "-inf", "-5", "0.5"],
+    ids=["zero", "one_dollar", "just_over", "pos_inf", "nan", "neg_inf", "negative", "half_a_cent"],
 )
 def test_spread_window_rejects_bad_numbers_on_both_paths(mod, monkeypatch, pinned, raw):
     """#707: a bad NUMBER is rejected, never clamped and never silently ignored.
 
     `0` and negatives used to be dropped by the tolerant read while `inf` set an
     infinite window -- the panel then read "enforced" while anything was allowed.
+    `99.5` is here because it is the value that proves the bound is on CENTS: as a
+    stored price fraction it would be a legal 0.995.
     """
     with pytest.raises(ValueError, match="BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID"):
         _spread_window(mod, monkeypatch, raw, pinned=pinned)
@@ -666,11 +668,12 @@ def test_spread_window_rejection_names_the_variable_and_the_value(mod, monkeypat
 
 
 @_BOTH_LOADERS
+@_BOTH_PATHS
 @pytest.mark.parametrize("var", ["HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD"])
-def test_spread_window_rejection_names_the_alias_that_supplied_it(mod, monkeypatch, var):
+def test_spread_window_rejection_names_the_alias_that_supplied_it(mod, monkeypatch, pinned, var):
     """#707 validates the RESOLVED value, so the error names the winning alias (#706 keeps them)."""
     with pytest.raises(ValueError, match=f"{var}='inf' is not finite"):
-        _spread_window(mod, monkeypatch, "inf", pinned=False, var=var)
+        _spread_window(mod, monkeypatch, "inf", pinned=pinned, var=var)
 
 
 @_BOTH_LOADERS

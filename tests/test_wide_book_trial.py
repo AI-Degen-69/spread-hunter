@@ -193,6 +193,13 @@ def test_an_unpinned_override_is_what_the_trial_compares_against(mod, monkeypatc
                           HUNTER_WIDE_BOOK_TRIAL="0.12")
     assert narrower.max_spread_from_mid == 0.12
 
+    # #707: the window is validated on the way IN, and the trial's own 0.0..0.30
+    # bound is what keeps `max(window, wide)` inside the same range -- no second
+    # validation of the post-trial value is needed or wanted.
+    floor = _load_with(mod, monkeypatch, BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID="1",
+                       HUNTER_WIDE_BOOK_TRIAL="0.30")
+    assert floor.max_spread_from_mid == 0.30
+
 
 @BOTH
 def test_load_refuses_outright_outside_a_rehearsal(mod, monkeypatch):

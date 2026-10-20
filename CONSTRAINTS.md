@@ -30,10 +30,11 @@ Branch: `i707/validate-max-spread-from-mid-range` | Issue: `#707` (resolves ledg
 - **The loader RULES stay per-path, deliberately.** Pinned is strict (a typo raises, as it always
   has). Unpinned keeps #690's rule that a *typographical* (non-number) value is inactive rather
   than enforced-at-zero, now pinned with its reason in the test file.
-- **Strict file boundary.** No `dashboard/` change (an illegal value makes the dashboard's
-  `scoring.config.load()` guard fall back to engine numbers; #709 owns surfacing it), no change to
-  `core_brain/config.py`'s trial-knob block, `scoring/config.py`'s copy of `_bounded_float` stays a
-  copy.
+- **Strict file boundary.** No `dashboard/` change. Its `get_parameters` loads the engine config
+  unguarded (`dashboard/server.py:4242-4246`), so an illegal value now fails that endpoint instead
+  of rendering a made-up number; #709 owns making the refusal readable. No change to
+  `core_brain/config.py`'s trial-knob block, and `scoring/config.py`'s copy of `_bounded_float`
+  stays a copy.
 - **No venue contact in tests.** Zero orders, zero `BRIDGE_CONTROL`, no dashboard START.
 
 ## 3. Anti-Cheat & Quality Rules

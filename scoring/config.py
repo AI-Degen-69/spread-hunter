@@ -191,8 +191,10 @@ def load() -> MakerConfig:
     # a ranker that starts cleanly today nor narrows the window to something that
     # refuses every quote. Non-numbers are the only tolerated input: #707 makes
     # `inf`, `nan` and a number outside 1..99 cents a rejection on both paths, so
-    # a value the operator set can never be silently dropped (#709 surfaces the
-    # rejection the dashboard currently swallows).
+    # a value the operator set can never be silently dropped. That refusal is
+    # loud on the money path and on this one; the dashboard's parameters endpoint
+    # loads the engine config unguarded, so it fails instead of showing a made-up
+    # number -- #709 owns turning that into a readable message.
     #
     # NOT the book gate. `filter_common_spread_max_cents` (2.05c) is the bid-ask
     # WIDTH wide books are refused on, derived from
