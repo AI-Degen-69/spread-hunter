@@ -1,58 +1,51 @@
-Branch: i706/remove-legacy-max-spread-env-aliases | Issue: #706
+Branch: i708/unify-spread-docstring | Issue: #708
 
-# Constraints - #706 retire the legacy max-spread env names
+# Constraints - #708 unify the max_spread_from_mid description, triage rebate dead code
 
-Operator directive, verbatim: **"Zero fallback. Zero warnings. Zero mention of old names."**
-`BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID` is the only accepted name for the spread window.
+Two housekeeping items from #690 O4: one field documented three different ways, and a
+`grep rebate` full of references to a model the strategy no longer uses.
 
 ## The bar
 
-- `git grep -n HUNTER_MAX_SPREAD` returns **zero** hits in production code (`core_brain/`,
-  `scoring/`, `dashboard/`, `scripts/`), `tests/`, `.env.example` and live docs
-  (`docs/agents/**`). `docs/issues/**` ledgers are exempt historical records and stay
-  byte-identical except the `#707` ledger row N3 status (`open` -> `fixed #706`).
-- No deprecation warning about a spread variable exists anywhere after this change. Both
-  old warnings are deleted, not reworded or harmonised.
-- The retired names are **ignored, not rejected**. Nothing reads them and nothing reports
-  them, which is what the acceptance criterion "setting only a legacy name has zero effect"
-  means in practice.
-- The `#707` validation survives on every remaining read: `_bounded_float(..., 1.0, 99.0)`
-  and the message naming `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID` for `inf`, `nan`, `0`, `100`,
-  negatives and sub-cent values. A non-number is still tolerated on the unpinned path only.
+- `max_spread_from_mid` carries **one** description, byte-identical in
+  `scoring/config.py` and `core_brain/config.py`, and a guard test pins that equality.
+- The description states the field's real role: **the largest allowed distance between
+  the book midpoint and our resting quote**. It does not say "rebate" and does not say
+  "market selection" -- the issue's own wording is wrong, and `CONSTRAINTS.md` (#706,
+  "Untouched") already pins the field as a distance-from-mid quoting window.
+- **No value, default, env var name, parse rule or validation changes.** Engine default
+  0.15, picker default 0.045, the `max(window, wide)` trial rule, the 1..99 cent bound
+  and the pinned/unpinned split all stay exactly as they are.
+- **No behavioural change** to KPI output, PnL crosscheck or fee math. `rebate_est`
+  stays `None`, `total_with_rebate` stays `realized_pnl`, the fee tier math is untouched.
+- Every `rebate` reference ends up either **kept with a written justification** in
+  `docs/issues/708-noticed-but-not-touching.md` or removed. No reference is left
+  unexplained.
+- `scoring/allocate.py` is deleted: no tracked importer, no test, retired reward-pot
+  model. The deletion is pinned by a `find_spec("scoring.allocate") is None` guard.
 
-## Two directive tensions, resolved here so a later session does not "fix" them back
+## Deliberate non-changes (a later reviewer must not "fix" these back)
 
-1. **"Surface a clear error for a wrong env var" vs "zero mention of old names".** An error
-   that names the retired variable mentions it, and an error that does not name the variable
-   is not actionable. Resolution (the one the ticket's own AC implies): the loaders ignore
-   unknown `HUNTER_*` names entirely; the only error surfaced is for the **canonical** name's
-   bad value, which `#707` already raises. Do not add a "retired variable" error later.
-2. **"A test proves the legacy name has zero effect" vs "zero mention in tests".** A test
-   that sets the retired name writes the literal back into the suite and the grep bar can
-   never reach zero. Resolution: the deletion is the proof (no read site exists), pinned by
-   (a) the grep bar itself and (b) a test that a name which is *not* the canonical one —
-   including a near-miss spelling — leaves the shipped default in place for both loaders,
-   pinned and unpinned. Do not reintroduce the retired literal to make this test "stronger".
-
-## Untouched
-
-- Money path: `max_spread_from_mid` stays a distance-from-mid quoting window, never a
-  bid-ask width, never fed to `MAX_BOOK_SPREAD` or `filter_common_spread_max_cents` (0.0205).
-  `max_book_spread = 0.06`, `max_pair_cost`, `select_spread_pct = 41/120`, the trial bound
-  (0.30) and the two shipped defaults (ranker 0.045 / engine 0.15) all stay.
-- The two engine read blocks stay separate (pinned strict, general tolerant). The blocked
-  form is confirmed by #632 ledger item 3; merging them is not this ticket.
-- Every other env var's alias chain (`BOT_QUOTE_SIZE_MIN_SHARES`/`HUNTER_MIN_QUOTE_SHARES`,
-  `BOT_QUOTE_GRID_TICK_SIZE_USD`/`HUNTER_PRICE_TICK`, ...) is out of scope.
-- `tests/test_stop_loss_config.py:88` is about a different retired variable; do not touch it.
+- The **visible message strings** in `core_brain/quotes.py` that say "reward window" and
+  "reward quote ... score N" are output the operator reads. Rewording them is a separate
+  change to visible output; they are recorded in the ledger.
+- `quotes.reward_score()` stays: a legacy diagnostic that feeds no sizing decision.
+- `kpi.py`'s `rebate_est` / `rebate_est_note` / `total_with_rebate` keys stay: they are
+  the emitted schema, and `None` is the honest value on graduated spread markets.
+- `pnl_crosscheck.py`'s `CREDIT_TYPES` / `ACTIVITY_TYPES` / `maker_rebates` stay: real
+  venue credits flow through them and `tests/test_pnl_crosscheck.py` covers them.
+- `venue_fees.py`'s rebate sign-safety comment stays: the fee-tier math is load-bearing.
+- `scoring/config.py`'s line "Maker rewards/rebates are $0.00 in graduated spread
+  markets" stays: it is accurate.
+- Historical records stay: old measured-run comments, the dashboard explainer line, the
+  validation artifacts and the prompt that forbids inventing rebate income.
+- `docs/issues/690-noticed-but-not-touching.md` was **pruned from the repo** in e2f648e
+  ("prune stale worktrees and closed-issue artifacts" -- every closed issue's ledger was
+  deleted). It is NOT resurrected here. #690 O4 is closed by this ticket's own ledger.
 
 ## Process
 
-- No direct push to `main`; no venue/live command; no write to `data/orders.db`.
-- Deletions removed tests that assert the removed behaviour only. No remaining test is
-  skipped, disabled or softened to get green.
-- The full `python -m pytest -q` suite runs ONCE locally before the push (deletion carve-out:
-  importers of deleted symbols can sit in files this diff never touches). CI is the gate.
-- No `pytest`/`gh`/`git` step inside the operator's `## How to verify`.
-- Accepted consequence, stated in the PR: a shell that still exports the retired name gets
-  the shipped window, not its value.
+- No live command, no venue call, no write to `data/orders.db`.
+- No direct push to `main`; the change ships through a PR.
+- Targeted suites locally only; GitHub CI on Ubuntu and Windows is the merge gate.
+- No `pytest` / `gh` / `git` step inside the operator's "How to verify".
