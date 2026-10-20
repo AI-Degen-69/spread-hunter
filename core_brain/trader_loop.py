@@ -19,6 +19,7 @@ import argparse
 import logging
 import math
 import os
+import sqlite3
 import sys
 import time
 import threading
@@ -669,6 +670,7 @@ def run(
                         log.warning("markets_fn failed: %s: %s", type(e).__name__, e)
                     else:
                         if fresh:
+                            _evaluate_requalification(registry, fresh)
                             current_markets = list(fresh)
                         elif seam.markets_fn_empty_is_routine:
                             # Normal for this caller (see the seam field). Still
@@ -701,6 +703,16 @@ def run(
                 # guard reads the in-memory universe, so a stale feed retaining
                 # the market, a reappearing feed, and a restart all stay quiet.
                 resolved = resolved_condition_ids(registry)
+                # Reset marks, read once per rotation (#646). Unreadable
+                # marks fail closed: fresh entries block for the cycle while
+                # managed markets still visit.
+                try:
+                    requal_marks = (registry.requalification_marks()
+                                    if registry is not None else {})
+                except sqlite3.Error as e:
+                    log.warning("requalification marks unreadable: %s; "
+                                "blocking fresh entries", e)
+                    requal_marks = None
                 # Held markets first (#505): naked, then balanced, then flat
                 # quoting-only -- stable within each rank, every market exactly
                 # once. `current_markets` itself is untouched: dropped-market
@@ -721,6 +733,14 @@ def run(
                         cycle_results.append(LiveFleetResult(
                             status="SKIPPED", condition_id=cid,
                             why="resolved_market_skipped"))
+                        continue
+                    if cid and _is_awaiting_requalification(
+                            registry, requal_marks, cid):
+                        title = (spec.get("title", "")
+                                 if isinstance(spec, dict) else "")
+                        cycle_results.append(LiveFleetResult(
+                            status="SKIPPED", condition_id=cid,
+                            title=title, why="awaiting_requalification"))
                         continue
                     res = _visit_one(
                         seam=seam, spec=spec, live=live, cycle=cycle,
@@ -1796,6 +1816,117 @@ def _tail_note(mem: Optional[dict], cid: str, kind: str, sig: str,
     log.info(msg + "\n", *args)
 
 
+def _enforce_entry_gate(seam, cid, to_submit, lifecycle_pair_id):
+    """Drop fresh-entry submits for a marked market, keep lifecycle ones (#646).
+
+    Returns (submits, blocked). The visit-loop skip handles the steady state;
+    this is the race guard for a reset that commits between planning and
+    submission. Hedge restoration builds its own submits later and is
+    unaffected. An unreadable marks table blocks everything: nothing may be
+    proven fresh, so nothing new goes out.
+    """
+    if not to_submit:
+        return to_submit, False
+    registry = getattr(seam, "registry", None)
+    if registry is None:
+        return to_submit, False
+    try:
+        marks = registry.requalification_marks()
+    except sqlite3.Error:
+        return [], True
+    if str(cid or "").lower() not in marks:
+        return to_submit, False
+    if lifecycle_pair_id is None:
+        return [], True
+    kept = [i for i in to_submit
+            if getattr(i, "pair_id", None) == lifecycle_pair_id]
+    return kept, True
+
+
+def _execute_planned_orders(seam, market, cfg, title, cycle, to_cancel,
+                            to_submit, cancel_reasons, queue_ahead, emit_fn):
+    """Run the planned cancels then submits. Returns (submitted, cancelled, error).
+
+    `error` is None on success; on failure it carries the same `submit/cancel`
+    text the visit reports, and the market_error emit has already fired.
+    Hedge restoration runs inside, so the whole terminal sequence stays under
+    the caller's lifecycle guard.
+    """
+    submitted = cancelled = 0
+    cancelled_lifecycle_orders = [
+        o for o in to_cancel
+        if cancel_reasons.get(str(o.get("id") or o.get("order_id") or "")) == "lifecycle_replace"
+    ]
+    try:
+        # Cancel first: cancelling old quotes before submitting replacements
+        # prevents exceeding MAX_TOTAL_USD notional exposure and avoids double
+        # quoting if replacement submission occurs while stale orders rest.
+        confirmed_cancelled_lifecycle = []
+        if to_cancel:
+            for row in to_cancel:
+                key = str(row.get("id") or row.get("order_id") or "")
+                if key in cancel_reasons:
+                    row["cancel_reason"] = cancel_reasons[key]
+                if queue_ahead and key in queue_ahead:
+                    row["cancel_queue_ahead"] = queue_ahead[key]
+            cancelled = seam.cancel_fn(seam.client, seam.registry, to_cancel)
+            if cancelled < len(to_cancel):
+                still_resting = _still_resting(seam, to_cancel)
+                if still_resting:
+                    raise RuntimeError(
+                        f"cancel failed: {len(still_resting)}/{len(to_cancel)} still "
+                        f"resting; aborting replacement submission"
+                    )
+            # Only consider lifecycle orders whose cancellation confirmed complete
+            confirmed_cancelled_lifecycle = list(cancelled_lifecycle_orders)
+        if to_submit:
+            submitted = seam.submit_fn(seam.client, seam.registry, market, to_submit, cfg)
+            if submitted == 0 and confirmed_cancelled_lifecycle:
+                # Submit accepted zero orders: attempt to restore cancelled hedge order
+                for old_o in confirmed_cancelled_lifecycle:
+                    try:
+                        restore_intent = QuoteIntent(
+                            side=old_o.get("side", "BUY"),
+                            token_id=old_o.get("token_id"),
+                            price=float(old_o["price"]),
+                            size=int(old_o.get("size") or old_o.get("original_size") or cfg.min_quote_shares),
+                            mid=float(old_o["price"]),
+                            edge_vs_mid=0.0,
+                            pair_id=old_o.get("pair_id"),
+                        )
+                        seam.submit_fn(seam.client, seam.registry, market, [restore_intent], cfg)
+                        log.warning("[HEDGE RESTORED] %s | Restored hedge %s after 0 orders submitted", title, old_o.get("id"))
+                    except Exception as rest_err:
+                        log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
+    except Exception as e:
+        submitted = getattr(e, PARTIAL_SUBMIT_PLACED_ATTR, getattr(e, "placed", submitted))
+        if confirmed_cancelled_lifecycle and submitted == 0:
+            # Submit raised exception with 0 placed: attempt to restore confirmed cancelled hedge order
+            for old_o in confirmed_cancelled_lifecycle:
+                try:
+                    restore_intent = QuoteIntent(
+                        side=old_o.get("side", "BUY"),
+                        token_id=old_o.get("token_id"),
+                        price=float(old_o["price"]),
+                        size=int(old_o.get("size") or old_o.get("original_size") or cfg.min_quote_shares),
+                        mid=float(old_o["price"]),
+                        edge_vs_mid=0.0,
+                        pair_id=old_o.get("pair_id"),
+                    )
+                    seam.submit_fn(seam.client, seam.registry, market, [restore_intent], cfg)
+                    log.warning("[HEDGE RESTORED] %s | Restored hedge %s after submit failure", title, old_o.get("id"))
+                except Exception as rest_err:
+                    log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
+        # A submit/cancel failure (venue rejection, a split couple rolled back)
+        # must degrade this market to ERROR, never stop the rotation.
+        emit_fn(service="decide", cycle=cycle, phase="quoting",
+                action="market_error", market_slug=title,
+                reason=f"submit/cancel: {type(e).__name__}: {e}",
+                extra={"submitted": submitted, "cancelled": cancelled})
+        return submitted, cancelled, f"submit/cancel: {type(e).__name__}: {e}"
+    return submitted, cancelled, None
+
+
 def _visit_one(
     seam: VenueSeam,
     spec,
@@ -2120,81 +2251,24 @@ def _visit_one(
             filtered_to_cancel.append(o)
         to_cancel = filtered_to_cancel
 
-    submitted = cancelled = 0
-    cancelled_lifecycle_orders = [
-        o for o in to_cancel
-        if cancel_reasons.get(str(o.get("id") or o.get("order_id") or "")) == "lifecycle_replace"
-    ]
-    try:
-        # Cancel first: cancelling old quotes before submitting replacements
-        # prevents exceeding MAX_TOTAL_USD notional exposure and avoids double
-        # quoting if replacement submission occurs while stale orders rest.
-        confirmed_cancelled_lifecycle = []
-        if to_cancel:
-            for row in to_cancel:
-                key = str(row.get("id") or row.get("order_id") or "")
-                if key in cancel_reasons:
-                    row["cancel_reason"] = cancel_reasons[key]
-                if queue_ahead and key in queue_ahead:
-                    row["cancel_queue_ahead"] = queue_ahead[key]
-            cancelled = seam.cancel_fn(seam.client, seam.registry, to_cancel)
-            if cancelled < len(to_cancel):
-                still_resting = _still_resting(seam, to_cancel)
-                if still_resting:
-                    raise RuntimeError(
-                        f"cancel failed: {len(still_resting)}/{len(to_cancel)} still "
-                        f"resting; aborting replacement submission"
-                    )
-            # Only consider lifecycle orders whose cancellation confirmed complete
-            confirmed_cancelled_lifecycle = list(cancelled_lifecycle_orders)
-        if to_submit:
-            submitted = seam.submit_fn(seam.client, seam.registry, market, to_submit, cfg)
-            if submitted == 0 and confirmed_cancelled_lifecycle:
-                # Submit accepted zero orders: attempt to restore cancelled hedge order
-                for old_o in confirmed_cancelled_lifecycle:
-                    try:
-                        restore_intent = QuoteIntent(
-                            side=old_o.get("side", "BUY"),
-                            token_id=old_o.get("token_id"),
-                            price=float(old_o["price"]),
-                            size=int(old_o.get("size") or old_o.get("original_size") or cfg.min_quote_shares),
-                            mid=float(old_o["price"]),
-                            edge_vs_mid=0.0,
-                            pair_id=old_o.get("pair_id"),
-                        )
-                        seam.submit_fn(seam.client, seam.registry, market, [restore_intent], cfg)
-                        log.warning("[HEDGE RESTORED] %s | Restored hedge %s after 0 orders submitted", title, old_o.get("id"))
-                    except Exception as rest_err:
-                        log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
-    except Exception as e:
-        submitted = getattr(e, PARTIAL_SUBMIT_PLACED_ATTR, getattr(e, "placed", submitted))
-        if confirmed_cancelled_lifecycle and submitted == 0:
-            # Submit raised exception with 0 placed: attempt to restore confirmed cancelled hedge order
-            for old_o in confirmed_cancelled_lifecycle:
-                try:
-                    restore_intent = QuoteIntent(
-                        side=old_o.get("side", "BUY"),
-                        token_id=old_o.get("token_id"),
-                        price=float(old_o["price"]),
-                        size=int(old_o.get("size") or old_o.get("original_size") or cfg.min_quote_shares),
-                        mid=float(old_o["price"]),
-                        edge_vs_mid=0.0,
-                        pair_id=old_o.get("pair_id"),
-                    )
-                    seam.submit_fn(seam.client, seam.registry, market, [restore_intent], cfg)
-                    log.warning("[HEDGE RESTORED] %s | Restored hedge %s after submit failure", title, old_o.get("id"))
-                except Exception as rest_err:
-                    log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
-        # A submit/cancel failure (venue rejection, a split couple rolled back)
-        # must degrade this market to ERROR, never stop the rotation.
-        emit_fn(service="decide", cycle=cycle, phase="quoting",
-                action="market_error", market_slug=title,
-                reason=f"submit/cancel: {type(e).__name__}: {e}",
-                extra={"submitted": submitted, "cancelled": cancelled})
+    # Final entry gate (#646): a reset may commit between planning and this
+    # submission. Reread the mark under the lifecycle guard and drop
+    # fresh-entry submits; lifecycle-context submits (hedge replace/restore
+    # on the managed pair) still go out.
+    from core_brain.single_buy_saver import lifecycle_mutation_guard
+    gate_pair_id = (getattr(lifecycle_context, "lifecycle_pair_id", None)
+                    if lifecycle_context is not None else None)
+    with lifecycle_mutation_guard():
+        to_submit, gate_blocked = _enforce_entry_gate(
+            seam, cid, to_submit, gate_pair_id)
+        submitted, cancelled, submit_error = _execute_planned_orders(
+            seam, market, cfg, title, cycle, to_cancel, to_submit,
+            cancel_reasons, queue_ahead, emit_fn)
+    if submit_error is not None:
         return LiveFleetResult(
             status="ERROR", condition_id=cid, title=title, why=why,
             intents=list(intents), submitted=submitted, cancelled=cancelled,
-            error=f"submit/cancel: {type(e).__name__}: {e}")
+            error=submit_error)
 
     submit_extra = {"submitted": submitted, "cancelled": cancelled}
     if queue_why:
@@ -2217,14 +2291,87 @@ def _visit_one(
         _tail_note(tail_memory, cid, "skipped", why,
                    "[SKIPPED] %s | %s", title, why)
 
+    gate_held = gate_blocked and bool(intents) and not to_submit
+    final_why = why
+    if gate_held:
+        final_why = (why + "; awaiting_requalification") if why else "awaiting_requalification"
     return LiveFleetResult(
-        status="QUOTED" if intents else "DECLINED",
-        condition_id=cid, title=title, why=why, intents=list(intents),
+        status="DECLINED" if gate_held else ("QUOTED" if intents else "DECLINED"),
+        condition_id=cid, title=title, why=final_why, intents=list(intents),
         submitted=submitted, cancelled=cancelled,
         queue_why=queue_why)
 
 
 # --- production wiring ------------------------------------------------------
+
+class MarketSpecList(list):
+    """Specs carrying their publication metadata (#646).
+
+    Only the production feed path mints these, via `load_graduated_snapshot`.
+    Plain lists from any other supplier (shadow, tests, paired bundles)
+    carry no metadata and can never clear a re-qualification mark.
+    """
+
+    def __init__(self, specs=(), *, published_mtime_ns=None,
+                 condition_ids=frozenset()):
+        super().__init__(specs)
+        self.published_mtime_ns = published_mtime_ns
+        self.publication_condition_ids = frozenset(condition_ids)
+
+
+def _evaluate_requalification(registry, fresh) -> None:
+    """Clear or retain reset marks against one publication (#646).
+
+    Runs after a successful `markets_fn()` load, before empty-result
+    handling. Only a publication strictly newer than the reset clears its
+    generation when it includes the market; a newer one that excludes it is
+    recorded and the market stays blocked. Suppliers without metadata,
+    and any failure here, leave every mark exactly where it was.
+    """
+    published_ns = getattr(fresh, "published_mtime_ns", None)
+    raw_cids = getattr(fresh, "publication_condition_ids", None)
+    if published_ns is None or raw_cids is None or registry is None:
+        return
+    try:
+        marks = registry.requalification_marks()
+    except sqlite3.Error as exc:
+        log.warning("re-qualification evaluation skipped: %s", exc)
+        return
+    for cid, mark in marks.items():
+        try:
+            if published_ns <= int(mark.reset_ts_ms) * 1_000_000:
+                continue
+            if cid in raw_cids:
+                registry.clear_requalification(cid, mark.generation)
+            else:
+                registry.record_requalification_exclusion(
+                    cid, mark.generation, int(published_ns),
+                    now_ms=int(time.time() * 1000))
+        except sqlite3.Error as exc:
+            log.warning("re-qualification evaluation for %s skipped: %s",
+                        cid, exc)
+
+
+def _is_awaiting_requalification(registry, marks, cid: str) -> bool:
+    """Whether a market gets no new entry quotes this cycle (#646).
+
+    A marked market with no lifecycle row is blocked. One under lifecycle
+    management still visits -- its hedges, not fresh entries, are the work.
+    Unreadable marks fail closed for fresh entries only, never for managed
+    markets.
+    """
+    if registry is None or not cid:
+        return False
+    try:
+        managed = registry.has_lifecycle_for_condition(cid)
+    except sqlite3.Error:
+        return False
+    if managed:
+        return False
+    if marks is None:
+        return True
+    return str(cid).lower() in marks
+
 
 def _market_specs(max_markets: Optional[int] = None, registry=None,
                   path=None, paired_arm: Optional[str] = None) -> list[dict]:
@@ -2238,8 +2385,14 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
     side of an atomic paired-depth bundle without changing the live path.
     """
     from core_brain.market_feed import load_graduated_markets
+    published_ns = None
+    publication_cids = frozenset()
     if paired_arm is None:
-        gms = load_graduated_markets(path=path)
+        from core_brain.market_feed import load_graduated_snapshot
+        snapshot = load_graduated_snapshot(path=path)
+        gms = snapshot.rows
+        published_ns = snapshot.published_mtime_ns
+        publication_cids = snapshot.condition_ids
     else:
         gms = load_graduated_markets(path=path, paired_arm=paired_arm)
     if not gms:
@@ -2304,6 +2457,9 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
                 "event_title": gm.event_title or gm.title,
             })
         specs.append(spec)
+    if paired_arm is None:
+        return MarketSpecList(specs, published_mtime_ns=published_ns,
+                              condition_ids=publication_cids)
     return specs
 
 

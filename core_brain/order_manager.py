@@ -324,6 +324,24 @@ def status() -> None:
         print(f"open orders    ERROR {type(e).__name__}: {e}")
     print("\nConfirm the address above is the account holding your USDC "
           "BEFORE sending anything.")
+    _print_requalification_section()
+
+
+def _print_requalification_section() -> None:
+    """Read-only reset marks for the operator (#646). Never writes."""
+    from core_brain.order_registry import OrderRegistry
+    try:
+        marks = OrderRegistry().requalification_marks()
+    except Exception as exc:
+        print(f"\nawaiting re-qualification  ERROR {type(exc).__name__}: {exc}")
+        return
+    print(f"\nawaiting re-qualification  {len(marks)} market(s)")
+    for cid in sorted(marks):
+        mark = marks[cid]
+        excluded = (" (excluded from latest publication)"
+                    if mark.excluded_publication_ns is not None else "")
+        print(f"  {cid[:16]:<18} {mark.status} gen={mark.generation}"
+              f" reason={mark.reason}{excluded}")
 
 
 def balance(funder: str | None) -> None:
