@@ -94,6 +94,14 @@ def test_scoring_rewards_module_is_deleted():
     assert spec is None, "scoring.rewards must be completely deleted (#681)"
 
 
+def test_scoring_allocate_module_is_deleted():
+    """scoring.allocate modeled the retired reward-pot split: no tracked
+    caller, no test, and the income it allocated is $0.00 on graduated
+    spread markets (#708)."""
+    spec = importlib.util.find_spec("scoring.allocate")
+    assert spec is None, "scoring.allocate must be completely deleted (#708)"
+
+
 def test_filter_markets_has_no_order_score_or_q_min():
     """scripts.filter_markets must not define order_score or q_min (#681)."""
     assert not hasattr(fm, "order_score"), "order_score must be purged (#681)"

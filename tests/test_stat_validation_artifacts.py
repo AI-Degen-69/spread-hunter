@@ -442,6 +442,10 @@ class TestPessimisticSensitivity:
         assert sens["verdict"] == "GO"
         assert sens["base"]["rebate_est"] is None
         assert sens["pessimistic"]["rebate_est"] is None
+        # The report's own top level carries the same contract: no rebate
+        # income is estimated, so the "with rebate" total IS the realized PnL.
+        assert data["rebate_est"] is None
+        assert data["total_with_rebate"] == data["realized_pnl"]
 
         md = (out / "report.md").read_text(encoding="utf-8")
         assert "Pessimistic sensitivity" in md
