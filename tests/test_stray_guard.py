@@ -795,3 +795,40 @@ def test_classify_market_orders_protected_orders_never_hopeless():
     assert len(res_protected.hopeless_strays) == 0
     assert len(res_protected.protected) == 1
     assert res_protected.protected[0].id == "o1"
+
+
+def test_stray_prefetch_uses_decision_book_fn_when_wired(tmp_path):
+    """#659: classification reads ride the provider; remediation stays fresh."""
+    from core_brain.order_registry import OrderRegistry
+    from core_brain.stray_guard import run_stray_guard
+
+    reg = OrderRegistry(db_path=tmp_path / "orders.db")
+    reg.create_order(make_order("o-live3", "0xlive3", "tok-live3", 0.45,
+                                order_id="v-live3"))
+
+    via_decision: list[str] = []
+    via_client: list[str] = []
+
+    def decision_book_fn(token_id):
+        via_decision.append(token_id)
+        return {"bids": [], "asks": []}
+
+    class _Client:
+        def get_order_book(self, token_id):
+            via_client.append(token_id)
+            return {"bids": [], "asks": []}
+
+        def get_order(self, order_id):
+            return {"id": order_id, "status": "open", "size_matched": 0.0}
+
+        def cancel_order(self, payload_or_id):
+            return {"success": True, "canceled": []}
+
+        def create_and_post_market_order(self, payload, options=None,
+                                         order_type=None, defer_exec=False):
+            return {"status": "matched", "takingAmount": "0.0", "size": "0.0"}
+
+    run_stray_guard(_Client(), reg, live=False,
+                    decision_book_fn=decision_book_fn)
+    assert "tok-live3" in via_decision
+    assert via_client == []

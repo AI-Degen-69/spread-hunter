@@ -1580,12 +1580,18 @@ def manage_single_leg_positions(
     state_cache: Optional[AgedOutMarketStateCache] = None,
     gamma_host: Optional[str] = None,
     resolved_cids: Optional[set[str]] = None,
+    decision_book_fn=None,
 ) -> list[dict]:
     """Apply the shared lifecycle policy to every active one-sided pair.
 
     Ordinary exposure waits for its resting hedge; an escalated hedge is
     managed by the Trader's quote path. The poll owns only the hard-stop sell
     and the existing market-end-aware settlement fallback.
+
+    `decision_book_fn(token_id)` optionally serves the held-leg bid the
+    lifecycle evaluates against (#659: stream-first books, REST fallback).
+    It takes the same levels shape `client.get_order_book` returns. Exits
+    and completions always read fresh from the client, never from this hook.
     """
     pairs_enabled = bool(getattr(cfg, "enable_pairs_rule", True))
     aged_out_enabled = bool(getattr(cfg, "enable_aged_out_rescue", True))
@@ -1609,6 +1615,7 @@ def manage_single_leg_positions(
             funder=funder, market_state_fn=market_state_fn,
             state_cache=state_cache, gamma_host=gamma_host,
             resolved_cids=resolved_cids,
+            decision_book_fn=decision_book_fn,
         )
 
 
@@ -1625,6 +1632,7 @@ def _manage_single_leg_positions_locked(
     state_cache: Optional[AgedOutMarketStateCache] = None,
     gamma_host: Optional[str] = None,
     resolved_cids: Optional[set[str]] = None,
+    decision_book_fn=None,
 ) -> list[dict]:
     """The mutation pass, called under `lifecycle_mutation_guard`."""
 
@@ -1742,7 +1750,10 @@ def _manage_single_leg_positions_locked(
             held_token = (
                 side_tokens["UP"] if up_size > down_size else side_tokens["DOWN"]
             )
-            held_book = client.get_order_book(held_token)
+            if decision_book_fn is not None:
+                held_book = decision_book_fn(held_token)
+            else:
+                held_book = client.get_order_book(held_token)
             held_bid = best_bid(held_book)
             up_bid = held_bid if held_token == side_tokens["UP"] else None
             down_bid = held_bid if held_token == side_tokens["DOWN"] else None
