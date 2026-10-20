@@ -3335,6 +3335,26 @@ def test_scoring_load_failure_marks_screener_cards(client, monkeypatch, caplog):
             f"engine value leaked under the screener scope: {p['key']}"
         )
 
+    # Named scoring-backed keys must show the marker in BOTH fields, so a
+    # different stray engine value on any of them cannot pass silently.
+    scoring_backed_keys = (
+        "select_movement_window_sec",
+        "select_min_movement_usd",
+        "select_min_activity_ratio",
+        "select_min_range_cents",
+        "select_volatility_window_sec",
+        "select_velocity_gate_enabled",
+    )
+    by_key = {p["key"]: p for p in screener}
+    for k in scoring_backed_keys:
+        assert k in by_key, f"scoring-backed card missing on failure path: {k}"
+        card = by_key[k]
+        assert "⚠" in card["value"], f"{k} value missing the marker: {card['value']!r}"
+        assert "⚠" in str(card["raw_value"]), (
+            f"{k} raw_value missing the marker: {card['raw_value']!r}"
+        )
+        assert card["env_var"] != "", f"{k} lost its env_var badge"
+
 
 def test_scoring_load_healthy_screener_cards_unchanged(client, monkeypatch):
     """#709: with no trigger set, the panel keeps exactly its 13 screener cards."""
