@@ -113,7 +113,6 @@ _LEGACY_TO_CANONICAL: dict[str, str] = {
     "enforce_queue_clear_gate": "bot_order_gate_queue_clear_on",
     "max_queue_clear_minutes": "bot_order_queue_max_clear_min",
     "queue_flow_window_sec": "bot_order_queue_flow_window_sec",
-    "min_t_remaining_sec": "bot_order_min_t_remaining_sec",
     # Risk
     "max_cost_per_market": "bot_risk_exposure_max_cost_per_market_usd",
     "max_open_markets": "bot_risk_exposure_max_open_markets",
@@ -414,7 +413,6 @@ class MakerConfig(_ConfigBase):
     bot_order_gate_queue_clear_on: bool = False
     bot_order_queue_max_clear_min: float = 60.0
     bot_order_queue_flow_window_sec: float = 1800.0
-    bot_order_min_t_remaining_sec: float = 15.0
 
     bot_risk_exposure_max_cost_per_market_usd: float = 400.0
     bot_risk_exposure_max_open_markets: int = 3
@@ -603,7 +601,6 @@ class MakerConfig(_ConfigBase):
             kw["market_title"] = title or ""
             url, _ = _env_get("BOT_MARKET_URL", "HUNTER_URL")
             kw["market_url"] = url or ""
-            kw["min_t_remaining_sec"] = 0.0
 
             ms, _ = _env_get("BOT_QUOTE_SIZE_MIN_SHARES", "HUNTER_MIN_QUOTE_SHARES")
             if ms is None:

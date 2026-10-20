@@ -92,7 +92,6 @@ SCORING_DEFAULTS: dict[str, object] = {
     "max_fills_per_market": 25,
     "requote_interval_sec": 2.0,
     "poll_interval_sec": 1.0,
-    "min_t_remaining_sec": 15.0,
     "max_cost_per_market": 400.0,
     "max_open_markets": 3,
     "enable_pairs_rule": True,

@@ -316,8 +316,11 @@ def _decide_quotes_from_mid(
     above runs only with the dynamic offset enabled -- so on the dynamic-off
     preset a wide pair rested at $1.00 and up.
     """
-    if t_remaining < cfg.min_t_remaining_sec:
-        return [], f"t_remaining {t_remaining:.0f}s < {cfg.min_t_remaining_sec:.0f}s"
+    # Only an ENDED market is refused (#686): the 15s floor was removed because
+    # near-close markets sit at the 90+/10- band anyway. An expired market can
+    # still print a mid-range book, so the band alone does not catch it.
+    if t_remaining <= 0:
+        return [], f"t_remaining {t_remaining:.0f}s: market ended"
 
     # A market that kept picking us off AFTER we widened is not mispriced, it
     # is toxic. Giving up the rent is the point: rent is worth ~$50/day across
@@ -762,8 +765,8 @@ def decide_quotes(
     if lifecycle_override is not None:
         return [], "lifecycle escalation requires the from-mid quote objective"
 
-    if t_remaining < cfg.min_t_remaining_sec:
-        return [], f"t_remaining {t_remaining:.0f}s < {cfg.min_t_remaining_sec:.0f}s"
+    if t_remaining <= 0:
+        return [], f"t_remaining {t_remaining:.0f}s: market ended"
 
     # powerwinner posts 57% of his entries in the FIRST 40% of the window: a
     # passive order needs time to be reached, and quoting late means resting

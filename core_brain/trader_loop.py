@@ -432,7 +432,6 @@ def _market_cfg(base, spec: Any):
         # the pair discount, not emissions. Deleted with the rewards purge
         # (#594); do not reintroduce a per-market window.
         price_tick=float(spec.get("tick", base.price_tick)),
-        min_t_remaining_sec=0.0,
         market_title=str(spec.get("title", "")),
         range_cents=(
             float(spec["range_cents"])

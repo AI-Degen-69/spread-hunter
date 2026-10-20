@@ -139,7 +139,7 @@
     <table>
       <tr><th>If</th><th>Then</th></tr>
       <tr><td>No two-sided book, or price off the 0–1 scale</td><td><strong>Skip market.</strong> Nothing to rest against.</td></tr>
-      <tr><td>Less than <strong>15s</strong> left to resolve</td><td><strong>Skip.</strong> No time to be filled fairly.</td></tr>
+      <tr><td>A market whose end time has passed</td><td><strong>Stop.</strong> No time left to trade — the price band alone does not catch an expired book that still prints mid-range prices.</td></tr>
       <tr><td>More than <strong>40%</strong> into the trading window</td><td><strong>Skip.</strong> Late quotes rest into convergence.</td></tr>
       <tr><td><strong>25 fills</strong> already on this market</td><td><strong>Stop quoting it.</strong> Enough exposure.</td></tr>
       <tr><td>Spent ≥ <strong>$400</strong> here <strong>and</strong> balanced (≥0.92)</td><td><strong>Stop quoting it.</strong> Cap reached, hedge complete.</td></tr>
