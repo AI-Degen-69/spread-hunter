@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>בעיה #718 — REBATE סוּדַּר</title>
+<style>
+:root{
+  --ink:#eaf1f6;--muted:#9aabb8;--bg:#0b1117;--panel:#121c25;--panel-2:#172530;
+  --line:#29404d;--accent:#55d6c2;--accent-ink:#06281f;--shadow:0 20px 55px rgba(0,0,0,.28);
+  --red:#f87171;--green:#4ade80;--amber:#fbbf24;
+}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);background:var(--bg);font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,"Heebo",Arial,sans-serif}
+main{max-width:1060px;margin:auto;padding:40px 20px 70px}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:2rem;margin:0 0 .4rem;line-height:1.2}
+h2{font-size:1.15rem;color:var(--muted);margin:2rem 0 .7rem;letter-spacing:.02em}
+.meta{display:flex;gap:1rem;align-items:center;flex-wrap:wrap;margin-bottom:2rem;font-size:.85rem;color:var(--muted)}
+.badge{background:var(--panel-2);border:1px solid var(--line);border-radius:20px;padding:.25rem .8rem;font-size:.78rem}
+.badge.merged{border-color:var(--accent);color:var(--accent)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:26px;margin-top:24px;box-shadow:var(--shadow)}
+.callout{border-right:3px solid var(--accent);background:rgba(85,214,194,.07);padding:1rem 1.2rem;border-radius:8px 0 0 8px;margin:1.2rem 0}
+/* split layout */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:24px}
+@media(max-width:700px){.split{grid-template-columns:1fr}}
+/* replay table */
+.replay-table{width:100%;border-collapse:collapse;margin-top:1rem;font-size:.9rem}
+.replay-table th{padding:.6rem .9rem;background:var(--panel-2);color:var(--muted);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.05em;text-align:right;border-bottom:1px solid var(--line)}
+.replay-table td{padding:.6rem .9rem;border-bottom:1px solid var(--line);text-align:right}
+.replay-table tr:last-child td{border-bottom:none}
+.mono{font-family:'Courier New',monospace;font-size:.85rem}
+.tag-unjudged{display:inline-block;background:rgba(251,191,36,.15);color:var(--amber);border:1px solid rgba(251,191,36,.35);border-radius:6px;padding:.15rem .55rem;font-size:.75rem;white-space:nowrap}
+.tag-credit{display:inline-block;background:rgba(74,222,128,.12);color:var(--green);border:1px solid rgba(74,222,128,.3);border-radius:6px;padding:.15rem .55rem;font-size:.75rem;white-space:nowrap}
+.tag-removed{display:inline-block;background:rgba(248,113,113,.12);color:var(--red);border:1px solid rgba(248,113,113,.3);border-radius:6px;padding:.15rem .55rem;font-size:.75rem;white-space:nowrap}
+/* interactive demo */
+.demo-area{background:var(--panel-2);border:1px solid var(--line);border-radius:14px;padding:24px;margin-top:12px}
+.type-btn{font-size:.82rem;padding:.4rem .9rem;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer;margin:.2rem}
+.type-btn.active{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+.result-box{margin-top:14px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:16px;font-family:'Courier New',monospace;font-size:.88rem;min-height:64px;transition:all .25s}
+.result-label{font-size:.72rem;color:var(--muted);margin-bottom:.4rem;font-family:system-ui}
+.verdict{font-size:1.05rem;font-weight:700;margin-top:.5rem}
+.verdict.unjudged{color:var(--amber)}
+.verdict.credit{color:var(--green)}
+/* steps */
+ol.steps{padding-right:1.5rem;margin:.5rem 0}
+ol.steps li{margin:.5rem 0;padding-right:.3rem}
+ol.steps li::marker{color:var(--accent);font-weight:700}
+/* numbers row */
+.numbers-row{display:flex;gap:20px;flex-wrap:wrap;margin-top:12px}
+.num-card{flex:1;min-width:130px;background:var(--panel-2);border:1px solid var(--line);border-radius:14px;padding:20px 18px;text-align:center}
+.num-big{font-size:2.2rem;font-weight:800;color:var(--accent);line-height:1}
+.num-label{font-size:.75rem;color:var(--muted);margin-top:.4rem}
+</style>
+</head>
+<body>
+<main>
+
+<!-- HEADER -->
+<h1>בעיה #718 — סוף ל-<span dir="ltr">REBATE</span> המרחף</h1>
+<div class="meta">
+  <span class="badge merged">✓ מוזג</span>
+  <a href="https://github.com/AI-Degen-69/spread-hunter/issues/718" target="_blank" class="badge">בעיה #718</a>
+  <a href="https://github.com/AI-Degen-69/spread-hunter/pull/723" target="_blank" class="badge">PR #723</a>
+  <span class="badge">בדק-צלב רווח/הפסד</span>
+</div>
+
+<!-- PART 1: THE PROBLEM -->
+<div class="callout">
+  <strong>מה הייתה הבעיה:</strong> הבדיקה הפנימית שמשווה הוצאות לקרדיטים ביקשה מהזירה סוג פעולה בשם
+  <span dir="ltr" class="mono">REBATE</span> — אבל הזירה אף פעם לא שולחת אותו. הרשימה שאמרה "אלו קרדיטים" ורשימת הסוגים שמתבקשים מהזירה היו לא מסונכרנות. תוצאה: ה-<span dir="ltr" class="mono">REBATE</span> חי ברשימת הקרדיטים בלי לעשות שום דבר — ואם הזירה אי-פעם שלחה אחד, הוא היה נעלם בלי שאף אחד ידע.
+</div>
+
+<!-- SPLIT: BEFORE / AFTER -->
+<h2>מה השתנה — לפני ואחרי</h2>
+<div class="split">
+  <div class="panel">
+    <h3 style="color:var(--red);margin-top:0">לפני</h3>
+    <p>שתי רשימות לא מסונכרנות:</p>
+    <ul style="padding-right:1.2rem">
+      <li>רשימת קרדיטים: כללה <span dir="ltr" class="mono">REBATE</span></li>
+      <li>רשימת בקשות מהזירה: <em>לא כללה</em> <span dir="ltr" class="mono">REBATE</span></li>
+      <li>תוצאת ריפליי לשורת <span dir="ltr" class="mono">REBATE</span>: <span class="tag-credit">credit \$2 — שגוי</span></li>
+      <li>אם הזירה הייתה שולחת כזה: הוא היה נשמט בשקט</li>
+    </ul>
+  </div>
+  <div class="panel">
+    <h3 style="color:var(--green);margin-top:0">אחרי</h3>
+    <p>שתי הרשימות מסוכמות עם הסבר:</p>
+    <ul style="padding-right:1.2rem">
+      <li><span dir="ltr" class="mono">REBATE</span> הוסר מרשימת הקרדיטים <span class="tag-removed">הוסר</span></li>
+      <li>ריפליי של <span dir="ltr" class="mono">REBATE</span>: <span class="tag-unjudged">UNJUDGED — לא ידוע</span></li>
+      <li>לא נשמט בשקט — מדווח כ"לא ידוע"</li>
+      <li>סוגי קרדיט ידועים: <span class="tag-credit">MAKER_REBATE ✓</span> <span class="tag-credit">REWARD ✓</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- NUMBERS ROW -->
+<h2>מספרי הריפליי לאחר השינוי</h2>
+<div class="numbers-row">
+  <div class="num-card">
+    <div class="num-big">$0</div>
+    <div class="num-label"><span dir="ltr">cash_in</span> לשורת REBATE</div>
+  </div>
+  <div class="num-card">
+    <div class="num-big">$0</div>
+    <div class="num-label"><span dir="ltr">cash_out</span> לשורת REBATE</div>
+  </div>
+  <div class="num-card">
+    <div class="num-big" style="color:var(--amber)">1</div>
+    <div class="num-label">סופרת כ"לא ידוע"</div>
+  </div>
+  <div class="num-card">
+    <div class="num-big" style="color:var(--red)">1</div>
+    <div class="num-label">סופרת כ"לא קריא"</div>
+  </div>
+</div>
+<p style="color:var(--muted);font-size:.82rem;margin-top:.5rem">
+  <span dir="ltr">(0.0, 0.0, 1, 1)</span> — זה הוא פלט הריפליי הצפוי לשורת <span dir="ltr">REBATE</span> בד הבדיקה.
+</p>
+
+<!-- INTERACTIVE DEMO -->
+<h2>בחר סוג פעולה — ראה פלט ריפליי</h2>
+<div class="demo-area">
+  <p style="margin-top:0;font-size:.88rem;color:var(--muted)">לחץ על סוג כדי לראות מה הבדיקה מחזירה עבורו:</p>
+  <div>
+    <button class="type-btn" onclick="showType('REBATE')">REBATE</button>
+    <button class="type-btn" onclick="showType('MAKER_REBATE')">MAKER_REBATE</button>
+    <button class="type-btn" onclick="showType('REWARD')">REWARD</button>
+    <button class="type-btn" onclick="showType('REFERRAL_REWARD')">REFERRAL_REWARD</button>
+    <button class="type-btn" onclick="showType('CONVERSION')">CONVERSION</button>
+  </div>
+  <div class="result-box" id="result-box">
+    <div class="result-label">פלט הריפליי:</div>
+    <div id="result-text" style="color:var(--muted)">← לחץ על סוג</div>
+    <div class="verdict" id="result-verdict"></div>
+  </div>
+</div>
+
+<!-- PART 3: NEW REALITY -->
+<div class="panel">
+  <h2 style="margin-top:0">המצב החדש</h2>
+  <p>הבדיקה הפנימית עובדת מול רשימה אחת מסונכרנת. כל סוג פעולה לא מוכר מופיע כ-<span dir="ltr" class="mono">UNJUDGED</span> — לא נעלם בשקט. הרשימה נוסחה עם הסבר שמפרש למה <span dir="ltr" class="mono">REBATE</span> הוסר.</p>
+  <div class="callout" style="margin:0">
+    <strong>מה לצפות לראות:</strong> בריצה של בדיקת צלב רווח/הפסד — שורת <span dir="ltr">REBATE</span> מוצגת כ"לא ידוע" ולא ממוספרת כקרדיט.
+  </div>
+</div>
+
+<!-- PART 4: VERIFICATION -->
+<div class="panel">
+  <h2 style="margin-top:0">איך לאמת בשורה אחת — ריפליי ידני</h2>
+  <p style="font-size:.88rem;color:var(--muted)">מקור: גוף ה-PR #723, "How to verify" — שלבים מלאים:</p>
+  <ol class="steps">
+    <li>פתח <span dir="ltr" class="mono">core_brain/pnl_crosscheck.py</span> וקרא את ההערה מעל <span dir="ltr" class="mono">CREDIT_TYPES</span>. צפוי: הסבר שאומר שה-<span dir="ltr">bare REBATE</span> חסר בכוונה ומפנה לתיעוד הזירה.</li>
+    <li>בשורש הריפו, הרץ את מקטע הפייתון הקצר: ייבוא של <span dir="ltr" class="mono">ACTIVITY_TYPES</span> ו-<span dir="ltr" class="mono">replay_rows</span>, הדפסת הרשימה המבוקשת, וריפליי של שורת <span dir="ltr">{type: kind, usdcSize: 2}</span> עבור כל אחד מ-<span dir="ltr">REBATE, MAKER_REBATE, REWARD, REFERRAL_REWARD, CONVERSION</span>. הדגל <span dir="ltr" class="mono">-B</span> מונע כתיבת קבצי cache.</li>
+    <li>צפוי: ברשימה המבוקשת — אין <span dir="ltr">REBATE</span>. הריפליי של <span dir="ltr">REBATE</span> מחזיר <span dir="ltr" class="mono">(0.0, 0.0, 1, 1)</span>. כל שאר הסוגים מחזירים <span dir="ltr" class="mono">(0.0, 2.0, 1, 0)</span>.</li>
+    <li>סימני כשל: <span dir="ltr">REBATE</span> מחזיר <span dir="ltr" class="mono">(0.0, 2.0, 1, 0)</span>, או שאחד מסוגי הקרדיט מראה ספירת "לא קריא" גדולה מאפס.</li>
+    <li>מגבלה: הבדיקה מוכיחה התנהגות ריפליי מקומית בלבד — לא מה שהזירה החיה שולחת בפועל.</li>
+  </ol>
+</div>
+
+</main>
+
+<script>
+const data = {
+  'REBATE': {
+    out: '(0.0, 0.0, 1, 1)',
+    verdict: 'UNJUDGED — לא ידוע',
+    cls: 'unjudged',
+    explain: 'REBATE הוסר מרשימת הקרדיטים. שורה בסוג זה מדווחת כ"לא ידוע", לא ממוספרת כקרדיט.'
+  },
+  'MAKER_REBATE': {
+    out: '(0.0, 2.0, 1, 0)',
+    verdict: 'קרדיט — $2.00 נספר',
+    cls: 'credit',
+    explain: 'MAKER_REBATE הוא קרדיט ידוע. שורה בסוג זה מספרת את ה-usdcSize כהכנסת קרדיט.'
+  },
+  'REWARD': {
+    out: '(0.0, 2.0, 1, 0)',
+    verdict: 'קרדיט — $2.00 נספר',
+    cls: 'credit',
+    explain: 'REWARD הוא קרדיט ידוע. שורה בסוג זה מספרת את ה-usdcSize כהכנסת קרדיט.'
+  },
+  'REFERRAL_REWARD': {
+    out: '(0.0, 2.0, 1, 0)',
+    verdict: 'קרדיט — $2.00 נספר',
+    cls: 'credit',
+    explain: 'REFERRAL_REWARD הוא קרדיט ידוע. שורה בסוג זה מספרת את ה-usdcSize כהכנסת קרדיט.'
+  },
+  'CONVERSION': {
+    out: '(0.0, 2.0, 1, 0)',
+    verdict: 'קרדיט — $2.00 נספר',
+    cls: 'credit',
+    explain: 'CONVERSION הוא קרדיט ידוע. שורה בסוג זה מספרת את ה-usdcSize כהכנסת קרדיט.'
+  }
+};
+function showType(t){
+  document.querySelectorAll('.type-btn').forEach(b=>b.classList.toggle('active', b.textContent===t));
+  const d = data[t];
+  document.getElementById('result-text').textContent = d.out + ' — ' + d.explain;
+  const v = document.getElementById('result-verdict');
+  v.textContent = d.verdict;
+  v.className = 'verdict ' + d.cls;
+}
+</script>
+</body>
+</html>
