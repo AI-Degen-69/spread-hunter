@@ -374,6 +374,14 @@ def live_reset_ports(client, funder: str, registry: OrderRegistry,
         except (ReconcileInProgress, PermissionError) as exc:
             raise ExposureUnavailable(
                 f"cannot reconcile before reset: {exc}") from exc
+        except sqlite3.Error:
+            raise
+        except Exception as exc:
+            # Port contract: only PairExitRefused, ExposureUnavailable and
+            # sqlite3.Error cross into the proof. A venue SDK failure
+            # during the reread fails the reset closed, never escapes it.
+            raise ExposureUnavailable(
+                f"cannot reconcile before reset: {exc}") from exc
 
     def _read_balances() -> tuple[float, float]:
         return fetch_token_balances(funder, up_token_id, down_token_id)

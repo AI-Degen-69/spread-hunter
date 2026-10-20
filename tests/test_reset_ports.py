@@ -11,7 +11,12 @@ import uuid
 
 import pytest
 
-from core_brain.lifecycle_reset import RESET, RESIDUAL, reset_condition
+from core_brain.lifecycle_reset import (
+    RESET,
+    RESIDUAL,
+    UNAVAILABLE,
+    reset_condition,
+)
 from core_brain.order_registry import (
     FillRecord,
     OrderRecord,
@@ -182,6 +187,26 @@ class TestLivePorts:
 
         assert outcome.status == RESET
         assert reg.requalification_marks()[CID.lower()].status == "awaiting"
+
+    def test_a_venue_reconcile_failure_is_unavailable_not_a_crash(
+            self, tmp_path, monkeypatch):
+        """#646: the port contract translates venue SDK errors, never escapes."""
+        import core_brain.order_registry as reg_mod
+        reg = OrderRegistry(db_path=tmp_path / "live.db")
+        client = FakeLiveClient()
+        _pages(monkeypatch, [])
+
+        def _boom(*a, **k):
+            raise RuntimeError("CLOB offline")
+
+        monkeypatch.setattr(reg_mod, "reconcile_orders", _boom)
+        outcome = reset_condition(
+            reg, CID, UP, DOWN,
+            live_reset_ports(client, FUNDER, reg, CID, UP, DOWN),
+            "test", now_ms=2_000)
+
+        assert outcome.status == UNAVAILABLE
+        assert reg.requalification_marks() == {}
 
     def test_a_venue_balance_blocks_the_reset(self, tmp_path, monkeypatch):
         """#646: shares the ledger forgot still count."""
