@@ -313,6 +313,30 @@ def fetch_token_balances(funder: str, up_token_id: str, down_token_id: str,
     return (balances.get(up_token_id, 0.0), balances.get(down_token_id, 0.0))
 
 
+# Shadow-side reset-port factory, registered by the shadow store module on
+# import (#646). The live fill engine must never import the shadow model --
+# `test_no_live_module_imports_the_shadow_model` scans for it textually -- so
+# the shadow side plugs its factory in here instead of being imported.
+# None means shadow resets are unavailable: stop exits and retries in
+# shadow mode stay managed, the safe direction.
+_SHADOW_RESET_PORTS_FACTORY = None
+
+
+def register_shadow_reset_ports(factory) -> None:
+    """Plug in the shadow store's `ResetPorts` factory (called once on its import)."""
+    global _SHADOW_RESET_PORTS_FACTORY
+    _SHADOW_RESET_PORTS_FACTORY = factory
+
+
+def _shadow_reset_ports_or_none(registry, db_path, condition_id,
+                                up_token_id, down_token_id):
+    """Shadow `ResetPorts` when the factory is registered, else None."""
+    factory = _SHADOW_RESET_PORTS_FACTORY
+    if factory is None:
+        return None
+    return factory(registry, db_path, condition_id, up_token_id, down_token_id)
+
+
 def live_reset_ports(client, funder: str, registry: OrderRegistry,
                      condition_id: str, up_token_id: str,
                      down_token_id: str):
@@ -1641,7 +1665,7 @@ def _retry_pending_reset(client, funder, live: bool, registry,
     if not pending:
         try:
             marks = registry.requalification_marks()
-        except sqlite3.Error:
+        except Exception:
             return None
         mark = marks.get(str(condition_id or "").lower())
         pending = mark is not None and mark.status == "resetting"
@@ -1653,11 +1677,12 @@ def _retry_pending_reset(client, funder, live: bool, registry,
         ports = live_reset_ports(client, funder, registry, condition_id,
                                  up_token_id, down_token_id)
     else:
-        from core_brain.shadow_exec import shadow_reset_ports
         db_path = (getattr(client, "_db_path", None)
                    or getattr(registry, "db_path", None))
-        ports = shadow_reset_ports(registry, db_path, condition_id,
-                                   up_token_id, down_token_id)
+        ports = _shadow_reset_ports_or_none(
+            registry, db_path, condition_id, up_token_id, down_token_id)
+        if ports is None:
+            return None
     return reset_condition(registry, condition_id, up_token_id, down_token_id,
                            ports, reason="reset_retry", now_ms=now_ms)
 
@@ -2043,12 +2068,14 @@ def _manage_single_leg_positions_locked(
                             client, funder, registry, position.condition_id,
                             position.up_token_id, position.down_token_id)
                     else:
-                        from core_brain.shadow_exec import shadow_reset_ports
                         db_path = (getattr(client, "_db_path", None)
                                    or getattr(registry, "db_path", None))
-                        ports = shadow_reset_ports(
+                        ports = _shadow_reset_ports_or_none(
                             registry, db_path, position.condition_id,
                             position.up_token_id, position.down_token_id)
+                        if ports is None:
+                            out.append(result)
+                            continue
                     reset_outcome = reset_condition(
                         registry, position.condition_id,
                         position.up_token_id, position.down_token_id,

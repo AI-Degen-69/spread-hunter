@@ -19,7 +19,6 @@ import argparse
 import logging
 import math
 import os
-import sqlite3
 import sys
 import time
 import threading
@@ -709,7 +708,10 @@ def run(
                 try:
                     requal_marks = (registry.requalification_marks()
                                     if registry is not None else {})
-                except sqlite3.Error as e:
+                except Exception as e:
+                    # Same duck-typed-read convention as
+                    # `resolved_condition_ids`: fakes and partial doubles
+                    # fail closed with a warning, never with a traceback.
                     log.warning("requalification marks unreadable: %s; "
                                 "blocking fresh entries", e)
                     requal_marks = None
@@ -1832,7 +1834,7 @@ def _enforce_entry_gate(seam, cid, to_submit, lifecycle_pair_id):
         return to_submit, False
     try:
         marks = registry.requalification_marks()
-    except sqlite3.Error:
+    except Exception:
         return [], True
     if str(cid or "").lower() not in marks:
         return to_submit, False
@@ -2334,7 +2336,7 @@ def _evaluate_requalification(registry, fresh) -> None:
         return
     try:
         marks = registry.requalification_marks()
-    except sqlite3.Error as exc:
+    except Exception as exc:
         log.warning("re-qualification evaluation skipped: %s", exc)
         return
     for cid, mark in marks.items():
@@ -2347,7 +2349,7 @@ def _evaluate_requalification(registry, fresh) -> None:
                 registry.record_requalification_exclusion(
                     cid, mark.generation, int(published_ns),
                     now_ms=int(time.time() * 1000))
-        except sqlite3.Error as exc:
+        except Exception as exc:
             log.warning("re-qualification evaluation for %s skipped: %s",
                         cid, exc)
 
@@ -2364,7 +2366,7 @@ def _is_awaiting_requalification(registry, marks, cid: str) -> bool:
         return False
     try:
         managed = registry.has_lifecycle_for_condition(cid)
-    except sqlite3.Error:
+    except Exception:
         return False
     if managed:
         return False

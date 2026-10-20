@@ -307,7 +307,7 @@ def _scan_one_order_log(f: Path, condition_id: str) -> None:
             )
 
 
-def status() -> None:
+def status(registry=None) -> None:
     """Who are we, and what is already resting. Read-only, safe anytime."""
     c = client()
     print(f"address        {c.get_address()}")
@@ -324,14 +324,19 @@ def status() -> None:
         print(f"open orders    ERROR {type(e).__name__}: {e}")
     print("\nConfirm the address above is the account holding your USDC "
           "BEFORE sending anything.")
-    _print_requalification_section()
+    _print_requalification_section(registry)
 
 
-def _print_requalification_section() -> None:
-    """Read-only reset marks for the operator (#646). Never writes."""
+def _print_requalification_section(registry=None) -> None:
+    """Read-only reset marks for the operator (#646). Never writes.
+
+    Takes the registry explicitly: the test guard forbids opening the
+    production store implicitly, so a bare `OrderRegistry()` here would
+    fail every suite that calls `status()`.
+    """
     from core_brain.order_registry import OrderRegistry
     try:
-        marks = OrderRegistry().requalification_marks()
+        marks = (registry or OrderRegistry()).requalification_marks()
     except Exception as exc:
         print(f"\nawaiting re-qualification  ERROR {type(exc).__name__}: {exc}")
         return

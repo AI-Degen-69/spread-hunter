@@ -1979,3 +1979,10 @@ def record_shadow_merges(
                 reason="shadow_merge", now_ms=int(time.time() * 1000))
 
     return merged
+
+
+# Plug the shadow factory into the live fill engine's hook (#646). The live
+# side declares the hook so it never imports this module -- the boundary
+# guard forbids it -- and the shadow side registers on import.
+from core_brain.single_buy_saver import register_shadow_reset_ports as _register
+_register(shadow_reset_ports)

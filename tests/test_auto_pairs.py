@@ -384,7 +384,11 @@ def test_poll_preserves_a_trader_persisted_escalation_row(registry):
     )
 
     assert results[0]["action"] == "exited"
-    assert registry.get_lifecycle_state("pair-1").state == "DUAL_RESTING"
+    # #646: the exit no longer assumes flat. The shared proof runs instead,
+    # and without proven-flat reads the row stays HARD_STOP under management
+    # instead of flipping to DUAL_RESTING.
+    assert registry.get_lifecycle_state("pair-1").state == "HARD_STOP"
+    assert results[0]["reset_status"] != "RESET"
     assert any(call.startswith("sell:") for call in client.calls)
     assert not any(call.startswith("buy:") for call in client.calls)
 

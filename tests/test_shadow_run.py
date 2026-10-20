@@ -2143,6 +2143,7 @@ class TestFullCycleRehearsal:
         import time
         from core_brain.order_registry import OrderRegistry
         from core_brain.shadow_run import run_shadow
+        from core_brain.trader_loop import MarketSpecList
 
         db = tmp_path / "shadow.db"
         holder = {"taker": {0: []}, "maker": {0: []}}
@@ -2170,9 +2171,21 @@ class TestFullCycleRehearsal:
             if rotations[0] >= 4:
                 raise KeyboardInterrupt
 
+        # #646: the shadow merge marks the market awaiting re-qualification,
+        # and a plain-list supplier can never clear that mark. The rehearsal
+        # therefore publishes like the real filter does: each rotation carries
+        # a publication newer than any reset, so the mark clears and the
+        # market re-quotes.
+        def _publication(max_markets=None):
+            return MarketSpecList(
+                [FakeMarket(self.COND)],
+                published_mtime_ns=time.time_ns() + 60_000_000_000,
+                condition_ids={self.COND.lower()},
+            )
+
         result = run_shadow(
             minutes=5.0, db_path=db,
-            markets_fn=lambda max_markets=None: [FakeMarket(self.COND)],
+            markets_fn=_publication,
             client_fn=lambda: object(),
             fetch_books=self._books,
             sleep_fn=sleep_fn,
