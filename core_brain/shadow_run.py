@@ -991,13 +991,24 @@ def build_shadow_seam(
             log.warning("shadow uma market_events write failed: %s: %s",
                         type(e).__name__, e)
 
-    return VenueSeam(
+    # One unified pricing seam (#659): every shadow read flows through the
+    # provider, stream-first with REST fallback. The rehearsal wires no
+    # stream, so this reads REST exactly as before — same books, one
+    # contract, and the lifecycle pass below reuses it for decision reads.
+    from core_brain.book_provider import BookProvider
+    book_provider = BookProvider(
+        stream=None,
+        rest_reader=shadow_fetch_books,
+        clob_host=clob_host,
+    )
+
+    seam = VenueSeam(
         client=client,
         registry=registry,
         base_cfg=cfg,
         clob_host=clob_host,
         fetch_market=fetch_market or _default_fetch_market(),
-        fetch_books=shadow_fetch_books,
+        fetch_books=book_provider.fetch_books,
         decide=decide,
         submit_fn=shadow_submit,
         cancel_fn=record_cancel,
@@ -1011,6 +1022,8 @@ def build_shadow_seam(
         fetch_uma_status=fetch_uma_status,
         record_market_event=shadow_record_market_event,
     )
+    seam.book_provider = book_provider
+    return seam
 
 
 def run_shadow(
@@ -1260,12 +1273,15 @@ def run_shadow(
             window_sec=getattr(cfg, "pairs_exit_window_sec", 900.0))
         state_fn = getattr(shadow_sweep, "_market_state_fn", None)
         try:
+            decision_book_fn = getattr(seam, "book_provider", None)
             for pr in manage_single_leg_positions(
                 exec_client, seam.registry, cfg,
                 venue_positions=shadow_positions(seam.registry, db_path),
                 market_state_fn=state_fn,
                 state_cache=getattr(shadow_sweep, "_state_cache", None),
                 resolved_cids=cycle_resolved,
+                decision_book_fn=(decision_book_fn.get_levels_book
+                                  if decision_book_fn is not None else None),
             ):
                 action = pr.get("action", "?")
                 pair_id = pr.get("pair_id") or "?"
