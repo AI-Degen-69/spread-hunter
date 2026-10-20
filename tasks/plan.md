@@ -106,7 +106,7 @@ Branch: i717/remove-retired-reward-vocabulary | Issue: #717
 
 T1 (the money path) unblocks T2 (the sweep + the guard) unblocks T3 (the docs).
 
-- [ ] **T1 (S) [Backend/Logic]** — Reword the four visible strings in `core_brain/quotes.py`,
+- [x] **T1 (S) [Backend/Logic]** — Reword the four visible strings in `core_brain/quotes.py`,
   delete `reward_score()` and its call site, and rewrite the ZERO ALLOCATION comment so it
   names no function that does not exist.
   Targets: `core_brain/quotes.py` only.
@@ -115,7 +115,7 @@ T1 (the money path) unblocks T2 (the sweep + the guard) unblocks T3 (the docs).
   tests/test_legacy_ask_quotes.py tests/test_dynamic_offset.py
   tests/test_completable_pair_gate.py tests/test_market_quote.py`
   plus `python -c "import core_brain.quotes as q; assert not hasattr(q, 'reward_score')"`.
-- [ ] **T2 (S) [Backend/Logic]** — Clear every remaining acceptance-search hit in
+- [x] **T2 (S) [Backend/Logic]** — Clear every remaining acceptance-search hit in
   `core_brain/` and `tests/`, re-point the four transient-refusal pins, and add the
   vocabulary guard test.
   Targets: `core_brain/risk.py:280`, `core_brain/trader_loop.py:118`,
@@ -128,7 +128,7 @@ T1 (the money path) unblocks T2 (the sweep + the guard) unblocks T3 (the docs).
   tests/test_live_quotes.py tests/test_quotes.py tests/test_risk.py
   tests/test_wide_book_trial.py tests/test_rewards_purge.py
   tests/test_unified_universe.py` + the acceptance greps.
-- [ ] **T3 (S) [Docs]** — Drop the retired vocabulary from the operator-facing prose the
+- [x] **T3 (S) [Docs]** — Drop the retired vocabulary from the operator-facing prose the
   change makes false, and record the out-of-scope findings in the ledger.
   Targets: `docs/agents/strategy.md:83` (names `quotes.reward_score()` — false once T1
   lands), `scripts/book_tape_recorder.py:22`, `docs/explanations/grace-hold-explainer.html`

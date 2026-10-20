@@ -19,7 +19,7 @@ because both are properties of the venue rather than of our quoting
      the `max_pair_cost` the risk gate refuses with `>=`. Whether it is ALWAYS
      $0.99 or merely usually decides whether the strategy has an edge to take.
 
-Distances are recorded in TICKS, not cents. The reward window, the offset knobs
+Distances are recorded in TICKS, not cents. The quote window, the offset knobs
 and the config defaults are all written in cents, but the book is quantised in
 ticks and a level is either reachable or it is not; a cent bucket on a 1c-tick
 book is a tick bucket wearing the wrong label, and on a 0.001 book it silently
