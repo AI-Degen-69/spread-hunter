@@ -116,11 +116,11 @@ def test_trial_refuses_a_non_number(mod):
 
 
 def _load_with(mod, monkeypatch, **env):
-    # Cleared through BOTH names of every knob the cases below touch. The canonical
-    # `BOT_*` spread name became live on unpinned runs in #690, so leaving it set
-    # here would let the developer's shell decide what a test asserts.
+    # Cleared through every name, canonical and legacy, of each knob the cases
+    # below touch. The spread name became live on unpinned runs in #690, so
+    # leaving it set here would let the developer's shell decide what a test
+    # asserts.
     for name in ("HUNTER_MARKET", "BOT_MARKET_PINNED_CONDITION_ID",
-                 "HUNTER_MAX_SPREAD", "HUNTER_MAX_SPREAD_CENTS",
                  "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
                  "HUNTER_WIDE_BOOK_TRIAL", "BOT_QUOTE_WIDE_BOOK_TRIAL"):
         monkeypatch.delenv(name, raising=False)
@@ -212,13 +212,13 @@ def test_load_refuses_outright_outside_a_rehearsal(mod, monkeypatch):
 @BOTH
 def test_trial_widens_a_venue_supplied_window_rather_than_replacing_it(
         mod, monkeypatch):
-    # `HUNTER_MAX_SPREAD` carries the venue's own reward window in cents. The
-    # trial takes the wider of the two, so a venue window of 20c survives a
-    # 15c trial.
+    # The 20c window set through the canonical name is wider than a 15c trial.
+    # The trial takes the wider of the two, so that window survives.
     rehearsal.declare_rehearsal()
 
     cfg = _load_with(mod, monkeypatch, HUNTER_MARKET="0xabc",
-                     HUNTER_MAX_SPREAD="20", HUNTER_WIDE_BOOK_TRIAL="0.15")
+                     BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID="20",
+                     HUNTER_WIDE_BOOK_TRIAL="0.15")
 
     assert cfg.max_book_spread == 0.15
     assert cfg.max_spread_from_mid == 0.20

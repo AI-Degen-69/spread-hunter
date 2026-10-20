@@ -605,20 +605,13 @@ class MakerConfig(_ConfigBase):
                 kw["min_quote_shares"] = int(float(ms))
                 kw["quote_shares"] = max(int(float(ms)), 120)
 
-            sp, sp_name = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "HUNTER_MAX_SPREAD_CENTS")
-            if sp is None:
-                sp = os.environ.get("HUNTER_MAX_SPREAD")
-                if sp is not None and sp.strip():
-                    sp_name = "HUNTER_MAX_SPREAD"
-                    logging.getLogger(__name__).warning(
-                        "HUNTER_MAX_SPREAD is deprecated (#632); set HUNTER_MAX_SPREAD_CENTS instead."
-                    )
+            sp, _ = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
             if sp and sp.strip():
                 # Pinned has always been strict here. #707 makes the rejection
                 # cover inf/nan and anything outside 1..99 cents as well, and
                 # names the variable the operator actually set.
                 kw["max_spread_from_mid"] = _bounded_float(
-                    sp_name or "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", sp.strip(), 1.0, 99.0) / 100.0
+                    "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", sp.strip(), 1.0, 99.0) / 100.0
 
             tk, _ = _env_get("BOT_QUOTE_GRID_TICK_SIZE_USD", "HUNTER_PRICE_TICK")
             if tk is None:
@@ -630,14 +623,7 @@ class MakerConfig(_ConfigBase):
             if tk and tk.strip():
                 kw["price_tick"] = float(tk)
 
-        raw_sp_general, sp_general_name = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "HUNTER_MAX_SPREAD_CENTS")
-        if raw_sp_general is None:
-            raw_sp_general = os.environ.get("HUNTER_MAX_SPREAD")
-            if raw_sp_general is not None and raw_sp_general.strip():
-                sp_general_name = "HUNTER_MAX_SPREAD"
-                logging.getLogger(__name__).warning(
-                    "HUNTER_MAX_SPREAD is deprecated (#632); set HUNTER_MAX_SPREAD_CENTS instead."
-                )
+        raw_sp_general, _ = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
         sp_general = raw_sp_general or ""
         if sp_general.strip():
             try:
@@ -651,7 +637,7 @@ class MakerConfig(_ConfigBase):
                 # never a clamp and never a silent ignore -- a silently ignored
                 # value reads as "enforced" while permitting anything.
                 kw["max_spread_from_mid"] = _bounded_float(
-                    sp_general_name or "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
+                    "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
                     sp_general.strip(), 1.0, 99.0) / 100.0
 
         awg, _ = _env_get("BOT_QUOTE_GATE_WIDEN_ON", "HUNTER_APPLY_WIDEN_GATE")

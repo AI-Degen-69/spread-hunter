@@ -1,6 +1,9 @@
-# todo — #709
+# todo - #706
 
-- [ ] T1 marker sentinel + WARNING log + synthetic card in dashboard/server.py
-- [ ] T2 failure + healthy path tests in tests/test_dashboard_server.py (RED→GREEN)
-- [ ] T3 two noticed-but-not-touching rows (THE500, git-workflow doc drift)
-- [ ] T4 push, PR #709, one CodeRabbit round, merge, closeout (detach, delete branch)
+- [x] T1 core_brain/config.py: canonical-only reads, both warnings and name plumbing gone
+- [x] T2 scoring/config.py: canonical-only read, warning and window_name gone
+- [x] T3 tests/test_config_single_source.py: alias/warning tests out, near-miss test in
+- [x] T4 tests/test_wide_book_trial.py: helper + widening test on the canonical name
+- [x] T5 .env.example, docs/agents/glossary.md, #707 ledger N3 status
+- [x] T6 docs/issues/706-noticed-but-not-touching.md
+- [ ] T7 push, PR #706, one CodeRabbit round, merge, closeout

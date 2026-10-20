@@ -200,22 +200,19 @@ def load() -> MakerConfig:
     # WIDTH wide books are refused on, derived from
     # `max_book_spread * select_spread_pct`. It must never read this value: a
     # distance-from-mid window and a bid-ask width are different measurements.
-    sp, sp_name = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD")
-    if sp_name == "HUNTER_MAX_SPREAD" and sp and sp.strip():
-        logging.getLogger(__name__).warning(
-            "HUNTER_MAX_SPREAD is deprecated (#632); set BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID instead."
-        )
+    sp, _ = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
     if sp and sp.strip():
-        window_name = sp_name or "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID"
         if cid:
-            kw["max_spread_from_mid"] = _bounded_float(window_name, sp.strip(), 1.0, 99.0) / 100.0
+            kw["max_spread_from_mid"] = _bounded_float(
+                "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", sp.strip(), 1.0, 99.0) / 100.0
         else:
             try:
                 cents = float(sp)
             except ValueError:
                 cents = None
             if cents is not None:
-                kw["max_spread_from_mid"] = _bounded_float(window_name, sp.strip(), 1.0, 99.0) / 100.0
+                kw["max_spread_from_mid"] = _bounded_float(
+                    "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", sp.strip(), 1.0, 99.0) / 100.0
     wide_raw, wide_name = _env_get("BOT_QUOTE_WIDE_BOOK_TRIAL", "HUNTER_WIDE_BOOK_TRIAL")
     wide = resolve_wide_book_trial(wide_raw or "", var_name=wide_name or "HUNTER_WIDE_BOOK_TRIAL")
     if wide is not None and wide > 0:
