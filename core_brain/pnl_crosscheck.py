@@ -52,9 +52,20 @@ ASC_TYPES = ("MERGE", "SPLIT")
 CASH_IN_TYPES = ("SELL", "MERGE", "REDEEM")
 CASH_OUT_TYPES = ("BUY", "SPLIT")
 
-# Platform credits. Kept apart from trading cashflow so the headline figure is
-# reproducible from trades alone; `pnl_inclusive` adds them back.
-CREDIT_TYPES = ("REBATE", "MAKER_REBATE", "REWARD", "REFERRAL_REWARD", "CONVERSION")
+# Platform credits (`CREDIT_TYPES`) vs requested feed types (`ACTIVITY_TYPES`).
+# The first decides credit versus trading cashflow; the second decides what
+# `replay_cashflow()` requests from the venue's `/activity` feed. Every credit
+# type is also requested, so the two lists agree — a credit can never go
+# missing from the cashflow the replay exists to measure. Credits stay apart
+# from trading cashflow so the headline figure is reproducible from trades
+# alone; `pnl_inclusive` adds them back.
+# Bare `REBATE` is absent on purpose: the documented `/activity` type enum
+# (https://docs.polymarket.com/api-reference/core/get-user-activity) lists
+# TRADE, SPLIT, MERGE, REDEEM, REWARD, CONVERSION, DEPOSIT, WITHDRAWAL, YIELD,
+# MAKER_REBATE, TAKER_REBATE and REFERRAL_REWARD — no bare `REBATE`. An
+# unexpected bare `REBATE` row is therefore unreadable, the replay is
+# incomplete and the verdict is `UNJUDGED`; the row is never silently dropped.
+CREDIT_TYPES = ("MAKER_REBATE", "REWARD", "REFERRAL_REWARD", "CONVERSION")
 
 ACTIVITY_TYPES = ("TRADE", "MERGE", "SPLIT", "REDEEM", "REWARD",
                   "MAKER_REBATE", "REFERRAL_REWARD", "CONVERSION")
