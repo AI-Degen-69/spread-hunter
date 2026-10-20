@@ -542,14 +542,16 @@ def test_unpinned_runs_read_the_spread_window_from_the_environment(monkeypatch):
 
 
 def test_unpinned_bad_spread_values_are_inactive_not_enforced(monkeypatch):
-    """#690: garbage, zero and negatives fall back to the default -- they do not raise.
+    """#707 narrowed this: only a NON-NUMBER falls back now, never a bad number.
 
-    The pinned branch stays strict and raises; this is the engine's tolerant rule,
-    adopted for unpinned runs so a ranker that starts cleanly today cannot start
-    crashing on a typo. A blank name counts as unset.
+    #690 made unpinned runs tolerant so a ranker that starts cleanly today cannot
+    start crashing on a typo. `0` and `-5` used to ride along with that tolerance
+    and were silently dropped; #707 makes them rejections on both paths, because a
+    value the operator set that is quietly ignored reads as "enforced" while
+    permitting anything. A blank name still counts as unset.
     """
     _clear_execution_env(monkeypatch)
-    for raw in ("", "wide", "0", "-5"):
+    for raw in ("", "wide"):
         monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", raw)
         assert scoring_config.load().max_spread_from_mid == 0.045, raw
 
@@ -575,11 +577,11 @@ def test_unpinned_legacy_spread_warns_once(monkeypatch, caplog):
 def test_unpinned_scoring_and_engine_load_the_same_window(monkeypatch):
     """#690: parity with `core_brain.config.load()`, including its quirks.
 
-    `inf` is in the matrix on purpose: the engine's tolerant read applies any
-    `cents > 0`, and `inf` passes. Scoring mirrors that instead of inventing a
-    stricter rule the money path does not follow. An unusable value is inactive on
-    both sides, so each keeps its own default -- the assertion there is
-    "unchanged", not "equal", because the two defaults differ by design.
+    An unusable value is inactive on both sides, so each keeps its own default --
+    the assertion there is "unchanged", not "equal", because the two defaults
+    differ by design. `inf` was in the matrix in #690 because the engine's
+    tolerant read applied any `cents > 0`; #707 retired that case and moved it to
+    the rejection tests below.
     """
     _clear_execution_env(monkeypatch)
 
@@ -593,9 +595,96 @@ def test_unpinned_scoring_and_engine_load_the_same_window(monkeypatch):
     assert scoring_config.load().max_spread_from_mid == 0.045
     assert core_config.load().max_spread_from_mid == 0.15
 
-    monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "inf")
-    assert scoring_config.load().max_spread_from_mid == float("inf")
-    assert core_config.load().max_spread_from_mid == float("inf")
+
+# ============================================================================
+# #707: the spread window is validated -- 1..99 cents, never inf or nan
+# ============================================================================
+
+
+_BOTH_LOADERS = pytest.mark.parametrize(
+    "mod", [core_config, scoring_config], ids=["core_brain", "scoring"])
+_BOTH_PATHS = pytest.mark.parametrize("pinned", [False, True], ids=["unpinned", "pinned"])
+
+
+def _spread_window(mod, monkeypatch, raw, *, pinned, var="BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID"):
+    """Load `mod` with the window set through `var`, blank raw meaning unset.
+
+    The value is in CENTS: `1` is `0.01`, `99` is `0.99`. The rejection names the
+    variable the operator actually set, so the alias cases set `var` too.
+    """
+    _clear_execution_env(monkeypatch)
+    if pinned:
+        monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned")
+    if raw:
+        monkeypatch.setenv(var, raw)
+    return mod.load()
+
+
+@_BOTH_LOADERS
+@_BOTH_PATHS
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("1", 0.01), ("99", 0.99), ("7.5", 0.075), ("22", 0.22)],
+    ids=["one_cent", "ninety_nine", "half_cent", "twenty_two"],
+)
+def test_spread_window_accepts_one_to_ninety_nine_cents(mod, monkeypatch, pinned, raw, expected):
+    """#707: both loaders, pinned and unpinned, store the ticket's 0.01..0.99 bounds."""
+    assert _spread_window(mod, monkeypatch, raw, pinned=pinned).max_spread_from_mid \
+        == pytest.approx(expected)
+
+
+@_BOTH_LOADERS
+@_BOTH_PATHS
+@pytest.mark.parametrize(
+    "raw", ["0", "100", "inf", "nan", "-inf", "-5", "0.5"],
+    ids=["zero", "one_dollar", "pos_inf", "nan", "neg_inf", "negative", "half_a_cent"],
+)
+def test_spread_window_rejects_bad_numbers_on_both_paths(mod, monkeypatch, pinned, raw):
+    """#707: a bad NUMBER is rejected, never clamped and never silently ignored.
+
+    `0` and negatives used to be dropped by the tolerant read while `inf` set an
+    infinite window -- the panel then read "enforced" while anything was allowed.
+    """
+    with pytest.raises(ValueError, match="BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID"):
+        _spread_window(mod, monkeypatch, raw, pinned=pinned)
+
+
+@_BOTH_LOADERS
+def test_spread_window_rejection_names_the_variable_and_the_value(mod, monkeypatch):
+    """#707: the message is what #709 can surface, so it carries both."""
+    with pytest.raises(ValueError) as exc:
+        _spread_window(mod, monkeypatch, "inf", pinned=False)
+    assert str(exc.value) == "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID='inf' is not finite"
+
+    with pytest.raises(ValueError) as exc:
+        _spread_window(mod, monkeypatch, "100", pinned=False)
+    assert "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID='100' is outside 1..99" in str(exc.value)
+
+    with pytest.raises(ValueError) as exc:
+        _spread_window(mod, monkeypatch, "0", pinned=True)
+    assert "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID='0' is outside 1..99" in str(exc.value)
+
+
+@_BOTH_LOADERS
+@pytest.mark.parametrize("var", ["HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD"])
+def test_spread_window_rejection_names_the_alias_that_supplied_it(mod, monkeypatch, var):
+    """#707 validates the RESOLVED value, so the error names the winning alias (#706 keeps them)."""
+    with pytest.raises(ValueError, match=f"{var}='inf' is not finite"):
+        _spread_window(mod, monkeypatch, "inf", pinned=False, var=var)
+
+
+@_BOTH_LOADERS
+def test_a_typo_in_the_spread_window_keeps_its_per_path_behaviour(mod, monkeypatch):
+    """#690's rule survives #707: unpinned a typo is inactive, pinned it still raises.
+
+    Only non-numbers are tolerated, and only unpinned. The pinned load has raised
+    on a typo since the beginning, and it now names the variable while doing it.
+    """
+    default = 0.15 if mod is core_config else 0.045
+    assert _spread_window(mod, monkeypatch, "wide", pinned=False).max_spread_from_mid == default
+
+    with pytest.raises(ValueError, match="BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID='wide' is not a number"):
+        _spread_window(mod, monkeypatch, "wide", pinned=True)
 
 
 @pytest.mark.parametrize(

@@ -1,45 +1,56 @@
-# Quality Guardrails & Constraints — Issue #690
-Branch: `i690/apply-spread-bar-at-market-filter` | Issue: `#690` (resolves #674 ledger item N2)
+# Quality Guardrails & Constraints — Issue #707
+
+Branch: `i707/validate-max-spread-from-mid-range` | Issue: `#707` (resolves ledger item O3 of #690)
 
 ## 1. Zero Regressions & Verification Gates
 - **Targeted suites** (run locally during build; the full suite is the GitHub CI merge gate):
   - `python -m pytest -q tests/test_config_single_source.py`
-  - `python -m pytest -q tests/test_wide_book_trial.py`
-  - `python -m pytest -q tests/test_redesigned_filter_pipeline.py`
-  - `python -m pytest -q tests/test_market_selection_bars.py`
-  - `python -m pytest -q tests/test_dashboard_server.py`
-- **Every changed behaviour needs a test that fails without it.** The unpinned read, the trial
-  `max(window, wide)`, and the 50/53 rejection + reason path each require one.
-- **Existing pinned cases stay byte-identical** — they are the proof AC-2 held.
+  - `python -m pytest -q tests/test_wide_book_trial.py tests/test_config_for_display.py tests/test_redesigned_filter_pipeline.py tests/test_config_divergence_guard.py`
+- **Every changed behaviour needs a test that fails without it.** The acceptance boundary, the
+  rejection of `inf`/`nan`/out-of-range, the alias-naming message, and the preserved per-path
+  typo rule each have one (`tests/test_config_single_source.py`, `#707` section).
 
 ## 2. Invariants
+- **The environment unit does not move.** The value stays in **cents**; `1..99` cents is stored as
+  `0.01..0.99`. `scripts/shadow_tournament.py:245` writes whole cents and `.env.example` ships `15`.
+- **Reject, never clamp, never silently ignore.** `_bounded_float` is the only validator; the
+  message names the variable the operator actually set (canonical or alias) and the value.
 - **Two measures, never mixed.** `filter_common_spread_max_cents` = `0.0205` owns wide-book
   rejection. `max_spread_from_mid` is a distance-from-mid quoting window. Do **not** pass
   `max_spread_from_mid` to `pair_books_allowed()` / `book_allowed()`, and do not feed it into
   `MAX_BOOK_SPREAD`.
 - **The ceiling does not move.** `0.0205`, `max_book_spread = 0.06`, `select_spread_pct = 41/120`,
-  and the trial bound `0.30` are untouchable in this change.
-- **Pinned = strict, unpinned = tolerant.** Pinned keeps `float(v) / 100.0` and its raise. Unpinned
-  mirrors `core_brain/config.py:636-642` exactly — including that `inf` passes parity. Do not
-  "improve" the engine's rule here.
-- **Order matters.** The lifted read must precede the wide-book trial block so `max(window, wide)`
-  sees the loaded value on unpinned runs.
-- **One warning per load.** `HUNTER_MAX_SPREAD is deprecated (#632); set
-  BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID instead.` — byte-identical, emitted once, now on both paths.
-- **No ranker admission change.** Eligibility, scoring, ordering, and rejection reasons must be
-  identical before and after for any given book.
-- **Strict file boundary.** Do **not** touch `core_brain/trader_loop.py`, `core_brain/order_manager.py`,
-  `core_brain/quotes.py`, `dashboard/static/app.js`, or any endpoint. `scripts/filter_markets.py`
-  changes are **comments only** — `rg -n "MAX_BOOK_SPREAD" scripts/filter_markets.py` must show the
-  same six call sites afterwards.
-- **No venue contact in tests or verification.** Zero orders, zero `BRIDGE_CONTROL`, no dashboard
-  START. Tests stay offline; `tests/conftest.py` blocks network.
+  the trial bound `0.30` and `max_pair_cost` are untouchable in this change.
+- **The two shipped defaults do not move.** Ranker `0.045`, engine `0.15`, pinned by
+  `tests/test_config_single_source.py:525,594`. The wide-book trial is not validated here: its own
+  bound (`0.0..0.30`) already keeps `max(window, wide)` inside the validated range.
+- **The alias chain is untouched.** `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID` →
+  `HUNTER_MAX_SPREAD_CENTS` → `HUNTER_MAX_SPREAD`, same order, same warnings. #706 removes the
+  aliases; this PR must behave identically before and after it.
+- **The loader RULES stay per-path, deliberately.** Pinned is strict (a typo raises, as it always
+  has). Unpinned keeps #690's rule that a *typographical* (non-number) value is inactive rather
+  than enforced-at-zero, now pinned with its reason in the test file.
+- **Strict file boundary.** No `dashboard/` change (an illegal value makes the dashboard's
+  `scoring.config.load()` guard fall back to engine numbers; #709 owns surfacing it), no change to
+  `core_brain/config.py`'s trial-knob block, `scoring/config.py`'s copy of `_bounded_float` stays a
+  copy.
+- **No venue contact in tests.** Zero orders, zero `BRIDGE_CONTROL`, no dashboard START.
 
 ## 3. Anti-Cheat & Quality Rules
 - No test skipping, no muted assertions, no deleted checks, no lint/type suppressions.
-- Do not weaken an existing assertion to make the new read pass — if a pinned test breaks, the branch
-  is wrong, not the test.
-- No new external dependency.
-- **Operator verification is hands-on only.** Never ask the operator to run `pytest`, `gh`, or `git`.
-  Point them at `runtime/previews/spread-follow-up/market_universe.json`, the parity one-liner in
-  `tasks/plan.md` §8, and the untouched `runtime/markets.json`.
+- Repinning `test_unpinned_bad_spread_values_are_inactive_not_enforced` and the `inf` parity case is
+  a **deliberate** change of the old contract, not a weakened assertion: the ticket's AC
+  ("values outside 0.01–0.99 are rejected, not silently clamped") supersedes #690's tolerance for
+  bad numbers. The docstring states the reason inline.
+
+## 4. Deliberate Decisions (do not "fix" these in Stations IV–V)
+- **The `0` boundary is a rejection (option (a)).** The operator directive is "can only be
+  0.01–0.99", and silently ignoring a value the operator set is the silent-lie pattern #709 exists
+  to kill. `0`, `-5`, `0.5`, `100`, `inf`, `nan`, `-inf` all raise; only a non-number stays
+  inactive, and only on the unpinned path.
+- **The engine keeps both reads** (pinned branch + the general read that always runs). The pinned
+  read's strictness is preserved rather than deleted, so the diff adds a range check and changes no
+  other pinned behaviour -- including the existing duplicate `HUNTER_MAX_SPREAD` warning count.
+- **A pinned typo now names the variable** (`... is not a number` from `_bounded_float`) instead of
+  Python's bare `could not convert string to float`. Still a raise, better message, no test pinned
+  the old text.

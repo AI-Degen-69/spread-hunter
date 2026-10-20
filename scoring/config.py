@@ -187,9 +187,12 @@ def load() -> MakerConfig:
     # The loader RULE is matched here, not the default: this class ships 4.5c
     # where core ships 15c, on purpose. Pinned stays strict -- `float()` raises,
     # the pinned contract since the beginning. Unpinned mirrors the engine:
-    # malformed text and values of zero or less are INACTIVE, not
-    # enforced-at-zero, so a typo neither crashes a ranker that starts cleanly
-    # today nor narrows the window to something that refuses every quote.
+    # malformed text is INACTIVE, not enforced-at-zero, so a typo neither crashes
+    # a ranker that starts cleanly today nor narrows the window to something that
+    # refuses every quote. Non-numbers are the only tolerated input: #707 makes
+    # `inf`, `nan` and a number outside 1..99 cents a rejection on both paths, so
+    # a value the operator set can never be silently dropped (#709 surfaces the
+    # rejection the dashboard currently swallows).
     #
     # NOT the book gate. `filter_common_spread_max_cents` (2.05c) is the bid-ask
     # WIDTH wide books are refused on, derived from
@@ -201,15 +204,16 @@ def load() -> MakerConfig:
             "HUNTER_MAX_SPREAD is deprecated (#632); set BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID instead."
         )
     if sp and sp.strip():
+        window_name = sp_name or "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID"
         if cid:
-            kw["max_spread_from_mid"] = float(sp) / 100.0
+            kw["max_spread_from_mid"] = _bounded_float(window_name, sp.strip(), 1.0, 99.0) / 100.0
         else:
             try:
                 cents = float(sp)
             except ValueError:
-                cents = 0.0
-            if cents > 0:
-                kw["max_spread_from_mid"] = cents / 100.0
+                cents = None
+            if cents is not None:
+                kw["max_spread_from_mid"] = _bounded_float(window_name, sp.strip(), 1.0, 99.0) / 100.0
     wide_raw, wide_name = _env_get("BOT_QUOTE_WIDE_BOOK_TRIAL", "HUNTER_WIDE_BOOK_TRIAL")
     wide = resolve_wide_book_trial(wide_raw or "", var_name=wide_name or "HUNTER_WIDE_BOOK_TRIAL")
     if wide is not None and wide > 0:
