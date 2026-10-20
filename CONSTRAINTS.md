@@ -1,51 +1,56 @@
-Branch: i708/unify-spread-docstring | Issue: #708
+Branch: i646/unified-reset-path | Issue: #646
 
-# Constraints - #708 unify the max_spread_from_mid description, triage rebate dead code
+# Constraints — #646 unified reset path with filter re-qualification
 
-Two housekeeping items from #690 O4: one field documented three different ways, and a
-`grep rebate` full of references to a model the strategy no longer uses.
+One guarded reset that live merges, shadow merges, and stop exits all go
+through: prove flat from real reads, clear the lifecycle row, mark the market
+awaiting re-qualification. No new entry quotes until a newer published
+universe includes the market.
 
 ## The bar
 
-- `max_spread_from_mid` carries **one** description, byte-identical in
-  `scoring/config.py` and `core_brain/config.py`, and a guard test pins that equality.
-- The description states the field's real role: **the largest allowed distance between
-  the book midpoint and our resting quote**. It does not say "rebate" and does not say
-  "market selection" -- the issue's own wording is wrong, and `CONSTRAINTS.md` (#706,
-  "Untouched") already pins the field as a distance-from-mid quoting window.
-- **No value, default, env var name, parse rule or validation changes.** Engine default
-  0.15, picker default 0.045, the `max(window, wide)` trial rule, the 1..99 cent bound
-  and the pinned/unpinned split all stay exactly as they are.
-- **No behavioural change** to KPI output, PnL crosscheck or fee math. `rebate_est`
-  stays `None`, `total_with_rebate` stays `realized_pnl`, the fee tier math is untouched.
-- Every `rebate` reference ends up either **kept with a written justification** in
-  `docs/issues/708-noticed-but-not-touching.md` or removed. No reference is left
-  unexplained.
-- `scoring/allocate.py` is deleted: no tracked importer, no test, retired reward-pot
-  model. The deletion is pinned by a `find_spec("scoring.allocate") is None` guard.
+- Reset proves flat from **real reads only**: net ledger inventory
+  (`inventory_from_registry`, fills minus closes) **and** both token balances
+  at or below `SIZE_EPS`. A `venue_positions is None` read never counts as
+  zero — it yields `UNAVAILABLE`/`REFUSED` and the market stays managed.
+- `PAIR_LOCKED`, `route_to_merge`, and `exited` alone are **never** proof of
+  flat. Only the reads count.
+- `finish` is atomic: delete of all `single_leg_lifecycle` rows for the
+  condition + `awaiting` mark land in **one `BEGIN IMMEDIATE` transaction**,
+  conditional on the generation. Stale generations clear nothing.
+- Begin (`resetting`) blocks fresh entries **before** cancellation starts; any
+  non-`RESET` outcome abandons the block and leaves lifecycle rows untouched.
+- Live merge resets only after `EXECUTED` **and** a successful `log_close`
+  write. Shadow merge resets only after close + leg writes commit. Stop exit
+  resets only after `_record_exit_close` on `action="exited"`.
+- Partial/unequal merges, partial stops, and late fills after cancel
+  **block** the reset; the market stays under the existing manager.
+- Entry gate fails closed: a `sqlite3.Error` from `requalification_marks()`
+  blocks fresh entries for the cycle. Hedges, exits, and restores keep
+  working. Legacy no-metadata `markets_fn` suppliers never clear a mark.
+- Only a publication **strictly newer** than `reset_ts_ms` that includes the
+  market clears its mark; a newer publication that excludes it drops the
+  market from trading but keeps the mark.
+- The `#634` lifecycle assertions in `tests/test_single_leg_lifecycle.py`
+  and `tests/test_single_buy_saver.py` stay green, or change only
+  deliberately with the reason recorded in the plan.
+- Every new behavior ships with a test that **fails without the change**.
 
 ## Deliberate non-changes (a later reviewer must not "fix" these back)
 
-- The **visible message strings** in `core_brain/quotes.py` that say "reward window" and
-  "reward quote ... score N" are output the operator reads. Rewording them is a separate
-  change to visible output; they are recorded in the ledger.
-- `quotes.reward_score()` stays: a legacy diagnostic that feeds no sizing decision.
-- `kpi.py`'s `rebate_est` / `rebate_est_note` / `total_with_rebate` keys stay: they are
-  the emitted schema, and `None` is the honest value on graduated spread markets.
-- `pnl_crosscheck.py`'s `CREDIT_TYPES` / `ACTIVITY_TYPES` / `maker_rebates` stay: real
-  venue credits flow through them and `tests/test_pnl_crosscheck.py` covers them.
-- `venue_fees.py`'s rebate sign-safety comment stays: the fee-tier math is load-bearing.
-- `scoring/config.py`'s line "Maker rewards/rebates are $0.00 in graduated spread
-  markets" stays: it is accurate.
-- Historical records stay: old measured-run comments, the dashboard explainer line, the
-  validation artifacts and the prompt that forbids inventing rebate income.
-- `docs/issues/690-noticed-but-not-touching.md` was **pruned from the repo** in e2f648e
-  ("prune stale worktrees and closed-issue artifacts" -- every closed issue's ledger was
-  deleted). It is NOT resurrected here. #690 O4 is closed by this ticket's own ledger.
+- Orders, fills, and closes history are never rewritten by a reset.
+- `scripts/filter_markets.py` and `_publish_json` are untouched; the filter
+  loop stays the only publication entry point, file stays a bare JSON list.
+- No tiered poller, no second-leg repricing, no slippage measurement
+  (out-of-scope rows go to `docs/issues/646-noticed-but-not-touching.md`).
+- No tier list for #621 is built here; `requalification_marks()` (incl.
+  exclusion records) is the documented contract #621 will read.
 
 ## Process
 
-- No live command, no venue call, no write to `data/orders.db`.
-- No direct push to `main`; the change ships through a PR.
-- Targeted suites locally only; GitHub CI on Ubuntu and Windows is the merge gate.
+- No live/opening commands (`quote`, `complete`, Trader loop, START).
+- Never touch `data/orders.db`; shadow work uses a fresh isolated store.
+- Targeted suites locally only; GitHub CI (Ubuntu + Windows) is the merge gate.
 - No `pytest` / `gh` / `git` step inside the operator's "How to verify".
+- Narrow `except` clauses only (`PairExitRefused`, `ExposureUnavailable`,
+  `sqlite3.Error`); unit-suffixed time names (`now_ms`, `reset_ts_ms`).
