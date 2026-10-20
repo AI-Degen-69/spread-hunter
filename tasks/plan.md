@@ -81,11 +81,11 @@ Authored in `scoring/config.py` above the field; mirrored byte-identically in
 
 ## Tasks
 
-### Task 1 - one description, in both configs and in the engine's prose
+### Task 1 - one description, in both configs and in the engine's prose [x]
 
 - **Size:** M. **Tag:** [Docs] / [Backend/Logic] (comments only).
 - **Files:** `scoring/config.py`, `core_brain/config.py`, `core_brain/quotes.py`,
-  `core_brain/trader_loop.py`.
+  `core_brain/trader_loop.py`, `tests/test_wide_book_trial.py` (test descriptions).
 - **What:**
   - `scoring/config.py`: replace the "4.5c maximum offset from mid ..." line with the
     canonical block; keep the `min_quote_shares` and `max_pair_cost` lines.
@@ -103,7 +103,7 @@ Authored in `scoring/config.py` above the field; mirrored byte-identically in
 - **Verification:** `python -m pytest -q tests/test_config_single_source.py
   tests/test_wide_book_trial.py` plus the new guard from Task 2.
 
-### Task 2 - guard the description's equality
+### Task 2 - guard the description's equality [x]
 
 - **Size:** S. **Tag:** [Backend/Logic].
 - **File:** `tests/test_config_single_source.py`.
@@ -114,7 +114,7 @@ Authored in `scoring/config.py` above the field; mirrored byte-identically in
 - **Depends on:** Task 1.
 - **Verification:** `python -m pytest -q tests/test_config_single_source.py`.
 
-### Task 3 - rebate triage: correct the stale prose, delete the dead allocator
+### Task 3 - rebate triage: correct the stale prose, delete the dead allocator [x]
 
 - **Size:** M. **Tag:** [Docs] / [Code].
 - **Files:** `core_brain/pnl_crosscheck.py` (module docstring only), `docs/agents/strategy.md`
@@ -143,7 +143,7 @@ Authored in `scoring/config.py` above the field; mirrored byte-identically in
 - **Verification:** `python -m pytest -q tests/test_rewards_purge.py
   tests/test_pnl_crosscheck.py tests/test_venue_fees.py` plus the new guards (Task 4).
 
-### Task 4 - the guards that prove nothing changed, and the ledger
+### Task 4 - the guards that prove nothing changed, and the ledger [x]
 
 - **Size:** S. **Tag:** [Backend/Logic] / [Docs].
 - **Files:** `tests/test_rewards_purge.py`, `tests/test_milestone7_telemetry.py`,
@@ -191,3 +191,23 @@ Recorded in `docs/issues/708-noticed-but-not-touching.md` (Task 4), not fixed he
 the visible "reward window" / "score N" quote messages, `quotes.reward_score()`, the
 `reward_offset` / `min_reward_offset` renames, the literal `REBATE` missing from
 `ACTIVITY_TYPES`, and #690 O1's hardcoded "(15c)" dashboard card text.
+
+## Deviations from the plan (Station III)
+
+1. **`tests/test_wide_book_trial.py` moved into Task 1** (it was unlisted). The issue's
+   Part A names the test description explicitly, and it describes the same field, so it
+   belongs with the description it now matches.
+2. **#690's ledger was not resurrected.** The plan (from the CodeRabbit comment) wanted
+   the O4 status cell of `docs/issues/690-noticed-but-not-touching.md` changed. That file
+   was deleted in e2f648e, which removed every closed issue's ledger. The row is recorded
+   in this ticket's own ledger instead.
+3. **`tests/test_docs_layout.py` was repaired in this branch (out of scope, disclosed).**
+   The e2f648e sweep deleted every showcase artifact under `docs/issues/`, and that
+   commit's own test - `test_showcases_live_in_docs_issues`, which required four named
+   files to exist - has been failing on `main` since. The merge gate cannot be green
+   while `main` is red, so the sentinel now proves the pattern is alive instead of
+   pinning files the repo deliberately deletes. No other test behaviour changed.
+4. **The canonical description avoids the words "rebate" and "market selection"**, even
+   in the negative ("it is NOT a market-selection filter"), because the operator's
+   check for this ticket is a literal look for those words. The meaning is unchanged:
+   the field is not a filter on which markets we quote.
