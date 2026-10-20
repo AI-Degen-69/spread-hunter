@@ -2061,3 +2061,39 @@ def test_saver_forwards_canonical_emergency_drawdown(registry: OrderRegistry):
 
     for w in recorded:
         assert "emergency_drawdown_pct is deprecated" not in str(w.message)
+
+
+def test_manage_held_bid_uses_decision_book_fn_when_wired(registry: OrderRegistry):
+    """#659: the lifecycle decision read rides the provider; exits stay fresh."""
+    from core_brain.single_buy_saver import manage_single_leg_positions
+
+    _one_sided_pair(registry, filled_size=10.0, fill_price=0.55)
+    decision_calls: list[str] = []
+
+    def decision_book_fn(token_id):
+        decision_calls.append(token_id)
+        return {"bids": [{"price": "0.50", "size": "25"}],
+                "asks": [{"price": "0.52", "size": "25"}]}
+
+    client = FakeClient(best_ask=0.40, best_bid=0.55)
+    cfg = MakerConfig()
+    results = manage_single_leg_positions(
+        client, registry, cfg, live=False, now=1010.0,
+        decision_book_fn=decision_book_fn,
+    )
+    assert decision_calls == [TOK_UP]
+    assert not any(c == f"book:{TOK_UP}" for c in client.calls)
+    assert results
+
+
+def test_manage_held_bid_falls_back_to_client_without_decision_fn(
+        registry: OrderRegistry):
+    """Unwired callers keep today's behavior exactly."""
+    from core_brain.single_buy_saver import manage_single_leg_positions
+
+    _one_sided_pair(registry, filled_size=10.0, fill_price=0.55)
+    client = FakeClient(best_ask=0.40, best_bid=0.55)
+    results = manage_single_leg_positions(
+        client, registry, MakerConfig(), live=False, now=1010.0)
+    assert f"book:{TOK_UP}" in client.calls
+    assert results
