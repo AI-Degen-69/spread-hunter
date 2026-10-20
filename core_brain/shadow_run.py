@@ -1899,18 +1899,19 @@ def main(
         resolved_markets_fn = (lambda max_markets=None:
                                _default_markets_fn()(a.max_markets))
     # Books come from the live market socket by default (#659 N2); --no-stream
-    # reproduces a pre-#659 rehearsal. Either way the heartbeat reports the
+    # reproduces a pre-#659 rehearsal. Either way the heartbeat carries the
     # stream/REST mix, so the two are distinguishable after the fact.
-    # An injected REST reader means the caller brought its own source: opening
-    # a socket underneath it would be the "live read by surprise" this module
-    # refuses at `flow_fn`. The CLI injects nothing, so the operator's rehearsal
-    # gets the stream; an embedding caller or a test that supplied `fetch_books`
-    # keeps reading exactly what it wired.
     #
-    # `stream_factory` stays explicit for the two cases that need it: a caller
-    # that wants a stream with its own REST reader, and a test that must not
-    # touch the network (the socket starts a thread eagerly, so unlike the
-    # other live ports it cannot wait for a lazy read).
+    # An injected REST reader means the caller brought its own source: opening a
+    # socket underneath it would be the "live read by surprise" this module
+    # refuses at `flow_fn`. The CLI injects nothing, so the operator's rehearsal
+    # gets the stream while an embedding caller or a test that supplied
+    # `fetch_books` keeps reading exactly what it wired.
+    #
+    # `stream_factory` is the way out of both rules, for a caller that wants a
+    # stream with its own reader and for a test that must stay off the network
+    # (the socket starts a thread eagerly -- unlike the other live ports, it
+    # cannot wait for a lazy read).
     make_stream = stream_factory if stream_factory is not None else _start_shadow_stream
     if a.no_stream or fetch_books is not None:
         shadow_stream = None
