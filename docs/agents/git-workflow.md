@@ -56,7 +56,6 @@ Body template:
 One or two sentences. What was wrong, or what was missing.
 
 ## Test output
-
 ```
 python -m pytest -q tests/test_<module>.py
 <paste the real targeted-test output>
@@ -68,6 +67,8 @@ full-suite output is not required at the review/PR stations.
 ## How to verify
 
 <the same How to verify block given to the operator — see docs/agents/verifying.md>
+
+Closes #<issue>
 ````
 
 After opening, post `@coderabbitai review` as its own comment — that is what triggers the
@@ -82,7 +83,7 @@ would silently override every UI setting.
 
 #### Where the handle is allowed
 
-`@coderabbitai` may appear in exactly four places, and nowhere else:
+`@coderabbitai` may appear in exactly two places, and nowhere else:
 
 | Use | Where |
 | --- | --- |
