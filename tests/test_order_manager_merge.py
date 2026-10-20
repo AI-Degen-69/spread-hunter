@@ -257,3 +257,164 @@ def test_redeem_idempotency_guard_refuses_prior_submitted(tmp_path):
     with patch.object(le, "RUN", tmp_path), \
          patch.object(le, "get_payout_denominator", return_value=1):
         le.redeem(cond_id, force=True, live=False)
+
+
+# ── #646 live-merge reset ──────────────────────────────────────────────────
+
+from core_brain.order_registry import OrderRegistry as _RealRegistry
+
+COND_MERGE = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+
+
+def _merge_tokens(cond_id):
+    from core_brain.merge_pairs import (
+        USDC_E_CONTRACT, ZERO_BYTES32, get_collection_id, get_position_id,
+    )
+    return [
+        get_position_id(USDC_E_CONTRACT,
+                        get_collection_id(ZERO_BYTES32, cond_id, idx))
+        for idx in (1, 2)
+    ]
+
+
+class FakeMergeClient:
+    """CLOB double for the merge path. No network."""
+
+    def __init__(self, balance_shares=10.0):
+        self.creds = object()
+        self.balance_shares = balance_shares
+        self.cancelled: list[str] = []
+
+    def get_balance_allowance(self, params):
+        return {"balance": str(int(self.balance_shares * 1e6))}
+
+    def get_open_orders(self):
+        return []
+
+    def get_trades(self, params=None):
+        return []
+
+    def cancel_order(self, payload):
+        self.cancelled.append(str(getattr(payload, "orderID", payload)))
+        return {"success": True}
+
+
+def _seed_merged_pair(reg, cond_id, up_token, dn_token,
+                      up_shares=10.0, dn_shares=10.0):
+    """Two filled legs plus the quotes ledger the merge close needs."""
+    import uuid as _uuid
+    from core_brain.order_registry import FillRecord, OrderRecord, QuoteRecord
+    now = 1_000_000
+    for tok, side, price, shares in ((up_token, "UP", 0.47, up_shares),
+                                     (dn_token, "DOWN", 0.51, dn_shares)):
+        order = OrderRecord(
+            id=str(_uuid.uuid4()), order_id=f"venue-{tok[-6:]}",
+            condition_id=cond_id, token_id=tok, side="BUY", price=price,
+            original_size=shares, status="filled", posted_ts=now,
+            last_polled_ts=now, pair_id="pair-merge",
+            max_pair_cost_at_post=0.995,
+        )
+        reg.create_order(order)
+        reg.record_fill(FillRecord(
+            trade_id=f"trade-{order.id}", order_uuid=order.id, size=shares,
+            price=price, venue_ts=now))
+        reg.log_quote(QuoteRecord(
+            ts=now / 1000.0, condition_id=cond_id, token_id=tok, side=side,
+            price=price, size=shares))
+
+
+def _live_merge(monkeypatch, tmp_path, reg, *, submit_state="STATE_EXECUTED",
+                positions=None, amount=10.0, balance_shares=10.0,
+                break_close=False):
+    """Run `merge(live=True)` with every venue call doubled."""
+    import core_brain.order_registry as ore
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    monkeypatch.setattr(le, "RUN", tmp_path)
+    monkeypatch.setattr(le, "get_payout_denominator", lambda cid: 0)
+    monkeypatch.setattr(le, "is_approved_for_all", lambda *a, **k: True)
+    monkeypatch.setattr(le, "client", lambda f: FakeMergeClient(balance_shares))
+    monkeypatch.setattr(ore, "OrderRegistry", lambda *a, **k: reg)
+    if break_close:
+        def _boom(close):
+            raise RuntimeError("close write exploded")
+        monkeypatch.setattr(reg, "log_close", _boom)
+
+    def _fake_urlopen(req, timeout=None):
+        url = req.get_full_url() if hasattr(req, "get_full_url") else req
+        if "data-api" in str(url):
+            return MockResponse(positions if positions is not None else [])
+        if str(url).rstrip("/").endswith("/submit"):
+            return MockResponse({"state": submit_state,
+                                 "transactionHash": "0xabc"})
+        if "transactions/params" in str(url):
+            return MockResponse({"nonce": 1})
+        raise AssertionError(f"unexpected network: {url}")
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    env = make_live_env(acc, funder)
+    with patch.dict(os.environ, env, clear=False):
+        le.merge(COND_MERGE, amount=amount, live=True, neg_risk=False)
+
+
+def _merge_reg(tmp_path):
+    # Module-global binding: `_live_merge` patches the registry attribute
+    # for the code under test, and this helper must keep the real class.
+    return _RealRegistry(db_path=tmp_path / "merge.db")
+
+
+class TestLiveMergeReset:
+    def test_an_executed_merge_with_a_close_write_resets(
+            self, tmp_path, monkeypatch, capsys):
+        """#646: EXECUTED plus a landed close clears the row, marks awaiting."""
+        up_tok, dn_tok = _merge_tokens(COND_MERGE)
+        reg = _merge_reg(tmp_path)
+        _seed_merged_pair(reg, COND_MERGE, up_tok, dn_tok)
+        _live_merge(monkeypatch, tmp_path, reg)
+        capsys.readouterr()
+
+        closes = [c for c in reg.get_all_closes() if c.get("method") == "merge"]
+        assert len(closes) == 1
+        assert reg.requalification_marks()[COND_MERGE.lower()].status == "awaiting"
+
+    def test_a_failed_close_write_never_resets(
+            self, tmp_path, monkeypatch, capsys):
+        """#646: the merge stands, but nothing is proven flat."""
+        up_tok, dn_tok = _merge_tokens(COND_MERGE)
+        reg = _merge_reg(tmp_path)
+        _seed_merged_pair(reg, COND_MERGE, up_tok, dn_tok)
+        _live_merge(monkeypatch, tmp_path, reg, break_close=True)
+        err = capsys.readouterr().err
+
+        assert "Failed to log close record" in err
+        assert reg.requalification_marks() == {}
+
+    def test_failed_and_submitted_responses_never_reset(
+            self, tmp_path, monkeypatch, capsys):
+        """#646: only STATE_EXECUTED even attempts the proof."""
+        for state in ("STATE_FAILED", "STATE_SUBMITTED"):
+            up_tok, dn_tok = _merge_tokens(COND_MERGE)
+            reg = _merge_reg(tmp_path / state)
+            _seed_merged_pair(reg, COND_MERGE, up_tok, dn_tok)
+            _live_merge(monkeypatch, tmp_path / state, reg, submit_state=state)
+            capsys.readouterr()
+
+            assert reg.get_all_closes() == []
+            assert reg.requalification_marks() == {}
+
+    def test_a_partial_merge_leaves_the_larger_leg_managed(
+            self, tmp_path, monkeypatch, capsys):
+        """#646: 20 UP / 5 DOWN merged 5 leaves 15 UP, no reset."""
+        up_tok, dn_tok = _merge_tokens(COND_MERGE)
+        reg = _merge_reg(tmp_path)
+        _seed_merged_pair(reg, COND_MERGE, up_tok, dn_tok,
+                          up_shares=20.0, dn_shares=5.0)
+        _live_merge(monkeypatch, tmp_path, reg, amount=5.0)
+        capsys.readouterr()
+
+        from core_brain.order_registry import inventory_from_registry
+        inv = inventory_from_registry(COND_MERGE, up_tok, dn_tok,
+                                      db_path=tmp_path / "merge.db")
+        assert inv.up_shares == pytest.approx(15.0)
+        assert inv.down_shares == pytest.approx(0.0)
+        assert reg.requalification_marks() == {}

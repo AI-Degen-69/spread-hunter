@@ -58,6 +58,7 @@ import sys
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -925,6 +926,20 @@ def _resolve_merge_unit_costs(conn, condition_id: str,
     return up_unit_cost, dn_unit_cost
 
 
+@dataclass(frozen=True)
+class SubmitOutcome:
+    """What a relayer submission achieved (#646).
+
+    `executed` mirrors the relayer's terminal state; `close_written` is True
+    only when the merge close row actually landed. `registry` is the store
+    instance the close was written to, so the reset can reuse it.
+    """
+
+    executed: bool
+    close_written: bool
+    registry: object = None
+
+
 def _submit_and_log(
     action: str,
     condition_id: str,
@@ -937,7 +952,7 @@ def _submit_and_log(
     headers: dict,
     relayer_url: str,
     target: str = CTF_CONTRACT,
-) -> None:
+) -> SubmitOutcome:
     """Submit EIP-712 batch transaction to relayer with crash-safe pre-logging and atomic status updates."""
     import urllib.request
 
@@ -1136,10 +1151,14 @@ def _submit_and_log(
     print(f"  RELAYER RESPONSE: {json.dumps(res)[:400]}")
     print(f"\nlogged to {RUN / 'live_orders.json'}")
 
-    if action == "MERGE" and (status == "executed" or state == "STATE_EXECUTED"):
+    executed = (status == "executed" or state == "STATE_EXECUTED")
+    close_written = False
+    close_registry = None
+    if action == "MERGE" and executed:
         try:
             from core_brain.order_registry import OrderRegistry, CloseRecord, get_run_id
             registry = OrderRegistry()
+            close_registry = registry
             amt = 0.0
             if call_data and len(call_data) >= 10 + 64 * 5:
                 amount_hex = call_data[10 + 64 * 4 : 10 + 64 * 5]
@@ -1190,8 +1209,14 @@ def _submit_and_log(
                 tx_hash=tx_hash,
                 run_id=get_run_id(),
             ))
+            # Set only here, immediately after the write returns: a failed
+            # close must never reset (#646).
+            close_written = True
         except Exception as close_exc:
             print(f"  WARNING: Failed to log close record: {close_exc}", file=sys.stderr)
+
+    return SubmitOutcome(executed=executed, close_written=close_written,
+                         registry=close_registry)
 
 
 def redeem(condition_id: str, index_sets: list[int] | None = None,
@@ -1709,7 +1734,7 @@ def merge(condition_id: str,
     )
 
     # 4. Submit and log
-    _submit_and_log(
+    submit = _submit_and_log(
         action="MERGE",
         condition_id=condition_id,
         funder=funder,
@@ -1722,6 +1747,20 @@ def merge(condition_id: str,
         relayer_url=relayer_url,
         target=call_target,
     )
+
+    # 5. Unified reset (#646): only an executed merge whose close row landed
+    # proves anything. Failed, reverted, cancelled, submitted, and
+    # close-write-failed merges never reset; a partial merge leaves the
+    # larger leg, and the proof returns RESIDUAL on it.
+    if submit.executed and submit.close_written and submit.registry is not None:
+        from core_brain.lifecycle_reset import reset_condition
+        from core_brain.single_buy_saver import live_reset_ports
+        reset_outcome = reset_condition(
+            submit.registry, condition_id, up_tok_id, dn_tok_id,
+            live_reset_ports(client(funder), funder, submit.registry,
+                             condition_id, up_tok_id, dn_tok_id),
+            reason="live_merge", now_ms=int(time.time() * 1000))
+        print(f"  RESET: {reset_outcome.status} ({reset_outcome.reason})")
 
 
 
