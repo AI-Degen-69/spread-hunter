@@ -8,8 +8,8 @@ having is one that does not read the registry at all.
 This replays the wallet's cashflow from the venue's activity feed — every BUY,
 SELL, MERGE, SPLIT, REDEEM and venue credit — adds the current mark on what is still
 open, and reports the gap against the registry's own figure. Venue credits (rebates,
-rewards, referrals) are money the venue actually paid, so the replay keeps them apart
-from the trading cashflow they are not: `credits` is reported on its own line.
+rewards, referrals) are money the venue actually paid, so the replay keeps them in
+their own field, apart from the trading cashflow they are not.
 
 Three things it refuses to do, because each one turns a check into a rubber
 stamp:

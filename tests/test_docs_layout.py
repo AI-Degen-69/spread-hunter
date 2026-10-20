@@ -46,7 +46,7 @@ def test_project_directory_absent():
     )
 
 
-def test_showcases_live_in_docs_issues():
+def test_the_showcase_pattern_still_matches_the_contract():
     """Sentinel: the guard above must not pass with nothing to check.
 
     It used to require four named showcases to be present in `docs/issues/`.
