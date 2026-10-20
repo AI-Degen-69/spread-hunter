@@ -169,13 +169,6 @@ def load() -> MakerConfig:
         if ms and ms.strip():
             kw["min_quote_shares"] = int(float(ms))
             kw["quote_shares"] = max(int(float(ms)), 120)
-        sp, sp_name = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD")
-        if sp_name == "HUNTER_MAX_SPREAD" and sp and sp.strip():
-            logging.getLogger(__name__).warning(
-                "HUNTER_MAX_SPREAD is deprecated (#632); set BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID instead."
-            )
-        if sp and sp.strip():
-            kw["max_spread_from_mid"] = float(sp) / 100.0
         tk, tk_name = _env_get("BOT_QUOTE_GRID_TICK_SIZE_USD", "HUNTER_PRICE_TICK", "HUNTER_TICK")
         if tk_name == "HUNTER_TICK" and tk and tk.strip():
             logging.getLogger(__name__).warning(
@@ -183,6 +176,40 @@ def load() -> MakerConfig:
             )
         if tk and tk.strip():
             kw["price_tick"] = float(tk)
+    # THE SPREAD WINDOW IS READ ON EVERY RUN (#690, N2 of #674).
+    #
+    # `max_spread_from_mid` is how far from mid we allow our resting quote to
+    # sit. The engine reads it on every run, through the second tolerant read in
+    # `core_brain/config.py`; the ranker read it only inside the pinned branch,
+    # so an unpinned run kept the 4.5c default while the engine honoured the
+    # operator's setting. Same variable, two answers.
+    #
+    # The loader RULE is matched here, not the default: this class ships 4.5c
+    # where core ships 15c, on purpose. Pinned stays strict -- `float()` raises,
+    # the pinned contract since the beginning. Unpinned mirrors the engine:
+    # malformed text and values of zero or less are INACTIVE, not
+    # enforced-at-zero, so a typo neither crashes a ranker that starts cleanly
+    # today nor narrows the window to something that refuses every quote.
+    #
+    # NOT the book gate. `filter_common_spread_max_cents` (2.05c) is the bid-ask
+    # WIDTH wide books are refused on, derived from
+    # `max_book_spread * select_spread_pct`. It must never read this value: a
+    # distance-from-mid window and a bid-ask width are different measurements.
+    sp, sp_name = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "HUNTER_MAX_SPREAD_CENTS", "HUNTER_MAX_SPREAD")
+    if sp_name == "HUNTER_MAX_SPREAD" and sp and sp.strip():
+        logging.getLogger(__name__).warning(
+            "HUNTER_MAX_SPREAD is deprecated (#632); set BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID instead."
+        )
+    if sp and sp.strip():
+        if cid:
+            kw["max_spread_from_mid"] = float(sp) / 100.0
+        else:
+            try:
+                cents = float(sp)
+            except ValueError:
+                cents = 0.0
+            if cents > 0:
+                kw["max_spread_from_mid"] = cents / 100.0
     wide_raw, wide_name = _env_get("BOT_QUOTE_WIDE_BOOK_TRIAL", "HUNTER_WIDE_BOOK_TRIAL")
     wide = resolve_wide_book_trial(wide_raw or "", var_name=wide_name or "HUNTER_WIDE_BOOK_TRIAL")
     if wide is not None and wide > 0:
