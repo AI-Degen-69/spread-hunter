@@ -5,7 +5,7 @@ look identical on a single reading. Only the second stays negative after we
 back off, and only the second is worth giving up the rent for -- so the
 response is graduated rather than a single kill switch.
 
-Widening keeps us inside the 4.5c reward window, which means a WIDENED market
+Widening keeps us inside the configured quote window, which means a WIDENED market
 still earns. EXITED is the only state that forfeits income, and it is reached
 only after the market has been given a second full sample to recover.
 """
@@ -103,7 +103,7 @@ def next_state(state: str, stats: dict, cfg) -> str:
     # markout could be one cent of mispricing, so we widen and look again. At
     # -2c/share there is no ambiguity left to resolve -- four times the widen
     # threshold and more than a full taker fee, a loss no offset inside the
-    # 4.5c reward window can quote its way out of. Both concessions above then
+    # configured quote window can quote its way out of. Both concessions above then
     # become actively expensive: WIDENED keeps us in the book, and the second
     # full sample the WIDENED->EXITED rule demands is another
     # `markout_min_sample` fills bought at that rate. Exit now, from whichever

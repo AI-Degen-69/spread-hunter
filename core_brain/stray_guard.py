@@ -376,6 +376,7 @@ def run_stray_guard(
     remediate_positions: bool = True,
     resolved_cids: Optional[set[str]] = None,
     book_tracker: Any = None,
+    decision_book_fn: Any = None,
 ) -> dict[str, Any]:
     """Unified Stray-Order Guard execution pass.
 
@@ -392,6 +393,9 @@ def run_stray_guard(
     `book_tracker` (#402): a per-token backoff (`DeadBookBackoff`) gating
     book reads; failures are noted so the next pass waits, successes clear.
     Neither invents a resolution: the tracker holds no registry handle.
+    `decision_book_fn(token_id)` (#659) optionally serves the classification
+    book prefetch from stream-first books; remediation exits keep their own
+    fresh client reads.
 
     Both default ON when the caller passes nothing: the resolved set is read
     from the store and one backoff tracker is kept on the registry instance,
@@ -484,12 +488,13 @@ def run_stray_guard(
         if str(token_conditions.get(t, "")).lower() not in resolved
     }
 
-    if hasattr(client, "get_order_book"):
+    if decision_book_fn is not None or hasattr(client, "get_order_book"):
+        reader = decision_book_fn if decision_book_fn is not None else client.get_order_book
         for tok in needed_tokens:
             if book_tracker is not None and not book_tracker.allow(tok):
                 continue
             try:
-                bk = client.get_order_book(tok)
+                bk = reader(tok)
                 if bk:
                     books[tok] = bk
                 if book_tracker is not None:

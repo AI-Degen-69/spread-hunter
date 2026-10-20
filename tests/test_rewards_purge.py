@@ -129,7 +129,7 @@ def test_evaluate_produces_spread_metrics_without_reward_pool_math():
         "condition_id": "0xtest_pure_spread",
         "question": "Binary Question?",
         "tokens": [{"token_id": "tok1"}, {"token_id": "tok2"}],
-        "rewards": {"max_spread": 0.5, "min_size": 1000, "rate": 500.0},  # tight reward window
+        "rewards": {"max_spread": 0.5, "min_size": 1000, "rate": 500.0},  # tight retired venue spread limit
         "minimum_tick_size": 0.01,
         "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=5)).isoformat(),
         "_order_min": 5,

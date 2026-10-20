@@ -1649,8 +1649,8 @@ def test_admission_cli_parses_and_rejects_depth_combo(tmp_path):
 class TestRefusedHoldShadow:
     """#390 end to end: a refused cycle holds, a dead market cancels."""
 
-    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
-                     "DOWN: 8.0c from mid > 4.5c reward window")
+    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c quote window; "
+                     "DOWN: 8.0c from mid > 4.5c quote window")
 
     def _held_pair(self):
         return [QuoteIntent(side="UP", token_id="tok-up", price=0.60, size=5,
@@ -2654,3 +2654,22 @@ class TestShadowSimulatedFillTelemetry:
         fill_events = [e for e in events if e.get("action") == "user_fill_received"]
         assert fill_events == []
 
+
+
+def test_shadow_seam_reads_through_unified_book_provider(tmp_path):
+    """#659: every shadow book read flows through the provider seam."""
+    from core_brain.shadow_run import build_shadow_seam
+
+    def fake_books(clob_host, token_id):
+        return {"token_id": token_id, "bids": {0.46: 10.0},
+                "asks": {0.50: 10.0}, "best_bid": 0.46, "best_ask": 0.50,
+                "malformed": 0}
+
+    seam = build_shadow_seam(
+        db_path=tmp_path / "shadow.db", intents_sink=[],
+        fetch_books=fake_books,
+    )
+    assert seam.fetch_books("https://clob.polymarket.com", "tok")["best_bid"] == 0.46
+    assert seam.book_provider.get_mid("tok") == 0.48
+    levels = seam.book_provider.get_levels_book("tok")
+    assert levels["bids"] == [{"price": 0.46, "size": 10.0}]
