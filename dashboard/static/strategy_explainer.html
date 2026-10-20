@@ -617,7 +617,7 @@
             </tr>
             <tr>
               <td><code>select_max_book_spread</code></td>
-              <td><code>2.05¢ (0.0205)</code></td>
+              <td><code>2.05¢</code></td>
               <td><span style="color:var(--text-muted)">Derived</span></td>
               <td><strong>Derived Picking Spread Cap</strong>: Derived as <code>max_book_spread * 41/120</code> (2.05¢); ensures bot only picks tight touches.</td>
             </tr>
@@ -713,13 +713,13 @@
             </tr>
             <tr>
               <td><code>price_band_low</code></td>
-              <td><code>$0.10 (10¢)</code></td>
+              <td><code>$0.10</code></td>
               <td>Pricing Band</td>
               <td><strong>Lower Probability Bound</strong>: Rejects bids below 10¢ where adverse selection risk spikes.</td>
             </tr>
             <tr>
               <td><code>price_band_high</code></td>
-              <td><code>$0.90 (90¢)</code></td>
+              <td><code>$0.90</code></td>
               <td>Pricing Band</td>
               <td><strong>Upper Probability Bound</strong>: Rejects bids above 90¢ where spread capture margin is negligible.</td>
             </tr>
@@ -755,7 +755,7 @@
             </tr>
             <tr>
               <td><code>tick_size</code></td>
-              <td><code>$0.01 (1¢)</code></td>
+              <td><code>$0.01</code></td>
               <td>Venue Grid</td>
               <td>Enforces 1¢ price discretization across all resting quotes.</td>
             </tr>
@@ -767,13 +767,13 @@
             </tr>
             <tr>
               <td><code>max_book_spread</code></td>
-              <td><code>$0.06 (6¢)</code></td>
+              <td><code>$0.06</code></td>
               <td>Book Health</td>
               <td>Continuous gate: rejects books with bid-ask spread wider than 6¢ to prevent illiquid quotes.</td>
             </tr>
             <tr>
               <td><code>max_spread_from_mid</code></td>
-              <td><code>$0.15 (15¢)</code></td>
+              <td><code>$0.15</code></td>
               <td>Book Health</td>
               <td>Resting-offset ceiling preventing quotes placed too deep from ever filling. Env: <span class="badge-env">BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID</span>.</td>
             </tr>
@@ -832,19 +832,19 @@
             </tr>
             <tr>
               <td><code>max_skew_offset</code></td>
-              <td><code>$0.015 (1.5¢)</code></td>
+              <td><code>$0.015</code></td>
               <td>Inventory Skew</td>
               <td>Pushes heavy-leg outward and pulls light-leg closer to mid by up to 1.5¢ to accelerate rebalancing.</td>
             </tr>
             <tr>
               <td><code>min_reward_offset</code></td>
-              <td><code>$0.005 (0.5¢)</code></td>
+              <td><code>$0.005</code></td>
               <td>Inventory Skew</td>
               <td>Enforces minimum 0.5¢ resting margin from mid.</td>
             </tr>
             <tr>
               <td><code>merge_max_loss_per_share</code></td>
-              <td><code>$0.01 (1¢)</code></td>
+              <td><code>$0.01</code></td>
               <td>Capital Efficiency</td>
               <td>Prevents merging pairs at a loss; holds pair until parity conditions are met.</td>
             </tr>
@@ -879,13 +879,13 @@
             </tr>
             <tr>
               <td><code>requote_dead_band</code></td>
-              <td><code>$0.03 (3¢)</code></td>
+              <td><code>$0.03</code></td>
               <td>Queue Protection</td>
               <td>Suppresses unnecessary cancel-replace churn when target shifts &lt; 3¢. Env: <span class="badge-env">BOT_ORDER_REQUOTE_DEAD_BAND_CENTS</span>.</td>
             </tr>
             <tr>
               <td><code>requote_hold_below_target</code></td>
-              <td><code>$0.05 (5¢)</code></td>
+              <td><code>$0.05</code></td>
               <td>Queue Protection</td>
               <td>Holds passive resting quote up to 5¢ below target to retain queue priority. Env: <span class="badge-env">BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS</span>.</td>
             </tr>
@@ -939,7 +939,7 @@
             </tr>
             <tr>
               <td><code>drop_cents</code></td>
-              <td><code>$0.05 (5¢)</code></td>
+              <td><code>$0.05</code></td>
               <td>Stop-Loss System</td>
               <td>Triggers defensive exit if mid drops 5¢ below acquisition cost. Env: <span class="badge-env">BOT_RISK_STOP_ADVERSE_DROP_CENTS</span>.</td>
             </tr>
