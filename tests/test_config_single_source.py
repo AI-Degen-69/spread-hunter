@@ -884,3 +884,44 @@ def test_a_name_that_is_not_the_canonical_one_leaves_the_window_shipped(
     shipped = 0.15 if mod is core_config else 0.045
     assert _spread_window(mod, monkeypatch, "40", pinned=pinned, var=ghost) \
         .max_spread_from_mid == shipped
+
+
+# ============================================================================
+# #708: one description of the quote window, in both config modules
+# ============================================================================
+
+
+def _quote_window_description(module) -> list[str]:
+    """The comment block that documents `max_spread_from_mid`, line by line."""
+    lines = Path(module.__file__).read_text(encoding="utf-8").splitlines()
+    start = next((i for i, line in enumerate(lines)
+                  if line.strip().startswith("# THE QUOTE WINDOW.")), None)
+    if start is None:
+        return []
+    block = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            break
+        block.append(stripped)
+    return block
+
+
+def test_both_config_modules_describe_the_quote_window_identically():
+    """#708: one field, one description.
+
+    The field was documented three different ways (#690 O4): a "4.5c maximum
+    offset from mid" in the picker, a venue rebate-qualification window in the
+    wide-book trial test, and a resting-offset ceiling in the engine. A comment
+    fix with no guard drifts again, so the two config modules are compared
+    against each other here.
+    """
+    scoring_block = _quote_window_description(scoring_config)
+    core_block = _quote_window_description(core_config)
+
+    assert scoring_block, "scoring/config.py lost the quote-window description"
+    assert core_block, "core_brain/config.py lost the quote-window description"
+    assert scoring_block == core_block, (
+        "the two config modules describe max_spread_from_mid differently:\n"
+        f"scoring: {scoring_block}\ncore: {core_block}"
+    )

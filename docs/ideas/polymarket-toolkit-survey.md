@@ -132,8 +132,9 @@ cannot be posted under a stale price. Worth a confirming test rather than a rede
 
 ### 5. Fee accounting — **adapt**
 
-[config.py:870](../../core_brain/config.py) carries `fee_rate = 0.07` **for the rebate estimate
-only**; `maker_fee` is 0.0 because `takerOnly=true` means our passive fills are not charged.
+[config.py:458](../../core_brain/config.py) carries `fee_rate = 0.07` **as a taker-completion
+cost input** — the rebate-estimate rationale this line used to carry is obsolete, no rebate
+income is estimated; `maker_fee` is 0.0 because `takerOnly=true` means our passive fills are not charged.
 [kpi.py:1536](../../core_brain/kpi.py) sums `taker_fees_paid` from the `fee` column on close
 rows — that is whatever we recorded, not what the venue charged. Their residual method
 (`usdcSize` minus `size × price`) recovers the charged fee per fill from a read we can make

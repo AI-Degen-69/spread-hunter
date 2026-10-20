@@ -13,7 +13,9 @@ from merge spread capture ($1.00 - pair cost).
 Everything below follows from that. Quote BOTH outcomes so a pair can assemble;
 stay ~92% balanced so no leg rides naked; never let the pair cost reach $1.00,
 because a pair bought at >= 1.00 is a booked loss on an instrument that pays
-exactly $1.00; and keep quotes within max_spread_from_mid to maintain book competitiveness.
+exactly $1.00; and keep quotes within the max_spread_from_mid window -- the
+distance from the book midpoint to our resting quote -- to maintain book
+competitiveness.
 
 The universe is NOT the BTC 5-minute series. The fleet quotes the ranker's
 graduated list (runtime/markets.json, via core_brain/market_feed.py) -- liquid sports,
@@ -104,12 +106,16 @@ def mid_price(best_bid: Optional[float], best_ask: Optional[float]) -> Optional[
 
 
 def reward_score(cfg: MakerConfig, spread_from_mid: float, size: float) -> float:
-    """Polymarket liquidity-reward score for one resting order.
+    """Legacy liquidity-reward score for one resting order.
 
-        S(v, s) = ((v - s) / v)^2 * size,    v = rewardsMaxSpread (4.5c)
+        S(v, s) = ((v - s) / v)^2 * size,    v = the quote window (max_spread_from_mid)
 
-    Quadratic, so it collapses fast: at 2c of 4.5c an order keeps only 30% of
-    the score it would earn at the touch. Orders outside v score nothing.
+    A legacy diagnostic: the number is printed in the quote reason and feeds no
+    sizing decision. `v` is the quote window -- the largest distance from the
+    book midpoint our resting quote may sit at -- not a venue reward window.
+
+    Quadratic, so it collapses fast: at 2c of a 4.5c window an order keeps only
+    30% of the score it would earn at the touch. Orders outside v score nothing.
     """
     v = cfg.max_spread_from_mid
     if spread_from_mid < 0 or spread_from_mid > v or size < cfg.min_quote_shares:
@@ -260,10 +266,10 @@ def _decide_quotes_from_mid(
 ) -> tuple[list[QuoteIntent], str]:
     """Rest both legs under MID. The production path.
 
-    Selected by `cfg.objective == "rewards"` -- a stale label from the
-    rebate-farming phase, kept because the literal is wired through the fleet and
-    the test suite. Read it as "price from mid". The objective it serves is spread
-    capture: see the module docstring.
+    Selected by `cfg.objective == "spread_capture"` -- what production pins on
+    every market. Dispatch still accepts the legacy alias "rewards"; the string
+    is wired through the fleet and the test suite. Read it as "price from mid".
+    The objective it serves is spread capture: see the module docstring.
 
     Rests at `mid - reward_offset` on BOTH tokens. Two properties the ask-based
     quoting never had:
@@ -273,16 +279,13 @@ def _decide_quotes_from_mid(
         pair cost ~1.00 - 2*offset, and merging it returns exactly 1.00. Quoting
         off the ASK did the opposite: ~half a spread ABOVE mid on each side, i.e.
         1.00 + spread, which is why no sub-$1.00 pair ever appeared.
-      * It also scores. The reward is paid on resting size sampled once a minute,
-        whether or not the order is ever hit, so time in the book earns a little
-        rent while the pair assembles. Small -- ~$0.22/day against $566 committed
-        -- but free, and it is why sitting out is not costless. The old
-        objective's gates left us out of the book 69% of the time.
+      * It stays in the book. The old objective's gates left us out of the book
+        69% of the time, and a quote out of the book is a pair that never
+        assembles.
 
     Still deliberately NOT gated on the QUOTING WINDOW. That rule exists to
     protect fill quality by refusing to open late, and here a fill is a side
-    effect: the score is paid on resting size every minute the order is there,
-    so a cycle spent sitting out earns nothing and buys nothing.
+    effect: a cycle spent sitting out buys nothing.
 
     The PRICE BAND and the PAIR-COST cap used to be excused on the same
     reasoning, and that reasoning was wrong -- not because sitting out is
@@ -483,7 +486,7 @@ def _decide_quotes_from_mid(
         # `provisional` one `hard_block` reads twenty lines above. They are not
         # the same number: `provisional` is mid - reward_offset, and `price`
         # then adds the inventory skew and the band's extra offset, clamps to
-        # the reward window and rounds to the tick. `skew_offset` pulls the
+        # the quote window and rounds to the tick. `skew_offset` pulls the
         # LIGHT side TOWARD mid, so the price we actually rest at can sit above
         # the provisional -- and a gate read off the provisional would have
         # cleared a cheaper pair than the one we post.
@@ -837,7 +840,7 @@ def decide_quotes(
         if price <= 0.0 or price >= 1.0:
             continue
 
-        # Spread window: must be within max_spread_from_mid of mid, else quote
+        # Quote window: must be within max_spread_from_mid of mid, else quote
         # is too far from the touch to fill.
         if abs(mid - price) > cfg.max_spread_from_mid:
             continue

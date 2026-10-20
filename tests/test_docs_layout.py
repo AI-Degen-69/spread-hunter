@@ -20,13 +20,6 @@ ISSUES_DIR = DOCS_DIR / "issues"
 # showcase files, so a presentation-only pattern would let a stray showcase slip past.
 SHOWCASE_RE = re.compile(r"^\d+-(presentation|showcase)-.+\.html$")
 
-RELOCATED_SHOWCASES = (
-    "297-presentation-instance-lock.html",
-    "304-presentation-queue-hold.html",
-    "310-presentation-rescue-exit-forensics.html",
-    "343-presentation-live-ladder-pricing.html",
-)
-
 
 def _direct_showcases() -> list[str]:
     """Relative POSIX paths of showcase files sitting directly under docs/."""
@@ -53,16 +46,20 @@ def test_project_directory_absent():
     )
 
 
-def test_showcases_live_in_docs_issues():
-    """Sentinel: the other two tests must not pass with nothing to check."""
+def test_the_showcase_pattern_still_matches_the_contract():
+    """Sentinel: the guard above must not pass with nothing to check.
+
+    It used to require four named showcases to be present in `docs/issues/`.
+    The e2f648e sweep deletes a closed issue's showcase artifacts, so "these
+    four files must exist" is not a state this repo keeps any more -- and a
+    sentinel that pins files the repo deliberately deletes is a sentinel that
+    breaks the next time one is swept. The proof that the pattern is alive is
+    the pattern itself: both contract forms must be recognised, and the
+    near-misses must not be.
+    """
     assert ISSUES_DIR.is_dir(), "docs/issues/ is missing entirely"
-    present = {
-        p.name
-        for p in ISSUES_DIR.iterdir()
-        if p.is_file() and SHOWCASE_RE.match(p.name)
-    }
-    assert present, "guard scanned no showcases in docs/issues/ -- it would pass vacuously"
-    missing = [name for name in RELOCATED_SHOWCASES if name not in present]
-    assert not missing, (
-        "relocated showcases missing from docs/issues/:\n" + "\n".join(missing)
-    )
+    assert SHOWCASE_RE.match("297-presentation-instance-lock.html")
+    assert SHOWCASE_RE.match("297-showcase-instance-lock.html")
+    assert not SHOWCASE_RE.match("297-presentation.html")
+    assert not SHOWCASE_RE.match("presentation-297.html")
+    assert not SHOWCASE_RE.match("297-slide-presentation-instance-lock.html")

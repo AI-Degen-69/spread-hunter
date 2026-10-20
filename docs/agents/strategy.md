@@ -18,14 +18,14 @@ cost of **$0.96006** — roughly 4c per pair. That is the strategy, and it is wh
 `max_pair_cost = 0.99` is therefore the **profit condition**, not a side constraint. The
 merge is the exit and the P&L event, not housekeeping.
 
-## Maker rebates are extra, not the income
+## Venue credits are extra, not the income
 
-Polymarket's liquidity-reward program pays for resting size, and the bot qualifies for it.
-Over the same measured run it accrued about **$0.22/day against $566 committed** — four
-hundredths of a percent. Rebates are a side accrual, estimated and reported separately,
-never blended into trading PnL (`config.maker_fee`, `config.rebate_rate`).
+The markets this bot trades are graduated spread markets: they pay **$0.00** in maker
+rewards, and the KPI report does not estimate any. A real venue credit — a rebate, a
+referral reward — would be a side accrual kept out of trading PnL, reported on its own
+and never blended into the merge spread.
 
-Describe this bot as a **pair-assembly arbitrage** that earns rebates while it waits.
+Describe this bot as a **pair-assembly arbitrage** that earns the merge spread.
 
 ## The universe: liquid markets inside a 30-day horizon
 
@@ -79,9 +79,8 @@ cost together, never on one axis.
 
 No reward-economics knob reaches live code. `reward_min_payout_usd`,
 `reward_floor_multiple`, `rebate_rate`, `marginal_return_floor`,
-`allocation_budget` and `max_pct` belong to the allocator in `scoring/allocate.py`
-and are read by nothing in `core_brain/` or `dashboard/`. `quotes.reward_score()` formats
-a log string and feeds no sizing decision.
+`allocation_budget` and `max_pct` are read by nothing in `core_brain/` or
+`dashboard/`. `quotes.reward_score()` formats a log string and feeds no sizing decision.
 
 ## The two failure modes
 

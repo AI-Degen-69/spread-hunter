@@ -252,6 +252,15 @@ class MakerConfig(_ConfigBase):
     bankroll_usd: float = 100.0
     max_naked_usd: float = 6.0
     min_quote_shares: int = 5
+    # THE QUOTE WINDOW. `max_spread_from_mid` is the largest allowed distance
+    # between the book midpoint and our resting quote. Prices are dollars on the
+    # 0-1 scale; the env value is cents. The quoting engine refuses or skips a
+    # quote outside the window and clamps the dynamic offset to it. It is NOT a
+    # filter on which markets we quote -- `filter_common_spread_max_cents`
+    # (2.05c) is the wide-book rejection bar (see CONSTRAINTS.md). The two
+    # shipped defaults are deliberate: 0.15 for the engine, 0.045 for the
+    # picker, whose copy the ranker does not gate on; both loaders read the
+    # same variable the same way.
     max_spread_from_mid: float = 0.15
     max_pair_cost: float = 0.99
     max_book_spread: float = 0.06
@@ -482,6 +491,8 @@ class MakerConfig(_ConfigBase):
     def bot_quote_size_min_shares(self, val: int) -> None:
         object.__setattr__(self, "min_quote_shares", val)
 
+    # Legacy alias of the quote window declared above; the canonical name is
+    # `max_spread_from_mid`.
     @property
     def bot_quote_book_max_spread_from_mid(self) -> float:
         return self.max_spread_from_mid

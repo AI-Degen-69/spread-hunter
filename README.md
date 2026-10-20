@@ -21,7 +21,8 @@ profit per pair = 1.00 - (avg UP price + avg DOWN price)
 ```
 
 `max_pair_cost = 0.99` is the profit condition: the merge is the exit and the P&L event.
-Maker rebates are a side accrual, never blended into trading PnL.
+Graduated markets pay $0.00 in maker rewards and the KPI report does not estimate them;
+a real venue credit would be a side accrual, never blended into trading PnL.
 
 The two failure modes everything else exists to prevent: a pair assembled **over $1.00**
 is a booked loss, and a **single buy** (one leg filled, one not) is a directional bet

@@ -307,6 +307,9 @@ def test_kpi_report_parity_and_live_fields(tmp_path):
     assert kpis["realized_pnl"] == 0.30
     assert kpis["fill_rate"] == 1.0
     assert kpis["rebate_est"] is None  # Explicit None for rebate
+    # No venue credit is estimated, so the "with rebate" total IS the
+    # realized PnL -- not a number that happens to be close to it.
+    assert kpis["total_with_rebate"] == kpis["realized_pnl"]
 
     # Live-specific operational metrics
     assert kpis["order_latency_ms"]["median"] == 12.5

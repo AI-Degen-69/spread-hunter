@@ -403,15 +403,14 @@ def _market_cfg(base, spec: Any):
     gates the paper fleet runs; the only per-market differences are the venue's
     min-size, spread window and tick, copied from the ranker's spec.
 
-    `objective="rewards"` below is pinned on every market ON PURPOSE, and the
-    string does NOT mean the bot is farming rebates. It selects
-    `quotes._decide_quotes_from_mid` -- rest both legs at `mid - offset`, which
-    assembles the pair at ~1.00 - 2*offset and is how spread capture is executed.
-    The alternative value, "pair", prices off the ask and was measured dead
-    (pair cost 1.00 + spread by construction); pinning here keeps a spec that
-    omits the field, or carries a stale one, from routing a live market onto it.
-    The ranker's own `source` field ("spread" vs "rewards") describes how a market
-    is FUNDED, not how it is quoted, and is deliberately not read here.
+    `objective="spread_capture"` below is pinned on every market ON PURPOSE. It
+    selects `quotes._decide_quotes_from_mid` -- rest both legs at `mid - offset`,
+    which assembles the pair at ~1.00 - 2*offset and is how spread capture is
+    executed. The alternative value, "pair", prices off the ask and was measured
+    dead (pair cost 1.00 + spread by construction); pinning here keeps a spec
+    that omits the field, or carries a stale one, from routing a live market
+    onto it. The ranker's own `source` field ("spread" vs "rewards") describes how
+    a market is FUNDED, not how it is quoted, and is deliberately not read here.
     """
     if not isinstance(spec, dict):
         if hasattr(spec, "range_cents") or hasattr(spec, "velocity_measured_at"):
