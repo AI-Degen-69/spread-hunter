@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>בעיה #659 — מחירים חיים קודם</title>
+<style>
+:root{
+  --ink:#eaf1f6;--muted:#9aabb8;--bg:#0b1117;--panel:#121c25;--panel-2:#172530;
+  --line:#29404d;--accent:#818cf8;--accent-2:#6366f1;--accent-ink:#0e0e2c;
+  --shadow:0 20px 55px rgba(0,0,0,.28);--green:#4ade80;--amber:#fbbf24;--red:#f87171;
+}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);background:var(--bg);font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,"Heebo",Arial,sans-serif}
+main{max-width:1060px;margin:auto;padding:40px 20px 70px}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:2rem;margin:0 0 .4rem;line-height:1.2}
+h2{font-size:1.15rem;color:var(--muted);margin:2rem 0 .7rem;letter-spacing:.02em}
+.meta{display:flex;gap:1rem;align-items:center;flex-wrap:wrap;margin-bottom:2rem;font-size:.85rem;color:var(--muted)}
+.badge{background:var(--panel-2);border:1px solid var(--line);border-radius:20px;padding:.25rem .8rem;font-size:.78rem}
+.badge.merged{border-color:var(--accent);color:var(--accent)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:26px;margin-top:24px;box-shadow:var(--shadow)}
+.callout{border-right:3px solid var(--accent);background:rgba(129,140,248,.07);padding:1rem 1.2rem;border-radius:8px 0 0 8px;margin:1.2rem 0}
+/* sequence diagram area */
+.seq-wrap{background:var(--panel-2);border:1px solid var(--line);border-radius:14px;padding:20px;margin-top:12px;overflow-x:auto}
+/* step-play controls */
+.ctrl-row{display:flex;gap:.6rem;align-items:center;margin-top:14px;flex-wrap:wrap}
+.ctrl-btn{font-size:.78rem;padding:.4rem 1rem;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer;font-family:inherit}
+.ctrl-btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+.step-label{font-size:.82rem;color:var(--muted);padding:.3rem .7rem;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+/* numbers */
+.numbers-row{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px}
+.num-card{flex:1;min-width:140px;background:var(--panel-2);border:1px solid var(--line);border-radius:14px;padding:20px 18px;text-align:center}
+.num-big{font-size:2rem;font-weight:800;color:var(--accent);line-height:1}
+.num-label{font-size:.75rem;color:var(--muted);margin-top:.4rem}
+/* mode toggle */
+.mode-toggle{display:flex;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:12px;width:fit-content}
+.mode-btn{padding:.5rem 1.3rem;font-size:.85rem;border:none;background:transparent;color:var(--muted);cursor:pointer;font-family:inherit;transition:background .2s,color .2s}
+.mode-btn.active{background:var(--accent);color:var(--accent-ink);font-weight:700}
+.mode-result{margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:16px;font-size:.88rem;min-height:56px;transition:all .25s}
+/* steps */
+ol.steps{padding-right:1.5rem;margin:.5rem 0}
+ol.steps li{margin:.55rem 0;padding-right:.3rem}
+ol.steps li::marker{color:var(--accent);font-weight:700}
+</style>
+</head>
+<body>
+<main>
+
+<!-- HEADER -->
+<h1>בעיה #659 — המחיר החי מגיע קודם</h1>
+<div class="meta">
+  <span class="badge merged">✓ מוזג</span>
+  <a href="https://github.com/AI-Degen-69/spread-hunter/issues/659" target="_blank" class="badge">בעיה #659</a>
+  <a href="https://github.com/AI-Degen-69/spread-hunter/pull/722" target="_blank" class="badge">PR #722</a>
+  <span class="badge">ספק מחירים</span>
+</div>
+
+<!-- PART 1: THE PROBLEM -->
+<div class="callout">
+  <strong>מה הייתה הבעיה:</strong> כל פעם שהמנוע צריך מחיר עדכני — לציטוט, להגנה, או לריצת צל — הוא שלח בקשת HTTP שלוקחת עד 520 מילישניות. השוק יכול לזוז הרבה ב-520ms. כל ציטוט חיכה לתור בקשות HTTP, וכל הגנה איחרה ב-חצי שניה לפחות.
+</div>
+
+<!-- SEQUENCE DIAGRAM — animated SVG -->
+<h2>שרשרת הקריאות — לפני ואחרי</h2>
+<div class="seq-wrap">
+  <canvas id="seq-canvas" width="900" height="260" style="width:100%;height:auto;display:block"></canvas>
+  <div class="ctrl-row">
+    <button class="ctrl-btn primary" id="play-btn" onclick="togglePlay()">▶ הפעל</button>
+    <button class="ctrl-btn" onclick="stepBack()">← אחורה</button>
+    <button class="ctrl-btn" onclick="stepFwd()">קדימה →</button>
+    <button class="ctrl-btn" onclick="resetAnim()">↺ אפס</button>
+    <span class="step-label" id="step-label">שלב 1 מתוך 5</span>
+  </div>
+</div>
+
+<!-- MODE TOGGLE: WS vs REST -->
+<h2>נסה: WS או REST — מה קורה לציטוט?</h2>
+<div class="panel" style="padding-top:18px">
+  <p style="margin-top:0;font-size:.88rem;color:var(--muted)">בחר מקור ספר:</p>
+  <div class="mode-toggle">
+    <button class="mode-btn active" onclick="setMode('stream')">WebSocket (חם)</button>
+    <button class="mode-btn" onclick="setMode('rest')">REST (קר / --book-source rest)</button>
+  </div>
+  <div class="mode-result" id="mode-result">
+    <strong style="color:var(--green)">WebSocket חם:</strong> הספר נקרא מהזיכרון (&lt;1ms). הציטוט יוצא מיד. אין המתנת HTTP.
+  </div>
+</div>
+
+<!-- NUMBERS -->
+<h2>השינוי במספרים</h2>
+<div class="numbers-row">
+  <div class="num-card">
+    <div class="num-big" style="color:var(--red)">520ms</div>
+    <div class="num-label">המתנה לפני — HTTP GET /book</div>
+  </div>
+  <div class="num-card">
+    <div class="num-big">&lt;1ms</div>
+    <div class="num-label">ספר מהזיכרון — WebSocket חם</div>
+  </div>
+  <div class="num-card">
+    <div class="num-big" style="color:var(--amber)">×1</div>
+    <div class="num-label">מקום אחד לכל הרכיבים — BookProvider</div>
+  </div>
+</div>
+
+<!-- PART 3: NEW REALITY -->
+<div class="panel">
+  <h2 style="margin-top:0">המצב החדש</h2>
+  <p>כל הרכיבים — ציטוטים, מסלול צל, והגנת single-buy — קוראים מ-<span dir="ltr" class="mono">BookProvider</span> אחד. אם הסטרים חם: המחיר נקרא מהזיכרון. אם הסטרים קר: נפול לבקשת HTTP אחת ומדווח על כך. אין עוד 520ms מתים לפני כל ציטוט.</p>
+  <div class="callout" style="margin:0">
+    <strong>מה לצפות לראות:</strong> ריצת צל עם סטרים פעיל — ציטוטים מהירים, ללא השהיה נראית. ריצת צל עם <span dir="ltr" class="mono">--book-source rest</span> — נפול ל-REST, ניתן לזיהוי בלוג.
+  </div>
+</div>
+
+<!-- PART 4: VERIFICATION -->
+<div class="panel">
+  <h2 style="margin-top:0">איך לאמת — ריצת צל עם ובלי סטרים</h2>
+  <ol class="steps">
+    <li><strong>סטרים פעיל:</strong> הרץ <span dir="ltr" class="mono">python -m core_brain.shadow_run --minutes 5 --db data/test_ws.db</span>. צפה ביומן — שורות ציטוט מופיעות מהר, ללא השהיות 500ms+. אין הודעת "REST fallback".</li>
+    <li><strong>REST כפוי:</strong> הרץ <span dir="ltr" class="mono">python -m core_brain.shadow_run --minutes 5 --db data/test_rest.db --book-source rest</span>. ביומן תופיע הודעת fallback לכל ספר שנבקש.</li>
+    <li><strong>השווה:</strong> ריצת סטרים — ציטוטים מהירים ויציבים. ריצת REST — ספרות גדולות יותר בשניות המחזור, הודעות fallback נראות.</li>
+    <li><strong>ריצה בפועל:</strong> הפעל את הסטאק המלא, פתח <span dir="ltr">http://127.0.0.1:8799</span>, לשונית <span dir="ltr">Trader</span> — בדוק שמחירי הציטוט מתעדכנים בזמן אמת.</li>
+  </ol>
+</div>
+
+</main>
+<script>
+const dpr=window.devicePixelRatio||1;
+const canvas=document.getElementById('seq-canvas');
+const ctx=canvas.getContext('2d');
+const W=900,H=260;
+canvas.width=W*dpr; canvas.height=H*dpr;
+canvas.style.width=W+'px'; canvas.style.height=H+'px';
+ctx.scale(dpr,dpr);
+
+// Actors: Trader(R), BookProvider(C), WS Stream(L), REST API(far-L)
+// Hebrew labels placed with LTR span wraps — we draw on canvas with ltr text
+const actors=[
+  {x:120,label:'Trader / Shadow'},
+  {x:320,label:'BookProvider'},
+  {x:520,label:'WS Stream'},
+  {x:720,label:'REST API'}
+];
+
+const ACCENT='#818cf8';
+const GREEN='#4ade80';
+const RED='#f87171';
+const AMBER='#fbbf24';
+const MUTED='#9aabb8';
+const INK='#eaf1f6';
+const BG='#172530';
+const LINE='#29404d';
+
+const steps=[
+  {from:0,to:1,label:'get_book(token)',color:ACCENT,y:80,dash:false,time:''},
+  {from:1,to:2,label:'stream cache hit?',color:ACCENT,y:110,dash:false,time:''},
+  {from:2,to:1,label:'book (< 1ms)',color:GREEN,y:140,dash:true,time:'< 1ms ✓'},
+  {from:1,to:0,label:'book returned',color:GREEN,y:170,dash:true,time:''},
+  {from:1,to:3,label:'(cold: REST fallback)',color:AMBER,y:200,dash:false,time:'~520ms'}
+];
+
+let currentStep=0;
+let playing=false;
+let timer=null;
+
+function drawBase(){
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle=BG;
+  ctx.fillRect(0,0,W,H);
+  // lifelines
+  ctx.strokeStyle=LINE;
+  ctx.lineWidth=1.5;
+  ctx.setLineDash([4,4]);
+  actors.forEach(a=>{
+    ctx.beginPath();
+    ctx.moveTo(a.x,50);
+    ctx.lineTo(a.x,H-10);
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  // actor boxes
+  actors.forEach(a=>{
+    ctx.fillStyle='#121c25';
+    ctx.strokeStyle=ACCENT;
+    ctx.lineWidth=1;
+    const tw=ctx.measureText(a.label).width+18;
+    ctx.beginPath();
+    ctx.roundRect(a.x-tw/2,10,tw,32,6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle=INK;
+    ctx.font='12px system-ui';
+    ctx.textAlign='center';
+    ctx.fillText(a.label,a.x,30);
+  });
+}
+
+function drawStep(i){
+  const s=steps[i];
+  const fromX=actors[s.from].x;
+  const toX=actors[s.to].x;
+  const arrowRight=toX>fromX;
+  // line
+  ctx.strokeStyle=s.color;
+  ctx.lineWidth=2;
+  if(s.dash) ctx.setLineDash([5,3]); else ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(fromX,s.y);
+  ctx.lineTo(toX,s.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // arrowhead
+  const ax=arrowRight?toX:toX;
+  const dir=arrowRight?1:-1;
+  ctx.fillStyle=s.color;
+  ctx.beginPath();
+  ctx.moveTo(ax,s.y);
+  ctx.lineTo(ax-dir*10,s.y-5);
+  ctx.lineTo(ax-dir*10,s.y+5);
+  ctx.closePath();
+  ctx.fill();
+  // label
+  const mx=(fromX+toX)/2;
+  ctx.fillStyle=s.color;
+  ctx.font='11px system-ui';
+  ctx.textAlign='center';
+  ctx.fillText(s.label,mx,s.y-6);
+  if(s.time){
+    ctx.fillStyle=s.time.includes('1ms')?GREEN:AMBER;
+    ctx.font='bold 11px system-ui';
+    ctx.fillText(s.time,mx,s.y+16);
+  }
+}
+
+function render(){
+  drawBase();
+  for(let i=0;i<=currentStep&&i<steps.length;i++) drawStep(i);
+  document.getElementById('step-label').textContent='שלב '+(currentStep+1)+' מתוך '+steps.length;
+}
+
+function stepFwd(){
+  if(currentStep<steps.length-1){currentStep++;render();}
+}
+function stepBack(){
+  if(currentStep>0){currentStep--;render();}
+}
+function resetAnim(){
+  currentStep=0;stopPlay();render();
+}
+function togglePlay(){
+  if(playing) stopPlay(); else startPlay();
+}
+function startPlay(){
+  playing=true;
+  document.getElementById('play-btn').textContent='⏸ עצור';
+  timer=setInterval(()=>{
+    if(currentStep<steps.length-1){currentStep++;render();}
+    else stopPlay();
+  },900);
+}
+function stopPlay(){
+  playing=false;
+  document.getElementById('play-btn').textContent='▶ הפעל';
+  clearInterval(timer);
+}
+
+// Mode toggle
+const modes={
+  stream:'<strong style="color:#4ade80">WebSocket חם:</strong> הספר נקרא מהזיכרון (&lt;1ms). הציטוט יוצא מיד. אין המתנת HTTP.',
+  rest:'<strong style="color:#fbbf24">REST (קר / --book-source rest):</strong> הספר מתבקש ב-HTTP. זמן: ~520ms. מדווח ביומן כ-fallback. כל ציטוט מחכה לתגובה.'
+};
+function setMode(m){
+  document.querySelectorAll('.mode-btn').forEach((b,i)=>b.classList.toggle('active',(i===0&&m==='stream')||(i===1&&m==='rest')));
+  document.getElementById('mode-result').innerHTML=modes[m];
+}
+
+render();
+</script>
+</body>
+</html>
