@@ -283,7 +283,7 @@ Target files: `dashboard/static/app.js:9581-9658`, `9941-9970`, `9972-10229`;
    Replace `test_is_live_market_classification` with a `marketLane`/`rowLane`
    truth table.
 
-### T4 — [Docs] Endpoint doc + operator path
+### T4 — [Docs] Endpoint doc + operator path [x]
 **Size S. Depends on: T1, T2. Verify: read the doc section against the shipped code paths.**
 
 Target file: `docs/polymarket-live-events-endpoint.md`.
