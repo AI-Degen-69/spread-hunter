@@ -1,63 +1,40 @@
-Branch: i730/record-stop-slippage | Issue: #730
+# Constraints — #749 Performance & Analytics consolidation
 
-# Constraints — spread-hunter measurement change #730
+Branch: `i749/consolidate-reports-and-analytics` | Issue: #749
 
-## Hard scope (measurement only)
+## Hard scope
 
-- No behaviour change: selling paths, FOK submission, requested sizes,
-  `_exit_fill_price` / `_exit_fill_size` fallbacks, `MAX_SELL_SLIPPAGE`,
-  reason labels, and reset logic stay byte-for-byte in behaviour. A change
-  that alters any execution behaviour is out of scope — stop and split it.
-- No new venue call, no new order path, no threshold moved.
+- Dashboard presentation only. No change to `core_brain/**`, `scoring/**`,
+  `dashboard/server.py`, `scripts/filter_markets.py`, the trading loop, the
+  registry, or any venue path. A change that reaches one of those is out of
+  scope — stop and split it.
+- No new statistic, no new KPI payload field, no `KPI_PAYLOAD_VERSION` bump.
+  Every rendered figure already exists in the payload the two cards read.
+- `#analytics-gates` and `#broker-portfolio-overview` keep exactly one home in
+  the document: deleting either breaks the Strategy or Home page.
+- The ported cards keep their data visuals (CI band, 90 %/95 % rows, loss
+  banner; four funnel stages, carry-on/lost arrows, WORST DROP, MERGED,
+  refused/dropped chips). Only their card chrome is harmonised.
 
-## Money-accuracy rules
+## Zero regressions
 
-- Unknown is never zero: unmeasured counts and `None` means stay `None`/
-  explicit, never defaulted with `x or 0.0` / `get(..., 0)` on measurement
-  fields.
-- A fill at the floor reports `0.00` slippage (`is not None`), not unknown.
-- Old rows are never backfilled; NULL `submitted_floor`/`fill_source` reads
-  as `historical` unmeasured.
-- Rehearsal figures are labelled rehearsal results, never venue results.
-- All summary floats go through `_finite()`; payload survives
-  `json.dumps(..., allow_nan=False)`.
-
-## Zero regressions (targeted only locally)
-
-- Every changed behaviour is covered by a test in
-  `tests/test_stop_slippage.py` (or the named existing suite) that fails
-  without the change.
-- Touched-module suites during work: the per-task Verify lines in
-  `tasks/plan.md`. The full `python -m pytest -q` suite is the GitHub CI
-  merge gate (Ubuntu + Windows) — never repeated locally to validate work.
-- Execution-unchanged proof suites that must keep passing unmodified:
-  `tests/test_hard_stop_fresh_exit.py`, `tests/test_dual_stop_loss.py`,
-  `tests/test_exit_price_realism.py`.
+- Green on this branch: `tests/test_sidebar_prototype.py`,
+  `tests/test_541_parity_ledger.py`, `tests/test_stop_slippage.py`,
+  `tests/test_analytics_surface_mount.py`, plus `tests/test_541_data_analysis.py`,
+  `tests/test_analysis_v2_binding.py`, `tests/test_analytics_api.py`,
+  `tests/test_analytics_impact_tiers.py`, `tests/test_portfolio_card_basis.py`.
+- New behaviour needs a test that fails without the change: the placement
+  assertions for the ported hosts (`pnl-ci-readout`, `execution-funnel`,
+  `stop-slippage-readout` inside `#analysis-v2`) are written first and RED.
 
 ## Anti-cheat
 
-- No skipping, renaming, or deleting tests; no deleting assertions; no
-  widening tolerance until a test passes; no `pytest.ini`/conftest hacks
-  that silence checks; no `# noqa`/`type: ignore`/`@ts-ignore` added to
-  bypass a failed gate; thresholds are never edited down to go green.
-- The 9 mechanical `_sell_into_bids` unpack edits in test files change no
-  assertion — reviewed as such.
+- No skipped, deleted or weakened test unless the subject of that test is the
+  thing this issue deletes (the analytics sub-nav and the legacy-only decks).
+  When a test is retired, its replacement or its reason is named in
+  `tasks/plan.md`. Never delete an assertion to reach green.
+- No `# type: ignore`, no bare `except: pass`, no lint suppressions.
 
 ## Dependencies
 
-- No new external dependency (stdlib argparse/sqlite3 only).
-
-## Database rules
-
-- `data/orders.db` is the production registry: read-only from the CLI
-  (`mode=ro`, no `OrderRegistry`); never rewritten or deleted by this work.
-- `hard_stop_refusals` is append-only: rows are added, never edited, and the
-  table is excluded from every delete/reset path.
-- `closes` gains only nullable columns; the migration must be idempotent and
-  safe on repeat init.
-
-## Version discipline
-
-- `KPI_PAYLOAD_VERSION` bump 259→260 lands on BOTH sides (backend + page
-  const) with the pinned test literal updated, in the same commit(s) as the
-  new section.
+- No new external dependency, no new stylesheet, no new script file.

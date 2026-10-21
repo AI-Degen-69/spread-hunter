@@ -30,7 +30,7 @@ _STATIC = _ROOT / "dashboard" / "static"
 HARNESS = Path(__file__).resolve().parent / "js" / "prototype_nav_harness.cjs"
 LAYOUT_HARNESS = Path(__file__).resolve().parent / "js" / "prototype_layout_harness.cjs"
 
-PAGES = ("home", "data-markets", "strategy", "trades", "reports", "analysis")
+PAGES = ("home", "data-markets", "strategy", "trades", "analysis")
 
 requires_node = pytest.mark.skipif(shutil.which("node") is None,
                                    reason="node is not installed on this host")
@@ -230,12 +230,12 @@ def test_home_is_the_page_a_first_visit_lands_on():
 
 @requires_node
 def test_the_chosen_page_survives_a_reload():
-    # Arrange — the previous visit ended on Reports.
-    rendered = _nav(stored="reports")
+    # Arrange — the previous visit ended on Trades & Positions.
+    rendered = _nav(stored="trades")
 
     # Act / Assert
-    assert rendered["visible"] == ["reports"]
-    assert rendered["current"] == ["reports"]
+    assert rendered["visible"] == ["trades"]
+    assert rendered["current"] == ["trades"]
 
 
 @requires_node
@@ -370,12 +370,13 @@ def test_the_served_page_loads_the_layout_assets():
 
 
 def test_the_analysis_entry_keeps_its_identity():
-    # Arrange — the #568 cutover moves the panel, never the rail entry.
+    # Arrange — the #568 cutover moves the panel, never the rail entry. #749
+    # retired the second analytics page, so the one left names what it holds.
     layout = _layout()
     entry = [e for e in layout["layout"] if e["page"] == "analysis"][0]
 
     # Act / Assert
-    assert entry["label"] == "Data Analysis"
+    assert entry["label"] == "Performance & Analytics"
     assert entry["selectors"] == ["#analysis-v2"]
     html = (_STATIC / "index.html").read_text(encoding="utf-8")
     assert html.count('id="analysis-v2"') == 1
@@ -562,11 +563,11 @@ def test_an_unreadable_pinned_state_loads_the_rail_collapsed():
 def test_pinning_does_not_disturb_the_chosen_page():
     # Arrange — the pin writes to storage, and one shared slot would make
     # pinning the rail forget which page the operator was on.
-    rendered = _nav(clicks=["reports"], click_pin=1)
+    rendered = _nav(clicks=["trades"], click_pin=1)
 
     # Act / Assert
-    assert rendered["stored"] == "reports"
-    assert rendered["visible"] == ["reports"]
+    assert rendered["stored"] == "trades"
+    assert rendered["visible"] == ["trades"]
 
 
 @requires_node

@@ -1,68 +1,41 @@
-Branch: i730/record-stop-slippage | Issue: #730
-
-# SPEC — #730 [MEASURE] Record stop-slippage on hard-stop exits
+# SPEC — One Performance & Analytics page (#749)
 
 ## Goal
 
-Every hard-stop exit sells into the book at a floor
-(`best_bid - MAX_SELL_SLIPPAGE`, floored to tick, `single_buy_saver.py:1115`)
-and records only the fill it got. The fleet cannot answer "what does a hard
-stop actually cost us" — the number that decides between limit-order exits,
-a wider cushion, or market orders, and gates #646 N2 (repricing a leftover
-leg). Record the decision price and the achieved price, aggregate the
-slippage into the KPI report.
+The dashboard serves two competing analytics pages ("Reports & Analytics" and
+"Data Analysis") that render the same statistics twice, in two designs. This
+change retires the Reports page and makes the surviving page the single
+analytics surface, labelled **Performance & Analytics**.
 
-## Acceptance criteria
+## In scope
 
-1. An exit whose fill matches the floor reports `0.00` slippage — never
-   "unknown".
-2. An exit that never filled (refused, zero size, fallback-priced) counts as
-   unmeasured — never zero (the queue-gate rule).
-3. The KPI report shows the aggregate without a schema break: existing keys
-   and meanings unchanged; a version bump on both sides; a stale backend
-   still renders the old page.
-4. A test fails without the field and passes with it — including the
-   unmeasured case.
-5. `python -m core_brain.kpi --db data/orders.db` shows a stop-slippage
-   figure once a run has produced a hard-stop exit; a shadow rehearsal that
-   produces a simulated exit moves the figure off "unmeasured" with a
-   rehearsal-labelled note; a refused rehearsal keeps it unmeasured and
-   raises the refused count.
+1. `reports` leaves `PAGES` and `PAGE_LAYOUT`; the `analysis` entry is relabelled
+   **Performance & Analytics** (rail label and hidden tab-shell label agree).
+2. The two legacy cards that are visibly better than their canonical twins move
+   into `#analysis-v2`, visuals unchanged: **Average Close & Confidence**
+   (`renderPnlCiReadout`) and **Execution Drop-off** (`renderExecutionFunnel`).
+3. **STOP-EXIT SLIPPAGE** (`renderStopSlippage`) moves onto the canonical page.
+4. The remaining legacy analytics cards and the `.stats-subnav` filter strip are
+   deleted. Statistics that already exist on the canonical page keep the one
+   rendering that page already has.
+5. `#analytics-gates` keeps a home in the document (the Strategy page claims it);
+   `#broker-portfolio-overview` stays where it is (Home claims it).
 
-## Deliverables
+## Out of scope
 
-- `closes.submitted_floor` (the floor the order was sent at) and
-  `closes.fill_source` ∈ {reported, simulated, assumed} — both nullable, no
-  backfill; old rows = historical unmeasured.
-- Append-only `hard_stop_refusals` table (refused/errored hard-stop
-  attempts; excluded from resets).
-- One always-present `stop_slippage` section (pure summary): counts,
-  mean/worst vs floor, mean/worst vs decision bid, below-floor count,
-  unmeasured reasons, refusal counts, simulated count, units.
-- Read-only `python -m core_brain.kpi --db <path> [--run-id <id>]`.
-- Dashboard card beside rescue-friction; unmeasured renders "unmeasured",
-  never `0.00`.
-- Demo seeds for the operator's hands-on check; N3 ledger row marked
-  addressed.
+- A page-wide visual restyle of the canonical cards.
+- Any new statistic, KPI payload field, or `KPI_PAYLOAD_VERSION` change.
+- Trading loop, registry, venue paths, market selection, sizing, risk.
+- Deleting the now-unreachable legacy renderer *functions* in `app.js`
+  (follow-up issue; this change deletes the markup and the wiring only).
 
-## Edge cases
+## Acceptance
 
-- Shadow walk that takes nothing still books the requested size at the floor
-  — the truth (took_shares) must be threaded, not inferred.
-- Partial closes (FOK leaves no remainder, but rescue sequences may close in
-  parts) count as one observation per close, unweighted.
-- Refusals repeat per poll for the same position: positions counted by
-  distinct `pair_id`, attempts by rows.
-- Live SDK responses without price/size fall back today: those exits remain
-  booked as before but read `assumed` ⇒ unmeasured.
-- Stores older than the columns: keys absent ⇒ historical unmeasured; the
-  CLI never writes anything.
-
-## Out of scope (from issue, unchanged)
-
-- Any behaviour change: exits stay market-FOK at the same floor; no
-  repricing, no new order path, no threshold move, no `MAX_SELL_SLIPPAGE`
-  change.
-- Parsing `takingAmount`-style live responses (separate ticket).
-- Existing `rescue_friction` wording/units quirks.
-- New scenario launchers (demo store covers the refused case).
+- The rail shows exactly one analytics page, labelled Performance & Analytics.
+- The canonical page renders the band CI card (90 % / 95 % rows, loss banner in
+  its negative state), the four-stage funnel with carry-on/lost arrows, WORST
+  DROP and MERGED badges plus the refused/dropped chips, and the STOP-EXIT
+  SLIPPAGE card.
+- No statistic is rendered twice in the served page; every stat-card title names
+  its unit (`test_541` 2a/2b stay green).
+- The Strategy page still shows `#analytics-gates`.
