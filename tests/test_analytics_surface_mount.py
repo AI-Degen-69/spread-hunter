@@ -170,21 +170,6 @@ def test_a_run_with_no_execution_telemetry_says_so():
     assert "No execution telemetry" in out["funnel_html"]
 
 
-# -- No sub-view can hide the decision row -----------------------------------
-
-@pytest.mark.parametrize("view", ["all", "distributions", "monte-carlo",
-                                  "markout", "simulator", "markets"])
-def test_no_analytics_sub_view_hides_the_go_no_go_row(view):
-    # Act
-    out = _mount(_kpi(LOSING_CI, FUNNEL))
-
-    # Assert -- the filter may hide decks; it may never hide Tier 1. The
-    # harness swallows a throwing filter, so a stored display of '' would
-    # otherwise pass this test on a filter that never ran at all.
-    assert not [e for e in out["errors"] if e.startswith("filter ")]
-    assert out["tier1_visibility"][view] != "none"
-
-
 # -- Sample size sufficiency rendering (#443) --------------------------------
 
 def test_sample_sufficiency_renders_three_levels():
@@ -961,13 +946,20 @@ def test_a_payload_from_before_this_section_renders_no_chips_at_all():
             assert leak not in text
 
 
-# -- Cached analytics-surface recovery (#540) --------------------------------
+# -- Cached recovery of the one analytics page (#540, #749) ------------------
 #
-# A dropped deferred frame leaves the five readouts at their placeholders
-# while the KPI tiles beside them keep painting. Opening Reports must repaint
-# the readouts synchronously from the cached snapshot. Driven through the
-# input-lag harness (real pollStatus + switchTab), recording BEFORE any flush.
+# A dropped frame can leave a card at its placeholder while the poll keeps
+# running. Opening the page must repaint its readouts synchronously from the
+# cached snapshot. Driven through the input-lag harness (real pollStatus +
+# switchTab), recording BEFORE any flush. #749 moved the readouts under test
+# from the retired reports surface to the one analytics page, so the scenario
+# opens Tab 4 -- the surface that still exists.
 _INPUT_LAG_HARNESS = Path(__file__).resolve().parent / "js" / "input_lag_harness.cjs"
+
+STOP_SLIPPAGE = {
+    "stop_exit_count": 3, "measured_count": 2, "unmeasured_count": 1,
+    "mean_gap_cents": 1.4, "worst_decision_cost_usd": 0.52,
+}
 
 
 def _recover(scenario, kpi):
@@ -978,74 +970,52 @@ def _recover(scenario, kpi):
     return json.loads(out.stdout)
 
 
-def _full_kpi(poison_mean_return=False):
-    """All five readout sections plus the guarded reads renderAnalyticsSurface needs."""
+def _full_kpi(poison_ci=False):
+    """Every section the three ported readouts read from."""
     return {
         "portfolio": {"account": {"account_value_usd": 100}},
         "trade_analytics": {
             "n_closes": 12, "wins": 7, "losses": 5,
-            "mean_return_pct": ("<string>" if poison_mean_return else 0.5),
+            "mean_return_pct": 0.5,
+            # A levelless band: reading a bound off it throws, which is the
+            # failure the isolation wrapper exists to contain.
+            "mean_pnl_ci": ({"mean_usd": -0.34, "n": 7, "levels": [None]}
+                            if poison_ci else LOSING_CI),
         },
-        "statistical_analytics": {
-            "fill_path_edge": FILL_PATH_EDGE,
-            "rescue_friction": RESCUE_FRICTION,
-            "queue_realism": QUEUE_REALISM,
-            "robustness": ROBUSTNESS,
-            "capital_risk": CAPITAL,
-        },
+        "execution_funnel": FUNNEL,
+        "statistical_analytics": {"stop_slippage": STOP_SLIPPAGE},
     }
 
 
-def _assert_all_five_readouts_painted(readouts):
-    assert "per close" in readouts["fill-path-edge-readout"]
-    assert "0.30" in readouts["fill-path-edge-readout"]
-    assert "33.3%" in readouts["fill-path-edge-readout"]
-    assert "SLED (¢)" in readouts["rescue-friction-readout"]
-    assert "15.80" in readouts["rescue-friction-readout"]
-    assert "Trade-Through Depth (¢)" in readouts["queue-realism-readout"]
-    assert "2.50" in readouts["queue-realism-readout"]
-    assert "10.0s" in readouts["queue-realism-readout"]
-    assert "Markout 5m (¢)" in readouts["robustness-readout"]
-    assert "-2.50" in readouts["robustness-readout"]
-    assert "SQN" in readouts["robustness-readout"]
-    assert "Deepest DD ($)" in readouts["capital-risk-readout"]
-    assert "14.60" in readouts["capital-risk-readout"]
-    assert "Sortino" in readouts["capital-risk-readout"]
+def _assert_ported_readouts_painted(readouts):
+    assert "mean realized pnl" in _visible(readouts["pnl-ci-readout"]).lower()
+    assert "Quoted" in _visible(readouts["execution-funnel"])
+    assert "Merged" in _visible(readouts["execution-funnel"])
     for html in readouts.values():
         assert "SENTINEL" not in html
 
 
-def test_tabs_recovery_repaints_all_five_readouts_synchronously():
+def test_tabs_recovery_repaints_the_ported_readouts_synchronously():
     res = _recover("analytics-tabs-recovery", _full_kpi())
 
-    _assert_all_five_readouts_painted(res["readouts"])
-    assert res["kpiGrid"] != "" and "SENTINEL" not in res["kpiGrid"]
-    assert res["queuedNew"] == 1
+    _assert_ported_readouts_painted(res["readouts"])
+    assert res["queuedNew"] == 0
     assert res["fetchKpi"] == 0
 
 
-def test_rail_recovery_repaints_all_five_readouts():
+def test_rail_recovery_repaints_the_ported_readouts():
     res = _recover("analytics-rail-recovery", _full_kpi())
 
-    _assert_all_five_readouts_painted(res["readouts"])
-    assert res["kpiGrid"] != ""
+    _assert_ported_readouts_painted(res["readouts"])
     assert res["fetchKpi"] == 0
 
 
 def test_error_isolation_survives_navigation_and_logs():
-    res = _recover("analytics-error-isolation", _full_kpi(poison_mean_return=True))
+    res = _recover("analytics-error-isolation", _full_kpi(poison_ci=True))
 
     assert res["crashed"] is False
-    assert res["tab2Hidden"] is False
+    assert res["tab4Hidden"] is False
     assert res["consoleErrors"] >= 1
-
-
-def test_stale_frame_paints_nothing():
-    res = _recover("analytics-stale", _full_kpi())
-
-    for html in res["readouts"].values():
-        assert "SENTINEL" in html
-    assert res["remainingQueue"] == 1
 
 
 def test_startup_with_empty_cache_leaves_placeholders():
@@ -1053,7 +1023,4 @@ def test_startup_with_empty_cache_leaves_placeholders():
 
     for html in res["readouts"].values():
         assert "SENTINEL" in html
-    assert "SENTINEL" in res["kpiGrid"]
     assert res["consoleErrors"] == 0
-
-

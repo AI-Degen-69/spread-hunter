@@ -90,16 +90,18 @@ def test_an_unmeasured_retention_reads_as_absent_rather_than_zero(app_js):
 
 # -- The surface is ordered, and stays in English ----------------------------
 
-def test_the_go_no_go_row_leads_the_surface(index_html):
-    assert index_html.index('id="tier1-decision-row"') < index_html.index('id="kpi-grid"')
-    assert 'id="pnl-ci-readout"' in index_html
-    assert 'id="execution-funnel"' in index_html
+def test_the_go_no_go_pair_leads_the_one_analytics_page(index_html):
+    # #749 deleted the reports surface these readings sat on; the pair now
+    # leads the page that survived, in document order.
+    assert index_html.index('id="analysis-v2"') < index_html.index('id="pnl-ci-readout"')
+    assert index_html.index('id="pnl-ci-readout"') < index_html.index('id="execution-funnel"')
 
 
-def test_the_squares_and_gates_use_human_language(app_js):
-    for title in ("Average Profit Per Close", "Mean Return Per Trade",
-                  "Annualized Sharpe Ratio", "Executed Sample Size"):
-        assert title in app_js
+def test_the_squares_and_gates_use_human_language(index_html, app_js):
+    # The KPI strip is markup on the one analytics page since #749.
+    for title in ("Mean Return Per Trade", "Executed Sample Size",
+                  "Sample Sufficiency Progress"):
+        assert title in index_html
 
     # The gates table names what each row measures and what it needs, in
     # column headers a reader can follow without the schema.
@@ -116,12 +118,11 @@ def test_the_tier_1_row_has_styling_of_its_own(styles_css):
 
 # -- Issue #248: the $ vs % sign divergence explains itself -------------------
 
-def test_expectancy_tiles_explain_the_dollar_vs_percent_sign_gap(app_js):
-    # Both grids carry the click-triggered explainer; pinned labels stay put.
-    assert "Why can $ and % disagree?" in app_js
-    assert "percents average % per close over measured closes only" in app_js
-    assert "Average Profit Per Close" in app_js
-    assert "Mean Return Per Trade" in app_js
+def test_expectancy_tiles_explain_the_dollar_vs_percent_sign_gap(index_html):
+    # The explainer travels with the reading it explains (#749 moved both).
+    assert "Why can $ and % disagree?" in index_html
+    assert "percents average % per close over measured closes only" in index_html
+    assert "Mean Return Per Trade" in index_html
 
 
 def test_expectancy_tiles_show_the_companion_sublabels(app_js):

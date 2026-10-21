@@ -404,7 +404,8 @@ def test_milestone8_html_contains_required_sections():
     The market inspection table was retired from Data & Markets (kanban +
     dashboard orders table superseded it), so it is asserted ABSENT here.
     """
-    assert "kpi-grid" in _read_static("index.html")
+    # #749 consolidated the KPI tiles into the one analytics page.
+    assert 'id="analysis-v2"' in _read_static("index.html")
     # Issue #504 / Operator Directive: exposure-bar retired from top-nav
     assert "exposure-bar" not in _read_static("index.html")
     assert "service-cards" in _read_static("index.html")
@@ -1569,8 +1570,10 @@ def test_operational_statuses_share_one_top_nav_bar():
     assert "btn-live-sync" not in html
     assert "live-ops-master-card" not in html
     assert "hud-db-mode" not in html
-    # Milestone 8 guard: the kpi-grid string must survive the hero removal.
-    assert 'id="kpi-grid"' in html
+    # Milestone 8 guard: the analytics page must survive the hero removal.
+    # #749 retired the KPI grid that once carried this guard; the one analytics
+    # page it consolidated into is what has to be there now.
+    assert 'id="analysis-v2"' in html
 
     # The removed IDs must not be referenced by the client logic either.
     app_js = _read_static("app.js")

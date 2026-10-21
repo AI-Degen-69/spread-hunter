@@ -572,9 +572,6 @@ function mountSidebarLayout(doc) {
     scope.body.classList.add('proto-body');
   }
 
-  // The analytics sub-nav filters the page it sits on, and the panels moved a
-  // moment ago. Re-check which of its views still have something to show.
-  if (typeof pruneStatsSubnav === 'function') pruneStatsSubnav();
   return shell;
 }
 

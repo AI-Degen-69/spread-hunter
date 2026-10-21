@@ -36,8 +36,7 @@ const DEFAULT_PAGES = [
   { page: 'data-markets', label: 'Data & Markets' },
   { page: 'strategy', label: 'Strategy' },
   { page: 'trades', label: 'Trades & Positions' },
-  { page: 'reports', label: 'Reports & Analytics' },
-  { page: 'analysis', label: 'Data Analysis' },
+  { page: 'analysis', label: 'Performance & Analytics' },
 ];
 
 /* ── element stub ── */

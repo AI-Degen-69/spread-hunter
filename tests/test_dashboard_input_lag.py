@@ -36,7 +36,7 @@ def _run(scenario: str, fetch_ok: bool = True) -> dict:
     out = subprocess.run(
         [shutil.which("node"), str(HARNESS),
          json.dumps({"scenario": scenario, "fetchOk": fetch_ok})],
-        capture_output=True, text=True, check=True)
+        capture_output=True, text=True, check=True, encoding="utf-8")
     return json.loads(out.stdout)
 
 
@@ -48,7 +48,7 @@ def test_poll_skips_hidden_tabs_but_keeps_header_live():
     # Assert — visible tab painted, header pill painted, hidden tabs untouched.
     assert res["tab1Head"] != ""
     assert res["scanPill"] != ""
-    assert res["kpiGrid"] == ""
+    assert res["gates"] == ""
     assert res["marketBody"] == ""
     assert res["kanbanBoard"] == ""
 
@@ -68,7 +68,7 @@ def test_poll_paints_only_the_active_rail_page():
     assert res["masterIndicator"] != ""
     assert res["brokerHero"] == "SENTINEL-STANDBY"
     assert res["ordersHead"] == ""
-    assert res["kpiGrid"] == ""
+    assert res["gates"] == ""
     assert res["marketBody"] == ""
     assert res["kanbanBoard"] == ""
     assert res["scanPill"] != ""
@@ -95,7 +95,7 @@ def test_poll_skips_offpage_renders_even_when_tab_gates_all_claim_visible():
     assert res["brokerHero"] != "SENTINEL-STANDBY"
     assert res["brokerHero"] != ""
     assert res["ordersHead"] != ""
-    assert res["kpiGrid"] == ""
+    assert res["gates"] == ""
     assert res["marketBody"] == ""
     assert res["kanbanBoard"] == ""
     assert res["scanPill"] != ""
@@ -128,7 +128,7 @@ def test_tab_switch_paints_synchronously_from_cache():
     assert res["tab1Hidden"] is True
     assert res["tab2Hidden"] is False
     assert res["tab3Hidden"] is True
-    assert res["kpiGrid"] != ""
+    assert res["gates"] != ""
     assert res["marketBody"] == ""
     assert res["kanbanBoard"] == ""
 
@@ -144,7 +144,7 @@ def test_rapid_clicks_end_on_the_last_tab_with_no_queued_replay():
     assert res["tab1Hidden"] is True
     assert res["tab2Hidden"] is True
     assert res["tab3Hidden"] is False
-    assert res["kpiGrid"] != ""
+    assert res["gates"] != ""
     assert res["kanbanBoard"] != ""
 
 
@@ -155,7 +155,7 @@ def test_a_failed_poll_never_crashes_and_leaves_hidden_tabs_blank():
 
     # Assert — no throw, nothing painted from nothing, header honest.
     assert res["crashed"] is False
-    assert res["kpiGrid"] == ""
+    assert res["gates"] == ""
     assert res["marketBody"] == ""
     assert res["kanbanBoard"] == ""
     assert res["scanPill"] != ""

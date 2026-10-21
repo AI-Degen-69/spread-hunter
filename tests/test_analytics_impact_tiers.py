@@ -1,18 +1,16 @@
-"""The analytics surface is ordered by decision impact, not by arrival order.
+"""The one analytics page is ordered by decision impact, not by arrival order.
 
-Issue #90 asks for components grouped by what they decide, with Tier 1
-dominating attention. The panel it replaced laid every deck out at the same
-weight, so a 1,000-path Monte Carlo projection sat level with the question of
-whether our average close is profitable at all.
+Issue #90 asked for components grouped by what they decide, with the go/no-go
+pair dominating attention. #749 consolidated two analytics pages into one and
+deleted the decks that carried the per-card `data-tier` labels, so the ranking
+that survives is the one an operator actually walks: the confidence band on the
+average close and the execution drop-off lead, the drill-downs follow.
 
-Tier 1 is the go/no-go pair (the confidence band on the average close, and the
-execution drop-off) plus the two charts that explain them. Tier 2 is
-drill-down. Tier 3 is exploration -- projections and the what-if simulator --
-and it renders last no matter where it sits in the document.
+The chart-grid ordering rules stay in CSS, so their assertions stay here.
 
 Journeys under test:
-1. As the Owner, the go/no-go row is the first thing on the analytics surface.
-2. As the Owner, every analytics deck declares which tier it belongs to.
+1. As the Owner, the go/no-go pair is the first thing on the analytics page.
+2. As the Owner, both of those readings are present, once each.
 3. As the Owner, exploration decks never outrank the decks that decide.
 """
 from __future__ import annotations
@@ -37,57 +35,25 @@ def styles_css() -> str:
     return STYLES.read_text(encoding="utf-8")
 
 
-# The decks that carry a tier, and the tier each one belongs to.
-TIER_BY_CARD = {
-    "card-pnl-ci": "1",
-    "card-execution-funnel": "1",
-    "card-sample-sufficiency": "1",
-    "card-position-returns-dist": "1",
-    "card-markout": "1",
-    "card-hist-kde": "2",
-    "card-prob-bell": "2",
-    "card-monte-carlo": "3",
-    "card-sensitivity-simulator": "3",
-}
+# -- The go/no-go pair leads -------------------------------------------------
 
-
-def _card_attrs(html: str, card_id: str) -> str:
-    """The opening tag of one card, by id."""
-    match = re.search(rf'<div[^>]*id="{re.escape(card_id)}"[^>]*>', html)
-    assert match, f"card {card_id!r} is not on the analytics surface"
-    return match.group(0)
-
-
-# -- Tier 1 leads ------------------------------------------------------------
-
-def test_the_go_no_go_row_comes_before_every_other_analytics_component(index_html):
+def test_the_go_no_go_pair_comes_before_every_other_analytics_component(index_html):
     # Arrange -- document order is what a screen reader and an unstyled render
-    # both follow, so the row has to lead there and not only in CSS.
-    surface = index_html.index('id="analytics-surface"')
-    tier1_row = index_html.index('id="tier1-decision-row"')
-    kpi_grid = index_html.index('id="kpi-grid"')
-    charts = index_html.index('id="analytics-charts-matrix"')
+    # both follow, so the pair has to lead there and not only in CSS.
+    page = index_html.index('id="analysis-v2"')
+    ci = index_html.index('id="pnl-ci-readout"')
+    funnel = index_html.index('id="execution-funnel"')
+    slippage = index_html.index('id="stop-slippage-readout"')
 
     # Assert
-    assert surface < tier1_row < kpi_grid < charts
+    assert page < ci < funnel < slippage
 
 
-def test_both_go_no_go_cards_are_present_and_labelled_tier_1(index_html):
-    # Assert -- the label is on screen, so the ranking is legible rather than
-    # implied by position alone.
-    assert 'id="pnl-ci-readout"' in index_html
-    assert 'id="execution-funnel"' in index_html
-    assert index_html.count("TIER 1") >= 2
-
-
-# -- Every deck declares its tier --------------------------------------------
-
-@pytest.mark.parametrize("card_id,tier", sorted(TIER_BY_CARD.items()))
-def test_each_analytics_deck_declares_its_impact_tier(index_html, card_id, tier):
-    # Assert -- an undeclared deck falls back to the CSS default and silently
-    # outranks whatever it was placed above.
-    attrs = _card_attrs(index_html, card_id)
-    assert f'data-tier="{tier}"' in attrs
+def test_both_go_no_go_cards_are_present_once_each(index_html):
+    # Assert -- one render site per reading: a second copy is how the pages
+    # drifted apart in the first place.
+    assert index_html.count('id="pnl-ci-readout"') == 1
+    assert index_html.count('id="execution-funnel"') == 1
 
 
 # -- Order follows tier, not document position -------------------------------

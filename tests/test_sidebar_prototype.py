@@ -174,39 +174,6 @@ def test_the_strategy_explainer_is_framed_rather_than_forked():
     assert (_STATIC / "strategy_explainer.html").exists()
 
 
-def test_the_analytics_subnav_filters_only_its_own_page():
-    # Arrange — those buttons filtered one tab panel by section. Two of the
-    # panels they hide (`#analytics-gates`, `#market-inspection-card`) now
-    # live on other pages, so an unscoped click blanks a page the operator is
-    # not looking at. Hiding the whole sub-nav was the holding fix while the
-    # layout sat at /prototype; scoping it to its own page is the real one.
-    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
-    app = (_STATIC / "app.js").read_text(encoding="utf-8")
-
-    # Act / Assert
-    assert ".proto-body .stats-subnav" not in css
-    assert "function statsFilterScope()" in app
-    assert "scope.contains(el)" in app
-    assert "closest('.proto-page')" in app
-
-
-def test_a_subnav_view_with_nothing_on_the_page_is_dropped():
-    # Arrange — Market Inspection was retired with the Data & Markets table:
-    # the kanban and the dashboard's orders table superseded it. Its button
-    # and STATS_VIEW_TARGETS entry are gone, and the prune still runs.
-    app = (_STATIC / "app.js").read_text(encoding="utf-8")
-    prototype = (_STATIC / "prototype.js").read_text(encoding="utf-8")
-
-    # Act
-    targets = app.split("const STATS_VIEW_TARGETS = {")[1].split("};")[0]
-
-    # Assert — the retired view has no target left, and the prune runs
-    # again after the panels move.
-    assert "#market-inspection-card" not in targets
-    assert "function pruneStatsSubnav()" in app
-    assert "pruneStatsSubnav()" in prototype
-
-
 # ── Navigation ──────────────────────────────────────────────────────────────
 
 @requires_node

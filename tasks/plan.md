@@ -67,6 +67,7 @@ Follow-up issue.
 ## Tasks
 
 ### T1 — Retire the `reports` page, relabel the analytics page
+- **Status:** done (`d81e4d2`).
 - **Size:** S · **Domain:** [Frontend/Code] · **Verify:** node harness + pytest (not browser)
 - **Files:** `dashboard/static/prototype.js` (`PAGES` :20, `PAGE_LAYOUT` :84-97,
   `normalizePage` comment :104), `dashboard/static/index.html:139`,
@@ -81,6 +82,7 @@ Follow-up issue.
 - **Depends on:** —
 
 ### T2 — Port the CI card and the funnel card into `#analysis-v2`
+- **Status:** done (`fe0717c`).
 - **Size:** M · **Domain:** [Frontend/UI] · **Verify:** pytest (node harness)
 - **Files:** `dashboard/static/index.html` (canonical cards :852-888, :936-953;
   legacy cards :474-496), `dashboard/static/analysis_v2.js` (`paintCiScale`
@@ -102,6 +104,7 @@ Follow-up issue.
 - **Depends on:** T1
 
 ### T3 — Move STOP-EXIT SLIPPAGE onto the canonical page
+- **Status:** done (`2142973`).
 - **Size:** S · **Domain:** [Frontend/UI] · **Verify:** pytest (node harness)
 - **Files:** `dashboard/static/index.html` (new card in the Microstructure &
   Execution section; delete legacy card :523-532), `tests/test_stop_slippage.py`
@@ -114,6 +117,7 @@ Follow-up issue.
 - **Depends on:** T2
 
 ### T4 — Delete the remaining legacy surface and its wiring
+- **Status:** done (see the deviations in the completion record).
 - **Size:** L · **Domain:** [Frontend/UI] · **Verify:** pytest (focused suites)
 - **Files:** `dashboard/static/index.html` (:454-751, minus `#analytics-gates`
   which is re-parented and minus `#broker-portfolio-overview` which stays),
@@ -150,6 +154,46 @@ Follow-up issue.
   tests/test_stop_slippage.py tests/test_analytics_surface_mount.py` plus the
   files T1–T4 touched.
 - **Depends on:** T4
+
+## Completion record
+
+- **T1–T4 done.** Commits: `d81e4d2` (T1), `fe0717c` (T2), `2142973` (T3), T4 with this file.
+- **T4 deviated from the plan in three places, each on evidence:**
+  1. **The `#kpi-grid` paint gate is deleted, not re-pointed.** `renderKPIs` reads
+     `grid.innerHTML` unguarded, so with `#kpi-grid` gone its only call sites were
+     dead branches. The decision gates were painted by the *deferred* repaint
+     inside `renderKPIs`, so `renderAnalyticsSurface` gained its own gate and its
+     own call site in `pollStatus` — otherwise the Strategy page's gates card
+     would have stopped repainting entirely.
+  2. **A new `paintAnalysisV2()` helper owns the analytics page.** The three
+     ported cards live under `#analysis-v2` but were painted by a function gated
+     on tab 2, so inside the rail layout `paintable()` refused the gate on the
+     page that actually shows them: the port was unreachable in production while
+     the rail-less test harnesses stayed green. Both call sites now go through
+     the helper, gated on `#analysis-v2`.
+  3. **Two pieces of chrome were ported with the readings they explain.**
+     `#quant-stale-note` (the amber "backend older than this page" band) and the
+     `$ vs %` explainer in the Mean Return tooltip lived only in the deleted
+     markup; dropping them would have removed a signal and a sentence, not a
+     duplicate.
+- **Retired tests, with subjects that no longer exist:**
+  - `test_sidebar_prototype.py::test_the_analytics_subnav_filters_only_its_own_page`
+    and `::test_a_subnav_view_with_nothing_on_the_page_is_dropped` — the sub-nav
+    they pin is deleted with the surface.
+  - `test_analytics_surface_mount.py::test_no_analytics_sub_view_hides_the_go_no_go_row`
+    (parametrised ×6) — same subject.
+  - `test_analytics_surface_mount.py::test_stale_frame_paints_nothing` and the
+    `analytics-stale` scenario — the rAF staleness guard lived in `renderKPIs`'
+    deferred chart paint, which has no call site left. The renderer and its
+    remaining suite retire in the follow-up issue below.
+  - `test_analytics_impact_tiers.py::test_each_analytics_deck_declares_its_impact_tier`
+    (parametrised ×9) — the decks carrying `data-tier` are gone; the surviving
+    ordering is pinned by document order on the canonical page. The two CSS
+    ordering rules stay asserted; the stylesheet sweep is the follow-up's job.
+- **Follow-up issue (not this PR):** retire the renderers whose hosts this issue
+  deleted (`renderKPIs`, `renderQuantRiskGrid`'s grid, the five accounting
+  readouts, the five chart renderers, the sensitivity simulator) together with
+  their suites and the now-dead `.analytics-chart-grid` tier CSS.
 
 ## Checkpoints
 

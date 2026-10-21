@@ -102,9 +102,11 @@ def test_the_ported_go_no_go_cards_live_on_the_analysis_page():
 
 
 def test_shell_poll_feeds_analysis_v2():
-    """Both poll call sites feed the cached snapshot to the v2 renderer."""
+    """Both paint call sites feed the cached snapshot to the page (#749 moved
+    them behind one helper, so each site is one call)."""
     src = (STATIC / "app.js").read_text(encoding="utf-8")
-    assert src.count("renderAnalysisV2(") >= 2
+    assert src.count("paintAnalysisV2(") >= 2
+    assert src.count("renderAnalysisV2(") == 1
     assert "renderDataAnalysis" not in src
     js = (STATIC / "prototype.js").read_text(encoding="utf-8")
     assert "'#analysis-v2'" in js
