@@ -2436,7 +2436,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     report has no business writing to a live registry.
 
     Every run in the file is aggregated -- a store-wide cost figure, where the
-    dashboard card slices the same rows to the run it is showing.
+    dashboard card slices the same rows to the run it is showing. `--run-id`
+    narrows both tables to one run.
     """
     parser = argparse.ArgumentParser(
         description="Stop-exit slippage, measured off the close and refusal rows.")
@@ -2444,6 +2445,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="registry database to read (default: data/orders.db)")
     parser.add_argument("--json", action="store_true",
                         help="print the raw summary instead of the short report")
+    parser.add_argument("--run-id", default=None,
+                        help="only rows written by this run (default: every run)")
     args = parser.parse_args(argv)
 
     path = Path(args.db)
@@ -2460,6 +2463,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     finally:
         conn.close()
 
+    if args.run_id:
+        closes = [c for c in closes if c.get("run_id") == args.run_id]
+        refusals = [r for r in refusals if r.get("run_id") == args.run_id]
+
     summary = stop_slippage_summary(closes, refusals)
     if args.json:
         print(json.dumps(summary, indent=2))
@@ -2470,7 +2477,8 @@ def main(argv: Optional[list[str]] = None) -> int:
           f"measured: {summary['measured_count']}  "
           f"unmeasured: {summary['unmeasured_count']} "
           f"(historical {reasons['historical']}, "
-          f"assumed {reasons['assumed_fill']})")
+          f"assumed {reasons['assumed_fill']}, "
+          f"refused {reasons['refused']})")
     if summary["mean_vs_floor"] is None:
         print("vs floor: unmeasured (no observed fill)")
     else:

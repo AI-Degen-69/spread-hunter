@@ -485,3 +485,87 @@ def test_partial_stop_exits_stay_two_measurements_after_the_reset(tmp_path):
     assert out["measured_count"] == 2
     assert out["mean_vs_floor"] == pytest.approx(0.02)  # (0.01 + 0.03) / 2
     assert out["worst_vs_floor"] == pytest.approx(0.03)
+
+def test_summary_counts_a_refused_only_position_as_unmeasured():
+    """A stop that never sold measured nothing -- it is not a clean exit."""
+    out = _summary([], refusals=[{"pair_id": "p9", "outcome": "refused"}])
+
+    assert out["stop_exit_count"] == 1
+    assert out["measured_count"] == 0
+    assert out["unmeasured_count"] == 1
+    assert out["unmeasured_reasons"]["refused"] == 1
+    assert out["mean_vs_floor"] is None
+    assert out["refused_position_count"] == 1
+
+
+def test_summary_does_not_count_a_refused_then_exited_position_twice():
+    out = _summary(_close(pair_id="p1"),
+                   refusals=[{"pair_id": "p1", "outcome": "refused"},
+                             {"pair_id": "p1", "outcome": "refused"}])
+
+    assert out["stop_exit_count"] == 1
+    assert out["measured_count"] == 1
+    assert out["unmeasured_count"] == 0
+    assert out["unmeasured_reasons"]["refused"] == 0
+    assert out["refused_attempt_count"] == 2
+
+
+def test_cli_run_id_narrows_both_tables_to_the_chosen_run(tmp_path, capsys):
+    import json
+
+    from core_brain import kpi
+
+    db = tmp_path / "two-runs.db"
+    init_db(db)
+    reg = OrderRegistry(db_path=db, run_id="run-b")
+    reg.log_close(CloseRecord(ts=1.0, condition_id="0xa", method="single_buy_exit",
+                              shares=5.0, dn_price=0.13, run_id="run-a",
+                              reason="lifecycle_hard_stop", submitted_floor=0.14,
+                              fill_source="reported"))
+    reg.log_close(CloseRecord(ts=2.0, condition_id="0xb", method="single_buy_exit",
+                              shares=5.0, dn_price=0.13, run_id="run-b",
+                              reason="lifecycle_hard_stop", submitted_floor=0.13,
+                              fill_source="reported"))
+    reg.log_hard_stop_refusal(pair_id="pair-b2", condition_id="0xb",
+                              trigger_bid=0.15, outcome="refused")
+
+    assert kpi.main(["--db", str(db), "--json", "--run-id", "run-a"]) == 0
+    section = json.loads(capsys.readouterr().out)
+    assert (section["stop_exit_count"], section["mean_vs_floor"]) == (1, pytest.approx(0.01))
+    assert section["refused_position_count"] == 0
+
+    assert kpi.main(["--db", str(db), "--json", "--run-id", "run-b"]) == 0
+    section = json.loads(capsys.readouterr().out)
+    assert section["stop_exit_count"] == 2
+    assert section["unmeasured_reasons"]["refused"] == 1
+
+HARNESS = Path(__file__).resolve().parent / "js" / "analytics_surface_harness.cjs"
+
+
+def _mount(kpi_payload):
+    """The card's rendered copy, from the stub-DOM harness."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed on this host")
+    out = subprocess.run([node, str(HARNESS), json.dumps({"kpi": kpi_payload})],
+                         capture_output=True, text=True, check=True,
+                         encoding="utf-8")
+    return json.loads(out.stdout)
+
+
+def test_card_shows_worst_decision_cost_and_labels_rehearsal_fills():
+    payload = {"statistical_analytics": {"stop_slippage": {
+        "stop_exit_count": 3, "measured_count": 2, "unmeasured_count": 1,
+        "unmeasured_reasons": {"historical": 0, "assumed_fill": 1, "refused": 0},
+        "below_floor_count": 1, "mean_vs_floor": 0.01, "worst_vs_floor": 0.02,
+        "decision_measured_count": 2, "mean_vs_decision": 0.0267,
+        "worst_vs_decision": 0.04, "refused_position_count": 0,
+        "refused_attempt_count": 0, "simulated_count": 2, "units": "usd_per_share"}}}
+    html = _mount(payload)["stop_slippage_html"]
+
+    assert "Worst vs Decision ($)" in html
+    assert "$0.0400" in html
+    assert "rehearsal" in html

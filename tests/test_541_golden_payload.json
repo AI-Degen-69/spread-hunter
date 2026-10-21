@@ -1418,7 +1418,8 @@
       "unmeasured_count": 0,
       "unmeasured_reasons": {
         "assumed_fill": 0,
-        "historical": 0
+        "historical": 0,
+        "refused": 0
       },
       "worst_vs_decision": null,
       "worst_vs_floor": null

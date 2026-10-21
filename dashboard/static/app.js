@@ -5853,17 +5853,21 @@ function renderStopSlippage(stats, hostId) {
       ${tile('Mean vs Floor ($)', perShare(slip.mean_vs_floor), 'floor we sent → price we got')}
       ${tile('Worst vs Floor ($)', perShare(slip.worst_vs_floor), 'the deepest single exit')}
       ${tile('Mean vs Decision ($)', perShare(slip.mean_vs_decision), 'bid that fired the stop → fill')}
+      ${tile('Worst vs Decision ($)', perShare(slip.worst_vs_decision), 'the deepest decision-to-fill gap')}
     </div>
     <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
       Measured ${count(slip.measured_count)} of ${count(slip.stop_exit_count)} stop exits ·
       unmeasured ${count(slip.unmeasured_count)} (historical ${count(reasons.historical)},
-      assumed ${count(reasons.assumed_fill)}) · below floor ${count(slip.below_floor_count)} ·
-      simulated ${count(slip.simulated_count)}
+      assumed ${count(reasons.assumed_fill)}, refused ${count(reasons.refused)}) ·
+      below floor ${count(slip.below_floor_count)} · simulated ${count(slip.simulated_count)}
     </div>
     <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:4px">
       Refused positions ${count(slip.refused_position_count)}
       (${count(slip.refused_attempt_count)} attempts) · dollars per share ·
       unmeasured exits stay out of every mean, never counted as zero.
+      ${count(slip.simulated_count) > 0
+        ? 'Simulated fills are rehearsal results blended into the means above — not venue results.'
+        : ''}
     </div>`;
 }
 

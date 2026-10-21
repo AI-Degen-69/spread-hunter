@@ -864,14 +864,22 @@ def stop_slippage_summary(closes: Sequence[Any],
         for row in refusal_rows
         if _close_field(row, "pair_id") is not None
     }
+    # A position that refused and later sold is one exit already in
+    # `stop_closes`; only a refusal that never became a close adds a stop exit
+    # nobody measured, and it belongs in the unmeasured population rather than
+    # being read as a free exit.
+    exited_pairs = {str(_close_field(c, "pair_id")) for c in stop_closes
+                    if _close_field(c, "pair_id") is not None}
+    refused_only = len(refused_positions - exited_pairs)
 
     return {
-        "stop_exit_count": len(stop_closes),
+        "stop_exit_count": len(stop_closes) + refused_only,
         "measured_count": len(costs_floor),
-        "unmeasured_count": historical + assumed_fill,
+        "unmeasured_count": historical + assumed_fill + refused_only,
         # Why a row measured nothing, so the card can say it without guessing.
         "unmeasured_reasons": {"historical": historical,
-                               "assumed_fill": assumed_fill},
+                               "assumed_fill": assumed_fill,
+                               "refused": refused_only},
         "below_floor_count": below_floor,
         "mean_vs_floor": (sum(costs_floor) / len(costs_floor)
                           if costs_floor else None),
