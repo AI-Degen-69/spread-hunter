@@ -28,14 +28,11 @@
 "🔍 Needs Triage":
   - '/\b(needs[- ]triage|triage)\b/i'
 
-"ℹ️ Needs Info":
-  - '/\b(needs[- ]info|more info|information needed)\b/i'
+"🙋 Needs Input":
+  - '/\b(needs[- ]info|needs[- ]answers?|open question|more info|information needed|how do i|how can i|why does|why is|is there a way)\b/i'
 
-"❓ Needs Answers":
-  - '/\b(needs[- ]answers?|open question)\b/i'
-
-"🚧 Blocked: Code Gate":
-  - '/\b(blocked:code[- ]gate|code gate|code[- ]gate)\b/i'
+"🚧 Blocked":
+  - '/\b(blocked|blocked:code[- ]gate|code gate|code[- ]gate|waiting on|depends on)\b/i'
 
 "💡 Idea":
   - '/\b(^idea:|raw idea|captured idea)\b/i'
@@ -74,38 +71,18 @@
 "⚡ Quick Fix":
   - '/\b(quick[- ]?fix|typo|one[- ]?liner|trivial)\b/i'
 
-# --- Domain / Spread Hunter Specifics ---
-"🏦 Exchanges":
-  - '/\b(exchange|ccxt|binance|bybit|okx|coinbase|kraken|kucoin|hyperliquid|gateio|mexc|bitget)\b/i'
+"🛠️ Maintenance":
+  - '/\b(maintenance|refactor|dependency|dependencies|ci|cd|github actions|workflow|build|deploy|docker|compose|k8s|kubernetes|tooling|infra|upgrade)\b/i'
 
-"📖 Orderbook":
-  - '/\b(orderbook|order-book|depth|bids?|asks?|l2|l3|snapshot|ticker|liquidity|slippage)\b/i'
-
-"🎯 Arbitrage":
-  - '/\b(arbitrage|arb|spread|triangular|cross-exchange|funding rate|basis|hedg(e|ing))\b/i'
-
-"⚙️ Execution":
-  - '/\b(execution|router|trade|order|fill|limit|market|post-only|cancel|stop-loss|take-profit)\b/i'
-
-"🔔 Alerts":
-  - '/\b(alert|notification|telegram|discord|webhook|slack|email|pagerduty)\b/i'
-
-"🔌 API & WebSocket":
-  - '/\b(websocket|ws|wss|rest api|endpoint|rate limit|429|connection drop|reconnect|heartbeat)\b/i'
-
-"🛠️ Infra & CI":
-  - '/\b(docker|compose|ci|cd|github actions|workflow|build|deploy|k8s|kubernetes)\b/i'
-
-"🎨 UI & Design":
-  - '/\b(ui|ux|frontend|design|css|style|layout|component|dashboard|visual|accessibility|a11y)\b/i'
-
-"📊 Execution Telemetry":
-  - '/\b(telemetry|fill.path|friction|queue|markout|capital.risk|execution telemetry)\b/i'
-
-# --- Accessibility ---
+# --- Quality ---
 "♿ Accessibility":
   - '/\b(accessibility|a11y|screen reader|wcag|aria|keyboard navigation)\b/i'
 
-# --- Question ---
-"❓ Question":
-  - '/\b(how do i|how can i|why does|why is|is there a way)\b/i'
+"🔒 Security":
+  - '/\b(security|vulnerability|vuln|cve|hardening|auth|authorization|authentication|xss|csrf|injection)\b/i'
+
+"🧪 Testing":
+  - '/\b(test|testing|coverage|flaky|e2e|integration test|unit test|snapshot)\b/i'
+
+"🎨 UI & Design":
+  - '/\b(ui|ux|frontend|design|css|style|layout|component|dashboard|visual)\b/i'

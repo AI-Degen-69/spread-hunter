@@ -2,6 +2,8 @@
 # .github/workflows/labels-sync.yaml (additive: nothing here deletes one).
 # Mirrors `gh label list` at the time it was written; a name with a colon or
 # an emoji is quoted so YAML keeps it a string.
+#
+# GENERIC LABELS — suitable for any repository, any project type.
 
 # --- Status / Workflow ---
 - name: "🤖 Ready for Agent"
@@ -16,17 +18,13 @@
   color: "e99695"
   description: "Maintainer needs to evaluate this idea"
 
-- name: "ℹ️ Needs Info"
+- name: "🙋 Needs Input"
   color: "d876e3"
-  description: "Waiting on reporter for more information"
+  description: "Waiting on reporter for more information, open questions, or clarification"
 
-- name: "❓ Needs Answers"
-  color: "FBCA04"
-  description: "Open questions recorded in the issue body"
-
-- name: "🚧 Blocked: Code Gate"
+- name: "🚧 Blocked"
   color: "B60205"
-  description: "Blocked until all code tasks are done — needs stable codebase before running"
+  description: "Blocked by another issue, external dependency, or gate"
 
 - name: "💡 Idea"
   color: "bfd4f2"
@@ -77,49 +75,23 @@
   color: "2133fa"
   description: "Trivial correction (typo, stale comment, wrong constant, ≤2 files, no behavior change)"
 
-# --- Domain / Spread Hunter Specifics ---
-- name: "🏦 Exchanges"
-  color: "5319e7"
-  description: "Issues related to CEX/DEX connectors"
-
-- name: "📖 Orderbook"
-  color: "0e8a16"
-  description: "Orderbook, depth, liquidity, or snapshots"
-
-- name: "🎯 Arbitrage"
-  color: "1d76db"
-  description: "Arbitrage calculation, spreads, or triangular logic"
-
-- name: "⚙️ Execution"
-  color: "fbca04"
-  description: "Order routing, limit/market orders, and fills"
-
-- name: "🔔 Alerts"
-  color: "e99695"
-  description: "Telegram, Discord, or webhook alerts"
-
-- name: "🔌 API & WebSocket"
-  color: "1f6feb"
-  description: "REST endpoints, WebSockets, or rate limits"
-
-- name: "🛠️ Infra & CI"
+- name: "🛠️ Maintenance"
   color: "6f42c1"
-  description: "Docker, CI/CD, or deployment issues"
+  description: "Refactoring, dependency updates, tooling, CI/CD, or infrastructure"
 
-- name: "🎨 UI & Design"
-  color: "f06292"
-  description: "Frontend, UI/UX, design system, or visual changes"
-
-- name: "📊 Execution Telemetry"
-  color: "1d76db"
-  description: "Execution telemetry suite: fill-path, friction, queue, markout, capital risk"
-
-# --- Accessibility ---
+# --- Quality ---
 - name: "♿ Accessibility"
   color: "f143ab"
   description: "Barrier affecting people with disabilities"
 
-# --- Question ---
-- name: "❓ Question"
-  color: "d876e3"
-  description: "Further information is requested"
+- name: "🔒 Security"
+  color: "ff0000"
+  description: "Security vulnerability or hardening"
+
+- name: "🧪 Testing"
+  color: "006b75"
+  description: "Test coverage, test infrastructure, or flaky tests"
+
+- name: "🎨 UI & Design"
+  color: "f06292"
+  description: "Frontend, UI/UX, design system, or visual changes"
