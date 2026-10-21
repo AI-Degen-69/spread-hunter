@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -236,3 +239,193 @@ def test_cockpit_html_links_to_no_purged_page():
     for dead in ('href="/484"', 'href="/492"', 'href="/608"'):
         assert dead not in html, f"purged page still linked: {dead}"
     assert 'href="/487"' in html
+
+
+# --- A record that cannot be read is not the same as no record ---------------
+#
+# `resolve_tournament_arms` silently fell back to the static presets on any
+# exception, and the page then said "not started". A truncated or hand-edited
+# record -- exactly what a crash mid-write leaves behind -- therefore looked
+# like a clean slate, and the operator drew conclusions from default numbers.
+# The status function makes that state visible instead of guessing.
+
+BROKEN_RECORD = '{"arms": [{"name": "control",'
+
+
+def _broken_record(tmp_path: Path) -> Path:
+    tourn_dir = tmp_path / "runtime" / "tournaments"
+    tourn_dir.mkdir(parents=True, exist_ok=True)
+    path = tourn_dir / "487_current_setup_10arm.json"
+    path.write_text(BROKEN_RECORD, encoding="utf-8")
+    return path
+
+
+def test_broken_record_reports_its_path_and_the_reason(tmp_path, monkeypatch):
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    path = _broken_record(tmp_path)
+
+    arms, record_error = cockpit.resolve_tournament_arms_with_status("487")
+
+    # The table keeps working (static presets), but never silently.
+    assert arms == cockpit.ARMS_CONFIG_487
+    assert record_error is not None
+    assert str(path) in record_error, "the operator must know WHICH file to fix"
+    assert "line" in record_error.lower(), f"no JSON parser reason: {record_error}"
+
+
+@pytest.mark.parametrize(
+    "payload, expected",
+    [
+        ("[]", "top level is not a JSON object"),
+        ('{"arm": []}', "'arms' is missing"),
+        ('{"arms": {}}', "'arms' is not a list"),
+        ('{"arms": ["control"]}', "arm 0 is not a JSON object"),
+        ('{"arms": [{"db_path": "x"}]}', "arm 0 has no string 'name'"),
+        # Present-but-unusable values: a null db_path would reach `ROOT / cfg["db"]`
+        # inside analyze_arm_database, raise TypeError and take the page with it.
+        ('{"arms": [{"name": "control", "db_path": null}]}', "arm 0 (control) has a non-string 'db_path'"),
+        ('{"arms": [{"name": "control", "run_id": null}]}', "arm 0 (control) has a non-string 'run_id'"),
+        ('{"arms": [{"name": "control", "dash_port": "8801"}]}', "arm 0 (control) has a non-integer 'dash_port'"),
+    ],
+)
+def test_broken_record_shape_errors_name_the_arm_at_fault(
+    tmp_path, monkeypatch, payload, expected
+):
+    """A record that parses but is the wrong shape is just as unreadable."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    tourn_dir = tmp_path / "runtime" / "tournaments"
+    tourn_dir.mkdir(parents=True, exist_ok=True)
+    (tourn_dir / "487_current_setup_10arm.json").write_text(payload, encoding="utf-8")
+
+    arms, record_error = cockpit.resolve_tournament_arms_with_status("487")
+
+    assert arms == cockpit.ARMS_CONFIG_487
+    assert record_error is not None
+    assert expected in record_error
+
+
+def test_no_record_is_not_an_error(tmp_path, monkeypatch):
+    """A run that has not started yet is a normal state, not a failure."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+
+    arms, record_error = cockpit.resolve_tournament_arms_with_status("487")
+
+    assert arms == cockpit.ARMS_CONFIG_487
+    assert record_error is None
+
+
+def test_a_readable_record_reports_no_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _record(tmp_path, "487_current_setup_10arm.json", [{
+        "name": "control",
+        "db_path": "data/real_control.db",
+        "run_id": "shadow-real-control",
+        "dash_port": 9901,
+    }])
+
+    arms, record_error = cockpit.resolve_tournament_arms_with_status("487")
+
+    assert record_error is None
+    assert {a["name"]: a for a in arms}["control"]["db"] == "data/real_control.db"
+
+
+def test_plain_resolver_still_returns_only_the_arms(tmp_path, monkeypatch):
+    """The wrapper keeps its old signature: other callers must not break."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _broken_record(tmp_path)
+
+    arms = cockpit.resolve_tournament_arms("487")
+
+    assert isinstance(arms, list)
+    assert arms == cockpit.ARMS_CONFIG_487
+
+
+def test_null_db_path_warns_instead_of_crashing_the_stats(tmp_path, monkeypatch):
+    """The end the shape check exists for: the stats endpoint still answers.
+
+    `analyze_arm_database` starts with `ROOT / cfg["db"]`. Handed a null db_path
+    it raises TypeError, so the page and `/api/stats` die with a traceback and
+    the operator sees no warning at all. The record must be refused first.
+    """
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _record(tmp_path, "487_current_setup_10arm.json", [
+        {"name": "control", "db_path": None, "run_id": "shadow-real", "dash_port": 8801},
+    ])
+
+    stats = cockpit.collect_all_stats("487")
+
+    assert stats["record_error"] is not None
+    assert "arm 0 (control)" in stats["record_error"]
+    # The table is the static fallback, not a half-merged arm with db=None.
+    assert {a["db"] for a in stats["arms"]} == {
+        a["db"] for a in cockpit.ARMS_CONFIG_487
+    }
+
+
+def test_a_broken_record_warns_once_not_once_per_poll(tmp_path, monkeypatch, caplog):
+    """`get_cached_stats` re-collects every 3s; 1200 log lines an hour help nobody."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _broken_record(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger=cockpit.__name__):
+        for _ in range(3):
+            cockpit.resolve_tournament_arms_with_status("487")
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1, [r.getMessage() for r in warnings]
+    assert "Could not read tournament record" in warnings[0].getMessage()
+
+
+def test_a_record_that_breaks_again_warns_again(tmp_path, monkeypatch, caplog):
+    """A fixed record must clear the memory, or the next break goes unseen."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    path = _broken_record(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger=cockpit.__name__):
+        cockpit.resolve_tournament_arms_with_status("487")
+        path.write_text(json.dumps({"arms": []}), encoding="utf-8")
+        assert cockpit.resolve_tournament_arms_with_status("487")[1] is None
+        path.write_text(BROKEN_RECORD, encoding="utf-8")
+        assert cockpit.resolve_tournament_arms_with_status("487")[1] is not None
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2, [r.getMessage() for r in warnings]
+
+
+def test_cockpit_page_shows_the_broken_record_warning():
+    """The fallback table must say, on screen, that it is the fallback."""
+    broken = cockpit.generate_cockpit_html({
+        "arms": [], "tourney_key": "487",
+        "record_error": "C:/run/487_current_setup_10arm.json: line 1 column 27",
+    })
+    assert 'id="record-warning"' in broken
+    assert 'record-warning" class="badge-red" style="display: block;' in broken
+    assert "failed to parse" in broken
+    assert "487_current_setup_10arm.json: line 1 column 27" in broken
+
+    healthy = cockpit.generate_cockpit_html(
+        {"arms": [], "tourney_key": "487", "record_error": None})
+    # Always in the DOM so the 5s poll can reveal it without a reload.
+    assert 'id="record-warning"' in healthy
+    assert 'style="display: none;' in healthy
+
+
+def test_tournament_metadata_carries_no_never_rendered_badge():
+    """`badge`/`badge_cls` were declared per tournament and rendered nowhere."""
+    for key, meta in cockpit.TOURNAMENTS.items():
+        assert "badge" not in meta, key
+        assert "badge_cls" not in meta, key
+
+
+def test_nav_pill_is_the_single_current_setup_badge():
+    html = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "487"})
+    assert html.count("CURRENT SETUP</span>") == 1
+    assert html.count('class="tourney-pill') == 1
