@@ -1,57 +1,54 @@
-# Constraints — #487 First 10-arm tournament from the current setup
+# Constraints — #754 Cockpit: surface arm-record parse failures, drop dead badge metadata
 
-Branch: `i487/Plan-the-first-10-arm-tournament-from-the-current-setup` | Issue: #487
+Branch: `i754/cockpit-record-parse-warning-and-drop-dead-badge` | Issue: #754
 
 ## Hard scope
 
-- **Shadow mode only.** Nothing in this issue reaches the venue. No signer, no live
-  order path, no `core_brain/trader_loop.py`, no `core_brain/order_manager.py`.
+- **Two files only:** `scripts/tournament_cockpit_server.py` and
+  `tests/test_tournament_cockpit_arms.py`. Anything else is out of scope for this issue.
+- **No LIVE execution.** This is a read-only cockpit page. No signer, no order path, no
+  `core_brain/order_manager.py`, no venue call.
 - **Never touch `data/orders.db`.** It is the production registry. Neither read nor write.
-- **This issue prepares the run; it does not launch it.** The 12-hour tournament is the
-  operator's to start. No task here runs `scripts/shadow_tournament.py` without `--dry-run`.
-- **The tournament spec is arm definitions, not strategy code.** No file under
-  `core_brain/`, `scoring/`, `strategy/` or `dashboard/` changes. A change that reaches
-  one of those is out of scope — stop and split it.
+- **No change to arm resolution precedence.** The named-record-over-timestamped sort, the
+  `i<key>_tournament-<run>.json` scheme for #492/#608, and the static-table fallback all stay
+  exactly as they are. Only the *failure visibility* is new.
+- **No route changes.** `/487` stays the only page; `/484`, `/492`, `/608` keep returning 404.
 
 ## Zero regressions
 
-- Targeted checks covering the touched files must pass during development and after
-  review fixes: `python -m pytest -q tests/test_shadow_tournament.py` and
-  `python -m pytest -q tests/test_tournament_cockpit_arms.py`. The full
-  `python -m pytest -q` suite is the GitHub CI merge gate; do not repeat it locally.
-- New behaviour needs a test that fails without the change. The arms spec needs a test
-  that fails while the spec is absent or carries a two-knob arm.
-- **`#492` / `#608` cockpit resolution is a frozen contract.** The
-  `resolve_tournament_arms` change may only add the `487` named-stamp form to the `487`
-  branch of the resolution path. A `492` or `608` plan record must resolve exactly as it
-  does today.
+- `python -m pytest -q tests/test_tournament_cockpit_arms.py tests/test_tournament_cockpit_funnel.py tests/test_tournament_dashboard_hub.py`
+  must pass. The full suite is the CI merge gate, not a local step.
+- `resolve_tournament_arms(key)` keeps its exact current signature and return type
+  (`list[dict]`). Five existing tests and `collect_all_stats` call it; it must stay a
+  drop-in.
 
-## Performance / resource ceilings
+## Behavioural contract (the point of the issue)
 
-- The dry-run validation is the only run this issue performs: it prints, it exits, it
-  starts no process.
-- Storage budget stated up front: 10 arms × ~110 MB ≈ **1.1 GB** of `data/*.db` for the
-  eventual 12-hour run. That is the existing per-arm shadow-store size, not a new cost,
-  but the operator needs the number before launching.
+- A record that **does not exist** means "the run has not started" and shows **no warning**.
+- A record that **exists but cannot be read** (truncated JSON, unparsable, or no `arms` list)
+  must be **visibly reported** — never rendered as the same silent "not started" table.
+- Dropping `TOURNAMENTS[*]["badge"]` / `["badge_cls"]` must not change what the nav renders:
+  the single `/487` pill's hardcoded `CURRENT SETUP` badge is the only badge on that nav.
+- The failure is a **named** error (`TournamentRecordError`) raised from shape validation,
+  with only `OSError` / `ValueError` caught around the read. The blanket `except Exception`
+  goes away, so an unforeseen bug surfaces loudly instead of posing as "not started".
+- One warning per broken record, not one per poll: `get_cached_stats` re-collects every 3s.
 
 ## Anti-cheat
 
-- Do not weaken, skip, delete or `xfail` an assertion to make a check pass.
-- Do not widen a test to "any 10 arms" — assert the exact 10 names and the exact
-  single-knob delta of each.
-- Do not suppress linters or add an ignore comment to silence a real finding.
+- No skipping, `xfail`-ing, or deleting existing assertions. The frozen #492/#608 resolver
+  test and the purged-route tests stay untouched and green.
+- No new external dependency, no new stylesheet class (reuse `.badge-red`).
+- No broad `except Exception: pass` replacing the existing one — the new path must record the
+  failure, not swallow it harder.
 
-## Dependencies
+## Deliberate non-goals (recorded so review does not "fix" them)
 
-- No new external dependency. The plan is JSON plus Python already present.
-- No new CLI flag on `scripts/shadow_tournament.py`: `--arms-file`, `--stamp`,
-  `--minutes`, `--dashboards` and `--dry-run` already cover the launch.
+- The nav pill keeps its literal label; the cockpit serves one page, so data-driving a
+  one-item nav would be ceremony, not honesty. The issue allows dropping the fields, and the
+  title names dropping.
+- `analyze_arm_database`'s per-arm `readiness` / `badge_cls` (the `NO_DATA` / `PENDING`
+  badges in the leaderboard) are live and unrelated. They stay.
+- `docs/issues/487-noticed-but-not-touching.md` is **not** edited here. Its rows already say
+  "promoted to #754", which stays true; artifact closeout is the end-of-pipeline step.
 
-## Deliberate non-regressions (Stations IV–V must not "fix" these)
-
-- `ARMS_CONFIG_487` carries `worst_catalyst: ""` and `worst_catalyst_desc: ""`. There is
-  no forensic run to populate them, and inventing numbers is the failure mode this issue
-  exists to remove. Empty renders as `N/A` in the leaderboard — that is correct.
-- `I487_TWEAKS` in `tests/test_shadow_tournament.py` stays. Its values describe the
-  **superseded** catalyst premise and are still the guard that keeps `#492` arms free of
-  `#487` tweaks. Only its comment changes.

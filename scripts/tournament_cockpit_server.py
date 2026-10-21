@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import html
 import http.server
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -642,8 +644,6 @@ TOURNAMENTS = {
         "id": "492",
         "title": "Issue #492 Baseline Re-run (Fixed Code)",
         "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | Original 10 arms, byte-identical env, no #487 tweaks",
-        "badge": "R1 FRESH",
-        "badge_cls": "badge-amber",
         "description": "Fresh Round 1 baseline on fixed code. Catalyst columns stay empty until this run reports; the current-setup tournament (#487) is a separate, later run.",
         "arms": ARMS_CONFIG_492,
         "issue_primary": 492,
@@ -653,8 +653,6 @@ TOURNAMENTS = {
         "id": "608",
         "title": "Issue #608 Character Tournament (Shipped Defaults)",
         "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | 10 one-knob characters, shared Data Analysis verdict",
-        "badge": "R1 CHARACTERS",
-        "badge_cls": "badge-green",
         "description": "Ten characters, one knob each, on loose shipped defaults. Catalyst columns stay empty until this run reports.",
         "arms": ARMS_CONFIG_608,
         "issue_primary": 608,
@@ -664,8 +662,6 @@ TOURNAMENTS = {
         "id": "484",
         "title": "Issue #484 / #485 Baseline Tournament (Archive)",
         "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | Issue #484 (Strategy Profiles) & Issue #485 (Execution Mechanics)",
-        "badge": "R1 ARCHIVE",
-        "badge_cls": "badge-amber",
         "description": "Archived baseline built on buggy code (see #492); kept for history, not for decisions.",
         "arms": ARMS_CONFIG_484,
         "issue_primary": 484,
@@ -675,8 +671,6 @@ TOURNAMENTS = {
         "id": "487",
         "title": "Issue #487 Current-Setup Tournament",
         "subtitle": "12-Hour Multi-Arm Shadow Evaluation | One control at today's settings + 9 arms varying a single live parameter",
-        "badge": "CURRENT SETUP",
-        "badge_cls": "badge-green",
         "description": "The first ten-arm run on the post-2026-10-20 code: every arm starts from the configuration that ships today and changes exactly one live setting. Comparative reading happens after the 720-minute run; no arm carries a catalyst score yet.",
         "arms": ARMS_CONFIG_487,
         "issue_primary": 487,
@@ -716,13 +710,66 @@ def _strip_round_suffix(name: str) -> str:
     return re.sub(r"-\d+$", "", str(name or ""))
 
 
-def resolve_tournament_arms(tourney_key: str = CURRENT_SETUP_KEY) -> list[dict[str, Any]]:
-    """Dynamically resolve tournament arms from active plan file or fall back to static presets."""
+log = logging.getLogger(__name__)
+
+
+class TournamentRecordError(Exception):
+    """An arm record exists but cannot be trusted to describe this run.
+
+    A record that is absent means the run has not started -- a normal state. A
+    record that is present and unreadable means the page is about to show the
+    static presets while looking exactly like that normal state. The two must not
+    be confused, so the second one has a name.
+    """
+
+
+# The last broken-record message already logged. `get_cached_stats` re-collects
+# every 3s, so a warning per call would print the same line hundreds of times. A
+# successful read clears it, which lets a record that breaks again warn again.
+_WARNED_RECORD: Optional[str] = None
+
+
+def _read_arm_record(path: Path) -> list[dict[str, Any]]:
+    """Read one arm record and check its shape; raise TournamentRecordError."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        # JSONDecodeError and UnicodeDecodeError are ValueError subclasses, so
+        # truncation, bad bytes and bad JSON all land here.
+        raise TournamentRecordError(f"{path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise TournamentRecordError(f"{path}: top level is not a JSON object")
+    if "arms" not in data:
+        raise TournamentRecordError(f"{path}: 'arms' is missing")
+    record_arms = data["arms"]
+    if not isinstance(record_arms, list):
+        raise TournamentRecordError(f"{path}: 'arms' is not a list")
+    for i, arm in enumerate(record_arms):
+        if not isinstance(arm, dict):
+            raise TournamentRecordError(f"{path}: arm {i} is not a JSON object")
+        if not isinstance(arm.get("name"), str) or not arm["name"]:
+            raise TournamentRecordError(f"{path}: arm {i} has no string 'name'")
+    return record_arms
+
+
+def resolve_tournament_arms_with_status(
+    tourney_key: str = CURRENT_SETUP_KEY,
+) -> tuple[list[dict[str, Any]], Optional[str]]:
+    """Resolve this key's arms, and say so when its record cannot be read.
+
+    Returns `(arms, record_error)`. `record_error` is None when there is nothing
+    to report: a key with no record (the run has not started), the static archive
+    key, and a record that parsed. A broken record falls back to the static
+    presets so the page stays usable, and the caller puts the error next to that
+    table instead of letting it pass for "not started".
+    """
+    global _WARNED_RECORD
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
     # #484 stays fully static (archive); live keys resolve their plan file.
     if tourney_key not in ("487", "492", "608"):
-        return default_arms
+        return default_arms, None
 
     tourn_dir = ROOT / "runtime" / "tournaments"
     latest_plan = None
@@ -749,30 +796,43 @@ def resolve_tournament_arms(tourney_key: str = CURRENT_SETUP_KEY) -> list[dict[s
         plan_files = sorted([p for p in tourn_dir.glob(f"{tourney_key}_*.json") if pattern.search(p.name)])
         latest_plan = plan_files[-1] if plan_files else None
     if latest_plan is None:
-        return default_arms
+        return default_arms, None
     try:
-        with open(latest_plan, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        plan_arms: dict[str, Any] = {}
-        for a in data.get("arms", []):
-            plan_arms[a.get("name")] = a
-            plan_arms[_strip_round_suffix(a.get("name", ""))] = a
-        merged = []
-        for base in default_arms:
-            name = base["name"]
-            pa = plan_arms.get(name, plan_arms.get(_strip_round_suffix(name)))
-            if pa is not None:
-                merged.append({
-                    **base,
-                    "db": pa.get("db_path", base["db"]),
-                    "run_id": pa.get("run_id", base["run_id"]),
-                    "port": pa.get("dash_port", base["port"]),
-                })
-            else:
-                merged.append(base)
-        return merged
-    except Exception:
-        return default_arms
+        record_arms = _read_arm_record(latest_plan)
+    except TournamentRecordError as exc:
+        message = str(exc)
+        if message != _WARNED_RECORD:
+            log.warning("Could not read tournament record %s", message)
+            _WARNED_RECORD = message
+        return default_arms, message
+    _WARNED_RECORD = None
+    plan_arms: dict[str, Any] = {}
+    for a in record_arms:
+        plan_arms[a["name"]] = a
+        plan_arms[_strip_round_suffix(a["name"])] = a
+    merged = []
+    for base in default_arms:
+        name = base["name"]
+        pa = plan_arms.get(name, plan_arms.get(_strip_round_suffix(name)))
+        if pa is not None:
+            merged.append({
+                **base,
+                "db": pa.get("db_path", base["db"]),
+                "run_id": pa.get("run_id", base["run_id"]),
+                "port": pa.get("dash_port", base["port"]),
+            })
+        else:
+            merged.append(base)
+    return merged, None
+
+
+def resolve_tournament_arms(tourney_key: str = CURRENT_SETUP_KEY) -> list[dict[str, Any]]:
+    """Dynamically resolve tournament arms from active plan file or fall back to static presets.
+
+    The arms only: `resolve_tournament_arms_with_status` carries the reason when a
+    record exists but could not be read.
+    """
+    return resolve_tournament_arms_with_status(tourney_key)[0]
 
 
 def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> dict[str, Any]:
@@ -1031,7 +1091,7 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
 def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
     """Analyze all tournament arms for the selected tournament and compile overall metrics."""
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
-    arms_config = resolve_tournament_arms(tourney_key)
+    arms_config, record_error = resolve_tournament_arms_with_status(tourney_key)
     arms_data = [analyze_arm_database(cfg) for cfg in arms_config]
     
     # Sort by Total PnL descending for leaderboard
@@ -1106,6 +1166,9 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
     return {
         "tourney_key": tourney_key,
         "tourney_meta": meta,
+        # None unless a record exists and could not be read: the page shows this
+        # so a broken record never passes for "the run has not started".
+        "record_error": record_error,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total_trades": total_trades,
         "total_merges": total_merges,
@@ -1143,6 +1206,18 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
 def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     """Generate the full responsive, interactive HTML dashboard."""
     json_embedded = json.dumps(initial_data)
+    # A record that exists but cannot be read must not look like "the run has not
+    # started". The container is always emitted -- hidden when there is nothing to
+    # say -- so the 5s /api/stats poll can show or hide it without a page reload.
+    record_error = initial_data.get("record_error")
+    record_warning_style = "display: block;" if record_error else "display: none;"
+    record_warning_text = ""
+    if record_error:
+        record_warning_text = (
+            "⚠️ Tournament record failed to parse: "
+            f"{html.escape(str(record_error))}. "
+            "The table shows default arms, not live data."
+        )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1461,6 +1536,8 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   </div>
 </header>
 
+<div id="record-warning" class="badge-red" style="{record_warning_style} width: 100%; box-sizing: border-box; padding: 10px 14px; border-radius: 8px; font-size: 12.5px; line-height: 1.5; margin: 0 0 18px;">{record_warning_text}</div>
+
 <!-- Top Headline Metric Cards -->
 <div class="metrics-grid">
   <div class="m-card">
@@ -1777,6 +1854,17 @@ function switchTab(name, btn) {{
 }}
 
 function renderAll() {{
+  // The warning must survive a refresh, and appear if a record stops parsing
+  // mid-run: /api/stats carries `record_error` on every poll.
+  const recWarn = document.getElementById('record-warning');
+  if (recWarn) {{
+    if (state.record_error) {{
+      recWarn.innerText = '⚠️ Tournament record failed to parse: ' + state.record_error + '. The table shows default arms, not live data.';
+      recWarn.style.display = 'block';
+    }} else {{
+      recWarn.style.display = 'none';
+    }}
+  }}
   // Header metrics
   const elapsedH = (state.elapsed_hours != null ? Number(state.elapsed_hours) : 0).toFixed(1);
   const remH = (state.rem_hours != null ? Number(state.rem_hours) : 12.0).toFixed(1);
