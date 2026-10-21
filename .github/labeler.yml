@@ -13,12 +13,19 @@
 # Patterns stay on words a reporter actually uses. A rule that fires on
 # "error" would label most bug reports ever written, and a wrong label costs
 # more triage than a missing one -- the maintainer still triages by hand.
+#
+# Severity is the maintainer's call, not a keyword's, so nothing here applies
+# "🚨 Critical". A reporter writing "this is urgent" usually means "this annoys
+# me", and a P0 label applied by regex is one the reader learns to ignore.
 
 bug:
   - '/\b(bug|crash|traceback|regression|broken)/i'
 
+# `docs?\b` and not `docs?`: without the boundary the alternative matches
+# the `doc` inside "docker", "doctype" and "doctor", so a post about a container
+# image would arrive tagged documentation.
 documentation:
-  - '/\b(documentation|readme|docs?|typo)/i'
+  - '/\b(documentation|readme|docs?\b|typo)/i'
 
 enhancement:
   - '/\b(feature request|enhancement|would be nice)/i'

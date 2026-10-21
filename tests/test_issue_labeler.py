@@ -31,9 +31,11 @@ LABELS = GITHUB / "labels.yaml"
 WORKFLOW = GITHUB / "workflows" / "labeler.yml"
 SYNC_WORKFLOW = GITHUB / "workflows" / "labels-sync.yaml"
 
-# `label:` at column 0, then `  - '<pattern>'` items.
-_RULE = re.compile(r"^([A-Za-z][\w-]*):\s*$")
-_ITEM = re.compile(r"^\s*-\s*'(.*)'\s*$")
+# `label:` at column 0 (quoted if the name needs it), then `  - '<pattern>'` items.
+# A parser that only understood the bare form would skip a quoted `"🚨 Critical":`
+# or an unquoted pattern line without complaint, leaving a rule unguarded.
+_RULE = re.compile(r'^(?:"(?P<quoted>[^"]+)"|(?P<bare>[A-Za-z][\w-]*)):\s*$')
+_ITEM = re.compile(r"^\s*-\s*'(?P<pattern>.*)'\s*$")
 # The action's own splitter: /(.+)/(.*)
 _PATTERN = re.compile(r"^/(.+)/(.*)$")
 
@@ -50,12 +52,18 @@ def _rules() -> dict[str, list[str]]:
             continue
         label = _RULE.match(line)
         if label:
-            current = label.group(1)
+            current = label.group("quoted") or label.group("bare")
+            assert current not in rules, f"{current} is declared twice"
             rules[current] = []
             continue
         item = _ITEM.match(line)
         if item and current is not None:
-            rules[current].append(item.group(1))
+            rules[current].append(item.group("pattern"))
+            continue
+        raise AssertionError(
+            f"unparsed line in {LABELER_RULES.name}: {line!r} -- the rule file's "
+            "shape changed, so this test is no longer reading it"
+        )
     return rules
 
 
@@ -108,6 +116,21 @@ def test_every_rule_names_a_label_the_tracker_declares():
     assert declared, "no labels parsed from labels.yaml"
     unknown = sorted(set(rules) - declared)
     assert not unknown, f"rules for labels that do not exist: {unknown}"
+
+
+def test_a_docs_rule_does_not_fire_on_docker_or_doctype():
+    """A stem without a trailing boundary matches the `doc` in `docker`."""
+    patterns = _rules()["documentation"]
+    assert len(patterns) == 1, "one pattern per label; several are ANDed by the action"
+    match = _PATTERN.match(patterns[0])
+    assert match
+    rx = re.compile(match.group(1), re.I)
+    for false_positive in ("Fix docker build", "the doctor said", "doctype header"):
+        assert not rx.search(false_positive), (
+            f"{false_positive!r} is not documentation"
+        )
+    for true_positive in ("Update the docs", "readme polish", "a typo", "documentation page"):
+        assert rx.search(true_positive), f"{true_positive!r} should label documentation"
 
 
 def test_every_pattern_carries_its_case_insensitive_flag():
