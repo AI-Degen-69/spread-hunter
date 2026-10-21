@@ -662,11 +662,11 @@ def test_i608_character_arms_plan(tmp_path: Path):
         assert set(a["env"]) == expected_knobs[a["name"]], a["name"]
 
 
-def test_worker_environment_strips_parent_hunter_env(tmp_path, monkeypatch):
-    """Shadow worker subprocesses must not inherit parent HUNTER_* variables.
+def test_worker_environment_strips_parent_config_env(tmp_path, monkeypatch):
+    """Shadow worker subprocesses must not inherit parent BOT_*/FILTER_* variables.
 
     Arms without explicit overrides must start with clean defaults, while arms
-    with explicit settings retain them, non-HUNTER parent variables are
+    with explicit settings retain them, unrelated parent variables are
     preserved, and SPREAD_HUNTER_DB points to the arm-specific database.
     """
     import scripts.shadow_tournament as st
@@ -731,9 +731,9 @@ def test_worker_environment_strips_parent_hunter_env(tmp_path, monkeypatch):
     # Parent config vars must be stripped from both
     assert "BOT_QUOTE_TOURNAMENT_PRESET" not in sparse_env
     assert "BOT_QUOTE_TOURNAMENT_PRESET" not in explicit_env
-    # A retired parent variable is inert wherever it survives: no loader reads
-    # it, so passing it on cannot change a run.
-    assert "HUNTER_DUMMY_LEAK" not in sparse_env or True
+    # A retired name is not config any more: nothing reads it, so the strip list
+    # does not know it and passing it on cannot change a run.
+    assert sparse_env.get("HUNTER_DUMMY_LEAK") == "should_be_stripped"
 
     # Sparse arm must have clean defaults (no BOT_QUOTE_PRICE_RISK_WIDEN)
     assert "BOT_QUOTE_PRICE_RISK_WIDEN" not in sparse_env
@@ -804,6 +804,21 @@ def test_the_i622_arms_file_varies_only_the_refusal_drift():
     assert "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS" not in shared[0], (
         "that stop setting is retired; the arm env is purged of it"
     )
+
+
+def test_the_i622_arms_file_is_refused_at_plan_time(tmp_path):
+    """#684: a retired override is refused, not silently ignored.
+
+    The drift arm differs from its siblings only by `HUNTER_REFUSAL_HOLD_DRIFT`.
+    Planning it would run two identical arms and call the result a comparison,
+    so the planner names the offending key instead.
+    """
+    from scripts.shadow_tournament import build_tournament_plan
+
+    arms = json.loads(I622_ARMS.read_text(encoding="utf-8"))
+    with pytest.raises(ValueError, match=r"only BOT_\* or FILTER_\* overrides are permitted"):
+        build_tournament_plan(issue=622, arms=arms, base_dir=tmp_path,
+                              run_number=1, check_ports=False)
 
 
 def test_no_arm_is_pointed_at_the_production_registry(tmp_path):

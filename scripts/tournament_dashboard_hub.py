@@ -111,7 +111,10 @@ def run_hub(tourney_id: str = "487", interval_sec: float = 3.0) -> None:
                     "--db",
                     str(full_db),
                 ]
-                env = dict(os.environ)
+                # Arm dashboards read their own --db; inheriting the parent's
+                # config overrides would show every arm the launcher's settings.
+                env = {k: v for k, v in os.environ.items()
+                       if not k.startswith(("BOT_", "FILTER_"))}
                 env["PORT"] = str(port)
                 env["LIVE_DB_PATH"] = str(full_db)
 
