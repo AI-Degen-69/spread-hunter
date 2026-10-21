@@ -248,33 +248,33 @@ def test_cli_subprocess_zero_network():
 # --------------------------------------------------------------------------
 
 def test_stat_gate_bankroll_pct_canonical_env(monkeypatch, caplog):
-    monkeypatch.setenv("HUNTER_STAT_GATE_BANKROLL_PCT", "0.03")
-    monkeypatch.delenv("HUNTER_STAT_GATE_BANKROLL_FRACTION", raising=False)
+    monkeypatch.setenv("BOT_EVAL_STAT_GATE_BANKROLL_PCT", "0.03")
     with caplog.at_level("WARNING"):
         cfg = load_cfg()
     assert cfg.stat_gate_bankroll_pct == 0.03
     assert cfg.stat_gate_bankroll_fraction == 0.03
-    assert "HUNTER_STAT_GATE_BANKROLL_FRACTION is deprecated" not in caplog.text
+    assert "deprecated" not in caplog.text
 
 
 def test_stat_gate_bankroll_fraction_legacy_env(monkeypatch, caplog):
-    monkeypatch.delenv("HUNTER_STAT_GATE_BANKROLL_PCT", raising=False)
+    """The retired `HUNTER_STAT_GATE_BANKROLL_FRACTION` is ignored, silently."""
+    monkeypatch.delenv("BOT_EVAL_STAT_GATE_BANKROLL_PCT", raising=False)
     monkeypatch.setenv("HUNTER_STAT_GATE_BANKROLL_FRACTION", "0.025")
     with caplog.at_level("WARNING"):
         cfg = load_cfg()
-    assert cfg.stat_gate_bankroll_pct == 0.025
-    assert cfg.stat_gate_bankroll_fraction == 0.025
-    assert "HUNTER_STAT_GATE_BANKROLL_FRACTION is deprecated (#632)" in caplog.text
+    assert cfg.stat_gate_bankroll_pct == 0.01
+    assert cfg.stat_gate_bankroll_fraction == 0.01
+    assert "deprecated" not in caplog.text
 
 
 def test_stat_gate_bankroll_pct_wins_over_legacy(monkeypatch, caplog):
-    monkeypatch.setenv("HUNTER_STAT_GATE_BANKROLL_PCT", "0.04")
-    monkeypatch.setenv("HUNTER_STAT_GATE_BANKROLL_FRACTION", "0.02")
+    monkeypatch.setenv("BOT_EVAL_STAT_GATE_BANKROLL_PCT", "0.04")
+    monkeypatch.setenv("HUNTER_STAT_GATE_BANKROLL_PCT", "0.02")
     with caplog.at_level("WARNING"):
         cfg = load_cfg()
     assert cfg.stat_gate_bankroll_pct == 0.04
     assert cfg.stat_gate_bankroll_fraction == 0.04
-    assert "HUNTER_STAT_GATE_BANKROLL_FRACTION is deprecated" not in caplog.text
+    assert "deprecated" not in caplog.text
 
 
 def test_stat_gate_display_criteria_reads_canonical():

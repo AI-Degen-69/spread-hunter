@@ -67,7 +67,7 @@ def _flat_cfg(**kw) -> MakerConfig:
 
     With `dynamic_offset_enabled=True` (the shipped default) `dynamic_pair_sum`
     already refuses any pair that rounds to $1.00 or more, so the new entry cap
-    is the binding one on the dynamic-off preset (`HUNTER_DYNAMIC_OFFSET=false`)
+    is the binding one on the dynamic-off preset (`BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=false`)
     and in the band the completable arm cannot see.
     """
     return _cfg(dynamic_offset_enabled=False, **kw)

@@ -80,8 +80,7 @@ def test_bankroll_override_survives_the_allocator_purge(monkeypatch):
     """The purge deleted allocation_budget but its bankroll writer stayed
     behind: load() with a bankroll override crashed with TypeError on the
     unknown kwarg. The override now lands on bankroll_usd only (#594)."""
-    monkeypatch.setenv("SPREAD_HUNTER_BANKROLL", "2000")
-    monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
+    monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "2000")
     cfg = load_scoring()
     assert cfg.bankroll_usd == 2000
     assert not hasattr(cfg, "allocation_budget")

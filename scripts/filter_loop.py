@@ -131,7 +131,7 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "(trial loop, e.g. runtime/trials/<run-id>/)")
     p.add_argument("--trial-depth", type=float, default=None, metavar="USD",
                    help="forward this top-3 bid-depth bar to the ranker; wins "
-                        "over the configured HUNTER_DEPTH_TRIAL_USD")
+                        "over the configured FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL")
     p.add_argument("--paired-depth-control-usd", type=float, default=None,
                    metavar="USD",
                    help="forward a paired control depth bar; requires --out-dir "
@@ -170,7 +170,7 @@ def _rank_cmd(top: int = 2, out_dir=None,
 
     The depth trial (U32) and the volume trial (U36) stay opt-in: when
     `filter_common_vol_min_top3_depth_usd_trial` / `filter_std_vol_min_24h_usd_trial`
-    are set (env HUNTER_DEPTH_TRIAL_USD / HUNTER_VOLUME_TRIAL_USD, or a config
+    are set (env FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL / FILTER_STD_VOL_MIN_24H_USD_TRIAL, or a config
     default), the loop passes the bar through so adopted markets are tagged
     `trial_depth_usd` / `trial_volume_usd` and their markouts are the decision
     evidence. Config is read fresh at process start, so flipping a trial on is

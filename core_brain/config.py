@@ -290,8 +290,8 @@ class MakerConfig(_ConfigBase):
     # normally-trading sports book, and stays far below the $125k/24h volume bar
     # -- whose markets average ~$2.6k per 30 minutes. The range gate below is
     # ANDed with this one, so a one-tick flicker still needs real notional.
-    # Operator-tunable without code via HUNTER_MIN_MOVEMENT_USD and
-    # HUNTER_MOVEMENT_WINDOW_SEC. Unmeasured tape stays fail-open:
+    # Operator-tunable without code via FILTER_LIVE_VEL_MIN_USD and
+    # FILTER_LIVE_VEL_LOOKBACK_SEC. Unmeasured tape stays fail-open:
     # `movement_reject` passes None, because a failed HTTP call must not empty
     # the universe on one bad minute.
     filter_live_vel_lookback_sec: float = 1800.0        # 30m lookback window
@@ -300,7 +300,7 @@ class MakerConfig(_ConfigBase):
     # volatility window refuses flat markets while active live sports/eSports
     # are exempted and prioritized. That window is distinct from the 30-minute
     # movement window above -- 2h by default. Operator-tunable via
-    # HUNTER_MIN_RANGE_CENTS and HUNTER_VOLATILITY_WINDOW_SEC.
+    # FILTER_LIVE_MOVE_MIN_RANGE_CENTS and FILTER_LIVE_MOVE_LOOKBACK_SEC.
     filter_live_move_lookback_sec: float = 7200.0       # 2h lookback window
     filter_live_move_min_range_cents: float = 2.0
     filter_live_gate_velocity_on: bool = True
@@ -310,7 +310,7 @@ class MakerConfig(_ConfigBase):
     # measures RECENT tape against total size: movement_usd (last movement
     # window) / volume_24h >= threshold. Loose initial threshold (0.0 = off by
     # default) so the baseline run observes a wide pool before we tighten it.
-    # Operator-tunable via HUNTER_MIN_ACTIVITY_RATIO. 0.0 disables the gate.
+    # Operator-tunable via FILTER_LIVE_ACTIVITY_MIN_RATIO. 0.0 disables the gate.
     filter_live_activity_min_ratio: float = 0.0
 
     # 2. Standard / Pre-Match & Long-Dated Markets
@@ -578,36 +578,30 @@ class MakerConfig(_ConfigBase):
         return (self.net_oneway_ms + self.post_venue_accept_ms) / 1000.0
 
     def db_path(self) -> Path:
-        return Path(os.environ.get("SPREAD_HUNTER_DB") or os.environ.get("HUNTER_DB", str(ROOT / "hunter.db")))
+        return Path(os.environ.get("SPREAD_HUNTER_DB") or str(ROOT / "hunter.db"))
 
     @classmethod
     def from_env(cls, *, for_display: bool = False) -> MakerConfig:
-        """Config loader checking canonical uppercase env var first, falling back to HUNTER_*."""
+        """Config loader. Canonical uppercase env vars only."""
         kw: dict = {}
         preset_name = resolve_tournament_preset_name()
         if preset_name:
             kw.update({k: v for k, v in TOURNAMENT_PRESETS[preset_name].items() if k != "description"})
 
-        cid, _ = _env_get("BOT_MARKET_PINNED_CONDITION_ID", "HUNTER_MARKET")
+        cid = _env("BOT_MARKET_PINNED_CONDITION_ID")
         if cid and cid.strip():
             kw["pinned_condition_id"] = cid.strip()
-            title, _ = _env_get("BOT_MARKET_TITLE", "HUNTER_TITLE")
+            title = _env("BOT_MARKET_TITLE")
             kw["market_title"] = title or ""
-            url, _ = _env_get("BOT_MARKET_URL", "HUNTER_URL")
+            url = _env("BOT_MARKET_URL")
             kw["market_url"] = url or ""
 
-            ms, _ = _env_get("BOT_QUOTE_SIZE_MIN_SHARES", "HUNTER_MIN_QUOTE_SHARES")
-            if ms is None:
-                ms = os.environ.get("HUNTER_MIN_SIZE")
-                if ms is not None and ms.strip():
-                    logging.getLogger(__name__).warning(
-                        "HUNTER_MIN_SIZE is deprecated (#632); set HUNTER_MIN_QUOTE_SHARES instead."
-                    )
+            ms = _env("BOT_QUOTE_SIZE_MIN_SHARES")
             if ms and ms.strip():
                 kw["min_quote_shares"] = int(float(ms))
                 kw["quote_shares"] = max(int(float(ms)), 120)
 
-            sp, _ = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
+            sp = _env("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
             if sp and sp.strip():
                 # Pinned has always been strict here. #707 makes the rejection
                 # cover inf/nan and anything outside 1..99 cents as well, and
@@ -615,17 +609,11 @@ class MakerConfig(_ConfigBase):
                 kw["max_spread_from_mid"] = _bounded_float(
                     "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", sp.strip(), 1.0, 99.0) / 100.0
 
-            tk, _ = _env_get("BOT_QUOTE_GRID_TICK_SIZE_USD", "HUNTER_PRICE_TICK")
-            if tk is None:
-                tk = os.environ.get("HUNTER_TICK")
-                if tk is not None and tk.strip():
-                    logging.getLogger(__name__).warning(
-                        "HUNTER_TICK is deprecated (#632); set HUNTER_PRICE_TICK instead."
-                    )
+            tk = _env("BOT_QUOTE_GRID_TICK_SIZE_USD")
             if tk and tk.strip():
                 kw["price_tick"] = float(tk)
 
-        raw_sp_general, _ = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
+        raw_sp_general = _env("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
         sp_general = raw_sp_general or ""
         if sp_general.strip():
             try:
@@ -642,12 +630,12 @@ class MakerConfig(_ConfigBase):
                     "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
                     sp_general.strip(), 1.0, 99.0) / 100.0
 
-        awg, _ = _env_get("BOT_QUOTE_GATE_WIDEN_ON", "HUNTER_APPLY_WIDEN_GATE")
+        awg = _env("BOT_QUOTE_GATE_WIDEN_ON")
         if awg and awg.strip():
             kw["apply_widen_gate"] = awg.strip().lower() not in ("0", "false", "off", "no")
 
-        wide_raw, wide_name = _env_get("BOT_QUOTE_WIDE_BOOK_TRIAL", "HUNTER_WIDE_BOOK_TRIAL")
-        wide = resolve_wide_book_trial(wide_raw or "", for_display=for_display, var_name=wide_name or "HUNTER_WIDE_BOOK_TRIAL")
+        wide_raw = _env("BOT_QUOTE_WIDE_BOOK_TRIAL")
+        wide = resolve_wide_book_trial(wide_raw or "", for_display=for_display, var_name="BOT_QUOTE_WIDE_BOOK_TRIAL")
         if wide is not None and wide > 0:
             kw["wide_book_trial"] = wide
             kw["max_book_spread"] = wide
@@ -656,73 +644,73 @@ class MakerConfig(_ConfigBase):
 
         # Trial knobs: the screener keeps the shipped default (None) and fails open
         # (scoring/config.py:197-249), while the engine raises and fails loud naming the variable.
-        trial, trial_name = _env_get("FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", "HUNTER_DEPTH_TRIAL_USD")
+        trial = _env("FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL")
         if trial and trial.strip():
             kw["select_min_top3_depth_usd_trial"] = _bounded_float(
-                trial_name or "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", trial.strip(), 0.0, float("inf")
+                "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", trial.strip(), 0.0, float("inf")
             )
 
-        vtri, vtri_name = _env_get("FILTER_STD_VOL_MIN_24H_USD_TRIAL", "HUNTER_VOLUME_TRIAL_USD")
+        vtri = _env("FILTER_STD_VOL_MIN_24H_USD_TRIAL")
         if vtri and vtri.strip():
             kw["select_min_volume_24h_usd_trial"] = _bounded_float(
-                vtri_name or "FILTER_STD_VOL_MIN_24H_USD_TRIAL", vtri.strip(), 0.0, float("inf")
+                "FILTER_STD_VOL_MIN_24H_USD_TRIAL", vtri.strip(), 0.0, float("inf")
             )
 
-        pr, _ = _env_get("BOT_RISK_GATE_PAIRS_RULE_ON", "HUNTER_PAIRS_RULE")
+        pr = _env("BOT_RISK_GATE_PAIRS_RULE_ON")
         if pr and pr.strip():
             kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
 
-        pcap, pcap_name = _env_get("BOT_POS_PRICE_MAX_PAIR_COST_USD", "HUNTER_PAIR_COST_CAP")
+        pcap = _env("BOT_POS_PRICE_MAX_PAIR_COST_USD")
         if pcap and pcap.strip():
-            kw["max_pair_cost"] = resolve_pair_cost_trial(pcap, for_display=for_display, var_name=pcap_name or "HUNTER_PAIR_COST_CAP")
+            kw["max_pair_cost"] = resolve_pair_cost_trial(pcap, for_display=for_display, var_name="BOT_POS_PRICE_MAX_PAIR_COST_USD")
 
-        ccap, ccap_name = _env_get("BOT_POS_PRICE_MAX_COMPLETE_USD", "HUNTER_COMPLETABLE_CAP")
+        ccap = _env("BOT_POS_PRICE_MAX_COMPLETE_USD")
         if ccap and ccap.strip():
             kw["max_completable_pair_cost"] = _bounded_float(
-                ccap_name or "HUNTER_COMPLETABLE_CAP", ccap, 0.0, 1.0)
+                "BOT_POS_PRICE_MAX_COMPLETE_USD", ccap, 0.0, 1.0)
 
-        rdb, rdb_name = _env_get("BOT_ORDER_REQUOTE_DEAD_BAND_CENTS", "HUNTER_REQUOTE_DEAD_BAND")
+        rdb = _env("BOT_ORDER_REQUOTE_DEAD_BAND_CENTS")
         if rdb and rdb.strip():
             kw["requote_dead_band"] = _bounded_float(
-                rdb_name or "HUNTER_REQUOTE_DEAD_BAND", rdb, 0.0, 1.0)
+                "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS", rdb, 0.0, 1.0)
 
-        rhb, rhb_name = _env_get("BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS", "HUNTER_REQUOTE_HOLD_BELOW")
+        rhb = _env("BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS")
         if rhb and rhb.strip():
             kw["requote_hold_below_target"] = _bounded_float(
-                rhb_name or "HUNTER_REQUOTE_HOLD_BELOW", rhb, 0.0, 1.0)
+                "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS", rhb, 0.0, 1.0)
 
-        rhq, rhq_name = _env_get("BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES", "HUNTER_REQUOTE_HOLD_QUEUE")
+        rhq = _env("BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES")
         if rhq and rhq.strip():
             kw["requote_hold_queue_shares"] = _bounded_float(
-                rhq_name or "HUNTER_REQUOTE_HOLD_QUEUE", rhq, 0.0, 2_000_000.0)
+                "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES", rhq, 0.0, 2_000_000.0)
 
-        qcg, _ = _env_get("BOT_ORDER_GATE_QUEUE_CLEAR_ON", "HUNTER_QUEUE_CLEAR_GATE")
+        qcg = _env("BOT_ORDER_GATE_QUEUE_CLEAR_ON")
         if qcg and qcg.strip():
             kw["enforce_queue_clear_gate"] = qcg.strip().lower() not in ("0", "false", "off")
 
-        qcm, qcm_name = _env_get("BOT_ORDER_QUEUE_MAX_CLEAR_MIN", "HUNTER_MAX_QUEUE_CLEAR_MIN")
+        qcm = _env("BOT_ORDER_QUEUE_MAX_CLEAR_MIN")
         if qcm and qcm.strip():
             kw["max_queue_clear_minutes"] = _bounded_float(
-                qcm_name or "HUNTER_MAX_QUEUE_CLEAR_MIN", qcm, 0.1, 1440.0)
+                "BOT_ORDER_QUEUE_MAX_CLEAR_MIN", qcm, 0.1, 1440.0)
 
-        prw, prw_name = _env_get("BOT_QUOTE_PRICE_RISK_WIDEN", "HUNTER_PRICE_RISK_WIDEN")
+        prw = _env("BOT_QUOTE_PRICE_RISK_WIDEN")
         if prw and prw.strip():
             kw["price_risk_widen"] = _bounded_float(
-                prw_name or "HUNTER_PRICE_RISK_WIDEN", prw, 0.0, 1.0)
+                "BOT_QUOTE_PRICE_RISK_WIDEN", prw, 0.0, 1.0)
 
-        cno, _ = _env_get("BOT_LATENCY_NET_ONEWAY_MS", "HUNTER_NET_ONEWAY_MS", "HUNTER_CANCEL_NET_ONEWAY_MS")
+        cno = _env("BOT_LATENCY_NET_ONEWAY_MS")
         if cno and cno.strip():
             kw["net_oneway_ms"] = float(cno)
 
-        cva, _ = _env_get("BOT_LATENCY_CANCEL_VENUE_ACK_MS", "HUNTER_CANCEL_VENUE_ACK_MS")
+        cva = _env("BOT_LATENCY_CANCEL_VENUE_ACK_MS")
         if cva and cva.strip():
             kw["cancel_venue_ack_ms"] = float(cva)
 
-        pva, _ = _env_get("BOT_LATENCY_POST_VENUE_ACCEPT_MS", "HUNTER_POST_VENUE_ACCEPT_MS")
+        pva = _env("BOT_LATENCY_POST_VENUE_ACCEPT_MS")
         if pva and pva.strip():
             kw["post_venue_accept_ms"] = float(pva)
 
-        bk, _ = _env_get("BOT_QUOTE_BANK_BASELINE_USD", "SPREAD_HUNTER_BANKROLL", "HUNTER_BANKROLL")
+        bk = _env("BOT_QUOTE_BANK_BASELINE_USD")
         if bk and bk.strip():
             val = float(bk)
             if not math.isfinite(val) or val <= 0:
@@ -730,106 +718,98 @@ class MakerConfig(_ConfigBase):
             kw["bankroll_usd"] = val
             kw["max_committed_usd"] = val
 
-        slm, slm_name = _env_get("BOT_RISK_STOP_MODE", "HUNTER_STOP_LOSS_MODE")
+        slm = _env("BOT_RISK_STOP_MODE")
         if slm and slm.strip():
             mode = slm.strip().upper()
             if mode not in STOP_LOSS_MODES:
                 choices = ", ".join(sorted(STOP_LOSS_MODES))
-                var_label = slm_name or "HUNTER_STOP_LOSS_MODE"
+                var_label = "BOT_RISK_STOP_MODE"
                 raise ValueError(
                     f"{var_label} must be one of {choices}, got: {slm}"
                 )
             kw["stop_loss_mode"] = mode
 
-        dc, dc_name = _env_get("BOT_RISK_STOP_ADVERSE_DROP_CENTS", "HUNTER_DROP_CENTS")
+        dc = _env("BOT_RISK_STOP_ADVERSE_DROP_CENTS")
         if dc and dc.strip():
             kw["drop_cents"] = _bounded_float(
-                dc_name or "HUNTER_DROP_CENTS", dc, DROP_CENTS_MIN, DROP_CENTS_MAX)
+                "BOT_RISK_STOP_ADVERSE_DROP_CENTS", dc, DROP_CENTS_MIN, DROP_CENTS_MAX)
 
-        for _can_name, _leg_name, _field in (
-            ("BOT_RISK_STOP_MAX_DRAWDOWN_PCT", "HUNTER_DRAWDOWN_PCT", "drawdown_pct"),
-            ("BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT", "HUNTER_EMERGENCY_DRAWDOWN_PCT", "emergency_drawdown_pct"),
+        for _can_name, _field in (
+            ("BOT_RISK_STOP_MAX_DRAWDOWN_PCT", "drawdown_pct"),
+            ("BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT", "emergency_drawdown_pct"),
         ):
-            _raw, _vname = _env_get(_can_name, _leg_name)
+            _raw = _env(_can_name)
             if _raw and _raw.strip():
-                _val = _bounded_float(_vname or _leg_name, _raw, 0.0, 100.0)
+                _val = _bounded_float(_can_name, _raw, 0.0, 100.0)
                 if _val <= 0.0:
                     raise ValueError(
-                        f"{_vname or _leg_name}={_raw!r} must be greater than zero"
+                        f"{_can_name}={_raw!r} must be greater than zero"
                     )
                 kw[_field] = _val
 
 
-        aorl, _ = _env_get("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "HUNTER_AGED_OUT_RESCUE_LEAD_SEC")
+        aorl = _env("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC")
         if aorl and aorl.strip():
             val = float(aorl)
             if not math.isfinite(val) or val < 0:
                 raise ValueError(
-                    "HUNTER_AGED_OUT_RESCUE_LEAD_SEC must be finite and "
+                    "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC must be finite and "
                     f"non-negative, got: {val}")
             kw["aged_out_rescue_lead_sec"] = val
 
-        mqs, _ = _env_get("BOT_QUOTE_SIZE_MAX_SHARES", "HUNTER_MAX_QUOTE_SHARES",
-                           "HUNTER_MAX_SHARES", "SPREAD_HUNTER_MAX_SHARES")
+        mqs = _env("BOT_QUOTE_SIZE_MAX_SHARES")
         if mqs and mqs.strip():
             val = float(mqs)
             if not math.isfinite(val) or val <= 0:
                 raise ValueError(f"BOT_QUOTE_SIZE_MAX_SHARES must be strictly positive, got: {val}")
             kw["max_quote_shares"] = val
 
-        sgt, sgt_name = _env_get("BOT_EVAL_STAT_GATE_THRESHOLD_PCT", "HUNTER_STAT_GATE_THRESHOLD_PCT")
+        sgt = _env("BOT_EVAL_STAT_GATE_THRESHOLD_PCT")
         if sgt and sgt.strip():
             kw["stat_gate_threshold_pct"] = _bounded_float(
-                sgt_name or "HUNTER_STAT_GATE_THRESHOLD_PCT", sgt, -100.0, 100.0)
+                "BOT_EVAL_STAT_GATE_THRESHOLD_PCT", sgt, -100.0, 100.0)
 
-        sgb, sgb_name = _env_get("BOT_EVAL_STAT_GATE_BANKROLL_PCT", "HUNTER_STAT_GATE_BANKROLL_PCT")
-        if sgb is None:
-            sgb = os.environ.get("HUNTER_STAT_GATE_BANKROLL_FRACTION")
-            if sgb is not None and sgb.strip():
-                logging.getLogger(__name__).warning(
-                    "HUNTER_STAT_GATE_BANKROLL_FRACTION is deprecated (#632); set HUNTER_STAT_GATE_BANKROLL_PCT instead."
-                )
-                sgb_name = "HUNTER_STAT_GATE_BANKROLL_FRACTION"
+        sgb = _env("BOT_EVAL_STAT_GATE_BANKROLL_PCT")
         if sgb and sgb.strip():
             kw["stat_gate_bankroll_pct"] = _bounded_float(
-                sgb_name or "HUNTER_STAT_GATE_BANKROLL_PCT", sgb, 0.0, 1.0)
+                "BOT_EVAL_STAT_GATE_BANKROLL_PCT", sgb, 0.0, 1.0)
 
-        stc, stc_name = _env_get("BOT_EVAL_STAT_GATE_TARGET_CLOSES", "HUNTER_STAT_GATE_TARGET_CLOSES")
+        stc = _env("BOT_EVAL_STAT_GATE_TARGET_CLOSES")
         if stc and stc.strip():
             try:
                 val = int(stc)
                 if val <= 0:
                     raise ValueError
             except ValueError as exc:
-                var_label = stc_name or "HUNTER_STAT_GATE_TARGET_CLOSES"
+                var_label = "BOT_EVAL_STAT_GATE_TARGET_CLOSES"
                 raise ValueError(
                     f"{var_label} must be a positive integer, got: {stc!r}"
                 ) from exc
             kw["stat_gate_target_closes"] = val
 
-        dyn, _ = _env_get("BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON", "HUNTER_DYNAMIC_OFFSET")
+        dyn = _env("BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON")
         if dyn and dyn.strip():
             kw["dynamic_offset_enabled"] = dyn.strip().lower() in ("1", "true", "yes", "on")
 
-        dyn_mult, dyn_mult_name = _env_get("BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER", "HUNTER_DYNAMIC_OFFSET_MULT")
+        dyn_mult = _env("BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER")
         if dyn_mult and dyn_mult.strip():
             kw["dynamic_offset_multiplier"] = _bounded_float(
-                dyn_mult_name or "HUNTER_DYNAMIC_OFFSET_MULT", dyn_mult, 0.0, 5.0)
+                "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER", dyn_mult, 0.0, 5.0)
 
-        dyn_min, dyn_min_name = _env_get("BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS", "HUNTER_DYNAMIC_OFFSET_MIN_CENTS")
+        dyn_min = _env("BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS")
         if dyn_min and dyn_min.strip():
             kw["dynamic_offset_min_cents"] = int(_bounded_float(
-                dyn_min_name or "HUNTER_DYNAMIC_OFFSET_MIN_CENTS", dyn_min, 1.0, 10.0))
+                "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS", dyn_min, 1.0, 10.0))
 
-        dyn_max, dyn_max_name = _env_get("BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS", "HUNTER_DYNAMIC_OFFSET_MAX_CENTS")
+        dyn_max = _env("BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS")
         if dyn_max and dyn_max.strip():
             kw["dynamic_offset_max_cents"] = int(_bounded_float(
-                dyn_max_name or "HUNTER_DYNAMIC_OFFSET_MAX_CENTS", dyn_max, 1.0, 20.0))
+                "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS", dyn_max, 1.0, 20.0))
 
-        dyn_age, dyn_age_name = _env_get("BOT_QUOTE_SPREAD_OFFSET_MAX_AGE_SEC", "HUNTER_DYNAMIC_OFFSET_MAX_AGE")
+        dyn_age = _env("BOT_QUOTE_SPREAD_OFFSET_MAX_AGE_SEC")
         if dyn_age and dyn_age.strip():
             kw["dynamic_offset_max_age_sec"] = _bounded_float(
-                dyn_age_name or "HUNTER_DYNAMIC_OFFSET_MAX_AGE", dyn_age, 0.0, 86400.0)
+                "BOT_QUOTE_SPREAD_OFFSET_MAX_AGE_SEC", dyn_age, 0.0, 86400.0)
 
         return cls(**kw)
 
@@ -920,20 +900,18 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
 def resolve_tournament_preset_name() -> str | None:
     """The shared tournament-preset selector for the engine and the ranker (#687).
 
-    Canonical `BOT_QUOTE_TOURNAMENT_PRESET` wins, legacy
-    `HUNTER_TOURNAMENT_PRESET` is the fallback (`_env_get` skips blank values,
-    so a blank canonical falls through to the legacy). Trimmed and lowercased;
-    `None` when neither is set. An unknown name raises the engine's existing
-    `ValueError` text, so a typo fails the same way on both loaders instead of
-    silently running the ranker on default bars.
+    `BOT_QUOTE_TOURNAMENT_PRESET` only, trimmed and lowercased; `None` when it is
+    unset or blank. An unknown name raises the engine's existing `ValueError`
+    text, so a typo fails the same way on both loaders instead of silently
+    running the ranker on default bars.
     """
-    preset_raw, _ = _env_get("BOT_QUOTE_TOURNAMENT_PRESET", "HUNTER_TOURNAMENT_PRESET")
+    preset_raw = _env("BOT_QUOTE_TOURNAMENT_PRESET")
     preset_name = (preset_raw or "").strip().lower()
     if not preset_name:
         return None
     if preset_name not in TOURNAMENT_PRESETS:
         raise ValueError(
-            f"HUNTER_TOURNAMENT_PRESET={preset_name!r} is unknown. "
+            f"BOT_QUOTE_TOURNAMENT_PRESET={preset_name!r} is unknown. "
             f"Valid presets: {list(TOURNAMENT_PRESETS.keys())}"
         )
     return preset_name
@@ -984,16 +962,12 @@ def apply_tournament_preset(config: MakerConfig, preset_name: str) -> MakerConfi
     return replace(config, **preset)
 
 
-def _env_get(canonical: str, *legacies: str) -> tuple[str | None, str | None]:
-    """Return (value, var_name_used) checking canonical uppercase first, then legacy env vars."""
-    val = os.environ.get(canonical)
-    if val is not None and val.strip():
-        return val, canonical
-    for leg in legacies:
-        val = os.environ.get(leg)
-        if val is not None and val.strip():
-            return val, leg
-    return None, None
+def _env(name: str) -> str | None:
+    """The environment value for `name`, or None when unset or blank."""
+    val = os.environ.get(name)
+    if val is None or not val.strip():
+        return None
+    return val
 
 
 def _bounded_float(name: str, raw: str, lo: float, hi: float) -> float:
@@ -1008,7 +982,7 @@ def _bounded_float(name: str, raw: str, lo: float, hi: float) -> float:
     return value
 
 
-def resolve_wide_book_trial(raw: str, *, for_display: bool = False, var_name: str = "HUNTER_WIDE_BOOK_TRIAL") -> float | None:
+def resolve_wide_book_trial(raw: str, *, for_display: bool = False, var_name: str = "BOT_QUOTE_WIDE_BOOK_TRIAL") -> float | None:
     if not raw.strip():
         return None
     if not rehearsal.is_rehearsal():
@@ -1027,7 +1001,7 @@ def resolve_wide_book_trial(raw: str, *, for_display: bool = False, var_name: st
     return _bounded_float(var_name, raw, 0.0, 0.30)
 
 
-def resolve_pair_cost_trial(raw: str, *, for_display: bool = False, var_name: str = "HUNTER_PAIR_COST_CAP") -> float:
+def resolve_pair_cost_trial(raw: str, *, for_display: bool = False, var_name: str = "BOT_POS_PRICE_MAX_PAIR_COST_USD") -> float:
     if not rehearsal.is_rehearsal():
         if for_display:
             logging.getLogger(__name__).warning(

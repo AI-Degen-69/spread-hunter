@@ -1,7 +1,7 @@
 """`config.load(for_display=True)` for read-only consumers.
 
-The two rehearsal-gated trial knobs -- `HUNTER_PAIR_COST_CAP` and
-`HUNTER_WIDE_BOOK_TRIAL` -- RAISE outside a declared rehearsal so a live trader
+The two rehearsal-gated trial knobs -- `BOT_POS_PRICE_MAX_PAIR_COST_USD` and
+`BOT_QUOTE_WIDE_BOOK_TRIAL` -- RAISE outside a declared rehearsal so a live trader
 cannot loosen a loss-prevention cap by accident. The dashboard is not that
 trader: its KPI and parameter endpoints import `core_brain.config` only to
 display numbers, and they inherit the operator's shell environment because
@@ -30,11 +30,11 @@ def _clean_rehearsal_flag():
     rehearsal.reset_for_test()
 
 
-# --- HUNTER_PAIR_COST_CAP -----------------------------------------------------
+# --- BOT_POS_PRICE_MAX_PAIR_COST_USD -----------------------------------------------------
 
 
 def test_pair_cost_cap_still_raises_on_the_money_path(monkeypatch):
-    monkeypatch.setenv("HUNTER_PAIR_COST_CAP", "0.995")
+    monkeypatch.setenv("BOT_POS_PRICE_MAX_PAIR_COST_USD", "0.995")
 
     with pytest.raises(ValueError) as e:
         core_config.load()
@@ -43,39 +43,39 @@ def test_pair_cost_cap_still_raises_on_the_money_path(monkeypatch):
 
 
 def test_pair_cost_cap_falls_back_to_shipped_for_display(monkeypatch, caplog):
-    monkeypatch.setenv("HUNTER_PAIR_COST_CAP", "0.995")
+    monkeypatch.setenv("BOT_POS_PRICE_MAX_PAIR_COST_USD", "0.995")
 
     with caplog.at_level(logging.WARNING):
         cfg = core_config.load(for_display=True)
 
     assert cfg.max_pair_cost == MakerConfig.max_pair_cost
     assert cfg.max_pair_cost == 0.99
-    assert "HUNTER_PAIR_COST_CAP ignored" in caplog.text
+    assert "BOT_POS_PRICE_MAX_PAIR_COST_USD ignored" in caplog.text
 
 
 def test_pair_cost_cap_still_applies_for_display_inside_a_rehearsal(monkeypatch):
     # for_display does not disable the knob; it only stops the refusal from
     # crashing a reader. A real rehearsal still gets the trial value.
     rehearsal.declare_rehearsal()
-    monkeypatch.setenv("HUNTER_PAIR_COST_CAP", "0.995")
+    monkeypatch.setenv("BOT_POS_PRICE_MAX_PAIR_COST_USD", "0.995")
 
     cfg = core_config.load(for_display=True)
 
     assert cfg.max_pair_cost == 0.995
 
 
-# --- HUNTER_WIDE_BOOK_TRIAL ---------------------------------------------------
+# --- BOT_QUOTE_WIDE_BOOK_TRIAL ---------------------------------------------------
 
 
 def test_wide_book_trial_still_raises_on_the_money_path(monkeypatch):
-    monkeypatch.setenv("HUNTER_WIDE_BOOK_TRIAL", "0.05")
+    monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.05")
 
     with pytest.raises(ValueError):
         core_config.load()
 
 
 def test_wide_book_trial_falls_back_to_shipped_for_display(monkeypatch, caplog):
-    monkeypatch.setenv("HUNTER_WIDE_BOOK_TRIAL", "0.05")
+    monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.05")
 
     with caplog.at_level(logging.WARNING):
         cfg = core_config.load(for_display=True)
@@ -85,7 +85,7 @@ def test_wide_book_trial_falls_back_to_shipped_for_display(monkeypatch, caplog):
     # The picking bar degrades with the gate (#572): the page shows the shipped
     # contract, never a trial value the process it describes cannot act on.
     assert cfg.select_max_book_spread == MakerConfig().select_max_book_spread == 0.0205
-    assert "HUNTER_WIDE_BOOK_TRIAL ignored" in caplog.text
+    assert "BOT_QUOTE_WIDE_BOOK_TRIAL ignored" in caplog.text
 
 
 def test_clean_environment_is_unaffected_by_the_flag():
@@ -100,7 +100,7 @@ def test_clean_environment_is_unaffected_by_the_flag():
 def test_kpi_module_imports_with_an_inherited_trial_knob(monkeypatch):
     # The regression: `core_brain.kpi` runs `load_cfg()` at import, and every
     # dashboard endpoint that imports it 500-ed when the knob was in the env.
-    monkeypatch.setenv("HUNTER_PAIR_COST_CAP", "0.995")
+    monkeypatch.setenv("BOT_POS_PRICE_MAX_PAIR_COST_USD", "0.995")
     import importlib
 
     from core_brain import kpi

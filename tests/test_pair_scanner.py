@@ -560,7 +560,7 @@ def test_a_gamma_transport_failure_ends_the_scan_cleanly():
 def test_importing_the_scanner_survives_a_trial_knob_in_the_environment():
     """A read-only module must not die on a gate that only guards order placement.
 
-    `HUNTER_WIDE_BOOK_TRIAL` is exported to hand to a rehearsal, and
+    `BOT_QUOTE_WIDE_BOOK_TRIAL` is exported to hand to a rehearsal, and
     `Start-Process` copies the operator's whole environment into every child.
     A module-scope `config.load()` without `for_display=True` then refuses at
     import, and the scanner cannot even be loaded -- nor can this test file.
@@ -569,7 +569,7 @@ def test_importing_the_scanner_survives_a_trial_knob_in_the_environment():
     env = {
         "PATH": os.environ.get("PATH", ""),
         "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
-        "HUNTER_WIDE_BOOK_TRIAL": "0.08",
+        "BOT_QUOTE_WIDE_BOOK_TRIAL": "0.08",
         "PYTHONPATH": str(repo_root),
     }
 

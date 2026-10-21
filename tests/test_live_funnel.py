@@ -88,7 +88,7 @@ def test_funnel_carries_every_gate_bar(tmp_path):
     The kanban hero blocks state the contract the screener gated on. Reading
     them from the snapshot is what stops the panel claiming a stale pair-cost
     cap after the config changes -- the movement bar was the one bar still
-    frozen into the markup, so an operator setting HUNTER_MIN_MOVEMENT_USD saw
+    frozen into the markup, so an operator setting FILTER_LIVE_VEL_MIN_USD saw
     the parameter card move while the lane header kept its old number.
     """
     pipeline = _write(tmp_path / "pipeline.json", {

@@ -2373,9 +2373,9 @@ class TestFixedStartingBankroll:
             self, tmp_path, monkeypatch):
         """The acceptance criterion: a wallet far from $100 must not move the
         caps the rehearsal computes."""
-        # `conftest` scrubs only `HUNTER_*`; `SPREAD_HUNTER_BANKROLL` is the
+        # `conftest` scrubs only `HUNTER_*`; `BOT_QUOTE_BANK_BASELINE_USD` is the
         # first name `config.load()` reads, so clear it to assert the default.
-        monkeypatch.delenv("SPREAD_HUNTER_BANKROLL", raising=False)
+        monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
         from core_brain import account
         from core_brain.config import derive_dynamic_caps
 
@@ -2407,7 +2407,7 @@ class TestFixedStartingBankroll:
 
         from core_brain.config import load
 
-        monkeypatch.setenv("SPREAD_HUNTER_BANKROLL", "50")
+        monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "50")
         supplied = dc_replace(load(), bankroll_usd=333.0)
 
         with caplog.at_level(logging.INFO, logger="shadow_run"):
@@ -2425,8 +2425,8 @@ class TestFixedStartingBankroll:
 
     def test_the_environment_can_still_choose_the_bankroll(
             self, tmp_path, monkeypatch):
-        monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
-        monkeypatch.setenv("SPREAD_HUNTER_BANKROLL", "50")
+        monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
+        monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "50")
 
         cfg = self._capture_cfg(tmp_path, monkeypatch)
 
@@ -2440,8 +2440,8 @@ class TestFixedStartingBankroll:
 
         # The refusal under test is this function's own; an externally set
         # bankroll env would raise a different (capitalised) message first.
-        monkeypatch.delenv("SPREAD_HUNTER_BANKROLL", raising=False)
-        monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
+        monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
+        monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
 
         with pytest.raises(ValueError, match="bankroll"):
             run_shadow(
@@ -2517,8 +2517,8 @@ class TestStartingBankrollCli:
         hard-coded copy that can drift from `config.py:41`."""
         from core_brain.config import MakerConfig
 
-        monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
-        monkeypatch.setenv("SPREAD_HUNTER_BANKROLL", "50")
+        monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
+        monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "50")
 
         forwarded = self._forwarded(
             monkeypatch,

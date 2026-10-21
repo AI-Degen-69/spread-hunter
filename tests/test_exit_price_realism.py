@@ -42,9 +42,9 @@ def registry(tmp_path):
 
 def test_shadow_run_keeps_the_configured_exit(monkeypatch):
     """A rehearsal that discards the exit knobs cannot sweep them."""
-    monkeypatch.setenv("HUNTER_AGED_OUT_RESCUE_LEAD_SEC", "1234")
-    monkeypatch.setenv("HUNTER_STOP_LOSS_MODE", "PERCENTAGE_DROP")
-    monkeypatch.setenv("HUNTER_DRAWDOWN_PCT", "20")
+    monkeypatch.setenv("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "1234")
+    monkeypatch.setenv("BOT_RISK_STOP_MODE", "PERCENTAGE_DROP")
+    monkeypatch.setenv("BOT_RISK_STOP_MAX_DRAWDOWN_PCT", "20")
 
     from core_brain.config import load
     from core_brain.shadow_run import shadow_cfg
@@ -57,8 +57,8 @@ def test_shadow_run_keeps_the_configured_exit(monkeypatch):
 
 def test_shadow_run_exit_defaults_when_unset(monkeypatch):
     """Unset stays the shipped baseline, so existing rehearsals do not move."""
-    for name in ("HUNTER_AGED_OUT_RESCUE_LEAD_SEC", "HUNTER_STOP_LOSS_MODE",
-                 "HUNTER_DRAWDOWN_PCT"):
+    for name in ("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "BOT_RISK_STOP_MODE",
+                 "BOT_RISK_STOP_MAX_DRAWDOWN_PCT"):
         monkeypatch.delenv(name, raising=False)
 
     from core_brain.shadow_run import shadow_cfg

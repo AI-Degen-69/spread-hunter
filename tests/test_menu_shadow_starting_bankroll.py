@@ -5,7 +5,7 @@ The menu launched the rehearsal as
     python -m core_brain.shadow_run --minutes N --db <shadow>.db --run-id shadow-NN
 
 with no bankroll flag at all, so what a session rehearsed under came from
-whatever `SPREAD_HUNTER_BANKROLL` happened to be exported in the operator's
+whatever `BOT_QUOTE_BANK_BASELINE_USD` happened to be exported in the operator's
 shell. A rehearsal exists to be compared against another rehearsal, so the
 starting bankroll is now stated on the command line instead of inherited.
 
@@ -63,5 +63,5 @@ def test_a_shadow_launch_states_its_starting_bankroll(function):
     for line in launching:
         assert _STATED_BANKROLL in line, (
             f"{function} launches the rehearsal without a stated $100 bankroll, "
-            f"so an exported SPREAD_HUNTER_BANKROLL decides it: {line.strip()}"
+            f"so an exported BOT_QUOTE_BANK_BASELINE_USD decides it: {line.strip()}"
         )

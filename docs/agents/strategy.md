@@ -116,13 +116,12 @@ the retired `usd`/`pct` knobs they replaced counted in different units. The trig
 entry-relative because active quotes span `$0.10`–`$0.90`: the static `$0.15` stop this
 replaced liquidated every entry at or below it the instant it filled.
 
-Operator overrides: `HUNTER_STOP_LOSS_MODE` (`NONE` / `ABSOLUTE_DROP` /
+Operator overrides: `BOT_RISK_STOP_MODE` (`NONE` / `ABSOLUTE_DROP` /
 `PERCENTAGE_DROP`, trailing spaces and case ignored, anything else refused with the choice
-list), `HUNTER_DROP_CENTS` (`0.01`–`0.90`, in DOLLARS per share despite the name),
-`HUNTER_DRAWDOWN_PCT` and `HUNTER_EMERGENCY_DRAWDOWN_PCT` (above `0`, at most `100`). The
-retired `HUNTER_STOP_LOSS_TRIGGER_USD_CENTS`, `HUNTER_STOP_LOSS_TRIGGER_PCT` and
-`HUNTER_SINGLE_BUY_GRACE_SEC` are named and ignored with a warning, never converted: their
-units do not match their replacements'.
+list), `BOT_RISK_STOP_ADVERSE_DROP_CENTS` (`0.01`–`0.90`, in DOLLARS per share despite the name),
+`BOT_RISK_STOP_MAX_DRAWDOWN_PCT` and `BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT` (above `0`, at most `100`).
+Every retired name — the old `HUNTER_*` variables and the `usd`/`pct` knobs — is inert: a
+loader reads the canonical names only, and a retired name in `.env` changes nothing.
 
 Balanced inventory within the configured pair cap becomes `PAIR_LOCKED`. The only
 automatic taker-completion exception is the existing market-end-aware settlement fallback: it makes one capped attempt when due,
@@ -145,7 +144,7 @@ unreadable books), and does not replace `max_pair_cost` — the two bound differ
 questions and both must hold. During normal lifecycle management, the opposite maker
 waits or escalates; the settlement fallback is the sole automatic taker-completion path.
 Switch it off with `enforce_completable_pair_cost=false`; override the cap with env var
-`HUNTER_COMPLETABLE_CAP`.
+`BOT_POS_PRICE_MAX_COMPLETE_USD`.
 
 **Re-quote dead band** (`requote_dead_band`, default `0.03`). On that same run all 205
 consecutive re-quotes changed price and every one reset queue position to zero (median
@@ -153,7 +152,7 @@ order lifetime 11.7 s against median 1058 shares ahead in queue). Measured suppr
 the run's own price series: 1c → 0%, 2c → 36%, **3c → 48%**, 4c → 58%, 5c → 68%. An order
 resting within 3c of the desired price is kept, not cancelled and replaced; the band is
 symmetric and independent of `price_eps` (sub-tick venue jitter) — the effective keep
-tolerance is the larger of the two. Override with env var `HUNTER_REQUOTE_DEAD_BAND`.
+tolerance is the larger of the two. Override with env var `BOT_ORDER_REQUOTE_DEAD_BAND_CENTS`.
 
 A kept order rests at its own price, up to one dead band away from what the gate approved,
 so it is **re-gated every cycle**: if its own resting price now fails the completable-cost

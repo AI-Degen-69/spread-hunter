@@ -111,10 +111,7 @@ def run_hub(tourney_id: str = "487", interval_sec: float = 3.0) -> None:
                     "--db",
                     str(full_db),
                 ]
-                env = {
-                    k: v for k, v in os.environ.items()
-                    if not k.startswith("HUNTER_")
-                }
+                env = dict(os.environ)
                 env["PORT"] = str(port)
                 env["LIVE_DB_PATH"] = str(full_db)
 

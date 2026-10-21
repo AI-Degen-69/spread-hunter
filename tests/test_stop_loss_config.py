@@ -44,33 +44,33 @@ def test_the_retired_knobs_are_gone_from_the_config(attr):
 
 
 def test_mode_env_override_is_trimmed_and_uppercased(monkeypatch):
-    monkeypatch.setenv("HUNTER_STOP_LOSS_MODE", "  percentage_drop ")
+    monkeypatch.setenv("BOT_RISK_STOP_MODE", "  percentage_drop ")
 
     assert load().stop_loss_mode == "PERCENTAGE_DROP"
 
 
 @pytest.mark.parametrize("raw", ["ABSOLUTE", "PERCENTAGE", "usd", "pct", "bogus"])
 def test_mode_env_refuses_non_canonical_spellings(monkeypatch, raw):
-    monkeypatch.setenv("HUNTER_STOP_LOSS_MODE", raw)
+    monkeypatch.setenv("BOT_RISK_STOP_MODE", raw)
 
-    with pytest.raises(ValueError, match="HUNTER_STOP_LOSS_MODE"):
+    with pytest.raises(ValueError, match="BOT_RISK_STOP_MODE"):
         load()
 
 
 def test_drop_cents_env_is_parsed_and_bounded(monkeypatch):
-    monkeypatch.setenv("HUNTER_DROP_CENTS", "0.05")
+    monkeypatch.setenv("BOT_RISK_STOP_ADVERSE_DROP_CENTS", "0.05")
     assert load().drop_cents == 0.05
 
     for raw in ("0.0", "0.009", "0.91", "nan", "inf"):
-        monkeypatch.setenv("HUNTER_DROP_CENTS", raw)
-        with pytest.raises(ValueError, match="HUNTER_DROP_CENTS"):
+        monkeypatch.setenv("BOT_RISK_STOP_ADVERSE_DROP_CENTS", raw)
+        with pytest.raises(ValueError, match="BOT_RISK_STOP_ADVERSE_DROP_CENTS"):
             load()
 
 
 @pytest.mark.parametrize(
     ("name", "field"),
-    [("HUNTER_DRAWDOWN_PCT", "drawdown_pct"),
-     ("HUNTER_EMERGENCY_DRAWDOWN_PCT", "bot_risk_circuit_max_drawdown_pct")],
+    [("BOT_RISK_STOP_MAX_DRAWDOWN_PCT", "drawdown_pct"),
+     ("BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT", "bot_risk_circuit_max_drawdown_pct")],
 )
 def test_drawdown_pct_env_is_an_open_lower_interval(monkeypatch, name, field):
     monkeypatch.setenv(name, "33.5")

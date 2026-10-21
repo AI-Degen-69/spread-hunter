@@ -224,7 +224,7 @@ def test_tournament_preset_leaves_the_stop_to_the_operator_env():
     from unittest import mock
 
     for name in ["conservative", "balanced", "aggressive"]:
-        with mock.patch.dict(os.environ, {"HUNTER_TOURNAMENT_PRESET": name}):
+        with mock.patch.dict(os.environ, {"BOT_QUOTE_TOURNAMENT_PRESET": name}):
             cfg = load()
         assert cfg.stop_loss_mode == "NONE"
         assert cfg.drop_cents == 0.05
@@ -245,14 +245,14 @@ def test_preset_env_no_longer_emits_the_retired_stop_var():
 
 
 def test_load_config_with_preset_and_env_overrides():
-    with mock.patch.dict(os.environ, {"HUNTER_TOURNAMENT_PRESET": "prudent"}):
+    with mock.patch.dict(os.environ, {"BOT_QUOTE_TOURNAMENT_PRESET": "prudent"}):
         cfg = load()
         assert cfg.dynamic_offset_enabled is True
         assert cfg.dynamic_offset_multiplier == 0.60
         assert cfg.dynamic_offset_min_cents == 2
         assert cfg.dynamic_offset_max_cents == 4
 
-    with mock.patch.dict(os.environ, {"HUNTER_TOURNAMENT_PRESET": "balanced"}):
+    with mock.patch.dict(os.environ, {"BOT_QUOTE_TOURNAMENT_PRESET": "balanced"}):
         cfg = load()
         assert cfg.dynamic_offset_enabled is True
         assert cfg.dynamic_offset_multiplier == 0.50
@@ -261,8 +261,8 @@ def test_load_config_with_preset_and_env_overrides():
 
     # Env override on top of preset
     with mock.patch.dict(os.environ, {
-        "HUNTER_TOURNAMENT_PRESET": "aggressive",
-        "HUNTER_DYNAMIC_OFFSET_MAX_CENTS": "3",
+        "BOT_QUOTE_TOURNAMENT_PRESET": "aggressive",
+        "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
     }):
         cfg_custom = load()
         assert cfg_custom.dynamic_offset_enabled is True
@@ -271,8 +271,8 @@ def test_load_config_with_preset_and_env_overrides():
         assert cfg_custom.dynamic_offset_max_cents == 3
 
     # Unknown preset raises ValueError
-    with mock.patch.dict(os.environ, {"HUNTER_TOURNAMENT_PRESET": "unknown_arm"}):
-        with pytest.raises(ValueError, match="HUNTER_TOURNAMENT_PRESET"):
+    with mock.patch.dict(os.environ, {"BOT_QUOTE_TOURNAMENT_PRESET": "unknown_arm"}):
+        with pytest.raises(ValueError, match="BOT_QUOTE_TOURNAMENT_PRESET"):
             load()
 
 
