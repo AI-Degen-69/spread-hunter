@@ -18,6 +18,40 @@
 # "🚨 Critical". A reporter writing "this is urgent" usually means "this annoys
 # me", and a P0 label applied by regex is one the reader learns to ignore.
 
+# --- Status / Workflow ---
+"🤖 Ready for Agent":
+  - '/\b(ready[- ]for[- ]agent|afk|agent[- ]ready)\b/i'
+
+"👤 Ready for Human":
+  - '/\b(ready[- ]for[- ]human|human[- ]required|manual)\b/i'
+
+"🔍 Needs Triage":
+  - '/\b(needs[- ]triage|triage)\b/i'
+
+"🙋 Needs Input":
+  - '/\b(needs[- ]info|needs[- ]answers?|open question|more info|information needed|how do i|how can i|why does|why is|is there a way)\b/i'
+
+"🚧 Blocked":
+  - '/\b(blocked|blocked:code[- ]gate|code gate|code[- ]gate|waiting on|depends on)\b/i'
+
+"💡 Idea":
+  - '/(^idea:|\braw idea\b|\bcaptured idea\b)/i'
+
+"🔄 Duplicate":
+  - '/\b(duplicate|dupe|already exists)\b/i'
+
+"🚫 Won't Fix":
+  - '/\b(wontfix|won.?t fix|will not fix)\b/i'
+
+"❌ Invalid":
+  - '/\b(invalid|not a bug|not an issue)\b/i'
+
+"👍 Good First Issue":
+  - '/\b(good first issue|good-first-issue|starter)\b/i'
+
+"🙋 Help Wanted":
+  - '/\b(help wanted|help-wanted|contributors? needed)\b/i'
+
 # --- Types & Severities ---
 "🐛 Bug":
   - '/\b(bug|error|exception|crash|panic|traceback|fail(ed|ing|ure)?|broken|unexpected)\b/i'
@@ -34,40 +68,21 @@
 "🚨 Critical":
   - '/\b(urgent|critical|sev-?1|p0|outage|downtime|hotfix|liquidat(ed|ion))\b/i'
 
-# --- Domain / Spread Hunter Specifics ---
-"🏦 Exchanges":
-  - '/\b(exchange|ccxt|binance|bybit|okx|coinbase|kraken|kucoin|hyperliquid|gateio|mexc|bitget)\b/i'
+"⚡ Quick Fix":
+  - '/\b(quick[- ]?fix|typo|one[- ]?liner|trivial)\b/i'
 
-"📖 Orderbook":
-  - '/\b(orderbook|order-book|depth|bids?|asks?|l2|l3|snapshot|ticker|liquidity|slippage)\b/i'
+"🛠️ Maintenance":
+  - '/\b(maintenance|refactor|dependency|dependencies|ci|cd|github actions|workflow|build|deploy|docker|compose|k8s|kubernetes|tooling|infra|upgrade)\b/i'
 
-"🎯 Arbitrage":
-  - '/\b(arbitrage|arb|spread|triangular|cross-exchange|funding rate|basis|hedg(e|ing))\b/i'
+# --- Quality ---
+"♿ Accessibility":
+  - '/\b(accessibility|a11y|screen reader|wcag|aria|keyboard navigation)\b/i'
 
-"⚙️ Execution":
-  - '/\b(execution|router|trade|order|fill|limit|market|post-only|cancel|stop-loss|take-profit)\b/i'
+"🔒 Security":
+  - '/\b(security|vulnerability|vuln|cve|hardening|auth|authorization|authentication|xss|csrf|injection)\b/i'
 
-"🔔 Alerts":
-  - '/\b(alert|notification|telegram|discord|webhook|slack|email|pagerduty)\b/i'
+"🧪 Testing":
+  - '/\b(test|testing|coverage|flaky|e2e|integration test|unit test|snapshot)\b/i'
 
-"🔌 API & WebSocket":
-  - '/\b(websocket|ws|wss|rest api|endpoint|rate limit|429|connection drop|reconnect|heartbeat)\b/i'
-
-"🛠️ Infra & CI":
-  - '/\b(docker|compose|ci|cd|github actions|workflow|build|deploy|k8s|kubernetes)\b/i'
-
-# --- Existing generic labels (kept for backward compatibility) ---
-bug:
-  - '/\b(bug|crash|traceback|regression|broken)\b/i'
-
-documentation:
-  - '/\b(documentation|readme|docs?\b|typo)\b/i'
-
-enhancement:
-  - '/\b(feature request|enhancement|would be nice)\b/i'
-
-question:
-  - '/\b(how do i|how can i|why does|why is|is there a way)\b/i'
-
-needs-triage:
-  - '/\b(needs[- ]triage)\b/i'
+"🎨 UI & Design":
+  - '/\b(ui|ux|frontend|design|css|style|layout|component|dashboard|visual)\b/i'

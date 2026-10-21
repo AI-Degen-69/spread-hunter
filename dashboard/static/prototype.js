@@ -17,7 +17,7 @@
 (function () {
 'use strict';
 
-const PAGES =['home', 'data-markets', 'strategy', 'trades', 'reports', 'analysis'];
+const PAGES =['home', 'data-markets', 'strategy', 'trades', 'analysis'];
 const STORAGE_KEY = 'sh-proto-page';
 /* The pinned rail is a preference, so it persists -- under its own key. One
  * shared slot would let pinning the rail forget the chosen page. */
@@ -82,17 +82,10 @@ const PAGE_LAYOUT = [
     selectors: ['#services-deck', '#event-ticker-card'],
   },
   {
-    page: 'reports',
-    label: 'Reports & Analytics',
-    icon: 'M2.4 13.6h11.2 M4.6 11.4V7 M8 11.4V3.4 M11.4 11.4V8.6',
-    note: 'The evidence behind the numbers on the Dashboard.',
-    selectors: ['.stats-subnav-container', '#analytics-surface'],
-  },
-  {
     page: 'analysis',
-    label: 'Data Analysis',
+    label: 'Performance & Analytics',
     icon: 'M2.4 13.6h11.2 M4.6 7.4l2.2 2.2 3-3.6 3.4 3.4',
-    note: 'Every project statistic, each shown once (#541).',
+    note: 'The one analytics page: every statistic, each shown once.',
     selectors: ['#analysis-v2'],
   },
 ];
@@ -101,7 +94,7 @@ function pageId(page) {
   return 'page-' + page;
 }
 
-// A stored value is data, not a command: anything that is not one of the six
+// A stored value is data, not a command: anything that is not one of the five
 // known pages falls back to Home rather than hiding every panel.
 function normalizePage(page) {
   return PAGES.includes(page) ? page : DEFAULT_PAGE;
@@ -579,9 +572,6 @@ function mountSidebarLayout(doc) {
     scope.body.classList.add('proto-body');
   }
 
-  // The analytics sub-nav filters the page it sits on, and the panels moved a
-  // moment ago. Re-check which of its views still have something to show.
-  if (typeof pruneStatsSubnav === 'function') pruneStatsSubnav();
   return shell;
 }
 

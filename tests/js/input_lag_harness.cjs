@@ -135,7 +135,7 @@ function setTabs(t1Hidden, t2Hidden, t3Hidden) {
  * sections and `prototype.js` shows exactly one of them. `page-*` stubs
  * auto-create through el() on first touch, so `hidden` flips are observable
  * like the real DOM's. */
-const RAIL_PAGES = ['home', 'data-markets', 'strategy', 'trades', 'reports'];
+const RAIL_PAGES = ['home', 'data-markets', 'strategy', 'trades', 'analysis'];
 function setRailPage(target) {
   for (const page of RAIL_PAGES) el('page-' + page).hidden = (page !== target);
 }
@@ -149,17 +149,20 @@ const PANEL_PAGE = {
   'service-cards': 'trades',
   'orders-trades-head': 'home',
   'orders-trades-body': 'home',
-  'kpi-grid': 'reports',
   'market-body': 'data-markets',
   'kanban-board': 'data-markets',
   'broker-hero-equity': 'home',
-  'analytics-surface': 'reports',
+  // #749: the decision gates stayed on Tab 2; the one analytics page is Tab 4
+  // and carries the CI band, the funnel and stop-exit slippage.
+  'analytics-gates': 'strategy',
+  'analysis-v2': 'analysis',
+  'pnl-ci-readout': 'analysis',
+  'execution-funnel': 'analysis',
+  'stop-slippage-readout': 'analysis',
 };
-// The five readouts live inside #analytics-surface on the rail's Reports
-// page; sentinels prove a synchronous cached repaint actually replaced them.
-const READOUT_IDS = ['fill-path-edge-readout', 'rescue-friction-readout',
-  'queue-realism-readout', 'robustness-readout', 'capital-risk-readout'];
-el('analytics-surface').parentElement = el('page-reports');
+// The three readouts #749 ported onto the one analytics page. Sentinels prove
+// a synchronous cached repaint actually replaced them.
+const READOUT_IDS = ['pnl-ci-readout', 'execution-funnel', 'stop-slippage-readout'];
 function seedReadoutSentinels() {
   for (const id of READOUT_IDS) el(id).innerHTML = 'SENTINEL-' + id;
 }
@@ -194,7 +197,7 @@ async function main() {
       masterIndicator: el('master-status-indicator').innerHTML,
       brokerHero: el('broker-hero-equity').textContent,
       ordersHead: el('orders-trades-head').innerHTML,
-      kpiGrid: el('kpi-grid').innerHTML,
+      gates: el('analytics-gates').innerHTML,
       marketBody: el('market-body').innerHTML,
       kanbanBoard: el('kanban-board').innerHTML,
       scanPill: el('market-scan-pill').innerHTML,
@@ -218,7 +221,7 @@ async function main() {
       masterIndicator: el('master-status-indicator').innerHTML,
       brokerHero: el('broker-hero-equity').textContent,
       ordersHead: el('orders-trades-head').innerHTML,
-      kpiGrid: el('kpi-grid').innerHTML,
+      gates: el('analytics-gates').innerHTML,
       marketBody: el('market-body').innerHTML,
       kanbanBoard: el('kanban-board').innerHTML,
       scanPill: el('market-scan-pill').innerHTML,
@@ -260,7 +263,7 @@ async function main() {
     // Assert material: tab-1 targets painted, hidden-tab targets untouched.
     result = {
       tab1Head: el('orders-trades-head').innerHTML,
-      kpiGrid: el('kpi-grid').innerHTML,
+      gates: el('analytics-gates').innerHTML,
       marketBody: el('market-body').innerHTML,
       kanbanBoard: el('kanban-board').innerHTML,
       scanPill: el('market-scan-pill').innerHTML,
@@ -270,7 +273,7 @@ async function main() {
     setTabs(false, false, false);
     await app.pollStatus();
     app.switchTab(1);
-    el('kpi-grid').innerHTML = '';
+    el('analytics-gates').innerHTML = '';
     el('market-body').innerHTML = '';
     el('kanban-board').innerHTML = '';
     // Act — operator clicks the Tab 2 button: must paint synchronously.
@@ -280,7 +283,7 @@ async function main() {
       tab1Hidden: el('tab-1').hidden,
       tab2Hidden: el('tab-2').hidden,
       tab3Hidden: el('tab-3').hidden,
-      kpiGrid: el('kpi-grid').innerHTML,
+      gates: el('analytics-gates').innerHTML,
       marketBody: el('market-body').innerHTML,
       kanbanBoard: el('kanban-board').innerHTML,
     };
@@ -290,7 +293,7 @@ async function main() {
     await app.pollStatus();
     app.switchTab(1);
     el('kanban-board').innerHTML = '';
-    el('kpi-grid').innerHTML = '';
+    el('analytics-gates').innerHTML = '';
     // Act — three rapid clicks: Tab 2, back to Tab 1, then Tab 3. Synchronous
     // toggles cannot queue, so only the last click's panel ends up painted.
     app.switchTab(2);
@@ -301,7 +304,7 @@ async function main() {
       tab1Hidden: el('tab-1').hidden,
       tab2Hidden: el('tab-2').hidden,
       tab3Hidden: el('tab-3').hidden,
-      kpiGrid: el('kpi-grid').innerHTML,
+      gates: el('analytics-gates').innerHTML,
       kanbanBoard: el('kanban-board').innerHTML,
     };
   } else if (scenario === 'failed-poll') {
@@ -318,7 +321,7 @@ async function main() {
     // Assert material.
     result = {
       crashed,
-      kpiGrid: el('kpi-grid').innerHTML,
+      gates: el('analytics-gates').innerHTML,
       marketBody: el('market-body').innerHTML,
       kanbanBoard: el('kanban-board').innerHTML,
       scanPill: el('market-scan-pill').innerHTML,
@@ -328,7 +331,7 @@ async function main() {
     setTabs(false, false, false);
     await app.pollStatus();
     global.__flushRaf();
-    const kpiBefore = el('kpi-grid').innerHTML;
+    const kpiBefore = el('analytics-gates').innerHTML;
     // Act — backend dies; next poll must not throw or blank cached paints.
     global.__setFetchOk(false);
     let crashed = null;
@@ -342,7 +345,7 @@ async function main() {
     result = {
       crashed,
       kpiBefore,
-      kpiAfter: el('kpi-grid').innerHTML,
+      kpiAfter: el('analytics-gates').innerHTML,
       readinessDisplay: el('trial-ready-banner').style.display,
       scanPill: el('market-scan-pill').innerHTML,
     };
@@ -363,9 +366,8 @@ async function main() {
     // Empty cache at startup: init already called switchTab before any poll
     // with lastKpi undefined, so this repaint must leave placeholders alone.
     seedReadoutSentinels();
-    el('kpi-grid').innerHTML = 'SENTINEL-kpi-grid';
-    app.switchTab(2);
-    result = { readouts: readReadouts(), kpiGrid: el('kpi-grid').innerHTML, consoleErrors: consoleErrorCount };
+    app.switchTab(4);
+    result = { readouts: readReadouts(), consoleErrors: consoleErrorCount };
   } else if (scenario === 'analytics-tabs-recovery') {
     // Tabs era (no rail): poll on Tab 1 fills the cache, then the operator
     // opens Reports. The repaint must be synchronous — record BEFORE flush.
@@ -374,10 +376,10 @@ async function main() {
     seedReadoutSentinels();
     const queuedBefore = rafQueue.length;
     const fetchBefore = kpiFetchCount;
-    app.switchTab(2);
+    app.switchTab(4);
     result = {
       readouts: readReadouts(),
-      kpiGrid: el('kpi-grid').innerHTML,
+      gates: el('analytics-gates').innerHTML,
       queuedNew: rafQueue.length - queuedBefore,
       fetchKpi: kpiFetchCount - fetchBefore,
       consoleErrors: consoleErrorCount,
@@ -389,13 +391,13 @@ async function main() {
     setTabs(false, false, false);
     setRailPage('home');
     await app.pollStatus();
-    setRailPage('reports');
+    setRailPage('analysis');
     seedReadoutSentinels();
     const fetchBefore = kpiFetchCount;
-    app.switchTab(2);
+    app.switchTab(4);
     result = {
       readouts: readReadouts(),
-      kpiGrid: el('kpi-grid').innerHTML,
+      gates: el('analytics-gates').innerHTML,
       fetchKpi: kpiFetchCount - fetchBefore,
       consoleErrors: consoleErrorCount,
     };
@@ -407,26 +409,17 @@ async function main() {
     seedReadoutSentinels();
     let crashed = null;
     try {
-      app.switchTab(2);
+      app.switchTab(4);
       crashed = false;
     } catch (e) {
       crashed = String((e && e.message) || e);
     }
     result = {
       crashed,
-      tab2Hidden: el('tab-2').hidden,
+      tab4Hidden: el('tab-4').hidden,
       readouts: readReadouts(),
       consoleErrors: consoleErrorCount,
     };
-  } else if (scenario === 'analytics-stale') {
-    // Two polls queue two frames; the first is stale. Running exactly one
-    // head must paint nothing — flushing both would mask the guard.
-    setTabs(false, false, false);
-    await app.pollStatus();
-    await app.pollStatus();
-    seedReadoutSentinels();
-    const remainingQueue = global.__runOneRaf();
-    result = { readouts: readReadouts(), remainingQueue, consoleErrors: consoleErrorCount };
   } else if (scenario === 'lane-numbers') {
     // Issue #744: a venue-declared in-play match was screened, graduated and
     // quoted as REGULAR while the live lane reported 0, because the lane was

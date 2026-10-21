@@ -41,12 +41,10 @@ function element(id) {
 
 // Every id the Tier 1 renderers and the view filter reach for.
 for (const id of ['pnl-ci-readout', 'execution-funnel', 'sample-sufficiency-readout',
-                  'card-sample-sufficiency', 'tier1-decision-row', 'fill-path-edge-readout',
+                  'card-sample-sufficiency', 'fill-path-edge-readout',
                   'rescue-friction-readout', 'stop-slippage-readout', 'queue-realism-readout',
                   'robustness-readout', 'capital-risk-readout',
-                  'quant-risk-deck', 'analytics-charts-matrix',
-                  'card-sensitivity-simulator', 'analytics-gates',
-                  'market-inspection-card']) {
+                  'analytics-gates']) {
   element(id);
 }
 
@@ -123,20 +121,6 @@ try {
   errors.push(`capital_risk: ${e && e.message}`);
 }
 
-/* Tier 1 is the row that decides whether we trade. Every sub-view filter has
- * to leave it alone -- a click on "Monte Carlo & VaR" must not blank the
- * go/no-go pair above it. */
-const views = ['all', 'distributions', 'monte-carlo', 'markout', 'simulator', 'markets'];
-const tier1Visibility = {};
-for (const view of views) {
-  try {
-    app.applyStatsViewFilter(view);
-  } catch (e) {
-    errors.push(`filter ${view}: ${e && e.message}`);
-  }
-  tier1Visibility[view] = element('tier1-decision-row').style.display || '';
-}
-
 process.stdout.write(JSON.stringify({
   errors,
   pnl_ci_html: element('pnl-ci-readout').innerHTML,
@@ -148,5 +132,4 @@ process.stdout.write(JSON.stringify({
   queue_realism_html: element('queue-realism-readout').innerHTML,
   robustness_html: element('robustness-readout').innerHTML,
   capital_risk_html: element('capital-risk-readout').innerHTML,
-  tier1_visibility: tier1Visibility,
 }));

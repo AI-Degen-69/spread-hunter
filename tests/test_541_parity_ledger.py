@@ -210,7 +210,7 @@ class TestLedgerRed541:
 
     def test_2b_every_stat_card_title_carries_a_unit(self):
         html = INDEX_HTML.read_text(encoding="utf-8")
-        assert 'id="kpi-grid"' in html and 'id="analytics-gates"' in html
+        assert 'id="analysis-v2"' in html and 'id="analytics-gates"' in html
         bare = [
             t for t in _stat_card_titles()
             if t not in _BARE_541 and not _UNIT_RE.search(t)

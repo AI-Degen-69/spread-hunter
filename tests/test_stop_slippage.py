@@ -556,6 +556,16 @@ def _mount(kpi_payload):
     return json.loads(out.stdout)
 
 
+def test_the_card_lives_on_the_one_analytics_page():
+    """#749: the card was on the retiring Reports page; it now sits on the one
+    surviving analytics page, and nowhere else."""
+    html = (Path(__file__).resolve().parent.parent
+            / "dashboard" / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert html.count('id="stop-slippage-readout"') == 1
+    assert html.index('id="analysis-v2"') < html.index('id="stop-slippage-readout"')
+
+
 def test_card_shows_worst_decision_cost_and_labels_rehearsal_fills():
     payload = {"statistical_analytics": {"stop_slippage": {
         "stop_exit_count": 3, "measured_count": 2, "unmeasured_count": 1,

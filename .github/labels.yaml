@@ -2,82 +2,55 @@
 # .github/workflows/labels-sync.yaml (additive: nothing here deletes one).
 # Mirrors `gh label list` at the time it was written; a name with a colon or
 # an emoji is quoted so YAML keeps it a string.
+#
+# GENERIC LABELS — suitable for any repository, any project type.
 
-- name: "accessibility"
-  color: "f143ab"
-  description: "Barrier affecting people with disabilities"
-
-- name: "bug"
-  color: "d73a4a"
-  description: "Something isn't working"
-
-- name: "documentation"
-  color: "0075ca"
-  description: "Improvements or additions to documentation"
-
-- name: "duplicate"
-  color: "cfd3d7"
-  description: "This issue or pull request already exists"
-
-- name: "enhancement"
-  color: "a2eeef"
-  description: "New feature or request"
-
-- name: "good first issue"
-  color: "7057ff"
-  description: "Good for newcomers"
-
-- name: "help wanted"
-  color: "008672"
-  description: "Extra attention is needed"
-
-- name: "invalid"
-  color: "e4e669"
-  description: "This doesn't seem right"
-
-- name: "question"
-  color: "d876e3"
-  description: "Further information is requested"
-
-- name: "wontfix"
-  color: "ffffff"
-  description: "This will not be worked on"
-
-- name: "needs-triage"
-  color: "e99695"
-  description: "Maintainer needs to evaluate this idea"
-
-- name: "needs-info"
-  color: "d876e3"
-  description: "Waiting on reporter for more information"
-
-- name: "ready-for-agent"
+# --- Status / Workflow ---
+- name: "🤖 Ready for Agent"
   color: "0e8a16"
   description: "Fully specified, ready for an AFK agent"
 
-- name: "idea"
-  color: "bfd4f2"
-  description: "Raw captured idea, not yet a task"
-
-- name: "ready-for-human"
+- name: "👤 Ready for Human"
   color: "fbca04"
   description: "Requires human implementation"
 
-- name: "needs-answers"
-  color: "FBCA04"
+- name: "🔍 Needs Triage"
+  color: "e99695"
+  description: "Maintainer needs to evaluate this idea"
 
-- name: "family:execution-telemetry"
-  color: "1d76db"
-  description: "Execution telemetry suite: fill-path, friction, queue, markout, capital risk"
+- name: "🙋 Needs Input"
+  color: "d876e3"
+  description: "Waiting on reporter for more information, open questions, or clarification"
 
-- name: "⚡quick-fix"
-  color: "2133fa"
-
-- name: "blocked:code-gate"
+- name: "🚧 Blocked"
   color: "B60205"
-  description: "Blocked until all code tasks are done — needs stable codebase before running"
+  description: "Blocked by another issue, external dependency, or gate"
 
-# --- Custom Spread Hunter labels ---
+- name: "💡 Idea"
+  color: "bfd4f2"
+  description: "Raw captured idea, not yet a task"
+
+- name: "🔄 Duplicate"
+  color: "cfd3d7"
+  description: "This issue or pull request already exists"
+
+- name: "🚫 Won't Fix"
+  color: "ffffff"
+  description: "This will not be worked on"
+
+- name: "❌ Invalid"
+  color: "e4e669"
+  description: "This doesn't seem right"
+
+- name: "👍 Good First Issue"
+  color: "7057ff"
+  description: "Good for newcomers"
+
+- name: "🙋 Help Wanted"
+  color: "008672"
+  description: "Extra attention is needed"
+
+# --- Types & Severities ---
 - name: "🐛 Bug"
   color: "d73a4a"
   description: "Something isn't working"
@@ -98,30 +71,27 @@
   color: "b60205"
   description: "Urgent/P0 issue requiring immediate fix"
 
-- name: "🏦 Exchanges"
-  color: "5319e7"
-  description: "Issues related to CEX/DEX connectors"
+- name: "⚡ Quick Fix"
+  color: "2133fa"
+  description: "Trivial correction (typo, stale comment, wrong constant, ≤2 files, no behavior change)"
 
-- name: "📖 Orderbook"
-  color: "0e8a16"
-  description: "Orderbook, depth, liquidity, or snapshots"
-
-- name: "🎯 Arbitrage"
-  color: "1d76db"
-  description: "Arbitrage calculation, spreads, or triangular logic"
-
-- name: "⚙️ Execution"
-  color: "fbca04"
-  description: "Order routing, limit/market orders, and fills"
-
-- name: "🔔 Alerts"
-  color: "e99695"
-  description: "Telegram, Discord, or webhook alerts"
-
-- name: "🔌 API & WebSocket"
-  color: "1f6feb"
-  description: "REST endpoints, WebSockets, or rate limits"
-
-- name: "🛠️ Infra & CI"
+- name: "🛠️ Maintenance"
   color: "6f42c1"
-  description: "Docker, CI/CD, or deployment issues"
+  description: "Refactoring, dependency updates, tooling, CI/CD, or infrastructure"
+
+# --- Quality ---
+- name: "♿ Accessibility"
+  color: "f143ab"
+  description: "Barrier affecting people with disabilities"
+
+- name: "🔒 Security"
+  color: "ff0000"
+  description: "Security vulnerability or hardening"
+
+- name: "🧪 Testing"
+  color: "006b75"
+  description: "Test coverage, test infrastructure, or flaky tests"
+
+- name: "🎨 UI & Design"
+  color: "f06292"
+  description: "Frontend, UI/UX, design system, or visual changes"

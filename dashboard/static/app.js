@@ -691,25 +691,20 @@ function renderCachedSections() {
   if (paintable(tab1, document.getElementById('orders-trades-body'))) {
     if (currentKpi) renderOrdersTrades(currentKpi, lastState);
   }
-  // Tab 2: PERFORMANCE & ANALYTICS (KPI tiles → rail Reports page)
+  // Tab 2: PERFORMANCE & ANALYTICS (portfolio overview + decision gates)
   if (paintable(tab2, document.getElementById('broker-hero-equity')) && currentKpi) {
     renderPortfolioOverview(currentKpi, lastStatus, lastState);
   }
-  if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
-    renderKPIs(currentKpi, lastStatus);
-  }
-  // A dropped deferred frame leaves the five readouts at their placeholders
+  // A dropped deferred frame leaves the decision gates at their placeholder
   // while the tiles beside them keep painting (#540). Repaint the surface
   // synchronously from the same cache; a throw mid-navigation logs instead
   // of blanking the tab. Empty cache paints nothing (startup guard).
-  if (paintable(tab2, document.getElementById('analytics-surface')) && currentKpi) {
-    try { renderAnalyticsSurface(currentKpi, lastStatus); } catch (e) { console.error('Error rendering cached analytics surface', e); }
+  if (paintable(tab2, document.getElementById('analytics-gates')) && currentKpi) {
+    try { renderAnalyticsSurface(currentKpi); } catch (e) { console.error('Error rendering cached analytics surface', e); }
   }
-  // Tab 4: DATA ANALYSIS (analysis-v2 content, #568). Painted from the same
-  // cache; the renderer lives in analysis_v2.js and no-ops when absent.
-  if (typeof renderAnalysisV2 === 'function'
-      && paintable(tab4, document.getElementById('analysis-v2')) && currentKpi) {
-    try { renderAnalysisV2(document.getElementById('analysis-v2'), currentKpi); } catch (e) { console.error('Error rendering cached analysis-v2 surface', e); }
+  // Tab 4: the one analytics page (#749). Painted from the same cache.
+  if (paintable(tab4, document.getElementById('analysis-v2')) && currentKpi) {
+    try { paintAnalysisV2(currentKpi); } catch (e) { console.error('Error rendering cached analysis-v2 surface', e); }
   }
   // Tab 3: MARKET FILTER (kanban → rail Data & Markets page). The readiness
   // banner lives on this tab, so it refreshes with it; the poll loop still
@@ -3416,7 +3411,6 @@ let currentMcCycles = 100;
 // Starting capital the hero rendered with, so the chart's baseline cannot
 // drift from the one the headline was measured against.
 let lastStartingCapital = null;
-let currentStatsView = 'all';
 let currentBrokerTimeframe = '1D';
 let simParams = { maxCost: 0.990, minVol: 10000, maxHorizon: 60 };
 
@@ -3872,110 +3866,7 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
 
 function initStatisticalSubnav() {
   initBrokerPortfolioTimeframe();
-  const subnav = document.querySelectorAll('.stats-subnav-btn');
-  subnav.forEach(btn => {
-    btn.addEventListener('click', () => {
-      subnav.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      currentStatsView = btn.dataset.view || 'all';
-      applyStatsViewFilter(currentStatsView);
-    });
-  });
-
-  const mcBtns = document.querySelectorAll('.analytics-ci-buttons button[data-mc-cycles]');
-  mcBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      mcBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      currentMcCycles = Number(btn.dataset.mcCycles) || 100;
-      if (lastKpi?.statistical_analytics) {
-        renderMonteCarloChart(lastKpi.statistical_analytics, currentMcCycles);
-      }
-    });
-  });
-
   initSensitivitySimulator();
-  pruneStatsSubnav();
-}
-
-/* The container the analytics sub-nav filters: its own page in the sidebar
- * layout, its own tab panel on the tabbed one. */
-function statsFilterScope() {
-  const subnav = document.querySelector('.stats-subnav-container');
-  if (!subnav) return document;
-  return subnav.closest('.proto-page')
-    || subnav.closest('[role="tabpanel"]')
-    || document;
-}
-
-/* Which panel each view exists to show. A view whose panel is not on this page
- * has nothing to filter, and its button could only hide something the operator
- * is not looking at. */
-const STATS_VIEW_TARGETS = {
-  distributions: '.stats-chart-card[data-section="distributions"]',
-  'monte-carlo': '.stats-chart-card[data-section="monte-carlo"]',
-  markout: '.stats-chart-card[data-section="markout"]',
-  simulator: '#card-sensitivity-simulator',
-};
-
-function pruneStatsSubnav() {
-  const scope = statsFilterScope();
-  document.querySelectorAll('.stats-subnav-btn').forEach(btn => {
-    const selector = STATS_VIEW_TARGETS[btn.dataset.view];
-    // 'All Analytics' has no single target and always stays.
-    if (!selector) return;
-    btn.hidden = !scope.querySelector(selector);
-  });
-}
-
-function applyStatsViewFilter(view) {
-  // The sub-nav filters the page it sits on. The decision gates and the market
-  // inspection table now live on other pages, and hiding a panel the operator
-  // is not looking at is how one click here blanks a page over there.
-  const scope = statsFilterScope();
-  const inScope = (el) => (el && scope.contains(el)) ? el : null;
-  const quantDeck = inScope(document.getElementById('quant-risk-deck'));
-  const chartsMatrix = inScope(document.getElementById('analytics-charts-matrix'));
-  const simulatorCard = inScope(document.getElementById('card-sensitivity-simulator'));
-  const gatesCard = inScope(document.getElementById('analytics-gates'));
-  const chartCards = scope.querySelectorAll('.stats-chart-card');
-
-  if (view === 'all') {
-    if (quantDeck) quantDeck.style.display = '';
-    if (chartsMatrix) chartsMatrix.style.display = 'grid';
-    if (simulatorCard) simulatorCard.style.display = '';
-    if (gatesCard) gatesCard.style.display = '';
-    chartCards.forEach(c => c.style.display = '');
-  } else if (view === 'distributions') {
-    if (quantDeck) quantDeck.style.display = 'none';
-    if (chartsMatrix) chartsMatrix.style.display = 'grid';
-    if (simulatorCard) simulatorCard.style.display = 'none';
-    if (gatesCard) gatesCard.style.display = 'none';
-    chartCards.forEach(c => {
-      c.style.display = (c.dataset.section === 'distributions') ? '' : 'none';
-    });
-  } else if (view === 'monte-carlo') {
-    if (quantDeck) quantDeck.style.display = '';
-    if (chartsMatrix) chartsMatrix.style.display = 'grid';
-    if (simulatorCard) simulatorCard.style.display = 'none';
-    if (gatesCard) gatesCard.style.display = 'none';
-    chartCards.forEach(c => {
-      c.style.display = (c.dataset.section === 'monte-carlo') ? '' : 'none';
-    });
-  } else if (view === 'markout') {
-    if (quantDeck) quantDeck.style.display = 'none';
-    if (chartsMatrix) chartsMatrix.style.display = 'grid';
-    if (simulatorCard) simulatorCard.style.display = 'none';
-    if (gatesCard) gatesCard.style.display = 'none';
-    chartCards.forEach(c => {
-      c.style.display = (c.dataset.section === 'markout') ? '' : 'none';
-    });
-  } else if (view === 'simulator') {
-    if (quantDeck) quantDeck.style.display = 'none';
-    if (chartsMatrix) chartsMatrix.style.display = 'none';
-    if (simulatorCard) simulatorCard.style.display = '';
-    if (gatesCard) gatesCard.style.display = 'none';
-  }
 }
 
 function initSensitivitySimulator() {
@@ -6208,83 +6099,39 @@ function renderCapitalRisk(stats, hostId, opts) {
     </div>`;
 }
 
-function renderAnalyticsSurface(kpi, status) {
-  const grid = document.getElementById('kpi-grid');
+/* Tab 2 keeps the decision gates (#749). The KPI tiles, the quant deck, the
+ * chart matrix and the five accounting readouts this function used to fill all
+ * moved to the one analytics page, which paints them through paintAnalysisV2. */
+function renderAnalyticsSurface(kpi) {
   const gates = document.getElementById('analytics-gates');
-  if (!grid || !gates) return;
+  if (!gates) return;
 
-  const p = kpi?.portfolio || {};
   const ta = kpi?.trade_analytics || {};
   const stats = kpi?.statistical_analytics || {};
-
   const nRaw = ta.n_closes != null ? ta.n_closes : ta.closes_count;
   const n = nRaw != null ? nRaw : 0;
-  const wins = ta.wins != null ? ta.wins : 0;
-  const losses = ta.losses != null ? ta.losses : 0;
-  const required = requiredObservations(ta);
-  const winRate = ta.win_rate != null ? ta.win_rate * 100 : (n > 0 ? 0.0 : 0.0);
-  const lower = ta.ci90_lower_pct != null ? ta.ci90_lower_pct : 0.00;
-  const progressPct = Math.min(100, Math.round((n / required) * 100));
-  // Issue #248 companions (display-only): bridge the $ vs % sign gap.
-  const nMeasKpi = ta.n_measured_returns != null ? ta.n_measured_returns : null;
-  const dwRetKpi = ta.dollar_weighted_return_pct != null && n > 0
-    ? fmtPct(ta.dollar_weighted_return_pct) : null;
 
-  grid.innerHTML = `
-    <div class="kpi-tile">
-      <div class="kpi-label">Average Profit Per Close ($) <span class="info-bubble" title="Why can $ and % disagree?">?</span><span class="info-tooltip">Dollars average $ per close over ALL closes; percents average % per close over measured closes only. A small trade with a big % loss can pull % negative while larger-$ wins keep $ positive.</span></div>
-      ${fmtVal(ta.expectancy_usd != null && n > 0 ? fmtSignedUSD(ta.expectancy_usd) : '$0.000', n > 0 ? ' ' + signClass(ta.expectancy_usd) : '')}
-      <div class="hint">Spread capture net of slippage</div>
-    </div>
-    <div class="kpi-tile">
-      <div class="kpi-label">Mean Return Per Trade (%)</div>
-      ${fmtVal(ta.mean_return_pct != null && n > 0 ? fmtPct(ta.mean_return_pct) : '0.00%', n > 0 ? ' ' + signClass(ta.mean_return_pct) : '')}
-      <div class="hint">± ${ta.stdev_return_pct != null && n > 0 ? Number(ta.stdev_return_pct).toFixed(2) + '%' : '0.00%'} (σ)${dwRetKpi != null ? ` · ${dwRetKpi} dollar-weighted` : ' · dollar-weighted unmeasured'}</div>
-    </div>
-    <div class="kpi-tile">
-      <div class="kpi-label">Annualized Sharpe Ratio</div>
-      ${fmtVal(ta.sharpe_ratio != null && n > 0 ? ta.sharpe_ratio.toFixed(2) : '0.00', n > 0 ? ' ' + signClass(ta.sharpe_ratio) : '')}
-      <div class="hint">Risk-adjusted spread performance</div>
-    </div>
-    <div class="kpi-tile">
-      <div class="kpi-label">Executed Sample Size</div>
-      ${fmtVal(`${n} Closes (${wins}W / ${losses}L)${nMeasKpi != null ? ` · ${nMeasKpi} measured` : ''}`)}
-      <div class="hint">Empirical Win Rate: ${n > 0 ? winRate.toFixed(1) + '%' : '0.0%'}</div>
-    </div>
-  `;
-
-  // Tier 1 first: the readings that gate live trading are rendered before
-  // the drill-down decks, and a throw in either must not take the rest down.
-  try { renderPnlCiReadout(ta); } catch (e) { console.error('Error rendering PnL CI readout', e); }
-  try { renderExecutionFunnel(kpi); } catch (e) { console.error('Error rendering execution funnel', e); }
-  try { renderSampleSufficiency(ta); } catch (e) { console.error('Error rendering sample sufficiency', e); }
-  try { renderFillPathEdge(stats); } catch (e) { console.error('Error rendering fill-path edge', e); }
-  try { renderRescueFriction(stats); } catch (e) { console.error('Error rendering rescue friction', e); }
-  try { renderStopSlippage(stats); } catch (e) { console.error('Error rendering stop slippage', e); }
-  try { renderQueueRealism(stats); } catch (e) { console.error('Error rendering queue realism', e); }
-  try { renderRobustness(stats); } catch (e) { console.error('Error rendering robustness gates', e); }
-  try { renderCapitalRisk(stats); } catch (e) { console.error('Error rendering capital risk', e); }
-
-  // Render Quant Grid
-  renderQuantRiskGrid(ta, p, stats);
-
-  // Render SVG Charts including featured Position Return Distribution safely
-  try { renderPositionDistributionChart(stats); } catch (e) { console.error('Error rendering position dist chart', e); }
-  try { renderPairCostKdeChart(stats); } catch (e) { console.error('Error rendering pair cost chart', e); }
-  try { renderMonteCarloChart(stats, currentMcCycles); } catch (e) { console.error('Error rendering monte carlo chart', e); }
-  try { renderProbabilityBellChart(stats); } catch (e) { console.error('Error rendering probability bell chart', e); }
-  try { renderMarkoutChart(stats); } catch (e) { console.error('Error rendering markout chart', e); }
-
-  // Render the decision gates. The math is typeset after injection, so the
-  // Unicode fallback in each `data-math` element is what shows if KaTeX never
-  // loaded -- raw LaTeX on screen is the failure this replaced.
+  // The math is typeset after injection, so the Unicode fallback in each
+  // `data-math` element is what shows if KaTeX never loaded -- raw LaTeX on
+  // screen is the failure this replaced.
   gates.innerHTML = decisionGatesHtml(ta, stats, n, kpi);
   typesetMath(gates);
   typesetMath(document.getElementById('tab-2'));
+}
 
-  // Update sample count in sub-nav
-  const samplePill = document.getElementById('stats-live-sample-count');
-  if (samplePill) samplePill.textContent = `${n} Closes · Scanned Polymarket Candidates`;
+/* The one analytics page (#749). The CI band, the execution funnel and
+ * stop-exit slippage are drawn by their own renderers, which find their hosts
+ * by id; renderAnalysisV2 fills the rest of the page from the same payload. */
+function paintAnalysisV2(kpi) {
+  const host = document.getElementById('analysis-v2');
+  if (!host) return;
+  if (typeof renderAnalysisV2 === 'function') {
+    try { renderAnalysisV2(host, kpi); } catch (e) { console.error('Error rendering analysis-v2 page', e); }
+  }
+  const stats = kpi?.statistical_analytics || {};
+  try { renderPnlCiReadout(kpi?.trade_analytics || {}); } catch (e) { console.error('Error rendering PnL CI readout', e); }
+  try { renderExecutionFunnel(kpi); } catch (e) { console.error('Error rendering execution funnel', e); }
+  try { renderStopSlippage(stats); } catch (e) { console.error('Error rendering stop slippage', e); }
 }
 
 /* Portfolio overview card + run pill (Issue #268): one paint for the card
@@ -10618,15 +10465,15 @@ async function pollStatus() {
       renderPortfolioOverview(currentKpi, status, lastState);
     }
 
-    // Render KPIs (Tab 2 → rail Reports page)
-    if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
-      renderKPIs(currentKpi, status);
+    // Decision gates (Tab 2 → rail Strategy page): the one reading #749 left
+    // on this tab, so it is its own paint rather than the retired KPI grid's.
+    if (paintable(tab2, document.getElementById('analytics-gates')) && currentKpi) {
+      renderAnalyticsSurface(currentKpi);
     }
 
-    // Render the Data Analysis tab (Tab 4, analysis-v2 content #568) from the same poll snapshot.
-    if (typeof renderAnalysisV2 === 'function'
-        && paintable(tab4, document.getElementById('analysis-v2')) && currentKpi) {
-      renderAnalysisV2(document.getElementById('analysis-v2'), currentKpi);
+    // Render the one analytics page (Tab 4, #analysis-v2 content) from the same poll snapshot.
+    if (paintable(tab4, document.getElementById('analysis-v2')) && currentKpi) {
+      paintAnalysisV2(currentKpi);
     }
 
     // Render the Market Filter kanban (Tab 3 → rail Data & Markets page)
@@ -10678,7 +10525,6 @@ if (typeof module !== 'undefined' && module.exports) {
     renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,
     setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
-    statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,
     renderPnlCiReadout, renderExecutionFunnel, renderSampleSufficiency,
     OT_VIEWS, OT_COLUMNS, ordersTradesRows, ordersTradesCounts, otHeadHtml,

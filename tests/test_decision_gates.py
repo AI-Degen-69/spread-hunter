@@ -152,14 +152,19 @@ def test_the_sweet_spot_figure_comes_from_the_payload():
     assert "82.5%" not in rendered["html"]
 
 
-def test_katex_is_loaded_and_the_distribution_heading_is_math():
-    # Arrange / Act
+def test_katex_is_loaded_and_the_gate_hypotheses_are_math():
+    # Arrange / Act — #749 retired the distribution heading this once pinned;
+    # the decision gates still typeset their hypotheses, and they are built in
+    # app.js rather than carried in the static page.
     html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    app_js = (_STATIC / "app.js").read_text(encoding="utf-8")
 
     # Assert
     assert "katex.min.js" in html
     assert "katex.min.css" in html
-    assert 'data-math="\\mathcal{N}(\\mu, \\sigma^2)"' in html
+    assert 'data-math="${esc(tex)}"' in app_js
+    assert "mathSpan(" in app_js
+    assert "typesetMath(gates)" in app_js
 
 
 def test_the_markout_row_reads_the_top_level_payload_fields():

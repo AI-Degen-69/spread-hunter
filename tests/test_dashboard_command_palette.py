@@ -205,7 +205,7 @@ def test_palette_lists_pages_actions_and_rail_links():
     labels = [r["label"] for r in res["rows"]]
     assert labels == [
         "Dashboard", "Data & Markets", "Strategy", "Trades & Positions",
-        "Reports & Analytics", "Data Analysis", "Polymarket",
+        "Performance & Analytics", "Polymarket",
         "SYNC VENUE", "RESET",
     ]
     link = [r for r in res["rows"] if r["label"] == "Polymarket"][0]
@@ -249,10 +249,10 @@ def test_rows_carry_rail_icons():
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_typing_filters_entries():
     """Trimmed, case-insensitive substring match on the label."""
-    res = _run({"withPrototype": True}, _open() + [{"type": "input", "value": "rep"}])
-    assert [r["label"] for r in res["rows"]] == ["Reports & Analytics"]
-    res = _run({"withPrototype": True}, _open() + [{"type": "input", "value": "REP"}])
-    assert [r["label"] for r in res["rows"]] == ["Reports & Analytics"]
+    res = _run({"withPrototype": True}, _open() + [{"type": "input", "value": "anal"}])
+    assert [r["label"] for r in res["rows"]] == ["Performance & Analytics"]
+    res = _run({"withPrototype": True}, _open() + [{"type": "input", "value": "ANAL"}])
+    assert [r["label"] for r in res["rows"]] == ["Performance & Analytics"]
 
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
@@ -266,7 +266,7 @@ def test_arrows_move_highlight_and_stop_at_ends():
     res = _run({"withPrototype": True}, _open() + [_key("ArrowUp")])
     assert [i for i, r in enumerate(res["rows"]) if r["selected"]] == [0]
     res = _run({"withPrototype": True}, _open() + [_key("ArrowDown")] * 9)
-    assert [i for i, r in enumerate(res["rows"]) if r["selected"]] == [7]
+    assert [i for i, r in enumerate(res["rows"]) if r["selected"]] == [6]
 
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
@@ -290,11 +290,11 @@ def test_page_entry_navigates_like_the_sidebar():
     aria-current, and the sh-proto-page persistence all move."""
     res = _run(
         {"withPrototype": True, "stored": "strategy"},
-        _open() + [{"type": "input", "value": "reports"}, _key("Enter")],
+        _open() + [{"type": "input", "value": "analytics"}, _key("Enter")],
     )
-    assert res["visiblePages"] == ["page-reports"]
-    assert res["currentPage"] == "reports"
-    assert res["stored"] == "reports"
+    assert res["visiblePages"] == ["page-analysis"]
+    assert res["currentPage"] == "analysis"
+    assert res["stored"] == "analysis"
 
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")

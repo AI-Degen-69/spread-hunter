@@ -136,7 +136,7 @@
     <button class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-1" id="tab-btn-1" type="button">LIVE OPERATIONS</button>
     <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-2" id="tab-btn-2" type="button">PERFORMANCE &amp; ANALYTICS</button>
     <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-3" id="tab-btn-3" type="button">MARKET FILTER</button>
-    <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-4" id="tab-btn-4" type="button">DATA ANALYSIS</button>
+    <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-4" id="tab-btn-4" type="button">PERFORMANCE &amp; ANALYTICS</button>
   </nav>
 
   <!-- ── Tab 1: Live Operations ── -->
@@ -451,303 +451,8 @@
       </div>
     </div>
 
-    <!-- Analytics View Filter Sub-Tabs -->
-    <div class="stats-subnav-container card" style="margin-bottom:16px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-      <div class="stats-subnav" role="tablist" aria-label="Statistical views">
-        <button class="stats-subnav-btn active" type="button" data-view="all">All Analytics</button>
-        <button class="stats-subnav-btn" type="button" data-view="distributions">Distributions &amp; KDE</button>
-        <button class="stats-subnav-btn" type="button" data-view="monte-carlo">Monte Carlo &amp; VaR</button>
-        <button class="stats-subnav-btn" type="button" data-view="markout">Adverse Selection</button>
-        <button class="stats-subnav-btn" type="button" data-view="simulator" style="display:none !important">Sensitivity Simulator</button>
-      </div>
-      <div style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px">
-        <span class="pulse-dot active" style="width:6px;height:6px"></span>
-        <span class="mono" id="stats-live-sample-count">0 Closes · Scanned Markets Standby</span>
-      </div>
-    </div>
-
-    <!-- Analytics Surface -->
-    <div id="analytics-surface" class="analytics-surface">
-      <!-- TIER 1 -- the two readings that gate live trading. Everything below
-           this row is drill-down: it explains these two, it does not outrank
-           them. Kept above the fold on every sub-view. -->
-      <div class="tier1-decision-row" id="tier1-decision-row">
-        <div class="card tier1-card" id="card-pnl-ci" data-tier="1">
-          <div class="tier1-head">
-            <div class="font-display tier1-title">AVERAGE CLOSE &amp; CONFIDENCE</div>
-            <div class="tier1-tier-tag">TIER 1 · GO / NO-GO</div>
-          </div>
-          <div id="pnl-ci-readout" class="pnl-ci-readout"><!-- Rendered by JS --></div>
-        </div>
-        <div class="card tier1-card" id="card-execution-funnel" data-tier="1">
-          <div class="tier1-head">
-            <div class="font-display tier1-title">EXECUTION DROP-OFF</div>
-            <div class="tier1-tier-tag">TIER 1 · WHERE WE FALL OFF</div>
-          </div>
-          <div id="execution-funnel" class="execution-funnel"><!-- Rendered by JS --></div>
-        </div>
-        <div class="card tier1-card" id="card-sample-sufficiency" data-tier="1">
-          <div class="tier1-head">
-            <div class="font-display tier1-title">SAMPLE SIZE &amp; CONFIDENCE SUFFICIENCY</div>
-            <div class="tier1-tier-tag">TIER 1 · OBSERVATION DEPTH</div>
-          </div>
-          <div id="sample-sufficiency-readout" class="sample-sufficiency-readout"><!-- Rendered by JS --></div>
-        </div>
-      </div>
-
-      <!-- Merge edge vs rescue bleed, measured apart (#513). Not a Tier-1
-           reading and not one of the drill-down charts: it explains WHY the
-           average close above is what it is, so it sits under that row and
-           above the decks. Deliberately not `.stats-chart-card` -- that class
-           takes part in the sub-view filter, and a reading that explains the
-           headline must not blank when a chart deck is selected. -->
-      <div class="card" style="margin-top:16px">
-        <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div class="font-display" style="font-size:13px;letter-spacing:0.06em">FILL-PATH EDGE — MERGE VS RESCUE</div>
-          <div class="mono" style="font-size:11px;color:var(--text-muted)">Per Close · Accounting View</div>
-        </div>
-        <div id="fill-path-edge-readout" class="fill-path-edge-readout"><!-- Rendered by JS --></div>
-      </div>
-
-      <!-- What the rescue path cost to execute, under the split that says how much of
-           the loss it was (#514). Same placement rule as the card above: it explains a
-           headline, so it must not take part in the sub-view filter. -->
-      <div class="card" style="margin-top:16px">
-        <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div class="font-display" style="font-size:13px;letter-spacing:0.06em">RESCUE FRICTION — STOP-LOSS DRAG &amp; TAKER COST</div>
-          <div class="mono" style="font-size:11px;color:var(--text-muted)">Per Share · Cents · Accounting View</div>
-        </div>
-        <div id="rescue-friction-readout" class="rescue-friction-readout"><!-- Rendered by JS --></div>
-      </div>
-
-      <!-- What a hard-stop exit actually sold at, against the floor it was sent at (#730).
-           A close nobody observed filling reads unmeasured here rather than 0.00, and the
-           footer says how many of the population that was. -->
-      <div class="card" style="margin-top:16px">
-        <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div class="font-display" style="font-size:13px;letter-spacing:0.06em">STOP-EXIT SLIPPAGE — FLOOR → FILL</div>
-          <div class="mono" style="font-size:11px;color:var(--text-muted)">Per Share · Accounting View</div>
-        </div>
-        <div id="stop-slippage-readout" class="stop-slippage-readout"><!-- Rendered by JS --></div>
-      </div>
-
-      <!-- The tape behind a fill rather than the close it became (#515). Same placement
-           rule as the two cards above: it explains the fills the headline counts, so it
-           must not take part in the sub-view filter. -->
-      <div class="card" style="margin-top:16px">
-        <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div class="font-display" style="font-size:13px;letter-spacing:0.06em">QUEUE REALISM — TRADE-THROUGH DEPTH &amp; FILL LATENCY</div>
-          <div class="mono" style="font-size:11px;color:var(--text-muted)">Per Cleared Fill · Cents &amp; Seconds</div>
-        </div>
-        <div id="queue-realism-readout" class="queue-realism-readout"><!-- Rendered by JS --></div>
-      </div>
-
-      <!-- Whether the tape behind our fills is helping or hurting, and whether the mean is an
-           edge or an accident (#516). Same placement rule as the three cards above: it explains
-           the numbers the headline counts, so it must not take part in the sub-view filter. -->
-      <div class="card" style="margin-top:16px">
-        <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div class="font-display" style="font-size:13px;letter-spacing:0.06em">POST-FILL ROBUSTNESS &mdash; MARKOUT, MAE, CI &amp; SQN</div>
-          <div class="mono" style="font-size:11px;color:var(--text-muted)">Per Fill &middot; Cents &middot; Statistical Gates</div>
-        </div>
-        <div id="robustness-readout" class="robustness-readout"><!-- Rendered by JS --></div>
-      </div>
-
-      <!-- How deep and how long the capital curve was underwater, where the swing risk sits, and
-           whether the return is worth the downside pain (#517). Same placement rule as the four
-           cards above: it explains the numbers the headline counts, so it must not take part in
-           the sub-view filter. -->
-      <div class="card" style="margin-top:16px">
-        <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div class="font-display" style="font-size:13px;letter-spacing:0.06em">CAPITAL RISK &mdash; DRAWDOWN RECOVERY, SKEWNESS &amp; SORTINO</div>
-          <div class="mono" style="font-size:11px;color:var(--text-muted)">Per Close &amp; Per Curve Point &middot; Percent &middot; Descriptive &amp; Banded</div>
-        </div>
-        <div id="capital-risk-readout" class="capital-risk-readout"><!-- Rendered by JS --></div>
-      </div>
-
-      <!-- Statistical Power & Distribution Chips -->
-      <div id="kpi-grid" class="kpi-grid analytics-squares"></div>
-
-      <!-- Quantitative Risk & Statistical Expectancy Deck -->
-      <div id="quant-risk-deck" class="card" style="margin-top:16px;margin-bottom:16px">
-        <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div class="font-display" style="font-size:13px;letter-spacing:0.06em">QUANTITATIVE RISK &amp; STATISTICAL EXPECTANCY</div>
-          <div class="mono" style="font-size:11px;color:var(--text-muted)">Parametric 95% Confidence</div>
-        </div>
-        <div class="quant-stale-note" id="quant-stale-note">
-          Dashboard backend is older than this page — restart the dashboard to see all metrics.
-        </div>
-        <div class="quant-grid" id="quant-grid">
-          <!-- Rendered by JS -->
-        </div>
-      </div>
-
-      <!-- Main Statistical Charts Grid -->
-      <div class="analytics-chart-grid" id="analytics-charts-matrix">
-        <!-- 0. Spotlight: Empirical Position Return Distribution & Confidence Interval Envelope -->
-        <div id="card-position-returns-dist" data-tier="1" class="card stats-chart-card featured-dist-card" data-section="distributions" style="grid-column: 1 / -1;">
-          <div class="stats-chart-head" style="flex-wrap:wrap;gap:12px;align-items:flex-start">
-            <div>
-              <div class="font-display" style="font-size:14px;letter-spacing:0.04em">POSITION RETURN DISTRIBUTION &amp; STATISTICAL EXPECTANCY (<span class="math-inline" data-math="\mathcal{N}(\mu, \sigma^2)">N(μ, σ²)</span>)</div>
-              <div style="font-size:11px;color:var(--text-muted)">Empirical density across all executed positions (Merged round-trips &amp; single unwinds) with normal distribution curve &amp; confidence interval band</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <!-- Parameter Switcher Selector -->
-              <div class="dist-param-select-group" style="display:flex;align-items:center;gap:6px">
-                <label for="select-dist-param" style="font-size:11px;color:var(--text-secondary);font-weight:600">Metric:</label>
-                <select id="select-dist-param" class="dist-param-select" aria-label="Select metric to model on normal distribution">
-                  <option value="pnl_pct" selected>% PnL Return per Position</option>
-                  <option value="pnl_usd">$ PnL Realized per Position</option>
-                  <option value="spread_cost">Spread Pair Cost ($)</option>
-                  <option value="outcome_prob">Contract Probability Skew (%)</option>
-                </select>
-              </div>
-              <!-- Confidence Interval 90% vs 95% Toggle -->
-              <div class="analytics-ci-buttons" id="dist-ci-toggle-group" role="group" aria-label="Confidence Interval Selection">
-                <button class="active" type="button" data-ci-level="90" id="btn-ci-90">90% CI</button>
-                <button type="button" data-ci-level="95" id="btn-ci-95">95% CI</button>
-              </div>
-              <span class="badge-tag live" id="dist-ci-badge" style="padding:4px 10px;font-size:11px;font-weight:700">90% CI: [+1.51%, +1.85%] · EDGE POSITIVE</span>
-            </div>
-          </div>
-          <!-- Statistical Power & Distribution Sample Count Banner -->
-          <div class="dist-power-banner" id="dist-power-banner">
-            <!-- Rendered by JS -->
-          </div>
-          <div id="position-dist-svg-container" class="chart-canvas-container" style="height:220px;position:relative"></div>
-          <div class="chart-footer-metrics" id="position-dist-footer"></div>
-        </div>
-
-        <!-- 1. Pair Cost & Spread Histogram with KDE Overlay -->
-        <div id="card-hist-kde" data-tier="2" class="card stats-chart-card" data-section="distributions">
-          <div class="stats-chart-head">
-            <div>
-              <div class="font-display" style="font-size:13px">PAIR COST &amp; SPREAD DISTRIBUTION</div>
-              <div style="font-size:11px;color:var(--text-muted)">Empirical density vs. $0.990 hard profit ceiling</div>
-            </div>
-            <span class="badge-tag live" id="hist-median-badge">Median: $0.982</span>
-          </div>
-          <div id="pair-cost-svg-container" class="chart-canvas-container"></div>
-          <div class="chart-footer-metrics" id="pair-cost-footer"></div>
-        </div>
-
-        <!-- 2. Monte Carlo Stochastic 1,000-Path Projections -->
-        <div id="card-monte-carlo" data-tier="3" class="card stats-chart-card" data-section="monte-carlo">
-          <div class="stats-chart-head">
-            <div>
-              <div class="font-display" style="font-size:13px">MONTE CARLO TRAJECTORY (1,000 PATHS)</div>
-              <div style="font-size:11px;color:var(--text-muted)">100-cycle portfolio confidence fan envelope</div>
-            </div>
-            <div class="analytics-ci-buttons" role="group" aria-label="Cycle Horizon">
-              <button class="active" type="button" data-mc-cycles="100">100 Cycles</button>
-              <button type="button" data-mc-cycles="50">50 Cycles</button>
-              <button type="button" data-mc-cycles="20">20 Cycles</button>
-            </div>
-          </div>
-          <div id="monte-carlo-svg-container" class="chart-canvas-container"></div>
-          <div class="chart-footer-metrics" id="monte-carlo-footer"></div>
-        </div>
-
-        <!-- 3. Implied Probability & Outcome Skew Bell Curve -->
-        <div id="card-prob-bell" data-tier="2" class="card stats-chart-card" data-section="distributions">
-          <div class="stats-chart-head">
-            <div>
-              <div class="font-display" style="font-size:13px">OUTCOME PROBABILITY &amp; LIQUIDITY SKEW</div>
-              <div style="font-size:11px;color:var(--text-muted)">Gaussian bell curve overlay · Sweet spot: 15%–85%</div>
-            </div>
-            <span class="badge-tag info" id="bell-sweetspot-badge">82.5% In Sweet Spot</span>
-          </div>
-          <div id="prob-bell-svg-container" class="chart-canvas-container"></div>
-          <div class="chart-footer-metrics" id="prob-bell-footer"></div>
-        </div>
-
-        <!-- 4. Execution Markout & Adverse Selection Decay -->
-        <div id="card-markout" data-tier="1" class="card stats-chart-card" data-section="markout">
-          <div class="stats-chart-head">
-            <div>
-              <div class="font-display" style="font-size:13px">POST-FILL MARKOUT &amp; ADVERSE SELECTION</div>
-              <div style="font-size:11px;color:var(--text-muted)">Price displacement from 1s to 300s post-execution</div>
-            </div>
-            <span class="badge-tag live">Zero Toxic Flow</span>
-          </div>
-          <div id="markout-svg-container" class="chart-canvas-container"></div>
-          <div class="chart-footer-metrics" id="markout-footer"></div>
-        </div>
-      </div>
-
-      <!-- Interactive Parameter Sensitivity Matrix & Simulator -->
-      <div id="card-sensitivity-simulator" data-tier="3" class="card" style="display:none !important;margin-top:16px" data-section="simulator">
-        <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-          <div>
-            <div class="font-display" style="font-size:13px;letter-spacing:0.06em">INTERACTIVE PARAMETER SENSITIVITY SIMULATOR</div>
-            <div style="font-size:11px;color:var(--text-muted)">Test how threshold adjustments alter universe graduation, expected daily edge, and capital efficiency</div>
-          </div>
-          <button id="btn-reset-sim-params" class="btn-reset" style="padding:4px 10px;font-size:11px" type="button">Reset Defaults</button>
-        </div>
-
-        <div class="simulator-layout">
-          <!-- Controls Panel -->
-          <div class="sim-controls-panel">
-            <div class="sim-control-group">
-              <div class="sim-control-label">
-                <span>Max Pair Cost Ceiling</span>
-                <b id="val-sim-cost" class="mono text-primary">$0.990</b>
-              </div>
-              <input id="slider-sim-cost" class="sim-slider" type="range" min="0.965" max="0.995" step="0.001" value="0.990">
-              <div class="sim-slider-ticks"><span>$0.965 (Aggressive)</span><span>$0.980</span><span>$0.990 (Default)</span><span>$0.995 (Loose)</span></div>
-            </div>
-
-            <div class="sim-control-group">
-              <div class="sim-control-label">
-                <span>Min 24h Volume Gate</span>
-                <b id="val-sim-vol" class="mono text-primary">$10,000</b>
-              </div>
-              <input id="slider-sim-vol" class="sim-slider" type="range" min="2000" max="50000" step="1000" value="10000">
-              <div class="sim-slider-ticks"><span>$2k (Broad)</span><span>$10k (Default)</span><span>$25k</span><span>$50k (Strict)</span></div>
-            </div>
-
-            <div class="sim-control-group">
-              <div class="sim-control-label">
-                <span>Max Horizon to Resolution</span>
-                <b id="val-sim-horizon" class="mono text-primary">60 Days</b>
-              </div>
-              <input id="slider-sim-horizon" class="sim-slider" type="range" min="3" max="90" step="1" value="60">
-              <div class="sim-slider-ticks"><span>3 Days</span><span>30 Days</span><span>60 Days (Default)</span><span>90 Days</span></div>
-            </div>
-          </div>
-
-          <!-- Real-time Simulation Output Matrix -->
-          <div class="sim-output-panel">
-            <div class="sim-metric-card highlight">
-              <div class="sim-metric-label">Graduated Candidates</div>
-              <div class="sim-metric-val mono text-primary" id="sim-out-candidates">7 Markets</div>
-              <div class="sim-metric-sub mono" id="sim-out-candidates-sub">Passing all 4 filter gates</div>
-            </div>
-            <div class="sim-metric-card">
-              <div class="sim-metric-label">Expected Daily Yield</div>
-              <div class="sim-metric-val mono text-signal" id="sim-out-daily-income">$24.50 / day</div>
-              <div class="sim-metric-sub mono" id="sim-out-daily-income-sub">Based on $100 baseline</div>
-            </div>
-            <div class="sim-metric-card">
-              <div class="sim-metric-label">Implied Annualized APR</div>
-              <div class="sim-metric-val mono text-signal" id="sim-out-apr">89.4%</div>
-              <div class="sim-metric-sub mono">Compounded spread capture</div>
-            </div>
-            <div class="sim-metric-card">
-              <div class="sim-metric-label">Average Edge per Pair</div>
-              <div class="sim-metric-val mono text-primary" id="sim-out-edge">1.00¢ / share</div>
-              <div class="sim-metric-sub mono">$1.00 - Average Cost</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Formal Statistical Hypothesis Testing & Decision Gates -->
-      <div id="analytics-gates" class="card analytics-gates" style="margin-top:16px" data-section="all"></div>
-      <div id="dist-container" hidden></div>
-    </div>
-
-    <!-- Market Inspection Table -->
+    <!-- Formal Statistical Hypothesis Testing & Decision Gates -->
+    <div id="analytics-gates" class="card analytics-gates" data-section="all"></div>
   </section>
 
   <!-- ── Tab 3: Market Filter Pipeline (kanban) ── -->
@@ -813,12 +518,18 @@
   <section id="tab-4" role="tabpanel" aria-labelledby="tab-btn-4" hidden>
 <div id="analysis-v2">
 
+  <!-- Backend older than this page: the amber note the retired KPI deck
+       carried (#749). It only reads, never measures, so it leads the page. -->
+  <div class="quant-stale-note" id="quant-stale-note">
+    Dashboard backend is older than this page — restart the dashboard to see all metrics.
+  </div>
+
   <!-- ===================== 1. MACRO KPI STRIP ===================== -->
   <section class="grid col-3">
     <article class="card kpi">
       <div class="card-head">
         <span class="kpi-label">Mean Return Per Trade</span>
-        <span class="info" data-tooltip="Arithmetic mean of per-close percentage returns across the executed sample. σ is the sample standard deviation; dollar-weighted re-weights each close by its realised dollar PnL."></span>
+        <span class="info" data-tooltip="Arithmetic mean of per-close percentage returns across the executed sample. σ is the sample standard deviation; dollar-weighted re-weights each close by its realised dollar PnL. Why can $ and % disagree? Dollars average $ per close over ALL closes; percents average % per close over measured closes only, so a small trade with a big % loss can pull % negative while larger-$ wins keep $ positive."></span>
       </div>
       <div class="kpi-value mono" data-bind="trade_analytics.mean_return_pct" data-fmt="pct" data-sign="1"></div>
       <div class="kpi-note">± <span data-bind="trade_analytics.stdev_return_pct" data-fmt="pct"></span> (σ) <span class="sep">·</span> <span data-bind="trade_analytics.dollar_weighted_return_pct" data-fmt="pct"></span> dollar-weighted</div>
@@ -849,42 +560,15 @@
     <div class="section-label">Tier 1 Metrics</div>
     <div class="grid col-2-wide">
 
-      <!-- Card 1: Average Close & CI -->
+      <!-- Card 1: Average Close & CI. The band readout is the card the retired
+           Reports page carried (#749): one render site for mean_pnl_ci, drawn
+           by renderPnlCiReadout from the payload's own levels. -->
       <article class="card">
         <div class="card-head">
-          <div>
-            <div class="card-title">Average Close &amp; Confidence Interval</div>
-            <div class="card-value mono" data-bind="trade_analytics.expectancy_usd" data-fmt="usd" data-sign="1"></div>
-            <div class="card-sub">Mean realised PnL per close · <span data-bind="trade_analytics.n_closes" data-fmt="int"></span> closes</div>
-          </div>
-          <span class="info" data-tooltip="Bootstrap confidence interval around the mean realised PnL per close. 90% and 95% bounds shown; the dashed line marks the $0.00 breakeven."></span>
+          <div class="card-title">Average Close &amp; Confidence Interval ($)</div>
+          <span class="info" data-tooltip="Bootstrap confidence interval around the mean realised PnL per close. 90% and 95% bounds against $0.00 breakeven; a band that crosses zero names how deep the loss goes."></span>
         </div>
-
-        <div class="ci-scale" id="ciScale">
-          <div class="track"></div>
-          <!-- ticks -->
-          <div class="tick" data-ci="lo95" style="left:0%;background:var(--crimson)"></div>
-          <div class="tick" data-ci="lo90" style="left:9%;background:var(--crimson)"></div>
-          <div class="tick mean" data-ci="mean" style="left:50%"></div>
-          <div class="tick be" data-ci="be" style="left:73%"></div>
-          <div class="tick" data-ci="hi90" style="left:91%;background:var(--emerald)"></div>
-          <div class="tick" data-ci="hi95" style="left:100%;background:var(--emerald)"></div>
-          <!-- labels -->
-          <span class="lab top neg l" data-ci="lo95" style="left:0%"></span>
-          <span class="lab mid neg" data-ci="lo90" style="left:9%"></span>
-          <span class="lab top" data-ci="mean" style="left:50%"></span>
-          <span class="lab top mute" data-ci="be" style="left:73%"></span>
-          <span class="lab mid pos" data-ci="hi90" style="left:91%"></span>
-          <span class="lab top pos r" data-ci="hi95" style="left:100%"></span>
-          <span class="lab bot2 mute" data-ci="be" style="left:73%">breakeven</span>
-        </div>
-
-        <div class="ci-legend">
-          <span><b class="neg">90%</b> · <span data-bind="_ci90" data-fmt="html"></span></span>
-          <span><b class="neg">95%</b> · <span data-bind="_ci95" data-fmt="html"></span></span>
-        </div>
-
-        <div class="verdict" data-bind="_ciVerdict" data-fmt="html"></div>
+        <div id="pnl-ci-readout" class="pnl-ci-readout"><!-- Rendered by JS --></div>
       </article>
 
       <!-- Card 2: Sample Size Sufficiency -->
@@ -934,22 +618,14 @@
     <div class="section-label">Execution Funnel &amp; Decision Gates</div>
     <div class="grid col-2-wide">
 
-      <!-- Funnel -->
+      <!-- Funnel: the stage stack the retired Reports page carried (#749). One
+           render site, drawn by renderExecutionFunnel from kpi.execution_funnel. -->
       <article class="card">
         <div class="card-head">
-          <div class="card-title">Stepped Execution Funnel</div>
-          <span class="info" data-tooltip="Lifecycle of a quoted spread: quoted → filled → closed → merged. Drop tags show legs lost at each transition."></span>
+          <div class="card-title">Execution Drop-off (Legs)</div>
+          <span class="info" data-tooltip="Lifecycle of a quoted spread: quoted → filled → closed → merged. Each bridge shows the rate that carried on, the legs lost and the worst drop; refused and dropped cycles chip underneath."></span>
         </div>
-        <div class="funnel">
-          <div class="fstep s1"><span class="idx">01</span><span class="name">Quoted</span><span class="stat" data-bind="_f0" data-fmt="html"></span></div>
-          <div class="farrow"><span class="alab" data-bind="_fdrop0" data-fmt="html"></span><svg width="12" height="10"><path d="M6 0 L6 8 M2 5 L6 9 L10 5" stroke="#64748B" stroke-width="1.4" fill="none"/></svg></div>
-          <div class="fstep s2"><span class="idx">02</span><span class="name">Filled</span><span class="stat" data-bind="_f1" data-fmt="html"></span><span class="tag drop">worst drop</span></div>
-          <div class="farrow"><span class="alab" data-bind="_fdrop1" data-fmt="html"></span><svg width="12" height="10"><path d="M6 0 L6 8 M2 5 L6 9 L10 5" stroke="#64748B" stroke-width="1.4" fill="none"/></svg></div>
-          <div class="fstep s3"><span class="idx">03</span><span class="name">Closed</span><span class="stat" data-bind="_f2" data-fmt="html"></span></div>
-          <div class="farrow"><span class="alab" data-bind="_fdrop2" data-fmt="html"></span><svg width="12" height="10"><path d="M6 0 L6 8 M2 5 L6 9 L10 5" stroke="#64748B" stroke-width="1.4" fill="none"/></svg></div>
-          <div class="fstep s4"><span class="idx">04</span><span class="name">Merged</span><span class="stat" data-bind="_f3" data-fmt="html"></span><span class="tag ok">merged</span></div>
-        </div>
-        <div class="ffoot"><span>PAIR_COST 1</span><span>QUEUE 1</span><span>LIFECYCLE 1</span></div>
+        <div id="execution-funnel" class="execution-funnel"><!-- Rendered by JS --></div>
       </article>
 
       <!-- Decision Gates -->
@@ -990,6 +666,19 @@
   <!-- ===================== 4. MICROSTRUCTURE & EXECUTION (BENTO) ===================== -->
   <section class="section">
     <div class="section-label">Microstructure &amp; Execution Quality</div>
+
+    <!-- What a hard-stop exit actually sold at, against the floor it was sent at
+         (#730). A close nobody observed filling reads unmeasured here rather
+         than 0.00, and the footer says how many of the population that was.
+         Moved onto this page by #749. -->
+    <div class="card block">
+      <div class="card-head">
+        <div class="card-title">Stop-Exit Slippage — Floor → Fill ($)</div>
+        <span class="info" data-tooltip="Per-share gap between the floor a hard-stop exit was sent at and the price it actually filled at, with the worst decision cost and how many of the stop population could not be measured."></span>
+      </div>
+      <div id="stop-slippage-readout" class="stop-slippage-readout"><!-- Rendered by JS --></div>
+    </div>
+
     <div class="bento">
 
       <!-- Block 1: Fill-Path Edge -->

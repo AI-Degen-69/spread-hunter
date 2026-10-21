@@ -30,7 +30,7 @@ _STATIC = _ROOT / "dashboard" / "static"
 HARNESS = Path(__file__).resolve().parent / "js" / "prototype_nav_harness.cjs"
 LAYOUT_HARNESS = Path(__file__).resolve().parent / "js" / "prototype_layout_harness.cjs"
 
-PAGES = ("home", "data-markets", "strategy", "trades", "reports", "analysis")
+PAGES = ("home", "data-markets", "strategy", "trades", "analysis")
 
 requires_node = pytest.mark.skipif(shutil.which("node") is None,
                                    reason="node is not installed on this host")
@@ -174,39 +174,6 @@ def test_the_strategy_explainer_is_framed_rather_than_forked():
     assert (_STATIC / "strategy_explainer.html").exists()
 
 
-def test_the_analytics_subnav_filters_only_its_own_page():
-    # Arrange — those buttons filtered one tab panel by section. Two of the
-    # panels they hide (`#analytics-gates`, `#market-inspection-card`) now
-    # live on other pages, so an unscoped click blanks a page the operator is
-    # not looking at. Hiding the whole sub-nav was the holding fix while the
-    # layout sat at /prototype; scoping it to its own page is the real one.
-    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
-    app = (_STATIC / "app.js").read_text(encoding="utf-8")
-
-    # Act / Assert
-    assert ".proto-body .stats-subnav" not in css
-    assert "function statsFilterScope()" in app
-    assert "scope.contains(el)" in app
-    assert "closest('.proto-page')" in app
-
-
-def test_a_subnav_view_with_nothing_on_the_page_is_dropped():
-    # Arrange — Market Inspection was retired with the Data & Markets table:
-    # the kanban and the dashboard's orders table superseded it. Its button
-    # and STATS_VIEW_TARGETS entry are gone, and the prune still runs.
-    app = (_STATIC / "app.js").read_text(encoding="utf-8")
-    prototype = (_STATIC / "prototype.js").read_text(encoding="utf-8")
-
-    # Act
-    targets = app.split("const STATS_VIEW_TARGETS = {")[1].split("};")[0]
-
-    # Assert — the retired view has no target left, and the prune runs
-    # again after the panels move.
-    assert "#market-inspection-card" not in targets
-    assert "function pruneStatsSubnav()" in app
-    assert "pruneStatsSubnav()" in prototype
-
-
 # ── Navigation ──────────────────────────────────────────────────────────────
 
 @requires_node
@@ -230,12 +197,12 @@ def test_home_is_the_page_a_first_visit_lands_on():
 
 @requires_node
 def test_the_chosen_page_survives_a_reload():
-    # Arrange — the previous visit ended on Reports.
-    rendered = _nav(stored="reports")
+    # Arrange — the previous visit ended on Trades & Positions.
+    rendered = _nav(stored="trades")
 
     # Act / Assert
-    assert rendered["visible"] == ["reports"]
-    assert rendered["current"] == ["reports"]
+    assert rendered["visible"] == ["trades"]
+    assert rendered["current"] == ["trades"]
 
 
 @requires_node
@@ -370,12 +337,13 @@ def test_the_served_page_loads_the_layout_assets():
 
 
 def test_the_analysis_entry_keeps_its_identity():
-    # Arrange — the #568 cutover moves the panel, never the rail entry.
+    # Arrange — the #568 cutover moves the panel, never the rail entry. #749
+    # retired the second analytics page, so the one left names what it holds.
     layout = _layout()
     entry = [e for e in layout["layout"] if e["page"] == "analysis"][0]
 
     # Act / Assert
-    assert entry["label"] == "Data Analysis"
+    assert entry["label"] == "Performance & Analytics"
     assert entry["selectors"] == ["#analysis-v2"]
     html = (_STATIC / "index.html").read_text(encoding="utf-8")
     assert html.count('id="analysis-v2"') == 1
@@ -562,11 +530,11 @@ def test_an_unreadable_pinned_state_loads_the_rail_collapsed():
 def test_pinning_does_not_disturb_the_chosen_page():
     # Arrange — the pin writes to storage, and one shared slot would make
     # pinning the rail forget which page the operator was on.
-    rendered = _nav(clicks=["reports"], click_pin=1)
+    rendered = _nav(clicks=["trades"], click_pin=1)
 
     # Act / Assert
-    assert rendered["stored"] == "reports"
-    assert rendered["visible"] == ["reports"]
+    assert rendered["stored"] == "trades"
+    assert rendered["visible"] == ["trades"]
 
 
 @requires_node

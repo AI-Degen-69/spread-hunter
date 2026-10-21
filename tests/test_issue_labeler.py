@@ -76,6 +76,13 @@ def _declared_labels() -> set[str]:
     return names
 
 
+def _patterns_for(name: str) -> list[str]:
+    """Label keys carry an emoji prefix, so match the word, not the whole key."""
+    hits = [patterns for label, patterns in _rules().items() if label.lower().endswith(name)]
+    assert len(hits) == 1, f"expected one {name!r} rule, found {len(hits)}"
+    return hits[0]
+
+
 def _workflow() -> str:
     return _read(WORKFLOW)
 
@@ -120,7 +127,7 @@ def test_every_rule_names_a_label_the_tracker_declares():
 
 def test_a_docs_rule_does_not_fire_on_docker_or_doctype():
     """A stem without a trailing boundary matches the `doc` in `docker`."""
-    patterns = _rules()["documentation"]
+    patterns = _patterns_for("documentation")
     assert len(patterns) == 1, "one pattern per label; several are ANDed by the action"
     match = _PATTERN.match(patterns[0])
     assert match
@@ -131,6 +138,19 @@ def test_a_docs_rule_does_not_fire_on_docker_or_doctype():
         )
     for true_positive in ("Update the docs", "readme polish", "a typo", "documentation page"):
         assert rx.search(true_positive), f"{true_positive!r} should label documentation"
+
+
+def test_the_idea_rule_matches_a_titled_idea():
+    """"Idea: ..." ends an alternative on a colon, where a trailing \\b never holds."""
+    patterns = _patterns_for("idea")
+    assert len(patterns) == 1, "one pattern per label; several are ANDed by the action"
+    match = _PATTERN.match(patterns[0])
+    assert match
+    rx = re.compile(match.group(1), re.I)
+    for titled in ("Idea: improve the dashboard", "raw idea", "captured idea"):
+        assert rx.search(titled), f"{titled!r} should label an idea"
+    for false_positive in ("idealistic", "ideas are welcome"):
+        assert not rx.search(false_positive), f"{false_positive!r} is not an idea"
 
 
 def test_every_pattern_carries_its_case_insensitive_flag():
