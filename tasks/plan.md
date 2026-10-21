@@ -312,7 +312,7 @@ RED→GREEN: a fixture payload with `mean_vs_floor = 0.0` renders `0.00` and
 `mean_vs_floor = None` renders "unmeasured"; missing section ⇒ the
 "backend older than page" copy.
 
-### T7 — [Backend/Logic] Assemble the proof [ ]
+### T7 — [Backend/Logic] Assemble the proof [x]
 **Size L. Depends on: T3, T4, T5. Verify: the files named per task above, plus `python -m pytest -q tests/test_stop_slippage.py`**
 
 File: `tests/test_stop_slippage.py` (single home; grows RED-first with each

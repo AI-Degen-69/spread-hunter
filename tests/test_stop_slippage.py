@@ -466,3 +466,22 @@ def test_cli_reads_a_legacy_store_without_migrating_it(tmp_path, capsys):
     with sqlite3.connect(db) as conn:
         after = [r[1] for r in conn.execute("PRAGMA table_info(closes)")]
     assert after == before
+
+
+def test_partial_stop_exits_stay_two_measurements_after_the_reset(tmp_path):
+    db = tmp_path / "partials.db"
+    init_db(db)
+    reg = OrderRegistry(db_path=db)
+    for ts, shares, floor in ((1.0, 4.0, 0.14), (2.0, 6.0, 0.16)):
+        reg.log_close(CloseRecord(
+            ts=ts, condition_id="0xpartial", method="single_buy_exit",
+            shares=shares, dn_price=0.13, reason="lifecycle_hard_stop",
+            submitted_floor=floor, fill_source="reported"))
+
+    generation = reg.begin_lifecycle_reset("0xpartial", "stop exit", now_ms=1000)
+    assert reg.finish_lifecycle_reset("0xpartial", generation, reset_ts_ms=2000)
+
+    out = _summary(*reg.get_all_closes())
+    assert out["measured_count"] == 2
+    assert out["mean_vs_floor"] == pytest.approx(0.02)  # (0.01 + 0.03) / 2
+    assert out["worst_vs_floor"] == pytest.approx(0.03)
