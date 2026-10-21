@@ -181,8 +181,10 @@ def test_the_payload_version_is_pinned_on_both_sides(app_js, kpi_module):
     # the new card reads: both sides sit at 257. #559 added the `settled` and
     # `other` fill-path buckets: both sides sit at 258. #732 renamed the funnel's
     # cap field to `bot_pos_price_max_pair_cost_usd`, so a page served by a
-    # pre-#732 process now reads a stale backend: both sides sit at 259.
-    assert backend.group(1) == "259"
+    # pre-#732 process now reads a stale backend: both sides sat at 259. #730
+    # added the `stop_slippage` section, so a pre-#730 page would read the new
+    # card as unmeasured: both sides sit at 260.
+    assert backend.group(1) == "260"
 
 
 def test_a_stale_backend_shows_a_restart_note(app_js, index_html, styles_css):

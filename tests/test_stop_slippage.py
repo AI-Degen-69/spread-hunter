@@ -376,3 +376,90 @@ def test_summary_serialises_strictly_and_counts_simulated():
     assert out["simulated_count"] == 1
     assert out["units"] == "usd_per_share"
     json.dumps(out, allow_nan=False)
+
+
+def _seed_run(db, run_id, *, close_kw=None, refusals=()):
+    reg = OrderRegistry(db_path=db, run_id=run_id)
+    if close_kw is not None:
+        row = {"ts": 1.0, "condition_id": "0xshared",
+               "method": "single_buy_exit", "shares": 5.0, "dn_price": 0.13,
+               "reason": "lifecycle_hard_stop", "submitted_floor": 0.13,
+               "fill_source": "reported", "trigger_bid": 0.15}
+        row.update(close_kw)
+        reg.log_close(CloseRecord(**row))
+    for kw in refusals:
+        reg.log_hard_stop_refusal(condition_id="0xshared", **kw)
+
+
+def test_report_ships_the_stop_slippage_section_and_bumps_the_version(tmp_path):
+    from core_brain import kpi
+
+    db = tmp_path / "kpi.db"
+    init_db(db)
+    _seed_run(db, "run-a", close_kw={"submitted_floor": 0.15})
+
+    payload = kpi.report(db, run_id="run-a")
+
+    section = payload["statistical_analytics"]["stop_slippage"]
+    assert section["measured_count"] == 1
+    assert section["mean_vs_floor"] == pytest.approx(0.02)
+    assert payload["payload_version"] == 260
+
+
+def test_report_separates_two_runs_that_share_a_condition(tmp_path):
+    from core_brain import kpi
+
+    db = tmp_path / "kpi.db"
+    init_db(db)
+    _seed_run(db, "run-a", close_kw={"submitted_floor": 0.15})
+    _seed_run(db, "run-b", close_kw={"submitted_floor": 0.16})
+
+    run_a = kpi.report(db, run_id="run-a")["statistical_analytics"]["stop_slippage"]
+    run_b = kpi.report(db, run_id="run-b")["statistical_analytics"]["stop_slippage"]
+
+    assert run_a["measured_count"] == 1
+    assert run_a["mean_vs_floor"] == pytest.approx(0.02)
+    assert run_b["measured_count"] == 1
+    assert run_b["mean_vs_floor"] == pytest.approx(0.03)
+
+
+def test_report_counts_refusals_for_the_chosen_run_only(tmp_path):
+    from core_brain import kpi
+
+    db = tmp_path / "kpi.db"
+    init_db(db)
+    _seed_run(db, "run-a", refusals=[
+        {"pair_id": "p1", "trigger_bid": 0.15, "outcome": "refused"},
+        {"pair_id": "p1", "trigger_bid": 0.15, "outcome": "refused"},
+    ])
+    _seed_run(db, "run-b", refusals=[
+        {"pair_id": "p2", "trigger_bid": 0.15, "outcome": "error"},
+    ])
+
+    run_a = kpi.report(db, run_id="run-a")["statistical_analytics"]["stop_slippage"]
+    run_b = kpi.report(db, run_id="run-b")["statistical_analytics"]["stop_slippage"]
+
+    assert (run_a["refused_position_count"], run_a["refused_attempt_count"]) == (1, 2)
+    assert (run_b["refused_position_count"], run_b["refused_attempt_count"]) == (1, 1)
+
+
+def test_cli_reads_a_legacy_store_without_migrating_it(tmp_path, capsys):
+    import json
+
+    from core_brain import kpi
+
+    db = tmp_path / "legacy.db"
+    _legacy_store(db)
+    with sqlite3.connect(db) as conn:
+        before = [r[1] for r in conn.execute("PRAGMA table_info(closes)")]
+
+    rc = kpi.main(["--db", str(db), "--json"])
+
+    assert rc == 0
+    section = json.loads(capsys.readouterr().out)
+    assert section["stop_exit_count"] == 1
+    assert section["unmeasured_reasons"]["historical"] == 1
+    assert section["mean_vs_floor"] is None
+    with sqlite3.connect(db) as conn:
+        after = [r[1] for r in conn.execute("PRAGMA table_info(closes)")]
+    assert after == before

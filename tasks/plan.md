@@ -291,7 +291,7 @@ Files: `core_brain/statistical_analytics.py` — `stop_slippage_summary` +
 ⇒ `assumed` ⇒ unmeasured; NULL floor/source ⇒ `historical`; partial closes =
 two observations; empty run ⇒ `None` means; strict-JSON round-trip.
 
-### T5 — [Backend/Logic] KPI wiring, version, and the read-only command [ ]
+### T5 — [Backend/Logic] KPI wiring, version, and the read-only command [x]
 **Size M. Depends on: T4. Verify: `python -m pytest -q tests/test_stop_slippage.py tests/test_kpi.py tests/test_analytics_api.py tests/test_trade_analytics.py tests/test_tournament_cockpit_funnel.py`**
 
 Files: `core_brain/kpi.py` (refusals read + run_id filter + `build()` arg;
