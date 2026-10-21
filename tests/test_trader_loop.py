@@ -142,7 +142,7 @@ class TestPlanOrders:
             _intent(side="DOWN", token="tok-dn", price=0.23),
         ]
         from core_brain.config import MakerConfig
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         to_cancel, to_submit = plan_orders(
             open_orders, intents, cfg=cfg,
             hedge_asks={"tok-up": 0.30, "tok-dn": 0.23})
@@ -160,7 +160,7 @@ class TestPlanOrders:
         from core_brain.config import MakerConfig
         to_cancel, to_submit = plan_orders(
             open_orders, intents,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.30})
         assert to_cancel == []
         assert to_submit == []
@@ -249,7 +249,7 @@ class TestPlanOrders:
         ]
         to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.20, "tok-dn": 0.80},
             queue_ahead={"o-up": 10.0},
             hold_queue_shares=50.0)
@@ -266,7 +266,7 @@ class TestPlanOrders:
         intents = [_intent(price=0.60)]
         to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.20},
             queue_ahead={"o-up": 50.0},
             hold_queue_shares=200.0)
@@ -280,7 +280,7 @@ class TestPlanOrders:
         intents = [_intent(price=0.60)]
         to_cancel, _ = plan_orders(
             open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.20},
             queue_ahead={"o-up": 5000.0},
             hold_queue_shares=200.0)
@@ -293,7 +293,7 @@ class TestPlanOrders:
         intents = [_intent(price=0.60)]
         to_cancel, _ = plan_orders(
             open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.20},
             queue_ahead={},
             hold_queue_shares=200.0)
@@ -306,7 +306,7 @@ class TestPlanOrders:
         intents = [_intent(price=0.60)]
         to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.42},
             queue_ahead={"o-up": 5.0},
             hold_queue_shares=200.0)
@@ -326,7 +326,7 @@ class TestPlanOrders:
         # #387: the order rests at 0.60 and completing at the DOWN ask of
         # 0.42 would cost 1.02 -- held anyway. The gate judges placements,
         # not resting orders.
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.60)]
         intents = [_intent(price=0.58)]
         to_cancel, to_submit = plan_orders(
@@ -336,7 +336,7 @@ class TestPlanOrders:
         assert to_submit == []
 
     def test_a_kept_order_that_still_completes_under_the_cap_is_left_alone(self):
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.60)]
         intents = [_intent(price=0.58)]
         to_cancel, to_submit = plan_orders(
@@ -346,7 +346,7 @@ class TestPlanOrders:
         assert to_submit == []
 
     def test_a_missing_hedge_ask_leaves_the_kept_order_alone(self):
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.60)]
         intents = [_intent(price=0.58)]
         to_cancel, _ = plan_orders(open_orders, intents, dead_band=0.03,
@@ -359,7 +359,7 @@ class TestPlanOrders:
         # Opposite ask is 0.42 (0.60 + 0.42 = 1.02 >= the retired cap).
         # Both dead-band widths hold the order and record no reason --
         # cost is judged at placement, never after.
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.60, oid="o1")]
         intents = [_intent(price=0.55)]
         hedge_asks = {"tok-up": 0.42}
@@ -387,7 +387,7 @@ class TestPlanOrders:
     def test_hold_levers_and_failing_gate_hold_together(self):
         # #387: hold_below_target and hold_queue_shares active, pair-cost
         # gate failing -- the wanted order is held, no reason recorded.
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.60, oid="o1")]
         intents = [_intent(price=0.55)]
         hedge_asks = {"tok-up": 0.42}
@@ -444,7 +444,7 @@ class TestPlanOrders:
 
         to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.03,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.80, "tok-dn": 0.28},
             reasons=reasons,
         )
@@ -463,7 +463,7 @@ class TestPlanOrders:
 
         to_cancel, to_submit = plan_orders(
             open_orders, intents,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.60},
             reasons=reasons,
         )
@@ -484,7 +484,7 @@ class TestPlanOrders:
 
         to_cancel, _ = plan_orders(
             open_orders, intents, dead_band=0.03,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.99, "tok-dn": 0.99},
             hedge_held=set(),
             visit_outcome=outcome,
@@ -640,7 +640,7 @@ class TestRunLoop:
         seen = {}
 
         def decide(cfg, up, dn, inv, t_rem, wf):
-            seen["fleet_naked_usd"] = cfg.fleet_naked_usd
+            seen["bot_risk_exposure_fleet_naked_usd"] = cfg.bot_risk_exposure_fleet_naked_usd
             return [], "declined"
 
         def fetch_market(cid):
@@ -656,13 +656,13 @@ class TestRunLoop:
                 fetch_market=fetch_market, fetch_books=fetch_books, decide=decide,
                 submit_fn=lambda *a, **k: 0, cancel_fn=lambda *a, **k: 0,
                 reconcile_fn=lambda *a, **k: None, sweep_fn=lambda: None,
-                fleet_state_fn=lambda r: {"fleet_naked_usd": 12.5},
+                fleet_state_fn=lambda r: {"bot_risk_exposure_fleet_naked_usd": 12.5},
             ),
             interval=0.0, once=True, live=False,
             markets=[FakeMarket("0xabc")],
             sleep_fn=lambda s: None,
         )
-        assert seen["fleet_naked_usd"] == 12.5
+        assert seen["bot_risk_exposure_fleet_naked_usd"] == 12.5
 
     def test_open_orders_fn_includes_open_and_partial_orders(self):
         from unittest.mock import MagicMock
@@ -1218,7 +1218,7 @@ class TestReGateRespectsHeldInventory:
         # UP kept at 0.54 against a DOWN leg already held. The DOWN ask of 0.50
         # is irrelevant -- we do not have to buy DOWN again -- so 0.54 + 0.50 =
         # 1.04 must NOT cancel this order.
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.54)]
         intents = [_intent(price=0.54)]
         to_cancel, to_submit = plan_orders(
@@ -1230,7 +1230,7 @@ class TestReGateRespectsHeldInventory:
     def test_no_recheck_fires_on_a_token_whose_hedge_is_not_held(self):
         # #387: the re-gate is retired, so even the token WITHOUT a held
         # hedge is kept. Both legs hold at their own prices.
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open("tok-up", 0.54, "o1"), _open("tok-dn", 0.40, "o2")]
         intents = [_intent(side="UP", token="tok-up", price=0.54),
                    _intent(side="DOWN", token="tok-dn", price=0.40)]
@@ -2337,13 +2337,13 @@ def _lifecycle_visit_seam(tmp_path, pairs, *, up_bid=0.45, decide):
         },
     }
     cfg = MakerConfig(
-        objective="spread_capture",
-        size_mode="shares",
-        quote_shares=120,
-        min_quote_shares=5,
+        bot_pos_objective="spread_capture",
+        bot_quote_size_mode="shares",
+        bot_quote_size_shares=120,
+        bot_quote_size_min_shares=5,
         bot_pos_price_max_pair_cost_usd=0.99,
-        max_naked_usd=100.0,
-        reward_offset=0.02,
+        bot_risk_exposure_max_naked_usd=100.0,
+        bot_quote_spread_static_offset_cents=0.02,
     )
     seam = VenueSeam(
         client=object(),
@@ -2767,7 +2767,7 @@ class TestDecideTelemetry:
                    emit_fn=lambda **event: emitted.append(event))
         decision = next(e for e in emitted if e.get("action") == "decide")
         assert decision["extra"]["intent_count"] == 2
-        assert decision["extra"]["market_title"]
+        assert decision["extra"]["bot_market_title"]
         assert decision["extra"]["quotes"][0] == {"side": "UP", "price": 0.48, "size": 5.0}
         assert len(decision["extra"]["quotes"]) == 2
 
@@ -2779,7 +2779,7 @@ class TestDecideTelemetry:
                    emit_fn=lambda **event: emitted.append(event))
         decision = next(e for e in emitted if e.get("action") == "decide")
         assert decision["extra"]["intent_count"] == 0
-        assert decision["extra"]["market_title"]
+        assert decision["extra"]["bot_market_title"]
         assert "quotes" not in decision["extra"]
 
     def test_quotes_capped_at_four_and_skips_unknown_sides(self):
@@ -2819,7 +2819,7 @@ class TestQuietTail:
         market = FakeMarket()
         books = self._books()
         return VenueSeam(
-            base_cfg=MakerConfig(max_completable_pair_cost=1.00),
+            base_cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             fetch_market=lambda cid: market,
             fetch_books=lambda host, tok: books[tok],
             decide=lambda *a, **k: ([_intent(price=0.49)], ""),
@@ -2830,7 +2830,7 @@ class TestQuietTail:
         market = FakeMarket()
         books = self._books()
         return VenueSeam(
-            base_cfg=MakerConfig(max_completable_pair_cost=1.00),
+            base_cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             fetch_market=lambda cid: market,
             fetch_books=lambda host, tok: books[tok],
             decide=lambda *a, **k: ([], box[0]),
@@ -2846,7 +2846,7 @@ class TestQuietTail:
             return len(intents)
 
         return VenueSeam(
-            base_cfg=MakerConfig(max_completable_pair_cost=1.00),
+            base_cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             fetch_market=lambda cid: market,
             fetch_books=lambda host, tok: books[tok],
             decide=lambda *a, **k: ([_intent(price=0.49)], ""),
@@ -3429,7 +3429,7 @@ def test_visit_one_passes_canonical_dead_band():
         warnings.simplefilter("always")
         _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=False, plan_fn=spy)
 
-    dead_band_warns = [w for w in recorded if "trader_loop.py" in w.filename and "requote_dead_band" in str(w.message)]
+    dead_band_warns = [w for w in recorded if "trader_loop.py" in w.filename and "bot_order_requote_dead_band_cents" in str(w.message)]
     assert dead_band_warns == []
     assert seen["dead_band"] == 0.05
 
@@ -4400,12 +4400,12 @@ class TestGuardianReactiveWake:
         )
 
         cfg = SimpleNamespace(
-            stop_loss_mode="ABSOLUTE_DROP",
-            drop_cents=0.05,
-            drawdown_pct=10.0,
+            bot_risk_stop_mode="ABSOLUTE_DROP",
+            bot_risk_stop_adverse_drop_cents=0.05,
+            bot_risk_stop_max_drawdown_pct=10.0,
             bot_risk_circuit_max_drawdown_pct=75.0,
-            max_pair_cost=0.99,
-            stranded_completion_enabled=False,
+            bot_pos_price_max_pair_cost_usd=0.99,
+            bot_risk_stranded_completion_on=False,
         )
 
         saver = MagicMock(return_value=[{"action": "exited"}])

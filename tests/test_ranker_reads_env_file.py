@@ -216,7 +216,7 @@ def test_canonical_bot_env_file_reaches_ranker_config(tmp_path):
         "BOT_MARKET_PINNED_CONDITION_ID=0xfeedbeef\n"
         "BOT_QUOTE_SIZE_MIN_SHARES=200\n"
     )
-    val = _cfg_field_with_generated_env(tmp_path, env_content, "min_quote_shares")
+    val = _cfg_field_with_generated_env(tmp_path, env_content, "bot_quote_size_min_shares")
     assert val == "200"
 
     pinned = _cfg_field_with_generated_env(

@@ -24,11 +24,11 @@ MIN_VOLUME_24H_USD = 125_000.0
 
 
 def test_the_permanent_depth_bar_is_five_hundred_dollars():
-    assert ScoringConfig().select_min_top3_depth_usd == MIN_TOP3_DEPTH_USD
+    assert ScoringConfig().filter_common_vol_min_top3_depth_usd == MIN_TOP3_DEPTH_USD
 
 
 def test_the_permanent_volume_bar_is_a_hundred_and_twenty_five_thousand():
-    assert ScoringConfig().select_min_volume_24h_usd == MIN_VOLUME_24H_USD
+    assert ScoringConfig().filter_std_vol_min_24h_usd == MIN_VOLUME_24H_USD
 
 
 def test_the_two_config_modules_carry_the_same_bars():
@@ -36,17 +36,17 @@ def test_the_two_config_modules_carry_the_same_bars():
     universe the Trader did not choose."""
     scoring, maker = ScoringConfig(), MakerConfig()
 
-    assert (scoring.select_min_top3_depth_usd
-            == maker.select_min_top3_depth_usd == MIN_TOP3_DEPTH_USD)
-    assert (scoring.select_min_volume_24h_usd
-            == maker.select_min_volume_24h_usd == MIN_VOLUME_24H_USD)
+    assert (scoring.filter_common_vol_min_top3_depth_usd
+            == maker.filter_common_vol_min_top3_depth_usd == MIN_TOP3_DEPTH_USD)
+    assert (scoring.filter_std_vol_min_24h_usd
+            == maker.filter_std_vol_min_24h_usd == MIN_VOLUME_24H_USD)
 
 
 def test_no_trial_bar_ships_set():
     """A committed trial value would make every rank a trial silently."""
     for cfg in (ScoringConfig(), MakerConfig()):
-        assert cfg.select_min_top3_depth_usd_trial is None
-        assert cfg.select_min_volume_24h_usd_trial is None
+        assert cfg.filter_common_vol_min_top3_depth_usd_trial is None
+        assert cfg.filter_std_vol_min_24h_usd_trial is None
 
 
 def test_the_help_screen_reports_the_bars_it_gates_on():
@@ -128,8 +128,8 @@ def test_a_thin_leg_refuses_the_pair_even_when_the_other_leg_is_deep():
 
 
 def test_the_permanent_spread_bar_is_two_point_zero_five_cents():
-    assert ScoringConfig().select_max_book_spread == 0.0205
-    assert MakerConfig().select_max_book_spread == 0.0205
+    assert ScoringConfig().filter_common_spread_max_cents == 0.0205
+    assert MakerConfig().filter_common_spread_max_cents == 0.0205
 
 
 def test_the_picker_bar_is_a_share_of_the_live_gate():
@@ -137,23 +137,23 @@ def test_the_picker_bar_is_a_share_of_the_live_gate():
     gate times a documented share -- not a second absolute that can be edited
     out of step with the gate it has to stay under."""
     for cfg in (ScoringConfig(), MakerConfig()):
-        assert cfg.max_book_spread == 0.06
-        assert cfg.select_spread_pct == 41.0 / 120.0
-        assert cfg.select_spread_frac == 41.0 / 120.0
-        assert cfg.select_max_book_spread == round(
-            cfg.max_book_spread * cfg.select_spread_pct, 6) == 0.0205
+        assert cfg.bot_quote_book_max_spread_cents == 0.06
+        assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
+        assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
+        assert cfg.filter_common_spread_max_cents == round(
+            cfg.bot_quote_book_max_spread_cents * cfg.filter_std_spread_share_pct, 6) == 0.0205
 
 
 def test_moving_the_live_gate_moves_the_picker_bar():
     """Raising the gate raises the picking limit with it, and nothing else has
     to be found and edited."""
     for cls in (ScoringConfig, MakerConfig):
-        broad = cls(max_book_spread=0.30)
-        assert broad.select_max_book_spread == round(0.30 * broad.select_spread_pct, 6)
-        assert broad.select_max_book_spread == 0.1025
+        broad = cls(bot_quote_book_max_spread_cents=0.30)
+        assert broad.filter_common_spread_max_cents == round(0.30 * broad.filter_std_spread_share_pct, 6)
+        assert broad.filter_common_spread_max_cents == 0.1025
 
         # The share's one escape hatch: pick exactly as wide as the gate.
-        assert cls(select_spread_pct=1.0).select_max_book_spread == 0.06
+        assert cls(filter_std_spread_share_pct=1.0).filter_common_spread_max_cents == 0.06
 
 
 def test_the_picker_bar_is_derived_not_settable():
@@ -163,7 +163,7 @@ def test_the_picker_bar_is_derived_not_settable():
 
     for cls in (ScoringConfig, MakerConfig):
         with pytest.raises(TypeError):
-            cls(select_max_book_spread=0.05)
+            cls(filter_common_spread_max_cents=0.05)
 
 
 def test_the_filter_markets_spread_bar_matches_config():
@@ -186,7 +186,7 @@ def test_moving_the_live_gate_moves_the_selector_fallback(monkeypatch):
     book = ({0.49: 20_000.0}, {0.52: 20_000.0})
     assert not selector.book_allowed(*book)[0]
 
-    monkeypatch.setattr(scoring_config.MakerConfig, "max_book_spread", 0.12)
+    monkeypatch.setattr(scoring_config.MakerConfig, "bot_quote_book_max_spread_cents", 0.12)
     try:
         reloaded = importlib.reload(selector)
         ok, reason, _, spread = reloaded.book_allowed(*book)
@@ -226,14 +226,14 @@ def test_the_canonical_picking_bar_name_holds_the_same_number():
     """
     for cls in (ScoringConfig, MakerConfig):
         cfg = cls()
-        assert cfg.filter_common_spread_max_cents == cfg.select_max_book_spread
+        assert cfg.filter_common_spread_max_cents == cfg.filter_common_spread_max_cents
         assert cfg.filter_common_spread_max_cents == 0.0205
 
 
 def test_the_canonical_picking_bar_name_follows_the_live_gate_and_the_trial():
     for cls in (ScoringConfig, MakerConfig):
-        assert cls(max_book_spread=0.30).filter_common_spread_max_cents == 0.1025
-        assert cls(wide_book_trial=0.15).filter_common_spread_max_cents == 0.15
+        assert cls(bot_quote_book_max_spread_cents=0.30).filter_common_spread_max_cents == 0.1025
+        assert cls(bot_quote_wide_book_trial=0.15).filter_common_spread_max_cents == 0.15
 
 
 def test_the_canonical_picking_bar_name_is_derived_not_settable():

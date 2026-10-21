@@ -83,16 +83,16 @@ def test_widen_gate_kill_switch_follows_raw_offset():
     the two differ by setting widen_offset far from the dynamic offset.
     """
     cfg = MakerConfig(
-        dynamic_offset_enabled=True,
-        dynamic_offset_multiplier=0.5,
-        dynamic_offset_min_cents=2,
-        dynamic_offset_max_cents=10,
-        range_cents=8.0,            # 0.5 x 8 = 4c dynamic offset
-        velocity_measured_at=None,
-        gate_state="WIDENED",
-        widen_offset=0.02,          # 2c -- very different from 4c
-        apply_widen_gate=False,     # kill switch
-        max_spread_from_mid=0.15,
+        bot_quote_gate_dynamic_offset_on=True,
+        bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=2,
+        bot_quote_spread_offset_max_cents=10,
+        bot_quote_telemetry_range_cents=8.0,            # 0.5 x 8 = 4c dynamic offset
+        bot_quote_telemetry_velocity_measured_at=None,
+        bot_risk_circuit_gate_state="WIDENED",
+        bot_risk_circuit_widen_offset_cents=0.02,          # 2c -- very different from 4c
+        bot_quote_gate_widen_on=False,     # kill switch
+        bot_quote_book_max_spread_from_mid=0.15,
     )
     # mid = 0.50, base_offset 4c -> provisional ~0.46
     price, provisional, _band, _trunc = quote_resting_price(
@@ -106,16 +106,16 @@ def test_widen_gate_kill_switch_follows_raw_offset():
 def test_widen_gate_on_still_snaps_back():
     """Shipped behaviour (apply_widen_gate=True) is unchanged."""
     cfg = MakerConfig(
-        dynamic_offset_enabled=True,
-        dynamic_offset_multiplier=0.5,
-        dynamic_offset_min_cents=2,
-        dynamic_offset_max_cents=10,
-        range_cents=8.0,
-        velocity_measured_at=None,
-        gate_state="WIDENED",
-        widen_offset=0.02,
-        apply_widen_gate=True,
-        max_spread_from_mid=0.15,
+        bot_quote_gate_dynamic_offset_on=True,
+        bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=2,
+        bot_quote_spread_offset_max_cents=10,
+        bot_quote_telemetry_range_cents=8.0,
+        bot_quote_telemetry_velocity_measured_at=None,
+        bot_risk_circuit_gate_state="WIDENED",
+        bot_risk_circuit_widen_offset_cents=0.02,
+        bot_quote_gate_widen_on=True,
+        bot_quote_book_max_spread_from_mid=0.15,
     )
     _price, provisional, _band, _trunc = quote_resting_price(
         cfg, _flat_inv(), "UP", _book(0.49, 0.51))
@@ -127,15 +127,15 @@ def test_raised_max_spread_lets_large_offset_through():
     """A raised max_spread_from_mid stops clamping a big dynamic offset."""
     # range 40c x 0.5 = 20c dynamic offset; clamp to [1,20] -> 20c.
     cfg = MakerConfig(
-        dynamic_offset_enabled=True,
-        dynamic_offset_multiplier=0.5,
-        dynamic_offset_min_cents=1,
-        dynamic_offset_max_cents=20,
-        range_cents=40.0,
-        velocity_measured_at=None,
-        gate_state="NORMAL",
-        apply_widen_gate=False,
-        max_spread_from_mid=0.15,   # 15c window -- wide enough
+        bot_quote_gate_dynamic_offset_on=True,
+        bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=1,
+        bot_quote_spread_offset_max_cents=20,
+        bot_quote_telemetry_range_cents=40.0,
+        bot_quote_telemetry_velocity_measured_at=None,
+        bot_risk_circuit_gate_state="NORMAL",
+        bot_quote_gate_widen_on=False,
+        bot_quote_book_max_spread_from_mid=0.15,   # 15c window -- wide enough
     )
     price, provisional, _band, _trunc = quote_resting_price(
         cfg, _flat_inv(), "UP", _book(0.40, 0.60))   # mid 0.50
@@ -152,12 +152,12 @@ def test_baseline_preset_is_registered_and_loose():
     """The baseline preset exists with the loose values, and does not touch
     the shipped ceiling to 0/None (which would zero every quote's score)."""
     p = TOURNAMENT_PRESETS["baseline"]
-    assert p["dynamic_offset_enabled"] is True
-    assert p["dynamic_offset_multiplier"] == 0.50
-    assert p["dynamic_offset_min_cents"] == 1
-    assert p["dynamic_offset_max_cents"] == 20
-    assert p["apply_widen_gate"] is False
-    assert p["max_spread_from_mid"] > 0.045   # raised, never zeroed
+    assert p["bot_quote_gate_dynamic_offset_on"] is True
+    assert p["bot_quote_spread_offset_multiplier"] == 0.50
+    assert p["bot_quote_spread_offset_min_cents"] == 1
+    assert p["bot_quote_spread_offset_max_cents"] == 20
+    assert p["bot_quote_gate_widen_on"] is False
+    assert p["bot_quote_book_max_spread_from_mid"] > 0.045   # raised, never zeroed
 
 
 def test_resting_price_is_floored_to_whole_cent():
@@ -168,10 +168,10 @@ def test_resting_price_is_floored_to_whole_cent():
     offset or push the quote UP a cent toward the ask. 0.4439 -> 0.44.
     """
     cfg = MakerConfig(
-        dynamic_offset_enabled=True, dynamic_offset_multiplier=0.5,
-        dynamic_offset_min_cents=1, dynamic_offset_max_cents=20,
-        range_cents=15.66, velocity_measured_at=None, price_tick=0.01,
-        max_spread_from_mid=0.15,
+        bot_quote_gate_dynamic_offset_on=True, bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=1, bot_quote_spread_offset_max_cents=20,
+        bot_quote_telemetry_range_cents=15.66, bot_quote_telemetry_velocity_measured_at=None, bot_quote_grid_tick_size_usd=0.01,
+        bot_quote_book_max_spread_from_mid=0.15,
     )
     # mid 0.545, band adds fractional offset -> raw lands sub-cent.
     price, provisional, *_ = quote_resting_price(cfg, _flat_inv(), "UP", _book(0.54, 0.55))
@@ -183,10 +183,10 @@ def test_resting_price_is_floored_to_whole_cent():
 def test_resting_price_never_rounds_up_a_cent():
     """A fractional target floors DOWN to the cent, never up."""
     cfg = MakerConfig(
-        dynamic_offset_enabled=True, dynamic_offset_multiplier=0.5,
-        dynamic_offset_min_cents=1, dynamic_offset_max_cents=20,
-        range_cents=10.0, velocity_measured_at=None, price_tick=0.01,
-        max_spread_from_mid=0.15,
+        bot_quote_gate_dynamic_offset_on=True, bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=1, bot_quote_spread_offset_max_cents=20,
+        bot_quote_telemetry_range_cents=10.0, bot_quote_telemetry_velocity_measured_at=None, bot_quote_grid_tick_size_usd=0.01,
+        bot_quote_book_max_spread_from_mid=0.15,
     )
     price, provisional, *_ = quote_resting_price(cfg, _flat_inv(), "UP", _book(0.49, 0.60))
     assert abs(price * 100 - round(price * 100)) < 1e-9
@@ -201,8 +201,8 @@ def test_no_touch_reach_at_a_sub_cent_bid():
     """
     from dataclasses import replace
     book = {"best_bid": 0.495, "best_ask": 0.505}
-    cfg = replace(MakerConfig(price_tick=0.01, price_risk_widen=0.0),
-                  reward_offset=0.005, dynamic_offset_enabled=False)
+    cfg = replace(MakerConfig(bot_quote_grid_tick_size_usd=0.01, bot_quote_price_risk_widen=0.0),
+                  bot_quote_spread_static_offset_cents=0.005, bot_quote_gate_dynamic_offset_on=False)
     price, *_ = quote_resting_price(cfg, _flat_inv(), "UP", book)
     assert abs(price * 100 - round(price * 100)) < 1e-9
     assert price <= 0.49 + 1e-9
@@ -215,10 +215,10 @@ def test_resting_price_never_goes_negative_or_zero():
     -0.01, an impossible resting price the venue rejects. Clamp to [tick, ...].
     """
     cfg = MakerConfig(
-        dynamic_offset_enabled=True, dynamic_offset_multiplier=0.5,
-        dynamic_offset_min_cents=1, dynamic_offset_max_cents=20,
-        range_cents=48.0, velocity_measured_at=None, price_tick=0.01,
-        max_spread_from_mid=0.15,
+        bot_quote_gate_dynamic_offset_on=True, bot_quote_spread_offset_multiplier=0.5,
+        bot_quote_spread_offset_min_cents=1, bot_quote_spread_offset_max_cents=20,
+        bot_quote_telemetry_range_cents=48.0, bot_quote_telemetry_velocity_measured_at=None, bot_quote_grid_tick_size_usd=0.01,
+        bot_quote_book_max_spread_from_mid=0.15,
     )
     # UP book high, DOWN book low-mid -> the DOWN leg is the pressure case.
     up_book = {"best_bid": 0.85, "best_ask": 0.86}
@@ -236,9 +236,9 @@ def test_promoted_system_defaults():
     The legacy 4.5c cap, tighten-on-widen, and 2c-4c dynamic clamp are retired.
     """
     cfg = MakerConfig()
-    assert cfg.apply_widen_gate is False          # widen snap-back disabled
-    assert cfg.max_spread_from_mid == 0.15        # wide ceiling
-    assert cfg.dynamic_offset_enabled is True     # dynamic quoting on
-    assert cfg.dynamic_offset_min_cents == 1      # 1c floor
-    assert cfg.dynamic_offset_max_cents == 20     # wide ceiling
-    assert cfg.dynamic_offset_multiplier == 0.50
+    assert cfg.bot_quote_gate_widen_on is False          # widen snap-back disabled
+    assert cfg.bot_quote_book_max_spread_from_mid == 0.15        # wide ceiling
+    assert cfg.bot_quote_gate_dynamic_offset_on is True     # dynamic quoting on
+    assert cfg.bot_quote_spread_offset_min_cents == 1      # 1c floor
+    assert cfg.bot_quote_spread_offset_max_cents == 20     # wide ceiling
+    assert cfg.bot_quote_spread_offset_multiplier == 0.50

@@ -263,12 +263,12 @@ def test_build_watches_stop_level_and_average_fill_shift(monkeypatch):
     )
 
     cfg = SimpleNamespace(
-        stop_loss_mode="ABSOLUTE_DROP",
-        drop_cents=0.05,
-        drawdown_pct=10.0,
+        bot_risk_stop_mode="ABSOLUTE_DROP",
+        bot_risk_stop_adverse_drop_cents=0.05,
+        bot_risk_stop_max_drawdown_pct=10.0,
         bot_risk_circuit_max_drawdown_pct=75.0,
-        max_pair_cost=0.99,
-        stranded_completion_enabled=False,
+        bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_stranded_completion_on=False,
     )
 
     watches = build_watches(registry, cfg)
@@ -304,12 +304,12 @@ def test_build_watches_exclusions_and_optional_hedge_watch(monkeypatch):
         lambda condition_id, up_token, down_token, db_path=None: inv_balanced,
     )
     cfg = SimpleNamespace(
-        stop_loss_mode="ABSOLUTE_DROP",
-        drop_cents=0.05,
-        drawdown_pct=10.0,
+        bot_risk_stop_mode="ABSOLUTE_DROP",
+        bot_risk_stop_adverse_drop_cents=0.05,
+        bot_risk_stop_max_drawdown_pct=10.0,
         bot_risk_circuit_max_drawdown_pct=75.0,
-        max_pair_cost=0.99,
-        stranded_completion_enabled=True,
+        bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_stranded_completion_on=True,
     )
     assert build_watches(registry, cfg) == {}
 
@@ -333,7 +333,7 @@ def test_build_watches_exclusions_and_optional_hedge_watch(monkeypatch):
     assert watches_with_hedge["tok_dn"].level == 0.47
 
     # 4. With stranded_completion_enabled=False -> stop watch only
-    cfg.stranded_completion_enabled = False
+    cfg.bot_risk_stranded_completion_on = False
     watches_no_hedge = build_watches(registry, cfg)
     assert set(watches_no_hedge) == {"tok_up"}
 

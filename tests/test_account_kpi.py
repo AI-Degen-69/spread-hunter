@@ -101,7 +101,7 @@ def test_account_value_does_not_come_from_the_config_bankroll(temp_db):
 
     p = report(db_path=str(temp_db), run_id="all")["portfolio"]
     assert p["starting_capital"] == pytest.approx(101.88)
-    assert p["starting_capital"] != pytest.approx(kpi_mod._CFG.bankroll_usd)
+    assert p["starting_capital"] != pytest.approx(kpi_mod._CFG.bot_quote_bank_baseline_usd)
     assert p["account"]["account_value_usd"] == pytest.approx(101.88)
 
 

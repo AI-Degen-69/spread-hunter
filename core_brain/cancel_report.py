@@ -23,7 +23,7 @@ REASON_ORDER = ("price_moved", "regate_pair_cost", "not_quoted",
 
 REASON_BLURB = {
     "price_moved": "the desired price left the tolerance band",
-    "regate_pair_cost": "holding would have carried the pair over max_pair_cost",
+    "regate_pair_cost": "holding would have carried the pair over bot_pos_price_max_pair_cost_usd",
     "not_quoted": "we stopped quoting that token this cycle",
     "market_dropped": "the market left the active universe",
 }
@@ -111,8 +111,8 @@ def _hold_state() -> str:
         from core_brain.config import load
 
         cfg = load()
-        shares = float(getattr(cfg, "requote_hold_queue_shares", 0.0) or 0.0)
-        below = float(getattr(cfg, "requote_hold_below_target", 0.0) or 0.0)
+        shares = float(getattr(cfg, "bot_order_requote_hold_queue_shares", 0.0) or 0.0)
+        below = float(getattr(cfg, "bot_order_requote_hold_below_target_cents", 0.0) or 0.0)
     except Exception:
         return "state unread"
     queue = f"on at {shares:g} shares" if shares > 0 else "off"

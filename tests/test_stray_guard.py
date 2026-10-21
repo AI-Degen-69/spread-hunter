@@ -49,7 +49,7 @@ def test_classify_registry_paired():
     res = classify_market_orders(
         orders=[o1, o2],
         books={},
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert len(res.registry_paired) == 1
@@ -71,7 +71,7 @@ def test_classify_complementary_detached():
     res = classify_market_orders(
         orders=[o1, o2],
         books={},
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     assert len(res.registry_paired) == 0
@@ -97,7 +97,7 @@ def test_classify_hopeless_stray_when_price_and_ask_exceed_cap():
     res = classify_market_orders(
         orders=[o1],
         books=books,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
         market_tokens={cond: (tok_up, tok_dn)},
     )
 
@@ -124,7 +124,7 @@ def test_classify_viable_lone_order_not_hopeless():
     res = classify_market_orders(
         orders=[o1],
         books=books,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
         market_tokens={cond: (tok_up, tok_dn)},
     )
 
@@ -152,7 +152,7 @@ def test_adopt_detached_legs_idempotent(tmp_path):
     reg.create_order(o2)
 
     active = reg.get_active_orders()
-    res = classify_market_orders(active, books={}, max_pair_cost=0.99)
+    res = classify_market_orders(active, books={}, bot_pos_price_max_pair_cost_usd=0.99)
     assert len(res.complementary_detached) == 1
 
     # Adopt
@@ -175,7 +175,7 @@ def test_adopt_detached_legs_idempotent(tmp_path):
 
     # Re-classification must be idempotent (now registry_paired, 0 detached)
     active_after = reg.get_active_orders()
-    res_after = classify_market_orders(active_after, books={}, max_pair_cost=0.99)
+    res_after = classify_market_orders(active_after, books={}, bot_pos_price_max_pair_cost_usd=0.99)
     assert len(res_after.registry_paired) == 1
     assert len(res_after.complementary_detached) == 0
 
@@ -212,7 +212,7 @@ def test_cancel_hopeless_orders_dry_run_and_live(tmp_path):
     res = classify_market_orders(
         reg.get_active_orders(),
         books=books,
-        max_pair_cost=0.99,
+        bot_pos_price_max_pair_cost_usd=0.99,
         market_tokens={cond: (tok_up, tok_dn)},
     )
     assert len(res.hopeless_strays) == 1
@@ -783,12 +783,12 @@ def test_classify_market_orders_protected_orders_never_hopeless():
     books = {tok_up: {"asks": [{"price": 0.50, "size": 10.0}]}}
 
     # When NOT protected -> hopeless
-    res_unprotected = classify_market_orders([o1], books=books, max_pair_cost=0.99, market_tokens={cond: (tok_up, tok_dn)})
+    res_unprotected = classify_market_orders([o1], books=books, bot_pos_price_max_pair_cost_usd=0.99, market_tokens={cond: (tok_up, tok_dn)})
     assert len(res_unprotected.hopeless_strays) == 1
 
     # When protected -> in protected list, never hopeless
     res_protected = classify_market_orders(
-        [o1], books=books, max_pair_cost=0.99,
+        [o1], books=books, bot_pos_price_max_pair_cost_usd=0.99,
         market_tokens={cond: (tok_up, tok_dn)},
         protected_order_ids={"o1"}
     )

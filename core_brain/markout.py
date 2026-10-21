@@ -26,7 +26,7 @@ log = logging.getLogger("markout")
 
 _CFG = load_cfg()
 MARKOUT_HORIZONS: tuple[float, ...] = getattr(
-    _CFG, "markout_horizons", (300.0, 3600.0, 21600.0, 900.0)
+    _CFG, "bot_risk_markout_horizons", (300.0, 3600.0, 21600.0, 900.0)
 )
 
 

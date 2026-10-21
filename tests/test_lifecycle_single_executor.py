@@ -154,8 +154,8 @@ def test_manage_single_leg_positions_is_reentrant_under_guard():
     calls = {"n": 0}
 
     class _Cfg:
-        enable_pairs_rule = False
-        enable_aged_out_rescue = False
+        bot_risk_gate_pairs_rule_on = False
+        bot_risk_gate_aged_out_rescue_on = False
 
     # Both rules disabled -> the pass returns [] immediately, but it still runs
     # inside the guard, so calling it from within a guard we already hold

@@ -315,8 +315,8 @@ class TestRunShadow:
         seen = {}
 
         def decide(cfg, up, dn, inv, t_rem, wf):
-            seen["max_order_usd"] = cfg.max_order_usd
-            seen["max_total_usd"] = cfg.max_total_usd
+            seen["bot_risk_exposure_max_order_usd"] = cfg.bot_risk_exposure_max_order_usd
+            seen["bot_risk_exposure_max_total_usd"] = cfg.bot_risk_exposure_max_total_usd
             return [], "declined"
 
         run_shadow(
@@ -325,8 +325,8 @@ class TestRunShadow:
             decide_fn=decide,
         )
 
-        assert seen["max_order_usd"] == MAX_ORDER_USD
-        assert seen["max_total_usd"] == MAX_TOTAL_USD
+        assert seen["bot_risk_exposure_max_order_usd"] == MAX_ORDER_USD
+        assert seen["bot_risk_exposure_max_total_usd"] == MAX_TOTAL_USD
 
     def test_reconcile_is_skipped_not_silently_passed(self, tmp_path):
         """Reconcile compares against venue positions a shadow run does not
@@ -1467,7 +1467,7 @@ class TestPairsWindowWiring:
 
         monkeypatch.setattr(shadow_exec, "ShadowExecutionClient",
                             RecordingClient)
-        narrow_cfg = dc_replace(_load_cfg(), pairs_exit_window_sec=123.0)
+        narrow_cfg = dc_replace(_load_cfg(), bot_risk_pairs_exit_window_sec=123.0)
         monkeypatch.setattr(config_mod, "load", lambda *a, **k: narrow_cfg)
 
         run_shadow(
@@ -1805,7 +1805,7 @@ class TestQueueGateInRehearsal:
             )
 
         assert rc == 0
-        assert seen == [("0x0", float(shadow_cfg().queue_flow_window_sec))]
+        assert seen == [("0x0", float(shadow_cfg().bot_order_queue_flow_window_sec))]
         assert "queue-clear gate inert" not in caplog.text
 
     def test_a_seam_without_a_flow_port_names_the_inert_gate(self, tmp_path,
@@ -1849,7 +1849,7 @@ class TestQueueGateInRehearsal:
             flow_fn=flow,
         )
 
-        assert flow.calls == [("0x0", float(shadow_cfg().queue_flow_window_sec))]
+        assert flow.calls == [("0x0", float(shadow_cfg().bot_order_queue_flow_window_sec))]
         assert "record-only" in result.results[0].queue_why
 
     def test_a_rehearsal_measures_the_queue_and_records_the_reason(
@@ -1865,7 +1865,7 @@ class TestQueueGateInRehearsal:
         from core_brain.shadow_run import run_shadow, shadow_cfg
 
         flow = self._flow()
-        window = float(shadow_cfg().queue_flow_window_sec)
+        window = float(shadow_cfg().bot_order_queue_flow_window_sec)
 
         with caplog.at_level(logging.INFO, logger="main_spread_hunter_loop"):
             result = run_shadow(
@@ -1889,7 +1889,7 @@ class TestQueueGateInRehearsal:
 
         from core_brain.shadow_run import run_shadow, shadow_cfg
 
-        cfg = replace(shadow_cfg(), enforce_queue_clear_gate=True)
+        cfg = replace(shadow_cfg(), bot_order_gate_queue_clear_on=True)
 
         result = run_shadow(
             minutes=0.0, db_path=tmp_path / "shadow.db",
@@ -2390,11 +2390,11 @@ class TestFixedStartingBankroll:
         cfg = self._capture_cfg(tmp_path, monkeypatch, funder="0xabc")
 
         assert calls == [], "an ordinary rehearsal must never read the live wallet"
-        assert cfg.bankroll_usd == 100.0
+        assert cfg.bot_quote_bank_baseline_usd == 100.0
         caps = derive_dynamic_caps(cfg)
-        assert caps["max_order_usd"] == 25.0
-        assert caps["max_naked_usd"] == 6.0
-        assert caps["max_total_usd"] == 90.0
+        assert caps["bot_risk_exposure_max_order_usd"] == 25.0
+        assert caps["bot_risk_exposure_max_naked_usd"] == 6.0
+        assert caps["bot_risk_exposure_max_total_usd"] == 90.0
 
     def test_a_caller_supplied_config_reports_its_own_source(
             self, tmp_path, monkeypatch, caplog):
@@ -2408,12 +2408,12 @@ class TestFixedStartingBankroll:
         from core_brain.config import load
 
         monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "50")
-        supplied = dc_replace(load(), bankroll_usd=333.0)
+        supplied = dc_replace(load(), bot_quote_bank_baseline_usd=333.0)
 
         with caplog.at_level(logging.INFO, logger="shadow_run"):
             cfg = self._capture_cfg(tmp_path, monkeypatch, cfg=supplied)
 
-        assert cfg.bankroll_usd == 333.0
+        assert cfg.bot_quote_bank_baseline_usd == 333.0
         assert "starting bankroll $333.00 (caller-supplied config)" in caplog.text
 
     def test_an_explicit_override_still_sets_a_different_bankroll(
@@ -2421,7 +2421,7 @@ class TestFixedStartingBankroll:
         cfg = self._capture_cfg(tmp_path, monkeypatch,
                                starting_bankroll_usd=250.0)
 
-        assert cfg.bankroll_usd == 250.0
+        assert cfg.bot_quote_bank_baseline_usd == 250.0
 
     def test_the_environment_can_still_choose_the_bankroll(
             self, tmp_path, monkeypatch):
@@ -2430,7 +2430,7 @@ class TestFixedStartingBankroll:
 
         cfg = self._capture_cfg(tmp_path, monkeypatch)
 
-        assert cfg.bankroll_usd == 50.0
+        assert cfg.bot_quote_bank_baseline_usd == 50.0
 
     @pytest.mark.parametrize("bad", [float("nan"), float("inf"),
                                      float("-inf"), 0.0, -5.0])
@@ -2526,7 +2526,7 @@ class TestStartingBankrollCli:
              "--markets-path", str(tmp_path / "feed.json"),
              "--paired-depth-arm", "treatment"])
 
-        assert forwarded == MakerConfig.__dataclass_fields__["bankroll_usd"].default
+        assert forwarded == MakerConfig.__dataclass_fields__["bot_quote_bank_baseline_usd"].default
         assert forwarded == 100.0
 
 

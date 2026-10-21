@@ -78,7 +78,7 @@ def plan_pairs(
     orders: list,
     books: dict[str, dict],
     market_tokens: dict[str, tuple[str, str]] | None,
-    max_pair_cost: float,
+    bot_pos_price_max_pair_cost_usd: float,
     mint_pair_id,
 ) -> PairPlan:
     """Decide adopt/cancel for one condition's working orders.
@@ -118,7 +118,7 @@ def plan_pairs(
                     if ob.id in used:
                         continue
                     combined = float(oa.price) + float(ob.price)
-                    if combined <= max_pair_cost and (
+                    if combined <= bot_pos_price_max_pair_cost_usd and (
                             best is None or combined < best[0]):
                         best = (combined, oa, ob)
             if best is not None:
@@ -129,7 +129,7 @@ def plan_pairs(
                 used.add(ob.id)
                 plan.reason.append(
                     f"adopt {oa.id[:8]}+{ob.id[:8]} under {shared} "
-                    f"(combined {_combined:.2f} <= {max_pair_cost:.2f})")
+                    f"(combined {_combined:.2f} <= {bot_pos_price_max_pair_cost_usd:.2f})")
 
     # --- CANCEL: a working leg with no partner resting AND no completing ask
     # at the live book is a hopeless stray. ---------------------------------
@@ -160,11 +160,11 @@ def plan_pairs(
             plan.cancel.append(o.id)
             plan.reason.append(
                 f"cancel {o.id[:8]}: orphan, no opposing book to complete against")
-        elif float(o.price) + ask >= max_pair_cost:
+        elif float(o.price) + ask >= bot_pos_price_max_pair_cost_usd:
             plan.cancel.append(o.id)
             plan.reason.append(
                 f"cancel {o.id[:8]}: orphan, {o.price:.2f}+ask {ask:.2f} "
-                f">= {max_pair_cost:.2f}")
+                f">= {bot_pos_price_max_pair_cost_usd:.2f}")
         # else: a profitable completion exists -- leave it for the pairs pass,
         # which crosses to complete rather than cancelling a completable leg.
 

@@ -272,13 +272,13 @@ def test_default_arm_offsets_agree_with_presets(tmp_path: Path):
     )
     for arm in plan.arms:
         preset = TOURNAMENT_PRESETS[arm.name]
-        assert arm.env["BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"] == ("1" if preset["dynamic_offset_enabled"] else "0")
-        if "dynamic_offset_multiplier" in preset:
-            assert float(arm.env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"]) == preset["dynamic_offset_multiplier"]
-        if "dynamic_offset_min_cents" in preset:
-            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"]) == preset["dynamic_offset_min_cents"]
-        if "dynamic_offset_max_cents" in preset:
-            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"]) == preset["dynamic_offset_max_cents"]
+        assert arm.env["BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"] == ("1" if preset["bot_quote_gate_dynamic_offset_on"] else "0")
+        if "bot_quote_spread_offset_multiplier" in preset:
+            assert float(arm.env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"]) == preset["bot_quote_spread_offset_multiplier"]
+        if "bot_quote_spread_offset_min_cents" in preset:
+            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"]) == preset["bot_quote_spread_offset_min_cents"]
+        if "bot_quote_spread_offset_max_cents" in preset:
+            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"]) == preset["bot_quote_spread_offset_max_cents"]
     by_name = {a.name: a for a in plan.arms}
     assert float(by_name["prudent"].env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"]) == 0.60
     assert int(by_name["prudent"].env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"]) == 4
@@ -605,10 +605,10 @@ def test_hybrid_preset_configuration():
 
     assert "hybrid" in TOURNAMENT_PRESETS
     preset = TOURNAMENT_PRESETS["hybrid"]
-    assert preset["dynamic_offset_enabled"] is False
-    # reward_offset was purged from the preset (HUNTER_REWARD_OFFSET retired).
-    assert "reward_offset" not in preset
-    assert preset["requote_dead_band"] == 0.060
+    assert preset["bot_quote_gate_dynamic_offset_on"] is False
+    # the static spread offset was purged from the preset
+    assert "bot_quote_spread_static_offset_cents" not in preset
+    assert preset["bot_order_requote_dead_band_cents"] == 0.060
     # The stop and grace knobs were retired in #619; no preset carries them.
     assert "stop_loss_trigger_usd_cents" not in preset
     assert "single_buy_grace_sec" not in preset
@@ -616,10 +616,10 @@ def test_hybrid_preset_configuration():
     cfg = apply_tournament_preset(MakerConfig(), "hybrid")
     # reward_offset keeps the shipped class default (0.020); the preset no
     # longer touches it.
-    assert cfg.reward_offset == 0.020
-    assert cfg.requote_dead_band == 0.060
-    assert cfg.stop_loss_mode == "NONE"
-    assert cfg.dynamic_offset_enabled is False
+    assert cfg.bot_quote_spread_static_offset_cents == 0.020
+    assert cfg.bot_order_requote_dead_band_cents == 0.060
+    assert cfg.bot_risk_stop_mode == "NONE"
+    assert cfg.bot_quote_gate_dynamic_offset_on is False
 
 
 def test_i608_character_arms_plan(tmp_path: Path):
@@ -801,7 +801,7 @@ def test_the_i622_arms_file_varies_only_the_refusal_drift():
     for key in ("BOT_RISK_STOP_MODE", "BOT_RISK_STOP_ADVERSE_DROP_CENTS",
                 "BOT_RISK_STOP_MAX_DRAWDOWN_PCT", "BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT"):
         assert key in shared[0], f"{key} must be pinned identically across arms"
-    assert "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS" not in shared[0], (
+    assert "BOT_RISK_STOP_TRIGGER_USD_CENTS" not in shared[0], (
         "that stop setting is retired; the arm env is purged of it"
     )
 

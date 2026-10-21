@@ -355,7 +355,7 @@ def test_a_wide_quote_window_never_widens_the_book_gate(monkeypatch):
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "50")
 
     cfg = scoring_config.load()
-    assert cfg.max_spread_from_mid == 0.50
+    assert cfg.bot_quote_book_max_spread_from_mid == 0.50
     assert cfg.filter_common_spread_max_cents == 0.0205
     assert fm.MAX_BOOK_SPREAD == fm._CFG.filter_common_spread_max_cents == 0.0205
 

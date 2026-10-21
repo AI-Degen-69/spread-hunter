@@ -160,7 +160,7 @@ class ExposureUnavailable(RuntimeError):
 
 
 def should_exit(fill_cost: float, light_ask: Optional[float],
-                max_pair_cost: float) -> bool:
+                bot_pos_price_max_pair_cost_usd: float) -> bool:
     """Exit when the pair cannot complete under the cap.
 
     `>=`, not `>`. A pair costing exactly max_pair_cost is a guaranteed loss
@@ -173,7 +173,7 @@ def should_exit(fill_cost: float, light_ask: Optional[float],
     """
     if light_ask is None or light_ask <= 0:
         return True
-    return (fill_cost + light_ask) >= max_pair_cost
+    return (fill_cost + light_ask) >= bot_pos_price_max_pair_cost_usd
 
 
 def _book_levels(book, key: str) -> list[tuple[float, float]]:
@@ -944,7 +944,7 @@ def exit_single_buy(
     client,
     registry: OrderRegistry,
     pair_id: str,
-    max_pair_cost: float,
+    bot_pos_price_max_pair_cost_usd: float,
     live: bool = True,
     venue_positions: Optional[dict[str, float]] = None,
     reason: Optional[str] = None,
@@ -1003,7 +1003,7 @@ def exit_single_buy(
     if not force and light_token:
         light_ask = best_ask(client.get_order_book(light_token))
 
-    if not force and not should_exit(pair["fill_cost"], light_ask, max_pair_cost):
+    if not force and not should_exit(pair["fill_cost"], light_ask, bot_pos_price_max_pair_cost_usd):
         return {
             "action": "hold",
             "pair_id": pair_id,
@@ -1197,9 +1197,9 @@ def complete_pair(
     client,
     registry: OrderRegistry,
     pair_id: str,
-    max_pair_cost: float,
+    bot_pos_price_max_pair_cost_usd: float,
     live: bool = True,
-    max_order_usd: float = 25.0,
+    bot_risk_exposure_max_order_usd: float = 25.0,
 ) -> dict:
     """Stage 4 — cross the book to complete a one-sided pair.
 
@@ -1208,7 +1208,7 @@ def complete_pair(
     why it sits inside the staged exposure rule alongside the exit.
 
     The cap is the whole discipline. A cross that pushes the pair to or past
-    `max_pair_cost` is a guaranteed loss after gas, and closing it that way is
+    `bot_pos_price_max_pair_cost_usd` is a guaranteed loss after gas, and closing it that way is
     the stop-loss's job -- this path must not do that job badly. So it refuses
     rather than crossing anyway.
 
@@ -1236,11 +1236,11 @@ def complete_pair(
         )
 
     pair_cost = pair["fill_cost"] + ask
-    if pair_cost >= max_pair_cost:
+    if pair_cost >= bot_pos_price_max_pair_cost_usd:
         raise PairCompletionRefused(
             f"Completing {pair_id} at ask {ask:.4f} against a fill cost of "
             f"{pair['fill_cost']:.4f} gives pair_cost {pair_cost:.4f}, at or "
-            f"above max_pair_cost {max_pair_cost:.4f}. That pair loses money "
+            f"above bot_pos_price_max_pair_cost_usd {bot_pos_price_max_pair_cost_usd:.4f}. That pair loses money "
             f"after gas; the exit path owns this case, not completion."
         )
 
@@ -1258,10 +1258,10 @@ def complete_pair(
         )
 
     notional = size * ask
-    if notional > max_order_usd:
+    if notional > bot_risk_exposure_max_order_usd:
         raise PairCompletionRefused(
             f"Completion notional ${notional:.2f} exceeds MAX_ORDER_USD "
-            f"${max_order_usd:.2f}. The Stage 1 cap applies to this order like "
+            f"${bot_risk_exposure_max_order_usd:.2f}. The Stage 1 cap applies to this order like "
             f"any other."
         )
 
@@ -1329,12 +1329,12 @@ def complete_pair(
     # filled in the meantime at a worse price can push the real pair cost past
     # the cap -- which is precisely the pair this path must never create.
     pair_cost_after = fill_cost_after + ask
-    if pair_cost_after >= max_pair_cost:
+    if pair_cost_after >= bot_pos_price_max_pair_cost_usd:
         raise PairCompletionRefused(
             f"Between the guard and the send, the heavy fill cost moved to "
             f"{fill_cost_after:.4f}; at ask {ask:.4f} the pair would cost "
-            f"{pair_cost_after:.4f}, at or above max_pair_cost "
-            f"{max_pair_cost:.4f}. Refusing the cross."
+            f"{pair_cost_after:.4f}, at or above bot_pos_price_max_pair_cost_usd "
+            f"{bot_pos_price_max_pair_cost_usd:.4f}. Refusing the cross."
         )
     pair_cost = pair_cost_after
 
@@ -1391,7 +1391,7 @@ def complete_pair(
                 posted_ts=now_ms,
                 last_polled_ts=now_ms,
                 pair_id=pair_id,
-                max_pair_cost_at_post=max_pair_cost,
+                max_pair_cost_at_post=bot_pos_price_max_pair_cost_usd,
             )
         )
 
@@ -1557,7 +1557,7 @@ def auto_manage_pairs(
     gamma_host: Optional[str] = None,
 ) -> list[dict]:
     """Compatibility adapter for the unified one-sided lifecycle pass."""
-    if not getattr(cfg, "enable_pairs_rule", True):
+    if not getattr(cfg, "bot_risk_gate_pairs_rule_on", True):
         return []
     return manage_single_leg_positions(
         client, registry, cfg, live=live, now=now,
@@ -1811,8 +1811,8 @@ def manage_single_leg_positions(
     It takes the same levels shape `client.get_order_book` returns. Exits
     and completions always read fresh from the client, never from this hook.
     """
-    pairs_enabled = bool(getattr(cfg, "enable_pairs_rule", True))
-    aged_out_enabled = bool(getattr(cfg, "enable_aged_out_rescue", True))
+    pairs_enabled = bool(getattr(cfg, "bot_risk_gate_pairs_rule_on", True))
+    aged_out_enabled = bool(getattr(cfg, "bot_risk_gate_aged_out_rescue_on", True))
     if not pairs_enabled and not aged_out_enabled:
         return []
 
@@ -1854,8 +1854,8 @@ def _manage_single_leg_positions_locked(
 ) -> list[dict]:
     """The mutation pass, called under `lifecycle_mutation_guard`."""
 
-    pairs_enabled = bool(getattr(cfg, "enable_pairs_rule", True))
-    aged_out_enabled = bool(getattr(cfg, "enable_aged_out_rescue", True))
+    pairs_enabled = bool(getattr(cfg, "bot_risk_gate_pairs_rule_on", True))
+    aged_out_enabled = bool(getattr(cfg, "bot_risk_gate_aged_out_rescue_on", True))
 
     from core_brain.quotes import dynamic_offset_for
     from core_brain.single_leg_lifecycle import (
@@ -1864,20 +1864,20 @@ def _manage_single_leg_positions_locked(
     )
 
     now_s = now if now is not None else time.time()
-    window_ms = int(getattr(cfg, "pairs_exit_window_sec", 900.0) * 1000)
-    lead_sec = float(getattr(cfg, "aged_out_rescue_lead_sec", 900.0))
+    window_ms = int(getattr(cfg, "bot_risk_pairs_exit_window_sec", 900.0) * 1000)
+    lead_sec = float(getattr(cfg, "bot_risk_aged_out_rescue_lead_sec", 900.0))
     _mpc = getattr(cfg, "bot_pos_price_max_pair_cost_usd", None)
     if _mpc is None:
-        _mpc = getattr(cfg, "max_pair_cost", 0.995)
-    max_pair_cost = float(_mpc)
-    tick_size = float(getattr(cfg, "price_tick", DEFAULT_TICK_SIZE))
-    stop_loss_mode = str(getattr(cfg, "stop_loss_mode", "NONE"))
-    drop_cents = float(getattr(cfg, "drop_cents", 0.05))
-    drawdown_pct = float(getattr(cfg, "drawdown_pct", 10.0))
+        _mpc = getattr(cfg, "bot_pos_price_max_pair_cost_usd", 0.995)
+    bot_pos_price_max_pair_cost_usd = float(_mpc)
+    tick_size = float(getattr(cfg, "bot_quote_grid_tick_size_usd", DEFAULT_TICK_SIZE))
+    bot_risk_stop_mode = str(getattr(cfg, "bot_risk_stop_mode", "NONE"))
+    bot_risk_stop_adverse_drop_cents = float(getattr(cfg, "bot_risk_stop_adverse_drop_cents", 0.05))
+    bot_risk_stop_max_drawdown_pct = float(getattr(cfg, "bot_risk_stop_max_drawdown_pct", 10.0))
     _edp = getattr(cfg, "bot_risk_circuit_max_drawdown_pct", None)
     if _edp is None:
-        _edp = getattr(cfg, "emergency_drawdown_pct", 75.0)
-    emergency_drawdown_pct = float(_edp)
+        _edp = getattr(cfg, "bot_risk_circuit_max_drawdown_pct", 75.0)
+    bot_risk_circuit_max_drawdown_pct = float(_edp)
     resolved = {str(cid).lower() for cid in (resolved_cids or ()) if cid}
 
     if market_state_fn is None:
@@ -2036,11 +2036,11 @@ def _manage_single_leg_positions_locked(
                 if previous_record is not None else None
             )
             decision = transition(
-                position, previous_state, max_pair_cost=max_pair_cost,
+                position, previous_state, bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
                 settlement_due=False, tick_size=tick_size,
-                stop_loss_mode=stop_loss_mode, drop_cents=drop_cents,
-                drawdown_pct=drawdown_pct,
-                bot_risk_circuit_max_drawdown_pct=emergency_drawdown_pct,
+                bot_risk_stop_mode=bot_risk_stop_mode, bot_risk_stop_adverse_drop_cents=bot_risk_stop_adverse_drop_cents,
+                bot_risk_stop_max_drawdown_pct=bot_risk_stop_max_drawdown_pct,
+                bot_risk_circuit_max_drawdown_pct=bot_risk_circuit_max_drawdown_pct,
             )
             if decision.action == "hard_stop":
                 # The poll's hard stop is its own to persist: it survives
@@ -2050,7 +2050,7 @@ def _manage_single_leg_positions_locked(
                 )
             if decision.action == "hard_stop":
                 result = exit_single_buy(
-                    client, registry, pair_id, max_pair_cost,
+                    client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
                     live=live, venue_positions=venue_positions,
                     reason="lifecycle_hard_stop", force=True,
                     trigger_bid=held_bid,
@@ -2116,15 +2116,15 @@ def _manage_single_leg_positions_locked(
                 )
                 if verdict == AGED_OUT_DUE:
                     decision = evaluate(
-                        position, registry, max_pair_cost=max_pair_cost,
+                        position, registry, bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
                         settlement_due=True, tick_size=tick_size,
-                        stop_loss_mode=stop_loss_mode,
-                        drop_cents=drop_cents,
-                        drawdown_pct=drawdown_pct,
-                        bot_risk_circuit_max_drawdown_pct=emergency_drawdown_pct,
+                        bot_risk_stop_mode=bot_risk_stop_mode,
+                        bot_risk_stop_adverse_drop_cents=bot_risk_stop_adverse_drop_cents,
+                        bot_risk_stop_max_drawdown_pct=bot_risk_stop_max_drawdown_pct,
+                        bot_risk_circuit_max_drawdown_pct=bot_risk_circuit_max_drawdown_pct,
                     )
                     result = _settlement_fallback(
-                        client, registry, pair, cfg, max_pair_cost, live,
+                        client, registry, pair, cfg, bot_pos_price_max_pair_cost_usd, live,
                         venue_positions, reason,
                     )
                     if result.get("action") in ("completed", "exited"):
@@ -2149,16 +2149,16 @@ def _manage_single_leg_positions_locked(
             try:
                 tokens = (side_tokens["UP"], side_tokens["DOWN"])
                 exp = load_condition_exposure(client, registry, condition_id, tokens)
-                stranded_completion_on = bool(getattr(cfg, "stranded_completion_enabled", False))
-                stranded_max_wait = float(getattr(cfg, "stranded_max_wait_sec", 300.0))
-                min_quote_shares = float(getattr(cfg, "min_quote_shares", 5.0) or 5.0)
+                stranded_completion_on = bool(getattr(cfg, "bot_risk_stranded_completion_on", False))
+                stranded_max_wait = float(getattr(cfg, "bot_risk_stranded_max_wait_sec", 300.0))
+                bot_quote_size_min_shares = float(getattr(cfg, "bot_quote_size_min_shares", 5.0) or 5.0)
 
                 # Stranded exposure resolution (#453)
                 # When completion is enabled with a profitable cross, complete immediately.
                 # When stranded without working hedge and aged out past regular window, force resolution.
                 if (stranded_completion_on or is_aged_out) and (
                     exp.status.value in ("stranded", "under_covered") and (
-                        exp.status.value == "stranded" or exp.coverage_shortfall < min_quote_shares
+                        exp.status.value == "stranded" or exp.coverage_shortfall < bot_quote_size_min_shares
                     )
                 ):
                     opposing_token = exp.light_token_id
@@ -2170,12 +2170,12 @@ def _manage_single_leg_positions_locked(
                         stranded_completion_on
                         and opposing_ask is not None
                         and opposing_ask > 0
-                        and (held_avg + opposing_ask) < max_pair_cost
+                        and (held_avg + opposing_ask) < bot_pos_price_max_pair_cost_usd
                     ):
                         with _completion_target(client, pair_id):
                             res = complete_pair(
-                                client, registry, pair_id, max_pair_cost,
-                                live=live, max_order_usd=getattr(cfg, "max_order_usd", 25.0) or 25.0,
+                                client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
+                                live=live, bot_risk_exposure_max_order_usd=getattr(cfg, "bot_risk_exposure_max_order_usd", 25.0) or 25.0,
                             )
                         if res.get("action") == "completed":
                             # Attempt live merge if live and non-interactive merge entry point is available
@@ -2192,7 +2192,7 @@ def _manage_single_leg_positions_locked(
                     # Otherwise, check maker tick availability & age
                     age_s = (now_s * 1000.0 - last_fill_ms) / 1000.0 if last_fill_ms > 0 else 0.0
                     try:
-                        max_profitable_hedge_bid(held_avg, max_pair_cost, tick_size)
+                        max_profitable_hedge_bid(held_avg, bot_pos_price_max_pair_cost_usd, tick_size)
                         has_maker_tick = True
                     except ValueError:
                         has_maker_tick = False
@@ -2208,7 +2208,7 @@ def _manage_single_leg_positions_locked(
                         continue
                     else:
                         exit_res = exit_single_buy(
-                            client, registry, pair_id, max_pair_cost,
+                            client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
                             live=live, venue_positions=venue_positions,
                             reason="stranded_unhedged_exit", force=True,
                         )
@@ -2253,18 +2253,18 @@ def _manage_single_leg_positions_locked(
     return out
 
 
-def _settlement_fallback(client, registry, pair, cfg, max_pair_cost, live,
+def _settlement_fallback(client, registry, pair, cfg, bot_pos_price_max_pair_cost_usd, live,
                          venue_positions, reason: str) -> dict:
     """Try one capped completion at settlement time, then use guarded exit."""
     try:
         with _completion_target(client, pair["pair_id"]):
             result = complete_pair(
-                client, registry, pair["pair_id"], max_pair_cost, live=live,
-                max_order_usd=getattr(cfg, "max_order_usd", None) or 25.0,
+                client, registry, pair["pair_id"], bot_pos_price_max_pair_cost_usd, live=live,
+                bot_risk_exposure_max_order_usd=getattr(cfg, "bot_risk_exposure_max_order_usd", None) or 25.0,
             )
     except PairCompletionRefused:
         result = exit_single_buy(
-            client, registry, pair["pair_id"], max_pair_cost,
+            client, registry, pair["pair_id"], bot_pos_price_max_pair_cost_usd,
             live=live, venue_positions=venue_positions,
             reason="aged_out_rescue", force=True,
         )
@@ -2290,7 +2290,7 @@ def rescue_aged_out_legs(
     resolved_cids: Optional[set[str]] = None,
 ) -> list[dict]:
     """Compatibility adapter for lifecycle-managed settlement fallback."""
-    if not getattr(cfg, "enable_aged_out_rescue", True):
+    if not getattr(cfg, "bot_risk_gate_aged_out_rescue_on", True):
         return []
     return manage_single_leg_positions(
         client, registry, cfg, live=live, now=now,

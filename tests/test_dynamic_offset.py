@@ -32,7 +32,7 @@ def test_dynamic_offset_enabled_by_default():
     """
     cfg = MakerConfig()
     offset, tag = dynamic_offset_for(cfg, now=NOW)
-    assert offset == cfg.reward_offset
+    assert offset == cfg.bot_quote_spread_static_offset_cents
     assert tag == "static_missing_range"
 
 
@@ -111,8 +111,8 @@ def test_quote_resting_price_integrates_dynamic_offset():
         bot_quote_spread_offset_max_cents=5,
         bot_quote_telemetry_range_cents=6.0,
         bot_quote_telemetry_velocity_measured_at=NOW - 60.0,
-        price_risk_widen=0.0,  # isolate base offset
-        coinflip_halfwidth=0.0,
+        bot_quote_price_risk_widen=0.0,  # isolate base offset
+        bot_quote_coinflip_halfwidth=0.0,
     )
     price, provisional, _, _ = quote_resting_price(cfg, Inventory(), "UP", book, now=NOW)
     # mid 0.500 - 0.03 base = 0.470
@@ -142,61 +142,61 @@ def test_tournament_presets_registry_contents():
     assert "control" not in TOURNAMENT_PRESETS
 
     aggressive = TOURNAMENT_PRESETS["aggressive"]
-    assert aggressive["dynamic_offset_enabled"]
-    assert aggressive["dynamic_offset_multiplier"] == 0.25
-    assert aggressive["dynamic_offset_min_cents"] == 2
-    assert aggressive["dynamic_offset_max_cents"] == 3
+    assert aggressive["bot_quote_gate_dynamic_offset_on"]
+    assert aggressive["bot_quote_spread_offset_multiplier"] == 0.25
+    assert aggressive["bot_quote_spread_offset_min_cents"] == 2
+    assert aggressive["bot_quote_spread_offset_max_cents"] == 3
 
     balanced = TOURNAMENT_PRESETS["balanced"]
-    assert balanced["dynamic_offset_enabled"]
-    assert balanced["dynamic_offset_multiplier"] == 0.50
-    assert balanced["dynamic_offset_min_cents"] == 2
-    assert balanced["dynamic_offset_max_cents"] == 4
-    assert balanced["requote_hold_queue_shares"] == 500.0
-    assert balanced["requote_hold_below_target"] == 0.08
+    assert balanced["bot_quote_gate_dynamic_offset_on"]
+    assert balanced["bot_quote_spread_offset_multiplier"] == 0.50
+    assert balanced["bot_quote_spread_offset_min_cents"] == 2
+    assert balanced["bot_quote_spread_offset_max_cents"] == 4
+    assert balanced["bot_order_requote_hold_queue_shares"] == 500.0
+    assert balanced["bot_order_requote_hold_below_target_cents"] == 0.08
 
     prudent = TOURNAMENT_PRESETS["prudent"]
-    assert prudent["dynamic_offset_enabled"]
-    assert prudent["dynamic_offset_multiplier"] == 0.60
-    assert prudent["dynamic_offset_min_cents"] == 2
-    assert prudent["dynamic_offset_max_cents"] == 4
-    assert prudent["requote_hold_queue_shares"] == 500.0
-    assert prudent["requote_hold_below_target"] == 0.08
+    assert prudent["bot_quote_gate_dynamic_offset_on"]
+    assert prudent["bot_quote_spread_offset_multiplier"] == 0.60
+    assert prudent["bot_quote_spread_offset_min_cents"] == 2
+    assert prudent["bot_quote_spread_offset_max_cents"] == 4
+    assert prudent["bot_order_requote_hold_queue_shares"] == 500.0
+    assert prudent["bot_order_requote_hold_below_target_cents"] == 0.08
 
 
 def test_apply_tournament_preset():
     base = MakerConfig()
     agg = apply_tournament_preset(base, "aggressive")
-    assert agg.dynamic_offset_enabled is True
-    assert agg.dynamic_offset_multiplier == 0.25
-    assert agg.dynamic_offset_min_cents == 2
-    assert agg.dynamic_offset_max_cents == 3
-    assert agg.requote_hold_queue_shares == 500.0
-    assert agg.requote_hold_below_target == 0.08
+    assert agg.bot_quote_gate_dynamic_offset_on is True
+    assert agg.bot_quote_spread_offset_multiplier == 0.25
+    assert agg.bot_quote_spread_offset_min_cents == 2
+    assert agg.bot_quote_spread_offset_max_cents == 3
+    assert agg.bot_order_requote_hold_queue_shares == 500.0
+    assert agg.bot_order_requote_hold_below_target_cents == 0.08
 
     bal = apply_tournament_preset(base, "balanced")
-    assert bal.dynamic_offset_enabled is True
-    assert bal.dynamic_offset_multiplier == 0.50
-    assert bal.dynamic_offset_min_cents == 2
-    assert bal.dynamic_offset_max_cents == 4
-    assert bal.requote_hold_queue_shares == 500.0
-    assert bal.requote_hold_below_target == 0.08
+    assert bal.bot_quote_gate_dynamic_offset_on is True
+    assert bal.bot_quote_spread_offset_multiplier == 0.50
+    assert bal.bot_quote_spread_offset_min_cents == 2
+    assert bal.bot_quote_spread_offset_max_cents == 4
+    assert bal.bot_order_requote_hold_queue_shares == 500.0
+    assert bal.bot_order_requote_hold_below_target_cents == 0.08
 
     cons = apply_tournament_preset(base, "conservative")
-    assert cons.dynamic_offset_enabled is True
-    assert cons.dynamic_offset_multiplier == 0.75
-    assert cons.dynamic_offset_min_cents == 2
-    assert cons.dynamic_offset_max_cents == 5
-    assert cons.requote_hold_queue_shares == 500.0
-    assert cons.requote_hold_below_target == 0.08
+    assert cons.bot_quote_gate_dynamic_offset_on is True
+    assert cons.bot_quote_spread_offset_multiplier == 0.75
+    assert cons.bot_quote_spread_offset_min_cents == 2
+    assert cons.bot_quote_spread_offset_max_cents == 5
+    assert cons.bot_order_requote_hold_queue_shares == 500.0
+    assert cons.bot_order_requote_hold_below_target_cents == 0.08
 
     pru = apply_tournament_preset(base, "prudent")
-    assert pru.dynamic_offset_enabled is True
-    assert pru.dynamic_offset_multiplier == 0.60
-    assert pru.dynamic_offset_min_cents == 2
-    assert pru.dynamic_offset_max_cents == 4
-    assert pru.requote_hold_queue_shares == 500.0
-    assert pru.requote_hold_below_target == 0.08
+    assert pru.bot_quote_gate_dynamic_offset_on is True
+    assert pru.bot_quote_spread_offset_multiplier == 0.60
+    assert pru.bot_quote_spread_offset_min_cents == 2
+    assert pru.bot_quote_spread_offset_max_cents == 4
+    assert pru.bot_order_requote_hold_queue_shares == 500.0
+    assert pru.bot_order_requote_hold_below_target_cents == 0.08
 
     with pytest.raises(ValueError, match="Unknown tournament preset"):
         apply_tournament_preset(base, "yolo")
@@ -226,9 +226,9 @@ def test_tournament_preset_leaves_the_stop_to_the_operator_env():
     for name in ["conservative", "balanced", "aggressive"]:
         with mock.patch.dict(os.environ, {"BOT_QUOTE_TOURNAMENT_PRESET": name}):
             cfg = load()
-        assert cfg.stop_loss_mode == "NONE"
-        assert cfg.drop_cents == 0.05
-        assert cfg.drawdown_pct == 10.0
+        assert cfg.bot_risk_stop_mode == "NONE"
+        assert cfg.bot_risk_stop_adverse_drop_cents == 0.05
+        assert cfg.bot_risk_stop_max_drawdown_pct == 10.0
         assert cfg.bot_risk_circuit_max_drawdown_pct == 75.0
 
 
@@ -247,17 +247,17 @@ def test_preset_env_no_longer_emits_the_retired_stop_var():
 def test_load_config_with_preset_and_env_overrides():
     with mock.patch.dict(os.environ, {"BOT_QUOTE_TOURNAMENT_PRESET": "prudent"}):
         cfg = load()
-        assert cfg.dynamic_offset_enabled is True
-        assert cfg.dynamic_offset_multiplier == 0.60
-        assert cfg.dynamic_offset_min_cents == 2
-        assert cfg.dynamic_offset_max_cents == 4
+        assert cfg.bot_quote_gate_dynamic_offset_on is True
+        assert cfg.bot_quote_spread_offset_multiplier == 0.60
+        assert cfg.bot_quote_spread_offset_min_cents == 2
+        assert cfg.bot_quote_spread_offset_max_cents == 4
 
     with mock.patch.dict(os.environ, {"BOT_QUOTE_TOURNAMENT_PRESET": "balanced"}):
         cfg = load()
-        assert cfg.dynamic_offset_enabled is True
-        assert cfg.dynamic_offset_multiplier == 0.50
-        assert cfg.dynamic_offset_min_cents == 2
-        assert cfg.dynamic_offset_max_cents == 4
+        assert cfg.bot_quote_gate_dynamic_offset_on is True
+        assert cfg.bot_quote_spread_offset_multiplier == 0.50
+        assert cfg.bot_quote_spread_offset_min_cents == 2
+        assert cfg.bot_quote_spread_offset_max_cents == 4
 
     # Env override on top of preset
     with mock.patch.dict(os.environ, {
@@ -265,10 +265,10 @@ def test_load_config_with_preset_and_env_overrides():
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
     }):
         cfg_custom = load()
-        assert cfg_custom.dynamic_offset_enabled is True
-        assert cfg_custom.dynamic_offset_multiplier == 0.25
-        assert cfg_custom.dynamic_offset_min_cents == 2
-        assert cfg_custom.dynamic_offset_max_cents == 3
+        assert cfg_custom.bot_quote_gate_dynamic_offset_on is True
+        assert cfg_custom.bot_quote_spread_offset_multiplier == 0.25
+        assert cfg_custom.bot_quote_spread_offset_min_cents == 2
+        assert cfg_custom.bot_quote_spread_offset_max_cents == 3
 
     # Unknown preset raises ValueError
     with mock.patch.dict(os.environ, {"BOT_QUOTE_TOURNAMENT_PRESET": "unknown_arm"}):
@@ -339,14 +339,14 @@ def test_dynamic_offset_for_reads_canonical_names_without_warning():
 
     all_records = list(recorded) + list(recorded_stale) + list(recorded_clamp)
     scoped_legacy = {
-        "dynamic_offset_enabled",
-        "dynamic_offset_multiplier",
-        "dynamic_offset_min_cents",
-        "dynamic_offset_max_cents",
-        "dynamic_offset_max_age_sec",
-        "range_cents",
-        "velocity_measured_at",
-        "reward_offset",
+        "bot_quote_gate_dynamic_offset_on",
+        "bot_quote_spread_offset_multiplier",
+        "bot_quote_spread_offset_min_cents",
+        "bot_quote_spread_offset_max_cents",
+        "bot_quote_spread_offset_max_age_sec",
+        "bot_quote_telemetry_range_cents",
+        "bot_quote_telemetry_velocity_measured_at",
+        "bot_quote_spread_static_offset_cents",
     }
     for w in all_records:
         if "quotes.py" in str(w.filename):

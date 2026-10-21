@@ -101,7 +101,7 @@ def test_funnel_carries_every_gate_bar(tmp_path):
         "horizon_gate_days": 30.0,
         "reward_min_income_usd_day": 1.5,
         "spread_min_income_usd_day": 0.0,
-        "max_pair_cost": 0.995,
+        "bot_pos_price_max_pair_cost_usd": 0.995,
     })
 
     f = _funnel_from_pipeline({}, pipeline_path=pipeline,
@@ -113,7 +113,7 @@ def test_funnel_carries_every_gate_bar(tmp_path):
     assert f["horizon_gate_days"] == 30.0
     assert f["reward_min_income_usd_day"] == 1.5
     assert f["spread_min_income_usd_day"] == 0.0
-    assert f["max_pair_cost"] == 0.995
+    assert f["bot_pos_price_max_pair_cost_usd"] == 0.995
 
 
 def test_funnel_passes_the_condition_id_through_to_the_final_rows(tmp_path):

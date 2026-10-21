@@ -2211,7 +2211,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--trial-spread", type=float, default=None, metavar="SPREAD",
                    help="WIDE-BOOK TRIAL (#145): admit books up to this spread "
                         "instead of the permanent ceiling (%.2f). Run 145 "
-                        "measured the touch pair at or above max_pair_cost in "
+                        "measured the touch pair at or above bot_pos_price_max_pair_cost_usd in "
                         "1247 of 1247 samples on one-tick books, and the only "
                         "sub-$0.99 pairs it saw came from books that had "
                         "widened. Adopted markets are tagged trial_spread in "
@@ -2607,7 +2607,7 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         # source so the snapshot schema is preserved without asymmetry.
         "reward_min_income_usd_day": 0.0,
         "spread_min_income_usd_day": 0.0,
-        "max_pair_cost": _CFG.max_pair_cost,
+        "bot_pos_price_max_pair_cost_usd": _CFG.bot_pos_price_max_pair_cost_usd,
         # Which tournament preset this ranker scored under (#687), or None on
         # a preset-free run. Resolved from the environment at snapshot time --
         # the same selector the scoring loader applied -- so the dashboard

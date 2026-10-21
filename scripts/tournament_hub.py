@@ -117,7 +117,6 @@ def build_arm_view(plan: dict, arm: dict, reachable_map: Optional[dict[int, bool
     env = arm.get("env") or {}
     preset = (
         env.get("BOT_QUOTE_TOURNAMENT_PRESET")
-        or env.get("BOT_QUOTE_TOURNAMENT_PRESET")
         or arm.get("name")
     )
     db_path = _resolve_path(arm["db_path"], ROOT)
@@ -150,22 +149,10 @@ def build_arm_view(plan: dict, arm: dict, reachable_map: Optional[dict[int, bool
         "db_path": str(db_path),
         "db_exists": db_path.exists(),
         "stop_loss_usd_cents": env.get("BOT_RISK_STOP_ADVERSE_DROP_CENTS"),
-        "dynamic_offset": (
-            env.get("BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON")
-            or env.get("BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON")
-        ),
-        "offset_min_cents": (
-            env.get("BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS")
-            or env.get("BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS")
-        ),
-        "offset_max_cents": (
-            env.get("BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS")
-            or env.get("BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS")
-        ),
-        "offset_mult": (
-            env.get("BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER")
-            or env.get("BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER")
-        ),
+        "dynamic_offset": env.get("BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"),
+        "offset_min_cents": env.get("BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"),
+        "offset_max_cents": env.get("BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"),
+        "offset_mult": env.get("BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"),
         "cycle": heartbeat.get("cycle"),
         "finished": bool(heartbeat.get("finished")),
         "shutdown_reason": heartbeat.get("shutdown_reason"),

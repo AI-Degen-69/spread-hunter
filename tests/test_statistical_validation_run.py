@@ -329,8 +329,8 @@ class TestSnapshot:
         assert cfg_file.is_file()
 
         data = json.loads(cfg_file.read_text(encoding="utf-8"))
-        assert "bankroll_usd" in data
-        assert "stat_gate_threshold_pct" in data
+        assert "bot_quote_bank_baseline_usd" in data
+        assert "bot_eval_stat_gate_threshold_pct" in data
         assert "STAT HARNESS config" in caplog.text
 
 
@@ -425,9 +425,10 @@ class TestEndToEndHarness:
         assert read_funder == [], "the rehearsal sized itself from the live wallet"
         snapshot = json.loads(
             (report_dir / "config_snapshot.json").read_text(encoding="utf-8"))
-        assert snapshot["bankroll_usd"] == 100.0
+        assert snapshot["bot_quote_bank_baseline_usd"] == 100.0
         # Derived property (#572): asdict() drops it, so the snapshot must add it back.
-        assert snapshot["select_max_book_spread"] == round(snapshot["max_book_spread"] * snapshot["select_spread_pct"], 6) == 0.0205
+        assert snapshot["filter_common_spread_max_cents"] == round(
+            snapshot["bot_quote_book_max_spread_cents"] * snapshot["filter_std_spread_share_pct"], 6) == 0.0205
 
     def test_underpowered_run_exits_inconclusive_without_go_verdict(self, tmp_path, caplog):
         """Acceptance Criteria: run with target-closes 999 exits INCONCLUSIVE with underpowered reason."""
@@ -532,7 +533,7 @@ class TestEndToEndHarness:
 
         db = tmp_path / "shadow_stat_cfg_target.db"
         report_dir = tmp_path / "stat_cfg_target"
-        target = load_cfg().stat_gate_target_closes
+        target = load_cfg().bot_eval_stat_gate_target_closes
         now = [1000.0]
 
         def clock():

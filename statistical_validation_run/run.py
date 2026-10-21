@@ -220,17 +220,17 @@ def snapshot_stat_validation_env(
     cfg_path = artifact_dir / "config_snapshot.json"
     try:
         with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump({**dataclasses.asdict(cfg), "select_max_book_spread": cfg.select_max_book_spread}, f, indent=2)
+            json.dump({**dataclasses.asdict(cfg), "filter_common_spread_max_cents": cfg.filter_common_spread_max_cents}, f, indent=2)
     except (OSError, TypeError) as e:
         log.warning("snapshot: failed to write config_snapshot.json: %s", e)
 
-    max_order_usd, max_total_usd = order_caps()
+    bot_risk_exposure_max_order_usd, bot_risk_exposure_max_total_usd = order_caps()
     log.info(
-        "STAT HARNESS config: max_order_usd=%.2f max_total_usd=%.2f objective=%s bankroll_usd=%.2f",
-        max_order_usd,
-        max_total_usd,
-        getattr(cfg, "objective", "balanced"),
-        getattr(cfg, "bankroll_usd", 0.0),
+        "STAT HARNESS config: bot_risk_exposure_max_order_usd=%.2f bot_risk_exposure_max_total_usd=%.2f objective=%s bot_quote_bank_baseline_usd=%.2f",
+        bot_risk_exposure_max_order_usd,
+        bot_risk_exposure_max_total_usd,
+        getattr(cfg, "bot_pos_objective", "balanced"),
+        getattr(cfg, "bot_quote_bank_baseline_usd", 0.0),
     )
 
 
@@ -332,7 +332,7 @@ def main(
     # on exactly what the operator configured.
     cfg = load_cfg()
     if a.target_closes is None:
-        a.target_closes = cfg.stat_gate_target_closes
+        a.target_closes = cfg.bot_eval_stat_gate_target_closes
     if a.target_closes < 0:
         # A negative typo must not slip past the stop rule (which only fires
         # on targets > 0) and read as an ungated run.
@@ -500,7 +500,7 @@ def main(
             kpi=kpi,
             underpowered=is_underpowered,
             underpowered_reasons=underpowered_reasons,
-            threshold_pct=cfg.stat_gate_threshold_pct,
+            threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
         )
         write_artifacts(
             artifact_dir,

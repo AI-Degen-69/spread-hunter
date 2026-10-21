@@ -19,7 +19,7 @@ from scoring.config import MakerConfig as _MakerConfig
 # and it would keep refusing books after the gate moved. `round(..., 6)` for
 # the same binary64 reason the config property rounds.
 _PICKER_BAR: float = round(
-    _MakerConfig.max_book_spread * _MakerConfig.select_spread_pct, 6)
+    _MakerConfig.bot_quote_book_max_spread_cents * _MakerConfig.filter_std_spread_share_pct, 6)
 
 
 # Normalize separators before matching so both human titles ("Game 1") and
@@ -305,7 +305,7 @@ def maker_queue_allowed(queue_minutes: float, max_queue_minutes: float,
                         enforce: bool = True) -> tuple[bool, str]:
     """Whether a market's queue at our level clears fast enough to join.
 
-    `>=` not `>`, matching `select_min_top3_depth_usd` and every other cap
+    `>=` not `>`, matching `filter_common_vol_min_top3_depth_usd` and every other cap
     here: a ceiling reached, not approached.
 
     `max_queue_minutes <= 0` disables the rule, the escape hatch every other
