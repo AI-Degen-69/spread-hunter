@@ -1,8 +1,10 @@
 """Tournament Analytics & Decision Cockpit Server.
 
 Interactive real-time visualization and statistical analysis cockpit for
-Spread Hunter multi-arm shadow tournaments (fresh Round 1: Issue #492;
-archive: #484/#485; current setup: #487).
+Spread Hunter multi-arm shadow tournaments. One page is served: the current
+setup (#487). The past-run pages (#484, #492, #608) were purged on 2026-10-21 --
+their routes 404 now, and their static snapshots are no longer written. Their
+arm records and stores stay: they are launch/compare data, not pages.
 Computes risk, expectancy (EV), standard deviation, max drawdown,
 Monte Carlo projections, and Live Readiness Scoring.
 
@@ -631,7 +633,8 @@ ARMS_CONFIG_608 = [
     },
 ]
 
-# Active Default / Backwards Compatibility Pointer
+# Legacy alias kept for older imports. The tournament the cockpit serves by
+# default is CURRENT_SETUP_KEY (#487); this constant no longer selects a page.
 ARMS_CONFIG = ARMS_CONFIG_492
 
 TOURNAMENTS = {
@@ -643,8 +646,6 @@ TOURNAMENTS = {
         "badge_cls": "badge-amber",
         "description": "Fresh Round 1 baseline on fixed code. Catalyst columns stay empty until this run reports; the current-setup tournament (#487) is a separate, later run.",
         "arms": ARMS_CONFIG_492,
-        "page_url": "/",
-        "static_filename": "tournament_cockpit_492.html",
         "issue_primary": 492,
         "issue_secondary": 492,
     },
@@ -656,8 +657,6 @@ TOURNAMENTS = {
         "badge_cls": "badge-green",
         "description": "Ten characters, one knob each, on loose shipped defaults. Catalyst columns stay empty until this run reports.",
         "arms": ARMS_CONFIG_608,
-        "page_url": "/608",
-        "static_filename": "tournament_cockpit_608.html",
         "issue_primary": 608,
         "issue_secondary": 608,
     },
@@ -669,8 +668,6 @@ TOURNAMENTS = {
         "badge_cls": "badge-amber",
         "description": "Archived baseline built on buggy code (see #492); kept for history, not for decisions.",
         "arms": ARMS_CONFIG_484,
-        "page_url": "/484",
-        "static_filename": "tournament_cockpit_484.html",
         "issue_primary": 484,
         "issue_secondary": 485,
     },
@@ -682,12 +679,36 @@ TOURNAMENTS = {
         "badge_cls": "badge-green",
         "description": "The first ten-arm run on the post-2026-10-20 code: every arm starts from the configuration that ships today and changes exactly one live setting. Comparative reading happens after the 720-minute run; no arm carries a catalyst score yet.",
         "arms": ARMS_CONFIG_487,
-        "page_url": "/487",
-        "static_filename": "tournament_cockpit_487.html",
         "issue_primary": 487,
         "issue_secondary": 487,
     },
 }
+
+
+# The cockpit serves one page: the current setup. Everything past-run is a
+# launch/compare record only. These paths are the only ones that render, and the
+# current setup is the only tournament key the JSON API will serve.
+CURRENT_SETUP_KEY = "487"
+PAGE_PATHS: dict[str, str] = {
+    "": CURRENT_SETUP_KEY,
+    "/index.html": CURRENT_SETUP_KEY,
+    "/487": CURRENT_SETUP_KEY,
+    "/487.html": CURRENT_SETUP_KEY,
+    "/cockpit_487": CURRENT_SETUP_KEY,
+}
+# The keys the JSON API may serve: the served pages' own tournaments, derived so
+# a new page cannot forget to widen this.
+SERVED_TOURNAMENT_KEYS = frozenset(PAGE_PATHS.values())
+
+
+def tourney_key_for_path(path: str) -> Optional[str]:
+    """Return the tournament key whose page serves this path, or None for a 404.
+
+    None is deliberate for `/492`, `/484`, `/484.html`, `/608` and `/608.html`:
+    the purged past-run pages. Issue #698 asked for that purge; PR #703 ticked
+    the acceptance boxes without delivering the route bullet, so it lands here.
+    """
+    return PAGE_PATHS.get(path.split("?")[0].rstrip("/"))
 
 
 def _strip_round_suffix(name: str) -> str:
@@ -695,9 +716,9 @@ def _strip_round_suffix(name: str) -> str:
     return re.sub(r"-\d+$", "", str(name or ""))
 
 
-def resolve_tournament_arms(tourney_key: str = "492") -> list[dict[str, Any]]:
+def resolve_tournament_arms(tourney_key: str = CURRENT_SETUP_KEY) -> list[dict[str, Any]]:
     """Dynamically resolve tournament arms from active plan file or fall back to static presets."""
-    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS["492"])
+    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
     # #484 stays fully static (archive); live keys resolve their plan file.
     if tourney_key not in ("487", "492", "608"):
@@ -1007,9 +1028,9 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
     }
 
 
-def collect_all_stats(tourney_key: str = "492") -> dict[str, Any]:
+def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
     """Analyze all tournament arms for the selected tournament and compile overall metrics."""
-    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS["492"])
+    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     arms_config = resolve_tournament_arms(tourney_key)
     arms_data = [analyze_arm_database(cfg) for cfg in arms_config]
     
@@ -1200,11 +1221,6 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     background: rgba(0, 230, 118, 0.12);
     color: var(--green);
     border-color: rgba(0, 230, 118, 0.4);
-  }}
-  .tourney-pill.active-amber {{
-    background: rgba(255, 214, 0, 0.12);
-    color: var(--amber);
-    border-color: rgba(255, 214, 0, 0.4);
   }}
 
   /* Top Bar */
@@ -1411,23 +1427,14 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 </head>
 <body>
 
-<!-- Tournament Navigation Switcher -->
+<!-- Tournament Navigation Switcher: the current setup is the only page served.
+     The past-run pages (#484, #492, #608) were purged; their routes 404. -->
 <div class="tourney-nav">
-  <span class="tourney-nav-label">Select Tournament Evaluation:</span>
-  <a href="/" class="tourney-pill {'active-amber' if initial_data.get('tourney_key') == '492' else ''}">
-    <span>🏛️</span>
-    <span>#492 Baseline Re-run (10 Arms)</span>
-    <span class="badge badge-amber" style="font-size: 9px; padding: 1px 5px;">R1 FRESH</span>
-  </a>
-  <a href="/484" class="tourney-pill {'active-amber' if initial_data.get('tourney_key') == '484' else ''}">
-    <span>🗄️</span>
-    <span>#484 Baseline Archive (10 Arms)</span>
-    <span class="badge badge-amber" style="font-size: 9px; padding: 1px 5px;">R1 ARCHIVE</span>
-  </a>
-  <a href="/608" class="tourney-pill {'active-amber' if initial_data.get('tourney_key') == '608' else ''}">
-    <span>🎭</span>
-    <span>#608 Characters (10 Arms)</span>
-    <span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">R1 CHARACTERS</span>
+  <span class="tourney-nav-label">Tournament Evaluation:</span>
+  <a href="/487" class="tourney-pill active">
+    <span>🧪</span>
+    <span>#487 Current Setup (10 Arms)</span>
+    <span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">CURRENT SETUP</span>
   </a>
 </div>
 
@@ -2062,7 +2069,7 @@ let lastUpdateTime = new Date().toLocaleTimeString();
 
 function fetchLiveStats() {{
   const statusEl = document.getElementById('refresh-status');
-  const tourneyKey = (state && state.tourney_key) ? state.tourney_key : '492';
+  const tourneyKey = (state && state.tourney_key) ? state.tourney_key : '487';
   fetch('/api/stats?tourney=' + tourneyKey)
     .then(r => {{
       if (!r.ok) {{
@@ -2104,7 +2111,7 @@ _STATS_CACHE_LOCK = threading.Lock()
 _STATS_CACHE_TTL_SEC: float = 3.0
 
 
-def get_cached_stats(tourney_key: str = "492") -> dict[str, Any]:
+def get_cached_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
     global _STATS_CACHE, _STATS_CACHE_TIME
     with _STATS_CACHE_LOCK:
         now = time.time()
@@ -2125,9 +2132,13 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
         clean_path = self.path.split("?")[0].rstrip("/")
         query = self.path.split("?")[1] if "?" in self.path else ""
 
-        # Route 1: Fresh Round 1 re-run (/ or /492) -- the main page.
-        if clean_path in ("", "/index.html", "/492"):
-            stats = get_cached_stats("492")
+        # Route 1: the current setup page (/ and its aliases) -- the only page.
+        # Ten arms are listed with their hypothesis; every metric reads NO_DATA
+        # until the 720-minute run writes its record. The purged past-run paths
+        # (/492, /484, /608) are absent from PAGE_PATHS, so they fall to the 404.
+        page_key = tourney_key_for_path(self.path)
+        if page_key is not None:
+            stats = get_cached_stats(page_key)
             html = generate_cockpit_html(stats)
             data = html.encode("utf-8")
             self.send_response(200)
@@ -2135,46 +2146,17 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        # Route 1b: Archived Round 1 baseline (/484, history only).
-        elif clean_path in ("/484", "/484.html"):
-            stats = get_cached_stats("484")
-            html = generate_cockpit_html(stats)
-            data = html.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-        # Route 2: Issue #487's current-setup tournament (/487). Ten arms are
-        # listed with their hypothesis; every metric reads NO_DATA until the
-        # 720-minute run writes its record. It stays out of the nav until then.
-        elif clean_path in ("/487", "/487.html", "/cockpit_487"):
-            stats = get_cached_stats("487")
-            html = generate_cockpit_html(stats)
-            data = html.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-        # Route 2b: Issue #608 character tournament (/608).
-        elif clean_path in ("/608", "/608.html"):
-            stats = get_cached_stats("608")
-            html = generate_cockpit_html(stats)
-            data = html.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-        # Route 3: JSON API (/api/stats or /api/stats?tourney=484)
+        # Route 2: JSON API (/api/stats?tourney=<key>) -- the page's Refresh
+        # button and the menu's service probe (`probe_path` in dashboard/server.py).
+        # A retired key serves the page's own tournament instead of resurrecting
+        # a purged one.
         elif clean_path == "/api/stats":
-            tourney = "492"
+            tourney = CURRENT_SETUP_KEY
             for param in query.split("&"):
                 if param.startswith("tourney="):
                     tourney = param.split("=")[1].strip()
-            if tourney not in TOURNAMENTS:
-                tourney = "492"
+            if tourney not in SERVED_TOURNAMENT_KEYS:
+                tourney = CURRENT_SETUP_KEY
             stats = get_cached_stats(tourney)
             data = json.dumps(stats).encode("utf-8")
             self.send_response(200)
@@ -2191,40 +2173,32 @@ def run_cockpit_server(port: int = 8800) -> None:
     reports_dir = ROOT / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Export standalone static copies for the fresh Issue #492 re-run.
-    #    tournament_cockpit.html stays the main snapshot (now fresh, not #484).
-    stats_492 = collect_all_stats("492")
-    static_492 = generate_cockpit_html(stats_492)
+    # Export the standalone static copy of the one page there is: the current
+    # setup. The past-run snapshots (#484, #492, #608) are no longer written --
+    # those pages are purged, and their stale files are deleted on the way in.
+    stats_current = collect_all_stats(CURRENT_SETUP_KEY)
+    static_current = generate_cockpit_html(stats_current)
     out_file_main = reports_dir / "tournament_cockpit.html"
-    out_file_main.write_text(static_492, encoding="utf-8")
-    print(f"Static Cockpit (#492 fresh) generated at: {out_file_main}")
-    out_file_492 = reports_dir / "tournament_cockpit_492.html"
-    out_file_492.write_text(static_492, encoding="utf-8")
-    print(f"Static Cockpit (#492 fresh) generated at: {out_file_492}")
+    out_file_main.write_text(static_current, encoding="utf-8")
+    print(f"Static Cockpit (#487 current setup) generated at: {out_file_main}")
 
-    # 2. Archive snapshot of the old #484/#485 baseline (history only).
-    stats_484 = collect_all_stats("484")
-    static_484 = generate_cockpit_html(stats_484)
-    out_file_484 = reports_dir / "tournament_cockpit_484.html"
-    out_file_484.write_text(static_484, encoding="utf-8")
-    print(f"Static Cockpit (#484 archive) generated at: {out_file_484}")
-
-    # 3. Issue #487 is prepared but not started: no static export until its
-    #    720-minute run reports, because there is no data to export yet.
-
-    # 4. Issue #608 character tournament snapshot.
-    stats_608 = collect_all_stats("608")
-    static_608 = generate_cockpit_html(stats_608)
-    out_file_608 = reports_dir / "tournament_cockpit_608.html"
-    out_file_608.write_text(static_608, encoding="utf-8")
-    print(f"Static Cockpit (#608 characters) generated at: {out_file_608}")
+    # The purged pages leave stale snapshots behind on every machine that ran
+    # the old server; drop them so nothing links to a page that no longer exists.
+    for stale in (
+        "tournament_cockpit_484.html",
+        "tournament_cockpit_492.html",
+        "tournament_cockpit_487.html",
+        "tournament_cockpit_608.html",
+    ):
+        with contextlib.suppress(OSError):
+            (reports_dir / stale).unlink()
 
     class ThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         daemon_threads = True
         allow_reuse_address = True
 
     server = ThreadedServer(("127.0.0.1", port), CockpitHandler)
-    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (pages: / [= #492 fresh], /608 [#608 characters], /484 [archive], /487 [current setup])")
+    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (page: / and /487 [#487 current setup]; the purged past-run pages /484, /492 and /608 return 404)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
