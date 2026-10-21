@@ -125,3 +125,7 @@
 - name: "🛠️ Infra & CI"
   color: "6f42c1"
   description: "Docker, CI/CD, or deployment issues"
+
+- name: "🎨 UI & Design"
+  color: "f06292"
+  description: "Frontend, UI/UX, design system, or visual changes"

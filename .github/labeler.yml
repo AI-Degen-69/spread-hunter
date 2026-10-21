@@ -56,6 +56,9 @@
 "🛠️ Infra & CI":
   - '/\b(docker|compose|ci|cd|github actions|workflow|build|deploy|k8s|kubernetes)\b/i'
 
+"🎨 UI & Design":
+  - '/\b(ui|ux|frontend|design|css|style|layout|component|dashboard|visual|accessibility|a11y)\b/i'
+
 # --- Existing generic labels (kept for backward compatibility) ---
 bug:
   - '/\b(bug|crash|traceback|regression|broken)\b/i'
