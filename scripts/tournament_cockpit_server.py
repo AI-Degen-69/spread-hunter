@@ -676,11 +676,11 @@ TOURNAMENTS = {
     },
     "487": {
         "id": "487",
-        "title": "Issue #487 Tweaked Catalyst Tournament",
-        "subtitle": "12-Hour Multi-Arm Shadow Evaluation | Single Worst-Parameter Catalyst Tweaked Independently per Arm",
-        "badge": "ROUND 2 TWEAKED",
+        "title": "Issue #487 Current-Setup Tournament",
+        "subtitle": "12-Hour Multi-Arm Shadow Evaluation | One control at today's settings + 9 arms varying a single live parameter",
+        "badge": "CURRENT SETUP",
         "badge_cls": "badge-green",
-        "description": "Isolated single-parameter improvements tested against baseline: each arm's worst catalyst improved while holding all other parameters fixed.",
+        "description": "The first ten-arm run on the post-2026-10-20 code: every arm starts from the configuration that ships today and changes exactly one live setting. Comparative reading happens after the 720-minute run; no arm carries a catalyst score yet.",
         "arms": ARMS_CONFIG_487,
         "page_url": "/487",
         "static_filename": "tournament_cockpit_487.html",
@@ -715,7 +715,16 @@ def resolve_tournament_arms(tourney_key: str = "492") -> list[dict[str, Any]]:
                 best = (int(m.group("run")), p)
         latest_plan = best[1] if best else None
     else:
-        pattern = re.compile(rf"{tourney_key}_\d{{8}}-\d{{6}}\.json$")
+        # #487's plan record carries a NAMED stamp (`487_current_setup_10arm.json`,
+        # written by `--stamp current_setup_10arm`) instead of the legacy
+        # `<issue>_<YYYYMMDD-HHMMSS>.json`. Both count as this key's record; nothing
+        # else matches. A leading digit sorts before a letter, so the named record
+        # is picked last -- which is what this key wants: the named record is THIS
+        # run, while a leftover timestamped record could only be the superseded
+        # catalyst round.
+        pattern = re.compile(
+            rf"{tourney_key}_(\d{{8}}-\d{{6}}|current_setup_10arm)\.json$"
+        )
         plan_files = sorted([p for p in tourn_dir.glob(f"{tourney_key}_*.json") if pattern.search(p.name)])
         latest_plan = plan_files[-1] if plan_files else None
     if latest_plan is None:
