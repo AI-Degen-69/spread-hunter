@@ -1169,6 +1169,12 @@ def _read_shadow_heartbeat_file(
         # When this process started, which is what bounds the code of a
         # heartbeat that carries no recorded revision.
         "process_started_at": raw.get("process_started_at"),
+        # Where this run's books came from (#659 N2), exactly as the run
+        # recorded it. None for a heartbeat written before the field existed:
+        # an old heartbeat says nothing about its source, and "0 stream" would
+        # be a claim about a run that never made one.
+        "book_source_mix": raw.get("book_source_mix") if isinstance(
+            raw.get("book_source_mix"), dict) else None,
     }
 
 

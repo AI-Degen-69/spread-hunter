@@ -1969,6 +1969,46 @@ function clearPollSnapshots() {
   lastStatusAtMs = null;
 }
 
+/* Where this run's books came from (#659 N2): the counts the run recorded on
+ * its heartbeat, not a verdict about them.
+ *
+ * A stream serves only tokens it has been subscribed to, and everything else
+ * silently drops to REST one read at a time. So a rehearsal can look
+ * stream-backed while pricing most of its books off REST, and the operator
+ * has no way to tell which from the dashboard. The counts already existed
+ * inside the run; this is what lets them leave it.
+ *
+ * Deliberately not a state: the mix is a record of what the run did, not a
+ * health signal, so it carries no colour vocabulary. A heartbeat written
+ * before the field existed records nothing, and renders nothing -- "0 stream"
+ * would be a claim about a run that never made one. An explicit zero is the
+ * honest reading of a run that recorded it. */
+function bookMixNote(mix) {
+  // A plain object only: an array or a string is a hand-edited heartbeat, not
+  // a record of reads, and reading one as "0 stream" would be a claim the run
+  // never made.
+  if (!mix || typeof mix !== 'object' || Array.isArray(mix)) {
+    return { text: '', title: '' };
+  }
+  // Counts, not numbers that happen to be numbers: a negative or non-finite
+  // count is not a measurement, and a string is not one either.
+  const reads = (v) => (typeof v === 'number' && isFinite(v) && v >= 0) ? v : 0;
+  const stream = reads(mix.stream);
+  const rest = reads(mix.rest);
+  const count = (n) => n.toLocaleString('en-US');
+  const fallback = (mix.fallback && typeof mix.fallback === 'object'
+    && !Array.isArray(mix.fallback)) ? mix.fallback : {};
+  const reasons = Object.entries(fallback)
+    .filter(([, n]) => typeof n === 'number' && isFinite(n) && n > 0)
+    .map(([reason, n]) => `${reason} ${count(n)}`)
+    .join(', ');
+  return {
+    text: `books: ${count(stream)} stream · ${count(rest)} REST`,
+    title: `${count(stream)} book reads served from the live market socket, `
+      + `${count(rest)} fell back to REST${reasons ? ` (${reasons})` : ''}.`,
+  };
+}
+
 async function renderRunSwitcher() {
   const sw = document.getElementById('db-run-switcher');
   const badge = document.getElementById('db-mode-badge');
@@ -1998,9 +2038,15 @@ async function renderRunSwitcher() {
       ? `<span class="db-run-current">THIS PAGE</span>`
       : `<button class="db-run-switch" data-db="${esc(r.db_path)}">SWITCH</button>`;
     const runState = r.running === true ? 'running' : 'stopped';
-    return `<div class="db-run-row${isThis ? ' current' : ''}">
+    const mix = bookMixNote(r.book_source_mix);
+    // The title rides the number it explains, not the whole row: hovering the
+    // mix line is the hover the operator means.
+    const mixHtml = mix.text
+      ? `\n        <div class="db-run-mix" title="${esc(mix.title)}">${esc(mix.text)}</div>`
+      : '';
+    return `<div class="db-run-row${isThis ? ' current' : ''}" data-run-id="${esc(r.run_id || '')}">
         <span class="pill state-${runState}"><span class="pill-label">${esc(label)}</span> <span class="pill-value">${state}</span>${age ? ` <span class="pill-detail">${age}</span>` : ''}</span>${portLink}
-        ${btn}
+        ${btn}${mixHtml}
       </div>`;
   });
   sw.innerHTML = `<div class="db-run-head">Which run is this page reading?</div>` + demoRow + rows.join('');
@@ -10588,5 +10634,6 @@ if (typeof module !== 'undefined' && module.exports) {
     stitchActiveMarketsRows, stitchActiveMarketsHeadHtml,
     showToast, dismissResetModal,
     noteShadowStartLaunched, clearPendingShadowStart,
-    isShadowStartPending, checkPendingShadowStart, SHADOW_START_TIMEOUT_MS };
+    isShadowStartPending, checkPendingShadowStart, SHADOW_START_TIMEOUT_MS,
+    bookMixNote, renderRunSwitcher };
 }

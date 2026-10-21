@@ -185,7 +185,8 @@ def test_read_other_live_shadow_runs_surfaces_only_identity(tmp_path, monkeypatc
     # not graded, so neither a revision nor a staleness verdict about it lands
     # on a page reading someone else's numbers.
     for forbidden in ("cycle", "cadence_sec", "heartbeat_age_sec", "elapsed_sec",
-                      "interval", "minutes", "code_revision", "code_stale"):
+                      "interval", "minutes", "code_revision", "code_stale",
+                      "book_source_mix"):
         assert forbidden not in other
 
 
