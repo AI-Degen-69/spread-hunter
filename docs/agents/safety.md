@@ -107,13 +107,18 @@ there. Each record carries the writing `pid`; that is what tells them apart.
 
 Risk caps scale dynamically with the live Polymarket account mark via `derive_dynamic_caps`
 in `core_brain/config.py`:
-- **Single Order Cap (`order_risk_pct`):** `25%` of account value ($25.00 baseline at $100).
-- **Single Buy / Naked Cap (`naked_risk_pct`):** `6%` of account value ($6.00 baseline at $100).
-- **Total Portfolio Risk Ceiling (`bankroll_ceiling_pct`):** `90%` of account value ($90.00 baseline at $100).
+- **Single Order Cap (`bot_risk_exposure_max_order_pct`):** `0.25` — 25% of account value ($25.00 baseline at $100).
+- **Single Buy / Naked Cap (`bot_risk_exposure_max_naked_pct`):** `0.06` — 6% of account value ($6.00 baseline at $100).
+- **Total Portfolio Risk Ceiling (`bot_risk_exposure_bankroll_ceiling_pct`):** `0.90` — 90% of account value ($90.00 baseline at $100).
+
+Those three are ratios in `0.0..1.0`, not percentage points: `derive_dynamic_caps` sanitizes each one
+and any value outside that range silently reverts to the shipped default, so a `50` meaning
+"half" would quietly run at the default instead of refusing.
 - **Max Pair Cost:** `$0.99` (guarantees $\ge \$0.01$ profit per pair upon merge).
 
 `MAX_ORDER_USD = 25.0`, `MAX_TOTAL_USD = 90.0` in `core_brain/venue.py` are legacy import-time
-snapshot constants matching baseline `MakerConfig` defaults (`max_order_usd`, `max_total_usd`).
+snapshot constants matching baseline `MakerConfig` defaults
+(`bot_risk_exposure_max_order_usd`, `bot_risk_exposure_max_total_usd`).
 Active dynamic caps are evaluated at cycle runtime via `order_caps()` / `derive_dynamic_caps` in
 `core_brain/trader_loop.py`, `core_brain/order_manager.py`, and `core_brain/single_buy_saver.py`.
 
@@ -138,13 +143,13 @@ shadow loop. A one-sided fill enters `PATIENT_WAIT`: the opposite maker remains 
 target and the poll does not taker-complete. If the held-leg fill average falls by at
 least twice the dynamic quote offset from its best bid, the lifecycle enters sticky
 `ESCALATED_HEDGE`; the Trader can raise the opposite bid only to the tick-aligned
-`min($0.99, configured max_pair_cost) - held average`. Book health, price-band, pair-cost,
+`min($0.99, configured bot_pos_price_max_pair_cost_usd) - held average`. Book health, price-band, pair-cost,
 order-size, naked-risk, bankroll, and venue checks remain in force.
 
 A held-leg best bid at or below its **entry-relative** trigger is a `HARD_STOP` and takes
 precedence over the settlement fallback. The trigger is the higher of the configured mode's
 drop from that leg's own fill average and the universal emergency floor
-(`emergency_drawdown_pct`, 75% by default) of the same average, never below `$0.01`; the
+(`bot_risk_circuit_max_drawdown_pct`, 75% by default) of the same average, never below `$0.01`; the
 shipped default mode is `NONE`, so the floor is the whole rule. There is no static bid
 stop, and none may be reintroduced: active quotes span `$0.10`–`$0.90`, so a fixed floor
 near the bottom of that range is a booked loss on fill, not a backstop. Before any venue
