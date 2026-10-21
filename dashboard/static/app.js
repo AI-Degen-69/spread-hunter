@@ -5850,9 +5850,9 @@ function renderStopSlippage(stats, hostId) {
 
   host.innerHTML = `
     <div class="kpi-grid">
-      ${tile('Mean vs Floor', perShare(slip.mean_vs_floor), 'floor we sent → price we got')}
-      ${tile('Worst vs Floor', perShare(slip.worst_vs_floor), 'the deepest single exit')}
-      ${tile('Mean vs Decision', perShare(slip.mean_vs_decision), 'bid that fired the stop → fill')}
+      ${tile('Mean vs Floor ($)', perShare(slip.mean_vs_floor), 'floor we sent → price we got')}
+      ${tile('Worst vs Floor ($)', perShare(slip.worst_vs_floor), 'the deepest single exit')}
+      ${tile('Mean vs Decision ($)', perShare(slip.mean_vs_decision), 'bid that fired the stop → fill')}
     </div>
     <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
       Measured ${count(slip.measured_count)} of ${count(slip.stop_exit_count)} stop exits ·

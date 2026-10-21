@@ -88,6 +88,7 @@ from typing import Any, Callable, Optional, Sequence
 
 from core_brain.close_methods import (
     BOOKKEEPING_METHODS as EXCLUDED_METHODS,
+    HARD_STOP_SELL_REASONS,
     MERGE_METHODS,
     RESCUE_METHODS,
 )
@@ -817,10 +818,6 @@ def stop_slippage_summary(closes: Sequence[Any],
     Each close is one observation (no share weighting): two partial exits of
     4 and 6 shares are two readings, not one weighted by size.
     """
-    # Function-level import: `shadow_exec` pulls the registry/trader chain for
-    # its client, and this module is imported by `kpi` for pure arithmetic.
-    from core_brain.shadow_exec import HARD_STOP_SELL_REASONS
-
     stop_closes = [c for c in (closes or [])
                    if str(_close_field(c, "reason") or "") in HARD_STOP_SELL_REASONS]
 

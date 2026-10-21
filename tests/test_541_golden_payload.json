@@ -1403,6 +1403,25 @@
         "stdev_usd": 1.527525
       },
       "units": "cents_per_share"
+    },
+    "stop_slippage": {
+      "below_floor_count": 0,
+      "decision_measured_count": 0,
+      "mean_vs_decision": null,
+      "mean_vs_floor": null,
+      "measured_count": 0,
+      "refused_attempt_count": 0,
+      "refused_position_count": 0,
+      "simulated_count": 0,
+      "stop_exit_count": 0,
+      "units": "usd_per_share",
+      "unmeasured_count": 0,
+      "unmeasured_reasons": {
+        "assumed_fill": 0,
+        "historical": 0
+      },
+      "worst_vs_decision": null,
+      "worst_vs_floor": null
     }
   },
   "trade_analytics": {

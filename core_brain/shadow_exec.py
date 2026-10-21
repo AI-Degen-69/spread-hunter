@@ -31,7 +31,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from core_brain.close_methods import MERGE_METHODS, RESCUE_METHODS
+from core_brain.close_methods import (
+    HARD_STOP_SELL_REASONS,
+    MERGE_METHODS,
+    RESCUE_METHODS,
+)
 from core_brain.order_registry import (
     SIZE_EPS, CloseRecord, FillRecord, MarkoutRecord, OrderRecord, OrderRegistry,
     QuoteRecord, get_connection,
@@ -53,13 +57,6 @@ MAX_BUY_SLIPPAGE = 0.02
 # Mirrors `MakerConfig.pairs_exit_window_sec`. A fallback only: the session
 # passes its own configured value in.
 DEFAULT_PAIRS_WINDOW_SEC = 900.0
-
-# Reasons that must sell NOW into the book read inside the exit call. Every
-# other route fills against the prior rotation's `queue_marks` snapshot (the
-# pre-decision book, adverse-selection protection); a stop-loss priced off a
-# stale snapshot books exits the venue never gave (H1/H2). Both the current
-# lifecycle string and the older alias route here.
-HARD_STOP_SELL_REASONS = frozenset({"hard_stop", "lifecycle_hard_stop"})
 
 # A `queue_marks` snapshot is the PRIOR rotation's pre-decision book -- seconds
 # old. Older than this it cannot be the book the exit decision was made
