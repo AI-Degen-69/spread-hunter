@@ -2,7 +2,7 @@
 
 Interactive real-time visualization and statistical analysis cockpit for
 Spread Hunter multi-arm shadow tournaments (fresh Round 1: Issue #492;
-archive: #484/#485; held Round 2: #487).
+archive: #484/#485; current setup: #487).
 Computes risk, expectancy (EV), standard deviation, max drawdown,
 Monte Carlo projections, and Live Readiness Scoring.
 
@@ -641,7 +641,7 @@ TOURNAMENTS = {
         "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | Original 10 arms, byte-identical env, no #487 tweaks",
         "badge": "R1 FRESH",
         "badge_cls": "badge-amber",
-        "description": "Fresh Round 1 baseline on fixed code. Catalyst columns stay empty until this run reports; Round 2 (#487) is held until then.",
+        "description": "Fresh Round 1 baseline on fixed code. Catalyst columns stay empty until this run reports; the current-setup tournament (#487) is a separate, later run.",
         "arms": ARMS_CONFIG_492,
         "page_url": "/",
         "static_filename": "tournament_cockpit_492.html",
@@ -1435,6 +1435,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <div class="header-titles">
     <h1><span class="pulse-dot"></span> {initial_data.get('tourney_meta', {}).get('title', 'Spread Hunter — Tournament Cockpit')}</h1>
     <p>{initial_data.get('tourney_meta', {}).get('subtitle', '12-Hour Multi-Arm Live Shadow Evaluation')}</p>
+    <p style="color: var(--text-muted); font-size: 12px; line-height: 1.35; margin-top: 4px; max-width: 820px;">{initial_data.get('tourney_meta', {}).get('description', '')}</p>
   </div>
   <div class="header-controls">
     <div class="progress-card">
@@ -1801,7 +1802,9 @@ function renderAll() {{
     const pnlPrefix = arm.total_pnl >= 0 ? '+$' : '-$';
     const funnel = arm.funnel || {{}};
     tr.innerHTML = `
-      <td><strong>#${{idx+1}}</strong> <span style="color: ${{arm.color}}">●</span> <strong>${{arm.label}}</strong></td>
+      <td><strong>#${{idx+1}}</strong> <span style="color: ${{arm.color}}">●</span> <strong>${{arm.label}}</strong>
+        <div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px; max-width: 260px;">${{arm.desc || ''}}</div>
+      </td>
       <td class="tabular">${{(arm.sharpe_proxy ?? 0).toFixed(2)}}</td>
       <td class="tabular">${{(arm.profit_factor ?? 0).toFixed(2)}}</td>
       <td class="tabular">${{(arm.var_95 ?? 0).toFixed(4)}}</td>
@@ -2142,8 +2145,9 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        # Route 2: Tweaked Catalysts Round 2 (/487) -- HELD until R1 reports.
-        # Route stays alive; it is just unlinked from the nav meanwhile.
+        # Route 2: Issue #487's current-setup tournament (/487). Ten arms are
+        # listed with their hypothesis; every metric reads NO_DATA until the
+        # 720-minute run writes its record. It stays out of the nav until then.
         elif clean_path in ("/487", "/487.html", "/cockpit_487"):
             stats = get_cached_stats("487")
             html = generate_cockpit_html(stats)
