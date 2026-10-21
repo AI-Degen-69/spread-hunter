@@ -9,6 +9,7 @@ Plus multi-run isolation (run selector) and float_marks time series.
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import sqlite3
@@ -2433,9 +2434,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     `OrderRegistry` here would migrate the schema and run the duplicate
     transaction-hash sweep against whatever file the operator pointed at -- a
     report has no business writing to a live registry.
-    """
-    import argparse
 
+    Every run in the file is aggregated -- a store-wide cost figure, where the
+    dashboard card slices the same rows to the run it is showing.
+    """
     parser = argparse.ArgumentParser(
         description="Stop-exit slippage, measured off the close and refusal rows.")
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH),
