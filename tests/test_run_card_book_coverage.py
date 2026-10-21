@@ -226,7 +226,13 @@ def test_a_hand_edited_heartbeat_never_reaches_the_page(card):
     assert card["notes"]["stringFallback"]["text"] == "books: 5 stream · 1 REST"
     assert "(" not in card["notes"]["stringFallback"]["title"]
     # A negative count is not a measurement.
-    assert card["notes"]["negativeMix"]["text"] == "books: 0 stream · 2 REST"
+    assert card["notes"]["negativeMix"]["text"] == ""
+
+
+@requires_node
+def test_missing_or_malformed_counts_render_no_note(card):
+    for note in card["notes"]["invalidCounts"]:
+        assert note == {"text": "", "title": ""}
 
 
 def test_the_coverage_line_stays_out_of_the_state_colour_vocabulary():

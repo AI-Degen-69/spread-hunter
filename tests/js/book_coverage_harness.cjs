@@ -156,7 +156,7 @@ const RUNS = [
 
   /* The pure helper, for the cases a row cannot show: no mix at all, and a
    * mix that recorded zero reads (a run that read no books is not the same
-   * thing as a run that recorded nothing). The last three are hand-edited
+   * thing as a run that recorded nothing). The rest are hand-edited
    * heartbeats: the file is not ours, so nothing junk may reach the page. */
   const notes = {
     noMix: app.bookMixNote(undefined),
@@ -165,6 +165,9 @@ const RUNS = [
     arrayMix: app.bookMixNote([]),
     stringFallback: app.bookMixNote({ stream: 5, rest: 1, fallback: '12' }),
     negativeMix: app.bookMixNote({ stream: -3, rest: 2 }),
+    invalidCounts: ['stream', 'rest'].flatMap(field =>
+      [undefined, null, '2', true, NaN, Infinity, -Infinity, -3, {}, []]
+        .map(value => app.bookMixNote({ stream: 2, rest: 2, [field]: value }))),
   };
 
   process.stdout.write(JSON.stringify({ rows, notes }));

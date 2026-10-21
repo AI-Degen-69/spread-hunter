@@ -1992,9 +1992,11 @@ function bookMixNote(mix) {
   }
   // Counts, not numbers that happen to be numbers: a negative or non-finite
   // count is not a measurement, and a string is not one either.
-  const reads = (v) => (typeof v === 'number' && isFinite(v) && v >= 0) ? v : 0;
-  const stream = reads(mix.stream);
-  const rest = reads(mix.rest);
+  const validCount = (v) => Number.isFinite(v) && v >= 0;
+  const { stream, rest } = mix;
+  if (!validCount(stream) || !validCount(rest)) {
+    return { text: '', title: '' };
+  }
   const count = (n) => n.toLocaleString('en-US');
   const fallback = (mix.fallback && typeof mix.fallback === 'object'
     && !Array.isArray(mix.fallback)) ? mix.fallback : {};
