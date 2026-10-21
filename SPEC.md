@@ -34,9 +34,11 @@ used has changed name. That is the gap this issue closes.
    setting **exactly one** `BOT_*` variable to a different value.
 2. Where `core_brain.config.TOURNAMENT_PRESETS` (the `#484` presets) ships the knob, the
    arm's value is read **from the live preset table** and the test asserts that equality
-   rather than a re-typed literal. The presets ship seven single-knob values that differ
-   from the current setup; the remaining two arms test knobs no preset ships and say so in
-   their own description.
+   rather than a re-typed literal. The presets ship five single-knob values that differ
+   from the current setup; the remaining four arms move levers no preset ships at a
+   different value and say so in their own description. (Amended in Station III with the
+   operator's approval — see the deviation note in
+   `docs/runs/2026-10-21-487-current-setup-tournament.md`.)
 3. The arm spec validates through `build_tournament_plan` with no port collision and no
    naming collision: ports `8801`–`8810`, unique DB paths, unique run ids.
 4. The Tournament Cockpit serves the ten arms with their hypothesis. `ARMS_CONFIG_487`
