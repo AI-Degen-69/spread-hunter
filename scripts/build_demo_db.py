@@ -797,6 +797,39 @@ def scenario_trade_history(reg: OrderRegistry, t: int, out: Path) -> str:
     return f"trade history ...... {len(history)} closes: merges, rescues (with/without audit pair, zero-fee)"
 
 
+def scenario_stop_slippage(reg: OrderRegistry, t: int, out: Path) -> str:
+    """Hard-stop exits at, below and away from the floor (#730): the card reads
+    one real 0.00, one booked cost, one unmeasured fill, and a refused exit
+    that never wrote a close."""
+    rows = (
+        # (idx, slug, floor sent, price booked, fill source, bid that fired)
+        (26, "stop-at-floor", 0.24, 0.24, "reported", 0.26),
+        (27, "stop-below-floor", 0.31, 0.29, "reported", 0.33),
+        (28, "stop-assumed-fill", 0.42, 0.42, "assumed", 0.44),
+    )
+    for i, (idx, slug, floor, fill, source, trigger) in enumerate(rows):
+        m = _market(slug, idx)
+        shares = 10
+        entry = round(fill + 0.10, 2)  # bought a dime higher, then stopped out
+        reg.log_close(CloseRecord(
+            ts=float(t - 2400 + i * 600), condition_id=m["condition_id"],
+            market_slug=slug, method="single_buy_exit", gas=0.0, shares=shares,
+            dn_price=fill, cost_basis=round(shares * entry, 4),
+            proceeds=round(shares * fill, 4), fee=0.0,
+            realized_pnl=round(shares * (fill - entry), 4),
+            reason="lifecycle_hard_stop", trigger_bid=trigger,
+            fresh_bid=floor, submitted_floor=floor, fill_source=source,
+            tx_hash=f"0xdeadbeef{idx:02x}",
+        ))
+    m = _market("stop-refused", 29)
+    reg.log_hard_stop_refusal(
+        pair_id="pair-stop-refused", condition_id=m["condition_id"],
+        trigger_bid=0.19, outcome="refused",
+        detail="No bid on tok-dn: nothing to sell into.")
+    return (f"stop slippage ..... {len(rows)} hard-stop closes (at floor, below "
+            "floor, assumed fill) + one refused exit")
+
+
 SCENARIOS = (
     scenario_resting_pair,
     scenario_naked_single_leg,
@@ -817,6 +850,7 @@ SCENARIOS = (
     scenario_account_curve,
     scenario_operational_telemetry,
     scenario_trade_history,
+    scenario_stop_slippage,
 )
 
 

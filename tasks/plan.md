@@ -325,7 +325,7 @@ summarised separately (per-`run_id` filtering); empty run `None`s;
 `allow_nan=False`; migration on an old store; the CLI read-only old-store
 case.
 
-### T8 — [Docs] Operator demo + ledger truth [ ]
+### T8 — [Docs] Operator demo + ledger truth [x]
 **Size S. Depends on: T3, T5. Verify: run `python scripts/build_demo_db.py --out data/operator-demo.db` then `python -m core_brain.kpi --db data/operator-demo.db` and read the seeded figures off the output.**
 
 Files: `scripts/build_demo_db.py` (seed: reported at-floor fill, reported
