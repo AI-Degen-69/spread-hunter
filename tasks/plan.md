@@ -302,7 +302,7 @@ added the stop-slippage card: both sides sit at 260.` RED→GREEN: the CLI on
 an old-schema store prints the section and leaves the file bytes unchanged;
 stale backend vs new page shows the restart note.
 
-### T6 — [Design/UI] The card [ ]
+### T6 — [Design/UI] The card [x]
 **Size S. Depends on: T5. Verify: `python -m pytest -q tests/test_negative_values_read_as_losses.py tests/test_analytics_api.py`**
 
 Files: `dashboard/static/app.js` (renderer by `renderRescueFriction:5751`,
