@@ -34,15 +34,15 @@
     }
   },
   {
-    "name": "hold-queue-500",
+    "name": "widen-on",
     "env": {
-      "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500"
+      "BOT_QUOTE_GATE_WIDEN_ON": "1"
     }
   },
   {
-    "name": "hold-below-8c",
+    "name": "price-risk-030",
     "env": {
-      "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.08"
+      "BOT_QUOTE_PRICE_RISK_WIDEN": "0.030"
     }
   },
   {

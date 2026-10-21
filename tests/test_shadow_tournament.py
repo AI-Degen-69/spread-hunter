@@ -1332,28 +1332,26 @@ I487_ARM_ENV: dict[str, dict[str, str]] = {
     "offset-max-3c": {"BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3"},
     "offset-static": {"BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0"},
     "deadband-6c": {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.06"},
-    "hold-queue-500": {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500"},
-    "hold-below-8c": {"BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.08"},
+    "widen-on": {"BOT_QUOTE_GATE_WIDEN_ON": "1"},
+    "price-risk-030": {"BOT_QUOTE_PRICE_RISK_WIDEN": "0.030"},
     "stop-adverse-5c": {"BOT_RISK_STOP_MODE": "ABSOLUTE_DROP"},
     "book-window-4c": {"BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID": "4"},
 }
 
-# The seven arms whose value a #484 preset ships, and the preset key each one
+# The five arms whose value a #484 preset ships, and the preset key each one
 # reads. The assertion compares against `TOURNAMENT_PRESETS` itself, so a later
 # preset edit that moves a value breaks this test instead of letting the arm
 # drift away from the table it claims to be sourced from.
 #
-# Arms 9 and 10 are absent on purpose: no preset ships a *different* value for
-# those two knobs, so "fetched live from the presets" cannot apply to them.
-# Their honesty note lives in the arm's description in the cockpit config.
+# Arms 7-10 are absent on purpose: no preset ships a *different* value for those
+# four knobs, so "fetched live from the presets" cannot apply to them. Their
+# honesty note lives in the arm's description in the cockpit config.
 I487_PRESET_SOURCED: dict[str, str] = {
     "offset-mult-025": "bot_quote_spread_offset_multiplier",
     "offset-min-2c": "bot_quote_spread_offset_min_cents",
     "offset-max-3c": "bot_quote_spread_offset_max_cents",
     "offset-static": "bot_quote_gate_dynamic_offset_on",
     "deadband-6c": "bot_order_requote_dead_band_cents",
-    "hold-queue-500": "bot_order_requote_hold_queue_shares",
-    "hold-below-8c": "bot_order_requote_hold_below_target_cents",
 }
 
 
