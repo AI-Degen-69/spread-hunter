@@ -18,6 +18,43 @@
 # "🚨 Critical". A reporter writing "this is urgent" usually means "this annoys
 # me", and a P0 label applied by regex is one the reader learns to ignore.
 
+# --- Status / Workflow ---
+"🤖 Ready for Agent":
+  - '/\b(ready[- ]for[- ]agent|afk|agent[- ]ready)\b/i'
+
+"👤 Ready for Human":
+  - '/\b(ready[- ]for[- ]human|human[- ]required|manual)\b/i'
+
+"🔍 Needs Triage":
+  - '/\b(needs[- ]triage|triage)\b/i'
+
+"ℹ️ Needs Info":
+  - '/\b(needs[- ]info|more info|information needed)\b/i'
+
+"❓ Needs Answers":
+  - '/\b(needs[- ]answers?|open question)\b/i'
+
+"🚧 Blocked: Code Gate":
+  - '/\b(blocked:code[- ]gate|code gate|code[- ]gate)\b/i'
+
+"💡 Idea":
+  - '/\b(^idea:|raw idea|captured idea)\b/i'
+
+"🔄 Duplicate":
+  - '/\b(duplicate|dupe|already exists)\b/i'
+
+"🚫 Won't Fix":
+  - '/\b(wontfix|won.?t fix|will not fix)\b/i'
+
+"❌ Invalid":
+  - '/\b(invalid|not a bug|not an issue)\b/i'
+
+"👍 Good First Issue":
+  - '/\b(good first issue|good-first-issue|starter)\b/i'
+
+"🙋 Help Wanted":
+  - '/\b(help wanted|help-wanted|contributors? needed)\b/i'
+
 # --- Types & Severities ---
 "🐛 Bug":
   - '/\b(bug|error|exception|crash|panic|traceback|fail(ed|ing|ure)?|broken|unexpected)\b/i'
@@ -33,6 +70,9 @@
 
 "🚨 Critical":
   - '/\b(urgent|critical|sev-?1|p0|outage|downtime|hotfix|liquidat(ed|ion))\b/i'
+
+"⚡ Quick Fix":
+  - '/\b(quick[- ]?fix|typo|one[- ]?liner|trivial)\b/i'
 
 # --- Domain / Spread Hunter Specifics ---
 "🏦 Exchanges":
@@ -59,18 +99,13 @@
 "🎨 UI & Design":
   - '/\b(ui|ux|frontend|design|css|style|layout|component|dashboard|visual|accessibility|a11y)\b/i'
 
-# --- Existing generic labels (kept for backward compatibility) ---
-bug:
-  - '/\b(bug|crash|traceback|regression|broken)\b/i'
+"📊 Execution Telemetry":
+  - '/\b(telemetry|fill.path|friction|queue|markout|capital.risk|execution telemetry)\b/i'
 
-documentation:
-  - '/\b(documentation|readme|docs?\b|typo)\b/i'
+# --- Accessibility ---
+"♿ Accessibility":
+  - '/\b(accessibility|a11y|screen reader|wcag|aria|keyboard navigation)\b/i'
 
-enhancement:
-  - '/\b(feature request|enhancement|would be nice)\b/i'
-
-question:
+# --- Question ---
+"❓ Question":
   - '/\b(how do i|how can i|why does|why is|is there a way)\b/i'
-
-needs-triage:
-  - '/\b(needs[- ]triage)\b/i'
