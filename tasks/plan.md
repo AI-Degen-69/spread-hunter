@@ -248,7 +248,7 @@ design shift past intake (3-tuple) and lands immediately after it.
 
 ## Tasks
 
-### T1 — [Backend/Logic] Registry: nullable exit evidence + append-only refusals [ ]
+### T1 — [Backend/Logic] Registry: nullable exit evidence + append-only refusals [x]
 **Size M. Depends on: —. Verify: `python -m pytest -q tests/test_stop_slippage.py -k registry`**
 
 Files: `core_brain/order_registry.py` — `closes` DDL (290-311), migration
