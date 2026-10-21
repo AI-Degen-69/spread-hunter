@@ -40,6 +40,6 @@ Three things to know before editing either:
   maintainer's judgement, and a keyword that fires on "urgent" labels ordinary
   frustration as a P0.
 - **Patterns are case-insensitive and written as `/pattern/i`.** The action
-  hands a bare string to `String.match`, which is case-sensitive, and several
-  patterns under one label are ANDed rather than ORed -- so a label gets one
-  pattern.
+  hands a bare string to `String.match`, which is case-sensitive. Several
+  patterns under one label are ANDed rather than ORed -- every listed pattern
+  has to match -- which is why each label here carries exactly one pattern.
