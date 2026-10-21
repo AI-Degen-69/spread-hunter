@@ -10015,9 +10015,13 @@ function renderScreener(kpi, scanState, status, engineOpts) {
   }
 
   // `!= null`, never `||`: an explicit zero is a measured zero, not a missing
-  // number to be replaced by a fallback.
+  // number to be replaced by a fallback. The global `raw_count` is the ALL
+  // lane's number only -- a lane that measured zero must show zero, not the
+  // whole universe.
   const counts = (laneScope && laneScope.counts) || {};
-  const totalRaw = counts.scored || counts.attempted || funnel.raw_count || 0;
+  const totalRaw = counts.scored != null ? counts.scored
+    : (counts.attempted != null ? counts.attempted
+    : (lane === 'all' ? (funnel.raw_count || 0) : 0));
 
   // Per-gate rejection totals, NOT a running pool.
   const stageFlow = { raw: { rejected: 0, scored: totalRaw } };

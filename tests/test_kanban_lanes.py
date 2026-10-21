@@ -258,6 +258,30 @@ def test_each_lane_numbers_match_that_lane_only():
 
 
 @_ROUTE_SKIP
+def test_a_lane_that_measured_zero_does_not_borrow_the_global_count():
+    # The bug: `counts.scored || counts.attempted || funnel.raw_count` turned a
+    # lane's measured zero into the global universe, so a lane with nothing in
+    # it claimed "of 137 scored" -- the exact badge/card disagreement #744 is
+    # about, only in the other direction.
+    funnel = _lane_fixture()
+    funnel["raw_count"] = 137
+    funnel["lanes"]["live"] = {
+        "counts": {"funded": 0, "spread_universe": 0, "attempted": 0,
+                   "scored": 0, "dropped_no_verdict": 0, "rejected": 0,
+                   "eligible": 0, "picked": 0},
+        "filters": [],
+    }
+    res = _run_lane_harness(funnel)
+    live_board = res["live"]["board"]
+
+    assert "of 0 scored" in live_board
+    assert "of 137 scored" not in live_board
+    assert "137 CANDIDATES" not in live_board
+    # All keeps the global numbers.
+    assert "of 137 scored" in res["all"]["board"]
+
+
+@_ROUTE_SKIP
 def test_a_snapshot_without_lanes_says_so_instead_of_showing_global_numbers():
     res = _run_lane_harness(_lane_fixture(lanes=False))
 
