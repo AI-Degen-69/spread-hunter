@@ -259,7 +259,7 @@ new test asserts the columns exist after init on an old-schema store, old
 rows read `None`, repeat-init is safe, refusal write→read round-trips, and a
 reset leaves refusal rows intact.
 
-### T2 — [Backend/Logic] Shadow sells label themselves [ ]
+### T2 — [Backend/Logic] Shadow sells label themselves [x]
 **Size S. Depends on: T1. Verify: `python -m pytest -q tests/test_exit_price_realism.py tests/test_hard_stop_fresh_exit.py tests/test_shadow_exec.py`**
 
 Files: `core_brain/shadow_exec.py` — `_sell_into_bids` (1302, fallback return

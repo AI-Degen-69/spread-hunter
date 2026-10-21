@@ -74,7 +74,7 @@ def test_sell_into_bids_fresh_flag_skips_snapshot(registry):
     _stale_snapshot(registry, best_bid=0.83, best_bid_size=10.0)
     client = _client(registry, {"bids": {0.15: 20.0}, "asks": {}})
 
-    filled, avg = client._sell_into_bids("tok-dn", 5.0, floor=0.13, fresh=True)
+    filled, avg, _ = client._sell_into_bids("tok-dn", 5.0, floor=0.13, fresh=True)
 
     assert filled == pytest.approx(5.0)
     assert avg == pytest.approx(0.15)

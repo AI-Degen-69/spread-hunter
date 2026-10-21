@@ -1300,10 +1300,17 @@ class ShadowExecutionClient:
         return str(cid), pid
 
     def _sell_into_bids(self, token_id: str, shares: float,
-                        *, floor: float, fresh: bool = False) -> tuple[float, float]:
+                        *, floor: float, fresh: bool = False
+                        ) -> tuple[float, float, bool]:
         """Rest a market SELL against the pre-decision bid ladder.
 
-        Returns `(shares_filled, weighted_average_price)`.
+        Returns `(shares_filled, weighted_average_price, took_shares)`.
+
+        `took_shares` is False only on the conservative fallback: no level at
+        or above the floor was walked, so the caller's requested size at the
+        floor is booked although nobody observed a fill. #730 needs that
+        distinction -- the booked price looks like a fill either way, and only
+        this function knows which one it is.
 
         With `fresh=True` (hard-stop exits only) the snapshot is skipped and
         the fill comes from the book read inside the exit call -- a stop must
@@ -1391,8 +1398,8 @@ class ShadowExecutionClient:
             remaining -= fill
 
         if taken <= 0:
-            return float(shares), float(floor)
-        return taken, notional / taken
+            return float(shares), float(floor), False
+        return taken, notional / taken, True
 
     def _buy_from_asks(self, token_id: str, amount: float,
                        *, price: float) -> tuple[float, float]:
@@ -1472,7 +1479,7 @@ class ShadowExecutionClient:
                 f"missing token, amount or price")
 
         if side == "SELL":
-            filled, avg = self._sell_into_bids(
+            filled, avg, took_shares = self._sell_into_bids(
                 token_id, amount, floor=price,
                 fresh=str(reason) in HARD_STOP_SELL_REASONS,
             )
@@ -1480,6 +1487,7 @@ class ShadowExecutionClient:
                 "success": True,
                 "orderID": f"{SHADOW_ORDER_PREFIX}{uuid.uuid4().hex[:12]}",
                 "status": "matched", "price": avg, "size": filled,
+                "fill_source": "simulated" if took_shares else "assumed",
             }
 
         if side != "BUY":

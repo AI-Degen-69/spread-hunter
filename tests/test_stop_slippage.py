@@ -117,3 +117,51 @@ def test_registry_refusals_round_trip_and_survive_a_lifecycle_reset(tmp_path):
 
     # Reset clears lifecycle rows only; refusal evidence is append-only.
     assert len(reg.get_hard_stop_refusals()) == 2
+
+
+def _args(token_id, amount, price):
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+    return MarketOrderArgsV2(token_id=token_id, amount=amount, side="SELL",
+                             price=price)
+
+
+def _shadow_client(tmp_path, book):
+    from core_brain.shadow_exec import ShadowExecutionClient, ensure_shadow_tables
+    db = tmp_path / "shadow.db"
+    init_db(db)
+    reg = OrderRegistry(db_path=db)
+    ensure_shadow_tables(db)
+    return ShadowExecutionClient(reg, db, book_fn=lambda h, t: book)
+
+
+def test_shadow_walk_that_takes_shares_labels_the_fill_simulated(tmp_path):
+    client = _shadow_client(tmp_path, {"bids": {0.15: 20.0}, "asks": {}})
+
+    resp = client.create_and_post_market_order(
+        _args("tok-dn", 5.0, 0.13), reason="lifecycle_hard_stop")
+
+    assert resp["fill_source"] == "simulated"
+    assert resp["price"] == pytest.approx(0.15)
+    assert resp["size"] == pytest.approx(5.0)
+
+
+def test_sell_into_bids_reports_whether_the_walk_took_shares(tmp_path):
+    client = _shadow_client(tmp_path, {"bids": {0.10: 20.0}, "asks": {}})
+
+    filled, avg, took = client._sell_into_bids("tok-dn", 5.0, floor=0.13,
+                                               fresh=True)
+
+    assert filled == pytest.approx(5.0)
+    assert avg == pytest.approx(0.13)
+    assert took is False
+
+
+def test_shadow_sell_into_a_book_below_the_floor_is_assumed(tmp_path):
+    client = _shadow_client(tmp_path, {"bids": {0.10: 20.0}, "asks": {}})
+
+    resp = client.create_and_post_market_order(
+        _args("tok-dn", 5.0, 0.13), reason="hard_stop")
+
+    assert resp["fill_source"] == "assumed"
+    assert resp["size"] == pytest.approx(5.0)
+    assert resp["price"] == pytest.approx(0.13)
