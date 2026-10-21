@@ -702,6 +702,38 @@ def list_runs(reg: OrderRegistry) -> list[dict[str, Any]]:
         return runs_list
 
 
+def _pipeline_filters(entries: Any) -> list[dict[str, Any]]:
+    """Map `pipeline.json` rejection entries to the dashboard's filter cards.
+
+    Shared by the global list and by each lane's list (#744): a lane view must
+    build its badges from the same mapping as All, or the two can disagree
+    about what a gate means.
+    """
+    return [
+        {
+            "cause": r.get("cause") or "other",
+            "n": int(r.get("n") or 0),
+            # Near-miss counters: how many of this bucket's rejects the
+            # allocator would still have funded, and how many of those were
+            # empty-book mirages. The dashboard's near-miss footer reads
+            # these, so dropping them here silently disabled it.
+            "would_fund": int(r.get("would_fund") or 0),
+            "traps": int(r.get("traps") or 0),
+            "examples": [
+                {
+                    "title": e.get("title") or "",
+                    "slug": e.get("slug") or "",
+                    "reason": e.get("reason") or "",
+                    "lane": e.get("lane") or "",
+                }
+                for e in (r.get("examples") or [])
+            ],
+        }
+        for r in (entries or [])
+        if isinstance(r, dict)
+    ]
+
+
 def _funnel_from_pipeline(
     by_mkt: dict[str, dict[str, Any]],
     pipeline_path: Path | str | None = None,
@@ -718,6 +750,11 @@ def _funnel_from_pipeline(
     Returns:
         Optional[dict[str, Any]]: Funnel data containing counts, rejection filters, graduated markets, and snapshot metadata; None when the ranker hasn't written a snapshot yet (caller falls back to [...]
     """
+    # Imported here rather than at module import: `core_brain` pulling `scoring`
+    # in at import time is the cycle this codebase avoids (see
+    # `core_brain/risk.py`).
+    from scoring.selector import market_lane
+
     pp = Path(pipeline_path) if pipeline_path is not None else resolve_runtime_file("pipeline.json", root=REPO_ROOT)
     if not pp.is_file():
         return None
@@ -731,28 +768,23 @@ def _funnel_from_pipeline(
     counts = snap.get("counts") or {}
     raw_count = int(counts.get("funded") or 0) + int(counts.get("spread_universe") or 0)
 
-    filters = [
-        {
-            "cause": r.get("cause") or "other",
-            "n": int(r.get("n") or 0),
-            # Near-miss counters: how many of this bucket's rejects the
-            # allocator would still have funded, and how many of those were
-            # empty-book mirages. The dashboard's near-miss footer reads
-            # these, so dropping them here silently disabled it.
-            "would_fund": int(r.get("would_fund") or 0),
-            "traps": int(r.get("traps") or 0),
-            "examples": [
-                {
-                    "title": e.get("title") or "",
-                    "slug": e.get("slug") or "",
-                    "reason": e.get("reason") or "",
-                }
-                for e in (r.get("examples") or [])
-            ],
-        }
-        for r in (snap.get("rejections") or [])
-        if isinstance(r, dict)
-    ]
+    filters = _pipeline_filters(snap.get("rejections"))
+
+    # Per-lane funnel (#744): each lane gets the same `filters` mapping over its
+    # own entries, and `None` (never zeros) when the snapshot predates the
+    # block -- an old artifact has no lane numbers, and zeros would claim it
+    # measured zero live markets.
+    lanes: Optional[dict[str, Any]] = None
+    raw_lanes = snap.get("lanes")
+    if isinstance(raw_lanes, dict):
+        lanes = {}
+        for name, block in raw_lanes.items():
+            if not isinstance(block, dict):
+                continue
+            lanes[name] = {
+                "counts": block.get("counts") or {},
+                "filters": _pipeline_filters(block.get("rejections")),
+            }
 
     graduated: list[dict[str, Any]] = []
     mp = Path(markets_path) if markets_path is not None else resolve_runtime_file("markets.json", root=REPO_ROOT)
@@ -798,6 +830,15 @@ def _funnel_from_pipeline(
             "return_pct_day": s.get("return_pct_day"),
             "fills": m.get("fills_count", 0),
             "pnl": m.get("realized_pnl", 0.0),
+            # The lane the ranker decided for this market (#744), plus the
+            # venue evidence behind it. `market_lane` also classifies a
+            # `markets.json` written before the lane existed from its flags,
+            # which is how the 2026-10-21 WTA row lands in Live.
+            "lane": market_lane(s),
+            "event_live": s.get("event_live"),
+            "event_period": s.get("event_period"),
+            "event_score": s.get("event_score"),
+            "volatility_exempt": s.get("volatility_exempt"),
         })
 
     # Snapshot metadata so the dashboard can show where the lanes came
@@ -809,6 +850,7 @@ def _funnel_from_pipeline(
         "raw_count": raw_count,
         "counts": counts,
         "filters": filters,
+        "lanes": lanes,
         "final_count": int(counts.get("eligible") or 0),
         "graduated": graduated,
         "raw": snap.get("raw"),

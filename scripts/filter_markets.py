@@ -41,7 +41,7 @@ from scoring.config import load as _load_cfg   # noqa: E402
 from scoring.family_admission import classify_identity   # noqa: E402
 from scoring.markets import parse_book   # noqa: E402
 from scoring.selector import (identity_allowed, is_sports_or_esports, maker_queue_allowed,  # noqa: E402
-                              pair_books_allowed, top_depth_usd)
+                              market_lane, pair_books_allowed, top_depth_usd)
 from scripts.family_probe import family_key   # noqa: E402
 
 
@@ -116,6 +116,12 @@ LIVE_EVENTS = "https://gamma-api.polymarket.com/events"
 # The main line in every sport. `child_moneyline` is the per-game esports
 # submarket and is NOT the match winner.
 LIVE_EVENT_MAIN_LINE = "moneyline"
+# The venue caps a page at 100 and IGNORES a larger `limit` (measured on
+# /events: 100, 250 and 500 all return 100), so a single request reports a
+# truncated live set as a complete one. Ask for the cap and page by offset.
+# A cap on pages keeps one pathological slate from spending the whole cycle.
+LIVE_EVENT_PAGE = 100
+LIVE_EVENT_MAX_PAGES = 20
 ORDERING_FALLBACK_PAGES = 5
 
 
@@ -1002,65 +1008,57 @@ def gamma_universe(session: requests.Session,
     return out, meta
 
 
-def live_event_markets(session: requests.Session,
-                       limit: int = 200) -> tuple[list[dict], dict]:
-    """Main-line markets on the events the venue declares live, normalised.
+def _live_stats() -> dict:
+    return {"live_events": 0, "live_main_lines": 0, "live_sports": [],
+            "live_below_bar": 0, "live_error": None, "live_truncated": False,
+            "live_pages": 0}
 
-    Discovery for in-play markets, FETCHED rather than hunted. The rank's
-    volume-sorted scan stops one boundary page past the volume floor, and
-    in-play sub-floor rows are not a cluster near that floor -- measured
-    2026-10-06 across ten pages they run 8-16 per page on EVERY page from 1 to
-    9+, mixed with long-dated and dead markets, so no bounded page budget
-    reliably reaches a named match (one run had the live `lol-est-kbm` on page
-    3, the next had it moved). `GET /events?live=true&closed=false` returns the
-    live set directly; `closed=false` is required, because `live=true` alone
-    also returns long-finished events.
 
-    `sportsMarketType == "moneyline"` selects the match winner, and it is the
-    selector that keeps a sport's submarkets OUT. Unlike esports, real sports
-    expose each submarket group as its OWN top-level event: a live MLB game
-    arrives as `mlb-lad-atl-...-first-five-winner` and `...-inning-1-winner`
-    through `...-inning-9-winner` beside the real game, and a live soccer match
-    as `-halftime-result`, `-second-half-result`, `-exact-score`,
-    `-first-to-score` and `-more-markets`. Every one of those carries the same
-    `live` flag, sport, period and score as the real game, so selecting on the
-    sport or the slug prefix admits them -- and NOT ONE of them carries a
-    `moneyline` (verified across the whole live set 2026-10-06), which is why
-    the type is the only safe selector here.
+def _fetch_live_events(session: requests.Session, stats: dict) -> list[dict]:
+    """Every event the venue declares live, page by page (#744).
 
-    Rows come back in the same shape `gamma_universe` emits, so nothing
-    downstream needs a special case, and carry `_live_event=True` -- the stamp
-    that admits them past the clock gates in `evaluate` and picks the live
-    volume bar in `tradable`.
-
-    Never raises. A rank must not fail because the live set was unreadable; the
-    failure is reported in the stats so a run that could not read it is visible
-    as that rather than as a thin live market.
+    Same contract as `scripts/live_events_probe.py`: ask for one page cap at a
+    time, advance the offset by the rows RETURNED, stop on an empty or short
+    page, and stop at `LIVE_EVENT_MAX_PAGES` with `live_truncated` set. A
+    later page that fails keeps the pages already read -- a timeout on page 3
+    must not make the first 200 live markets look like a thin slate -- and
+    reports itself through `live_error`.
     """
-    stats: dict = {"live_events": 0, "live_main_lines": 0, "live_sports": [],
-                   "live_below_bar": 0, "live_error": None}
-    try:
-        r = session.get(LIVE_EVENTS, params={"live": "true",
-                                             "closed": "false",
-                                             "limit": limit}, timeout=30)
-        r.raise_for_status()
-        events = r.json()
-    except Exception as e:                                   # noqa: BLE001
-        stats["live_error"] = f"{type(e).__name__}: {e}"
-        return [], stats
-    if isinstance(events, dict):
-        # The endpoint has served a dict wrapper before; a dict is not a list
-        # of events and must not be iterated as one.
-        events = events.get("data")
-    if not isinstance(events, list):
-        stats["live_error"] = "venue returned a non-list payload"
-        return [], stats
+    events: list[dict] = []
+    offset = 0
+    for _ in range(LIVE_EVENT_MAX_PAGES):
+        try:
+            r = session.get(LIVE_EVENTS, params={"live": "true",
+                                                 "closed": "false",
+                                                 "limit": LIVE_EVENT_PAGE,
+                                                 "offset": offset},
+                            timeout=30)
+            r.raise_for_status()
+            payload = r.json()
+        except Exception as e:                               # noqa: BLE001
+            stats["live_error"] = f"{type(e).__name__}: {e}"
+            return events
+        if isinstance(payload, dict):
+            # The endpoint has served a dict wrapper before; a dict is not a
+            # list of events and must not be iterated as one.
+            payload = payload.get("data")
+        if not isinstance(payload, list):
+            stats["live_error"] = "venue returned a non-list payload"
+            return events
+        events.extend(ev for ev in payload if isinstance(ev, dict))
+        stats["live_pages"] += 1
+        offset += len(payload)
+        if len(payload) < LIVE_EVENT_PAGE:
+            return events
+    stats["live_truncated"] = True
+    return events
 
+
+def _live_rows(events: list[dict], stats: dict) -> list[dict]:
+    """The normalised main lines among `events` (the admitted live set)."""
     rows: list[dict] = []
     sports: set[str] = set()
     for ev in events:
-        if not isinstance(ev, dict):
-            continue
         # The server-side `live=true` filter is re-checked on every event. A
         # caller that widens the fetch -- or a venue that stops honouring the
         # filter -- would otherwise let a finished match through, and a
@@ -1095,7 +1093,85 @@ def live_event_markets(session: requests.Session,
                 sports.add(row["_sport"])
     stats["live_main_lines"] = len(rows)
     stats["live_sports"] = sorted(sports)
-    return rows, stats
+    return rows
+
+
+def _live_declarations(events: list[dict]) -> dict[str, dict]:
+    """The venue's in-play declaration for every market in a live event (#744).
+
+    Built from the EVENT before any admission check, because the moneyline
+    filter, the two-token requirement and the live volume bar decide whether a
+    row may be QUOTED -- none of them decides whether the match is being
+    played. A sub-floor market in a live game is therefore still declared live
+    instead of being reported as regular.
+
+    Carries display evidence only. No admission flag: `_live_event` and
+    `volatility_exempt` stay sole property of the admitted live row, so a lane
+    decision can never become a second route past the live volume bar.
+    """
+    declared: dict[str, dict] = {}
+    for ev in events:
+        if not ev.get("live") or ev.get("ended"):
+            continue
+        sport = _str((ev.get("sport") or {}).get("sport"))
+        for m in ev.get("markets") or []:
+            if not isinstance(m, dict):
+                continue
+            cid = _str(m.get("conditionId"))
+            if not cid:
+                continue
+            declared[cid] = {
+                "_sport": sport,
+                "_event_period": ev.get("period"),
+                "_event_score": ev.get("score"),
+                "_event_live": True,
+                "sports_market_type": _str(m.get("sportsMarketType")),
+            }
+    return declared
+
+
+def live_event_markets(session: requests.Session) -> tuple[list[dict], dict]:
+    """Main-line markets on the events the venue declares live, normalised.
+
+    Discovery for in-play markets, FETCHED rather than hunted. The rank's
+    volume-sorted scan stops one boundary page past the volume floor, and
+    in-play sub-floor rows are not a cluster near that floor -- measured
+    2026-10-06 across ten pages they run 8-16 per page on EVERY page from 1 to
+    9+, mixed with long-dated and dead markets, so no bounded page budget
+    reliably reaches a named match (one run had the live `lol-est-kbm` on page
+    3, the next had it moved). `GET /events?live=true&closed=false` returns the
+    live set directly; `closed=false` is required, because `live=true` alone
+    also returns long-finished events.
+
+    `sportsMarketType == "moneyline"` selects the match winner, and it is the
+    selector that keeps a sport's submarkets OUT. Unlike esports, real sports
+    expose each submarket group as its OWN top-level event: a live MLB game
+    arrives as `mlb-lad-atl-...-first-five-winner` and `...-inning-1-winner`
+    through `...-inning-9-winner` beside the real game, and a live soccer match
+    as `-halftime-result`, `-second-half-result`, `-exact-score`,
+    `-first-to-score` and `-more-markets`. Every one of those carries the same
+    `live` flag, sport, period and score as the real game, so selecting on the
+    sport or the slug prefix admits them -- and NOT ONE of them carries a
+    `moneyline` (verified across the whole live set 2026-10-06), which is why
+    the type is the only safe selector here.
+
+    Rows come back in the same shape `gamma_universe` emits, so nothing
+    downstream needs a special case, and carry `_live_event=True` -- the stamp
+    that admits them past the clock gates in `evaluate` and picks the live
+    volume bar in `tradable`.
+
+    The live set is PAGINATED (`_fetch_live_events`): the venue serves at most
+    100 events per request, so a single call reported a busy slate as a small
+    one. What this function ADMITS is unchanged -- the moneyline selector and
+    the live volume bar still decide that; the lane decision is not made here
+    (`_live_declarations` records it for `merge_live_event_markets`).
+
+    Never raises. A rank must not fail because the live set was unreadable; the
+    failure is reported in the stats so a run that could not read it is visible
+    as that rather than as a thin live market.
+    """
+    stats = _live_stats()
+    return _live_rows(_fetch_live_events(session, stats), stats), stats
 
 
 def _live_event_row(ev: dict, m: dict, sport: object) -> dict:
@@ -1165,8 +1241,7 @@ def _live_event_row(ev: dict, m: dict, sport: object) -> dict:
 
 
 def merge_live_event_markets(universe: list[dict],
-                             session: requests.Session,
-                             limit: int = 200) -> tuple[list[dict], dict]:
+                             session: requests.Session) -> tuple[list[dict], dict]:
     """Append the venue's live main lines to a scanned universe, deduplicated.
 
     A live market above the volume floor is ALSO in the paginated scan, so the
@@ -1176,8 +1251,18 @@ def merge_live_event_markets(universe: list[dict],
     other way would drop the stamp on exactly the markets it exists for, and
     not deduplicating would score one market twice and double-count it in the
     funnel.
+
+    Every merged row is STAMPED with this cycle's lane, from the venue's live
+    declaration (#744). Any lane the row already carried is overwritten, which
+    is what makes a match that kicked off since the last cycle move lanes on
+    this one. A declared market that did not become an admitted live row (a
+    submarket, or below the live bar) keeps its admission fields untouched and
+    gains only display evidence.
     """
-    live_rows, stats = live_event_markets(session, limit=limit)
+    stats = _live_stats()
+    events = _fetch_live_events(session, stats)
+    live_rows = _live_rows(events, stats)
+    declared = _live_declarations(events)
     scanned = {r.get("condition_id") for r in universe}
     # A market the scan already found is REPLACED IN PLACE, not skipped: the
     # live row is the one carrying the stamp, and keeping the scan's copy would
@@ -1198,10 +1283,23 @@ def merge_live_event_markets(universe: list[dict],
     stats["live_rows_merged"] = len(fresh)
     stats["live_rows_already_scanned"] = replaced
     merged.extend(fresh)
-    # The scan stamps its own rows; the live rows are appended after it, and a
-    # row without the flag reads as "this listing was not cut off" downstream.
+    declared_only = 0
     for row in merged:
+        cid = row.get("condition_id")
+        evidence = declared.get(cid) if cid else None
+        row["lane"] = "live" if evidence else "regular"
+        if evidence is not None and cid not in live_by_cid:
+            # Declared in play, but not an admitted live row: display evidence
+            # only. `_live_event`/`volatility_exempt` are never set here, so the
+            # lane cannot become a second route past the live volume bar.
+            for key, value in evidence.items():
+                row.setdefault(key, value)
+            declared_only += 1
+        # The scan stamps its own rows; the live rows are appended after it, and
+        # a row without the flag reads as "this listing was not cut off"
+        # downstream.
         row.setdefault("fetch_truncated", False)
+    stats["live_rows_declared_only"] = declared_only
     return merged, stats
 
 
@@ -1236,6 +1334,7 @@ def queue_bar_reject(m: dict, *, source: str,
         "cid": m.get("condition_id"),
         "title": m.get("question", "")[:90],
         "slug": m.get("market_slug", ""),
+        "lane": market_lane(m),
     }
 
 
@@ -1279,6 +1378,11 @@ def _live_evidence(m: dict) -> dict:
         "_sport": m.get("_sport") or "",
         "event_period": m.get("_event_period"),
         "event_score": m.get("_event_score"),
+        # The venue's own declaration, recorded even when it is False: a reader
+        # diffing a live row against the dashboard's lane needs the declaration
+        # and the market type, not just our admission stamp (#744).
+        "event_live": bool(m.get("_event_live")),
+        "sports_market_type": m.get("sports_market_type") or "",
         "volume_bar_usd": MIN_VOLUME_24H_LIVE,
     }
 
@@ -1299,6 +1403,10 @@ def _reject_row(source: str, reason: str, m: dict,
         "cid": m.get("condition_id"),
         "title": m.get("question", "")[:90],
         "slug": m.get("market_slug", ""),
+        # Which lane this refusal belongs to (#744). Computed here rather than
+        # passed in so every caller of this helper stamps it, and DISPLAY ONLY:
+        # nothing about admission reads it.
+        "lane": market_lane(m),
         # Inherited from the discovery pass: every row from a capped scan says
         # so, so an empty or thin result is auditable as an environment
         # condition rather than read as "no liquid market exists" (#312).
@@ -1345,6 +1453,10 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     (time-of-game purge, #597): a game's start, quarter, half or end says
     nothing about when this market decides, so no gate may key off it.
     """
+    # ONE lane decision, made before the first exit so every row this function
+    # returns carries it (#744). Display and accounting only -- no gate below
+    # reads it.
+    lane = market_lane(m)
     identity_ok, identity_reason = identity_allowed(
         m.get("question"), m.get("market_slug") or m.get("slug"),
         m.get("category"), m.get("market_type"),
@@ -1373,6 +1485,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                     "cid": m.get("condition_id"),
                     "title": m.get("question", "")[:90],
                     "slug": m.get("market_slug", ""),
+                    "lane": lane,
                     "fetch_truncated": bool(m.get("fetch_truncated")),
                 }
             admission_role = verdict["role"]
@@ -1396,6 +1509,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
             "cid": m.get("condition_id"),
             "title": m.get("question", "")[:90],
             "slug": m.get("market_slug", ""),
+            "lane": lane,
             "fetch_truncated": bool(m.get("fetch_truncated")),
         }
     # THE TIMING GATES ARE GONE (time-of-game purge, #597): a game's start,
@@ -1617,9 +1731,14 @@ def evaluate(session: requests.Session, rate: float, m: dict,
             "title": m.get("question", "")[:90],
             "slug": m.get("market_slug", ""),
             "movement_usd": movement_usd,
+            "lane": lane,
             "fetch_truncated": bool(m.get("fetch_truncated")),
             "volatility_exempt": is_volatility_exempt,
             **_book_stats(book_spreads, book_depths),
+            # The book gate used to be the one live refusal that carried no
+            # provenance at all, so a live market refused for its book read as
+            # an ordinary one (#744). Same evidence as every other exit.
+            **_live_evidence(m),
         }
 
     n = max(min_size, 120)
@@ -1650,6 +1769,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     row = {
         "source": source,
         "spread": round(float(m.get("_spread") or 0.0), 4) or None,
+        "lane": lane,
         # Recorded rather than filtered here so the report can show what was
         # rejected and why.
         "eligible": eligible,
@@ -2510,13 +2630,21 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
             "days": _days(m),
         })
     raw_spread = []
-    for m in spread_cands[:24]:
+    # Sampled PER LANE (24 each), so a lane view can preview its own rows
+    # instead of borrowing the other lane's. Order stays the universe's.
+    sampled: dict[str, int] = {}
+    for m in spread_cands:
+        row_lane = market_lane(m)
+        if sampled.get(row_lane, 0) >= 24:
+            continue
+        sampled[row_lane] = sampled.get(row_lane, 0) + 1
         raw_spread.append({
             "title": (m.get("question") or "")[:80],
             "slug": m.get("market_slug") or m.get("slug") or "",
             "volume": round(float(m.get("_volume_24h") or 0.0), 0),
             "spread": m.get("_spread"),
             "days": _days(m),
+            "lane": row_lane,
         })
 
     # Estimated allocator verdict per scored-and-rejected market, keyed by
@@ -2530,34 +2658,43 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         verdicts = {}
 
     rejections = []
-    for cause, n in sorted(causes.items(), key=lambda kv: -kv[1]):
-        bucket_rows = [r for r in out
-                       if not r["eligible"] and _cause(r["reject_reason"]) == cause]
-        examples = []
-        for r in bucket_rows[:4]:
-            v = verdicts.get(id(r))
-            examples.append({
-                "title": r["title"],
-                "slug": r.get("slug", ""),
-                "reason": r["reject_reason"],
-                "volume": r.get("volume_24h"),
-                "days": r.get("days_to_resolve"),
-                # Absent (not None) for markets with no book reading -- an
-                # identity reject never fetched the book, so there is nothing
-                # to estimate from and the card shows no verdict.
-                **({"marg": v} if v else {}),
-            })
-        # would_fund counts only CREDIBLE near-misses: an empty-book mirage
-        # (the estimate dividing by ~zero competition) is not evidence for
-        # loosening a gate -- the traps are shown separately, not hidden.
-        would_fund = sum(1 for r in bucket_rows
-                         if (v := verdicts.get(id(r)))
-                         and v["would_fund"] and not v["trap"])
-        traps = sum(1 for r in bucket_rows
-                    if (v := verdicts.get(id(r))) and v and v["trap"])
-        rejections.append({"cause": cause, "n": n,
-                           "would_fund": would_fund, "traps": traps,
-                           "examples": examples})
+    # One builder for the global list and for each lane's list (#744): the
+    # badge and the cards under it must come from the same population, or a
+    # per-lane number can disagree with the cards a reader can see.
+    def _rejection_entries(rows, causes_by_name):
+        entries = []
+        for cause, n in sorted(causes_by_name.items(), key=lambda kv: -kv[1]):
+            bucket_rows = [r for r in rows
+                           if not r["eligible"] and _cause(r["reject_reason"]) == cause]
+            examples = []
+            for r in bucket_rows[:4]:
+                v = verdicts.get(id(r))
+                examples.append({
+                    "title": r["title"],
+                    "slug": r.get("slug", ""),
+                    "reason": r["reject_reason"],
+                    "volume": r.get("volume_24h"),
+                    "days": r.get("days_to_resolve"),
+                    # Absent (not None) for markets with no book reading -- an
+                    # identity reject never fetched the book, so there is nothing
+                    # to estimate from and the card shows no verdict.
+                    **({"marg": v} if v else {}),
+                    "lane": market_lane(r),
+                })
+            # would_fund counts only CREDIBLE near-misses: an empty-book mirage
+            # (the estimate dividing by ~zero competition) is not evidence for
+            # loosening a gate -- the traps are shown separately, not hidden.
+            would_fund = sum(1 for r in bucket_rows
+                             if (v := verdicts.get(id(r)))
+                             and v["would_fund"] and not v["trap"])
+            traps = sum(1 for r in bucket_rows
+                        if (v := verdicts.get(id(r))) and v and v["trap"])
+            entries.append({"cause": cause, "n": n,
+                            "would_fund": would_fund, "traps": traps,
+                            "examples": examples})
+        return entries
+
+    rejections = _rejection_entries(out, causes)
 
     def _row(r: dict) -> dict:
         return {
@@ -2569,7 +2706,36 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
             "income": r.get("est_income"), "capital": r.get("est_capital"),
             "ret_day_pct": r.get("return_pct_day"),
             "volume": r.get("volume_24h"), "days": r.get("days_to_resolve"),
+            "lane": market_lane(r),
         }
+
+    # Per-lane numbers (#744), computed from the FULL populations -- the
+    # candidate universe for candidates/attempted, the scored rows for
+    # scored/rejected/eligible, the picks for picked -- never from the preview
+    # samples. Summed over the two lanes each key equals its global count, so a
+    # lane view and All cannot disagree about the same run.
+    lane_counts: dict[str, dict] = {}
+    lane_rejections: dict[str, list] = {}
+    for lane in ("live", "regular"):
+        rows = [r for r in out if market_lane(r) == lane]
+        candidates = sum(1 for m in spread_cands if market_lane(m) == lane)
+        elig = sum(1 for r in rows if r["eligible"])
+        lane_causes: dict[str, int] = {}
+        for r in rows:
+            if not r["eligible"]:
+                cause = _cause(r["reject_reason"])
+                lane_causes[cause] = lane_causes.get(cause, 0) + 1
+        lane_counts[lane] = {
+            "funded": 0,
+            "spread_universe": candidates,
+            "attempted": candidates,
+            "scored": len(rows),
+            "dropped_no_verdict": candidates - len(rows),
+            "rejected": len(rows) - elig,
+            "eligible": elig,
+            "picked": sum(1 for r in picked if market_lane(r) == lane),
+        }
+        lane_rejections[lane] = _rejection_entries(rows, lane_causes)
 
     snap = {
         "ts": time.time(),
@@ -2632,6 +2798,12 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         "discovery": discovery or {},
         "raw": {"rewards": raw_rewards, "spread": raw_spread},
         "rejections": rejections,
+        # The lane-scoped funnel (#744). `counts`/`rejections` above keep their
+        # exact shape and stay the All view; each lane gets the same two blocks
+        # for its own population.
+        "lanes": {lane: {"counts": lane_counts[lane],
+                         "rejections": lane_rejections[lane]}
+                  for lane in ("live", "regular")},
         "final": [_row(r) for r in eligible],
         "picked": [_row(r) for r in picked],
     }

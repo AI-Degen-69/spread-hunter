@@ -9578,13 +9578,18 @@ function gateBar(value, fallback) {
   return (value === null || value === undefined) ? fallback : Number(value);
 }
 
-function isLiveMarket(m) {
-  if (!m) return false;
-  if (m.volatility_exempt === true || m.live_event === true || m.event_live === true || m._live_event === true || m.in_play === true) {
-    return true;
-  }
-  if (m.event_period || m.event_score) return true;
-  return false;
+// Which lane a row belongs to, as the ranker decided it (#744). The display no
+// longer guesses from flags: guessing is what screened an in-play match as
+// regular while the live lane reported 0. `unknown` (a row written before the
+// lane existed and carrying no live declaration) shows under All only.
+function rowLane(m) {
+  if (!m) return 'unknown';
+  if (m.lane === 'live' || m.lane === 'regular') return m.lane;
+  return 'unknown';
+}
+
+function inLane(m, lane) {
+  return lane === 'all' || rowLane(m) === lane;
 }
 
 const KANBAN_LANE_STORAGE_KEY = 'sh-kanban-lane';
@@ -9945,6 +9950,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
     funnel?.census,
     funnel?.counts,
     funnel?.filters,
+    funnel?.lanes,
     funnel?.graduated,
     funnel?.final,
     funnel?.raw,
@@ -9966,8 +9972,24 @@ function renderScreener(kpi, scanState, status, engineOpts) {
       <div class="empty-state-title">No Market Filter data yet</div>
       <div class="empty-state-msg">The Market Filter writes runtime/pipeline.json on each scan cycle. Data appears here once it runs.</div>
     </div>`;
+    // The pills and the banner describe the same data: with no funnel they
+    // must not keep the previous run's numbers (#744).
+    for (const id of ['lane-count-live', 'lane-count-regular', 'lane-count-all']) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '0';
+    }
+    const emptyBanner = document.getElementById('kanban-lane-banner');
+    if (emptyBanner) emptyBanner.innerHTML = '';
     return;
   }
+
+  // Every number below describes ONE lane: the snapshot publishes a per-lane
+  // counts + rejections block, so a badge and the cards under it come from the
+  // same population (#744). All keeps the global blocks. `null` (not zeros)
+  // means this snapshot predates the lane block.
+  const laneScope = (lane === 'all')
+    ? funnel
+    : ((funnel.lanes && funnel.lanes[lane]) || null);
 
   // Group rejections by canonical gate
   const gateRejections = {
@@ -9979,7 +10001,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
     horizon: { count: 0, examples: [], would_fund: 0, traps: 0 },
   };
 
-  for (const f of (funnel.filters || [])) {
+  for (const f of ((laneScope && laneScope.filters) || [])) {
     const g = categorizeGate(f.cause);
     if (!gateRejections[g]) {
       gateRejections[g] = { count: 0, examples: [], would_fund: 0, traps: 0 };
@@ -9992,8 +10014,14 @@ function renderScreener(kpi, scanState, status, engineOpts) {
     gateRejections[g].traps += (f.traps || 0);
   }
 
-  const counts = funnel.counts || {};
-  const totalRaw = counts.scored || counts.attempted || funnel.raw_count || 0;
+  // `!= null`, never `||`: an explicit zero is a measured zero, not a missing
+  // number to be replaced by a fallback. The global `raw_count` is the ALL
+  // lane's number only -- a lane that measured zero must show zero, not the
+  // whole universe.
+  const counts = (laneScope && laneScope.counts) || {};
+  const totalRaw = counts.scored != null ? counts.scored
+    : (counts.attempted != null ? counts.attempted
+    : (lane === 'all' ? (funnel.raw_count || 0) : 0));
 
   // Per-gate rejection totals, NOT a running pool.
   const stageFlow = { raw: { rejected: 0, scored: totalRaw } };
@@ -10006,9 +10034,10 @@ function renderScreener(kpi, scanState, status, engineOpts) {
   const eligibleList = funnel.final || [];
   stageFlow.passed = { rejected: 0, scored: totalRaw };
 
-  // Lane classification & counts
-  const liveCount = graduatedList.filter(isLiveMarket).length;
-  const regularCount = graduatedList.filter(m => !isLiveMarket(m)).length;
+  // Lane classification & counts. All three pills count GRADUATIONS by the
+  // row's own lane; a row the ranker could not classify appears only under All.
+  const liveCount = graduatedList.filter(m => rowLane(m) === 'live').length;
+  const regularCount = graduatedList.filter(m => rowLane(m) === 'regular').length;
   const totalCount = graduatedList.length;
 
   const regCountEl = document.getElementById('lane-count-regular');
@@ -10028,13 +10057,19 @@ function renderScreener(kpi, scanState, status, engineOpts) {
   updateLaneBanner(lane, { regular: regularCount, live: liveCount, total: totalCount },
                     { movement_gate_usd: funnel?.movement_gate_usd });
 
-  const activeGraduated = (lane === 'all')
-    ? graduatedList
-    : graduatedList.filter(m => lane === 'live' ? isLiveMarket(m) : !isLiveMarket(m));
+  if (!laneScope) {
+    // An artifact written before the lane block. Showing the global numbers
+    // here is what made a lane's badge disagree with its cards; zeros would
+    // claim the lane was measured and empty.
+    board.innerHTML = `<div class="kanban-empty" style="flex:1">
+      <div class="empty-state-title">Lane numbers are not available for this snapshot</div>
+      <div class="empty-state-msg">runtime/pipeline.json was written before per-lane counts existed. They appear after the next filter cycle; All still shows this run.</div>
+    </div>`;
+    return;
+  }
 
-  const activeEligible = (lane === 'all')
-    ? eligibleList
-    : eligibleList.filter(m => lane === 'live' ? isLiveMarket(m) : !isLiveMarket(m));
+  const activeGraduated = graduatedList.filter(m => inLane(m, lane));
+  const activeEligible = eligibleList.filter(m => inLane(m, lane));
 
   // Preserve scroll positions: horizontal board scroll, vertical bucket body scrolls, and window scroll
   const prevScrollLeft = board.scrollLeft;
@@ -10058,14 +10093,16 @@ function renderScreener(kpi, scanState, status, engineOpts) {
     if (def.key === 'raw') {
       const fundedN = counts.funded || (funnel.raw?.rewards || []).length || 0;
       const allRawSpread = funnel.raw?.spread || [];
-      const filteredRawSpread = (lane === 'all')
-        ? allRawSpread
-        : allRawSpread.filter(s => lane === 'live' ? isLiveMarket(s) : !isLiveMarket(s));
-      const spreadN = counts.spread_universe || allRawSpread.length || 0;
-      countBadge = `<span class="bucket-count-badge info">${lane === 'all' ? totalRaw : filteredRawSpread.length} CANDIDATES</span>`;
+      const filteredRawSpread = allRawSpread.filter(s => inLane(s, lane));
+      // The lane's candidate count comes from the lane's own funnel, not from
+      // the preview list (which is capped per lane).
+      const candidateCount = (counts.spread_universe != null)
+        ? counts.spread_universe
+        : filteredRawSpread.length;
+      countBadge = `<span class="bucket-count-badge info">${candidateCount} CANDIDATES</span>`;
       flowHtml = `<div class="kanban-header-flow">
         <span>${lane === 'live' ? 'Live Events Scan' : (lane === 'regular' ? 'Regular Volume Scan' : 'Discovery')}</span>
-        <span class="flow-passed">${lane === 'all' ? totalRaw : filteredRawSpread.length} to evaluate ➔</span>
+        <span class="flow-passed">${candidateCount} to evaluate ➔</span>
       </div>`;
 
       // Render raw examples if available
@@ -10083,7 +10120,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
           </div>`;
         }
         for (const s of rawSpread) {
-          const isLive = isLiveMarket(s);
+          const isLive = rowLane(s) === 'live';
           cardsHtml += `<div class="market-card ${isLive ? 'live-card' : 'regular-card'}" role="listitem">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span class="card-tag ${isLive ? 'tag-live-sport' : 'tag-spread'}">${isLive ? '⚡ LIVE CANDIDATE' : 'SPREAD'}</span>
@@ -10133,7 +10170,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
           const volStr = m.volume !== null && m.volume !== undefined ? fmtUSD(m.volume) : '--';
           const daysStr = m.days_to_resolve !== null && m.days_to_resolve !== undefined ? esc(m.days_to_resolve) + 'd' : '--';
           const shortCid = m.condition_id ? (m.condition_id.slice(0, 6) + '...' + m.condition_id.slice(-4)) : '';
-          const isLive = isLiveMarket(m);
+          const isLive = rowLane(m) === 'live';
           const liveTag = `<span class="card-tag tag-live-sport">⚡ LIVE SPORT</span>`;
           const volTag = m.volatility_exempt ? `<span class="card-tag tag-vol-exempt">VOL EXEMPT</span>` : '';
           const scoreBadge = (m.event_period || m.event_score) ? `<span class="card-score-badge">${esc(m.event_period || '')} ${esc(m.event_score || '')}</span>` : '';
@@ -10160,7 +10197,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
         for (const el of activeEligible) {
           const cid = el.cid || el.condition_id;
           if (cid && renderedCids.has(cid)) continue;
-          const isLive = isLiveMarket(el);
+          const isLive = rowLane(el) === 'live';
           cardsHtml += `<div class="market-card ${isLive ? 'live-card' : 'regular-card'}" role="listitem" style="border-color:rgba(52,211,153,0.2)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
               <span class="card-tag" style="background:rgba(52,211,153,0.1);color:#34d399">${isLive ? '⚡ LIVE' : 'ELIGIBLE'}</span>
@@ -10200,17 +10237,16 @@ function renderScreener(kpi, scanState, status, engineOpts) {
         </div>`;
         footerHtml = `<div class="kanban-bucket-footer">${droppedCount} of ${flow.scored} scored markets refused here</div>`;
       } else {
-        const allExamples = gateData.examples || [];
-        const filteredExamples = (lane === 'all')
-          ? allExamples
-          : allExamples.filter(ex => lane === 'live' ? isLiveMarket(ex) : !isLiveMarket(ex));
-        const displayExamples = filteredExamples;
+        // The examples ARE this lane's: `laneScope.filters` came from the lane's
+        // own rejections, so filtering them again by a guessed flag is what
+        // produced a non-zero badge over an empty list (#744).
+        const displayExamples = gateData.examples || [];
 
         if (displayExamples.length === 0) {
           cardsHtml = `<div class="kanban-empty">No ${lane === 'live' ? 'live sports' : (lane === 'regular' ? 'regular' : '')} market rejections at this gate.</div>`;
         } else {
           for (const ex of displayExamples) {
-            const isLive = isLiveMarket(ex);
+            const isLive = rowLane(ex) === 'live';
             cardsHtml += `<div class="market-card ${isLive ? 'live-card' : ''}" role="listitem">
               <div class="card-title" title="${esc(ex.title || '')}">${marketLink(ex)}</div>
               <div class="card-reason">${esc(ex.reason || 'Criteria not met')}</div>
