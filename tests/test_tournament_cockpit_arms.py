@@ -46,6 +46,28 @@ def test_i487_arm_table_names_the_ten_spec_arms_with_their_hypotheses():
         assert arm["worst_catalyst_desc"] == "", arm["name"]
 
 
+def test_i487_each_arm_tweak_names_the_one_knob_the_spec_file_sets():
+    """The cockpit prose and the executable env live in two files.
+
+    Names alone are not enough: a value edited in one file and not the other
+    would misreport what the arm actually ran, which is the whole promise the
+    table makes to the operator.
+    """
+    spec = {
+        a["name"]: a.get("env", {})
+        for a in json.loads(I487_ARMS_SPEC.read_text(encoding="utf-8"))
+    }
+    arms = {a["name"]: a for a in cockpit.ARMS_CONFIG_487}
+    assert spec["control"] == {}, "the control arm's entire point is an empty env"
+    for name, env in spec.items():
+        if not env:
+            continue
+        assert len(env) == 1, f"{name} moves {len(env)} settings, not one"
+        (key, value), = env.items()
+        assert key.startswith("BOT_"), (name, key)
+        assert arms[name]["hypothesized_tweak"] == f"{key.removeprefix('BOT_').lower()} = {value}", name
+
+
 def test_i487_resolves_the_named_plan_record(tmp_path, monkeypatch):
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     _record(tmp_path, "487_current_setup_10arm.json", [
@@ -74,6 +96,32 @@ def test_i487_resolves_the_named_plan_record(tmp_path, monkeypatch):
     assert arms["widen-on"]["db"] == (
         "data/487_tournament_07_widen-on_current_setup_10arm.db")
     assert arms["widen-on"]["hypothesized_tweak"] == "quote_gate_widen_on = 1"
+
+
+def test_i487_prefers_the_named_record_over_a_leftover_timestamped_one(tmp_path, monkeypatch):
+    """Both record shapes can sit in the folder; the named one is this run.
+
+    A timestamped `487_<stamp>.json` could only be the superseded catalyst round,
+    so the resolver must read db/run_id/port from the named record. That choice is
+    a sort, so it gets a test rather than a comment.
+    """
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    _record(tmp_path, "487_20261018-140000.json", [{
+        "name": "control",
+        "db_path": "data/stale_control.db",
+        "run_id": "shadow-stale-control",
+        "dash_port": 9999,
+    }])
+    _record(tmp_path, "487_current_setup_10arm.json", [{
+        "name": "control",
+        "db_path": "data/named_control.db",
+        "run_id": "shadow-named-control",
+        "dash_port": 8801,
+    }])
+    arms = {a["name"]: a for a in cockpit.resolve_tournament_arms("487")}
+    assert arms["control"]["db"] == "data/named_control.db"
+    assert arms["control"]["run_id"] == "shadow-named-control"
+    assert arms["control"]["port"] == 8801
 
 
 def test_i487_without_a_record_falls_back_to_the_static_table(tmp_path, monkeypatch):
