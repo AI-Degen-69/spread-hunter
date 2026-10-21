@@ -90,12 +90,14 @@ six-knob one.
 | 4 | `offset-max-3c` | 8804 | `BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS` | 20 → 3 | preset `aggressive` |
 | 5 | `offset-static` | 8805 | `BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON` | on → off | preset `hybrid` |
 | 6 | `deadband-6c` | 8806 | `BOT_ORDER_REQUOTE_DEAD_BAND_CENTS` | 0.03 → 0.06 | preset `hybrid` |
-| 7 | `hold-queue-500` | 8807 | `BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES` | 0.0 → 500 | every preset |
-| 8 | `hold-below-8c` | 8808 | `BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS` | 0.05 → 0.08 | every preset |
+| 7 | `widen-on` | 8807 | `BOT_QUOTE_GATE_WIDEN_ON` | off → on | no preset ships a different value |
+| 8 | `price-risk-030` | 8808 | `BOT_QUOTE_PRICE_RISK_WIDEN` | 0.010 → 0.030 | no preset ships this knob |
 | 9 | `stop-adverse-5c` | 8809 | `BOT_RISK_STOP_MODE` | `NONE` → `ABSOLUTE_DROP` | no preset ships this knob |
 | 10 | `book-window-4c` | 8810 | `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID` | 15 → 4 (cents) | no preset ships this knob |
 
-Arms 9 and 10 carry their own honest note. Arm 9 flips the single-leg stop from off to on;
+Only arms 2–6 use preset values. Arms 7–10 test levers no preset ships at a different value.
+Arm 7 enables the WIDENED-gate snap-back; arm 8 increases the price-risk offset on every
+quote. Arm 9 flips the single-leg stop from off to on;
 the shipped `0.05` adverse-drop threshold travels with the mode, so the arm changes one
 variable and two behaviours — that is stated in its description rather than hidden. Arm 10
 tightens the per-market quoting window from 15¢ to 4¢; it is the one arm that changes which
@@ -130,9 +132,9 @@ Files: `tests/test_shadow_tournament.py`
 Built: a test that loads `configs/tournaments/i487_current_setup_10arm_arms.json` and asserts:
 ten arms in the order above; every name matches `^[a-z0-9-]{1,24}$` and is **not** a
 `TOURNAMENT_PRESETS` key; `control` has an empty `env`; each of the other nine carries
-exactly one `BOT_*` key and its `env` differs from the control in exactly that key; the seven
-preset-sourced values equal the live `TOURNAMENT_PRESETS` entries (read from the table, not
-re-typed); and `build_tournament_plan(issue=487, arms=..., base_dir=tmp_path, check_ports=False)`
+exactly one `BOT_*` key and its `env` differs from the control in exactly that key; the five
+preset-sourced values (arms 2–6) equal the live `TOURNAMENT_PRESETS` entries (read from the
+table, not re-typed); and `build_tournament_plan(issue=487, arms=..., base_dir=tmp_path, check_ports=False)`
 yields ports `8801`–`8810`, ten distinct DB paths and ten distinct run ids.
 Depends on: T1 | Skill: `test-driven-development`
 Verification: **lands RED** — the spec file does not exist yet, so the test fails on load.
@@ -140,7 +142,8 @@ Verification: **lands RED** — the spec file does not exist yet, so the test fa
 ### T3 — [x] Create the arm spec  `[Code]` `S`
 Files: `configs/tournaments/i487_current_setup_10arm_arms.json`
 Built: the ten-arm bare-list spec of Decision 3, shape identical to
-`configs/tournaments/i492_tournament-1_arms.json`.
+`configs/tournaments/i492_tournament-1_arms.json`. Arms 7 and 8 set
+`BOT_QUOTE_GATE_WIDEN_ON=1` and `BOT_QUOTE_PRICE_RISK_WIDEN=0.030`, respectively.
 Depends on: T2 | Skill: `incremental-implementation`
 Verification: T2 goes GREEN.
 
@@ -155,7 +158,8 @@ arm is, `hypothesized_tweak` stating the one setting it changes, `tweak_rational
 the hypothesis it tests, and `worst_catalyst`/`worst_catalyst_desc` **empty** — there is no
 forensic run to fill them and inventing numbers is the failure this issue removes.
 Depends on: T1 | Skill: `incremental-implementation`
-Verification: module imports; the ten entries match T3's arm names one for one.
+Verification: module imports; the ten entries match T3's arm names one for one, including
+`widen-on` / `BOT_QUOTE_GATE_WIDEN_ON` and `price-risk-030` / `BOT_QUOTE_PRICE_RISK_WIDEN`.
 
 ### T5 — [x] Point the cockpit's `#487` round at the current-setup run  `[Code]` `S`
 Files: `scripts/tournament_cockpit_server.py` (`TOURNAMENTS["487"]` at :670 and the `487`
@@ -191,7 +195,8 @@ ports 8801–8810, the ~1.1 GB storage note, and — stated plainly — that the
 read from the cockpit and `reports/tournaments/487_current_setup_10arm_results.json` **after**
 the run, and that no production winner may be chosen from modelled shadow results.
 Depends on: T3, T4 | Skill: `documentation-and-adrs`
-Verification: the command in the runbook is the command validated in T9.
+Verification: T9 validates the documented launch command with `--dry-run`, intentionally
+omitting `--dashboards` because dry-run starts neither a dashboard nor a tournament arm.
 
 ### T8 — [x] Refresh the superseded-premise comment  `[Code]` `XS`
 Files: `tests/test_shadow_tournament.py` (`I487_TWEAKS`, :981–:995)
@@ -203,7 +208,8 @@ Verification: `test_i492_arms_carry_no_487_catalyst_tweak` still passes unchange
 
 ### T9 — [x] Validate the plan end to end  `[Code]` `XS`
 Files: none — evidence only.
-Built: the dry run of the exact launch command, and the recorded output.
+Built: the documented launch command validated with `--dry-run` and without `--dashboards`,
+and the recorded output; dry-run starts neither a dashboard nor a tournament arm.
 Depends on: T3, T4, T5 | Skill: `verification-before-completion`
 Verification: `python -m scripts.shadow_tournament --issue 487 --arms-file configs/tournaments/i487_current_setup_10arm_arms.json --minutes 720 --stamp current_setup_10arm --dry-run`
 prints ten arms on ports 8801–8810 with distinct stores and distinct run ids, exits 0, and
@@ -214,15 +220,14 @@ starts nothing.
 **Adopted (edge-case hardening).** Evidence, verbatim from the issue's own acceptance
 criteria: *"10 arms defined out of the current parameter set: one control at current
 settings + 9 one-parameter variations fetched live from #484's presets."* The presets ship
-seven single-knob values that differ from the current setup. The remaining two arms cannot
-be "fetched live from #484's presets" because no preset ships a different value for any
-other knob — `bot_quote_book_max_spread_from_mid` (0.15) and `bot_quote_gate_widen_on`
-(False) both already equal the current setup, so reusing them would produce two arms
-identical to the control. Rather than pad the set with those two no-ops — which is exactly
-what left `#608` with four byte-identical arms — arms 9 and 10 test the two levers no preset
-covers (the single-leg stop, and the per-market quoting window) and their descriptions say
-so. The test still asserts live-preset equality for the seven that have it, so the "fetched
-live" intent is enforced wherever it is achievable.
+five usable single-knob values that differ from the current setup; only arms 2–6 use those
+preset values. Arms 7–10 cannot be "fetched live from #484's presets": they test
+`BOT_QUOTE_GATE_WIDEN_ON=1`, `BOT_QUOTE_PRICE_RISK_WIDEN=0.030`, the single-leg stop,
+and the per-market quoting window, none of which a preset ships at a different value.
+The original arms 7 and 8 used retired requote-hold settings and were replaced during
+Station III; the runbook records that substitution. The test asserts live-preset equality
+for arms 2–6, and each other arm's description states its source, preserving the "fetched
+live" intent wherever achievable without duplicating the control as `#608` did.
 
 **Not proposed (would be scope expansion).** Adding an arm to guard against duplicate
 controls. The one-knob test makes a duplicate arm impossible in this spec, so no question is
