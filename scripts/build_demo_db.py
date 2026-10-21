@@ -106,7 +106,7 @@ def _post(
     posted_ts: int,
     polled_ts: int,
     pair_id: str | None = None,
-    max_pair_cost: float | None = None,
+    bot_pos_price_max_pair_cost_usd: float | None = None,
 ) -> None:
     """Create an order and attach its venue id, as the trader loop does.
 
@@ -126,7 +126,7 @@ def _post(
             posted_ts=_ms(posted_ts),
             last_polled_ts=_ms(polled_ts),
             pair_id=pair_id,
-            max_pair_cost_at_post=max_pair_cost,
+            max_pair_cost_at_post=bot_pos_price_max_pair_cost_usd,
         )
     )
     if venue_id is not None:
@@ -216,13 +216,13 @@ def scenario_resting_pair(reg: OrderRegistry, t: int, out: Path) -> str:
     m = _market("btc-150k-oct", 1)
     _post(reg, local_id="loc-1-up", venue_id="0xvenue0001up", market=m, leg="UP",
           price=0.46, size=20, posted_ts=t - 600, polled_ts=t - 45,
-          pair_id="pair-1", max_pair_cost=0.98)
+          pair_id="pair-1", bot_pos_price_max_pair_cost_usd=0.98)
     _quote(reg, market=m, leg="UP", price=0.46, size=20, ts=t - 600,
            local_id="loc-1-up", venue_id="0xvenue0001up", queue_ahead=1200.0,
            mid=0.48, t_remaining=5400.0, latency_ms=62.0)
     _post(reg, local_id="loc-1-dn", venue_id="0xvenue0001dn", market=m, leg="DOWN",
           price=0.49, size=20, posted_ts=t - 598, polled_ts=t - 45,
-          pair_id="pair-1", max_pair_cost=0.98)
+          pair_id="pair-1", bot_pos_price_max_pair_cost_usd=0.98)
     _quote(reg, market=m, leg="DOWN", price=0.49, size=20, ts=t - 598,
            local_id="loc-1-dn", venue_id="0xvenue0001dn", queue_ahead=3400.0,
            mid=0.50, t_remaining=5400.0, latency_ms=58.0)
@@ -235,7 +235,7 @@ def scenario_naked_single_leg(reg: OrderRegistry, t: int, out: Path) -> str:
     m = _market("eth-flip-nov", 2)
     _post(reg, local_id="loc-2-up", venue_id="0xvenue0002up", market=m, leg="UP",
           price=0.44, size=15, posted_ts=t - 1500, polled_ts=t - 900,
-          pair_id="pair-2", max_pair_cost=0.97)
+          pair_id="pair-2", bot_pos_price_max_pair_cost_usd=0.97)
     _quote(reg, market=m, leg="UP", price=0.44, size=15, ts=t - 1500,
            local_id="loc-2-up", venue_id="0xvenue0002up", queue_ahead=80.0,
            mid=0.465, t_remaining=7200.0, latency_ms=41.0)
@@ -273,7 +273,7 @@ def scenario_balanced_pair(reg: OrderRegistry, t: int, out: Path) -> str:
     m = _market("fed-cut-dec", 3)
     _post(reg, local_id="loc-3-up", venue_id="0xvenue0003up", market=m, leg="UP",
           price=0.46, size=10, posted_ts=t - 2400, polled_ts=t - 2100,
-          pair_id="pair-3", max_pair_cost=0.98)
+          pair_id="pair-3", bot_pos_price_max_pair_cost_usd=0.98)
     _quote(reg, market=m, leg="UP", price=0.46, size=10, ts=t - 2400,
            local_id="loc-3-up", venue_id="0xvenue0003up", queue_ahead=540.0,
            mid=0.47, t_remaining=10800.0, latency_ms=88.0)
@@ -281,7 +281,7 @@ def scenario_balanced_pair(reg: OrderRegistry, t: int, out: Path) -> str:
           price=0.458, venue_ts=t - 2100)
     _post(reg, local_id="loc-3-dn", venue_id="0xvenue0003dn", market=m, leg="DOWN",
           price=0.51, size=10, posted_ts=t - 2395, polled_ts=t - 2050,
-          pair_id="pair-3", max_pair_cost=0.98)
+          pair_id="pair-3", bot_pos_price_max_pair_cost_usd=0.98)
     _quote(reg, market=m, leg="DOWN", price=0.51, size=10, ts=t - 2395,
            local_id="loc-3-dn", venue_id="0xvenue0003dn", queue_ahead=2100.0,
            mid=0.51, t_remaining=10800.0, latency_ms=91.0)
@@ -295,7 +295,7 @@ def scenario_merged_pair(reg: OrderRegistry, t: int, out: Path) -> str:
     m = _market("spacex-starship", 4)
     _post(reg, local_id="loc-4a-up", venue_id="0xvenue0004aup", market=m, leg="UP",
           price=0.45, size=12, posted_ts=t - 7200, polled_ts=t - 7000,
-          pair_id="pair-4a", max_pair_cost=0.98)
+          pair_id="pair-4a", bot_pos_price_max_pair_cost_usd=0.98)
     _quote(reg, market=m, leg="UP", price=0.45, size=12, ts=t - 7200,
            local_id="loc-4a-up", venue_id="0xvenue0004aup", queue_ahead=310.0,
            mid=0.49, t_remaining=21600.0, latency_ms=55.0)
@@ -303,7 +303,7 @@ def scenario_merged_pair(reg: OrderRegistry, t: int, out: Path) -> str:
           price=0.448, venue_ts=t - 7000)
     _post(reg, local_id="loc-4a-dn", venue_id="0xvenue0004adn", market=m, leg="DOWN",
           price=0.52, size=12, posted_ts=t - 7190, polled_ts=t - 6950,
-          pair_id="pair-4a", max_pair_cost=0.98)
+          pair_id="pair-4a", bot_pos_price_max_pair_cost_usd=0.98)
     _quote(reg, market=m, leg="DOWN", price=0.52, size=12, ts=t - 7190,
            local_id="loc-4a-dn", venue_id="0xvenue0004adn", queue_ahead=880.0,
            mid=0.51, t_remaining=21600.0, latency_ms=74.0)
@@ -320,7 +320,7 @@ def scenario_merged_pair(reg: OrderRegistry, t: int, out: Path) -> str:
     # fill-path metrics instead of one.
     _post(reg, local_id="loc-4b-up", venue_id="0xvenue0004bup", market=m, leg="UP",
           price=0.43, size=8, posted_ts=t - 6800, polled_ts=t - 6600,
-          pair_id="pair-4b", max_pair_cost=0.96)
+          pair_id="pair-4b", bot_pos_price_max_pair_cost_usd=0.96)
     _quote(reg, market=m, leg="UP", price=0.43, size=8, ts=t - 6800,
            local_id="loc-4b-up", venue_id="0xvenue0004bup", queue_ahead=150.0,
            mid=0.47, t_remaining=21600.0, latency_ms=49.0)
@@ -328,7 +328,7 @@ def scenario_merged_pair(reg: OrderRegistry, t: int, out: Path) -> str:
           price=0.428, venue_ts=t - 6600)
     _post(reg, local_id="loc-4b-dn", venue_id="0xvenue0004bdn", market=m, leg="DOWN",
           price=0.50, size=8, posted_ts=t - 6790, polled_ts=t - 6550,
-          pair_id="pair-4b", max_pair_cost=0.96)
+          pair_id="pair-4b", bot_pos_price_max_pair_cost_usd=0.96)
     _quote(reg, market=m, leg="DOWN", price=0.50, size=8, ts=t - 6790,
            local_id="loc-4b-dn", venue_id="0xvenue0004bdn", queue_ahead=640.0,
            mid=0.53, t_remaining=21600.0, latency_ms=63.0)
@@ -350,7 +350,7 @@ def scenario_cancelled_order(reg: OrderRegistry, t: int, out: Path) -> str:
     m = _market("nba-finals-2027", 5)
     _post(reg, local_id="loc-5-up", venue_id="0xvenue0005up", market=m, leg="UP",
           price=0.55, size=20, posted_ts=t - 1800, polled_ts=t - 300,
-          pair_id="pair-5", max_pair_cost=0.98)
+          pair_id="pair-5", bot_pos_price_max_pair_cost_usd=0.98)
     _quote(reg, market=m, leg="UP", price=0.55, size=20, ts=t - 1800,
            local_id="loc-5-up", venue_id="0xvenue0005up", queue_ahead=15638.0,
            mid=0.52, t_remaining=43200.0, latency_ms=120.0)
@@ -365,7 +365,7 @@ def scenario_partial_fill(reg: OrderRegistry, t: int, out: Path) -> str:
     m = _market("oscar-best-picture", 6)
     _post(reg, local_id="loc-6-up", venue_id="0xvenue0006up", market=m, leg="UP",
           price=0.22, size=20, posted_ts=t - 1200, polled_ts=t - 900,
-          pair_id="pair-6", max_pair_cost=0.75)
+          pair_id="pair-6", bot_pos_price_max_pair_cost_usd=0.75)
     _quote(reg, market=m, leg="UP", price=0.22, size=20, ts=t - 1200,
            local_id="loc-6-up", venue_id="0xvenue0006up", queue_ahead=420.0,
            mid=0.24, t_remaining=259200.0, latency_ms=310.0)
@@ -379,7 +379,7 @@ def scenario_pending_order(reg: OrderRegistry, t: int, out: Path) -> str:
     m = _market("gdp-q3-print", 7)
     _post(reg, local_id="loc-7-up", venue_id=None, market=m, leg="UP",
           price=0.61, size=10, posted_ts=t - 20, polled_ts=t - 20,
-          pair_id="pair-7", max_pair_cost=0.97)
+          pair_id="pair-7", bot_pos_price_max_pair_cost_usd=0.97)
     _quote(reg, market=m, leg="UP", price=0.61, size=10, ts=t - 20,
            local_id="loc-7-up", venue_id=None, queue_ahead=None,
            mid=0.635, t_remaining=900.0, latency_ms=None)
@@ -417,7 +417,7 @@ def scenario_ghost_fill(reg: OrderRegistry, t: int, out: Path) -> str:
     # reconcile pass.
     _post(reg, local_id="loc-8-ghost", venue_id=None, market=m, leg="UP",
           price=0.49, size=10, posted_ts=t - 2400, polled_ts=t - 2300,
-          pair_id="pair-8", max_pair_cost=0.97)
+          pair_id="pair-8", bot_pos_price_max_pair_cost_usd=0.97)
     reg.update_order_status("loc-8-ghost", "unattributed", _ms(t - 2300))
     return "ghost fill ......... election-pa: fill with no order + dangling quote + unattributed order"
 
@@ -430,13 +430,13 @@ def scenario_stale_order(reg: OrderRegistry, t: int, out: Path) -> str:
     m = _market("rain-in-tel-aviv", 9)
     _post(reg, local_id="loc-9-up", venue_id="0xvenue0009up", market=m, leg="UP",
           price=0.30, size=25, posted_ts=t - 3600, polled_ts=t - 180,
-          pair_id="pair-9", max_pair_cost=0.90)
+          pair_id="pair-9", bot_pos_price_max_pair_cost_usd=0.90)
     _quote(reg, market=m, leg="UP", price=0.30, size=25, ts=t - 3600,
            local_id="loc-9-up", venue_id="0xvenue0009up", queue_ahead=220.0,
            mid=0.30, t_remaining=172800.0, latency_ms=95.0)
     _post(reg, local_id="loc-9-dn", venue_id="0xvenue0009dn", market=m, leg="DOWN",
           price=0.58, size=25, posted_ts=t - 3590, polled_ts=t - 180,
-          pair_id="pair-9", max_pair_cost=0.90)
+          pair_id="pair-9", bot_pos_price_max_pair_cost_usd=0.90)
     _quote(reg, market=m, leg="DOWN", price=0.58, size=25, ts=t - 3590,
            local_id="loc-9-dn", venue_id="0xvenue0009dn", queue_ahead=1750.0,
            mid=0.68, t_remaining=172800.0, latency_ms=110.0)
@@ -448,7 +448,7 @@ def scenario_settled_market(reg: OrderRegistry, t: int, out: Path) -> str:
     m = _market("superbowl-lix-winner", 10)
     _post(reg, local_id="loc-10-up", venue_id="0xvenue0010up", market=m, leg="UP",
           price=0.55, size=10, posted_ts=t - 86400, polled_ts=t - 86000,
-          pair_id="pair-10", max_pair_cost=0.99)
+          pair_id="pair-10", bot_pos_price_max_pair_cost_usd=0.99)
     _quote(reg, market=m, leg="UP", price=0.55, size=10, ts=t - 86400,
            local_id="loc-10-up", venue_id="0xvenue0010up", queue_ahead=4300.0,
            mid=0.53, t_remaining=259200.0, latency_ms=150.0)
@@ -456,7 +456,7 @@ def scenario_settled_market(reg: OrderRegistry, t: int, out: Path) -> str:
           price=0.548, venue_ts=t - 86000)
     _post(reg, local_id="loc-10-dn", venue_id="0xvenue0010dn", market=m, leg="DOWN",
           price=0.44, size=10, posted_ts=t - 86390, polled_ts=t - 85900,
-          pair_id="pair-10", max_pair_cost=0.99)
+          pair_id="pair-10", bot_pos_price_max_pair_cost_usd=0.99)
     _quote(reg, market=m, leg="DOWN", price=0.44, size=10, ts=t - 86390,
            local_id="loc-10-dn", venue_id="0xvenue0010dn", queue_ahead=670.0,
            mid=0.46, t_remaining=259200.0, latency_ms=140.0)
@@ -489,7 +489,7 @@ def scenario_refused_lifecycle(reg: OrderRegistry, t: int, out: Path) -> str:
     # The single buy that filled.
     _post(reg, local_id="loc-11-up", venue_id="0xvenue0011up", market=m, leg="UP",
           price=0.38, size=10, posted_ts=t - 5400, polled_ts=t - 5000,
-          pair_id="pair-11", max_pair_cost=0.97)
+          pair_id="pair-11", bot_pos_price_max_pair_cost_usd=0.97)
     _quote(reg, market=m, leg="UP", price=0.38, size=10, ts=t - 5400,
            local_id="loc-11-up", venue_id="0xvenue0011up", queue_ahead=2600.0,
            mid=0.39, t_remaining=86400.0, latency_ms=180.0)
@@ -498,7 +498,7 @@ def scenario_refused_lifecycle(reg: OrderRegistry, t: int, out: Path) -> str:
     # The second leg, resting.
     _post(reg, local_id="loc-11-dn", venue_id="0xvenue0011dn", market=m, leg="DOWN",
           price=0.57, size=10, posted_ts=t - 5390, polled_ts=t - 4990,
-          pair_id="pair-11", max_pair_cost=0.97)
+          pair_id="pair-11", bot_pos_price_max_pair_cost_usd=0.97)
     _quote(reg, market=m, leg="DOWN", price=0.57, size=10, ts=t - 5390,
            local_id="loc-11-dn", venue_id="0xvenue0011dn", queue_ahead=1900.0,
            mid=0.60, t_remaining=86400.0, latency_ms=175.0)
@@ -507,7 +507,7 @@ def scenario_refused_lifecycle(reg: OrderRegistry, t: int, out: Path) -> str:
     stray = _market("strike-friday-stray", 31)
     _post(reg, local_id="loc-11-extra", venue_id="0xvenue0011x", market=stray,
           leg="UP", price=0.20, size=5, posted_ts=t - 5380, polled_ts=t - 4980,
-          pair_id="pair-11", max_pair_cost=0.97)
+          pair_id="pair-11", bot_pos_price_max_pair_cost_usd=0.97)
     reg.save_lifecycle_state(LifecycleStateRecord(
         pair_id="pair-11", condition_id=m["condition_id"], state="refused",
         reason="single_buy_refused_second_leg",
@@ -523,7 +523,7 @@ def scenario_aged_cancelled(reg: OrderRegistry, t: int, out: Path) -> str:
     m = _market("old-market-june", 12)
     _post(reg, local_id="loc-12-up", venue_id="0xvenue0012up", market=m, leg="UP",
           price=0.50, size=10, posted_ts=t - 432000, polled_ts=t - 431500,
-          pair_id="pair-12", max_pair_cost=0.98)
+          pair_id="pair-12", bot_pos_price_max_pair_cost_usd=0.98)
     _quote(reg, market=m, leg="UP", price=0.50, size=10, ts=t - 432000,
            local_id="loc-12-up", venue_id="0xvenue0012up", queue_ahead=5100.0,
            mid=0.49, t_remaining=604800.0, latency_ms=210.0)
@@ -532,7 +532,7 @@ def scenario_aged_cancelled(reg: OrderRegistry, t: int, out: Path) -> str:
                             cancel_queue_ahead=0.0)
     _post(reg, local_id="loc-12-dn", venue_id="0xvenue0012dn", market=m, leg="DOWN",
           price=0.49, size=10, posted_ts=t - 431990, polled_ts=t - 431500,
-          pair_id="pair-12", max_pair_cost=0.98)
+          pair_id="pair-12", bot_pos_price_max_pair_cost_usd=0.98)
     _quote(reg, market=m, leg="DOWN", price=0.49, size=10, ts=t - 431990,
            local_id="loc-12-dn", venue_id="0xvenue0012dn", queue_ahead=4600.0,
            mid=0.50, t_remaining=604800.0, latency_ms=205.0)
@@ -554,7 +554,7 @@ def scenario_pair_completion_wait(reg: OrderRegistry, t: int, out: Path) -> str:
     # The leg that filled.
     _post(reg, local_id="loc-w-up", venue_id="0xvenue0026up", market=m, leg="UP",
           price=0.42, size=10, posted_ts=t - 2700, polled_ts=t - 2400,
-          pair_id="pair-wait", max_pair_cost=0.98)
+          pair_id="pair-wait", bot_pos_price_max_pair_cost_usd=0.98)
     _quote(reg, market=m, leg="UP", price=0.42, size=10, ts=t - 2700,
            local_id="loc-w-up", venue_id="0xvenue0026up", queue_ahead=340.0,
            mid=0.44, t_remaining=7200.0, latency_ms=67.0)
@@ -563,7 +563,7 @@ def scenario_pair_completion_wait(reg: OrderRegistry, t: int, out: Path) -> str:
     # The leg still quoted, waiting for the filled side to complete the pair.
     _post(reg, local_id="loc-w-dn", venue_id="0xvenue0026dn", market=m, leg="DOWN",
           price=0.55, size=10, posted_ts=t - 2350, polled_ts=t - 60,
-          pair_id="pair-wait", max_pair_cost=0.98)
+          pair_id="pair-wait", bot_pos_price_max_pair_cost_usd=0.98)
     _quote(reg, market=m, leg="DOWN", price=0.55, size=10, ts=t - 2350,
            local_id="loc-w-dn", venue_id="0xvenue0026dn", queue_ahead=1100.0,
            mid=0.55, t_remaining=7200.0, latency_ms=71.0)
@@ -580,7 +580,7 @@ def scenario_one_leg_quoted(reg: OrderRegistry, t: int, out: Path) -> str:
     m = _market("half-quoted-market", 27)
     _post(reg, local_id="loc-h-up", venue_id="0xvenue0027up", market=m, leg="UP",
           price=0.36, size=15, posted_ts=t - 900, polled_ts=t - 30,
-          pair_id="pair-half", max_pair_cost=0.97)
+          pair_id="pair-half", bot_pos_price_max_pair_cost_usd=0.97)
     _quote(reg, market=m, leg="UP", price=0.36, size=15, ts=t - 900,
            local_id="loc-h-up", venue_id="0xvenue0027up", queue_ahead=760.0,
            mid=0.38, t_remaining=10800.0, latency_ms=59.0)

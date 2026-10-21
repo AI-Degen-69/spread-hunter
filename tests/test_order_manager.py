@@ -1169,8 +1169,9 @@ def test_cancel_all_cmd_dry_run_and_live(capsys):
     assert "CANCEL-ALL REFUSED" in str(exc.value)
 
 
-def test_status_cmd_reports_auth_and_balances(capsys):
+def test_status_cmd_reports_auth_and_balances(capsys, tmp_path):
     """status() prints address, funder, and open order summary."""
+    from core_brain.order_registry import OrderRegistry
     mock_client = MagicMock()
     mock_client.get_address.return_value = "0x1111222233334444555566667777888899990000"
     mock_client.get_open_orders.return_value = [
@@ -1179,13 +1180,16 @@ def test_status_cmd_reports_auth_and_balances(capsys):
 
     with patch.object(le, "client", return_value=mock_client), \
          patch.dict(os.environ, {"POLY_FUNDER": "0xfunder1234"}, clear=False):
-        le.status()
+        # #646: the re-qualification section reads the registry, so the
+        # test passes an isolated store instead of the production one.
+        le.status(registry=OrderRegistry(db_path=tmp_path / "status.db"))
 
     out = capsys.readouterr().out
     assert "0x1111222233334444555566667777888899990000" in out
     assert "0xfunder1234" in out
     assert "open orders    1" in out
     assert "venue-ord-1" in out
+    assert "awaiting re-qualification  0 market(s)" in out
 
 
 def test_balance_cmd_queries_funder_and_collateral(capsys):

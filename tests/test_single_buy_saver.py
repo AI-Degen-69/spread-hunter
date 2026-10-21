@@ -150,18 +150,18 @@ class FakeClient:
 def test_trigger_fires_at_the_cap():
     """0.60 fill + 0.395 ask == 0.995 == max_pair_cost. `>=`, not `>`."""
     assert lp.should_exit(fill_cost=0.60, light_ask=0.395,
-                          max_pair_cost=MAX_PAIR_COST) is True
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST) is True
 
 
 def test_trigger_holds_one_tick_below_the_cap():
     assert lp.should_exit(fill_cost=0.60, light_ask=0.394,
-                          max_pair_cost=MAX_PAIR_COST) is False
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST) is False
 
 
 def test_trigger_fires_when_the_light_leg_has_no_ask():
     """No ask at all is not a completable pair; it is a naked leg."""
     assert lp.should_exit(fill_cost=0.60, light_ask=None,
-                          max_pair_cost=MAX_PAIR_COST) is True
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST) is True
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +174,7 @@ def test_cancel_precedes_the_sell(registry: OrderRegistry):
     client = FakeClient(best_ask=0.40)
 
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True)
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["action"] == "exited"
     cancel_i = next(i for i, c in enumerate(client.calls) if c.startswith("cancel:"))
@@ -188,7 +188,7 @@ def test_a_failed_cancel_aborts_before_any_sell(registry: OrderRegistry):
 
     with pytest.raises(lp.PairExitRefused, match="cancel"):
         lp.exit_naked_leg(client, registry, pair_id,
-                          max_pair_cost=MAX_PAIR_COST, live=True)
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert not any(c.startswith("sell:") for c in client.calls)
 
@@ -221,7 +221,7 @@ def test_a_pair_that_completed_between_cancel_and_sell_routes_to_merge(
     client = RacingClient(best_ask=0.40)
     assert light is not None
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True)
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["action"] == "route_to_merge"
     assert not any(c.startswith("sell:") for c in client.calls)
@@ -237,7 +237,7 @@ def test_sell_size_is_capped_by_the_registry(registry: OrderRegistry):
     client = FakeClient(best_ask=0.40, bid_depth=1_000.0)
 
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True)
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["size"] == pytest.approx(10.0)
     sell_call = next(c for c in client.calls if c.startswith("sell:"))
@@ -250,7 +250,7 @@ def test_sell_size_is_capped_by_bid_depth(registry: OrderRegistry):
     client = FakeClient(best_ask=0.40, bid_depth=4.0)
 
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True)
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["size"] == pytest.approx(4.0)
 
@@ -270,7 +270,7 @@ def test_position_divergence_refuses_the_exit(registry: OrderRegistry):
 
     with pytest.raises(lp.PairExitRefused, match="diverge"):
         lp.exit_naked_leg(client, registry, pair_id,
-                          max_pair_cost=MAX_PAIR_COST, live=True,
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                           venue_positions={TOK_UP: 3.0})
 
     assert not any(c.startswith("cancel:") for c in client.calls)
@@ -282,7 +282,7 @@ def test_matching_positions_allow_the_exit(registry: OrderRegistry):
     client = FakeClient(best_ask=0.40)
 
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True,
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                                venue_positions={TOK_UP: 10.0})
     assert result["action"] == "exited"
 
@@ -292,7 +292,7 @@ def test_divergence_check_tolerates_float_dust(registry: OrderRegistry):
     client = FakeClient(best_ask=0.40)
 
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True,
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                                venue_positions={TOK_UP: 10.0 - 1e-9})
     assert result["action"] == "exited"
 
@@ -307,7 +307,7 @@ def test_below_the_cap_holds_and_sends_nothing(registry: OrderRegistry):
     client = FakeClient(best_ask=0.30)  # 0.60 + 0.30 = 0.90, well under
 
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True)
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["action"] == "hold"
     assert not any(c.startswith(("cancel:", "sell:")) for c in client.calls)
@@ -318,7 +318,7 @@ def test_dry_run_sends_no_venue_writes(registry: OrderRegistry):
     client = FakeClient(best_ask=0.40)
 
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=False)
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=False)
 
     assert result["action"] == "would_exit"
     assert not any(c.startswith(("cancel:", "sell:")) for c in client.calls)
@@ -335,7 +335,7 @@ def test_a_balanced_pair_is_not_an_exit_candidate(registry: OrderRegistry):
 
     client = FakeClient(best_ask=0.40)
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True)
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["action"] == "balanced"
     assert not any(c.startswith(("cancel:", "sell:")) for c in client.calls)
@@ -355,7 +355,7 @@ def test_completion_crosses_when_the_pair_stays_under_the_cap(registry: OrderReg
     client = FakeClient(best_ask=0.30)  # 0.60 + 0.30 = 0.90 < 0.995
 
     result = lp.complete_pair(client, registry, pair_id,
-                              max_pair_cost=MAX_PAIR_COST, live=True)
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["action"] == "completed"
     assert result["size"] == pytest.approx(10.0)
@@ -369,9 +369,9 @@ def test_completion_refuses_a_cross_that_breaches_the_cap(registry: OrderRegistr
     pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
     client = FakeClient(best_ask=0.40)  # 0.60 + 0.40 = 1.00 >= 0.995
 
-    with pytest.raises(lp.PairCompletionRefused, match="max_pair_cost"):
+    with pytest.raises(lp.PairCompletionRefused, match="bot_pos_price_max_pair_cost_usd"):
         lp.complete_pair(client, registry, pair_id,
-                         max_pair_cost=MAX_PAIR_COST, live=True)
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert not any(c.startswith("buy:") for c in client.calls)
 
@@ -405,7 +405,7 @@ def test_completion_sizes_from_fills_not_from_intent(registry: OrderRegistry):
 
     client = FakeClient(best_ask=0.30)
     result = lp.complete_pair(client, registry, pair_id,
-                              max_pair_cost=MAX_PAIR_COST, live=True)
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["size"] == pytest.approx(4.0)
 
@@ -417,8 +417,8 @@ def test_completion_is_capped_by_max_order_usd(registry: OrderRegistry):
 
     with pytest.raises(lp.PairCompletionRefused, match="MAX_ORDER_USD"):
         lp.complete_pair(client, registry, pair_id,
-                         max_pair_cost=MAX_PAIR_COST, live=True,
-                         max_order_usd=1.00)  # 10 * 0.30 = $3.00
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
+                         bot_risk_exposure_max_order_usd=1.00)  # 10 * 0.30 = $3.00
 
 
 def test_completion_is_capped_by_ask_depth(registry: OrderRegistry):
@@ -426,7 +426,7 @@ def test_completion_is_capped_by_ask_depth(registry: OrderRegistry):
     client = FakeClient(best_ask=0.30, ask_depth=3.0)
 
     result = lp.complete_pair(client, registry, pair_id,
-                              max_pair_cost=MAX_PAIR_COST, live=True)
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
     assert result["size"] == pytest.approx(3.0)
 
 
@@ -436,7 +436,7 @@ def test_completion_refuses_without_an_ask(registry: OrderRegistry):
 
     with pytest.raises(lp.PairCompletionRefused, match="no ask"):
         lp.complete_pair(client, registry, pair_id,
-                         max_pair_cost=MAX_PAIR_COST, live=True)
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
 
 def test_completion_dry_run_sends_nothing(registry: OrderRegistry):
@@ -444,7 +444,7 @@ def test_completion_dry_run_sends_nothing(registry: OrderRegistry):
     client = FakeClient(best_ask=0.30)
 
     result = lp.complete_pair(client, registry, pair_id,
-                              max_pair_cost=MAX_PAIR_COST, live=False)
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=False)
 
     assert result["action"] == "would_complete"
     assert not any(c.startswith("buy:") for c in client.calls)
@@ -461,7 +461,7 @@ def test_a_balanced_pair_needs_no_completion(registry: OrderRegistry):
 
     client = FakeClient(best_ask=0.30)
     result = lp.complete_pair(client, registry, pair_id,
-                              max_pair_cost=MAX_PAIR_COST, live=True)
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["action"] == "balanced"
     assert not any(c.startswith("buy:") for c in client.calls)
@@ -479,7 +479,7 @@ def test_a_completed_pair_reads_as_held_on_both_legs(registry: OrderRegistry):
     client = FakeClient(best_ask=0.30)
 
     lp.complete_pair(client, registry, pair_id,
-                     max_pair_cost=MAX_PAIR_COST, live=True)
+                     bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
     # The venue fill arrives through reconcile; simulate that landing.
     registry.record_fill(FillRecord(
         trade_id="trade-completion", order_uuid=light.id, size=10.0,
@@ -505,7 +505,7 @@ def test_completion_buy_amount_is_usdc_not_shares(registry: OrderRegistry):
     client = FakeClient(best_ask=0.30)
 
     result = lp.complete_pair(client, registry, pair_id,
-                              max_pair_cost=MAX_PAIR_COST, live=True)
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     sent = next(o for o in client.orders if o["side"] == "BUY")
     assert sent["amount"] == pytest.approx(3.00)            # 10 shares * $0.30
@@ -524,7 +524,7 @@ def test_exit_sell_amount_stays_in_shares(registry: OrderRegistry):
     client = FakeClient(best_ask=0.40)
 
     lp.exit_naked_leg(client, registry, pair_id,
-                      max_pair_cost=MAX_PAIR_COST, live=True)
+                      bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     sent = next(o for o in client.orders if o["side"] == "SELL")
     assert sent["amount"] == pytest.approx(10.0)
@@ -549,7 +549,7 @@ def test_exit_cancels_working_orders_on_the_heavy_leg_too(registry: OrderRegistr
 
     client = FakeClient(best_ask=0.40)
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True)
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert "venue-heavy-2" in result["cancelled"]
     cancel_idx = [i for i, c in enumerate(client.calls) if c.startswith("cancel:")]
@@ -564,7 +564,7 @@ def test_exit_refuses_when_the_venue_order_read_fails(registry: OrderRegistry):
 
     with pytest.raises(lp.PairExitRefused, match="venue state"):
         lp.exit_naked_leg(client, registry, pair_id,
-                          max_pair_cost=MAX_PAIR_COST, live=True)
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert not any(c.startswith("sell:") for c in client.calls)
 
@@ -585,7 +585,7 @@ def test_exit_bounds_the_sell_price_and_counts_only_acceptable_depth(
     ])
 
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True)
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["size"] == pytest.approx(5.0)        # 3 + 2, not 45
     assert result["min_price"] == pytest.approx(0.53)  # 0.55 - 0.02, on tick
@@ -601,7 +601,7 @@ def test_completion_cancels_the_resting_light_buy_before_crossing(
     client = FakeClient(best_ask=0.30)
 
     result = lp.complete_pair(client, registry, pair_id,
-                              max_pair_cost=MAX_PAIR_COST, live=True)
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert "venue-light" in result["cancelled"]
     cancel_i = next(i for i, c in enumerate(client.calls) if c.startswith("cancel:"))
@@ -617,7 +617,7 @@ def test_completion_shrinks_to_the_remainder_after_a_partial_race(
     client = FakeClient(best_ask=0.30, venue_matched={"venue-light": 6.0})
 
     result = lp.complete_pair(client, registry, pair_id,
-                              max_pair_cost=MAX_PAIR_COST, live=True)
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["size"] == pytest.approx(4.0)
     sent = next(o for o in client.orders if o["side"] == "BUY")
@@ -631,7 +631,7 @@ def test_completion_is_a_no_op_when_the_leg_filled_during_the_cancel(
     client = FakeClient(best_ask=0.30, venue_matched={"venue-light": 10.0})
 
     result = lp.complete_pair(client, registry, pair_id,
-                              max_pair_cost=MAX_PAIR_COST, live=True)
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["action"] == "balanced"
     assert not any(c.startswith("buy:") for c in client.calls)
@@ -647,7 +647,7 @@ def test_a_venue_surplus_does_not_block_the_exit(registry: OrderRegistry):
     client = FakeClient(best_ask=0.40)
 
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True,
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                                venue_positions={TOK_UP: 25.0})
     assert result["action"] == "exited"
 
@@ -659,7 +659,7 @@ def test_a_token_absent_from_the_positions_read_refuses(registry: OrderRegistry)
 
     with pytest.raises(lp.PairExitRefused, match="no position at all"):
         lp.exit_naked_leg(client, registry, pair_id,
-                          max_pair_cost=MAX_PAIR_COST, live=True,
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                           venue_positions={"some-other-token": 5.0})
 
     assert not any(c.startswith("cancel:") for c in client.calls)
@@ -696,7 +696,7 @@ def test_completion_refusals_use_the_completion_exception(registry: OrderRegistr
 
     with pytest.raises(lp.PairCompletionRefused, match="Cancel"):
         lp.complete_pair(client, registry, pair_id,
-                         max_pair_cost=MAX_PAIR_COST, live=True)
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert not any(c.startswith("buy:") for c in client.calls)
 
@@ -709,7 +709,7 @@ def test_completion_venue_read_failure_uses_the_completion_exception(
 
     with pytest.raises(lp.PairCompletionRefused, match="venue state"):
         lp.complete_pair(client, registry, pair_id,
-                         max_pair_cost=MAX_PAIR_COST, live=True)
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert not any(c.startswith("buy:") for c in client.calls)
 
@@ -721,7 +721,7 @@ def test_exit_refusals_still_use_the_exit_exception(registry: OrderRegistry):
 
     with pytest.raises(lp.PairExitRefused):
         lp.exit_naked_leg(client, registry, pair_id,
-                          max_pair_cost=MAX_PAIR_COST, live=True)
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
 
 # ---------------------------------------------------------------------------
@@ -803,7 +803,7 @@ def test_complete_pair_cmd_runs_end_to_end_and_holds_after_a_cross(
     def fake_complete(*args, **kwargs):
         # Proves the call site was reached with a real max_pair_cost, which is
         # what the missing config import used to break before any work started.
-        assert kwargs["max_pair_cost"] > 0
+        assert kwargs["bot_pos_price_max_pair_cost_usd"] > 0
         return {"action": "completed", "pair_id": pair_id, "condition_id": COND,
                 "size": 10.0, "notional": 3.0}
 
@@ -931,7 +931,7 @@ def test_exit_survives_the_light_leg_overtaking_the_heavy_one(
     # and walk away from an open position on the other token.
     with pytest.raises(lp.PairExitRefused, match="changed token"):
         lp.exit_naked_leg(client, registry, pair_id,
-                          max_pair_cost=MAX_PAIR_COST, live=True)
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert not any(c.startswith("sell:") for c in client.calls)
 
@@ -975,7 +975,7 @@ def test_completion_cancels_the_working_heavy_leg_too(registry: OrderRegistry):
 
     client = FakeClient(best_ask=0.30)
     result = lp.complete_pair(client, registry, pair_id,
-                              max_pair_cost=MAX_PAIR_COST, live=True)
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert "venue-heavy-2" in result["cancelled"]
 
@@ -1002,9 +1002,9 @@ def test_completion_rechecks_the_cap_after_the_cancel(registry: OrderRegistry):
             return out
 
     client = WorseningClient(best_ask=0.30)
-    with pytest.raises(lp.PairCompletionRefused, match="max_pair_cost"):
+    with pytest.raises(lp.PairCompletionRefused, match="bot_pos_price_max_pair_cost_usd"):
         lp.complete_pair(client, registry, pair_id,
-                         max_pair_cost=MAX_PAIR_COST, live=True)
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert not any(c.startswith("buy:") for c in client.calls)
 
@@ -1048,7 +1048,7 @@ def test_completion_refuses_when_a_heavy_fill_is_visible_only_at_the_venue(
 
     with pytest.raises(lp.PairCompletionRefused, match="has none yet"):
         lp.complete_pair(client, registry, pair_id,
-                         max_pair_cost=MAX_PAIR_COST, live=True)
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert not any(c.startswith("buy:") for c in client.calls)
 
@@ -1067,7 +1067,7 @@ def test_completion_refuses_when_the_light_leg_overtakes(registry: OrderRegistry
 
     with pytest.raises(lp.PairCompletionRefused, match="exceeds"):
         lp.complete_pair(client, registry, pair_id,
-                         max_pair_cost=MAX_PAIR_COST, live=True)
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert not any(c.startswith("buy:") for c in client.calls)
 
@@ -1249,7 +1249,7 @@ def test_taker_paths_never_set_post_only(registry):
     # 1. Test exit_naked_leg (taker SELL)
     res_exit = lp.exit_naked_leg(
         client, registry, pair_id,
-        max_pair_cost=MAX_PAIR_COST,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
         live=True,
     )
     assert res_exit["action"] == "exited"
@@ -1281,7 +1281,7 @@ def test_taker_paths_never_set_post_only(registry):
     client_comp = FakeClient(best_ask=0.35, best_bid=0.55)
     res_comp = lp.complete_pair(
         client_comp, registry, pair_id_2,
-        max_pair_cost=MAX_PAIR_COST,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
         live=True,
     )
     assert res_comp["action"] == "completed"
@@ -1300,7 +1300,7 @@ def test_exit_close_without_a_reason_still_records(registry: OrderRegistry):
     client = FakeClient(best_ask=0.40)
 
     result = lp.exit_single_buy(client, registry, pair_id,
-                                max_pair_cost=MAX_PAIR_COST, live=True)
+                                bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     assert result["action"] == "exited"
     closes = [c for c in registry.get_all_closes()
@@ -1323,14 +1323,14 @@ def test_exit_close_carries_reason_only_after_a_successful_sale(
     refused_client = FakeClient(best_ask=0.40, cancel_ok=False)
     with pytest.raises(lp.PairExitRefused):
         lp.exit_single_buy(refused_client, registry, pair_id,
-                           max_pair_cost=MAX_PAIR_COST, live=True,
+                           bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                            reason="grace_expired")
     assert registry.get_all_closes() == []
 
     # Then the real exit with a reason records it, only after the sell.
     client = FakeClient(best_ask=0.40)
     result = lp.exit_single_buy(client, registry, pair_id,
-                                max_pair_cost=MAX_PAIR_COST, live=True,
+                                bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                                 reason="grace_expired")
     assert result["action"] == "exited"
     sell_i = next(i for i, c in enumerate(client.calls) if c.startswith("sell:"))
@@ -1354,7 +1354,7 @@ def test_force_exit_sells_after_cancel_despite_a_profitable_completion_ask(
     client = FakeClient(best_ask=0.38, best_bid=0.55)
 
     result = lp.exit_single_buy(
-        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        client, registry, pair_id, bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
         live=True, force=True, reason="hard_stop",
     )
 
@@ -1376,7 +1376,7 @@ def test_force_exit_does_not_sell_when_cancel_fails(registry: OrderRegistry):
 
     with pytest.raises(lp.PairExitRefused, match="cancel"):
         lp.exit_single_buy(
-            client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+            client, registry, pair_id, bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
             live=True, force=True, reason="hard_stop",
         )
 
@@ -1396,7 +1396,7 @@ def test_force_exit_routes_to_merge_when_the_pair_fills_during_cancel(
 
     client = RacingClient(best_ask=0.38)
     result = lp.exit_single_buy(
-        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        client, registry, pair_id, bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
         live=True, force=True, reason="hard_stop",
     )
 
@@ -1412,7 +1412,7 @@ def test_force_exit_does_not_sell_on_registry_venue_position_divergence(
 
     with pytest.raises(lp.PairExitRefused, match="diverge"):
         lp.exit_single_buy(
-            client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+            client, registry, pair_id, bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
             live=True, venue_positions={TOK_UP: 3.0},
             force=True, reason="hard_stop",
         )
@@ -1433,7 +1433,7 @@ def test_force_exit_does_not_sell_below_the_venue_minimum_depth(
 
     with pytest.raises(lp.PairExitRefused, match="below the venue minimum"):
         lp.exit_single_buy(
-            client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+            client, registry, pair_id, bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
             live=True, force=True, reason="hard_stop",
         )
 
@@ -1480,7 +1480,7 @@ def test_manage_single_leg_positions_stranded_completion_when_enabled(registry: 
     # opposing ask is 0.40 -> 0.55 + 0.40 = 0.95 < 0.99
     # fill venue_ts is 1_000_000 ms = 1000s; now=1010s (within 900s window)
     client = FakeClient(best_ask=0.40)
-    cfg = MakerConfig(stranded_completion_enabled=True, max_pair_cost=0.99)
+    cfg = MakerConfig(bot_risk_stranded_completion_on=True, bot_pos_price_max_pair_cost_usd=0.99)
 
     results = manage_single_leg_positions(client, registry, cfg, live=False, now=1010.0)
     assert any(r.get("action") == "would_complete" for r in results)
@@ -1500,11 +1500,11 @@ def test_manage_single_leg_positions_stranded_maker_wait_and_forced_exit(registr
     # -> action is stranded_awaiting_maker
     client = FakeClient(best_ask=0.60)  # 0.55 + 0.60 = 1.15 > 0.99
     cfg = MakerConfig(
-        stranded_completion_enabled=False,
-        enable_aged_out_rescue=False,
-        pairs_exit_window_sec=100.0,
-        stranded_max_wait_sec=300.0,
-        max_pair_cost=0.99,
+        bot_risk_stranded_completion_on=False,
+        bot_risk_gate_aged_out_rescue_on=False,
+        bot_risk_pairs_exit_window_sec=100.0,
+        bot_risk_stranded_max_wait_sec=300.0,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     results_wait = manage_single_leg_positions(client, registry, cfg, live=False, now=1101.0)
@@ -1533,9 +1533,9 @@ def test_manage_single_leg_positions_settles_by_completing_under_the_cap(
     # is long past, and a market ending 600s out is inside the 900s lead.
     client = FakeClient(best_ask=0.30, best_bid=0.55, ask_depth=100.0)
     cfg = MakerConfig(
-        enable_pairs_rule=True, enable_aged_out_rescue=True,
-        pairs_exit_window_sec=900.0, aged_out_rescue_lead_sec=900.0,
-        max_pair_cost=0.99,
+        bot_risk_gate_pairs_rule_on=True, bot_risk_gate_aged_out_rescue_on=True,
+        bot_risk_pairs_exit_window_sec=900.0, bot_risk_aged_out_rescue_lead_sec=900.0,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
 
     results = manage_single_leg_positions(
@@ -1595,7 +1595,7 @@ def test_shadow_rescue_exit_records_an_explicit_zero_fee(
     client = ShadowFakeClient(best_ask=0.38, best_bid=0.55)
 
     result = lp.exit_single_buy(
-        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        client, registry, pair_id, bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
         live=True, force=True, reason="hard_stop", method=method,
     )
 
@@ -1612,7 +1612,7 @@ def test_partial_shadow_rescue_exit_records_zero_fee(registry: OrderRegistry):
     client = ShadowFakeClient(best_ask=0.38, best_bid=0.55, fill_size=4.0)
 
     result = lp.exit_single_buy(
-        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        client, registry, pair_id, bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
         live=True, force=True, reason="hard_stop",
     )
 
@@ -1635,7 +1635,7 @@ def test_live_rescue_exit_keeps_fee_unmeasured(registry: OrderRegistry):
     client = FakeClient(best_ask=0.38, best_bid=0.55)
 
     result = lp.exit_single_buy(
-        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        client, registry, pair_id, bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
         live=True, force=True, reason="hard_stop",
     )
 
@@ -1654,7 +1654,7 @@ def test_executed_rescue_close_reads_as_measured_zero_friction(
     client = ShadowFakeClient(best_ask=0.38, best_bid=0.55)
 
     result = lp.exit_single_buy(
-        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        client, registry, pair_id, bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
         live=True, force=True, reason="hard_stop",
     )
 
@@ -1728,9 +1728,9 @@ def _trig525_pair(registry: OrderRegistry, when: int) -> None:
 def _trig525_cfg():
     """The manager's own knobs: both routes on, a 900s window and lead."""
     return MakerConfig(
-        enable_pairs_rule=True, enable_aged_out_rescue=True,
-        pairs_exit_window_sec=900.0, aged_out_rescue_lead_sec=900.0,
-        max_pair_cost=MAX_PAIR_COST, max_order_usd=100.0,
+        bot_risk_gate_pairs_rule_on=True, bot_risk_gate_aged_out_rescue_on=True,
+        bot_risk_pairs_exit_window_sec=900.0, bot_risk_aged_out_rescue_lead_sec=900.0,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, bot_risk_exposure_max_order_usd=100.0,
     )
 
 
@@ -1793,13 +1793,15 @@ class DecisionThenExecutionBook:
         return {"success": True, "orderID": f"venue-{verb}"}
 
 
-def _trig525_route(registry, venue, now_s, *, market_state_fn=None):
+def _trig525_route(registry, venue, now_s, *, market_state_fn=None,
+                   funder=None):
     """One unified-lifecycle pass over the #525 pair, with the venue position
     the exit's divergence gate needs (UP 10 held, DOWN nothing)."""
     results = lp.manage_single_leg_positions(
         venue, registry, _trig525_cfg(), live=True, now=now_s,
         venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
         market_state_fn=market_state_fn,
+        funder=funder,
     )
     assert len(results) == 1
     return results[0]
@@ -1916,8 +1918,8 @@ def test_shadow_hard_stop_records_trigger_bid(tmp_path):
 
     routed = lp.manage_single_leg_positions(
         client, reg, MakerConfig(
-            enable_pairs_rule=True, pairs_exit_window_sec=900.0,
-            max_pair_cost=MAX_PAIR_COST,
+            bot_risk_gate_pairs_rule_on=True, bot_risk_pairs_exit_window_sec=900.0,
+            bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
         ),
         live=True, now=TRIG525_NOW / 1000.0 + 10.0,
         venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
@@ -2002,17 +2004,51 @@ def test_hard_stop_exit_refuses_when_cancel_fails(registry: OrderRegistry):
     assert not any(c.startswith("sell:") for c in client.calls)
 
 
-def test_hard_stop_full_exit_resets_lifecycle(registry: OrderRegistry):
-    """#628: When all shares are sold on hard stop, lifecycle row resets to DUAL_RESTING."""
+def test_hard_stop_full_exit_resets_lifecycle(registry: OrderRegistry, monkeypatch):
+    """#646: reset now deletes the row and marks re-qualification.
+
+    Was #628's DUAL_RESTING write off an assumed-flat read; only the shared
+    proof clears the row now, so this venue proves flat (empty book, empty
+    trades, empty balances) instead of merely selling.
+    """
+    import json as _json
+    import urllib.request as _urlopen_mod
+
     _trig525_pair(registry, TRIG525_NOW)
     venue = DecisionThenExecutionBook(decision_bid=0.15, execution_bid=0.14)
-    routed = _trig525_route(registry, venue, TRIG525_NOW / 1000.0 + 10.0)
+    venue.creds = object()
+    venue.open_orders = [{"id": "venue-up"}, {"id": "venue-dn"}]
+    venue.get_open_orders = lambda: list(venue.open_orders)
+    venue.get_trades = lambda params=None: []
+    _orig_cancel = venue.cancel_order
+
+    def _proving_cancel(payload):
+        out = _orig_cancel(payload)
+        oid = str(getattr(payload, "orderID", payload))
+        venue.open_orders = [o for o in venue.open_orders if o["id"] != oid]
+        return out
+
+    venue.cancel_order = _proving_cancel
+
+    class _Resp:
+        def read(self):
+            return _json.dumps([]).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(
+        _urlopen_mod, "urlopen", lambda req, timeout=None: _Resp())
+    routed = _trig525_route(registry, venue, TRIG525_NOW / 1000.0 + 10.0,
+                            funder="0xfunder")
 
     assert routed["action"] == "exited"
-    rec = registry.get_lifecycle_state(TRIG525_PAIR)
-    assert rec is not None
-    assert rec.state == "DUAL_RESTING"
-    assert rec.reason == "hard_stop_exited"
+    assert routed["reset_status"] == "RESET"
+    assert registry.get_lifecycle_state(TRIG525_PAIR) is None
+    assert registry.requalification_marks()[TRIG525_COND].status == "awaiting"
 
 
 def test_hard_stop_partial_exit_keeps_hard_stop(registry: OrderRegistry):
@@ -2041,7 +2077,7 @@ def test_saver_forwards_canonical_emergency_drawdown(registry: OrderRegistry):
     import warnings
     from unittest.mock import MagicMock, patch
     cfg = MakerConfig(
-        enable_pairs_rule=True,
+        bot_risk_gate_pairs_rule_on=True,
         bot_pos_price_max_pair_cost_usd=0.99,
         bot_risk_circuit_max_drawdown_pct=60.0,
     )
@@ -2061,3 +2097,39 @@ def test_saver_forwards_canonical_emergency_drawdown(registry: OrderRegistry):
 
     for w in recorded:
         assert "emergency_drawdown_pct is deprecated" not in str(w.message)
+
+
+def test_manage_held_bid_uses_decision_book_fn_when_wired(registry: OrderRegistry):
+    """#659: the lifecycle decision read rides the provider; exits stay fresh."""
+    from core_brain.single_buy_saver import manage_single_leg_positions
+
+    _one_sided_pair(registry, filled_size=10.0, fill_price=0.55)
+    decision_calls: list[str] = []
+
+    def decision_book_fn(token_id):
+        decision_calls.append(token_id)
+        return {"bids": [{"price": "0.50", "size": "25"}],
+                "asks": [{"price": "0.52", "size": "25"}]}
+
+    client = FakeClient(best_ask=0.40, best_bid=0.55)
+    cfg = MakerConfig()
+    results = manage_single_leg_positions(
+        client, registry, cfg, live=False, now=1010.0,
+        decision_book_fn=decision_book_fn,
+    )
+    assert decision_calls == [TOK_UP]
+    assert not any(c == f"book:{TOK_UP}" for c in client.calls)
+    assert results
+
+
+def test_manage_held_bid_falls_back_to_client_without_decision_fn(
+        registry: OrderRegistry):
+    """Unwired callers keep today's behavior exactly."""
+    from core_brain.single_buy_saver import manage_single_leg_positions
+
+    _one_sided_pair(registry, filled_size=10.0, fill_price=0.55)
+    client = FakeClient(best_ask=0.40, best_bid=0.55)
+    results = manage_single_leg_positions(
+        client, registry, MakerConfig(), live=False, now=1010.0)
+    assert f"book:{TOK_UP}" in client.calls
+    assert results

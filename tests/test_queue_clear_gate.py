@@ -11,7 +11,7 @@ Two halves, tested apart so a failure names which one is wrong:
 
 The gate ships RECORD-ONLY (`enforce_queue_clear_gate = False`): the reason is
 reported on every gated placement and nothing is dropped until
-`HUNTER_QUEUE_CLEAR_GATE=1`. The operator chose that this session; the repo's own
+`BOT_ORDER_GATE_QUEUE_CLEAR_ON=1`. The operator chose that this session; the repo's own
 precedent for this rule ships the same way ("enforcing on day one refuses every
 market and takes the bot silent").
 
@@ -164,7 +164,7 @@ class TestRecentSellFlow:
         # with no stamp into epoch 0, which then became `oldest` -- so a full
         # page that never reached the window start was reported as COMPLETE.
         # The reading is a floor, and reading a floor as a measurement is what
-        # refuses placements under HUNTER_QUEUE_CLEAR_GATE=1.
+        # refuses placements under BOT_ORDER_GATE_QUEUE_CLEAR_ON=1.
         page = [{"price": 0.47, "size": 10.0, "side": "SELL", "asset": "tok"},
                 _trade(NOW - 30, 0.47, 10.0, tx="0xone")]
         flow = _flow(_TapeSession([page]), page_size=2, max_pages=1)
@@ -197,8 +197,8 @@ class TestRecentSellFlow:
 def _gate_cfg(**kw):
     """A cfg that carries only what this gate reads, following `_gate_cfg`
     in `tests/test_completable_pair_gate.py`."""
-    base = dict(max_queue_clear_minutes=60.0, enforce_queue_clear_gate=False,
-                queue_flow_window_sec=WINDOW)
+    base = dict(bot_order_queue_max_clear_min=60.0, bot_order_gate_queue_clear_on=False,
+                bot_order_queue_flow_window_sec=WINDOW)
     base.update(kw)
     return MakerConfig(**base)
 
@@ -216,7 +216,7 @@ class TestQueueClearBlock:
 
     def test_enforcing_refuses_the_same_placement(self):
         allowed, why = risk.queue_clear_block(
-            _gate_cfg(enforce_queue_clear_gate=True), "UP", 0.47,
+            _gate_cfg(bot_order_gate_queue_clear_on=True), "UP", 0.47,
             85000.0, 2000.0, 30.0)
         assert allowed is False
         assert "maker queue" in why
@@ -224,7 +224,7 @@ class TestQueueClearBlock:
 
     def test_a_clear_queue_is_allowed_with_no_reason(self):
         allowed, why = risk.queue_clear_block(
-            _gate_cfg(enforce_queue_clear_gate=True), "DOWN", 0.45,
+            _gate_cfg(bot_order_gate_queue_clear_on=True), "DOWN", 0.45,
             100.0, 3000.0, 30.0)
         assert allowed is True
         assert why == ""
@@ -233,14 +233,14 @@ class TestQueueClearBlock:
         # Nothing ahead of us needs no time to clear, and "no flow at our price"
         # must not turn into an infinite wait for an empty level.
         allowed, why = risk.queue_clear_block(
-            _gate_cfg(enforce_queue_clear_gate=True), "UP", 0.47, 0.0, 0.0, 30.0)
+            _gate_cfg(bot_order_gate_queue_clear_on=True), "UP", 0.47, 0.0, 0.0, 30.0)
         assert allowed is True
         assert why == ""
 
     def test_nonzero_queue_with_zero_flow_never_clears(self):
         # The strongest form of the finding: a queue nobody ever sold into.
         allowed, why = risk.queue_clear_block(
-            _gate_cfg(enforce_queue_clear_gate=True), "UP", 0.47, 50.0, 0.0, 30.0)
+            _gate_cfg(bot_order_gate_queue_clear_on=True), "UP", 0.47, 50.0, 0.0, 30.0)
         assert allowed is False
         assert "never clears" in why
 
@@ -248,14 +248,14 @@ class TestQueueClearBlock:
         # `>=`, not `>`: a ceiling reached, not approached -- the same reading
         # every other cap in this repo takes.
         allowed, why = risk.queue_clear_block(
-            _gate_cfg(enforce_queue_clear_gate=True), "UP", 0.47,
+            _gate_cfg(bot_order_gate_queue_clear_on=True), "UP", 0.47,
             6000.0, 3000.0, 30.0)          # 3000/30min -> 100/min -> 60 min
         assert allowed is False
         assert "60 min bar" in why
 
     def test_just_under_the_bar_is_allowed(self):
         allowed, why = risk.queue_clear_block(
-            _gate_cfg(enforce_queue_clear_gate=True), "UP", 0.47,
+            _gate_cfg(bot_order_gate_queue_clear_on=True), "UP", 0.47,
             5999.0, 3000.0, 30.0)
         assert allowed is True
         assert why == ""
@@ -263,7 +263,7 @@ class TestQueueClearBlock:
     def test_a_zero_bar_turns_the_gate_off(self):
         # The escape hatch every other limit here has.
         allowed, why = risk.queue_clear_block(
-            _gate_cfg(max_queue_clear_minutes=0.0, enforce_queue_clear_gate=True),
+            _gate_cfg(bot_order_queue_max_clear_min=0.0, bot_order_gate_queue_clear_on=True),
             "UP", 0.47, 85000.0, 0.0, 30.0)
         assert allowed is True
         assert why == ""
@@ -272,8 +272,8 @@ class TestQueueClearBlock:
         # NaN would make every comparison false, so the gate would read as
         # enforced while permitting anything. Refused loudly instead.
         allowed, why = risk.queue_clear_block(
-            _gate_cfg(max_queue_clear_minutes=math.nan,
-                      enforce_queue_clear_gate=True),
+            _gate_cfg(bot_order_queue_max_clear_min=math.nan,
+                      bot_order_gate_queue_clear_on=True),
             "UP", 0.47, 85000.0, 0.0, 30.0)
         assert allowed is False
         assert why
@@ -381,7 +381,7 @@ class TestAdmitPlacements:
         down = _intent(side="DOWN", token="tok-dn", price=0.45)
         admitted, why = _admit_placements(
             [up, down], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
-            _gate_cfg(enforce_queue_clear_gate=True))
+            _gate_cfg(bot_order_gate_queue_clear_on=True))
         assert admitted == []
         assert "maker queue" in why
         assert "2 new placement(s) dropped with it" in why
@@ -395,7 +395,7 @@ class TestAdmitPlacements:
         up.pair_id = down.pair_id = "pair-live"
         admitted, why = _admit_placements(
             [up, down], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
-            _gate_cfg(enforce_queue_clear_gate=True))
+            _gate_cfg(bot_order_gate_queue_clear_on=True))
         assert admitted == []
         assert why
 
@@ -408,7 +408,7 @@ class TestAdmitPlacements:
         crossed = _intent(side="UP", token="tok-up", price=0.50, crossed=True)
         admitted, why = _admit_placements(
             [up, down, crossed], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
-            _gate_cfg(enforce_queue_clear_gate=True))
+            _gate_cfg(bot_order_gate_queue_clear_on=True))
         assert admitted == [crossed]
         assert why
 
@@ -420,7 +420,7 @@ class TestAdmitPlacements:
         allowed_by = _CountingFlow(_sell_flow({"tok-up": {0.48: 1000.0, 0.47: 1000.0}}))
         admitted, why = _admit_placements(
             [boundary], _FakeMarket(), book, _CLEAR_DOWN, allowed_by,
-            _gate_cfg(enforce_queue_clear_gate=True))
+            _gate_cfg(bot_order_gate_queue_clear_on=True))
         # 2000 shares reachable -> 5900 / (2000/30) = 88.5 min > 60: blocked.
         assert admitted == []
         assert "maker queue" in why
@@ -428,7 +428,7 @@ class TestAdmitPlacements:
         ignored = _CountingFlow(_sell_flow({"tok-up": {0.49: 1_000_000.0}}))
         admitted, why = _admit_placements(
             [boundary], _FakeMarket(), book, _CLEAR_DOWN, ignored,
-            _gate_cfg(enforce_queue_clear_gate=True))
+            _gate_cfg(bot_order_gate_queue_clear_on=True))
         # Nothing reached our price at all: the queue never clears.
         assert admitted == []
         assert "never clears" in why
@@ -440,7 +440,7 @@ class TestAdmitPlacements:
             admitted, why = _admit_placements(
                 [up, down], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN,
                 _CountingFlow(_sell_flow({}, status=status)),
-                _gate_cfg(enforce_queue_clear_gate=True))
+                _gate_cfg(bot_order_gate_queue_clear_on=True))
             assert admitted == [up, down]
             assert status in why
 
@@ -449,7 +449,7 @@ class TestAdmitPlacements:
         admitted, why = _admit_placements(
             [up], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN,
             _CountingFlow(boom=True),
-            _gate_cfg(enforce_queue_clear_gate=True))
+            _gate_cfg(bot_order_gate_queue_clear_on=True))
         assert admitted == [up]
         assert "failed" in why
 
@@ -461,7 +461,7 @@ class TestAdmitPlacements:
                              logger="main_spread_hunter_loop"):
             _admit_placements([up], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN,
                               _CountingFlow(boom=True),
-                              _gate_cfg(enforce_queue_clear_gate=True))
+                              _gate_cfg(bot_order_gate_queue_clear_on=True))
         assert "queue gate tape read failed" in caplog.text
         assert "OSError" in caplog.text
 
@@ -476,7 +476,7 @@ class TestAdmitPlacements:
         down = _intent(side="DOWN", token="tok-dn", price=0.45)
         admitted, why = _admit_placements(
             [up, down], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
-            _gate_cfg(enforce_queue_clear_gate=True),
+            _gate_cfg(bot_order_gate_queue_clear_on=True),
             lifecycle_state="ESCALATED_HEDGE")
         assert admitted == [up, down]
         assert "bypassed" in why
@@ -488,7 +488,7 @@ class TestAdmitPlacements:
         up = _intent(side="UP", token="tok-up", price=0.47)
         admitted, why = _admit_placements(
             [up], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
-            _gate_cfg(enforce_queue_clear_gate=True),
+            _gate_cfg(bot_order_gate_queue_clear_on=True),
             lifecycle_state="HARD_STOP")
         assert admitted == [up]
         assert "bypassed" in why
@@ -504,7 +504,7 @@ class TestAdmitPlacements:
             down = _intent(side="DOWN", token="tok-dn", price=0.45)
             admitted, why = _admit_placements(
                 [up, down], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
-                _gate_cfg(enforce_queue_clear_gate=True),
+                _gate_cfg(bot_order_gate_queue_clear_on=True),
                 lifecycle_state=state)
             assert admitted == [], state
             assert "bypassed" not in why, state
@@ -514,7 +514,7 @@ class TestAdmitPlacements:
         up = _intent(side="UP", token="tok-up", price=0.47)
         admitted, why = _admit_placements(
             [up], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, None,
-            _gate_cfg(enforce_queue_clear_gate=True))
+            _gate_cfg(bot_order_gate_queue_clear_on=True))
         assert admitted == [up]
         assert why == ""
 
@@ -554,7 +554,7 @@ class TestGateInVisitOne:
 
     def test_enforcing_leaves_nothing_resting_for_that_market(self):
         submitted = []
-        seam = self._seam(_gate_cfg(enforce_queue_clear_gate=True),
+        seam = self._seam(_gate_cfg(bot_order_gate_queue_clear_on=True),
                           self._two_legs, submitted,
                           _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}})))
         result = _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True)
@@ -567,7 +567,7 @@ class TestGateInVisitOne:
         # minute of queue: nothing to refuse.
         submitted = []
         port = _CountingFlow(_sell_flow({"tok-up": {0.47: 3000.0}}))
-        seam = self._seam(_gate_cfg(enforce_queue_clear_gate=True),
+        seam = self._seam(_gate_cfg(bot_order_gate_queue_clear_on=True),
                           self._two_legs, submitted, port, up_book=_SHALLOW_UP)
         result = _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True)
         assert len(submitted[0]) == 2
@@ -578,7 +578,7 @@ class TestGateInVisitOne:
         # Today's wiring, and the shadow seam, set no flow port: a deep queue
         # must change nothing for them.
         submitted = []
-        seam = self._seam(_gate_cfg(enforce_queue_clear_gate=True),
+        seam = self._seam(_gate_cfg(bot_order_gate_queue_clear_on=True),
                           self._two_legs, submitted, None)
         result = _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True)
         assert len(submitted[0]) == 2
@@ -587,7 +587,7 @@ class TestGateInVisitOne:
     def test_a_measured_window_is_the_configured_one(self):
         submitted = []
         port = _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}}))
-        seam = self._seam(_gate_cfg(queue_flow_window_sec=600.0),
+        seam = self._seam(_gate_cfg(bot_order_queue_flow_window_sec=600.0),
                           self._two_legs, submitted, port)
         _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True)
         assert port.calls == [("0xabc", 600.0)]
@@ -596,34 +596,34 @@ class TestGateInVisitOne:
 class TestQueueGateSettings:
     def test_ships_record_only_at_sixty_minutes_on_a_thirty_minute_tape(self):
         cfg = MakerConfig()
-        assert cfg.enforce_queue_clear_gate is False
-        assert cfg.max_queue_clear_minutes == 60.0
-        assert cfg.queue_flow_window_sec == 1800.0
+        assert cfg.bot_order_gate_queue_clear_on is False
+        assert cfg.bot_order_queue_max_clear_min == 60.0
+        assert cfg.bot_order_queue_flow_window_sec == 1800.0
 
     def test_env_turns_the_gate_on_and_moves_the_bar(self):
         with mock.patch.dict(os.environ, {
-                "HUNTER_QUEUE_CLEAR_GATE": "1",
-                "HUNTER_MAX_QUEUE_CLEAR_MIN": "15"}):
+                "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
+                "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "15"}):
             cfg = load()
-            assert cfg.enforce_queue_clear_gate is True
-            assert cfg.max_queue_clear_minutes == 15.0
+            assert cfg.bot_order_gate_queue_clear_on is True
+            assert cfg.bot_order_queue_max_clear_min == 15.0
 
     @pytest.mark.parametrize("raw", ["0", "false", "FALSE", "off", "Off"])
     def test_false_spellings_turn_the_gate_off(self, raw):
-        with mock.patch.dict(os.environ, {"HUNTER_QUEUE_CLEAR_GATE": raw}):
-            assert load().enforce_queue_clear_gate is False
+        with mock.patch.dict(os.environ, {"BOT_ORDER_GATE_QUEUE_CLEAR_ON": raw}):
+            assert load().bot_order_gate_queue_clear_on is False
 
     @pytest.mark.parametrize("raw", ["1", "true", "on", "yes"])
     def test_any_other_value_turns_the_gate_on(self, raw):
-        with mock.patch.dict(os.environ, {"HUNTER_QUEUE_CLEAR_GATE": raw}):
-            assert load().enforce_queue_clear_gate is True
+        with mock.patch.dict(os.environ, {"BOT_ORDER_GATE_QUEUE_CLEAR_ON": raw}):
+            assert load().bot_order_gate_queue_clear_on is True
 
     @pytest.mark.parametrize("bad", ["abc", "nan", "inf", "-1", "0"])
     def test_a_bad_bar_is_refused_at_load(self, bad):
         # "0" belongs here with the rest: a zero bar is the DISABLE value, and a
         # disabled rule set through the bar's own name would read as enforced.
-        with mock.patch.dict(os.environ, {"HUNTER_MAX_QUEUE_CLEAR_MIN": bad}):
-            with pytest.raises(ValueError, match="HUNTER_MAX_QUEUE_CLEAR_MIN"):
+        with mock.patch.dict(os.environ, {"BOT_ORDER_QUEUE_MAX_CLEAR_MIN": bad}):
+            with pytest.raises(ValueError, match="BOT_ORDER_QUEUE_MAX_CLEAR_MIN"):
                 load()
 
     def test_the_bar_ceiling_is_accepted(self):
@@ -631,13 +631,13 @@ class TestQueueGateSettings:
         # "queue" is the market's whole remaining life, which no bid can be
         # behind.
         with mock.patch.dict(os.environ,
-                             {"HUNTER_MAX_QUEUE_CLEAR_MIN": "1440"}):
-            assert load().max_queue_clear_minutes == 1440.0
+                             {"BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "1440"}):
+            assert load().bot_order_queue_max_clear_min == 1440.0
 
     def test_a_bar_past_the_ceiling_is_refused(self):
         with mock.patch.dict(os.environ,
-                             {"HUNTER_MAX_QUEUE_CLEAR_MIN": "1441"}):
-            with pytest.raises(ValueError, match="HUNTER_MAX_QUEUE_CLEAR_MIN"):
+                             {"BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "1441"}):
+            with pytest.raises(ValueError, match="BOT_ORDER_QUEUE_MAX_CLEAR_MIN"):
                 load()
 
     def test_the_two_bars_ship_independent_and_record_only(self):
@@ -652,15 +652,15 @@ class TestQueueGateSettings:
         from scripts.filter_markets import resolve_queue_bar
 
         ranker = RankerConfig()
-        assert ranker.select_max_queue_minutes == 15.0
-        assert ranker.enforce_max_queue_minutes is False
+        assert ranker.filter_std_queue_max_clear_min == 15.0
+        assert ranker.filter_std_gate_queue_max_on is False
         assert resolve_queue_bar(ranker) is None
 
         gate = MakerConfig()
-        assert gate.max_queue_clear_minutes == 60.0
-        assert gate.enforce_queue_clear_gate is False
-        assert gate.queue_flow_window_sec == 1800.0
+        assert gate.bot_order_queue_max_clear_min == 60.0
+        assert gate.bot_order_gate_queue_clear_on is False
+        assert gate.bot_order_queue_flow_window_sec == 1800.0
 
-        moved = replace(ranker, select_max_queue_minutes=5.0)
-        assert moved.select_max_queue_minutes == 5.0
-        assert MakerConfig().max_queue_clear_minutes == 60.0
+        moved = replace(ranker, filter_std_queue_max_clear_min=5.0)
+        assert moved.filter_std_queue_max_clear_min == 5.0
+        assert MakerConfig().bot_order_queue_max_clear_min == 60.0

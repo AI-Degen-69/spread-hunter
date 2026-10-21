@@ -21,7 +21,7 @@ The columns answer the three questions the snapshot could not:
     a run is actually exposed to, and a family whose median is 2 minutes and
     whose p90 is 90 is not a 2-minute family.
   * PASS% -- share of samples where BOTH legs clear inside `--queue-bar` AND
-    the touch pair costs under `max_pair_cost`. That conjunction is the
+    the touch pair costs under `bot_pos_price_max_pair_cost_usd`. That conjunction is the
     strategy's entry condition; either half alone has already misled this
     project once.
 

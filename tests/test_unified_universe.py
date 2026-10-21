@@ -330,7 +330,7 @@ class _ZeroScoreSession:
 
 
 def test_spread_market_is_not_rejected_by_venue_reward_spread_limit():
-    """Binary spread markets must not be rejected by legacy venue reward windows (#681)."""
+    """Binary spread markets must not be rejected by legacy venue reward-spread limits (#681)."""
     market = _universe_candidate("0xzero")
     market["rewards"]["max_spread"] = 2.1
     market["minimum_tick_size"] = 0.001

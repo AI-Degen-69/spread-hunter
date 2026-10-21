@@ -65,12 +65,12 @@ state is persisted in the order registry so a restart does not erase an escalati
 3. **`ESCALATED_HEDGE`** — when the held leg's fill average minus its best bid reaches
    twice the dynamic quote offset, the state sticks and the Trader quotes the opposite
    leg at the highest tick-aligned price that fits
-   `min($0.99, configured max_pair_cost) - held average`.
+   `min($0.99, configured bot_pos_price_max_pair_cost_usd) - held average`.
 4. **`HARD_STOP`** — a held-leg best bid at or below its **entry-relative** trigger takes
    precedence over the other routes and requests a guarded exit. The trigger is the higher
    of the configured mode's drop from that leg's own fill average (`NONE` contributes
    none, `ABSOLUTE_DROP` a fixed dollar drop, `PERCENTAGE_DROP` a percentage of it) and
-   the universal emergency floor at `emergency_drawdown_pct` of the same average, never
+   the universal emergency floor at `bot_risk_circuit_max_drawdown_pct` of the same average, never
    below `$0.01`. A static bid floor was retired in #619: active quotes span
    `$0.10`–`$0.90`, so a fixed stop near the bottom liquidated every low entry on fill.
 5. **`PAIR_LOCKED`** — both legs are balanced and their average prices total no more than
@@ -84,6 +84,25 @@ cap-checked completion and uses the guarded exit if completion is refused. A har
 exit retains venue-position, cancellation, fill-reread, residual-size, depth, and
 slippage protections. `unhedged_stop_loss.py` remains the separate per-market markout gate;
 it does not replace the pair lifecycle.
+
+## Unified reset and re-qualification (#646)
+
+One guarded reset (`core_brain/lifecycle_reset.py`, caller-injected ports) serves
+live merges, shadow merges, and stop exits. It proves the market flat -- net
+ledger inventory AND both token balances at or below `SIZE_EPS`, no resting
+orders, no late fill -- then atomically clears the condition's lifecycle rows
+and marks it awaiting re-qualification (`lifecycle_requalification` table,
+generation-guarded). Anything less than proof leaves the row and the market
+stays managed. `requalification_marks()` (including exclusion records) is the
+contract #621's tier list will read.
+
+Freshness is the file mtime in nanoseconds (`load_graduated_snapshot`, single
+open + `fstat()` so timestamp and rows never describe different files). No
+publish-timestamp field exists: the file is a bare JSON list, the filter
+publishes by atomic replace so every publication is a new file with its own
+mtime, and trader and filter share one machine and clock. Only a publication
+strictly newer than the reset clears the mark when it includes the market; a
+newer one that excludes it drops the market from trading but keeps the mark.
 
 ## Where generated files go
 

@@ -110,7 +110,7 @@ def main():
 
     # Build the config EXACTLY as the loose system baseline ships now.
     # MakerConfig is frozen, so range/velocity go through the constructor.
-    cfg = MakerConfig(range_cents=range_cents, velocity_measured_at=time.time())
+    cfg = MakerConfig(bot_quote_telemetry_range_cents=range_cents, bot_quote_telemetry_velocity_measured_at=time.time())
 
     bids, asks = fetch_book(s, str(toks[0]))
     if not bids or not asks:
@@ -129,8 +129,8 @@ def main():
     dyn_off, dyn_tag = dynamic_offset_for(cfg)
     print("\n--- BOT DYNAMIC OFFSET ---")
     print(f"  offset = {dyn_off*100:.2f}c  ({dyn_tag})  "
-          f"[floor {cfg.dynamic_offset_min_cents}c / ceil {cfg.dynamic_offset_max_cents}c, "
-          f"mult {cfg.dynamic_offset_multiplier}]")
+          f"[floor {cfg.bot_quote_spread_offset_min_cents}c / ceil {cfg.bot_quote_spread_offset_max_cents}c, "
+          f"mult {cfg.bot_quote_spread_offset_multiplier}]")
 
     # NORMAL quote
     t0 = time.perf_counter()
@@ -149,8 +149,8 @@ def main():
 
     # WIDENED gate: prove NO snap-back under the new default (gate disabled)
     cfg_widened = MakerConfig(
-        range_cents=range_cents, velocity_measured_at=time.time(),
-        gate_state="WIDENED", widen_offset=0.035,
+        bot_quote_telemetry_range_cents=range_cents, bot_quote_telemetry_velocity_measured_at=time.time(),
+        bot_risk_circuit_gate_state="WIDENED", bot_risk_circuit_widen_offset_cents=0.035,
     )
     t1 = time.perf_counter()
     price_w, prov_w, _, _ = quote_resting_price(cfg_widened, inv, "UP", book)
@@ -176,11 +176,11 @@ def main():
     # shares. Show the exact trigger price on the whole-cent book.
     fill = price                       # assume we get filled at our resting bid
     trigger_price, trigger_source = stop_trigger(
-        fill, cfg.stop_loss_mode, cfg.drop_cents, cfg.drawdown_pct,
+        fill, cfg.bot_risk_stop_mode, cfg.bot_risk_stop_adverse_drop_cents, cfg.bot_risk_stop_max_drawdown_pct,
         cfg.bot_risk_circuit_max_drawdown_pct,
     )
     trigger_cent = math.floor(trigger_price * 100.0 + 1e-9) / 100.0
-    print("\n--- STOP LOSS (entry-relative, mode %s) ---" % cfg.stop_loss_mode)
+    print("\n--- STOP LOSS (entry-relative, mode %s) ---" % cfg.bot_risk_stop_mode)
     print(f"  buy / fill       = {fill:.2f}  (${fill:.2f}/share)")
     print(f"  active trigger   = {trigger_price:.4f}  (set by the {trigger_source} rule)")
     print(f"  highest whole-cent bid that fires = {trigger_cent:.2f}"
@@ -192,7 +192,7 @@ def main():
     # operator can see them survive their own entry-relative trigger instead.
     for ex_fill in (0.10, 0.12, 0.14):
         ex_price, ex_source = stop_trigger(
-            ex_fill, cfg.stop_loss_mode, cfg.drop_cents, cfg.drawdown_pct,
+            ex_fill, cfg.bot_risk_stop_mode, cfg.bot_risk_stop_adverse_drop_cents, cfg.bot_risk_stop_max_drawdown_pct,
             cfg.bot_risk_circuit_max_drawdown_pct,
         )
         ex_cent = math.floor(ex_price * 100.0 + 1e-9) / 100.0
@@ -203,7 +203,7 @@ def main():
     print(f"  [OK] offset {dyn_off*100:.2f}c not clipped by any 4.5c cap")
     print(f"  [OK] resting price on whole-cent grid, floored not up ({price:.2f})")
     print(f"  [OK] WIDENED state does NOT snap back (kill switch active)")
-    print(f"  [OK] stop loss entry-relative ({cfg.stop_loss_mode}): "
+    print(f"  [OK] stop loss entry-relative ({cfg.bot_risk_stop_mode}): "
           f"buy {fill:.2f} -> cut {trigger_cent:.2f} ({trigger_source})")
     print(f"  [OK] decision latency sub-ms ({max(dt_normal, dt_w, dt_h):.2f} ms worst)")
 

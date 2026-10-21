@@ -38,7 +38,7 @@ def _books(up_ask: float = 0.52, dn_ask: float = 0.47) -> tuple[dict, dict]:
 
 
 def _ask_cfg(**kw) -> MakerConfig:
-    return replace(MakerConfig(), objective=ASK, **kw)
+    return replace(MakerConfig(), bot_pos_objective=ASK, **kw)
 
 
 def _quote(cfg, window_pct, books=None):
@@ -61,7 +61,7 @@ def test_the_branch_reads_tick_size_not_the_live_price_grid():
     """`tick_size` and `price_tick` hold the same value and are not the same
     knob: the live grid floors quotes to `price_tick`, this branch steps down
     from the ask by `tick_size`."""
-    intents, why = _quote(_ask_cfg(tick_size=0.02), window_pct=None)
+    intents, why = _quote(_ask_cfg(bot_quote_tick_size=0.02), window_pct=None)
 
     assert why == ""
     assert {i.side: i.price for i in intents} == {"UP": 0.50, "DOWN": 0.45}
@@ -96,7 +96,7 @@ def test_the_window_gate_admits_exactly_at_the_quoting_window():
 
 
 def test_the_window_gate_is_switchable():
-    intents, why = _quote(_ask_cfg(enforce_quote_window=False), window_pct=0.99)
+    intents, why = _quote(_ask_cfg(bot_quote_gate_quote_window_on=False), window_pct=0.99)
 
     assert why == ""
     assert len(intents) == 2
@@ -118,7 +118,7 @@ def test_a_missing_clock_skips_the_window_rule_on_this_branch():
 def test_the_mid_priced_objectives_never_read_the_clock(objective):
     """Both mid-priced objectives take the from-mid path, which has no window
     rule: the same books quote identically at 9% and at 99% into the window."""
-    cfg = replace(MakerConfig(), objective=objective)
+    cfg = replace(MakerConfig(), bot_pos_objective=objective)
 
     early, _ = _quote(cfg, window_pct=0.09)
     late_why = _quote(cfg, window_pct=0.99)
@@ -133,7 +133,7 @@ def test_the_ask_branch_is_the_only_place_the_window_bites():
     window = 0.99
 
     assert _quote(_ask_cfg(), window_pct=window)[0] == []
-    assert _quote(replace(MakerConfig(), objective="spread_capture"),
+    assert _quote(replace(MakerConfig(), bot_pos_objective="spread_capture"),
                   window_pct=window)[0] != []
 
 

@@ -35,8 +35,8 @@ def registry(tmp_path: Path) -> OrderRegistry:
 
 
 def _cfg(**kw) -> MakerConfig:
-    base = dict(enable_pairs_rule=True, pairs_exit_window_sec=900.0,
-                max_pair_cost=MAX_PAIR_COST)
+    base = dict(bot_risk_gate_pairs_rule_on=True, bot_risk_pairs_exit_window_sec=900.0,
+                bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST)
     base.update(kw)
     return MakerConfig(**base)
 
@@ -142,7 +142,7 @@ class FakeClient:
 
 def test_disabled_rule_does_nothing(registry):
     _one_sided_pair(registry, fill_price=0.60)
-    assert auto_manage_pairs(FakeClient(), registry, _cfg(enable_pairs_rule=False),
+    assert auto_manage_pairs(FakeClient(), registry, _cfg(bot_risk_gate_pairs_rule_on=False),
                              now=NOW_S) == []
 
 
@@ -154,7 +154,7 @@ def test_out_of_window_remains_under_lifecycle_management(registry):
     _one_sided_pair(registry, fill_price=0.60, venue_ts=1_000_000)
     client = FakeClient(best_bid=0.58)
     results = auto_manage_pairs(
-        client, registry, _cfg(enable_aged_out_rescue=False), now=3_000.0,
+        client, registry, _cfg(bot_risk_gate_aged_out_rescue_on=False), now=3_000.0,
     )
     assert results[0]["action"] == "patient_wait"
     assert not any(call.startswith(("buy:", "sell:", "cancel:"))
@@ -384,7 +384,11 @@ def test_poll_preserves_a_trader_persisted_escalation_row(registry):
     )
 
     assert results[0]["action"] == "exited"
-    assert registry.get_lifecycle_state("pair-1").state == "DUAL_RESTING"
+    # #646: the exit no longer assumes flat. The shared proof runs instead,
+    # and without proven-flat reads the row stays HARD_STOP under management
+    # instead of flipping to DUAL_RESTING.
+    assert registry.get_lifecycle_state("pair-1").state == "HARD_STOP"
+    assert results[0]["reset_status"] != "RESET"
     assert any(call.startswith("sell:") for call in client.calls)
     assert not any(call.startswith("buy:") for call in client.calls)
 

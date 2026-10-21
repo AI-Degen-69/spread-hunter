@@ -48,21 +48,21 @@ def test_a_cap_of_exactly_one_dollar_is_allowed():
 
 def test_load_applies_the_trial_cap(monkeypatch):
     rehearsal.declare_rehearsal()
-    monkeypatch.setenv("HUNTER_PAIR_COST_CAP", "0.995")
-    monkeypatch.delenv("HUNTER_MARKET", raising=False)
+    monkeypatch.setenv("BOT_POS_PRICE_MAX_PAIR_COST_USD", "0.995")
+    monkeypatch.delenv("BOT_MARKET_PINNED_CONDITION_ID", raising=False)
 
     cfg = importlib.reload(core_config).load()
 
-    assert cfg.max_pair_cost == 0.995
+    assert cfg.bot_pos_price_max_pair_cost_usd == 0.995
 
 
 def test_load_leaves_the_shipped_cap_alone_when_unset(monkeypatch):
-    monkeypatch.delenv("HUNTER_PAIR_COST_CAP", raising=False)
-    monkeypatch.delenv("HUNTER_MARKET", raising=False)
+    monkeypatch.delenv("BOT_POS_PRICE_MAX_PAIR_COST_USD", raising=False)
+    monkeypatch.delenv("BOT_MARKET_PINNED_CONDITION_ID", raising=False)
 
     cfg = importlib.reload(core_config).load()
 
-    assert cfg.max_pair_cost == 0.99
+    assert cfg.bot_pos_price_max_pair_cost_usd == 0.99
 
 
 def test_the_touch_pair_is_refused_at_the_shipped_cap_and_allowed_at_the_trial():
@@ -81,11 +81,11 @@ def test_the_touch_pair_is_refused_at_the_shipped_cap_and_allowed_at_the_trial()
 
     # Built through `load()` rather than by constructing MakerConfig directly:
     # a hand-built config would keep this test passing even if the
-    # HUNTER_PAIR_COST_CAP wiring were deleted, which is the one thing it is
+    # BOT_POS_PRICE_MAX_PAIR_COST_USD wiring were deleted, which is the one thing it is
     # here to protect.
     shipped = core_config.MakerConfig()
     rehearsal.declare_rehearsal()
-    os.environ["HUNTER_PAIR_COST_CAP"] = "0.995"
+    os.environ["BOT_POS_PRICE_MAX_PAIR_COST_USD"] = "0.995"
     try:
         trial = importlib.reload(core_config).load()
     finally:
@@ -94,11 +94,11 @@ def test_the_touch_pair_is_refused_at_the_shipped_cap_and_allowed_at_the_trial()
         # reloaded module hands out a different `MakerConfig` than the one
         # already-imported modules closed over -- so the suite's result starts
         # depending on file order. Restored here, not at some later fixture.
-        os.environ.pop("HUNTER_PAIR_COST_CAP", None)
+        os.environ.pop("BOT_POS_PRICE_MAX_PAIR_COST_USD", None)
         rehearsal.reset_for_test()
         importlib.reload(core_config)
-    assert trial.max_pair_cost == 0.995
-    assert shipped.max_pair_cost == 0.99
+    assert trial.bot_pos_price_max_pair_cost_usd == 0.995
+    assert shipped.bot_pos_price_max_pair_cost_usd == 0.99
     book = {"best_bid": 0.32, "best_ask": 0.34, "bids": {0.32: 5000.0}}
 
     # A DOWN bid at 0.33 against an UP average of 0.66 assembles a $0.99 pair.

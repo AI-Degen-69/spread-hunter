@@ -96,17 +96,17 @@ function Format-ProcessArgs {
 # core_brain/config.py's resolve_pair_cost_trial RAISES unless the process
 # declared itself a rehearsal, and only core_brain.shadow_run does.
 # Start-Process copies this menu's whole environment into every child, so
-# HUNTER_PAIR_COST_CAP -- exported to steer a rehearsal -- also lands in the
+# BOT_POS_PRICE_MAX_PAIR_COST_USD -- exported to steer a rehearsal -- also lands in the
 # stats observer, whose config.load() then dies at import.
 #
 # Capture and strip it from THIS process now; Invoke-WithRehearsalTrialEnv
-# re-injects it for the shadow_run launch alone. (HUNTER_WIDE_BOOK_TRIAL is
+# re-injects it for the shadow_run launch alone. (BOT_QUOTE_WIDE_BOOK_TRIAL is
 # NOT handled here: it reaches the screener through the ranker's own
 # --trial-spread flag, not this menu, and the dashboard tolerates it via
 # config.load(for_display=True).)
 $script:RehearsalTrialEnv = @{}
 $script:ShadowPreset = if ($Preset) { $Preset } elseif ($Prudent) { "prudent" } else { "" }
-foreach ($k in @('HUNTER_PAIR_COST_CAP', 'HUNTER_TOURNAMENT_PRESET')) {
+foreach ($k in @('BOT_POS_PRICE_MAX_PAIR_COST_USD', 'BOT_QUOTE_TOURNAMENT_PRESET')) {
     $v = [Environment]::GetEnvironmentVariable($k)
     if ($null -ne $v -and $v -ne '') {
         $script:RehearsalTrialEnv[$k] = $v
@@ -124,7 +124,7 @@ function Invoke-WithRehearsalTrialEnv {
         Set-Item "Env:$k" $script:RehearsalTrialEnv[$k]
     }
     if ($script:ShadowPreset) {
-        Set-Item "Env:HUNTER_TOURNAMENT_PRESET" $script:ShadowPreset
+        Set-Item "Env:BOT_QUOTE_TOURNAMENT_PRESET" $script:ShadowPreset
     }
     try { & $Action }
     finally {
@@ -132,7 +132,7 @@ function Invoke-WithRehearsalTrialEnv {
             Remove-Item "Env:$k" -ErrorAction SilentlyContinue
         }
         if ($script:ShadowPreset) {
-            Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue
+            Remove-Item "Env:BOT_QUOTE_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue
         }
     }
 }
@@ -817,7 +817,7 @@ function Start-ShadowDashboard {
     }
     $logs = @{ out = $OutLog; err = $ErrLog }
     Lsh-Step "Launching unified dashboard (python -m dashboard.server --port $port)..."
-    if ($script:ShadowPreset) { Set-Item "Env:HUNTER_TOURNAMENT_PRESET" $script:ShadowPreset }
+    if ($script:ShadowPreset) { Set-Item "Env:BOT_QUOTE_TOURNAMENT_PRESET" $script:ShadowPreset }
     # Same stray-PORT guard as Start-Dashboard: a PORT=0 in this shell is
     # inherited by the child and crashes dashboard/server.py at import,
     # before --port is parsed. Drop it for the spawn, then restore it.
@@ -831,7 +831,7 @@ function Start-ShadowDashboard {
             -RedirectStandardOutput $logs.out `
             -RedirectStandardError  $logs.err
     } finally {
-        if ($script:ShadowPreset) { Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue }
+        if ($script:ShadowPreset) { Remove-Item "Env:BOT_QUOTE_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue }
         if ($hadPort) { $env:PORT = $savedPort }
     }
     Save-DashInstance -DashProcess $dash
@@ -1350,7 +1350,7 @@ function Resume-ShadowRun {
     }
     # A rehearsal starts at the fixed $100 bankroll and says so on the command
     # line (#422): relying on the process default would let an exported
-    # SPREAD_HUNTER_BANKROLL change what this session rehearsed under.
+    # BOT_QUOTE_BANK_BASELINE_USD change what this session rehearsed under.
     $shadowArgs = @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $script:ShadowRunId, "--starting-bankroll-usd", "100")
     if ($trial) { $shadowArgs += @("--markets-path", $trial.markets_path) }
     $shadowRun = Invoke-WithRehearsalTrialEnv {
@@ -2660,7 +2660,7 @@ function Reset-Environment {
                     Lsh-Step "Starting the rehearsal loop (python -m core_brain.shadow_run --minutes $shadowMinutes --db $ShadowDbPath)..."
                     # shadow_run is the ONLY child that declares itself a
                     # rehearsal, so it is the only one that may see
-                    # HUNTER_PAIR_COST_CAP. Re-inject it here; the wrapper
+                    # BOT_POS_PRICE_MAX_PAIR_COST_USD. Re-inject it here; the wrapper
                     # strips it again before the observer launches.
                     $shadowRun = Invoke-WithRehearsalTrialEnv {
                         Start-Process -FilePath "python" `

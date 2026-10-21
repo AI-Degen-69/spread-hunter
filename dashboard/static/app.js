@@ -85,7 +85,7 @@ let lastStatusAtMs = null;
  * envelope; anything lower (or missing) means this page is newer than the
  * process answering it. Keep EXPECTED_PAYLOAD_VERSION matched with
  * KPI_PAYLOAD_VERSION in core_brain/kpi.py. */
-const EXPECTED_PAYLOAD_VERSION = 258;
+const EXPECTED_PAYLOAD_VERSION = 259;
 let payloadVersionWarned = false;
 
 // True when the payload is absent, malformed, or predates this page.
@@ -1969,6 +1969,48 @@ function clearPollSnapshots() {
   lastStatusAtMs = null;
 }
 
+/* Where this run's books came from (#659 N2): the counts the run recorded on
+ * its heartbeat, not a verdict about them.
+ *
+ * A stream serves only tokens it has been subscribed to, and everything else
+ * silently drops to REST one read at a time. So a rehearsal can look
+ * stream-backed while pricing most of its books off REST, and the operator
+ * has no way to tell which from the dashboard. The counts already existed
+ * inside the run; this is what lets them leave it.
+ *
+ * Deliberately not a state: the mix is a record of what the run did, not a
+ * health signal, so it carries no colour vocabulary. A heartbeat written
+ * before the field existed records nothing, and renders nothing -- "0 stream"
+ * would be a claim about a run that never made one. An explicit zero is the
+ * honest reading of a run that recorded it. */
+function bookMixNote(mix) {
+  // A plain object only: an array or a string is a hand-edited heartbeat, not
+  // a record of reads, and reading one as "0 stream" would be a claim the run
+  // never made.
+  if (!mix || typeof mix !== 'object' || Array.isArray(mix)) {
+    return { text: '', title: '' };
+  }
+  // Counts, not numbers that happen to be numbers: a negative or non-finite
+  // count is not a measurement, and a string is not one either.
+  const validCount = (v) => Number.isFinite(v) && v >= 0;
+  const { stream, rest } = mix;
+  if (!validCount(stream) || !validCount(rest)) {
+    return { text: '', title: '' };
+  }
+  const count = (n) => n.toLocaleString('en-US');
+  const fallback = (mix.fallback && typeof mix.fallback === 'object'
+    && !Array.isArray(mix.fallback)) ? mix.fallback : {};
+  const reasons = Object.entries(fallback)
+    .filter(([, n]) => typeof n === 'number' && isFinite(n) && n > 0)
+    .map(([reason, n]) => `${reason} ${count(n)}`)
+    .join(', ');
+  return {
+    text: `books: ${count(stream)} stream · ${count(rest)} REST`,
+    title: `${count(stream)} book reads served from the live market socket, `
+      + `${count(rest)} fell back to REST${reasons ? ` (${reasons})` : ''}.`,
+  };
+}
+
 async function renderRunSwitcher() {
   const sw = document.getElementById('db-run-switcher');
   const badge = document.getElementById('db-mode-badge');
@@ -1998,9 +2040,15 @@ async function renderRunSwitcher() {
       ? `<span class="db-run-current">THIS PAGE</span>`
       : `<button class="db-run-switch" data-db="${esc(r.db_path)}">SWITCH</button>`;
     const runState = r.running === true ? 'running' : 'stopped';
-    return `<div class="db-run-row${isThis ? ' current' : ''}">
+    const mix = bookMixNote(r.book_source_mix);
+    // The title rides the number it explains, not the whole row: hovering the
+    // mix line is the hover the operator means.
+    const mixHtml = mix.text
+      ? `\n        <div class="db-run-mix" title="${esc(mix.title)}">${esc(mix.text)}</div>`
+      : '';
+    return `<div class="db-run-row${isThis ? ' current' : ''}" data-run-id="${esc(r.run_id || '')}">
         <span class="pill state-${runState}"><span class="pill-label">${esc(label)}</span> <span class="pill-value">${state}</span>${age ? ` <span class="pill-detail">${age}</span>` : ''}</span>${portLink}
-        ${btn}
+        ${btn}${mixHtml}
       </div>`;
   });
   sw.innerHTML = `<div class="db-run-head">Which run is this page reading?</div>` + demoRow + rows.join('');
@@ -2886,11 +2934,11 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
 
 /* ── Render: Strategy Parameters (Human-Readable) ── */
 const PARAM_HUMAN_NAMES = {
-  'max_pair_cost': 'Pair Cost Entry Ceiling',
+  'bot_pos_price_max_pair_cost_usd': 'Pair Cost Entry Ceiling',
   'max_naked_usd': 'Single-Leg Unwind Cap',
-  'max_order_usd': 'Max Capital Per Order',
-  'max_total_usd': 'Bankroll Deployment Ceiling',
-  'min_quote_shares': 'Minimum Order Size',
+  'bot_risk_exposure_max_order_usd': 'Max Capital Per Order',
+  'bot_risk_exposure_max_total_usd': 'Bankroll Deployment Ceiling',
+  'bot_quote_size_min_shares': 'Minimum Order Size',
   'sweep_interval': 'Account Sync & Balance Cadence',
 };
 
@@ -9824,6 +9872,24 @@ function renderScreener(kpi, scanState, status, engineOpts) {
 
   const funnel = kpi?.funnel;
 
+  // Tournament preset pill (#687): the preset the ranker actually scored
+  // under, read from the snapshot funnel -- never the dashboard process's
+  // own environment. Hidden on preset-free runs (absent reads as absent,
+  // not as "default"). Updates every poll, like the pills above.
+  const presetPill = document.getElementById('screener-preset-pill');
+  if (presetPill) {
+    const preset = funnel?.tournament_preset;
+    if (typeof preset === 'string' && preset) {
+      const safe = preset.replace(/[^a-z0-9-]/gi, '').toUpperCase();
+      presetPill.style.display = '';
+      presetPill.className = 'pill state-running mono';
+      presetPill.title = 'Tournament preset the ranker scored under: ' + preset;
+      presetPill.innerHTML = '<span class="pill-value">PRESET ' + safe + '</span>';
+    } else {
+      presetPill.style.display = 'none';
+    }
+  }
+
   if (headerAge) {
     const SCAN_INTERVAL_SEC = scanIntervalSec(status);
     const cycleMin = Math.round(SCAN_INTERVAL_SEC / 60);
@@ -9884,6 +9950,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
     funnel?.raw,
     funnel?.discovery,
     funnel?.gates,
+    funnel?.tournament_preset,
     funnel?.depth_gate_usd,
     funnel?.volume_gate_usd,
     funnel?.trial_volume_usd,
@@ -10569,5 +10636,6 @@ if (typeof module !== 'undefined' && module.exports) {
     stitchActiveMarketsRows, stitchActiveMarketsHeadHtml,
     showToast, dismissResetModal,
     noteShadowStartLaunched, clearPendingShadowStart,
-    isShadowStartPending, checkPendingShadowStart, SHADOW_START_TIMEOUT_MS };
+    isShadowStartPending, checkPendingShadowStart, SHADOW_START_TIMEOUT_MS,
+    bookMixNote, renderRunSwitcher };
 }

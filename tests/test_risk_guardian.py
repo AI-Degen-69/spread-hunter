@@ -263,12 +263,12 @@ def test_build_watches_stop_level_and_average_fill_shift(monkeypatch):
     )
 
     cfg = SimpleNamespace(
-        stop_loss_mode="ABSOLUTE_DROP",
-        drop_cents=0.05,
-        drawdown_pct=10.0,
+        bot_risk_stop_mode="ABSOLUTE_DROP",
+        bot_risk_stop_adverse_drop_cents=0.05,
+        bot_risk_stop_max_drawdown_pct=10.0,
         bot_risk_circuit_max_drawdown_pct=75.0,
-        max_pair_cost=0.99,
-        stranded_completion_enabled=False,
+        bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_stranded_completion_on=False,
     )
 
     watches = build_watches(registry, cfg)
@@ -304,12 +304,12 @@ def test_build_watches_exclusions_and_optional_hedge_watch(monkeypatch):
         lambda condition_id, up_token, down_token, db_path=None: inv_balanced,
     )
     cfg = SimpleNamespace(
-        stop_loss_mode="ABSOLUTE_DROP",
-        drop_cents=0.05,
-        drawdown_pct=10.0,
+        bot_risk_stop_mode="ABSOLUTE_DROP",
+        bot_risk_stop_adverse_drop_cents=0.05,
+        bot_risk_stop_max_drawdown_pct=10.0,
         bot_risk_circuit_max_drawdown_pct=75.0,
-        max_pair_cost=0.99,
-        stranded_completion_enabled=True,
+        bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_stranded_completion_on=True,
     )
     assert build_watches(registry, cfg) == {}
 
@@ -333,7 +333,7 @@ def test_build_watches_exclusions_and_optional_hedge_watch(monkeypatch):
     assert watches_with_hedge["tok_dn"].level == 0.47
 
     # 4. With stranded_completion_enabled=False -> stop watch only
-    cfg.stranded_completion_enabled = False
+    cfg.bot_risk_stranded_completion_on = False
     watches_no_hedge = build_watches(registry, cfg)
     assert set(watches_no_hedge) == {"tok_up"}
 
@@ -358,3 +358,77 @@ def test_run_guardian_tick_publishes_empty_when_nothing_unhedged(monkeypatch):
     assert board.watches() == {}
     assert client.mock_calls == []
 
+
+
+# ── #646 N5 — the guardian pass needs a venue view ─────────────────────────
+
+def _unhedged_registry(monkeypatch, *, up=5.0, down=0.0):
+    registry = MagicMock()
+    registry.get_all_quotes.return_value = [
+        {"condition_id": "0x123", "side": "UP", "token_id": "tok_up"},
+        {"condition_id": "0x123", "side": "DOWN", "token_id": "tok_dn"},
+    ]
+    mock_inv = Inventory()
+    mock_inv.up_shares = up
+    mock_inv.down_shares = down
+    monkeypatch.setattr(
+        "core_brain.risk_guardian.inventory_from_registry",
+        lambda condition_id, up_token, down_token, db_path=None: mock_inv
+    )
+    return registry
+
+
+def test_the_default_saver_path_is_handed_the_funder(monkeypatch):
+    """Without it the pass sizes exits off fills a close already retired."""
+    import core_brain.single_buy_saver as sbs
+
+    seen: dict = {}
+
+    def fake_saver(client, registry, cfg, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(sbs, "manage_single_leg_positions", fake_saver)
+    registry = _unhedged_registry(monkeypatch)
+
+    run_guardian_tick(MagicMock(), registry, MagicMock(), live=True,
+                      funder="0xfunder")
+
+    assert seen["funder"] == "0xfunder"
+
+
+def test_the_funder_falls_back_to_the_same_env_var_the_loop_uses(monkeypatch):
+    """A guardian started without the parameter still gets a view."""
+    import core_brain.single_buy_saver as sbs
+
+    seen: dict = {}
+
+    def fake_saver(client, registry, cfg, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(sbs, "manage_single_leg_positions", fake_saver)
+    monkeypatch.setenv("POLY_FUNDER", "0xfromenv")
+    registry = _unhedged_registry(monkeypatch)
+
+    run_guardian_tick(MagicMock(), registry, MagicMock(), live=True)
+
+    assert seen["funder"] == "0xfromenv"
+
+
+def test_no_funder_anywhere_passes_none_rather_than_guessing(monkeypatch):
+    import core_brain.single_buy_saver as sbs
+
+    seen: dict = {}
+
+    def fake_saver(client, registry, cfg, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(sbs, "manage_single_leg_positions", fake_saver)
+    monkeypatch.delenv("POLY_FUNDER", raising=False)
+    registry = _unhedged_registry(monkeypatch)
+
+    run_guardian_tick(MagicMock(), registry, MagicMock(), live=True)
+
+    assert seen["funder"] is None

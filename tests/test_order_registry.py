@@ -1509,3 +1509,152 @@ def test_log_close_keeps_an_explicit_slug_and_a_missing_one(registry: OrderRegis
 
     assert by_ts[101.0]["market_slug"] == "explicit-slug"
     assert by_ts[102.0]["market_slug"] is None
+
+
+# ── #646 lifecycle reset state ─────────────────────────────────────────────
+
+CID = "0xABCDEF"
+
+
+def _seed_lifecycle(registry: OrderRegistry, pair_id: str = "pair-1") -> None:
+    registry.save_lifecycle_state(LifecycleStateRecord(
+        pair_id=pair_id, condition_id=CID, state="HARD_STOP",
+        reason="hard_stop", updated_ts_ms=1_000,
+        evidence_json="{}"))
+
+
+def test_begin_blocks_entries_and_finish_clears_rows_atomically(
+        registry: OrderRegistry):
+    """#646: flat reset deletes lifecycle rows and leaves an awaiting mark."""
+    _seed_lifecycle(registry)
+    gen = registry.begin_lifecycle_reset(CID, "merge", now_ms=2_000)
+    assert gen == 1
+    assert registry.requalification_marks()[CID.lower()].status == "resetting"
+
+    assert registry.finish_lifecycle_reset(CID, gen, reset_ts_ms=3_000) is True
+
+    assert registry.has_lifecycle_for_condition(CID) is False
+    assert registry.get_lifecycle_state("pair-1") is None
+    mark = registry.requalification_marks()[CID.lower()]
+    assert mark.status == "awaiting"
+    assert mark.generation == gen
+    assert mark.reset_ts_ms == 3_000
+
+
+def test_finish_with_a_stale_generation_changes_nothing(
+        registry: OrderRegistry):
+    """#646: a delayed finish for an old reset never clears a newer one."""
+    _seed_lifecycle(registry)
+    gen1 = registry.begin_lifecycle_reset(CID, "merge", now_ms=2_000)
+    gen2 = registry.begin_lifecycle_reset(CID, "stop", now_ms=2_500)
+    assert gen2 == gen1 + 1
+
+    assert registry.finish_lifecycle_reset(CID, gen1, reset_ts_ms=3_000) is False
+
+    assert registry.has_lifecycle_for_condition(CID) is True
+    assert registry.requalification_marks()[CID.lower()].generation == gen2
+
+
+def test_finish_rolls_back_as_a_whole_when_the_delete_fails(
+        registry: OrderRegistry, monkeypatch):
+    """#646: a mid-finish failure keeps both the rows and the resetting mark."""
+    _seed_lifecycle(registry)
+    gen = registry.begin_lifecycle_reset(CID, "merge", now_ms=2_000)
+    con = sqlite3.connect(str(registry.db_path))
+    con.execute(
+        "CREATE TRIGGER inject_finish_failure BEFORE DELETE ON "
+        "single_leg_lifecycle BEGIN SELECT RAISE(ABORT, 'injected'); END")
+    con.commit()
+    try:
+        with pytest.raises(sqlite3.Error):
+            registry.finish_lifecycle_reset(CID, gen, reset_ts_ms=3_000)
+    finally:
+        con.execute("DROP TRIGGER inject_finish_failure")
+        con.commit()
+        con.close()
+
+    assert registry.has_lifecycle_for_condition(CID) is True
+    mark = registry.requalification_marks()[CID.lower()]
+    assert mark.status == "resetting"
+    assert mark.generation == gen
+
+
+def test_abandon_lifts_the_block_but_keeps_lifecycle_rows(
+        registry: OrderRegistry):
+    """#646: a failed proof leaves the market under its existing manager."""
+    _seed_lifecycle(registry)
+    gen = registry.begin_lifecycle_reset(CID, "merge", now_ms=2_000)
+
+    assert registry.abandon_lifecycle_reset(CID, gen + 99) is False
+    assert registry.abandon_lifecycle_reset(CID, gen) is True
+
+    assert registry.requalification_marks() == {}
+    assert registry.has_lifecycle_for_condition(CID) is True
+
+
+def test_marks_survive_a_reopen(registry: OrderRegistry, temp_db: Path):
+    """#646: reset state is durable across restarts."""
+    gen = registry.begin_lifecycle_reset(CID, "stop", now_ms=2_000)
+    registry.finish_lifecycle_reset(CID, gen, reset_ts_ms=3_000)
+
+    reopened = OrderRegistry(db_path=temp_db)
+    mark = reopened.requalification_marks()[CID.lower()]
+    assert (mark.status, mark.generation, mark.reset_ts_ms) == ("awaiting", gen, 3_000)
+
+
+def test_a_store_from_before_646_gains_the_new_table(tmp_path: Path):
+    """#646: opening a legacy store creates lifecycle_requalification."""
+    from core_brain.order_registry import SCHEMA
+    legacy_schema = SCHEMA.split(
+        "-- Reset/re-qualification marks")[0]
+    db = tmp_path / "legacy.db"
+    con = sqlite3.connect(str(db))
+    con.executescript(legacy_schema)
+    con.commit()
+    con.close()
+
+    reg = OrderRegistry(db_path=db)
+    assert reg.begin_lifecycle_reset(CID, "merge", now_ms=2_000) == 1
+
+
+def test_clear_only_honours_the_current_generation(registry: OrderRegistry):
+    """#646: a stale clear never drops a newer mark."""
+    registry.begin_lifecycle_reset(CID, "merge", now_ms=2_000)
+    gen2 = registry.begin_lifecycle_reset(CID, "merge", now_ms=2_500)
+    registry.finish_lifecycle_reset(CID, gen2, reset_ts_ms=3_000)
+
+    assert registry.clear_requalification(CID, gen2 - 1) is False
+    assert CID.lower() in registry.requalification_marks()
+    assert registry.clear_requalification(CID, gen2) is True
+    assert registry.requalification_marks() == {}
+
+
+def test_exclusion_keeps_the_mark_and_records_the_publication(
+        registry: OrderRegistry):
+    """#646: an excluded market stays blocked but visible."""
+    gen = registry.begin_lifecycle_reset(CID, "merge", now_ms=2_000)
+    registry.finish_lifecycle_reset(CID, gen, reset_ts_ms=3_000)
+
+    assert registry.record_requalification_exclusion(
+        CID, gen + 99, publication_ns=9, now_ms=4_000) is False
+    assert registry.record_requalification_exclusion(
+        CID, gen, publication_ns=9, now_ms=4_000) is True
+
+    mark = registry.requalification_marks()[CID.lower()]
+    assert mark.status == "awaiting"
+    assert mark.excluded_publication_ns == 9
+
+
+def test_mark_reads_fail_closed_on_db_errors(
+        registry: OrderRegistry, monkeypatch):
+    """#646: mark-read errors propagate so callers block entries."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _broken():
+        raise sqlite3.OperationalError("injected read failure")
+        yield
+
+    monkeypatch.setattr(registry, "_conn", _broken)
+    with pytest.raises(sqlite3.OperationalError):
+        registry.requalification_marks()

@@ -78,7 +78,7 @@ def risk_utilization(cfg, inv, side: str) -> float:
     A zero budget means the rule is unset, the same escape hatch every other
     cap in this config has. It must read as 0.0, never as infinite.
     """
-    budget = cfg.max_naked_usd
+    budget = cfg.bot_risk_exposure_max_naked_usd
     if budget <= 0:
         return 0.0
     return max(0.0, min(1.0, naked_usd(inv, side) / budget))
@@ -106,9 +106,9 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
         price -- the same confusion of units that made the old share cap $72 of
         risk at 0.20 and $293 at 0.8152. With it, one order can never buy more
         exposure than the budget it is walking toward.
-      * THE FLOOR at `min_quote_shares`. rewardsMinSize is 50: below it an
-        order earns no score at all while still buying inventory, so the honest
-        answer is 0 -- post nothing -- rather than a token order. This is what
+      * THE FLOOR at `bot_quote_size_min_shares`. Below the venue's order minimum an
+        order cannot be posted at all, so the honest answer is 0 -- post
+        nothing -- rather than a token order. This is what
         makes the tail of the ladder terminate instead of trickling.
 
     The light side is never tapered (R4). It is the only resting order that
@@ -120,10 +120,10 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
     # sizing mode. It is not a sizing instruction and must never be read as
     # one: reading 0 as "size from dollars" is how 17 defunded markets kept
     # posting 50-share orders. Defunded means silent.
-    if cfg.quote_shares <= 0:
+    if cfg.bot_quote_size_shares <= 0:
         return 0
 
-    if getattr(cfg, "size_mode", "shares") == "dollars":
+    if getattr(cfg, "bot_quote_size_mode", "shares") == "dollars":
         # Sized in couple shares from the Owner's allocation rule:
         # N = floor(couple_allocation / (up_price + down_price))
         # N = max(N, venue_min_size)
@@ -140,33 +140,31 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
             return 0
         couple_alloc = config.couple_allocation_usd(cfg)
         raw_n = int(couple_alloc / eff_pair)
-        if raw_n < cfg.min_quote_shares:
+        if raw_n < cfg.bot_quote_size_min_shares:
             return 0
-        base = max(raw_n, cfg.min_quote_shares)
+        base = max(raw_n, cfg.bot_quote_size_min_shares)
     else:
-        base = max(cfg.quote_shares, cfg.min_quote_shares)
+        base = max(cfg.bot_quote_size_shares, cfg.bot_quote_size_min_shares)
 
-    max_shares = getattr(cfg, "max_quote_shares", None)
+    max_shares = getattr(cfg, "bot_quote_size_max_shares", None)
     if max_shares is not None and max_shares > 0:
         base = min(base, int(max_shares))
 
     # The venue floor applies to the derived size exactly as it applies to the
     # fixed one: an order below it cannot be posted, so the honest answer is
     # no order rather than a token one.
-    if base < cfg.min_quote_shares:
+    if base < cfg.bot_quote_size_min_shares:
         return 0
 
     _strict_pairs = getattr(cfg, "bot_pos_gate_strict_pairs_on", None)
-    if _strict_pairs is None:
-        _strict_pairs = getattr(cfg, "strict_paired_inventory", True)
-    _strict_pairs = bool(_strict_pairs)
+    _strict_pairs = True if _strict_pairs is None else bool(_strict_pairs)
 
     if naked_side(inv) != side:
         if _strict_pairs and naked_side(inv) is not None:
             excess = abs(inv.up_shares - inv.down_shares)
             if excess > 0:
                 deficit_sz = int(excess)
-                if deficit_sz < cfg.min_quote_shares:
+                if deficit_sz < cfg.bot_quote_size_min_shares:
                     return 0
                 return min(base, deficit_sz)
         return base
@@ -176,16 +174,16 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
 
     size = base * (1.0 - risk_utilization(cfg, inv, side)) ** 2
 
-    if cfg.max_naked_usd > 0:
+    if cfg.bot_risk_exposure_max_naked_usd > 0:
         if price <= 0:
             # The remaining budget buys an unbounded number of shares at a
             # price of zero. That is the one reading that must never reach the
             # venue, so a degenerate book quotes nothing.
             return 0
-        remaining = max(0.0, cfg.max_naked_usd - naked_usd(inv, side))
+        remaining = max(0.0, cfg.bot_risk_exposure_max_naked_usd - naked_usd(inv, side))
         size = min(size, remaining / price)
 
-    if size < cfg.min_quote_shares:
+    if size < cfg.bot_quote_size_min_shares:
         return 0
     return int(size)
 
@@ -209,7 +207,7 @@ def skew_offset(cfg, inv, side: str) -> float:
     naked = naked_side(inv)
     if naked is None:
         return 0.0
-    push = cfg.max_skew_offset * risk_utilization(cfg, inv, naked)
+    push = cfg.bot_pos_skew_max_offset_cents * risk_utilization(cfg, inv, naked)
     return push if side == naked else -push
 
 
@@ -237,7 +235,7 @@ def band_risk_factor(cfg, price: float) -> BandRisk:
         variance is p(1-p) -- 0.2500 at 0.50 against 0.2100 at 0.30/0.70 and
         zero at the ends. The coin flip is where a fill says least about the
         outcome. The weight `w` below is a linear taper of that hump, reaching
-        zero at `coinflip_halfwidth` (0.20 = half the price band, so the
+        zero at `bot_quote_coinflip_halfwidth` (0.20 = half the price band, so the
         treatment stops exactly where the band stops permitting quotes).
       * MAGNITUDE, answered with OFFSET. The downside of one long share IS the
         price paid for it, so 0.70 buys more than twice the risk of 0.30 for
@@ -248,20 +246,20 @@ def band_risk_factor(cfg, price: float) -> BandRisk:
     The coin-flip term appears in BOTH outputs on purpose. Size alone would
     leave us resting at the same price in the least readable market on the
     board; offset alone would keep full size against the widest variance. The
-    offset terms share one scale (`price_risk_widen`) because `w` and `price`
+    offset terms share one scale (`bot_quote_price_risk_widen`) because `w` and `price`
     are both dimensionless 0..1 weights -- a second magnitude knob would be a
     number with no independent evidence behind it.
 
-    Zero `coinflip_halfwidth` unsets the variance term, the same escape hatch
+    Zero `bot_quote_coinflip_halfwidth` unsets the variance term, the same escape hatch
     every other tunable here has, and is also the one value that would divide
     by zero. The multiplier floors at 0: a negative multiplier would flip the
     sign of a size, and "quote nothing" is the correct limit of "quote less".
     """
-    hw = cfg.coinflip_halfwidth
+    hw = cfg.bot_quote_coinflip_halfwidth
     w = 0.0 if hw <= 0 else max(0.0, 1.0 - abs(price - 0.50) / hw)
     return BandRisk(
-        size_mult=max(0.0, 1.0 - cfg.coinflip_size_cut * w),
-        extra_offset=cfg.price_risk_widen * (w + price),
+        size_mult=max(0.0, 1.0 - cfg.bot_quote_coinflip_size_cut * w),
+        extra_offset=cfg.bot_quote_price_risk_widen * (w + price),
     )
 
 
@@ -271,14 +269,14 @@ def book_health(book: dict, cfg) -> BookHealth:
     Three rejections, cheapest and most certain first.
 
       * ONE-SIDED. No mid, nothing to quote against.
-      * SETTLED. Either quote sits within `decided_price` of an end. The
+      * SETTLED. Either quote sits within `bot_risk_circuit_decided_price_cents` of an end. The
         market has already decided: there is no spread left to capture, and
         the naked leg a fill would create is decided against us. Both ends are
         tested against both quotes -- the recorded failure was a 0.999 bid
         against a 0.001 ask, an inverted shape no single arm catches.
-      * TOO WIDE / TOO THIN. A spread wider than `max_book_spread` puts the
-        whole reward window inside it, so quoting there means being the most
-        exposed order in the book. Summed bid depth under `min_book_depth_sh`
+      * TOO WIDE / TOO THIN. A spread wider than `bot_quote_book_max_spread_cents` puts the
+        whole quote window inside it, so quoting there means being the most
+        exposed order in the book. Summed bid depth under `bot_quote_book_min_depth_shares`
         means nothing is there to absorb an exit.
     """
     bb, ba = book.get("best_bid"), book.get("best_ask")
@@ -286,7 +284,7 @@ def book_health(book: dict, cfg) -> BookHealth:
         return BookHealth(False, "one-sided book", depth_evaluated=False)
 
     lo, hi = min(bb, ba), max(bb, ba)
-    if lo <= cfg.decided_price or hi >= 1.0 - cfg.decided_price:
+    if lo <= cfg.bot_risk_circuit_decided_price_cents or hi >= 1.0 - cfg.bot_risk_circuit_decided_price_cents:
         return BookHealth(False, f"settled book {bb:.3f}/{ba:.3f}",
                           depth_evaluated=False)
 
@@ -307,10 +305,10 @@ def book_health(book: dict, cfg) -> BookHealth:
     # the two are equal; keeping the normalised form means a future reordering
     # cannot silently reintroduce the negative-width hole.
     spread = hi - lo
-    if spread > cfg.max_book_spread:
+    if spread > cfg.bot_quote_book_max_spread_cents:
         return BookHealth(False,
                           f"book too wide {100*spread:.1f}c > "
-                          f"{100*cfg.max_book_spread:.1f}c",
+                          f"{100*cfg.bot_quote_book_max_spread_cents:.1f}c",
                           depth_evaluated=False)
 
     bids = book.get("bids")
@@ -321,10 +319,10 @@ def book_health(book: dict, cfg) -> BookHealth:
         return BookHealth(True, "", depth_evaluated=False)
 
     depth = sum(bids.values())
-    if depth < cfg.min_book_depth_shares:
+    if depth < cfg.bot_quote_book_min_depth_shares:
         return BookHealth(False,
                           f"book too thin {depth:.0f}sh < "
-                          f"{cfg.min_book_depth_shares:.0f}sh")
+                          f"{cfg.bot_quote_book_min_depth_shares:.0f}sh")
     return BookHealth(True, "")
 
 
@@ -332,7 +330,7 @@ def completable_pair_block(cfg, price: float,
                            hedge_ask: Optional[float]) -> Optional[str]:
     """Why a bid at `price` must not rest given what the hedge leg costs to TAKE.
 
-    `max_pair_cost` asks what a pair costs if both legs fill as resting bids.
+    `bot_pos_price_max_pair_cost_usd` asks what a pair costs if both legs fill as resting bids.
     This asks the question the tape actually answers: one leg fills as maker,
     and the other has to be bought at its ask. On a binary market the two are
     not close. UP + DOWN = 1.00 is near a mechanical identity, so the legs are
@@ -392,13 +390,13 @@ def queue_clear_block(cfg, side: str, price: float, queue_shares: float,
     Returns `(allowed, why)`. `why` is EMPTY when the queue clears and otherwise
     carries the shared `maker queue: ...` reason with the leg appended, so the
     string stands on its own in a log line or a cycle event.
-    `max_queue_clear_minutes` of 0 disables the rule, and a zero queue is allowed
+    `bot_order_queue_max_clear_min` of 0 disables the rule, and a zero queue is allowed
     before any division -- an empty level needs no time to clear, whatever the
     tape says.
     """
     from scoring.selector import maker_queue_allowed, queue_minutes_at
 
-    bar = float(getattr(cfg, "max_queue_clear_minutes", 0.0) or 0.0)
+    bar = float(getattr(cfg, "bot_order_queue_max_clear_min", 0.0) or 0.0)
     if bar <= 0:
         return True, ""
     ahead = float(queue_shares)
@@ -408,7 +406,7 @@ def queue_clear_block(cfg, side: str, price: float, queue_shares: float,
         ahead, float(reachable_shares), float(window_min))
     allowed, why = maker_queue_allowed(
         minutes, bar,
-        enforce=bool(getattr(cfg, "enforce_queue_clear_gate", False)),
+        enforce=bool(getattr(cfg, "bot_order_gate_queue_clear_on", False)),
     )
     if not why:
         return True, ""
@@ -444,14 +442,14 @@ def hard_block(
         finished quoting 0.999 bid against a 0.001 ask, and a fill on the
         healthy leg would have left a position no price could unwind.
       * OWN SIDE. The book we would rest into, on the same three arms.
-      * DOLLAR CAP. Naked cost on this side at or past `max_naked_usd`.
-      * PRICE BAND (R7). Outside `price_band_low..price_band_high` the spread
+      * DOLLAR CAP. Naked cost on this side at or past `bot_risk_exposure_max_naked_usd`.
+      * PRICE BAND (R7). Outside `bot_quote_price_band_min_cents..bot_quote_price_band_max_cents` the spread
         has collapsed toward one tick on an outcome the market already
         considers settled, so there is nothing to capture -- while a wrong
         resolution still costs the full $1.00. Reported AFTER the dollar cap
         on purpose: when both bind, what is already at stake is the more
         useful reading than what a new fill would be worth.
-      * PAIR COST (R7). `price + inv.avg(other) >= max_pair_cost`. The pair
+      * PAIR COST (R7). `price + inv.avg(other) >= bot_pos_price_max_pair_cost_usd`. The pair
         pays exactly $1.00, so a pair assembled above that is a booked loss,
         not a risk. The explicit lifecycle escalation instead uses its
         pair-scoped held average and may equal the cap, never exceed it.
@@ -474,7 +472,7 @@ def hard_block(
 
     The PAIR-COST arm is the exception, and deliberately: it is not an
     exposure bound. A light-side fill that assembles the pair at/over
-    `max_pair_cost` is a booked loss on an instrument that pays exactly
+    `bot_pos_price_max_pair_cost_usd` is a booked loss on an instrument that pays exactly
     $1.00, and "reduces exposure" does not make a guaranteed loss
     acceptable. It is checked before R4 returns, so the light side is exempt
     from the exposure arms only -- never from the cap that exists to stop a
@@ -485,10 +483,10 @@ def hard_block(
     other = OTHER[side]
 
     # THE PAIR-COST CAP is evaluated BEFORE enable_hard_blocks so it always
-    # rejects pairs at or above max_pair_cost, regardless of the flag.
+    # rejects pairs at or above the pair-cost ceiling, regardless of the flag.
     # R4 exempts the light side from the exposure arms because buying the
     # light side REDUCES exposure -- but the pair-cost arm is not an exposure
-    # bound. A light-side fill that assembles the pair at/over `max_pair_cost`
+    # bound. A light-side fill that assembles the pair at/over `bot_pos_price_max_pair_cost_usd`
     # is a booked loss on an instrument that pays exactly $1.00; "reduces
     # exposure" does not make a guaranteed loss acceptable. The old order
     # skipped this arm entirely for the light side, which is how a light-side
@@ -536,7 +534,7 @@ def hard_block(
 
     # Ordinary light-side quotes retain R4's early return. A lifecycle
     # escalation is also light-side, but must still pass book and price gates.
-    if not lifecycle_escalation and not getattr(cfg, "enable_hard_blocks", True):
+    if not lifecycle_escalation and not getattr(cfg, "bot_risk_gate_hard_blocks_on", True):
         return None
 
     hedge = book_health(hedge_book, cfg)
@@ -550,10 +548,10 @@ def hard_block(
 
     # 0 disables the rule, the same escape hatch every other cap in this config
     # has. `>=` not `>`: the budget is a ceiling reached, not approached.
-    if cfg.max_naked_usd > 0:
+    if cfg.bot_risk_exposure_max_naked_usd > 0:
         naked = naked_usd(inv, side)
-        if naked >= cfg.max_naked_usd:
-            return (f"${naked:.2f} naked >= ${cfg.max_naked_usd:.0f} "
+        if naked >= cfg.bot_risk_exposure_max_naked_usd:
+            return (f"${naked:.2f} naked >= ${cfg.bot_risk_exposure_max_naked_usd:.0f} "
                     f"budget -- not adding")
 
     # THE PRICE BAND. Inclusive at both ends, mirroring `_in_band` -- a rule
@@ -561,9 +559,9 @@ def hard_block(
     # config says. Switchable for the same reason it always was: a gate that
     # cannot be turned off cannot be attributed a result.
     if cfg.bot_quote_gate_price_band_on and not (
-            cfg.price_band_low <= price <= cfg.price_band_high):
-        return (f"{price:.3f} outside band {cfg.price_band_low:.2f}-"
-                f"{cfg.price_band_high:.2f}")
+            cfg.bot_quote_price_band_min_cents <= price <= cfg.bot_quote_price_band_max_cents):
+        return (f"{price:.3f} outside band {cfg.bot_quote_price_band_min_cents:.2f}-"
+                f"{cfg.bot_quote_price_band_max_cents:.2f}")
 
     # PAIR COST, for the heavy side. `other_avg > 0` guards it, exactly as
     # the legacy branch does: a zero average means we hold none of that token,

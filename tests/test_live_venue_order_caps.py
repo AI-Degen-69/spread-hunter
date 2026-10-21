@@ -8,11 +8,11 @@ from core_brain import venue
 
 @pytest.fixture
 def clean_bankroll_env(monkeypatch):
-    monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
-    monkeypatch.delenv("SPREAD_HUNTER_BANKROLL", raising=False)
+    monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
+    monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
     yield
-    monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
-    monkeypatch.delenv("SPREAD_HUNTER_BANKROLL", raising=False)
+    monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
+    monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
 
 
 def test_order_caps_follows_settings_changed_after_import(clean_bankroll_env, monkeypatch):
@@ -22,7 +22,7 @@ def test_order_caps_follows_settings_changed_after_import(clean_bankroll_env, mo
 
     # A per-run override applied after import (tournament preset, starting
     # cash, test adjustment): bankroll $400 -> 25% / 90% dynamic caps.
-    monkeypatch.setenv("HUNTER_BANKROLL", "400")
+    monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "400")
     assert venue.order_caps() == pytest.approx((100.0, 360.0))
 
     # The import-time snapshot is untouched -- that staleness is the bug.

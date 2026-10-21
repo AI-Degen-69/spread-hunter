@@ -115,7 +115,7 @@ def _classify_refusal(why: str) -> VisitOutcome:
 
     Delegates to the single enumerated list in `market_lifecycle`: a named
     stop refuses for good, everything else (wide book, completable cap,
-    reward window, mid band, ...) is transient -- the book moved, not the
+    quote window, mid band, ...) is transient -- the book moved, not the
     market. Matched case-insensitively.
     """
     if classify_refusal(why) is not None:
@@ -271,7 +271,7 @@ def plan_orders(
     parameters stay in the signature -- `cfg`, `hedge_asks`, `hedge_held`,
     `queue_ahead`, `hold_queue_shares`, `hold_below_target`, `visit_outcome` --
     for the follow-up cancel-conditions issue to disposition; only `dead_band`
-    and `cfg.min_quote_shares` are read here.
+    and `cfg.bot_quote_size_min_shares` are read here.
     """
     tolerance = max(float(price_eps), float(dead_band))
     preserve_ids = {str(value) for value in preserve_order_ids or ()}
@@ -337,10 +337,10 @@ def plan_orders(
             to_submit.append(i)
 
     # Delta top-up (#453): if an existing hedge is preserved (kept) on a lifecycle pair
-    # but leaves a shortfall >= min_quote_shares, generate a supplemental maker intent
+    # but leaves a shortfall >= bot_quote_size_min_shares, generate a supplemental maker intent
     # for the missing delta shares on the same token and pair ID.
-    if lifecycle_pair_id is not None and hasattr(cfg, "min_quote_shares"):
-        min_shares = float(getattr(cfg, "min_quote_shares", 5.0) or 5.0)
+    if lifecycle_pair_id is not None and hasattr(cfg, "bot_quote_size_min_shares"):
+        min_shares = float(getattr(cfg, "bot_quote_size_min_shares", 5.0) or 5.0)
         # Check if any kept order belongs to lifecycle_pair_id
         for tok, sits in kept.items():
             pair_sits = [o for o in sits if str(o.get("pair_id") or "") == str(lifecycle_pair_id)]
@@ -403,7 +403,7 @@ def _market_cfg(base, spec: Any):
     gates the paper fleet runs; the only per-market differences are the venue's
     min-size, spread window and tick, copied from the ranker's spec.
 
-    `objective="spread_capture"` below is pinned on every market ON PURPOSE. It
+    `bot_pos_objective="spread_capture"` below is pinned on every market ON PURPOSE. It
     selects `quotes._decide_quotes_from_mid` -- rest both legs at `mid - offset`,
     which assembles the pair at ~1.00 - 2*offset and is how spread capture is
     executed. The alternative value, "pair", prices off the ask and was measured
@@ -416,32 +416,32 @@ def _market_cfg(base, spec: Any):
         if hasattr(spec, "range_cents") or hasattr(spec, "velocity_measured_at"):
             return replace(
                 base,
-                range_cents=getattr(spec, "range_cents", None),
-                velocity_measured_at=getattr(spec, "velocity_measured_at", None),
+                bot_quote_telemetry_range_cents=getattr(spec, "range_cents", None),
+                bot_quote_telemetry_velocity_measured_at=getattr(spec, "velocity_measured_at", None),
             )
         return base
     return replace(
         base,
-        objective="spread_capture",
-        min_quote_shares=int(spec.get("min_size", base.min_quote_shares)),
-        quote_shares=int(spec.get("shares", base.quote_shares)),
-        # The quote window is the ENGINE's max_spread_from_mid, single source.
+        bot_pos_objective="spread_capture",
+        bot_quote_size_min_shares=int(spec.get("min_size", base.bot_quote_size_min_shares)),
+        bot_quote_size_shares=int(spec.get("shares", base.bot_quote_size_shares)),
+        # The quote window is the ENGINE's bot_quote_book_max_spread_from_mid, single source.
         # The venue's rewardsMaxSpread used to ride in on the feed row's
         # max_spread field and cap the window here (2.5c on Fed rows, 4.5c on
         # sports) — a rewards-program leftover throttling a strategy that earns
         # the pair discount, not emissions. Deleted with the rewards purge
         # (#594); do not reintroduce a per-market window.
-        price_tick=float(spec.get("tick", base.price_tick)),
-        market_title=str(spec.get("title", "")),
-        range_cents=(
+        bot_quote_grid_tick_size_usd=float(spec.get("tick", base.bot_quote_grid_tick_size_usd)),
+        bot_market_title=str(spec.get("title", "")),
+        bot_quote_telemetry_range_cents=(
             float(spec["range_cents"])
             if spec.get("range_cents") is not None
-            else getattr(base, "range_cents", None)
+            else getattr(base, "bot_quote_telemetry_range_cents", None)
         ),
-        velocity_measured_at=(
+        bot_quote_telemetry_velocity_measured_at=(
             float(spec["velocity_measured_at"])
             if spec.get("velocity_measured_at") is not None
-            else getattr(base, "velocity_measured_at", None)
+            else getattr(base, "bot_quote_telemetry_velocity_measured_at", None)
         ),
     )
 
@@ -511,6 +511,11 @@ class VenueSeam:
     #: a closure over `(client, registry, maker_address)`, so the reaction keeps
     #: the 3-argument reconcile port untouched. See `fill_events_fn`.
     fill_reconcile_fn: Optional[Callable[[], Any]] = None
+    #: Unified pricing seam for #659: the `BookProvider` behind `fetch_books`.
+    #: Optional -- `main()` sets it when the stream is up so the risk guardian
+    #: thread evaluates defense against the same books the quotes use. Unset,
+    #: the guardian decides against the client, exactly as before.
+    book_provider: Optional[Any] = None
 
 
 def run(
@@ -629,6 +634,14 @@ def run(
                 stop_event=stop_workers,
                 wake_event=guardian_wake,
                 trigger_board=trigger_board,
+                single_buy_saver_fn=_make_guardian_saver_fn(
+                    getattr(seam, "book_provider", None),
+                    # The wallet the exit sizing nets against (#646 N5). The
+                    # seam already carries it -- it is what reconcile is
+                    # handed -- and without it the guardian manages blind.
+                    funder=seam.maker_address,
+                ),
+                funder=seam.maker_address,
             )
             log.info("risk guardian sentry started (every 1.0s, background)")
 
@@ -669,6 +682,7 @@ def run(
                         log.warning("markets_fn failed: %s: %s", type(e).__name__, e)
                     else:
                         if fresh:
+                            _evaluate_requalification(registry, fresh)
                             current_markets = list(fresh)
                         elif seam.markets_fn_empty_is_routine:
                             # Normal for this caller (see the seam field). Still
@@ -701,6 +715,19 @@ def run(
                 # guard reads the in-memory universe, so a stale feed retaining
                 # the market, a reappearing feed, and a restart all stay quiet.
                 resolved = resolved_condition_ids(registry)
+                # Reset marks, read once per rotation (#646). Unreadable
+                # marks fail closed: fresh entries block for the cycle while
+                # managed markets still visit.
+                try:
+                    requal_marks = (registry.requalification_marks()
+                                    if registry is not None else {})
+                except Exception as e:
+                    # Same duck-typed-read convention as
+                    # `resolved_condition_ids`: fakes and partial doubles
+                    # fail closed with a warning, never with a traceback.
+                    log.warning("requalification marks unreadable: %s; "
+                                "blocking fresh entries", e)
+                    requal_marks = None
                 # Held markets first (#505): naked, then balanced, then flat
                 # quoting-only -- stable within each rank, every market exactly
                 # once. `current_markets` itself is untouched: dropped-market
@@ -721,6 +748,14 @@ def run(
                         cycle_results.append(LiveFleetResult(
                             status="SKIPPED", condition_id=cid,
                             why="resolved_market_skipped"))
+                        continue
+                    if cid and _is_awaiting_requalification(
+                            registry, requal_marks, cid):
+                        title = (spec.get("title", "")
+                                 if isinstance(spec, dict) else "")
+                        cycle_results.append(LiveFleetResult(
+                            status="SKIPPED", condition_id=cid,
+                            title=title, why="awaiting_requalification"))
                         continue
                     res = _visit_one(
                         seam=seam, spec=spec, live=live, cycle=cycle,
@@ -949,14 +984,19 @@ def _react_to_one_fill(
         except Exception as e:
             log.warning("fill visit failed: %s: %s", type(e).__name__, e)
     try:
+        # Same wallet the background sentry gets (#646 N5). Without it the
+        # fill-triggered tick would have to fall back to POLY_FUNDER, and a
+        # pass with no venue view skips a partial exit's remainder instead
+        # of sizing it -- the one moment a remainder is most likely to exist.
         if trigger_board is not None:
             _guardian_fill_tick(
                 client=seam.client, registry=seam.registry,
-                cfg=seam.base_cfg, live=live, trigger_board=trigger_board)
+                cfg=seam.base_cfg, live=live, trigger_board=trigger_board,
+                funder=seam.maker_address)
         else:
             _guardian_fill_tick(
                 client=seam.client, registry=seam.registry,
-                cfg=seam.base_cfg, live=live)
+                cfg=seam.base_cfg, live=live, funder=seam.maker_address)
     except Exception as e:
         log.warning("fill guardian tick failed: %s: %s",
                     type(e).__name__, e)
@@ -1235,7 +1275,7 @@ def _admit_placements(
     state rather than the pair this strategy rests.
 
     Returns `(admitted, why)`. `why` is empty when nothing was refused or
-    reported; under the shipped record-only default (`enforce_queue_clear_gate`
+    reported; under the shipped record-only default (`bot_order_gate_queue_clear_on`
     False) it carries the reason and `admitted` is unchanged.
     """
     from core_brain import risk
@@ -1274,7 +1314,7 @@ def _admit_placements(
         return list(to_submit), ""
 
     cid = str(getattr(market, "condition_id", "") or "")
-    window_sec = float(getattr(cfg, "queue_flow_window_sec", 0.0) or 0.0)
+    window_sec = float(getattr(cfg, "bot_order_queue_flow_window_sec", 0.0) or 0.0)
     try:
         flow = flow_fn(cid, window_sec)
     except Exception as e:
@@ -1315,7 +1355,7 @@ def _admit_placements(
             why = f"{why} ({len(passive)} new placement(s) dropped with it)"
         return [i for i in to_submit if i.crossed], why
     if reasons:
-        # Record-only (`enforce_queue_clear_gate` False): the bar is on the
+        # Record-only (`bot_order_gate_queue_clear_on` False): the bar is on the
         # record, nothing is dropped. This is what the threshold gets picked from.
         return list(to_submit), reasons[0]
     return list(to_submit), ""
@@ -1601,12 +1641,12 @@ def _lifecycle_quote_context(
         decision = evaluate_single_leg_lifecycle(
             position,
             registry,
-            max_pair_cost=float(cfg.bot_pos_price_max_pair_cost_usd),
-            stop_loss_mode=str(cfg.stop_loss_mode),
-            drop_cents=float(cfg.drop_cents),
-            drawdown_pct=float(cfg.drawdown_pct),
+            bot_pos_price_max_pair_cost_usd=float(cfg.bot_pos_price_max_pair_cost_usd),
+            bot_risk_stop_mode=str(cfg.bot_risk_stop_mode),
+            bot_risk_stop_adverse_drop_cents=float(cfg.bot_risk_stop_adverse_drop_cents),
+            bot_risk_stop_max_drawdown_pct=float(cfg.bot_risk_stop_max_drawdown_pct),
             bot_risk_circuit_max_drawdown_pct=float(cfg.bot_risk_circuit_max_drawdown_pct),
-            tick_size=float(cfg.price_tick),
+            tick_size=float(cfg.bot_quote_grid_tick_size_usd),
         )
         decisions.append((pair_id, position, decision))
 
@@ -1734,13 +1774,13 @@ def _lifecycle_quote_context(
             pair_price=pair_price,
         )
         size = min(int(decision.naked_size), size_cap)
-        if size < cfg.min_quote_shares:
+        if size < cfg.bot_quote_size_min_shares:
             # Keep the resting hedge instead of cancelling it; a transient
             # size refusal is not a reason to strand the pair ahead of the
             # hard-stop or settlement path (see single_leg_refusal).
             return preserve_refusal_context(
                 f"lifecycle escalation size {size} below venue minimum "
-                f"{cfg.min_quote_shares}",
+                f"{cfg.bot_quote_size_min_shares}",
                 [pair_id],
             )
         return LifecycleQuoteContext(
@@ -1794,6 +1834,117 @@ def _tail_note(mem: Optional[dict], cid: str, kind: str, sig: str,
         mem[key] = sig
         mem[(cid, "__kind")] = kind
     log.info(msg + "\n", *args)
+
+
+def _enforce_entry_gate(seam, cid, to_submit, lifecycle_pair_id):
+    """Drop fresh-entry submits for a marked market, keep lifecycle ones (#646).
+
+    Returns (submits, blocked). The visit-loop skip handles the steady state;
+    this is the race guard for a reset that commits between planning and
+    submission. Hedge restoration builds its own submits later and is
+    unaffected. An unreadable marks table blocks everything: nothing may be
+    proven fresh, so nothing new goes out.
+    """
+    if not to_submit:
+        return to_submit, False
+    registry = getattr(seam, "registry", None)
+    if registry is None:
+        return to_submit, False
+    try:
+        marks = registry.requalification_marks()
+    except Exception:
+        return [], True
+    if str(cid or "").lower() not in marks:
+        return to_submit, False
+    if lifecycle_pair_id is None:
+        return [], True
+    kept = [i for i in to_submit
+            if getattr(i, "pair_id", None) == lifecycle_pair_id]
+    return kept, True
+
+
+def _execute_planned_orders(seam, market, cfg, title, cycle, to_cancel,
+                            to_submit, cancel_reasons, queue_ahead, emit_fn):
+    """Run the planned cancels then submits. Returns (submitted, cancelled, error).
+
+    `error` is None on success; on failure it carries the same `submit/cancel`
+    text the visit reports, and the market_error emit has already fired.
+    Hedge restoration runs inside, so the whole terminal sequence stays under
+    the caller's lifecycle guard.
+    """
+    submitted = cancelled = 0
+    cancelled_lifecycle_orders = [
+        o for o in to_cancel
+        if cancel_reasons.get(str(o.get("id") or o.get("order_id") or "")) == "lifecycle_replace"
+    ]
+    try:
+        # Cancel first: cancelling old quotes before submitting replacements
+        # prevents exceeding MAX_TOTAL_USD notional exposure and avoids double
+        # quoting if replacement submission occurs while stale orders rest.
+        confirmed_cancelled_lifecycle = []
+        if to_cancel:
+            for row in to_cancel:
+                key = str(row.get("id") or row.get("order_id") or "")
+                if key in cancel_reasons:
+                    row["cancel_reason"] = cancel_reasons[key]
+                if queue_ahead and key in queue_ahead:
+                    row["cancel_queue_ahead"] = queue_ahead[key]
+            cancelled = seam.cancel_fn(seam.client, seam.registry, to_cancel)
+            if cancelled < len(to_cancel):
+                still_resting = _still_resting(seam, to_cancel)
+                if still_resting:
+                    raise RuntimeError(
+                        f"cancel failed: {len(still_resting)}/{len(to_cancel)} still "
+                        f"resting; aborting replacement submission"
+                    )
+            # Only consider lifecycle orders whose cancellation confirmed complete
+            confirmed_cancelled_lifecycle = list(cancelled_lifecycle_orders)
+        if to_submit:
+            submitted = seam.submit_fn(seam.client, seam.registry, market, to_submit, cfg)
+            if submitted == 0 and confirmed_cancelled_lifecycle:
+                # Submit accepted zero orders: attempt to restore cancelled hedge order
+                for old_o in confirmed_cancelled_lifecycle:
+                    try:
+                        restore_intent = QuoteIntent(
+                            side=old_o.get("side", "BUY"),
+                            token_id=old_o.get("token_id"),
+                            price=float(old_o["price"]),
+                            size=int(old_o.get("size") or old_o.get("original_size") or cfg.bot_quote_size_min_shares),
+                            mid=float(old_o["price"]),
+                            edge_vs_mid=0.0,
+                            pair_id=old_o.get("pair_id"),
+                        )
+                        seam.submit_fn(seam.client, seam.registry, market, [restore_intent], cfg)
+                        log.warning("[HEDGE RESTORED] %s | Restored hedge %s after 0 orders submitted", title, old_o.get("id"))
+                    except Exception as rest_err:
+                        log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
+    except Exception as e:
+        submitted = getattr(e, PARTIAL_SUBMIT_PLACED_ATTR, getattr(e, "placed", submitted))
+        if confirmed_cancelled_lifecycle and submitted == 0:
+            # Submit raised exception with 0 placed: attempt to restore confirmed cancelled hedge order
+            for old_o in confirmed_cancelled_lifecycle:
+                try:
+                    restore_intent = QuoteIntent(
+                        side=old_o.get("side", "BUY"),
+                        token_id=old_o.get("token_id"),
+                        price=float(old_o["price"]),
+                        size=int(old_o.get("size") or old_o.get("original_size") or cfg.bot_quote_size_min_shares),
+                        mid=float(old_o["price"]),
+                        edge_vs_mid=0.0,
+                        pair_id=old_o.get("pair_id"),
+                    )
+                    seam.submit_fn(seam.client, seam.registry, market, [restore_intent], cfg)
+                    log.warning("[HEDGE RESTORED] %s | Restored hedge %s after submit failure", title, old_o.get("id"))
+                except Exception as rest_err:
+                    log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
+        # A submit/cancel failure (venue rejection, a split couple rolled back)
+        # must degrade this market to ERROR, never stop the rotation.
+        emit_fn(service="decide", cycle=cycle, phase="quoting",
+                action="market_error", market_slug=title,
+                reason=f"submit/cancel: {type(e).__name__}: {e}",
+                extra={"submitted": submitted, "cancelled": cancelled})
+        return submitted, cancelled, f"submit/cancel: {type(e).__name__}: {e}"
+    return submitted, cancelled, None
 
 
 def _visit_one(
@@ -2047,7 +2198,7 @@ def _visit_one(
         if isinstance(_stats, dict):
             event_extra.update(_stats)
     if title:
-        event_extra["market_title"] = title
+        event_extra["bot_market_title"] = title
     _decide_quotes = []
     for _di in list(intents)[:4]:
         _dside = getattr(_di, "side", None)
@@ -2120,81 +2271,24 @@ def _visit_one(
             filtered_to_cancel.append(o)
         to_cancel = filtered_to_cancel
 
-    submitted = cancelled = 0
-    cancelled_lifecycle_orders = [
-        o for o in to_cancel
-        if cancel_reasons.get(str(o.get("id") or o.get("order_id") or "")) == "lifecycle_replace"
-    ]
-    try:
-        # Cancel first: cancelling old quotes before submitting replacements
-        # prevents exceeding MAX_TOTAL_USD notional exposure and avoids double
-        # quoting if replacement submission occurs while stale orders rest.
-        confirmed_cancelled_lifecycle = []
-        if to_cancel:
-            for row in to_cancel:
-                key = str(row.get("id") or row.get("order_id") or "")
-                if key in cancel_reasons:
-                    row["cancel_reason"] = cancel_reasons[key]
-                if queue_ahead and key in queue_ahead:
-                    row["cancel_queue_ahead"] = queue_ahead[key]
-            cancelled = seam.cancel_fn(seam.client, seam.registry, to_cancel)
-            if cancelled < len(to_cancel):
-                still_resting = _still_resting(seam, to_cancel)
-                if still_resting:
-                    raise RuntimeError(
-                        f"cancel failed: {len(still_resting)}/{len(to_cancel)} still "
-                        f"resting; aborting replacement submission"
-                    )
-            # Only consider lifecycle orders whose cancellation confirmed complete
-            confirmed_cancelled_lifecycle = list(cancelled_lifecycle_orders)
-        if to_submit:
-            submitted = seam.submit_fn(seam.client, seam.registry, market, to_submit, cfg)
-            if submitted == 0 and confirmed_cancelled_lifecycle:
-                # Submit accepted zero orders: attempt to restore cancelled hedge order
-                for old_o in confirmed_cancelled_lifecycle:
-                    try:
-                        restore_intent = QuoteIntent(
-                            side=old_o.get("side", "BUY"),
-                            token_id=old_o.get("token_id"),
-                            price=float(old_o["price"]),
-                            size=int(old_o.get("size") or old_o.get("original_size") or cfg.min_quote_shares),
-                            mid=float(old_o["price"]),
-                            edge_vs_mid=0.0,
-                            pair_id=old_o.get("pair_id"),
-                        )
-                        seam.submit_fn(seam.client, seam.registry, market, [restore_intent], cfg)
-                        log.warning("[HEDGE RESTORED] %s | Restored hedge %s after 0 orders submitted", title, old_o.get("id"))
-                    except Exception as rest_err:
-                        log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
-    except Exception as e:
-        submitted = getattr(e, PARTIAL_SUBMIT_PLACED_ATTR, getattr(e, "placed", submitted))
-        if confirmed_cancelled_lifecycle and submitted == 0:
-            # Submit raised exception with 0 placed: attempt to restore confirmed cancelled hedge order
-            for old_o in confirmed_cancelled_lifecycle:
-                try:
-                    restore_intent = QuoteIntent(
-                        side=old_o.get("side", "BUY"),
-                        token_id=old_o.get("token_id"),
-                        price=float(old_o["price"]),
-                        size=int(old_o.get("size") or old_o.get("original_size") or cfg.min_quote_shares),
-                        mid=float(old_o["price"]),
-                        edge_vs_mid=0.0,
-                        pair_id=old_o.get("pair_id"),
-                    )
-                    seam.submit_fn(seam.client, seam.registry, market, [restore_intent], cfg)
-                    log.warning("[HEDGE RESTORED] %s | Restored hedge %s after submit failure", title, old_o.get("id"))
-                except Exception as rest_err:
-                    log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
-        # A submit/cancel failure (venue rejection, a split couple rolled back)
-        # must degrade this market to ERROR, never stop the rotation.
-        emit_fn(service="decide", cycle=cycle, phase="quoting",
-                action="market_error", market_slug=title,
-                reason=f"submit/cancel: {type(e).__name__}: {e}",
-                extra={"submitted": submitted, "cancelled": cancelled})
+    # Final entry gate (#646): a reset may commit between planning and this
+    # submission. Reread the mark under the lifecycle guard and drop
+    # fresh-entry submits; lifecycle-context submits (hedge replace/restore
+    # on the managed pair) still go out.
+    from core_brain.single_buy_saver import lifecycle_mutation_guard
+    gate_pair_id = (getattr(lifecycle_context, "lifecycle_pair_id", None)
+                    if lifecycle_context is not None else None)
+    with lifecycle_mutation_guard():
+        to_submit, gate_blocked = _enforce_entry_gate(
+            seam, cid, to_submit, gate_pair_id)
+        submitted, cancelled, submit_error = _execute_planned_orders(
+            seam, market, cfg, title, cycle, to_cancel, to_submit,
+            cancel_reasons, queue_ahead, emit_fn)
+    if submit_error is not None:
         return LiveFleetResult(
             status="ERROR", condition_id=cid, title=title, why=why,
             intents=list(intents), submitted=submitted, cancelled=cancelled,
-            error=f"submit/cancel: {type(e).__name__}: {e}")
+            error=submit_error)
 
     submit_extra = {"submitted": submitted, "cancelled": cancelled}
     if queue_why:
@@ -2217,14 +2311,87 @@ def _visit_one(
         _tail_note(tail_memory, cid, "skipped", why,
                    "[SKIPPED] %s | %s", title, why)
 
+    gate_held = gate_blocked and bool(intents) and not to_submit
+    final_why = why
+    if gate_held:
+        final_why = (why + "; awaiting_requalification") if why else "awaiting_requalification"
     return LiveFleetResult(
-        status="QUOTED" if intents else "DECLINED",
-        condition_id=cid, title=title, why=why, intents=list(intents),
+        status="DECLINED" if gate_held else ("QUOTED" if intents else "DECLINED"),
+        condition_id=cid, title=title, why=final_why, intents=list(intents),
         submitted=submitted, cancelled=cancelled,
         queue_why=queue_why)
 
 
 # --- production wiring ------------------------------------------------------
+
+class MarketSpecList(list):
+    """Specs carrying their publication metadata (#646).
+
+    Only the production feed path mints these, via `load_graduated_snapshot`.
+    Plain lists from any other supplier (shadow, tests, paired bundles)
+    carry no metadata and can never clear a re-qualification mark.
+    """
+
+    def __init__(self, specs=(), *, published_mtime_ns=None,
+                 condition_ids=frozenset()):
+        super().__init__(specs)
+        self.published_mtime_ns = published_mtime_ns
+        self.publication_condition_ids = frozenset(condition_ids)
+
+
+def _evaluate_requalification(registry, fresh) -> None:
+    """Clear or retain reset marks against one publication (#646).
+
+    Runs after a successful `markets_fn()` load, before empty-result
+    handling. Only a publication strictly newer than the reset clears its
+    generation when it includes the market; a newer one that excludes it is
+    recorded and the market stays blocked. Suppliers without metadata,
+    and any failure here, leave every mark exactly where it was.
+    """
+    published_ns = getattr(fresh, "published_mtime_ns", None)
+    raw_cids = getattr(fresh, "publication_condition_ids", None)
+    if published_ns is None or raw_cids is None or registry is None:
+        return
+    try:
+        marks = registry.requalification_marks()
+    except Exception as exc:
+        log.warning("re-qualification evaluation skipped: %s", exc)
+        return
+    for cid, mark in marks.items():
+        try:
+            if published_ns <= int(mark.reset_ts_ms) * 1_000_000:
+                continue
+            if cid in raw_cids:
+                registry.clear_requalification(cid, mark.generation)
+            else:
+                registry.record_requalification_exclusion(
+                    cid, mark.generation, int(published_ns),
+                    now_ms=int(time.time() * 1000))
+        except Exception as exc:
+            log.warning("re-qualification evaluation for %s skipped: %s",
+                        cid, exc)
+
+
+def _is_awaiting_requalification(registry, marks, cid: str) -> bool:
+    """Whether a market gets no new entry quotes this cycle (#646).
+
+    A marked market with no lifecycle row is blocked. One under lifecycle
+    management still visits -- its hedges, not fresh entries, are the work.
+    Unreadable marks fail closed for fresh entries only, never for managed
+    markets.
+    """
+    if registry is None or not cid:
+        return False
+    try:
+        managed = registry.has_lifecycle_for_condition(cid)
+    except Exception:
+        return False
+    if managed:
+        return False
+    if marks is None:
+        return True
+    return str(cid).lower() in marks
+
 
 def _market_specs(max_markets: Optional[int] = None, registry=None,
                   path=None, paired_arm: Optional[str] = None) -> list[dict]:
@@ -2238,8 +2405,14 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
     side of an atomic paired-depth bundle without changing the live path.
     """
     from core_brain.market_feed import load_graduated_markets
+    published_ns = None
+    publication_cids = frozenset()
     if paired_arm is None:
-        gms = load_graduated_markets(path=path)
+        from core_brain.market_feed import load_graduated_snapshot
+        snapshot = load_graduated_snapshot(path=path)
+        gms = snapshot.rows
+        published_ns = snapshot.published_mtime_ns
+        publication_cids = snapshot.condition_ids
     else:
         gms = load_graduated_markets(path=path, paired_arm=paired_arm)
     if not gms:
@@ -2304,6 +2477,9 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
                 "event_title": gm.event_title or gm.title,
             })
         specs.append(spec)
+    if paired_arm is None:
+        return MarketSpecList(specs, published_mtime_ns=published_ns,
+                              condition_ids=publication_cids)
     return specs
 
 
@@ -2376,27 +2552,27 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
     # loop has already merged the latest venue account_value into base_cfg via
     # _fleet_state, use those; otherwise fall back to the live venue caps.
     _live_order, _live_total = order_caps()
-    max_order_usd = float(getattr(cfg, "max_order_usd", _live_order)) if cfg is not None else _live_order
-    max_total_usd = float(getattr(cfg, "max_total_usd", _live_total)) if cfg is not None else _live_total
+    bot_risk_exposure_max_order_usd = float(getattr(cfg, "bot_risk_exposure_max_order_usd", _live_order)) if cfg is not None else _live_order
+    bot_risk_exposure_max_total_usd = float(getattr(cfg, "bot_risk_exposure_max_total_usd", _live_total)) if cfg is not None else _live_total
 
     total_cost = sum(i.price * i.size for i in intents)
     for i in intents:
-        if i.price * i.size > max_order_usd:
+        if i.price * i.size > bot_risk_exposure_max_order_usd:
             raise RuntimeError(
                 f"leg {i.side} ${i.price * i.size:.2f} exceeds "
-                f"MAX_ORDER_USD ${max_order_usd:.2f}")
+                f"MAX_ORDER_USD ${bot_risk_exposure_max_order_usd:.2f}")
     already = open_notional(client)
     if already is None:
         raise RuntimeError(
             "Cannot check MAX_TOTAL_USD cap: venue open_orders unreachable")
-    if already + total_cost > max_total_usd:
+    if already + total_cost > bot_risk_exposure_max_total_usd:
         raise RuntimeError(
             f"open ${already:.2f} + ${total_cost:.2f} exceeds "
-            f"MAX_TOTAL_USD ${max_total_usd:.2f}")
+            f"MAX_TOTAL_USD ${bot_risk_exposure_max_total_usd:.2f}")
 
     now_ms = int(time.time() * 1000)
     pair_id = f"pair-{uuid.uuid4().hex[:12]}"
-    max_pair_cost = getattr(cfg, "bot_pos_price_max_pair_cost_usd", 0.995)
+    bot_pos_price_max_pair_cost_usd = getattr(cfg, "bot_pos_price_max_pair_cost_usd", 0.995)
 
     # A carried pair_id means this batch REPLACES one leg of an existing pair
     # whose complement still rests: the replacement must join that pair, not
@@ -2434,7 +2610,7 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
                     token_id=str(i.token_id), side="BUY", price=i.price,
                     original_size=i.size, status="pending",
                     posted_ts=now_ms, last_polled_ts=now_ms,
-                    pair_id=pair_id, max_pair_cost_at_post=max_pair_cost,
+                    pair_id=pair_id, max_pair_cost_at_post=bot_pos_price_max_pair_cost_usd,
                 ))
                 signed = client.create_order(OrderArgsV2(
                     price=i.price, size=i.size, side=BUY, token_id=i.token_id,
@@ -2638,7 +2814,7 @@ def _fleet_state(registry, cfg) -> dict:
     keeps the previous cycle's values -- never resetting a live cap to open on
     a bad read.
     """
-    from core_brain.unhedged_stop_loss import fleet_posture
+    from core_brain.unhedged_stop_loss import bot_risk_circuit_fleet_posture
     from core_brain.markout import fleet_stats
     from core_brain.order_registry import (
         registry_committed_usd, registry_naked_usd,
@@ -2681,7 +2857,7 @@ def _fleet_state(registry, cfg) -> dict:
                         latest = run_fms[-1]
                         unrealized = latest.get("unrealized_usd")
                         if unrealized is not None:
-                            val = float(cfg.bankroll_usd) + float(unrealized)
+                            val = float(cfg.bot_quote_bank_baseline_usd) + float(unrealized)
                             if val > 0:
                                 portfolio_usd = val
             except Exception:
@@ -2690,10 +2866,10 @@ def _fleet_state(registry, cfg) -> dict:
     dynamic_caps = derive_dynamic_caps(cfg, portfolio_usd)
 
     return {
-        "fleet_naked_usd": registry_naked_usd(registry),
-        "committed_usd": registry_committed_usd(registry),
-        "fleet_posture": fleet_posture(
-            fleet_stats(registry, cfg.markout_fleet_min_sample), cfg),
+        "bot_risk_exposure_fleet_naked_usd": registry_naked_usd(registry),
+        "bot_risk_exposure_committed_usd": registry_committed_usd(registry),
+        "bot_risk_circuit_fleet_posture": bot_risk_circuit_fleet_posture(
+            fleet_stats(registry, cfg.bot_risk_markout_fleet_min_sample), cfg),
         **dynamic_caps,
     }
 
@@ -2806,6 +2982,7 @@ def start_risk_guardian(
     trigger_board: Optional[Any] = None,
     emit_fn: Optional[Callable] = None,
     ring_path: Optional[Path | str] = None,
+    funder: Optional[str] = None,
 ) -> Any:
     """Run the high-alert risk guardian sentry on a tight <=1.0s background cadence."""
     import threading
@@ -2871,6 +3048,7 @@ def start_risk_guardian(
                     live=live,
                     single_buy_saver_fn=single_buy_saver_fn,
                     trigger_board=trigger_board,
+                    funder=funder,
                 )
             except Exception as e:
                 log.warning("risk guardian tick failed: %s: %s", type(e).__name__, e)
@@ -2911,38 +3089,35 @@ def _production_reconcile_fn(emit_fn: Any) -> Any:
     return _reconcile
 
 
-def _make_stream_fetch_books(
-    cache: Any,
-    stats_box: dict,
-) -> Callable[[str, str], dict]:
-    """Return a `fetch_books(clob_host, token_id)` reader backed by `MarketBookCache`.
+BOOK_SOURCE_DEFAULT = "stream"
 
-    Times the read with `time.perf_counter()`, records latency and source in
-    `stats_box` (surfaced on the decide row via `book_stats_fn`), and fails
-    closed on `BookNotReady` without falling back to REST. No ring event is
-    emitted per read: at ~2 reads per visit per second the ring would churn,
-    evicting the `rotation_complete` / `user_fill_received` rows the
-    dashboard reads.
+
+def _make_guardian_saver_fn(book_provider: Any,
+                            funder: Optional[str] = None) -> Callable[..., Any]:
+    """Guardian defense with stream-first decision reads (#659).
+
+    The held-leg bid the lifecycle poll evaluates comes from the provider
+    (WS books, REST fallback); exits and completions keep their own fresh
+    venue reads inside `manage_single_leg_positions`. Without a provider
+    the decision read stays on the client, exactly as before.
+
+    `funder` is the venue view the exit sizing needs (#646 N5). It is what
+    separates "this pair is already flat" from "this pair's close retired
+    fills that left a remainder": without it a partial exit reached by the
+    guardian is skipped outright and its naked leg keeps sitting there.
     """
-    from core_brain.market_stream import BookNotReady
+    from core_brain.single_buy_saver import manage_single_leg_positions
 
-    def _fetch_books(clob_host: str, token_id: str) -> dict:
-        t0 = time.perf_counter()
-        try:
-            book = cache.book(token_id)
-        except BookNotReady:
-            raise RuntimeError(f"book stream cold: {token_id}")
-        read_ms = (time.perf_counter() - t0) * 1000.0
-        stats = {
-            "book_source": "stream",
-            "book_read_ms": read_ms,
-            "token_id": token_id,
-        }
-        stats_box.clear()
-        stats_box.update(stats)
-        return book
+    def _saver(client: Any, registry: Any, cfg: Any, live: bool = True) -> Any:
+        kwargs: dict[str, Any] = {}
+        if book_provider is not None:
+            kwargs["decision_book_fn"] = book_provider.get_levels_book
+        if funder:
+            kwargs["funder"] = funder
+        return manage_single_leg_positions(client, registry, cfg, live=live,
+                                           **kwargs)
 
-    return _fetch_books
+    return _saver
 
 
 def _make_subscribe_fn(
@@ -3125,6 +3300,11 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     ap.add_argument("--ws-books", action=argparse.BooleanOptionalAction, default=None,
                     help="read order books from the WebSocket market stream instead of "
                          "REST (default: True in loop mode, False with --once)")
+    ap.add_argument("--book-source", choices=("stream", "rest"),
+                    default=BOOK_SOURCE_DEFAULT,
+                    help="book source with REST fallback (default: stream). "
+                         "--book-source rest is the one-flag undo: today's "
+                         "REST-only behavior, no socket.")
     a = ap.parse_args(argv)
     # The ceiling is enforced HERE, at the CLI boundary, so the loop body
     # never sees a cadence above 1s -- not silently clamped mid-flight
@@ -3151,6 +3331,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     a = _parse_args(argv)
 
     use_ws_books = a.ws_books if a.ws_books is not None else not a.once
+    if a.book_source == "rest":
+        use_ws_books = False
     books_mode = "stream" if use_ws_books else "rest"
 
     logging.basicConfig(
@@ -3169,7 +3351,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         from core_brain.account import fetch_live_balance
         live_bal = fetch_live_balance(a.funder)
         if live_bal is not None and live_bal > 0:
-            cfg = replace(cfg, bankroll_usd=live_bal)
+            cfg = replace(cfg, bot_quote_bank_baseline_usd=live_bal)
     except Exception as e:
         log.warning("live balance read failed, using config bankroll: %s", e)
 
@@ -3200,10 +3382,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     decide_emit = partial(_emit_cycle_event, db_path=db_path)
 
     market_stream = None
+    book_provider = None
     book_stats: dict = {}
     guardian_wake = None
     trigger_board = None
     if use_ws_books:
+        from core_brain.book_provider import BookProvider
         from core_brain.market_stream import MarketBookCache, MarketStream
         if not a.once:
             from core_brain.orphan_trigger import OrphanTriggerBoard
@@ -3216,7 +3400,18 @@ def main(argv: Optional[list[str]] = None) -> int:
             price_listener=trigger_board.observe if trigger_board is not None else None,
         )
         market_stream.start()
-        fetch_books_fn = _make_stream_fetch_books(cache, book_stats)
+        # Stream first, REST fallback (#659): a cold or silent feed reads
+        # from REST instead of holding every quote. The provider owns the
+        # stream, so `stop()` below joins both threads.
+        book_provider = BookProvider(
+            stream=market_stream,
+            rest_reader=full_book,
+            clob_host=os.environ.get("CLOB_HOST", "https://clob.polymarket.com"),
+            emit_fn=decide_emit,
+            owns_stream=True,
+            stats_box=book_stats,
+        )
+        fetch_books_fn = book_provider.fetch_books
         subscribe_fn = _make_subscribe_fn(
             market_stream, cache, _fetch_market, trigger_board=trigger_board,
         )
@@ -3249,6 +3444,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         fetch_market=_fetch_market,
         fetch_books=fetch_books_fn,
         decide=decide_quotes,
+        book_provider=book_provider,
         submit_fn=_submit_intents,
         cancel_fn=_cancel_orders,
         reconcile_fn=(
@@ -3310,9 +3506,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"fleet refused: {exc}", file=sys.stderr)
         return 2
     finally:
-        if market_stream is not None:
+        # The provider owns the stream whenever one is up, so stopping it
+        # joins both threads; `market_stream` is never set without one.
+        if book_provider is not None:
             try:
-                market_stream.stop()
+                book_provider.stop()
             except Exception as e:
                 log.warning("market stream stop failed: %s", e)
         if user_stream is not None:

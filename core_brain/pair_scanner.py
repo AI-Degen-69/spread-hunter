@@ -111,7 +111,7 @@ DISLOCATION_EPS = 0.005
 #   inherits every refusal on the money path. Nothing else in `core_brain/`
 #   calls `load()` at import time.
 # * Without `for_display=True`, `resolve_wide_book_trial` REFUSES whenever
-#   `HUNTER_WIDE_BOOK_TRIAL` is exported. That knob is handed to a rehearsal,
+#   `BOT_QUOTE_WIDE_BOOK_TRIAL` is exported. That knob is handed to a rehearsal,
 #   `Start-Process` copies the operator's environment into every child, and
 #   the refusal then aborts the import of a module that holds no signer and
 #   places no order. `config.load` documents this exact escape hatch for a
@@ -123,7 +123,7 @@ def taker_fee_rate() -> float:
     """The venue's taker fee rate, read once, never at import."""
     global _TAKER_FEE_RATE
     if _TAKER_FEE_RATE is None:
-        _TAKER_FEE_RATE = float(load_cfg(for_display=True).fee_rate)
+        _TAKER_FEE_RATE = float(load_cfg(for_display=True).bot_econ_fee_rate)
     return _TAKER_FEE_RATE
 
 # Slugs and questions come from the venue and are later printed to a terminal

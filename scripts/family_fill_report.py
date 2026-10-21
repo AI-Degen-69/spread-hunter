@@ -15,7 +15,7 @@ no moment could have been found in, and dividing by it reports the strategy as
 worse than it is.
 
 `family_probe_report.py` answers "how often does a family LOOK quotable" --
-`pair < max_pair_cost` and both queues inside the bar, counted on snapshots.
+`pair < bot_pos_price_max_pair_cost_usd` and both queues inside the bar, counted on snapshots.
 That number cannot be spent. A moment that looks quotable pays nothing unless
 the tape then trades THROUGH BOTH of the levels we quoted, in the same window,
 before the touch moves off them. This script walks each qualifying moment

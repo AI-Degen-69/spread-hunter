@@ -261,6 +261,41 @@ def test_admission_bundle_rejects_mixed_snapshot(tmp_path):
         load_graduated_markets(path=path, paired_arm="treatment")
 
 
+def test_snapshot_carries_mtime_for_an_empty_universe(tmp_path):
+    """#646: a valid `[]` is an empty set with a real publication time."""
+    from core_brain.market_feed import load_graduated_snapshot
+    path = tmp_path / "markets.json"
+    path.write_text("[]", encoding="utf-8")
+
+    snap = load_graduated_snapshot(path=path, max_age_sec=None)
+
+    assert snap.rows == []
+    assert snap.condition_ids == frozenset()
+    assert snap.published_mtime_ns == path.stat().st_mtime_ns > 0
+
+
+def test_snapshot_metadata_matches_the_parsed_file_after_replace(tmp_path):
+    """#646: timestamp and rows always describe the same file."""
+    import os
+    from core_brain.market_feed import load_graduated_snapshot
+    path = tmp_path / "markets.json"
+    first = dict(SAMPLE_ROW)
+    path.write_text(json.dumps([first]), encoding="utf-8")
+    before = load_graduated_snapshot(path=path, max_age_sec=None)
+
+    second = dict(SAMPLE_ROW, cid="0xsecond")
+    staged = tmp_path / "markets.json.next"
+    staged.write_text(json.dumps([first, second]), encoding="utf-8")
+    os.replace(staged, path)
+    after = load_graduated_snapshot(path=path, max_age_sec=None)
+
+    assert after.published_mtime_ns == path.stat().st_mtime_ns
+    assert after.published_mtime_ns >= before.published_mtime_ns
+    assert after.condition_ids == frozenset(
+        {first["cid"].lower(), "0xsecond"})
+    assert [m.cid for m in after.rows] == [first["cid"], "0xsecond"]
+
+
 def test_admission_bundle_rejects_wrong_arm(tmp_path):
     path = tmp_path / "paired_admission_markets.json"
     bundle = _admission_bundle()

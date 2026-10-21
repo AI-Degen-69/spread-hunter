@@ -199,3 +199,66 @@ class TestTheLedgerScanIsPaidOnlyWhenSomethingMerges:
         # And the attribution still lands: laziness must not cost correctness.
         close = reg.get_all_closes()[0]
         assert round(close["up_cost_removed"], 4) == round(6.0 * 0.252, 4)
+
+
+def _seed_shadow_pair(reg, db, up_shares=6.0, dn_shares=6.0):
+    """One pair resting, filled unevenly or evenly, both legs marked filled."""
+    from core_brain.shadow_exec import ensure_shadow_tables, record_submit
+    ensure_shadow_tables(db)
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}})
+    by_token = {o.token_id: o for o in reg.get_active_orders()}
+    reg.record_fill(FillRecord(trade_id="f-up",
+                               order_uuid=by_token["tok-up"].id,
+                               size=up_shares, price=0.252))
+    reg.record_fill(FillRecord(trade_id="f-dn",
+                               order_uuid=by_token["tok-dn"].id,
+                               size=dn_shares, price=0.618))
+    now = int(time.time() * 1000)
+    reg.update_order_status(by_token["tok-up"].id, status="filled",
+                            last_polled_ts=now)
+    reg.update_order_status(by_token["tok-dn"].id, status="filled",
+                            last_polled_ts=now)
+
+
+class TestShadowMergeReset:
+    def test_an_equal_merge_resets(self, registry):
+        """#646: close plus leg writes committed, flat proof resets."""
+        from core_brain.shadow_exec import record_shadow_merges
+        reg, db = registry
+        _seed_shadow_pair(reg, db)
+
+        assert len(record_shadow_merges(reg, db)) == 1
+        assert record_shadow_merges(reg, db) == []
+
+        assert reg.requalification_marks()["0xabc"].status == "awaiting"
+
+    def test_an_unequal_merge_does_not_reset(self, registry):
+        """#646: the excess leg stays managed, no mark."""
+        from core_brain.shadow_exec import record_shadow_merges
+        reg, db = registry
+        _seed_shadow_pair(reg, db, up_shares=6.0, dn_shares=3.0)
+
+        assert len(record_shadow_merges(reg, db)) == 1
+        assert reg.requalification_marks() == {}
+
+    def test_a_failed_leg_write_does_not_reset(self, registry):
+        """#646: the exception propagates, the proof never runs."""
+        import sqlite3
+        from core_brain.shadow_exec import record_shadow_merges
+        reg, db = registry
+        _seed_shadow_pair(reg, db)
+        con = sqlite3.connect(str(db))
+        con.execute(
+            "CREATE TRIGGER inject_leg_failure BEFORE INSERT ON "
+            "shadow_merge_legs BEGIN SELECT RAISE(ABORT, 'injected'); END")
+        con.commit()
+        try:
+            with pytest.raises(sqlite3.Error):
+                record_shadow_merges(reg, db)
+        finally:
+            con.execute("DROP TRIGGER inject_leg_failure")
+            con.commit()
+            con.close()
+
+        assert reg.requalification_marks() == {}

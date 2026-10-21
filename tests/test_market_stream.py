@@ -791,10 +791,22 @@ def test_a_seam_built_on_the_stream_never_calls_full_book(monkeypatch):
         run()
 
 
-def test_single_buy_saver_never_reaches_the_stream():
-    """The locked hard-stop invariant: exits keep their own fresh venue read."""
+def test_exit_paths_never_reach_the_stream():
+    """The locked hard-stop invariant: exits keep their own fresh venue read.
+
+    `shadow_run.py` used to sit in this list because it wired no stream at all.
+    #659 N2 gives the rehearsal a live `MarketStream` for its DECISION reads,
+    so the file-level grep no longer describes the invariant it was written to
+    protect -- keeping it would fail a change the ticket asks for, not a change
+    that breaks safety. What the invariant actually covers is the exit and fill
+    paths, and those live in the two files below: `single_buy_saver.py` owns
+    `exit_single_buy` and its hard-stop poll, `shadow_exec.py` owns the shadow
+    fills. Neither may name the stream, and the provider's own
+    `get_fresh_book`/`fetch_fresh_books` REST-only rule is pinned in
+    `tests/test_book_provider.py`.
+    """
     root = Path(__file__).resolve().parent.parent / "core_brain"
-    for name in ("single_buy_saver.py", "shadow_run.py", "shadow_exec.py"):
+    for name in ("single_buy_saver.py", "shadow_exec.py"):
         assert "market_stream" not in (root / name).read_text(encoding="utf-8")
 
 

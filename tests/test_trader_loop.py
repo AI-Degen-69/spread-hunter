@@ -142,7 +142,7 @@ class TestPlanOrders:
             _intent(side="DOWN", token="tok-dn", price=0.23),
         ]
         from core_brain.config import MakerConfig
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         to_cancel, to_submit = plan_orders(
             open_orders, intents, cfg=cfg,
             hedge_asks={"tok-up": 0.30, "tok-dn": 0.23})
@@ -160,7 +160,7 @@ class TestPlanOrders:
         from core_brain.config import MakerConfig
         to_cancel, to_submit = plan_orders(
             open_orders, intents,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.30})
         assert to_cancel == []
         assert to_submit == []
@@ -249,7 +249,7 @@ class TestPlanOrders:
         ]
         to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.20, "tok-dn": 0.80},
             queue_ahead={"o-up": 10.0},
             hold_queue_shares=50.0)
@@ -266,7 +266,7 @@ class TestPlanOrders:
         intents = [_intent(price=0.60)]
         to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.20},
             queue_ahead={"o-up": 50.0},
             hold_queue_shares=200.0)
@@ -280,7 +280,7 @@ class TestPlanOrders:
         intents = [_intent(price=0.60)]
         to_cancel, _ = plan_orders(
             open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.20},
             queue_ahead={"o-up": 5000.0},
             hold_queue_shares=200.0)
@@ -293,7 +293,7 @@ class TestPlanOrders:
         intents = [_intent(price=0.60)]
         to_cancel, _ = plan_orders(
             open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.20},
             queue_ahead={},
             hold_queue_shares=200.0)
@@ -306,7 +306,7 @@ class TestPlanOrders:
         intents = [_intent(price=0.60)]
         to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.42},
             queue_ahead={"o-up": 5.0},
             hold_queue_shares=200.0)
@@ -326,7 +326,7 @@ class TestPlanOrders:
         # #387: the order rests at 0.60 and completing at the DOWN ask of
         # 0.42 would cost 1.02 -- held anyway. The gate judges placements,
         # not resting orders.
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.60)]
         intents = [_intent(price=0.58)]
         to_cancel, to_submit = plan_orders(
@@ -336,7 +336,7 @@ class TestPlanOrders:
         assert to_submit == []
 
     def test_a_kept_order_that_still_completes_under_the_cap_is_left_alone(self):
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.60)]
         intents = [_intent(price=0.58)]
         to_cancel, to_submit = plan_orders(
@@ -346,7 +346,7 @@ class TestPlanOrders:
         assert to_submit == []
 
     def test_a_missing_hedge_ask_leaves_the_kept_order_alone(self):
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.60)]
         intents = [_intent(price=0.58)]
         to_cancel, _ = plan_orders(open_orders, intents, dead_band=0.03,
@@ -359,7 +359,7 @@ class TestPlanOrders:
         # Opposite ask is 0.42 (0.60 + 0.42 = 1.02 >= the retired cap).
         # Both dead-band widths hold the order and record no reason --
         # cost is judged at placement, never after.
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.60, oid="o1")]
         intents = [_intent(price=0.55)]
         hedge_asks = {"tok-up": 0.42}
@@ -387,7 +387,7 @@ class TestPlanOrders:
     def test_hold_levers_and_failing_gate_hold_together(self):
         # #387: hold_below_target and hold_queue_shares active, pair-cost
         # gate failing -- the wanted order is held, no reason recorded.
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.60, oid="o1")]
         intents = [_intent(price=0.55)]
         hedge_asks = {"tok-up": 0.42}
@@ -444,7 +444,7 @@ class TestPlanOrders:
 
         to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.03,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.80, "tok-dn": 0.28},
             reasons=reasons,
         )
@@ -463,7 +463,7 @@ class TestPlanOrders:
 
         to_cancel, to_submit = plan_orders(
             open_orders, intents,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.60},
             reasons=reasons,
         )
@@ -484,7 +484,7 @@ class TestPlanOrders:
 
         to_cancel, _ = plan_orders(
             open_orders, intents, dead_band=0.03,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             hedge_asks={"tok-up": 0.99, "tok-dn": 0.99},
             hedge_held=set(),
             visit_outcome=outcome,
@@ -640,7 +640,7 @@ class TestRunLoop:
         seen = {}
 
         def decide(cfg, up, dn, inv, t_rem, wf):
-            seen["fleet_naked_usd"] = cfg.fleet_naked_usd
+            seen["bot_risk_exposure_fleet_naked_usd"] = cfg.bot_risk_exposure_fleet_naked_usd
             return [], "declined"
 
         def fetch_market(cid):
@@ -656,13 +656,13 @@ class TestRunLoop:
                 fetch_market=fetch_market, fetch_books=fetch_books, decide=decide,
                 submit_fn=lambda *a, **k: 0, cancel_fn=lambda *a, **k: 0,
                 reconcile_fn=lambda *a, **k: None, sweep_fn=lambda: None,
-                fleet_state_fn=lambda r: {"fleet_naked_usd": 12.5},
+                fleet_state_fn=lambda r: {"bot_risk_exposure_fleet_naked_usd": 12.5},
             ),
             interval=0.0, once=True, live=False,
             markets=[FakeMarket("0xabc")],
             sleep_fn=lambda s: None,
         )
-        assert seen["fleet_naked_usd"] == 12.5
+        assert seen["bot_risk_exposure_fleet_naked_usd"] == 12.5
 
     def test_open_orders_fn_includes_open_and_partial_orders(self):
         from unittest.mock import MagicMock
@@ -1218,7 +1218,7 @@ class TestReGateRespectsHeldInventory:
         # UP kept at 0.54 against a DOWN leg already held. The DOWN ask of 0.50
         # is irrelevant -- we do not have to buy DOWN again -- so 0.54 + 0.50 =
         # 1.04 must NOT cancel this order.
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.54)]
         intents = [_intent(price=0.54)]
         to_cancel, to_submit = plan_orders(
@@ -1230,7 +1230,7 @@ class TestReGateRespectsHeldInventory:
     def test_no_recheck_fires_on_a_token_whose_hedge_is_not_held(self):
         # #387: the re-gate is retired, so even the token WITHOUT a held
         # hedge is kept. Both legs hold at their own prices.
-        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open("tok-up", 0.54, "o1"), _open("tok-dn", 0.40, "o2")]
         intents = [_intent(side="UP", token="tok-up", price=0.54),
                    _intent(side="DOWN", token="tok-dn", price=0.40)]
@@ -1393,9 +1393,11 @@ class TestMarketSpecsPath:
 
         def spy(path=None, max_age_sec=None):
             seen["path"] = path
-            return []
+            # #646: the plain path loads through the snapshot reader now.
+            return feed_mod.GraduatedSnapshot(
+                rows=[], published_mtime_ns=0, condition_ids=frozenset())
 
-        monkeypatch.setattr(feed_mod, "load_graduated_markets", spy)
+        monkeypatch.setattr(feed_mod, "load_graduated_snapshot", spy)
 
         assert _market_specs() == []
         assert seen["path"] is None
@@ -1514,8 +1516,8 @@ class TestClassifyRefusal:
         assert _classify_refusal(why) is VisitOutcome.REFUSED_TERMINAL
 
     @pytest.mark.parametrize("why", [
-        "UP: 8.0c from mid > 4.5c reward window; "
-        "DOWN: 8.0c from mid > 4.5c reward window",
+        "UP: 8.0c from mid > 4.5c quote window; "
+        "DOWN: 8.0c from mid > 4.5c quote window",
         "no side quotable",
         "",
     ])
@@ -1527,8 +1529,8 @@ class TestRefusedHold:
     """#390: a visited-but-refused market holds resting orders; only a dropped
     market, a terminal refusal, or an expired grace cancels."""
 
-    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
-                     "DOWN: 8.0c from mid > 4.5c reward window")
+    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c quote window; "
+                     "DOWN: 8.0c from mid > 4.5c quote window")
     TERMINAL_WHY = ("UP: mid 0.950 outside [0.10,0.90] -- decided market; "
                     "DOWN: mid 0.050 outside [0.10,0.90] -- decided market")
 
@@ -2335,13 +2337,13 @@ def _lifecycle_visit_seam(tmp_path, pairs, *, up_bid=0.45, decide):
         },
     }
     cfg = MakerConfig(
-        objective="spread_capture",
-        size_mode="shares",
-        quote_shares=120,
-        min_quote_shares=5,
+        bot_pos_objective="spread_capture",
+        bot_quote_size_mode="shares",
+        bot_quote_size_shares=120,
+        bot_quote_size_min_shares=5,
         bot_pos_price_max_pair_cost_usd=0.99,
-        max_naked_usd=100.0,
-        reward_offset=0.02,
+        bot_risk_exposure_max_naked_usd=100.0,
+        bot_quote_spread_static_offset_cents=0.02,
     )
     seam = VenueSeam(
         client=object(),
@@ -2765,7 +2767,7 @@ class TestDecideTelemetry:
                    emit_fn=lambda **event: emitted.append(event))
         decision = next(e for e in emitted if e.get("action") == "decide")
         assert decision["extra"]["intent_count"] == 2
-        assert decision["extra"]["market_title"]
+        assert decision["extra"]["bot_market_title"]
         assert decision["extra"]["quotes"][0] == {"side": "UP", "price": 0.48, "size": 5.0}
         assert len(decision["extra"]["quotes"]) == 2
 
@@ -2777,7 +2779,7 @@ class TestDecideTelemetry:
                    emit_fn=lambda **event: emitted.append(event))
         decision = next(e for e in emitted if e.get("action") == "decide")
         assert decision["extra"]["intent_count"] == 0
-        assert decision["extra"]["market_title"]
+        assert decision["extra"]["bot_market_title"]
         assert "quotes" not in decision["extra"]
 
     def test_quotes_capped_at_four_and_skips_unknown_sides(self):
@@ -2817,7 +2819,7 @@ class TestQuietTail:
         market = FakeMarket()
         books = self._books()
         return VenueSeam(
-            base_cfg=MakerConfig(max_completable_pair_cost=1.00),
+            base_cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             fetch_market=lambda cid: market,
             fetch_books=lambda host, tok: books[tok],
             decide=lambda *a, **k: ([_intent(price=0.49)], ""),
@@ -2828,7 +2830,7 @@ class TestQuietTail:
         market = FakeMarket()
         books = self._books()
         return VenueSeam(
-            base_cfg=MakerConfig(max_completable_pair_cost=1.00),
+            base_cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             fetch_market=lambda cid: market,
             fetch_books=lambda host, tok: books[tok],
             decide=lambda *a, **k: ([], box[0]),
@@ -2844,7 +2846,7 @@ class TestQuietTail:
             return len(intents)
 
         return VenueSeam(
-            base_cfg=MakerConfig(max_completable_pair_cost=1.00),
+            base_cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
             fetch_market=lambda cid: market,
             fetch_books=lambda host, tok: books[tok],
             decide=lambda *a, **k: ([_intent(price=0.49)], ""),
@@ -3195,8 +3197,8 @@ class TestRefusalVisitRows:
     apart from "this arm had more chances to".
     """
 
-    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
-                     "DOWN: 8.0c from mid > 4.5c reward window")
+    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c quote window; "
+                     "DOWN: 8.0c from mid > 4.5c quote window")
 
     def _seam(self, tmp_path, decide, books=None):
         reg, _db = _t3_registry(tmp_path)
@@ -3427,7 +3429,7 @@ def test_visit_one_passes_canonical_dead_band():
         warnings.simplefilter("always")
         _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=False, plan_fn=spy)
 
-    dead_band_warns = [w for w in recorded if "trader_loop.py" in w.filename and "requote_dead_band" in str(w.message)]
+    dead_band_warns = [w for w in recorded if "trader_loop.py" in w.filename and "bot_order_requote_dead_band_cents" in str(w.message)]
     assert dead_band_warns == []
     assert seen["dead_band"] == 0.05
 
@@ -3863,11 +3865,12 @@ class TestMainStreamWiring:
         assert (a_no_ws.ws_books if a_no_ws.ws_books is not None else not a_no_ws.once) is False
 
     def test_stream_reader_returns_cache_shape_and_loads_stats(self):
-        from core_brain.trader_loop import _make_stream_fetch_books
+        from core_brain.book_provider import BookProvider
+        from core_brain.market_stream import BookNotReady
         stats_box = {}
 
-        class FakeCache:
-            def book(self, token_id):
+        class FakeStream:
+            def fetch_books(self, clob_host, token_id):
                 return {
                     "token_id": token_id,
                     "bids": {0.49: 100},
@@ -3876,27 +3879,38 @@ class TestMainStreamWiring:
                     "best_ask": 0.51,
                 }
 
-        reader = _make_stream_fetch_books(FakeCache(), stats_box)
-        res = reader("https://clob", "tok-1")
+        provider = BookProvider(stream=FakeStream(), rest_reader=None,
+                                stats_box=stats_box)
+        res = provider.fetch_books("https://clob", "tok-1")
         assert res["token_id"] == "tok-1"
         assert res["best_bid"] == 0.49
         assert stats_box["book_source"] == "stream"
         assert stats_box["token_id"] == "tok-1"
         assert stats_box["book_read_ms"] >= 0.0
 
-    def test_cold_cache_raises_book_stream_cold_and_never_calls_rest(self):
-        from core_brain.trader_loop import _make_stream_fetch_books
+    def test_cold_stream_falls_back_to_rest_and_marks_source(self):
+        from core_brain.book_provider import BookProvider
         from core_brain.market_stream import BookNotReady
 
-        class ColdCache:
-            def book(self, token_id):
+        class ColdStream:
+            def fetch_books(self, clob_host, token_id):
                 raise BookNotReady(f"token {token_id} has no live book")
 
+        rest_calls = []
+
+        def fake_rest(clob_host, token_id):
+            rest_calls.append((clob_host, token_id))
+            return {"token_id": token_id, "bids": {0.4: 1},
+                    "asks": {0.6: 1}, "best_bid": 0.4, "best_ask": 0.6,
+                    "malformed": 0}
+
         stats_box = {}
-        reader = _make_stream_fetch_books(ColdCache(), stats_box)
-        with pytest.raises(RuntimeError, match="book stream cold: tok-cold"):
-            reader("https://clob", "tok-cold")
-        assert not stats_box
+        provider = BookProvider(stream=ColdStream(), rest_reader=fake_rest,
+                                stats_box=stats_box)
+        res = provider.fetch_books("https://clob", "tok-cold")
+        assert res["best_bid"] == 0.4
+        assert rest_calls == [("https://clob", "tok-cold")]
+        assert stats_box["book_source"] == "rest"
 
     def test_subscribe_dedupes_and_retains(self):
         from core_brain.trader_loop import _make_subscribe_fn
@@ -4386,12 +4400,12 @@ class TestGuardianReactiveWake:
         )
 
         cfg = SimpleNamespace(
-            stop_loss_mode="ABSOLUTE_DROP",
-            drop_cents=0.05,
-            drawdown_pct=10.0,
+            bot_risk_stop_mode="ABSOLUTE_DROP",
+            bot_risk_stop_adverse_drop_cents=0.05,
+            bot_risk_stop_max_drawdown_pct=10.0,
             bot_risk_circuit_max_drawdown_pct=75.0,
-            max_pair_cost=0.99,
-            stranded_completion_enabled=False,
+            bot_pos_price_max_pair_cost_usd=0.99,
+            bot_risk_stranded_completion_on=False,
         )
 
         saver = MagicMock(return_value=[{"action": "exited"}])
@@ -4464,5 +4478,309 @@ class TestGuardianReactiveWake:
             stream.stop()
 
 
+class TestRequalificationGate:
+    """No new entry quotes for a reset market until a newer publication (#646)."""
+
+    CID = "0xRequal"
+
+    def _reg(self, tmp_path):
+        from core_brain.order_registry import OrderRegistry
+        return OrderRegistry(db_path=tmp_path / "t.db")
+
+    def _mark_awaiting(self, reg, cid, reset_ts_ms):
+        gen = reg.begin_lifecycle_reset(cid, "test", now_ms=reset_ts_ms)
+        assert reg.finish_lifecycle_reset(cid, gen, reset_ts_ms=reset_ts_ms)
+        return gen
+
+    def _books(self, token="tok-up"):
+        return {"token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                "bids": {0.59: 100}, "asks": {0.61: 100}}
+
+    def _seam(self, reg, submitted):
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            return [_intent()], ""
+
+        return VenueSeam(
+            client=object(),
+            registry=reg,
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda host, token: self._books(token),
+            decide=decide,
+            submit_fn=lambda c, r, m, i, cfg: submitted.append(
+                [x.side for x in i]) or len(i),
+            cancel_fn=lambda c, r, o: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+        )
+
+    def _specs(self, *cids, published_ns, cids_in_pub):
+        from core_brain.trader_loop import MarketSpecList
+        return MarketSpecList(
+            [FakeMarket(cid) for cid in cids],
+            published_mtime_ns=published_ns,
+            condition_ids=frozenset(cids_in_pub))
+
+    def _run_once(self, reg, submitted, specs):
+        return run(
+            self._seam(reg, submitted), interval=0.0, once=True, live=True,
+            markets_fn=lambda: specs, sleep_fn=lambda s: None)
+
+    def test_a_marked_market_gets_no_entry_quote(self, tmp_path):
+        """#646: an older publication leaves the block in place."""
+        import time
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        self._mark_awaiting(reg, self.CID, reset_ms)
+        submitted = []
+        specs = self._specs(self.CID, published_ns=reset_ms * 1_000_000 - 1,
+                            cids_in_pub={self.CID.lower()})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert [(r.status, r.why) for r in results] == [
+            ("SKIPPED", "awaiting_requalification")]
+        assert submitted == []
+        assert self.CID.lower() in reg.requalification_marks()
+
+    def test_an_equal_publication_time_does_not_clear(self, tmp_path):
+        """#646: strictly newer is the rule; equal keeps the mark."""
+        import time
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        self._mark_awaiting(reg, self.CID, reset_ms)
+        submitted = []
+        specs = self._specs(self.CID, published_ns=reset_ms * 1_000_000,
+                            cids_in_pub={self.CID.lower()})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert results[0].status == "SKIPPED"
+        assert self.CID.lower() in reg.requalification_marks()
+
+    def test_a_newer_publication_including_the_market_clears(self, tmp_path):
+        """#646: quoting resumes once the filter re-qualifies the market."""
+        import time
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        self._mark_awaiting(reg, self.CID, reset_ms)
+        submitted = []
+        specs = self._specs(self.CID,
+                            published_ns=int(time.time() * 1_000_000_000),
+                            cids_in_pub={self.CID.lower()})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert results[0].status == "QUOTED"
+        assert submitted == [["UP"]]
+        assert reg.requalification_marks() == {}
+
+    def test_a_newer_publication_excluding_the_market_drops_it(self, tmp_path):
+        """#646: dropped from trading, but the block stays recorded."""
+        import time
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        self._mark_awaiting(reg, self.CID, reset_ms)
+        submitted = []
+        specs = self._specs("0xother",
+                            published_ns=int(time.time() * 1_000_000_000),
+                            cids_in_pub={"0xother"})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert all(r.condition_id != self.CID for r in results)
+        mark = reg.requalification_marks()[self.CID.lower()]
+        assert mark.status == "awaiting"
+        assert mark.excluded_publication_ns is not None
+
+    def test_an_empty_publication_never_readmits(self, tmp_path):
+        """#646: keeping the old universe is not re-qualification."""
+        import time
+        reg = self._reg(tmp_path)
+        self._mark_awaiting(reg, self.CID, int(time.time() * 1000) - 60_000)
+
+        results = self._run_once(reg, [], [])
+
+        assert results == []
+        assert self.CID.lower() in reg.requalification_marks()
+
+    def test_a_legacy_supplier_never_clears_a_mark(self, tmp_path):
+        """#646: a plain list carries no publication time, so no clearing."""
+        import time
+        reg = self._reg(tmp_path)
+        self._mark_awaiting(reg, self.CID, int(time.time() * 1000) - 60_000)
+        submitted = []
+
+        results = self._run_once(reg, submitted, [FakeMarket(self.CID)])
+
+        assert [(r.status, r.why) for r in results] == [
+            ("SKIPPED", "awaiting_requalification")]
+        assert submitted == []
+        assert self.CID.lower() in reg.requalification_marks()
+
+    def test_the_block_ignores_case(self, tmp_path):
+        """#646: 0xABC marked still blocks a 0xabc quote."""
+        import time
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        self._mark_awaiting(reg, "0xABC", reset_ms)
+        submitted = []
+        specs = self._specs("0xabc", published_ns=reset_ms * 1_000_000 - 1,
+                            cids_in_pub={"0xabc"})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert results[0].status == "SKIPPED"
+        assert submitted == []
+
+    def test_a_hedge_intent_is_submitted_while_resetting(self, tmp_path):
+        """#646: the final gate keeps lifecycle-context submits."""
+        import time
+        from core_brain.trader_loop import _enforce_entry_gate
+        reg = self._reg(tmp_path)
+        reset_ms = int(time.time() * 1000) - 60_000
+        gen = reg.begin_lifecycle_reset(self.CID, "test", now_ms=reset_ms)
+        assert gen == 1
+        seam = self._seam(reg, [])
+        hedge = _intent(pair_id="pair-9")
+        fresh = _intent()
+
+        kept, blocked = _enforce_entry_gate(
+            seam, self.CID, [hedge, fresh], "pair-9")
+
+        assert blocked is True
+        assert kept == [hedge]
+
+        kept, _ = _enforce_entry_gate(seam, self.CID, [fresh], None)
+        assert kept == []
+
+    def test_a_reset_between_planning_and_submission_drops_entries(
+            self, tmp_path):
+        """#646: the guarded reread catches a mark the visit skip missed."""
+        import time
+        reg = self._reg(tmp_path)
+        real_marks = reg.requalification_marks
+        calls = {"n": 0}
+        reset_ms = int(time.time() * 1000) - 60_000
+
+        def _flaky_marks():
+            # Reads 1-2 are evaluation plus the visit-loop skip (both miss
+            # the mark); read 3 is the guarded final check (catches it).
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                return {}
+            return real_marks()
+
+        reg.requalification_marks = _flaky_marks
+        self._mark_awaiting(reg, self.CID, reset_ms)
+        submitted = []
+        specs = self._specs(self.CID, published_ns=reset_ms * 1_000_000 - 1,
+                            cids_in_pub={self.CID.lower()})
+
+        results = self._run_once(reg, submitted, specs)
+
+        assert results[0].status == "DECLINED"
+        assert results[0].why == "awaiting_requalification"
+        assert submitted == []
+
+    def test_market_specs_carries_publication_metadata(self, tmp_path):
+        """#646: the production feed path mints metadata-carrying lists."""
+        import json
+        from core_brain.trader_loop import _market_specs
+        path = tmp_path / "markets.json"
+        path.write_text(json.dumps([{"cid": "0xMeta"}]), encoding="utf-8")
+
+        specs = _market_specs(path=path)
+
+        assert [s["cid"] for s in specs] == ["0xMeta"]
+        assert specs.published_mtime_ns == path.stat().st_mtime_ns
+        assert specs.publication_condition_ids == frozenset({"0xmeta"})
 
 
+
+
+
+
+def test_book_source_rest_is_the_one_flag_undo():
+    """#659: --book-source rest forces REST-only books, no socket."""
+    from core_brain.trader_loop import _parse_args
+
+    assert _parse_args([]).book_source == "stream"
+    assert _parse_args(["--book-source", "rest"]).book_source == "rest"
+    assert _parse_args(["--book-source", "stream"]).book_source == "stream"
+
+
+def test_guardian_saver_fn_routes_decisions_through_provider(monkeypatch):
+    """#659: guardian defense evaluates the held bid from the provider."""
+    import core_brain.single_buy_saver as saver_mod
+    from core_brain.trader_loop import _make_guardian_saver_fn
+
+    seen_books: list[str] = []
+
+    class FakeProvider:
+        def get_levels_book(self, token_id):
+            seen_books.append(token_id)
+            return {"bids": [{"price": "0.5", "size": "1"}], "asks": []}
+
+    captured: dict = {}
+
+    def fake_manage(client, registry, cfg, live=True, **kwargs):
+        captured.update(kwargs)
+        decision = kwargs.get("decision_book_fn")
+        if decision is not None:
+            decision("tok-held")
+        return []
+
+    monkeypatch.setattr(saver_mod, "manage_single_leg_positions", fake_manage)
+    provider = FakeProvider()
+    saver_fn = _make_guardian_saver_fn(provider)
+    assert saver_fn(object(), object(), object(), live=False) == []
+    decision = captured["decision_book_fn"]
+    assert decision.__self__ is provider
+    assert decision.__func__ is provider.get_levels_book.__func__
+    assert seen_books == ["tok-held"]
+
+    captured.clear()
+    plain_fn = _make_guardian_saver_fn(None)
+    assert plain_fn(object(), object(), object(), live=False) == []
+    assert "decision_book_fn" not in captured
+
+
+def test_the_guardian_saver_carries_the_funder_it_is_given(monkeypatch):
+    """#646 N5: the guardian's saver fn is the one that sizes the exit.
+
+    Without the funder the pass reaches `manage_single_leg_positions` with no
+    venue view, and a partial exit's remainder is skipped instead of sold.
+    """
+    import core_brain.single_buy_saver as sbs
+    from core_brain.trader_loop import _make_guardian_saver_fn
+
+    seen: dict = {}
+
+    def fake(client, registry, cfg, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(sbs, "manage_single_leg_positions", fake)
+    saver = _make_guardian_saver_fn(None, funder="0xmaker")
+
+    saver(object(), object(), object(), live=True)
+
+    assert seen["funder"] == "0xmaker"
+
+
+def test_the_guardian_saver_omits_the_funder_when_there_is_none(monkeypatch):
+    """No wallet is not the same as an empty-string wallet heading to a read."""
+    import core_brain.single_buy_saver as sbs
+    from core_brain.trader_loop import _make_guardian_saver_fn
+
+    seen: dict = {}
+
+    def fake(client, registry, cfg, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(sbs, "manage_single_leg_positions", fake)
+    _make_guardian_saver_fn(None, funder=None)(object(), object(), object(),
+                                               live=True)
+
+    assert "funder" not in seen

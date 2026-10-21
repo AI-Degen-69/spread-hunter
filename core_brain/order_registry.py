@@ -428,6 +428,22 @@ CREATE TABLE IF NOT EXISTS single_leg_lifecycle (
     evidence_json TEXT NOT NULL
 );
 
+-- Reset/re-qualification marks, one row per market. `begin` writes `resetting`
+-- before cancellation starts so no fresh entry can slip in mid-reset; `finish`
+-- flips it to `awaiting` in the same transaction that clears the lifecycle
+-- rows. `generation` rises on every begin so a stale finish can never clear a
+-- newer reset. `reset_ts_ms` is the wall-clock time of the reset; only a
+-- publication strictly newer than it can re-qualify the market.
+CREATE TABLE IF NOT EXISTS lifecycle_requalification (
+    condition_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('resetting', 'awaiting')),
+    generation INTEGER NOT NULL,
+    reset_ts_ms INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    excluded_publication_ns INTEGER,
+    updated_ts_ms INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_pair_id ON orders(pair_id);
@@ -438,6 +454,7 @@ CREATE INDEX IF NOT EXISTS idx_markouts_done ON markouts(done, ts);
 CREATE INDEX IF NOT EXISTS idx_closes_ts ON closes(ts);
 CREATE INDEX IF NOT EXISTS idx_float_marks_ts ON float_marks(ts);
 CREATE INDEX IF NOT EXISTS idx_account_marks_ts ON account_marks(ts);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_requal_status ON lifecycle_requalification(status);
 
 CREATE VIEW IF NOT EXISTS order_summary AS
 SELECT
@@ -864,6 +881,17 @@ class LifecycleStateRecord:
     evidence_json: str
 
 
+@dataclass(frozen=True)
+class RequalificationMark:
+    condition_id: str
+    status: str
+    generation: int
+    reset_ts_ms: int
+    reason: str
+    excluded_publication_ns: Optional[int]
+    updated_ts_ms: int
+
+
 class OrderRegistry:
     """Thread-safe SQLite-backed registry for live orders, fills, and operational telemetry."""
 
@@ -1163,6 +1191,153 @@ class OrderRegistry:
                 ),
             )
             conn.commit()
+
+    def has_lifecycle_for_condition(self, condition_id: str) -> bool:
+        """True while any single-leg lifecycle row exists for this market."""
+        cid = str(condition_id or "").lower()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM single_leg_lifecycle "
+                "WHERE LOWER(condition_id) = ? LIMIT 1",
+                (cid,),
+            ).fetchone()
+            return row is not None
+
+    @staticmethod
+    def _row_to_mark(row: sqlite3.Row) -> RequalificationMark:
+        excluded = row["excluded_publication_ns"]
+        return RequalificationMark(
+            condition_id=row["condition_id"],
+            status=row["status"],
+            generation=int(row["generation"]),
+            reset_ts_ms=int(row["reset_ts_ms"]),
+            reason=row["reason"],
+            excluded_publication_ns=(None if excluded is None else int(excluded)),
+            updated_ts_ms=int(row["updated_ts_ms"]),
+        )
+
+    def begin_lifecycle_reset(self, condition_id: str, reason: str, now_ms: int) -> int:
+        """Block fresh entries before cancellation starts. Returns the new generation."""
+        cid = str(condition_id or "").lower()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT generation FROM lifecycle_requalification WHERE condition_id = ?",
+                (cid,),
+            ).fetchone()
+            generation = int(row["generation"]) + 1 if row is not None else 1
+            conn.execute(
+                """
+                INSERT INTO lifecycle_requalification (
+                    condition_id, status, generation, reset_ts_ms, reason,
+                    excluded_publication_ns, updated_ts_ms
+                ) VALUES (?, 'resetting', ?, 0, ?, NULL, ?)
+                ON CONFLICT(condition_id) DO UPDATE SET
+                    status = 'resetting',
+                    generation = excluded.generation,
+                    reason = excluded.reason,
+                    excluded_publication_ns = NULL,
+                    updated_ts_ms = excluded.updated_ts_ms
+                """,
+                (cid, generation, str(reason or ""), int(now_ms)),
+            )
+            conn.commit()
+            return generation
+
+    def finish_lifecycle_reset(
+        self, condition_id: str, generation: int, reset_ts_ms: int
+    ) -> bool:
+        """Atomically clear lifecycle rows and mark the market awaiting.
+
+        Both writes land in one transaction, and only when the generation
+        still matches. Orders, fills and closes are untouched. False means a
+        newer reset superseded this one -- the caller must not treat the
+        market as reset.
+        """
+        cid = str(condition_id or "").lower()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT generation FROM lifecycle_requalification WHERE condition_id = ?",
+                (cid,),
+            ).fetchone()
+            if row is None or int(row["generation"]) != int(generation):
+                conn.rollback()
+                return False
+            conn.execute(
+                "DELETE FROM single_leg_lifecycle WHERE LOWER(condition_id) = ?",
+                (cid,),
+            )
+            conn.execute(
+                "UPDATE lifecycle_requalification SET status = 'awaiting', "
+                "reset_ts_ms = ?, updated_ts_ms = ? WHERE condition_id = ?",
+                (int(reset_ts_ms), int(reset_ts_ms), cid),
+            )
+            conn.commit()
+            return True
+
+    def abandon_lifecycle_reset(self, condition_id: str, generation: int) -> bool:
+        """Lift a `resetting` block when the proof failed. Lifecycle rows untouched."""
+        cid = str(condition_id or "").lower()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "DELETE FROM lifecycle_requalification "
+                "WHERE condition_id = ? AND status = 'resetting' AND generation = ?",
+                (cid, int(generation)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def requalification_marks(self) -> dict[str, RequalificationMark]:
+        """All reset marks keyed by lowercased condition id. DB errors propagate."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM lifecycle_requalification").fetchall()
+            return {str(row["condition_id"]): self._row_to_mark(row) for row in rows}
+
+    def clear_requalification(self, condition_id: str, generation: int) -> bool:
+        """Clear one mark, but only for the generation that earned it."""
+        cid = str(condition_id or "").lower()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "DELETE FROM lifecycle_requalification "
+                "WHERE condition_id = ? AND generation = ?",
+                (cid, int(generation)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def record_requalification_exclusion(
+        self, condition_id: str, generation: int, publication_ns: int, now_ms: int
+    ) -> bool:
+        """Note that a newer publication excluded the market. Keeps the mark."""
+        cid = str(condition_id or "").lower()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE lifecycle_requalification SET excluded_publication_ns = ?, "
+                "updated_ts_ms = ? WHERE condition_id = ? AND generation = ?",
+                (int(publication_ns), int(now_ms), cid, int(generation)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def fill_watermark(self, condition_id: str) -> tuple[int, int]:
+        """Identity of the latest recorded fill for one market.
+
+        Returns `(fill count, max recorded_ts_ms)`. Any newly recorded fill
+        changes it, so a reset can tell a late fill landed after cancel.
+        """
+        cid = str(condition_id or "").lower()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n, COALESCE(MAX(f.recorded_ts), 0) AS ts "
+                "FROM fills f JOIN orders o ON o.id = f.order_uuid "
+                "WHERE LOWER(o.condition_id) = ?",
+                (cid,),
+            ).fetchone()
+            return (int(row["n"]), int(row["ts"]))
 
     def get_order_by_venue_id(self, venue_order_id: str) -> Optional[OrderRecord]:
         """Fetch order record by venue order_id."""

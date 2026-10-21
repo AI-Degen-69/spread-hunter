@@ -178,25 +178,26 @@ store automatically.
 - `--interval` — rotation cadence (default `1.0`; values above 1.0 are clamped)
 - `--db` — required, explicit per-run shadow store (for example, `data/04_shadow_24-09_test.db`); `data/orders.db` is refused
 - `--max-markets N` — cap rotation universe
+- `--no-stream` — read every book over REST instead of the live market socket. The socket is the **default** (#659 N2); this flag exists to reproduce a rehearsal recorded before it. Either way the run's heartbeat carries `book_source_mix` (stream/rest read counts and the fallback reasons), so a stream run can never look like it had coverage it did not
 - `--funder ADDR` — kept for compatibility; it does **not** set the shadow bankroll
 - `--starting-bankroll-usd USD` — override the starting bankroll for this run (`--paired-starting-bankroll-usd` is the old name and still works)
 
 **Every shadow run starts at the config bankroll — $100 by default.** Override
-it with `--starting-bankroll-usd` or `SPREAD_HUNTER_BANKROLL`; the live wallet is
+it with `--starting-bankroll-usd` or `BOT_QUOTE_BANK_BASELINE_USD`; the live wallet is
 never read, so every risk cap (order 25%, naked 6%, ceiling 90%) is the same at
 the start of every rehearsal and two runs can be compared. Paired arms keep
 their preregistered $100 unless the flag is passed.
 
 The menu's `shadow-run` and `resume` actions state `--starting-bankroll-usd 100`
-on the launched command, so an exported `SPREAD_HUNTER_BANKROLL` cannot change
+on the launched command, so an exported `BOT_QUOTE_BANK_BASELINE_USD` cannot change
 what that session rehearsed under. Nothing on a shadow path reads your
 Polymarket account either: the shadow dashboard and the statistical harness never
 run `account-sweep`, they do not fetch your balance, and no live account mark is
 written into the rehearsal's store. Only the live dashboard's own page snapshots
 account equity.
 
-It rehearses everything: the same `MakerConfig`, the same `max_order_usd` /
-`max_total_usd`, the same gates, the same `decide_quotes`. Only the signer, the
+It rehearses everything: the same `MakerConfig`, the same `bot_risk_exposure_max_order_usd` /
+`bot_risk_exposure_max_total_usd`, the same gates, the same `decide_quotes`. Only the signer, the
 store, and the wall clock differ — the bankroll is fixed, not read from the
 wallet. Point the shadow dashboard at the same per-run
 store path and it updates live while the rehearsal runs.

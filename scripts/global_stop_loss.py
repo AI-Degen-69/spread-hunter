@@ -8,7 +8,7 @@ happen, independent of the poll loop.
    production). With the close-recording fix a pair can only exit once -- so a
    second `pairs_exited` for the same pair_id is the bug coming back.
 
-2. OVER-CAP PAIR -- a filled pair at/over `max_pair_cost`. The instrument pays
+2. OVER-CAP PAIR -- a filled pair at/over `bot_pos_price_max_pair_cost_usd`. The instrument pays
    exactly $1.00, so a pair assembled at >= the cap is a booked loss; the
    RC-2 cap now blocks the light-side quote at the source, and this watcher is
    the backstop that screams if a pair still forms.

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import time
 import threading
 import urllib.error
@@ -159,10 +160,10 @@ class ExposureUnavailable(RuntimeError):
 
 
 def should_exit(fill_cost: float, light_ask: Optional[float],
-                max_pair_cost: float) -> bool:
+                bot_pos_price_max_pair_cost_usd: float) -> bool:
     """Exit when the pair cannot complete under the cap.
 
-    `>=`, not `>`. A pair costing exactly max_pair_cost is a guaranteed loss
+    `>=`, not `>`. A pair costing exactly bot_pos_price_max_pair_cost_usd is a guaranteed loss
     after gas, which is the whole reason the cap sits below $1.00.
 
     A missing ask fires rather than holds. No ask means there is nothing to
@@ -172,7 +173,7 @@ def should_exit(fill_cost: float, light_ask: Optional[float],
     """
     if light_ask is None or light_ask <= 0:
         return True
-    return (fill_cost + light_ask) >= max_pair_cost
+    return (fill_cost + light_ask) >= bot_pos_price_max_pair_cost_usd
 
 
 def _book_levels(book, key: str) -> list[tuple[float, float]]:
@@ -260,6 +261,164 @@ def fetch_positions(funder: str, timeout: float = 10.0) -> dict[str, float]:
         offset += POSITIONS_PAGE_SIZE
 
     return positions
+
+
+def fetch_token_balances(funder: str, up_token_id: str, down_token_id: str,
+                         timeout: float = 10.0) -> tuple[float, float]:
+    """Strict two-token balance read for the reset proof (#646).
+
+    Same Data API pages as `fetch_positions`, but strict: any failed page,
+    non-list payload, or malformed row raises `ExposureUnavailable` instead
+    of being skipped. A token absent from a complete, successful read is an
+    explicit zero -- the API omits tokens no longer held, and only a full
+    read earns the right to say so.
+    """
+    balances: dict[str, float] = {}
+    offset = 0
+    try:
+        while True:
+            url = (
+                f"{DATA_API_BASE}/positions?user={funder}"
+                f"&sizeThreshold=0&limit={POSITIONS_PAGE_SIZE}&offset={offset}"
+            )
+            req = urllib.request.Request(url, headers={"User-Agent": "spread-hunter"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            if not isinstance(payload, list):
+                raise ExposureUnavailable(
+                    f"token balance read returned {type(payload).__name__}, not a list")
+            for row in payload:
+                if not isinstance(row, dict):
+                    raise ExposureUnavailable(
+                        f"token balance row is {type(row).__name__}, not an object")
+                token = str(row.get("asset") or row.get("tokenId")
+                            or row.get("token_id") or "")
+                if not token:
+                    raise ExposureUnavailable("token balance row carries no token id")
+                try:
+                    balances[token] = float(row.get("size", 0.0) or 0.0)
+                except (TypeError, ValueError) as exc:
+                    raise ExposureUnavailable(
+                        f"token balance size for {token!r} is not numeric") from exc
+            if len(payload) < POSITIONS_PAGE_SIZE:
+                break
+            offset += POSITIONS_PAGE_SIZE
+    except ExposureUnavailable:
+        raise
+    except Exception as exc:
+        # Translation boundary: the HTTP/JSON stack raises whatever it
+        # raises; the reset proof only understands ExposureUnavailable.
+        # Nothing is swallowed -- the failure still blocks the reset.
+        raise ExposureUnavailable(f"token balance read failed: {exc}") from exc
+    return (balances.get(up_token_id, 0.0), balances.get(down_token_id, 0.0))
+
+
+# Shadow-side reset-port factory, registered by the shadow store module on
+# import (#646). The live fill engine must never import the shadow model --
+# `test_no_live_module_imports_the_shadow_model` scans for it textually -- so
+# the shadow side plugs its factory in here instead of being imported.
+# None means shadow resets are unavailable: stop exits and retries in
+# shadow mode stay managed, the safe direction.
+_SHADOW_RESET_PORTS_FACTORY = None
+
+
+def register_shadow_reset_ports(factory) -> None:
+    """Plug in the shadow store's `ResetPorts` factory (called once on its import)."""
+    global _SHADOW_RESET_PORTS_FACTORY
+    _SHADOW_RESET_PORTS_FACTORY = factory
+
+
+def _shadow_reset_ports_or_none(registry, db_path, condition_id,
+                                up_token_id, down_token_id):
+    """Shadow `ResetPorts` when the factory is registered, else None."""
+    factory = _SHADOW_RESET_PORTS_FACTORY
+    if factory is None:
+        return None
+    return factory(registry, db_path, condition_id, up_token_id, down_token_id)
+
+
+def live_reset_ports(client, funder: str, registry: OrderRegistry,
+                     condition_id: str, up_token_id: str,
+                     down_token_id: str):
+    """`ResetPorts` over the live venue and registry (#646).
+
+    Imported lazily by callers: `lifecycle_reset` imports this module at top
+    level, so a top-level import back would be a cycle.
+    """
+    from core_brain.lifecycle_reset import ResetPorts
+    from core_brain.order_registry import (
+        ReconcileInProgress,
+        inventory_from_registry,
+        reconcile_orders,
+    )
+
+    cid = str(condition_id or "").lower()
+    db_path = getattr(registry, "db_path", None)
+
+    def _active_rows() -> list:
+        return [r for r in registry.get_active_orders()
+                if str(r.condition_id or "").lower() == cid and r.order_id]
+
+    def _read_inventory() -> tuple[float, float]:
+        inv = inventory_from_registry(
+            condition_id, up_token_id, down_token_id,
+            **({"db_path": db_path} if db_path is not None else {}))
+        return (float(inv.up_shares or 0.0), float(inv.down_shares or 0.0))
+
+    def _watermark() -> tuple:
+        return registry.fill_watermark(condition_id)
+
+    def _active_order_ids() -> list[str]:
+        return [str(r.order_id) for r in _active_rows()]
+
+    def _cancel(order_ids: list[str]) -> None:
+        wanted = set(map(str, order_ids))
+        rows = [r for r in _active_rows() if str(r.order_id) in wanted]
+        _cancel_orders(client, rows, f"reset {condition_id}")
+
+    def _verify_cancelled() -> bool:
+        # An unreadable book is not an empty book: exception or None reads
+        # as "still resting", which refuses the reset rather than proving it.
+        if not hasattr(client, "get_open_orders"):
+            return False
+        try:
+            raw = client.get_open_orders()
+        except Exception:
+            return False
+        if raw is None:
+            return False
+        venue_ids = {str(o.get("id") or o.get("order_id") or o.get("orderID") or "")
+                     for o in raw if isinstance(o, dict)}
+        known = {str(r.order_id) for r in _active_rows()}
+        return not (known & venue_ids)
+
+    def _reconcile_fills() -> None:
+        try:
+            reconcile_orders(client, registry, maker_address=funder)
+        except (ReconcileInProgress, PermissionError) as exc:
+            raise ExposureUnavailable(
+                f"cannot reconcile before reset: {exc}") from exc
+        except sqlite3.Error:
+            raise
+        except Exception as exc:
+            # Port contract: only PairExitRefused, ExposureUnavailable and
+            # sqlite3.Error cross into the proof. A venue SDK failure
+            # during the reread fails the reset closed, never escapes it.
+            raise ExposureUnavailable(
+                f"cannot reconcile before reset: {exc}") from exc
+
+    def _read_balances() -> tuple[float, float]:
+        return fetch_token_balances(funder, up_token_id, down_token_id)
+
+    return ResetPorts(
+        read_inventory=_read_inventory,
+        fill_watermark=_watermark,
+        active_order_ids=_active_order_ids,
+        cancel=_cancel,
+        verify_cancelled=_verify_cancelled,
+        reconcile_fills=_reconcile_fills,
+        read_balances=_read_balances,
+    )
 
 
 def load_condition_exposure(
@@ -785,7 +944,7 @@ def exit_single_buy(
     client,
     registry: OrderRegistry,
     pair_id: str,
-    max_pair_cost: float,
+    bot_pos_price_max_pair_cost_usd: float,
     live: bool = True,
     venue_positions: Optional[dict[str, float]] = None,
     reason: Optional[str] = None,
@@ -844,7 +1003,7 @@ def exit_single_buy(
     if not force and light_token:
         light_ask = best_ask(client.get_order_book(light_token))
 
-    if not force and not should_exit(pair["fill_cost"], light_ask, max_pair_cost):
+    if not force and not should_exit(pair["fill_cost"], light_ask, bot_pos_price_max_pair_cost_usd):
         return {
             "action": "hold",
             "pair_id": pair_id,
@@ -1038,9 +1197,9 @@ def complete_pair(
     client,
     registry: OrderRegistry,
     pair_id: str,
-    max_pair_cost: float,
+    bot_pos_price_max_pair_cost_usd: float,
     live: bool = True,
-    max_order_usd: float = 25.0,
+    bot_risk_exposure_max_order_usd: float = 25.0,
 ) -> dict:
     """Stage 4 — cross the book to complete a one-sided pair.
 
@@ -1049,7 +1208,7 @@ def complete_pair(
     why it sits inside the staged exposure rule alongside the exit.
 
     The cap is the whole discipline. A cross that pushes the pair to or past
-    `max_pair_cost` is a guaranteed loss after gas, and closing it that way is
+    `bot_pos_price_max_pair_cost_usd` is a guaranteed loss after gas, and closing it that way is
     the stop-loss's job -- this path must not do that job badly. So it refuses
     rather than crossing anyway.
 
@@ -1077,11 +1236,11 @@ def complete_pair(
         )
 
     pair_cost = pair["fill_cost"] + ask
-    if pair_cost >= max_pair_cost:
+    if pair_cost >= bot_pos_price_max_pair_cost_usd:
         raise PairCompletionRefused(
             f"Completing {pair_id} at ask {ask:.4f} against a fill cost of "
             f"{pair['fill_cost']:.4f} gives pair_cost {pair_cost:.4f}, at or "
-            f"above max_pair_cost {max_pair_cost:.4f}. That pair loses money "
+            f"above bot_pos_price_max_pair_cost_usd {bot_pos_price_max_pair_cost_usd:.4f}. That pair loses money "
             f"after gas; the exit path owns this case, not completion."
         )
 
@@ -1099,10 +1258,10 @@ def complete_pair(
         )
 
     notional = size * ask
-    if notional > max_order_usd:
+    if notional > bot_risk_exposure_max_order_usd:
         raise PairCompletionRefused(
             f"Completion notional ${notional:.2f} exceeds MAX_ORDER_USD "
-            f"${max_order_usd:.2f}. The Stage 1 cap applies to this order like "
+            f"${bot_risk_exposure_max_order_usd:.2f}. The Stage 1 cap applies to this order like "
             f"any other."
         )
 
@@ -1170,12 +1329,12 @@ def complete_pair(
     # filled in the meantime at a worse price can push the real pair cost past
     # the cap -- which is precisely the pair this path must never create.
     pair_cost_after = fill_cost_after + ask
-    if pair_cost_after >= max_pair_cost:
+    if pair_cost_after >= bot_pos_price_max_pair_cost_usd:
         raise PairCompletionRefused(
             f"Between the guard and the send, the heavy fill cost moved to "
             f"{fill_cost_after:.4f}; at ask {ask:.4f} the pair would cost "
-            f"{pair_cost_after:.4f}, at or above max_pair_cost "
-            f"{max_pair_cost:.4f}. Refusing the cross."
+            f"{pair_cost_after:.4f}, at or above bot_pos_price_max_pair_cost_usd "
+            f"{bot_pos_price_max_pair_cost_usd:.4f}. Refusing the cross."
         )
     pair_cost = pair_cost_after
 
@@ -1232,7 +1391,7 @@ def complete_pair(
                 posted_ts=now_ms,
                 last_polled_ts=now_ms,
                 pair_id=pair_id,
-                max_pair_cost_at_post=max_pair_cost,
+                max_pair_cost_at_post=bot_pos_price_max_pair_cost_usd,
             )
         )
 
@@ -1398,7 +1557,7 @@ def auto_manage_pairs(
     gamma_host: Optional[str] = None,
 ) -> list[dict]:
     """Compatibility adapter for the unified one-sided lifecycle pass."""
-    if not getattr(cfg, "enable_pairs_rule", True):
+    if not getattr(cfg, "bot_risk_gate_pairs_rule_on", True):
         return []
     return manage_single_leg_positions(
         client, registry, cfg, live=live, now=now,
@@ -1467,6 +1626,65 @@ def _latest_close_ms_by_condition(registry) -> dict[str, int]:
         if ts_ms > latest_close_ms.get(cid, 0):
             latest_close_ms[cid] = ts_ms
     return latest_close_ms
+
+
+def _reset_tokens_for_condition(quoted_tokens: dict,
+                                 condition_id: str) -> tuple[Optional[str], Optional[str]]:
+    """UP/DOWN token ids for one market from the quotes ledger, if known."""
+    sides = quoted_tokens.get(condition_id) or {}
+    up = sides.get("UP")
+    down = sides.get("DOWN")
+    return (up[1] if up else None, down[1] if down else None)
+
+
+def _net_leftover_above_eps(registry, condition_id: str,
+                            up_token_id: str,
+                            down_token_id: str) -> bool:
+    """Whether fills minus closes still leave shares on either token (#646)."""
+    from core_brain.order_registry import inventory_from_registry
+    db_path = getattr(registry, "db_path", None)
+    kwargs = {"db_path": db_path} if db_path is not None else {}
+    inv = inventory_from_registry(condition_id, up_token_id, down_token_id,
+                                  **kwargs)
+    return (abs(float(inv.up_shares or 0.0)) > SIZE_EPS
+            or abs(float(inv.down_shares or 0.0)) > SIZE_EPS)
+
+
+def _retry_pending_reset(client, funder, live: bool, registry,
+                         condition_id: str, up_token_id: str,
+                         down_token_id: str, now_ms: int):
+    """Retry a reset an earlier pass could not prove (#646).
+
+    Runs when a lifecycle row or a `resetting` block still exists for the
+    condition -- e.g. the Data API still showed sold shares at exit time.
+    Returns the `ResetOutcome`, or None when nothing is pending (or when a
+    live retry has no funder to read balances with).
+    """
+    from core_brain.lifecycle_reset import reset_condition
+    pending = registry.has_lifecycle_for_condition(condition_id)
+    if not pending:
+        try:
+            marks = registry.requalification_marks()
+        except Exception:
+            return None
+        mark = marks.get(str(condition_id or "").lower())
+        pending = mark is not None and mark.status == "resetting"
+    if not pending:
+        return None
+    if live:
+        if not funder:
+            return None
+        ports = live_reset_ports(client, funder, registry, condition_id,
+                                 up_token_id, down_token_id)
+    else:
+        db_path = (getattr(client, "_db_path", None)
+                   or getattr(registry, "db_path", None))
+        ports = _shadow_reset_ports_or_none(
+            registry, db_path, condition_id, up_token_id, down_token_id)
+        if ports is None:
+            return None
+    return reset_condition(registry, condition_id, up_token_id, down_token_id,
+                           ports, reason="reset_retry", now_ms=now_ms)
 
 
 def _last_fill_ms_by_pair(registry) -> tuple[dict[str, int], dict[str, str]]:
@@ -1580,15 +1798,21 @@ def manage_single_leg_positions(
     state_cache: Optional[AgedOutMarketStateCache] = None,
     gamma_host: Optional[str] = None,
     resolved_cids: Optional[set[str]] = None,
+    decision_book_fn=None,
 ) -> list[dict]:
     """Apply the shared lifecycle policy to every active one-sided pair.
 
     Ordinary exposure waits for its resting hedge; an escalated hedge is
     managed by the Trader's quote path. The poll owns only the hard-stop sell
     and the existing market-end-aware settlement fallback.
+
+    `decision_book_fn(token_id)` optionally serves the held-leg bid the
+    lifecycle evaluates against (#659: stream-first books, REST fallback).
+    It takes the same levels shape `client.get_order_book` returns. Exits
+    and completions always read fresh from the client, never from this hook.
     """
-    pairs_enabled = bool(getattr(cfg, "enable_pairs_rule", True))
-    aged_out_enabled = bool(getattr(cfg, "enable_aged_out_rescue", True))
+    pairs_enabled = bool(getattr(cfg, "bot_risk_gate_pairs_rule_on", True))
+    aged_out_enabled = bool(getattr(cfg, "bot_risk_gate_aged_out_rescue_on", True))
     if not pairs_enabled and not aged_out_enabled:
         return []
 
@@ -1609,6 +1833,7 @@ def manage_single_leg_positions(
             funder=funder, market_state_fn=market_state_fn,
             state_cache=state_cache, gamma_host=gamma_host,
             resolved_cids=resolved_cids,
+            decision_book_fn=decision_book_fn,
         )
 
 
@@ -1625,11 +1850,12 @@ def _manage_single_leg_positions_locked(
     state_cache: Optional[AgedOutMarketStateCache] = None,
     gamma_host: Optional[str] = None,
     resolved_cids: Optional[set[str]] = None,
+    decision_book_fn=None,
 ) -> list[dict]:
     """The mutation pass, called under `lifecycle_mutation_guard`."""
 
-    pairs_enabled = bool(getattr(cfg, "enable_pairs_rule", True))
-    aged_out_enabled = bool(getattr(cfg, "enable_aged_out_rescue", True))
+    pairs_enabled = bool(getattr(cfg, "bot_risk_gate_pairs_rule_on", True))
+    aged_out_enabled = bool(getattr(cfg, "bot_risk_gate_aged_out_rescue_on", True))
 
     from core_brain.quotes import dynamic_offset_for
     from core_brain.single_leg_lifecycle import (
@@ -1638,20 +1864,16 @@ def _manage_single_leg_positions_locked(
     )
 
     now_s = now if now is not None else time.time()
-    window_ms = int(getattr(cfg, "pairs_exit_window_sec", 900.0) * 1000)
-    lead_sec = float(getattr(cfg, "aged_out_rescue_lead_sec", 900.0))
+    window_ms = int(getattr(cfg, "bot_risk_pairs_exit_window_sec", 900.0) * 1000)
+    lead_sec = float(getattr(cfg, "bot_risk_aged_out_rescue_lead_sec", 900.0))
     _mpc = getattr(cfg, "bot_pos_price_max_pair_cost_usd", None)
-    if _mpc is None:
-        _mpc = getattr(cfg, "max_pair_cost", 0.995)
-    max_pair_cost = float(_mpc)
-    tick_size = float(getattr(cfg, "price_tick", DEFAULT_TICK_SIZE))
-    stop_loss_mode = str(getattr(cfg, "stop_loss_mode", "NONE"))
-    drop_cents = float(getattr(cfg, "drop_cents", 0.05))
-    drawdown_pct = float(getattr(cfg, "drawdown_pct", 10.0))
+    bot_pos_price_max_pair_cost_usd = float(0.995 if _mpc is None else _mpc)
+    tick_size = float(getattr(cfg, "bot_quote_grid_tick_size_usd", DEFAULT_TICK_SIZE))
+    bot_risk_stop_mode = str(getattr(cfg, "bot_risk_stop_mode", "NONE"))
+    bot_risk_stop_adverse_drop_cents = float(getattr(cfg, "bot_risk_stop_adverse_drop_cents", 0.05))
+    bot_risk_stop_max_drawdown_pct = float(getattr(cfg, "bot_risk_stop_max_drawdown_pct", 10.0))
     _edp = getattr(cfg, "bot_risk_circuit_max_drawdown_pct", None)
-    if _edp is None:
-        _edp = getattr(cfg, "emergency_drawdown_pct", 75.0)
-    emergency_drawdown_pct = float(_edp)
+    bot_risk_circuit_max_drawdown_pct = float(75.0 if _edp is None else _edp)
     resolved = {str(cid).lower() for cid in (resolved_cids or ()) if cid}
 
     if market_state_fn is None:
@@ -1696,7 +1918,31 @@ def _manage_single_leg_positions_locked(
             continue
         if (condition_id
                 and last_fill_ms <= latest_close_ms.get(condition_id, 0)):
-            continue
+            # A close covering the latest fill is not proof the market is
+            # flat: a partial exit leaves a remainder (#646). Skip only when
+            # the net leftover inventory is also gone; otherwise fall through
+            # and stay managed. A pending reset is retried on the way out so
+            # a delayed balance read can complete without a new scheduler.
+            # Unknown tokens fail closed: without them there is no inventory
+            # to check, so the pair stays managed.
+            up_tok, down_tok = _reset_tokens_for_condition(
+                quoted_tokens, condition_id)
+            if up_tok is None or down_tok is None:
+                continue
+            if _net_leftover_above_eps(registry, condition_id, up_tok,
+                                       down_tok):
+                # A partial exit stays managed -- but only with a venue view:
+                # exit sizing nets prior closes against it (#326), and
+                # without a view the sale would size off fills the close
+                # already retired. No view means no safe sale, so keep
+                # the old skip on that path.
+                if venue_positions is None:
+                    continue
+            else:
+                _retry_pending_reset(client, funder, live, registry, condition_id,
+                                     up_tok, down_tok,
+                                     now_ms=int(now_s * 1000.0))
+                continue
 
         is_aged_out = (
             last_fill_ms > 0
@@ -1742,7 +1988,10 @@ def _manage_single_leg_positions_locked(
             held_token = (
                 side_tokens["UP"] if up_size > down_size else side_tokens["DOWN"]
             )
-            held_book = client.get_order_book(held_token)
+            if decision_book_fn is not None:
+                held_book = decision_book_fn(held_token)
+            else:
+                held_book = client.get_order_book(held_token)
             held_bid = best_bid(held_book)
             up_bid = held_bid if held_token == side_tokens["UP"] else None
             down_bid = held_bid if held_token == side_tokens["DOWN"] else None
@@ -1783,11 +2032,11 @@ def _manage_single_leg_positions_locked(
                 if previous_record is not None else None
             )
             decision = transition(
-                position, previous_state, max_pair_cost=max_pair_cost,
+                position, previous_state, bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
                 settlement_due=False, tick_size=tick_size,
-                stop_loss_mode=stop_loss_mode, drop_cents=drop_cents,
-                drawdown_pct=drawdown_pct,
-                bot_risk_circuit_max_drawdown_pct=emergency_drawdown_pct,
+                bot_risk_stop_mode=bot_risk_stop_mode, bot_risk_stop_adverse_drop_cents=bot_risk_stop_adverse_drop_cents,
+                bot_risk_stop_max_drawdown_pct=bot_risk_stop_max_drawdown_pct,
+                bot_risk_circuit_max_drawdown_pct=bot_risk_circuit_max_drawdown_pct,
             )
             if decision.action == "hard_stop":
                 # The poll's hard stop is its own to persist: it survives
@@ -1797,7 +2046,7 @@ def _manage_single_leg_positions_locked(
                 )
             if decision.action == "hard_stop":
                 result = exit_single_buy(
-                    client, registry, pair_id, max_pair_cost,
+                    client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
                     live=live, venue_positions=venue_positions,
                     reason="lifecycle_hard_stop", force=True,
                     trigger_bid=held_bid,
@@ -1808,47 +2057,43 @@ def _manage_single_leg_positions_locked(
                 )
                 if result.get("action") == "exited":
                     sold_size = float(result.get("size", 0.0) or 0.0)
-                    requested_size = float(result.get("requested_size", 0.0) or 0.0)
                     heavy_tok = result.get("token_id")
                     if (venue_positions is not None
                             and heavy_tok and heavy_tok in venue_positions):
                         venue_positions[heavy_tok] = max(
                             0.0, float(venue_positions[heavy_tok]) - sold_size)
-                    opp_tok = getattr(position, "opposite_token_id", None)
-                    remaining_heavy = (
-                        float(venue_positions.get(heavy_tok, 0.0))
-                        if venue_positions is not None and heavy_tok
-                        else max(0.0, requested_size - sold_size)
+                    # #646: the old block wrote DUAL_RESTING here off an
+                    # assumed-flat read (`venue_positions is None` fell back
+                    # to `requested - sold`, and `opposite_token_id` does not
+                    # exist on SingleLegPosition so the other leg read 0.0).
+                    # The shared proof replaces it: only a market flat on
+                    # both ledger and venue clears its row. Anything else
+                    # keeps the row and stays managed.
+                    from core_brain.lifecycle_reset import reset_condition
+                    if live:
+                        ports = live_reset_ports(
+                            client, funder, registry, position.condition_id,
+                            position.up_token_id, position.down_token_id)
+                    else:
+                        db_path = (getattr(client, "_db_path", None)
+                                   or getattr(registry, "db_path", None))
+                        ports = _shadow_reset_ports_or_none(
+                            registry, db_path, position.condition_id,
+                            position.up_token_id, position.down_token_id)
+                        if ports is None:
+                            out.append(result)
+                            continue
+                    reset_outcome = reset_condition(
+                        registry, position.condition_id,
+                        position.up_token_id, position.down_token_id,
+                        ports, reason="hard_stop_exited",
+                        now_ms=int(time.time() * 1000))
+                    result.update(
+                        reset_status=reset_outcome.status,
+                        reset_reason=reset_outcome.reason,
                     )
-                    remaining_opp = (
-                        float(venue_positions.get(opp_tok, 0.0))
-                        if venue_positions is not None and opp_tok
-                        else 0.0
-                    )
-                    if (requested_size > 0
-                            and sold_size >= requested_size - SIZE_EPS
-                            and remaining_heavy <= SIZE_EPS
-                            and remaining_opp <= SIZE_EPS):
-                        if (registry is not None
-                                and callable(getattr(registry, "save_lifecycle_state", None))):
-                            from core_brain.order_registry import LifecycleStateRecord
-                            registry.save_lifecycle_state(
-                                LifecycleStateRecord(
-                                    pair_id=pair_id,
-                                    condition_id=position.condition_id,
-                                    state="DUAL_RESTING",
-                                    reason="hard_stop_exited",
-                                    updated_ts_ms=int(time.time() * 1000),
-                                    evidence_json=json.dumps({
-                                        "previous_state": "HARD_STOP",
-                                        "state": "DUAL_RESTING",
-                                        "action": "exited",
-                                        "sold_size": sold_size,
-                                        "requested_size": requested_size,
-                                        "reason": "hard_stop_exited",
-                                    }, sort_keys=True, separators=(",", ":")),
-                                )
-                            )
+                    if reset_outcome.status == "RESET":
+                        result.update(lifecycle_state=None)
                 out.append(result)
                 continue
 
@@ -1867,15 +2112,15 @@ def _manage_single_leg_positions_locked(
                 )
                 if verdict == AGED_OUT_DUE:
                     decision = evaluate(
-                        position, registry, max_pair_cost=max_pair_cost,
+                        position, registry, bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
                         settlement_due=True, tick_size=tick_size,
-                        stop_loss_mode=stop_loss_mode,
-                        drop_cents=drop_cents,
-                        drawdown_pct=drawdown_pct,
-                        bot_risk_circuit_max_drawdown_pct=emergency_drawdown_pct,
+                        bot_risk_stop_mode=bot_risk_stop_mode,
+                        bot_risk_stop_adverse_drop_cents=bot_risk_stop_adverse_drop_cents,
+                        bot_risk_stop_max_drawdown_pct=bot_risk_stop_max_drawdown_pct,
+                        bot_risk_circuit_max_drawdown_pct=bot_risk_circuit_max_drawdown_pct,
                     )
                     result = _settlement_fallback(
-                        client, registry, pair, cfg, max_pair_cost, live,
+                        client, registry, pair, cfg, bot_pos_price_max_pair_cost_usd, live,
                         venue_positions, reason,
                     )
                     if result.get("action") in ("completed", "exited"):
@@ -1900,16 +2145,16 @@ def _manage_single_leg_positions_locked(
             try:
                 tokens = (side_tokens["UP"], side_tokens["DOWN"])
                 exp = load_condition_exposure(client, registry, condition_id, tokens)
-                stranded_completion_on = bool(getattr(cfg, "stranded_completion_enabled", False))
-                stranded_max_wait = float(getattr(cfg, "stranded_max_wait_sec", 300.0))
-                min_quote_shares = float(getattr(cfg, "min_quote_shares", 5.0) or 5.0)
+                stranded_completion_on = bool(getattr(cfg, "bot_risk_stranded_completion_on", False))
+                stranded_max_wait = float(getattr(cfg, "bot_risk_stranded_max_wait_sec", 300.0))
+                bot_quote_size_min_shares = float(getattr(cfg, "bot_quote_size_min_shares", 5.0) or 5.0)
 
                 # Stranded exposure resolution (#453)
                 # When completion is enabled with a profitable cross, complete immediately.
                 # When stranded without working hedge and aged out past regular window, force resolution.
                 if (stranded_completion_on or is_aged_out) and (
                     exp.status.value in ("stranded", "under_covered") and (
-                        exp.status.value == "stranded" or exp.coverage_shortfall < min_quote_shares
+                        exp.status.value == "stranded" or exp.coverage_shortfall < bot_quote_size_min_shares
                     )
                 ):
                     opposing_token = exp.light_token_id
@@ -1921,12 +2166,12 @@ def _manage_single_leg_positions_locked(
                         stranded_completion_on
                         and opposing_ask is not None
                         and opposing_ask > 0
-                        and (held_avg + opposing_ask) < max_pair_cost
+                        and (held_avg + opposing_ask) < bot_pos_price_max_pair_cost_usd
                     ):
                         with _completion_target(client, pair_id):
                             res = complete_pair(
-                                client, registry, pair_id, max_pair_cost,
-                                live=live, max_order_usd=getattr(cfg, "max_order_usd", 25.0) or 25.0,
+                                client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
+                                live=live, bot_risk_exposure_max_order_usd=getattr(cfg, "bot_risk_exposure_max_order_usd", 25.0) or 25.0,
                             )
                         if res.get("action") == "completed":
                             # Attempt live merge if live and non-interactive merge entry point is available
@@ -1943,7 +2188,7 @@ def _manage_single_leg_positions_locked(
                     # Otherwise, check maker tick availability & age
                     age_s = (now_s * 1000.0 - last_fill_ms) / 1000.0 if last_fill_ms > 0 else 0.0
                     try:
-                        max_profitable_hedge_bid(held_avg, max_pair_cost, tick_size)
+                        max_profitable_hedge_bid(held_avg, bot_pos_price_max_pair_cost_usd, tick_size)
                         has_maker_tick = True
                     except ValueError:
                         has_maker_tick = False
@@ -1959,7 +2204,7 @@ def _manage_single_leg_positions_locked(
                         continue
                     else:
                         exit_res = exit_single_buy(
-                            client, registry, pair_id, max_pair_cost,
+                            client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
                             live=live, venue_positions=venue_positions,
                             reason="stranded_unhedged_exit", force=True,
                         )
@@ -2004,18 +2249,18 @@ def _manage_single_leg_positions_locked(
     return out
 
 
-def _settlement_fallback(client, registry, pair, cfg, max_pair_cost, live,
+def _settlement_fallback(client, registry, pair, cfg, bot_pos_price_max_pair_cost_usd, live,
                          venue_positions, reason: str) -> dict:
     """Try one capped completion at settlement time, then use guarded exit."""
     try:
         with _completion_target(client, pair["pair_id"]):
             result = complete_pair(
-                client, registry, pair["pair_id"], max_pair_cost, live=live,
-                max_order_usd=getattr(cfg, "max_order_usd", None) or 25.0,
+                client, registry, pair["pair_id"], bot_pos_price_max_pair_cost_usd, live=live,
+                bot_risk_exposure_max_order_usd=getattr(cfg, "bot_risk_exposure_max_order_usd", None) or 25.0,
             )
     except PairCompletionRefused:
         result = exit_single_buy(
-            client, registry, pair["pair_id"], max_pair_cost,
+            client, registry, pair["pair_id"], bot_pos_price_max_pair_cost_usd,
             live=live, venue_positions=venue_positions,
             reason="aged_out_rescue", force=True,
         )
@@ -2041,7 +2286,7 @@ def rescue_aged_out_legs(
     resolved_cids: Optional[set[str]] = None,
 ) -> list[dict]:
     """Compatibility adapter for lifecycle-managed settlement fallback."""
-    if not getattr(cfg, "enable_aged_out_rescue", True):
+    if not getattr(cfg, "bot_risk_gate_aged_out_rescue_on", True):
         return []
     return manage_single_leg_positions(
         client, registry, cfg, live=live, now=now,

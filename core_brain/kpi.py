@@ -41,9 +41,9 @@ from core_brain.runtime_paths import resolve_runtime_file
 
 # Display-only: this module computes report numbers, never places an order.
 # `for_display=True` keeps an inherited rehearsal-only trial knob
-# (HUNTER_PAIR_COST_CAP / HUNTER_WIDE_BOOK_TRIAL) from crashing the import --
+# (BOT_POS_PRICE_MAX_PAIR_COST_USD / BOT_QUOTE_WIDE_BOOK_TRIAL) from crashing the import --
 # and every dashboard endpoint that imports it -- when the operator exported
-# one to hand to a rehearsal. Only `bankroll_usd` is read from `_CFG` here,
+# one to hand to a rehearsal. Only `bot_quote_bank_baseline_usd` is read from `_CFG` here,
 # which no trial knob touches.
 _CFG = load_cfg(for_display=True)
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -55,7 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 258
+KPI_PAYLOAD_VERSION = 259
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -240,8 +240,8 @@ def gate_definition(cfg: MakerConfig | None = None) -> dict[str, Any]:
         cfg = load_cfg()
     return {
         "primary_gate": "ci90_lower_pct >= threshold_pct",
-        "threshold_pct": cfg.stat_gate_threshold_pct,
-        "bankroll_fraction": cfg.stat_gate_bankroll_pct,
+        "threshold_pct": cfg.bot_eval_stat_gate_threshold_pct,
+        "bankroll_fraction": cfg.bot_eval_stat_gate_bankroll_pct,
         "dollar_twin_gate": "ci90_lower_usd >= bankroll * bankroll_fraction",
         "tautology_disclaimer": (
             "TAUTOLOGY DISCLAIMER: E[PnL | method=merge] > 0 is trivially true "
@@ -828,7 +828,8 @@ def _funnel_from_pipeline(
         "horizon_gate_days": snap.get("horizon_gate_days"),
         "reward_min_income_usd_day": snap.get("reward_min_income_usd_day"),
         "spread_min_income_usd_day": snap.get("spread_min_income_usd_day"),
-        "max_pair_cost": snap.get("max_pair_cost"),
+        "bot_pos_price_max_pair_cost_usd": snap.get("bot_pos_price_max_pair_cost_usd"),
+        "tournament_preset": snap.get("tournament_preset"),
     }
 
 
@@ -1923,7 +1924,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
                 _all_pairs, key=lambda vt: vt[1])
 
     if starting_capital is None:
-        starting_capital = _CFG.bankroll_usd
+        starting_capital = _CFG.bot_quote_bank_baseline_usd
 
     sorted_closes = sorted(
         [c for c in closes if c.get("ts") is not None], key=lambda c: float(c["ts"])
@@ -2356,8 +2357,8 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         "total_with_rebate": realized_pnl,
 
         # Bankroll & Census
-        "equity": _CFG.bankroll_usd + realized_pnl,
-        "bankroll": _CFG.bankroll_usd,
+        "equity": _CFG.bot_quote_bank_baseline_usd + realized_pnl,
+        "bankroll": _CFG.bot_quote_bank_baseline_usd,
         "census": census,
         "settlements": closes[:60],
         "resolved_markets": len(resolution_cids),

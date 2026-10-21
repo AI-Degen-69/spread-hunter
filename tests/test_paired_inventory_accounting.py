@@ -13,7 +13,7 @@ from core_brain.order_manager import _submit_and_log
 
 def test_flat_inventory_quotes_both_sides():
     """When flat, both UP and DOWN are quoted equally."""
-    cfg = MakerConfig(strict_paired_inventory=True, quote_shares=10, min_quote_shares=5)
+    cfg = MakerConfig(bot_pos_gate_strict_pairs_on=True, bot_quote_size_shares=10, bot_quote_size_min_shares=5)
     inv = Inventory(up_shares=0, down_shares=0, up_cost=0.0, down_cost=0.0)
     up = {"best_bid": 0.48, "best_ask": 0.52, "token_id": "asset_id_up"}
     down = {"best_bid": 0.48, "best_ask": 0.52, "token_id": "asset_id_dn"}
@@ -28,11 +28,11 @@ def test_flat_inventory_quotes_both_sides():
 def test_unhedged_heavy_side_strictly_blocked():
     """When UP-heavy (e.g. 10 UP, 0 DOWN), UP is strictly blocked and only DOWN is quoted."""
     cfg = MakerConfig(
-        strict_paired_inventory=True,
-        size_mode="shares",
-        quote_shares=20,
-        min_quote_shares=5,
-        max_pair_cost=0.99,
+        bot_pos_gate_strict_pairs_on=True,
+        bot_quote_size_mode="shares",
+        bot_quote_size_shares=20,
+        bot_quote_size_min_shares=5,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
     inv = Inventory(up_shares=10, down_shares=0, up_cost=3.0, down_cost=0.0)  # avg UP = 0.30
     up = {"best_bid": 0.30, "best_ask": 0.32, "token_id": "asset_id_up"}
@@ -52,10 +52,10 @@ def test_unhedged_heavy_side_strictly_blocked():
 def test_deficit_below_min_quote_shares_returns_zero():
     """Deficits smaller than venue min_quote_shares (e.g. 3 shares < 5) return 0 to prevent overshoot."""
     cfg = MakerConfig(
-        strict_paired_inventory=True,
-        size_mode="shares",
-        quote_shares=20,
-        min_quote_shares=5,
+        bot_pos_gate_strict_pairs_on=True,
+        bot_quote_size_mode="shares",
+        bot_quote_size_shares=20,
+        bot_quote_size_min_shares=5,
     )
     inv = Inventory(up_shares=3, down_shares=0, up_cost=0.90, down_cost=0.0)
     assert size_for(cfg, inv, "DOWN", 0.65) == 0
@@ -64,10 +64,10 @@ def test_deficit_below_min_quote_shares_returns_zero():
 def test_pair_inversion_blocks_deficit_quote():
     """When market moves against unhedged position (provisional + heavy_avg >= max_pair_cost), quote is blocked."""
     cfg = MakerConfig(
-        strict_paired_inventory=True,
-        quote_shares=20,
-        min_quote_shares=5,
-        max_pair_cost=0.99,
+        bot_pos_gate_strict_pairs_on=True,
+        bot_quote_size_shares=20,
+        bot_quote_size_min_shares=5,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
     inv = Inventory(up_shares=10, down_shares=0, up_cost=6.0, down_cost=0.0)  # avg UP = 0.60
     up = {"best_bid": 0.20, "best_ask": 0.25, "token_id": "asset_id_up"}
@@ -81,10 +81,10 @@ def test_pair_inversion_blocks_deficit_quote():
 def test_emergency_hedge_pair_inversion_blocked():
     """Emergency hedge path rejects crossing when heavy_avg + ask > max_pair_cost, falling through to maker quote."""
     cfg = MakerConfig(
-        enable_emergency_hedge=True,
-        max_naked_usd=5.0,
-        emergency_hedge_pct=0.5,
-        max_pair_cost=0.99,
+        bot_risk_gate_emergency_hedge_on=True,
+        bot_risk_exposure_max_naked_usd=5.0,
+        bot_risk_hedge_emergency_pct=0.5,
+        bot_pos_price_max_pair_cost_usd=0.99,
     )
     # 10 UP shares @ $0.60 ($6.00 deficit usd >= $2.50 threshold)
     inv = Inventory(up_shares=10, down_shares=0, up_cost=6.0, down_cost=0.0)  # avg UP = 0.60

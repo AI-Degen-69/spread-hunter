@@ -170,14 +170,41 @@ def test_build_tournament_plan_rejects_duplicate_arm_names():
         build_tournament_plan(issue=371, arms=dup_arms, check_ports=False)
 
 
-def test_build_tournament_plan_rejects_non_hunter_env():
+def test_build_tournament_plan_rejects_a_non_canonical_env():
     from scripts.shadow_tournament import build_tournament_plan
 
     bad_env_arms = [
-        {"name": "arm-one", "env": {"NOT_HUNTER": "123"}},
+        {"name": "arm-one", "env": {"NOT_A_CONFIG_VARIABLE": "123"}},
     ]
-    with pytest.raises(ValueError, match=r"only BOT_\* \(or legacy HUNTER_\*\) overrides are permitted"):
+    with pytest.raises(ValueError, match=r"only BOT_\* or FILTER_\* overrides are permitted"):
         build_tournament_plan(issue=371, arms=bad_env_arms, check_ports=False)
+
+
+def test_build_tournament_plan_rejects_a_retired_env_name():
+    """The retired `HUNTER_*` names are not arm overrides any more."""
+    from scripts.shadow_tournament import build_tournament_plan
+
+    bad_env_arms = [
+        {"name": "arm-one", "env": {"HUNTER_DYNAMIC_OFFSET_MULT": "0.5"}},
+    ]
+    with pytest.raises(ValueError, match=r"only BOT_\* or FILTER_\* overrides are permitted"):
+        build_tournament_plan(issue=371, arms=bad_env_arms, check_ports=False)
+
+
+def test_build_tournament_plan_rejects_a_retired_preset_key():
+    """A pre-#732 arm key is refused, not silently left at the shipped default.
+
+    `_preset_to_env` only reads canonical `bot_*` keys, so an arm still spelled
+    with the old name used to run with no override at all -- the tournament
+    then compared an arm nobody chose.
+    """
+    from scripts.shadow_tournament import build_tournament_plan
+
+    stale_arms = [
+        {"name": "arm-one", "dynamic_offset_enabled": True, "stop_loss_mode": "NONE"},
+    ]
+    with pytest.raises(ValueError, match=r"retired preset keys"):
+        build_tournament_plan(issue=371, arms=stale_arms, check_ports=False)
 
 
 def test_build_tournament_plan_rejects_live_port_8799():
@@ -261,13 +288,13 @@ def test_default_arm_offsets_agree_with_presets(tmp_path: Path):
     )
     for arm in plan.arms:
         preset = TOURNAMENT_PRESETS[arm.name]
-        assert arm.env["BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"] == ("1" if preset["dynamic_offset_enabled"] else "0")
-        if "dynamic_offset_multiplier" in preset:
-            assert float(arm.env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"]) == preset["dynamic_offset_multiplier"]
-        if "dynamic_offset_min_cents" in preset:
-            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"]) == preset["dynamic_offset_min_cents"]
-        if "dynamic_offset_max_cents" in preset:
-            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"]) == preset["dynamic_offset_max_cents"]
+        assert arm.env["BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"] == ("1" if preset["bot_quote_gate_dynamic_offset_on"] else "0")
+        if "bot_quote_spread_offset_multiplier" in preset:
+            assert float(arm.env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"]) == preset["bot_quote_spread_offset_multiplier"]
+        if "bot_quote_spread_offset_min_cents" in preset:
+            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"]) == preset["bot_quote_spread_offset_min_cents"]
+        if "bot_quote_spread_offset_max_cents" in preset:
+            assert int(arm.env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"]) == preset["bot_quote_spread_offset_max_cents"]
     by_name = {a.name: a for a in plan.arms}
     assert float(by_name["prudent"].env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"]) == 0.60
     assert int(by_name["prudent"].env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"]) == 4
@@ -572,7 +599,9 @@ def test_launch_starts_and_stops_the_market_filter(tmp_path, monkeypatch):
     assert argv == [st.sys.executable, "-m", "scripts.filter_loop"]
     assert filter_env is not None
     assert filter_env.get("SH_FILTER_INTERVAL_SEC") == str(st.FILTER_INTERVAL_SEC)
-    assert not any(k.startswith("HUNTER_") for k in filter_env), "inherited HUNTER_* must be removed"
+    assert not any(k.startswith(("BOT_", "FILTER_")) for k in filter_env), (
+        "inherited config variables must be removed"
+    )
 
     # It is still running at shutdown and must be stopped, never left behind.
     assert proc.terminated or proc.killed, "filter must be stopped on run exit"
@@ -592,10 +621,10 @@ def test_hybrid_preset_configuration():
 
     assert "hybrid" in TOURNAMENT_PRESETS
     preset = TOURNAMENT_PRESETS["hybrid"]
-    assert preset["dynamic_offset_enabled"] is False
-    # reward_offset was purged from the preset (HUNTER_REWARD_OFFSET retired).
-    assert "reward_offset" not in preset
-    assert preset["requote_dead_band"] == 0.060
+    assert preset["bot_quote_gate_dynamic_offset_on"] is False
+    # the static spread offset was purged from the preset
+    assert "bot_quote_spread_static_offset_cents" not in preset
+    assert preset["bot_order_requote_dead_band_cents"] == 0.060
     # The stop and grace knobs were retired in #619; no preset carries them.
     assert "stop_loss_trigger_usd_cents" not in preset
     assert "single_buy_grace_sec" not in preset
@@ -603,10 +632,10 @@ def test_hybrid_preset_configuration():
     cfg = apply_tournament_preset(MakerConfig(), "hybrid")
     # reward_offset keeps the shipped class default (0.020); the preset no
     # longer touches it.
-    assert cfg.reward_offset == 0.020
-    assert cfg.requote_dead_band == 0.060
-    assert cfg.stop_loss_mode == "NONE"
-    assert cfg.dynamic_offset_enabled is False
+    assert cfg.bot_quote_spread_static_offset_cents == 0.020
+    assert cfg.bot_order_requote_dead_band_cents == 0.060
+    assert cfg.bot_risk_stop_mode == "NONE"
+    assert cfg.bot_quote_gate_dynamic_offset_on is False
 
 
 def test_i608_character_arms_plan(tmp_path: Path):
@@ -635,12 +664,12 @@ def test_i608_character_arms_plan(tmp_path: Path):
     expected_knobs = {
         "the-accountant": set(),
         "the-patient-one": set(),
-        "the-surgeon": {"HUNTER_DYNAMIC_OFFSET_MULT"},
-        "the-daydreamer": {"HUNTER_DYNAMIC_OFFSET_MULT"},
-        "the-regular": {"HUNTER_DYNAMIC_OFFSET_MAX_CENTS"},
-        "the-metronome": {"HUNTER_REQUOTE_DEAD_BAND"},
-        "the-gambler": {"HUNTER_REQUOTE_HOLD_BELOW", "HUNTER_REQUOTE_HOLD_QUEUE"},
-        "the-chaperone": {"HUNTER_REQUOTE_HOLD_QUEUE"},
+        "the-surgeon": {"BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"},
+        "the-daydreamer": {"BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"},
+        "the-regular": {"BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"},
+        "the-metronome": {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS"},
+        "the-gambler": {"BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS", "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"},
+        "the-chaperone": {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"},
         "the-graceful": set(),
         "the-strict-parent": set(),
     }
@@ -649,11 +678,11 @@ def test_i608_character_arms_plan(tmp_path: Path):
         assert set(a["env"]) == expected_knobs[a["name"]], a["name"]
 
 
-def test_worker_environment_strips_parent_hunter_env(tmp_path, monkeypatch):
-    """Shadow worker subprocesses must not inherit parent HUNTER_* variables.
+def test_worker_environment_strips_parent_config_env(tmp_path, monkeypatch):
+    """Shadow worker subprocesses must not inherit parent BOT_*/FILTER_* variables.
 
     Arms without explicit overrides must start with clean defaults, while arms
-    with explicit settings retain them, non-HUNTER parent variables are
+    with explicit settings retain them, unrelated parent variables are
     preserved, and SPREAD_HUNTER_DB points to the arm-specific database.
     """
     import scripts.shadow_tournament as st
@@ -672,8 +701,8 @@ def test_worker_environment_strips_parent_hunter_env(tmp_path, monkeypatch):
 
     # Set parent ambient environment variables
     monkeypatch.setenv("HUNTER_DUMMY_LEAK", "should_be_stripped")
-    monkeypatch.setenv("HUNTER_PRICE_RISK_WIDEN", "0.03")
-    monkeypatch.setenv("HUNTER_TOURNAMENT_PRESET", "aggressive")
+    monkeypatch.setenv("BOT_QUOTE_PRICE_RISK_WIDEN", "0.03")
+    monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "aggressive")
     monkeypatch.setenv("FOO", "bar")
     monkeypatch.setenv("SPREAD_HUNTER_DB", "data/wrong_parent.db")
 
@@ -681,7 +710,7 @@ def test_worker_environment_strips_parent_hunter_env(tmp_path, monkeypatch):
         issue=624,
         arms=[
             {"name": "sparse"},
-            {"name": "explicit", "env": {"HUNTER_PRICE_RISK_WIDEN": "0.02"}},
+            {"name": "explicit", "env": {"BOT_QUOTE_PRICE_RISK_WIDEN": "0.02"}},
         ],
         base_dir=tmp_path,
         stamp="20261016-120000",
@@ -715,17 +744,18 @@ def test_worker_environment_strips_parent_hunter_env(tmp_path, monkeypatch):
     assert sparse_env.get("SPREAD_HUNTER_DB") == str(sparse_arm.db_path)
     assert explicit_env.get("SPREAD_HUNTER_DB") == str(explicit_arm.db_path)
 
-    # Un-set parent HUNTER_* vars must be stripped from both
-    assert "HUNTER_DUMMY_LEAK" not in sparse_env
-    assert "HUNTER_DUMMY_LEAK" not in explicit_env
-    assert "HUNTER_TOURNAMENT_PRESET" not in sparse_env
-    assert "HUNTER_TOURNAMENT_PRESET" not in explicit_env
+    # Parent config vars must be stripped from both
+    assert "BOT_QUOTE_TOURNAMENT_PRESET" not in sparse_env
+    assert "BOT_QUOTE_TOURNAMENT_PRESET" not in explicit_env
+    # A retired name is not config any more: nothing reads it, so the strip list
+    # does not know it and passing it on cannot change a run.
+    assert sparse_env.get("HUNTER_DUMMY_LEAK") == "should_be_stripped"
 
-    # Sparse arm must have clean defaults (no HUNTER_PRICE_RISK_WIDEN)
-    assert "HUNTER_PRICE_RISK_WIDEN" not in sparse_env
+    # Sparse arm must have clean defaults (no BOT_QUOTE_PRICE_RISK_WIDEN)
+    assert "BOT_QUOTE_PRICE_RISK_WIDEN" not in sparse_env
 
     # Explicit arm must have its explicit override only
-    assert explicit_env.get("HUNTER_PRICE_RISK_WIDEN") == "0.02"
+    assert explicit_env.get("BOT_QUOTE_PRICE_RISK_WIDEN") == "0.02"
 
 
 
@@ -746,9 +776,9 @@ I622_VARYING = ("HUNTER_REFUSAL_HOLD_DRIFT",)
 #: HUNTER_REFUSAL_HOLD_DRIFT, which #684 refuses at plan time (see
 #: test_the_i622_arms_file_is_refused_at_plan_time).
 SUPPORTED_ARMS = [
-    {"name": "hold-remove", "env": {"HUNTER_BANKROLL": "100"}},
-    {"name": "hold-keep", "env": {"HUNTER_BANKROLL": "100"}},
-    {"name": "hold-drift", "env": {"HUNTER_BANKROLL": "100"}},
+    {"name": "hold-remove", "env": {"BOT_QUOTE_BANK_BASELINE_USD": "100"}},
+    {"name": "hold-keep", "env": {"BOT_QUOTE_BANK_BASELINE_USD": "100"}},
+    {"name": "hold-drift", "env": {"BOT_QUOTE_BANK_BASELINE_USD": "100"}},
 ]
 
 
@@ -779,17 +809,32 @@ def test_the_i622_arms_file_varies_only_the_refusal_drift():
         "the arms must share everything except the refusal-drift knob; anything "
         "else and the result measures two changes at once"
     )
-    assert shared[0]["HUNTER_BANKROLL"] == "100"
-    assert shared[0]["HUNTER_EMERGENCY_DRAWDOWN_PCT"] == "75.0"
+    assert shared[0]["BOT_QUOTE_BANK_BASELINE_USD"] == "100"
+    assert shared[0]["BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT"] == "75.0"
 
     # The four live stop settings are pinned identically across arms, and the
     # retired stop knob is not carried over from the i492 presets.
-    for key in ("HUNTER_STOP_LOSS_MODE", "HUNTER_DROP_CENTS",
-                "HUNTER_DRAWDOWN_PCT", "HUNTER_EMERGENCY_DRAWDOWN_PCT"):
+    for key in ("BOT_RISK_STOP_MODE", "BOT_RISK_STOP_ADVERSE_DROP_CENTS",
+                "BOT_RISK_STOP_MAX_DRAWDOWN_PCT", "BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT"):
         assert key in shared[0], f"{key} must be pinned identically across arms"
-    assert "HUNTER_STOP_LOSS_TRIGGER_USD_CENTS" not in shared[0], (
+    assert "BOT_RISK_STOP_TRIGGER_USD_CENTS" not in shared[0], (
         "that stop setting is retired; the arm env is purged of it"
     )
+
+
+def test_the_i622_arms_file_is_refused_at_plan_time(tmp_path):
+    """#684: a retired override is refused, not silently ignored.
+
+    The drift arm differs from its siblings only by `HUNTER_REFUSAL_HOLD_DRIFT`.
+    Planning it would run two identical arms and call the result a comparison,
+    so the planner names the offending key instead.
+    """
+    from scripts.shadow_tournament import build_tournament_plan
+
+    arms = json.loads(I622_ARMS.read_text(encoding="utf-8"))
+    with pytest.raises(ValueError, match=r"only BOT_\* or FILTER_\* overrides are permitted"):
+        build_tournament_plan(issue=622, arms=arms, base_dir=tmp_path,
+                              run_number=1, check_ports=False)
 
 
 def test_no_arm_is_pointed_at_the_production_registry(tmp_path):
@@ -814,7 +859,7 @@ I492_ARMS = (
 # The first run's per-leg stop cap was `single_buy_max_loss_usd`, in DOLLARS.
 # #573 renamed it to `HUNTER_STOP_LOSS_TRIGGER_USD_CENTS` (same magnitude, x100
 # units) and #619 replaced it with the entry-relative ABSOLUTE_DROP trigger,
-# which reads `HUNTER_DROP_CENTS` in dollars again. Re-expressing the original
+# which reads `BOT_RISK_STOP_ADVERSE_DROP_CENTS` in dollars again. Re-expressing the original
 # 4.5c cap as ABSOLUTE_DROP + 0.045 keeps the dimension the arm was measuring;
 # dropping it would silently disable every arm's stop, changing more than the
 # two script fixes this rerun exists to isolate.
@@ -937,15 +982,15 @@ I492_RETIRED_KNOBS = {
 # so its presence here would mean the rerun is no longer the baseline #487 is
 # compared against.
 I487_TWEAKS = {
-    ("control", "HUNTER_DROP_CENTS"): "0.060",
-    ("conservative", "HUNTER_DROP_CENTS"): "0.045",
-    ("balanced", "HUNTER_DYNAMIC_OFFSET_MULT"): "0.25",
-    ("aggressive", "HUNTER_DROP_CENTS"): "0.045",
-    ("prudent", "HUNTER_DYNAMIC_OFFSET_MULT"): "0.30",
-    ("stickhold", "HUNTER_REQUOTE_HOLD_QUEUE"): "500",
-    ("queuehug", "HUNTER_REQUOTE_HOLD_BELOW"): "0.08",
-    ("deadband-tight", "HUNTER_REQUOTE_DEAD_BAND"): "0.05",
-    ("deadband-wide", "HUNTER_DYNAMIC_OFFSET_MULT"): "0.25",
+    ("control", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"): "0.060",
+    ("conservative", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"): "0.045",
+    ("balanced", "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"): "0.25",
+    ("aggressive", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"): "0.045",
+    ("prudent", "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"): "0.30",
+    ("stickhold", "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"): "500",
+    ("queuehug", "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS"): "0.08",
+    ("deadband-tight", "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS"): "0.05",
+    ("deadband-wide", "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"): "0.25",
     ("snapstop", "HUNTER_SINGLE_BUY_GRACE_SEC"): "45",
 }
 
@@ -979,7 +1024,7 @@ def test_i492_arms_carry_no_487_catalyst_tweak():
 def test_every_i492_arm_loads_its_own_config():
     """A plan the children cannot load is not a tournament.
 
-    The file shipped `HUNTER_TOURNAMENT_PRESET=control` long after #484's
+    The file shipped `BOT_QUOTE_TOURNAMENT_PRESET=control` long after #484's
     control preset was purged. `config.from_env` raises on an unknown preset, so
     that arm would have died at startup while the other nine kept posting --
     the exact failure the plan now refuses up front.
@@ -1072,22 +1117,34 @@ def test_unknown_preset_selector_is_refused_at_plan_time(tmp_path):
         build_tournament_plan(
             issue=492,
             arms=[{"name": "control",
-                   "env": {"HUNTER_TOURNAMENT_PRESET": "control"}}],
+                   "env": {"BOT_QUOTE_TOURNAMENT_PRESET": "control"}}],
             base_dir=tmp_path, run_number=1, check_ports=False,
         )
 
 
-def test_explicit_legacy_preset_selector_not_overwritten_by_name_default(tmp_path):
+def test_explicit_preset_selector_not_overwritten_by_name_default(tmp_path):
     from scripts.shadow_tournament import build_tournament_plan
 
     plan = build_tournament_plan(
         issue=492,
         arms=[{"name": "conservative",
-               "env": {"HUNTER_TOURNAMENT_PRESET": "aggressive"}}],
+               "env": {"BOT_QUOTE_TOURNAMENT_PRESET": "aggressive"}}],
         base_dir=tmp_path, run_number=1, check_ports=False,
     )
-    assert plan.arms[0].env["HUNTER_TOURNAMENT_PRESET"] == "aggressive"
-    assert "BOT_QUOTE_TOURNAMENT_PRESET" not in plan.arms[0].env
+    assert plan.arms[0].env["BOT_QUOTE_TOURNAMENT_PRESET"] == "aggressive"
+
+
+def test_a_retired_preset_selector_is_refused_at_plan_time(tmp_path):
+    """The retired `HUNTER_TOURNAMENT_PRESET` is not a name the planner knows."""
+    from scripts.shadow_tournament import build_tournament_plan
+
+    with pytest.raises(ValueError, match=r"only BOT_\* or FILTER_\* overrides are permitted"):
+        build_tournament_plan(
+            issue=492,
+            arms=[{"name": "conservative",
+                   "env": {"HUNTER_TOURNAMENT_PRESET": "aggressive"}}],
+            base_dir=tmp_path, run_number=1, check_ports=False,
+        )
 
 
 def test_a_supported_legacy_alias_still_plans(tmp_path):
@@ -1098,9 +1155,9 @@ def test_a_supported_legacy_alias_still_plans(tmp_path):
         arms=[{
             "name": "arm-one",
             "env": {
-                "HUNTER_REQUOTE_HOLD_QUEUE": "500",
-                "HUNTER_DROP_CENTS": "0.05",
-                "HUNTER_PRICE_RISK_WIDEN": "0.02",
+                "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500",
+                "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.05",
+                "BOT_QUOTE_PRICE_RISK_WIDEN": "0.02",
             },
         }],
         base_dir=tmp_path,
@@ -1108,9 +1165,9 @@ def test_a_supported_legacy_alias_still_plans(tmp_path):
         check_ports=False,
     )
     env = plan.arms[0].env
-    assert env["HUNTER_REQUOTE_HOLD_QUEUE"] == "500"
-    assert env["HUNTER_DROP_CENTS"] == "0.05"
-    assert env["HUNTER_PRICE_RISK_WIDEN"] == "0.02"
+    assert env["BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"] == "500"
+    assert env["BOT_RISK_STOP_ADVERSE_DROP_CENTS"] == "0.05"
+    assert env["BOT_QUOTE_PRICE_RISK_WIDEN"] == "0.02"
 
 
 def test_default_plan_interval_matches_max_rotation_ceiling(tmp_path: Path):

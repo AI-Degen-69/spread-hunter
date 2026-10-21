@@ -58,6 +58,7 @@ import sys
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -306,7 +307,7 @@ def _scan_one_order_log(f: Path, condition_id: str) -> None:
             )
 
 
-def status() -> None:
+def status(registry=None) -> None:
     """Who are we, and what is already resting. Read-only, safe anytime."""
     c = client()
     print(f"address        {c.get_address()}")
@@ -323,6 +324,29 @@ def status() -> None:
         print(f"open orders    ERROR {type(e).__name__}: {e}")
     print("\nConfirm the address above is the account holding your USDC "
           "BEFORE sending anything.")
+    _print_requalification_section(registry)
+
+
+def _print_requalification_section(registry=None) -> None:
+    """Read-only reset marks for the operator (#646). Never writes.
+
+    Takes the registry explicitly: the test guard forbids opening the
+    production store implicitly, so a bare `OrderRegistry()` here would
+    fail every suite that calls `status()`.
+    """
+    from core_brain.order_registry import OrderRegistry
+    try:
+        marks = (registry or OrderRegistry()).requalification_marks()
+    except Exception as exc:
+        print(f"\nawaiting re-qualification  ERROR {type(exc).__name__}: {exc}")
+        return
+    print(f"\nawaiting re-qualification  {len(marks)} market(s)")
+    for cid in sorted(marks):
+        mark = marks[cid]
+        excluded = (" (excluded from latest publication)"
+                    if mark.excluded_publication_ns is not None else "")
+        print(f"  {cid[:16]:<18} {mark.status} gen={mark.generation}"
+              f" reason={mark.reason}{excluded}")
 
 
 def balance(funder: str | None) -> None:
@@ -457,10 +481,10 @@ def quote(condition_id: str, price: float, size: float, live: bool,
 
     dn_price = round(down_price, 4) if down_price is not None else round(1.0 - price, 4)
     cost = price * size + dn_price * size
-    max_order_usd, _ = order_caps()
-    if cost > max_order_usd:
+    bot_risk_exposure_max_order_usd, _ = order_caps()
+    if cost > bot_risk_exposure_max_order_usd:
         raise SystemExit(
-            f"${cost:.2f} exceeds MAX_ORDER_USD ${max_order_usd:.2f}")
+            f"${cost:.2f} exceeds MAX_ORDER_USD ${bot_risk_exposure_max_order_usd:.2f}")
 
     legs = [(m.up_token, price, "UP"), (m.down_token, dn_price, "DOWN")]
     print(f"market   {m.market_slug[:60]}")
@@ -476,10 +500,10 @@ def quote(condition_id: str, price: float, size: float, live: bool,
 
     c = client()
     already = open_notional(c)
-    _, max_total_usd = order_caps()
-    if already + cost > max_total_usd:
+    _, bot_risk_exposure_max_total_usd = order_caps()
+    if already + cost > bot_risk_exposure_max_total_usd:
         raise SystemExit(f"open ${already:.2f} + ${cost:.2f} exceeds "
-                         f"MAX_TOTAL_USD ${max_total_usd:.2f}")
+                         f"MAX_TOTAL_USD ${bot_risk_exposure_max_total_usd:.2f}")
 
     # The registry is what every later stage reads. Without a row here the poll
     # loop has nothing to reconcile, `exit` and `complete` have no pair_id to
@@ -493,7 +517,7 @@ def quote(condition_id: str, price: float, size: float, live: bool,
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     pair_id = f"pair-{_uuid.uuid4().hex[:12]}"
-    max_pair_cost = strategy_config.load().bot_pos_price_max_pair_cost_usd
+    bot_pos_price_max_pair_cost_usd = strategy_config.load().bot_pos_price_max_pair_cost_usd
     now_ms = int(time.time() * 1000)
 
     # Indexed, not getattr-with-default. A silent fallback to GTC would turn a
@@ -518,7 +542,7 @@ def quote(condition_id: str, price: float, size: float, live: bool,
             id=local_id, order_id=None, condition_id=condition_id,
             token_id=str(tok), side="BUY", price=p, original_size=size,
             status="pending", posted_ts=now_ms, last_polled_ts=now_ms,
-            pair_id=pair_id, max_pair_cost_at_post=max_pair_cost,
+            pair_id=pair_id, max_pair_cost_at_post=bot_pos_price_max_pair_cost_usd,
         ))
 
         signed = c.create_order(
@@ -925,6 +949,20 @@ def _resolve_merge_unit_costs(conn, condition_id: str,
     return up_unit_cost, dn_unit_cost
 
 
+@dataclass(frozen=True)
+class SubmitOutcome:
+    """What a relayer submission achieved (#646).
+
+    `executed` mirrors the relayer's terminal state; `close_written` is True
+    only when the merge close row actually landed. `registry` is the store
+    instance the close was written to, so the reset can reuse it.
+    """
+
+    executed: bool
+    close_written: bool
+    registry: object = None
+
+
 def _submit_and_log(
     action: str,
     condition_id: str,
@@ -937,7 +975,7 @@ def _submit_and_log(
     headers: dict,
     relayer_url: str,
     target: str = CTF_CONTRACT,
-) -> None:
+) -> SubmitOutcome:
     """Submit EIP-712 batch transaction to relayer with crash-safe pre-logging and atomic status updates."""
     import urllib.request
 
@@ -1136,10 +1174,14 @@ def _submit_and_log(
     print(f"  RELAYER RESPONSE: {json.dumps(res)[:400]}")
     print(f"\nlogged to {RUN / 'live_orders.json'}")
 
-    if action == "MERGE" and (status == "executed" or state == "STATE_EXECUTED"):
+    executed = (status == "executed" or state == "STATE_EXECUTED")
+    close_written = False
+    close_registry = None
+    if action == "MERGE" and executed:
         try:
             from core_brain.order_registry import OrderRegistry, CloseRecord, get_run_id
             registry = OrderRegistry()
+            close_registry = registry
             amt = 0.0
             if call_data and len(call_data) >= 10 + 64 * 5:
                 amount_hex = call_data[10 + 64 * 4 : 10 + 64 * 5]
@@ -1190,8 +1232,14 @@ def _submit_and_log(
                 tx_hash=tx_hash,
                 run_id=get_run_id(),
             ))
+            # Set only here, immediately after the write returns: a failed
+            # close must never reset (#646).
+            close_written = True
         except Exception as close_exc:
             print(f"  WARNING: Failed to log close record: {close_exc}", file=sys.stderr)
+
+    return SubmitOutcome(executed=executed, close_written=close_written,
+                         registry=close_registry)
 
 
 def redeem(condition_id: str, index_sets: list[int] | None = None,
@@ -1445,9 +1493,9 @@ def merge(condition_id: str,
 
     # Pre-flight Guard 3: MAX_ORDER_USD ceiling
     cost = amount * 1.0
-    max_order_usd, _ = order_caps()
-    if cost > max_order_usd:
-        raise SystemExit(f"${cost:.2f} exceeds MAX_ORDER_USD ${max_order_usd:.2f}")
+    bot_risk_exposure_max_order_usd, _ = order_caps()
+    if cost > bot_risk_exposure_max_order_usd:
+        raise SystemExit(f"${cost:.2f} exceeds MAX_ORDER_USD ${bot_risk_exposure_max_order_usd:.2f}")
 
     # Pre-flight Guard 4: Idempotency check
     _check_idempotency_guard(condition_id, force=force)
@@ -1709,7 +1757,7 @@ def merge(condition_id: str,
     )
 
     # 4. Submit and log
-    _submit_and_log(
+    submit = _submit_and_log(
         action="MERGE",
         condition_id=condition_id,
         funder=funder,
@@ -1722,6 +1770,20 @@ def merge(condition_id: str,
         relayer_url=relayer_url,
         target=call_target,
     )
+
+    # 5. Unified reset (#646): only an executed merge whose close row landed
+    # proves anything. Failed, reverted, cancelled, submitted, and
+    # close-write-failed merges never reset; a partial merge leaves the
+    # larger leg, and the proof returns RESIDUAL on it.
+    if submit.executed and submit.close_written and submit.registry is not None:
+        from core_brain.lifecycle_reset import reset_condition
+        from core_brain.single_buy_saver import live_reset_ports
+        reset_outcome = reset_condition(
+            submit.registry, condition_id, up_tok_id, dn_tok_id,
+            live_reset_ports(client(funder), funder, submit.registry,
+                             condition_id, up_tok_id, dn_tok_id),
+            reason="live_merge", now_ms=int(time.time() * 1000))
+        print(f"  RESET: {reset_outcome.status} ({reset_outcome.reason})")
 
 
 
@@ -2667,7 +2729,7 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
     try:
         result = exit_naked_leg(
             _clob, registry, pair_id,
-            max_pair_cost=strategy_config.load().bot_pos_price_max_pair_cost_usd,
+            bot_pos_price_max_pair_cost_usd=strategy_config.load().bot_pos_price_max_pair_cost_usd,
             live=live,
             venue_positions=venue_positions,
         )
@@ -2713,7 +2775,7 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
 
     Closes exposure rather than opening it: the half-open leg is already at
     risk, and completing it yields a pair worth $1.00 at merge. Refuses any
-    cross that would push the pair to or past max_pair_cost -- that case
+    cross that would push the pair to or past bot_pos_price_max_pair_cost_usd -- that case
     belongs to `exit`, and this path must not do the stop-loss's job badly.
     """
     from core_brain.single_buy_saver import (
@@ -2784,12 +2846,12 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
         })
 
     try:
-        max_order_usd, _ = order_caps()
+        bot_risk_exposure_max_order_usd, _ = order_caps()
         result = complete_pair(
             client(), registry, pair_id,
-            max_pair_cost=strategy_config.load().bot_pos_price_max_pair_cost_usd,
+            bot_pos_price_max_pair_cost_usd=strategy_config.load().bot_pos_price_max_pair_cost_usd,
             live=live,
-            max_order_usd=max_order_usd,
+            bot_risk_exposure_max_order_usd=bot_risk_exposure_max_order_usd,
         )
     except PairCompletionRefused as exc:
         if entry_id:
@@ -3243,7 +3305,7 @@ def decide(
     cfg = load()
     live_bal = fetch_live_balance()
     if live_bal is not None and live_bal > 0:
-        cfg = replace(cfg, bankroll_usd=live_bal)
+        cfg = replace(cfg, bot_quote_bank_baseline_usd=live_bal)
 
     reg_db = Path(db_path) if db_path else DEFAULT_DB_PATH
 
@@ -3328,14 +3390,14 @@ def _evaluate_single_market_quote(
     depth_up = sum(up_book.get("bids", {}).values())
     depth_dn = sum(down_book.get("bids", {}).values())
 
-    couple_alloc = max(cfg.bankroll_usd * getattr(cfg, "couple_risk_pct", 0.01), getattr(cfg, "min_couple_usd", 6.00))
+    couple_alloc = max(cfg.bot_quote_bank_baseline_usd * getattr(cfg, "bot_quote_alloc_couple_pct", 0.01), getattr(cfg, "bot_quote_alloc_couple_min_usd", 6.00))
     leg_alloc = couple_alloc / 2.0
 
     print("=" * 80)
     print(f"MARKET:    {title}")
     print(f"SLUG:      {slug}")
     print(f"CID:       {m.condition_id}")
-    print(f"BANKROLL:  ${cfg.bankroll_usd:,.2f} USDC (Sizing: max(${cfg.bankroll_usd:.2f} * 1%, ${getattr(cfg, 'min_couple_usd', 6.0):.2f}) = ${couple_alloc:.2f} couple, ${leg_alloc:.2f}/leg)")
+    print(f"BANKROLL:  ${cfg.bot_quote_bank_baseline_usd:,.2f} USDC (Sizing: max(${cfg.bot_quote_bank_baseline_usd:.2f} * 1%, ${getattr(cfg, "bot_quote_alloc_couple_min_usd", 6.0):.2f}) = ${couple_alloc:.2f} couple, ${leg_alloc:.2f}/leg)")
     print(f"TICK:      {m.tick_size:<6} NEG_RISK: {m.neg_risk}")
     if gm:
         print(f"GRADUATED: min_size={gm.min_size} tick={gm.tick} max_spread={gm.max_spread} "

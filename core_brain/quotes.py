@@ -13,13 +13,13 @@ from merge spread capture ($1.00 - pair cost).
 Everything below follows from that. Quote BOTH outcomes so a pair can assemble;
 stay ~92% balanced so no leg rides naked; never let the pair cost reach $1.00,
 because a pair bought at >= 1.00 is a booked loss on an instrument that pays
-exactly $1.00; and keep quotes within the max_spread_from_mid window -- the
+exactly $1.00; and keep quotes within the bot_quote_book_max_spread_from_mid window -- the
 distance from the book midpoint to our resting quote -- to maintain book
 competitiveness.
 
 The universe is NOT the BTC 5-minute series. The fleet quotes the ranker's
 graduated list (runtime/markets.json, via core_brain/market_feed.py) -- liquid sports,
-esports, macro and political markets inside a 30-day horizon. `config.series_slug`
+esports, macro and political markets inside a 30-day horizon. `config.bot_market_series_slug`
 is a legacy field; see AGENTS.md.
 """
 from __future__ import annotations
@@ -96,31 +96,13 @@ def _in_band(cfg: MakerConfig, price: float) -> bool:
     """Is this a price worth resting at? 54% of powerwinner's volume is here."""
     if not cfg.bot_quote_gate_price_band_on:
         return True
-    return cfg.price_band_low <= price <= cfg.price_band_high
+    return cfg.bot_quote_price_band_min_cents <= price <= cfg.bot_quote_price_band_max_cents
 
 
 def mid_price(best_bid: Optional[float], best_ask: Optional[float]) -> Optional[float]:
     if best_bid is None or best_ask is None:
         return None
     return (best_bid + best_ask) / 2.0
-
-
-def reward_score(cfg: MakerConfig, spread_from_mid: float, size: float) -> float:
-    """Legacy liquidity-reward score for one resting order.
-
-        S(v, s) = ((v - s) / v)^2 * size,    v = the quote window (max_spread_from_mid)
-
-    A legacy diagnostic: the number is printed in the quote reason and feeds no
-    sizing decision. `v` is the quote window -- the largest distance from the
-    book midpoint our resting quote may sit at -- not a venue reward window.
-
-    Quadratic, so it collapses fast: at 2c of a 4.5c window an order keeps only
-    30% of the score it would earn at the touch. Orders outside v score nothing.
-    """
-    v = cfg.max_spread_from_mid
-    if spread_from_mid < 0 or spread_from_mid > v or size < cfg.min_quote_shares:
-        return 0.0
-    return ((v - spread_from_mid) / v) ** 2 * size
 
 
 def dynamic_offset_for(
@@ -203,10 +185,10 @@ def quote_resting_price(
     if mid is None:
         return None, None, None, 1.0
     base_offset, _ = dynamic_offset_for(cfg, now=now)
-    if getattr(cfg, "apply_widen_gate", True):
+    if getattr(cfg, "bot_quote_gate_widen_on", True):
         base = unhedged_stop_loss.offset_for(
-            getattr(cfg, "gate_state", unhedged_stop_loss.NORMAL),
-            base_offset, cfg.widen_offset)
+            getattr(cfg, "bot_risk_circuit_gate_state", unhedged_stop_loss.NORMAL),
+            base_offset, cfg.bot_risk_circuit_widen_offset_cents)
     else:
         # WIDENED-gate kill switch (loose baseline preset): quote the raw
         # dynamic offset with no snap-back to the tight widen_offset. A
@@ -216,7 +198,7 @@ def quote_resting_price(
     skew = risk.skew_offset(cfg, inv, side)
     band = risk.band_risk_factor(cfg, provisional)
     desired = base + skew + band.extra_offset
-    offset = max(cfg.bot_pos_skew_min_reward_offset_cents, min(cfg.max_spread_from_mid, desired))
+    offset = max(cfg.bot_pos_skew_min_reward_offset_cents, min(cfg.bot_quote_book_max_spread_from_mid, desired))
     truncated = 1.0
     if desired > offset > 0:
         truncated = offset / desired
@@ -231,8 +213,8 @@ def quote_resting_price(
     # minus a 20c offset) floors BELOW zero -- an impossible resting price the
     # venue rejects. Clamp to [one tick, one tick under the ask]: never negative,
     # never zero, never crossing. This is the last line of defense after the
-    # offset arithmetic; the offset itself is already capped by max_spread_from_mid.
-    tick = cfg.price_tick if cfg.price_tick and cfg.price_tick > 0 else 0.01
+    # offset arithmetic; the offset itself is already capped by bot_quote_book_max_spread_from_mid.
+    tick = cfg.bot_quote_grid_tick_size_usd if cfg.bot_quote_grid_tick_size_usd and cfg.bot_quote_grid_tick_size_usd > 0 else 0.01
     min_price = round(tick, 10)
     if price < min_price:
         price = min_price
@@ -305,12 +287,12 @@ def _decide_quotes_from_mid(
     function rests at is `provisional` plus skew, plus the band offset, clamped
     and tick-rounded. Skew pulls the light side toward mid, so the two differ in
     the direction that matters. The gate asks what the pair costs to FINISH by
-    taking the other leg -- the question the old `max_pair_cost` never asked,
+    taking the other leg -- the question the old `bot_pos_price_max_pair_cost_usd` never asked,
     which is how all 209 orders of shadow run run-2809a7161de1 rested with one
     distinct `max_pair_cost_at_post` of 0.995 and zero fills.
 
     The ENTRY PAIR-COST CAP (#627) is judged last, on the two resting prices
-    taken together: `sum(prices) <= max_pair_cost`, Decimal-compared so a $0.99
+    taken together: `sum(prices) <= bot_pos_price_max_pair_cost_usd`, Decimal-compared so a $0.99
     pair on a $0.99 cap still posts. Nothing else read the flat book as a pair
     -- `hard_block`'s pair-cost arm needs a held average and `dynamic_pair_sum`
     above runs only with the dynamic offset enabled -- so on the dynamic-off
@@ -323,9 +305,13 @@ def _decide_quotes_from_mid(
         return [], f"t_remaining {t_remaining:.0f}s: market ended"
 
     # A market that kept picking us off AFTER we widened is not mispriced, it
-    # is toxic. Giving up the rent is the point: rent is worth ~$50/day across
-    # the fleet, and the exposure a bad market builds is worth multiples of it.
-    if getattr(cfg, "gate_state", unhedged_stop_loss.NORMAL) == unhedged_stop_loss.EXITED:
+    # is toxic. Giving up the spread capture is the point: what a market like
+    # this earns is the merge spread on the pairs it completes, and the
+    # exposure it builds while losing is worth multiples of that. (No dollar
+    # figure is quoted here on purpose -- the fleet number this used to carry
+    # was never derived from a run, and an unmeasured figure in a money-path
+    # rationale reads as evidence when it is not.)
+    if getattr(cfg, "bot_risk_circuit_gate_state", unhedged_stop_loss.NORMAL) == unhedged_stop_loss.EXITED:
         return [], "market exited: fills still lost money after widening"
 
     # PER-MARKET FILL CAP. This check has existed in `decide_quotes` since the
@@ -336,20 +322,18 @@ def _decide_quotes_from_mid(
     # It belongs here rather than in the caller because the from-mid path is
     # the one the fleet actually runs -- a cap enforced only on the path
     # nobody takes is not a cap.
-    if inv.fills >= cfg.max_fills_per_market:
-        return [], f"hit {cfg.max_fills_per_market} fills for this market"
+    if inv.fills >= cfg.bot_order_max_fills_per_market:
+        return [], f"hit {cfg.bot_order_max_fills_per_market} fills for this market"
 
-    # ZERO ALLOCATION MEANS QUOTE NOTHING. `reallocate` has always documented
-    # that an unfunded market "gets 0 and stops quoting", and it never did:
-    # `size = max(quote_shares, min_quote_shares)` below silently promoted a 0
-    # back to the venue minimum, so a market the allocator had deliberately
-    # defunded carried on posting 50-share orders.
+    # ZERO ALLOCATION MEANS QUOTE NOTHING. A nonpositive `bot_quote_size_shares` is an
+    # explicit no-quote signal from the market spec "shares" value: the
+    # allocator deliberately left this market unfunded, so it gets 0 and stops
+    # quoting. `risk.size_for` returns 0 for it in every sizing mode, so a 0
+    # is never promoted to a minimum-size order.
     #
-    # Harmless while every market was fundable. Not harmless once U4 defunds
-    # markets that cannot clear the payout floor -- measured on the first
-    # smoke run, 17 markets kept quoting while 4 were funded, putting $2,108
-    # of offers against a $2,000 committed cap before a share was bought.
-    if cfg.quote_shares <= 0:
+    # Past incident, kept as a reminder: defunded markets once kept posting
+    # orders past the committed cap.
+    if cfg.bot_quote_size_shares <= 0:
         return [], "unfunded by the allocator -- quoting nothing"
 
     if lifecycle_override is not None:
@@ -378,7 +362,7 @@ def _decide_quotes_from_mid(
             continue
 
         # DECIDED MARKET — no room to work. The band is the CONFIGURED price
-        # band (price_band_low/high), not a hardcoded pair of edges: the
+        # band (bot_quote_price_band_min_cents/bot_quote_price_band_max_cents), not a hardcoded pair of edges: the
         # operator's directive is 10c-90c, and a second hardcoded band here
         # silently ignored whatever the config said (#582). Mirrors
         # scripts/filter_markets.py's decided check.
@@ -391,10 +375,10 @@ def _decide_quotes_from_mid(
         # A live series is NOT exempt (time-of-game purge, #597): game progress
         # says nothing about when this market decides, so the band applies to
         # every market alike.
-        if mid <= cfg.price_band_low or mid >= cfg.price_band_high:
+        if mid <= cfg.bot_quote_price_band_min_cents or mid >= cfg.bot_quote_price_band_max_cents:
             blocked.append(
                 f"{side}: mid {mid:.3f} outside "
-                f"[{cfg.price_band_low:.2f},{cfg.price_band_high:.2f}] -- decided market")
+                f"[{cfg.bot_quote_price_band_min_cents:.2f},{cfg.bot_quote_price_band_max_cents:.2f}] -- decided market")
             continue
 
         # INVENTORY SKEW. Push the heavy side away from mid and pull the light
@@ -412,8 +396,8 @@ def _decide_quotes_from_mid(
         heavy = "DOWN" if side == "UP" else "UP"
         deficit_usd = deficit * inv.avg(heavy) if deficit > 0 else 0.0
         if (cfg.bot_risk_gate_emergency_hedge_on and ba is not None and ba < 1.0
-                and cfg.max_naked_usd > 0
-                and deficit_usd >= cfg.max_naked_usd * cfg.emergency_hedge_frac):
+                and cfg.bot_risk_exposure_max_naked_usd > 0
+                and deficit_usd >= cfg.bot_risk_exposure_max_naked_usd * cfg.bot_risk_hedge_emergency_pct):
             heavy_book = down_book if side == "UP" else up_book
             heavy_mid = mid_price(heavy_book.get("best_bid"),
                                   heavy_book.get("best_ask"))
@@ -427,7 +411,7 @@ def _decide_quotes_from_mid(
                         edge_vs_mid=mid - ba, crossed=True,
                         reason=(f"EMERGENCY hedge: {deficit:.0f}sh short of "
                                 f"{heavy} = ${deficit_usd:.0f} vs "
-                                f"${cfg.max_naked_usd:.0f} cap, "
+                                f"${cfg.bot_risk_exposure_max_naked_usd:.0f} cap, "
                                 f"{heavy} mid {heavy_mid:.3f} under avg "
                                 f"{heavy_avg:.3f} -- crossing at {ba:.3f}"),
                     ))
@@ -457,24 +441,24 @@ def _decide_quotes_from_mid(
 
         # FLEET-WIDE cap.
         if (imbalance > 0
-                and cfg.max_fleet_naked_usd > 0
-                and cfg.fleet_naked_usd >= cfg.max_fleet_naked_usd):
+                and cfg.bot_risk_exposure_max_fleet_naked_usd > 0
+                and cfg.bot_risk_exposure_fleet_naked_usd >= cfg.bot_risk_exposure_max_fleet_naked_usd):
             blocked.append(
-                f"{side}: fleet ${cfg.fleet_naked_usd:.0f} unhedged >= "
-                f"${cfg.max_fleet_naked_usd:.0f} budget -- not adding")
+                f"{side}: fleet ${cfg.bot_risk_exposure_fleet_naked_usd:.0f} unhedged >= "
+                f"${cfg.bot_risk_exposure_max_fleet_naked_usd:.0f} budget -- not adding")
             continue
 
         # TOTAL COMMITTED CAPITAL.
         if (imbalance >= 0
-                and cfg.max_committed_usd > 0
-                and cfg.committed_usd >= cfg.max_committed_usd):
+                and cfg.bot_risk_exposure_max_committed_usd > 0
+                and cfg.bot_risk_exposure_committed_usd >= cfg.bot_risk_exposure_max_committed_usd):
             blocked.append(
-                f"{side}: fleet ${cfg.committed_usd:.0f} committed >= "
-                f"${cfg.max_committed_usd:.0f} cap -- not adding")
+                f"{side}: fleet ${cfg.bot_risk_exposure_committed_usd:.0f} committed >= "
+                f"${cfg.bot_risk_exposure_max_committed_usd:.0f} cap -- not adding")
             continue
 
         # THE FLEET CIRCUIT BREAKER (U6).
-        if imbalance > 0 and getattr(cfg, "fleet_posture",
+        if imbalance > 0 and getattr(cfg, "bot_risk_circuit_fleet_posture",
                                      unhedged_stop_loss.NORMAL) == unhedged_stop_loss.HALTED:
             blocked.append(
                 f"{side}: fleet HALTED on pooled markout -- no new naked "
@@ -497,7 +481,7 @@ def _decide_quotes_from_mid(
         # Only while we hold NONE of the hedge token. A fill here then opens a
         # leg that has to be finished by CROSSING, and the price that finishes
         # it is the hedge ASK. Holding the other leg already makes completion
-        # unnecessary, and `risk.hard_block`'s max_pair_cost arm is the one that
+        # unnecessary, and `risk.hard_block`'s bot_pos_price_max_pair_cost_usd arm is the one that
         # governs there; the two conditions never overlap.
         hedge_book = down_book if side == "UP" else up_book
         if inv.avg("DOWN" if side == "UP" else "UP") <= 0:
@@ -508,13 +492,13 @@ def _decide_quotes_from_mid(
                 continue
 
         s = mid - price
-        if s > cfg.max_spread_from_mid + 1e-9:
+        if s > cfg.bot_quote_book_max_spread_from_mid + 1e-9:
             blocked.append(f"{side}: {100*s:.1f}c from mid > "
-                           f"{100*cfg.max_spread_from_mid:.1f}c reward window")
+                           f"{100*cfg.bot_quote_book_max_spread_from_mid:.1f}c quote window")
             continue
 
-        if inv.cost >= cfg.max_cost_per_market and mine >= theirs:
-            blocked.append(f"{side}: cost cap ${cfg.max_cost_per_market:.0f}")
+        if inv.cost >= cfg.bot_risk_exposure_max_cost_per_market_usd and mine >= theirs:
+            blocked.append(f"{side}: cost cap ${cfg.bot_risk_exposure_max_cost_per_market_usd:.0f}")
             continue
 
         # THE SIZE LADDER (strategy/risk.py). Sized in couple shares.
@@ -524,55 +508,54 @@ def _decide_quotes_from_mid(
         else:
             size = int(ladder * band.size_mult * truncated)
         waived = ""
-        if size < cfg.min_quote_shares:
-            if (cfg.waive_attenuation_below_floor
-                    and getattr(cfg, "size_mode", "shares") == "dollars"
-                    and ladder >= cfg.min_quote_shares
+        if size < cfg.bot_quote_size_min_shares:
+            if (cfg.bot_quote_waive_attenuation_below_floor_on
+                    and getattr(cfg, "bot_quote_size_mode", "shares") == "dollars"
+                    and ladder >= cfg.bot_quote_size_min_shares
                     and truncated >= 1.0):
-                size = cfg.min_quote_shares
+                size = cfg.bot_quote_size_min_shares
                 waived = (f", price-risk taper x{band.size_mult:.2f} waived: "
                           f"{int(ladder * band.size_mult)}sh is under the "
-                          f"{cfg.min_quote_shares}sh venue floor")
+                          f"{cfg.bot_quote_size_min_shares}sh venue floor")
             else:
                 size = 0
         if size <= 0:
             if ladder <= 0:
                 couple_alloc = (config.couple_allocation_usd(cfg)
-                                if getattr(cfg, "size_mode", "shares") == "dollars"
+                                if getattr(cfg, "bot_quote_size_mode", "shares") == "dollars"
                                 else 0.0)
                 eff_pair = calc_pair_price if (calc_pair_price is not None and calc_pair_price > 0) else (2.0 * price if price > 0 else 1.0)
                 affordable = int(couple_alloc / eff_pair) if (couple_alloc and eff_pair > 0) else None
-                if affordable is not None and affordable < cfg.min_quote_shares:
-                    needed = cfg.min_quote_shares * eff_pair
+                if affordable is not None and affordable < cfg.bot_quote_size_min_shares:
+                    needed = cfg.bot_quote_size_min_shares * eff_pair
                     blocked.append(
                         f"{side}: ${couple_alloc:.2f} couple allocation at pair price "
                         f"{eff_pair:.3f} buys {affordable}sh, below the venue "
-                        f"minimum of {cfg.min_quote_shares}sh (needs "
+                        f"minimum of {cfg.bot_quote_size_min_shares}sh (needs "
                         f"${needed:.2f}, shortfall ${needed - couple_alloc:.2f})")
                 else:
                     util = risk.risk_utilization(cfg, inv, side)
                     blocked.append(
                         f"{side}: size tapered to 0 at {100*util:.0f}% of the "
-                        f"${cfg.max_naked_usd:.0f} naked budget")
+                        f"${cfg.bot_risk_exposure_max_naked_usd:.0f} naked budget")
             elif (truncated < 1.0
-                    and int(ladder * band.size_mult) >= cfg.min_quote_shares):
+                    and int(ladder * band.size_mult) >= cfg.bot_quote_size_min_shares):
                 blocked.append(
-                    f"{side}: reward window truncated the quote to "
+                    f"{side}: quote window truncated the quote to "
                     f"{100*truncated:.0f}% of the distance asked for, cutting "
-                    f"{ladder}sh under the {cfg.min_quote_shares}sh minimum")
+                    f"{ladder}sh under the {cfg.bot_quote_size_min_shares}sh minimum")
             else:
                 blocked.append(
                     f"{side}: price risk at {price:.3f} cut {ladder}sh to "
-                    f"under the {cfg.min_quote_shares}sh reward minimum")
+                    f"under the {cfg.bot_quote_size_min_shares}sh venue minimum")
             continue
         _, dyn_tag = dynamic_offset_for(cfg)
         dyn_note = f"; {dyn_tag}" if dyn_tag.startswith("dynamic_") else ""
         out.append(QuoteIntent(
             side=side, token_id=book.get("token_id"), price=price, size=size,
             mid=mid, edge_vs_mid=mid - price,
-            reason=(f"reward quote {100*s:.1f}c under mid {mid:.3f}, "
-                    f"score {reward_score(cfg, s, size):.0f}{waived}"
-                    f"{dyn_note}"),
+            reason=(f"quote {100*s:.1f}c under mid {mid:.3f}"
+                    f"{waived}{dyn_note}"),
         ))
 
     if not out:
@@ -582,7 +565,7 @@ def _decide_quotes_from_mid(
     # resting prices as a pair: `hard_block`'s pair-cost arm needs a held
     # average (`other_avg > 0`), `dynamic_pair_sum` above runs only with the
     # dynamic offset enabled, and the legacy fresh-market check sits below this
-    # function's return. Two maker bids summing past `max_pair_cost` pay more
+    # function's return. Two maker bids summing past `bot_pos_price_max_pair_cost_usd` pay more
     # than $1.00 for an instrument that pays exactly $1.00 -- a booked loss the
     # moment they assemble, not a worse fill.
     #
@@ -601,7 +584,7 @@ def _decide_quotes_from_mid(
     # carry the blocked side's reason into that refusal instead of dropping
     # it here. The flag-off opt-out keeps its one-sided result unchanged.
     if (risk.naked_side(inv) is None
-            and getattr(cfg, "require_two_sided_when_flat", False)
+            and getattr(cfg, "bot_quote_require_two_sided_when_flat_on", False)
             and len(out) == 1):
         return out, "; ".join(blocked)
     return out, ""
@@ -650,7 +633,7 @@ def _decide_lifecycle_escalation(
         maximum_bid = max_profitable_hedge_bid(
             override.held_average_price,
             cfg.bot_pos_price_max_pair_cost_usd,
-            cfg.price_tick,
+            cfg.bot_quote_grid_tick_size_usd,
         )
     except ValueError as exc:
         return [], f"lifecycle maximum profitable bid unavailable: {exc}"
@@ -679,9 +662,9 @@ def _decide_lifecycle_escalation(
         return [], f"{side}: no two-sided book"
     # The band, no series exemption (time-of-game purge, #597). The band is
     # the CONFIGURED price band, not a hardcoded pair of edges (#582).
-    if mid <= cfg.price_band_low or mid >= cfg.price_band_high:
+    if mid <= cfg.bot_quote_price_band_min_cents or mid >= cfg.bot_quote_price_band_max_cents:
         return [], (f"{side}: mid {mid:.3f} outside "
-                    f"[{cfg.price_band_low:.2f},{cfg.price_band_high:.2f}] -- decided market")
+                    f"[{cfg.bot_quote_price_band_min_cents:.2f},{cfg.bot_quote_price_band_max_cents:.2f}] -- decided market")
 
     blocked = risk.hard_block(
         cfg,
@@ -713,10 +696,10 @@ def _decide_lifecycle_escalation(
         else band.size_mult
     )
     size = int(min(override.size, ladder, residual_size) * size_factor)
-    if size < cfg.min_quote_shares:
+    if size < cfg.bot_quote_size_min_shares:
         return [], (
             f"lifecycle escalation size {size} below venue minimum "
-            f"{cfg.min_quote_shares}")
+            f"{cfg.bot_quote_size_min_shares}")
 
     return [QuoteIntent(
         side=side,
@@ -750,7 +733,7 @@ def decide_quotes(
     """
     if "window_frac" in kwargs and window_pct is None:
         window_pct = kwargs.pop("window_frac")
-    if cfg.objective in ("spread_capture", "rewards"):
+    if cfg.bot_pos_objective in ("spread_capture", "rewards"):
         intents, why = _decide_quotes_from_mid(cfg, up_book, down_book, inv,
                                                t_remaining,
                                                lifecycle_override)
@@ -772,12 +755,12 @@ def decide_quotes(
     # passive order needs time to be reached, and quoting late means resting
     # into the convergence, when a fill is most likely to be the wrong side of
     # a move.
-    if cfg.enforce_quote_window and window_pct is not None \
-            and window_pct > cfg.quote_window_pct:
+    if cfg.bot_quote_gate_quote_window_on and window_pct is not None \
+            and window_pct > cfg.bot_quote_window_max_pct:
         return [], (f"{100*window_pct:.0f}% into window > "
-                    f"{100*cfg.quote_window_pct:.0f}% quoting window")
-    if inv.fills >= cfg.max_fills_per_market:
-        return [], f"hit {cfg.max_fills_per_market} fills for this market"
+                    f"{100*cfg.bot_quote_window_max_pct:.0f}% quoting window")
+    if inv.fills >= cfg.bot_order_max_fills_per_market:
+        return [], f"hit {cfg.bot_order_max_fills_per_market} fills for this market"
 
     # At the cost cap we may still buy the LIGHTER side. Measured over 44
     # settled markets: perfectly hedged markets averaged +$30.70 while badly
@@ -785,9 +768,9 @@ def decide_quotes(
     # The old rule stopped ALL quoting at the cap, which froze whatever
     # imbalance we happened to hold -- the single biggest loss driver. Buying
     # the light side REDUCES exposure, so the cap must not block it.
-    balancing_only = inv.cost >= cfg.max_cost_per_market
+    balancing_only = inv.cost >= cfg.bot_risk_exposure_max_cost_per_market_usd
     if balancing_only and inv.balance >= cfg.bot_pos_skew_target_balance_ratio:
-        return [], f"cost cap ${cfg.max_cost_per_market:.0f} reached and balanced"
+        return [], f"cost cap ${cfg.bot_risk_exposure_max_cost_per_market_usd:.0f} reached and balanced"
 
     # Fresh market: only open a position if BOTH sides can be filled at a pair
     # that pays under $1.00 at ask-1tick. A lone directional leg is an unhedged
@@ -801,7 +784,7 @@ def decide_quotes(
             if mid is None or ba is None:
                 blocked.append(f"{side}: no two-sided book")
                 continue
-            p = round(ba - cfg.ticks_below_ask * cfg.tick_size, 4)
+            p = round(ba - cfg.bot_quote_ticks_below_ask * cfg.bot_quote_tick_size, 4)
             if p <= 0.0 or p >= 1.0:
                 blocked.append(f"{side}: price {p:.2f} off-scale")
                 continue
@@ -809,13 +792,13 @@ def decide_quotes(
             # one-sided market as a price-band rejection, which sent the skip
             # log chasing the wrong rule -- turning the band off changed nothing,
             # because it was almost never the binding constraint.
-            if abs(mid - p) > cfg.max_spread_from_mid:
+            if abs(mid - p) > cfg.bot_quote_book_max_spread_from_mid:
                 blocked.append(f"{side}: {100*abs(mid-p):.1f}c from mid > "
-                               f"{100*cfg.max_spread_from_mid:.1f}c spread window")
+                               f"{100*cfg.bot_quote_book_max_spread_from_mid:.1f}c spread window")
                 continue
             if not _in_band(cfg, p):
                 blocked.append(f"{side}: {p:.2f} outside band "
-                               f"{cfg.price_band_low:.2f}-{cfg.price_band_high:.2f}")
+                               f"{cfg.bot_quote_price_band_min_cents:.2f}-{cfg.bot_quote_price_band_max_cents:.2f}")
                 continue
             if side == "UP":
                 p_up = p
@@ -839,13 +822,13 @@ def decide_quotes(
             continue
 
         # Rest one tick inside the ask -- passive, never crossing.
-        price = round(ba - cfg.ticks_below_ask * cfg.tick_size, 4)
+        price = round(ba - cfg.bot_quote_ticks_below_ask * cfg.bot_quote_tick_size, 4)
         if price <= 0.0 or price >= 1.0:
             continue
 
-        # Quote window: must be within max_spread_from_mid of mid, else quote
+        # Quote window: must be within bot_quote_book_max_spread_from_mid of mid, else quote
         # is too far from the touch to fill.
-        if abs(mid - price) > cfg.max_spread_from_mid:
+        if abs(mid - price) > cfg.bot_quote_book_max_spread_from_mid:
             continue
 
         # Price band. Outside 0.30-0.70 the spread narrows toward one tick on
@@ -878,9 +861,9 @@ def decide_quotes(
             continue
 
         out.append(QuoteIntent(
-            side=side, token_id=tok, price=price, size=cfg.quote_shares,
+            side=side, token_id=tok, price=price, size=cfg.bot_quote_size_shares,
             mid=mid, edge_vs_mid=mid - price,
-            reason=f"rest {cfg.ticks_below_ask} tick under ask {ba:.2f}",
+            reason=f"rest {cfg.bot_quote_ticks_below_ask} tick under ask {ba:.2f}",
         ))
 
     if not out:
@@ -919,9 +902,9 @@ def _require_two_sided(cfg, inv, intents, why):
         dns = [i for i in intents if i.side == "DOWN"]
         if ups and dns:
             common = min(i.size for i in intents)
-            if common < cfg.min_quote_shares:
+            if common < cfg.bot_quote_size_min_shares:
                 return [], (f"harmonized size {common}sh below venue floor "
-                            f"{cfg.min_quote_shares}sh -- the couple is not placed"
+                            f"{cfg.bot_quote_size_min_shares}sh -- the couple is not placed"
                             + (f" -- {why}" if why else ""))
             for i in intents:
                 if i.size != common:
@@ -929,7 +912,7 @@ def _require_two_sided(cfg, inv, intents, why):
                     i.reason += (f", size clamped from {i.size} to {common} "
                                  f"to match {other} leg")
                     i.size = common
-    if not getattr(cfg, "require_two_sided_when_flat", False):
+    if not getattr(cfg, "bot_quote_require_two_sided_when_flat_on", False):
         return intents, why
     heavy = risk.naked_side(inv)
     if heavy is not None:

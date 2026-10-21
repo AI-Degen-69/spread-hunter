@@ -315,8 +315,8 @@ class TestRunShadow:
         seen = {}
 
         def decide(cfg, up, dn, inv, t_rem, wf):
-            seen["max_order_usd"] = cfg.max_order_usd
-            seen["max_total_usd"] = cfg.max_total_usd
+            seen["bot_risk_exposure_max_order_usd"] = cfg.bot_risk_exposure_max_order_usd
+            seen["bot_risk_exposure_max_total_usd"] = cfg.bot_risk_exposure_max_total_usd
             return [], "declined"
 
         run_shadow(
@@ -325,8 +325,8 @@ class TestRunShadow:
             decide_fn=decide,
         )
 
-        assert seen["max_order_usd"] == MAX_ORDER_USD
-        assert seen["max_total_usd"] == MAX_TOTAL_USD
+        assert seen["bot_risk_exposure_max_order_usd"] == MAX_ORDER_USD
+        assert seen["bot_risk_exposure_max_total_usd"] == MAX_TOTAL_USD
 
     def test_reconcile_is_skipped_not_silently_passed(self, tmp_path):
         """Reconcile compares against venue positions a shadow run does not
@@ -1467,7 +1467,7 @@ class TestPairsWindowWiring:
 
         monkeypatch.setattr(shadow_exec, "ShadowExecutionClient",
                             RecordingClient)
-        narrow_cfg = dc_replace(_load_cfg(), pairs_exit_window_sec=123.0)
+        narrow_cfg = dc_replace(_load_cfg(), bot_risk_pairs_exit_window_sec=123.0)
         monkeypatch.setattr(config_mod, "load", lambda *a, **k: narrow_cfg)
 
         run_shadow(
@@ -1649,8 +1649,8 @@ def test_admission_cli_parses_and_rejects_depth_combo(tmp_path):
 class TestRefusedHoldShadow:
     """#390 end to end: a refused cycle holds, a dead market cancels."""
 
-    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
-                     "DOWN: 8.0c from mid > 4.5c reward window")
+    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c quote window; "
+                     "DOWN: 8.0c from mid > 4.5c quote window")
 
     def _held_pair(self):
         return [QuoteIntent(side="UP", token_id="tok-up", price=0.60, size=5,
@@ -1805,7 +1805,7 @@ class TestQueueGateInRehearsal:
             )
 
         assert rc == 0
-        assert seen == [("0x0", float(shadow_cfg().queue_flow_window_sec))]
+        assert seen == [("0x0", float(shadow_cfg().bot_order_queue_flow_window_sec))]
         assert "queue-clear gate inert" not in caplog.text
 
     def test_a_seam_without_a_flow_port_names_the_inert_gate(self, tmp_path,
@@ -1849,7 +1849,7 @@ class TestQueueGateInRehearsal:
             flow_fn=flow,
         )
 
-        assert flow.calls == [("0x0", float(shadow_cfg().queue_flow_window_sec))]
+        assert flow.calls == [("0x0", float(shadow_cfg().bot_order_queue_flow_window_sec))]
         assert "record-only" in result.results[0].queue_why
 
     def test_a_rehearsal_measures_the_queue_and_records_the_reason(
@@ -1865,7 +1865,7 @@ class TestQueueGateInRehearsal:
         from core_brain.shadow_run import run_shadow, shadow_cfg
 
         flow = self._flow()
-        window = float(shadow_cfg().queue_flow_window_sec)
+        window = float(shadow_cfg().bot_order_queue_flow_window_sec)
 
         with caplog.at_level(logging.INFO, logger="main_spread_hunter_loop"):
             result = run_shadow(
@@ -1889,7 +1889,7 @@ class TestQueueGateInRehearsal:
 
         from core_brain.shadow_run import run_shadow, shadow_cfg
 
-        cfg = replace(shadow_cfg(), enforce_queue_clear_gate=True)
+        cfg = replace(shadow_cfg(), bot_order_gate_queue_clear_on=True)
 
         result = run_shadow(
             minutes=0.0, db_path=tmp_path / "shadow.db",
@@ -2143,6 +2143,7 @@ class TestFullCycleRehearsal:
         import time
         from core_brain.order_registry import OrderRegistry
         from core_brain.shadow_run import run_shadow
+        from core_brain.trader_loop import MarketSpecList
 
         db = tmp_path / "shadow.db"
         holder = {"taker": {0: []}, "maker": {0: []}}
@@ -2170,9 +2171,21 @@ class TestFullCycleRehearsal:
             if rotations[0] >= 4:
                 raise KeyboardInterrupt
 
+        # #646: the shadow merge marks the market awaiting re-qualification,
+        # and a plain-list supplier can never clear that mark. The rehearsal
+        # therefore publishes like the real filter does: each rotation carries
+        # a publication newer than any reset, so the mark clears and the
+        # market re-quotes.
+        def _publication(max_markets=None):
+            return MarketSpecList(
+                [FakeMarket(self.COND)],
+                published_mtime_ns=time.time_ns() + 60_000_000_000,
+                condition_ids={self.COND.lower()},
+            )
+
         result = run_shadow(
             minutes=5.0, db_path=db,
-            markets_fn=lambda max_markets=None: [FakeMarket(self.COND)],
+            markets_fn=_publication,
             client_fn=lambda: object(),
             fetch_books=self._books,
             sleep_fn=sleep_fn,
@@ -2360,9 +2373,9 @@ class TestFixedStartingBankroll:
             self, tmp_path, monkeypatch):
         """The acceptance criterion: a wallet far from $100 must not move the
         caps the rehearsal computes."""
-        # `conftest` scrubs only `HUNTER_*`; `SPREAD_HUNTER_BANKROLL` is the
+        # `conftest` scrubs only `HUNTER_*`; `BOT_QUOTE_BANK_BASELINE_USD` is the
         # first name `config.load()` reads, so clear it to assert the default.
-        monkeypatch.delenv("SPREAD_HUNTER_BANKROLL", raising=False)
+        monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
         from core_brain import account
         from core_brain.config import derive_dynamic_caps
 
@@ -2377,11 +2390,11 @@ class TestFixedStartingBankroll:
         cfg = self._capture_cfg(tmp_path, monkeypatch, funder="0xabc")
 
         assert calls == [], "an ordinary rehearsal must never read the live wallet"
-        assert cfg.bankroll_usd == 100.0
+        assert cfg.bot_quote_bank_baseline_usd == 100.0
         caps = derive_dynamic_caps(cfg)
-        assert caps["max_order_usd"] == 25.0
-        assert caps["max_naked_usd"] == 6.0
-        assert caps["max_total_usd"] == 90.0
+        assert caps["bot_risk_exposure_max_order_usd"] == 25.0
+        assert caps["bot_risk_exposure_max_naked_usd"] == 6.0
+        assert caps["bot_risk_exposure_max_total_usd"] == 90.0
 
     def test_a_caller_supplied_config_reports_its_own_source(
             self, tmp_path, monkeypatch, caplog):
@@ -2394,13 +2407,13 @@ class TestFixedStartingBankroll:
 
         from core_brain.config import load
 
-        monkeypatch.setenv("SPREAD_HUNTER_BANKROLL", "50")
-        supplied = dc_replace(load(), bankroll_usd=333.0)
+        monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "50")
+        supplied = dc_replace(load(), bot_quote_bank_baseline_usd=333.0)
 
         with caplog.at_level(logging.INFO, logger="shadow_run"):
             cfg = self._capture_cfg(tmp_path, monkeypatch, cfg=supplied)
 
-        assert cfg.bankroll_usd == 333.0
+        assert cfg.bot_quote_bank_baseline_usd == 333.0
         assert "starting bankroll $333.00 (caller-supplied config)" in caplog.text
 
     def test_an_explicit_override_still_sets_a_different_bankroll(
@@ -2408,16 +2421,16 @@ class TestFixedStartingBankroll:
         cfg = self._capture_cfg(tmp_path, monkeypatch,
                                starting_bankroll_usd=250.0)
 
-        assert cfg.bankroll_usd == 250.0
+        assert cfg.bot_quote_bank_baseline_usd == 250.0
 
     def test_the_environment_can_still_choose_the_bankroll(
             self, tmp_path, monkeypatch):
-        monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
-        monkeypatch.setenv("SPREAD_HUNTER_BANKROLL", "50")
+        monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
+        monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "50")
 
         cfg = self._capture_cfg(tmp_path, monkeypatch)
 
-        assert cfg.bankroll_usd == 50.0
+        assert cfg.bot_quote_bank_baseline_usd == 50.0
 
     @pytest.mark.parametrize("bad", [float("nan"), float("inf"),
                                      float("-inf"), 0.0, -5.0])
@@ -2427,8 +2440,7 @@ class TestFixedStartingBankroll:
 
         # The refusal under test is this function's own; an externally set
         # bankroll env would raise a different (capitalised) message first.
-        monkeypatch.delenv("SPREAD_HUNTER_BANKROLL", raising=False)
-        monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
+        monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
 
         with pytest.raises(ValueError, match="bankroll"):
             run_shadow(
@@ -2504,8 +2516,8 @@ class TestStartingBankrollCli:
         hard-coded copy that can drift from `config.py:41`."""
         from core_brain.config import MakerConfig
 
-        monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
-        monkeypatch.setenv("SPREAD_HUNTER_BANKROLL", "50")
+        monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
+        monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "50")
 
         forwarded = self._forwarded(
             monkeypatch,
@@ -2513,7 +2525,7 @@ class TestStartingBankrollCli:
              "--markets-path", str(tmp_path / "feed.json"),
              "--paired-depth-arm", "treatment"])
 
-        assert forwarded == MakerConfig.__dataclass_fields__["bankroll_usd"].default
+        assert forwarded == MakerConfig.__dataclass_fields__["bot_quote_bank_baseline_usd"].default
         assert forwarded == 100.0
 
 
@@ -2641,3 +2653,231 @@ class TestShadowSimulatedFillTelemetry:
         fill_events = [e for e in events if e.get("action") == "user_fill_received"]
         assert fill_events == []
 
+
+
+def test_shadow_seam_reads_through_unified_book_provider(tmp_path):
+    """#659: every shadow book read flows through the provider seam."""
+    from core_brain.shadow_run import build_shadow_seam
+
+    def fake_books(clob_host, token_id):
+        return {"token_id": token_id, "bids": {0.46: 10.0},
+                "asks": {0.50: 10.0}, "best_bid": 0.46, "best_ask": 0.50,
+                "malformed": 0}
+
+    seam = build_shadow_seam(
+        db_path=tmp_path / "shadow.db", intents_sink=[],
+        fetch_books=fake_books,
+    )
+    assert seam.fetch_books("https://clob.polymarket.com", "tok")["best_bid"] == 0.46
+    assert seam.book_provider.get_mid("tok") == 0.48
+    levels = seam.book_provider.get_levels_book("tok")
+    assert levels["bids"] == [{"price": 0.46, "size": 10.0}]
+
+
+class ShadowFakeCache:
+    """Enough of MarketBookCache for the subscribe seam to wait on."""
+
+    def __init__(self):
+        self.tokens: list[str] = []
+
+    def ready_tokens(self):
+        return list(self.tokens)
+
+
+class ShadowFakeStream:
+    """Duck-typed MarketStream: ready books for the tokens it was told about."""
+
+    def __init__(self, *, connected=True):
+        self.connected = connected
+        self.cache = ShadowFakeCache()
+        self.ensured: list[tuple] = []
+        self.retained: list = []
+        self.started = False
+        self.stopped = False
+
+    def fetch_books(self, clob_host, token_id):
+        from core_brain.market_stream import BookNotReady
+
+        if not self.connected:
+            raise BookNotReady(f"market stream is not connected ({token_id})")
+        if str(token_id) not in self.cache.tokens:
+            raise BookNotReady(f"no live book for token {token_id}")
+        return _books(clob_host, token_id)
+
+    def ensure_market(self, condition_id, slug, up_token, down_token):
+        self.ensured.append((condition_id, slug, up_token, down_token))
+        self.cache.tokens.extend(t for t in (up_token, down_token) if t)
+
+    def retain_markets(self, condition_ids):
+        self.retained = list(condition_ids)
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+
+class TestShadowReadsTheLiveBook:
+    """#659 N2: the rehearsal reads the market socket by default."""
+
+    def test_the_seam_serves_books_from_the_stream(self, tmp_path):
+        from core_brain.shadow_run import build_shadow_seam
+
+        stream = ShadowFakeStream()
+        seam = build_shadow_seam(
+            db_path=tmp_path / "shadow.db",
+            stream=stream,
+            intents_sink=[],
+        )
+        stream.cache.tokens.append("tok-up")
+
+        assert seam.fetch_books("https://clob", "tok-up")["best_bid"] == 0.47
+        assert seam.book_provider.read_stats()["stream"] == 1
+
+    def test_the_heartbeat_reports_the_book_source_mix(self, tmp_path):
+        """A stream run must never be reported as if it saw no socket."""
+        import json
+
+        from core_brain.shadow_run import run_shadow, shadow_heartbeat_path
+
+        run_id = "shadow-659n2-mix"
+        stream = ShadowFakeStream()
+        run_shadow(
+            minutes=0,
+            db_path=tmp_path / "shadow.db",
+            markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+            fetch_books=_books,
+            stream=stream,
+            run_id=run_id,
+        )
+
+        payload = json.loads(
+            shadow_heartbeat_path(run_id=run_id).read_text(encoding="utf-8"))
+        mix = payload["book_source_mix"]
+        assert set(mix) == {"stream", "rest", "fallback"}
+        assert isinstance(mix["stream"], int)
+        assert isinstance(mix["rest"], int)
+
+    def test_the_mix_is_rest_only_without_a_stream(self, tmp_path):
+        import json
+
+        from core_brain.shadow_run import run_shadow, shadow_heartbeat_path
+
+        run_id = "shadow-659n2-rest"
+        run_shadow(
+            minutes=0,
+            db_path=tmp_path / "shadow.db",
+            markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+            fetch_books=_books,
+            run_id=run_id,
+        )
+
+        payload = json.loads(
+            shadow_heartbeat_path(run_id=run_id).read_text(encoding="utf-8"))
+        assert payload["book_source_mix"]["stream"] == 0
+
+    def test_main_wires_the_live_stream_by_default(
+            self, tmp_path, monkeypatch):
+        """No --no-stream, no injected REST reader: the socket is opened."""
+        import core_brain.shadow_run as shadow_mod
+
+        opened: list = []
+
+        def factory():
+            opened.append(True)
+            return None  # None is a supported outcome; the mix then says REST
+
+        monkeypatch.setattr(shadow_mod, "_start_shadow_stream", factory)
+        monkeypatch.setattr(shadow_mod, "_default_fetch_books", lambda: _books)
+
+        rc = shadow_mod.main(
+            ["--minutes", "0", "--db", str(tmp_path / "shadow.db")],
+            markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+        )
+
+        assert rc == 0
+        assert opened == [True]
+
+    def test_main_does_not_open_a_socket_under_no_stream(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        import core_brain.shadow_run as shadow_mod
+
+        def factory():
+            raise AssertionError("--no-stream must not start a socket")
+
+        monkeypatch.setattr(shadow_mod, "_start_shadow_stream", factory)
+
+        with caplog.at_level(logging.INFO, logger="shadow_run"):
+            rc = shadow_mod.main(
+                ["--minutes", "0", "--db", str(tmp_path / "shadow.db"),
+                 "--no-stream"],
+                markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+                client_fn=lambda: object(),
+                decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+                fetch_books=_books,
+            )
+
+        assert rc == 0
+        assert "rest (--no-stream)" in caplog.text.lower()
+
+    def test_an_injected_rest_reader_keeps_its_own_source(
+            self, tmp_path, monkeypatch):
+        """A caller that brought a reader is not handed a live socket.
+
+        Same rule the module already applies to `flow_fn`: no live read by
+        surprise.
+        """
+        import core_brain.shadow_run as shadow_mod
+
+        def factory():
+            raise AssertionError("an injected REST reader must not open a socket")
+
+        monkeypatch.setattr(shadow_mod, "_start_shadow_stream", factory)
+
+        rc = shadow_mod.main(
+            ["--minutes", "0", "--db", str(tmp_path / "shadow.db")],
+            markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+            fetch_books=_books,
+        )
+
+        assert rc == 0
+
+    def test_a_failed_run_stops_the_stream_it_opened(self, tmp_path):
+        """The socket closes on the error path, not only after a clean run.
+
+        The production-registry guard raises inside `run_shadow`, after `main`
+        has already started the stream. Without the `finally`, that exception
+        left a live `market-stream` thread behind -- and a later test asserting
+        no stream threads remain failed because of it.
+        """
+        import threading
+
+        import core_brain.shadow_run as shadow_mod
+        from core_brain.order_registry import DEFAULT_DB_PATH
+        from core_brain.shadow_guard import ShadowSafetyViolation
+
+        stream = ShadowFakeStream()
+
+        with pytest.raises(ShadowSafetyViolation, match="production registry"):
+            shadow_mod.main(
+                ["--minutes", "0", "--db", str(DEFAULT_DB_PATH)],
+                markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+                client_fn=lambda: object(),
+                decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+                stream_factory=lambda: stream,
+            )
+
+        assert stream.stopped is True
+        assert not [t for t in threading.enumerate()
+                    if "market-stream" in str(t.name)]

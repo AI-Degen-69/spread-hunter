@@ -33,7 +33,7 @@ def test_snapshot_carries_every_gate_bar(tmp_path, monkeypatch):
     assert snap["reward_min_income_usd_day"] == 0.0
     assert not hasattr(fm, "MIN_PAYOUT")
     assert not hasattr(fm, "FLOOR_MULTIPLE")
-    assert snap["max_pair_cost"] == getattr(fm._CFG, "max_pair_cost", 0.995)
+    assert snap["bot_pos_price_max_pair_cost_usd"] == getattr(fm._CFG, "bot_pos_price_max_pair_cost_usd", 0.995)
 
 
 def test_movement_bar_falls_back_to_the_shipped_constant(tmp_path, monkeypatch):

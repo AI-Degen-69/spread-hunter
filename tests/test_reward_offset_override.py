@@ -25,16 +25,16 @@ class TestRewardOffsetPurged:
         # Setting the retired override must not move the offset any more.
         with mock.patch.dict(os.environ, {"HUNTER_REWARD_OFFSET": "0.005"}):
             cfg = load()
-        assert cfg.reward_offset == 0.020  # shipped default, override ignored
+        assert cfg.bot_quote_spread_static_offset_cents == 0.020  # shipped default, override ignored
 
     def test_a_garbage_value_is_ignored_not_raised(self):
         # The parse block is gone, so a bad value is simply not read.
         for bad in ("nan", "inf", "abc", "1.5"):
             with mock.patch.dict(os.environ, {"HUNTER_REWARD_OFFSET": bad}):
-                assert load().reward_offset == 0.020
+                assert load().bot_quote_spread_static_offset_cents == 0.020
 
     def test_shipped_default_is_unchanged(self):
-        assert MakerConfig().reward_offset == 0.020
+        assert MakerConfig().bot_quote_spread_static_offset_cents == 0.020
 
 
 class TestQuotesFloorToWholeCent:
@@ -43,10 +43,10 @@ class TestQuotesFloorToWholeCent:
     def test_a_sub_cent_target_floors_to_the_cent(self):
         # mid 0.545, dynamic offset + band -> raw 0.4xxx; must floor to a cent.
         cfg = MakerConfig(
-            dynamic_offset_enabled=True, dynamic_offset_multiplier=0.5,
-            dynamic_offset_min_cents=1, dynamic_offset_max_cents=20,
-            range_cents=15.66, velocity_measured_at=None, price_tick=0.01,
-            max_spread_from_mid=0.15,
+            bot_quote_gate_dynamic_offset_on=True, bot_quote_spread_offset_multiplier=0.5,
+            bot_quote_spread_offset_min_cents=1, bot_quote_spread_offset_max_cents=20,
+            bot_quote_telemetry_range_cents=15.66, bot_quote_telemetry_velocity_measured_at=None, bot_quote_grid_tick_size_usd=0.01,
+            bot_quote_book_max_spread_from_mid=0.15,
         )
         book = {"best_bid": 0.54, "best_ask": 0.55}
         price, provisional, *_ = quote_resting_price(cfg, Inventory(), "UP", book)
@@ -60,8 +60,8 @@ class TestQuotesFloorToWholeCent:
         # cannot rest at a half-cent touch.
         from dataclasses import replace
         book = {"best_bid": 0.495, "best_ask": 0.505}
-        cfg = replace(MakerConfig(price_tick=0.01, price_risk_widen=0.0),
-                      reward_offset=0.005, dynamic_offset_enabled=False)
+        cfg = replace(MakerConfig(bot_quote_grid_tick_size_usd=0.01, bot_quote_price_risk_widen=0.0),
+                      bot_quote_spread_static_offset_cents=0.005, bot_quote_gate_dynamic_offset_on=False)
         price, *_ = quote_resting_price(cfg, Inventory(), "UP", book)
         # Floored to a whole cent at or below the touch -- never 0.495.
         assert abs(price * 100 - round(price * 100)) < 1e-9
@@ -69,8 +69,8 @@ class TestQuotesFloorToWholeCent:
 
     def test_zero_offset_still_floors_to_the_grid(self):
         cfg = MakerConfig(
-            dynamic_offset_enabled=False, reward_offset=0.0,
-            min_reward_offset=0.0, price_risk_widen=0.0, price_tick=0.01,
+            bot_quote_gate_dynamic_offset_on=False, bot_quote_spread_static_offset_cents=0.0,
+            bot_pos_skew_min_reward_offset_cents=0.0, bot_quote_price_risk_widen=0.0, bot_quote_grid_tick_size_usd=0.01,
         )
         book = {"best_bid": 0.495, "best_ask": 0.505}
         price, *_ = quote_resting_price(cfg, Inventory(), "UP", book)

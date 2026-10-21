@@ -17,6 +17,8 @@ import dataclasses
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
+import warnings
+
 import pytest
 
 from core_brain import config as core_config
@@ -25,98 +27,98 @@ from scoring import config as scoring_config
 from scoring.config import MakerConfig as ScoringMakerConfig
 
 SCORING_DEFAULTS: dict[str, object] = {
-    "series_slug": "btc-up-or-down-5m",
-    "bankroll_usd": 1000.0,
-    "objective": "spread_capture",
-    "reward_offset": 0.020,
-    "max_skew_offset": 0.015,
-    "min_reward_offset": 0.005,
-    "max_naked_usd": 120.0,
-    "enable_hard_blocks": True,
-    "decided_price": 0.02,
-    "max_book_spread": 0.06,
-    "wide_book_trial": None,
-    "min_book_depth_shares": 200.0,
-    "emergency_hedge_pct": 0.8,
-    "enable_emergency_hedge": True,
-    "markout_horizons": (300.0, 3600.0, 21600.0, 900.0),
-    "markout_min_sample": 8,
-    "markout_fleet_min_sample": 25,
-    "markout_widen_threshold": -0.005,
-    "markout_catastrophic_threshold": -0.020,
-    "widen_offset": 0.035,
-    "gate_state": "NORMAL",
-    "merge_max_loss_per_share": 0.01,
-    "merge_velocity_hold_days": 30.0,
-    "select_min_volume_24h_usd": 125_000.0,
-    "select_min_top3_depth_usd": 500.0,
-    "select_max_queue_minutes": 15.0,
-    "enforce_max_queue_minutes": False,
-    "select_min_top3_depth_usd_trial": None,
-    "select_min_volume_24h_usd_trial": None,
-    "select_min_volume_24h_usd_live": 35_000.0,
-    "select_movement_window_sec": 1800.0,
-    "select_min_movement_usd": 200.0,
-    "select_velocity_gate_enabled": True,
-    "select_min_activity_ratio": 0.0,
-    "select_min_range_cents": 2.0,
-    "select_volatility_window_sec": 7200.0,
-    "select_spread_pct": 41.0 / 120.0,
-    "select_max_days_to_resolve": 30.0,
-    "rank_sample_window_sec": 1800.0,
-    "rerank_interval_sec": 600.0,
-    "scarcity_marginal_multiple": 2.0,
-    "capital_scarce": False,
-    "max_fleet_naked_usd": 400.0,
-    "fleet_naked_usd": 0.0,
-    "max_committed_usd": 1000.0,
-    "committed_usd": 0.0,
-    "fleet_posture": "NORMAL",
-    "quote_both_sides": True,
-    "ticks_below_ask": 1,
-    "tick_size": 0.01,
-    "price_tick": 0.01,
-    "min_quote_shares": 50,
-    "max_spread_from_mid": 0.045,
-    "quote_shares": 120,
-    "price_band_low": 0.10,
-    "price_band_high": 0.90,
-    "quote_window_pct": 0.40,
-    "enforce_price_band": True,
-    "enforce_quote_window": True,
-    "coinflip_halfwidth": 0.20,
-    "coinflip_size_cut": 0.55,
-    "price_risk_widen": 0.010,
-    "target_balance": 0.92,
-    "max_pair_cost": 0.995,
-    "max_fills_per_market": 25,
-    "requote_interval_sec": 2.0,
-    "poll_interval_sec": 1.0,
-    "max_cost_per_market": 400.0,
-    "max_open_markets": 3,
-    "enable_pairs_rule": True,
-    "pairs_exit_window_sec": 900.0,
-    "pairs_complete_gain_cents": 3.68,
-    "pairs_exit_cost_cents": 3.67,
-    "maker_fee": 0.0,
-    "fee_rate": 0.07,
-    "net_oneway_ms": 3.93,
-    "cancel_venue_ack_ms": 150.0,
-    "post_venue_accept_ms": 81.0,
-    "pinned_condition_id": "",
-    "market_title": "",
-    "market_url": "",
+    "bot_market_series_slug": "btc-up-or-down-5m",
+    "bot_quote_bank_baseline_usd": 1000.0,
+    "bot_pos_objective": "spread_capture",
+    "bot_quote_spread_static_offset_cents": 0.020,
+    "bot_pos_skew_max_offset_cents": 0.015,
+    "bot_pos_skew_min_reward_offset_cents": 0.005,
+    "bot_risk_exposure_max_naked_usd": 120.0,
+    "bot_risk_gate_hard_blocks_on": True,
+    "bot_risk_circuit_decided_price_cents": 0.02,
+    "bot_quote_book_max_spread_cents": 0.06,
+    "bot_quote_wide_book_trial": None,
+    "bot_quote_book_min_depth_shares": 200.0,
+    "bot_risk_hedge_emergency_pct": 0.8,
+    "bot_risk_gate_emergency_hedge_on": True,
+    "bot_risk_markout_horizons": (300.0, 3600.0, 21600.0, 900.0),
+    "bot_risk_markout_min_sample": 8,
+    "bot_risk_markout_fleet_min_sample": 25,
+    "bot_risk_markout_widen_threshold": -0.005,
+    "bot_risk_markout_catastrophic_threshold": -0.020,
+    "bot_risk_circuit_widen_offset_cents": 0.035,
+    "bot_risk_circuit_gate_state": "NORMAL",
+    "bot_pos_merge_max_loss_per_share_usd": 0.01,
+    "bot_pos_merge_velocity_hold_days": 30.0,
+    "filter_std_vol_min_24h_usd": 125_000.0,
+    "filter_common_vol_min_top3_depth_usd": 500.0,
+    "filter_std_queue_max_clear_min": 15.0,
+    "filter_std_gate_queue_max_on": False,
+    "filter_common_vol_min_top3_depth_usd_trial": None,
+    "filter_std_vol_min_24h_usd_trial": None,
+    "filter_live_vol_min_24h_usd": 35_000.0,
+    "filter_live_vel_lookback_sec": 1800.0,
+    "filter_live_vel_min_usd": 200.0,
+    "filter_live_gate_velocity_on": True,
+    "filter_live_activity_min_ratio": 0.0,
+    "filter_live_move_min_range_cents": 2.0,
+    "filter_live_move_lookback_sec": 7200.0,
+    "filter_std_spread_share_pct": 41.0 / 120.0,
+    "filter_std_time_max_days_to_resolve": 30.0,
+    "filter_std_rank_sample_window_sec": 1800.0,
+    "filter_std_rerank_interval_sec": 600.0,
+    "bot_risk_scarcity_marginal_multiple": 2.0,
+    "bot_risk_capital_scarce": False,
+    "bot_risk_exposure_max_fleet_naked_usd": 400.0,
+    "bot_risk_exposure_fleet_naked_usd": 0.0,
+    "bot_risk_exposure_max_committed_usd": 1000.0,
+    "bot_risk_exposure_committed_usd": 0.0,
+    "bot_risk_circuit_fleet_posture": "NORMAL",
+    "bot_quote_both_sides_on": True,
+    "bot_quote_ticks_below_ask": 1,
+    "bot_quote_tick_size": 0.01,
+    "bot_quote_grid_tick_size_usd": 0.01,
+    "bot_quote_size_min_shares": 50,
+    "bot_quote_book_max_spread_from_mid": 0.045,
+    "bot_quote_size_shares": 120,
+    "bot_quote_price_band_min_cents": 0.10,
+    "bot_quote_price_band_max_cents": 0.90,
+    "bot_quote_window_max_pct": 0.40,
+    "bot_quote_gate_price_band_on": True,
+    "bot_quote_gate_quote_window_on": True,
+    "bot_quote_coinflip_halfwidth": 0.20,
+    "bot_quote_coinflip_size_cut": 0.55,
+    "bot_quote_price_risk_widen": 0.010,
+    "bot_pos_skew_target_balance_ratio": 0.92,
+    "bot_pos_price_max_pair_cost_usd": 0.995,
+    "bot_order_max_fills_per_market": 25,
+    "bot_order_requote_interval_sec": 2.0,
+    "bot_order_poll_interval_sec": 1.0,
+    "bot_risk_exposure_max_cost_per_market_usd": 400.0,
+    "bot_risk_exposure_max_open_markets": 3,
+    "bot_risk_gate_pairs_rule_on": True,
+    "bot_risk_pairs_exit_window_sec": 900.0,
+    "bot_risk_pairs_complete_gain_cents": 3.68,
+    "bot_risk_pairs_exit_cost_cents": 3.67,
+    "bot_econ_maker_fee": 0.0,
+    "bot_econ_fee_rate": 0.07,
+    "bot_latency_net_oneway_ms": 3.93,
+    "bot_latency_cancel_venue_ack_ms": 150.0,
+    "bot_latency_post_venue_accept_ms": 81.0,
+    "bot_market_pinned_condition_id": "",
+    "bot_market_title": "",
+    "bot_market_url": "",
 }
 
 # The five values that differ on purpose (CONSTRAINTS §2, verified 2026-10-18).
 # `scoring` keeps its own number for each; the refactor moves WHERE they live,
 # never WHAT they are.
 CORE_DIFF_DEFAULTS: dict[str, object] = {
-    "bankroll_usd": 100.0,
-    "max_naked_usd": 6.0,
-    "min_quote_shares": 5,
-    "max_spread_from_mid": 0.15,
-    "max_pair_cost": 0.99,
+    "bot_quote_bank_baseline_usd": 100.0,
+    "bot_risk_exposure_max_naked_usd": 6.0,
+    "bot_quote_size_min_shares": 5,
+    "bot_quote_book_max_spread_from_mid": 0.15,
+    "bot_pos_price_max_pair_cost_usd": 0.99,
 }
 
 _MISSING = "<field gone>"
@@ -157,27 +159,23 @@ def test_derived_values_unchanged():
     for cfg in (ScoringMakerConfig(), CoreMakerConfig()):
         assert cfg.tau_cancel_sec == (3.93 + 150.0) / 1000.0
         assert cfg.tau_post_sec == (3.93 + 81.0) / 1000.0
-        assert cfg.max_skew == cfg.max_skew_offset == 0.015
-        assert cfg.min_book_depth_sh == cfg.min_book_depth_shares == 200.0
-        assert cfg.emergency_hedge_frac == cfg.emergency_hedge_pct == 0.8
-        assert cfg.cancel_net_oneway_ms == cfg.net_oneway_ms == 3.93
-        assert cfg.quote_window_frac == cfg.quote_window_pct == 0.40
-        assert cfg.select_spread_frac == cfg.select_spread_pct == 41.0 / 120.0
-        assert cfg.select_max_book_spread == 0.0205
+        assert cfg.bot_pos_skew_max_offset_cents == 0.015
+        assert cfg.bot_quote_book_min_depth_shares == 200.0
+        assert cfg.bot_risk_hedge_emergency_pct == 0.8
+        assert cfg.bot_latency_net_oneway_ms == 3.93
+        assert cfg.bot_quote_window_max_pct == 0.40
+        assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
+        assert cfg.filter_common_spread_max_cents == 0.0205
 
 
 def test_db_path_unchanged_under_every_env_state(monkeypatch):
-    """`db_path()` resolves identically in both classes, in all three states.
+    """`db_path()` resolves identically in both classes, unset and set.
 
-    Only the default is rooted at `ROOT`; an explicit `HUNTER_DB` is taken
+    Only the default is rooted at `ROOT`; an explicit `SPREAD_HUNTER_DB` is taken
     verbatim, which is what the duplicated helper does in both files.
     """
-    for name in ("HUNTER_DB", "SPREAD_HUNTER_DB"):
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("SPREAD_HUNTER_DB", raising=False)
     assert scoring_config.MakerConfig().db_path() == scoring_config.ROOT / "hunter.db"
-
-    monkeypatch.setenv("HUNTER_DB", "legacy.db")
-    assert scoring_config.MakerConfig().db_path() == Path("legacy.db")
 
     monkeypatch.setenv("SPREAD_HUNTER_DB", "current.db")
     assert scoring_config.MakerConfig().db_path() == Path("current.db")
@@ -188,8 +186,8 @@ def test_db_path_unchanged_under_every_env_state(monkeypatch):
 
 def test_loader_output_unchanged(monkeypatch):
     """`load()` with nothing set is the shipped class, not a re-derived one."""
-    for name in ("HUNTER_MARKET", "HUNTER_WIDE_BOOK_TRIAL", "HUNTER_BANKROLL",
-                 "SPREAD_HUNTER_BANKROLL", "HUNTER_DB", "SPREAD_HUNTER_DB"):
+    for name in ("BOT_MARKET_PINNED_CONDITION_ID", "BOT_QUOTE_WIDE_BOOK_TRIAL",
+                 "BOT_QUOTE_BANK_BASELINE_USD", "SPREAD_HUNTER_DB"):
         monkeypatch.delenv(name, raising=False)
 
     loaded = scoring_config.load()
@@ -202,7 +200,7 @@ def test_scoring_config_is_frozen():
     cfg = ScoringMakerConfig()
 
     with pytest.raises(FrozenInstanceError):
-        cfg.max_pair_cost = 0.5
+        cfg.bot_pos_price_max_pair_cost_usd = 0.5
 
 
 # ============================================================================
@@ -219,15 +217,17 @@ def test_scoring_config_is_frozen():
 # expectation. The two queue bars are absent on purpose -- they never had an
 # override, and adding one is out of scope for #652.
 PICKER_BAR_ENV = [
-    ("HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "777.0", 777.0),
-    ("HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "900.0", 900.0),
-    ("HUNTER_VELOCITY_GATE", "filter_live_gate_velocity_on", "off", False),
-    ("HUNTER_MIN_ACTIVITY_RATIO", "filter_live_activity_min_ratio", "0.25", 0.25),
-    ("HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "3.5", 3.5),
-    ("HUNTER_VOLATILITY_WINDOW_SEC", "filter_live_move_lookback_sec", "3600.0", 3600.0),
+    ("FILTER_LIVE_VEL_MIN_USD", "filter_live_vel_min_usd", "777.0", 777.0),
+    ("FILTER_LIVE_VEL_LOOKBACK_SEC", "filter_live_vel_lookback_sec", "900.0", 900.0),
+    ("FILTER_LIVE_GATE_VELOCITY_ON", "filter_live_gate_velocity_on", "off", False),
+    ("FILTER_LIVE_ACTIVITY_MIN_RATIO", "filter_live_activity_min_ratio", "0.25", 0.25),
+    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "3.5", 3.5),
+    ("FILTER_LIVE_MOVE_LOOKBACK_SEC", "filter_live_move_lookback_sec", "3600.0", 3600.0),
 ]
 
-# The old picker name of each bar. Insertion order is the issue's order.
+# The old picker name of each bar, now retired. Insertion order is the issue's
+# order. These names are GONE: the purge removed the alias table, so each one
+# must now be neither a field nor a readable attribute.
 PICKER_BAR_OLD_NAMES: dict[str, str] = {
     "select_min_movement_usd": "filter_live_vel_min_usd",
     "select_movement_window_sec": "filter_live_vel_lookback_sec",
@@ -267,41 +267,54 @@ def test_each_picker_bar_override_reaches_the_canonical_field(
 
 
 @pytest.mark.parametrize("var,field,raw,expected", PICKER_BAR_ENV)
-def test_each_picker_bar_override_is_readable_by_its_old_name(
+def test_the_old_picker_bar_name_is_gone(
         monkeypatch, var, field, raw, expected):
-    """The dashboard's `getattr(scfg, "select_*", <fallback>)` must not fall back."""
+    """The retired picker name is not a readable attribute any more."""
     _clear_picker_bar_env(monkeypatch)
     monkeypatch.setenv(var, raw)
 
     loaded = scoring_config.load()
 
-    with pytest.warns(DeprecationWarning):
-        assert getattr(loaded, _OLD_NAME_OF[field]) == expected
+    with pytest.raises(AttributeError):
+        getattr(loaded, _OLD_NAME_OF[field])
 
 
-def test_all_eight_picker_bars_read_the_canonical_value_by_their_old_name(monkeypatch):
+def test_all_eight_picker_bars_lost_their_old_names(monkeypatch):
     _clear_picker_bar_env(monkeypatch)
 
     loaded = scoring_config.load()
 
     for old, canonical in PICKER_BAR_OLD_NAMES.items():
-        with pytest.warns(DeprecationWarning):
-            assert getattr(loaded, old) == getattr(loaded, canonical), old
+        assert getattr(loaded, canonical) is not None, old
+        with pytest.raises(AttributeError):
+            getattr(loaded, old)
+
+
+def test_no_picker_bar_carries_a_deprecation_warning(monkeypatch):
+    """Reading a bar is not a deprecated act any more: no warning, ever."""
+    _clear_picker_bar_env(monkeypatch)
+
+    loaded = scoring_config.load()
+
+    for old, canonical in PICKER_BAR_OLD_NAMES.items():
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            assert getattr(loaded, canonical) is not None, old
 
 
 # Values that must be REFUSED rather than carried: not a number, not finite, or
 # a non-positive window. Each keeps the shipped bar, which is the parsing
 # behaviour #652 promised not to touch (the keys moved, nothing else).
 PICKER_BAR_REFUSED_INPUT = [
-    ("HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "abc", 200.0),
-    ("HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "nan", 200.0),
-    ("HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "0", 1800.0),
-    ("HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "abc", 1800.0),
-    ("HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "-1", 2.0),
-    ("HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "inf", 2.0),
-    ("HUNTER_VOLATILITY_WINDOW_SEC", "filter_live_move_lookback_sec", "0", 7200.0),
-    ("HUNTER_MIN_ACTIVITY_RATIO", "filter_live_activity_min_ratio", "-0.5", 0.0),
-    ("HUNTER_VELOCITY_GATE", "filter_live_gate_velocity_on", "no", False),
+    ("FILTER_LIVE_VEL_MIN_USD", "filter_live_vel_min_usd", "abc", 200.0),
+    ("FILTER_LIVE_VEL_MIN_USD", "filter_live_vel_min_usd", "nan", 200.0),
+    ("FILTER_LIVE_VEL_LOOKBACK_SEC", "filter_live_vel_lookback_sec", "0", 1800.0),
+    ("FILTER_LIVE_VEL_LOOKBACK_SEC", "filter_live_vel_lookback_sec", "abc", 1800.0),
+    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "-1", 2.0),
+    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "inf", 2.0),
+    ("FILTER_LIVE_MOVE_LOOKBACK_SEC", "filter_live_move_lookback_sec", "0", 7200.0),
+    ("FILTER_LIVE_ACTIVITY_MIN_RATIO", "filter_live_activity_min_ratio", "-0.5", 0.0),
+    ("FILTER_LIVE_GATE_VELOCITY_ON", "filter_live_gate_velocity_on", "no", False),
 ]
 
 
@@ -358,9 +371,9 @@ def _clear_screener_canonical_env(monkeypatch):
     "can_var,leg_var,field,can_raw,can_val,leg_raw,leg_val,default_val",
     SCREENER_CANONICAL_ENV,
 )
-def test_canonical_filter_env_overrides_field_and_wins_over_legacy(
+def test_canonical_filter_env_overrides_field_and_legacy_is_ignored(
         monkeypatch, can_var, leg_var, field, can_raw, can_val, leg_raw, leg_val, default_val):
-    """#653: each canonical `FILTER_*` overrides its field and beats `HUNTER_*`."""
+    """Each canonical `FILTER_*` overrides its field; the retired `HUNTER_*` does not."""
     _clear_screener_canonical_env(monkeypatch)
 
     # 1. Unset -> shipped default
@@ -371,18 +384,20 @@ def test_canonical_filter_env_overrides_field_and_wins_over_legacy(
     assert getattr(scoring_config.load(), field) == can_val
 
     if leg_var is not None:
-        # 3. Both set -> canonical wins over legacy
+        # 3. Both set -> canonical still wins
         monkeypatch.setenv(leg_var, leg_raw)
         assert getattr(scoring_config.load(), field) == can_val
 
-        # 4. Blank or whitespace canonical -> falls through to legacy
+        # 4. Legacy alone -> IGNORED: the field keeps the shipped default.
+        #    A retired name is not an override; it is a no-op.
+        monkeypatch.delenv(can_var, raising=False)
+        assert getattr(scoring_config.load(), field) == default_val
+
+        # 5. Blank canonical plus legacy -> still the shipped default. There is
+        #    nothing to fall through to any more.
         for blank in ("", "   "):
             monkeypatch.setenv(can_var, blank)
-            assert getattr(scoring_config.load(), field) == leg_val
-
-        # 5. Legacy alone -> legacy value still works
-        monkeypatch.delenv(can_var, raising=False)
-        assert getattr(scoring_config.load(), field) == leg_val
+            assert getattr(scoring_config.load(), field) == default_val
 
 
 # ============================================================================
@@ -391,8 +406,7 @@ def test_canonical_filter_env_overrides_field_and_wins_over_legacy(
 
 EXECUTION_CANONICAL_ENV = [
     # (canonical_var, legacy_vars, field, can_raw, can_val, leg_raw, leg_val, default_val, needs_pin, needs_rehearsal)
-    # An empty legacy tuple means the variable has no alias left, so its row
-    # answers the canonical and blank-canonical questions only.
+    # The legacy column names the retired variable, to prove it is ignored.
     ("BOT_MARKET_PINNED_CONDITION_ID", ("HUNTER_MARKET",), "bot_market_pinned_condition_id", "0xcan_pinned", "0xcan_pinned", "0xleg_pinned", "0xleg_pinned", "", False, False),
     ("BOT_MARKET_TITLE", ("HUNTER_TITLE",), "bot_market_title", "Canonical Title", "Canonical Title", "Legacy Title", "Legacy Title", "", True, False),
     ("BOT_MARKET_URL", ("HUNTER_URL",), "bot_market_url", "https://polymarket.com/can", "https://polymarket.com/can", "https://polymarket.com/leg", "https://polymarket.com/leg", "", True, False),
@@ -431,9 +445,9 @@ def _clear_execution_env(monkeypatch):
     "can_var,leg_vars,field,can_raw,can_val,leg_raw,leg_val,default_val,needs_pin,needs_rehearsal",
     EXECUTION_CANONICAL_ENV,
 )
-def test_canonical_execution_env_overrides_field_and_wins_over_legacy(
+def test_canonical_execution_env_overrides_field_and_legacy_is_ignored(
         monkeypatch, can_var, leg_vars, field, can_raw, can_val, leg_raw, leg_val, default_val, needs_pin, needs_rehearsal):
-    """#674: each canonical BOT_* execution variable overrides its field and beats legacy HUNTER_*."""
+    """Each canonical BOT_* execution variable overrides its field; retired HUNTER_* ones do not."""
     _clear_execution_env(monkeypatch)
     if needs_rehearsal:
         monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
@@ -441,7 +455,6 @@ def test_canonical_execution_env_overrides_field_and_wins_over_legacy(
     def _setup_pin():
         if needs_pin:
             monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned_for_test")
-            monkeypatch.setenv("HUNTER_MARKET", "0xpinned_for_test")
 
     # 1. Unset -> shipped default
     _setup_pin()
@@ -451,64 +464,63 @@ def test_canonical_execution_env_overrides_field_and_wins_over_legacy(
     monkeypatch.setenv(can_var, can_raw)
     assert getattr(scoring_config.load(), field) == can_val
 
-    # 3. Both set -> canonical wins over legacy
-    for leg_var in leg_vars:
-        monkeypatch.setenv(leg_var, leg_raw)
-    assert getattr(scoring_config.load(), field) == can_val
-
-    # 4. Blank or whitespace canonical -> falls through to legacy, and to the
-    #    shipped default for a variable that has no alias left (#706)
-    for blank in ("", "   "):
-        monkeypatch.setenv(can_var, blank)
-        assert getattr(scoring_config.load(), field) == (leg_val if leg_vars else default_val)
-
-    # 5. Each legacy var alone with newer cleared -> legacy value still works
     if leg_vars:
+        # 3. Both set -> canonical still wins
+        for leg_var in leg_vars:
+            monkeypatch.setenv(leg_var, leg_raw)
+        assert getattr(scoring_config.load(), field) == can_val
+
+        # 4. Each legacy var alone -> IGNORED, the field keeps the default.
         monkeypatch.delenv(can_var, raising=False)
         for leg_var in leg_vars:
             for other in leg_vars:
                 monkeypatch.delenv(other, raising=False)
             monkeypatch.setenv(leg_var, leg_raw)
-            assert getattr(scoring_config.load(), field) == leg_val
+            assert getattr(scoring_config.load(), field) == default_val
+
+    # 5. Blank or whitespace canonical -> the shipped default. There is no
+    #    legacy variable left to fall through to.
+    for blank in ("", "   "):
+        monkeypatch.setenv(can_var, blank)
+        assert getattr(scoring_config.load(), field) == default_val
 
 
 def test_execution_coupling_overrides(monkeypatch):
-    """#674: Coupling tests for size (quote_shares floor), bankroll (max_committed_usd), and trial (widen max_spread_from_mid)."""
+    """#674: Coupling tests for size (quote_shares floor), bankroll (max_committed_usd), and trial (widen bot_quote_book_max_spread_from_mid)."""
     _clear_execution_env(monkeypatch)
     monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned")
-    monkeypatch.setenv("HUNTER_MARKET", "0xpinned")
 
     # 1. Size override raises quote_shares to max(n, 120)
     monkeypatch.setenv("BOT_QUOTE_SIZE_MIN_SHARES", "200")
     cfg = scoring_config.load()
-    assert cfg.min_quote_shares == 200
+    assert cfg.bot_quote_size_min_shares == 200
     assert cfg.bot_quote_size_shares == 200
 
     monkeypatch.setenv("BOT_QUOTE_SIZE_MIN_SHARES", "50")
     cfg = scoring_config.load()
-    assert cfg.min_quote_shares == 50
+    assert cfg.bot_quote_size_min_shares == 50
     assert cfg.bot_quote_size_shares == 120
 
-    # 2. Bankroll override sets bankroll_usd and max_committed_usd
+    # 2. Bankroll override sets bot_quote_bank_baseline_usd and max_committed_usd
     monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "250.0")
     cfg = scoring_config.load()
-    assert cfg.bankroll_usd == 250.0
+    assert cfg.bot_quote_bank_baseline_usd == 250.0
     assert cfg.bot_risk_exposure_max_committed_usd == 250.0
 
-    # 3. Wide-book trial override only widens max_spread_from_mid
+    # 3. Wide-book trial override only widens bot_quote_book_max_spread_from_mid
     monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "5")  # 5 cents = 0.05
     monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
     cfg = scoring_config.load()
     assert cfg.bot_quote_wide_book_trial == 0.12
-    assert cfg.max_book_spread == 0.12
-    assert cfg.max_spread_from_mid == 0.12
+    assert cfg.bot_quote_book_max_spread_cents == 0.12
+    assert cfg.bot_quote_book_max_spread_from_mid == 0.12
 
-    # Smaller trial does not lower max_spread_from_mid
+    # Smaller trial does not lower bot_quote_book_max_spread_from_mid
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "20")  # 20 cents = 0.20
     monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
     cfg = scoring_config.load()
-    assert cfg.max_spread_from_mid == 0.20
+    assert cfg.bot_quote_book_max_spread_from_mid == 0.20
 
 
 # ============================================================================
@@ -525,14 +537,14 @@ def test_unpinned_runs_read_the_spread_window_from_the_environment(monkeypatch):
     _clear_execution_env(monkeypatch)
 
     # Nothing set: the picker's own shipped window (4.5c), never core's 15c.
-    assert scoring_config.load().max_spread_from_mid == 0.045
+    assert scoring_config.load().bot_quote_book_max_spread_from_mid == 0.045
 
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "25")
-    assert scoring_config.load().max_spread_from_mid == 0.25
+    assert scoring_config.load().bot_quote_book_max_spread_from_mid == 0.25
 
     # Blank is unset on this path too, so the picker's own window stands.
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "   ")
-    assert scoring_config.load().max_spread_from_mid == 0.045
+    assert scoring_config.load().bot_quote_book_max_spread_from_mid == 0.045
 
 
 def test_unpinned_bad_spread_values_are_inactive_not_enforced(monkeypatch):
@@ -547,7 +559,7 @@ def test_unpinned_bad_spread_values_are_inactive_not_enforced(monkeypatch):
     _clear_execution_env(monkeypatch)
     for raw in ("", "wide"):
         monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", raw)
-        assert scoring_config.load().max_spread_from_mid == 0.045, raw
+        assert scoring_config.load().bot_quote_book_max_spread_from_mid == 0.045, raw
 
 
 def test_unpinned_scoring_and_engine_load_the_same_window(monkeypatch):
@@ -564,12 +576,12 @@ def test_unpinned_scoring_and_engine_load_the_same_window(monkeypatch):
     for raw in ("22", "7.5"):
         monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", raw)
         expected = float(raw) / 100.0
-        assert scoring_config.load().max_spread_from_mid == pytest.approx(expected)
-        assert core_config.load().max_spread_from_mid == pytest.approx(expected)
+        assert scoring_config.load().bot_quote_book_max_spread_from_mid == pytest.approx(expected)
+        assert core_config.load().bot_quote_book_max_spread_from_mid == pytest.approx(expected)
 
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "wide")
-    assert scoring_config.load().max_spread_from_mid == 0.045
-    assert core_config.load().max_spread_from_mid == 0.15
+    assert scoring_config.load().bot_quote_book_max_spread_from_mid == 0.045
+    assert core_config.load().bot_quote_book_max_spread_from_mid == 0.15
 
 
 # ============================================================================
@@ -606,7 +618,7 @@ def _spread_window(mod, monkeypatch, raw, *, pinned, var="BOT_QUOTE_BOOK_MAX_SPR
 )
 def test_spread_window_accepts_one_to_ninety_nine_cents(mod, monkeypatch, pinned, raw, expected):
     """#707: both loaders, pinned and unpinned, store the ticket's 0.01..0.99 bounds."""
-    assert _spread_window(mod, monkeypatch, raw, pinned=pinned).max_spread_from_mid \
+    assert _spread_window(mod, monkeypatch, raw, pinned=pinned).bot_quote_book_max_spread_from_mid \
         == pytest.approx(expected)
 
 
@@ -652,78 +664,56 @@ def test_a_typo_in_the_spread_window_keeps_its_per_path_behaviour(mod, monkeypat
     on a typo since the beginning, and it now names the variable while doing it.
     """
     default = 0.15 if mod is core_config else 0.045
-    assert _spread_window(mod, monkeypatch, "wide", pinned=False).max_spread_from_mid == default
+    assert _spread_window(mod, monkeypatch, "wide", pinned=False).bot_quote_book_max_spread_from_mid == default
 
     with pytest.raises(ValueError, match="BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID='wide' is not a number"):
         _spread_window(mod, monkeypatch, "wide", pinned=True)
 
 
 @pytest.mark.parametrize(
-    "oldest_var,newer_var,canonical_var,val_raw,warn_text",
+    "retired_var,canonical_var,val_raw,field,default",
     [
-        (
-            "HUNTER_MIN_SIZE",
-            "HUNTER_MIN_QUOTE_SHARES",
-            "BOT_QUOTE_SIZE_MIN_SHARES",
-            "100",
-            "HUNTER_MIN_SIZE is deprecated (#632); set BOT_QUOTE_SIZE_MIN_SHARES instead.",
-        ),
-        (
-            "HUNTER_TICK",
-            "HUNTER_PRICE_TICK",
-            "BOT_QUOTE_GRID_TICK_SIZE_USD",
-            "0.02",
-            "HUNTER_TICK is deprecated (#632); set BOT_QUOTE_GRID_TICK_SIZE_USD instead.",
-        ),
+        ("HUNTER_MIN_SIZE", "BOT_QUOTE_SIZE_MIN_SHARES", "100", "bot_quote_size_min_shares", 50),
+        ("HUNTER_TICK", "BOT_QUOTE_GRID_TICK_SIZE_USD", "0.02", "bot_quote_grid_tick_size_usd", 0.01),
     ],
 )
-def test_execution_legacy_deprecation_warnings(
-        monkeypatch, caplog, oldest_var, newer_var, canonical_var, val_raw, warn_text):
-    """#674: Oldest legacy variable emits #632 warning only when it is the winning source."""
+def test_a_retired_execution_variable_is_ignored(
+        monkeypatch, caplog, retired_var, canonical_var, val_raw, field, default):
+    """The retired variable is inert: no value, no warning, no error."""
     import logging
 
     _clear_execution_env(monkeypatch)
     monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned")
 
-    # 1. Oldest legacy alone -> warning emitted
+    # 1. The retired variable alone -> the shipped field, and silence.
     caplog.clear()
     with caplog.at_level(logging.WARNING):
-        monkeypatch.setenv(oldest_var, val_raw)
-        scoring_config.load()
-    assert warn_text in caplog.text
+        monkeypatch.setenv(retired_var, val_raw)
+        cfg = scoring_config.load()
+    assert "deprecated" not in caplog.text
+    assert getattr(cfg, field) == default
 
-    # 2. Canonical set alongside -> no warning emitted (canonical wins)
+    # 2. The canonical variable still works, and is still silent.
     caplog.clear()
     with caplog.at_level(logging.WARNING):
         monkeypatch.setenv(canonical_var, val_raw)
-        scoring_config.load()
-    assert warn_text not in caplog.text
-
-    # 3. Newer legacy alone -> no warning emitted
-    monkeypatch.delenv(canonical_var, raising=False)
-    monkeypatch.delenv(oldest_var, raising=False)
-    caplog.clear()
-    with caplog.at_level(logging.WARNING):
-        monkeypatch.setenv(newer_var, val_raw)
-        scoring_config.load()
-    assert warn_text not in caplog.text
+        cfg = scoring_config.load()
+    assert "deprecated" not in caplog.text
+    assert getattr(cfg, field) != default
 
 
-def test_blank_canonical_fallthrough_fires_legacy_warning(monkeypatch, caplog):
-    """#674: Blank canonical falls through to oldest legacy and still emits the #632 warning."""
+def test_a_blank_canonical_variable_leaves_the_shipped_value(monkeypatch, caplog):
+    """A blank canonical is a blank canonical: there is nothing to fall through to."""
     import logging
 
     _clear_execution_env(monkeypatch)
     monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned")
     monkeypatch.setenv("BOT_QUOTE_SIZE_MIN_SHARES", "   ")
     monkeypatch.setenv("HUNTER_MIN_SIZE", "200")
-
-    caplog.clear()
     with caplog.at_level(logging.WARNING):
         cfg = scoring_config.load()
-
-    assert cfg.min_quote_shares == 200
-    assert "HUNTER_MIN_SIZE is deprecated (#632)" in caplog.text
+    assert cfg.bot_quote_size_min_shares == 50
+    assert "deprecated" not in caplog.text
 
 
 def test_wide_book_trial_refusal_names_variable(monkeypatch):
@@ -735,14 +725,13 @@ def test_wide_book_trial_refusal_names_variable(monkeypatch):
     monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
     with pytest.raises(ValueError) as exc1:
         scoring_config.load()
-    assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens max_book_spread" in str(exc1.value)
+    assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens bot_quote_book_max_spread_cents" in str(exc1.value)
 
-    # 2. Legacy variable set outside rehearsal
+    # 2. The retired variable is inert outside a rehearsal: no refusal, no error
     monkeypatch.delenv("BOT_QUOTE_WIDE_BOOK_TRIAL", raising=False)
     monkeypatch.setenv("HUNTER_WIDE_BOOK_TRIAL", "0.12")
-    with pytest.raises(ValueError) as exc2:
-        scoring_config.load()
-    assert "HUNTER_WIDE_BOOK_TRIAL widens max_book_spread" in str(exc2.value)
+    assert scoring_config.load().bot_quote_wide_book_trial is None
+    monkeypatch.delenv("HUNTER_WIDE_BOOK_TRIAL", raising=False)
 
     # 3. Inside rehearsal, value exceeding 0.30 is rejected
     monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
@@ -780,9 +769,7 @@ def test_invalid_trial_override_keeps_shipped_default(monkeypatch, can_var, bad_
     "var_name",
     [
         "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL",
-        "HUNTER_DEPTH_TRIAL_USD",
         "FILTER_STD_VOL_MIN_24H_USD_TRIAL",
-        "HUNTER_VOLUME_TRIAL_USD",
     ],
 )
 @pytest.mark.parametrize("bad_raw", ["abc", "nan", "inf", "-1"])
@@ -803,12 +790,12 @@ def test_engine_invalid_trial_override_raises_named_error(monkeypatch, var_name,
         (
             "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL",
             "HUNTER_DEPTH_TRIAL_USD",
-            "select_min_top3_depth_usd_trial",
+            "filter_common_vol_min_top3_depth_usd_trial",
         ),
         (
             "FILTER_STD_VOL_MIN_24H_USD_TRIAL",
             "HUNTER_VOLUME_TRIAL_USD",
-            "select_min_volume_24h_usd_trial",
+            "filter_std_vol_min_24h_usd_trial",
         ),
     ],
 )
@@ -830,15 +817,15 @@ def test_engine_valid_trial_override_populates_field(monkeypatch, can_var, leg_v
     cfg = CoreMakerConfig.from_env()
     assert getattr(cfg, field) == 1234.5
 
-    # 4. Canonical beats legacy
+    # 4. The retired alias cannot beat the canonical value
     monkeypatch.setenv(leg_var, "999.0")
     cfg = CoreMakerConfig.from_env()
     assert getattr(cfg, field) == 1234.5
 
-    # 5. Legacy alone works
+    # 5. The retired alias alone is inert: the field stays None
     monkeypatch.delenv(can_var, raising=False)
     cfg = CoreMakerConfig.from_env()
-    assert getattr(cfg, field) == 999.0
+    assert getattr(cfg, field) is None
 
 
 def test_env_example_documents_only_real_canonical_variables():
@@ -882,7 +869,7 @@ def test_a_name_that_is_not_the_canonical_one_leaves_the_window_shipped(
     """
     shipped = 0.15 if mod is core_config else 0.045
     assert _spread_window(mod, monkeypatch, "40", pinned=pinned, var=ghost) \
-        .max_spread_from_mid == shipped
+        .bot_quote_book_max_spread_from_mid == shipped
 
 
 # ============================================================================
@@ -891,7 +878,7 @@ def test_a_name_that_is_not_the_canonical_one_leaves_the_window_shipped(
 
 
 def _quote_window_description(module) -> list[str]:
-    """The comment block that documents `max_spread_from_mid`, line by line."""
+    """The comment block that documents the quote window, line by line."""
     lines = Path(module.__file__).read_text(encoding="utf-8").splitlines()
     start = next((i for i, line in enumerate(lines)
                   if line.strip().startswith("# THE QUOTE WINDOW.")), None)
@@ -921,6 +908,6 @@ def test_both_config_modules_describe_the_quote_window_identically():
     assert scoring_block, "scoring/config.py lost the quote-window description"
     assert core_block, "core_brain/config.py lost the quote-window description"
     assert scoring_block == core_block, (
-        "the two config modules describe max_spread_from_mid differently:\n"
+        "the two config modules describe the quote window differently:\n"
         f"scoring: {scoring_block}\ncore: {core_block}"
     )
