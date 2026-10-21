@@ -85,7 +85,7 @@ let lastStatusAtMs = null;
  * envelope; anything lower (or missing) means this page is newer than the
  * process answering it. Keep EXPECTED_PAYLOAD_VERSION matched with
  * KPI_PAYLOAD_VERSION in core_brain/kpi.py. */
-const EXPECTED_PAYLOAD_VERSION = 259;
+const EXPECTED_PAYLOAD_VERSION = 260;
 let payloadVersionWarned = false;
 
 // True when the payload is absent, malformed, or predates this page.
@@ -5819,6 +5819,58 @@ function renderRescueFriction(stats, hostId) {
     </div>`;
 }
 
+/* What the hard-stop sell actually got, against the floor it was sent at (#730).
+ * A fill at the floor is a real `0.0000`; a close nobody observed filling (the
+ * assumed fallback, a zero-size exit, a row written before this shipped) reads
+ * `unmeasured` and stays out of every mean -- never a free exit. */
+function renderStopSlippage(stats, hostId) {
+  const host = document.getElementById(hostId || 'stop-slippage-readout');
+  if (!host) return;
+
+  const slip = (stats || {}).stop_slippage || {};
+  const reasons = slip.unmeasured_reasons || {};
+  const figure = (value) => {
+    const n = Number(value);
+    return (value === null || value === undefined || !Number.isFinite(n)) ? null : n;
+  };
+  const count = (value) => figure(value) || 0;
+  /* Dollars per share to four decimals: rounding a sub-cent leak to 0.00 would
+   * hide exactly the cost a stop pays on every exit. */
+  const perShare = (value) => {
+    const n = figure(value);
+    if (n === null) return 'unmeasured';
+    return (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(4);
+  };
+  const tile = (label, value, hint) => `
+    <div class="kpi-tile">
+      <div class="kpi-label">${esc(label)}</div>
+      ${fmtVal(value, value === 'unmeasured' ? ' null' : '')}
+      <div class="mono" style="font-size:11px;color:var(--text-muted)">${esc(hint)}</div>
+    </div>`;
+
+  host.innerHTML = `
+    <div class="kpi-grid">
+      ${tile('Mean vs Floor ($)', perShare(slip.mean_vs_floor), 'floor we sent → price we got')}
+      ${tile('Worst vs Floor ($)', perShare(slip.worst_vs_floor), 'the deepest single exit')}
+      ${tile('Mean vs Decision ($)', perShare(slip.mean_vs_decision), 'bid that fired the stop → fill')}
+      ${tile('Worst vs Decision ($)', perShare(slip.worst_vs_decision), 'the deepest decision-to-fill gap')}
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
+      Measured ${count(slip.measured_count)} of ${count(slip.stop_exit_count)} stop exits ·
+      unmeasured ${count(slip.unmeasured_count)} (historical ${count(reasons.historical)},
+      assumed ${count(reasons.assumed_fill)}, refused ${count(reasons.refused)}) ·
+      below floor ${count(slip.below_floor_count)} · simulated ${count(slip.simulated_count)}
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:4px">
+      Refused positions ${count(slip.refused_position_count)}
+      (${count(slip.refused_attempt_count)} attempts) · dollars per share ·
+      unmeasured exits stay out of every mean, never counted as zero.
+      ${count(slip.simulated_count) > 0
+        ? 'Simulated fills are rehearsal results blended into the means above — not venue results.'
+        : ''}
+    </div>`;
+}
+
 /* The tape behind a fill, rather than the close it became (#515): how far below our own
  * price the tape had to print to clear the level, and how long the quote waited for it.
  *
@@ -6208,6 +6260,7 @@ function renderAnalyticsSurface(kpi, status) {
   try { renderSampleSufficiency(ta); } catch (e) { console.error('Error rendering sample sufficiency', e); }
   try { renderFillPathEdge(stats); } catch (e) { console.error('Error rendering fill-path edge', e); }
   try { renderRescueFriction(stats); } catch (e) { console.error('Error rendering rescue friction', e); }
+  try { renderStopSlippage(stats); } catch (e) { console.error('Error rendering stop slippage', e); }
   try { renderQueueRealism(stats); } catch (e) { console.error('Error rendering queue realism', e); }
   try { renderRobustness(stats); } catch (e) { console.error('Error rendering robustness gates', e); }
   try { renderCapitalRisk(stats); } catch (e) { console.error('Error rendering capital risk', e); }
@@ -10619,7 +10672,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,

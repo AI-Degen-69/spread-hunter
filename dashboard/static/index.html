@@ -520,6 +520,17 @@
         <div id="rescue-friction-readout" class="rescue-friction-readout"><!-- Rendered by JS --></div>
       </div>
 
+      <!-- What a hard-stop exit actually sold at, against the floor it was sent at (#730).
+           A close nobody observed filling reads unmeasured here rather than 0.00, and the
+           footer says how many of the population that was. -->
+      <div class="card" style="margin-top:16px">
+        <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div class="font-display" style="font-size:13px;letter-spacing:0.06em">STOP-EXIT SLIPPAGE — FLOOR → FILL</div>
+          <div class="mono" style="font-size:11px;color:var(--text-muted)">Per Share · Accounting View</div>
+        </div>
+        <div id="stop-slippage-readout" class="stop-slippage-readout"><!-- Rendered by JS --></div>
+      </div>
+
       <!-- The tape behind a fill rather than the close it became (#515). Same placement
            rule as the two cards above: it explains the fills the headline counts, so it
            must not take part in the sub-view filter. -->

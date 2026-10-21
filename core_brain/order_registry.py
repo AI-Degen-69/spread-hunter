@@ -307,7 +307,23 @@ CREATE TABLE IF NOT EXISTS closes (
     tx_hash TEXT,
     run_id TEXT NOT NULL,
     trigger_bid REAL,
-    fresh_bid REAL
+    fresh_bid REAL,
+    submitted_floor REAL,
+    fill_source TEXT
+);
+
+-- Refused or errored hard-stop exits (#730). Append-only: a refusal never
+-- writes a close, so this is the only durable record that the exit was
+-- attempted and measured nothing. No reset path deletes it.
+CREATE TABLE IF NOT EXISTS hard_stop_refusals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    run_id TEXT,
+    pair_id TEXT,
+    condition_id TEXT,
+    trigger_bid REAL,
+    outcome TEXT NOT NULL,
+    detail TEXT
 );
 
 CREATE TABLE IF NOT EXISTS float_marks (
@@ -535,6 +551,10 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE closes ADD COLUMN trigger_bid REAL")
         if "fresh_bid" not in cols:
             conn.execute("ALTER TABLE closes ADD COLUMN fresh_bid REAL")
+        if "submitted_floor" not in cols:
+            conn.execute("ALTER TABLE closes ADD COLUMN submitted_floor REAL")
+        if "fill_source" not in cols:
+            conn.execute("ALTER TABLE closes ADD COLUMN fill_source TEXT")
 
     # Check columns in resolutions. `winning_token` is the label the operator
     # reads ("Up", a team name); `winning_token_id` is the venue token id, and
@@ -812,6 +832,12 @@ class CloseRecord:
     # future audit can replay booked-vs-true without reconstructing books.
     trigger_bid: Optional[float] = None
     fresh_bid: Optional[float] = None
+    # #730: the worst price the exit order was sent at (`submitted_floor`) and
+    # where the booked numbers came from (`reported` / `simulated` /
+    # `assumed`). NULL on rows written before this landed: unmeasured, never
+    # a free exit.
+    submitted_floor: Optional[float] = None
+    fill_source: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -1784,8 +1810,9 @@ class OrderRegistry:
                     ts, condition_id, market_slug, method, gas, shares,
                     up_price, dn_price, cost_basis, proceeds, fee, realized_pnl,
                     forgone_vs_settlement, up_cost_removed, dn_cost_removed,
-                    tx_hash, run_id, reason, trigger_bid, fresh_bid
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tx_hash, run_id, reason, trigger_bid, fresh_bid,
+                    submitted_floor, fill_source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     close.ts,
@@ -1808,6 +1835,8 @@ class OrderRegistry:
                     close.reason,
                     close.trigger_bid,
                     close.fresh_bid,
+                    close.submitted_floor,
+                    close.fill_source,
                 ),
             )
             conn.commit()
@@ -2037,6 +2066,32 @@ class OrderRegistry:
     def get_all_closes(self) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute("SELECT * FROM closes ORDER BY ts ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def log_hard_stop_refusal(self, *, pair_id: str, condition_id: str,
+                              trigger_bid: Optional[float], outcome: str,
+                              detail: Optional[str] = None) -> None:
+        """Append one refused or errored hard-stop exit attempt (#730).
+
+        The only durable trace of an exit that measured nothing -- a refusal
+        writes no close. Append-only on purpose: repeated polls write one row
+        each and the aggregate counts distinct `pair_id`s itself.
+        """
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO hard_stop_refusals "
+                "(ts, run_id, pair_id, condition_id, trigger_bid, outcome, detail) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (time.time(), self._run_id(), pair_id, condition_id,
+                 trigger_bid, outcome, detail),
+            )
+            conn.commit()
+
+    def get_hard_stop_refusals(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM hard_stop_refusals ORDER BY ts ASC, id ASC"
+            ).fetchall()
             return [dict(r) for r in rows]
 
     def get_all_float_marks(self) -> list[dict]:

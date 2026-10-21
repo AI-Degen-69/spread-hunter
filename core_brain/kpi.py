@@ -9,6 +9,7 @@ Plus multi-run isolation (run selector) and float_marks time series.
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import sqlite3
@@ -31,6 +32,7 @@ from core_brain.statistical_analytics import (
     ci_z,
     mean_pnl_ci as _mean_pnl_ci,
     normal_mean_interval,
+    stop_slippage_summary,
 )
 from core_brain.order_registry import (
     OrderRegistry, DEFAULT_DB_PATH, VENUE_SYNC_RUN_ID, get_connection,
@@ -55,7 +57,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 259
+KPI_PAYLOAD_VERSION = 260
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -1335,6 +1337,9 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # the wallet, not to a run: slicing it per run would report the account as
     # empty for any run that happened not to sweep.
     all_account_marks = reg.get_all_account_marks()
+    # Refused/errored hard-stop exits (#730): append-only evidence of an exit
+    # that measured nothing, sliced by run below like every other ledger.
+    all_refusals = reg.get_hard_stop_refusals()
     resolutions = reg.get_all_resolutions()
     # The terminal marker the shadow resolution sweeper finally writes
     # (OrderRegistry.log_resolution -- wired via core_brain.market_resolution).
@@ -1399,6 +1404,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         divergences = [d for d in all_divergences if d.get("run_id") == active_run_id]
         float_marks = [fm for fm in all_float_marks if fm.get("run_id") == active_run_id]
         orders = [o for o in all_orders if o.get("run_id") == active_run_id]
+        refusals = [r for r in all_refusals if r.get("run_id") == active_run_id]
     else:
         quotes = all_quotes
         fills = all_fills
@@ -1409,6 +1415,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         divergences = all_divergences
         float_marks = all_float_marks
         orders = all_orders
+        refusals = all_refusals
 
     # The wallet's own history is not a run's trading record. `venue_sync`
     # writes the venue's account-wide closes and open positions into the same
@@ -2387,7 +2394,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         # it is the same series the payload below already ships.
         "statistical_analytics": build_statistical_analytics(
             closes, fills, markouts, starting_capital, quotes,
-            equity_curve=account_series),
+            equity_curve=account_series, refusals=refusals),
 
         # Adverse selection & rebate
         "adverse_selection": adverse_selection,
@@ -2418,3 +2425,70 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         # Req 4: Exposure time series
         "float_marks": float_marks_formatted,
     }
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """Report stop-exit slippage read-only (#730).
+
+    Opens the store with `mode=ro` and reads two tables. Constructing an
+    `OrderRegistry` here would migrate the schema and run the duplicate
+    transaction-hash sweep against whatever file the operator pointed at -- a
+    report has no business writing to a live registry.
+
+    Every run in the file is aggregated -- a store-wide cost figure, where the
+    dashboard card slices the same rows to the run it is showing. `--run-id`
+    narrows both tables to one run.
+    """
+    parser = argparse.ArgumentParser(
+        description="Stop-exit slippage, measured off the close and refusal rows.")
+    parser.add_argument("--db", default=str(DEFAULT_DB_PATH),
+                        help="registry database to read (default: data/orders.db)")
+    parser.add_argument("--json", action="store_true",
+                        help="print the raw summary instead of the short report")
+    parser.add_argument("--run-id", default=None,
+                        help="only rows written by this run (default: every run)")
+    args = parser.parse_args(argv)
+
+    path = Path(args.db)
+    if not path.exists():
+        parser.error(f"no store at {path}")
+    conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        closes = [dict(r) for r in conn.execute("SELECT * FROM closes")]
+        try:
+            refusals = [dict(r) for r in conn.execute("SELECT * FROM hard_stop_refusals")]
+        except sqlite3.OperationalError:  # store predates #730
+            refusals = []
+    finally:
+        conn.close()
+
+    if args.run_id:
+        closes = [c for c in closes if c.get("run_id") == args.run_id]
+        refusals = [r for r in refusals if r.get("run_id") == args.run_id]
+
+    summary = stop_slippage_summary(closes, refusals)
+    if args.json:
+        print(json.dumps(summary, indent=2))
+        return 0
+
+    reasons = summary["unmeasured_reasons"]
+    print(f"stop exits: {summary['stop_exit_count']}  "
+          f"measured: {summary['measured_count']}  "
+          f"unmeasured: {summary['unmeasured_count']} "
+          f"(historical {reasons['historical']}, "
+          f"assumed {reasons['assumed_fill']}, "
+          f"refused {reasons['refused']})")
+    if summary["mean_vs_floor"] is None:
+        print("vs floor: unmeasured (no observed fill)")
+    else:
+        print(f"vs floor: mean {summary['mean_vs_floor']:.4f}  "
+              f"worst {summary['worst_vs_floor']:.4f} $/share  "
+              f"below floor: {summary['below_floor_count']}")
+    print(f"refused positions: {summary['refused_position_count']} "
+          f"({summary['refused_attempt_count']} attempts)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

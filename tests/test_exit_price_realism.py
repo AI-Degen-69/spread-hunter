@@ -126,7 +126,7 @@ def test_rehearsed_sell_falls_back_to_the_floor_without_a_book(registry):
     """
     client = _client(registry, {"bids": {}, "asks": {}})
 
-    filled, avg = client._sell_into_bids("tok-dn", 5.0, floor=0.64)
+    filled, avg, _ = client._sell_into_bids("tok-dn", 5.0, floor=0.64)
 
     assert filled == pytest.approx(5.0)
     assert avg == pytest.approx(0.64)
@@ -249,7 +249,7 @@ def test_rehearsed_sell_fills_against_the_prior_rotations_snapshot(registry):
     # matches the fresh touch, the exit read the book it should not have.
     client = _client(registry, {"bids": {0.66: 20.0}, "asks": {}})
 
-    filled, avg = client._sell_into_bids("tok-dn", 5.0, floor=0.58)
+    filled, avg, _ = client._sell_into_bids("tok-dn", 5.0, floor=0.58)
 
     # Snapshot best_bid 0.60, stored best_bid_size 3.0: 3 shares fill at 0.60;
     # the floor (0.58) stops the remaining 2 -- depth beneath it is not ours.
@@ -279,7 +279,7 @@ def test_rehearsed_sell_ignores_a_stale_snapshot_and_uses_the_fresh_book(registr
 
     client = _client(registry, {"bids": {0.33: 20.0}, "asks": {}})
 
-    filled, avg = client._sell_into_bids("tok-dn", 5.0, floor=0.31)
+    filled, avg, _ = client._sell_into_bids("tok-dn", 5.0, floor=0.31)
 
     assert filled == pytest.approx(5.0)
     assert avg == pytest.approx(0.33)
@@ -306,14 +306,14 @@ def test_rehearsed_sell_snapshot_still_respects_a_better_fresh_floor(registry):
     client = _client(registry, {"bids": {0.66: 20.0}, "asks": {}})
 
     # Floor 0.60 admits the snapshot touch 0.61; returns 0.61 (distinguishable from 0.60 floor fallback).
-    filled, avg = client._sell_into_bids("tok-dn", 4.0, floor=0.60)
+    filled, avg, _ = client._sell_into_bids("tok-dn", 4.0, floor=0.60)
 
     assert filled == pytest.approx(4.0)
     assert avg == pytest.approx(0.61)
 
     # Floor 0.62 is above the snapshot touch: nothing fills at 0.61, and the
     # fresh book is not consulted -- the conservative floor fallback stands.
-    filled2, avg2 = client._sell_into_bids("tok-dn", 4.0, floor=0.62)
+    filled2, avg2, _ = client._sell_into_bids("tok-dn", 4.0, floor=0.62)
     assert filled2 == pytest.approx(4.0)
     assert avg2 == pytest.approx(0.62)
 
@@ -322,7 +322,7 @@ def test_rehearsed_sell_without_a_snapshot_uses_the_fresh_book(registry):
     """No queue-mark row for this run -> the fresh book, exactly as today."""
     client = _client(registry, {"bids": {0.66: 20.0, 0.65: 30.0}, "asks": {}})
 
-    filled, avg = client._sell_into_bids("tok-dn", 5.0, floor=0.64)
+    filled, avg, _ = client._sell_into_bids("tok-dn", 5.0, floor=0.64)
 
     assert filled == pytest.approx(5.0)
     assert avg == pytest.approx(0.66)
@@ -353,7 +353,7 @@ def test_rehearsed_sell_ignores_snapshots_from_other_runs(registry):
 
     client = _client(registry, {"bids": {0.66: 20.0}, "asks": {}})
 
-    filled, avg = client._sell_into_bids("tok-dn", 5.0, floor=0.60)
+    filled, avg, _ = client._sell_into_bids("tok-dn", 5.0, floor=0.60)
 
     # Current-run snapshot (0.61) is selected, NOT the foreign snapshot (0.68)
     # and NOT the fresh book (0.66).
@@ -375,7 +375,7 @@ def test_rehearsed_sell_without_best_bid_size_does_not_use_level_size(registry):
         best_bid=0.60, best_bid_size=None,
     )
     client = _client(registry, {"bids": {0.66: 20.0}, "asks": {}})
-    filled, avg = client._sell_into_bids("tok-dn", 5.0, floor=0.64)
+    filled, avg, _ = client._sell_into_bids("tok-dn", 5.0, floor=0.64)
     # Falls back to fresh book because best_bid_size is missing
     assert filled == pytest.approx(5.0)
     assert avg == pytest.approx(0.66)

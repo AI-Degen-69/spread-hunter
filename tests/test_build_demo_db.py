@@ -99,9 +99,12 @@ def test_the_demo_store_measures_the_capital_risk_section(tmp_path):
     payload = kpi.report(db_path=str(tmp_path / "demo.db"), run_id="all")
 
     capital = payload["statistical_analytics"]["capital_risk"]
-    assert capital["pnl_skewness"]["pnl_skewness"] == pytest.approx(-1.504061, abs=1e-6)
+    # #730 added three hard-stop closes to the demo store (15 → 18 closes), so the two
+    # close-population statistics move with it. Bands and every drawdown figure below are
+    # unchanged: the shape (few large losses) and the account curve are the same scenarios.
+    assert capital["pnl_skewness"]["pnl_skewness"] == pytest.approx(-0.963916, abs=1e-6)
     assert capital["pnl_skewness"]["band"] == "bad"
-    assert capital["sortino_ratio"]["sortino_ratio"] == pytest.approx(-0.23345, abs=1e-6)
+    assert capital["sortino_ratio"]["sortino_ratio"] == pytest.approx(-0.351863, abs=1e-6)
     assert capital["sortino_ratio"]["band"] == "bad"
 
     recovery = capital["drawdown_recovery"]

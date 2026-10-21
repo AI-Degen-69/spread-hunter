@@ -99,6 +99,17 @@ METHODS: tuple[CloseMethod, ...] = (
 
 MERGE_METHODS = tuple(r.name for r in METHODS if r.bucket == MERGE_BUCKET)
 RESCUE_METHODS = tuple(r.name for r in METHODS if r.bucket == RESCUE_BUCKET)
+
+# --- exit reasons that mean a stop forced the sale (#730) -------------------
+
+# Reasons that must sell NOW into the book read inside the exit call. Every
+# other route fills against the prior rotation's `queue_marks` snapshot (the
+# pre-decision book, adverse-selection protection); a stop-loss priced off a
+# stale snapshot books exits the venue never gave (H1/H2). Both the current
+# lifecycle string and the older alias route here. It lives in this leaf
+# because the shadow fill engine and the pure analytics both read it, and the
+# analytics must not import across the live/shadow boundary.
+HARD_STOP_SELL_REASONS = frozenset({"hard_stop", "lifecycle_hard_stop"})
 SETTLEMENT_METHODS = tuple(r.name for r in METHODS if r.bucket == SETTLEMENT_BUCKET)
 BOOKKEEPING_METHODS = tuple(r.name for r in METHODS if r.bucket == BOOKKEEPING_BUCKET)
 ALL_METHOD_NAMES = frozenset(r.name for r in METHODS)

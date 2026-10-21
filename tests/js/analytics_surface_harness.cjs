@@ -42,7 +42,7 @@ function element(id) {
 // Every id the Tier 1 renderers and the view filter reach for.
 for (const id of ['pnl-ci-readout', 'execution-funnel', 'sample-sufficiency-readout',
                   'card-sample-sufficiency', 'tier1-decision-row', 'fill-path-edge-readout',
-                  'rescue-friction-readout', 'queue-realism-readout',
+                  'rescue-friction-readout', 'stop-slippage-readout', 'queue-realism-readout',
                   'robustness-readout', 'capital-risk-readout',
                   'quant-risk-deck', 'analytics-charts-matrix',
                   'card-sensitivity-simulator', 'analytics-gates',
@@ -103,6 +103,11 @@ try {
   errors.push(`rescue_friction: ${e && e.message}`);
 }
 try {
+  app.renderStopSlippage(kpi.statistical_analytics || {});
+} catch (e) {
+  errors.push(`stop_slippage: ${e && e.message}`);
+}
+try {
   app.renderQueueRealism(kpi.statistical_analytics || {});
 } catch (e) {
   errors.push(`queue_realism: ${e && e.message}`);
@@ -139,6 +144,7 @@ process.stdout.write(JSON.stringify({
   sample_sufficiency_html: element('sample-sufficiency-readout').innerHTML,
   fill_path_edge_html: element('fill-path-edge-readout').innerHTML,
   rescue_friction_html: element('rescue-friction-readout').innerHTML,
+  stop_slippage_html: element('stop-slippage-readout').innerHTML,
   queue_realism_html: element('queue-realism-readout').innerHTML,
   robustness_html: element('robustness-readout').innerHTML,
   capital_risk_html: element('capital-risk-readout').innerHTML,
