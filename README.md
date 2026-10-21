@@ -20,7 +20,7 @@ back into $1.00 of USDC. The income is the difference:
 profit per pair = 1.00 - (avg UP price + avg DOWN price)
 ```
 
-`max_pair_cost = 0.99` is the profit condition: the merge is the exit and the P&L event.
+`bot_pos_price_max_pair_cost_usd = 0.99` is the profit condition: the merge is the exit and the P&L event.
 Graduated markets pay $0.00 in maker rewards and the KPI report does not estimate them;
 a real venue credit would be a side accrual, never blended into trading PnL.
 
@@ -181,9 +181,9 @@ stack and preserves the captured `starting_account_value`.
    and the dashboard's START button all rest or spend real funds. `complete` buys the
    missing side: it removes the risk of a single buy, but it does so by spending, so it is
    an opening command and not a closing one.
-4. **Dynamic caps** (`core_brain/config.py`): `order_risk_pct = 25%` ($25.00 at $100
-   baseline), `naked_risk_pct = 6%` ($6.00 at $100 baseline),
-   `bankroll_ceiling_pct = 90%` ($90.00 at $100 baseline), `max_pair_cost = 0.99`.
+4. **Dynamic caps** (`core_brain/config.py`): `bot_risk_exposure_max_order_pct = 25%` ($25.00 at $100
+   baseline), `bot_risk_exposure_max_naked_pct = 6%` ($6.00 at $100 baseline),
+   `bot_risk_exposure_bankroll_ceiling_pct = 90%` ($90.00 at $100 baseline), `bot_pos_price_max_pair_cost_usd = 0.99`.
    Caps scale with the live account mark.
 5. **`data/orders.db` is the production registry.** Read it; never rewrite or delete it.
 

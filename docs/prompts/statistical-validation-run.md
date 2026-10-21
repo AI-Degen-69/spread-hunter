@@ -32,7 +32,7 @@ Build a **Statistical Validation Run** — a time-boxed + event-boxed rehearsal 
    - Snapshot `runtime/pipeline.json` + `runtime/markets.json` + effective `MakerConfig` into the artifact directory so the run is replayable.
 
 3. **No forked strategy logic.** Call the live decision stack directly:
-   - Config: `core_brain/config.py:MakerConfig` via `load()` (`core_brain/shadow_run.py:517`) — same `max_order_usd` / `max_total_usd` caps as `core_brain/venue.py:25`, same `max_pair_cost=0.99`, `max_completable_pair_cost=1.00`, `requote_dead_band=0.03`, `price_band 0.10-0.90`, skew, band risk, fleet caps (`core_brain/risk.py`, `core_brain/quotes.py:137`).
+   - Config: `core_brain/config.py:MakerConfig` via `load()` (`core_brain/shadow_run.py:517`) — same `bot_risk_exposure_max_order_usd` / `bot_risk_exposure_max_total_usd` caps as `core_brain/venue.py:25`, same `max_pair_cost=0.99`, `max_completable_pair_cost=1.00`, `requote_dead_band=0.03`, `price_band 0.10-0.90`, skew, band risk, fleet caps (`core_brain/risk.py`, `core_brain/quotes.py:137`).
    - Decision: `core_brain/quotes.py:decide_quotes` → `_decide_quotes_from_mid` (objective `spread_capture`, `core_brain/quotes.py:420`), including `risk.hard_block` and `risk.completable_pair_block`.
    - Planning: `core_brain/trader_loop.py:plan_orders` with re-gate + dead-band (`trader_loop.py:54`).
    - Loop: `core_brain/trader_loop.py:run` via `VenueSeam` (`core_brain/shadow_run.py:268 build_shadow_seam` / `run_shadow`). Wire `settling_inventory_fn` → `shadow_exec.settle_market` before each decide (same ordering as live).
@@ -70,7 +70,7 @@ Require the agent to **derive N from the data**, not pick a round number:
    Half-width ≈ `z * sqrt(p(1-p)/n)`. To claim win_rate > 0.5 with lower bound > 0.55 at p≈0.6 needs n ≥ 100; at p≈0.7 needs n ≥ 70. Report.
 
 3. **Markout maturity** (adverse selection gate):
-   `core_brain/config.py:232 markout_min_sample=8`, `markout_fleet_min_sample=25`, horizons `(300, 3600, 21600, 900)`s (`core_brain/markout.py:24`). A verdict with zero matured markouts is `insufficient_sample`, not a pass. Require ≥ 25 pooled matured samples before evaluating `fleet_posture` (`core_brain/markout.py:219 fleet_stats`).
+   `core_brain/config.py:232 markout_min_sample=8`, `markout_fleet_min_sample=25`, horizons `(300, 3600, 21600, 900)`s (`core_brain/markout.py:24`). A verdict with zero matured markouts is `insufficient_sample`, not a pass. Require ≥ 25 pooled matured samples before evaluating `bot_risk_circuit_fleet_posture` (`core_brain/markout.py:219 fleet_stats`).
 
 4. **Historical calibration**:
    Reference: paper run 476 closes, shadow run `run-2809a7161de1` had 209 orders / 0 fills in 30 min — **minutes ≠ sample**. The agent must justify **event-based stopping** (N closes) over pure time-box. E.g., 60 and 120 markets are starting points, but the agent must show they meet the power requirement or raise them.
@@ -86,7 +86,7 @@ Reuse `core_brain/kpi.py:50 compute_trade_analytics` — do not re-derive:
 - `n_closes` **inclusive** (every `method` — `shadow_merge` + `single_buy_exit`/`naked_exit` + stop-loss), `wins/losses`, `win_rate` + `win_rate_ci95` (Wilson), `expectancy_usd`, `mean_return_pct`, `stdev_return_pct`, **`ci90_lower_pct` gated at > 1.0% (not > 0)**, `ci95_return_pct`, `profit_factor`, `risk_reward_ratio`, `sharpe_ratio`, `sortino_ratio`, `max_drawdown_usd/pct`, `max_naked_exposure_usd`, `pnl_distribution`, **`total_realized_pnl` and `total_return_pct` inclusive**
 - Pair-cost: `median_pair_cost`, `pairs_under_1` (`kpi.py:1089`), full sorted distribution — report but **do not gate on conditional merge profit alone** (tautology)
 - Fill quality: `fill_rate`, `median_seconds_to_fill`, `median_queue_ahead`, `fill_by_queue`, `quote_uptime`, `top_skip_reasons` (hard blocks), `adverse_selection` per share (size-weighted drift to longest matured horizon), `markout_samples`
-- Rescue: completion rate, exit rate, realized `pairs_complete_gain_cents` vs `pairs_exit_cost_cents` (`config.py:818`) — these losses are **inside** the total PnL gate, not beside it
+- Rescue: completion rate, exit rate, realized `bot_risk_pairs_complete_gain_cents` vs `bot_risk_pairs_exit_cost_cents` (`config.py:818`) — these losses are **inside** the total PnL gate, not beside it
 - Mechanics: `order_latency_ms`, `reconcile_lag_ms`, `venue_rejects`, divergences (even if NO-OP in shadow, report as `skipped_stages=("reconcile",)` per `shadow_run.py:633`)
 
 ---
@@ -105,7 +105,7 @@ python -m core_brain.statistical_validation_run \
 
 Internals:
 
-1. **Config snapshot** (`core_brain/shadow_run.py:524`): log `reward_offset`, `price_risk_widen`, `max_completable_pair_cost`, caps, `requote_dead_band`, `pairs_exit_window_sec`. Support env overrides `HUNTER_COMPLETABLE_CAP`, `HUNTER_REQUOTE_DEAD_BAND` but snapshot the **effective** values.
+1. **Config snapshot** (`core_brain/shadow_run.py:524`): log `bot_quote_spread_static_offset_cents`, `bot_quote_price_risk_widen`, `bot_pos_price_max_complete_usd`, caps, `bot_order_requote_dead_band_cents`, `bot_risk_pairs_exit_window_sec`. Support env overrides `BOT_POS_PRICE_MAX_COMPLETE_USD`, `BOT_ORDER_REQUOTE_DEAD_BAND_CENTS` but snapshot the **effective** values.
 
 2. **Seam wiring** (`build_shadow_seam` pattern):
    - `db_path` = isolated file, `run_id = shadow_run_id()` (`shadow_run.py:51` shadow- prefix).
@@ -145,7 +145,7 @@ The agent must define **explicit, numeric gates** in `report.md`. Suggested (tun
 | **Total PnL $** | `total_realized_pnl` lower 90% bound | `> 0` and `> 1% of bankroll` | Dollar version of the same gate — report both forms |
 | **Win rate** | `win_rate_ci95.lower` | `> 0.50` | Wins not a coin flip (Wilson, `kpi.py:31`) — secondary only |
 | **Economic** | `expectancy_usd` vs `merge_gas_usd` | `> 0.05` | Edge survives real gas (`config.py:315`) — folded into total PnL anyway |
-| **Adverse sel.** | `adverse_selection` per share | `> -0.005` | Fleet markout not catastrophically adverse (`markout_widen_threshold`) |
+| **Adverse sel.** | `adverse_selection` per share | `> -0.005` | Fleet markout not catastrophically adverse (`bot_risk_markout_widen_threshold`) |
 | **Rescue** | `single_buy` completion rate | report inside total | Completion/exit CIs are **not** separate gates — their losses are already inside the primary total PnL gate |
 | **Sample** | `n_closes` inclusive | `≥ n_required` from §3.2 | Underpowered runs cannot be GO |
 | **Maturity** | `markout_samples` | `≥ 25` pooled | Otherwise `insufficient_sample` |

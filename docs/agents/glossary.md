@@ -87,16 +87,16 @@ Commit scopes follow the package name: `fix(core_brain): ...`, not `fix(engine):
 
 | Legacy name | Canonical name | Unit / Meaning |
 | --- | --- | --- |
-| `max_skew` | `max_skew_offset` | `0.015` (1.5¢ additive offset behind mid) |
-| `min_book_depth_sh` | `min_book_depth_shares` | `200.0` shares top-3 depth floor |
-| `emergency_hedge_frac` | `emergency_hedge_pct` | `0.80` ratio of naked cap trigger |
-| `couple_risk_frac` | `couple_risk_pct` | `0.01` max risk ratio per coupled pair |
-| `quote_window_frac` | `quote_window_pct` | `0.40` ratio of spread window |
-| `stat_gate_bankroll_fraction` | `stat_gate_bankroll_pct` | `0.01` (1% of bankroll for stat gate) |
-| `MAX_ORDER_USD` | `max_order_usd` | $25.0 baseline single order ceiling ($1.00 min floor) |
-| `MAX_TOTAL_USD` | `max_total_usd` | $90.0 baseline total portfolio ceiling |
-| `HUNTER_MIN_SIZE` | — | Retired; `BOT_QUOTE_SIZE_MIN_SHARES` is the only name |
-| `HUNTER_TICK` | — | Retired; `BOT_QUOTE_GRID_TICK_SIZE_USD` is the only name |
-| `HUNTER_MAX_SHARES` | — | Retired; `BOT_QUOTE_SIZE_MAX_SHARES` is the only name |
-| `HUNTER_STAT_GATE_BANKROLL_FRACTION` | — | Retired; `BOT_EVAL_STAT_GATE_BANKROLL_PCT` is the only name |
+| `bot_pos_skew_max_offset_cents` | `bot_pos_skew_max_offset_cents` | `0.015` (1.5¢ additive offset behind mid) |
+| `bot_quote_book_min_depth_shares` | `bot_quote_book_min_depth_shares` | `200.0` shares top-3 depth floor |
+| `bot_risk_hedge_emergency_pct` | `bot_risk_hedge_emergency_pct` | `0.80` ratio of naked cap trigger |
+| `bot_quote_alloc_couple_pct` | `bot_quote_alloc_couple_pct` | `0.01` max risk ratio per coupled pair |
+| `bot_quote_window_max_pct` | `bot_quote_window_max_pct` | `0.40` ratio of spread window |
+| `bot_eval_stat_gate_bankroll_pct` | `bot_eval_stat_gate_bankroll_pct` | `0.01` (1% of bankroll for stat gate) |
+| `MAX_ORDER_USD` | `bot_risk_exposure_max_order_usd` | $25.0 baseline single order ceiling ($1.00 min floor) |
+| `MAX_TOTAL_USD` | `bot_risk_exposure_max_total_usd` | $90.0 baseline total portfolio ceiling |
+| `BOT_QUOTE_SIZE_MIN_SHARES` | `BOT_QUOTE_SIZE_MIN_SHARES` | Canonical environment variable |
+| `BOT_QUOTE_GRID_TICK_SIZE_USD` | `BOT_QUOTE_GRID_TICK_SIZE_USD` | Canonical environment variable |
+| `BOT_QUOTE_SIZE_MAX_SHARES` | `BOT_QUOTE_SIZE_MAX_SHARES` | Canonical environment variable |
+| `BOT_EVAL_STAT_GATE_BANKROLL_PCT` | `BOT_EVAL_STAT_GATE_BANKROLL_PCT` | Canonical environment variable |
 

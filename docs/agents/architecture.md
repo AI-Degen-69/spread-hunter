@@ -70,7 +70,7 @@ state is persisted in the order registry so a restart does not erase an escalati
    precedence over the other routes and requests a guarded exit. The trigger is the higher
    of the configured mode's drop from that leg's own fill average (`NONE` contributes
    none, `ABSOLUTE_DROP` a fixed dollar drop, `PERCENTAGE_DROP` a percentage of it) and
-   the universal emergency floor at `emergency_drawdown_pct` of the same average, never
+   the universal emergency floor at `bot_risk_circuit_max_drawdown_pct` of the same average, never
    below `$0.01`. A static bid floor was retired in #619: active quotes span
    `$0.10`–`$0.90`, so a fixed stop near the bottom liquidated every low entry on fill.
 5. **`PAIR_LOCKED`** — both legs are balanced and their average prices total no more than
