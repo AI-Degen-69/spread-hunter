@@ -218,12 +218,29 @@ def is_port_available(port: int, host: str = "127.0.0.1") -> bool:
             return False
 
 
+# Arm keys that named a config field before #732 renamed them to `bot_*`.
+# They are not read below, so an arm still carrying one would quietly run the
+# shipped default and the tournament would compare an arm nobody chose. Fail
+# at plan time instead of after the runs have spent their minutes.
+_RETIRED_PRESET_KEYS = frozenset({
+    "dynamic_offset_enabled", "dynamic_offset_multiplier",
+    "dynamic_offset_min_cents", "dynamic_offset_max_cents",
+    "stop_loss_mode", "drop_cents", "max_spread_from_mid",
+    "apply_widen_gate",
+})
+
+
 def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
     """Convert a tournament preset dict into BOT_* environment overrides.
 
     The launcher emits canonical names only; there is no legacy alias to fall
-    back to.
+    back to, so a retired key is refused rather than silently ignored.
     """
+    retired = sorted(_RETIRED_PRESET_KEYS & preset.keys())
+    if retired:
+        raise ValueError(
+            f"Arm uses retired preset keys {retired}; use the bot_* names instead"
+        )
     env: dict[str, str] = {}
     if "bot_quote_gate_dynamic_offset_on" in preset:
         env["BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"] = "1" if preset["bot_quote_gate_dynamic_offset_on"] else "0"
@@ -241,7 +258,7 @@ def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
     # offset with no upper clamp and no WIDENED snap-back, without touching
     # the shipped defaults or any other arm.
     if "bot_quote_book_max_spread_from_mid" in preset:
-        env["BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID"] = str(int(round(float(preset["bot_quote_book_max_spread_from_mid"]) * 100.0)))
+        env["BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID"] = str(round(float(preset["bot_quote_book_max_spread_from_mid"]) * 100.0))
     if "bot_quote_gate_widen_on" in preset:
         env["BOT_QUOTE_GATE_WIDEN_ON"] = "1" if preset["bot_quote_gate_widen_on"] else "0"
     return env

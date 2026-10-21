@@ -1867,17 +1867,13 @@ def _manage_single_leg_positions_locked(
     window_ms = int(getattr(cfg, "bot_risk_pairs_exit_window_sec", 900.0) * 1000)
     lead_sec = float(getattr(cfg, "bot_risk_aged_out_rescue_lead_sec", 900.0))
     _mpc = getattr(cfg, "bot_pos_price_max_pair_cost_usd", None)
-    if _mpc is None:
-        _mpc = getattr(cfg, "bot_pos_price_max_pair_cost_usd", 0.995)
-    bot_pos_price_max_pair_cost_usd = float(_mpc)
+    bot_pos_price_max_pair_cost_usd = float(0.995 if _mpc is None else _mpc)
     tick_size = float(getattr(cfg, "bot_quote_grid_tick_size_usd", DEFAULT_TICK_SIZE))
     bot_risk_stop_mode = str(getattr(cfg, "bot_risk_stop_mode", "NONE"))
     bot_risk_stop_adverse_drop_cents = float(getattr(cfg, "bot_risk_stop_adverse_drop_cents", 0.05))
     bot_risk_stop_max_drawdown_pct = float(getattr(cfg, "bot_risk_stop_max_drawdown_pct", 10.0))
     _edp = getattr(cfg, "bot_risk_circuit_max_drawdown_pct", None)
-    if _edp is None:
-        _edp = getattr(cfg, "bot_risk_circuit_max_drawdown_pct", 75.0)
-    bot_risk_circuit_max_drawdown_pct = float(_edp)
+    bot_risk_circuit_max_drawdown_pct = float(75.0 if _edp is None else _edp)
     resolved = {str(cid).lower() for cid in (resolved_cids or ()) if cid}
 
     if market_state_fn is None:

@@ -8,7 +8,7 @@ from one that saved us from a pair over $1.00: `orders` recorded a status and
 nothing else.
 
 So every cancel now records its reason and the queue it held. The hold rule is
-the payoff, and it ships OFF (`requote_hold_queue_shares = 0.0`) precisely
+the payoff, and it ships OFF (`bot_order_requote_hold_queue_shares = 0.0`) precisely
 because choosing the threshold is what the record is for.
 """
 from __future__ import annotations

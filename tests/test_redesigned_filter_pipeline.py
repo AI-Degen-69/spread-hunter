@@ -348,9 +348,8 @@ def test_a_wide_quote_window_never_widens_the_book_gate(monkeypatch):
     The quote window can be set to 50c and the book gate must still refuse a 3c
     book for the same reason. `MAX_BOOK_SPREAD` is a module constant, so the
     config assertions are the load-bearing half of this test: they fail the moment
-    the ceiling is derived from `max_spread_from_mid`.
+    the ceiling is derived from `bot_quote_book_max_spread_from_mid`.
     """
-    monkeypatch.delenv("BOT_MARKET_PINNED_CONDITION_ID", raising=False)
     monkeypatch.delenv("BOT_MARKET_PINNED_CONDITION_ID", raising=False)
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "50")
 

@@ -157,9 +157,7 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
         return 0
 
     _strict_pairs = getattr(cfg, "bot_pos_gate_strict_pairs_on", None)
-    if _strict_pairs is None:
-        _strict_pairs = getattr(cfg, "bot_pos_gate_strict_pairs_on", True)
-    _strict_pairs = bool(_strict_pairs)
+    _strict_pairs = True if _strict_pairs is None else bool(_strict_pairs)
 
     if naked_side(inv) != side:
         if _strict_pairs and naked_side(inv) is not None:

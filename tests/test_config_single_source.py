@@ -159,27 +159,23 @@ def test_derived_values_unchanged():
     for cfg in (ScoringMakerConfig(), CoreMakerConfig()):
         assert cfg.tau_cancel_sec == (3.93 + 150.0) / 1000.0
         assert cfg.tau_post_sec == (3.93 + 81.0) / 1000.0
-        assert cfg.bot_pos_skew_max_offset_cents == cfg.bot_pos_skew_max_offset_cents == 0.015
-        assert cfg.bot_quote_book_min_depth_shares == cfg.bot_quote_book_min_depth_shares == 200.0
-        assert cfg.bot_risk_hedge_emergency_pct == cfg.bot_risk_hedge_emergency_pct == 0.8
-        assert cfg.bot_latency_net_oneway_ms == cfg.bot_latency_net_oneway_ms == 3.93
-        assert cfg.bot_quote_window_max_pct == cfg.bot_quote_window_max_pct == 0.40
-        assert cfg.filter_std_spread_share_pct == cfg.filter_std_spread_share_pct == 41.0 / 120.0
+        assert cfg.bot_pos_skew_max_offset_cents == 0.015
+        assert cfg.bot_quote_book_min_depth_shares == 200.0
+        assert cfg.bot_risk_hedge_emergency_pct == 0.8
+        assert cfg.bot_latency_net_oneway_ms == 3.93
+        assert cfg.bot_quote_window_max_pct == 0.40
+        assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
         assert cfg.filter_common_spread_max_cents == 0.0205
 
 
 def test_db_path_unchanged_under_every_env_state(monkeypatch):
-    """`db_path()` resolves identically in both classes, in all three states.
+    """`db_path()` resolves identically in both classes, unset and set.
 
     Only the default is rooted at `ROOT`; an explicit `SPREAD_HUNTER_DB` is taken
     verbatim, which is what the duplicated helper does in both files.
     """
-    for name in ("SPREAD_HUNTER_DB", "SPREAD_HUNTER_DB"):
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("SPREAD_HUNTER_DB", raising=False)
     assert scoring_config.MakerConfig().db_path() == scoring_config.ROOT / "hunter.db"
-
-    monkeypatch.setenv("SPREAD_HUNTER_DB", "legacy.db")
-    assert scoring_config.MakerConfig().db_path() == Path("legacy.db")
 
     monkeypatch.setenv("SPREAD_HUNTER_DB", "current.db")
     assert scoring_config.MakerConfig().db_path() == Path("current.db")
@@ -190,8 +186,8 @@ def test_db_path_unchanged_under_every_env_state(monkeypatch):
 
 def test_loader_output_unchanged(monkeypatch):
     """`load()` with nothing set is the shipped class, not a re-derived one."""
-    for name in ("BOT_MARKET_PINNED_CONDITION_ID", "BOT_QUOTE_WIDE_BOOK_TRIAL", "BOT_QUOTE_BANK_BASELINE_USD",
-                 "BOT_QUOTE_BANK_BASELINE_USD", "SPREAD_HUNTER_DB", "SPREAD_HUNTER_DB"):
+    for name in ("BOT_MARKET_PINNED_CONDITION_ID", "BOT_QUOTE_WIDE_BOOK_TRIAL",
+                 "BOT_QUOTE_BANK_BASELINE_USD", "SPREAD_HUNTER_DB"):
         monkeypatch.delenv(name, raising=False)
 
     loaded = scoring_config.load()
@@ -490,9 +486,8 @@ def test_canonical_execution_env_overrides_field_and_legacy_is_ignored(
 
 
 def test_execution_coupling_overrides(monkeypatch):
-    """#674: Coupling tests for size (quote_shares floor), bankroll (max_committed_usd), and trial (widen max_spread_from_mid)."""
+    """#674: Coupling tests for size (quote_shares floor), bankroll (max_committed_usd), and trial (widen bot_quote_book_max_spread_from_mid)."""
     _clear_execution_env(monkeypatch)
-    monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned")
     monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned")
 
     # 1. Size override raises quote_shares to max(n, 120)
@@ -506,13 +501,13 @@ def test_execution_coupling_overrides(monkeypatch):
     assert cfg.bot_quote_size_min_shares == 50
     assert cfg.bot_quote_size_shares == 120
 
-    # 2. Bankroll override sets bankroll_usd and max_committed_usd
+    # 2. Bankroll override sets bot_quote_bank_baseline_usd and max_committed_usd
     monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "250.0")
     cfg = scoring_config.load()
     assert cfg.bot_quote_bank_baseline_usd == 250.0
     assert cfg.bot_risk_exposure_max_committed_usd == 250.0
 
-    # 3. Wide-book trial override only widens max_spread_from_mid
+    # 3. Wide-book trial override only widens bot_quote_book_max_spread_from_mid
     monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "5")  # 5 cents = 0.05
     monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
@@ -521,7 +516,7 @@ def test_execution_coupling_overrides(monkeypatch):
     assert cfg.bot_quote_book_max_spread_cents == 0.12
     assert cfg.bot_quote_book_max_spread_from_mid == 0.12
 
-    # Smaller trial does not lower max_spread_from_mid
+    # Smaller trial does not lower bot_quote_book_max_spread_from_mid
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "20")  # 20 cents = 0.20
     monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
     cfg = scoring_config.load()
@@ -732,12 +727,11 @@ def test_wide_book_trial_refusal_names_variable(monkeypatch):
         scoring_config.load()
     assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens bot_quote_book_max_spread_cents" in str(exc1.value)
 
-    # 2. Legacy variable set outside rehearsal
+    # 2. The retired variable is inert outside a rehearsal: no refusal, no error
     monkeypatch.delenv("BOT_QUOTE_WIDE_BOOK_TRIAL", raising=False)
-    monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
-    with pytest.raises(ValueError) as exc2:
-        scoring_config.load()
-    assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens bot_quote_book_max_spread_cents" in str(exc2.value)
+    monkeypatch.setenv("HUNTER_WIDE_BOOK_TRIAL", "0.12")
+    assert scoring_config.load().bot_quote_wide_book_trial is None
+    monkeypatch.delenv("HUNTER_WIDE_BOOK_TRIAL", raising=False)
 
     # 3. Inside rehearsal, value exceeding 0.30 is rejected
     monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
@@ -775,8 +769,6 @@ def test_invalid_trial_override_keeps_shipped_default(monkeypatch, can_var, bad_
     "var_name",
     [
         "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL",
-        "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL",
-        "FILTER_STD_VOL_MIN_24H_USD_TRIAL",
         "FILTER_STD_VOL_MIN_24H_USD_TRIAL",
     ],
 )

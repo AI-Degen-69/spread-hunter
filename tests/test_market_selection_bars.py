@@ -139,7 +139,6 @@ def test_the_picker_bar_is_a_share_of_the_live_gate():
     for cfg in (ScoringConfig(), MakerConfig()):
         assert cfg.bot_quote_book_max_spread_cents == 0.06
         assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
-        assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
         assert cfg.filter_common_spread_max_cents == round(
             cfg.bot_quote_book_max_spread_cents * cfg.filter_std_spread_share_pct, 6) == 0.0205
 
@@ -214,20 +213,13 @@ def test_book_allowed_default_spread_gate_boundary():
     assert "spread 0.0206 > 0.0205" in reason
 
 
-# --- #652: the derived picking cap's canonical name --------------------------
-
-
-def test_the_canonical_picking_bar_name_holds_the_same_number():
-    """`filter_common_spread_max_cents` is a second NAME for one value, not a copy.
-
-    The value is a price fraction (0.0205), the way
-    `bot_quote_price_band_min_cents` (0.10) and
-    `bot_quote_spread_static_offset_cents` (0.020) already read.
-    """
-    for cls in (ScoringConfig, MakerConfig):
-        cfg = cls()
-        assert cfg.filter_common_spread_max_cents == cfg.filter_common_spread_max_cents
-        assert cfg.filter_common_spread_max_cents == 0.0205
+# --- #652: the derived picking cap ------------------------------------------
+#
+# The cap used to be reachable under two names (the alias and the canonical
+# `filter_common_spread_max_cents`). #732 deleted the alias, so the only name
+# left is the canonical one and the "both names hold one number" test it
+# needed went with it; `test_the_permanent_spread_bar_is_two_point_zero_five_cents`
+# still pins the number itself.
 
 
 def test_the_canonical_picking_bar_name_follows_the_live_gate_and_the_trial():

@@ -191,6 +191,22 @@ def test_build_tournament_plan_rejects_a_retired_env_name():
         build_tournament_plan(issue=371, arms=bad_env_arms, check_ports=False)
 
 
+def test_build_tournament_plan_rejects_a_retired_preset_key():
+    """A pre-#732 arm key is refused, not silently left at the shipped default.
+
+    `_preset_to_env` only reads canonical `bot_*` keys, so an arm still spelled
+    with the old name used to run with no override at all -- the tournament
+    then compared an arm nobody chose.
+    """
+    from scripts.shadow_tournament import build_tournament_plan
+
+    stale_arms = [
+        {"name": "arm-one", "dynamic_offset_enabled": True, "stop_loss_mode": "NONE"},
+    ]
+    with pytest.raises(ValueError, match=r"retired preset keys"):
+        build_tournament_plan(issue=371, arms=stale_arms, check_ports=False)
+
+
 def test_build_tournament_plan_rejects_live_port_8799():
     from scripts.shadow_tournament import build_tournament_plan
 

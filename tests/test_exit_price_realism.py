@@ -58,7 +58,7 @@ def test_shadow_run_keeps_the_configured_exit(monkeypatch):
 def test_shadow_run_exit_defaults_when_unset(monkeypatch):
     """Unset stays the shipped baseline, so existing rehearsals do not move."""
     for name in ("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "BOT_RISK_STOP_MODE",
-                 "HUNTER_DRAWDOWN_PCT"):
+                 "BOT_RISK_STOP_MAX_DRAWDOWN_PCT"):
         monkeypatch.delenv(name, raising=False)
 
     from core_brain.shadow_run import shadow_cfg

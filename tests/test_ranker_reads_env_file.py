@@ -70,7 +70,6 @@ def _bar_with_generated_env(tmp_path: Path, contents: str) -> float:
         # environment and override=False would never replace it. Clear it: this
         # test controls the file, not the checkout it happens to run in.
         os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
-        os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
         # Re-run the loader against the generated root and rebuild the config
         # exactly as import does, so the fallback chain is exercised end to end.
         fm._load_repo_env({str(tmp_path)!r})
@@ -121,7 +120,6 @@ def test_a_missing_env_file_is_not_an_error(tmp_path):
         # so a value staged in the developer's own .env is already in the
         # environment and override=False would never replace it. Clear it: this
         # test controls the file, not the checkout it happens to run in.
-        os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
         os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
         fm._load_repo_env({str(tmp_path)!r})
         fm._CFG = scoring.config.load()

@@ -37,7 +37,7 @@ from scoring import config as scoring_config
 
 REPO = Path(__file__).resolve().parents[1]
 
-SELECTOR_VARS = ("BOT_QUOTE_TOURNAMENT_PRESET", "BOT_QUOTE_TOURNAMENT_PRESET")
+SELECTOR_VARS = ("BOT_QUOTE_TOURNAMENT_PRESET",)
 
 
 def _clear_selector(monkeypatch):

@@ -160,8 +160,8 @@ def test_retained_neighbors_still_declared():
     }
     expected_scoring = {
         "filter_common_vol_min_top3_depth_usd",
-        # `select_max_book_spread` is derived (a property) since #572, so the
-        # declared scoring knob to guard is the share it derives from.
+        # `filter_common_spread_max_cents` is derived (a property) since #572, so
+        # the declared scoring knob to guard is the share it derives from.
         "filter_std_spread_share_pct",
     }
 

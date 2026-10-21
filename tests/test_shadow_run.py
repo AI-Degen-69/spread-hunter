@@ -2441,7 +2441,6 @@ class TestFixedStartingBankroll:
         # The refusal under test is this function's own; an externally set
         # bankroll env would raise a different (capitalised) message first.
         monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
-        monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
 
         with pytest.raises(ValueError, match="bankroll"):
             run_shadow(

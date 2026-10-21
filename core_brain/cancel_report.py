@@ -152,7 +152,8 @@ def format_report(summary: dict[str, Any]) -> str:
         lines.append("")
         lines.append(f"  {share:.0f}% of cancels were price moves. Those are the "
                      f"only ones the re-quote holds can keep")
-        lines.append(f"  (requote_hold_queue_shares / requote_hold_below_target "
+        lines.append(f"  (bot_order_requote_hold_queue_shares / "
+                     f"bot_order_requote_hold_below_target_cents "
                      f"in core_brain.config: {_hold_state()});")
         lines.append(f"  the rest are gates doing their job.")
     return "\n".join(lines)
