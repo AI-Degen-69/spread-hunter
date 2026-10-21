@@ -282,6 +282,11 @@ def test_broken_record_reports_its_path_and_the_reason(tmp_path, monkeypatch):
         ('{"arms": {}}', "'arms' is not a list"),
         ('{"arms": ["control"]}', "arm 0 is not a JSON object"),
         ('{"arms": [{"db_path": "x"}]}', "arm 0 has no string 'name'"),
+        # Present-but-unusable values: a null db_path would reach `ROOT / cfg["db"]`
+        # inside analyze_arm_database, raise TypeError and take the page with it.
+        ('{"arms": [{"name": "control", "db_path": null}]}', "arm 0 (control) has a non-string 'db_path'"),
+        ('{"arms": [{"name": "control", "run_id": null}]}', "arm 0 (control) has a non-string 'run_id'"),
+        ('{"arms": [{"name": "control", "dash_port": "8801"}]}', "arm 0 (control) has a non-integer 'dash_port'"),
     ],
 )
 def test_broken_record_shape_errors_name_the_arm_at_fault(
@@ -338,6 +343,29 @@ def test_plain_resolver_still_returns_only_the_arms(tmp_path, monkeypatch):
 
     assert isinstance(arms, list)
     assert arms == cockpit.ARMS_CONFIG_487
+
+
+def test_null_db_path_warns_instead_of_crashing_the_stats(tmp_path, monkeypatch):
+    """The end the shape check exists for: the stats endpoint still answers.
+
+    `analyze_arm_database` starts with `ROOT / cfg["db"]`. Handed a null db_path
+    it raises TypeError, so the page and `/api/stats` die with a traceback and
+    the operator sees no warning at all. The record must be refused first.
+    """
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _record(tmp_path, "487_current_setup_10arm.json", [
+        {"name": "control", "db_path": None, "run_id": "shadow-real", "dash_port": 8801},
+    ])
+
+    stats = cockpit.collect_all_stats("487")
+
+    assert stats["record_error"] is not None
+    assert "arm 0 (control)" in stats["record_error"]
+    # The table is the static fallback, not a half-merged arm with db=None.
+    assert {a["db"] for a in stats["arms"]} == {
+        a["db"] for a in cockpit.ARMS_CONFIG_487
+    }
 
 
 def test_a_broken_record_warns_once_not_once_per_poll(tmp_path, monkeypatch, caplog):

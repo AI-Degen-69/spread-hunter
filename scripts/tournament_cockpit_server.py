@@ -750,6 +750,22 @@ def _read_arm_record(path: Path) -> list[dict[str, Any]]:
             raise TournamentRecordError(f"{path}: arm {i} is not a JSON object")
         if not isinstance(arm.get("name"), str) or not arm["name"]:
             raise TournamentRecordError(f"{path}: arm {i} has no string 'name'")
+        # An ABSENT field is fine -- the merge keeps the static placeholder. A
+        # PRESENT-but-unusable one is not: `db_path: null` would be copied into
+        # the arm and reach `ROOT / cfg["db"]` in analyze_arm_database, where it
+        # raises TypeError and takes the page down with a traceback instead of
+        # showing the warning this module exists to show.
+        for field in ("db_path", "run_id"):
+            if field in arm and (not isinstance(arm[field], str) or not arm[field]):
+                raise TournamentRecordError(
+                    f"{path}: arm {i} ({arm['name']}) has a non-string '{field}'"
+                )
+        if "dash_port" in arm:
+            port = arm["dash_port"]
+            if isinstance(port, bool) or not isinstance(port, int):
+                raise TournamentRecordError(
+                    f"{path}: arm {i} ({arm['name']}) has a non-integer 'dash_port'"
+                )
     return record_arms
 
 
