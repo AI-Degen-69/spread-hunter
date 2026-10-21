@@ -495,6 +495,17 @@ header {
 .db-run-row.current { background: rgba(255, 255, 255, 0.06); }
 .db-run-row .pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .db-run-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+/* The run's stream-vs-REST book mix (#659 N2): the counts the run recorded.
+ * Muted on purpose -- DESIGN.md lets a saturated hue mean a state only, and
+ * a provenance mix is not one. It spans the row so it reads as a second line,
+ * not as a third column of the switcher. */
+.db-run-mix {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.4;
+}
 
 /* The SERVICES pill dropdown (terminal-redesign pattern): the summary pill in
    the top bar doubles as the trigger; a child of <header>, NOT of .top-meta,
