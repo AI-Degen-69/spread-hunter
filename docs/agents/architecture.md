@@ -49,7 +49,7 @@ spread-hunter/
     cycle_events.jsonl    Ring buffer of operational events
     *.log                 Every process log the menu redirects
   reports/                Generated statistics reports (gitignored)
-  docs/issues/            Issue showcases: <id>-presentation-<slug>.html
+  docs/issues/            Issue showcases: <id>-presentation-<slug>.html (nowhere else under docs/)
   docs/archive/           Superseded human-written docs (readable, not active contract)
   tests/                  Full hermetic unit & integration test suite
 ```
@@ -116,7 +116,7 @@ each ended up with two homes, decided by which code path produced it:
 | Statistics report | `reports/` | `statistics_report.DEFAULT_REPORT_DIR` (`LIVE_ROOT / "reports"`) |
 | Runtime state | `runtime/` | `core_brain/runtime_paths.py` |
 | Process logs | `runtime/` | the menu's `-RedirectStandard*` arguments |
-| Issue showcase | `docs/issues/` | Station VII's `<id>-presentation-<slug>.html` contract |
+| Issue showcase | `docs/issues/` (or a folder below it) | Station VII's `<id>-presentation-<slug>.html` contract; `tests/test_docs_layout.py` fails for one anywhere else under `docs/` |
 
 Two rules keep it that way:
 
@@ -145,7 +145,7 @@ silently swallowed `docs/reports/` -- two issue showcases sat there untracked.
 | `SPEC.md`, `CONSTRAINTS.md` | Archived | `docs/archive/`, history preserved; three historical showcases name them as text labels |
 | `metadata.json` | Kept at root | Host-owned: no repo reference found, so deleting could break tooling outside this repo |
 
-Enforced by `tests/test_docs_layout.py` (showcase placement + `project/` absence).
+Enforced by `tests/test_docs_layout.py` (recursive showcase placement -- `docs/issues/` and its subfolders only -- plus `project/` absence).
 
 ## Data storage retention policy
 
