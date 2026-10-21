@@ -76,3 +76,52 @@
 - name: "blocked:code-gate"
   color: "B60205"
   description: "Blocked until all code tasks are done — needs stable codebase before running"
+
+# --- Custom Spread Hunter labels ---
+- name: "🐛 Bug"
+  color: "d73a4a"
+  description: "Something isn't working"
+
+- name: "✨ Feature"
+  color: "a2eeef"
+  description: "New feature or enhancement"
+
+- name: "📚 Documentation"
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+
+- name: "⚡ Performance"
+  color: "ffb703"
+  description: "Performance improvements or latency fixes"
+
+- name: "🚨 Critical"
+  color: "b60205"
+  description: "Urgent/P0 issue requiring immediate fix"
+
+- name: "🏦 Exchanges"
+  color: "5319e7"
+  description: "Issues related to CEX/DEX connectors"
+
+- name: "📖 Orderbook"
+  color: "0e8a16"
+  description: "Orderbook, depth, liquidity, or snapshots"
+
+- name: "🎯 Arbitrage"
+  color: "1d76db"
+  description: "Arbitrage calculation, spreads, or triangular logic"
+
+- name: "⚙️ Execution"
+  color: "fbca04"
+  description: "Order routing, limit/market orders, and fills"
+
+- name: "🔔 Alerts"
+  color: "e99695"
+  description: "Telegram, Discord, or webhook alerts"
+
+- name: "🔌 API & WebSocket"
+  color: "1f6feb"
+  description: "REST endpoints, WebSockets, or rate limits"
+
+- name: "🛠️ Infra & CI"
+  color: "6f42c1"
+  description: "Docker, CI/CD, or deployment issues"

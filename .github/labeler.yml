@@ -18,20 +18,56 @@
 # "🚨 Critical". A reporter writing "this is urgent" usually means "this annoys
 # me", and a P0 label applied by regex is one the reader learns to ignore.
 
-bug:
-  - '/\b(bug|crash|traceback|regression|broken)/i'
+# --- Types & Severities ---
+"🐛 Bug":
+  - '/\b(bug|error|exception|crash|panic|traceback|fail(ed|ing|ure)?|broken|unexpected)\b/i'
 
-# `docs?\b` and not `docs?`: without the boundary the alternative matches
-# the `doc` inside "docker", "doctype" and "doctor", so a post about a container
-# image would arrive tagged documentation.
+"✨ Feature":
+  - '/\b(feat|feature|enhancement|request|add support|proposal|rfc)\b/i'
+
+"📚 Documentation":
+  - '/\b(doc|docs|documentation|readme|guide|wiki|typo)\b/i'
+
+"⚡ Performance":
+  - '/\b(perf|performance|latency|lag|slow|bottleneck|throughput|memory leak|cpu spike)\b/i'
+
+"🚨 Critical":
+  - '/\b(urgent|critical|sev-?1|p0|outage|downtime|hotfix|liquidat(ed|ion))\b/i'
+
+# --- Domain / Spread Hunter Specifics ---
+"🏦 Exchanges":
+  - '/\b(exchange|ccxt|binance|bybit|okx|coinbase|kraken|kucoin|hyperliquid|gateio|mexc|bitget)\b/i'
+
+"📖 Orderbook":
+  - '/\b(orderbook|order-book|depth|bids?|asks?|l2|l3|snapshot|ticker|liquidity|slippage)\b/i'
+
+"🎯 Arbitrage":
+  - '/\b(arbitrage|arb|spread|triangular|cross-exchange|funding rate|basis|hedg(e|ing))\b/i'
+
+"⚙️ Execution":
+  - '/\b(execution|router|trade|order|fill|limit|market|post-only|cancel|stop-loss|take-profit)\b/i'
+
+"🔔 Alerts":
+  - '/\b(alert|notification|telegram|discord|webhook|slack|email|pagerduty)\b/i'
+
+"🔌 API & WebSocket":
+  - '/\b(websocket|ws|wss|rest api|endpoint|rate limit|429|connection drop|reconnect|heartbeat)\b/i'
+
+"🛠️ Infra & CI":
+  - '/\b(docker|compose|ci|cd|github actions|workflow|build|deploy|k8s|kubernetes)\b/i'
+
+# --- Existing generic labels (kept for backward compatibility) ---
+bug:
+  - '/\b(bug|crash|traceback|regression|broken)\b/i'
+
 documentation:
-  - '/\b(documentation|readme|docs?\b|typo)/i'
+  - '/\b(documentation|readme|docs?\b|typo)\b/i'
 
 enhancement:
-  - '/\b(feature request|enhancement|would be nice)/i'
+  - '/\b(feature request|enhancement|would be nice)\b/i'
 
 question:
-  - '/\b(how do i|how can i|why does|why is|is there a way)/i'
+  - '/\b(how do i|how can i|why does|why is|is there a way)\b/i'
 
 needs-triage:
-  - '/\b(needs[- ]triage)/i'
+  - '/\b(needs[- ]triage)\b/i'
