@@ -855,13 +855,38 @@ def _exit_fill_size(resp, requested_size: float) -> float:
     return min(size, float(requested_size))
 
 
+def _exit_fill_source(resp) -> str:
+    """Where the booked fill numbers came from (#730).
+
+    `simulated` / `assumed` come from the rehearsal's ladder walk, which is
+    the only place that knows whether shares actually crossed the book.
+    Otherwise a response carrying a positive price and size is a `reported`
+    fill; anything else is a fallback -- missing, unparseable or zero fields
+    -- and a fallback is unmeasured, never a free exit at 0.00 slippage.
+    """
+    if isinstance(resp, dict):
+        label = resp.get("fill_source")
+        if label:
+            return str(label)
+        try:
+            price = float(resp.get("price"))
+            size = float(resp.get("size"))
+        except (TypeError, ValueError):
+            return "assumed"
+        if price > 0 and size > 0:
+            return "reported"
+    return "assumed"
+
+
 def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
                        heavy_side: str, size: float, sell_price: float,
                        reason: Optional[str] = None,
                        method: str = "single_buy_exit",
                        trigger_bid: Optional[float] = None,
                        fresh_bid: Optional[float] = None,
-                       fee: Optional[float] = None) -> None:
+                       fee: Optional[float] = None,
+                       submitted_floor: Optional[float] = None,
+                       fill_source: Optional[str] = None) -> None:
     """Ledger a completed exit: the sold leg leaves the registry for good.
 
     Written AFTER the market order succeeds, mirroring the paper run's sweep (which
@@ -920,6 +945,8 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
         trigger_bid=trigger_bid,
         fresh_bid=fresh_bid,
         fee=fee,
+        submitted_floor=submitted_floor,
+        fill_source=fill_source,
     ))
 
 
@@ -1165,9 +1192,12 @@ def exit_single_buy(
     # Shadow rehearsal sells into its own book: no venue, no taker fee. Live
     # taker fees are unknown at sell time, so live stays NULL (unmeasured).
     fee = ZERO_FEE if hasattr(client, "_sell_into_bids") else None
+    fill_source = _exit_fill_source(resp)
     _record_exit_close(registry, after, heavy_token, heavy_side, sold,
                        fill_price, reason=reason, method=method,
-                       trigger_bid=trigger_bid, fresh_bid=bid, fee=fee)
+                       trigger_bid=trigger_bid, fresh_bid=bid, fee=fee,
+                       submitted_floor=min_price,
+                       fill_source=fill_source)
 
     return {
         "action": "exited",
@@ -1180,6 +1210,8 @@ def exit_single_buy(
         "bid": bid,
         "fill_price": fill_price,
         "min_price": min_price,
+        "submitted_floor": min_price,
+        "fill_source": fill_source,
         "trigger_bid": trigger_bid,
         "fresh_bid": bid,
         "cancelled": cancelled,
@@ -2045,12 +2077,29 @@ def _manage_single_leg_positions_locked(
                     registry, position, decision, previous_state,
                 )
             if decision.action == "hard_stop":
-                result = exit_single_buy(
-                    client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
-                    live=live, venue_positions=venue_positions,
-                    reason="lifecycle_hard_stop", force=True,
-                    trigger_bid=held_bid,
-                )
+                try:
+                    result = exit_single_buy(
+                        client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
+                        live=live, venue_positions=venue_positions,
+                        reason="lifecycle_hard_stop", force=True,
+                        trigger_bid=held_bid,
+                    )
+                except Exception as exc:
+                    # #730: an exit that measured nothing is evidence too -- one
+                    # append-only row per attempt. Telemetry is best-effort: a
+                    # failing write never changes the exit outcome below.
+                    try:
+                        registry.log_hard_stop_refusal(
+                            pair_id=pair_id,
+                            condition_id=position.condition_id,
+                            trigger_bid=held_bid,
+                            outcome=("refused" if isinstance(exc, PairExitRefused)
+                                     else "error"),
+                            detail=f"{type(exc).__name__}: {exc}",
+                        )
+                    except Exception:  # noqa: BLE001 - never mask the exit error
+                        pass
+                    raise
                 result.update(
                     route="hard_stop", lifecycle_state=decision.state.value,
                     reason=decision.reason,

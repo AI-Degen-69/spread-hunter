@@ -10,6 +10,16 @@ import sqlite3
 import pytest
 
 from core_brain.order_registry import CloseRecord, OrderRegistry, init_db
+from tests.test_hard_stop_reset import (
+    COND,
+    NOW,
+    PAIR,
+    TOK_DN,
+    TOK_UP,
+    ProvingVenue,
+    _balances,
+    _seed_pair,
+)
 
 
 # The `closes` table as it shipped before #730: no submitted_floor, no
@@ -165,3 +175,90 @@ def test_shadow_sell_into_a_book_below_the_floor_is_assumed(tmp_path):
     assert resp["fill_source"] == "assumed"
     assert resp["size"] == pytest.approx(5.0)
     assert resp["price"] == pytest.approx(0.13)
+
+
+def test_exit_fill_source_truth_table():
+    from core_brain.single_buy_saver import _exit_fill_source
+
+    assert _exit_fill_source(
+        {"fill_source": "simulated", "price": 0.13, "size": 5}) == "simulated"
+    assert _exit_fill_source({"price": 0.13, "size": 5}) == "reported"
+    assert _exit_fill_source({"price": "0.13", "size": "5"}) == "reported"
+    assert _exit_fill_source({"price": 0.13}) == "assumed"
+    assert _exit_fill_source({"price": "0.13", "size": 0}) == "assumed"
+    assert _exit_fill_source({"price": "bad", "size": 5}) == "assumed"
+    assert _exit_fill_source(None) == "assumed"
+
+
+def _route(registry, venue):
+    from core_brain import single_buy_saver as lp
+    from core_brain.market_resolution import MarketEndState
+    from tests.test_hard_stop_reset import _cfg
+
+    results = lp.manage_single_leg_positions(
+        venue, registry, _cfg(), live=True, now=NOW / 1000.0 + 10.0,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+        market_state_fn=lambda cid: MarketEndState(
+            condition_id=COND, closed=False, end_ts=NOW / 1000.0 + 600.0,
+            end_date_iso=None, end_date_passed=False, accepting_orders=True,
+            resolved=False, unreachable=False))
+    assert len(results) == 1
+    return results[0]
+
+
+class _RefusingVenue(ProvingVenue):
+    def create_and_post_market_order(self, *args, **kwargs):
+        from core_brain import single_buy_saver as lp
+        raise lp.PairExitRefused("venue refused the stop sale")
+
+
+class _ErroringVenue(ProvingVenue):
+    def create_and_post_market_order(self, *args, **kwargs):
+        raise RuntimeError("venue connection lost")
+
+
+def test_a_live_exit_without_reported_numbers_books_the_floor_assumed(
+        tmp_path, monkeypatch):
+    """A live response with no price/size is a fallback: unmeasured, never 0."""
+    db = tmp_path / "live.db"
+    reg = OrderRegistry(db_path=db)
+    _balances(monkeypatch, [])
+    _seed_pair(reg)
+
+    routed = _route(reg, ProvingVenue())
+
+    assert routed["action"] == "exited"
+    close = reg.get_all_closes()[0]
+    assert close["submitted_floor"] == pytest.approx(0.12)  # 0.14 bid - 0.02
+    assert close["fill_source"] == "assumed"
+
+
+def test_a_refused_hard_stop_is_recorded_and_keeps_the_error_result(
+        tmp_path, monkeypatch):
+    db = tmp_path / "live.db"
+    reg = OrderRegistry(db_path=db)
+    _balances(monkeypatch, [])
+    _seed_pair(reg)
+
+    routed = _route(reg, _RefusingVenue())
+
+    assert routed["action"] == "error"
+    rows = reg.get_hard_stop_refusals()
+    assert [r["outcome"] for r in rows] == ["refused"]
+    assert rows[0]["pair_id"] == PAIR
+    assert rows[0]["condition_id"] == COND
+    assert reg.get_all_closes() == []
+
+
+def test_an_errored_hard_stop_is_recorded_as_error(tmp_path, monkeypatch):
+    db = tmp_path / "live.db"
+    reg = OrderRegistry(db_path=db)
+    _balances(monkeypatch, [])
+    _seed_pair(reg)
+
+    routed = _route(reg, _ErroringVenue())
+
+    assert routed["action"] == "error"
+    rows = reg.get_hard_stop_refusals()
+    assert [r["outcome"] for r in rows] == ["error"]
+    assert "venue connection lost" in rows[0]["detail"]

@@ -268,7 +268,7 @@ Files: `core_brain/shadow_exec.py` — `_sell_into_bids` (1302, fallback return
 (`filled, avg, _ = client._sell_into_bids(...)`). The existing tests in these
 files keep their assertions verbatim.
 
-### T3 — [Backend/Logic] Exit records carry the floor and the source [ ]
+### T3 — [Backend/Logic] Exit records carry the floor and the source [x]
 **Size M. Depends on: T1, T2. Verify: `python -m pytest -q tests/test_hard_stop_fresh_exit.py tests/test_dual_stop_loss.py tests/test_single_buy_saver.py`**
 
 Files: `core_brain/single_buy_saver.py` — `_exit_fill_source` helper beside
