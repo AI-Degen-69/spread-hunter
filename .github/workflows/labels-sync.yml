@@ -21,21 +21,23 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # Fetch existing labels once, store as JSON array of names
-          existing=$(gh api repos/$GH_REPO/labels --jq 'map(.name)')
-          # Process each label from YAML
           yq -o=json '.[]' .github/labels.yaml | jq -c '.' | while IFS= read -r item; do
             name=$(echo "$item" | jq -r '.name')
             color=$(echo "$item" | jq -r '.color')
             desc=$(echo "$item" | jq -r '.description // ""')
-            # Check if label exists using jq (handles Unicode properly)
-            if echo "$existing" | jq -e --arg n "$name" 'index($n)' >/dev/null; then
-              echo "Label '$name' exists, skipping"
-              continue
-            fi
-            echo "Creating label '$name' (#$color)"
-            gh api --method POST repos/$GH_REPO/labels \
+            # Try to create; if it already exists (422), that's fine - skip it
+            if gh api --method POST repos/$GH_REPO/labels \
               -f name="$name" \
               -f color="$color" \
-              -f description="$desc"
+              -f description="$desc" 2>/dev/null; then
+              echo "Created label '$name' (#$color)"
+            else
+              # Check if it was a 422 (already exists) vs real error
+              if gh api repos/$GH_REPO/labels --jq '.[].name' | grep -Fxq "$name" 2>/dev/null; then
+                echo "Label '$name' exists, skipping"
+              else
+                echo "ERROR: Failed to create label '$name'" >&2
+                exit 1
+              fi
+            fi
           done
