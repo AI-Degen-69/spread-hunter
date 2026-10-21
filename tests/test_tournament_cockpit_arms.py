@@ -7,6 +7,7 @@ record forms -- that path is a frozen contract, so the last test pins it.
 """
 from __future__ import annotations
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -159,3 +160,73 @@ def test_492_and_608_still_resolve_from_their_run_numbered_records(tmp_path, mon
     assert c608["the-accountant-1"]["db"] == "data/real608.db"
     assert c608["the-accountant-1"]["run_id"] == "shadow-real-608"
     assert c608["the-accountant-1"]["port"] == 8902
+
+
+# --- The purged past-run pages ------------------------------------------------
+#
+# Issue #698 ordered the broken past-run pages purged. PR #703 closed the issue
+# without touching a single route, so `/484`, `/492` and `/608` kept serving
+# stale snapshots for two more days. Nothing on the page said which tournament
+# it was showing, and the operator had to notice by eye. These tests are the
+# guard: the cockpit serves one page, and the retired paths 404 on purpose.
+#
+# Their arm records stay (the resolver tests above), because "no page" is not
+# "no data": #492/#608 must remain launchable and comparable.
+
+
+class _CockpitHandlerStub(cockpit.CockpitHandler):
+    """The real handler with no socket under it, so routing is testable."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.statuses: list[int] = []
+        self.wfile = io.BytesIO()
+
+    def send_response(self, code: int, message: str | None = None) -> None:
+        self.statuses.append(code)
+
+    def send_header(self, keyword: str, value: str) -> None:
+        pass
+
+    def end_headers(self) -> None:
+        pass
+
+
+def _stub_stats(monkeypatch) -> None:
+    """Keep the handler off the arm databases; routing is what is under test."""
+    monkeypatch.setattr(
+        cockpit, "get_cached_stats",
+        lambda key=cockpit.CURRENT_SETUP_KEY: {"arms": [], "tourney_key": key},
+    )
+
+
+def test_cockpit_serves_only_the_current_setup_page(monkeypatch):
+    _stub_stats(monkeypatch)
+
+    for path in ("/", "/index.html", "/487", "/487.html", "/cockpit_487", "/487?refresh=1"):
+        handler = _CockpitHandlerStub(path)
+        handler.do_GET()
+        assert handler.statuses == [200], path
+        assert b"#487 Current Setup" in handler.wfile.getvalue(), path
+
+    for path in ("/484", "/484.html", "/492", "/492.html", "/608", "/608.html", "/nope"):
+        handler = _CockpitHandlerStub(path)
+        handler.do_GET()
+        assert handler.statuses == [404], f"{path} must not render a page"
+
+
+def test_stats_api_will_not_serve_a_purged_tournament(monkeypatch):
+    """`?tourney=608` falls back to the served page instead of its old data."""
+    _stub_stats(monkeypatch)
+
+    handler = _CockpitHandlerStub("/api/stats?tourney=608")
+    handler.do_GET()
+    assert handler.statuses == [200]
+    assert json.loads(handler.wfile.getvalue())["tourney_key"] == cockpit.CURRENT_SETUP_KEY
+
+
+def test_cockpit_html_links_to_no_purged_page():
+    html = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "487"})
+    for dead in ('href="/484"', 'href="/492"', 'href="/608"'):
+        assert dead not in html, f"purged page still linked: {dead}"
+    assert 'href="/487"' in html
