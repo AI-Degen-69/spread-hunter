@@ -1,0 +1,32 @@
+name: Issue Labeler
+
+# Labels an issue from its own text. Issues only: the action writes labels with
+# the workflow token, and a pull_request event from a fork gets a read-only
+# token, so a PR trigger would only ever turn into a red check on other
+# people's PRs. PRs are triaged by hand or by the review pipeline.
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      # No checkout: the action reads .github/labeler.yml from the repository
+      # through the API when the file is not on the runner.
+      - uses: github/issue-labeler@v3.5
+        with:
+          configuration-path: .github/labeler.yml
+          # Required by the action even when unused; `1` would switch on the
+          # `issue_labeler_regex_version=N` machinery and label every issue
+          # that lacks the marker with `body-missing-regex-label`.
+          enable-versioned-regex: 0
+          include-title: 1
+          # Add-only: a human's own label survives a later edit that no longer
+          # matches the rule.
+          sync-labels: 0
+          repo-token: ${{ github.token }}

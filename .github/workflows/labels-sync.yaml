@@ -1,0 +1,26 @@
+name: Sync Labels
+
+# Applies .github/labels.yaml to the tracker. Additive by design
+# (`skip-delete: true`): a label created in the UI stays, so this is a way to
+# record names, colours and descriptions in git without ever pruning one.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/labels.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crazy-max/ghaction-github-labeler@v6
+        with:
+          github-token: ${{ github.token }}
+          yaml-file: .github/labels.yaml
+          skip-delete: true
