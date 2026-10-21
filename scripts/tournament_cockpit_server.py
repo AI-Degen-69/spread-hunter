@@ -2205,7 +2205,8 @@ def run_cockpit_server(port: int = 8800) -> None:
     out_file_484.write_text(static_484, encoding="utf-8")
     print(f"Static Cockpit (#484 archive) generated at: {out_file_484}")
 
-    # 3. Issue #487 is HELD until R1 reports -- no fresh static export.
+    # 3. Issue #487 is prepared but not started: no static export until its
+    #    720-minute run reports, because there is no data to export yet.
 
     # 4. Issue #608 character tournament snapshot.
     stats_608 = collect_all_stats("608")
@@ -2219,7 +2220,7 @@ def run_cockpit_server(port: int = 8800) -> None:
         allow_reuse_address = True
 
     server = ThreadedServer(("127.0.0.1", port), CockpitHandler)
-    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (pages: / [= #492 fresh], /608 [#608 characters], /484 [archive], /487 [held])")
+    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (pages: / [= #492 fresh], /608 [#608 characters], /484 [archive], /487 [current setup])")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
