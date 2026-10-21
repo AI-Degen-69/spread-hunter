@@ -219,7 +219,7 @@ Target files: `scripts/filter_markets.py:1005-1205`, `scoring/selector.py`.
    - keep in-place replacement (universe length unchanged) and the existing
      dedup.
 
-### T2 — [Backend/Logic] Lane on every exit; per-lane snapshot; funnel passthrough
+### T2 — [Backend/Logic] Lane on every exit; per-lane snapshot; funnel passthrough [x]
 **Size L. Depends on: T1. Verify: `python -m pytest -q tests/test_live_event_discovery.py tests/test_live_funnel.py tests/test_redesigned_filter_pipeline.py tests/test_pipeline_snapshot_gates.py`**
 
 Target files: `scripts/filter_markets.py:1264-1708`, `2434-2640`,

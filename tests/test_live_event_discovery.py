@@ -9,6 +9,9 @@ Vectors are recorded from the live venue, 2026-10-06/07.
 """
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from scripts import filter_markets as fm
@@ -588,6 +591,176 @@ def test_a_sub_floor_live_market_is_declared_but_never_admitted():
     assert row["lane"] == "live"
     assert "_live_event" not in row
     assert stats["live_rows_declared_only"] == 1
+
+
+# --- the lane on every exit (#744) -------------------------------------------
+
+
+def _regular_market(days: int = 5) -> dict:
+    """A non-sports market that can reach the book gate on its own merits."""
+    end = datetime.now(timezone.utc) + timedelta(days=days)
+    return {
+        "condition_id": "0xpolitics",
+        "question": "Will the incumbent win the general election?",
+        "market_slug": "incumbent-election",
+        "category": "Politics",
+        "end_date_iso": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "tokens": [{"token_id": "aa"}, {"token_id": "bb"}],
+        "closed": False, "accepting_orders": True,
+        "minimum_tick_size": 0.01, "_order_min": 5,
+        "_volume_24h": 300_000.0, "_spread": 0.02,
+    }
+
+
+class _BookSession:
+    """Answers both book legs at mid 0.50 with the given spread."""
+
+    def __init__(self, spread: float, depth: int = 5000):
+        self.spread = spread
+        self.depth = depth
+
+    def get(self, url, **kwargs):  # pragma: no cover - always called
+        if "clob.polymarket.com/book" not in str(url):
+            raise AssertionError(f"unexpected venue call {url}")
+        half = self.spread / 2.0
+        return _FakeResponse({
+            "bids": [{"price": f"{0.50 - half:.4f}", "size": str(self.depth)}],
+            "asks": [{"price": f"{0.50 + half:.4f}", "size": str(self.depth)}]})
+
+
+def _live_row() -> dict:
+    return fm.live_event_markets(_FakeSession([_NHL_EVENT]))[0][0]
+
+
+@pytest.mark.parametrize("lane", ["live", "regular"])
+def test_every_evaluate_exit_carries_the_lane(lane, monkeypatch, tmp_path):
+    # Arrange: one row per lane, driven through every exit `evaluate` has. A
+    # row that leaves without a lane is what let the dashboard guess one.
+    market = _live_row() if lane == "live" else _regular_market()
+    volume = 63_664.0 if lane == "live" else 300_000.0
+    monkeypatch.setattr(fm, "tape_movement_and_range",
+                        lambda *a, **k: {"movement_usd": 1_000_000.0,
+                                         "range_cents": 5.0,
+                                         "measured_at": "t", "trade_count": 100})
+
+    # 1. identity refusal: no matchup, no primary/macro field to admit it.
+    faceless = dict(market, question="Alpha vs Beta", market_slug="alpha-beta",
+                    category="", market_type="", market_group="",
+                    series_title="", event_title="")
+    out = fm.evaluate(_NoNetwork(), 0.0, faceless, volume_24h=volume,
+                      source="spread")
+    assert out["eligible"] is False
+    assert out["lane"] == lane
+
+    # 2. movement refusal: the tape is flat.
+    monkeypatch.setattr(fm, "tape_movement_and_range",
+                        lambda *a, **k: {"movement_usd": 0.0, "range_cents": 0.0,
+                                         "measured_at": "t", "trade_count": 0})
+    out = fm.evaluate(_NoNetwork(), 0.0, market, volume_24h=volume,
+                      source="spread")
+    assert out["eligible"] is False
+    assert "movement" in out["reject_reason"]
+    assert out["lane"] == lane
+
+    # 3. book refusal: a book too wide to quote, with the tape alive.
+    monkeypatch.setattr(fm, "tape_movement_and_range",
+                        lambda *a, **k: {"movement_usd": 1_000_000.0,
+                                         "range_cents": 5.0,
+                                         "measured_at": "t", "trade_count": 100})
+    out = fm.evaluate(_BookSession(spread=0.10), 0.0, market,
+                      volume_24h=volume, source="spread")
+    assert out["eligible"] is False
+    assert "spread" in out["reject_reason"]
+    # The book exit is the one live refusal that used to carry no provenance at
+    # all; it now says the market was live as well as which lane it is in.
+    if lane == "live":
+        assert out["live_event"] is True
+        assert out["event_live"] is True
+        assert out["sports_market_type"] == "moneyline"
+        assert out["volume_bar_usd"] == fm.MIN_VOLUME_24H_LIVE
+    assert out["lane"] == lane
+
+    # 4. eligible: a tight, deep book.
+    out = fm.evaluate(_BookSession(spread=0.02), 0.0, market,
+                      volume_24h=volume, source="spread")
+    assert out["eligible"] is True
+    assert out["lane"] == lane
+
+    # 5. picked/final are projections of the eligible row, not an exit.
+    monkeypatch.setattr(fm, "RUN", tmp_path)
+    fm._write_pipeline_snapshot(
+        cands=[], spread_cands=[market], out=[out], eligible=[out],
+        picked=[out], causes={}, census="", gates="", attempted=1,
+        rejected=0, out_dir=tmp_path)
+    snap = json.loads((tmp_path / "pipeline.json").read_text(encoding="utf-8"))
+    assert snap["final"][0]["lane"] == lane
+    assert snap["picked"][0]["lane"] == lane
+
+
+def test_the_snapshot_publishes_per_lane_numbers_that_add_up(tmp_path):
+    # Arrange: two lanes, one live refusal, one live pick, one regular refusal,
+    # and one live candidate that never got a verdict.
+    out = [
+        {"source": "spread", "eligible": False,
+         "reject_reason": "no movement in window", "volume_24h": 100.0,
+         "cid": "0xlive1", "title": "Live one", "slug": "live-1",
+         "lane": "live", "days_to_resolve": 0.1},
+        {"source": "spread", "eligible": True, "reject_reason": "",
+         "volume_24h": 50_000.0, "cid": "0xlive2", "title": "Live two",
+         "slug": "live-2", "lane": "live", "days_to_resolve": 0.2},
+        {"source": "spread", "eligible": False,
+         "reject_reason": "24h volume $10 < $250,000", "volume_24h": 10.0,
+         "cid": "0xreg1", "title": "Reg one", "slug": "reg-1",
+         "lane": "regular", "days_to_resolve": 3.0},
+    ]
+    universe = [
+        {"condition_id": "0xlive1", "question": "Live one", "lane": "live"},
+        {"condition_id": "0xlive2", "question": "Live two", "lane": "live"},
+        {"condition_id": "0xlive3", "question": "Live three", "lane": "live"},
+        {"condition_id": "0xreg1", "question": "Reg one", "lane": "regular"},
+    ]
+    causes: dict = {}
+    for r in out:
+        if not r["eligible"]:
+            cause = fm._cause(r["reject_reason"])
+            causes[cause] = causes.get(cause, 0) + 1
+    eligible = [r for r in out if r["eligible"]]
+
+    # Act
+    fm._write_pipeline_snapshot(
+        cands=[], spread_cands=universe, out=out, eligible=eligible,
+        picked=eligible, causes=causes, census="", gates="",
+        attempted=len(universe), rejected=len(out) - len(eligible),
+        out_dir=tmp_path)
+    snap = json.loads((tmp_path / "pipeline.json").read_text(encoding="utf-8"))
+
+    # Assert: the block exists for exactly the two lanes, in the same shape as
+    # the global one.
+    assert set(snap["lanes"]) == {"live", "regular"}
+    global_counts = snap["counts"]
+    for key in ("funded", "spread_universe", "attempted", "scored",
+                "dropped_no_verdict", "rejected", "eligible", "picked"):
+        assert (snap["lanes"]["live"]["counts"][key]
+                + snap["lanes"]["regular"]["counts"][key]) == global_counts[key], key
+    live = snap["lanes"]["live"]["counts"]
+    assert live == {"funded": 0, "spread_universe": 3, "attempted": 3,
+                    "scored": 2, "dropped_no_verdict": 1, "rejected": 1,
+                    "eligible": 1, "picked": 1}
+    # A lane's numbers describe that lane only: nothing live leaks into regular.
+    assert snap["lanes"]["regular"]["counts"] == {
+        "funded": 0, "spread_universe": 1, "attempted": 1, "scored": 1,
+        "dropped_no_verdict": 0, "rejected": 1, "eligible": 0, "picked": 0}
+    # Per-lane rejections reuse the existing entry shape exactly.
+    assert (set(snap["lanes"]["live"]["rejections"][0])
+            == set(snap["rejections"][0])
+            == {"cause", "n", "would_fund", "traps", "examples"})
+    assert snap["lanes"]["live"]["rejections"][0]["n"] == 1
+    assert snap["lanes"]["live"]["rejections"][0]["examples"][0]["lane"] == "live"
+    assert snap["lanes"]["regular"]["rejections"][0]["n"] == 1
+    # Every preview row says which lane it is previewing.
+    assert {r["lane"] for r in snap["raw"]["spread"]} == {"live", "regular"}
+    assert snap["final"][0]["lane"] == "live"
+    assert snap["picked"][0]["lane"] == "live"
 
 
 # --- the evidence on the funnel row ----------------------------------------

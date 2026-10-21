@@ -298,6 +298,105 @@ def test_funnel_from_pipeline_includes_slug_and_url(tmp_path):
     assert f["final"][0]["slug"] == "winner-slug"
 
 
+def test_funnel_passes_the_per_lane_numbers_through(tmp_path):
+    """Each lane's counts and filters reach the dashboard from the same mapping (#744)."""
+    pipeline = _write(tmp_path / "pipeline.json", {
+        "counts": {"funded": 0, "spread_universe": 137, "attempted": 137,
+                   "scored": 137, "dropped_no_verdict": 0, "rejected": 132,
+                   "eligible": 5, "picked": 5},
+        "rejections": [
+            {"cause": "volume", "n": 100, "examples": []},
+        ],
+        "lanes": {
+            "live": {
+                "counts": {"funded": 0, "spread_universe": 5, "attempted": 5,
+                           "scored": 5, "dropped_no_verdict": 0,
+                           "rejected": 4, "eligible": 1, "picked": 1},
+                "rejections": [
+                    {"cause": "movement", "n": 4, "would_fund": 0, "traps": 0,
+                     "examples": [{"title": "WTA", "reason": "no movement",
+                                   "lane": "live"}]},
+                ],
+            },
+            "regular": {
+                "counts": {"funded": 0, "spread_universe": 132, "attempted": 132,
+                           "scored": 132, "dropped_no_verdict": 0,
+                           "rejected": 128, "eligible": 4, "picked": 4},
+                "rejections": [
+                    {"cause": "volume", "n": 100, "examples": []},
+                    {"cause": "movement", "n": 28, "examples": []},
+                ],
+            },
+        },
+    })
+
+    f = _funnel_from_pipeline({}, pipeline_path=pipeline,
+                              markets_path=tmp_path / "missing.json")
+
+    assert f is not None
+    # All keeps the global blocks.
+    assert f["counts"]["scored"] == 137
+    assert [g["cause"] for g in f["filters"]] == ["volume"]
+    # Each lane reads its own, built by the same mapper.
+    assert f["lanes"]["live"]["counts"]["scored"] == 5
+    assert [g["cause"] for g in f["lanes"]["live"]["filters"]] == ["movement"]
+    assert f["lanes"]["live"]["filters"][0]["n"] == 4
+    assert f["lanes"]["live"]["filters"][0]["examples"][0]["lane"] == "live"
+    assert [g["cause"] for g in f["lanes"]["regular"]["filters"]] == ["volume", "movement"]
+    # A lane's counts can be summed back to the All view the same run.
+    for key, value in f["lanes"]["live"]["counts"].items():
+        assert value + f["lanes"]["regular"]["counts"][key] == f["counts"][key]
+
+
+def test_funnel_reports_no_lane_numbers_for_an_older_snapshot(tmp_path):
+    """An artifact written before #744 has no lanes -- None, never fabricated zeros."""
+    pipeline = _write(tmp_path / "pipeline.json", {
+        "counts": {"funded": 0, "spread_universe": 137, "eligible": 5},
+        "rejections": [{"cause": "volume", "n": 1, "examples": []}],
+    })
+
+    f = _funnel_from_pipeline({}, pipeline_path=pipeline,
+                              markets_path=tmp_path / "missing.json")
+
+    assert f is not None
+    assert f["lanes"] is None
+    # The global blocks are unaffected by the lane block's absence.
+    assert f["counts"]["spread_universe"] == 137
+    assert [g["cause"] for g in f["filters"]] == ["volume"]
+
+
+def test_the_wta_row_is_live_without_a_lane_field(tmp_path):
+    """The 2026-10-21 markets.json shape: `event_live` and no lane.
+
+    That row was screened and graduated while the live lane reported 0 (#744),
+    so the reader has to classify the artifact it is given. A row the ranker
+    stamps decides for itself; these old fields are the fallback only.
+    """
+    pipeline = _write(tmp_path / "pipeline.json", {
+        "counts": {"funded": 0, "spread_universe": 2, "eligible": 2},
+        "rejections": [],
+    })
+    markets = _write(tmp_path / "markets.json", [
+        {"cid": "0xwta", "slug": "wta-buyukak-klimovi-2026-10-05",
+         "title": "Samsun: Cagla Buyukakcay vs Linda Klimovicova",
+         "event_live": True, "sport": "wta",
+         "event_period": "S3", "event_score": "6-3, 6-7(2-7), 0-3"},
+        {"cid": "0xbtc", "slug": "btc-above-100k", "title": "BTC above 100k?"},
+        {"cid": "0xstamped", "slug": "stamped", "title": "Stamped row",
+         "lane": "regular", "_live_event": True},
+    ])
+
+    f = _funnel_from_pipeline({}, pipeline_path=pipeline, markets_path=markets)
+
+    assert f is not None
+    assert f["graduated"][0]["lane"] == "live"
+    assert f["graduated"][0]["event_live"] is True
+    assert f["graduated"][0]["event_period"] == "S3"
+    assert f["graduated"][1]["lane"] == "regular"
+    # The ranker's stamp wins over a stale flag.
+    assert f["graduated"][2]["lane"] == "regular"
+
+
 def test_write_pipeline_snapshot_slug_serialization(monkeypatch, tmp_path):
     """_write_pipeline_snapshot serializes slug in raw, rejections, final, and picked."""
     import scripts.filter_markets as fm
