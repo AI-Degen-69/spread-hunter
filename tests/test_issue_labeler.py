@@ -76,6 +76,13 @@ def _declared_labels() -> set[str]:
     return names
 
 
+def _patterns_for(name: str) -> list[str]:
+    """Label keys carry an emoji prefix, so match the word, not the whole key."""
+    hits = [patterns for label, patterns in _rules().items() if label.lower().endswith(name)]
+    assert len(hits) == 1, f"expected one {name!r} rule, found {len(hits)}"
+    return hits[0]
+
+
 def _workflow() -> str:
     return _read(WORKFLOW)
 
@@ -120,7 +127,7 @@ def test_every_rule_names_a_label_the_tracker_declares():
 
 def test_a_docs_rule_does_not_fire_on_docker_or_doctype():
     """A stem without a trailing boundary matches the `doc` in `docker`."""
-    patterns = _rules()["documentation"]
+    patterns = _patterns_for("documentation")
     assert len(patterns) == 1, "one pattern per label; several are ANDed by the action"
     match = _PATTERN.match(patterns[0])
     assert match
