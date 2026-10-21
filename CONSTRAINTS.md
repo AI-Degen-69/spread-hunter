@@ -1,57 +1,74 @@
-# Constraints — #487 First 10-arm tournament from the current setup
+# Constraints — #748 One category label across the Orders & Trades tabs
 
-Branch: `i487/Plan-the-first-10-arm-tournament-from-the-current-setup` | Issue: #487
+Branch: `i748/consistent-category-label-orders-trades` | Issue: #748
 
 ## Hard scope
 
-- **Shadow mode only.** Nothing in this issue reaches the venue. No signer, no live
-  order path, no `core_brain/trader_loop.py`, no `core_brain/order_manager.py`.
-- **Never touch `data/orders.db`.** It is the production registry. Neither read nor write.
-- **This issue prepares the run; it does not launch it.** The 12-hour tournament is the
-  operator's to start. No task here runs `scripts/shadow_tournament.py` without `--dry-run`.
-- **The tournament spec is arm definitions, not strategy code.** No file under
-  `core_brain/`, `scoring/`, `strategy/` or `dashboard/` changes. A change that reaches
-  one of those is out of scope — stop and split it.
+- **Display only.** The category never gates admission, ranking, sizing or risk
+  (`docs/agents/strategy.md:39-42`). No file under `strategy/` or `scoring/`
+  changes, and `scripts/filter_markets.py` changes only in what it **asks the
+  venue for** and what it **writes into the row** — never in a filter, a score or
+  a gate.
+- **Five files may change:** `core_brain/market_meta.py`,
+  `scripts/filter_markets.py`, `dashboard/static/app.js`,
+  `tests/test_market_meta.py`, `tests/js/orders_trades_harness.cjs`,
+  `tests/test_orders_trades_table.py`, plus two existing test files that already
+  own the fetch seams (`tests/test_unified_universe.py`,
+  `tests/test_live_event_discovery.py`). A change outside this list is out of
+  scope — stop and split it.
+- **Never touch `data/orders.db`.** It is the production registry. Read only.
+- **No venue contact from this work.** No `quote`, no `complete`, no Trader
+  loop, no `order_manager` subcommand. The tag vocabulary was sampled live once
+  during planning, from `%TEMP%`, and nothing of it is committed.
+- **The legacy table is out of scope.** `dashboard/static/prototype.js:572` adds
+  `proto-body` on boot, so the dashboard paints the stitch renderers
+  (`app.js:8919-8937`). `marketCell`'s `caption-muted` category line and the
+  legacy rows keep their current markup.
 
 ## Zero regressions
 
-- Targeted checks covering the touched files must pass during development and after
-  review fixes: `python -m pytest -q tests/test_shadow_tournament.py` and
-  `python -m pytest -q tests/test_tournament_cockpit_arms.py`. The full
-  `python -m pytest -q` suite is the GitHub CI merge gate; do not repeat it locally.
-- New behaviour needs a test that fails without the change. The arms spec needs a test
-  that fails while the spec is absent or carries a two-knob arm.
-- **`#492` / `#608` cockpit resolution is a frozen contract.** The
-  `resolve_tournament_arms` change may only add the `487` named-stamp form to the `487`
-  branch of the resolution path. A `492` or `608` plan record must resolve exactly as it
-  does today.
+- Targeted checks covering the touched files, run by the agent during
+  development and after review fixes:
+  `python -m pytest -q tests/test_market_meta.py tests/test_orders_trades_table.py tests/test_unified_universe.py tests/test_live_event_discovery.py tests/test_stitch_active_markets.py tests/test_kpi.py`.
+  The full `python -m pytest -q` suite is the GitHub CI merge gate; do not repeat
+  it locally.
+- **`tests/test_stitch_active_markets.py` stays green untouched.** It pins the
+  Active Markets column structure; the category chip's contents may change, its
+  presence and class may not.
+- New behaviour needs a test that fails without the change. Every acceptance row
+  in `SPEC.md` names the test that fails when its behaviour is absent.
 
-## Performance / resource ceilings
+## Frozen contracts
 
-- The dry-run validation is the only run this issue performs: it prints, it exits, it
-  starts no process.
-- Storage budget stated up front: 10 arms × ~110 MB ≈ **1.1 GB** of `data/*.db` for the
-  eventual 12-hour run. That is the existing per-arm shadow-store size, not a new cost,
-  but the operator needs the number before launching.
+- `resolve_market_meta(cid, closes, quotes, root=...)` keeps its signature and
+  its returned keys. `event_title` is **added** to the returned dict (the
+  Positions secondary line needs a real title); no key is removed or renamed.
+- `kpi.by_market[cid]` is `{**meta, ...}` (`core_brain/kpi.py:1616`), so an added
+  meta key reaches the frontend without a KPI change. A KPI change is out of
+  scope.
+- `marketCategory(m)` keeps its name, its single argument and its
+  `Uncategorized` fallback — it is already exported and already called by every
+  renderer.
+- Feed rows keep `series_title`, `market_group`, `event_title`, `tags`,
+  `venue_category` and `category` with their current meanings. Only the
+  **resolver's use** of them changes.
+- `stitch-category-pill` is the only category markup. No new CSS class; the chip
+  and its muted `Uncategorized` styling already exist in
+  `dashboard/static/prototype.css:1313-1323`.
 
 ## Anti-cheat
 
-- Do not weaken, skip, delete or `xfail` an assertion to make a check pass.
-- Do not widen a test to "any 10 arms" — assert the exact 10 names and the exact
-  single-knob delta of each.
-- Do not suppress linters or add an ignore comment to silence a real finding.
+- No skipped or xfailed test, no deleted assertion, no widened tolerance. An
+  existing assertion that encodes the **old** precedence (series/group becoming
+  the category) is **rewritten** to the new contract, and the plan lists each one
+  — rewriting an assertion that guards a behaviour still wanted is not allowed.
+- No new external dependency. `requests` and `node` are already used.
 
-## Dependencies
+## Performance / resource ceilings
 
-- No new external dependency. The plan is JSON plus Python already present.
-- No new CLI flag on `scripts/shadow_tournament.py`: `--arms-file`, `--stamp`,
-  `--minutes`, `--dashboards` and `--dry-run` already cover the launch.
-
-## Deliberate non-regressions (Stations IV–V must not "fix" these)
-
-- `ARMS_CONFIG_487` carries `worst_catalyst: ""` and `worst_catalyst_desc: ""`. There is
-  no forensic run to populate them, and inventing numbers is the failure mode this issue
-  exists to remove. Empty renders as `N/A` in the leaderboard — that is correct.
-- `I487_TWEAKS` in `tests/test_shadow_tournament.py` stays. Its values describe the
-  **superseded** catalyst premise and are still the guard that keeps `#492` arms free of
-  `#487` tweaks. Only its comment changes.
+- The resolver stays pure and dict-only: no I/O, no network, no new import beyond
+  what `market_meta.py` already imports at module scope.
+- The tag ranking is O(tags) per market with a fixed vocabulary map built once at
+  import — no per-row regex compilation.
+- `include_tag=true` adds no page: it widens each existing `/markets` and
+  `/events` response, not the page count.
