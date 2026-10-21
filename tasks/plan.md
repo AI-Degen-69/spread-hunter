@@ -125,7 +125,7 @@ Built: the per-issue constraint and specification set for #487.
 Skill: `spec-driven-development`, `constraint-driven-development`
 Verification: both file headers name `#487` and this branch, and no `#749` text survives.
 
-### T2 — [ ] Write the arms-spec test  `[Code]` `S`
+### T2 — [x] Write the arms-spec test  `[Code]` `S`
 Files: `tests/test_shadow_tournament.py`
 Built: a test that loads `configs/tournaments/i487_current_setup_10arm_arms.json` and asserts:
 ten arms in the order above; every name matches `^[a-z0-9-]{1,24}$` and is **not** a
@@ -137,7 +137,7 @@ yields ports `8801`–`8810`, ten distinct DB paths and ten distinct run ids.
 Depends on: T1 | Skill: `test-driven-development`
 Verification: **lands RED** — the spec file does not exist yet, so the test fails on load.
 
-### T3 — [ ] Create the arm spec  `[Code]` `S`
+### T3 — [x] Create the arm spec  `[Code]` `S`
 Files: `configs/tournaments/i487_current_setup_10arm_arms.json`
 Built: the ten-arm bare-list spec of Decision 3, shape identical to
 `configs/tournaments/i492_tournament-1_arms.json`.
