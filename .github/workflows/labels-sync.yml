@@ -21,9 +21,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # yq reads the YAML properly, comments are ignored
-          # Iterate over each item in the array
-          yq -r '.[] | "\(.name)\t\(.color)\t\(.description // "")"' .github/labels.yaml | while IFS=$'\t' read -r name color desc; do
+          # Use yq to output JSON, then process with jq
+          yq -o=json '.[]' .github/labels.yaml | jq -c '.' | while IFS= read -r item; do
+            name=$(echo "$item" | jq -r '.name')
+            color=$(echo "$item" | jq -r '.color')
+            desc=$(echo "$item" | jq -r '.description // ""')
             # Skip if label already exists
             if gh api repos/$GH_REPO/labels --jq '.[].name' | grep -Fxq "$name"; then
               echo "Label '$name' exists, skipping"
