@@ -41,5 +41,5 @@ Three things to know before editing either:
   frustration as a P0.
 - **Patterns are case-insensitive and written as `/pattern/i`.** The action
   hands a bare string to `String.match`, which is case-sensitive. Several
-  patterns under one label are ANDed rather than ORed -- every listed pattern
-  has to match -- which is why each label here carries exactly one pattern.
+  patterns under one label are ANDed -- every listed pattern must match for
+  the label to be applied.
