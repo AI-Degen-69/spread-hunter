@@ -179,8 +179,10 @@ def test_the_payload_version_is_pinned_on_both_sides(app_js, kpi_module):
     # distribution chart now reads instead of its own constants; #517 added the
     # capital-risk section (`pnl_skewness`, `sortino_ratio`, `drawdown_recovery`)
     # the new card reads: both sides sit at 257. #559 added the `settled` and
-    # `other` fill-path buckets: both sides sit at 258.
-    assert backend.group(1) == "258"
+    # `other` fill-path buckets: both sides sit at 258. #732 renamed the funnel's
+    # cap field to `bot_pos_price_max_pair_cost_usd`, so a page served by a
+    # pre-#732 process now reads a stale backend: both sides sit at 259.
+    assert backend.group(1) == "259"
 
 
 def test_a_stale_backend_shows_a_restart_note(app_js, index_html, styles_css):

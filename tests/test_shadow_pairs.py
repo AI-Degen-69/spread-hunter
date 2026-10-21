@@ -31,7 +31,7 @@ def test_adopt_welds_two_detached_legs_under_one_pair_id():
     a = _order("idA", "tokUP", 0.30, pair_id="pair-aaa")
     b = _order("idB", "tokDN", 0.60, pair_id=None)
     plan = plan_pairs("0xcond", [a, b], {}, {"0xcond": ("tokUP", "tokDN")},
-                      max_pair_cost=0.98, mint_pair_id=lambda: "pair-fresh")
+                      bot_pos_price_max_pair_cost_usd=0.98, mint_pair_id=lambda: "pair-fresh")
     assert len(plan.adopt) == 1
     l1, l2, shared = plan.adopt[0]
     assert {l1, l2} == {"idA", "idB"}
@@ -44,7 +44,7 @@ def test_adopt_mints_when_neither_leg_has_a_pair_id():
     a = _order("idA", "tokUP", 0.40, pair_id=None)
     b = _order("idB", "tokDN", 0.50, pair_id=None)
     plan = plan_pairs("0xcond", [a, b], {}, {"0xcond": ("tokUP", "tokDN")},
-                      max_pair_cost=0.98, mint_pair_id=lambda: "pair-fresh")
+                      bot_pos_price_max_pair_cost_usd=0.98, mint_pair_id=lambda: "pair-fresh")
     assert plan.adopt[0][2] == "pair-fresh"
 
 
@@ -52,7 +52,7 @@ def test_no_adopt_when_combined_exceeds_cap():
     a = _order("idA", "tokUP", 0.50)
     b = _order("idB", "tokDN", 0.55)  # 1.05 > cap
     plan = plan_pairs("0xcond", [a, b], {}, {"0xcond": ("tokUP", "tokDN")},
-                      max_pair_cost=0.98, mint_pair_id=lambda: "pair-x")
+                      bot_pos_price_max_pair_cost_usd=0.98, mint_pair_id=lambda: "pair-x")
     assert not plan.adopt
 
 
@@ -63,14 +63,14 @@ def test_cancel_orphan_when_combined_with_ask_exceeds_cap():
     a = _order("idA", "tokUP", 0.60)
     books = {"tokDN": _book(0.50)}  # 0.60 + 0.50 = 1.10 >= cap
     plan = plan_pairs("0xcond", [a], books, {"0xcond": ("tokUP", "tokDN")},
-                      max_pair_cost=0.98, mint_pair_id=lambda: "pair-x")
+                      bot_pos_price_max_pair_cost_usd=0.98, mint_pair_id=lambda: "pair-x")
     assert "idA" in plan.cancel
 
 
 def test_cancel_orphan_when_no_opposing_book():
     a = _order("idA", "tokUP", 0.60)
     plan = plan_pairs("0xcond", [a], {}, {"0xcond": ("tokUP", "tokDN")},
-                      max_pair_cost=0.98, mint_pair_id=lambda: "pair-x")
+                      bot_pos_price_max_pair_cost_usd=0.98, mint_pair_id=lambda: "pair-x")
     assert "idA" in plan.cancel
 
 
@@ -80,7 +80,7 @@ def test_unavailable_opposing_book_defers_instead_of_cancelling():
     a = _order("idA", "tokUP", 0.60)
     books = {"tokDN": None}
     plan = plan_pairs("0xcond", [a], books, {"0xcond": ("tokUP", "tokDN")},
-                      max_pair_cost=0.98, mint_pair_id=lambda: "pair-x")
+                      bot_pos_price_max_pair_cost_usd=0.98, mint_pair_id=lambda: "pair-x")
     assert "idA" not in plan.cancel
     assert not plan.adopt
 
@@ -91,7 +91,7 @@ def test_completable_orphan_is_left_for_the_pairs_pass():
     a = _order("idA", "tokUP", 0.40)
     books = {"tokDN": _book(0.50)}  # 0.40 + 0.50 = 0.90 < cap
     plan = plan_pairs("0xcond", [a], books, {"0xcond": ("tokUP", "tokDN")},
-                      max_pair_cost=0.98, mint_pair_id=lambda: "pair-x")
+                      bot_pos_price_max_pair_cost_usd=0.98, mint_pair_id=lambda: "pair-x")
     assert "idA" not in plan.cancel
     assert not plan.adopt
 
@@ -102,14 +102,14 @@ def test_partner_resting_is_not_treated_as_orphan():
     a = _order("idA", "tokUP", 0.60)
     b = _order("idB", "tokDN", 0.60)
     plan = plan_pairs("0xcond", [a, b], {}, {"0xcond": ("tokUP", "tokDN")},
-                      max_pair_cost=0.98, mint_pair_id=lambda: "pair-x")
+                      bot_pos_price_max_pair_cost_usd=0.98, mint_pair_id=lambda: "pair-x")
     assert not plan.cancel
     assert not plan.adopt
 
 
 def test_empty_orders_is_a_noop():
     plan = plan_pairs("0xcond", [], {}, {"0xcond": ("tokUP", "tokDN")},
-                      max_pair_cost=0.98, mint_pair_id=lambda: "pair-x")
+                      bot_pos_price_max_pair_cost_usd=0.98, mint_pair_id=lambda: "pair-x")
     assert not plan.adopt and not plan.cancel
 
 
@@ -132,7 +132,7 @@ def test_record_submit_reuses_resting_complement_pair_id(tmp_path):
     ensure_shadow_tables(db)
 
     market = SimpleNamespace(condition_id="0xcond")
-    cfg = SimpleNamespace(max_pair_cost=0.99)
+    cfg = SimpleNamespace(bot_pos_price_max_pair_cost_usd=0.99)
 
     class QI:
         def __init__(self, side, token, price, size, pair_id=None):

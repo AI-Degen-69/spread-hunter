@@ -87,7 +87,7 @@ class TestParity541:
         # Sensitivity block matches build_sensitivity on the same closes.
         cfg = load_cfg()
         sens = build_sensitivity(
-            _fixture_closes(db), threshold_pct=cfg.stat_gate_threshold_pct
+            _fixture_closes(db), threshold_pct=cfg.bot_eval_stat_gate_threshold_pct
         )
         assert f"{_fmt(sens['base']['ci90_lower_pct'], 4)}%" in bullet("**Base**")
         assert (
@@ -107,7 +107,7 @@ class TestParity541:
         stat = resolve_verdict(
             gate_rows=rows, kpi=payload,
             underpowered=False, underpowered_reasons=[],
-            threshold_pct=cfg.stat_gate_threshold_pct,
+            threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
         )
         out = tmp_path / "stat_bundle"
         write_artifacts(
@@ -138,9 +138,9 @@ class TestParity541:
         closes = _fixture_closes(db)
         gate = evaluate_stat_gate(
             closes, starting_capital=0.0,
-            threshold_pct=cfg.stat_gate_threshold_pct,
+            threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
         )
-        sens = build_sensitivity(closes, threshold_pct=cfg.stat_gate_threshold_pct)
+        sens = build_sensitivity(closes, threshold_pct=cfg.bot_eval_stat_gate_threshold_pct)
         # Same code path: sensitivity base IS the gate evaluation.
         assert sens["base"]["ci90_lower_pct"] == gate["ci90_lower_pct"]
 

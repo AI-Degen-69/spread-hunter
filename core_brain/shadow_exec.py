@@ -394,8 +394,8 @@ def record_submit(
     # Same precedence as live submission (`trader_loop._submit_intents`):
     # effective caps already merged into cfg win, otherwise the live caps.
     _live_order, _live_total = order_caps()
-    max_order_usd = float(getattr(cfg, "max_order_usd", _live_order)) if cfg is not None else _live_order
-    max_total_usd = float(getattr(cfg, "max_total_usd", _live_total)) if cfg is not None else _live_total
+    bot_risk_exposure_max_order_usd = float(getattr(cfg, "bot_risk_exposure_max_order_usd", _live_order)) if cfg is not None else _live_order
+    bot_risk_exposure_max_total_usd = float(getattr(cfg, "bot_risk_exposure_max_total_usd", _live_total)) if cfg is not None else _live_total
 
     paired_context = getattr(registry, "paired_context", None)
     paired_enabled = isinstance(paired_context, dict)
@@ -405,20 +405,20 @@ def record_submit(
             db_path, run_id=registry._run_id(),
             condition_id=market.condition_id)
     for i in intents:
-        if i.price * i.size > max_order_usd:
+        if i.price * i.size > bot_risk_exposure_max_order_usd:
             raise ShadowOrderRefused(
                 f"leg {i.side} ${i.price * i.size:.2f} exceeds "
-                f"MAX_ORDER_USD ${max_order_usd:.2f}")
+                f"MAX_ORDER_USD ${bot_risk_exposure_max_order_usd:.2f}")
 
     open_usd = sum(o.price * o.original_size for o in registry.get_active_orders())
     total_cost = sum(i.price * i.size for i in intents)
-    if open_usd + total_cost > max_total_usd:
+    if open_usd + total_cost > bot_risk_exposure_max_total_usd:
         raise ShadowOrderRefused(
             f"open ${open_usd:.2f} + ${total_cost:.2f} exceeds "
-            f"MAX_TOTAL_USD ${max_total_usd:.2f}")
+            f"MAX_TOTAL_USD ${bot_risk_exposure_max_total_usd:.2f}")
 
     now_ms = int(now_fn() * 1000)
-    max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
+    bot_pos_price_max_pair_cost_usd = float(getattr(cfg, "bot_pos_price_max_pair_cost_usd", 0.995))
 
     # STABLE PAIR IDENTITY (operator directive 2026-10-12). A market re-quoted
     # across rotations must NOT split one economic pair across two pair_ids --
@@ -469,7 +469,7 @@ def record_submit(
                     condition_id=market.condition_id, token_id=str(i.token_id),
                     side="BUY", price=i.price, original_size=i.size, status="open",
                     posted_ts=now_ms, last_polled_ts=now_ms, pair_id=pair_id,
-                    max_pair_cost_at_post=max_pair_cost,
+                    max_pair_cost_at_post=bot_pos_price_max_pair_cost_usd,
                 ))
             except Exception:
                 if attribution_written:

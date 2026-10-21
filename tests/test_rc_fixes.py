@@ -100,8 +100,8 @@ class FakeClient:
 
 
 def _cfg(**kw) -> MakerConfig:
-    base = dict(enable_pairs_rule=True, pairs_exit_window_sec=900.0,
-                max_pair_cost=MAX_PAIR_COST)
+    base = dict(bot_risk_gate_pairs_rule_on=True, bot_risk_pairs_exit_window_sec=900.0,
+                bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST)
     base.update(kw)
     return MakerConfig(**base)
 
@@ -158,7 +158,7 @@ def test_exit_writes_a_naked_exit_close(registry: OrderRegistry):
     client = FakeClient(best_ask=0.40)
 
     result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True)
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
     assert result["action"] == "exited"
     assert result["side"] == "UP"          # the heavy leg is the one sold
 
@@ -222,7 +222,7 @@ def test_exit_refuses_when_unpriced_heavy_shares_exist(registry: OrderRegistry):
 
     with pytest.raises(lp.PairExitRefused, match="more shares"):
         lp.exit_naked_leg(client, registry, "pair-1",
-                          max_pair_cost=MAX_PAIR_COST, live=True)
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     # The defer is a ledger no-op: nothing sold, no close written.
     assert client.orders == []
@@ -239,7 +239,7 @@ def test_exit_close_is_subtracted_from_inventory(registry: OrderRegistry):
 
     _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
     lp.exit_naked_leg(FakeClient(best_ask=0.40), registry, "pair-1",
-                      max_pair_cost=MAX_PAIR_COST, live=True)
+                      bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     inv = inventory_from_registry(COND, TOK_UP, TOK_DN, db_path=registry.db_path)
     assert inv.up_shares == pytest.approx(0.0)
@@ -252,7 +252,7 @@ def test_auto_pass_does_not_re_exit_after_the_close(registry: OrderRegistry):
     _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
     client = FakeClient(best_ask=0.40)
     lp.exit_naked_leg(client, registry, "pair-1",
-                      max_pair_cost=MAX_PAIR_COST, live=True)
+                      bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     out = auto_manage_pairs(client, registry, _cfg(), now=NOW_S)
     assert out == []
@@ -268,7 +268,7 @@ def test_a_fill_after_the_close_re_arms_the_rule(registry: OrderRegistry):
     """
     _one_sided_pair(registry, filled_size=10.0, fill_price=0.60, pair_id="pair-1")
     lp.exit_naked_leg(FakeClient(best_ask=0.40), registry, "pair-1",
-                      max_pair_cost=MAX_PAIR_COST, live=True)
+                      bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
 
     # A second pair on the SAME condition, filled AFTER the close. The close
     # row's ts is time.time() (real now); the new fill's venue_ts must sit
@@ -308,7 +308,7 @@ def test_exit_refuses_when_the_sold_leg_side_is_unresolvable(
 
     with pytest.raises(lp.PairExitRefused, match="UP or DOWN leg"):
         lp.exit_naked_leg(client, registry, pair_id,
-                          max_pair_cost=MAX_PAIR_COST, live=True)
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
     assert not any(c.startswith("cancel:") for c in client.calls)
     assert not any(c.startswith("sell:") for c in client.calls)
 
@@ -331,8 +331,8 @@ def test_hard_block_pair_cost_fires_on_the_light_side():
     at 0.20 avg -> pair $1.12, a booked loss, and the cap never fired because
     R4 returned before the pair-cost arm ran.
     """
-    cfg = MakerConfig(enable_hard_blocks=True, max_pair_cost=0.995,
-                      max_naked_usd=100.0, enforce_price_band=False)
+    cfg = MakerConfig(bot_risk_gate_hard_blocks_on=True, bot_pos_price_max_pair_cost_usd=0.995,
+                      bot_risk_exposure_max_naked_usd=100.0, bot_quote_gate_price_band_on=False)
     inv = Inventory(up_shares=0.0, down_shares=6.0,
                     up_cost=0.0, down_cost=6.0 * 0.20)
 
@@ -352,8 +352,8 @@ def test_hard_block_light_side_under_the_cap_is_allowed():
     R4's exemption survives for exposure: buying the light side REDUCES
     exposure, and the pair-cost arm only fires when the pair is a booked loss.
     """
-    cfg = MakerConfig(enable_hard_blocks=True, max_pair_cost=0.995,
-                      max_naked_usd=100.0, enforce_price_band=False)
+    cfg = MakerConfig(bot_risk_gate_hard_blocks_on=True, bot_pos_price_max_pair_cost_usd=0.995,
+                      bot_risk_exposure_max_naked_usd=100.0, bot_quote_gate_price_band_on=False)
     inv = Inventory(up_shares=0.0, down_shares=6.0,
                     up_cost=0.0, down_cost=6.0 * 0.20)
 
@@ -367,8 +367,8 @@ def test_hard_block_light_side_under_the_cap_is_allowed():
 
 def test_hard_block_heavy_side_pair_cost_still_fires():
     """The heavy side keeps its existing pair-cost bound (and its reason)."""
-    cfg = MakerConfig(enable_hard_blocks=True, max_pair_cost=0.995,
-                      max_naked_usd=100.0, enforce_price_band=False)
+    cfg = MakerConfig(bot_risk_gate_hard_blocks_on=True, bot_pos_price_max_pair_cost_usd=0.995,
+                      bot_risk_exposure_max_naked_usd=100.0, bot_quote_gate_price_band_on=False)
     inv = Inventory(up_shares=6.0, down_shares=2.0,
                     up_cost=6.0 * 0.80, down_cost=2.0 * 0.20)
 
@@ -394,8 +394,8 @@ def test_flat_inventory_refuses_a_lone_leg():
     # Price band 0.30-0.70 makes UP at 0.24 blocked by band while DOWN at
     # 0.65 passes — both mids inside [0.20,0.80] so the 2026-08-28 tighten
     # does not mask the lone-leg case.
-    cfg = MakerConfig(require_two_sided_when_flat=True,
-                      price_band_low=0.30, price_band_high=0.70)
+    cfg = MakerConfig(bot_quote_require_two_sided_when_flat_on=True,
+                      bot_quote_price_band_min_cents=0.30, bot_quote_price_band_max_cents=0.70)
     flat = Inventory(up_shares=0, down_shares=0, up_cost=0.0, down_cost=0.0)
     up = {"best_bid": 0.24, "best_ask": 0.26,
           "bids": {0.24: 9999.0}, "asks": {0.26: 9999.0}}
@@ -419,10 +419,10 @@ def test_unbalanced_lone_heavy_side_is_refused():
     down_quote + avg(UP) >= max_pair_cost. Only UP (heavy) remains quotable,
     and a lone UP intent would deepen the position -- refused.
     """
-    cfg = MakerConfig(require_two_sided_when_flat=True,
-                      objective="rewards", quote_shares=120,
-                      min_quote_shares=5, max_pair_cost=0.995,
-                      enable_emergency_hedge=False, max_naked_usd=0.0)
+    cfg = MakerConfig(bot_quote_require_two_sided_when_flat_on=True,
+                      bot_pos_objective="rewards", bot_quote_size_shares=120,
+                      bot_quote_size_min_shares=5, bot_pos_price_max_pair_cost_usd=0.995,
+                      bot_risk_gate_emergency_hedge_on=False, bot_risk_exposure_max_naked_usd=0.0)
     # UP-heavy at a 0.60 average: 40 UP held, none DOWN.
     naked = Inventory(up_shares=40, down_shares=0,
                       up_cost=24.0, down_cost=0.0)
@@ -440,7 +440,7 @@ def test_unbalanced_lone_heavy_side_is_refused():
 
 def test_unbalanced_lone_light_side_is_allowed():
     """The light side alone still rests: it flattens the position."""
-    cfg = MakerConfig(require_two_sided_when_flat=True)
+    cfg = MakerConfig(bot_quote_require_two_sided_when_flat_on=True)
     naked = Inventory(up_shares=40, down_shares=0,
                       up_cost=4.0, down_cost=0.0)
     # Both mids inside [0.20,0.80]; naked UP-heavy blocks UP, DOWN (light)

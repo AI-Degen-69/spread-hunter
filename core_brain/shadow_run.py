@@ -368,7 +368,7 @@ def shadow_cfg():
     was discarded on the way in, and so the knob could never be swept.
 
     #619 retired that knob outright -- the unified lifecycle's patience comes
-    from `pairs_exit_window_sec` / `aged_out_rescue_lead_sec`, and the stop is
+    from `pairs_exit_window_sec` / `bot_risk_aged_out_rescue_lead_sec`, and the stop is
     entry-relative -- so the pin is gone with it. What remains is the rule that
     mattered: the rehearsal runs on the operator's own settings, so a rehearsal
     measures the exit the live path would really take.
@@ -901,8 +901,8 @@ def build_shadow_seam(
                 # Unknown, not empty: plan_pairs defers legs waiting on a
                 # failed read instead of cancelling them on no evidence.
                 books[t] = None
-        max_pair_cost = float(getattr(cfg_in, "max_pair_cost", 0.99))
-        plan = plan_pairs(cond, working, books, market_tokens, max_pair_cost,
+        bot_pos_price_max_pair_cost_usd = float(getattr(cfg_in, "bot_pos_price_max_pair_cost_usd", 0.99))
+        plan = plan_pairs(cond, working, books, market_tokens, bot_pos_price_max_pair_cost_usd,
                           lambda: f"pair-{__import__('uuid').uuid4().hex[:12]}")
         if not (plan.adopt or plan.cancel):
             return
@@ -1143,17 +1143,16 @@ def run_shadow(
             raise ValueError(
                 "starting bankroll must be finite and positive, "
                 f"got: {starting_bankroll_usd}")
-        cfg = dc_replace(cfg, bankroll_usd=float(starting_bankroll_usd))
+        cfg = dc_replace(cfg, bot_quote_bank_baseline_usd=float(starting_bankroll_usd))
         bankroll_source = "explicit override"
     elif cfg_supplied:
         # A caller that built its own cfg never went through `config.load()`,
         # so the bankroll environment did not set this value. Reporting
         # "environment" would misstate the one thing this line exists to say.
         bankroll_source = "caller-supplied config"
-    elif (os.environ.get("SPREAD_HUNTER_BANKROLL") or "").strip() or \
-            (os.environ.get("HUNTER_BANKROLL") or "").strip():
+    elif (os.environ.get("BOT_QUOTE_BANK_BASELINE_USD") or "").strip():
         bankroll_source = "environment"
-    log.info("starting bankroll $%.2f (%s)", cfg.bankroll_usd, bankroll_source)
+    log.info("starting bankroll $%.2f (%s)", cfg.bot_quote_bank_baseline_usd, bankroll_source)
 
     # One line that retires "what did this rehearsal actually run under?".
     # The two offset knobs are env-overridable per run, and recovering what a
@@ -1163,8 +1162,8 @@ def run_shadow(
     log.info(
         "effective config: reward_offset=%.4f price_risk_widen=%.4f "
         "min_reward_offset=%.4f max_completable_pair_cost=%.4f",
-        cfg.reward_offset, cfg.price_risk_widen,
-        cfg.min_reward_offset, cfg.max_completable_pair_cost,
+        cfg.bot_quote_spread_static_offset_cents, cfg.bot_quote_price_risk_widen,
+        cfg.bot_pos_skew_min_reward_offset_cents, cfg.bot_pos_price_max_complete_usd,
     )
 
     resolved_markets_fn = markets_fn or _default_markets_fn()
@@ -1316,7 +1315,7 @@ def run_shadow(
         exec_client = ShadowExecutionClient(
             seam.registry, db_path, book_fn=seam.fetch_books,
             clob_host=seam.clob_host,
-            window_sec=getattr(cfg, "pairs_exit_window_sec", 900.0))
+            window_sec=getattr(cfg, "bot_risk_pairs_exit_window_sec", 900.0))
         state_fn = getattr(shadow_sweep, "_market_state_fn", None)
         try:
             decision_book_fn = getattr(seam, "book_provider", None)
@@ -1813,7 +1812,7 @@ def _parse_args(argv: Optional[list[str]] = None):
     ap.add_argument("--starting-bankroll-usd", "--paired-starting-bankroll-usd",
                     type=float, default=None,
                     help="fixed starting bankroll for this rehearsal "
-                         "(default: config bankroll ($100) or SPREAD_HUNTER_BANKROLL; "
+                         "(default: config bankroll ($100) or BOT_QUOTE_BANK_BASELINE_USD; "
                          "paired arms default to $100)")
     ap.add_argument("--funder", default=None,
                     help="kept for compatibility; does not set the shadow bankroll")
@@ -1931,7 +1930,7 @@ def main(
         starting_bankroll = a.starting_bankroll_usd
     elif a.paired_depth_arm is not None or a.paired_admission_arm is not None:
         from core_brain.config import MakerConfig
-        starting_bankroll = MakerConfig.__dataclass_fields__["bankroll_usd"].default
+        starting_bankroll = MakerConfig.__dataclass_fields__["bot_quote_bank_baseline_usd"].default
     else:
         starting_bankroll = None
 

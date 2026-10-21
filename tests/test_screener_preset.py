@@ -37,7 +37,7 @@ from scoring import config as scoring_config
 
 REPO = Path(__file__).resolve().parents[1]
 
-SELECTOR_VARS = ("BOT_QUOTE_TOURNAMENT_PRESET", "BOT_QUOTE_TOURNAMENT_PRESET")
+SELECTOR_VARS = ("BOT_QUOTE_TOURNAMENT_PRESET",)
 
 
 def _clear_selector(monkeypatch):
@@ -110,7 +110,7 @@ def test_screener_preset_overrides_are_real_fields_and_never_picker_profile():
 def test_preset_off_scores_with_defaults(monkeypatch):
     _clear_selector(monkeypatch)
     cfg = scoring_config.load()
-    assert cfg.max_spread_from_mid == PICKER_PROFILE["max_spread_from_mid"]
+    assert cfg.bot_quote_book_max_spread_from_mid == PICKER_PROFILE["bot_quote_book_max_spread_from_mid"]
     assert cfg.filter_std_vol_min_24h_usd == 125_000.0
     assert cfg.filter_live_activity_min_ratio == 0.0
 
@@ -119,7 +119,7 @@ def test_preset_on_loads_cleanly_and_keeps_picker_window(monkeypatch):
     for name in TOURNAMENT_PRESETS:
         monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", name)
         cfg = scoring_config.load()
-        assert cfg.max_spread_from_mid == 0.045, (
+        assert cfg.bot_quote_book_max_spread_from_mid == 0.045, (
             f"preset {name!r} must not touch the picker's 0.045 window"
         )
     # Precedence probe: a temporary in-test bar proves the preset merge in
@@ -144,7 +144,7 @@ def test_legacy_selector_reaches_the_ranker_loader(monkeypatch):
     _clear_selector(monkeypatch)
     monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "conservative")
     cfg = scoring_config.load()
-    assert cfg.max_spread_from_mid == 0.045
+    assert cfg.bot_quote_book_max_spread_from_mid == 0.045
 
 
 # --- snapshot + funnel ---------------------------------------------------------

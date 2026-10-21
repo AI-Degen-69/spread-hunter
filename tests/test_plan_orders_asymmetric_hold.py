@@ -41,7 +41,7 @@ def _open(token="tok-up", price=0.60, oid="o1"):
 
 
 def _cfg():
-    return MakerConfig(max_completable_pair_cost=1.00)
+    return MakerConfig(bot_pos_price_max_complete_usd=1.00)
 
 
 class TestAsymmetricRequoteHold:
@@ -140,7 +140,7 @@ class TestAsymmetricRequoteHold:
         # held anyway. Cost is judged at placement, never after.
         to_cancel, to_submit = plan_orders(
             [_open(price=0.60)], [_intent(price=0.56)],
-            dead_band=0.03, cfg=MakerConfig(max_pair_cost=0.99),
+            dead_band=0.03, cfg=MakerConfig(bot_pos_price_max_pair_cost_usd=0.99),
             hedge_asks=None, hedge_held={"tok-up": 0.43},
             hold_below_target=0.05)
         assert to_cancel == []
@@ -155,7 +155,7 @@ class TestAsymmetricRequoteHold:
             side="UP", token_id="tok-up", price=0.60, size=20,
             mid=0.61, edge_vs_mid=0.01, pair_id="pair-lc-1"
         )
-        cfg = MakerConfig(min_quote_shares=5.0)
+        cfg = MakerConfig(bot_quote_size_min_shares=5.0)
         to_cancel, to_submit = plan_orders(
             [open_order], [target_intent],
             preserve_order_ids={"o1"},
@@ -174,13 +174,13 @@ class TestAsymmetricRequoteHold:
 class TestConfigWiring:
     def test_the_cap_ships_enabled(self):
         # Shipping at 0.0 would leave the measured defect in place.
-        assert MakerConfig().requote_hold_below_target > 0.0
+        assert MakerConfig().bot_order_requote_hold_below_target_cents > 0.0
 
     def test_the_cap_is_at_least_the_dead_band(self):
         # A cap under the band can never fire: an order inside the band was
         # already kept by the tolerance.
         cfg = MakerConfig()
-        assert cfg.requote_hold_below_target >= cfg.requote_dead_band
+        assert cfg.bot_order_requote_hold_below_target_cents >= cfg.bot_order_requote_dead_band_cents
 
 
 class TestCancelReportNamesBothHolds:

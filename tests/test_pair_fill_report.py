@@ -53,7 +53,7 @@ def test_load_applies_the_trial_cap(monkeypatch):
 
     cfg = importlib.reload(core_config).load()
 
-    assert cfg.max_pair_cost == 0.995
+    assert cfg.bot_pos_price_max_pair_cost_usd == 0.995
 
 
 def test_load_leaves_the_shipped_cap_alone_when_unset(monkeypatch):
@@ -62,7 +62,7 @@ def test_load_leaves_the_shipped_cap_alone_when_unset(monkeypatch):
 
     cfg = importlib.reload(core_config).load()
 
-    assert cfg.max_pair_cost == 0.99
+    assert cfg.bot_pos_price_max_pair_cost_usd == 0.99
 
 
 def test_the_touch_pair_is_refused_at_the_shipped_cap_and_allowed_at_the_trial():
@@ -97,8 +97,8 @@ def test_the_touch_pair_is_refused_at_the_shipped_cap_and_allowed_at_the_trial()
         os.environ.pop("BOT_POS_PRICE_MAX_PAIR_COST_USD", None)
         rehearsal.reset_for_test()
         importlib.reload(core_config)
-    assert trial.max_pair_cost == 0.995
-    assert shipped.max_pair_cost == 0.99
+    assert trial.bot_pos_price_max_pair_cost_usd == 0.995
+    assert shipped.bot_pos_price_max_pair_cost_usd == 0.99
     book = {"best_bid": 0.32, "best_ask": 0.34, "bids": {0.32: 5000.0}}
 
     # A DOWN bid at 0.33 against an UP average of 0.66 assembles a $0.99 pair.

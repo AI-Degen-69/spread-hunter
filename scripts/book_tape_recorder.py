@@ -16,7 +16,7 @@ because both are properties of the venue rather than of our quoting
   2. **The touch pair.** `best_bid(UP) + best_bid(DOWN)` is the cheapest pair
      two resting bids can assemble. On the current universe -- 1c tick, 1c
      spread, `mid_UP + mid_DOWN` measured at 1.0000 -- that is $0.99, exactly
-     the `max_pair_cost` the risk gate refuses with `>=`. Whether it is ALWAYS
+     the `bot_pos_price_max_pair_cost_usd` the risk gate refuses with `>=`. Whether it is ALWAYS
      $0.99 or merely usually decides whether the strategy has an edge to take.
 
 Distances are recorded in TICKS, not cents. The quote window, the offset knobs
@@ -102,7 +102,7 @@ def touch_pair_cost(up_book: dict, down_book: dict) -> Optional[float]:
 
     Not the pair we would post -- the quoter rests under mid, not at the touch
     -- but the FLOOR of what any maker-only pair can cost. If this sits at or
-    above `max_pair_cost` there is no maker-only pair to assemble at any offset.
+    above `bot_pos_price_max_pair_cost_usd` there is no maker-only pair to assemble at any offset.
     """
     bu, bd = (up_book or {}).get("best_bid"), (down_book or {}).get("best_bid")
     if bu is None or bd is None:

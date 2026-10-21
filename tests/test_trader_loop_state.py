@@ -160,6 +160,6 @@ class TestFleetStateWiring:
         cfg = load()
         state = _fleet_state(reg, cfg)
 
-        assert state["committed_usd"] == pytest.approx(10.0)
-        assert state["fleet_naked_usd"] == pytest.approx(0.60)
-        assert state["fleet_posture"] == "HALTED"
+        assert state["bot_risk_exposure_committed_usd"] == pytest.approx(10.0)
+        assert state["bot_risk_exposure_fleet_naked_usd"] == pytest.approx(0.60)
+        assert state["bot_risk_circuit_fleet_posture"] == "HALTED"

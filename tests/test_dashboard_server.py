@@ -3199,9 +3199,9 @@ def test_get_parameters_endpoint(client):
     assert len(data["parameters"]) > 0
 
     names = {p["name"] for p in data["parameters"]}
-    assert "select_min_volume_24h_usd_live" in names
-    assert "max_pair_cost" in names
-    assert "pairs_exit_window_sec" in names
+    assert "filter_live_vol_min_24h_usd" in names
+    assert "bot_pos_price_max_pair_cost_usd" in names
+    assert "bot_risk_pairs_exit_window_sec" in names
 
     first = data["parameters"][0]
     for required_key in ("name", "display_name", "scope", "value", "category"):
@@ -3210,14 +3210,14 @@ def test_get_parameters_endpoint(client):
 
 # The eight picker filter bars' card keys (#652).
 PICKER_BAR_CARD_KEYS = (
-    "select_movement_window_sec",
-    "select_min_movement_usd",
-    "select_min_activity_ratio",
-    "select_min_range_cents",
-    "select_volatility_window_sec",
-    "select_velocity_gate_enabled",
-    "select_max_queue_minutes",
-    "enforce_max_queue_minutes",
+    "filter_live_vel_lookback_sec",
+    "filter_live_vel_min_usd",
+    "filter_live_activity_min_ratio",
+    "filter_live_move_min_range_cents",
+    "filter_live_move_lookback_sec",
+    "filter_live_gate_velocity_on",
+    "filter_std_queue_max_clear_min",
+    "filter_std_gate_queue_max_on",
 )
 
 
@@ -3242,10 +3242,10 @@ def test_picker_parameter_cards_read_the_configured_bars(client, monkeypatch):
     cards = _picker_cards(client)
 
     assert set(cards) == set(PICKER_BAR_CARD_KEYS)
-    assert cards["select_min_movement_usd"]["raw_value"] == 777.0
-    assert cards["select_min_movement_usd"]["value"] == "$777.00"
-    assert cards["select_movement_window_sec"]["raw_value"] == 900.0
-    assert cards["select_velocity_gate_enabled"]["raw_value"] is False
+    assert cards["filter_live_vel_min_usd"]["raw_value"] == 777.0
+    assert cards["filter_live_vel_min_usd"]["value"] == "$777.00"
+    assert cards["filter_live_vel_lookback_sec"]["raw_value"] == 900.0
+    assert cards["filter_live_gate_velocity_on"]["raw_value"] is False
 
 
 def test_picker_parameter_cards_show_the_shipped_bars_by_default(client, monkeypatch):
@@ -3256,14 +3256,14 @@ def test_picker_parameter_cards_show_the_shipped_bars_by_default(client, monkeyp
 
     cards = _picker_cards(client)
 
-    assert cards["select_min_movement_usd"]["raw_value"] == 200.0
+    assert cards["filter_live_vel_min_usd"]["raw_value"] == 200.0
     # #705: was "1800s (30m)" — the "(30m)" was a hardcoded literal that only
     # restated the 1800s default; on a non-default setting the card contradicted
     # itself. The suffix is removed from all such cards, so the pin follows.
-    assert cards["select_movement_window_sec"]["value"] == "1800s"
-    assert cards["select_max_queue_minutes"]["raw_value"] == 15.0
-    assert cards["enforce_max_queue_minutes"]["raw_value"] is False
-    assert cards["enforce_max_queue_minutes"]["value"] == "False (Telemetry Only)"
+    assert cards["filter_live_vel_lookback_sec"]["value"] == "1800s"
+    assert cards["filter_std_queue_max_clear_min"]["raw_value"] == 15.0
+    assert cards["filter_std_gate_queue_max_on"]["raw_value"] is False
+    assert cards["filter_std_gate_queue_max_on"]["value"] == "False (Telemetry Only)"
 
 
 def test_max_spread_from_mid_card_shows_configured_value_exactly(client, monkeypatch):
@@ -3276,7 +3276,7 @@ def test_max_spread_from_mid_card_shows_configured_value_exactly(client, monkeyp
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "20")
 
     data = client.get("/api/parameters").json()
-    card = next(p for p in data["parameters"] if p["key"] == "max_spread_from_mid")
+    card = next(p for p in data["parameters"] if p["key"] == "bot_quote_book_max_spread_from_mid")
 
     assert card["raw_value"] == 0.20
     assert card["value"] == "$0.20"
@@ -3338,12 +3338,12 @@ def test_scoring_load_failure_marks_screener_cards(client, monkeypatch, caplog):
     # Named scoring-backed keys must show the marker in BOTH fields, so a
     # different stray engine value on any of them cannot pass silently.
     scoring_backed_keys = (
-        "select_movement_window_sec",
-        "select_min_movement_usd",
-        "select_min_activity_ratio",
-        "select_min_range_cents",
-        "select_volatility_window_sec",
-        "select_velocity_gate_enabled",
+        "filter_live_vel_lookback_sec",
+        "filter_live_vel_min_usd",
+        "filter_live_activity_min_ratio",
+        "filter_live_move_min_range_cents",
+        "filter_live_move_lookback_sec",
+        "filter_live_gate_velocity_on",
     )
     by_key = {p["key"]: p for p in screener}
     for k in scoring_backed_keys:
@@ -3390,33 +3390,33 @@ def test_parameters_cards_canonical_env_var_badges(client):
     """Verify that all 59 parameter cards have canonical env_var badges matching .env.example (#672)."""
     expected_badges = {
         # Scope 1: Market Screener
-        "select_min_volume_24h_usd_live": "FILTER_LIVE_VOL_MIN_24H_USD",
-        "select_movement_window_sec": "FILTER_LIVE_VEL_LOOKBACK_SEC",
-        "select_min_movement_usd": "FILTER_LIVE_VEL_MIN_USD",
-        "select_min_activity_ratio": "FILTER_LIVE_ACTIVITY_MIN_RATIO",
-        "select_min_range_cents": "FILTER_LIVE_MOVE_MIN_RANGE_CENTS",
-        "select_volatility_window_sec": "FILTER_LIVE_MOVE_LOOKBACK_SEC",
-        "select_velocity_gate_enabled": "FILTER_LIVE_GATE_VELOCITY_ON",
-        "select_min_volume_24h_usd": "FILTER_STD_VOL_MIN_24H_USD",
+        "filter_live_vol_min_24h_usd": "FILTER_LIVE_VOL_MIN_24H_USD",
+        "filter_live_vel_lookback_sec": "FILTER_LIVE_VEL_LOOKBACK_SEC",
+        "filter_live_vel_min_usd": "FILTER_LIVE_VEL_MIN_USD",
+        "filter_live_activity_min_ratio": "FILTER_LIVE_ACTIVITY_MIN_RATIO",
+        "filter_live_move_min_range_cents": "FILTER_LIVE_MOVE_MIN_RANGE_CENTS",
+        "filter_live_move_lookback_sec": "FILTER_LIVE_MOVE_LOOKBACK_SEC",
+        "filter_live_gate_velocity_on": "FILTER_LIVE_GATE_VELOCITY_ON",
+        "filter_std_vol_min_24h_usd": "FILTER_STD_VOL_MIN_24H_USD",
         # Scope 2: Bot Engine
-        "bankroll_usd": "BOT_QUOTE_BANK_BASELINE_USD",
-        "max_spread_from_mid": "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
-        "dynamic_offset_enabled": "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON",
-        "dynamic_offset_multiplier": "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER",
-        "dynamic_offset_min_cents": "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS",
-        "dynamic_offset_max_cents": "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS",
-        "max_pair_cost": "BOT_POS_PRICE_MAX_PAIR_COST_USD",
-        "max_completable_pair_cost": "BOT_POS_PRICE_MAX_COMPLETE_USD",
-        "requote_dead_band": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS",
-        "requote_hold_below_target": "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS",
-        "requote_hold_queue_shares": "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES",
+        "bot_quote_bank_baseline_usd": "BOT_QUOTE_BANK_BASELINE_USD",
+        "bot_quote_book_max_spread_from_mid": "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
+        "bot_quote_gate_dynamic_offset_on": "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON",
+        "bot_quote_spread_offset_multiplier": "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER",
+        "bot_quote_spread_offset_min_cents": "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS",
+        "bot_quote_spread_offset_max_cents": "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS",
+        "bot_pos_price_max_pair_cost_usd": "BOT_POS_PRICE_MAX_PAIR_COST_USD",
+        "bot_pos_price_max_complete_usd": "BOT_POS_PRICE_MAX_COMPLETE_USD",
+        "bot_order_requote_dead_band_cents": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS",
+        "bot_order_requote_hold_below_target_cents": "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS",
+        "bot_order_requote_hold_queue_shares": "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES",
         "sweep_interval": "LIVE_SWEEP_INTERVAL",
-        "enable_pairs_rule": "BOT_RISK_GATE_PAIRS_RULE_ON",
-        "aged_out_rescue_lead_sec": "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC",
-        "stop_loss_mode": "BOT_RISK_STOP_MODE",
-        "drop_cents": "BOT_RISK_STOP_ADVERSE_DROP_CENTS",
-        "drawdown_pct": "BOT_RISK_STOP_MAX_DRAWDOWN_PCT",
-        "emergency_drawdown_pct": "BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT",
+        "bot_risk_gate_pairs_rule_on": "BOT_RISK_GATE_PAIRS_RULE_ON",
+        "bot_risk_aged_out_rescue_lead_sec": "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC",
+        "bot_risk_stop_mode": "BOT_RISK_STOP_MODE",
+        "bot_risk_stop_adverse_drop_cents": "BOT_RISK_STOP_ADVERSE_DROP_CENTS",
+        "bot_risk_stop_max_drawdown_pct": "BOT_RISK_STOP_MAX_DRAWDOWN_PCT",
+        "bot_risk_circuit_max_drawdown_pct": "BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT",
     }
 
     env_example_path = Path(__file__).resolve().parent.parent / ".env.example"

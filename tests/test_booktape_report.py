@@ -67,7 +67,7 @@ def test_report_marks_a_touch_pair_at_the_cap_as_refused(tmp_path):
     text = rpt.report(db)
 
     assert "$0.9900" in text
-    assert "REFUSED by max_pair_cost" in text
+    assert "REFUSED by bot_pos_price_max_pair_cost_usd" in text
 
 
 def test_report_marks_a_cheaper_touch_pair_as_tradeable(tmp_path):

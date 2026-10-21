@@ -447,7 +447,7 @@ def test_the_horizon_seconds_mirror_the_configured_horizons():
     """
     from core_brain.config import load as load_cfg
 
-    horizons = load_cfg().markout_horizons
+    horizons = load_cfg().bot_risk_markout_horizons
 
     assert sa.MARKOUT_HORIZON_SECONDS == {
         "mid_h0": float(horizons[0]), "mid_h1": float(horizons[1]),

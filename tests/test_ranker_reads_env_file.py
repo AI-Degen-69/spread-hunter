@@ -70,7 +70,6 @@ def _bar_with_generated_env(tmp_path: Path, contents: str) -> float:
         # environment and override=False would never replace it. Clear it: this
         # test controls the file, not the checkout it happens to run in.
         os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
-        os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
         # Re-run the loader against the generated root and rebuild the config
         # exactly as import does, so the fallback chain is exercised end to end.
         fm._load_repo_env({str(tmp_path)!r})
@@ -121,7 +120,6 @@ def test_a_missing_env_file_is_not_an_error(tmp_path):
         # so a value staged in the developer's own .env is already in the
         # environment and override=False would never replace it. Clear it: this
         # test controls the file, not the checkout it happens to run in.
-        os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
         os.environ.pop("FILTER_STD_VOL_MIN_24H_USD_TRIAL", None)
         fm._load_repo_env({str(tmp_path)!r})
         fm._CFG = scoring.config.load()
@@ -216,7 +214,7 @@ def test_canonical_bot_env_file_reaches_ranker_config(tmp_path):
         "BOT_MARKET_PINNED_CONDITION_ID=0xfeedbeef\n"
         "BOT_QUOTE_SIZE_MIN_SHARES=200\n"
     )
-    val = _cfg_field_with_generated_env(tmp_path, env_content, "min_quote_shares")
+    val = _cfg_field_with_generated_env(tmp_path, env_content, "bot_quote_size_min_shares")
     assert val == "200"
 
     pinned = _cfg_field_with_generated_env(

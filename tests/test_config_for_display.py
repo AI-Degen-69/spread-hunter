@@ -48,8 +48,8 @@ def test_pair_cost_cap_falls_back_to_shipped_for_display(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         cfg = core_config.load(for_display=True)
 
-    assert cfg.max_pair_cost == MakerConfig.max_pair_cost
-    assert cfg.max_pair_cost == 0.99
+    assert cfg.bot_pos_price_max_pair_cost_usd == MakerConfig.bot_pos_price_max_pair_cost_usd
+    assert cfg.bot_pos_price_max_pair_cost_usd == 0.99
     assert "BOT_POS_PRICE_MAX_PAIR_COST_USD ignored" in caplog.text
 
 
@@ -61,7 +61,7 @@ def test_pair_cost_cap_still_applies_for_display_inside_a_rehearsal(monkeypatch)
 
     cfg = core_config.load(for_display=True)
 
-    assert cfg.max_pair_cost == 0.995
+    assert cfg.bot_pos_price_max_pair_cost_usd == 0.995
 
 
 # --- BOT_QUOTE_WIDE_BOOK_TRIAL ---------------------------------------------------
@@ -80,11 +80,11 @@ def test_wide_book_trial_falls_back_to_shipped_for_display(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         cfg = core_config.load(for_display=True)
 
-    assert cfg.wide_book_trial is None
-    assert cfg.max_book_spread == MakerConfig.max_book_spread
+    assert cfg.bot_quote_wide_book_trial is None
+    assert cfg.bot_quote_book_max_spread_cents == MakerConfig.bot_quote_book_max_spread_cents
     # The picking bar degrades with the gate (#572): the page shows the shipped
     # contract, never a trial value the process it describes cannot act on.
-    assert cfg.select_max_book_spread == MakerConfig().select_max_book_spread == 0.0205
+    assert cfg.filter_common_spread_max_cents == MakerConfig().filter_common_spread_max_cents == 0.0205
     assert "BOT_QUOTE_WIDE_BOOK_TRIAL ignored" in caplog.text
 
 
@@ -93,8 +93,8 @@ def test_clean_environment_is_unaffected_by_the_flag():
     plain = core_config.load()
     display = core_config.load(for_display=True)
 
-    assert plain.max_pair_cost == display.max_pair_cost
-    assert plain.max_book_spread == display.max_book_spread
+    assert plain.bot_pos_price_max_pair_cost_usd == display.bot_pos_price_max_pair_cost_usd
+    assert plain.bot_quote_book_max_spread_cents == display.bot_quote_book_max_spread_cents
 
 
 def test_kpi_module_imports_with_an_inherited_trial_knob(monkeypatch):
@@ -107,7 +107,7 @@ def test_kpi_module_imports_with_an_inherited_trial_knob(monkeypatch):
 
     importlib.reload(kpi)  # must not raise
 
-    assert kpi._CFG.max_pair_cost == MakerConfig.max_pair_cost
+    assert kpi._CFG.bot_pos_price_max_pair_cost_usd == MakerConfig.bot_pos_price_max_pair_cost_usd
 
 
 # --- UNREAD SETTINGS PURGE (#576) ---------------------------------------------
@@ -151,18 +151,18 @@ def test_retained_neighbors_still_declared():
     scoring_fields = {f.name for f in dataclasses.fields(scoring_config.MakerConfig)}
 
     expected_core = {
-        "stat_gate_deltas",
-        "stat_gate_threshold_pct",
-        "stat_gate_bankroll_pct",
-        "stat_gate_target_closes",
-        "stranded_max_wait_sec",
-        "pairs_exit_window_sec",
+        "bot_eval_stat_gate_deltas",
+        "bot_eval_stat_gate_threshold_pct",
+        "bot_eval_stat_gate_bankroll_pct",
+        "bot_eval_stat_gate_target_closes",
+        "bot_risk_stranded_max_wait_sec",
+        "bot_risk_pairs_exit_window_sec",
     }
     expected_scoring = {
-        "select_min_top3_depth_usd",
-        # `select_max_book_spread` is derived (a property) since #572, so the
-        # declared scoring knob to guard is the share it derives from.
-        "select_spread_pct",
+        "filter_common_vol_min_top3_depth_usd",
+        # `filter_common_spread_max_cents` is derived (a property) since #572, so
+        # the declared scoring knob to guard is the share it derives from.
+        "filter_std_spread_share_pct",
     }
 
     missing_core = expected_core - core_fields

@@ -218,32 +218,49 @@ def is_port_available(port: int, host: str = "127.0.0.1") -> bool:
             return False
 
 
+# Arm keys that named a config field before #732 renamed them to `bot_*`.
+# They are not read below, so an arm still carrying one would quietly run the
+# shipped default and the tournament would compare an arm nobody chose. Fail
+# at plan time instead of after the runs have spent their minutes.
+_RETIRED_PRESET_KEYS = frozenset({
+    "dynamic_offset_enabled", "dynamic_offset_multiplier",
+    "dynamic_offset_min_cents", "dynamic_offset_max_cents",
+    "stop_loss_mode", "drop_cents", "max_spread_from_mid",
+    "apply_widen_gate",
+})
+
+
 def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
     """Convert a tournament preset dict into BOT_* environment overrides.
 
-    The launcher emits canonical `BOT_*` names only; there is no legacy alias
-    to fall back to.
+    The launcher emits canonical names only; there is no legacy alias to fall
+    back to, so a retired key is refused rather than silently ignored.
     """
+    retired = sorted(_RETIRED_PRESET_KEYS & preset.keys())
+    if retired:
+        raise ValueError(
+            f"Arm uses retired preset keys {retired}; use the bot_* names instead"
+        )
     env: dict[str, str] = {}
-    if "dynamic_offset_enabled" in preset:
-        env["BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"] = "1" if preset["dynamic_offset_enabled"] else "0"
-    if "dynamic_offset_multiplier" in preset:
-        env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"] = str(preset["dynamic_offset_multiplier"])
-    if "dynamic_offset_min_cents" in preset:
-        env["BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"] = str(int(preset["dynamic_offset_min_cents"]))
-    if "dynamic_offset_max_cents" in preset:
-        env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"] = str(int(preset["dynamic_offset_max_cents"]))
-    if "stop_loss_mode" in preset:
-        env["BOT_RISK_STOP_MODE"] = str(preset["stop_loss_mode"])
-    if "drop_cents" in preset:
-        env["BOT_RISK_STOP_ADVERSE_DROP_CENTS"] = str(preset["drop_cents"])
+    if "bot_quote_gate_dynamic_offset_on" in preset:
+        env["BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"] = "1" if preset["bot_quote_gate_dynamic_offset_on"] else "0"
+    if "bot_quote_spread_offset_multiplier" in preset:
+        env["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"] = str(preset["bot_quote_spread_offset_multiplier"])
+    if "bot_quote_spread_offset_min_cents" in preset:
+        env["BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"] = str(int(preset["bot_quote_spread_offset_min_cents"]))
+    if "bot_quote_spread_offset_max_cents" in preset:
+        env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"] = str(int(preset["bot_quote_spread_offset_max_cents"]))
+    if "bot_risk_stop_mode" in preset:
+        env["BOT_RISK_STOP_MODE"] = str(preset["bot_risk_stop_mode"])
+    if "bot_risk_stop_adverse_drop_cents" in preset:
+        env["BOT_RISK_STOP_ADVERSE_DROP_CENTS"] = str(preset["bot_risk_stop_adverse_drop_cents"])
     # Loose-baseline knobs. These let an arm quote the raw dynamic
     # offset with no upper clamp and no WIDENED snap-back, without touching
     # the shipped defaults or any other arm.
-    if "max_spread_from_mid" in preset:
-        env["BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID"] = str(int(round(float(preset["max_spread_from_mid"]) * 100.0)))
-    if "apply_widen_gate" in preset:
-        env["BOT_QUOTE_GATE_WIDEN_ON"] = "1" if preset["apply_widen_gate"] else "0"
+    if "bot_quote_book_max_spread_from_mid" in preset:
+        env["BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID"] = str(round(float(preset["bot_quote_book_max_spread_from_mid"]) * 100.0))
+    if "bot_quote_gate_widen_on" in preset:
+        env["BOT_QUOTE_GATE_WIDEN_ON"] = "1" if preset["bot_quote_gate_widen_on"] else "0"
     return env
 
 

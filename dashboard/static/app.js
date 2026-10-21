@@ -85,7 +85,7 @@ let lastStatusAtMs = null;
  * envelope; anything lower (or missing) means this page is newer than the
  * process answering it. Keep EXPECTED_PAYLOAD_VERSION matched with
  * KPI_PAYLOAD_VERSION in core_brain/kpi.py. */
-const EXPECTED_PAYLOAD_VERSION = 258;
+const EXPECTED_PAYLOAD_VERSION = 259;
 let payloadVersionWarned = false;
 
 // True when the payload is absent, malformed, or predates this page.
@@ -2886,11 +2886,11 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
 
 /* ── Render: Strategy Parameters (Human-Readable) ── */
 const PARAM_HUMAN_NAMES = {
-  'max_pair_cost': 'Pair Cost Entry Ceiling',
+  'bot_pos_price_max_pair_cost_usd': 'Pair Cost Entry Ceiling',
   'max_naked_usd': 'Single-Leg Unwind Cap',
-  'max_order_usd': 'Max Capital Per Order',
-  'max_total_usd': 'Bankroll Deployment Ceiling',
-  'min_quote_shares': 'Minimum Order Size',
+  'bot_risk_exposure_max_order_usd': 'Max Capital Per Order',
+  'bot_risk_exposure_max_total_usd': 'Bankroll Deployment Ceiling',
+  'bot_quote_size_min_shares': 'Minimum Order Size',
   'sweep_interval': 'Account Sync & Balance Cadence',
 };
 

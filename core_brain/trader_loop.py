@@ -271,7 +271,7 @@ def plan_orders(
     parameters stay in the signature -- `cfg`, `hedge_asks`, `hedge_held`,
     `queue_ahead`, `hold_queue_shares`, `hold_below_target`, `visit_outcome` --
     for the follow-up cancel-conditions issue to disposition; only `dead_band`
-    and `cfg.min_quote_shares` are read here.
+    and `cfg.bot_quote_size_min_shares` are read here.
     """
     tolerance = max(float(price_eps), float(dead_band))
     preserve_ids = {str(value) for value in preserve_order_ids or ()}
@@ -337,10 +337,10 @@ def plan_orders(
             to_submit.append(i)
 
     # Delta top-up (#453): if an existing hedge is preserved (kept) on a lifecycle pair
-    # but leaves a shortfall >= min_quote_shares, generate a supplemental maker intent
+    # but leaves a shortfall >= bot_quote_size_min_shares, generate a supplemental maker intent
     # for the missing delta shares on the same token and pair ID.
-    if lifecycle_pair_id is not None and hasattr(cfg, "min_quote_shares"):
-        min_shares = float(getattr(cfg, "min_quote_shares", 5.0) or 5.0)
+    if lifecycle_pair_id is not None and hasattr(cfg, "bot_quote_size_min_shares"):
+        min_shares = float(getattr(cfg, "bot_quote_size_min_shares", 5.0) or 5.0)
         # Check if any kept order belongs to lifecycle_pair_id
         for tok, sits in kept.items():
             pair_sits = [o for o in sits if str(o.get("pair_id") or "") == str(lifecycle_pair_id)]
@@ -403,7 +403,7 @@ def _market_cfg(base, spec: Any):
     gates the paper fleet runs; the only per-market differences are the venue's
     min-size, spread window and tick, copied from the ranker's spec.
 
-    `objective="spread_capture"` below is pinned on every market ON PURPOSE. It
+    `bot_pos_objective="spread_capture"` below is pinned on every market ON PURPOSE. It
     selects `quotes._decide_quotes_from_mid` -- rest both legs at `mid - offset`,
     which assembles the pair at ~1.00 - 2*offset and is how spread capture is
     executed. The alternative value, "pair", prices off the ask and was measured
@@ -416,32 +416,32 @@ def _market_cfg(base, spec: Any):
         if hasattr(spec, "range_cents") or hasattr(spec, "velocity_measured_at"):
             return replace(
                 base,
-                range_cents=getattr(spec, "range_cents", None),
-                velocity_measured_at=getattr(spec, "velocity_measured_at", None),
+                bot_quote_telemetry_range_cents=getattr(spec, "range_cents", None),
+                bot_quote_telemetry_velocity_measured_at=getattr(spec, "velocity_measured_at", None),
             )
         return base
     return replace(
         base,
-        objective="spread_capture",
-        min_quote_shares=int(spec.get("min_size", base.min_quote_shares)),
-        quote_shares=int(spec.get("shares", base.quote_shares)),
-        # The quote window is the ENGINE's max_spread_from_mid, single source.
+        bot_pos_objective="spread_capture",
+        bot_quote_size_min_shares=int(spec.get("min_size", base.bot_quote_size_min_shares)),
+        bot_quote_size_shares=int(spec.get("shares", base.bot_quote_size_shares)),
+        # The quote window is the ENGINE's bot_quote_book_max_spread_from_mid, single source.
         # The venue's rewardsMaxSpread used to ride in on the feed row's
         # max_spread field and cap the window here (2.5c on Fed rows, 4.5c on
         # sports) — a rewards-program leftover throttling a strategy that earns
         # the pair discount, not emissions. Deleted with the rewards purge
         # (#594); do not reintroduce a per-market window.
-        price_tick=float(spec.get("tick", base.price_tick)),
-        market_title=str(spec.get("title", "")),
-        range_cents=(
+        bot_quote_grid_tick_size_usd=float(spec.get("tick", base.bot_quote_grid_tick_size_usd)),
+        bot_market_title=str(spec.get("title", "")),
+        bot_quote_telemetry_range_cents=(
             float(spec["range_cents"])
             if spec.get("range_cents") is not None
-            else getattr(base, "range_cents", None)
+            else getattr(base, "bot_quote_telemetry_range_cents", None)
         ),
-        velocity_measured_at=(
+        bot_quote_telemetry_velocity_measured_at=(
             float(spec["velocity_measured_at"])
             if spec.get("velocity_measured_at") is not None
-            else getattr(base, "velocity_measured_at", None)
+            else getattr(base, "bot_quote_telemetry_velocity_measured_at", None)
         ),
     )
 
@@ -1275,7 +1275,7 @@ def _admit_placements(
     state rather than the pair this strategy rests.
 
     Returns `(admitted, why)`. `why` is empty when nothing was refused or
-    reported; under the shipped record-only default (`enforce_queue_clear_gate`
+    reported; under the shipped record-only default (`bot_order_gate_queue_clear_on`
     False) it carries the reason and `admitted` is unchanged.
     """
     from core_brain import risk
@@ -1314,7 +1314,7 @@ def _admit_placements(
         return list(to_submit), ""
 
     cid = str(getattr(market, "condition_id", "") or "")
-    window_sec = float(getattr(cfg, "queue_flow_window_sec", 0.0) or 0.0)
+    window_sec = float(getattr(cfg, "bot_order_queue_flow_window_sec", 0.0) or 0.0)
     try:
         flow = flow_fn(cid, window_sec)
     except Exception as e:
@@ -1355,7 +1355,7 @@ def _admit_placements(
             why = f"{why} ({len(passive)} new placement(s) dropped with it)"
         return [i for i in to_submit if i.crossed], why
     if reasons:
-        # Record-only (`enforce_queue_clear_gate` False): the bar is on the
+        # Record-only (`bot_order_gate_queue_clear_on` False): the bar is on the
         # record, nothing is dropped. This is what the threshold gets picked from.
         return list(to_submit), reasons[0]
     return list(to_submit), ""
@@ -1641,12 +1641,12 @@ def _lifecycle_quote_context(
         decision = evaluate_single_leg_lifecycle(
             position,
             registry,
-            max_pair_cost=float(cfg.bot_pos_price_max_pair_cost_usd),
-            stop_loss_mode=str(cfg.stop_loss_mode),
-            drop_cents=float(cfg.drop_cents),
-            drawdown_pct=float(cfg.drawdown_pct),
+            bot_pos_price_max_pair_cost_usd=float(cfg.bot_pos_price_max_pair_cost_usd),
+            bot_risk_stop_mode=str(cfg.bot_risk_stop_mode),
+            bot_risk_stop_adverse_drop_cents=float(cfg.bot_risk_stop_adverse_drop_cents),
+            bot_risk_stop_max_drawdown_pct=float(cfg.bot_risk_stop_max_drawdown_pct),
             bot_risk_circuit_max_drawdown_pct=float(cfg.bot_risk_circuit_max_drawdown_pct),
-            tick_size=float(cfg.price_tick),
+            tick_size=float(cfg.bot_quote_grid_tick_size_usd),
         )
         decisions.append((pair_id, position, decision))
 
@@ -1774,13 +1774,13 @@ def _lifecycle_quote_context(
             pair_price=pair_price,
         )
         size = min(int(decision.naked_size), size_cap)
-        if size < cfg.min_quote_shares:
+        if size < cfg.bot_quote_size_min_shares:
             # Keep the resting hedge instead of cancelling it; a transient
             # size refusal is not a reason to strand the pair ahead of the
             # hard-stop or settlement path (see single_leg_refusal).
             return preserve_refusal_context(
                 f"lifecycle escalation size {size} below venue minimum "
-                f"{cfg.min_quote_shares}",
+                f"{cfg.bot_quote_size_min_shares}",
                 [pair_id],
             )
         return LifecycleQuoteContext(
@@ -1909,7 +1909,7 @@ def _execute_planned_orders(seam, market, cfg, title, cycle, to_cancel,
                             side=old_o.get("side", "BUY"),
                             token_id=old_o.get("token_id"),
                             price=float(old_o["price"]),
-                            size=int(old_o.get("size") or old_o.get("original_size") or cfg.min_quote_shares),
+                            size=int(old_o.get("size") or old_o.get("original_size") or cfg.bot_quote_size_min_shares),
                             mid=float(old_o["price"]),
                             edge_vs_mid=0.0,
                             pair_id=old_o.get("pair_id"),
@@ -1928,7 +1928,7 @@ def _execute_planned_orders(seam, market, cfg, title, cycle, to_cancel,
                         side=old_o.get("side", "BUY"),
                         token_id=old_o.get("token_id"),
                         price=float(old_o["price"]),
-                        size=int(old_o.get("size") or old_o.get("original_size") or cfg.min_quote_shares),
+                        size=int(old_o.get("size") or old_o.get("original_size") or cfg.bot_quote_size_min_shares),
                         mid=float(old_o["price"]),
                         edge_vs_mid=0.0,
                         pair_id=old_o.get("pair_id"),
@@ -2198,7 +2198,7 @@ def _visit_one(
         if isinstance(_stats, dict):
             event_extra.update(_stats)
     if title:
-        event_extra["market_title"] = title
+        event_extra["bot_market_title"] = title
     _decide_quotes = []
     for _di in list(intents)[:4]:
         _dside = getattr(_di, "side", None)
@@ -2552,27 +2552,27 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
     # loop has already merged the latest venue account_value into base_cfg via
     # _fleet_state, use those; otherwise fall back to the live venue caps.
     _live_order, _live_total = order_caps()
-    max_order_usd = float(getattr(cfg, "max_order_usd", _live_order)) if cfg is not None else _live_order
-    max_total_usd = float(getattr(cfg, "max_total_usd", _live_total)) if cfg is not None else _live_total
+    bot_risk_exposure_max_order_usd = float(getattr(cfg, "bot_risk_exposure_max_order_usd", _live_order)) if cfg is not None else _live_order
+    bot_risk_exposure_max_total_usd = float(getattr(cfg, "bot_risk_exposure_max_total_usd", _live_total)) if cfg is not None else _live_total
 
     total_cost = sum(i.price * i.size for i in intents)
     for i in intents:
-        if i.price * i.size > max_order_usd:
+        if i.price * i.size > bot_risk_exposure_max_order_usd:
             raise RuntimeError(
                 f"leg {i.side} ${i.price * i.size:.2f} exceeds "
-                f"MAX_ORDER_USD ${max_order_usd:.2f}")
+                f"MAX_ORDER_USD ${bot_risk_exposure_max_order_usd:.2f}")
     already = open_notional(client)
     if already is None:
         raise RuntimeError(
             "Cannot check MAX_TOTAL_USD cap: venue open_orders unreachable")
-    if already + total_cost > max_total_usd:
+    if already + total_cost > bot_risk_exposure_max_total_usd:
         raise RuntimeError(
             f"open ${already:.2f} + ${total_cost:.2f} exceeds "
-            f"MAX_TOTAL_USD ${max_total_usd:.2f}")
+            f"MAX_TOTAL_USD ${bot_risk_exposure_max_total_usd:.2f}")
 
     now_ms = int(time.time() * 1000)
     pair_id = f"pair-{uuid.uuid4().hex[:12]}"
-    max_pair_cost = getattr(cfg, "bot_pos_price_max_pair_cost_usd", 0.995)
+    bot_pos_price_max_pair_cost_usd = getattr(cfg, "bot_pos_price_max_pair_cost_usd", 0.995)
 
     # A carried pair_id means this batch REPLACES one leg of an existing pair
     # whose complement still rests: the replacement must join that pair, not
@@ -2610,7 +2610,7 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
                     token_id=str(i.token_id), side="BUY", price=i.price,
                     original_size=i.size, status="pending",
                     posted_ts=now_ms, last_polled_ts=now_ms,
-                    pair_id=pair_id, max_pair_cost_at_post=max_pair_cost,
+                    pair_id=pair_id, max_pair_cost_at_post=bot_pos_price_max_pair_cost_usd,
                 ))
                 signed = client.create_order(OrderArgsV2(
                     price=i.price, size=i.size, side=BUY, token_id=i.token_id,
@@ -2814,7 +2814,7 @@ def _fleet_state(registry, cfg) -> dict:
     keeps the previous cycle's values -- never resetting a live cap to open on
     a bad read.
     """
-    from core_brain.unhedged_stop_loss import fleet_posture
+    from core_brain.unhedged_stop_loss import bot_risk_circuit_fleet_posture
     from core_brain.markout import fleet_stats
     from core_brain.order_registry import (
         registry_committed_usd, registry_naked_usd,
@@ -2857,7 +2857,7 @@ def _fleet_state(registry, cfg) -> dict:
                         latest = run_fms[-1]
                         unrealized = latest.get("unrealized_usd")
                         if unrealized is not None:
-                            val = float(cfg.bankroll_usd) + float(unrealized)
+                            val = float(cfg.bot_quote_bank_baseline_usd) + float(unrealized)
                             if val > 0:
                                 portfolio_usd = val
             except Exception:
@@ -2866,10 +2866,10 @@ def _fleet_state(registry, cfg) -> dict:
     dynamic_caps = derive_dynamic_caps(cfg, portfolio_usd)
 
     return {
-        "fleet_naked_usd": registry_naked_usd(registry),
-        "committed_usd": registry_committed_usd(registry),
-        "fleet_posture": fleet_posture(
-            fleet_stats(registry, cfg.markout_fleet_min_sample), cfg),
+        "bot_risk_exposure_fleet_naked_usd": registry_naked_usd(registry),
+        "bot_risk_exposure_committed_usd": registry_committed_usd(registry),
+        "bot_risk_circuit_fleet_posture": bot_risk_circuit_fleet_posture(
+            fleet_stats(registry, cfg.bot_risk_markout_fleet_min_sample), cfg),
         **dynamic_caps,
     }
 
@@ -3351,7 +3351,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         from core_brain.account import fetch_live_balance
         live_bal = fetch_live_balance(a.funder)
         if live_bal is not None and live_bal > 0:
-            cfg = replace(cfg, bankroll_usd=live_bal)
+            cfg = replace(cfg, bot_quote_bank_baseline_usd=live_bal)
     except Exception as e:
         log.warning("live balance read failed, using config bankroll: %s", e)
 

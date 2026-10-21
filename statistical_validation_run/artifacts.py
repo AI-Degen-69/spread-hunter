@@ -128,8 +128,8 @@ def build_gate_rows(
     gate = evaluate_stat_gate(
         closes,
         starting_capital=float(starting_capital) if starting_capital is not None else 0.0,
-        threshold_pct=cfg.stat_gate_threshold_pct,
-        bankroll_fraction=cfg.stat_gate_bankroll_fraction,
+        threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
+        bankroll_fraction=cfg.bot_eval_stat_gate_bankroll_pct,
     )
     ci90 = ta.get("ci90_lower_pct")
     ci90_usd = gate.get("ci90_lower_usd")
@@ -140,26 +140,26 @@ def build_gate_rows(
     rescues = rescue_stats(closes)
 
     dollar_threshold = (
-        float(starting_capital) * cfg.stat_gate_bankroll_fraction
+        float(starting_capital) * cfg.bot_eval_stat_gate_bankroll_pct
         if starting_capital is not None else None
     )
 
     # Strict `>` on both twins, matching the artifact policy in the issue
     # (90% CI (1%, inf)) rather than kpi.evaluate_stat_gate's `>=`. Equality at
     # the boundary must read as FAIL, and the config threshold is env-
-    # overridable (HUNTER_STAT_GATE_THRESHOLD_PCT), so nothing here hard-codes
+    # overridable (BOT_EVAL_STAT_GATE_THRESHOLD_PCT), so nothing here hard-codes
     # 1.0.
     rows: list[dict[str, Any]] = [
         {
             "gate": "Primary — total PnL (inclusive)",
             "metric": "ci90_lower_pct",
             "value": ci90,
-            "threshold": f"> {cfg.stat_gate_threshold_pct}",
+            "threshold": f"> {cfg.bot_eval_stat_gate_threshold_pct}",
             # A CI that could not be computed (no cost basis on any close) is
             # unmeasurable, not failed: the memo renders it n/a and the verdict
             # falls to INCONCLUSIVE.
             "passed": (
-                None if ci90 is None else ci90 > cfg.stat_gate_threshold_pct
+                None if ci90 is None else ci90 > cfg.bot_eval_stat_gate_threshold_pct
             ),
             "rationale": (
                 "one-sided 90% CI lower bound on mean return %, every close "
@@ -275,7 +275,7 @@ def resolve_verdict(
 
     `threshold_pct` is the EFFECTIVE configured threshold
     (``cfg.stat_gate_threshold_pct``, env-overridable via
-    ``HUNTER_STAT_GATE_THRESHOLD_PCT``) and is used in the verdict text so the
+    ``BOT_EVAL_STAT_GATE_THRESHOLD_PCT``) and is used in the verdict text so the
     memo never hard-codes 1.0.
     """
     ta = kpi.get("trade_analytics") or {}
@@ -365,15 +365,15 @@ def render_report_md(
     portfolio = kpi.get("portfolio") or {}
     if sensitivity is None:
         sensitivity = build_sensitivity(
-            closes, threshold_pct=cfg.stat_gate_threshold_pct,
+            closes, threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
         )
     rescues = rescue_stats(closes)
     methods = sorted({c.get("method") or "unknown" for c in closes})
     ci95 = ta.get("ci95_return_pct") or {}
     win_ci = (ta.get("win_rate_ci95") or {})
     generated = datetime.datetime.now().isoformat(timespec="seconds")
-    max_order_usd, max_total_usd = order_caps()
-    caps = f"`MAX_ORDER_USD={max_order_usd:.2f}`, `MAX_TOTAL_USD={max_total_usd:.2f}`"
+    bot_risk_exposure_max_order_usd, bot_risk_exposure_max_total_usd = order_caps()
+    caps = f"`MAX_ORDER_USD={bot_risk_exposure_max_order_usd:.2f}`, `MAX_TOTAL_USD={bot_risk_exposure_max_total_usd:.2f}`"
     disclaimer = gate_definition(cfg)["tautology_disclaimer"]
 
     lines: list[str] = [
@@ -466,8 +466,8 @@ def render_report_md(
         f"- Settlements (held to market resolution): {rescues['settlements']}",
         f"- Completion rate: {_pct(rescues['completion_rate'])}"
         f" (exit rate {_pct(rescues['exit_rate'])})",
-        f"- Config calibration: `pairs_complete_gain_cents={cfg.pairs_complete_gain_cents}` "
-        f"vs `pairs_exit_cost_cents={cfg.pairs_exit_cost_cents}`",
+        f"- Config calibration: `pairs_complete_gain_cents={cfg.bot_risk_pairs_complete_gain_cents}` "
+        f"vs `pairs_exit_cost_cents={cfg.bot_risk_pairs_exit_cost_cents}`",
         "- The losses above are already inside `total_realized_pnl`; a bad exit "
         "path fails the primary gate with the rest of the PnL.",
         "",
@@ -594,14 +594,14 @@ def write_artifacts(
         return p
 
     methods = sorted({c.get("method") or "unknown" for c in closes})
-    max_order_usd, max_total_usd = order_caps()
+    bot_risk_exposure_max_order_usd, bot_risk_exposure_max_total_usd = order_caps()
 
     # Issue #55: the side-by-side sensitivity column. GO must survive pessimism,
     # so the verdict here is GO only when BOTH the base and the pessimistic
     # `ci90_lower_pct` sit at or above the threshold. `rebate_est` stays None in
     # both variants -- the report never invents rebate income.
     sensitivity = build_sensitivity(
-        closes, threshold_pct=cfg.stat_gate_threshold_pct,
+        closes, threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
     )
 
     # Issue #55: GO must survive pessimism, so the headline verdict is the thing
@@ -624,13 +624,13 @@ def write_artifacts(
         "verdict": effective_verdict,
         "verdict_reason": effective_reason,
         "gates": gate_rows,
-        "primary_gate": f"ci90_lower_pct > {cfg.stat_gate_threshold_pct} inclusive",
-        "threshold_pct": cfg.stat_gate_threshold_pct,
-        "bankroll_fraction": cfg.stat_gate_bankroll_fraction,
+        "primary_gate": f"ci90_lower_pct > {cfg.bot_eval_stat_gate_threshold_pct} inclusive",
+        "threshold_pct": cfg.bot_eval_stat_gate_threshold_pct,
+        "bankroll_fraction": cfg.bot_eval_stat_gate_bankroll_pct,
         "tautology_disclaimer": gate_definition(cfg)["tautology_disclaimer"],
         "caps_at_risk_usd": {
-            "MAX_ORDER_USD": max_order_usd,
-            "MAX_TOTAL_USD": max_total_usd,
+            "MAX_ORDER_USD": bot_risk_exposure_max_order_usd,
+            "MAX_TOTAL_USD": bot_risk_exposure_max_total_usd,
         },
         "cost_of_being_wrong": COST_OF_BEING_WRONG,
         "rescue": rescue_stats(closes),

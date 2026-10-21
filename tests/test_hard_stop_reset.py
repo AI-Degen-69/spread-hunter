@@ -138,9 +138,9 @@ def _seed_pair(registry: OrderRegistry) -> None:
 
 def _cfg():
     return MakerConfig(
-        enable_pairs_rule=True, enable_aged_out_rescue=True,
-        pairs_exit_window_sec=900.0, aged_out_rescue_lead_sec=900.0,
-        max_pair_cost=MAX_PAIR_COST, max_order_usd=100.0)
+        bot_risk_gate_pairs_rule_on=True, bot_risk_gate_aged_out_rescue_on=True,
+        bot_risk_pairs_exit_window_sec=900.0, bot_risk_aged_out_rescue_lead_sec=900.0,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, bot_risk_exposure_max_order_usd=100.0)
 
 
 def _route(registry, venue, **kw):

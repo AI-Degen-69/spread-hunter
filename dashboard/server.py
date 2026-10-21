@@ -1930,7 +1930,7 @@ def start_bot() -> dict:
         }
         # Capture starting capital: a real snapshot of account equity at the
         # moment the bot is toggled ON. The kpi.py report uses
-        # _CFG.bankroll_usd (a hardcoded config constant) as its baseline,
+        # _CFG.bot_quote_bank_baseline_usd (a hardcoded config constant) as its baseline,
         # but the comment at kpi.py:889 explicitly says that's "a paper-run
         # constant that nobody deposited." This snapshot is the real number.
         # It may be None if the venue is unreachable at start time; the
@@ -4262,8 +4262,9 @@ def log_stream_events(
 def get_parameters(registry=None):
     """Return active strategy settings, trigger thresholds, and action descriptions.
 
-    Consolidates safety limits from core_brain.config:MakerConfig (max_pair_cost,
-    max_naked_usd, min_quote_shares, max_order_usd, max_total_usd) and the sweep
+    Consolidates safety limits from core_brain.config:MakerConfig (bot_pos_price_max_pair_cost_usd,
+    bot_risk_exposure_max_naked_usd, bot_quote_size_min_shares, bot_risk_exposure_max_order_usd,
+    bot_risk_exposure_max_total_usd) and the sweep
     interval from the dashboard's own config. One config object, not two.
     """
     from core_brain.config import load as load_cfg, derive_dynamic_caps
@@ -4300,9 +4301,9 @@ def get_parameters(registry=None):
         logger.debug("get_parameters: using bankroll fallback (%s)", exc)
 
     dynamic = derive_dynamic_caps(cfg, portfolio_usd)
-    naked_usd = dynamic["max_naked_usd"]
-    order_usd = dynamic["max_order_usd"]
-    total_usd = dynamic["max_total_usd"]
+    naked_usd = dynamic["bot_risk_exposure_max_naked_usd"]
+    order_usd = dynamic["bot_risk_exposure_max_order_usd"]
+    total_usd = dynamic["bot_risk_exposure_max_total_usd"]
     basis_label = "account value" if portfolio_usd is not None else "bankroll"
 
     sweep = resolve_sweep_interval()
@@ -4329,8 +4330,8 @@ def get_parameters(registry=None):
         # =====================================================================
         # Subgroup 1: Active / In-Play Markets (Live Sports & Esports)
         {
-            "name": "select_min_volume_24h_usd_live",
-            "key": "select_min_volume_24h_usd_live",
+            "name": "filter_live_vol_min_24h_usd",
+            "key": "filter_live_vol_min_24h_usd",
             "display_name": "Live Event 24h Volume Floor",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4346,8 +4347,8 @@ def get_parameters(registry=None):
             "action": "Filters out illiquid live matches to protect against dead-flat or untradable tape",
         },
         {
-            "name": "select_movement_window_sec",
-            "key": "select_movement_window_sec",
+            "name": "filter_live_vel_lookback_sec",
+            "key": "filter_live_vel_lookback_sec",
             "display_name": "Movement Lookback Window",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4363,8 +4364,8 @@ def get_parameters(registry=None):
             "action": "Evaluates recent trading velocity across 30-minute window before admitting live candidates",
         },
         {
-            "name": "select_min_movement_usd",
-            "key": "select_min_movement_usd",
+            "name": "filter_live_vel_min_usd",
+            "key": "filter_live_vel_min_usd",
             "display_name": "Min Traded Movement Notional",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4380,8 +4381,8 @@ def get_parameters(registry=None):
             "action": "Disqualifies dead markets that traded previously but have halted now",
         },
         {
-            "name": "select_min_activity_ratio",
-            "key": "select_min_activity_ratio",
+            "name": "filter_live_activity_min_ratio",
+            "key": "filter_live_activity_min_ratio",
             "display_name": "Min Movement Activity Ratio",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4397,8 +4398,8 @@ def get_parameters(registry=None):
             "action": "Demands minimum active trading share before admitting candidate",
         },
         {
-            "name": "select_min_range_cents",
-            "key": "select_min_range_cents",
+            "name": "filter_live_move_min_range_cents",
+            "key": "filter_live_move_min_range_cents",
             "display_name": "Min Price Range Volatility",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4414,8 +4415,8 @@ def get_parameters(registry=None):
             "action": "Rejects static, pinned markets lacking two-sided price discovery",
         },
         {
-            "name": "select_volatility_window_sec",
-            "key": "select_volatility_window_sec",
+            "name": "filter_live_move_lookback_sec",
+            "key": "filter_live_move_lookback_sec",
             "display_name": "Volatility Evaluation Horizon",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4431,8 +4432,8 @@ def get_parameters(registry=None):
             "action": "Samples high-to-low price dispersion across 2-hour window",
         },
         {
-            "name": "select_velocity_gate_enabled",
-            "key": "select_velocity_gate_enabled",
+            "name": "filter_live_gate_velocity_on",
+            "key": "filter_live_gate_velocity_on",
             "display_name": "Velocity Gate Active",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4449,8 +4450,8 @@ def get_parameters(registry=None):
         },
         # Subgroup 2: Standard / Pre-Match & Long-Dated Markets
         {
-            "name": "select_min_volume_24h_usd",
-            "key": "select_min_volume_24h_usd",
+            "name": "filter_std_vol_min_24h_usd",
+            "key": "filter_std_vol_min_24h_usd",
             "display_name": "Standard 24h Volume Floor",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4466,8 +4467,8 @@ def get_parameters(registry=None):
             "action": "Guarantees sufficient trading depth across the full market lifecycle",
         },
         {
-            "name": "select_min_top3_depth_usd",
-            "key": "select_min_top3_depth_usd",
+            "name": "filter_common_vol_min_top3_depth_usd",
+            "key": "filter_common_vol_min_top3_depth_usd",
             "display_name": "Top-3 Level Depth Floor",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4483,8 +4484,8 @@ def get_parameters(registry=None):
             "action": "Refuses thin books to guarantee immediate exit liquidity upon fill",
         },
         {
-            "name": "select_max_days_to_resolve",
-            "key": "select_max_days_to_resolve",
+            "name": "filter_std_time_max_days_to_resolve",
+            "key": "filter_std_time_max_days_to_resolve",
             "display_name": "Max Resolution Horizon",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4500,8 +4501,8 @@ def get_parameters(registry=None):
             "action": "Excludes long-dated capital lockup contracts; prioritizes near-term turnover",
         },
         {
-            "name": "select_max_book_spread",
-            "key": "select_max_book_spread",
+            "name": "filter_common_spread_max_cents",
+            "key": "filter_common_spread_max_cents",
             "display_name": "Picking Spread Cap (Derived)",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4513,12 +4514,12 @@ def get_parameters(registry=None):
             "env_var": "",
             "category": "Spread Gate",
             "badge": "dynamic",
-            "trigger": f"Candidate book spread > {cfg.filter_common_spread_max_cents*100:.2f}¢ (41/120 of max_book_spread)",
+            "trigger": f"Candidate book spread > {cfg.filter_common_spread_max_cents*100:.2f}¢ (41/120 of bot_quote_book_max_spread_cents)",
             "action": "Derived picking cap prevents offering books wider than entry threshold",
         },
         {
-            "name": "select_max_queue_minutes",
-            "key": "select_max_queue_minutes",
+            "name": "filter_std_queue_max_clear_min",
+            "key": "filter_std_queue_max_clear_min",
             "display_name": "Maker Queue Bar",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4534,8 +4535,8 @@ def get_parameters(registry=None):
             "action": "Screens out congested queues that cannot drain within pairs action window",
         },
         {
-            "name": "enforce_max_queue_minutes",
-            "key": "enforce_max_queue_minutes",
+            "name": "filter_std_gate_queue_max_on",
+            "key": "filter_std_gate_queue_max_on",
             "display_name": "Queue Bar Enforcement",
             "scope": "market_screener",
             "scope_label": "Scope 1: Market Screener",
@@ -4556,15 +4557,15 @@ def get_parameters(registry=None):
         # =====================================================================
         # Subgroup 1: Quoting Phase (Entry & Book Health)
         {
-            "name": "bankroll_usd",
-            "key": "bankroll_usd",
+            "name": "bot_quote_bank_baseline_usd",
+            "key": "bot_quote_bank_baseline_usd",
             "display_name": "Baseline Trading Bankroll",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
             "subgroup": "quoting_phase",
             "subgroup_label": "Quoting Phase: Sizing & Capital",
-            "value": f"${cfg.bankroll_usd:.2f}",
-            "raw_value": cfg.bankroll_usd,
+            "value": f"${cfg.bot_quote_bank_baseline_usd:.2f}",
+            "raw_value": cfg.bot_quote_bank_baseline_usd,
             "default": "$100.00",
             "env_var": "BOT_QUOTE_BANK_BASELINE_USD",
             "category": "Capital Baseline",
@@ -4573,8 +4574,8 @@ def get_parameters(registry=None):
             "action": "Scales dynamic risk caps proportionally with live account value",
         },
         {
-            "name": "naked_risk_pct",
-            "key": "naked_risk_pct",
+            "name": "bot_risk_exposure_max_naked_pct",
+            "key": "bot_risk_exposure_max_naked_pct",
             "display_name": "Directional Risk Allocation",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4590,8 +4591,8 @@ def get_parameters(registry=None):
             "action": "Allocates 6% risk budget to cap maximum single-leg unhedged exposure",
         },
         {
-            "name": "order_risk_pct",
-            "key": "order_risk_pct",
+            "name": "bot_risk_exposure_max_order_pct",
+            "key": "bot_risk_exposure_max_order_pct",
             "display_name": "Single Order Capital Cap",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4607,8 +4608,8 @@ def get_parameters(registry=None):
             "action": "Enforces 25% single-order ceiling to prevent accidental capital overcommitment",
         },
         {
-            "name": "bankroll_ceiling_pct",
-            "key": "bankroll_ceiling_pct",
+            "name": "bot_risk_exposure_bankroll_ceiling_pct",
+            "key": "bot_risk_exposure_bankroll_ceiling_pct",
             "display_name": "Global Fleet Deployment Ceiling",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4624,8 +4625,8 @@ def get_parameters(registry=None):
             "action": "Halts all new quotes across all markets when 90% capital is committed",
         },
         {
-            "name": "max_naked_usd",
-            "key": "max_naked_usd",
+            "name": "bot_risk_exposure_max_naked_usd",
+            "key": "bot_risk_exposure_max_naked_usd",
             "display_name": "Single-Leg Unwind Cap",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4641,8 +4642,8 @@ def get_parameters(registry=None):
             "action": "Stops quoting new orders on that market; prepares emergency exit / merge",
         },
         {
-            "name": "max_order_usd",
-            "key": "max_order_usd",
+            "name": "bot_risk_exposure_max_order_usd",
+            "key": "bot_risk_exposure_max_order_usd",
             "display_name": "Max Capital Per Order",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4658,8 +4659,8 @@ def get_parameters(registry=None):
             "action": "Clamps size to prevent accidental capital overcommitment",
         },
         {
-            "name": "max_total_usd",
-            "key": "max_total_usd",
+            "name": "bot_risk_exposure_max_total_usd",
+            "key": "bot_risk_exposure_max_total_usd",
             "display_name": "Bankroll Deployment Ceiling",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4675,8 +4676,8 @@ def get_parameters(registry=None):
             "action": "Refuses all new quotes across all markets until existing orders settle or cancel",
         },
         {
-            "name": "couple_risk_pct",
-            "key": "couple_risk_pct",
+            "name": "bot_quote_alloc_couple_pct",
+            "key": "bot_quote_alloc_couple_pct",
             "display_name": "Pair Coupling Fraction",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4692,8 +4693,8 @@ def get_parameters(registry=None):
             "action": "Limits coupled notional commitment per round-trip opportunity",
         },
         {
-            "name": "min_couple_usd",
-            "key": "min_couple_usd",
+            "name": "bot_quote_alloc_couple_min_usd",
+            "key": "bot_quote_alloc_couple_min_usd",
             "display_name": "Min Coupled Capital Floor",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4711,8 +4712,8 @@ def get_parameters(registry=None):
 
         # Probability & Pricing Bands
         {
-            "name": "price_band_low",
-            "key": "price_band_low",
+            "name": "bot_quote_price_band_min_cents",
+            "key": "bot_quote_price_band_min_cents",
             "display_name": "Pricing Band Lower Bound",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4728,8 +4729,8 @@ def get_parameters(registry=None):
             "action": "Refuses extreme longshot bids where adverse selection risk spikes",
         },
         {
-            "name": "price_band_high",
-            "key": "price_band_high",
+            "name": "bot_quote_price_band_max_cents",
+            "key": "bot_quote_price_band_max_cents",
             "display_name": "Pricing Band Upper Bound",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4745,8 +4746,8 @@ def get_parameters(registry=None):
             "action": "Refuses extreme favourite bids where spread capture margin is negligible",
         },
         {
-            "name": "enforce_price_band",
-            "key": "enforce_price_band",
+            "name": "bot_quote_gate_price_band_on",
+            "key": "bot_quote_gate_price_band_on",
             "display_name": "Enforce Pricing Band",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4764,8 +4765,8 @@ def get_parameters(registry=None):
 
         # Dynamic Offsets & Grid
         {
-            "name": "dynamic_offset_enabled",
-            "key": "dynamic_offset_enabled",
+            "name": "bot_quote_gate_dynamic_offset_on",
+            "key": "bot_quote_gate_dynamic_offset_on",
             "display_name": "Dynamic Offset Active",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4781,8 +4782,8 @@ def get_parameters(registry=None):
             "action": "Scales resting bid distance dynamically with order book width",
         },
         {
-            "name": "dynamic_offset_multiplier",
-            "key": "dynamic_offset_multiplier",
+            "name": "bot_quote_spread_offset_multiplier",
+            "key": "bot_quote_spread_offset_multiplier",
             "display_name": "Half-Spread Offset Multiplier",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4798,8 +4799,8 @@ def get_parameters(registry=None):
             "action": "Positions maker bids at 50% of the inside spread away from mid",
         },
         {
-            "name": "dynamic_offset_min_cents",
-            "key": "dynamic_offset_min_cents",
+            "name": "bot_quote_spread_offset_min_cents",
+            "key": "bot_quote_spread_offset_min_cents",
             "display_name": "Min Offset Floor",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4815,8 +4816,8 @@ def get_parameters(registry=None):
             "action": "Enforces minimum 1 tick distance below touch",
         },
         {
-            "name": "dynamic_offset_max_cents",
-            "key": "dynamic_offset_max_cents",
+            "name": "bot_quote_spread_offset_max_cents",
+            "key": "bot_quote_spread_offset_max_cents",
             "display_name": "Max Offset Ceiling",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4832,8 +4833,8 @@ def get_parameters(registry=None):
             "action": "Caps offset at 20¢ to ensure quotes remain fillable",
         },
         {
-            "name": "tick_size",
-            "key": "tick_size",
+            "name": "bot_quote_tick_size",
+            "key": "bot_quote_tick_size",
             "display_name": "Price Grid / Tick Size",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4851,59 +4852,59 @@ def get_parameters(registry=None):
 
         # Book Quality & Order Floor
         {
-            "name": "min_quote_shares",
-            "key": "min_quote_shares",
+            "name": "bot_quote_size_min_shares",
+            "key": "bot_quote_size_min_shares",
             "display_name": "Minimum Order Size",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
             "subgroup": "quoting_phase",
             "subgroup_label": "Quoting Phase: Book Quality & Order Floor",
-            "value": f"{cfg.min_quote_shares} shares",
-            "raw_value": cfg.min_quote_shares,
+            "value": f"{cfg.bot_quote_size_min_shares} shares",
+            "raw_value": cfg.bot_quote_size_min_shares,
             "default": "5 shares",
             "env_var": "",
             "category": "Venue Protocol",
             "badge": "cadence",
             "trigger": "Calculated order size falls below Polymarket venue protocol floor",
-            "action": f"Refuses single-sided quote or scales up to {cfg.min_quote_shares} shares if budget permits",
+            "action": f"Refuses single-sided quote or scales up to {cfg.bot_quote_size_min_shares} shares if budget permits",
         },
         {
-            "name": "max_book_spread",
-            "key": "max_book_spread",
+            "name": "bot_quote_book_max_spread_cents",
+            "key": "bot_quote_book_max_spread_cents",
             "display_name": "Max Book Spread Gate",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
             "subgroup": "quoting_phase",
             "subgroup_label": "Quoting Phase: Book Quality & Order Floor",
-            "value": f"${cfg.max_book_spread:.2f}",
-            "raw_value": cfg.max_book_spread,
+            "value": f"${cfg.bot_quote_book_max_spread_cents:.2f}",
+            "raw_value": cfg.bot_quote_book_max_spread_cents,
             "default": "$0.06",
             "env_var": "",
             "category": "Book Health",
             "badge": "hard-limit",
-            "trigger": f"Inside two-sided book spread > ${cfg.max_book_spread:.2f}",
+            "trigger": f"Inside two-sided book spread > ${cfg.bot_quote_book_max_spread_cents:.2f}",
             "action": "Refuses to quote wide books where exit hedging is illiquid",
         },
         {
-            "name": "max_spread_from_mid",
-            "key": "max_spread_from_mid",
+            "name": "bot_quote_book_max_spread_from_mid",
+            "key": "bot_quote_book_max_spread_from_mid",
             "display_name": "Max Resting Spread From Mid",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
             "subgroup": "quoting_phase",
             "subgroup_label": "Quoting Phase: Book Quality & Order Floor",
-            "value": f"${cfg.max_spread_from_mid:.2f}",
-            "raw_value": cfg.max_spread_from_mid,
+            "value": f"${cfg.bot_quote_book_max_spread_from_mid:.2f}",
+            "raw_value": cfg.bot_quote_book_max_spread_from_mid,
             "default": "$0.15",
             "env_var": "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
             "category": "Book Health",
             "badge": "hard-limit",
-            "trigger": f"Distance from mid to resting bid > ${cfg.max_spread_from_mid:.2f}",
+            "trigger": f"Distance from mid to resting bid > ${cfg.bot_quote_book_max_spread_from_mid:.2f}",
             "action": "Resting-offset ceiling preventing quotes too deep to fill",
         },
         {
-            "name": "require_two_sided_when_flat",
-            "key": "require_two_sided_when_flat",
+            "name": "bot_quote_require_two_sided_when_flat_on",
+            "key": "bot_quote_require_two_sided_when_flat_on",
             "display_name": "Require Two-Sided Flat Entry",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4924,25 +4925,25 @@ def get_parameters(registry=None):
         # ---------------------------------------------------------------------
         # Spread Capture & Parity
         {
-            "name": "max_pair_cost",
-            "key": "max_pair_cost",
+            "name": "bot_pos_price_max_pair_cost_usd",
+            "key": "bot_pos_price_max_pair_cost_usd",
             "display_name": "Pair Cost Entry Ceiling",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
             "subgroup": "open_positions",
             "subgroup_label": "Open Positions: Spread Capture & Parity",
-            "value": f"${cfg.max_pair_cost:.2f}",
-            "raw_value": cfg.max_pair_cost,
+            "value": f"${cfg.bot_pos_price_max_pair_cost_usd:.2f}",
+            "raw_value": cfg.bot_pos_price_max_pair_cost_usd,
             "default": "$0.99",
             "env_var": "BOT_POS_PRICE_MAX_PAIR_COST_USD",
             "category": "Pricing Safeguard",
             "badge": "hard-limit",
-            "trigger": f"Combined UP + DOWN maker buy cost exceeds ${cfg.max_pair_cost:.2f}",
+            "trigger": f"Combined UP + DOWN maker buy cost exceeds ${cfg.bot_pos_price_max_pair_cost_usd:.2f}",
             "action": "Refuses to quote pair to ensure guaranteed positive spread profit on merge ($1.00 - cost)",
         },
         {
-            "name": "max_completable_pair_cost",
-            "key": "max_completable_pair_cost",
+            "name": "bot_pos_price_max_complete_usd",
+            "key": "bot_pos_price_max_complete_usd",
             "display_name": "Completable Pair Cost Ceiling",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4958,8 +4959,8 @@ def get_parameters(registry=None):
             "action": "Guarantees any single fill can immediately be hedged at market ask without loss",
         },
         {
-            "name": "enforce_completable_pair_cost",
-            "key": "enforce_completable_pair_cost",
+            "name": "bot_pos_gate_complete_cost_on",
+            "key": "bot_pos_gate_complete_cost_on",
             "display_name": "Enforce Completable Cost",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4977,8 +4978,8 @@ def get_parameters(registry=None):
 
         # Inventory Skew
         {
-            "name": "strict_paired_inventory",
-            "key": "strict_paired_inventory",
+            "name": "bot_pos_gate_strict_pairs_on",
+            "key": "bot_pos_gate_strict_pairs_on",
             "display_name": "Strict Paired Inventory",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -4994,8 +4995,8 @@ def get_parameters(registry=None):
             "action": "Blocks quoting heavy leg; sizes light leg strictly to balance inventory",
         },
         {
-            "name": "target_balance",
-            "key": "target_balance",
+            "name": "bot_pos_skew_target_balance_ratio",
+            "key": "bot_pos_skew_target_balance_ratio",
             "display_name": "Target Inventory Balance",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5011,8 +5012,8 @@ def get_parameters(registry=None):
             "action": "Activates skew spring to rebalance positions toward 1.0 parity",
         },
         {
-            "name": "max_skew_offset",
-            "key": "max_skew_offset",
+            "name": "bot_pos_skew_max_offset_cents",
+            "key": "bot_pos_skew_max_offset_cents",
             "display_name": "Max Skew Offset",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5028,8 +5029,8 @@ def get_parameters(registry=None):
             "action": "Caps aggressive pricing on light side to prevent adverse fills",
         },
         {
-            "name": "min_reward_offset",
-            "key": "min_reward_offset",
+            "name": "bot_pos_skew_min_reward_offset_cents",
+            "key": "bot_pos_skew_min_reward_offset_cents",
             "display_name": "Min Quote Offset Edge",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5047,8 +5048,8 @@ def get_parameters(registry=None):
 
         # Capital Efficiency
         {
-            "name": "merge_max_loss_per_share",
-            "key": "merge_max_loss_per_share",
+            "name": "bot_pos_merge_max_loss_per_share_usd",
+            "key": "bot_pos_merge_max_loss_per_share_usd",
             "display_name": "Merge Max Loss Per Share",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5064,8 +5065,8 @@ def get_parameters(registry=None):
             "action": "Prevents merging at a loss; holds pair until parity conditions met",
         },
         {
-            "name": "merge_velocity_hold_days",
-            "key": "merge_velocity_hold_days",
+            "name": "bot_pos_merge_velocity_hold_days",
+            "key": "bot_pos_merge_velocity_hold_days",
             "display_name": "Max Inventory Hold Days",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5086,8 +5087,8 @@ def get_parameters(registry=None):
         # ---------------------------------------------------------------------
         # Order Management & Requoting
         {
-            "name": "requote_interval_sec",
-            "key": "requote_interval_sec",
+            "name": "bot_order_requote_interval_sec",
+            "key": "bot_order_requote_interval_sec",
             "display_name": "Requote Min Interval",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5103,8 +5104,8 @@ def get_parameters(registry=None):
             "action": "Throttles amendments to prevent venue rate limit exhaustion and preserve queue",
         },
         {
-            "name": "requote_dead_band",
-            "key": "requote_dead_band",
+            "name": "bot_order_requote_dead_band_cents",
+            "key": "bot_order_requote_dead_band_cents",
             "display_name": "Requote Dead Band",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5120,8 +5121,8 @@ def get_parameters(registry=None):
             "action": "Suppresses cancel-replace churn; retains order book queue priority",
         },
         {
-            "name": "requote_hold_below_target",
-            "key": "requote_hold_below_target",
+            "name": "bot_order_requote_hold_below_target_cents",
+            "key": "bot_order_requote_hold_below_target_cents",
             "display_name": "Requote Hold Below Target",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5137,8 +5138,8 @@ def get_parameters(registry=None):
             "action": "Holds passive resting quote to avoid cancelling favorable queue positions",
         },
         {
-            "name": "requote_hold_queue_shares",
-            "key": "requote_hold_queue_shares",
+            "name": "bot_order_requote_hold_queue_shares",
+            "key": "bot_order_requote_hold_queue_shares",
             "display_name": "Queue Size Protection Floor",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5154,8 +5155,8 @@ def get_parameters(registry=None):
             "action": "Protects valuable queue position from unnecessary replacement",
         },
         {
-            "name": "poll_interval_sec",
-            "key": "poll_interval_sec",
+            "name": "bot_order_poll_interval_sec",
+            "key": "bot_order_poll_interval_sec",
             "display_name": "Trader Loop Poll Cadence",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5190,8 +5191,8 @@ def get_parameters(registry=None):
 
         # Single-Buy Rescue & Aging
         {
-            "name": "enable_pairs_rule",
-            "key": "enable_pairs_rule",
+            "name": "bot_risk_gate_pairs_rule_on",
+            "key": "bot_risk_gate_pairs_rule_on",
             "display_name": "Pairs-Only Rule Active",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5207,8 +5208,8 @@ def get_parameters(registry=None):
             "action": "Dates a 15-minute action window off the last fill; an older naked leg is left alone, not force-exited",
         },
         {
-            "name": "pairs_exit_window_sec",
-            "key": "pairs_exit_window_sec",
+            "name": "bot_risk_pairs_exit_window_sec",
+            "key": "bot_risk_pairs_exit_window_sec",
             "display_name": "Pairs Action Window",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5224,8 +5225,8 @@ def get_parameters(registry=None):
             "action": "Halts active quoting on market; passes control to single-buy rescue handler",
         },
         {
-            "name": "enable_aged_out_rescue",
-            "key": "enable_aged_out_rescue",
+            "name": "bot_risk_gate_aged_out_rescue_on",
+            "key": "bot_risk_gate_aged_out_rescue_on",
             "display_name": "Aged-Out Rescue Active",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5241,8 +5242,8 @@ def get_parameters(registry=None):
             "action": "Activates automated unhedged inventory liquidator / rescue routine",
         },
         {
-            "name": "aged_out_rescue_lead_sec",
-            "key": "aged_out_rescue_lead_sec",
+            "name": "bot_risk_aged_out_rescue_lead_sec",
+            "key": "bot_risk_aged_out_rescue_lead_sec",
             "display_name": "Resolution Rescue Lead Time",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5260,8 +5261,8 @@ def get_parameters(registry=None):
 
         # Stop-Loss & Emergency Defense
         {
-            "name": "stop_loss_mode",
-            "key": "stop_loss_mode",
+            "name": "bot_risk_stop_mode",
+            "key": "bot_risk_stop_mode",
             "display_name": "Stop-Loss Defensive Mode",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5277,8 +5278,8 @@ def get_parameters(registry=None):
             "action": "Defines defensive liquidation rule (NONE, ABSOLUTE_DROP, or PERCENTAGE_DROP)",
         },
         {
-            "name": "drop_cents",
-            "key": "drop_cents",
+            "name": "bot_risk_stop_adverse_drop_cents",
+            "key": "bot_risk_stop_adverse_drop_cents",
             "display_name": "Adverse Drop Cents Stop",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5294,8 +5295,8 @@ def get_parameters(registry=None):
             "action": "Triggers defensive market exit to truncate tail risk on naked leg",
         },
         {
-            "name": "drawdown_pct",
-            "key": "drawdown_pct",
+            "name": "bot_risk_stop_max_drawdown_pct",
+            "key": "bot_risk_stop_max_drawdown_pct",
             "display_name": "Position Drawdown Stop",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5311,8 +5312,8 @@ def get_parameters(registry=None):
             "action": "Halts quoting and initiates orderly position liquidation",
         },
         {
-            "name": "emergency_drawdown_pct",
-            "key": "emergency_drawdown_pct",
+            "name": "bot_risk_circuit_max_drawdown_pct",
+            "key": "bot_risk_circuit_max_drawdown_pct",
             "display_name": "Emergency Circuit Breaker",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
@@ -5328,25 +5329,25 @@ def get_parameters(registry=None):
             "action": "Immediate emergency circuit breaker; liquidates open risk unconditionally",
         },
         {
-            "name": "emergency_hedge_pct",
-            "key": "emergency_hedge_pct",
+            "name": "bot_risk_hedge_emergency_pct",
+            "key": "bot_risk_hedge_emergency_pct",
             "display_name": "Emergency Taker Cross Trigger",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
             "subgroup": "protection_lifecycle",
             "subgroup_label": "Protection & Lifecycle: Stop-Loss & Emergency Defense",
-            "value": f"{cfg.bot_risk_hedge_emergency_pct*100:.0f}% of max_naked_usd",
+            "value": f"{cfg.bot_risk_hedge_emergency_pct*100:.0f}% of bot_risk_exposure_max_naked_usd",
             "raw_value": cfg.bot_risk_hedge_emergency_pct,
             "default": "80%",
             "env_var": "",
             "category": "Emergency Defense",
             "badge": "dynamic",
-            "trigger": f"Exposure reaches {cfg.bot_risk_hedge_emergency_pct*100:.0f}% of max_naked_usd",
+            "trigger": f"Exposure reaches {cfg.bot_risk_hedge_emergency_pct*100:.0f}% of bot_risk_exposure_max_naked_usd",
             "action": "Permits light side to cross spread and take hedge at market before cap freezes",
         },
         {
-            "name": "enable_emergency_hedge",
-            "key": "enable_emergency_hedge",
+            "name": "bot_risk_gate_emergency_hedge_on",
+            "key": "bot_risk_gate_emergency_hedge_on",
             "display_name": "Emergency Hedge Active",
             "scope": "bot_engine",
             "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",

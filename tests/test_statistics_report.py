@@ -70,7 +70,7 @@ def test_sample_size_gate_bites_on_config_target(tmp_path: Path):
 
     db = tmp_path / "registry.db"
     reg = OrderRegistry(db)
-    target = load_cfg().stat_gate_target_closes
+    target = load_cfg().bot_eval_stat_gate_target_closes
     n = min(target - 1, 5)  # below target, small keeps the test fast
     for i in range(n):
         reg.log_close(CloseRecord(

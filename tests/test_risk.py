@@ -13,7 +13,7 @@ from core_brain.risk import (
 
 
 def test_skew_offset_zero_when_flat():
-    cfg = MakerConfig(max_skew_offset=0.015, max_naked_usd=10.0)
+    cfg = MakerConfig(bot_pos_skew_max_offset_cents=0.015, bot_risk_exposure_max_naked_usd=10.0)
     inv = Inventory(up_shares=10, down_shares=10, up_cost=5.0, down_cost=5.0)
     assert skew_offset(cfg, inv, "UP") == 0.0
     assert skew_offset(cfg, inv, "DOWN") == 0.0
@@ -21,7 +21,7 @@ def test_skew_offset_zero_when_flat():
 
 def test_skew_offset_scales_with_max_skew_offset():
     # Long UP: 10 shares @ 0.50 -> $5.00 cost against max_naked_usd=10.0 => 50% utilization
-    cfg = MakerConfig(max_skew_offset=0.020, max_naked_usd=10.0)
+    cfg = MakerConfig(bot_pos_skew_max_offset_cents=0.020, bot_risk_exposure_max_naked_usd=10.0)
     inv = Inventory(up_shares=10, down_shares=0, up_cost=5.0, down_cost=0.0)
 
     # Naked side (UP) gets positive push (quote further from mid)
@@ -34,7 +34,7 @@ def test_skew_offset_scales_with_max_skew_offset():
 
 
 def test_book_health_checks_min_book_depth_shares():
-    cfg = MakerConfig(min_book_depth_shares=200.0, max_book_spread=0.06)
+    cfg = MakerConfig(bot_quote_book_min_depth_shares=200.0, bot_quote_book_max_spread_cents=0.06)
 
     # Thin book (150 shares < 200)
     thin_book = {

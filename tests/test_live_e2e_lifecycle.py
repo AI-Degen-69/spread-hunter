@@ -104,7 +104,7 @@ def test_full_cycle_pending_to_open_to_filled(registry, venue):
     # decide: both legs quoted, sized at the venue floor or above, tiny.
     assert len(intents) == 2, why
     assert {i.side for i in intents} == {"UP", "DOWN"}
-    assert all(i.size >= cfg.min_quote_shares for i in intents)
+    assert all(i.size >= cfg.bot_quote_size_min_shares for i in intents)
 
     # submit: real row-first placement path.
     placed = _submit_intents(venue, registry, Market(), intents, cfg)

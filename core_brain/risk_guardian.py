@@ -88,32 +88,18 @@ def build_watches(
     if not token_pairs:
         return {}
 
-    stop_loss_mode = str(
-        getattr(cfg, "bot_risk_stop_mode", None)
-        or getattr(cfg, "stop_loss_mode", "NONE")
-        or "NONE"
-    )
+    # One read per field: the second `getattr` in each pair used to be the
+    # legacy alias, and #732 deleted every alias, so it re-read the same name.
+    bot_risk_stop_mode = str(getattr(cfg, "bot_risk_stop_mode", None) or "NONE")
     _dc = getattr(cfg, "bot_risk_stop_adverse_drop_cents", None)
-    if _dc is None:
-        _dc = getattr(cfg, "drop_cents", 0.05)
-    drop_cents = float(_dc if _dc is not None else 0.05)
+    bot_risk_stop_adverse_drop_cents = float(0.05 if _dc is None else _dc)
     _ddp = getattr(cfg, "bot_risk_stop_max_drawdown_pct", None)
-    if _ddp is None:
-        _ddp = getattr(cfg, "drawdown_pct", 10.0)
-    drawdown_pct = float(_ddp if _ddp is not None else 10.0)
+    bot_risk_stop_max_drawdown_pct = float(10.0 if _ddp is None else _ddp)
     _edp = getattr(cfg, "bot_risk_circuit_max_drawdown_pct", None)
-    if _edp is None:
-        _edp = getattr(cfg, "emergency_drawdown_pct", 75.0)
-    emergency_drawdown_pct = float(_edp if _edp is not None else 75.0)
-
+    bot_risk_circuit_max_drawdown_pct = float(75.0 if _edp is None else _edp)
     _mpc = getattr(cfg, "bot_pos_price_max_pair_cost_usd", None)
-    if _mpc is None:
-        _mpc = getattr(cfg, "max_pair_cost", 0.995)
-    max_pair_cost = float(_mpc if _mpc is not None else 0.995)
-    _sc = getattr(cfg, "bot_risk_stranded_completion_on", None)
-    if _sc is None:
-        _sc = getattr(cfg, "stranded_completion_enabled", False)
-    stranded_completion_on = bool(_sc)
+    bot_pos_price_max_pair_cost_usd = float(0.995 if _mpc is None else _mpc)
+    stranded_completion_on = bool(getattr(cfg, "bot_risk_stranded_completion_on", False))
 
     real_db = db_path or getattr(registry, "db_path", getattr(registry, "_db_path", None))
     watches: dict[str, Watch] = {}
@@ -154,10 +140,10 @@ def build_watches(
         try:
             stop_level, stop_source = stop_trigger(
                 held_avg,
-                stop_loss_mode,
-                drop_cents,
-                drawdown_pct,
-                emergency_drawdown_pct,
+                bot_risk_stop_mode,
+                bot_risk_stop_adverse_drop_cents,
+                bot_risk_stop_max_drawdown_pct,
+                bot_risk_circuit_max_drawdown_pct,
             )
         except ValueError:
             continue
@@ -171,7 +157,7 @@ def build_watches(
         )
 
         if stranded_completion_on:
-            hedge_cap = min(0.99, max_pair_cost)
+            hedge_cap = min(0.99, bot_pos_price_max_pair_cost_usd)
             hedge_level = round(hedge_cap - held_avg, 4)
             if hedge_level > 0.0:
                 watches[light_token] = Watch(

@@ -11,7 +11,7 @@ Two sections, matching the two questions in issue #145:
     column is the direct measurement of `spread_capture_frac`, which the market
     filter asserts is 0.25 and has never checked.
   * **The touch pair.** The distribution of `best_bid(UP) + best_bid(DOWN)`,
-    against the `max_pair_cost` the risk gate refuses with `>=`.
+    against the `bot_pos_price_max_pair_cost_usd` the risk gate refuses with `>=`.
 
 Bootstrap rows are excluded from reachability and counted separately. See
 `book_tape_recorder.write_tape` for why they exist and why they are kept.
@@ -135,7 +135,7 @@ def report(db_path: Path) -> str:
     out.append("THE TOUCH PAIR -- best_bid(UP) + best_bid(DOWN)")
     ptotal = sum(p[1] for p in pairs) or 0
     for cost, n in pairs:
-        verdict = ("REFUSED by max_pair_cost" if cost >= MAX_PAIR_COST
+        verdict = ("REFUSED by bot_pos_price_max_pair_cost_usd" if cost >= MAX_PAIR_COST
                    else "tradeable")
         out.append(f"  ${cost:.4f}  n={n:<6} {_pct(n, ptotal)}  {verdict}")
     refused = sum(n for c, n in pairs if c >= MAX_PAIR_COST)

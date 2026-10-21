@@ -367,7 +367,7 @@ if __name__ == "__main__":
     from scoring.config import load
 
     cfg = load()
-    m = fetch_live_market(cfg.gamma_host, cfg.series_slug)
+    m = fetch_live_market(cfg.gamma_host, cfg.bot_market_series_slug)
     if not m:
         print("no live market right now")
     else:

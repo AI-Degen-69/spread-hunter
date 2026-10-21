@@ -117,9 +117,9 @@ def _ladder_market(registry: OrderRegistry, when: int) -> None:
 def _cfg() -> MakerConfig:
     """The manager's own knobs: both routes on, a 900s window and lead."""
     return MakerConfig(
-        enable_pairs_rule=True, enable_aged_out_rescue=True,
-        pairs_exit_window_sec=900.0, aged_out_rescue_lead_sec=900.0,
-        max_pair_cost=MAX_PAIR_COST, max_order_usd=100.0,
+        bot_risk_gate_pairs_rule_on=True, bot_risk_gate_aged_out_rescue_on=True,
+        bot_risk_pairs_exit_window_sec=900.0, bot_risk_aged_out_rescue_lead_sec=900.0,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, bot_risk_exposure_max_order_usd=100.0,
     )
 
 
@@ -168,7 +168,7 @@ def test_refill_after_exit_sells_the_netted_remainder(registry):
     first = _resting_up(registry, 10.0, 0.60, NOW, "r1")
     _fill(registry, first, 10.0, 0.60, NOW)
     result = lp.exit_single_buy(venue, registry, PAIR,
-                                max_pair_cost=MAX_PAIR_COST, live=True,
+                                bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                                 venue_positions={TOK_UP: 10.0, TOK_DN: 0.0})
     assert result["action"] == "exited"
     assert result["size"] == pytest.approx(10.0)
@@ -178,7 +178,7 @@ def test_refill_after_exit_sells_the_netted_remainder(registry):
     _fill(registry, second, 10.0, 0.60, NOW + 1)
 
     result = lp.exit_single_buy(venue, registry, PAIR,
-                                max_pair_cost=MAX_PAIR_COST, live=True,
+                                bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                                 venue_positions={TOK_UP: 10.0, TOK_DN: 0.0})
     assert result["action"] == "exited"
     assert result["size"] == pytest.approx(10.0)
@@ -200,7 +200,7 @@ def test_genuine_divergence_with_no_prior_exits_still_refuses(registry):
     _fill(registry, first, 10.0, 0.60, NOW)
     with pytest.raises(lp.PairExitRefused, match="diverge"):
         lp.exit_single_buy(venue, registry, PAIR,
-                           max_pair_cost=MAX_PAIR_COST, live=True,
+                           bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                            venue_positions={TOK_UP: 5.0, TOK_DN: 0.0})
     assert not any(c.startswith("sell:") for c in venue.calls)
 
@@ -213,7 +213,7 @@ def test_partially_explained_divergence_still_refuses(registry):
     first = _resting_up(registry, 10.0, 0.60, NOW, "r1")
     _fill(registry, first, 10.0, 0.60, NOW)
     lp.exit_single_buy(venue, registry, PAIR,
-                       max_pair_cost=MAX_PAIR_COST, live=True,
+                       bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0})
 
     second = _resting_up(registry, 10.0, 0.60, NOW + 1, "r2")
@@ -221,7 +221,7 @@ def test_partially_explained_divergence_still_refuses(registry):
     # Truncated view: 5 more shares missing than the one exit accounts for.
     with pytest.raises(lp.PairExitRefused, match="diverge"):
         lp.exit_single_buy(venue, registry, PAIR,
-                           max_pair_cost=MAX_PAIR_COST, live=True,
+                           bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True,
                            venue_positions={TOK_UP: 5.0, TOK_DN: 0.0})
     sells = [c for c in venue.calls if c.startswith("sell:")]
     assert len(sells) == 1

@@ -251,8 +251,7 @@ def test_stat_gate_bankroll_pct_canonical_env(monkeypatch, caplog):
     monkeypatch.setenv("BOT_EVAL_STAT_GATE_BANKROLL_PCT", "0.03")
     with caplog.at_level("WARNING"):
         cfg = load_cfg()
-    assert cfg.stat_gate_bankroll_pct == 0.03
-    assert cfg.stat_gate_bankroll_fraction == 0.03
+    assert cfg.bot_eval_stat_gate_bankroll_pct == 0.03
     assert "deprecated" not in caplog.text
 
 
@@ -262,8 +261,7 @@ def test_stat_gate_bankroll_fraction_legacy_env(monkeypatch, caplog):
     monkeypatch.setenv("HUNTER_STAT_GATE_BANKROLL_FRACTION", "0.025")
     with caplog.at_level("WARNING"):
         cfg = load_cfg()
-    assert cfg.stat_gate_bankroll_pct == 0.01
-    assert cfg.stat_gate_bankroll_fraction == 0.01
+    assert cfg.bot_eval_stat_gate_bankroll_pct == 0.01
     assert "deprecated" not in caplog.text
 
 
@@ -272,13 +270,12 @@ def test_stat_gate_bankroll_pct_wins_over_legacy(monkeypatch, caplog):
     monkeypatch.setenv("HUNTER_STAT_GATE_BANKROLL_PCT", "0.02")
     with caplog.at_level("WARNING"):
         cfg = load_cfg()
-    assert cfg.stat_gate_bankroll_pct == 0.04
-    assert cfg.stat_gate_bankroll_fraction == 0.04
+    assert cfg.bot_eval_stat_gate_bankroll_pct == 0.04
     assert "deprecated" not in caplog.text
 
 
 def test_stat_gate_display_criteria_reads_canonical():
-    cfg = MakerConfig(stat_gate_bankroll_pct=0.05, stat_gate_threshold_pct=2.0)
+    cfg = MakerConfig(bot_eval_stat_gate_bankroll_pct=0.05, bot_eval_stat_gate_threshold_pct=2.0)
     criteria = stat_gate_script.gate_definition(cfg)
     assert criteria["threshold_pct"] == 2.0
     assert criteria["bankroll_fraction"] == 0.05
