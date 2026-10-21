@@ -15,7 +15,7 @@ Measured over the paper run: 476 merge closes returned **+$1,172.35** at an aver
 cost of **$0.96006** — roughly 4c per pair. That is the strategy, and it is what the name
 "spread hunter" refers to.
 
-`max_pair_cost = 0.99` is therefore the **profit condition**, not a side constraint. The
+`bot_pos_price_max_pair_cost_usd = 0.99` is therefore the **profit condition**, not a side constraint. The
 merge is the exit and the P&L event, not housekeeping.
 
 ## Venue credits are extra, not the income
@@ -103,7 +103,7 @@ the state remains escalated until the pair locks or another terminal route appli
 **entry-relative** trigger and routes through `single_buy_saver.py`'s guarded exit:
 
 ```
-active_trigger = max(strategy_trigger, max(held_average × (1 − emergency_drawdown_pct/100), $0.01))
+active_trigger = max(strategy_trigger, max(held_average × (1 − bot_risk_circuit_max_drawdown_pct/100), $0.01))
 ```
 
 The strategy trigger comes from `bot_risk_stop_mode`, one mode per run: `NONE` (the default)
@@ -120,7 +120,7 @@ Operator overrides: `BOT_RISK_STOP_MODE` (`NONE` / `ABSOLUTE_DROP` /
 `PERCENTAGE_DROP`, trailing spaces and case ignored, anything else refused with the choice
 list), `BOT_RISK_STOP_ADVERSE_DROP_CENTS` (`0.01`–`0.90`, in DOLLARS per share despite the name),
 `BOT_RISK_STOP_MAX_DRAWDOWN_PCT` and `BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT` (above `0`, at most `100`).
-Every retired name -- the old `HUNTER_*` variables and the `usd`/`pct` knobs -- is inert: a
+Every retired name — the old `HUNTER_*` variables and the `usd`/`pct` knobs — is inert: a
 loader reads the canonical names only, and a retired name in `.env` changes nothing.
 
 Balanced inventory within the configured pair cap becomes `PAIR_LOCKED`. The only
@@ -133,18 +133,18 @@ routes; it is not an independent lifecycle policy.
 Two execution rules from shadow run `run-2809a7161de1` (209 orders, zero fills, 2026-08-25):
 
 **Completable-cost gate** (`bot_pos_price_max_complete_usd`, default `1.00`). The existing
-`max_pair_cost = 0.99` checks a **both-maker** pair: `up_bid + down_bid`. On a binary
+`bot_pos_price_max_pair_cost_usd = 0.99` checks a **both-maker** pair: `up_bid + down_bid`. On a binary
 market the legs are anti-correlated (`UP + DOWN ≈ 1.00`, measured correlation −0.9989),
 so a double-maker fill is rare by construction and one-sided fills require deliberate
 lifecycle management. The completable-cost gate refuses a resting bid when
-`price + best_ask(hedge) >= max_completable_pair_cost`; it does not itself trigger a taker
+`price + best_ask(hedge) >= bot_pos_price_max_complete_usd`; it does not itself trigger a taker
 completion. It fires only when we hold none of the hedge token (otherwise `bot_pos_price_max_pair_cost_usd`
 governs), has no opinion when the hedge book has no ask (`book_health` already refuses
 unreadable books), and does not replace `bot_pos_price_max_pair_cost_usd` — the two bound different
 questions and both must hold. During normal lifecycle management, the opposite maker
 waits or escalates; the settlement fallback is the sole automatic taker-completion path.
-Switch it off with `enforce_completable_pair_cost=false`; override the cap with env var
-`BOT_POS_PRICE_MAX_COMPLETE_USD`.
+Switch it off with the field `bot_pos_gate_complete_cost_on = False` (that switch has no
+environment override); override the cap with env var `BOT_POS_PRICE_MAX_COMPLETE_USD`.
 
 **Re-quote dead band** (`bot_order_requote_dead_band_cents`, default `0.03`). On that same run all 205
 consecutive re-quotes changed price and every one reset queue position to zero (median

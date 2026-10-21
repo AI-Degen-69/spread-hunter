@@ -20,7 +20,7 @@ nobody decided to take.
    and the dashboard's **START** button all spend money. Propose them; do not run them
    unless the operator says so in that session.
 3. **`data/orders.db` is the production registry.** Read it; never rewrite or delete it.
-4. **Dynamic Caps (`core_brain/config.py`):** `bot_risk_exposure_max_order_pct = 25%` ($25.0 at $100 baseline), `bot_risk_exposure_max_naked_pct = 6%` ($6.0 at $100 baseline), `bot_risk_exposure_bankroll_ceiling_pct = 90%` ($90.0 at $100 baseline), `bot_pos_price_max_pair_cost_usd = 0.99`. Dynamic caps scale with live account value.
+4. **Dynamic Caps (`core_brain/config.py`):** `bot_risk_exposure_max_order_pct = 0.25` (25%, $25.0 at $100 baseline), `bot_risk_exposure_max_naked_pct = 0.06` (6%, $6.0 at $100 baseline), `bot_risk_exposure_bankroll_ceiling_pct = 0.90` (90%, $90.0 at $100 baseline), `bot_pos_price_max_pair_cost_usd = 0.99`. These are ratios in `0.0..1.0`, not percentage points. Dynamic caps scale with live account value.
 
 Full rules, including which commands are pre-approved: [docs/agents/safety.md](docs/agents/safety.md).
 

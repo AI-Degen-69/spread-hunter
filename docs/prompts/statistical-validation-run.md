@@ -32,7 +32,7 @@ Build a **Statistical Validation Run** — a time-boxed + event-boxed rehearsal 
    - Snapshot `runtime/pipeline.json` + `runtime/markets.json` + effective `MakerConfig` into the artifact directory so the run is replayable.
 
 3. **No forked strategy logic.** Call the live decision stack directly:
-   - Config: `core_brain/config.py:MakerConfig` via `load()` (`core_brain/shadow_run.py:517`) — same `bot_risk_exposure_max_order_usd` / `bot_risk_exposure_max_total_usd` caps as `core_brain/venue.py:25`, same `max_pair_cost=0.99`, `max_completable_pair_cost=1.00`, `requote_dead_band=0.03`, `price_band 0.10-0.90`, skew, band risk, fleet caps (`core_brain/risk.py`, `core_brain/quotes.py:137`).
+   - Config: `core_brain/config.py:MakerConfig` via `load()` (`core_brain/shadow_run.py:517`) — same `bot_risk_exposure_max_order_usd` / `bot_risk_exposure_max_total_usd` caps as `core_brain/venue.py:25`, same `bot_pos_price_max_pair_cost_usd=0.99`, `bot_pos_price_max_complete_usd=1.00`, `bot_order_requote_dead_band_cents=0.03`, `bot_quote_price_band_min_cents` 0.10 to `bot_quote_price_band_max_cents` 0.90, skew, band risk, fleet caps (`core_brain/risk.py`, `core_brain/quotes.py:137`).
    - Decision: `core_brain/quotes.py:decide_quotes` → `_decide_quotes_from_mid` (objective `spread_capture`, `core_brain/quotes.py:420`), including `risk.hard_block` and `risk.completable_pair_block`.
    - Planning: `core_brain/trader_loop.py:plan_orders` with re-gate + dead-band (`trader_loop.py:54`).
    - Loop: `core_brain/trader_loop.py:run` via `VenueSeam` (`core_brain/shadow_run.py:268 build_shadow_seam` / `run_shadow`). Wire `settling_inventory_fn` → `shadow_exec.settle_market` before each decide (same ordering as live).
@@ -70,7 +70,7 @@ Require the agent to **derive N from the data**, not pick a round number:
    Half-width ≈ `z * sqrt(p(1-p)/n)`. To claim win_rate > 0.5 with lower bound > 0.55 at p≈0.6 needs n ≥ 100; at p≈0.7 needs n ≥ 70. Report.
 
 3. **Markout maturity** (adverse selection gate):
-   `core_brain/config.py:232 markout_min_sample=8`, `markout_fleet_min_sample=25`, horizons `(300, 3600, 21600, 900)`s (`core_brain/markout.py:24`). A verdict with zero matured markouts is `insufficient_sample`, not a pass. Require ≥ 25 pooled matured samples before evaluating `bot_risk_circuit_fleet_posture` (`core_brain/markout.py:219 fleet_stats`).
+   `core_brain/config.py:232 bot_risk_markout_min_sample=8`, `bot_risk_markout_fleet_min_sample=25`, horizons `(300, 3600, 21600, 900)`s (`core_brain/markout.py:24`). A verdict with zero matured markouts is `insufficient_sample`, not a pass. Require ≥ 25 pooled matured samples before evaluating `bot_risk_circuit_fleet_posture` (`core_brain/markout.py:219 fleet_stats`).
 
 4. **Historical calibration**:
    Reference: paper run 476 closes, shadow run `run-2809a7161de1` had 209 orders / 0 fills in 30 min — **minutes ≠ sample**. The agent must justify **event-based stopping** (N closes) over pure time-box. E.g., 60 and 120 markets are starting points, but the agent must show they meet the power requirement or raise them.

@@ -85,18 +85,24 @@ Commit scopes follow the package name: `fix(core_brain): ...`, not `fix(engine):
 
 ## Standardized parameters and environment variables (#632)
 
-| Legacy name | Canonical name | Unit / Meaning |
-| --- | --- | --- |
-| `bot_pos_skew_max_offset_cents` | `bot_pos_skew_max_offset_cents` | `0.015` (1.5¢ additive offset behind mid) |
-| `bot_quote_book_min_depth_shares` | `bot_quote_book_min_depth_shares` | `200.0` shares top-3 depth floor |
-| `bot_risk_hedge_emergency_pct` | `bot_risk_hedge_emergency_pct` | `0.80` ratio of naked cap trigger |
-| `bot_quote_alloc_couple_pct` | `bot_quote_alloc_couple_pct` | `0.01` max risk ratio per coupled pair |
-| `bot_quote_window_max_pct` | `bot_quote_window_max_pct` | `0.40` ratio of spread window |
-| `bot_eval_stat_gate_bankroll_pct` | `bot_eval_stat_gate_bankroll_pct` | `0.01` (1% of bankroll for stat gate) |
-| `MAX_ORDER_USD` | `bot_risk_exposure_max_order_usd` | $25.0 baseline single order ceiling ($1.00 min floor) |
-| `MAX_TOTAL_USD` | `bot_risk_exposure_max_total_usd` | $90.0 baseline total portfolio ceiling |
-| `BOT_QUOTE_SIZE_MIN_SHARES` | `BOT_QUOTE_SIZE_MIN_SHARES` | Canonical environment variable |
-| `BOT_QUOTE_GRID_TICK_SIZE_USD` | `BOT_QUOTE_GRID_TICK_SIZE_USD` | Canonical environment variable |
-| `BOT_QUOTE_SIZE_MAX_SHARES` | `BOT_QUOTE_SIZE_MAX_SHARES` | Canonical environment variable |
-| `BOT_EVAL_STAT_GATE_BANKROLL_PCT` | `BOT_EVAL_STAT_GATE_BANKROLL_PCT` | Canonical environment variable |
+One name per field. #732 deleted the compatibility layer — the property aliases, the
+constructor kwargs translation and the `HUNTER_*` environment fallbacks — so a table of
+"legacy name → canonical name" has nothing left to translate. What follows is the canonical
+spelling of each knob, its unit, and the two module constants that still outlive their
+config fields.
+
+| Canonical name | Unit / Meaning |
+| --- | --- |
+| `bot_pos_skew_max_offset_cents` | `0.015` (1.5¢ additive offset behind mid) |
+| `bot_quote_book_min_depth_shares` | `200.0` shares top-3 depth floor |
+| `bot_risk_hedge_emergency_pct` | `0.80` ratio of naked cap trigger |
+| `bot_quote_alloc_couple_pct` | `0.01` max risk ratio per coupled pair |
+| `bot_quote_window_max_pct` | `0.40` ratio of spread window |
+| `bot_eval_stat_gate_bankroll_pct` | `0.01` (1% of bankroll for stat gate) |
+| `MAX_ORDER_USD` (import-time constant in `core_brain/venue.py`) | $25.0 baseline single order ceiling ($1.00 min floor); read from `bot_risk_exposure_max_order_usd` |
+| `MAX_TOTAL_USD` (import-time constant in `core_brain/venue.py`) | $90.0 baseline total portfolio ceiling; read from `bot_risk_exposure_max_total_usd` |
+| `BOT_QUOTE_SIZE_MIN_SHARES` | Environment variable for `bot_quote_size_min_shares` |
+| `BOT_QUOTE_GRID_TICK_SIZE_USD` | Environment variable for `bot_quote_grid_tick_size_usd` |
+| `BOT_QUOTE_SIZE_MAX_SHARES` | Environment variable for `bot_quote_size_max_shares` |
+| `BOT_EVAL_STAT_GATE_BANKROLL_PCT` | Environment variable for `bot_eval_stat_gate_bankroll_pct` |
 

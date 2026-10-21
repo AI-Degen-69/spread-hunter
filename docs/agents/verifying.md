@@ -45,8 +45,8 @@ operator can already see on their own.
   **Trader** card → poll cadence reads `0.5s`.
 - **Live, with real money:** a change to quoting, filling or merging is only proven when a
   real order behaves. Say so, and give the smallest test that settles it: one pair at the
-  venue minimum, inside `max_order_usd` / `max_total_usd`, on a graduated market from
-  `runtime/markets.json`.
+  venue minimum, inside `bot_risk_exposure_max_order_usd` /
+  `bot_risk_exposure_max_total_usd`, on a graduated market from `runtime/markets.json`.
 
 ## Rules for the block
 

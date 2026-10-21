@@ -65,7 +65,7 @@ state is persisted in the order registry so a restart does not erase an escalati
 3. **`ESCALATED_HEDGE`** — when the held leg's fill average minus its best bid reaches
    twice the dynamic quote offset, the state sticks and the Trader quotes the opposite
    leg at the highest tick-aligned price that fits
-   `min($0.99, configured max_pair_cost) - held average`.
+   `min($0.99, configured bot_pos_price_max_pair_cost_usd) - held average`.
 4. **`HARD_STOP`** — a held-leg best bid at or below its **entry-relative** trigger takes
    precedence over the other routes and requests a guarded exit. The trigger is the higher
    of the configured mode's drop from that leg's own fill average (`NONE` contributes
