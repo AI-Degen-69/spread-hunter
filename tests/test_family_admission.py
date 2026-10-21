@@ -121,6 +121,9 @@ def test_default_path_bytes_unchanged():
         "title": "Will BTC close above 100k?"[:90],
         "slug": "mkt-0xgrp",
         "fetch_truncated": False,
+        # Every funnel row carries the display lane it belongs to (#744).
+        # This candidate carries no venue live declaration, so it is regular.
+        "lane": "regular",
     }
     assert "trial_arm" not in row
     assert "family" not in row
