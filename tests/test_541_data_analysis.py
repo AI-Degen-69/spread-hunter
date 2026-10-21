@@ -84,6 +84,23 @@ def test_single_analysis_surface_in_tab4():
     assert "da-surface" not in tab4
 
 
+def test_the_ported_go_no_go_cards_live_on_the_analysis_page():
+    """#749: the band CI card and the funnel render on the canonical page only.
+
+    They moved here from the retired Reports page, which rendered the same two
+    statistics in a plainer form. One host each, inside #analysis-v2, and the
+    plainer CI scale is gone with the card that drew it.
+    """
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    tab4 = _section(html, 'id="tab-4"')
+
+    assert tab4.count('id="pnl-ci-readout"') == 1
+    assert tab4.count('id="execution-funnel"') == 1
+    assert html.count('id="pnl-ci-readout"') == 1
+    assert html.count('id="execution-funnel"') == 1
+    assert 'id="ciScale"' not in html
+
+
 def test_shell_poll_feeds_analysis_v2():
     """Both poll call sites feed the cached snapshot to the v2 renderer."""
     src = (STATIC / "app.js").read_text(encoding="utf-8")
@@ -107,9 +124,10 @@ def test_da_fixture_close_count_and_units_in_headline_and_gates(tmp_path):
     p = rendered["painted"]
     assert p["trade_analytics.n_closes"] == "8"
     assert p["_winloss"] == "5W / 2L"
-    # Units ride on the values: % / $ / x families all present.
+    # Units ride on the values: % / $ / x families all present. (§749: the mean
+    # close itself is painted by the band readout, not a data-bind.)
     assert p["trade_analytics.mean_return_pct"].endswith("%")
-    assert p["trade_analytics.expectancy_usd"].startswith(("$", "-", "+"))
+    assert p["statistical_analytics.fill_path_edge.net_expectancy_usd"].startswith(("$", "-", "+"))
     assert "x" in p["trade_analytics.profit_factor"]
     assert rendered["gates"]["power"]["observed"].startswith("8 / ")
     assert rendered["gates"]["drawdown_guard"]["observed"] != ""

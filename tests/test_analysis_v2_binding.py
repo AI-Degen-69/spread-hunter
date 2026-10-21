@@ -141,7 +141,7 @@ def test_every_bind_hook_paints_a_real_value(tmp_path, live_payload):
     """No data-bind is left blank and no mock number survives."""
     out = _run(live_payload, "render", tmp_path)
     assert not out["errors"], out["errors"]
-    assert out["hookCount"] >= 50, f"only {out['hookCount']} bind hooks found"
+    assert out["hookCount"] >= 45, f"only {out['hookCount']} bind hooks found"
 
     blank = [k for k, v in out["painted"].items() if v in (None, "")]
     assert not blank, f"hooks painted nothing: {blank}"
@@ -150,7 +150,7 @@ def test_every_bind_hook_paints_a_real_value(tmp_path, live_payload):
     # Spot-check the numbers an operator would actually read, against the
     # payload's own values -- these are the mock numbers the design shipped.
     assert painted["trade_analytics.mean_return_pct"] == "-6.76%"
-    assert painted["trade_analytics.expectancy_usd"] == "-$0.41"
+    assert painted["statistical_analytics.fill_path_edge.net_expectancy_usd"] == "-$0.05"
     assert painted["trade_analytics.win_rate"] == "60.0%"          # 0.6 fraction
     assert painted["trade_analytics.n_closes"] == "15"
     assert painted["_required"] == "120"
@@ -176,7 +176,7 @@ def test_units_and_signs_match_the_payload(tmp_path, live_payload):
     """$ and ¢ are signed; % and x are signed only when negative."""
     out = _run(live_payload, "render", tmp_path)
     p = out["painted"]
-    assert p["trade_analytics.expectancy_usd"].startswith("-")       # negative usd
+    assert p["statistical_analytics.fill_path_edge.rescue_expectancy_usd"].startswith("-")  # negative usd
     assert p["statistical_analytics.fill_path_edge.merge_expectancy_usd"].startswith("+")
     assert p["statistical_analytics.rescue_friction.mean_sled_cents"] == "-6.21¢"
     assert p["trade_analytics.mean_return_pct"].startswith("-")      # negative pct
@@ -214,24 +214,19 @@ def test_unmeasured_fields_blank_rather_than_invent(tmp_path, live_payload):
 
 
 @requires_node
-def test_ci_verdict_reads_a_loss_as_negative(tmp_path, live_payload):
-    """negative_depth_usd is a loss depth; it must not render as +$."""
+def test_the_band_readout_owns_the_loss_verdict(tmp_path, live_payload):
+    """#749: one owner for the confidence band, and it is the portfolio readout.
+
+    The canonical page used to draw its own scale and verdict from these same
+    levels. The loss-depth sentence now comes from the band readout only, so the
+    page must not carry a second CI rendering of its own.
+    """
     out = _run(live_payload, "render", tmp_path)
-    verdict = out["painted"]["_ciVerdict"]
-    assert "loss down to -$1.30" in verdict, verdict
-    # The scale's geometry is the payload's own: the track spans the 95%
-    # band (lo95 -> 0%, hi95 -> 100%), so lo90/mean/be/hi90 map onto it.
-    # These positions were the design's hardcoded mock values; they must
-    # now be computed, or they lie the moment the payload changes.
-    s = out["ciScale"]
-    assert s["display"] != "none"
-    assert s["ticks"]["lo95"] == ["0.0%"]
-    assert s["ticks"]["hi95"] == ["100.0%"]
-    assert abs(float(s["ticks"]["mean"][0][:-1]) - 50.0) < 0.5   # -$0.41 on [-1.30, +0.48]
-    assert abs(float(s["ticks"]["be"][0][:-1]) - 73.0) < 0.5     # breakeven on the same span
-    assert s["labels"]["lo95"][0]["text"] == "95% Low -$1.30"
-    assert s["labels"]["mean"][0]["text"] == "Mean -$0.41"
-    assert s["labels"]["hi90"][0]["text"] == "90% High +$0.32"
+    assert not out["errors"], out["errors"]
+    assert not [k for k in out["painted"] if k.startswith("_ci")]
+    html = INDEX.read_text(encoding="utf-8")
+    assert 'id="pnl-ci-readout"' in html
+    assert 'id="ciScale"' not in html
 
 
 @requires_node
@@ -353,19 +348,16 @@ def test_empty_payload_mounts_without_throwing(tmp_path):
     p = out["painted"]
     assert p["_required"] == "120"                 # documented default
     assert p["_var"] == "unmeasured" and p["_cvar"] == "unmeasured"
-    assert "unmeasured" in p["_ciVerdict"]         # never claims an edge on 0 closes
     # No samples: the markout honestly says "unmeasured", never a fabricated number.
     assert "unmeasured" in p["_gateMarkout"]
     # Nothing numeric from the live sample may appear.
     for key in ("trade_analytics.mean_return_pct", "trade_analytics.n_closes",
-                "trade_analytics.expectancy_usd", "trade_analytics.win_rate"):
+                "statistical_analytics.fill_path_edge.net_expectancy_usd",
+                "trade_analytics.win_rate"):
         assert p[key] == "", f"{key} painted {p[key]!r} on an empty payload"
     # No chart may draw a series with no data behind it.
     for c in out["charts"]:
         assert c["svg"] == "" and c["badge"] == "", f"{c['id']} drew on empty data"
-    # Same rule for the CI scale: static geometry would keep drawing the
-    # last payload's ticks on an empty registry.
-    assert out["ciScale"]["display"] == "none"
 
 
 @requires_node

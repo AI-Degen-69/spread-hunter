@@ -189,49 +189,16 @@ function derived(kpi) {
   const wins = num(ta.wins) || 0;
   const losses = num(ta.losses) || 0;
   const required = num(ta.required_observations) || POWER_GATE;
-  const ci = ta.mean_pnl_ci || {};
-  const levels = ci.levels || [];
-  const byLevel = {};
-  levels.forEach((l) => { byLevel[l.level] = l; });
-  const l90 = byLevel[90] || {};
-  const l95 = byLevel[95] || {};
   const fp = stats.fill_path_edge || {};
   const fr = stats.rescue_friction || {};
   const dd = (stats.capital_risk && stats.capital_risk.drawdown_recovery) || {};
   const gates = gateVerdicts(kpi);
-  const funnel = kpi.execution_funnel || {};
-  const stages = funnel.stages || [];
-  const drops = funnel.drop_off || [];
   const mo = (stats.robustness && stats.robustness.markout && stats.robustness.markout.intervals) || [];
   const mo5 = mo.filter((x) => x.horizon === '5m')[0] || {};
-
-  const stageLabel = (s, unit) => {
-    if (!s) return '—';
-    const markets = num(s.markets);
-    return `${esc(s.legs)} ${unit}${markets != null ? ` · ${markets} markets` : ''}`;
-  };
-  const dropLabel = (d, tail) => {
-    if (!d) return '—';
-    const lost = num(d.lost);
-    const kept = num(d.retained_pct);
-    const carried = lost === null ? '' :
-      (lost > 0 ? ` · lost ${lost}` : lost < 0 ? ` · gained ${-lost}` : ' · held');
-    return `${kept === null ? '—' : kept.toFixed(1) + '%'} ${tail}${carried}`;
-  };
 
   return {
     _winloss: `${wins}W / ${losses}L`,
     _required: required,
-    _ci90: `${format(l90.lower, 'usd')} → ${format(l90.upper, 'usd')}`,
-    _ci95: `${format(l95.lower, 'usd')} → ${format(l95.upper, 'usd')}`,
-    _ciVerdict: (() => {
-      const depth = num(l95.negative_depth_usd);
-      // No verdict (or no closes) is unmeasured -- never a claimed win.
-      if (!ci.verdict || n === 0) return '⚠ unmeasured — no closes in this registry';
-      if (ci.verdict !== 'spans_zero') return '✓ Band excludes a loss — edge is positive at 95%';
-      if (depth === null) return '⚠ Band spans breakeven';
-      return `⚠ Band includes a loss down to ${format(-Math.abs(depth), 'usd')} per close`;
-    })(),
     _rescueTotal: (num(fp.merge_count) || 0) + (num(fp.rescue_count) || 0) + (num(fp.other_count) || 0),
     _mo5: num(mo5.markout_cents),
     _mo5n: num(mo5.samples),
@@ -243,13 +210,6 @@ function derived(kpi) {
     _gateBand: `<span class="${gates.band.cls}">$0.15–$0.85 (${gates.band.text})</span>`,
     _gatePower: `<span class="${gates.power.cls}">${gates.power.observed}</span>`,
     _gateMarkout: `<span class="${gates.markout.cls}">${gates.markout.observed}</span>`,
-    _f0: stageLabel(stages[0], 'legs'),
-    _f1: stageLabel(stages[1], 'legs'),
-    _f2: stageLabel(stages[2], 'closes'),
-    _f3: stageLabel(stages[3], 'legs'),
-    _fdrop0: dropLabel(drops[0], 'carried on'),
-    _fdrop1: dropLabel(drops[1], 'carried on'),
-    _fdrop2: dropLabel(drops[2], 'merged'),
     _suffPct: `${required > 0 ? Math.min(100, Math.round((n / required) * 100)) : 0}% of the gate`,
     /* `_gates` is keyed the way the markup's data-band refs are written
      * (`gates.edge_viability`, `rb.sqn`, ...) so the band pass is a plain
@@ -373,8 +333,9 @@ function paintBinds(root, kpi, d) {
     else value = resolve(kpi, path);
     if (value === null || value === undefined) continue; // leave the design's own placeholder
     if (fmt === 'html') {
-      /* Derived entries (`_winloss`, `_ci95`, ...) are markup this module builds
-       * from numbers; a direct payload path may carry a string, so escape it. */
+      /* Derived entries (`_winloss`, `_gatePower`, ...) are markup this module
+       * builds from numbers; a direct payload path may carry a string, so
+       * escape it. */
       el.innerHTML = path.charAt(0) === '_' ? String(value) : esc(value);
     } else el.textContent = format(value, fmt);
     if (el.getAttribute('data-sign')) setSign(el, value);
@@ -591,50 +552,6 @@ function paintCharts(root, kpi) {
   }
 }
 
-/* The CI scale's track spans the 95% band; every tick and label sits at
- * the payload's own value mapped onto that span. Unmeasured (no closes,
- * or a degenerate band) hides the scale outright — static geometry would
- * keep drawing the last payload's positions and lie about this one. */
-function paintCiScale(root, kpi) {
-  const scope = root || (typeof document !== 'undefined' ? document : null);
-  if (!scope) return;
-  const q = (sel) => (scope.querySelector ? scope.querySelector(sel) : null);
-  const qa = (sel) => (scope.querySelectorAll ? scope.querySelectorAll(sel) : []);
-  const scale = (scope.getElementById ? scope.getElementById('ciScale')
-    : null) || q('#ciScale');
-  if (!scale) return;
-  const ta = (kpi && kpi.trade_analytics) || {};
-  const ci = ta.mean_pnl_ci || {};
-  const byLevel = {};
-  (ci.levels || []).forEach((l) => { byLevel[l.level] = l; });
-  const l95 = byLevel[95] || {}, l90 = byLevel[90] || {};
-  const lo = num(l95.lower), hi = num(l95.upper);
-  const marks = {
-    lo95: lo, lo90: num(l90.lower), mean: num(ta.expectancy_usd),
-    be: 0, hi90: num(l90.upper), hi95: hi,
-  };
-  const measured = lo !== null && hi !== null && hi !== lo &&
-    marks.lo90 !== null && marks.hi90 !== null;
-  scale.style.display = measured ? '' : 'none';
-  if (!measured) return;
-  const pct = (v) => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
-  const labels = {
-    lo95: `95% Low ${format(lo, 'usd')}`,
-    lo90: `90% Low ${format(marks.lo90, 'usd')}`,
-    mean: `Mean ${format(marks.mean, 'usd')}`,
-    be: '$0.00 ▼',
-    hi90: `90% High ${format(marks.hi90, 'usd')}`,
-    hi95: `95% High ${format(marks.hi95, 'usd')}`,
-  };
-  Object.keys(marks).forEach((key) => {
-    const at = pct(marks[key]).toFixed(1) + '%';
-    qa(`.tick[data-ci="${key}"]`).forEach((t) => { t.style.left = at; });
-    const labs = qa(`.lab[data-ci="${key}"]`);
-    labs.forEach((l) => { l.style.left = at; });
-    if (labs.length) labs[0].textContent = labels[key];
-  });
-}
-
 function applyAll(root, kpi) {
   if (!kpi) return;
   const scope = root || (typeof document !== 'undefined' ? document : null);
@@ -643,7 +560,6 @@ function applyAll(root, kpi) {
   paintBinds(scope, kpi, d);
   paintSufficiency(scope, kpi);
   paintCharts(scope, kpi);
-  paintCiScale(scope, kpi);
 }
 
 /* Confidence toggle: one wiring pass over the pills under `root`. Idempotent

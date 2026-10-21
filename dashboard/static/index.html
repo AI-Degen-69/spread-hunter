@@ -468,32 +468,9 @@
 
     <!-- Analytics Surface -->
     <div id="analytics-surface" class="analytics-surface">
-      <!-- TIER 1 -- the two readings that gate live trading. Everything below
-           this row is drill-down: it explains these two, it does not outrank
-           them. Kept above the fold on every sub-view. -->
-      <div class="tier1-decision-row" id="tier1-decision-row">
-        <div class="card tier1-card" id="card-pnl-ci" data-tier="1">
-          <div class="tier1-head">
-            <div class="font-display tier1-title">AVERAGE CLOSE &amp; CONFIDENCE</div>
-            <div class="tier1-tier-tag">TIER 1 · GO / NO-GO</div>
-          </div>
-          <div id="pnl-ci-readout" class="pnl-ci-readout"><!-- Rendered by JS --></div>
-        </div>
-        <div class="card tier1-card" id="card-execution-funnel" data-tier="1">
-          <div class="tier1-head">
-            <div class="font-display tier1-title">EXECUTION DROP-OFF</div>
-            <div class="tier1-tier-tag">TIER 1 · WHERE WE FALL OFF</div>
-          </div>
-          <div id="execution-funnel" class="execution-funnel"><!-- Rendered by JS --></div>
-        </div>
-        <div class="card tier1-card" id="card-sample-sufficiency" data-tier="1">
-          <div class="tier1-head">
-            <div class="font-display tier1-title">SAMPLE SIZE &amp; CONFIDENCE SUFFICIENCY</div>
-            <div class="tier1-tier-tag">TIER 1 · OBSERVATION DEPTH</div>
-          </div>
-          <div id="sample-sufficiency-readout" class="sample-sufficiency-readout"><!-- Rendered by JS --></div>
-        </div>
-      </div>
+      <!-- TIER 1 -- the two readings that gate live trading lived here until
+           #749 consolidated the analytics pages; they now render on the one
+           Performance & Analytics page (#analysis-v2). -->
 
       <!-- Merge edge vs rescue bleed, measured apart (#513). Not a Tier-1
            reading and not one of the drill-down charts: it explains WHY the
@@ -849,42 +826,15 @@
     <div class="section-label">Tier 1 Metrics</div>
     <div class="grid col-2-wide">
 
-      <!-- Card 1: Average Close & CI -->
+      <!-- Card 1: Average Close & CI. The band readout is the card the retired
+           Reports page carried (#749): one render site for mean_pnl_ci, drawn
+           by renderPnlCiReadout from the payload's own levels. -->
       <article class="card">
         <div class="card-head">
-          <div>
-            <div class="card-title">Average Close &amp; Confidence Interval</div>
-            <div class="card-value mono" data-bind="trade_analytics.expectancy_usd" data-fmt="usd" data-sign="1"></div>
-            <div class="card-sub">Mean realised PnL per close · <span data-bind="trade_analytics.n_closes" data-fmt="int"></span> closes</div>
-          </div>
-          <span class="info" data-tooltip="Bootstrap confidence interval around the mean realised PnL per close. 90% and 95% bounds shown; the dashed line marks the $0.00 breakeven."></span>
+          <div class="card-title">Average Close &amp; Confidence Interval ($)</div>
+          <span class="info" data-tooltip="Bootstrap confidence interval around the mean realised PnL per close. 90% and 95% bounds against $0.00 breakeven; a band that crosses zero names how deep the loss goes."></span>
         </div>
-
-        <div class="ci-scale" id="ciScale">
-          <div class="track"></div>
-          <!-- ticks -->
-          <div class="tick" data-ci="lo95" style="left:0%;background:var(--crimson)"></div>
-          <div class="tick" data-ci="lo90" style="left:9%;background:var(--crimson)"></div>
-          <div class="tick mean" data-ci="mean" style="left:50%"></div>
-          <div class="tick be" data-ci="be" style="left:73%"></div>
-          <div class="tick" data-ci="hi90" style="left:91%;background:var(--emerald)"></div>
-          <div class="tick" data-ci="hi95" style="left:100%;background:var(--emerald)"></div>
-          <!-- labels -->
-          <span class="lab top neg l" data-ci="lo95" style="left:0%"></span>
-          <span class="lab mid neg" data-ci="lo90" style="left:9%"></span>
-          <span class="lab top" data-ci="mean" style="left:50%"></span>
-          <span class="lab top mute" data-ci="be" style="left:73%"></span>
-          <span class="lab mid pos" data-ci="hi90" style="left:91%"></span>
-          <span class="lab top pos r" data-ci="hi95" style="left:100%"></span>
-          <span class="lab bot2 mute" data-ci="be" style="left:73%">breakeven</span>
-        </div>
-
-        <div class="ci-legend">
-          <span><b class="neg">90%</b> · <span data-bind="_ci90" data-fmt="html"></span></span>
-          <span><b class="neg">95%</b> · <span data-bind="_ci95" data-fmt="html"></span></span>
-        </div>
-
-        <div class="verdict" data-bind="_ciVerdict" data-fmt="html"></div>
+        <div id="pnl-ci-readout" class="pnl-ci-readout"><!-- Rendered by JS --></div>
       </article>
 
       <!-- Card 2: Sample Size Sufficiency -->
@@ -934,22 +884,14 @@
     <div class="section-label">Execution Funnel &amp; Decision Gates</div>
     <div class="grid col-2-wide">
 
-      <!-- Funnel -->
+      <!-- Funnel: the stage stack the retired Reports page carried (#749). One
+           render site, drawn by renderExecutionFunnel from kpi.execution_funnel. -->
       <article class="card">
         <div class="card-head">
-          <div class="card-title">Stepped Execution Funnel</div>
-          <span class="info" data-tooltip="Lifecycle of a quoted spread: quoted → filled → closed → merged. Drop tags show legs lost at each transition."></span>
+          <div class="card-title">Execution Drop-off (Legs)</div>
+          <span class="info" data-tooltip="Lifecycle of a quoted spread: quoted → filled → closed → merged. Each bridge shows the rate that carried on, the legs lost and the worst drop; refused and dropped cycles chip underneath."></span>
         </div>
-        <div class="funnel">
-          <div class="fstep s1"><span class="idx">01</span><span class="name">Quoted</span><span class="stat" data-bind="_f0" data-fmt="html"></span></div>
-          <div class="farrow"><span class="alab" data-bind="_fdrop0" data-fmt="html"></span><svg width="12" height="10"><path d="M6 0 L6 8 M2 5 L6 9 L10 5" stroke="#64748B" stroke-width="1.4" fill="none"/></svg></div>
-          <div class="fstep s2"><span class="idx">02</span><span class="name">Filled</span><span class="stat" data-bind="_f1" data-fmt="html"></span><span class="tag drop">worst drop</span></div>
-          <div class="farrow"><span class="alab" data-bind="_fdrop1" data-fmt="html"></span><svg width="12" height="10"><path d="M6 0 L6 8 M2 5 L6 9 L10 5" stroke="#64748B" stroke-width="1.4" fill="none"/></svg></div>
-          <div class="fstep s3"><span class="idx">03</span><span class="name">Closed</span><span class="stat" data-bind="_f2" data-fmt="html"></span></div>
-          <div class="farrow"><span class="alab" data-bind="_fdrop2" data-fmt="html"></span><svg width="12" height="10"><path d="M6 0 L6 8 M2 5 L6 9 L10 5" stroke="#64748B" stroke-width="1.4" fill="none"/></svg></div>
-          <div class="fstep s4"><span class="idx">04</span><span class="name">Merged</span><span class="stat" data-bind="_f3" data-fmt="html"></span><span class="tag ok">merged</span></div>
-        </div>
-        <div class="ffoot"><span>PAIR_COST 1</span><span>QUEUE 1</span><span>LIFECYCLE 1</span></div>
+        <div id="execution-funnel" class="execution-funnel"><!-- Rendered by JS --></div>
       </article>
 
       <!-- Decision Gates -->
