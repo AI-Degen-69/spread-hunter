@@ -1,0 +1,30 @@
+# Rules for .github/workflows/labeler.yml (github/issue-labeler).
+#
+# The key is the label as it appears in this tracker. The action **fails the
+# job** for a name that does not exist -- it cannot create one -- so every key
+# here is an existing label (`gh label list`). A name with a colon or an emoji
+# would need quoting; none of these do.
+#
+# The value is read as `/<pattern>/i`: the action hands a bare string to
+# String.match, which is case-sensitive, and only the `/.../flags` form turns
+# that off. Several entries under one key are ANDed, not ORed (the action
+# requires every regex in the list to match), so each label gets one pattern.
+#
+# Patterns stay on words a reporter actually uses. A rule that fires on
+# "error" would label most bug reports ever written, and a wrong label costs
+# more triage than a missing one -- the maintainer still triages by hand.
+
+bug:
+  - '/\b(bug|crash|traceback|regression|broken)/i'
+
+documentation:
+  - '/\b(documentation|readme|docs?|typo)/i'
+
+enhancement:
+  - '/\b(feature request|enhancement|would be nice)/i'
+
+question:
+  - '/\b(how do i|how can i|why does|why is|is there a way)/i'
+
+needs-triage:
+  - '/\b(needs[- ]triage)/i'
