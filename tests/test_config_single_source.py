@@ -167,17 +167,14 @@ def test_derived_values_unchanged():
 
 
 def test_db_path_unchanged_under_every_env_state(monkeypatch):
-    """`db_path()` resolves identically in both classes, in all three states.
+    """`db_path()` resolves identically in both classes in both states.
 
-    Only the default is rooted at `ROOT`; an explicit `HUNTER_DB` is taken
-    verbatim, which is what the duplicated helper does in both files.
+    Only the default is rooted at `ROOT`; an explicit `SPREAD_HUNTER_DB` is
+    taken verbatim, which is what the duplicated helper does in both files.
     """
-    for name in ("HUNTER_DB", "SPREAD_HUNTER_DB"):
+    for name in ("SPREAD_HUNTER_DB", "HUNTER_DB"):
         monkeypatch.delenv(name, raising=False)
     assert scoring_config.MakerConfig().db_path() == scoring_config.ROOT / "hunter.db"
-
-    monkeypatch.setenv("HUNTER_DB", "legacy.db")
-    assert scoring_config.MakerConfig().db_path() == Path("legacy.db")
 
     monkeypatch.setenv("SPREAD_HUNTER_DB", "current.db")
     assert scoring_config.MakerConfig().db_path() == Path("current.db")
@@ -188,8 +185,9 @@ def test_db_path_unchanged_under_every_env_state(monkeypatch):
 
 def test_loader_output_unchanged(monkeypatch):
     """`load()` with nothing set is the shipped class, not a re-derived one."""
-    for name in ("HUNTER_MARKET", "HUNTER_WIDE_BOOK_TRIAL", "HUNTER_BANKROLL",
-                 "SPREAD_HUNTER_BANKROLL", "HUNTER_DB", "SPREAD_HUNTER_DB"):
+    for name in ("BOT_MARKET_PINNED_CONDITION_ID", "BOT_QUOTE_WIDE_BOOK_TRIAL",
+                 "BOT_QUOTE_BANK_BASELINE_USD", "HUNTER_MARKET", "HUNTER_WIDE_BOOK_TRIAL",
+                 "HUNTER_BANKROLL", "HUNTER_DB", "SPREAD_HUNTER_DB"):
         monkeypatch.delenv(name, raising=False)
 
     loaded = scoring_config.load()
@@ -219,12 +217,12 @@ def test_scoring_config_is_frozen():
 # expectation. The two queue bars are absent on purpose -- they never had an
 # override, and adding one is out of scope for #652.
 PICKER_BAR_ENV = [
-    ("HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "777.0", 777.0),
-    ("HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "900.0", 900.0),
-    ("HUNTER_VELOCITY_GATE", "filter_live_gate_velocity_on", "off", False),
-    ("HUNTER_MIN_ACTIVITY_RATIO", "filter_live_activity_min_ratio", "0.25", 0.25),
-    ("HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "3.5", 3.5),
-    ("HUNTER_VOLATILITY_WINDOW_SEC", "filter_live_move_lookback_sec", "3600.0", 3600.0),
+    ("FILTER_LIVE_VEL_MIN_USD", "filter_live_vel_min_usd", "777.0", 777.0),
+    ("FILTER_LIVE_VEL_LOOKBACK_SEC", "filter_live_vel_lookback_sec", "900.0", 900.0),
+    ("FILTER_LIVE_GATE_VELOCITY_ON", "filter_live_gate_velocity_on", "off", False),
+    ("FILTER_LIVE_ACTIVITY_MIN_RATIO", "filter_live_activity_min_ratio", "0.25", 0.25),
+    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "3.5", 3.5),
+    ("FILTER_LIVE_MOVE_LOOKBACK_SEC", "filter_live_move_lookback_sec", "3600.0", 3600.0),
 ]
 
 # The old picker name of each bar. Insertion order is the issue's order.
@@ -293,15 +291,15 @@ def test_all_eight_picker_bars_read_the_canonical_value_by_their_old_name(monkey
 # a non-positive window. Each keeps the shipped bar, which is the parsing
 # behaviour #652 promised not to touch (the keys moved, nothing else).
 PICKER_BAR_REFUSED_INPUT = [
-    ("HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "abc", 200.0),
-    ("HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "nan", 200.0),
-    ("HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "0", 1800.0),
-    ("HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "abc", 1800.0),
-    ("HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "-1", 2.0),
-    ("HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "inf", 2.0),
-    ("HUNTER_VOLATILITY_WINDOW_SEC", "filter_live_move_lookback_sec", "0", 7200.0),
-    ("HUNTER_MIN_ACTIVITY_RATIO", "filter_live_activity_min_ratio", "-0.5", 0.0),
-    ("HUNTER_VELOCITY_GATE", "filter_live_gate_velocity_on", "no", False),
+    ("FILTER_LIVE_VEL_MIN_USD", "filter_live_vel_min_usd", "abc", 200.0),
+    ("FILTER_LIVE_VEL_MIN_USD", "filter_live_vel_min_usd", "nan", 200.0),
+    ("FILTER_LIVE_VEL_LOOKBACK_SEC", "filter_live_vel_lookback_sec", "0", 1800.0),
+    ("FILTER_LIVE_VEL_LOOKBACK_SEC", "filter_live_vel_lookback_sec", "abc", 1800.0),
+    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "-1", 2.0),
+    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "inf", 2.0),
+    ("FILTER_LIVE_MOVE_LOOKBACK_SEC", "filter_live_move_lookback_sec", "0", 7200.0),
+    ("FILTER_LIVE_ACTIVITY_MIN_RATIO", "filter_live_activity_min_ratio", "-0.5", 0.0),
+    ("FILTER_LIVE_GATE_VELOCITY_ON", "filter_live_gate_velocity_on", "no", False),
 ]
 
 
@@ -333,7 +331,7 @@ def test_the_eight_picker_bars_keep_their_shipped_defaults(monkeypatch):
 # ============================================================================
 
 SCREENER_CANONICAL_ENV = [
-    # (canonical_var, legacy_var, field, canonical_raw, canonical_val, legacy_raw, legacy_val, default_val)
+    # (canonical_var, retired_var, field, canonical_raw, canonical_val, retired_raw, retired_val, default_val)
     ("FILTER_LIVE_VEL_MIN_USD", "HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "888.0", 888.0, "777.0", 777.0, 200.0),
     ("FILTER_LIVE_VEL_LOOKBACK_SEC", "HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "600.0", 600.0, "900.0", 900.0, 1800.0),
     ("FILTER_LIVE_GATE_VELOCITY_ON", "HUNTER_VELOCITY_GATE", "filter_live_gate_velocity_on", "false", False, "true", True, True),
@@ -355,12 +353,12 @@ def _clear_screener_canonical_env(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "can_var,leg_var,field,can_raw,can_val,leg_raw,leg_val,default_val",
+    "can_var,retired_var,field,can_raw,can_val,retired_raw,retired_val,default_val",
     SCREENER_CANONICAL_ENV,
 )
-def test_canonical_filter_env_overrides_field_and_wins_over_legacy(
-        monkeypatch, can_var, leg_var, field, can_raw, can_val, leg_raw, leg_val, default_val):
-    """#653: each canonical `FILTER_*` overrides its field and beats `HUNTER_*`."""
+def test_canonical_filter_env_overrides_field_and_the_retired_name_is_ignored(
+        monkeypatch, can_var, retired_var, field, can_raw, can_val, retired_raw, retired_val, default_val):
+    """Each canonical `FILTER_*` overrides its field; the retired name does not."""
     _clear_screener_canonical_env(monkeypatch)
 
     # 1. Unset -> shipped default
@@ -370,19 +368,19 @@ def test_canonical_filter_env_overrides_field_and_wins_over_legacy(
     monkeypatch.setenv(can_var, can_raw)
     assert getattr(scoring_config.load(), field) == can_val
 
-    if leg_var is not None:
-        # 3. Both set -> canonical wins over legacy
-        monkeypatch.setenv(leg_var, leg_raw)
+    if retired_var is not None:
+        # 3. Both set -> the canonical value still stands
+        monkeypatch.setenv(retired_var, retired_raw)
         assert getattr(scoring_config.load(), field) == can_val
 
-        # 4. Blank or whitespace canonical -> falls through to legacy
+        # 4. Retired alone -> IGNORED: the field keeps the shipped default.
+        monkeypatch.delenv(can_var, raising=False)
+        assert getattr(scoring_config.load(), field) == default_val
+
+        # 5. Blank canonical plus retired -> still the shipped default
         for blank in ("", "   "):
             monkeypatch.setenv(can_var, blank)
-            assert getattr(scoring_config.load(), field) == leg_val
-
-        # 5. Legacy alone -> legacy value still works
-        monkeypatch.delenv(can_var, raising=False)
-        assert getattr(scoring_config.load(), field) == leg_val
+            assert getattr(scoring_config.load(), field) == default_val
 
 
 # ============================================================================
@@ -390,21 +388,20 @@ def test_canonical_filter_env_overrides_field_and_wins_over_legacy(
 # ============================================================================
 
 EXECUTION_CANONICAL_ENV = [
-    # (canonical_var, legacy_vars, field, can_raw, can_val, leg_raw, leg_val, default_val, needs_pin, needs_rehearsal)
-    # An empty legacy tuple means the variable has no alias left, so its row
-    # answers the canonical and blank-canonical questions only.
-    ("BOT_MARKET_PINNED_CONDITION_ID", ("HUNTER_MARKET",), "bot_market_pinned_condition_id", "0xcan_pinned", "0xcan_pinned", "0xleg_pinned", "0xleg_pinned", "", False, False),
-    ("BOT_MARKET_TITLE", ("HUNTER_TITLE",), "bot_market_title", "Canonical Title", "Canonical Title", "Legacy Title", "Legacy Title", "", True, False),
-    ("BOT_MARKET_URL", ("HUNTER_URL",), "bot_market_url", "https://polymarket.com/can", "https://polymarket.com/can", "https://polymarket.com/leg", "https://polymarket.com/leg", "", True, False),
-    ("BOT_QUOTE_SIZE_MIN_SHARES", ("HUNTER_MIN_QUOTE_SHARES", "HUNTER_MIN_SIZE"), "bot_quote_size_min_shares", "200", 200, "150", 150, 50, True, False),
-    ("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", (), "bot_quote_book_max_spread_from_mid", "25", 0.25, None, None, 0.045, True, False),
-    ("BOT_QUOTE_GRID_TICK_SIZE_USD", ("HUNTER_PRICE_TICK", "HUNTER_TICK"), "bot_quote_grid_tick_size_usd", "0.005", 0.005, "0.02", 0.02, 0.01, True, False),
-    ("BOT_QUOTE_WIDE_BOOK_TRIAL", ("HUNTER_WIDE_BOOK_TRIAL",), "bot_quote_wide_book_trial", "0.12", 0.12, "0.15", 0.15, None, False, True),
-    ("BOT_RISK_GATE_PAIRS_RULE_ON", ("HUNTER_PAIRS_RULE",), "bot_risk_gate_pairs_rule_on", "off", False, "1", True, True, False, False),
-    ("BOT_LATENCY_NET_ONEWAY_MS", ("HUNTER_NET_ONEWAY_MS", "HUNTER_CANCEL_NET_ONEWAY_MS"), "bot_latency_net_oneway_ms", "9.5", 9.5, "7.5", 7.5, 3.93, False, False),
-    ("BOT_LATENCY_CANCEL_VENUE_ACK_MS", ("HUNTER_CANCEL_VENUE_ACK_MS",), "bot_latency_cancel_venue_ack_ms", "210.0", 210.0, "190.0", 190.0, 150.0, False, False),
-    ("BOT_LATENCY_POST_VENUE_ACCEPT_MS", ("HUNTER_POST_VENUE_ACCEPT_MS",), "bot_latency_post_venue_accept_ms", "95.0", 95.0, "85.0", 85.0, 81.0, False, False),
-    ("BOT_QUOTE_BANK_BASELINE_USD", ("SPREAD_HUNTER_BANKROLL", "HUNTER_BANKROLL"), "bot_quote_bank_baseline_usd", "2500.0", 2500.0, "1500.0", 1500.0, 1000.0, False, False),
+    # (canonical_var, retired_vars, field, can_raw, can_val, retired_raw, retired_val, default_val, needs_pin, needs_rehearsal)
+    # The retired column names the variable that no longer exists, to prove it is ignored.
+    ("BOT_MARKET_PINNED_CONDITION_ID", ("HUNTER_MARKET",), "pinned_condition_id", "0xcan_pinned", "0xcan_pinned", "0xretired_pinned", "0xretired_pinned", "", False, False),
+    ("BOT_MARKET_TITLE", ("HUNTER_TITLE",), "market_title", "Canonical Title", "Canonical Title", "Retired Title", "Retired Title", "", True, False),
+    ("BOT_MARKET_URL", ("HUNTER_URL",), "market_url", "https://polymarket.com/can", "https://polymarket.com/can", "https://polymarket.com/ret", "https://polymarket.com/ret", "", True, False),
+    ("BOT_QUOTE_SIZE_MIN_SHARES", ("HUNTER_MIN_QUOTE_SHARES", "HUNTER_MIN_SIZE"), "min_quote_shares", "200", 200, "150", 150, 50, True, False),
+    ("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", (), "max_spread_from_mid", "25", 0.25, None, None, 0.045, True, False),
+    ("BOT_QUOTE_GRID_TICK_SIZE_USD", ("HUNTER_PRICE_TICK", "HUNTER_TICK"), "price_tick", "0.005", 0.005, "0.02", 0.02, 0.01, True, False),
+    ("BOT_QUOTE_WIDE_BOOK_TRIAL", ("HUNTER_WIDE_BOOK_TRIAL",), "wide_book_trial", "0.12", 0.12, "0.15", 0.15, None, False, True),
+    ("BOT_RISK_GATE_PAIRS_RULE_ON", ("HUNTER_PAIRS_RULE",), "enable_pairs_rule", "off", False, "1", True, True, False, False),
+    ("BOT_LATENCY_NET_ONEWAY_MS", ("HUNTER_NET_ONEWAY_MS", "HUNTER_CANCEL_NET_ONEWAY_MS"), "net_oneway_ms", "9.5", 9.5, "7.5", 7.5, 3.93, False, False),
+    ("BOT_LATENCY_CANCEL_VENUE_ACK_MS", ("HUNTER_CANCEL_VENUE_ACK_MS",), "cancel_venue_ack_ms", "210.0", 210.0, "190.0", 190.0, 150.0, False, False),
+    ("BOT_LATENCY_POST_VENUE_ACCEPT_MS", ("HUNTER_POST_VENUE_ACCEPT_MS",), "post_venue_accept_ms", "95.0", 95.0, "85.0", 85.0, 81.0, False, False),
+    ("BOT_QUOTE_BANK_BASELINE_USD", ("SPREAD_HUNTER_BANKROLL", "HUNTER_BANKROLL"), "bankroll_usd", "2500.0", 2500.0, "1500.0", 1500.0, 1000.0, False, False),
 ]
 
 
@@ -428,12 +425,12 @@ def _clear_execution_env(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "can_var,leg_vars,field,can_raw,can_val,leg_raw,leg_val,default_val,needs_pin,needs_rehearsal",
+    "can_var,retired_vars,field,can_raw,can_val,retired_raw,retired_val,default_val,needs_pin,needs_rehearsal",
     EXECUTION_CANONICAL_ENV,
 )
-def test_canonical_execution_env_overrides_field_and_wins_over_legacy(
-        monkeypatch, can_var, leg_vars, field, can_raw, can_val, leg_raw, leg_val, default_val, needs_pin, needs_rehearsal):
-    """#674: each canonical BOT_* execution variable overrides its field and beats legacy HUNTER_*."""
+def test_canonical_execution_env_overrides_field_and_the_retired_name_is_ignored(
+        monkeypatch, can_var, retired_vars, field, can_raw, can_val, retired_raw, retired_val, default_val, needs_pin, needs_rehearsal):
+    """Each canonical BOT_* execution variable overrides its field; retired HUNTER_* names do not."""
     _clear_execution_env(monkeypatch)
     if needs_rehearsal:
         monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
@@ -441,7 +438,6 @@ def test_canonical_execution_env_overrides_field_and_wins_over_legacy(
     def _setup_pin():
         if needs_pin:
             monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned_for_test")
-            monkeypatch.setenv("HUNTER_MARKET", "0xpinned_for_test")
 
     # 1. Unset -> shipped default
     _setup_pin()
@@ -451,25 +447,24 @@ def test_canonical_execution_env_overrides_field_and_wins_over_legacy(
     monkeypatch.setenv(can_var, can_raw)
     assert getattr(scoring_config.load(), field) == can_val
 
-    # 3. Both set -> canonical wins over legacy
-    for leg_var in leg_vars:
-        monkeypatch.setenv(leg_var, leg_raw)
-    assert getattr(scoring_config.load(), field) == can_val
+    if retired_vars:
+        # 3. Both set -> the canonical value still stands
+        for retired_var in retired_vars:
+            monkeypatch.setenv(retired_var, retired_raw)
+        assert getattr(scoring_config.load(), field) == can_val
 
-    # 4. Blank or whitespace canonical -> falls through to legacy, and to the
-    #    shipped default for a variable that has no alias left (#706)
+        # 4. Each retired name alone -> IGNORED, the field keeps the default
+        monkeypatch.delenv(can_var, raising=False)
+        for retired_var in retired_vars:
+            for other in retired_vars:
+                monkeypatch.delenv(other, raising=False)
+            monkeypatch.setenv(retired_var, retired_raw)
+            assert getattr(scoring_config.load(), field) == default_val
+
+    # 5. Blank or whitespace canonical -> the shipped default
     for blank in ("", "   "):
         monkeypatch.setenv(can_var, blank)
-        assert getattr(scoring_config.load(), field) == (leg_val if leg_vars else default_val)
-
-    # 5. Each legacy var alone with newer cleared -> legacy value still works
-    if leg_vars:
-        monkeypatch.delenv(can_var, raising=False)
-        for leg_var in leg_vars:
-            for other in leg_vars:
-                monkeypatch.delenv(other, raising=False)
-            monkeypatch.setenv(leg_var, leg_raw)
-            assert getattr(scoring_config.load(), field) == leg_val
+        assert getattr(scoring_config.load(), field) == default_val
 
 
 def test_execution_coupling_overrides(monkeypatch):
@@ -659,71 +654,47 @@ def test_a_typo_in_the_spread_window_keeps_its_per_path_behaviour(mod, monkeypat
 
 
 @pytest.mark.parametrize(
-    "oldest_var,newer_var,canonical_var,val_raw,warn_text",
+    "retired_var,canonical_var,val_raw,field,default",
     [
-        (
-            "HUNTER_MIN_SIZE",
-            "HUNTER_MIN_QUOTE_SHARES",
-            "BOT_QUOTE_SIZE_MIN_SHARES",
-            "100",
-            "HUNTER_MIN_SIZE is deprecated (#632); set BOT_QUOTE_SIZE_MIN_SHARES instead.",
-        ),
-        (
-            "HUNTER_TICK",
-            "HUNTER_PRICE_TICK",
-            "BOT_QUOTE_GRID_TICK_SIZE_USD",
-            "0.02",
-            "HUNTER_TICK is deprecated (#632); set BOT_QUOTE_GRID_TICK_SIZE_USD instead.",
-        ),
+        ("HUNTER_MIN_SIZE", "BOT_QUOTE_SIZE_MIN_SHARES", "100", "min_quote_shares", 50),
+        ("HUNTER_TICK", "BOT_QUOTE_GRID_TICK_SIZE_USD", "0.02", "price_tick", 0.01),
     ],
 )
-def test_execution_legacy_deprecation_warnings(
-        monkeypatch, caplog, oldest_var, newer_var, canonical_var, val_raw, warn_text):
-    """#674: Oldest legacy variable emits #632 warning only when it is the winning source."""
+def test_a_retired_execution_variable_is_ignored(
+        monkeypatch, caplog, retired_var, canonical_var, val_raw, field, default):
+    """The retired variable is inert: no value, no warning, no error."""
     import logging
 
     _clear_execution_env(monkeypatch)
     monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned")
 
-    # 1. Oldest legacy alone -> warning emitted
     caplog.clear()
     with caplog.at_level(logging.WARNING):
-        monkeypatch.setenv(oldest_var, val_raw)
-        scoring_config.load()
-    assert warn_text in caplog.text
+        monkeypatch.setenv(retired_var, val_raw)
+        cfg = scoring_config.load()
+    assert "deprecated" not in caplog.text
+    assert getattr(cfg, field) == default
 
-    # 2. Canonical set alongside -> no warning emitted (canonical wins)
     caplog.clear()
     with caplog.at_level(logging.WARNING):
         monkeypatch.setenv(canonical_var, val_raw)
-        scoring_config.load()
-    assert warn_text not in caplog.text
-
-    # 3. Newer legacy alone -> no warning emitted
-    monkeypatch.delenv(canonical_var, raising=False)
-    monkeypatch.delenv(oldest_var, raising=False)
-    caplog.clear()
-    with caplog.at_level(logging.WARNING):
-        monkeypatch.setenv(newer_var, val_raw)
-        scoring_config.load()
-    assert warn_text not in caplog.text
+        cfg = scoring_config.load()
+    assert "deprecated" not in caplog.text
+    assert getattr(cfg, field) != default
 
 
-def test_blank_canonical_fallthrough_fires_legacy_warning(monkeypatch, caplog):
-    """#674: Blank canonical falls through to oldest legacy and still emits the #632 warning."""
+def test_a_blank_canonical_variable_leaves_the_shipped_value(monkeypatch, caplog):
+    """A blank canonical is a blank canonical: there is nothing to fall through to."""
     import logging
 
     _clear_execution_env(monkeypatch)
     monkeypatch.setenv("BOT_MARKET_PINNED_CONDITION_ID", "0xpinned")
     monkeypatch.setenv("BOT_QUOTE_SIZE_MIN_SHARES", "   ")
     monkeypatch.setenv("HUNTER_MIN_SIZE", "200")
-
-    caplog.clear()
     with caplog.at_level(logging.WARNING):
         cfg = scoring_config.load()
-
-    assert cfg.min_quote_shares == 200
-    assert "HUNTER_MIN_SIZE is deprecated (#632)" in caplog.text
+    assert cfg.min_quote_shares == 50
+    assert "deprecated" not in caplog.text
 
 
 def test_wide_book_trial_refusal_names_variable(monkeypatch):
@@ -737,12 +708,11 @@ def test_wide_book_trial_refusal_names_variable(monkeypatch):
         scoring_config.load()
     assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens max_book_spread" in str(exc1.value)
 
-    # 2. Legacy variable set outside rehearsal
+    # 2. The retired variable is inert outside a rehearsal: no refusal, no error
     monkeypatch.delenv("BOT_QUOTE_WIDE_BOOK_TRIAL", raising=False)
     monkeypatch.setenv("HUNTER_WIDE_BOOK_TRIAL", "0.12")
-    with pytest.raises(ValueError) as exc2:
-        scoring_config.load()
-    assert "HUNTER_WIDE_BOOK_TRIAL widens max_book_spread" in str(exc2.value)
+    cfg = scoring_config.load()
+    assert cfg.wide_book_trial is None
 
     # 3. Inside rehearsal, value exceeding 0.30 is rejected
     monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
@@ -780,9 +750,7 @@ def test_invalid_trial_override_keeps_shipped_default(monkeypatch, can_var, bad_
     "var_name",
     [
         "FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL",
-        "HUNTER_DEPTH_TRIAL_USD",
         "FILTER_STD_VOL_MIN_24H_USD_TRIAL",
-        "HUNTER_VOLUME_TRIAL_USD",
     ],
 )
 @pytest.mark.parametrize("bad_raw", ["abc", "nan", "inf", "-1"])
@@ -830,15 +798,15 @@ def test_engine_valid_trial_override_populates_field(monkeypatch, can_var, leg_v
     cfg = CoreMakerConfig.from_env()
     assert getattr(cfg, field) == 1234.5
 
-    # 4. Canonical beats legacy
+    # 4. The retired alias cannot beat the canonical value
     monkeypatch.setenv(leg_var, "999.0")
     cfg = CoreMakerConfig.from_env()
     assert getattr(cfg, field) == 1234.5
 
-    # 5. Legacy alone works
+    # 5. The retired alias alone is inert: the field stays None
     monkeypatch.delenv(can_var, raising=False)
     cfg = CoreMakerConfig.from_env()
-    assert getattr(cfg, field) == 999.0
+    assert getattr(cfg, field) is None
 
 
 def test_env_example_documents_only_real_canonical_variables():

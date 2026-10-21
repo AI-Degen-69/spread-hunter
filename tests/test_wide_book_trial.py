@@ -1,6 +1,6 @@
 """The wide-book trial knob, and the refusal that keeps it off the money path.
 
-`HUNTER_WIDE_BOOK_TRIAL` widens `max_book_spread`, which is not a preference
+`BOT_QUOTE_WIDE_BOOK_TRIAL` widens `max_book_spread`, which is not a preference
 but the gate that refuses a book where a fill may leave a leg that cannot be
 closed. The two config modules carry independent copies of the parse and the
 refusal -- the ranker loads `scoring.config`, the fleet loads
@@ -120,9 +120,9 @@ def _load_with(mod, monkeypatch, **env):
     # below touch. The spread name became live on unpinned runs in #690, so
     # leaving it set here would let the developer's shell decide what a test
     # asserts.
-    for name in ("HUNTER_MARKET", "BOT_MARKET_PINNED_CONDITION_ID",
+    for name in ("BOT_MARKET_PINNED_CONDITION_ID", "BOT_MARKET_PINNED_CONDITION_ID",
                  "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID",
-                 "HUNTER_WIDE_BOOK_TRIAL", "BOT_QUOTE_WIDE_BOOK_TRIAL"):
+                 "BOT_QUOTE_WIDE_BOOK_TRIAL", "BOT_QUOTE_WIDE_BOOK_TRIAL"):
         monkeypatch.delenv(name, raising=False)
     for k, v in env.items():
         monkeypatch.setenv(k, v)
@@ -136,7 +136,7 @@ def test_load_moves_all_three_ceilings_together(mod, monkeypatch):
     # quote it, or the quote window refuses the price the bid cap produces.
     rehearsal.declare_rehearsal()
 
-    cfg = _load_with(mod, monkeypatch, HUNTER_WIDE_BOOK_TRIAL="0.15")
+    cfg = _load_with(mod, monkeypatch, BOT_QUOTE_WIDE_BOOK_TRIAL="0.15")
 
     assert cfg.wide_book_trial == 0.15
     assert cfg.max_book_spread == 0.15
@@ -166,7 +166,7 @@ def test_a_narrow_trial_never_tightens_the_quote_window(mod, monkeypatch):
     # must not quietly shrink where we are allowed to quote.
     rehearsal.declare_rehearsal()
 
-    cfg = _load_with(mod, monkeypatch, HUNTER_WIDE_BOOK_TRIAL="0.02")
+    cfg = _load_with(mod, monkeypatch, BOT_QUOTE_WIDE_BOOK_TRIAL="0.02")
 
     assert cfg.max_book_spread == 0.02
     # A narrow trial narrows the picking bar with it -- the trial is one
@@ -184,20 +184,20 @@ def test_an_unpinned_override_is_what_the_trial_compares_against(mod, monkeypatc
     rehearsal.declare_rehearsal()
 
     wider = _load_with(mod, monkeypatch, BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID="22",
-                       HUNTER_WIDE_BOOK_TRIAL="0.12")
+                       BOT_QUOTE_WIDE_BOOK_TRIAL="0.12")
     assert wider.max_book_spread == 0.12
     assert wider.max_spread_from_mid == 0.22
 
     # The trial still wins when it is the wider of the two.
     narrower = _load_with(mod, monkeypatch, BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID="5",
-                          HUNTER_WIDE_BOOK_TRIAL="0.12")
+                          BOT_QUOTE_WIDE_BOOK_TRIAL="0.12")
     assert narrower.max_spread_from_mid == 0.12
 
     # #707: the window is validated on the way IN, and the trial's own 0.0..0.30
     # bound is what keeps `max(window, wide)` inside the same range -- no second
     # validation of the post-trial value is needed or wanted.
     floor = _load_with(mod, monkeypatch, BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID="1",
-                       HUNTER_WIDE_BOOK_TRIAL="0.30")
+                       BOT_QUOTE_WIDE_BOOK_TRIAL="0.30")
     assert floor.max_spread_from_mid == 0.30
 
 
@@ -206,7 +206,7 @@ def test_load_refuses_outright_outside_a_rehearsal(mod, monkeypatch):
     # Refusing at config load stops the process before a client is built and
     # long before a share is bought.
     with pytest.raises(ValueError):
-        _load_with(mod, monkeypatch, HUNTER_WIDE_BOOK_TRIAL="0.15")
+        _load_with(mod, monkeypatch, BOT_QUOTE_WIDE_BOOK_TRIAL="0.15")
 
 
 @BOTH
@@ -216,9 +216,9 @@ def test_trial_widens_a_venue_supplied_window_rather_than_replacing_it(
     # The trial takes the wider of the two, so that window survives.
     rehearsal.declare_rehearsal()
 
-    cfg = _load_with(mod, monkeypatch, HUNTER_MARKET="0xabc",
+    cfg = _load_with(mod, monkeypatch, BOT_MARKET_PINNED_CONDITION_ID="0xabc",
                      BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID="20",
-                     HUNTER_WIDE_BOOK_TRIAL="0.15")
+                     BOT_QUOTE_WIDE_BOOK_TRIAL="0.15")
 
     assert cfg.max_book_spread == 0.15
     assert cfg.max_spread_from_mid == 0.20
@@ -250,7 +250,7 @@ def test_a_13c_book_clears_the_ranker_bar_and_the_live_gate_under_the_trial(
     from scoring.selector import book_allowed
 
     rehearsal.declare_rehearsal()
-    cfg = _load_with(mod, monkeypatch, HUNTER_WIDE_BOOK_TRIAL="0.15")
+    cfg = _load_with(mod, monkeypatch, BOT_QUOTE_WIDE_BOOK_TRIAL="0.15")
 
     book = {"best_bid": 0.435, "best_ask": 0.565, "bids": {0.435: 5000.0}}
 

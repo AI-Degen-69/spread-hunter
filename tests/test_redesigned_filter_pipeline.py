@@ -351,7 +351,7 @@ def test_a_wide_quote_window_never_widens_the_book_gate(monkeypatch):
     the ceiling is derived from `max_spread_from_mid`.
     """
     monkeypatch.delenv("BOT_MARKET_PINNED_CONDITION_ID", raising=False)
-    monkeypatch.delenv("HUNTER_MARKET", raising=False)
+    monkeypatch.delenv("BOT_MARKET_PINNED_CONDITION_ID", raising=False)
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "50")
 
     cfg = scoring_config.load()

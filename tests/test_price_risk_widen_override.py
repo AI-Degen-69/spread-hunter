@@ -25,11 +25,11 @@ class TestPriceRiskWidenOverride:
     def test_the_shipped_default_is_unchanged(self):
         assert MakerConfig().price_risk_widen == 0.010
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("HUNTER_PRICE_RISK_WIDEN", None)
+            os.environ.pop("BOT_QUOTE_PRICE_RISK_WIDEN", None)
             assert load().price_risk_widen == 0.010
 
     def test_the_environment_can_zero_it(self):
-        with mock.patch.dict(os.environ, {"HUNTER_PRICE_RISK_WIDEN": "0"}):
+        with mock.patch.dict(os.environ, {"BOT_QUOTE_PRICE_RISK_WIDEN": "0"}):
             assert load().price_risk_widen == 0.0
 
     @pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "-0.01", "1.5",
@@ -37,12 +37,12 @@ class TestPriceRiskWidenOverride:
     def test_a_non_finite_negative_or_oversized_value_is_refused(self, bad):
         # A NaN here would widen every quote by NaN and round to a price no
         # comparison can reject.
-        with mock.patch.dict(os.environ, {"HUNTER_PRICE_RISK_WIDEN": bad}):
-            with pytest.raises(ValueError, match="HUNTER_PRICE_RISK_WIDEN"):
+        with mock.patch.dict(os.environ, {"BOT_QUOTE_PRICE_RISK_WIDEN": bad}):
+            with pytest.raises(ValueError, match="BOT_QUOTE_PRICE_RISK_WIDEN"):
                 load()
 
     def test_an_empty_value_is_not_an_override(self):
-        with mock.patch.dict(os.environ, {"HUNTER_PRICE_RISK_WIDEN": ""}):
+        with mock.patch.dict(os.environ, {"BOT_QUOTE_PRICE_RISK_WIDEN": ""}):
             assert load().price_risk_widen == 0.010
 
     def test_overrides_now_floor_to_the_cent(self):
@@ -56,7 +56,7 @@ class TestPriceRiskWidenOverride:
         from core_brain.quotes import Inventory, quote_resting_price
 
         book = {"best_bid": 0.495, "best_ask": 0.505}   # mid 0.500, 10 ticks
-        with mock.patch.dict(os.environ, {"HUNTER_PRICE_RISK_WIDEN": "0"}):
+        with mock.patch.dict(os.environ, {"BOT_QUOTE_PRICE_RISK_WIDEN": "0"}):
             cfg = load()
         assert cfg.price_risk_widen == 0.0
         price, _, band, _ = quote_resting_price(cfg, Inventory(), "UP", book)
@@ -71,7 +71,7 @@ class TestPriceRiskWidenOverride:
         # least readable part of the price range.
         from core_brain import risk
 
-        with mock.patch.dict(os.environ, {"HUNTER_PRICE_RISK_WIDEN": "0"}):
+        with mock.patch.dict(os.environ, {"BOT_QUOTE_PRICE_RISK_WIDEN": "0"}):
             cfg = load()
         band = risk.band_risk_factor(cfg, 0.50)
         assert band.extra_offset == 0.0

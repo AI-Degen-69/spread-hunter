@@ -183,13 +183,13 @@ store automatically.
 - `--starting-bankroll-usd USD` — override the starting bankroll for this run (`--paired-starting-bankroll-usd` is the old name and still works)
 
 **Every shadow run starts at the config bankroll — $100 by default.** Override
-it with `--starting-bankroll-usd` or `SPREAD_HUNTER_BANKROLL`; the live wallet is
+it with `--starting-bankroll-usd` or `BOT_QUOTE_BANK_BASELINE_USD`; the live wallet is
 never read, so every risk cap (order 25%, naked 6%, ceiling 90%) is the same at
 the start of every rehearsal and two runs can be compared. Paired arms keep
 their preregistered $100 unless the flag is passed.
 
 The menu's `shadow-run` and `resume` actions state `--starting-bankroll-usd 100`
-on the launched command, so an exported `SPREAD_HUNTER_BANKROLL` cannot change
+on the launched command, so an exported `BOT_QUOTE_BANK_BASELINE_USD` cannot change
 what that session rehearsed under. Nothing on a shadow path reads your
 Polymarket account either: the shadow dashboard and the statistical harness never
 run `account-sweep`, they do not fetch your balance, and no live account mark is

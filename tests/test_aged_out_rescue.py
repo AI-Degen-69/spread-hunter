@@ -202,7 +202,7 @@ def test_no_unrelated_shipped_default_moved():
 
 def test_the_lead_knob_has_an_env_override(monkeypatch):
     # Arrange - the operator can retune the deadline without a code change.
-    monkeypatch.setenv("HUNTER_AGED_OUT_RESCUE_LEAD_SEC", "120")
+    monkeypatch.setenv("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "120")
 
     from core_brain.config import load
 
@@ -212,7 +212,7 @@ def test_the_lead_knob_has_an_env_override(monkeypatch):
 
 def test_a_negative_lead_override_is_refused(monkeypatch):
     # Arrange - a negative lead would fire the deadline after the market ended.
-    monkeypatch.setenv("HUNTER_AGED_OUT_RESCUE_LEAD_SEC", "-5")
+    monkeypatch.setenv("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC", "-5")
 
     from core_brain.config import load
 

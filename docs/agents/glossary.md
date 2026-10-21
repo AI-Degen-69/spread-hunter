@@ -95,8 +95,8 @@ Commit scopes follow the package name: `fix(core_brain): ...`, not `fix(engine):
 | `stat_gate_bankroll_fraction` | `stat_gate_bankroll_pct` | `0.01` (1% of bankroll for stat gate) |
 | `MAX_ORDER_USD` | `max_order_usd` | $25.0 baseline single order ceiling ($1.00 min floor) |
 | `MAX_TOTAL_USD` | `max_total_usd` | $90.0 baseline total portfolio ceiling |
-| `HUNTER_MIN_SIZE` | `HUNTER_MIN_QUOTE_SHARES` | Canonical environment variable |
-| `HUNTER_TICK` | `HUNTER_PRICE_TICK` | Canonical environment variable |
-| `HUNTER_MAX_SHARES` | `HUNTER_MAX_QUOTE_SHARES` | Canonical environment variable |
-| `HUNTER_STAT_GATE_BANKROLL_FRACTION` | `HUNTER_STAT_GATE_BANKROLL_PCT` | Canonical environment variable |
+| `HUNTER_MIN_SIZE` | — | Retired; `BOT_QUOTE_SIZE_MIN_SHARES` is the only name |
+| `HUNTER_TICK` | — | Retired; `BOT_QUOTE_GRID_TICK_SIZE_USD` is the only name |
+| `HUNTER_MAX_SHARES` | — | Retired; `BOT_QUOTE_SIZE_MAX_SHARES` is the only name |
+| `HUNTER_STAT_GATE_BANKROLL_FRACTION` | — | Retired; `BOT_EVAL_STAT_GATE_BANKROLL_PCT` is the only name |
 

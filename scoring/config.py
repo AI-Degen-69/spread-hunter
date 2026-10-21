@@ -28,7 +28,7 @@ from core_brain.config import (
     PICKER_PROFILE,
     SCREENER_PRESETS,
     MakerConfig as CoreMakerConfig,
-    _env_get,
+    _env,
     resolve_tournament_preset_name,
 )
 from pathlib import Path
@@ -90,7 +90,7 @@ class MakerConfig(CoreMakerConfig):
         # `scoring.ROOT` and `core_brain.ROOT` are the same folder, so this and
         # the inherited copy resolve identically --
         # `tests/test_config_single_source.py` pins both under three env states.
-        return Path(os.environ.get("SPREAD_HUNTER_DB") or os.environ.get("HUNTER_DB", str(ROOT / "hunter.db")))
+        return Path(os.environ.get("SPREAD_HUNTER_DB") or str(ROOT / "hunter.db"))
 
 
 def _bounded_float(name: str, raw: str, lo: float, hi: float) -> float:
@@ -114,8 +114,8 @@ def _bounded_float(name: str, raw: str, lo: float, hi: float) -> float:
     return value
 
 
-def resolve_wide_book_trial(raw: str, *, var_name: str = "HUNTER_WIDE_BOOK_TRIAL") -> float | None:
-    """Parse `HUNTER_WIDE_BOOK_TRIAL` / `BOT_QUOTE_WIDE_BOOK_TRIAL`, refusing outside a declared rehearsal.
+def resolve_wide_book_trial(raw: str, *, var_name: str = "BOT_QUOTE_WIDE_BOOK_TRIAL") -> float | None:
+    """Parse `BOT_QUOTE_WIDE_BOOK_TRIAL`, refusing outside a declared rehearsal.
 
     The gate is `rehearsal.is_rehearsal()`, and the choice of question matters.
     The obvious alternative -- "is a signing key reachable?" -- is wrong twice
@@ -159,8 +159,7 @@ def load() -> MakerConfig:
     """Config, with the per-bot fields overridable from the environment.
 
     Four bots run the same code against different markets; each gets its own
-    SPREAD_HUNTER_DB / HUNTER_DB, port and BOT_MARKET_PINNED_CONDITION_ID /
-    HUNTER_MARKET. Nothing else differs, so a difference in results is a
+    SPREAD_HUNTER_DB, port and BOT_MARKET_PINNED_CONDITION_ID. Nothing else differs, so a difference in results is a
     difference in the MARKET, not in the settings.
     """
     kw: dict = {}
@@ -172,29 +171,21 @@ def load() -> MakerConfig:
     preset_name = resolve_tournament_preset_name()
     if preset_name:
         kw.update({k: v for k, v in SCREENER_PRESETS[preset_name].items() if k != "description"})
-    cid, _ = _env_get("BOT_MARKET_PINNED_CONDITION_ID", "HUNTER_MARKET")
+    cid = _env("BOT_MARKET_PINNED_CONDITION_ID")
     cid = (cid or "").strip()
     if cid:
         kw["pinned_condition_id"] = cid
-        title, _ = _env_get("BOT_MARKET_TITLE", "HUNTER_TITLE")
+        title = _env("BOT_MARKET_TITLE")
         kw["market_title"] = title or ""
-        url, _ = _env_get("BOT_MARKET_URL", "HUNTER_URL")
+        url = _env("BOT_MARKET_URL")
         kw["market_url"] = url or ""
         # The min-size floor is per-market (20, 50, 100, 200) -- quoting under
         # it earns nothing.
-        ms, ms_name = _env_get("BOT_QUOTE_SIZE_MIN_SHARES", "HUNTER_MIN_QUOTE_SHARES", "HUNTER_MIN_SIZE")
-        if ms_name == "HUNTER_MIN_SIZE" and ms and ms.strip():
-            logging.getLogger(__name__).warning(
-                "HUNTER_MIN_SIZE is deprecated (#632); set BOT_QUOTE_SIZE_MIN_SHARES instead."
-            )
+        ms = _env("BOT_QUOTE_SIZE_MIN_SHARES")
         if ms and ms.strip():
             kw["min_quote_shares"] = int(float(ms))
             kw["quote_shares"] = max(int(float(ms)), 120)
-        tk, tk_name = _env_get("BOT_QUOTE_GRID_TICK_SIZE_USD", "HUNTER_PRICE_TICK", "HUNTER_TICK")
-        if tk_name == "HUNTER_TICK" and tk and tk.strip():
-            logging.getLogger(__name__).warning(
-                "HUNTER_TICK is deprecated (#632); set BOT_QUOTE_GRID_TICK_SIZE_USD instead."
-            )
+        tk = _env("BOT_QUOTE_GRID_TICK_SIZE_USD")
         if tk and tk.strip():
             kw["price_tick"] = float(tk)
     # THE SPREAD WINDOW IS READ ON EVERY RUN (#690, N2 of #674).
@@ -221,7 +212,7 @@ def load() -> MakerConfig:
     # WIDTH wide books are refused on, derived from
     # `max_book_spread * select_spread_pct`. It must never read this value: a
     # distance-from-mid window and a bid-ask width are different measurements.
-    sp, _ = _env_get("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
+    sp = _env("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
     if sp and sp.strip():
         if cid:
             kw["max_spread_from_mid"] = _bounded_float(
@@ -234,8 +225,8 @@ def load() -> MakerConfig:
             if cents is not None:
                 kw["max_spread_from_mid"] = _bounded_float(
                     "BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", sp.strip(), 1.0, 99.0) / 100.0
-    wide_raw, wide_name = _env_get("BOT_QUOTE_WIDE_BOOK_TRIAL", "HUNTER_WIDE_BOOK_TRIAL")
-    wide = resolve_wide_book_trial(wide_raw or "", var_name=wide_name or "HUNTER_WIDE_BOOK_TRIAL")
+    wide_raw = _env("BOT_QUOTE_WIDE_BOOK_TRIAL")
+    wide = resolve_wide_book_trial(wide_raw or "", var_name="BOT_QUOTE_WIDE_BOOK_TRIAL")
     if wide is not None and wide > 0:
         # The trial moves ONE ceiling; the picker bar follows through the
         # derived property (#572), and the quote window is widened only if
@@ -244,7 +235,7 @@ def load() -> MakerConfig:
         kw["max_book_spread"] = wide
         window = kw.get("max_spread_from_mid", MakerConfig.max_spread_from_mid)
         kw["max_spread_from_mid"] = max(window, wide)
-    trial, _ = _env_get("FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", "HUNTER_DEPTH_TRIAL_USD")
+    trial = _env("FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL")
     if trial and trial.strip():
         try:
             td = float(trial)
@@ -252,7 +243,7 @@ def load() -> MakerConfig:
                 kw["filter_common_vol_min_top3_depth_usd_trial"] = td
         except ValueError:
             pass
-    mvmt, _ = _env_get("FILTER_LIVE_VEL_MIN_USD", "HUNTER_MIN_MOVEMENT_USD")
+    mvmt = _env("FILTER_LIVE_VEL_MIN_USD")
     if mvmt and mvmt.strip():
         try:
             bar = float(mvmt)
@@ -262,7 +253,7 @@ def load() -> MakerConfig:
         # `nan` compares false against everything, silently disabling the gate.
         if bar is not None and math.isfinite(bar):
             kw["filter_live_vel_min_usd"] = max(0.0, bar)
-    mwin, _ = _env_get("FILTER_LIVE_VEL_LOOKBACK_SEC", "HUNTER_MOVEMENT_WINDOW_SEC")
+    mwin = _env("FILTER_LIVE_VEL_LOOKBACK_SEC")
     if mwin and mwin.strip():
         try:
             window = float(mwin)
@@ -270,10 +261,10 @@ def load() -> MakerConfig:
             window = None
         if window is not None and math.isfinite(window) and window > 0:
             kw["filter_live_vel_lookback_sec"] = window
-    vgate, _ = _env_get("FILTER_LIVE_GATE_VELOCITY_ON", "HUNTER_VELOCITY_GATE")
+    vgate = _env("FILTER_LIVE_GATE_VELOCITY_ON")
     if vgate and vgate.strip():
         kw["filter_live_gate_velocity_on"] = vgate.strip().lower() not in ("0", "false", "off", "no")
-    rcents, _ = _env_get("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "HUNTER_MIN_RANGE_CENTS")
+    rcents = _env("FILTER_LIVE_MOVE_MIN_RANGE_CENTS")
     if rcents and rcents.strip():
         try:
             rc = float(rcents)
@@ -281,7 +272,7 @@ def load() -> MakerConfig:
                 kw["filter_live_move_min_range_cents"] = rc
         except ValueError:
             pass
-    vwin, _ = _env_get("FILTER_LIVE_MOVE_LOOKBACK_SEC", "HUNTER_VOLATILITY_WINDOW_SEC")
+    vwin = _env("FILTER_LIVE_MOVE_LOOKBACK_SEC")
     if vwin and vwin.strip():
         try:
             vw = float(vwin)
@@ -289,7 +280,7 @@ def load() -> MakerConfig:
                 kw["filter_live_move_lookback_sec"] = vw
         except ValueError:
             pass
-    vtri, _ = _env_get("FILTER_STD_VOL_MIN_24H_USD_TRIAL", "HUNTER_VOLUME_TRIAL_USD")
+    vtri = _env("FILTER_STD_VOL_MIN_24H_USD_TRIAL")
     if vtri and vtri.strip():
         try:
             vt = float(vtri)
@@ -301,7 +292,7 @@ def load() -> MakerConfig:
     # 0.0 (shipped default) disables it. Loose-baseline runs lower the absolute
     # volume floor AND turn this on, so relative recent activity -- not raw 24h
     # size -- is what admits a market.
-    aratio, _ = _env_get("FILTER_LIVE_ACTIVITY_MIN_RATIO", "HUNTER_MIN_ACTIVITY_RATIO")
+    aratio = _env("FILTER_LIVE_ACTIVITY_MIN_RATIO")
     if aratio and aratio.strip():
         try:
             ratio = float(aratio)
@@ -309,7 +300,7 @@ def load() -> MakerConfig:
             ratio = 0.0
         if math.isfinite(ratio) and ratio >= 0:
             kw["filter_live_activity_min_ratio"] = ratio
-    vol_live, _ = _env_get("FILTER_LIVE_VOL_MIN_24H_USD")
+    vol_live = _env("FILTER_LIVE_VOL_MIN_24H_USD")
     if vol_live and vol_live.strip():
         try:
             vl = float(vol_live)
@@ -317,7 +308,7 @@ def load() -> MakerConfig:
                 kw["filter_live_vol_min_24h_usd"] = vl
         except ValueError:
             pass
-    vol, _ = _env_get("FILTER_STD_VOL_MIN_24H_USD", "HUNTER_MIN_VOLUME_24H_USD")
+    vol = _env("FILTER_STD_VOL_MIN_24H_USD")
     if vol and vol.strip():
         try:
             v = float(vol)
@@ -325,19 +316,19 @@ def load() -> MakerConfig:
             v = 0.0
         if math.isfinite(v) and v >= 0:
             kw["filter_std_vol_min_24h_usd"] = v
-    pr, _ = _env_get("BOT_RISK_GATE_PAIRS_RULE_ON", "HUNTER_PAIRS_RULE")
+    pr = _env("BOT_RISK_GATE_PAIRS_RULE_ON")
     if pr and pr.strip():
         kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
-    cno, _ = _env_get("BOT_LATENCY_NET_ONEWAY_MS", "HUNTER_NET_ONEWAY_MS", "HUNTER_CANCEL_NET_ONEWAY_MS")
+    cno = _env("BOT_LATENCY_NET_ONEWAY_MS")
     if cno and cno.strip():
         kw["net_oneway_ms"] = float(cno)
-    cva, _ = _env_get("BOT_LATENCY_CANCEL_VENUE_ACK_MS", "HUNTER_CANCEL_VENUE_ACK_MS")
+    cva = _env("BOT_LATENCY_CANCEL_VENUE_ACK_MS")
     if cva and cva.strip():
         kw["cancel_venue_ack_ms"] = float(cva)
-    pva, _ = _env_get("BOT_LATENCY_POST_VENUE_ACCEPT_MS", "HUNTER_POST_VENUE_ACCEPT_MS")
+    pva = _env("BOT_LATENCY_POST_VENUE_ACCEPT_MS")
     if pva and pva.strip():
         kw["post_venue_accept_ms"] = float(pva)
-    bk, _ = _env_get("BOT_QUOTE_BANK_BASELINE_USD", "SPREAD_HUNTER_BANKROLL", "HUNTER_BANKROLL")
+    bk = _env("BOT_QUOTE_BANK_BASELINE_USD")
     if bk and bk.strip():
         val = float(bk)
         if not math.isfinite(val) or val <= 0:

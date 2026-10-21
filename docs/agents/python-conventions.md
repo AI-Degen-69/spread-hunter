@@ -85,6 +85,6 @@ Narrow `except` clauses only (`except sqlite3.Error`, `except OSError`). A bare
   `BOT_*` for the trading bot engine, e.g., `FILTER_LIVE_VEL_MIN_USD`,
   `FILTER_LIVE_MOVE_MIN_RANGE_CENTS`, `BOT_QUOTE_SIZE_MIN_SHARES`,
   `BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID`, `BOT_EVAL_STAT_GATE_BANKROLL_PCT`) and carries
-  strict unit suffixes. Legacy `HUNTER_*` environment variables are supported as
-  deprecated fallback aliases (canonical wins when non-blank).
+  strict unit suffixes. The retired `HUNTER_*` variables are ignored: a loader
+  reads the canonical name only, so a retired name in `.env` changes nothing.
 

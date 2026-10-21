@@ -3235,9 +3235,9 @@ def test_picker_parameter_cards_read_the_configured_bars(client, monkeypatch):
     distinguishable: a card showing `$777.00` resolved the config, and a card
     still showing the `$200.00` fallback did not.
     """
-    monkeypatch.setenv("HUNTER_MIN_MOVEMENT_USD", "777")
-    monkeypatch.setenv("HUNTER_MOVEMENT_WINDOW_SEC", "900")
-    monkeypatch.setenv("HUNTER_VELOCITY_GATE", "off")
+    monkeypatch.setenv("FILTER_LIVE_VEL_MIN_USD", "777")
+    monkeypatch.setenv("FILTER_LIVE_VEL_LOOKBACK_SEC", "900")
+    monkeypatch.setenv("FILTER_LIVE_GATE_VELOCITY_ON", "off")
 
     cards = _picker_cards(client)
 
@@ -3250,8 +3250,8 @@ def test_picker_parameter_cards_read_the_configured_bars(client, monkeypatch):
 
 def test_picker_parameter_cards_show_the_shipped_bars_by_default(client, monkeypatch):
     """With nothing set, the queue cards keep their bars and their wording."""
-    for var in ("HUNTER_MIN_MOVEMENT_USD", "HUNTER_MOVEMENT_WINDOW_SEC",
-                "HUNTER_VELOCITY_GATE"):
+    for var in ("FILTER_LIVE_VEL_MIN_USD", "FILTER_LIVE_VEL_LOOKBACK_SEC",
+                "FILTER_LIVE_GATE_VELOCITY_ON"):
         monkeypatch.delenv(var, raising=False)
 
     cards = _picker_cards(client)

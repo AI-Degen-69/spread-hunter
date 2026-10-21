@@ -11,7 +11,7 @@ Two halves, tested apart so a failure names which one is wrong:
 
 The gate ships RECORD-ONLY (`enforce_queue_clear_gate = False`): the reason is
 reported on every gated placement and nothing is dropped until
-`HUNTER_QUEUE_CLEAR_GATE=1`. The operator chose that this session; the repo's own
+`BOT_ORDER_GATE_QUEUE_CLEAR_ON=1`. The operator chose that this session; the repo's own
 precedent for this rule ships the same way ("enforcing on day one refuses every
 market and takes the bot silent").
 
@@ -164,7 +164,7 @@ class TestRecentSellFlow:
         # with no stamp into epoch 0, which then became `oldest` -- so a full
         # page that never reached the window start was reported as COMPLETE.
         # The reading is a floor, and reading a floor as a measurement is what
-        # refuses placements under HUNTER_QUEUE_CLEAR_GATE=1.
+        # refuses placements under BOT_ORDER_GATE_QUEUE_CLEAR_ON=1.
         page = [{"price": 0.47, "size": 10.0, "side": "SELL", "asset": "tok"},
                 _trade(NOW - 30, 0.47, 10.0, tx="0xone")]
         flow = _flow(_TapeSession([page]), page_size=2, max_pages=1)
@@ -602,28 +602,28 @@ class TestQueueGateSettings:
 
     def test_env_turns_the_gate_on_and_moves_the_bar(self):
         with mock.patch.dict(os.environ, {
-                "HUNTER_QUEUE_CLEAR_GATE": "1",
-                "HUNTER_MAX_QUEUE_CLEAR_MIN": "15"}):
+                "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
+                "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "15"}):
             cfg = load()
             assert cfg.enforce_queue_clear_gate is True
             assert cfg.max_queue_clear_minutes == 15.0
 
     @pytest.mark.parametrize("raw", ["0", "false", "FALSE", "off", "Off"])
     def test_false_spellings_turn_the_gate_off(self, raw):
-        with mock.patch.dict(os.environ, {"HUNTER_QUEUE_CLEAR_GATE": raw}):
+        with mock.patch.dict(os.environ, {"BOT_ORDER_GATE_QUEUE_CLEAR_ON": raw}):
             assert load().enforce_queue_clear_gate is False
 
     @pytest.mark.parametrize("raw", ["1", "true", "on", "yes"])
     def test_any_other_value_turns_the_gate_on(self, raw):
-        with mock.patch.dict(os.environ, {"HUNTER_QUEUE_CLEAR_GATE": raw}):
+        with mock.patch.dict(os.environ, {"BOT_ORDER_GATE_QUEUE_CLEAR_ON": raw}):
             assert load().enforce_queue_clear_gate is True
 
     @pytest.mark.parametrize("bad", ["abc", "nan", "inf", "-1", "0"])
     def test_a_bad_bar_is_refused_at_load(self, bad):
         # "0" belongs here with the rest: a zero bar is the DISABLE value, and a
         # disabled rule set through the bar's own name would read as enforced.
-        with mock.patch.dict(os.environ, {"HUNTER_MAX_QUEUE_CLEAR_MIN": bad}):
-            with pytest.raises(ValueError, match="HUNTER_MAX_QUEUE_CLEAR_MIN"):
+        with mock.patch.dict(os.environ, {"BOT_ORDER_QUEUE_MAX_CLEAR_MIN": bad}):
+            with pytest.raises(ValueError, match="BOT_ORDER_QUEUE_MAX_CLEAR_MIN"):
                 load()
 
     def test_the_bar_ceiling_is_accepted(self):
@@ -631,13 +631,13 @@ class TestQueueGateSettings:
         # "queue" is the market's whole remaining life, which no bid can be
         # behind.
         with mock.patch.dict(os.environ,
-                             {"HUNTER_MAX_QUEUE_CLEAR_MIN": "1440"}):
+                             {"BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "1440"}):
             assert load().max_queue_clear_minutes == 1440.0
 
     def test_a_bar_past_the_ceiling_is_refused(self):
         with mock.patch.dict(os.environ,
-                             {"HUNTER_MAX_QUEUE_CLEAR_MIN": "1441"}):
-            with pytest.raises(ValueError, match="HUNTER_MAX_QUEUE_CLEAR_MIN"):
+                             {"BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "1441"}):
+            with pytest.raises(ValueError, match="BOT_ORDER_QUEUE_MAX_CLEAR_MIN"):
                 load()
 
     def test_the_two_bars_ship_independent_and_record_only(self):

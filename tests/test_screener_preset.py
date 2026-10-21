@@ -37,7 +37,7 @@ from scoring import config as scoring_config
 
 REPO = Path(__file__).resolve().parents[1]
 
-SELECTOR_VARS = ("BOT_QUOTE_TOURNAMENT_PRESET", "HUNTER_TOURNAMENT_PRESET")
+SELECTOR_VARS = ("BOT_QUOTE_TOURNAMENT_PRESET", "BOT_QUOTE_TOURNAMENT_PRESET")
 
 
 def _clear_selector(monkeypatch):
@@ -57,9 +57,10 @@ def test_canonical_selector_resolves(monkeypatch):
     assert resolve_tournament_preset_name() == "balanced"
 
 
-def test_legacy_selector_resolves(monkeypatch):
+def test_retired_selector_name_is_ignored(monkeypatch):
+    """The retired `HUNTER_TOURNAMENT_PRESET` selects nothing."""
     monkeypatch.setenv("HUNTER_TOURNAMENT_PRESET", "Aggressive ")
-    assert resolve_tournament_preset_name() == "aggressive"
+    assert resolve_tournament_preset_name() is None
 
 
 def test_canonical_wins_over_legacy(monkeypatch):
@@ -68,10 +69,11 @@ def test_canonical_wins_over_legacy(monkeypatch):
     assert resolve_tournament_preset_name() == "prudent"
 
 
-def test_blank_canonical_falls_back_to_legacy(monkeypatch):
+def test_blank_canonical_selects_nothing(monkeypatch):
+    """A blank canonical is a blank canonical: there is no legacy to fall back to."""
     monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "   ")
     monkeypatch.setenv("HUNTER_TOURNAMENT_PRESET", "hybrid")
-    assert resolve_tournament_preset_name() == "hybrid"
+    assert resolve_tournament_preset_name() is None
 
 
 def test_unknown_selector_raises_engine_and_ranker(monkeypatch):
@@ -140,7 +142,7 @@ def test_explicit_setting_overrides_the_preset(monkeypatch):
 
 def test_legacy_selector_reaches_the_ranker_loader(monkeypatch):
     _clear_selector(monkeypatch)
-    monkeypatch.setenv("HUNTER_TOURNAMENT_PRESET", "conservative")
+    monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "conservative")
     cfg = scoring_config.load()
     assert cfg.max_spread_from_mid == 0.045
 

@@ -243,10 +243,10 @@ class TestEffectiveConfigIsLogged:
 
         monkeypatch.setattr(order_registry_current(), "_CURRENT_RUN_ID",
                             "run-liveone")
-        # `HUNTER_REWARD_OFFSET`/`HUNTER_PRICE_RISK_WIDEN` live on the
+        # `HUNTER_REWARD_OFFSET`/`BOT_QUOTE_PRICE_RISK_WIDEN` live on the
         # reward-offset-override branch; on main the overridable knob is the
         # completable cap, so assert through it.
-        monkeypatch.setenv("HUNTER_COMPLETABLE_CAP", "0.995")
+        monkeypatch.setenv("BOT_POS_PRICE_MAX_COMPLETE_USD", "0.995")
 
         with caplog.at_level(logging.INFO, logger="shadow_run"):
             run_shadow(
