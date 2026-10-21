@@ -978,9 +978,11 @@ I492_RETIRED_KNOBS = {
     "HUNTER_REFUSAL_HOLD_DRIFT",
 }
 
-# #487 hypothesises one changed catalyst per arm. Each value below IS the tweak,
-# so its presence here would mean the rerun is no longer the baseline #487 is
-# compared against.
+# The SUPERSEDED #487 premise: one "worst catalyst" tweaked per arm, read from
+# the #484/#485 forensics. The 2026-10-21 reframe dropped that premise -- those
+# forensics described pre-2026-10-20 code, and the knobs it named were retired --
+# but the values stay. They are the one job this table still has: keeping a #492
+# baseline arm free of a #487-era tweak, so the rerun is still the baseline.
 I487_TWEAKS = {
     ("control", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"): "0.060",
     ("conservative", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"): "0.045",
