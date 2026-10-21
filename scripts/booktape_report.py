@@ -11,7 +11,7 @@ Two sections, matching the two questions in issue #145:
     column is the direct measurement of `spread_capture_frac`, which the market
     filter asserts is 0.25 and has never checked.
   * **The touch pair.** The distribution of `best_bid(UP) + best_bid(DOWN)`,
-    against the `max_pair_cost` the risk gate refuses with `>=`.
+    against the `bot_pos_price_max_pair_cost_usd` the risk gate refuses with `>=`.
 
 Bootstrap rows are excluded from reachability and counted separately. See
 `book_tape_recorder.write_tape` for why they exist and why they are kept.

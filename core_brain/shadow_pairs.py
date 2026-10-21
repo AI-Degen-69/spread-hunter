@@ -8,12 +8,12 @@ open position -- sitting unhedged.
 For each condition, every sweep:
 
   1. ADOPT: two detached legs on the same condition under different tokens whose
-     combined cost <= max_pair_cost are welded under ONE shared pair_id (reusing
+     combined cost <= bot_pos_price_max_pair_cost_usd are welded under ONE shared pair_id (reusing
      an existing `pair-` id when either leg carries one, else minting). This is
      what makes the dashboard show one row and lets the merge fire.
 
   2. CANCEL: a leg with no completing partner at the LIVE book -- combined cost
-     with the opposing best ask >= max_pair_cost, or the opposing book is gone --
+     with the opposing best ask >= bot_pos_price_max_pair_cost_usd, or the opposing book is gone --
      is a hopeless stray. Cancel it (registry-only in shadow; no venue call).
 
   3. RE-QUOTE FRESH: after cancelling, the condition is left to the normal

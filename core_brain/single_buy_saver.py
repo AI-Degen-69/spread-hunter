@@ -163,7 +163,7 @@ def should_exit(fill_cost: float, light_ask: Optional[float],
                 bot_pos_price_max_pair_cost_usd: float) -> bool:
     """Exit when the pair cannot complete under the cap.
 
-    `>=`, not `>`. A pair costing exactly max_pair_cost is a guaranteed loss
+    `>=`, not `>`. A pair costing exactly bot_pos_price_max_pair_cost_usd is a guaranteed loss
     after gas, which is the whole reason the cap sits below $1.00.
 
     A missing ask fires rather than holds. No ask means there is nothing to

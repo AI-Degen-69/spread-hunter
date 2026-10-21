@@ -723,9 +723,9 @@ VENUE_MIN_NOTIONAL_USD: float = 1.0
 def derive_dynamic_caps(cfg: MakerConfig, portfolio_usd: float | None = None) -> dict[str, float]:
     """Derive dynamic risk caps scaled to the account's total portfolio value.
 
-    - max_naked_usd = 6% (naked_risk_pct) of portfolio value
-    - max_order_usd = 25% (order_risk_pct) of portfolio value
-    - max_total_usd = 90% (bankroll_ceiling_pct) of portfolio value
+    - bot_risk_exposure_max_naked_usd = 6% (bot_risk_exposure_max_naked_pct) of portfolio value
+    - bot_risk_exposure_max_order_usd = 25% (bot_risk_exposure_max_order_pct) of portfolio value
+    - bot_risk_exposure_max_total_usd = 90% (bot_risk_exposure_bankroll_ceiling_pct) of portfolio value
     """
     base_val = None
     if portfolio_usd is not None:

@@ -271,14 +271,14 @@ def book_health(book: dict, cfg) -> BookHealth:
     Three rejections, cheapest and most certain first.
 
       * ONE-SIDED. No mid, nothing to quote against.
-      * SETTLED. Either quote sits within `decided_price` of an end. The
+      * SETTLED. Either quote sits within `bot_risk_circuit_decided_price_cents` of an end. The
         market has already decided: there is no spread left to capture, and
         the naked leg a fill would create is decided against us. Both ends are
         tested against both quotes -- the recorded failure was a 0.999 bid
         against a 0.001 ask, an inverted shape no single arm catches.
       * TOO WIDE / TOO THIN. A spread wider than `bot_quote_book_max_spread_cents` puts the
         whole quote window inside it, so quoting there means being the most
-        exposed order in the book. Summed bid depth under `min_book_depth_sh`
+        exposed order in the book. Summed bid depth under `bot_quote_book_min_depth_shares`
         means nothing is there to absorb an exit.
     """
     bb, ba = book.get("best_bid"), book.get("best_ask")
@@ -445,13 +445,13 @@ def hard_block(
         healthy leg would have left a position no price could unwind.
       * OWN SIDE. The book we would rest into, on the same three arms.
       * DOLLAR CAP. Naked cost on this side at or past `bot_risk_exposure_max_naked_usd`.
-      * PRICE BAND (R7). Outside `price_band_low..price_band_high` the spread
+      * PRICE BAND (R7). Outside `bot_quote_price_band_min_cents..bot_quote_price_band_max_cents` the spread
         has collapsed toward one tick on an outcome the market already
         considers settled, so there is nothing to capture -- while a wrong
         resolution still costs the full $1.00. Reported AFTER the dollar cap
         on purpose: when both bind, what is already at stake is the more
         useful reading than what a new fill would be worth.
-      * PAIR COST (R7). `price + inv.avg(other) >= max_pair_cost`. The pair
+      * PAIR COST (R7). `price + inv.avg(other) >= bot_pos_price_max_pair_cost_usd`. The pair
         pays exactly $1.00, so a pair assembled above that is a booked loss,
         not a risk. The explicit lifecycle escalation instead uses its
         pair-scoped held average and may equal the cap, never exceed it.

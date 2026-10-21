@@ -2775,7 +2775,7 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
 
     Closes exposure rather than opening it: the half-open leg is already at
     risk, and completing it yields a pair worth $1.00 at merge. Refuses any
-    cross that would push the pair to or past max_pair_cost -- that case
+    cross that would push the pair to or past bot_pos_price_max_pair_cost_usd -- that case
     belongs to `exit`, and this path must not do the stop-loss's job badly.
     """
     from core_brain.single_buy_saver import (

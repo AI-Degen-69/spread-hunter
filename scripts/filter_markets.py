@@ -97,8 +97,10 @@ MIN_VOLUME_24H_LIVE = _CFG.filter_live_vol_min_24h_usd
 MOVEMENT_WINDOW_SEC = _CFG.filter_live_vel_lookback_sec
 MIN_MOVEMENT_USD = _CFG.filter_live_vel_min_usd
 TRADES_API = "https://data-api.polymarket.com/trades"
-# The book gate: a bid-ask WIDTH, derived from `max_book_spread *
-# select_spread_pct` (2.05c, #572). NOT `max_spread_from_mid`, which is the
+# The book gate: a bid-ask WIDTH, derived from
+# `bot_quote_book_max_spread_cents * filter_std_spread_share_pct`
+# (`filter_common_spread_max_cents`, 2.05c, #572). NOT
+# `bot_quote_book_max_spread_from_mid`, which is the
 # distance from mid we allow a resting quote to sit at -- a different
 # measurement, read only by the quoting code and never by this ranker (#690).
 MAX_BOOK_SPREAD = _CFG.filter_common_spread_max_cents
@@ -2585,7 +2587,7 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         "trial_volume_usd": trial_volume_usd,
         # The remaining gate bars, so the dashboard states the contract it is
         # actually screening against rather than a number frozen into the
-        # markup. `max_pair_cost` is the sub-dollar rule the strategy rests
+        # markup. `bot_pos_price_max_pair_cost_usd` is the sub-dollar rule the strategy rests
         # on; a stale figure there is worse than no figure at all.
         # Which spread ceiling this rank gated on, on the same trial contract
         # as depth and volume. Passing the module constant here regardless

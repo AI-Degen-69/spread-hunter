@@ -271,7 +271,7 @@ def plan_orders(
     parameters stay in the signature -- `cfg`, `hedge_asks`, `hedge_held`,
     `queue_ahead`, `hold_queue_shares`, `hold_below_target`, `visit_outcome` --
     for the follow-up cancel-conditions issue to disposition; only `dead_band`
-    and `cfg.min_quote_shares` are read here.
+    and `cfg.bot_quote_size_min_shares` are read here.
     """
     tolerance = max(float(price_eps), float(dead_band))
     preserve_ids = {str(value) for value in preserve_order_ids or ()}
@@ -337,7 +337,7 @@ def plan_orders(
             to_submit.append(i)
 
     # Delta top-up (#453): if an existing hedge is preserved (kept) on a lifecycle pair
-    # but leaves a shortfall >= min_quote_shares, generate a supplemental maker intent
+    # but leaves a shortfall >= bot_quote_size_min_shares, generate a supplemental maker intent
     # for the missing delta shares on the same token and pair ID.
     if lifecycle_pair_id is not None and hasattr(cfg, "bot_quote_size_min_shares"):
         min_shares = float(getattr(cfg, "bot_quote_size_min_shares", 5.0) or 5.0)
@@ -403,7 +403,7 @@ def _market_cfg(base, spec: Any):
     gates the paper fleet runs; the only per-market differences are the venue's
     min-size, spread window and tick, copied from the ranker's spec.
 
-    `objective="spread_capture"` below is pinned on every market ON PURPOSE. It
+    `bot_pos_objective="spread_capture"` below is pinned on every market ON PURPOSE. It
     selects `quotes._decide_quotes_from_mid` -- rest both legs at `mid - offset`,
     which assembles the pair at ~1.00 - 2*offset and is how spread capture is
     executed. The alternative value, "pair", prices off the ask and was measured
@@ -425,7 +425,7 @@ def _market_cfg(base, spec: Any):
         bot_pos_objective="spread_capture",
         bot_quote_size_min_shares=int(spec.get("min_size", base.bot_quote_size_min_shares)),
         bot_quote_size_shares=int(spec.get("shares", base.bot_quote_size_shares)),
-        # The quote window is the ENGINE's max_spread_from_mid, single source.
+        # The quote window is the ENGINE's bot_quote_book_max_spread_from_mid, single source.
         # The venue's rewardsMaxSpread used to ride in on the feed row's
         # max_spread field and cap the window here (2.5c on Fed rows, 4.5c on
         # sports) — a rewards-program leftover throttling a strategy that earns

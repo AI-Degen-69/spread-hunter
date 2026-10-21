@@ -1930,7 +1930,7 @@ def start_bot() -> dict:
         }
         # Capture starting capital: a real snapshot of account equity at the
         # moment the bot is toggled ON. The kpi.py report uses
-        # _CFG.bankroll_usd (a hardcoded config constant) as its baseline,
+        # _CFG.bot_quote_bank_baseline_usd (a hardcoded config constant) as its baseline,
         # but the comment at kpi.py:889 explicitly says that's "a paper-run
         # constant that nobody deposited." This snapshot is the real number.
         # It may be None if the venue is unreachable at start time; the
@@ -4262,8 +4262,9 @@ def log_stream_events(
 def get_parameters(registry=None):
     """Return active strategy settings, trigger thresholds, and action descriptions.
 
-    Consolidates safety limits from core_brain.config:MakerConfig (max_pair_cost,
-    max_naked_usd, min_quote_shares, max_order_usd, max_total_usd) and the sweep
+    Consolidates safety limits from core_brain.config:MakerConfig (bot_pos_price_max_pair_cost_usd,
+    bot_risk_exposure_max_naked_usd, bot_quote_size_min_shares, bot_risk_exposure_max_order_usd,
+    bot_risk_exposure_max_total_usd) and the sweep
     interval from the dashboard's own config. One config object, not two.
     """
     from core_brain.config import load as load_cfg, derive_dynamic_caps

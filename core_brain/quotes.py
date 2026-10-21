@@ -13,13 +13,13 @@ from merge spread capture ($1.00 - pair cost).
 Everything below follows from that. Quote BOTH outcomes so a pair can assemble;
 stay ~92% balanced so no leg rides naked; never let the pair cost reach $1.00,
 because a pair bought at >= 1.00 is a booked loss on an instrument that pays
-exactly $1.00; and keep quotes within the max_spread_from_mid window -- the
+exactly $1.00; and keep quotes within the bot_quote_book_max_spread_from_mid window -- the
 distance from the book midpoint to our resting quote -- to maintain book
 competitiveness.
 
 The universe is NOT the BTC 5-minute series. The fleet quotes the ranker's
 graduated list (runtime/markets.json, via core_brain/market_feed.py) -- liquid sports,
-esports, macro and political markets inside a 30-day horizon. `config.series_slug`
+esports, macro and political markets inside a 30-day horizon. `config.bot_market_series_slug`
 is a legacy field; see AGENTS.md.
 """
 from __future__ import annotations
@@ -213,7 +213,7 @@ def quote_resting_price(
     # minus a 20c offset) floors BELOW zero -- an impossible resting price the
     # venue rejects. Clamp to [one tick, one tick under the ask]: never negative,
     # never zero, never crossing. This is the last line of defense after the
-    # offset arithmetic; the offset itself is already capped by max_spread_from_mid.
+    # offset arithmetic; the offset itself is already capped by bot_quote_book_max_spread_from_mid.
     tick = cfg.bot_quote_grid_tick_size_usd if cfg.bot_quote_grid_tick_size_usd and cfg.bot_quote_grid_tick_size_usd > 0 else 0.01
     min_price = round(tick, 10)
     if price < min_price:
@@ -292,7 +292,7 @@ def _decide_quotes_from_mid(
     distinct `max_pair_cost_at_post` of 0.995 and zero fills.
 
     The ENTRY PAIR-COST CAP (#627) is judged last, on the two resting prices
-    taken together: `sum(prices) <= max_pair_cost`, Decimal-compared so a $0.99
+    taken together: `sum(prices) <= bot_pos_price_max_pair_cost_usd`, Decimal-compared so a $0.99
     pair on a $0.99 cap still posts. Nothing else read the flat book as a pair
     -- `hard_block`'s pair-cost arm needs a held average and `dynamic_pair_sum`
     above runs only with the dynamic offset enabled -- so on the dynamic-off
@@ -362,7 +362,7 @@ def _decide_quotes_from_mid(
             continue
 
         # DECIDED MARKET — no room to work. The band is the CONFIGURED price
-        # band (price_band_low/high), not a hardcoded pair of edges: the
+        # band (bot_quote_price_band_min_cents/bot_quote_price_band_max_cents), not a hardcoded pair of edges: the
         # operator's directive is 10c-90c, and a second hardcoded band here
         # silently ignored whatever the config said (#582). Mirrors
         # scripts/filter_markets.py's decided check.
@@ -481,7 +481,7 @@ def _decide_quotes_from_mid(
         # Only while we hold NONE of the hedge token. A fill here then opens a
         # leg that has to be finished by CROSSING, and the price that finishes
         # it is the hedge ASK. Holding the other leg already makes completion
-        # unnecessary, and `risk.hard_block`'s max_pair_cost arm is the one that
+        # unnecessary, and `risk.hard_block`'s bot_pos_price_max_pair_cost_usd arm is the one that
         # governs there; the two conditions never overlap.
         hedge_book = down_book if side == "UP" else up_book
         if inv.avg("DOWN" if side == "UP" else "UP") <= 0:
@@ -826,7 +826,7 @@ def decide_quotes(
         if price <= 0.0 or price >= 1.0:
             continue
 
-        # Quote window: must be within max_spread_from_mid of mid, else quote
+        # Quote window: must be within bot_quote_book_max_spread_from_mid of mid, else quote
         # is too far from the touch to fill.
         if abs(mid - price) > cfg.bot_quote_book_max_spread_from_mid:
             continue
