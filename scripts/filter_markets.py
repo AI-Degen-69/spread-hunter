@@ -116,6 +116,12 @@ LIVE_EVENTS = "https://gamma-api.polymarket.com/events"
 # The main line in every sport. `child_moneyline` is the per-game esports
 # submarket and is NOT the match winner.
 LIVE_EVENT_MAIN_LINE = "moneyline"
+# The venue caps a page at 100 and IGNORES a larger `limit` (measured on
+# /events: 100, 250 and 500 all return 100), so a single request reports a
+# truncated live set as a complete one. Ask for the cap and page by offset.
+# A cap on pages keeps one pathological slate from spending the whole cycle.
+LIVE_EVENT_PAGE = 100
+LIVE_EVENT_MAX_PAGES = 20
 ORDERING_FALLBACK_PAGES = 5
 
 
@@ -1002,65 +1008,57 @@ def gamma_universe(session: requests.Session,
     return out, meta
 
 
-def live_event_markets(session: requests.Session,
-                       limit: int = 200) -> tuple[list[dict], dict]:
-    """Main-line markets on the events the venue declares live, normalised.
+def _live_stats() -> dict:
+    return {"live_events": 0, "live_main_lines": 0, "live_sports": [],
+            "live_below_bar": 0, "live_error": None, "live_truncated": False,
+            "live_pages": 0}
 
-    Discovery for in-play markets, FETCHED rather than hunted. The rank's
-    volume-sorted scan stops one boundary page past the volume floor, and
-    in-play sub-floor rows are not a cluster near that floor -- measured
-    2026-10-06 across ten pages they run 8-16 per page on EVERY page from 1 to
-    9+, mixed with long-dated and dead markets, so no bounded page budget
-    reliably reaches a named match (one run had the live `lol-est-kbm` on page
-    3, the next had it moved). `GET /events?live=true&closed=false` returns the
-    live set directly; `closed=false` is required, because `live=true` alone
-    also returns long-finished events.
 
-    `sportsMarketType == "moneyline"` selects the match winner, and it is the
-    selector that keeps a sport's submarkets OUT. Unlike esports, real sports
-    expose each submarket group as its OWN top-level event: a live MLB game
-    arrives as `mlb-lad-atl-...-first-five-winner` and `...-inning-1-winner`
-    through `...-inning-9-winner` beside the real game, and a live soccer match
-    as `-halftime-result`, `-second-half-result`, `-exact-score`,
-    `-first-to-score` and `-more-markets`. Every one of those carries the same
-    `live` flag, sport, period and score as the real game, so selecting on the
-    sport or the slug prefix admits them -- and NOT ONE of them carries a
-    `moneyline` (verified across the whole live set 2026-10-06), which is why
-    the type is the only safe selector here.
+def _fetch_live_events(session: requests.Session, stats: dict) -> list[dict]:
+    """Every event the venue declares live, page by page (#744).
 
-    Rows come back in the same shape `gamma_universe` emits, so nothing
-    downstream needs a special case, and carry `_live_event=True` -- the stamp
-    that admits them past the clock gates in `evaluate` and picks the live
-    volume bar in `tradable`.
-
-    Never raises. A rank must not fail because the live set was unreadable; the
-    failure is reported in the stats so a run that could not read it is visible
-    as that rather than as a thin live market.
+    Same contract as `scripts/live_events_probe.py`: ask for one page cap at a
+    time, advance the offset by the rows RETURNED, stop on an empty or short
+    page, and stop at `LIVE_EVENT_MAX_PAGES` with `live_truncated` set. A
+    later page that fails keeps the pages already read -- a timeout on page 3
+    must not make the first 200 live markets look like a thin slate -- and
+    reports itself through `live_error`.
     """
-    stats: dict = {"live_events": 0, "live_main_lines": 0, "live_sports": [],
-                   "live_below_bar": 0, "live_error": None}
-    try:
-        r = session.get(LIVE_EVENTS, params={"live": "true",
-                                             "closed": "false",
-                                             "limit": limit}, timeout=30)
-        r.raise_for_status()
-        events = r.json()
-    except Exception as e:                                   # noqa: BLE001
-        stats["live_error"] = f"{type(e).__name__}: {e}"
-        return [], stats
-    if isinstance(events, dict):
-        # The endpoint has served a dict wrapper before; a dict is not a list
-        # of events and must not be iterated as one.
-        events = events.get("data")
-    if not isinstance(events, list):
-        stats["live_error"] = "venue returned a non-list payload"
-        return [], stats
+    events: list[dict] = []
+    offset = 0
+    for _ in range(LIVE_EVENT_MAX_PAGES):
+        try:
+            r = session.get(LIVE_EVENTS, params={"live": "true",
+                                                 "closed": "false",
+                                                 "limit": LIVE_EVENT_PAGE,
+                                                 "offset": offset},
+                            timeout=30)
+            r.raise_for_status()
+            payload = r.json()
+        except Exception as e:                               # noqa: BLE001
+            stats["live_error"] = f"{type(e).__name__}: {e}"
+            return events
+        if isinstance(payload, dict):
+            # The endpoint has served a dict wrapper before; a dict is not a
+            # list of events and must not be iterated as one.
+            payload = payload.get("data")
+        if not isinstance(payload, list):
+            stats["live_error"] = "venue returned a non-list payload"
+            return events
+        events.extend(ev for ev in payload if isinstance(ev, dict))
+        stats["live_pages"] += 1
+        offset += len(payload)
+        if len(payload) < LIVE_EVENT_PAGE:
+            return events
+    stats["live_truncated"] = True
+    return events
 
+
+def _live_rows(events: list[dict], stats: dict) -> list[dict]:
+    """The normalised main lines among `events` (the admitted live set)."""
     rows: list[dict] = []
     sports: set[str] = set()
     for ev in events:
-        if not isinstance(ev, dict):
-            continue
         # The server-side `live=true` filter is re-checked on every event. A
         # caller that widens the fetch -- or a venue that stops honouring the
         # filter -- would otherwise let a finished match through, and a
@@ -1095,7 +1093,85 @@ def live_event_markets(session: requests.Session,
                 sports.add(row["_sport"])
     stats["live_main_lines"] = len(rows)
     stats["live_sports"] = sorted(sports)
-    return rows, stats
+    return rows
+
+
+def _live_declarations(events: list[dict]) -> dict[str, dict]:
+    """The venue's in-play declaration for every market in a live event (#744).
+
+    Built from the EVENT before any admission check, because the moneyline
+    filter, the two-token requirement and the live volume bar decide whether a
+    row may be QUOTED -- none of them decides whether the match is being
+    played. A sub-floor market in a live game is therefore still declared live
+    instead of being reported as regular.
+
+    Carries display evidence only. No admission flag: `_live_event` and
+    `volatility_exempt` stay sole property of the admitted live row, so a lane
+    decision can never become a second route past the live volume bar.
+    """
+    declared: dict[str, dict] = {}
+    for ev in events:
+        if not ev.get("live") or ev.get("ended"):
+            continue
+        sport = _str((ev.get("sport") or {}).get("sport"))
+        for m in ev.get("markets") or []:
+            if not isinstance(m, dict):
+                continue
+            cid = _str(m.get("conditionId"))
+            if not cid:
+                continue
+            declared[cid] = {
+                "_sport": sport,
+                "_event_period": ev.get("period"),
+                "_event_score": ev.get("score"),
+                "_event_live": True,
+                "sports_market_type": _str(m.get("sportsMarketType")),
+            }
+    return declared
+
+
+def live_event_markets(session: requests.Session) -> tuple[list[dict], dict]:
+    """Main-line markets on the events the venue declares live, normalised.
+
+    Discovery for in-play markets, FETCHED rather than hunted. The rank's
+    volume-sorted scan stops one boundary page past the volume floor, and
+    in-play sub-floor rows are not a cluster near that floor -- measured
+    2026-10-06 across ten pages they run 8-16 per page on EVERY page from 1 to
+    9+, mixed with long-dated and dead markets, so no bounded page budget
+    reliably reaches a named match (one run had the live `lol-est-kbm` on page
+    3, the next had it moved). `GET /events?live=true&closed=false` returns the
+    live set directly; `closed=false` is required, because `live=true` alone
+    also returns long-finished events.
+
+    `sportsMarketType == "moneyline"` selects the match winner, and it is the
+    selector that keeps a sport's submarkets OUT. Unlike esports, real sports
+    expose each submarket group as its OWN top-level event: a live MLB game
+    arrives as `mlb-lad-atl-...-first-five-winner` and `...-inning-1-winner`
+    through `...-inning-9-winner` beside the real game, and a live soccer match
+    as `-halftime-result`, `-second-half-result`, `-exact-score`,
+    `-first-to-score` and `-more-markets`. Every one of those carries the same
+    `live` flag, sport, period and score as the real game, so selecting on the
+    sport or the slug prefix admits them -- and NOT ONE of them carries a
+    `moneyline` (verified across the whole live set 2026-10-06), which is why
+    the type is the only safe selector here.
+
+    Rows come back in the same shape `gamma_universe` emits, so nothing
+    downstream needs a special case, and carry `_live_event=True` -- the stamp
+    that admits them past the clock gates in `evaluate` and picks the live
+    volume bar in `tradable`.
+
+    The live set is PAGINATED (`_fetch_live_events`): the venue serves at most
+    100 events per request, so a single call reported a busy slate as a small
+    one. What this function ADMITS is unchanged -- the moneyline selector and
+    the live volume bar still decide that; the lane decision is not made here
+    (`_live_declarations` records it for `merge_live_event_markets`).
+
+    Never raises. A rank must not fail because the live set was unreadable; the
+    failure is reported in the stats so a run that could not read it is visible
+    as that rather than as a thin live market.
+    """
+    stats = _live_stats()
+    return _live_rows(_fetch_live_events(session, stats), stats), stats
 
 
 def _live_event_row(ev: dict, m: dict, sport: object) -> dict:
@@ -1165,8 +1241,7 @@ def _live_event_row(ev: dict, m: dict, sport: object) -> dict:
 
 
 def merge_live_event_markets(universe: list[dict],
-                             session: requests.Session,
-                             limit: int = 200) -> tuple[list[dict], dict]:
+                             session: requests.Session) -> tuple[list[dict], dict]:
     """Append the venue's live main lines to a scanned universe, deduplicated.
 
     A live market above the volume floor is ALSO in the paginated scan, so the
@@ -1176,8 +1251,18 @@ def merge_live_event_markets(universe: list[dict],
     other way would drop the stamp on exactly the markets it exists for, and
     not deduplicating would score one market twice and double-count it in the
     funnel.
+
+    Every merged row is STAMPED with this cycle's lane, from the venue's live
+    declaration (#744). Any lane the row already carried is overwritten, which
+    is what makes a match that kicked off since the last cycle move lanes on
+    this one. A declared market that did not become an admitted live row (a
+    submarket, or below the live bar) keeps its admission fields untouched and
+    gains only display evidence.
     """
-    live_rows, stats = live_event_markets(session, limit=limit)
+    stats = _live_stats()
+    events = _fetch_live_events(session, stats)
+    live_rows = _live_rows(events, stats)
+    declared = _live_declarations(events)
     scanned = {r.get("condition_id") for r in universe}
     # A market the scan already found is REPLACED IN PLACE, not skipped: the
     # live row is the one carrying the stamp, and keeping the scan's copy would
@@ -1198,10 +1283,23 @@ def merge_live_event_markets(universe: list[dict],
     stats["live_rows_merged"] = len(fresh)
     stats["live_rows_already_scanned"] = replaced
     merged.extend(fresh)
-    # The scan stamps its own rows; the live rows are appended after it, and a
-    # row without the flag reads as "this listing was not cut off" downstream.
+    declared_only = 0
     for row in merged:
+        cid = row.get("condition_id")
+        evidence = declared.get(cid) if cid else None
+        row["lane"] = "live" if evidence else "regular"
+        if evidence is not None and cid not in live_by_cid:
+            # Declared in play, but not an admitted live row: display evidence
+            # only. `_live_event`/`volatility_exempt` are never set here, so the
+            # lane cannot become a second route past the live volume bar.
+            for key, value in evidence.items():
+                row.setdefault(key, value)
+            declared_only += 1
+        # The scan stamps its own rows; the live rows are appended after it, and
+        # a row without the flag reads as "this listing was not cut off"
+        # downstream.
         row.setdefault("fetch_truncated", False)
+    stats["live_rows_declared_only"] = declared_only
     return merged, stats
 
 

@@ -183,7 +183,7 @@ T1 (fetch + declarations + market_lane + merge stamping)
 
 ## Tasks
 
-### T1 — [Backend/Logic] Paginated live fetch, declarations, one lane decision
+### T1 — [Backend/Logic] Paginated live fetch, declarations, one lane decision [x]
 **Size M. Depends on: —. Verify: `python -m pytest -q tests/test_live_event_discovery.py`**
 
 Target files: `scripts/filter_markets.py:1005-1205`, `scoring/selector.py`.

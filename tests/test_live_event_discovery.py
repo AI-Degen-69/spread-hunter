@@ -139,6 +139,37 @@ class _FakeSession:
         return _FakeResponse(self.payload, boom=self.boom)
 
 
+class _PagedSession:
+    """Serves offset windows of one live set, the way the venue pages it.
+
+    `fail_from` makes every request at or past that offset fail, which is the
+    later-page timeout the fetch has to survive.
+    """
+
+    def __init__(self, events, *, fail_from=None):
+        self.events = events
+        self.fail_from = fail_from
+        self.offsets: list[int] = []
+
+    def get(self, url, **kwargs):
+        params = kwargs.get("params") or {}
+        offset = int(params.get("offset") or 0)
+        self.offsets.append(offset)
+        if self.fail_from is not None and offset >= self.fail_from:
+            return _FakeResponse(None, boom=True)
+        return _FakeResponse(self.events[offset:offset + int(params["limit"])])
+
+
+def _live_page(count, start=0):
+    """`count` distinct live NHL main lines, one per event."""
+    out = []
+    for i in range(start, start + count):
+        marker = f"0xnhlmain{i}"
+        market = dict(_NHL_EVENT["markets"][0], conditionId=marker)
+        out.append(dict(_NHL_EVENT, id=f"7{i:04d}", markets=[market]))
+    return out
+
+
 # --- the fetch --------------------------------------------------------------
 
 
@@ -339,6 +370,77 @@ def test_a_market_without_a_condition_id_is_dropped():
     assert rows == []
 
 
+# --- pagination (#744) -------------------------------------------------------
+
+
+def test_the_fetch_pages_through_a_slate_bigger_than_one_page():
+    # Arrange: the venue caps a page at 100 and ignores a bigger `limit`, so a
+    # single request reported a 250-market slate as a 100-market one.
+    events = _live_page(250)
+    session = _PagedSession(events)
+
+    # Act
+    rows, stats = fm.live_event_markets(session)
+
+    # Assert
+    assert len(rows) == 250
+    assert session.offsets == [0, fm.LIVE_EVENT_PAGE, 2 * fm.LIVE_EVENT_PAGE]
+    assert stats["live_pages"] == 3
+    assert stats["live_events"] == 250
+    assert stats["live_main_lines"] == 250
+    assert stats["live_truncated"] is False
+    assert stats["live_error"] is None
+
+
+def test_the_page_cap_reports_the_live_set_as_truncated():
+    # Arrange: a slate larger than the page budget must not read as complete.
+    session = _PagedSession(_live_page(fm.LIVE_EVENT_MAX_PAGES * fm.LIVE_EVENT_PAGE + 5))
+
+    # Act
+    rows, stats = fm.live_event_markets(session)
+
+    # Assert
+    assert len(session.offsets) == fm.LIVE_EVENT_MAX_PAGES
+    assert len(rows) == fm.LIVE_EVENT_MAX_PAGES * fm.LIVE_EVENT_PAGE
+    assert stats["live_truncated"] is True
+
+
+def test_a_later_page_failure_keeps_the_pages_already_read():
+    # Arrange: page 2 times out. The 100 live markets page 1 returned are real.
+    session = _PagedSession(_live_page(250), fail_from=fm.LIVE_EVENT_PAGE)
+
+    # Act
+    rows, stats = fm.live_event_markets(session)
+
+    # Assert
+    assert len(rows) == fm.LIVE_EVENT_PAGE
+    assert stats["live_pages"] == 1
+    assert stats["live_error"]
+    assert stats["live_truncated"] is False
+
+
+# --- the lane decision -------------------------------------------------------
+
+
+def test_market_lane_reads_the_stamp_first_and_flags_second():
+    from scoring import selector
+
+    # A row stamped this cycle is never re-guessed: the stamp is the lane.
+    assert selector.market_lane({"lane": "live"}) == "live"
+    assert selector.market_lane({"lane": "regular", "_live_event": True}) == "regular"
+    # The pre-#744 artifact fields, which is how the WTA row in the 2026-10-21
+    # `markets.json` (and any older file) is still classified correctly.
+    assert selector.market_lane({"_event_live": True}) == "live"
+    assert selector.market_lane({"event_live": True}) == "live"
+    assert selector.market_lane({"_live_event": True}) == "live"
+    assert selector.market_lane({"volatility_exempt": True}) == "live"
+    # Strictly True, never truthy: a string flag is not a venue declaration.
+    assert selector.market_lane({"event_live": "true"}) == "regular"
+    assert selector.market_lane({"lane": "unknown"}) == "regular"
+    assert selector.market_lane({}) == "regular"
+    assert selector.market_lane(None) == "regular"
+
+
 # --- the merge --------------------------------------------------------------
 
 
@@ -403,6 +505,9 @@ def test_an_unreachable_live_set_leaves_the_universe_intact():
 
     # Assert
     assert merged == scanned
+    # Nothing was declared live, so the lane is decided all the same: a ranker
+    # row without a lane is what used to make the dashboard guess.
+    assert merged[0]["lane"] == "regular"
     assert stats["live_error"]
     assert stats["live_rows_merged"] == 0
 
@@ -415,6 +520,74 @@ def test_every_merged_row_carries_a_truncation_flag():
 
     # Assert
     assert merged[0]["fetch_truncated"] is False
+
+
+def test_a_match_that_kicked_off_moves_lane_at_unchanged_length():
+    # Arrange: the scan admitted this row before kickoff, so it carries the
+    # lane the last cycle gave it. The venue now declares the same market live.
+    scanned = [{"condition_id": "0xnhlmain",
+                "market_slug": "nhl-nsh-tor-2026-10-06", "lane": "regular"}]
+
+    # Act
+    merged, stats = fm.merge_live_event_markets(scanned, _FakeSession([_NHL_EVENT]))
+
+    # Assert: re-derived on this cycle, at unchanged length (never scored twice).
+    assert len(merged) == 1
+    assert merged[0]["lane"] == "live"
+    assert merged[0]["_live_event"] is True
+    assert stats["live_rows_already_scanned"] == 1
+
+
+def test_an_undeclared_row_is_stamped_regular_on_every_merge():
+    # Arrange: a scanned row that already carries a stale live stamp.
+    scanned = [{"condition_id": "0xbtc", "lane": "live", "_live_event": True}]
+
+    # Act
+    merged, _ = fm.merge_live_event_markets(scanned, _FakeSession([_NHL_EVENT]))
+
+    # Assert: an old stamp must not survive; the venue did not declare it live.
+    assert [r["lane"] for r in merged] == ["regular", "live"]
+
+
+def test_a_declared_in_play_market_that_was_not_admitted_is_still_live():
+    # Arrange: the MLB inning submarket is in a live game but is not a main
+    # line, so the moneyline selector refuses to ADMIT it. That is a refusal to
+    # quote, not a statement that the match is not being played.
+    scanned = [{"condition_id": "0xinning5"}]
+
+    # Act
+    merged, stats = fm.merge_live_event_markets(
+        scanned, _FakeSession([_MLB_INNING_EVENT]))
+
+    # Assert
+    row = merged[0]
+    assert row["lane"] == "live"
+    assert row["_event_live"] is True
+    assert row["_sport"] == "mlb"
+    assert row["sports_market_type"] == "baseball_team_inning5_winner"
+    # The lane grants nothing: no admission flag leaks in.
+    assert "_live_event" not in row
+    assert "volatility_exempt" not in row
+    assert stats["live_rows_declared_only"] == 1
+    assert stats["live_rows_merged"] == 0
+
+
+def test_a_sub_floor_live_market_is_declared_but_never_admitted():
+    # Arrange: the live volume bar is a DISCOVERY bar -- a market under it is
+    # not fetched at all. It is still in a match being played right now.
+    quiet = dict(_NHL_EVENT["markets"][0], volume24hr=12.0)
+    event = dict(_NHL_EVENT, id="7009", markets=[quiet])
+
+    # Act
+    merged, stats = fm.merge_live_event_markets(
+        [{"condition_id": "0xnhlmain"}], _FakeSession([event]))
+
+    # Assert
+    row = merged[0]
+    assert stats["live_below_bar"] == 1
+    assert row["lane"] == "live"
+    assert "_live_event" not in row
+    assert stats["live_rows_declared_only"] == 1
 
 
 # --- the evidence on the funnel row ----------------------------------------

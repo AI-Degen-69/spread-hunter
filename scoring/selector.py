@@ -185,6 +185,34 @@ def is_sports_or_esports(
     return False
 
 
+# Every row field that IS a venue live declaration, in the shapes the ranker has
+# written. `_event_live`/`_live_event`/`volatility_exempt` are what a
+# pre-#744 `markets.json` carries, so reading them keeps a stale artifact
+# classifiable instead of reporting the live lane as empty (#744).
+_LIVE_FLAGS = ("_event_live", "event_live", "_live_event", "live_event",
+               "volatility_exempt")
+
+
+def market_lane(row: Mapping) -> str:
+    """Which display lane a row belongs in: ``"live"`` or ``"regular"`` (#744).
+
+    DISPLAY AND ACCOUNTING ONLY. No gate, floor, volume bar, exemption, horizon
+    or ranking call may read this: the lane is decided once per cycle from the
+    venue's live declaration and carries no admission power. The ranker's
+    `lane` stamp wins over any flag, so a row that has left the live set is not
+    kept live by a stale flag -- and a row stamped this cycle is never
+    re-guessed here.
+    """
+    if not isinstance(row, Mapping):
+        return "regular"
+    stamped = row.get("lane")
+    if stamped in ("live", "regular"):
+        return stamped
+    if any(row.get(flag) is True for flag in _LIVE_FLAGS):
+        return "live"
+    return "regular"
+
+
 def top_depth_usd(levels: Mapping[float, float] | Iterable[tuple[float, float]],
                   count: int = 3) -> float:
     """Notional depth in the best ``count`` bid levels.
