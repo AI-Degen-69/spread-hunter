@@ -281,7 +281,7 @@ change. RED→GREEN: at-floor shadow exit ⇒ `fill_source="simulated"`,
 `submitted_floor=floor`; refusal paths write the row and keep the identical
 `action="error"` result.
 
-### T4 — [Backend/Logic] The pure aggregate [ ]
+### T4 — [Backend/Logic] The pure aggregate [x]
 **Size M. Depends on: T1. Verify: `python -m pytest -q tests/test_stop_slippage.py -k summary`**
 
 Files: `core_brain/statistical_analytics.py` — `stop_slippage_summary` +

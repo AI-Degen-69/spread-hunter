@@ -772,6 +772,126 @@ def rescue_friction_summary(closes: Sequence[Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Stop-exit slippage (#730) -- what a hard stop's sale cost per share, read off
+# the close record the exit already writes. No venue call, no new order path.
+# ---------------------------------------------------------------------------
+
+# The floor is `best_bid - MAX_SELL_SLIPPAGE`, and the difference from it is
+# computed in float. A value within this tolerance IS the floor: a fill at the
+# floor must read 0.00, never "-0.00" or a 1e-12 leak.
+STOP_SLIPPAGE_ZERO_TOL = 1e-9
+
+# Labels that mean a human/venue observation: the venue stated the fill, or
+# the rehearsal's ladder walk actually took the shares.
+MEASURED_FILL_SOURCES = frozenset({"reported", "simulated"})
+
+
+def _stop_fill_price(close: Any) -> Optional[float]:
+    """The sold-side price the close wrote, or None when the side is ambiguous.
+
+    An exit close sets exactly one of `up_price` / `dn_price`; both set (or
+    neither) means this row cannot say which leg sold, so it measures nothing.
+    """
+    up = _finite(_close_field(close, "up_price"))
+    dn = _finite(_close_field(close, "dn_price"))
+    if (up is None) == (dn is None):
+        return None
+    return up if up is not None else dn
+
+
+def stop_slippage_summary(closes: Sequence[Any],
+                          refusals: Optional[Sequence[Any]] = None,
+                          ) -> dict[str, Any]:
+    """Mean and worst per-share cost of a hard-stop exit, plus what it could not see.
+
+    Always present, like `rescue_friction` and `queue_realism`, because the
+    caller must never branch on whether a reading exists. Three states stay
+    distinct: a fill at the floor is a real `0.0`; a fill below it is a cost;
+    an exit nobody observed filling (assumed fallback, zero size, an old row
+    with no floor) is *unmeasured* -- never zero, never folded into the mean.
+
+    Costs are `reference - achieved`: positive means we got less than the
+    reference. A negative cost is kept -- a fill better than the floor is real
+    information, not an error.
+
+    Each close is one observation (no share weighting): two partial exits of
+    4 and 6 shares are two readings, not one weighted by size.
+    """
+    # Function-level import: `shadow_exec` pulls the registry/trader chain for
+    # its client, and this module is imported by `kpi` for pure arithmetic.
+    from core_brain.shadow_exec import HARD_STOP_SELL_REASONS
+
+    stop_closes = [c for c in (closes or [])
+                   if str(_close_field(c, "reason") or "") in HARD_STOP_SELL_REASONS]
+
+    costs_floor: list[float] = []
+    costs_decision: list[float] = []
+    historical = 0
+    assumed_fill = 0
+    below_floor = 0
+    simulated = 0
+
+    for close in stop_closes:
+        floor = _finite(_close_field(close, "submitted_floor"))
+        source = _close_field(close, "fill_source")
+        fill = _stop_fill_price(close)
+        shares = _finite(_close_field(close, "shares"))
+        if floor is None or source is None:
+            historical += 1
+            continue
+        if (str(source) not in MEASURED_FILL_SOURCES or fill is None
+                or shares is None or shares <= 0):
+            assumed_fill += 1
+            continue
+
+        cost = floor - fill
+        if abs(cost) <= STOP_SLIPPAGE_ZERO_TOL:
+            cost = 0.0
+        costs_floor.append(cost)
+        if cost > STOP_SLIPPAGE_ZERO_TOL:
+            below_floor += 1
+
+        trigger = _finite(_close_field(close, "trigger_bid"))
+        if trigger is not None:
+            decision_cost = trigger - fill
+            if abs(decision_cost) <= STOP_SLIPPAGE_ZERO_TOL:
+                decision_cost = 0.0
+            costs_decision.append(decision_cost)
+
+        if str(source) == "simulated":
+            simulated += 1
+
+    refusal_rows = list(refusals or [])
+    refused_positions = {
+        str(_close_field(row, "pair_id"))
+        for row in refusal_rows
+        if _close_field(row, "pair_id") is not None
+    }
+
+    return {
+        "stop_exit_count": len(stop_closes),
+        "measured_count": len(costs_floor),
+        "unmeasured_count": historical + assumed_fill,
+        # Why a row measured nothing, so the card can say it without guessing.
+        "unmeasured_reasons": {"historical": historical,
+                               "assumed_fill": assumed_fill},
+        "below_floor_count": below_floor,
+        "mean_vs_floor": (sum(costs_floor) / len(costs_floor)
+                          if costs_floor else None),
+        "worst_vs_floor": max(costs_floor) if costs_floor else None,
+        "decision_measured_count": len(costs_decision),
+        "mean_vs_decision": (sum(costs_decision) / len(costs_decision)
+                             if costs_decision else None),
+        "worst_vs_decision": max(costs_decision) if costs_decision else None,
+        # Distinct positions, not polls: a refused exit retries every cycle.
+        "refused_position_count": len(refused_positions),
+        "refused_attempt_count": len(refusal_rows),
+        "simulated_count": simulated,
+        "units": "usd_per_share",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Queue realism (#515) -- read off the tape that credited a fill, in cents and seconds.
 # ---------------------------------------------------------------------------
 
@@ -2085,7 +2205,8 @@ def monte_carlo(returns_usd: Sequence[float], starting_capital: float,
 def build(closes: Sequence[dict], fills: Sequence[dict],
           markouts: Sequence[dict], starting_capital: float,
           quotes: Optional[Sequence[Any]] = None,
-          equity_curve: Optional[Sequence[Any]] = None) -> dict[str, Any]:
+          equity_curve: Optional[Sequence[Any]] = None,
+          refusals: Optional[Sequence[Any]] = None) -> dict[str, Any]:
     """The whole `statistical_analytics` payload the analytics tab reads.
 
     The charts come and go with their input; `fill_path_edge`, `rescue_friction`,
@@ -2102,6 +2223,10 @@ def build(closes: Sequence[dict], fills: Sequence[dict],
     curve this call cannot assemble (realised closes stacked with the venue's own float marks), so a
     caller without one gets every drawdown figure `None` rather than a curve invented from the
     closes it happens to hold. `kpi.report` supplies the venue account-value curve it already emits.
+
+    `refusals` is optional and additive too: a refused hard-stop exit writes no close, so the
+    stop-slippage section counts those attempts from the registry's append-only refusal rows. A
+    caller without them gets zero refusals, never a missing section.
     """
     returns = position_returns(closes)
     records = cleared_fills(quotes or [], fills)
@@ -2111,6 +2236,7 @@ def build(closes: Sequence[dict], fills: Sequence[dict],
         "pair_costs": pair_costs(closes),
         "fill_path_edge": fill_path_edge(closes),
         "rescue_friction": rescue_friction_summary(closes),
+        "stop_slippage": stop_slippage_summary(closes, refusals),
         "queue_realism": {
             "cleared_fill_count": len(records),
             "trade_through_depth": trade_through_depth(records),

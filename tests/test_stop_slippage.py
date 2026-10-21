@@ -262,3 +262,117 @@ def test_an_errored_hard_stop_is_recorded_as_error(tmp_path, monkeypatch):
     rows = reg.get_hard_stop_refusals()
     assert [r["outcome"] for r in rows] == ["error"]
     assert "venue connection lost" in rows[0]["detail"]
+
+
+def _close(**kw):
+    row = {
+        "reason": "lifecycle_hard_stop", "method": "single_buy_exit",
+        "shares": 5.0, "up_price": None, "dn_price": 0.13,
+        "submitted_floor": 0.13, "fill_source": "reported",
+        "trigger_bid": 0.15, "run_id": "run-1",
+    }
+    row.update(kw)
+    return row
+
+
+def _summary(*closes, refusals=None):
+    from core_brain.statistical_analytics import stop_slippage_summary
+    return stop_slippage_summary(list(closes), refusals)
+
+
+def test_summary_a_fill_at_the_floor_is_zero_not_unknown():
+    out = _summary(_close())
+
+    assert out["measured_count"] == 1
+    assert out["mean_vs_floor"] is not None
+    assert out["mean_vs_floor"] == 0.0
+    assert out["worst_vs_floor"] == 0.0
+    assert out["below_floor_count"] == 0
+
+
+def test_summary_a_fill_below_the_floor_sets_worst_and_count():
+    out = _summary(_close(submitted_floor=0.15))
+
+    assert out["below_floor_count"] == 1
+    assert out["mean_vs_floor"] == pytest.approx(0.02)
+    assert out["worst_vs_floor"] == pytest.approx(0.02)
+
+
+def test_summary_measures_the_decision_bid_separately():
+    out = _summary(_close(trigger_bid=0.16, submitted_floor=0.13))
+    assert out["decision_measured_count"] == 1
+    assert out["mean_vs_decision"] == pytest.approx(0.03)
+
+    out = _summary(_close(trigger_bid=None))
+    assert out["decision_measured_count"] == 0
+    assert out["mean_vs_decision"] is None
+    assert out["worst_vs_decision"] is None
+
+
+def test_summary_never_zeroes_an_unmeasured_exit():
+    out = _summary(
+        _close(fill_source="assumed"),
+        _close(shares=0.0),
+        _close(up_price=0.13, dn_price=0.13),  # ambiguous sold side
+        _close(submitted_floor=None),
+        _close(fill_source=None),
+    )
+
+    assert out["measured_count"] == 0
+    assert out["unmeasured_count"] == 5
+    assert out["unmeasured_reasons"]["historical"] == 2
+    assert out["unmeasured_reasons"]["assumed_fill"] == 3
+    assert out["mean_vs_floor"] is None
+    assert out["worst_vs_floor"] is None
+
+
+def test_summary_keeps_a_better_than_floor_fill_negative():
+    out = _summary(_close(dn_price=0.15))
+
+    assert out["worst_vs_floor"] == pytest.approx(-0.02)
+    assert out["below_floor_count"] == 0
+
+
+def test_summary_treats_each_partial_close_as_one_observation():
+    out = _summary(_close(submitted_floor=0.14), _close(submitted_floor=0.16))
+
+    assert out["measured_count"] == 2
+    assert out["mean_vs_floor"] == pytest.approx(0.02)
+    assert out["worst_vs_floor"] == pytest.approx(0.03)
+
+
+def test_summary_snaps_float_noise_at_the_floor_to_zero():
+    out = _summary(_close(dn_price=0.13 + 1e-12))
+
+    assert out["mean_vs_floor"] == 0.0
+
+
+def test_summary_empty_population_is_none_not_zero():
+    out = _summary(_close(reason="aged_out_rescue"))
+
+    assert out["stop_exit_count"] == 0
+    assert out["measured_count"] == 0
+    for key in ("mean_vs_floor", "worst_vs_floor",
+                "mean_vs_decision", "worst_vs_decision"):
+        assert out[key] is None
+
+
+def test_summary_counts_refused_positions_not_polls():
+    out = _summary(_close(), refusals=[
+        {"pair_id": "p1", "outcome": "refused"},
+        {"pair_id": "p1", "outcome": "refused"},
+        {"pair_id": "p2", "outcome": "error"},
+    ])
+
+    assert out["refused_position_count"] == 2
+    assert out["refused_attempt_count"] == 3
+
+
+def test_summary_serialises_strictly_and_counts_simulated():
+    import json
+
+    out = _summary(_close(fill_source="simulated", submitted_floor=0.15))
+
+    assert out["simulated_count"] == 1
+    assert out["units"] == "usd_per_share"
+    json.dumps(out, allow_nan=False)
