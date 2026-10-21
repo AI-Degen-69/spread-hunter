@@ -44,6 +44,10 @@ one's description in the cockpit says so.
 Two notes the arms themselves carry, stated here rather than hidden:
 
 - **Arm 9 changes one variable and two behaviours.** The single-leg stop is off by default;
+  switching the mode on also brings the shipped `0.05` adverse-drop threshold into play.
+- **Arm 7 can quote TIGHTER, not wider, in a losing market.** `offset_for` returns the 3.5¢
+  widen offset once a market is flagged WIDENED, and 3.5¢ is tighter than the dynamic offset
+  can run. That is the lever, not a bug.
 
 ## Deviation from the plan (Station III, operator-approved 2026-10-21)
 
@@ -77,6 +81,13 @@ python -m scripts.shadow_tournament --issue 487 --arms-file configs/tournaments/
 ```
 
 One 720-minute (12-hour) window, ten arms, shadow only — no signer, nothing reaches the venue.
+
+**The issue's own code gate, as it stands today.** Its blocking comment named the order
+#708 → #686 → #687 → #646 → #659 → #471. All five code tickets are **closed** (the four table
+rows on 2026-10-20, which is why the arms above can be read off today's vocabulary at all).
+**#471 is still open** — it collects ≥60 live closes for the statistical GO gate, so it gates
+the *verdict* this run feeds, not the preparation or the launch. The `🚧 Blocked` label on the
+issue is stale; removing it is the operator's call.
 
 Artifacts:
 
@@ -121,8 +132,3 @@ decision.
    8801–8810 with ten distinct `data/487_tournament_...` stores and run ids, names
    `runtime/tournaments/487_current_setup_10arm.json` as the record, and **starts nothing** —
    no dashboard, no arm, no signer.
-
-  switching the mode on also brings the shipped `0.05` adverse-drop threshold into play.
-- **Arm 7 can quote TIGHTER, not wider, in a losing market.** `offset_for` returns the 3.5¢
-  widen offset once a market is flagged WIDENED, and 3.5¢ is tighter than the dynamic offset
-  can run. That is the lever, not a bug.
