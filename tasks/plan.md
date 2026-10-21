@@ -147,7 +147,7 @@ Verification: T2 goes GREEN.
 ### ▶ Checkpoint 1 — the spec exists and validates
 Report: the ten arm/env rows and the dry-run port/DB/run-id assignment. Nothing else.
 
-### T4 — [ ] Rewrite the cockpit's `#487` arm table  `[Code]` `S`
+### T4 — [x] Rewrite the cockpit's `#487` arm table  `[Code]` `S`
 Files: `scripts/tournament_cockpit_server.py` (`ARMS_CONFIG_487`, currently :187–:329)
 Built: ten entries named exactly as T3's arms, port 8801–8810, a colour and a label each,
 `db`/`run_id` as the post-launch placeholders in the legacy scheme, `desc` stating what the
@@ -157,7 +157,7 @@ forensic run to fill them and inventing numbers is the failure this issue remove
 Depends on: T1 | Skill: `incremental-implementation`
 Verification: module imports; the ten entries match T3's arm names one for one.
 
-### T5 — [ ] Point the cockpit's `#487` round at the current-setup run  `[Code]` `S`
+### T5 — [x] Point the cockpit's `#487` round at the current-setup run  `[Code]` `S`
 Files: `scripts/tournament_cockpit_server.py` (`TOURNAMENTS["487"]` at :670 and the `487`
 branch of `resolve_tournament_arms` at :691)
 Built: `TOURNAMENTS["487"]` title/subtitle/description/badge describing the current-setup
@@ -168,7 +168,7 @@ Depends on: T4 | Skill: `incremental-implementation`
 Verification: `resolve_tournament_arms("487")` returns the ten new arms; `"492"` and `"608"`
 resolution is byte-identical to before.
 
-### T6 — [ ] Test the cockpit side  `[Code]` `S`
+### T6 — [x] Test the cockpit side  `[Code]` `S`
 Files: `tests/test_tournament_cockpit_arms.py` (new)
 Built: three assertions — `ARMS_CONFIG_487` holds ten arms whose names match the spec and
 whose `hypothesized_tweak` is non-empty; `resolve_tournament_arms("487")` reads a
@@ -182,7 +182,7 @@ Verification: lands RED against the old resolver, GREEN after T5.
 Report: start the cockpit, open `http://127.0.0.1:8800/487`, confirm ten rows with their
 hypotheses and `NO_DATA` metrics. One line.
 
-### T7 — [ ] Operator runbook  `[Docs]` `S`
+### T7 — [x] Operator runbook  `[Docs]` `S`
 Files: `docs/runs/2026-10-21-487-current-setup-tournament.md` (new; mirrors
 `docs/runs/2026-10-18-492-tournament-rerun.md`)
 Built: why this run exists (the #608 run predates the 2026-10-20 code), the ten-arm table
@@ -193,7 +193,7 @@ the run, and that no production winner may be chosen from modelled shadow result
 Depends on: T3, T4 | Skill: `documentation-and-adrs`
 Verification: the command in the runbook is the command validated in T9.
 
-### T8 — [ ] Refresh the superseded-premise comment  `[Code]` `XS`
+### T8 — [x] Refresh the superseded-premise comment  `[Code]` `XS`
 Files: `tests/test_shadow_tournament.py` (`I487_TWEAKS`, :981–:995)
 Built: the comment only. It currently reads "#487 hypothesises one changed catalyst per
 arm", which the 2026-10-21 reframe makes false; the values themselves stay as the guard that
@@ -201,7 +201,7 @@ keeps `#492` arms free of `#487` tweaks.
 Depends on: T3 | Skill: `incremental-implementation`
 Verification: `test_i492_arms_carry_no_487_catalyst_tweak` still passes unchanged.
 
-### T9 — [ ] Validate the plan end to end  `[Code]` `XS`
+### T9 — [x] Validate the plan end to end  `[Code]` `XS`
 Files: none — evidence only.
 Built: the dry run of the exact launch command, and the recorded output.
 Depends on: T3, T4, T5 | Skill: `verification-before-completion`
