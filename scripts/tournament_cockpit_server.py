@@ -2,7 +2,7 @@
 
 Interactive real-time visualization and statistical analysis cockpit for
 Spread Hunter multi-arm shadow tournaments (fresh Round 1: Issue #492;
-archive: #484/#485; held Round 2: #487).
+archive: #484/#485; current setup: #487).
 Computes risk, expectancy (EV), standard deviation, max drawdown,
 Monte Carlo projections, and Live Readiness Scoring.
 
@@ -185,146 +185,153 @@ ARMS_CONFIG_484 = [
 ]
 
 ARMS_CONFIG_487 = [
-    # Issue #487: 10 Tweaked Arms with Worst Parameter Catalyst Corrected
+    # Issue #487: the current-setup ten-arm tournament. One control running
+    # today's configuration untouched, plus nine arms that each move exactly one
+    # LIVE BOT_* setting. Worst-catalyst columns stay EMPTY: there is no
+    # forensic run behind this set, and inventing numbers is the failure this
+    # issue removes. Static db/run_id values are placeholders -- the launcher
+    # writes runtime/tournaments/487_current_setup_10arm.json at launch and
+    # resolve_tournament_arms() reads the real db/run_id/port from it. Before
+    # launch a missing store reports NO_DATA, which is the honest fresh state.
     {
         "issue": 487,
-        "name": "control-2",
-        "label": "Control (#2)",
+        "name": "control",
+        "label": "Control",
         "port": 8801,
-        "db": "data/i487_tournament_control-2.db",
-        "run_id": "i487_tournament_control-2",
+        "db": "data/487_tournament_01_control_current_setup_10arm.db",
+        "run_id": "shadow-487-t01-control-current_setup_10arm",
         "color": "#00e676",
-        "desc": "Control baseline with adverse noise stop relaxed to 6.0c (absorbs micro-volatility)",
-        "worst_catalyst": "stop_loss_trigger_usd_cents (4.5c static)",
-        "worst_catalyst_desc": "Baseline dumped 56 trades prematurely on 4.5c noise (-$15.16 haircut losses)",
-        "hypothesized_tweak": "stop_loss_trigger_usd_cents = 6.0",
-        "tweak_rationale": "Relaxed stop threshold to 6.0c to absorb noise and prevent premature panic exits while keeping adverse limit intact",
+        "desc": "Today's shipped configuration plus the operator's .env, untouched",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "none - the current setup",
+        "tweak_rationale": "The baseline every variation is measured against; this arm changes nothing on purpose",
     },
     {
         "issue": 487,
-        "name": "conservative-2",
-        "label": "Conservative (#2)",
+        "name": "offset-mult-025",
+        "label": "Offset Mult 0.25x",
         "port": 8802,
-        "db": "data/i487_tournament_conservative-2.db",
-        "run_id": "i487_tournament_conservative-2",
+        "db": "data/487_tournament_02_offset-mult-025_current_setup_10arm.db",
+        "run_id": "shadow-487-t02-offset-mult-025-current_setup_10arm",
         "color": "#00b0ff",
-        "desc": "Conservative profile with hair-trigger stop widened from 3.0c to standard 4.5c",
-        "worst_catalyst": "stop_loss_trigger_usd_cents (3.0c tight)",
-        "worst_catalyst_desc": "Hair-trigger 3c stop panic-sold 28 trades via aged_out_rescue (-$15.43, -$0.55/tr)",
-        "hypothesized_tweak": "stop_loss_trigger_usd_cents = 4.5",
-        "tweak_rationale": "Relaxed hair-trigger 3c stop to standard 4.5c so normal maker variance does not force emergency bailouts",
+        "desc": "Dynamic offset multiplier halved, 0.50x -> 0.25x (the preset aggressive value)",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "quote_spread_offset_multiplier = 0.25",
+        "tweak_rationale": "A lower multiplier tracks a quiet book more closely and rests nearer mid, which should raise merge volume",
     },
     {
         "issue": 487,
-        "name": "balanced-2",
-        "label": "Balanced (#2)",
+        "name": "offset-min-2c",
+        "label": "Offset Min 2c",
         "port": 8803,
-        "db": "data/i487_tournament_balanced-2.db",
-        "run_id": "i487_tournament_balanced-2",
+        "db": "data/487_tournament_03_offset-min-2c_current_setup_10arm.db",
+        "run_id": "shadow-487-t03-offset-min-2c-current_setup_10arm",
         "color": "#e040fb",
-        "desc": "Balanced profile with offset multiplier tightened from 0.50x to 0.25x (closer to mid)",
-        "worst_catalyst": "dynamic_offset_multiplier (0.50x / 2-4c)",
-        "worst_catalyst_desc": "No-man's land offset missed tight volume; lowest merge revenue in tournament (+$28.69)",
-        "hypothesized_tweak": "dynamic_offset_multiplier = 0.25x",
-        "tweak_rationale": "Tightened multiplier from 0.50x to 0.25x to sit closer to market mid and capture high-volume flow",
+        "desc": "Dynamic offset floor raised 1c -> 2c (the preset conservative value)",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "quote_spread_offset_min_cents = 2",
+        "tweak_rationale": "A 2c floor stops the offset collapsing onto mid in calm markets, where a 1c edge pays for nothing",
     },
     {
         "issue": 487,
-        "name": "aggressive-2",
-        "label": "Aggressive (#2)",
+        "name": "offset-max-3c",
+        "label": "Offset Max 3c",
         "port": 8804,
-        "db": "data/i487_tournament_aggressive-2.db",
-        "run_id": "i487_tournament_aggressive-2",
+        "db": "data/487_tournament_04_offset-max-3c_current_setup_10arm.db",
+        "run_id": "shadow-487-t04-offset-max-3c-current_setup_10arm",
         "color": "#ffd600",
-        "desc": "Aggressive tight offset with loose stop reigned in from 6.5c to standard 4.5c",
-        "worst_catalyst": "stop_loss_trigger_usd_cents (6.5c wide)",
-        "worst_catalyst_desc": "Wide 6.5c leash allowed adverse single buys to bleed deeper (-$0.32 avg loss per stop)",
-        "hypothesized_tweak": "stop_loss_trigger_usd_cents = 4.5",
-        "tweak_rationale": "Reigned in excessive 6.5c stop to standard 4.5c to cap catastrophic single-leg drawdown",
+        "desc": "Dynamic offset ceiling cut 20c -> 3c (the preset aggressive value)",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "quote_spread_offset_max_cents = 3",
+        "tweak_rationale": "A hard 3c ceiling stops the offset running away in volatile books and keeps both legs reachable before settlement",
     },
     {
         "issue": 487,
-        "name": "prudent-2",
-        "label": "Prudent (#2)",
+        "name": "offset-static",
+        "label": "Offset Static",
         "port": 8805,
-        "db": "data/i487_tournament_prudent-2.db",
-        "run_id": "i487_tournament_prudent-2",
+        "db": "data/487_tournament_05_offset-static_current_setup_10arm.db",
+        "run_id": "shadow-487-t05-offset-static-current_setup_10arm",
         "color": "#ff6d00",
-        "desc": "Prudent profile with offset multiplier narrowed from 0.60x to 0.30x (2nd leg reachable)",
-        "worst_catalyst": "dynamic_offset_multiplier (0.60x / 2-4c)",
-        "worst_catalyst_desc": "Wide resting distance caused asymmetric fills; leg 2 failed to fill before settlement (-$15.28)",
-        "hypothesized_tweak": "dynamic_offset_multiplier = 0.30x",
-        "tweak_rationale": "Narrowed offset multiplier from 0.60x to 0.30x so leg 2 remains reachable before game close",
+        "desc": "Dynamic offset switched off: the shipped 2c static offset quotes instead",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "quote_gate_dynamic_offset_on = 0",
+        "tweak_rationale": "A fixed 2c offset should beat volatility tracking if the dynamic offset is mostly noise",
     },
     {
         "issue": 487,
-        "name": "stickhold-2",
-        "label": "Stick-Hold (#2)",
+        "name": "deadband-6c",
+        "label": "Deadband 6c",
         "port": 8806,
-        "db": "data/i487_tournament_stickhold-2.db",
-        "run_id": "i487_tournament_stickhold-2",
+        "db": "data/487_tournament_06_deadband-6c_current_setup_10arm.db",
+        "run_id": "shadow-487-t06-deadband-6c-current_setup_10arm",
         "color": "#69f0ae",
-        "desc": "Stick-Hold with queue hold activated at 500 shares (prevents churn demotions)",
-        "worst_catalyst": "requote_hold_queue_shares (0 / no hold)",
-        "worst_catalyst_desc": "Zero queue hold surrendered priority on every tick; forced 57 single-buy exits (-$20.56)",
-        "hypothesized_tweak": "requote_hold_queue_shares = 500",
-        "tweak_rationale": "Enabled 500 share queue hold to defend priority against micro-price flicker and avoid queue demotions",
+        "desc": "Requote dead band widened 0.03 -> 0.06 (the preset hybrid value)",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "order_requote_dead_band_cents = 0.06",
+        "tweak_rationale": "A wider dead band should stop small price jitter from churning orders to the back of the queue",
     },
     {
         "issue": 487,
-        "name": "queuehug-2",
-        "label": "Queue-Hug (#2)",
+        "name": "widen-on",
+        "label": "Widen Gate On",
         "port": 8807,
-        "db": "data/i487_tournament_queuehug-2.db",
-        "run_id": "i487_tournament_queuehug-2",
+        "db": "data/487_tournament_07_widen-on_current_setup_10arm.db",
+        "run_id": "shadow-487-t07-widen-on-current_setup_10arm",
         "color": "#ff5252",
-        "desc": "Queue-Hug with hold below target capped at 8¢ (drops toxic collapsing books)",
-        "worst_catalyst": "requote_hold_below_target (1.0 / unconstrained)",
-        "worst_catalyst_desc": "Held bids while market collapsed to zero, eating toxic fills into settlement (-$31.65)",
-        "hypothesized_tweak": "requote_hold_below_target = 0.08",
-        "tweak_rationale": "Constrained drop tolerance to 8c so collapsing books trigger immediate bid cancellations instead of toxic fills",
+        "desc": "WIDENED-gate snap-back switched on: a market flagged WIDENED quotes the 3.5c widen offset instead of the raw dynamic offset. No preset ships a different value for this knob, so the arm is not preset-sourced.",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "quote_gate_widen_on = 1",
+        "tweak_rationale": "Tests whether the WIDENED-gate snap-back helps or hurts: it can quote TIGHTER than the raw dynamic offset in exactly the markets that are losing",
     },
     {
         "issue": 487,
-        "name": "deadband-tight-2",
-        "label": "Deadband-Tight (#2)",
+        "name": "price-risk-030",
+        "label": "Price Risk 3c",
         "port": 8808,
-        "db": "data/i487_tournament_deadband-tight-2.db",
-        "run_id": "i487_tournament_deadband-tight-2",
+        "db": "data/487_tournament_08_price-risk-030_current_setup_10arm.db",
+        "run_id": "shadow-487-t08-price-risk-030-current_setup_10arm",
         "color": "#ff4081",
-        "desc": "Deadband arm with requote threshold widened from 1¢ to 5¢ (eliminates queue resets)",
-        "worst_catalyst": "requote_dead_band (0.01 / 1c strict)",
-        "worst_catalyst_desc": "1c tick flutter churned hedging orders to back of queue; leg 2 never filled (-$38.03 settlement)",
-        "hypothesized_tweak": "requote_dead_band = 0.05",
-        "tweak_rationale": "Widened deadband to 5c to prevent 1c jitter from resetting queue rank on complementary hedge legs",
+        "desc": "Price-risk offset weight tripled, 0.010 -> 0.030: every resting quote sits up to ~3c deeper under mid. No preset ships this setting, so the arm is not preset-sourced.",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "quote_price_risk_widen = 0.030",
+        "tweak_rationale": "Demanding more offset where a share costs more should price a naked leg's downside properly; it deepens every quote, not just the risky ones",
     },
     {
         "issue": 487,
-        "name": "deadband-wide-2",
-        "label": "Deadband-Wide (#2)",
+        "name": "stop-adverse-5c",
+        "label": "Stop Adverse 5c",
         "port": 8809,
-        "db": "data/i487_tournament_deadband-wide-2.db",
-        "run_id": "i487_tournament_deadband-wide-2",
-        "color": "#76ff03",
-        "desc": "Wide 6¢ deadband queue defense paired with tighter 0.25x offset multiplier for more merges",
-        "worst_catalyst": "dynamic_offset_multiplier (0.50x / 2-4c)",
-        "worst_catalyst_desc": "Inherited 0.50x offset backed off on volatility, capping merges to +$35.14 vs control's +$39.91",
-        "hypothesized_tweak": "dynamic_offset_multiplier = 0.25x",
-        "tweak_rationale": "Lowered multiplier to 0.25x so wide-deadband stability pairs with tighter maker pricing to boost merges",
+        "db": "data/487_tournament_09_stop-adverse-5c_current_setup_10arm.db",
+        "run_id": "shadow-487-t09-stop-adverse-5c-current_setup_10arm",
+        "color": "#b388ff",
+        "desc": "Single-leg stop switched on, NONE -> ABSOLUTE_DROP, with the shipped 0.05 adverse-drop threshold travelling with the mode: one variable, two behaviours. No preset ships this setting, so the arm is not preset-sourced.",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "risk_stop_mode = ABSOLUTE_DROP",
+        "tweak_rationale": "An entry-relative stop should cap single-leg losses instead of letting a naked leg run to settlement",
     },
     {
         "issue": 487,
-        "name": "snapstop-2",
-        "label": "Snap-Stop (#2)",
+        "name": "book-window-4c",
+        "label": "Book Window 4c",
         "port": 8810,
-        "db": "data/i487_tournament_snapstop-2.db",
-        "run_id": "i487_tournament_snapstop-2",
-        "color": "#b388ff",
-        "desc": "Snap-Stop with maker patience restored to 45 seconds (allows organic pairing)",
-        "worst_catalyst": "single_buy_grace_sec (0s / zero patience)",
-        "worst_catalyst_desc": "0s grace gave leg 2 zero time as maker; rushed taker hedge failed, wiping out -$14.82 at settlement",
-        "hypothesized_tweak": "single_buy_grace_sec = 45s",
-        "tweak_rationale": "Provided 45s of maker patience so leg 2 can fill organically before triggering forced market cross",
+        "db": "data/487_tournament_10_book-window-4c_current_setup_10arm.db",
+        "run_id": "shadow-487-t10-book-window-4c-current_setup_10arm",
+        "color": "#18ffff",
+        "desc": "Per-market quoting window tightened 15c -> 4c. The one arm that changes which markets get quoted at all. The baseline preset ships 15c, the current setup's own value, so the arm is not preset-sourced.",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "quote_book_max_spread_from_mid = 4",
+        "tweak_rationale": "A narrower window refuses the wide, unreadable books and keeps quoting only the tightest ones",
     },
 ]
 
@@ -634,7 +641,7 @@ TOURNAMENTS = {
         "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | Original 10 arms, byte-identical env, no #487 tweaks",
         "badge": "R1 FRESH",
         "badge_cls": "badge-amber",
-        "description": "Fresh Round 1 baseline on fixed code. Catalyst columns stay empty until this run reports; Round 2 (#487) is held until then.",
+        "description": "Fresh Round 1 baseline on fixed code. Catalyst columns stay empty until this run reports; the current-setup tournament (#487) is a separate, later run.",
         "arms": ARMS_CONFIG_492,
         "page_url": "/",
         "static_filename": "tournament_cockpit_492.html",
@@ -669,11 +676,11 @@ TOURNAMENTS = {
     },
     "487": {
         "id": "487",
-        "title": "Issue #487 Tweaked Catalyst Tournament",
-        "subtitle": "12-Hour Multi-Arm Shadow Evaluation | Single Worst-Parameter Catalyst Tweaked Independently per Arm",
-        "badge": "ROUND 2 TWEAKED",
+        "title": "Issue #487 Current-Setup Tournament",
+        "subtitle": "12-Hour Multi-Arm Shadow Evaluation | One control at today's settings + 9 arms varying a single live parameter",
+        "badge": "CURRENT SETUP",
         "badge_cls": "badge-green",
-        "description": "Isolated single-parameter improvements tested against baseline: each arm's worst catalyst improved while holding all other parameters fixed.",
+        "description": "The first ten-arm run on the post-2026-10-20 code: every arm starts from the configuration that ships today and changes exactly one live setting. Comparative reading happens after the 720-minute run; no arm carries a catalyst score yet.",
         "arms": ARMS_CONFIG_487,
         "page_url": "/487",
         "static_filename": "tournament_cockpit_487.html",
@@ -708,7 +715,16 @@ def resolve_tournament_arms(tourney_key: str = "492") -> list[dict[str, Any]]:
                 best = (int(m.group("run")), p)
         latest_plan = best[1] if best else None
     else:
-        pattern = re.compile(rf"{tourney_key}_\d{{8}}-\d{{6}}\.json$")
+        # #487's plan record carries a NAMED stamp (`487_current_setup_10arm.json`,
+        # written by `--stamp current_setup_10arm`) instead of the legacy
+        # `<issue>_<YYYYMMDD-HHMMSS>.json`. Both count as this key's record; nothing
+        # else matches. A leading digit sorts before a letter, so the named record
+        # is picked last -- which is what this key wants: the named record is THIS
+        # run, while a leftover timestamped record could only be the superseded
+        # catalyst round.
+        pattern = re.compile(
+            rf"{tourney_key}_(\d{{8}}-\d{{6}}|current_setup_10arm)\.json$"
+        )
         plan_files = sorted([p for p in tourn_dir.glob(f"{tourney_key}_*.json") if pattern.search(p.name)])
         latest_plan = plan_files[-1] if plan_files else None
     if latest_plan is None:
@@ -1419,6 +1435,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <div class="header-titles">
     <h1><span class="pulse-dot"></span> {initial_data.get('tourney_meta', {}).get('title', 'Spread Hunter — Tournament Cockpit')}</h1>
     <p>{initial_data.get('tourney_meta', {}).get('subtitle', '12-Hour Multi-Arm Live Shadow Evaluation')}</p>
+    <p style="color: var(--text-muted); font-size: 12px; line-height: 1.35; margin-top: 4px; max-width: 820px;">{initial_data.get('tourney_meta', {}).get('description', '')}</p>
   </div>
   <div class="header-controls">
     <div class="progress-card">
@@ -1785,7 +1802,9 @@ function renderAll() {{
     const pnlPrefix = arm.total_pnl >= 0 ? '+$' : '-$';
     const funnel = arm.funnel || {{}};
     tr.innerHTML = `
-      <td><strong>#${{idx+1}}</strong> <span style="color: ${{arm.color}}">●</span> <strong>${{arm.label}}</strong></td>
+      <td><strong>#${{idx+1}}</strong> <span style="color: ${{arm.color}}">●</span> <strong>${{arm.label}}</strong>
+        <div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px; max-width: 260px;">${{arm.desc || ''}}</div>
+      </td>
       <td class="tabular">${{(arm.sharpe_proxy ?? 0).toFixed(2)}}</td>
       <td class="tabular">${{(arm.profit_factor ?? 0).toFixed(2)}}</td>
       <td class="tabular">${{(arm.var_95 ?? 0).toFixed(4)}}</td>
@@ -2126,8 +2145,9 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        # Route 2: Tweaked Catalysts Round 2 (/487) -- HELD until R1 reports.
-        # Route stays alive; it is just unlinked from the nav meanwhile.
+        # Route 2: Issue #487's current-setup tournament (/487). Ten arms are
+        # listed with their hypothesis; every metric reads NO_DATA until the
+        # 720-minute run writes its record. It stays out of the nav until then.
         elif clean_path in ("/487", "/487.html", "/cockpit_487"):
             stats = get_cached_stats("487")
             html = generate_cockpit_html(stats)
@@ -2189,7 +2209,8 @@ def run_cockpit_server(port: int = 8800) -> None:
     out_file_484.write_text(static_484, encoding="utf-8")
     print(f"Static Cockpit (#484 archive) generated at: {out_file_484}")
 
-    # 3. Issue #487 is HELD until R1 reports -- no fresh static export.
+    # 3. Issue #487 is prepared but not started: no static export until its
+    #    720-minute run reports, because there is no data to export yet.
 
     # 4. Issue #608 character tournament snapshot.
     stats_608 = collect_all_stats("608")
@@ -2203,7 +2224,7 @@ def run_cockpit_server(port: int = 8800) -> None:
         allow_reuse_address = True
 
     server = ThreadedServer(("127.0.0.1", port), CockpitHandler)
-    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (pages: / [= #492 fresh], /608 [#608 characters], /484 [archive], /487 [held])")
+    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (pages: / [= #492 fresh], /608 [#608 characters], /484 [archive], /487 [current setup])")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

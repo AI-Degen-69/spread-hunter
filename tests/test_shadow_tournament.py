@@ -978,9 +978,11 @@ I492_RETIRED_KNOBS = {
     "HUNTER_REFUSAL_HOLD_DRIFT",
 }
 
-# #487 hypothesises one changed catalyst per arm. Each value below IS the tweak,
-# so its presence here would mean the rerun is no longer the baseline #487 is
-# compared against.
+# The SUPERSEDED #487 premise: one "worst catalyst" tweaked per arm, read from
+# the #484/#485 forensics. The 2026-10-21 reframe dropped that premise -- those
+# forensics described pre-2026-10-20 code, and the knobs it named were retired --
+# but the values stay. They are the one job this table still has: keeping a #492
+# baseline arm free of a #487-era tweak, so the rerun is still the baseline.
 I487_TWEAKS = {
     ("control", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"): "0.060",
     ("conservative", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"): "0.045",
@@ -1311,4 +1313,117 @@ def test_cockpit_hybrid_blueprint_tab_purged():
 
 
 
+
+
+# --- Issue #487: the current-setup ten-arm tournament ------------------------
+
+I487_ARMS = (
+    Path(__file__).resolve().parent.parent
+    / "configs" / "tournaments" / "i487_current_setup_10arm_arms.json"
+)
+
+# The plan's Decision 3 table, arm for arm. The control runs today's
+# configuration untouched (empty env); every other arm sets exactly one
+# canonical `BOT_*` variable. The names and values are pinned here rather than
+# derived, because the whole point of the run is that these ten differences --
+# and only these ten -- are measured.
+I487_ARM_ENV: dict[str, dict[str, str]] = {
+    "control": {},
+    "offset-mult-025": {"BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.25"},
+    "offset-min-2c": {"BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2"},
+    "offset-max-3c": {"BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3"},
+    "offset-static": {"BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0"},
+    "deadband-6c": {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.06"},
+    "widen-on": {"BOT_QUOTE_GATE_WIDEN_ON": "1"},
+    "price-risk-030": {"BOT_QUOTE_PRICE_RISK_WIDEN": "0.030"},
+    "stop-adverse-5c": {"BOT_RISK_STOP_MODE": "ABSOLUTE_DROP"},
+    "book-window-4c": {"BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID": "4"},
+}
+
+# The five arms whose value a #484 preset ships, and the preset key each one
+# reads. The assertion compares against `TOURNAMENT_PRESETS` itself, so a later
+# preset edit that moves a value breaks this test instead of letting the arm
+# drift away from the table it claims to be sourced from.
+#
+# Arms 7-10 are absent on purpose: no preset ships a *different* value for those
+# four knobs, so "fetched live from the presets" cannot apply to them. Their
+# honesty note lives in the arm's description in the cockpit config.
+I487_PRESET_SOURCED: dict[str, str] = {
+    "offset-mult-025": "bot_quote_spread_offset_multiplier",
+    "offset-min-2c": "bot_quote_spread_offset_min_cents",
+    "offset-max-3c": "bot_quote_spread_offset_max_cents",
+    "offset-static": "bot_quote_gate_dynamic_offset_on",
+    "deadband-6c": "bot_order_requote_dead_band_cents",
+}
+
+
+def _i487_arms() -> list[dict]:
+    return json.loads(I487_ARMS.read_text(encoding="utf-8"))
+
+
+def _i487_same_setting(env_token: str, preset_value: object) -> bool:
+    """A preset value and its `BOT_*` env spelling, compared as one setting.
+
+    Bools travel as "1"/"0"; numbers compare as numbers, so the file's "500"
+    and the preset's `500.0` are the same setting.
+    """
+    if isinstance(preset_value, bool):
+        return env_token == ("1" if preset_value else "0")
+    return float(env_token) == float(preset_value)
+
+
+def test_i487_arms_are_one_knob_variations_of_the_control():
+    from core_brain.config import TOURNAMENT_PRESETS
+    from scripts.shadow_tournament import ARM_NAME_PATTERN
+
+    arms = _i487_arms()
+    assert [a["name"] for a in arms] == list(I487_ARM_ENV)
+    assert arms[0]["env"] == {}, "the control arm must run today's setup untouched"
+    for arm in arms:
+        assert arm["env"] == I487_ARM_ENV[arm["name"]], arm["name"]
+
+    names = [a["name"] for a in arms]
+    assert len(set(names)) == 10
+    # `build_tournament_plan` appends BOT_QUOTE_TOURNAMENT_PRESET=<arm name>
+    # when the name is a preset key, turning a one-knob arm into a six-knob
+    # one. The spec must stay disjoint from the preset names.
+    collisions = sorted(set(names) & set(TOURNAMENT_PRESETS))
+    assert not collisions, f"arm names collide with presets: {collisions}"
+    for name in names:
+        assert ARM_NAME_PATTERN.match(name), name
+
+
+def test_i487_preset_sourced_values_come_from_the_live_preset_table():
+    from core_brain.config import TOURNAMENT_PRESETS
+
+    arms = {a["name"]: a for a in _i487_arms()}
+    for arm_name, preset_key in I487_PRESET_SOURCED.items():
+        env = arms[arm_name]["env"]
+        assert len(env) == 1, f"{arm_name} is not a one-knob arm: {sorted(env)}"
+        value = next(iter(env.values()))
+        shipped = {
+            preset[preset_key]
+            for preset in TOURNAMENT_PRESETS.values()
+            if preset_key in preset
+        }
+        assert shipped, f"no preset ships {preset_key}"
+        assert any(_i487_same_setting(value, candidate) for candidate in shipped), (
+            f"{arm_name} states {value!r}, which no preset ships for {preset_key}"
+        )
+
+
+def test_i487_plan_names_ten_fresh_stores_and_ports(tmp_path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    arms = _i487_arms()
+    plan = build_tournament_plan(
+        issue=487, arms=arms, base_dir=tmp_path, check_ports=False
+    )
+    assert [a.name for a in plan.arms] == list(I487_ARM_ENV)
+    assert [a.dash_port for a in plan.arms] == list(range(8801, 8811))
+    assert len({str(a.db_path) for a in plan.arms}) == 10
+    assert len({a.run_id for a in plan.arms}) == 10
+    for arm in plan.arms:
+        assert Path(arm.db_path).name.startswith("487_tournament_")
+        assert Path(arm.db_path).name != "orders.db"
 
