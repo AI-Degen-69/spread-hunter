@@ -696,6 +696,9 @@ PAGE_PATHS: dict[str, str] = {
     "/487.html": CURRENT_SETUP_KEY,
     "/cockpit_487": CURRENT_SETUP_KEY,
 }
+# The keys the JSON API may serve: the served pages' own tournaments, derived so
+# a new page cannot forget to widen this.
+SERVED_TOURNAMENT_KEYS = frozenset(PAGE_PATHS.values())
 
 
 def tourney_key_for_path(path: str) -> Optional[str]:
@@ -1218,11 +1221,6 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     background: rgba(0, 230, 118, 0.12);
     color: var(--green);
     border-color: rgba(0, 230, 118, 0.4);
-  }}
-  .tourney-pill.active-amber {{
-    background: rgba(255, 214, 0, 0.12);
-    color: var(--amber);
-    border-color: rgba(255, 214, 0, 0.4);
   }}
 
   /* Top Bar */
@@ -2157,7 +2155,7 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
             for param in query.split("&"):
                 if param.startswith("tourney="):
                     tourney = param.split("=")[1].strip()
-            if tourney_key_for_path(f"/{tourney}") is None:
+            if tourney not in SERVED_TOURNAMENT_KEYS:
                 tourney = CURRENT_SETUP_KEY
             stats = get_cached_stats(tourney)
             data = json.dumps(stats).encode("utf-8")

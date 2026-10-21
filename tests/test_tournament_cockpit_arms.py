@@ -216,13 +216,19 @@ def test_cockpit_serves_only_the_current_setup_page(monkeypatch):
 
 
 def test_stats_api_will_not_serve_a_purged_tournament(monkeypatch):
-    """`?tourney=608` falls back to the served page instead of its old data."""
+    """`?tourney=<retired or nonsense>` serves the page's own tournament.
+
+    An empty or repeated key must not reach the arm analysis with a key nothing
+    serves: the JSON echoes `tourney_key`, and the page's Refresh reads it back.
+    """
     _stub_stats(monkeypatch)
 
-    handler = _CockpitHandlerStub("/api/stats?tourney=608")
-    handler.do_GET()
-    assert handler.statuses == [200]
-    assert json.loads(handler.wfile.getvalue())["tourney_key"] == cockpit.CURRENT_SETUP_KEY
+    for query in ("tourney=608", "tourney=492", "tourney=484", "tourney=", "tourney=../487", ""):
+        handler = _CockpitHandlerStub(f"/api/stats?{query}")
+        handler.do_GET()
+        assert handler.statuses == [200], query
+        body = json.loads(handler.wfile.getvalue())
+        assert body["tourney_key"] == cockpit.CURRENT_SETUP_KEY, query
 
 
 def test_cockpit_html_links_to_no_purged_page():
