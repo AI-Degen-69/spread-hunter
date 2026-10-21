@@ -66,8 +66,12 @@ global.document = {
   createElement: () => stubElement('created'),
   addEventListener: noop,
   body: stubElement('body'),
+  // The kanban's window-scroll restore reads both of these; a stub without
+  // them threw on the first lane-scoped paint (#744). The real DOM always has
+  // them, so modelling them is stub completeness, not product tolerance.
+  documentElement: { scrollTop: 0 },
 };
-global.window = { addEventListener: noop, location: { href: '' } };
+global.window = { addEventListener: noop, location: { href: '' }, scrollY: 0 };
 global.localStorage = {
   getItem: (k) => (k in store ? store[k] : null),
   setItem: (k, v) => { store[k] = String(v); },
@@ -423,6 +427,32 @@ async function main() {
     seedReadoutSentinels();
     const remainingQueue = global.__runOneRaf();
     result = { readouts: readReadouts(), remainingQueue, consoleErrors: consoleErrorCount };
+  } else if (scenario === 'lane-numbers') {
+    // Issue #744: a venue-declared in-play match was screened, graduated and
+    // quoted as REGULAR while the live lane reported 0, because the lane was
+    // guessed from row flags the artifacts no longer carry. The row's own
+    // `lane` decides now, and every number inside a lane comes from that lane's
+    // funnel block. Fixture shape: the 2026-10-21 run (137 scored globally,
+    // 5 live candidates, one WTA main line).
+    global.__railMounted = true;
+    setTabs(false, false, false);
+    setRailPage('data-markets');
+    await app.pollStatus();
+    const capture = () => ({
+      board: el('kanban-board').innerHTML,
+      livePill: String(el('lane-count-live').textContent),
+      regularPill: String(el('lane-count-regular').textContent),
+      allPill: String(el('lane-count-all').textContent),
+      banner: el('kanban-lane-banner').innerHTML,
+    });
+    // Act — operator clicks each lane tab.
+    global.window.setKanbanLane('live');
+    const live = capture();
+    global.window.setKanbanLane('regular');
+    const regular = capture();
+    global.window.setKanbanLane('all');
+    const all = capture();
+    result = { live, regular, all };
   } else {
     throw new Error('unknown scenario: ' + scenario);
   }

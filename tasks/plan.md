@@ -249,7 +249,7 @@ Target files: `scripts/filter_markets.py:1264-1708`, `2434-2640`,
    (via `market_lane`), `event_live`, `event_period`, `event_score`,
    `volatility_exempt`. `market_feed.py` untouched.
 
-### T3 — [Design/UI] Dashboard: read the lane, number the lane
+### T3 — [Design/UI] Dashboard: read the lane, number the lane [x]
 **Size L. Depends on: T2. Verify: `python -m pytest -q tests/test_kanban_lanes.py tests/test_dashboard_server.py` (plus a `node` run of the new harness scenario)**
 
 Target files: `dashboard/static/app.js:9581-9658`, `9941-9970`, `9972-10229`;
