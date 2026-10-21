@@ -35,7 +35,7 @@
   - '/\b(blocked|blocked:code[- ]gate|code gate|code[- ]gate|waiting on|depends on)\b/i'
 
 "💡 Idea":
-  - '/\b(^idea:|raw idea|captured idea)\b/i'
+  - '/(^idea:|\braw idea\b|\bcaptured idea\b)/i'
 
 "🔄 Duplicate":
   - '/\b(duplicate|dupe|already exists)\b/i'

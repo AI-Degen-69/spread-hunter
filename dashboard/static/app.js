@@ -6125,7 +6125,9 @@ function renderAnalyticsSurface(kpi) {
 function paintAnalysisV2(kpi) {
   const host = document.getElementById('analysis-v2');
   if (!host) return;
-  if (typeof renderAnalysisV2 === 'function') renderAnalysisV2(host, kpi);
+  if (typeof renderAnalysisV2 === 'function') {
+    try { renderAnalysisV2(host, kpi); } catch (e) { console.error('Error rendering analysis-v2 page', e); }
+  }
   const stats = kpi?.statistical_analytics || {};
   try { renderPnlCiReadout(kpi?.trade_analytics || {}); } catch (e) { console.error('Error rendering PnL CI readout', e); }
   try { renderExecutionFunnel(kpi); } catch (e) { console.error('Error rendering execution funnel', e); }

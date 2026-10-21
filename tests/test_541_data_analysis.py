@@ -105,7 +105,8 @@ def test_shell_poll_feeds_analysis_v2():
     """Both paint call sites feed the cached snapshot to the page (#749 moved
     them behind one helper, so each site is one call)."""
     src = (STATIC / "app.js").read_text(encoding="utf-8")
-    assert src.count("paintAnalysisV2(") >= 2
+    call_sites = src.count("paintAnalysisV2(") - src.count("function paintAnalysisV2(")
+    assert call_sites == 2
     assert src.count("renderAnalysisV2(") == 1
     assert "renderDataAnalysis" not in src
     js = (STATIC / "prototype.js").read_text(encoding="utf-8")

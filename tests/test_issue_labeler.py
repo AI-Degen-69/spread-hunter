@@ -140,6 +140,19 @@ def test_a_docs_rule_does_not_fire_on_docker_or_doctype():
         assert rx.search(true_positive), f"{true_positive!r} should label documentation"
 
 
+def test_the_idea_rule_matches_a_titled_idea():
+    """"Idea: ..." ends an alternative on a colon, where a trailing \\b never holds."""
+    patterns = _patterns_for("idea")
+    assert len(patterns) == 1, "one pattern per label; several are ANDed by the action"
+    match = _PATTERN.match(patterns[0])
+    assert match
+    rx = re.compile(match.group(1), re.I)
+    for titled in ("Idea: improve the dashboard", "raw idea", "captured idea"):
+        assert rx.search(titled), f"{titled!r} should label an idea"
+    for false_positive in ("idealistic", "ideas are welcome"):
+        assert not rx.search(false_positive), f"{false_positive!r} is not an idea"
+
+
 def test_every_pattern_carries_its_case_insensitive_flag():
     """A bare string goes to `String.match` and matches case-sensitively."""
     for label, patterns in _rules().items():
