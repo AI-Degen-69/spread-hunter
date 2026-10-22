@@ -1,222 +1,371 @@
-# Plan — #753 Retire the dead hold-lever surface left behind by #387
+Branch: i474/fill-model-calibration-cli | Issue: #474
 
-Branch: `i753/retire-dead-hold-levers` | Issue: #753
+# Plan — Step 4: fill-model calibration (simulated vs observed fill-rate)
 
-**Tier: Standard** (~20 files, no schema change, no new behaviour — a deletion
-whose only decision is how far the dead surface reaches). **Type: Code**
-[Backend/Logic] + [UI] (operator-facing copy).
+**Issue:** [#474 — [VALIDATE] Step 4 - Fill-model calibration](https://github.com/AI-Degen-69/spread-hunter/issues/474)
+**Parent:** #470 (validation ladder) · **Blocked by:** #471 (needs ≥60 closes of live data)
+**Size:** Standard (2 files, one module, one architectural decision — a read-only text/JSON
+report over two SQLite stores) · **Task type:** Code
 
-## Intake note (CodeRabbit plan comment, read once — do not re-read)
+## What is being built, in one paragraph
 
-- **Adopted:** its four-phase shape, the `.env.example` cleanup, the launcher
-  rejection of the retired names, the arm-file cleanup, the neutral description of
-  `price_moved` / `regate_pair_cost`, `_hold_state()` deletion on the grounds that
-  it read the reporting process's config, and the new absence test file.
-- **Rejected:** (a) its instruction to delete the two #485 cockpit forensic cards
-  outright — they are the only record those runs happened; annotate the
-  hypothesized tweak instead. (b) its claim that `.env` loading must gain explicit
-  "ignore retired names" code — deleting the parsing is already sufficient, and a
-  list of retired names would be new dead code. (c) `test_config_single_source.py`
-  and `test_ui_276_explainer_tokens.py` as files needing changes — both grep clean
-  for the retired symbols; they are regression guards only.
-- **Resolved `[UNVERIFIED]` items** (checked against live code):
-  - *"`plan_orders` still accepts four unread parameters"* → **false count**: it
-    accepts **six** unread ones. `hedge_held` (line 219) and `visit_outcome`
-    (line 224) are equally unread; the docstring itself lists all seven survivors
-    and says `only dead_band and cfg.bot_quote_size_min_shares are read here`
-    (lines 271-274).
-  - *"The production call site never passes the hold arguments"* → **true**, and
-    it does pass the other four (`trader_loop.py:2143-2151`).
-  - *"`hedge_asks` and `queue_ahead` exist only to feed the retired holds"* →
-    **half false**: `queue_ahead` also feeds `cancel_queue_ahead` attribution
-    (`trader_loop.py:2286`); `hedge_asks`/`hedge_held` are planner-only and die.
-  - *"`visit_outcome` can be dropped from the call site"* → **false**:
-    `visit_outcome.value` is written to the registry by `_note_refusal_visit`
-    (line 2141). Compute it; stop passing it.
-  - *"`cfg` is dead"* (issue finding 1) → **false**: read for
-    `bot_quote_size_min_shares`. It stays.
-  - *"`configs/tournaments/*.json` carry `hold_queue_shares` keys"* → **false
-    naming**: the arm files set the *environment* names
-    (`BOT_ORDER_REQUOTE_HOLD_*`) inside `env`, never the field names.
+A read-only command, `python -m core_brain.fill_calibration --shadow-db <path> --live-db
+<path>`, that opens both SQLite files with `mode=ro`, takes one record per **resting maker
+bid**, buckets those records by price and by queue-ahead, and prints the shadow fill rate
+next to the live fill rate with a signed gap (`shadow − live`). Two rates per bucket: share
+fill fraction and order any-fill rate. Nothing is written, nothing is repaired, nothing
+reaches the venue.
 
-## Interface contract (locked)
+## Locked seams (verified against the working tree at plan time)
+
+| Seam | Location now | Use |
+| --- | --- | --- |
+| `orders` schema | `core_brain/order_registry.py` CREATE TABLE — `id, order_id, condition_id, token_id, side, price, original_size, status, posted_ts, last_polled_ts, pair_id, …, run_id` | cohort source |
+| `fills` schema | same file — `trade_id, order_uuid, size, price, venue_ts, recorded_ts, run_id` | numerator |
+| `quotes` schema | same file — `id INTEGER PRIMARY KEY AUTOINCREMENT, ts, …, queue_ahead, filled, local_id, run_id` | the "is a rest" test + queue value |
+| Join | `fills.order_uuid = orders.id = quotes.local_id` | confirmed in `kpi.py` and `shadow_exec.py:899` |
+| Read-only connect | `core_brain/run_scorer.py:128-131` — `f"file:{path.resolve().as_posix()}?mode=ro"`, `uri=True` | copy the pattern |
+| Status words | `core_brain/run_scorer.py:119,137` — `NO_DATA`, `UNREADABLE`; success word `OK` (`:315`) | copy the vocabulary |
+| Queue boundaries | `core_brain/kpi.py:1723` — `[(0,1),(1,50),(50,150),(150,400),(400,1e12)]`; labels built at `:1731` by `f"{lo:.0f}-{hi:.0f}"` / `f"{lo:.0f}+"` → `0-1 … 400+` | copy, do not import |
+| Test seed idiom | `tests/test_stat_validation_artifacts.py:314-327` — `OrderRegistry(db_path=tmp)`, `log_quote(QuoteRecord(...))`, `create_order(OrderRecord(...))`, `record_fill(FillRecord(...))` | fixtures |
+| Shadow fill model | `core_brain/shadow_fills.py:72` `credit_fills` | the model under calibration; **read, never change** |
+
+**Drift corrections (issue and CodeRabbit text, resolved):**
+
+1. The issue cites `shadow_fills.py:83` for `credit_fills`. The function is **defined at
+   line 72**; line 83 sits inside its docstring. Path and symbol were right, the line was stale.
+2. `shadow_taker_completions` exists (`core_brain/shadow_exec.py:175`) and marks completions
+   by `(pair_id, token_id)`, not by order. It is **not needed**: a completion BUY is created
+   through `create_order` (`shadow_exec.py:1519-1527`, OrderRecord at `:1519`, write at
+   `:1527`) with **no `log_quote` call** — only `record_fill` at `:1536` — so the
+   "BUY with a `quotes` row" cohort rule already excludes it, and the same rule reads
+   identically on the live side where no marker table exists. Symmetric, no special case.
+3. Live `queue_ahead` is empty in practice: in `data/orders.db` 0 of 14 quote rows carry a
+   value, and 0 of 15 orders have one. The live side therefore always lands in `unknown`.
+   That is a finding to print, not a defect to fix.
+4. **Deliberate divergence from `kpi.py`:** `kpi.py:1726` reads a missing queue as
+   `float(q.get("queue_ahead") or 0.0)`, i.e. NULL counts as queue 0. This report maps NULL
+   to the `unknown` bucket instead — a live quote with no queue reading has no queue reading,
+   and folding it into `0-1` would invent a fill rate at the best queue. The price buckets and
+   the queue *boundaries* are still identical to `kpi.py`; only the NULL handling differs.
+
+## Grounding against the real stores (read-only probes, plan time)
+
+Run before writing a line of the tool, so the cohort rule is evidence-based rather than
+plausible:
+
+| Store | Cohort orders | Fills | Partial | Overfill |
+| --- | --- | --- | --- | --- |
+| `i608_tournament-1_the-accountant-1.db` | 793 | 246 | 0 | 0 |
+| `…the-surgeon-1.db` | 779 | 241 | 0 | 0 |
+| `…the-strict-parent-1.db` | 762 | 253 | 0 | 0 |
+| `…the-gambler-1.db` | 760 | 262 | 0 | 0 |
+| `…the-metronome-1.db` | 758 | 256 | 0 | 0 |
+| `…the-chaperone-1.db` | 747 | 238 | 0 | 0 |
+| `…the-daydreamer-1.db` | 732 | 230 | 0 | 0 |
+| `…the-graceful-1.db` | 728 | 244 | 0 | 0 |
+| `…the-regular-1.db` | 715 | 231 | 0 | 0 |
+| `…the-patient-one-1.db` | 708 | 227 | 0 | 0 |
+
+Four conclusions that changed the plan:
+
+1. **The cohort rule is exactly right.** In `the-daydreamer`, 733 orders hold 732 quoted
+   rests; the one order with **no `quotes` row** is `status='filled'`, has a `pair_id`, one
+   fill of its full 5.0 shares, and `shadow_taker_completions` holds **exactly one** row.
+   That lone order *is* the taker completion buy, and the quote-row rule removes it without
+   ever reading the marker table. The marker join is unnecessary — confirmed empirically, not
+   by reading code.
+2. **The shadow fill model is binary.** 0 partials and 0 overfills in 7,382 cohort orders
+   across ten stores. So the two rate measures coincide on the shadow side; they diverge only
+   on live. Both stay in the report because the live side is where the distinction lives — and
+   the fixture keeps a synthetic partial so the summing path has coverage.
+3. **`stats_*.db` are not registries.** The three 130–148 MB `stats_21-10_*_shadow-01.db`
+   files contain a single `snapshots` table and no `orders`/`quotes`/`fills`. Pointing
+   `--shadow-db` at one must yield `UNREADABLE`, which is now a test case rather than a
+   surprise. The usable shadow registries are the `i608_tournament-1_*.db` files.
+4. **Queue data exists on the shadow side only.** All 793 quotes in `the-accountant` carry
+   `queue_ahead`; 0 of 14 in `data/orders.db` do. Queue rows will be real for shadow and
+   `insufficient` for live — a property of the data, printed rather than papered over.
+
+## One improvement proposal (Step 5) — adopted by default
+
+**The report must not repeat the issue's "pessimistic by construction" claim.**
+
+Evidence, verbatim. Issue #474: *"shadow_fills.credit_fills (core_brain/shadow_fills.py:83)
+fills a resting order only when real volume trades through it, and is pessimistic by
+construction."* The model's own docstring, `core_brain/shadow_fills.py:88-92`: *"a print
+strictly below our price is a trade-through. It proves our level was cleared … The lower
+print is evidence, not shared volume -- it is never consumed, so one print can fill every
+order resting above it."*
+
+One print below the bid fills **every** order resting above it, so the model can be
+optimistic as easily as pessimistic. Classification: **edge-case hardening / wording
+correction, not scope expansion** — adopted into the plan. Effect: the gap is signed and
+both directions are printed; the footer names the one-print-fills-all artefact instead of
+asserting pessimism. No line of `shadow_fills.py` changes.
+
+## CodeRabbit plan intake (read once, costed here)
+
+- **Adopted:** the read-only loader with `NO_DATA`/`UNREADABLE`; the cohort rule; two rate
+  measures plus the gap direction; the `kpi.py` queue boundaries and 0.10 price bands;
+  `--min-orders` guarding the gap; caps + `overfilled`; dual `--json`/text output and the
+  `1` exit code; most of its test list.
+- **Rejected:** (a) its PR-note wording that asks the operator to *expect exit code 1 on
+  failure* as a verify step — that is a fact to state, not an action to perform; (b) its
+  `test_completion_buy_does_not_change_shadow_rate` as a second mechanism — the cohort rule
+  already covers it, so it is one assertion inside the cohort test rather than extra code;
+  (c) its prompt block's "seed both databases through the real `OrderRegistry` write
+  methods" for anything other than a `tmp_path` fixture — `CONSTRAINTS.md` now forbids
+  pointing `OrderRegistry` at an input path.
+- **Stayed `[UNVERIFIED]` → resolved:** `shadow_fills.py:83` (→ 72), whether the completions
+  marker is needed (→ not needed), and whether live queue data exists (→ it does not).
+  Nothing remains unresolved.
+
+## Interface contract (frozen; Station III builds to this)
 
 ```python
-def plan_orders(
-    open_orders: list[dict], intents: list[QuoteIntent], price_eps: float = 1e-9, *,
-    dead_band: float = 0.0, cfg=None, reasons: Optional[dict] = None,
-    preserve_order_ids: Optional[set[str] | frozenset[str]] = None,
-    replace_order_ids: Optional[set[str] | frozenset[str]] = None,
-    cancel_order_ids: Optional[set[str] | frozenset[str]] = None,
-    lifecycle_pair_id: str | None = None,
-) -> tuple[list[dict], list[QuoteIntent]]
+# core_brain/fill_calibration.py — stdlib only, imports nothing from core_brain
+OK, NO_DATA, UNREADABLE = "OK", "NO_DATA", "UNREADABLE"
+INSUFFICIENT = "insufficient"
+SIGN_RULE = "positive gap = shadow fills more than live"
+PRICE_BUCKET_WIDTH = 0.10
+QUEUE_BUCKETS = ((0.0, 1.0), (1.0, 50.0), (50.0, 150.0), (150.0, 400.0), (400.0, math.inf))
+QUEUE_UNKNOWN = "unknown"
+DEFAULT_MIN_ORDERS = 10
+FILL_EPSILON = 1e-9
+
+@dataclass(frozen=True)
+class OrderSample:
+    local_id: str
+    price: float
+    posted_shares: float
+    queue_ahead: float | None
+    status: str
+    filled_shares: float          # capped at posted_shares
+    overfilled: bool
+    @property
+    def has_fill(self) -> bool: ...   # filled_shares > FILL_EPSILON
+
+@dataclass(frozen=True)
+class StoreLoad:
+    label: str                    # "shadow" | "live"
+    path: str
+    run_id: str | None
+    status: str                   # OK | NO_DATA | UNREADABLE
+    detail: str                   # "" for OK, else the reason / sqlite error text
+    samples: tuple[OrderSample, ...] = ()
+
+@dataclass(frozen=True)
+class BucketSummary:
+    bucket: str
+    orders: int
+    posted_shares: float
+    filled_shares: float
+    filled_orders: int
+    status_counts: dict[str, int]
+    share_fill_rate: float | None      # None when posted_shares == 0
+    order_fill_rate: float | None      # None when orders == 0
+
+@dataclass(frozen=True)
+class CalibrationRow:
+    dimension: str                # "overall" | "price" | "queue"
+    bucket: str
+    shadow: BucketSummary
+    live: BucketSummary
+    share_gap: float | None       # shadow - live; None when not measurable
+    order_gap: float | None
+    status: str                   # OK | INSUFFICIENT
+
+@dataclass(frozen=True)
+class CalibrationReport:
+    shadow: StoreLoad
+    live: StoreLoad
+    min_orders: int
+    overall: CalibrationRow
+    price_rows: tuple[CalibrationRow, ...]
+    queue_rows: tuple[CalibrationRow, ...]
+    sign_rule: str = SIGN_RULE
+    def to_dict(self) -> dict: ...
+
+def load_store(path: Path | str, *, run_id: str | None = None,
+               label: str = "shadow") -> StoreLoad
+def price_bucket(price: float) -> str                 # "0.40-0.50"
+def queue_bucket(queue_ahead: float | None) -> str    # "0-1" | ... | "400+" | "unknown"
+def summarize(samples: Sequence[OrderSample], bucket: str) -> BucketSummary
+def bucket_summaries(samples, key) -> dict[str, BucketSummary]
+def compare(shadow, live, *, min_orders: int
+            ) -> tuple[CalibrationRow, list[CalibrationRow], list[CalibrationRow]]
+def build_report(shadow: StoreLoad, live: StoreLoad, *, min_orders: int) -> CalibrationReport
+def render_text(report: CalibrationReport) -> str
+def main(argv: Sequence[str] | None = None) -> int
 ```
 
-- `MakerConfig`: the two `bot_order_requote_hold_*` fields, their `_bounded_float`
-  parsing and their bounds disappear. No replacement field, no deprecation shim.
-- `TOURNAMENT_PRESETS`: same six names, same non-hold keys, descriptions rewritten
-  to name only live distinguishing settings.
-- `scripts.shadow_tournament`: `_RETIRED_PRESET_KEYS` gains
-  `bot_order_requote_hold_queue_shares`, `bot_order_requote_hold_below_target_cents`;
-  a new retired-environment set
-  (`BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES`, `BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS`)
-  is rejected on the `arm["env"]` path with a message naming the setting and #387.
-- `core_brain.cancel_report`: `_hold_state()` removed; `format_report` keeps the
-  `{share:.0f}% of cancels were price moves` line and drops the two sentences
-  after it.
-- `dashboard/server.py`: two parameter cards removed; `/api/parameters` shape and
-  every other card unchanged.
-- `dashboard/static/strategy_explainer.html`: two `<tr>` rows removed, design
-  tokens untouched.
+**Locked query** (one per store, no per-order queries):
+
+```sql
+SELECT o.id AS local_id, o.price, o.original_size, o.status,
+       COALESCE(f.filled, 0.0) AS filled,
+       q.queue_ahead
+FROM orders o
+JOIN (SELECT local_id, MIN(id) AS first_id FROM quotes
+      WHERE local_id IS NOT NULL GROUP BY local_id) qf ON qf.local_id = o.id
+JOIN quotes q ON q.id = qf.first_id
+LEFT JOIN (SELECT order_uuid, SUM(size) AS filled FROM fills
+           GROUP BY order_uuid) f ON f.order_uuid = o.id
+WHERE o.side = 'BUY' AND o.original_size > 0 AND o.price > 0 AND o.price < 1
+  /* AND o.run_id = ?  — only when a run id is given */
+ORDER BY o.id
+```
+
+`MIN(id)` = first-logged quote row (lowest rowid); `quotes` declares
+`id INTEGER PRIMARY KEY AUTOINCREMENT`. `quotes.filled` is never selected.
 
 ## Dependency graph
 
 ```
-T1 (config surface) ──┬─→ T3 (operator surfaces: cards, explainer, cockpit)
-T2 (planner surface) ─┴─→ T4 (launcher + arm files + docs)
-                              T4 ──→ T5 (absence test file)
+T1 (loader)  ──►  T2 (buckets + gap math)  ──►  T3 (render + CLI)
 ```
 
-T1 and T2 are independent of each other (the planner never imports the fields) but
-land in the same PR; T3 depends on T1 because both surfaces read the deleted
-attributes. T5 asserts the end state and therefore comes last.
+Riskiest first: T1 owns the trust boundary (the read-only claim and the cohort rule), so a
+mistake there invalidates every number downstream.
 
 ## Tasks
 
-### T1 · [Backend/Logic] · S · Delete the config surface — ✅ done
-**Files:** `core_brain/config.py`, `.env.example`,
-`tests/test_dynamic_offset.py`, `tests/test_completable_pair_gate.py`
-**Depends on:** none
-**Build:** remove both `MakerConfig` fields (lines 197-198) and their parsing /
-bounds (lines ~375-383); remove both keys from all six presets (lines 526-581) and
-rewrite the four `… with queue hold` descriptions plus the hybrid description that
-advertises `queue stability`; drop the two variables, their unit notes from
-`.env.example` (lines 54-55). Update the tests that pin the preset values (155-199) and the
-`load()` bound tests (209-238) — the latter become "the retired variable is
-ignored", asserted in T5.
-**Verify:** `python -m pytest -q tests/test_dynamic_offset.py
-tests/test_completable_pair_gate.py tests/test_loose_baseline.py
-tests/test_screener_preset.py tests/test_config_single_source.py`
+### T1 — Read-only loader · size S · `[Backend/Logic]` · Depends on: —
+**Files:** `core_brain/fill_calibration.py` (new), `tests/test_fill_calibration.py` (new)
+**Build:** the constants, `OrderSample`, `StoreLoad`, `load_store` with the locked query,
+`mode=ro` connect inside `try/finally`, `NO_DATA`/`UNREADABLE` handling, cap + `overfilled`.
+**Verification (automated):** the T1 test group below, seeded through `OrderRegistry` on
+`tmp_path`.
 
-### T2 · [Backend/Logic] · M · Trim the planner surface, keep the behaviour — ✅ done
-**Files:** `core_brain/trader_loop.py`, `tests/test_plan_orders_asymmetric_hold.py`,
-`tests/test_trader_loop.py`, `tests/test_cancel_attribution.py`
-**Depends on:** none
-**Build:** drop the six unread parameters from the signature (lines 218-224) and
-the four keys from `plan_kwargs` (2146-2150); delete the now-consumer-less
-`hedge_asks` / `hedge_held` blocks (2081-2100) but **keep** `queue_ahead`,
-`visit_outcome.value` and `_queue_ahead_for` because they feed attribution and the
-registry write. Replace the two `RETIRED BY #387` docstring blocks (232-274) with
-one paragraph: a wanted resting order is kept at its own price regardless of price
-drift or queue position. No change to the body. Delete the hold tests in
-`test_plan_orders_asymmetric_hold.py` (51-145, 174-199 incl. `TestConfigWiring`),
-the hold cases in `test_trader_loop.py` (255-312) and its 387-406 case, and the
-hold kwargs in `test_cancel_attribution.py` (132-232, 625, 710, 726) while keeping
-every assertion those tests make about live behaviour.
-**Verify:** focused pytest on those three files + `test_completable_pair_gate.py`
-+ `test_live_e2e_lifecycle.py`.
+### T2 — Buckets and signed gap math · size S · `[Backend/Logic]` · Depends on: T1
+**Files:** `core_brain/fill_calibration.py`
+**Build:** `price_bucket`, `queue_bucket`, `summarize`, `bucket_summaries`, `compare`,
+`build_report`. Pure functions over `OrderSample`; no database access, so every number is
+testable without a file.
+**Verification (automated):** the T2 test group below.
 
-### T3 · [UI] · S · Clean the three operator surfaces — ✅ done
-**Files:** `dashboard/server.py`, `dashboard/static/strategy_explainer.html`,
-`scripts/tournament_cockpit_server.py`, `tests/test_dashboard_server.py`,
-`tests/test_shadow_tournament.py`
-**Depends on:** T1
-**Build:** delete the two parameter cards (`server.py:5128-5158`); delete the two
-explainer rows (`strategy_explainer.html:887,893`); delete the "Queue Hold
-Threshold" and "Hold Deviation Buffer" rows from the HYBRID blueprint table
-(`tournament_cockpit_server.py:1715-1728`) and annotate the two #485 card tweaks
-(`128-131`, `142-145`) as retired by #387. Update the dashboard env-key map
-(`test_dashboard_server.py:3414-3415`) and the blueprint key list
-(`test_shadow_tournament.py:1275-1287`).
-**Verify:** focused pytest on both test files + `test_ui_276_explainer_tokens.py`;
-then open `/api/parameters` and the explainer in the browser.
+### T3 — Report rendering and CLI · size S · `[Backend/Logic]` · Depends on: T2
+**Files:** `core_brain/fill_calibration.py`, `tests/test_fill_calibration.py`
+**Build:** `render_text` (fixed-width, `--` for `None`, rates to 3 decimals, footer with the
+sign rule and the four honesty points), `to_dict`, `main` with `--shadow-db`/`--live-db`
+(required), `--shadow-run-id`/`--live-run-id`, `--min-orders` (default 10), `--json`;
+exit `0` when both sides are `OK`, else `1`. `python -m core_brain.fill_calibration` runs it.
+**Verification (automated):** the T3 test group, then a real run against a **copy** of
+`i608_tournament-1_the-accountant-1.db` (793 orders, 793 quotes, 246 fills — a real cohort)
+plus a copy of `data/orders.db` — the table prints with real shadow rates, live gaps are `--`,
+and nothing under `data/` changes.
 
-### T4 · [Backend/Logic] · S · Launcher rejection, arm files, written record — ✅ done
-**Files:** `scripts/shadow_tournament.py`,
-`configs/tournaments/i492_tournament-1_arms.json`,
-`configs/tournaments/i608_tournament-1_arms.json`,
-`tests/test_shadow_tournament.py`, `docs/issues/487-noticed-but-not-touching.md`,
-`docs/ideas/variable-names-refactor.md`
-**Depends on:** T2
-**Build:** extend `_RETIRED_PRESET_KEYS` with both field names and add a retired
-environment check on the `arm["env"]` path (`shadow_tournament.py:326-333`) whose
-error names the setting and #387; remove the `BOT_ORDER_REQUOTE_HOLD_*` entries
-from `stickhold`, `queuehug`, `deadband-tight`, `deadband-wide`, `snapstop`,
-`hybrid` (i492) and delete the now-empty `the-gambler` / `the-chaperone` arms
-(i608). Update `test_shadow_tournament.py`: 671-672 and 992-993 expectations,
-918-961 and 1160-1170 fixtures, 1279-1280 blueprint keys; convert
-`test_a_supported_legacy_alias_still_plans` (1152) into a rejection test. Mark
-N1-N3 resolved in the #487 noticed-but-not-touching file and drop the proposed
-hold renames from the variable-names idea file.
-**Verify:** focused pytest on `test_shadow_tournament.py`, then build a plan from
-each committed arm file (no shadow minutes spent) to confirm they still load.
+**Checkpoints:** after T1 (`load_store` returns `OK` with the expected 4/4 cohort on the
+fixture); after T3 (a full text table and `--json` on the copies). In Mode A each checkpoint
+is a one-line progress note, not a pause.
 
-### T5 · [Backend/Logic] · S · Absence test (the guard that ends this class of bug) — ✅ done
-**Files:** `tests/test_requote_hold_retired.py` (new; module shape mirrors
-`tests/test_refusal_hold_decision.py`)
-**Depends on:** T1, T2, T3, T4
-**Build:** assert `inspect.signature(plan_orders)` carries none of the six names;
-`MakerConfig` has neither field; no preset carries either key and no preset
-description mentions a queue hold; setting either `BOT_ORDER_REQUOTE_HOLD_*`
-variable (valid and invalid) leaves `load()` untouched; `/api/parameters` has no
-hold card and the explainer HTML carries neither identifier; `format_report`
-contains no hold advice; the launcher raises for both environment names in
-`arm["env"]` and for both field names in a preset dict.
-**Verify:** the file fails on `git stash` of the change and passes after it.
+## Test list (fixture numbers chosen so every expected gap is exact)
 
-## Checkpoints
+**Fixture** — both stores seeded on `tmp_path` through `OrderRegistry`; every order is
+`BUY` with `original_size = 10`.
 
-- **After T2:** planner + config clean; focused planner/config checks green.
-- **After T4:**
-  `rg -n "hold_queue_shares|hold_below_target|REQUOTE_HOLD" core_brain/ scripts/
-  dashboard/ configs/ .env.example` returns only the historical cockpit
-  annotations.
-- **After T5:** full focused set green, absence test red without the change.
+| Shadow `shadow-A` | price | queue_ahead | fills | status |
+| --- | --- | --- | --- | --- |
+| S1 | 0.42 | 0 | 10 | filled |
+| S2 | 0.42 | 20 | 2 + 3 | partial |
+| S3 | 0.57 | 100 | 10 | filled |
+| S4 | 0.57 | 200 | — | cancelled |
+| C1 | 0.50 | no quote row | 10 | filled (taker completion) |
 
-## Step 5 — improvement proposal (adopted; classification: simplification)
+| Live `live-A` | price | queue_ahead | fills | status |
+| --- | --- | --- | --- | --- |
+| L1 | 0.42 | NULL | 10 (`run_id=live-B`) | filled |
+| L2 | 0.42 | NULL | — | cancelled |
+| L3, L4 | 0.57 | NULL | — | open |
+| L5 (`run_id=live-other`) | 0.42 | NULL | — | open |
 
-Evidence — `core_brain/trader_loop.py:271-274`, verified by reading the body and
-grepping every parameter name:
+Resulting truths: shadow `0.40-0.50` → 2 orders, 2 filled, posted 20, filled 15 (order 1.0,
+share 0.75); shadow `0.50-0.60` → 2 orders, 1 filled, posted 20, filled 10 (0.5 / 0.5);
+shadow overall → 4 orders, 25/40 = 0.625 share, 3/4 = 0.75 order. Live `0.40-0.50` → 2
+orders, filled 10/20 (0.5 / 0.5); live `0.50-0.60` → 2 orders, 0.0 / 0.0; live overall → 4
+orders, 0.25 / 0.25.
 
-> `parameters stay in the signature -- `cfg`, `hedge_asks`, `hedge_held`,
-> `queue_ahead`, `hold_queue_shares`, `hold_below_target`, `visit_outcome` --
-> for the follow-up cancel-conditions issue to disposition; only `dead_band`
-> and `cfg.bot_quote_size_min_shares` are read here.`
+**T1**
+- `test_cohort_excludes_completion_buy` — shadow returns 4 records; `C1` absent.
+- `test_partial_fills_are_summed` — S2 `filled_shares == 5`.
+- `test_cancelled_unfilled_order_stays_in` — S4 present, status `cancelled`, filled 0.
+- `test_duplicate_quote_counts_once` — live returns 4 records; L1 filled 10, not 20.
+- `test_cross_run_fill_counts_for_owning_order` — with run `live-A`, L1 filled 10 though its
+  fill carries `live-B`.
+- `test_run_filter_excludes_other_runs` — filter `live-A` → 4 records; no filter → 5.
+- `test_missing_queue_is_none_not_zero` — every live record has `queue_ahead is None`.
+- `test_overfill_is_capped_and_flagged` — a 12-share fill on a 10-share order → 10, `True`.
+- `test_inputs_are_not_modified` — SHA-256 of both files identical before and after.
+- `test_missing_path_is_no_data` — status `NO_DATA`, and the path is still absent.
+- `test_missing_quotes_table_is_unreadable` — a bare `orders`+`fills` file → `UNREADABLE`
+  with non-empty detail text.
+- `test_foreign_schema_is_unreadable` — a file whose only table is `snapshots` (the shape the
+  real `stats_21-10_*_shadow-01.db` files have) → `UNREADABLE`, not an empty `OK` cohort.
 
-The comment names seven survivors and then says which two are read — so the dead
-set is **six** parameters, not the issue's three and not CodeRabbit's four.
-Removing all six in one pass deletes the follow-up work this comment defers and
-stops the next reader re-deriving it. No new behaviour, no new file. Folded into
-T2.
+**T2**
+- `test_price_bucket_edges` — 0.40 → `0.40-0.50`; 0.3999 → `0.30-0.40`; 1.00 → `0.90-1.00`.
+- `test_queue_bucket_edges` — 0 → `0-1`; 1 → `1-50`; 400 → `400+`; `None` → `unknown`.
+- `test_overall_gap` — order gap +0.50, share gap +0.375.
+- `test_gap_sign_is_shadow_minus_live` — swapping the sides flips both gaps' sign.
+- `test_price_bucket_gaps` — `0.40-0.50` order +0.50 / share +0.25; `0.50-0.60` +0.50 / +0.50.
+- `test_live_queue_rows_are_unknown` — live `0-1` has 0 orders, live `unknown` has 4; every
+  queue row's gaps are `None`.
+- `test_min_orders_blocks_thin_buckets` — `min_orders=3` → `insufficient`, both gaps `None`,
+  counts still printed.
+- `test_zero_posted_shares_gives_none` — an empty sample set → both rates `None`, no
+  `ZeroDivisionError`.
+- `test_bucket_gap_ok_status` — sides above `min_orders` → `status == OK`.
 
-## Trap recorded for Station III
+**T3**
+- `test_main_json` — `--min-orders 1 --json` → returns 0; parsed `overall.order_gap == 0.5`;
+  `sign_rule` present.
+- `test_main_text` — output contains `gap`, `positive gap = shadow fills more than live`,
+  `unknown`, and `--`.
+- `test_main_missing_live_db` — returns 1, output names `NO_DATA`, and the path is not
+  created.
 
-`hedge_asks` / `hedge_held` look live because they are computed from `ev` books
-under a long comment about the hedge ask. Their only consumer is `plan_kwargs`.
-Delete the computation with the parameter, or the deletion leaves dead code that
-reads as an intentional mechanism.
+Assert **exact equality**, never `pytest.approx`: every expected value is an exact binary
+fraction (0.625 = 5/8, 0.375 = 3/8, 0.75, 0.5), so a tolerance could only mask a wrong
+denominator.
 
-## Out of scope (recorded, not touched)
+## How to verify (operator, hands-on — no test output)
 
-- `docs/runs/*` — dated run records (e.g.
-  `2026-10-04-queue-hold-200-rehearsal.md`) keep their mentions; they are evidence
-  of what was tried.
-- `docs/issues/487-noticed-but-not-touching.md` keeps its findings text; only the
-  status line is updated (T4).
+1. From the **main checkout** (the worktree has no `data/`), copy both stores somewhere safe
+   so the tool never opens the originals:
+   `Copy-Item 'data\i608_tournament-1_the-accountant-1.db' "$env:TEMP\sh.db"; Copy-Item 'data\orders.db' "$env:TEMP\live.db"`
+2. Run `python -m core_brain.fill_calibration --shadow-db "$env:TEMP\sh.db" --live-db "$env:TEMP\live.db"`.
+3. Expect a table whose **gap** column carries a `+`/`−` sign, and a footer stating
+   *positive gap = shadow fills more than live*. The shadow side shows a real rate (roughly a
+   third of orders fill); the live column reads `0.000` and every gap reads `--` — the honest
+   answer today, not a failure.
+4. Run it again with `--json` and check the same `order_gap` / `share_gap` values appear.
+5. Point `--shadow-db` at a `stats_21-10_*_shadow-01.db` file: expect `UNREADABLE` naming the
+   missing table, not a silent empty report. Point `--live-db` at a missing path: expect
+   `NO_DATA`, exit code `1`, no file created.
 
-## How to verify (hands-on, operator)
+## Follow-up (deferred, not part of this PR)
 
-1. `python -m dashboard.server` → open `http://127.0.0.1:8799` → Parameters: the
-   two knobs *Queue Hold* and *Direction Hold* are gone; requote cadence, dead
-   band and every other card still render with their usual values.
-2. Same dashboard → strategy explainer: the rows describing "holds passive
-   resting quote up to 5¢ below target" and "protects valuable queue position" are
-   gone; the rows around them are unchanged.
-3. `python -m core_brain.cancel_report --db <any shadow db>` → the reason table is
-   unchanged and the trailing paragraph no longer claims the holds can keep a
-   price move.
-4. `.\scripts\spread-hunter-menu.ps1 status` → still reports the stack; open the
-   tournament cockpit and confirm the HYBRID blueprint table no longer lists the
-   two hold rows, while the #485 cards still show their runs.
+The **real calibration run** — the numbers that actually matter — waits on #471 producing at
+least 60 closes of live data. Until then this PR ships the instrument, not the reading. Once
+#471 closes, the run is one command against the real stores and the measured gap can be
+recorded on #470. The split is documented on the issue itself.
 
+## NOTICED-BUT-NOT-TOUCHING
+
+- `data/orders.db` holds 0 fills, so the live side is a denominator with no numerator.
+  Populating it is #471's job.
+- `shadow_fills.credit_fills` keeps `queue_ahead` as "descriptive telemetry but gates
+  nothing" (`shadow_fills.py:101-102`), yet this report buckets by it. The buckets describe
+  the cohort; they do not explain the fill. The footer says so.
+- `kpi.py` computes its own queue-bucket fill rate from `quotes.filled`
+  (`kpi.py:1726-1735`), which double-counts on duplicate quote rows. Out of scope here; a
+  future issue could align the two.
+- `CONSTRAINTS.md`, `SPEC.md` and `tasks/` are a **single shared slot** at the repo root,
+  not per-issue paths. At plan time the slot held #748's artifacts
+  (`git show HEAD:CONSTRAINTS.md` → "Constraints — #748 One category label…"). Overwriting is
+  the documented convention (`docs/agents/architecture.md:145` describes them as archived per
+  issue; commit `d6e7c75` is a past sweep), so this plan takes the slot and #748's content
+  stays readable in git history at `1074ea2`. Flagged, not fixed: two worktrees planning at
+  once will collide here.
 

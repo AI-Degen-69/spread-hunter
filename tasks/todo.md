@@ -1,43 +1,42 @@
-# Todo — #753 Retire the dead hold-lever surface
+Branch: i474/fill-model-calibration-cli | Issue: #474
 
-Branch: `i753/retire-dead-hold-levers` | Issue: #753 | Plan: `tasks/plan.md`
+# Todo — fill-model calibration
 
-## T1 · Config surface [Backend/Logic] · S
-- [x] Delete both `MakerConfig` fields (`config.py:197-198`)
-- [x] Delete their env parsing + bounds (`config.py:~375-383`)
-- [x] Remove both keys from all six `TOURNAMENT_PRESETS`
-- [x] Rewrite the four "... with queue hold" descriptions + hybrid's "queue stability"
-- [x] Drop both variables and the unit note from `.env.example`
-- [x] Update `test_dynamic_offset.py` preset pins + `test_completable_pair_gate.py` bound tests
+## T1 — Read-only loader
+- [ ] Constants: `OK`/`NO_DATA`/`UNREADABLE`/`INSUFFICIENT`, `SIGN_RULE`, `PRICE_BUCKET_WIDTH`,
+      `QUEUE_BUCKETS`, `QUEUE_UNKNOWN`, `DEFAULT_MIN_ORDERS`, `FILL_EPSILON`
+- [ ] `OrderSample` (frozen) with `has_fill`
+- [ ] `StoreLoad` (frozen)
+- [ ] `load_store`: `mode=ro` URI + `uri=True`, `try/finally`, `NO_DATA` for a missing path,
+      `UNREADABLE` for a SQLite error (with detail text)
+- [ ] Locked cohort query — one grouped query, first quote row per `local_id`, `fills.size` sum
+- [ ] Cap at `original_size`; set `overfilled`; `queue_ahead` NULL → `None`
+- [ ] T1 tests (12)
+- [ ] Checkpoint: fixture yields 4 shadow / 4 live records, `OK`
 
-## T2 · Planner surface [Backend/Logic] · M
-- [x] Drop six unread params from `plan_orders` signature
-- [x] Drop four keys from `plan_kwargs`
-- [x] Delete `hedge_asks` / `hedge_held` computation blocks
-- [x] Keep `queue_ahead` (attribution) and `visit_outcome.value` (registry write)
-- [x] Replace the two "RETIRED BY #387" docstring blocks with one paragraph
-- [x] Delete/adjust hold tests in `test_plan_orders_asymmetric_hold.py`, `test_trader_loop.py`, `test_cancel_attribution.py`
+## T2 — Buckets and gap math
+- [ ] `price_bucket` (0.10 bands, `[0.90,1.00]` closes at 1.00)
+- [ ] `queue_bucket` (`kpi.py` labels + `unknown`)
+- [ ] `summarize` — counts, shares, both rates, `None` on zero denominator, no `ZeroDivision`
+- [ ] `bucket_summaries`
+- [ ] `compare` — union of buckets, `shadow − live`, `insufficient` below `min_orders`
+- [ ] `build_report`
+- [ ] T2 tests (9)
 
-## T3 · Operator surfaces [UI] · S
-- [x] Delete the two dashboard parameter cards
-- [x] Delete the two explainer rows
-- [x] Delete the two HYBRID blueprint table rows in the cockpit
-- [x] Annotate the two #485 cockpit card tweaks as retired by #387
-- [x] Update `test_dashboard_server.py` env-key map + `test_shadow_tournament.py` blueprint keys
+## T3 — Rendering and CLI
+- [ ] `render_text` — fixed-width, `--` for `None`, 3 decimals, header, footer (sign rule +
+      one-print-fills-all + live-queue-absent + `min_orders`)
+- [ ] `CalibrationReport.to_dict`
+- [ ] `main` — argparse (`--shadow-db`, `--live-db`, run ids, `--min-orders`, `--json`),
+      exit `0`/`1`
+- [ ] `if __name__ == "__main__": raise SystemExit(main())`
+- [ ] T3 tests (3)
+- [ ] Live run on copies of `data/i608_tournament-1_the-accountant-1.db` + `data/orders.db`
+      (main checkout — the worktree has no `data/`)
+- [ ] Checkpoint: table prints, gaps `--`, `data/` untouched
 
-## T4 · Launcher, arm files, written record [Backend/Logic] · S
-- [x] Extend `_RETIRED_PRESET_KEYS` with both field names
-- [x] Reject both retired `BOT_*` names on the `arm["env"]` path, message names #387
-- [x] Clean `i492_tournament-1_arms.json` (6 arms)
-- [x] Delete the two now-empty arms from `i608_tournament-1_arms.json`
-- [x] Update `test_shadow_tournament.py` fixtures + convert the legacy-alias test
-- [x] Mark N1-N3 resolved; drop hold renames from the variable-names idea file
-
-## T5 · Absence test [Backend/Logic] · S
-- [x] New `tests/test_requote_hold_retired.py` covering all eight acceptance bars
-- [x] Confirm it is red without the change, green with it
-
-## Checkpoints
-- [x] After T2: focused planner/config checks green
-- [x] After T4: repo grep clean outside historical cockpit annotations
-- [x] After T5: full focused set green
+## Wrap-up
+- [ ] Focused regressions green (`shadow_fills`, `order_registry`, `quote_fill_attribution`,
+      `run_attribution`, `run_scorer`, `stat_validation_artifacts`)
+- [ ] `git diff --stat` confined to the two new files (+ planning docs)
+- [ ] Commit, push, open PR linking #474, note the #471 deferral
