@@ -50,7 +50,7 @@ spread-hunter/
     *.log                 Every process log the menu redirects
   reports/                Generated statistics reports (gitignored)
   docs/issues/            Issue showcases: <id>-presentation-<slug>.html (nowhere else under docs/)
-  docs/archive/           Superseded human-written docs (readable, not active contract)
+  docs/superpowers/specs/ Design specs an agent must read before coding (e.g. the shadow fill model)
   tests/                  Full hermetic unit & integration test suite
 ```
 
@@ -142,7 +142,7 @@ silently swallowed `docs/reports/` -- two issue showcases sat there untracked.
 | `docs/297-`, `304-`, `310-`, `343-presentation-*.html` | Moved | `docs/issues/`, per the showcase contract above |
 | `project/` | Deleted | Empty leftover directory; sole tracked file was its own `.gitignore`, nothing imports from it |
 | `SHARED_TASK_NOTES.md` | Deleted | Backlog of already-implemented iterations, referenced nowhere |
-| `SPEC.md`, `CONSTRAINTS.md` | Archived | `docs/archive/`, history preserved; three historical showcases name them as text labels |
+| `SPEC.md`, `CONSTRAINTS.md` | Deleted | Root files stay the live copies; the `docs/archive/` duplicates were removed |
 | `metadata.json` | Kept at root | Host-owned: no repo reference found, so deleting could break tooling outside this repo |
 
 Enforced by `tests/test_docs_layout.py` (recursive showcase placement -- `docs/issues/` and its subfolders only -- plus `project/` absence).
