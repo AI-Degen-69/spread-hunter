@@ -1,43 +1,45 @@
-# Todo — #753 Retire the dead hold-lever surface
+Branch: i474/fill-model-calibration-cli | Issue: #474
 
-Branch: `i753/retire-dead-hold-levers` | Issue: #753 | Plan: `tasks/plan.md`
+# Todo — fill-model calibration
 
-## T1 · Config surface [Backend/Logic] · S
-- [x] Delete both `MakerConfig` fields (`config.py:197-198`)
-- [x] Delete their env parsing + bounds (`config.py:~375-383`)
-- [x] Remove both keys from all six `TOURNAMENT_PRESETS`
-- [x] Rewrite the four "... with queue hold" descriptions + hybrid's "queue stability"
-- [x] Drop both variables and the unit note from `.env.example`
-- [x] Update `test_dynamic_offset.py` preset pins + `test_completable_pair_gate.py` bound tests
+## T1 — Read-only loader
+- [x] Constants: `OK`/`NO_DATA`/`UNREADABLE`/`INSUFFICIENT`, `SIGN_RULE`, `PRICE_BUCKET_WIDTH`,
+      `QUEUE_BUCKETS`, `QUEUE_UNKNOWN`, `DEFAULT_MIN_ORDERS`, `FILL_EPSILON`
+- [x] `OrderSample` (frozen) with `has_fill`
+- [x] `StoreLoad` (frozen)
+- [x] `load_store`: `mode=ro` URI + `uri=True`, `try/finally`, `NO_DATA` for a missing path,
+      `UNREADABLE` for a SQLite error (with detail text)
+- [x] Locked cohort query — one grouped query, first quote row per `local_id`, `fills.size` sum
+- [x] Cap at `original_size`; set `overfilled`; `queue_ahead` NULL → `None`
+- [x] T1 tests (12)
+- [x] Checkpoint: fixture yields 4 shadow / 4 live records, `OK`
 
-## T2 · Planner surface [Backend/Logic] · M
-- [x] Drop six unread params from `plan_orders` signature
-- [x] Drop four keys from `plan_kwargs`
-- [x] Delete `hedge_asks` / `hedge_held` computation blocks
-- [x] Keep `queue_ahead` (attribution) and `visit_outcome.value` (registry write)
-- [x] Replace the two "RETIRED BY #387" docstring blocks with one paragraph
-- [x] Delete/adjust hold tests in `test_plan_orders_asymmetric_hold.py`, `test_trader_loop.py`, `test_cancel_attribution.py`
+## T2 — Buckets and gap math
+- [x] `price_bucket` (0.10 bands, `[0.90,1.00]` closes at 1.00; `round(..., 9)` before the floor
+      so a 0.30 bid cannot land in 0.20-0.30)
+- [x] `queue_bucket` (`kpi.py` labels + `unknown`)
+- [x] `summarize` — counts, shares, both rates, `None` on zero denominator, no `ZeroDivision`
+- [x] `bucket_summaries`
+- [x] `compare` — union of buckets, `shadow − live`, `insufficient` below `min_orders`
+- [x] `build_report`
+- [x] T2 tests (9)
 
-## T3 · Operator surfaces [UI] · S
-- [x] Delete the two dashboard parameter cards
-- [x] Delete the two explainer rows
-- [x] Delete the two HYBRID blueprint table rows in the cockpit
-- [x] Annotate the two #485 cockpit card tweaks as retired by #387
-- [x] Update `test_dashboard_server.py` env-key map + `test_shadow_tournament.py` blueprint keys
+## T3 — Rendering and CLI
+- [x] `render_text` — fixed-width, `--` for `None`, percentages with one decimal / gaps in `pp`,
+      per-bucket blocks, footer (sign rule + one-print-fills-all + `min_orders`)
+- [x] `CalibrationReport.to_dict`
+- [x] `main` — argparse (`--shadow-db`, `--live-db`, run ids, `--min-orders`, `--json`),
+      exit `0` only when both sides are `OK`, else `1`
+- [x] `if __name__ == "__main__": raise SystemExit(main())`
+- [x] T3 tests (3)
+- [x] Live run on copies of `data/01_shadow_21-10_11-39.db` (1,252 cohort orders) and
+      `data/i608_tournament-1_the-accountant-1.db` (793) against a copy of `data/orders.db`
+      (14 cohort orders, 0 fills) — main checkout copied into `$env:TEMP`, never opened in place
+- [x] Checkpoint: table prints (`shadow 31.8% / live 0.0%`, overall `+31.8pp`), per-bucket gaps
+      `--` under `insufficient`, `--json` parses, copy SHA-256 identical before and after
 
-## T4 · Launcher, arm files, written record [Backend/Logic] · S
-- [x] Extend `_RETIRED_PRESET_KEYS` with both field names
-- [x] Reject both retired `BOT_*` names on the `arm["env"]` path, message names #387
-- [x] Clean `i492_tournament-1_arms.json` (6 arms)
-- [x] Delete the two now-empty arms from `i608_tournament-1_arms.json`
-- [x] Update `test_shadow_tournament.py` fixtures + convert the legacy-alias test
-- [x] Mark N1-N3 resolved; drop hold renames from the variable-names idea file
-
-## T5 · Absence test [Backend/Logic] · S
-- [x] New `tests/test_requote_hold_retired.py` covering all eight acceptance bars
-- [x] Confirm it is red without the change, green with it
-
-## Checkpoints
-- [x] After T2: focused planner/config checks green
-- [x] After T4: repo grep clean outside historical cockpit annotations
-- [x] After T5: full focused set green
+## Wrap-up
+- [x] Focused regressions green (`shadow_fills`, `order_registry` — 79 passed; full suite is CI)
+- [x] `ruff check` clean on both new files
+- [x] `git diff --stat` confined to the two new files (+ planning docs)
+- [x] Commit, push, open PR linking #474, note the #471 deferral
