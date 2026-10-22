@@ -1,156 +1,192 @@
-# Plan — #754 Cockpit: surface arm-record parse failures, drop dead badge metadata
+# Plan — #748 One category label across the Orders & Trades tabs
 
-Branch: `i754/cockpit-record-parse-warning-and-drop-dead-badge`
-Files: `scripts/tournament_cockpit_server.py`, `tests/test_tournament_cockpit_arms.py`
+Branch: `i748/consistent-category-label-orders-trades` | Issue: #748
 
-## CodeRabbit plan comment: adopted vs rejected
+**Tier: Standard** (7 files, no schema change, one architectural decision: the tag
+ranking vocabulary). **Type: Code + UX/Copy** (a data-resolution fix whose visible
+outcome is one consistent chip).
 
-Issue #754 carries one `coderabbitai` comment (446-line `Coding Plan`). Mined once; the
-duplicated HTML echo under `<!-- <rawResChunk> -->` was not read. Every point is triaged:
+## Intake note (CodeRabbit plan comment, read once)
 
-**Adopted**
+- **Adopted:** its precedence chain (venue label → venue tags → classifier →
+  `Uncategorized`), its file map, and its observation that the node harness only
+  drives the legacy rows.
+- **Rejected:** its suggestion of a general "category confidence" layer and a new
+  resolver module — the resolver already exists in `market_meta.py`; a second
+  module would split one precedence across two files.
+- **Resolved `[UNVERIFIED]` items** (checked against live code during planning):
+  - *"`marketCategory` does not exist yet"* → **false**: it exists at
+    `dashboard/static/app.js:7050` and all four renderers already call it
+    (8063, 8222, 8437, 8798). The defect is markup/placement plus the data,
+    not a missing helper.
+  - *"The stitch path is untested"* → **true**, and the reason is now known:
+    `ordersTradesRows` (`app.js:7748`) always takes the legacy branch. The
+    `proto-body` class that selects the stitch renderers is added at runtime by
+    `dashboard/static/prototype.js:572`, so the harness must call the stitch
+    renderers directly.
+  - *"Gamma needs `include_tag=true`"* → **true**, re-verified live: 400 markets
+    sampled, tags absent without the flag and present with it; nested event
+    markets inherit the parent event's tags.
+  - *Issue line numbers are stale by ~60–90 lines* (e.g. `marketCategory` cited
+    at `:7150`, actually `:7050`). Paths and symbols were right; every location
+    below was re-derived live.
+- **Tag vocabulary decision (evidence):** a live sample of 400 top-volume markets
+  returned **249 distinct labels**, dominated by non-categories (`Recurring`,
+  `Hide From New`, `Earn 3.25%`, `NBA Tip-Off`, `UCL`, team and candidate
+  names). A flat allow-list of venue labels is therefore not maintainable and
+  "first tag" is wrong. The ranking reuses the repo's own display rules
+  (`_SPORT_RULES`, `_ESPORTS_GAME_RULES`, `_POLITICS_RE`) as the vocabulary.
 
-1. A named `TournamentRecordError` raised by shape validation, with only `OSError` / `ValueError`
-   caught around the read. The blanket `except Exception: return default_arms` is deleted, so an
-   unforeseen bug surfaces as a real error instead of posing as "not started".
-2. A sibling `resolve_tournament_arms_with_status(key)` returning `(arms, error_or_None)`.
-   `resolve_tournament_arms` stays a one-line wrapper, so five existing tests and
-   `collect_all_stats` keep working unchanged.
-3. The error text rides in the `/api/stats` payload as `record_error`, shown as an escaped
-   warning line, and re-synced by `renderAll()` — the 5s poll must not erase the banner.
-4. Reuse `.badge-red`; add no stylesheet class.
-5. `caplog` assertions for the log line, and every new test must fail on the old code.
+## Resolved open questions
 
-**Rejected**
+| Question | Answer (from code / live venue) |
+| --- | --- |
+| Where does a tag reach the frontend? | Feed row `tags` (`filter_markets.py:923`) → `resolve_market_meta` → `meta["category"]` → `kpi.by_market[cid] = {**meta, ...}` (`kpi.py:1616`) → `app.js` `marketCategory(m)`. No server aggregation step in between. |
+| Does the Positions secondary line have a real title? | Not today: `resolve_market_meta` reads `event_title` (`:302`) but never returns it, and KPI drops it. Add `"event_title"` to the returned dict — `{**meta}` carries it to the page with no KPI change. |
+| Is the legacy markup still painted? | No. `prototype.js:572` adds `proto-body` on boot; `app.js:8919-8937` then paints the stitch renderers. Legacy stays untouched. |
+| One label or a two-token label? | One. `stitch-category-pill` carries the most specific label (`Basketball`, not `Sports / Basketball`). |
 
-1. *Render `TOURNAMENTS["487"]["badge"]` in the nav and keep the field.* The issue title says
-   drop; the nav serves exactly one page, so a metadata-driven one-item nav buys the operator
-   nothing visible while leaving four entries with inconsistent key sets. Dropping all four
-   entries removes the duplicate literal instead of moving it.
-2. *Log a warning on every resolve call.* `get_cached_stats` re-collects every 3s and calls the
-   resolver each time, so a per-call warning prints roughly 1200 identical lines per hour. One
-   warning per broken record instead (module-level `_LAST_WARNED_RECORD`, reset on a successful
-   read so a record that breaks again warns again).
-3. *Update `docs/issues/487-noticed-but-not-touching.md` here.* Two-file scope; those rows
-   already say "promoted to #754", which stays true. Artifact closeout is the last station.
+## Interface contracts
 
-## Locked interface
+### Python — `core_brain/market_meta.py`
 
 ```python
-class TournamentRecordError(Exception):
-    """An arm record exists but cannot be trusted to describe this run."""
+CATEGORY_TAG_RANK: dict[str, int]        # canonical label -> 3 (sport / named game),
+                                         # 2 (Politics, E-Sports, Geopolitics),
+                                         # 1 (Sports, Crypto, Culture, Economy,
+                                         #    Tech, Weather, World)
 
-_WARNED_RECORD: Optional[str] = None        # last record message already logged
+def category_from_tags(row: dict) -> Optional[str]
+    # Highest-ranked canonical label among row["tags"]; first one wins a tie;
+    # None when no tag is a category. Non-list / non-str tags are ignored.
 
-def _read_arm_record(path: Path) -> list[dict[str, Any]]:
-    """Read + shape-check an arm record. Raises TournamentRecordError."""
+def _category_from_feed_label(label: str) -> Optional[str]
+    # A venue label accepted only when it is recognised: it canonicalises to a
+    # sport/game/Politics label, or it is in CATEGORY_TAG_RANK, or it already
+    # equals a canonical label ("E-Sports"). Anything else -> None.
 
-def resolve_tournament_arms_with_status(
-    tourney_key: str = CURRENT_SETUP_KEY,
-) -> tuple[list[dict[str, Any]], Optional[str]]:
-    """Return (arms, record_error). record_error is None when nothing failed."""
-
-def resolve_tournament_arms(tourney_key: str = CURRENT_SETUP_KEY) -> list[dict[str, Any]]:
-    """Unchanged signature/return type: the arms only."""
-    return resolve_tournament_arms_with_status(tourney_key)[0]
+def resolve_market_meta(cid, closes=None, quotes=None, *, root=None) -> dict
+    # category precedence (rewritten):
+    #   1. _category_from_feed_label(venue_category or category)
+    #   2. category_from_tags(row)
+    #   3. classify_display_category(title, event_title, slug)
+    #   4. UNCATEGORIZED
+    # new key: "event_title" (str, "" when the feed has none)
 ```
 
-Status mapping — this is the whole contract:
+`series_title`, `market_group` and `_first_tag_label` stop being category
+sources; `_first_tag_label` is deleted once a grep confirms nothing else reads it.
 
-| Record state | arms returned | `record_error` |
-| --- | --- | --- |
-| key not live (`484`) | static table | `None` |
-| no record file | static table | `None` |
-| valid record | merged table | `None` |
-| broken record | static table | `"<path>: <reason>"` |
+### Python — `scripts/filter_markets.py`
 
-Every error string starts with the record path, so the page and the log both name the file.
+- `/markets` params (`:826-832`) gain `"include_tag": "true"`.
+- `LIVE_EVENTS` params (`:1030-1035`) gain `"include_tag": "true"`.
+- Row `tags` dedupes while keeping order: `list(dict.fromkeys(...))` over the
+  market + event labels (`:923`). No other row field changes.
 
-Shape validation in `_read_arm_record`: top level must be a JSON object; `"arms"` must be
-present and a list; each entry must be an object with a non-empty string `name`. Anything else
-raises `TournamentRecordError` with a plain reason ("'arms' is not a list", "arm 2 is not a JSON
-object", …). `json.JSONDecodeError` and `UnicodeDecodeError` are `ValueError` subclasses, so the
-single `except (OSError, ValueError)` around the read covers truncation, bad bytes and bad JSON.
+### JavaScript — `dashboard/static/app.js`
+
+```js
+function marketCategory(m)          // unchanged: m.category || 'Uncategorized'
+function categoryPill(m)            // NEW: <span class="stitch-category-pill">…</span>
+                                    // always rendered, always escaped, muted for
+                                    // 'Uncategorized'
+```
+
+- Orders (`:8063`): bare `stitch-meta-category` span → `categoryPill(m)` in the
+  meta line; `Paired Arb` keeps `stitch-meta-tag`.
+- Active Markets (`:8222`): → `categoryPill(m)` (chip no longer suppressed).
+- Open Positions (`:8437`): → `categoryPill(m)`; the secondary line at `:8494`
+  drops the `m.category` fallback and renders only `m.event_title` (or
+  `m.subtitle`), hidden when empty or identical to the category label.
+- Closed Trades (`:8735-8736`, `:8798`): drop `categoryShort`, → `categoryPill(m)`.
+- `module.exports` gains `marketCategory`, `categoryPill`,
+  `stitchOpenOrdersRows`, `stitchActiveMarketsRows`, `stitchPositionsRows`,
+  `stitchClosedTradesRows`.
+
+### Test seam — `tests/js/orders_trades_harness.cjs`
+
+`argv[2]` gains an optional `"surface": "stitch"`, which dispatches `view` to the
+exported `stitch*Rows` instead of `ordersTradesRows`. Default stays legacy, so
+every existing assertion keeps its meaning.
 
 ## Tasks
 
-### T1 — Named error, shape check, status function (server)
+### T1 — `[Backend/Logic]` Tag-aware resolver · **M** · `core_brain/market_meta.py`
+Depends on: none.
+Build the rank map from the existing rule tables at import, add
+`category_from_tags`, rewrite the category precedence, add `event_title` to the
+output, delete the series/group/first-tag sources.
+**Verify:** `python -m pytest -q tests/test_market_meta.py`.
 
-- `import html` / `import logging` at the top; `log = logging.getLogger(__name__)`.
-- Add `TournamentRecordError` + `_read_arm_record` next to `_strip_round_suffix`.
-- Rename today's `resolve_tournament_arms` body to `resolve_tournament_arms_with_status`:
-  - the plan-file picker (lines 727-750) moves across unchanged — precedence is a frozen
-    contract: the named `487_current_setup_10arm.json` still wins over a leftover timestamped
-    record, and #492/#608 still pick the highest `i<key>_tournament-<run>.json`;
-  - `if latest_plan is None: return default_arms, None`;
-  - `try: record_arms = _read_arm_record(latest_plan)` / `except TournamentRecordError as exc:`
-    → warn once (`"Could not read tournament record %s"`), `return default_arms, str(exc)`;
-  - merging keeps the per-field fallback (`db_path` / `run_id` / `dash_port`) and the static base
-    for arms the record omits;
-  - `return merged, None`.
-- `resolve_tournament_arms` becomes the one-line wrapper.
-- `collect_all_stats`: `arms_config, record_error = resolve_tournament_arms_with_status(...)` and
-  `"record_error": record_error` in the returned dict.
+### T2 — `[Backend/Logic]` Ask gamma for tags · **S** · `scripts/filter_markets.py`
+Depends on: none (parallel with T1).
+Add `include_tag=true` to both request param dicts; dedupe the row's tags.
+**Verify:** `python -m pytest -q tests/test_unified_universe.py tests/test_live_event_discovery.py`.
 
-### T2 — Warning on the page and in the poll (server + template)
+### T3 — `[Design/UI]` One chip in all four tabs · **M** · `dashboard/static/app.js`
+Depends on: T1 (needs the `category` + `event_title` semantics), T2 (tags reach it).
+Add `categoryPill`, route the four stitch renderers through it, drop
+`categoryShort` and the Positions category fallback, export the stitch renderers.
+**Verify:** render one view by hand through the harness, then
+`python -m pytest -q tests/test_stitch_active_markets.py`.
 
-- At the top of `generate_cockpit_html`, compute `record_error` via `initial_data.get(...)` and
-  build the warning block. **Always** emit the container so the 5s poll can show/hide it:
+### T4 — `[Backend/Logic]` Resolver tests · **M** · `tests/test_market_meta.py`
+Depends on: T1.
+Rewrite the assertions that encode the old precedence (`series_title`,
+`market_group`, first-tag → category) and add: most-specific tag wins;
+`NBA Tip-Off` / `UCL Matchday` / `Republican Party` / `Data 2` / `Spread -3.5`
+never appear as a label; tags beat the classifier; the classifier still fills in
+when tags are empty; `event_title` is returned.
+**Verify:** same command as T1.
 
-  ```html
-  <div id="record-warning" class="badge badge-red" style="display:none; ...">…</div>
-  ```
+### T5 — `[Backend/Logic]` Fetch-param tests · **S** · `tests/test_unified_universe.py`, `tests/test_live_event_discovery.py`
+Depends on: T2.
+Assert `include_tag=true` on the `/markets` page request and on the live-events
+request, using the fake sessions those files already own.
+**Verify:** same command as T2.
 
-  When `record_error` is set: `display:block` and text
-  `⚠️ Tournament record failed to parse: <html-escaped reason>. The table shows default arms, not live data.`
-- Place `{record_warning_html}` directly after `</header>` (line 1462), above the metric cards.
-- `renderAll()`: read `#record-warning`, set `innerText` from `state.record_error` and toggle
-  `display`. Absent field on an older payload ⇒ hidden.
-- No new CSS class: `.badge-red` (line 1401) + inline layout only.
+### T6 — `[Design/UI]` Stitch-surface harness coverage · **M** · `tests/js/orders_trades_harness.cjs`, `tests/test_orders_trades_table.py`
+Depends on: T3.
+Add the `surface` switch to the harness and four assertions in the Python test:
+per-view row count unchanged; exactly one `stitch-category-pill` per market row;
+no `stitch-meta-category` and no `categoryShort` output; Open Positions carries
+no second line repeating the category.
+**Verify:** `python -m pytest -q tests/test_orders_trades_table.py`.
 
-### T3 — Delete the dead badge metadata
+**Checkpoints:** after T1+T2 — resolver and feed agree (probe one real market
+through `resolve_market_meta`). After T4+T5 — targeted Python suites green.
+After T6 — `python -m pytest -q tests/test_market_meta.py tests/test_orders_trades_table.py`
+green, then the operator-facing check below.
 
-- Remove `badge` / `badge_cls` from all four `TOURNAMENTS` entries (492: 645-646, 608: 656-657,
-  484: 667-668, 487: 678-679). Keep every other key.
-- Nav pill literal (line 1437) is untouched — it is now the only source of that string.
-- `analyze_arm_database`'s per-arm `badge_cls` (line 1026) is a different feature: do not touch.
+## How to verify (operator)
 
-### T4 — Tests (`tests/test_tournament_cockpit_arms.py`)
+1. `.\scripts\spread-hunter-menu.ps1 start`, open `http://127.0.0.1:8799`.
+2. Orders & Trades → click through **Orders**, **Active Markets**, **Open
+   Positions**, **Closed Trades**. Every row shows exactly one small chip under
+   the market name, in the same place, reading a real category (`Basketball`,
+   `Politics`, `Crypto`, `Uncategorized`) — never `NBA Tip-Off`,
+   `Republican Party`, `Aaron Ford (D)`, `Data 2` or `Spread -3.5`.
+3. On **Open Positions**, the second line under a row's chip is the event or
+   market title, not the category word again.
 
-Reuse `_record()` + `monkeypatch.setattr(cockpit, "ROOT", tmp_path)`.
+## Improvement proposal (adopted — simplification / edge-case hardening)
 
-1. `test_broken_record_reports_the_path_and_the_reason` — truncate the file (`'{"arms": ['`):
-   default arms + error containing `487_current_setup_10arm.json`.
-2. `test_record_shape_errors_are_named` — parametrised: top-level list, `arms` missing,
-   `arms` as dict, arm as int, arm without `name`; each returns default arms + a reason.
-3. `test_missing_record_is_not_an_error` — `(ARMS_CONFIG_487, None)`.
-4. `test_valid_record_has_no_error` — merged db/run_id/port applied, error `None`.
-5. `test_resolver_wrapper_still_returns_arms_only` — broken record → `ARMS_CONFIG_487`.
-6. `test_broken_record_logs_one_warning` — `caplog`, resolver called twice → exactly one
-   WARNING containing the file name; valid and missing records log none.
-   Reset `cockpit._WARNED_RECORD` with `monkeypatch`.
-7. `test_cockpit_page_shows_the_record_warning` — `generate_cockpit_html({"arms": [], "tourney_key":
-   "487", "record_error": "<path>: boom"})` contains "failed to parse" + the path; the same call
-   without `record_error` does not, and the container is `display:none`.
-8. `test_no_tournament_entry_carries_badge_metadata` — no `badge` / `badge_cls` key on any of the
-   four entries.
-9. `test_nav_renders_one_current_setup_badge` — the fixed nav pill string appears once and the
-   removed values (`R1 FRESH`, `R1 CHARACTERS`, `R1 ARCHIVE`) appear nowhere.
+Evidence, `core_brain/market_meta.py:317-334`: the category is built by an `or`
+chain that mixes four different kinds of text — `venue_category`, `category`,
+`series_title`, `market_group`, first tag — into one `_canonical_feed_label(...)`
+call. That chain is the bug: it cannot tell a category from a group name, so any
+fix that only appends tags leaves `Republican Party` reachable whenever tags are
+absent. **Adopted:** replace the chain with an ordered list of *typed* candidates
+(venue label, ranked tags, classifier), so a non-category string has no path to
+the label. Cost: one function, no new file.
 
-## Verification (agent-run)
+## Noticed but not touching
 
-```
-python -m pytest -q tests/test_tournament_cockpit_arms.py
-python -m pytest -q tests/test_tournament_cockpit_funnel.py tests/test_tournament_dashboard_hub.py
-```
-
-Full suite stays the CI merge gate.
-
-## Risks
-
-- **Log spam** — handled by `_WARNED_RECORD`; the test asserts one record across two calls.
-- **Contract drift on the picker** — the picker code is moved, not rewritten; the frozen
-  #492/#608 test plus the named-vs-timestamped test guard it.
-- **Banner vanishing on refresh** — avoided by always emitting the container and syncing it in
-  `renderAll()`.
-
+- `dashboard/static/app.js:8919-8937` duplicates the four-way view dispatch in
+  both the stitch and legacy branches; a table-driven dispatch would halve it.
+  Out of scope — the issue is the label, not the dispatch.
+- `_first_tag_label`'s "first tag wins" is wrong for every caller; only the
+  category path uses it, so it is removed rather than generalised.
+- The legacy `marketCell` caption still prints a bare-text category. Unreachable
+  in the browser (`proto-body`), left alone deliberately (see `CONSTRAINTS.md`).

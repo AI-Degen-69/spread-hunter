@@ -53,13 +53,26 @@ const kpi = input.kpi || {};
 const state = input.state || {};
 const view = input.view || 'active-markets';
 const sort = input.sort || null;
+// `surface: 'stitch'` renders the prototype terminal's row builders -- the ones
+// `renderOrdersTrades` actually paints. The classic builders stay the default
+// because the rest of this suite asserts the non-terminal tables (#748).
+const surface = input.surface === 'stitch' ? 'stitch' : 'classic';
 
 // `expand` opens market rows the way a click does, through the module's own
 // expand state, so the sub-table under test is the one the table really
 // renders -- not a second assembly of the same pieces that could drift from it.
 for (const cid of (input.expand || [])) app.expandedMarkets.add(cid);
 
-const html = app.ordersTradesRows(view, kpi, state, sort);
+const STITCH_ROWS = {
+  'open-orders': () => app.stitchOpenOrdersRows(kpi, state, sort),
+  'active-markets': () => app.stitchActiveMarketsRows(kpi, state, sort),
+  'positions': () => app.stitchPositionsRows(kpi, state, sort),
+  'closed-trades': () => app.stitchClosedTradesRows(kpi, state, sort),
+};
+
+const html = surface === 'stitch'
+  ? STITCH_ROWS[view]()
+  : app.ordersTradesRows(view, kpi, state, sort);
 
 // `toggle` drives the click path itself, not just the resulting sort: the issue
 // is about a header you click, so the sequence a click produces is part of the
@@ -75,6 +88,7 @@ if (toggle) {
 } else {
   process.stdout.write(JSON.stringify({
     view,
+    surface,
     sort,
     columns: app.OT_COLUMNS[view],
     head: app.otHeadHtml(view, sort),

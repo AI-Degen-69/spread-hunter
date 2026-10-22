@@ -850,6 +850,9 @@ def gamma_universe(session: requests.Session,
         params = {
             "closed": "false", "active": "true", "archived": "false",
             "order": "volume24hr", "ascending": "false",
+            # Tags carry the only reliable category labels the venue publishes;
+            # gamma omits them unless asked (#748).
+            "include_tag": "true",
             "limit": per_page, "offset": offset,
         }
         try:
@@ -920,8 +923,8 @@ def gamma_universe(session: requests.Session,
                     _str(m.get("category")) or _str(m.get("categorySlug"))
                     or _str(event.get("category"))
                     or _str(event.get("categorySlug"))),
-                "tags": _tag_labels(m.get("tags"))
-                + _tag_labels(event.get("tags")),
+                "tags": list(dict.fromkeys(
+                    _tag_labels(m.get("tags")) + _tag_labels(event.get("tags")))),
                 "market_type": m.get("marketType") or m.get("type") or "",
                 "market_group": m.get("groupItemTitle") or "",
                 # main's guarded readers win; the paired bundle also needs the
@@ -1029,9 +1032,13 @@ def _fetch_live_events(session: requests.Session, stats: dict) -> list[dict]:
     for _ in range(LIVE_EVENT_MAX_PAGES):
         try:
             r = session.get(LIVE_EVENTS, params={"live": "true",
-                                                 "closed": "false",
-                                                 "limit": LIVE_EVENT_PAGE,
-                                                 "offset": offset},
+                                                "closed": "false",
+                                                # Nested markets inherit these
+                                                # tags, so one flag covers the
+                                                # live slate (#748).
+                                                "include_tag": "true",
+                                                "limit": LIVE_EVENT_PAGE,
+                                                "offset": offset},
                             timeout=30)
             r.raise_for_status()
             payload = r.json()

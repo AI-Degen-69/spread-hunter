@@ -1,95 +1,78 @@
-# SPEC — First 10-arm tournament from the current setup (#487)
+# SPEC — One category label across the Orders & Trades tabs (#748)
+
+Branch: `i748/consistent-category-label-orders-trades` | Issue: #748
 
 ## Goal
 
-Turn "run a 10-arm shadow tournament from today's configuration" into an artifact a
-launcher and a cockpit can both read: one **tracked arm spec** holding ten arm
-definitions (one control at the current settings, nine one-knob variations), and a
-cockpit that shows those ten arms with the hypothesis each one tests.
+Every market row in the four Orders & Trades tabs (Orders, Active Markets, Open
+Positions, Closed Trades) shows **exactly one** category label, painted by the same
+`stitch-category-pill` chip, in the same place, with the full label — and that label
+is a real venue category, never a series, group or outcome name.
 
-No tournament is launched by this issue. The launch is the operator's command.
+## Where the label comes from
 
-## Why the premise was reset
+One resolver (`core_brain.market_meta.resolve_market_meta`), one precedence:
 
-The issue's original framing ("tweak the single worst-performing catalyst per arm" from
-first-run forensics) is stale, and the operator said so on 2026-10-21. Two facts from the
-repo, verified live:
+1. The venue's own explicit label — feed `venue_category`, then `category` —
+   canonicalised through the existing display rules (`ATP Tour` → `Tennis`,
+   `CS2` → `Counter-Strike 2`). Only recognised categories are accepted.
+2. The market's own venue **tags**, most specific category-level tag wins
+   (Basketball / Tennis / Politics / Crypto / Economy …). Non-category tags
+   (`NBA Tip-Off`, `UCL Matchday`, `Republican Party`, `Aaron Ford (D)`, `Data 2`,
+   `Spread -3.5`) never become the label.
+3. The existing keyword classifier over title / event title / slug.
+4. `Uncategorized`.
 
-- Tournament **#608** did run 10 arms for 720 minutes, 2026-10-19 03:51 → 15:51
-  (`runtime/tournaments/i608_tournament-1.json`, `reports/tournaments/i608_tournament-1_results.json`,
-  10 × ~110 MB stores in `data/`). Four of its ten arms carried an empty `env`, so they
-  were the same run four times, and the arms its descriptions named (`stop_loss_trigger_usd_cents`,
-  `single_buy_grace_sec`) had already been retired as inert knobs.
-- Every code-gate ticket the issue's own blocking comment named closed on **2026-10-20**
-  (#708 12:51Z, #686 13:28Z, #687 16:01Z, #646 16:23Z; #659 closed), and the config
-  vocabulary was canonicalised the same day (#734, #739). The #608 run predates all of it.
+`series_title`, `market_group` and arbitrary first-tag values stop being category
+sources. They keep every other use they have in the feed row and in the Open
+Positions secondary line.
 
-So: a tournament has never run on the current code, and the arm vocabulary it would have
-used has changed name. That is the gap this issue closes.
+## Why it is broken today (verified against live code and the live venue)
+
+- `scripts/filter_markets.py` never asks gamma for tags (`include_tag=true`), so
+  `tags` is empty on feed rows and the resolver never reaches step 2.
+- `resolve_market_meta` therefore falls through `series_title` → `market_group`,
+  which is where `Republican Party` / `Data 2` come from.
+- `dashboard/static/app.js:7050` `marketCategory()` already exists and every
+  renderer already calls it — the four tabs disagree about *markup and
+  placement*, not about the resolver call: Orders prints bare text
+  (`stitch-meta-category`), the other three print a chip, Open Positions also
+  duplicates the word in its secondary line (`classification` falls back to
+  `m.category`), and Closed Trades still computes a dead 4-character
+  `categoryShort`.
+- The node harness drives the **legacy** rows (`app.ordersTradesRows`), while the
+  dashboard paints the stitch renderers (`prototype.js:572` adds `proto-body`,
+  `app.js:8919-8937` dispatches on it) — so the path the operator actually sees
+  has no test.
 
 ## Acceptance criteria
 
-1. Ten arms are defined, resolved from the current configuration: one **control** whose
-   `env` is empty (the shipped defaults plus the operator's `.env`), plus nine arms each
-   setting **exactly one** `BOT_*` variable to a different value.
-2. Where `core_brain.config.TOURNAMENT_PRESETS` (the `#484` presets) ships the knob, the
-   arm's value is read **from the live preset table** and the test asserts that equality
-   rather than a re-typed literal. The presets ship five single-knob values that differ
-   from the current setup; the remaining four arms move levers no preset ships at a
-   different value and say so in their own description. (Amended in Station III with the
-   operator's approval — see the deviation note in
-   `docs/runs/2026-10-21-487-current-setup-tournament.md`.)
-3. The arm spec validates through `build_tournament_plan` with no port collision and no
-   naming collision: ports `8801`–`8810`, unique DB paths, unique run ids.
-4. The Tournament Cockpit serves the ten arms with their hypothesis. `ARMS_CONFIG_487`
-   and `TOURNAMENTS["487"]` describe the current-setup run, not the superseded catalyst
-   round, and `resolve_tournament_arms("487")` finds the run's plan record at
-   `runtime/tournaments/487_current_setup_10arm.json`.
-5. The run's launch and analysis path is documented and dry-run validated at 720 minutes
-   across ports 8801–8810.
+Mapped 1:1 to the issue's checklist; each one is asserted by a named test.
 
-## Artifacts
-
-| Artifact | Path | Tracked |
+| # | Criterion | Test |
 | --- | --- | --- |
-| Arm spec (source of truth for env) | `configs/tournaments/i487_current_setup_10arm_arms.json` | yes |
-| Plan record (written at launch) | `runtime/tournaments/487_current_setup_10arm.json` | no — `runtime/` is not in git |
-| Launcher log | `runtime/tournaments/487_current_setup_10arm.log` | no |
-| Per-arm stores | `data/487_tournament_<NN>_<arm>_current_setup_10arm.db` | no |
-| Results | `reports/tournaments/487_current_setup_10arm_results.json` | no |
-| Runbook | `docs/runs/2026-10-21-487-current-setup-tournament.md` | yes |
-
-The issue names `runtime/tournaments/487_current_setup_10arm.json` as "the executable
-tournament plan". That path is honoured **as the plan record** the launcher writes, reached
-with the existing `--stamp current_setup_10arm` flag. It is not committed: `runtime/` is
-runtime state by design (`docs/agents/architecture.md`, "Runtime state across the rename",
-and the `/runtime/**/*.json` rule in `.gitignore`). The committed half — the part that has
-to survive a clean checkout and be reviewable — is the arm spec under `configs/tournaments/`,
-which is the same split `#492` already uses.
+| A1 | Every row of all four tabs shows exactly one `stitch-category-pill` and no `stitch-meta-category`/bare text | `tests/test_orders_trades_table.py` (stitch surface, 4 views) |
+| A2 | Resolution order: venue label → most specific venue tag → classifier → `Uncategorized` | `tests/test_market_meta.py` |
+| A3 | No series/group/outcome name can become a label | `tests/test_market_meta.py` (negative vocabulary) |
+| A4 | Open Positions secondary line is an event/market title only | `tests/test_orders_trades_table.py` |
+| A5 | The gamma scan requests tags on `/markets` and `/events` | `tests/test_unified_universe.py`, `tests/test_live_event_discovery.py` |
+| A6 | The harness covers the four stitch renderers | `tests/js/orders_trades_harness.cjs` + `test_orders_trades_table.py` |
+| A7 | Display-only: no selection/ranking/sizing/risk change | no diff outside the four files below |
 
 ## Edge cases
 
-- **Arm name vs. preset name.** `build_tournament_plan` appends
-  `BOT_QUOTE_TOURNAMENT_PRESET=<arm name>` whenever an arm's name is a key of
-  `TOURNAMENT_PRESETS`. That would silently turn a one-knob arm into a six-knob arm. No arm
-  name may equal a preset name (`conservative`, `balanced`, `aggressive`, `prudent`,
-  `hybrid`, `baseline`). The spec's test asserts the disjointness, so a future rename cannot
-  reintroduce it.
-- **Arm name shape.** `ARM_NAME_PATTERN` is `^[a-z0-9-]{1,24}$`. The test pins it.
-- **An unknown preset selector is a planned failure.** The launcher refuses at plan time;
-  no arm sets `BOT_QUOTE_TOURNAMENT_PRESET`.
-- **Two plan records for `487`.** The obsolete static paths (`data/i487_tournament_*.db`)
-  live only in the current `ARMS_CONFIG_487`; they are replaced by the new arm slugs. The
-  resolver falls back to the static config when no record exists, and those static
-  db/run_id values are placeholders until the run launches — same contract as `#492`.
-- **A missing plan record is not an error.** Before launch the cockpit shows the ten arms
-  with `NO_DATA`; after launch it resolves db/run_id/port from the record.
+- A market whose only tags are non-category (`Senate`, `United States`,
+  `Midterms`) still resolves: `Politics` from the classifier or a politics tag;
+  if neither, `Uncategorized`. Never `Senate`.
+- A sports market tagged `Sports, NBA, Games, Basketball, NBA Tip-Off` resolves to
+  `Basketball`, not `Sports` and not `NBA Tip-Off` (rank, not tag order).
+- A market with no feed row (order outlived its market) keeps `Uncategorized`.
+- A tag list arriving as a non-list (`"nope"`, `{}`) must not raise.
 
 ## Out of scope
 
-- Launching the 12-hour run. Operator's command; see the runbook.
-- Any comparison or verdict. Comparative evaluation happens after the run finishes.
-- A new analysis script. The cockpit already computes the per-arm metrics
-  (`analyze_arm_database`, `generate_cockpit_html`); a third parallel analyser is invention.
-- Touching `data/orders.db`, any live-money path, or the strategy modules.
-- Any change to `TOURNAMENT_PRESETS`, `PICKER_PROFILE` or shipped `MakerConfig` defaults.
+- The legacy (non-`proto-body`) table markup. It is unreachable in the browser —
+  `prototype.js` adds `proto-body` on boot — so it stays as-is; only the stitch
+  renderers change.
+- Any change to market selection, ranking, sizing, risk caps or universe gates.
+- Localising or re-labelling the venue's category vocabulary.

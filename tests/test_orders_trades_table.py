@@ -43,12 +43,13 @@ CID_SETTLED = "0xsettled"
 
 
 def _render(view: str, kpi: dict | None = None, state: dict | None = None,
-            *, sort: dict | None = None, expand: list[str] | None = None) -> dict:
+            *, sort: dict | None = None, expand: list[str] | None = None,
+            surface: str = "classic") -> dict:
     # `sort` is keyword-only on purpose: as a positional third argument it lands
     # in `state`, the render comes back unsorted, and the sort assertion passes
     # against output the sort never touched.
     payload = {"view": view, "kpi": kpi or {}, "state": state or {}, "sort": sort,
-               "expand": expand or []}
+               "expand": expand or [], "surface": surface}
     out = subprocess.run([shutil.which("node"), str(HARNESS), json.dumps(payload)],
                          capture_output=True, text=True, check=True, encoding="utf-8")
     return json.loads(out.stdout)
@@ -2341,5 +2342,108 @@ def test_sorting_one_view_does_not_disturb_another_views_sort():
                                  {"col": 6, "dir": "asc"}]
     assert 'aria-sort="ascending"' in result["heads"][2]
 
+
+
+# ── One category chip on every surface (#748) ───────────────────────────────
+#
+# The four views are four stages of one trade, so they read one label for it.
+# The resolver decides what the label says; the table only has to render it the
+# same way in all four places -- one chip, under the market name, always.
+
+_STITCH_VIEWS = ["open-orders", "active-markets", "positions", "closed-trades"]
+
+_STITCH_ROW = re.compile(r'<tr class="stitch-')
+_STITCH_PILL = re.compile(
+    r'<span class="stitch-category-pill(?: is-muted)?">([^<]*)</span>')
+
+
+@requires_node
+@pytest.mark.parametrize("view", _STITCH_VIEWS)
+def test_every_stitch_view_renders_one_category_chip_per_market_row(view):
+    # Act
+    rendered = _render(view, _kpi(), _state(), surface="stitch")
+
+    # Assert — one chip per row and no second label markup, so the eye finds it
+    # in the same place whatever view is open.
+    html = rendered["html"]
+    assert rendered["surface"] == "stitch"
+    rows = _STITCH_ROW.findall(html)
+    assert rows, f"{view} rendered no rows"
+    assert len(_STITCH_PILL.findall(html)) == len(rows)
+    for cell in html.split('class="stitch-market-cell"')[1:]:
+        assert cell.split("</td>")[0].count("stitch-category-pill") == 1
+
+
+@requires_node
+@pytest.mark.parametrize("view", _STITCH_VIEWS)
+def test_the_chip_reads_the_same_label_the_resolver_wrote(view):
+    # Act — the fixture's labels are MLB / NBA / LOL, straight off the feed.
+    html = _render(view, _kpi(), _state(), surface="stitch")["html"]
+
+    # Assert — no view re-labels, abbreviates or falls back on its own.
+    labels = set(_STITCH_PILL.findall(html))
+    assert labels <= {"MLB", "NBA", "LOL", "Uncategorized"}, labels
+
+
+@requires_node
+@pytest.mark.parametrize("view,cid", [
+    ("open-orders", CID_QUOTED),
+    ("active-markets", CID_QUOTED),
+    ("positions", CID_HELD),
+    ("closed-trades", CID_CLOSED),
+])
+def test_an_unlabelled_market_still_shows_a_chip_in_every_view(view, cid):
+    # Arrange — a market the resolver could not name.
+    kpi = _kpi()
+    kpi["by_market"][cid]["category"] = ""
+
+    # Act
+    html = _render(view, kpi, _state(), surface="stitch")["html"]
+
+    # Assert — "Uncategorized" is an answer, and a dimmed chip keeps the column
+    # aligned instead of leaving a hole on that one row.
+    assert '<span class="stitch-category-pill is-muted">Uncategorized</span>' in html
+
+
+@requires_node
+def test_positions_second_line_names_the_event_not_the_category():
+    # Arrange — the market the position sits inside.
+    kpi = _kpi()
+    kpi["by_market"][CID_HELD]["category"] = "Politics"
+    kpi["by_market"][CID_HELD]["event_title"] = "Brazilian Presidential Election"
+
+    # Act
+    html = _render("positions", kpi, _state(), surface="stitch")["html"]
+
+    # Assert — the event name is there, and "Politics" appears exactly once:
+    # on the chip, never repeated as the line under it.
+    assert "Brazilian Presidential Election" in html
+    assert html.count("Politics") == 1
+
+
+@requires_node
+def test_positions_second_line_disappears_when_the_feed_names_no_event():
+    # Arrange — a resolved category with no event title behind it.
+    kpi = _kpi()
+    kpi["by_market"][CID_HELD]["category"] = "Politics"
+    kpi["by_market"][CID_HELD].pop("event_title", None)
+
+    # Act
+    html = _render("positions", kpi, _state(), surface="stitch")["html"]
+
+    # Assert — the chip answers the question; the old `|| m.category` fallback
+    # would have printed the category word a second time.
+    assert html.count("Politics") == 1
+
+
+def test_the_retired_category_markup_is_gone_from_the_renderer():
+    # Arrange
+    source = (_STATIC / "app.js").read_text(encoding="utf-8")
+
+    # Assert — one helper builds the chip for all four views; the per-view
+    # markup and the four-letter abbreviation are what drifted apart.
+    assert "function categoryPill(" in source
+    assert "stitch-meta-category" not in source
+    assert "categoryShort" not in source
 
 

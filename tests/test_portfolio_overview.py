@@ -95,8 +95,10 @@ def markets_feed(tmp_path, monkeypatch):
         },
         {
             "cid": "0xmarket_b", "slug": "market-b", "title": "Market B resolves up?",
-            # Category blank on the live feed today -- must fall back, not blank out.
+            # Category blank on the live feed today; the tags carry the label the
+            # venue actually publishes (#748), so the row still resolves.
             "category": "", "series_title": "Dota 2", "market_group": "Match Winner",
+            "tags": ["Recurring", "E-Sports", "Dota 2"],
             "volume_24h": 2000.0, "days_to_resolve": 0.5, "min_size": 5.0,
             "source": "spread", "spread": 0.02, "eligible": True, "reject_reason": "",
         },
@@ -262,10 +264,26 @@ def test_market_meta_carries_category_from_the_ranker_feed(seeded_db, markets_fe
     assert data["by_market"]["0xmarket_a"]["category"] == "Crypto"
 
 
-def test_blank_category_falls_back_to_series_title(seeded_db, markets_feed):
-    """A blank category on the feed resolves to the series, never to an empty cell."""
+def test_blank_category_falls_back_to_the_most_specific_tag(seeded_db, markets_feed):
+    """A blank venue category resolves from the tags, never from the series."""
     data = report(db_path=seeded_db, run_id=RUN)
     assert data["by_market"]["0xmarket_b"]["category"] == "Dota 2"
+
+
+def test_series_and_group_are_not_categories(seeded_db, tmp_path, monkeypatch):
+    """`Dota 2` as a series and `Match Winner` as a group are not labels (#748)."""
+    run_dir = tmp_path / "runtime"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "markets.json").write_text(json.dumps([
+        {
+            "cid": "0xmarket_b", "slug": "market-b", "title": "Market B resolves up?",
+            "category": "", "series_title": "Dota 2", "market_group": "Match Winner",
+            "tags": ["Recurring", "Match Winner"],
+        },
+    ]), encoding="utf-8")
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    data = report(db_path=seeded_db, run_id=RUN)
+    assert data["by_market"]["0xmarket_b"]["category"] == "Uncategorized"
 
 
 def test_empty_feed_leaves_category_as_uncategorized(seeded_db, tmp_path, monkeypatch):

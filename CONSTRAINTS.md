@@ -1,54 +1,78 @@
-# Constraints — #754 Cockpit: surface arm-record parse failures, drop dead badge metadata
+# Constraints — #748 One category label across the Orders & Trades tabs
 
-Branch: `i754/cockpit-record-parse-warning-and-drop-dead-badge` | Issue: #754
+Branch: `i748/consistent-category-label-orders-trades` | Issue: #748
 
 ## Hard scope
 
-- **Two files only:** `scripts/tournament_cockpit_server.py` and
-  `tests/test_tournament_cockpit_arms.py`. Anything else is out of scope for this issue.
-- **No LIVE execution.** This is a read-only cockpit page. No signer, no order path, no
-  `core_brain/order_manager.py`, no venue call.
-- **Never touch `data/orders.db`.** It is the production registry. Neither read nor write.
-- **No change to arm resolution precedence.** The named-record-over-timestamped sort, the
-  `i<key>_tournament-<run>.json` scheme for #492/#608, and the static-table fallback all stay
-  exactly as they are. Only the *failure visibility* is new.
-- **No route changes.** `/487` stays the only page; `/484`, `/492`, `/608` keep returning 404.
+- **Display only.** The category never gates admission, ranking, sizing or risk
+  (`docs/agents/strategy.md:39-42`). No file under `strategy/` or `scoring/`
+  changes, and `scripts/filter_markets.py` changes only in what it **asks the
+  venue for** and what it **writes into the row** — never in a filter, a score or
+  a gate.
+- **Nine files may change**, all of them named here: `core_brain/market_meta.py`,
+  `scripts/filter_markets.py`, `dashboard/static/app.js`,
+  `dashboard/static/prototype.css` (one muted-chip rule), `tests/test_market_meta.py`,
+  `tests/js/orders_trades_harness.cjs`, `tests/test_orders_trades_table.py`, plus three
+  existing test files: the two that own the fetch seams
+  (`tests/test_unified_universe.py`, `tests/test_live_event_discovery.py`) and
+  `tests/test_portfolio_overview.py`, whose
+  `test_blank_category_falls_back_to_series_title` asserted the retired
+  `series_title` fallback — it is rewritten to the tag precedence with a
+  `series_title`/`market_group` negative case. A change outside this list is out of
+  scope — stop and split it.
+- **Never touch `data/orders.db`.** It is the production registry. Read only.
+- **No venue contact from this work.** No `quote`, no `complete`, no Trader
+  loop, no `order_manager` subcommand. The tag vocabulary was sampled live once
+  during planning, from `%TEMP%`, and nothing of it is committed.
+- **The legacy table is out of scope.** `dashboard/static/prototype.js:572` adds
+  `proto-body` on boot, so the dashboard paints the stitch renderers
+  (`app.js:8919-8937`). `marketCell`'s `caption-muted` category line and the
+  legacy rows keep their current markup.
 
 ## Zero regressions
 
-- `python -m pytest -q tests/test_tournament_cockpit_arms.py tests/test_tournament_cockpit_funnel.py tests/test_tournament_dashboard_hub.py`
-  must pass. The full suite is the CI merge gate, not a local step.
-- `resolve_tournament_arms(key)` keeps its exact current signature and return type
-  (`list[dict]`). Five existing tests and `collect_all_stats` call it; it must stay a
-  drop-in.
+- Targeted checks covering the touched files, run by the agent during
+  development and after review fixes:
+  `python -m pytest -q tests/test_market_meta.py tests/test_orders_trades_table.py tests/test_unified_universe.py tests/test_live_event_discovery.py tests/test_stitch_active_markets.py tests/test_kpi.py tests/test_portfolio_overview.py`.
+  The full `python -m pytest -q` suite is the GitHub CI merge gate; do not repeat
+  it locally.
+- **`tests/test_stitch_active_markets.py` stays green untouched.** It pins the
+  Active Markets column structure; the category chip's contents may change, its
+  presence and class may not.
+- New behaviour needs a test that fails without the change. Every acceptance row
+  in `SPEC.md` names the test that fails when its behaviour is absent.
 
-## Behavioural contract (the point of the issue)
+## Frozen contracts
 
-- A record that **does not exist** means "the run has not started" and shows **no warning**.
-- A record that **exists but cannot be read** (truncated JSON, unparsable, or no `arms` list)
-  must be **visibly reported** — never rendered as the same silent "not started" table.
-- Dropping `TOURNAMENTS[*]["badge"]` / `["badge_cls"]` must not change what the nav renders:
-  the single `/487` pill's hardcoded `CURRENT SETUP` badge is the only badge on that nav.
-- The failure is a **named** error (`TournamentRecordError`) raised from shape validation,
-  with only `OSError` / `ValueError` caught around the read. The blanket `except Exception`
-  goes away, so an unforeseen bug surfaces loudly instead of posing as "not started".
-- One warning per broken record, not one per poll: `get_cached_stats` re-collects every 3s.
+- `resolve_market_meta(cid, closes, quotes, root=...)` keeps its signature and
+  its returned keys. `event_title` is **added** to the returned dict (the
+  Positions secondary line needs a real title); no key is removed or renamed.
+- `kpi.by_market[cid]` is `{**meta, ...}` (`core_brain/kpi.py:1616`), so an added
+  meta key reaches the frontend without a KPI change. A KPI change is out of
+  scope.
+- `marketCategory(m)` keeps its name, its single argument and its
+  `Uncategorized` fallback — it is already exported and already called by every
+  renderer.
+- Feed rows keep `series_title`, `market_group`, `event_title`, `tags`,
+  `venue_category` and `category` with their current meanings. Only the
+  **resolver's use** of them changes.
+- `stitch-category-pill` is the only category markup. No new CSS class; the chip
+  and its muted `Uncategorized` styling already exist in
+  `dashboard/static/prototype.css:1313-1323`.
 
 ## Anti-cheat
 
-- No skipping, `xfail`-ing, or deleting existing assertions. The frozen #492/#608 resolver
-  test and the purged-route tests stay untouched and green.
-- No new external dependency, no new stylesheet class (reuse `.badge-red`).
-- No broad `except Exception: pass` replacing the existing one — the new path must record the
-  failure, not swallow it harder.
+- No skipped or xfailed test, no deleted assertion, no widened tolerance. An
+  existing assertion that encodes the **old** precedence (series/group becoming
+  the category) is **rewritten** to the new contract, and the plan lists each one
+  — rewriting an assertion that guards a behaviour still wanted is not allowed.
+- No new external dependency. `requests` and `node` are already used.
 
-## Deliberate non-goals (recorded so review does not "fix" them)
+## Performance / resource ceilings
 
-- The nav pill keeps its literal label; the cockpit serves one page, so data-driving a
-  one-item nav would be ceremony, not honesty. The issue allows dropping the fields, and the
-  title names dropping.
-- `analyze_arm_database`'s per-arm `readiness` / `badge_cls` (the `NO_DATA` / `PENDING`
-  badges in the leaderboard) are live and unrelated. They stay.
-- `docs/issues/487-noticed-but-not-touching.md` is **not** edited here. Its rows already say
-  "promoted to #754", which stays true; artifact closeout is the end-of-pipeline step.
-
+- The resolver stays pure and dict-only: no I/O, no network, no new import beyond
+  what `market_meta.py` already imports at module scope.
+- The tag ranking is O(tags) per market with a fixed vocabulary map built once at
+  import — no per-row regex compilation.
+- `include_tag=true` adds no page: it widens each existing `/markets` and
+  `/events` response, not the page count.
