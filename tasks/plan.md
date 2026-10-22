@@ -116,7 +116,7 @@ every assertion those tests make about live behaviour.
 **Verify:** focused pytest on those three files + `test_completable_pair_gate.py`
 + `test_live_e2e_lifecycle.py`.
 
-### T3 · [UI] · S · Clean the three operator surfaces
+### T3 · [UI] · S · Clean the three operator surfaces — ✅ done
 **Files:** `dashboard/server.py`, `dashboard/static/strategy_explainer.html`,
 `scripts/tournament_cockpit_server.py`, `tests/test_dashboard_server.py`,
 `tests/test_shadow_tournament.py`
@@ -131,7 +131,7 @@ Threshold" and "Hold Deviation Buffer" rows from the HYBRID blueprint table
 **Verify:** focused pytest on both test files + `test_ui_276_explainer_tokens.py`;
 then open `/api/parameters` and the explainer in the browser.
 
-### T4 · [Backend/Logic] · S · Launcher rejection, arm files, written record
+### T4 · [Backend/Logic] · S · Launcher rejection, arm files, written record — ✅ done
 **Files:** `scripts/shadow_tournament.py`,
 `configs/tournaments/i492_tournament-1_arms.json`,
 `configs/tournaments/i608_tournament-1_arms.json`,
@@ -151,7 +151,7 @@ hold renames from the variable-names idea file.
 **Verify:** focused pytest on `test_shadow_tournament.py`, then build a plan from
 each committed arm file (no shadow minutes spent) to confirm they still load.
 
-### T5 · [Backend/Logic] · S · Absence test (the guard that ends this class of bug)
+### T5 · [Backend/Logic] · S · Absence test (the guard that ends this class of bug) — ✅ done
 **Files:** `tests/test_requote_hold_retired.py` (new; module shape mirrors
 `tests/test_refusal_hold_decision.py`)
 **Depends on:** T1, T2, T3, T4
