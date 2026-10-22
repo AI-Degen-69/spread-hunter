@@ -23,9 +23,11 @@ rate.
 
 ## Scope note — the run itself is deferred
 
-The issue's real deliverable is the measured gap, which requires **≥60 closes of live data**
-from #471. This PR ships the instrument. Until #471 lands, the live registry has 0 fills, so
-every gap honestly reads `--`. The run is a single command once the data exists.
+The issue's real deliverable is a useful measured gap; #471 targets **≥60 closes of live data**
+for that calibration run. This PR ships the instrument. The sampled live registry has 0 fills,
+but a gap still prints when both sides clear `--min-orders` — which is what the run below shows
+(`+31.8pp` from 14 live orders against 1,252 shadow orders). Thinner or unreadable buckets read
+`--`. The run is a single command once more live data exists.
 
 ## Files
 

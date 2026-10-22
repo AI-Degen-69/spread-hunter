@@ -301,6 +301,68 @@ def test_foreign_schema_is_unreadable(tmp_path):
     assert load.samples == ()
 
 
+def _corrupt(path, statement: str, value) -> None:
+    """Edit one value in a test-owned store; the module itself never writes."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(statement, (value,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_hash_in_path_opens_the_intended_file(tmp_path):
+    """A raw `file:` URI is cut at `#`: the old code opened -- and created -- `a`."""
+    path = tmp_path / "a#b.db"
+    reg = OrderRegistry(db_path=path)
+    _post(reg, "H1", 0.42, run_id=SHADOW_RUN, status="open", queue_ahead=0.0)
+    load = load_store(path, run_id=SHADOW_RUN, label="shadow")
+    assert load.status == OK
+    assert [s.local_id for s in load.samples] == ["H1"]
+    assert not (tmp_path / "a").exists()
+
+
+def test_non_finite_original_size_is_unreadable(tmp_path):
+    path = tmp_path / "inf.db"
+    reg = OrderRegistry(db_path=path)
+    _post(reg, "N1", 0.42, run_id=SHADOW_RUN, status="open")
+    _corrupt(path, "UPDATE orders SET original_size = ?", float("inf"))
+    load = load_store(path, run_id=SHADOW_RUN, label="shadow")
+    assert load.status == UNREADABLE
+    assert "not finite" in load.detail
+    assert "N1" in load.detail
+    assert load.samples == ()
+
+
+def test_non_numeric_queue_ahead_is_unreadable(tmp_path):
+    path = tmp_path / "bad-queue.db"
+    reg = OrderRegistry(db_path=path)
+    _post(reg, "Q1", 0.42, run_id=SHADOW_RUN, status="open", queue_ahead=5.0)
+    _corrupt(path, "UPDATE quotes SET queue_ahead = ?", "n/a")
+    load = load_store(path, run_id=SHADOW_RUN, label="shadow")
+    assert load.status == UNREADABLE
+    assert "Q1" in load.detail
+    assert load.samples == ()
+
+
+def test_json_never_emits_nan(tmp_path, live_db, capsys):
+    """`inf / inf` is `nan`: the old path printed `NaN`, which is not valid JSON."""
+    path = tmp_path / "inf-json.db"
+    reg = OrderRegistry(db_path=path)
+    _post(reg, "N1", 0.42, run_id=SHADOW_RUN, status="filled",
+          queue_ahead=0.0, fills=(("t-n1", 5.0),))
+    _corrupt(path, "UPDATE orders SET original_size = ?", float("inf"))
+    _corrupt(path, "UPDATE fills SET size = ?", float("inf"))
+    rc = main(["--shadow-db", str(path), "--live-db", str(live_db),
+               "--live-run-id", LIVE_RUN, "--min-orders", "1", "--json"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "NaN" not in out
+    payload = json.loads(out)
+    assert payload["shadow"]["status"] == UNREADABLE
+    assert payload["overall"]["share_gap"] is None
+
+
 # --- T2: buckets and signed gap math -----------------------------------------
 
 def test_price_bucket_edges():

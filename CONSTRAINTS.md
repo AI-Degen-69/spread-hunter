@@ -38,7 +38,8 @@ violation blocks the PR.
 
 ## Math contract
 
-- Every rate is a fraction in `0..1`, never a percentage. Formatting appends no `%`.
+- Every rate is a fraction in `0..1`, never a percentage; the JSON output preserves those
+  fractions. Text rendering is display-only: rates print as `%`, gaps as `pp`.
 - **Gap = shadow − live.** Positive means the shadow model fills more than the venue did.
   The sign rule string `positive gap = shadow fills more than live` appears in both output
   modes.

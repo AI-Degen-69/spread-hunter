@@ -156,17 +156,39 @@ _RUN_FILTER = "  AND o.run_id = ?\n"
 _ORDER_BY = "ORDER BY o.id\n"
 
 
+class _BadRow(ValueError):
+    """A cohort row whose numbers cannot be trusted: non-numeric or non-finite."""
+
+
 def _sample_from_row(row: sqlite3.Row) -> OrderSample:
-    posted = float(row["original_size"])
-    raw_filled = float(row["filled"] or 0.0)
+    """One row to one sample, or `_BadRow` -- never a guess and never `nan`.
+
+    SQLite columns are dynamically typed, so a corrupt or hand-edited store can
+    hold text in `queue_ahead` or an infinity in `original_size`; `inf / inf`
+    would reach `json.dumps` as `NaN`, which strict JSON parsers reject. Every
+    number is therefore checked here, inside the caller's guarded block, and a
+    bad row makes its store `UNREADABLE` instead of crashing the report.
+    """
+    local_id = row["local_id"]
+    try:
+        posted = float(row["original_size"])
+        price = float(row["price"])
+        raw_filled = float(row["filled"] or 0.0)
+        queue = row["queue_ahead"]
+        queue_ahead = None if queue is None else float(queue)
+    except (TypeError, ValueError) as exc:
+        raise _BadRow(f"order {local_id!r}: {exc}") from exc
+    for name, value in (("original_size", posted), ("price", price),
+                        ("filled", raw_filled), ("queue_ahead", queue_ahead)):
+        if value is not None and not math.isfinite(value):
+            raise _BadRow(f"order {local_id!r}: {name} is not finite ({value!r})")
     overfilled = raw_filled > posted + FILL_EPSILON
     filled = min(raw_filled, posted) if raw_filled > 0.0 else 0.0
-    queue = row["queue_ahead"]
     return OrderSample(
-        local_id=str(row["local_id"]),
-        price=float(row["price"]),
+        local_id=str(local_id),
+        price=price,
         posted_shares=posted,
-        queue_ahead=None if queue is None else float(queue),
+        queue_ahead=queue_ahead,
         status=str(row["status"]),
         filled_shares=filled,
         overfilled=overfilled,
@@ -191,7 +213,11 @@ def load_store(
             status=NO_DATA, detail="file not found; nothing to read",
         )
 
-    uri = f"file:{resolved.resolve().as_posix()}?mode=ro"
+    # `as_uri()` percent-escapes reserved characters. A raw `file:<path>?mode=ro`
+    # URI is cut at a `#`, so a store named `a#b.db` opened `a` instead -- and
+    # created it, read-write, because the `?mode=ro` then belonged to the
+    # truncated path. `?` cannot exist in a Windows filename; `#` can.
+    uri = f"{resolved.resolve().as_uri()}?mode=ro"
     query = _SAMPLE_QUERY
     params: list[object] = []
     if run_id:
@@ -209,15 +235,21 @@ def load_store(
     try:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(query, params).fetchall()
+        samples = tuple(_sample_from_row(row) for row in rows)
     except sqlite3.Error as exc:
         return StoreLoad(
             label=label, path=str(resolved), run_id=run_id,
             status=UNREADABLE, detail=str(exc) or exc.__class__.__name__,
         )
+    except _BadRow as exc:
+        return StoreLoad(
+            label=label, path=str(resolved), run_id=run_id,
+            status=UNREADABLE,
+            detail=f"unreadable cohort row ({exc}); nothing was repaired",
+        )
     finally:
         conn.close()
 
-    samples = tuple(_sample_from_row(row) for row in rows)
     if not samples:
         return StoreLoad(
             label=label, path=str(resolved), run_id=run_id,
@@ -563,7 +595,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = build_report(shadow, live, min_orders=args.min_orders)
 
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2))
+        # `allow_nan=False` is the last line of defence: `_sample_from_row` already
+        # rejects non-finite numbers, and `NaN` is not valid JSON for a strict reader.
+        print(json.dumps(report.to_dict(), indent=2, allow_nan=False))
     else:
         print(render_text(report))
     return 0 if (shadow.status == OK and live.status == OK) else 1
