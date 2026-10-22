@@ -1,51 +1,43 @@
-﻿# Checklist — #748 One category label across the Orders & Trades tabs
+# Todo — #753 Retire the dead hold-lever surface
 
-Branch: `i748/consistent-category-label-orders-trades` | Issue: #748
+Branch: `i753/retire-dead-hold-levers` | Issue: #753 | Plan: `tasks/plan.md`
 
-## T1 — Tag-aware resolver (`core_brain/market_meta.py`)
-- [x] Build `CATEGORY_TAG_RANK` at import from `_SPORT_RULES`, `_ESPORTS_GAME_RULES` + the top-level venue list
-- [x] Add `category_from_tags(row)` (highest rank, first tag wins a tie, malformed tags ignored)
-- [x] Add `_category_from_feed_label(label)` (recognised labels only)
-- [x] Rewrite the category precedence: venue label → tags → classifier → `UNCATEGORIZED`
-- [x] Return `event_title` in the meta dict
-- [x] Delete the `series_title` / `market_group` / `_first_tag_label` category sources
-- [x] `python -m pytest -q tests/test_market_meta.py`
+## T1 · Config surface [Backend/Logic] · S
+- [x] Delete both `MakerConfig` fields (`config.py:197-198`)
+- [x] Delete their env parsing + bounds (`config.py:~375-383`)
+- [x] Remove both keys from all six `TOURNAMENT_PRESETS`
+- [x] Rewrite the four "... with queue hold" descriptions + hybrid's "queue stability"
+- [x] Drop both variables and the unit note from `.env.example`
+- [x] Update `test_dynamic_offset.py` preset pins + `test_completable_pair_gate.py` bound tests
 
-## T2 — Ask gamma for tags (`scripts/filter_markets.py`)
-- [x] `include_tag: "true"` on the `/markets` page params
-- [x] `include_tag: "true"` on the live-events params
-- [x] Dedupe the feed row's `tags` (market + event) preserving order
-- [x] `python -m pytest -q tests/test_unified_universe.py tests/test_live_event_discovery.py`
+## T2 · Planner surface [Backend/Logic] · M
+- [x] Drop six unread params from `plan_orders` signature
+- [x] Drop four keys from `plan_kwargs`
+- [x] Delete `hedge_asks` / `hedge_held` computation blocks
+- [x] Keep `queue_ahead` (attribution) and `visit_outcome.value` (registry write)
+- [x] Replace the two "RETIRED BY #387" docstring blocks with one paragraph
+- [x] Delete/adjust hold tests in `test_plan_orders_asymmetric_hold.py`, `test_trader_loop.py`, `test_cancel_attribution.py`
 
-## T3 — One chip everywhere (`dashboard/static/app.js`)
-- [x] Add `categoryPill(m)`; single template, escapes, muted for `Uncategorized`
-- [x] Orders meta line: bare `stitch-meta-category` span → `categoryPill`
-- [x] Active Markets: chip always rendered
-- [x] Open Positions: chip + secondary line is event/market title only
-- [x] Closed Trades: drop `categoryShort`, use `categoryPill`
-- [x] Export `marketCategory`, `categoryPill`, the four `stitch*Rows`
-- [x] `python -m pytest -q tests/test_stitch_active_markets.py`
+## T3 · Operator surfaces [UI] · S
+- [x] Delete the two dashboard parameter cards
+- [x] Delete the two explainer rows
+- [x] Delete the two HYBRID blueprint table rows in the cockpit
+- [x] Annotate the two #485 cockpit card tweaks as retired by #387
+- [x] Update `test_dashboard_server.py` env-key map + `test_shadow_tournament.py` blueprint keys
 
-## T4 — Resolver tests (`tests/test_market_meta.py`)
-- [x] Rewrite the old-precedence assertions (series, group, first tag)
-- [x] Most specific tag wins (`Sports, NBA, Games, Basketball, NBA Tip-Off` → `Basketball`)
-- [x] Non-category tags never become a label (`NBA Tip-Off`, `UCL Matchday`, `Republican Party`, `Aaron Ford (D)`, `Data 2`, `Spread -3.5`)
-- [x] Tags beat the classifier; classifier fills in when tags are empty
-- [x] `event_title` is returned; malformed `tags` never raise
-- [x] `python -m pytest -q tests/test_market_meta.py`
+## T4 · Launcher, arm files, written record [Backend/Logic] · S
+- [x] Extend `_RETIRED_PRESET_KEYS` with both field names
+- [x] Reject both retired `BOT_*` names on the `arm["env"]` path, message names #387
+- [x] Clean `i492_tournament-1_arms.json` (6 arms)
+- [x] Delete the two now-empty arms from `i608_tournament-1_arms.json`
+- [x] Update `test_shadow_tournament.py` fixtures + convert the legacy-alias test
+- [x] Mark N1-N3 resolved; drop hold renames from the variable-names idea file
 
-## T5 — Fetch-param tests
-- [x] `tests/test_unified_universe.py`: the `/markets` request carries `include_tag`
-- [x] `tests/test_live_event_discovery.py`: the live-events request carries `include_tag`
-- [x] `python -m pytest -q tests/test_unified_universe.py tests/test_live_event_discovery.py`
+## T5 · Absence test [Backend/Logic] · S
+- [x] New `tests/test_requote_hold_retired.py` covering all eight acceptance bars
+- [x] Confirm it is red without the change, green with it
 
-## T6 — Stitch-surface coverage
-- [x] `tests/js/orders_trades_harness.cjs`: `surface: "stitch"` dispatches to `stitch*Rows`
-- [x] `tests/test_orders_trades_table.py`: one `stitch-category-pill` per market row, four views
-- [x] no `stitch-meta-category`, no `categoryShort` in the rendered output
-- [x] Open Positions has no second line repeating the category
-- [x] `python -m pytest -q tests/test_market_meta.py tests/test_orders_trades_table.py tests/test_stitch_active_markets.py`
-
-## Wrap-up
-- [ ] Full changed-file review (the five files + two test files) against `CONSTRAINTS.md`
-- [ ] `tasks/pr-body.md` written; PR opened; one CodeRabbit round; CI green; merge; #748 closed
+## Checkpoints
+- [x] After T2: focused planner/config checks green
+- [x] After T4: repo grep clean outside historical cockpit annotations
+- [x] After T5: full focused set green

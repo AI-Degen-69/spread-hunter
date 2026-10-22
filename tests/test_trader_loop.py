@@ -143,9 +143,7 @@ class TestPlanOrders:
         ]
         from core_brain.config import MakerConfig
         cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
-        to_cancel, to_submit = plan_orders(
-            open_orders, intents, cfg=cfg,
-            hedge_asks={"tok-up": 0.30, "tok-dn": 0.23})
+        to_cancel, to_submit = plan_orders(open_orders, intents, cfg=cfg)
         assert to_cancel == []
         assert to_submit == []
 
@@ -160,8 +158,7 @@ class TestPlanOrders:
         from core_brain.config import MakerConfig
         to_cancel, to_submit = plan_orders(
             open_orders, intents,
-            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
-            hedge_asks={"tok-up": 0.30})
+            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00))
         assert to_cancel == []
         assert to_submit == []
 
@@ -234,85 +231,6 @@ class TestPlanOrders:
         assert [i.token_id for i in to_submit] == ["tok-dn"]
         assert to_submit[0].pair_id is None
 
-    def test_wanted_legs_hold_despite_queue_and_gate_pressure(self):
-        # #387: both legs wanted, live asks failing the retired pair-cost
-        # gate, queue hold armed -- everything that used to cancel now holds.
-        open_orders = [
-            {"token_id": "tok-up", "price": 0.73, "order_id": "o-up",
-             "side": "BUY", "status": "open", "pair_id": "pair-aaa111"},
-            {"token_id": "tok-dn", "price": 0.23, "order_id": "o-dn",
-             "side": "BUY", "status": "open", "pair_id": "pair-aaa111"},
-        ]
-        intents = [
-            _intent(side="UP", token="tok-up", price=0.60),
-            _intent(side="DOWN", token="tok-dn", price=0.28),
-        ]
-        to_cancel, to_submit = plan_orders(
-            open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
-            hedge_asks={"tok-up": 0.20, "tok-dn": 0.80},
-            queue_ahead={"o-up": 10.0},
-            hold_queue_shares=50.0)
-        assert to_cancel == []
-        assert to_submit == []
-
-    def test_the_queue_hold_keeps_a_near_front_order_through_a_price_move(self):
-        # #304: the hold is the whole point of the issue, so it gets its own
-        # test at the threshold the recorded cancels picked. 50 shares ahead,
-        # 200-share threshold: the order is held at 0.73 even though the
-        # desired price has walked to 0.60, because a cancel would re-post it
-        # at the back of a new level and the queue is what fills here.
-        open_orders = [_open(price=0.73, oid="o-up")]
-        intents = [_intent(price=0.60)]
-        to_cancel, to_submit = plan_orders(
-            open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
-            hedge_asks={"tok-up": 0.20},
-            queue_ahead={"o-up": 50.0},
-            hold_queue_shares=200.0)
-        assert to_cancel == []
-        assert to_submit == []
-
-    def test_the_queue_hold_releases_an_order_that_is_far_back(self):
-        # Place-and-wait (#384): a wanted token is held unconditionally, so
-        # queue depth no longer releases it. The far-back order stays.
-        open_orders = [_open(price=0.73, oid="o-up")]
-        intents = [_intent(price=0.60)]
-        to_cancel, _ = plan_orders(
-            open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
-            hedge_asks={"tok-up": 0.20},
-            queue_ahead={"o-up": 5000.0},
-            hold_queue_shares=200.0)
-        assert to_cancel == []
-
-    def test_the_queue_hold_declines_on_a_queue_it_never_measured(self):
-        # Place-and-wait (#384): an unmeasured queue no longer cancels a
-        # wanted token either. The order is held at its own price.
-        open_orders = [_open(price=0.73, oid="o-up")]
-        intents = [_intent(price=0.60)]
-        to_cancel, _ = plan_orders(
-            open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
-            hedge_asks={"tok-up": 0.20},
-            queue_ahead={},
-            hold_queue_shares=200.0)
-        assert to_cancel == []
-
-    def test_front_of_queue_order_holds_despite_failing_gate(self):
-        # #387: queue position AND a failing pair-cost gate -- the wanted
-        # order is still held. Cost is judged at placement, never after.
-        open_orders = [_open(price=0.73, oid="o-up")]
-        intents = [_intent(price=0.60)]
-        to_cancel, to_submit = plan_orders(
-            open_orders, intents, dead_band=0.01,
-            cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
-            hedge_asks={"tok-up": 0.42},
-            queue_ahead={"o-up": 5.0},
-            hold_queue_shares=200.0)
-        assert to_cancel == []
-        assert to_submit == []
-
     def test_the_larger_of_dead_band_and_price_eps_wins(self):
         # Place-and-wait (#384): either tolerance holds a wanted token; drift
         # cancels nothing, so both widths keep the order.
@@ -330,8 +248,7 @@ class TestPlanOrders:
         open_orders = [_open(price=0.60)]
         intents = [_intent(price=0.58)]
         to_cancel, to_submit = plan_orders(
-            open_orders, intents, dead_band=0.03, cfg=cfg,
-            hedge_asks={"tok-up": 0.42})
+            open_orders, intents, dead_band=0.03, cfg=cfg)
         assert to_cancel == []
         assert to_submit == []
 
@@ -340,35 +257,24 @@ class TestPlanOrders:
         open_orders = [_open(price=0.60)]
         intents = [_intent(price=0.58)]
         to_cancel, to_submit = plan_orders(
-            open_orders, intents, dead_band=0.03, cfg=cfg,
-            hedge_asks={"tok-up": 0.38})
+            open_orders, intents, dead_band=0.03, cfg=cfg)
         assert to_cancel == []
         assert to_submit == []
-
-    def test_a_missing_hedge_ask_leaves_the_kept_order_alone(self):
-        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
-        open_orders = [_open(price=0.60)]
-        intents = [_intent(price=0.58)]
-        to_cancel, _ = plan_orders(open_orders, intents, dead_band=0.03,
-                                   cfg=cfg, hedge_asks={})
-        assert to_cancel == []
 
     def test_dead_band_widths_hold_despite_failing_gate(self):
         # Issue #361 scenario, under no-re-check (#387):
         # Resting bid at 0.60, desired intent walks down to 0.55 (drift = 0.05).
-        # Opposite ask is 0.42 (0.60 + 0.42 = 1.02 >= the retired cap).
-        # Both dead-band widths hold the order and record no reason --
-        # cost is judged at placement, never after.
+        # Both dead-band widths hold the order and record no reason -- cost is
+        # judged at placement, never after.
         cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
         open_orders = [_open(price=0.60, oid="o1")]
         intents = [_intent(price=0.55)]
-        hedge_asks = {"tok-up": 0.42}
 
         # 1. Narrow dead band (0.03): out of band -- held anyway.
         reasons_narrow = {}
         to_cancel_narrow, to_submit_narrow = plan_orders(
             open_orders, intents, dead_band=0.03, cfg=cfg,
-            hedge_asks=hedge_asks, reasons=reasons_narrow,
+            reasons=reasons_narrow,
         )
         assert to_cancel_narrow == []
         assert reasons_narrow == {}
@@ -378,32 +284,11 @@ class TestPlanOrders:
         reasons_wide = {}
         to_cancel_wide, to_submit_wide = plan_orders(
             open_orders, intents, dead_band=0.08, cfg=cfg,
-            hedge_asks=hedge_asks, reasons=reasons_wide,
+            reasons=reasons_wide,
         )
         assert to_cancel_wide == []
         assert reasons_wide == {}
         assert to_submit_wide == []
-
-    def test_hold_levers_and_failing_gate_hold_together(self):
-        # #387: hold_below_target and hold_queue_shares active, pair-cost
-        # gate failing -- the wanted order is held, no reason recorded.
-        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
-        open_orders = [_open(price=0.60, oid="o1")]
-        intents = [_intent(price=0.55)]
-        hedge_asks = {"tok-up": 0.42}
-        reasons = {}
-
-        to_cancel, to_submit = plan_orders(
-            open_orders, intents, dead_band=0.08, cfg=cfg,
-            hedge_asks=hedge_asks,
-            queue_ahead={"o1": 5.0},
-            hold_queue_shares=200.0,
-            hold_below_target=0.06,
-            reasons=reasons,
-        )
-        assert to_cancel == []
-        assert reasons == {}
-        assert to_submit == []
 
     def test_place_and_wait_holds_a_profitable_resting_pair_through_drift(self):
         # Issue #384: every resting pair passed the pair-cost gate before
@@ -445,7 +330,6 @@ class TestPlanOrders:
         to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.03,
             cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
-            hedge_asks={"tok-up": 0.80, "tok-dn": 0.28},
             reasons=reasons,
         )
 
@@ -464,7 +348,6 @@ class TestPlanOrders:
         to_cancel, to_submit = plan_orders(
             open_orders, intents,
             cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
-            hedge_asks={"tok-up": 0.60},
             reasons=reasons,
         )
 
@@ -472,11 +355,10 @@ class TestPlanOrders:
         assert to_submit == []
         assert reasons == {}
 
-    @pytest.mark.parametrize("outcome", list(VisitOutcome))
-    def test_planner_never_records_regate_reason(self, outcome):
-        # #626: whatever the visit decided and however hostile the opposite
-        # asks, there is no re-gate left to record a reason for. This is the
-        # invariant, not one path: a reintroduced cost re-check fails here.
+    def test_planner_never_records_regate_reason(self):
+        # #626: whatever the visit decided, there is no re-gate left to record
+        # a reason for. This is the invariant, not one path: a reintroduced
+        # cost re-check fails here.
         open_orders = [_open("tok-up", 0.60, "o-up"), _open("tok-dn", 0.23, "o-dn")]
         intents = [_intent(side="UP", token="tok-up", price=0.60),
                    _intent(side="DOWN", token="tok-dn", price=0.23)]
@@ -485,14 +367,38 @@ class TestPlanOrders:
         to_cancel, _ = plan_orders(
             open_orders, intents, dead_band=0.03,
             cfg=MakerConfig(bot_pos_price_max_complete_usd=1.00),
-            hedge_asks={"tok-up": 0.99, "tok-dn": 0.99},
-            hedge_held=set(),
-            visit_outcome=outcome,
             reasons=reasons,
         )
 
         assert to_cancel == []
         assert "regate_pair_cost" not in reasons.values()
+
+
+    def test_delta_top_up_intent_generated_when_shortfall_exceeds_minimum(self):
+        # Moved here from the retired asymmetric-hold module (#753): a
+        # preserved order whose size is short of the target by at least
+        # `bot_quote_size_min_shares` gets a supplemental delta intent.
+        open_order = {"token_id": "tok-up", "price": 0.60, "order_id": "o1",
+                      "side": "BUY", "status": "open", "size": 10.0,
+                      "pair_id": "pair-lc-1"}
+        target_intent = QuoteIntent(
+            side="UP", token_id="tok-up", price=0.60, size=20,
+            mid=0.61, edge_vs_mid=0.01, pair_id="pair-lc-1"
+        )
+        cfg = MakerConfig(bot_quote_size_min_shares=5.0)
+        to_cancel, to_submit = plan_orders(
+            [open_order], [target_intent],
+            preserve_order_ids={"o1"},
+            lifecycle_pair_id="pair-lc-1",
+            cfg=cfg,
+        )
+        assert to_cancel == []
+        assert len(to_submit) == 1
+        delta_intent = to_submit[0]
+        assert delta_intent.pair_id == "pair-lc-1"
+        assert delta_intent.token_id == "tok-up"
+        assert delta_intent.size == 10
+        assert delta_intent.price == 0.60
 
 
 class TestRetiredRegatePurge:
@@ -1196,107 +1102,10 @@ class TestVisitOnePassesTheDeadBand:
 
         assert seen["dead_band"] == 0.03
         assert seen["cfg"] is not None
-        # The hedge ask for the UP token is the DOWN book's ask, and vice
-        # versa. Getting this mapping backwards is the one way this wiring
-        # can be wrong while every other assertion still passes.
-        assert seen["hedge_asks"] == {"tok-up": 0.48, "tok-dn": 0.52}
         assert result.status in ("DRY_RUN", "DECLINED")
 
 
-class TestReGateRespectsHeldInventory:
-    """CodeRabbit round 1: the re-gate must not fire on an inventory-backed hedge.
-
-    `_decide_quotes_from_mid` skips the completable gate when the opposite leg
-    is already held -- completion is not needed, so the hedge ASK is not the
-    price that finishes the pair. `plan_orders` has no inventory of its own, so
-    without being told, it re-gated every kept order and cancelled valid hedges
-    every cycle: the exact churn this change exists to stop, with a naked leg
-    left open longer while it happened.
-    """
-
-    def test_a_kept_order_is_not_re_gated_when_the_hedge_leg_is_held(self):
-        # UP kept at 0.54 against a DOWN leg already held. The DOWN ask of 0.50
-        # is irrelevant -- we do not have to buy DOWN again -- so 0.54 + 0.50 =
-        # 1.04 must NOT cancel this order.
-        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
-        open_orders = [_open(price=0.54)]
-        intents = [_intent(price=0.54)]
-        to_cancel, to_submit = plan_orders(
-            open_orders, intents, dead_band=0.03, cfg=cfg,
-            hedge_asks={"tok-up": 0.50}, hedge_held={"tok-up"})
-        assert to_cancel == []
-        assert to_submit == []
-
-    def test_no_recheck_fires_on_a_token_whose_hedge_is_not_held(self):
-        # #387: the re-gate is retired, so even the token WITHOUT a held
-        # hedge is kept. Both legs hold at their own prices.
-        cfg = MakerConfig(bot_pos_price_max_complete_usd=1.00)
-        open_orders = [_open("tok-up", 0.54, "o1"), _open("tok-dn", 0.40, "o2")]
-        intents = [_intent(side="UP", token="tok-up", price=0.54),
-                   _intent(side="DOWN", token="tok-dn", price=0.40)]
-        to_cancel, to_submit = plan_orders(
-            open_orders, intents, dead_band=0.03, cfg=cfg,
-            hedge_asks={"tok-up": 0.50, "tok-dn": 0.62},
-            hedge_held={"tok-up"})
-        assert to_cancel == []
-        assert to_submit == []
-
-    def test_visit_one_derives_held_hedges_from_the_inventory(self):
-        seen = {}
-        real_plan = plan_orders
-
-        def spy(open_orders, intents, price_eps=1e-9, **kw):
-            seen.update(kw)
-            return real_plan(open_orders, intents, price_eps, **kw)
-
-        market = FakeMarket()
-        up = {"token_id": "tok-up", "best_bid": 0.50, "best_ask": 0.52,
-              "bids": {0.50: 5000.0}, "asks": {0.52: 5000.0}}
-        down = {"token_id": "tok-dn", "best_bid": 0.46, "best_ask": 0.48,
-                "bids": {0.46: 5000.0}, "asks": {0.48: 5000.0}}
-        books = {"tok-up": up, "tok-dn": down}
-        # We hold DOWN. DOWN is the UP token's hedge, so the UP token -- and
-        # only the UP token -- stands down from the re-gate.
-        inv = Inventory(down_shares=100.0, down_cost=43.0)
-        seam = VenueSeam(
-            base_cfg=MakerConfig(bot_order_requote_dead_band_cents=0.03,
-                                 bot_pos_price_max_complete_usd=1.00),
-            fetch_market=lambda cid: market,
-            fetch_books=lambda host, tok: books[tok],
-            decide=lambda *a, **k: ([_intent(price=0.49)], ""),
-            inventory_fn=lambda m: inv,
-            open_orders_fn=lambda m: [_open(price=0.51)],
-        )
-        _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=False, plan_fn=spy)
-
-        assert seen["hedge_held"] == {"tok-up": 0.43}
-
-    def test_visit_one_holds_nothing_back_when_the_inventory_is_flat(self):
-        seen = {}
-        real_plan = plan_orders
-
-        def spy(open_orders, intents, price_eps=1e-9, **kw):
-            seen.update(kw)
-            return real_plan(open_orders, intents, price_eps, **kw)
-
-        market = FakeMarket()
-        up = {"token_id": "tok-up", "best_bid": 0.50, "best_ask": 0.52,
-              "bids": {0.50: 5000.0}, "asks": {0.52: 5000.0}}
-        down = {"token_id": "tok-dn", "best_bid": 0.46, "best_ask": 0.48,
-                "bids": {0.46: 5000.0}, "asks": {0.48: 5000.0}}
-        books = {"tok-up": up, "tok-dn": down}
-        seam = VenueSeam(
-            base_cfg=MakerConfig(bot_order_requote_dead_band_cents=0.03,
-                                 bot_pos_price_max_complete_usd=1.00),
-            fetch_market=lambda cid: market,
-            fetch_books=lambda host, tok: books[tok],
-            decide=lambda *a, **k: ([_intent(price=0.49)], ""),
-            inventory_fn=lambda m: Inventory(),
-            open_orders_fn=lambda m: [_open(price=0.51)],
-        )
-        _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=False, plan_fn=spy)
-
-        assert seen["hedge_held"] == {}
+class TestPairedDepthAttribution:
 
     def test_paired_depth_metadata_is_emitted_for_ranker_attribution(self):
         from core_brain.config import MakerConfig

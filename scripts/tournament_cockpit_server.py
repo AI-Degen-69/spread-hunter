@@ -127,7 +127,7 @@ ARMS_CONFIG_484 = [
         "desc": "Dynamic offset 0.25x, 45s single grace, 6.5c loss cap",
         "worst_catalyst": "requote_hold_queue_shares (0 / no hold)",
         "worst_catalyst_desc": "Zero queue hold surrendered priority on every tick; forced 57 single-buy exits (-$20.56)",
-        "hypothesized_tweak": "requote_hold_queue_shares -> 500",
+        "hypothesized_tweak": "requote_hold_queue_shares -> 500 (retired by #387)",
         "tweak_rationale": "Enable 500 share queue hold to defend priority against micro-price flicker and avoid queue demotions",
     },
     {
@@ -141,7 +141,7 @@ ARMS_CONFIG_484 = [
         "desc": "Requote hold below 100 shares, queue hold 150 shares",
         "worst_catalyst": "requote_hold_below_target (1.0 / unconstrained)",
         "worst_catalyst_desc": "Held bids while market collapsed to zero, eating toxic fills into settlement (-$31.65)",
-        "hypothesized_tweak": "requote_hold_below_target -> 0.08",
+        "hypothesized_tweak": "requote_hold_below_target -> 0.08 (retired by #387)",
         "tweak_rationale": "Constrain drop tolerance to 8c so collapsing books trigger immediate bid cancellations instead of toxic fills",
     },
     {
@@ -1713,20 +1713,6 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
           <td>Static offset avoids widening quotes during volatile yet profitable flow, keeping fill velocity predictable.</td>
         </tr>
         <tr>
-          <td><strong>Queue Hold Threshold</strong></td>
-          <td class="tabular" style="font-size: 14px;"><strong>500.0 shares</strong></td>
-          <td><code>BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES</code></td>
-          <td><span class="badge badge-green">Shared Defense</span></td>
-          <td>Do not cancel resting quote if 500+ shares are ahead in the queue at the current price level. Prevents resetting queue line.</td>
-        </tr>
-        <tr>
-          <td><strong>Hold Deviation Buffer</strong></td>
-          <td class="tabular" style="font-size: 14px;"><strong>0.080 (8.0¢)</strong></td>
-          <td><code>BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS</code></td>
-          <td><span class="badge badge-green">Shared Defense</span></td>
-          <td>Maintains resting quote if mid shift is less than 8¢ per share, avoiding high frequency order cancellations.</td>
-        </tr>
-        <tr>
           <td><strong>Absolute Pair Cap</strong></td>
           <td class="tabular" style="font-size: 14px; color: var(--amber);"><strong>$0.990</strong></td>
           <td><code>BOT_POS_PRICE_MAX_PAIR_COST_USD</code></td>
@@ -1761,8 +1747,6 @@ python -m scripts.tournament_cockpit_server --port 8800
 BOT_QUOTE_TOURNAMENT_PRESET=hybrid
 BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0
 BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06
-BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES=500
-BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS=0.08
 BOT_RISK_STOP_MODE=ABSOLUTE_DROP
 BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045
 BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0

@@ -1,78 +1,61 @@
-# SPEC — One category label across the Orders & Trades tabs (#748)
-
-Branch: `i748/consistent-category-label-orders-trades` | Issue: #748
+# SPEC — #753 Retire the dead hold-lever surface left behind by #387
 
 ## Goal
 
-Every market row in the four Orders & Trades tabs (Orders, Active Markets, Open
-Positions, Closed Trades) shows **exactly one** category label, painted by the same
-`stitch-category-pill` chip, in the same place, with the full label — and that label
-is a real venue category, never a series, group or outcome name.
-
-## Where the label comes from
-
-One resolver (`core_brain.market_meta.resolve_market_meta`), one precedence:
-
-1. The venue's own explicit label — feed `venue_category`, then `category` —
-   canonicalised through the existing display rules (`ATP Tour` → `Tennis`,
-   `CS2` → `Counter-Strike 2`). Only recognised categories are accepted.
-2. The market's own venue **tags**, most specific category-level tag wins
-   (Basketball / Tennis / Politics / Crypto / Economy …). Non-category tags
-   (`NBA Tip-Off`, `UCL Matchday`, `Republican Party`, `Aaron Ford (D)`, `Data 2`,
-   `Spread -3.5`) never become the label.
-3. The existing keyword classifier over title / event title / slug.
-4. `Uncategorized`.
-
-`series_title`, `market_group` and arbitrary first-tag values stop being category
-sources. They keep every other use they have in the feed row and in the Open
-Positions secondary line.
-
-## Why it is broken today (verified against live code and the live venue)
-
-- `scripts/filter_markets.py` never asks gamma for tags (`include_tag=true`), so
-  `tags` is empty on feed rows and the resolver never reaches step 2.
-- `resolve_market_meta` therefore falls through `series_title` → `market_group`,
-  which is where `Republican Party` / `Data 2` come from.
-- `dashboard/static/app.js:7050` `marketCategory()` already exists and every
-  renderer already calls it — the four tabs disagree about *markup and
-  placement*, not about the resolver call: Orders prints bare text
-  (`stitch-meta-category`), the other three print a chip, Open Positions also
-  duplicates the word in its secondary line (`classification` falls back to
-  `m.category`), and Closed Trades still computes a dead 4-character
-  `categoryShort`.
-- The node harness drives the **legacy** rows (`app.ordersTradesRows`), while the
-  dashboard paints the stitch renderers (`prototype.js:572` adds `proto-body`,
-  `app.js:8919-8937` dispatches on it) — so the path the operator actually sees
-  has no test.
+Delete every declaration that still presents the re-quote queue hold and the
+direction hold as working levers. #387 retired the behaviour; the names survived
+in the planner signature, in `MakerConfig`, in all six tournament presets, on the
+dashboard parameter cards, in the strategy explainer, in the cancel report and in
+the tournament cockpit. Each survivor invites the same mistake: an operator or an
+arm turns a knob that changes nothing.
 
 ## Acceptance criteria
 
-Mapped 1:1 to the issue's checklist; each one is asserted by a named test.
-
-| # | Criterion | Test |
-| --- | --- | --- |
-| A1 | Every row of all four tabs shows exactly one `stitch-category-pill` and no `stitch-meta-category`/bare text | `tests/test_orders_trades_table.py` (stitch surface, 4 views) |
-| A2 | Resolution order: venue label → most specific venue tag → classifier → `Uncategorized` | `tests/test_market_meta.py` |
-| A3 | No series/group/outcome name can become a label | `tests/test_market_meta.py` (negative vocabulary) |
-| A4 | Open Positions secondary line is an event/market title only | `tests/test_orders_trades_table.py` |
-| A5 | The gamma scan requests tags on `/markets` and `/events` | `tests/test_unified_universe.py`, `tests/test_live_event_discovery.py` |
-| A6 | The harness covers the four stitch renderers | `tests/js/orders_trades_harness.cjs` + `test_orders_trades_table.py` |
-| A7 | Display-only: no selection/ranking/sizing/risk change | no diff outside the four files below |
+1. `plan_orders` accepts none of `hold_queue_shares`, `hold_below_target`,
+   `hedge_asks`, `hedge_held`, `queue_ahead`, `visit_outcome`. `cfg` and
+   `dead_band` stay — the body reads both.
+2. `MakerConfig` has neither `bot_order_requote_hold_queue_shares` nor
+   `bot_order_requote_hold_below_target_cents`; no environment parsing, no bounds.
+   Setting either `BOT_ORDER_REQUOTE_HOLD_*` variable — including an invalid value —
+   neither changes nor breaks `load()`.
+3. No `TOURNAMENT_PRESETS` entry carries either key, and no description advertises
+   a queue hold. All six presets still build a valid `MakerConfig`.
+4. `/api/parameters` returns no card for either setting; the strategy explainer
+   lists no row for either setting.
+5. `core_brain.cancel_report` prints no advice claiming the holds can keep a
+   price move, and `_hold_state()` is gone. Counts, ordering, unattributed rows,
+   the `price_moved` percentage (all cancels as denominator), the unreadable
+   message, `--db` and exit codes 0/1 are unchanged.
+6. `scripts.shadow_tournament` refuses an arm that sets either retired field name
+   or either retired `BOT_*` environment name, naming the setting and #387.
+7. Both committed arm files still load: the retired entries are gone from
+   `configs/tournaments/i492_tournament-1_arms.json` and
+   `configs/tournaments/i608_tournament-1_arms.json`, and no arm is left empty.
+8. A new absence test fails if any of the above comes back.
 
 ## Edge cases
 
-- A market whose only tags are non-category (`Senate`, `United States`,
-  `Midterms`) still resolves: `Politics` from the classifier or a politics tag;
-  if neither, `Uncategorized`. Never `Senate`.
-- A sports market tagged `Sports, NBA, Games, Basketball, NBA Tip-Off` resolves to
-  `Basketball`, not `Sports` and not `NBA Tip-Off` (rank, not tag order).
-- A market with no feed row (order outlived its market) keeps `Uncategorized`.
-- A tag list arriving as a non-list (`"nope"`, `{}`) must not raise.
+- **`cfg` is live.** Issue finding 1 calls `cfg` dead; it is not —
+  `plan_orders` reads `cfg.bot_quote_size_min_shares`. Keep it; the plan records
+  the correction.
+- **`queue_ahead` has a second life.** The local in `_run_one_cycle` still feeds
+  `cancel_queue_ahead` attribution (`trader_loop.py:2286`). Only the planner
+  parameter goes; the local and `_queue_ahead_for` stay.
+- **`visit_outcome` feeds a registry write.** `_note_refusal_visit` uses
+  `visit_outcome.value` (`trader_loop.py:2139-2142`). The value stays computed;
+  only the unused parameter goes.
+- **`hedge_asks` / `hedge_held` become fully dead** once the parameter is gone —
+  their only consumer was `plan_kwargs`. Their computation blocks go with it.
+- **`the-gambler` / `the-chaperone` exist only to set the holds.** After the
+  entries are removed those arms are empty and must be deleted, not left blank.
+- **Historical cockpit cards are history, not levers.** The #485 `stickhold-1` /
+  `queuehug-1` forensic cards describe runs that really happened. They stay, with
+  the hypothesized tweak annotated as retired, so the record is not falsified.
+  The "HYBRID Configuration Blueprint" table rows claim *current* values and go.
 
 ## Out of scope
 
-- The legacy (non-`proto-body`) table markup. It is unreachable in the browser —
-  `prototype.js` adds `proto-body` on boot — so it stays as-is; only the stitch
-  renderers change.
-- Any change to market selection, ranking, sizing, risk caps or universe gates.
-- Localising or re-labelling the venue's category vocabulary.
+- `docs/runs/*` (dated run records — evidence, immutable).
+- The `dead_band` mechanism, the pair-cost re-gate removal history, the refusal
+  hold in `quotes.py`/`risk.py` (live, unrelated).
+- Re-wiring any hold to a new mechanism. #387 retired the behaviour on purpose.

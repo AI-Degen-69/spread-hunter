@@ -194,8 +194,6 @@ class MakerConfig:
     bot_order_max_fills_per_market: int = 25
     bot_order_requote_interval_sec: float = 2.0
     bot_order_requote_dead_band_cents: float = 0.03
-    bot_order_requote_hold_queue_shares: float = 0.0
-    bot_order_requote_hold_below_target_cents: float = 0.05
     bot_order_poll_interval_sec: float = 1.0
     bot_order_gate_queue_clear_on: bool = False
     bot_order_queue_max_clear_min: float = 60.0
@@ -372,16 +370,6 @@ class MakerConfig:
             kw["bot_order_requote_dead_band_cents"] = _bounded_float(
                 "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS", rdb, 0.0, 1.0)
 
-        rhb = _env("BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS")
-        if rhb:
-            kw["bot_order_requote_hold_below_target_cents"] = _bounded_float(
-                "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS", rhb, 0.0, 1.0)
-
-        rhq = _env("BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES")
-        if rhq:
-            kw["bot_order_requote_hold_queue_shares"] = _bounded_float(
-                "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES", rhq, 0.0, 2_000_000.0)
-
         qcg = _env("BOT_ORDER_GATE_QUEUE_CLEAR_ON")
         if qcg:
             kw["bot_order_gate_queue_clear_on"] = qcg.strip().lower() not in ("0", "false", "off")
@@ -529,43 +517,33 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "bot_quote_spread_offset_multiplier": 0.75,
         "bot_quote_spread_offset_min_cents": 2,
         "bot_quote_spread_offset_max_cents": 5,
-        "bot_order_requote_hold_queue_shares": 500.0,
-        "bot_order_requote_hold_below_target_cents": 0.08,
-        "description": "Wider safety buffer in volatile swings (2¢–5¢) with queue hold",
+        "description": "Wider safety buffer in volatile swings (2¢–5¢)",
     },
     "balanced": {
         "bot_quote_gate_dynamic_offset_on": True,
         "bot_quote_spread_offset_multiplier": 0.50,
         "bot_quote_spread_offset_min_cents": 2,
         "bot_quote_spread_offset_max_cents": 4,
-        "bot_order_requote_hold_queue_shares": 500.0,
-        "bot_order_requote_hold_below_target_cents": 0.08,
-        "description": "Proportional volatility tracking (2¢–4¢) with queue hold",
+        "description": "Proportional volatility tracking (2¢–4¢)",
     },
     "aggressive": {
         "bot_quote_gate_dynamic_offset_on": True,
         "bot_quote_spread_offset_multiplier": 0.25,
         "bot_quote_spread_offset_min_cents": 2,
         "bot_quote_spread_offset_max_cents": 3,
-        "bot_order_requote_hold_queue_shares": 500.0,
-        "bot_order_requote_hold_below_target_cents": 0.08,
-        "description": "Tight queue priority capturing fast fills (2¢–3¢) with queue hold",
+        "description": "Tight offset tracking capturing fast fills (2¢–3¢)",
     },
     "prudent": {
         "bot_quote_gate_dynamic_offset_on": True,
         "bot_quote_spread_offset_multiplier": 0.60,
         "bot_quote_spread_offset_min_cents": 2,
         "bot_quote_spread_offset_max_cents": 4,
-        "bot_order_requote_hold_queue_shares": 500.0,
-        "bot_order_requote_hold_below_target_cents": 0.08,
-        "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x) with queue hold",
+        "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x)",
     },
     "hybrid": {
         "bot_quote_gate_dynamic_offset_on": False,
         "bot_order_requote_dead_band_cents": 0.060,
-        "bot_order_requote_hold_queue_shares": 500.0,
-        "bot_order_requote_hold_below_target_cents": 0.08,
-        "description": "Empirical Winner Hybrid: control edge + Deadband-Wide queue stability (6c deadband)",
+        "description": "Empirical Winner Hybrid: control edge + Deadband-Wide (6c deadband)",
     },
     "baseline": {
         "bot_quote_gate_dynamic_offset_on": True,
@@ -574,8 +552,6 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "bot_quote_spread_offset_max_cents": 20,
         "bot_quote_book_max_spread_from_mid": 0.15,
         "bot_quote_gate_widen_on": False,
-        "bot_order_requote_hold_queue_shares": 500.0,
-        "bot_order_requote_hold_below_target_cents": 0.08,
         "description": "Loose baseline: raw dynamic offset (0.5x range), 1c floor, 20c ceiling, no widen snap-back, 15c quote window",
     },
 }

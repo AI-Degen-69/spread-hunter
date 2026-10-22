@@ -202,38 +202,3 @@ class TestOverrideValidation:
         with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "1.0"}):
             assert load().bot_order_requote_dead_band_cents == 1.0
 
-    def test_the_queue_hold_ships_off(self):
-        # The threshold #304 picked off the recorded cancels is 200, but the
-        # shipped default stays 0.0: this is a lever on real money and the
-        # repo moves those from a recorded rehearsal, not from reading a
-        # prior store. A rehearsal sets BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES.
-        assert MakerConfig().bot_order_requote_hold_queue_shares == 0.0
-
-    def test_the_queue_hold_is_turnable_on_for_one_rehearsal(self):
-        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "200"}):
-            assert load().bot_order_requote_hold_queue_shares == 200.0
-
-    def test_zero_turns_the_queue_hold_back_off(self):
-        # 0 must be accepted and must mean OFF, not "hold nothing ever": it is
-        # how a rehearsal restores the symmetric re-quote and gets a result it
-        # can attribute to the hold alone.
-        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "0"}):
-            assert load().bot_order_requote_hold_queue_shares == 0.0
-
-    @pytest.mark.parametrize("bad", ["nan", "inf", "-0.01", "abc"])
-    def test_a_non_finite_negative_or_unparseable_queue_threshold_is_refused(self, bad):
-        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": bad}):
-            with pytest.raises(ValueError, match="BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"):
-                load()
-
-    def test_the_queue_threshold_ceiling_is_accepted(self):
-        # The bound is a share count, not a price. The largest queue measured
-        # on this venue was 1,999,936 shares, so 2,000,000 is the last value
-        # that is a setting; past it the hold would keep every order forever.
-        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "2000000"}):
-            assert load().bot_order_requote_hold_queue_shares == 2000000.0
-
-    def test_a_queue_threshold_past_the_ceiling_is_refused(self):
-        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "2000001"}):
-            with pytest.raises(ValueError, match="BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"):
-                load()

@@ -229,6 +229,28 @@ _RETIRED_PRESET_KEYS = frozenset({
     "apply_widen_gate",
 })
 
+# The re-quote holds #387 retired, named on both surfaces an arm can use: the
+# config field names in a preset dict and the BOT_* names in its `env` block.
+# Neither is read by anything, so an arm still carrying one would run the same
+# as every other arm — a comparison nobody chose. Refused by name.
+RETIRED_HOLD_FIELDS = frozenset({
+    "bot_order_requote_hold_queue_shares",
+    "bot_order_requote_hold_below_target_cents",
+})
+RETIRED_HOLD_ENV = frozenset({
+    "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES",
+    "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS",
+})
+
+
+def _reject_retired_holds(names) -> None:
+    retired = sorted(RETIRED_HOLD_FIELDS & set(names))
+    if retired:
+        raise ValueError(
+            f"Arm sets {retired}, retired by #387 — the re-quote queue hold and "
+            f"direction hold no longer exist; remove the setting"
+        )
+
 
 def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
     """Convert a tournament preset dict into BOT_* environment overrides.
@@ -236,6 +258,7 @@ def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
     The launcher emits canonical names only; there is no legacy alias to fall
     back to, so a retired key is refused rather than silently ignored.
     """
+    _reject_retired_holds(preset.keys())
     retired = sorted(_RETIRED_PRESET_KEYS & preset.keys())
     if retired:
         raise ValueError(
@@ -325,15 +348,22 @@ def build_tournament_plan(
         arm_env = _preset_to_env(arm_def)
         custom_env = arm_def.get("env")
         if custom_env:
+            retired_env = sorted(RETIRED_HOLD_ENV & set(custom_env))
+            if retired_env:
+                raise ValueError(
+                    f"Arm {name!r} environment sets {retired_env}, retired by "
+                    f"#387 — the re-quote queue hold and direction hold no "
+                    f"longer exist; remove the setting"
+                )
             for k, v in custom_env.items():
                 if not k.startswith(("BOT_", "FILTER_")):
                     raise ValueError(
                         f"Invalid environment override {k!r}: only BOT_* or FILTER_* overrides are permitted"
                     )
                 arm_env[k] = str(v)
-        # Full-profile selector: applies the whole preset (including the
-        # shared queue-hold settings _preset_to_env does not copy). Only
-        # for names the config knows; custom arms keep their explicit env.
+        # Full-profile selector: applies the whole preset (including any
+        # setting _preset_to_env does not copy). Only for names the config
+        # knows; custom arms keep their explicit env.
         if (
             name in TOURNAMENT_PRESETS
             and "BOT_QUOTE_TOURNAMENT_PRESET" not in arm_env

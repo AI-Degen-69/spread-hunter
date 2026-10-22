@@ -1,78 +1,56 @@
-# Constraints — #748 One category label across the Orders & Trades tabs
+# CONSTRAINTS — #753 Retire the dead hold-lever surface
 
-Branch: `i748/consistent-category-label-orders-trades` | Issue: #748
-
-## Hard scope
-
-- **Display only.** The category never gates admission, ranking, sizing or risk
-  (`docs/agents/strategy.md:39-42`). No file under `strategy/` or `scoring/`
-  changes, and `scripts/filter_markets.py` changes only in what it **asks the
-  venue for** and what it **writes into the row** — never in a filter, a score or
-  a gate.
-- **Nine files may change**, all of them named here: `core_brain/market_meta.py`,
-  `scripts/filter_markets.py`, `dashboard/static/app.js`,
-  `dashboard/static/prototype.css` (one muted-chip rule), `tests/test_market_meta.py`,
-  `tests/js/orders_trades_harness.cjs`, `tests/test_orders_trades_table.py`, plus three
-  existing test files: the two that own the fetch seams
-  (`tests/test_unified_universe.py`, `tests/test_live_event_discovery.py`) and
-  `tests/test_portfolio_overview.py`, whose
-  `test_blank_category_falls_back_to_series_title` asserted the retired
-  `series_title` fallback — it is rewritten to the tag precedence with a
-  `series_title`/`market_group` negative case. A change outside this list is out of
-  scope — stop and split it.
-- **Never touch `data/orders.db`.** It is the production registry. Read only.
-- **No venue contact from this work.** No `quote`, no `complete`, no Trader
-  loop, no `order_manager` subcommand. The tag vocabulary was sampled live once
-  during planning, from `%TEMP%`, and nothing of it is committed.
-- **The legacy table is out of scope.** `dashboard/static/prototype.js:572` adds
-  `proto-body` on boot, so the dashboard paints the stitch renderers
-  (`app.js:8919-8937`). `marketCell`'s `caption-muted` category line and the
-  legacy rows keep their current markup.
+Branch: `i753/retire-dead-hold-levers` | Issue: #753
 
 ## Zero regressions
 
-- Targeted checks covering the touched files, run by the agent during
-  development and after review fixes:
-  `python -m pytest -q tests/test_market_meta.py tests/test_orders_trades_table.py tests/test_unified_universe.py tests/test_live_event_discovery.py tests/test_stitch_active_markets.py tests/test_kpi.py tests/test_portfolio_overview.py`.
-  The full `python -m pytest -q` suite is the GitHub CI merge gate; do not repeat
-  it locally.
-- **`tests/test_stitch_active_markets.py` stays green untouched.** It pins the
-  Active Markets column structure; the category chip's contents may change, its
-  presence and class may not.
-- New behaviour needs a test that fails without the change. Every acceptance row
-  in `SPEC.md` names the test that fails when its behaviour is absent.
+- Focused checks per task, run by the agent (never handed to the operator):
+  - `python -m pytest -q tests/test_requote_hold_retired.py tests/test_trader_loop.py tests/test_cancel_attribution.py`
+  - `python -m pytest -q tests/test_dynamic_offset.py tests/test_completable_pair_gate.py tests/test_loose_baseline.py tests/test_screener_preset.py tests/test_config_single_source.py`
+  - `python -m pytest -q tests/test_dashboard_server.py tests/test_ui_276_explainer_tokens.py`
+  - `python -m pytest -q tests/test_shadow_tournament.py`
+- `python -m pytest -q` stays with GitHub CI (Ubuntu + Windows) — the merge gate.
+- Any test that passes a removed parameter, or asserts a field that no longer
+  exists, is updated or deleted **in the task that removes the parameter** — never
+  left red between tasks.
 
-## Frozen contracts
+## Behaviour contract (must not move)
 
-- `resolve_market_meta(cid, closes, quotes, root=...)` keeps its signature and
-  its returned keys. `event_title` is **added** to the returned dict (the
-  Positions secondary line needs a real title); no key is removed or renamed.
-- `kpi.by_market[cid]` is `{**meta, ...}` (`core_brain/kpi.py:1616`), so an added
-  meta key reaches the frontend without a KPI change. A KPI change is out of
-  scope.
-- `marketCategory(m)` keeps its name, its single argument and its
-  `Uncategorized` fallback — it is already exported and already called by every
-  renderer.
-- Feed rows keep `series_title`, `market_group`, `event_title`, `tags`,
-  `venue_category` and `category` with their current meanings. Only the
-  **resolver's use** of them changes.
-- `stitch-category-pill` is the only category markup. No new CSS class; the chip
-  and its muted `Uncategorized` styling already exist in
-  `dashboard/static/prototype.css:1313-1323`.
+- `plan_orders` keeps its lifecycle decisions: preserve / replace / cancel by id,
+  keep-wanted-token-at-its-own-price, duplicate-intent suppression via
+  `held_tokens`, delta top-up, `not_quoted` cancels, `reasons` out-parameter.
+- `cancel_report` output contracts: read-only SQLite, `summary` keys `db_path`,
+  `readable`, `cancelled`, `unattributed`, `reasons`; `REASON_ORDER` first then
+  sorted unknowns; explicit `queue unmeasured`; distinct UNREAD message;
+  `price_moved` share uses `summary["cancelled"]` (all cancels) as denominator;
+  `--db`; exit 0 readable / 1 unreadable.
+- `TOURNAMENT_PRESETS` keeps its six names — `test_dynamic_offset.py:138` and
+  `test_screener_preset.py:92` pin the name set against `SCREENER_PRESETS`.
+- The dashboard keeps the requote-cadence and dead-band cards unchanged.
+- The explainer keeps its design tokens (`test_ui_276_explainer_tokens.py`).
 
 ## Anti-cheat
 
-- No skipped or xfailed test, no deleted assertion, no widened tolerance. An
-  existing assertion that encodes the **old** precedence (series/group becoming
-  the category) is **rewritten** to the new contract, and the plan lists each one
-  — rewriting an assertion that guards a behaviour still wanted is not allowed.
-- No new external dependency. `requests` and `node` are already used.
+- No deleting a test without replacing its intent (removal → absence assertion),
+  no `xfail`, no `skip`, no widened `pytest.raises`, no exception swallowing.
+- No weakening of `_RETIRED_PRESET_KEYS` or of the arm-env validation to make an
+  arm file load — the arm files are edited instead.
+- No removal of assertions that still verify live behaviour (delta top-up,
+  dead band, refusal hold, unattributed cancels).
 
-## Performance / resource ceilings
+## Dependencies
 
-- The resolver stays pure and dict-only: no I/O, no network, no new import beyond
-  what `market_meta.py` already imports at module scope.
-- The tag ranking is O(tags) per market with a fixed vocabulary map built once at
-  import — no per-row regex compilation.
-- `include_tag=true` adds no page: it widens each existing `/markets` and
-  `/events` response, not the page count.
+- No new external dependency. Standard library + existing pytest only.
+
+## Deliberate states (do not "fix" in review)
+
+- `_hold_state()` is deleted, not re-implemented: it read the *reporting*
+  process's config, not the config of the database being reported.
+- `hedge_asks` / `hedge_held` are deleted from `_run_one_cycle` even though they
+  are not literally a "hold lever" — their only consumer was `plan_kwargs`.
+  Leaving them computed would be new dead code.
+- The #485 cockpit cards keep their `worst_catalyst` text (a real forensic
+  finding); only `hypothesized_tweak` gains a retired marker. Deleting the whole
+  card would erase the only record that the experiment ran.
+- `docs/runs/*` keeps every mention. Dated run records are evidence, not docs to
+  rewrite.

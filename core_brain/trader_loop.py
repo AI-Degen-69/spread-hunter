@@ -215,13 +215,7 @@ def plan_orders(
     *,
     dead_band: float = 0.0,
     cfg=None,
-    hedge_asks: Optional[dict] = None,
-    hedge_held: Optional[set] = None,
     reasons: Optional[dict] = None,
-    queue_ahead: Optional[dict] = None,
-    hold_queue_shares: float = 0.0,
-    hold_below_target: float = 0.0,
-    visit_outcome: Optional[VisitOutcome] = None,
     preserve_order_ids: Optional[set[str] | frozenset[str]] = None,
     replace_order_ids: Optional[set[str] | frozenset[str]] = None,
     cancel_order_ids: Optional[set[str] | frozenset[str]] = None,
@@ -237,9 +231,10 @@ def plan_orders(
     whose token still has an intent this cycle is KEPT at its own price,
     period. The intent is suppressed via held_tokens (no duplicate posted).
     The only thing that still cancels is no intent for the token
-    (not_quoted). The dead band, queue hold, direction hold, and pair-cost
-    re-gate stop firing -- left in code untouched for the follow-up
-    cancel-conditions issue to disposition.
+    (not_quoted): a wanted resting order is kept at its own price regardless
+    of price drift or queue position. The queue hold, the direction hold and
+    the pair-cost re-gate were retired by #387 and their settings deleted by
+    #753.
 
     Orders on tokens we no longer quote are cancelled. An intent with no kept
     order near its price is submitted.
@@ -261,17 +256,6 @@ def plan_orders(
     `reasons` is an optional out-parameter: pass a dict and it comes back keyed
     by order id with one of the CANCEL_* constants. It exists because a cancel
     with no recorded reason cannot be tuned -- see #131.
-
-    RETIRED BY #387 -- THE RE-GATE, THE QUEUE HOLD, THE DIRECTION HOLD
-    (historical only; none of them fire). A kept order used to be re-tested
-    against `risk.completable_pair_block` at its own price, kept when it sat
-    inside the front-of-queue threshold (`hold_queue_shares`), and kept through
-    a downward move (`hold_below_target`). All three cancelled profitable pairs
-    on book flicker, so a wanted token is now kept at its own price. The
-    parameters stay in the signature -- `cfg`, `hedge_asks`, `hedge_held`,
-    `queue_ahead`, `hold_queue_shares`, `hold_below_target`, `visit_outcome` --
-    for the follow-up cancel-conditions issue to disposition; only `dead_band`
-    and `cfg.bot_quote_size_min_shares` are read here.
     """
     tolerance = max(float(price_eps), float(dead_band))
     preserve_ids = {str(value) for value in preserve_order_ids or ()}
@@ -2078,26 +2062,6 @@ def _visit_one(
             lifecycle_context_for=lifecycle_context_for,
         )
         intents, why = ev.intents, ev.why
-        # The hedge ask for a token is the OTHER token's ask -- that is the
-        # price a fill on this leg would have to pay to finish the pair.
-        # `evaluate_market_quote` already fetched both books; re-reading them
-        # here would be a second venue round-trip for a number we hold.
-        up_tok = ev.up_book.get("token_id")
-        dn_tok = ev.down_book.get("token_id")
-        hedge_asks = {
-            up_tok: ev.down_book.get("best_ask"),
-            dn_tok: ev.up_book.get("best_ask"),
-        }
-        # A token whose hedge we already hold stands down from the re-gate:
-        # the pair is finished from inventory, not by paying the hedge ask.
-        # This mirrors the `inv.avg(other) > 0` skip in
-        # `quotes._decide_quotes_from_mid` -- the two gates must agree, or the
-        # planner cancels every cycle what the decider was happy to post.
-        hedge_held: dict[str, float] = {}
-        if ev.inventory.avg("DOWN") > 0:
-            hedge_held[up_tok] = ev.inventory.avg("DOWN")
-        if ev.inventory.avg("UP") > 0:
-            hedge_held[dn_tok] = ev.inventory.avg("UP")
         # Why each cancel happened, and where the order stood in its queue when
         # it did. Both travel to the registry with the status change: a cancel
         # with no recorded reason cannot be told from churn afterwards.
@@ -2143,11 +2107,7 @@ def _visit_one(
         plan_kwargs = {
             "dead_band": float(getattr(cfg, "bot_order_requote_dead_band_cents", 0.0)),
             "cfg": cfg,
-            "hedge_asks": hedge_asks,
-            "hedge_held": hedge_held,
             "reasons": cancel_reasons,
-            "queue_ahead": queue_ahead,
-            "visit_outcome": visit_outcome,
         }
         lifecycle_context = ev.lifecycle_context
         if lifecycle_context is not None and (
