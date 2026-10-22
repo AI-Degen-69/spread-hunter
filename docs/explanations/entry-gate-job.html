@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The job I'd spend the budget on — Spread Hunter</title>
+<style>
+  :root {
+    --bg: #0b0e14; --card: #141a26; --card2: #1a2233; --border: #2a3550;
+    --fg: #e8eef7; --muted: #93a1b8; --green: #00e676; --red: #ff5252;
+    --amber: #ffd600; --blue: #40a9ff; --violet: #b388ff;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; animation: none !important; }
+  }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.62 system-ui, "Segoe UI", sans-serif; margin: 0; padding: 0 0 64px; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 28px 20px; }
+  .eyebrow { font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: 30px; line-height: 1.2; margin: 6px 0 8px; letter-spacing: -.01em; }
+  h2 { font-size: 20px; margin: 40px 0 10px; padding-bottom: 7px; border-bottom: 1px solid var(--border); }
+  h2 .n { color: var(--blue); font-variant-numeric: tabular-nums; margin-right: 8px; }
+  h3 { font-size: 15.5px; margin: 20px 0 6px; }
+  p, li { color: var(--fg); }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .lede { font-size: 16.5px; color: #cfd8e6; margin: 6px 0 0; max-width: 78ch; }
+  .sub { color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; }
+  .chip { font-size: 11.5px; font-weight: 600; letter-spacing: .04em; padding: 3px 9px; border-radius: 20px; border: 1px solid var(--border); background: var(--card2); color: var(--muted); }
+  .chip.open { color: var(--amber); border-color: #5a4a1a; background: rgba(255,214,0,.09); }
+  .chip.ok { color: var(--green); border-color: #1f4a30; background: rgba(0,230,118,.09); }
+  .chip.bad { color: var(--red); border-color: #5a2a2a; background: rgba(255,82,82,.09); }
+  .callout { border-radius: 12px; padding: 14px 16px; margin: 18px 0; border: 1px solid var(--border); background: var(--card); }
+  .callout p { margin: 6px 0; }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .lbl { font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 4px; }
+  .callout.red { border-color: #5a2f2f; background: linear-gradient(135deg, rgba(255,82,82,.10), rgba(255,214,0,.04)); }
+  .callout.amber { border-color: #5a4a1a; background: linear-gradient(135deg, rgba(255,214,0,.10), rgba(64,169,255,.04)); }
+  .callout.green { border-color: #1f4a30; background: linear-gradient(135deg, rgba(0,230,118,.09), rgba(64,169,255,.03)); }
+  .callout.blue { border-color: #24405e; background: linear-gradient(135deg, rgba(64,169,255,.10), rgba(179,136,255,.04)); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  @media (max-width: 820px) { .grid2, .grid3 { grid-template-columns: 1fr; } h1 { font-size: 25px; } }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .card h3 { margin-top: 0; }
+  .card .meta { color: var(--muted); font-size: 12.5px; }
+  .big { font-size: 27px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .neu { color: var(--amber); }
+  code { background: #232c40; padding: 1px 6px; border-radius: 5px; font-family: var(--mono); font-size: 13px; color: #d7e3f4; }
+  pre { background: #0e1320; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; color: #d7e3f4; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--card2); font-size: 12.5px; color: #c9d5e6; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:nth-child(even) td { background: rgba(255,255,255,.015); }
+  .src { font-family: var(--mono); font-size: 12px; color: #8fa6c8; }
+  .toc { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 18px 0 0; padding: 12px 14px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; font-size: 13px; }
+  .toc a { color: #9fc0e8; text-decoration: none; border-bottom: 1px dotted #3a4a68; }
+  .toc a:hover, .toc a:focus-visible { color: #fff; border-bottom-color: var(--blue); }
+  .check { color: var(--green); font-weight: 700; }
+  .cross { color: var(--red); font-weight: 700; }
+  figure { margin: 16px 0; }
+  figcaption { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  details { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin: 12px 0; }
+  details summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+  details[open] summary { margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  /* headline verdict */
+  .verdict { border: 1px solid #24405e; border-radius: 14px; padding: 18px 20px; margin: 22px 0 8px;
+             background: linear-gradient(135deg, rgba(64,169,255,.12), rgba(0,230,118,.05) 60%, rgba(255,82,82,.05)); }
+  .verdict .k { font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase; color: #9fc0e8; }
+  .verdict h2 { border: 0; margin: 4px 0 8px; padding: 0; font-size: 22px; }
+  .verdict p { margin: 6px 0 0; color: #dbe5f2; }
+
+  /* horizontal bar rows */
+  .bars { margin: 14px 0 6px; }
+  .brow { display: grid; grid-template-columns: 210px 1fr 92px; gap: 10px; align-items: center; padding: 5px 0; }
+  .brow .bl { font-size: 13px; color: #cfd8e6; }
+  .brow .bl small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.3; }
+  .brow .bv { font-family: var(--mono); font-size: 12.5px; text-align: right; font-variant-numeric: tabular-nums; }
+  .track { position: relative; height: 20px; background: #0e1320; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .fill { position: absolute; top: 0; bottom: 0; border-radius: 4px; transition: width .5s ease; }
+  .fill.g { background: linear-gradient(90deg, #0e7a45, var(--green)); }
+  .fill.r { background: linear-gradient(90deg, #7a1f1f, var(--red)); }
+  .fill.b { background: linear-gradient(90deg, #1b4b73, var(--blue)); }
+  .fill.a { background: linear-gradient(90deg, #6b5310, var(--amber)); }
+  .track.dzero::before { content: ""; position: absolute; left: 50%; top: -1px; bottom: -1px; width: 2px; background: #3b4a68; z-index: 2; }
+  .fill.fromc.r { border-radius: 4px 0 0 4px; }
+  .fill.fromc.g { border-radius: 0 4px 4px 0; }
+
+  /* entry -> exit collapse ladder */
+  .haircut { display: grid; grid-template-columns: 150px 1fr 190px; gap: 12px; align-items: center; padding: 7px 0; border-bottom: 1px dashed rgba(42,53,80,.6); }
+  .haircut:last-child { border-bottom: 0; }
+  .haircut .hl { font-size: 13px; }
+  .haircut .hl small { display: block; color: var(--muted); font-size: 11.5px; }
+  .hbar { position: relative; height: 26px; background: #0e1320; border: 1px solid var(--border); border-radius: 6px; }
+  .hbar .drop { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(45deg, rgba(255,82,82,.30), rgba(255,82,82,.30) 5px, rgba(255,82,82,.16) 5px, rgba(255,82,82,.16) 10px); border-right: 2px solid var(--red); }
+  .hbar .mk { position: absolute; top: -5px; bottom: -5px; width: 2px; }
+  .hbar .mk.entry { background: var(--blue); box-shadow: 0 0 0 1px #0b0e14; }
+  .hbar .mk.exit { background: var(--red); box-shadow: 0 0 0 1px #0b0e14; }
+  .hbar .lbl { position: absolute; top: 50%; transform: translateY(-50%); font-family: var(--mono); font-size: 10.5px; color: #cfe0f5; background: rgba(11,14,20,.82); padding: 0 3px; border-radius: 3px; }
+  .haircut .hv { font-family: var(--mono); font-size: 12.5px; text-align: right; font-variant-numeric: tabular-nums; color: #ffb3b3; }
+  @media (max-width: 820px) {
+    .brow { grid-template-columns: 120px 1fr 76px; }
+    .haircut { grid-template-columns: 1fr; gap: 6px; }
+    .haircut .hv { text-align: left; }
+  }
+  /* stage stepper */
+  .stepper { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0 10px; }
+  .stepper button { background: var(--card2); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+  .stepper button[aria-pressed="true"] { border-color: var(--blue); background: #16283e; color: #fff; }
+  .stepper button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .stage { display: none; }
+  .stage.on { display: block; }
+  .stagebox { border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 14px 16px; }
+  .stagebox h3 { margin: 0 0 4px; }
+  .stagebox .tagline { color: var(--muted); font-size: 12.5px; margin: 0 0 8px; }
+
+  /* deliverables */
+  .deliv { display: grid; gap: 12px; margin: 14px 0 0; counter-reset: d; }
+  .deliv .d { position: relative; background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--blue); border-radius: 10px; padding: 12px 16px 12px 50px; }
+  .deliv .d::before { counter-increment: d; content: counter(d); position: absolute; left: 13px; top: 12px; width: 24px; height: 24px; border-radius: 50%; background: #1c2a42; border: 1px solid var(--blue); color: #9fc0e8; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
+  .deliv .d h3 { margin: 0 0 3px; font-size: 14.5px; }
+  .deliv .d p { margin: 0; font-size: 13.5px; color: #cfd8e6; }
+  .deliv .d .why { display: block; margin-top: 6px; font-size: 12.5px; color: var(--muted); }
+
+  /* rejection table emphasis */
+  .no { color: #ff9a9a; font-weight: 600; }
+  .yes { color: #8affc0; font-weight: 600; }
+  .pill { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; padding: 2px 7px; border-radius: 5px; white-space: nowrap; }
+  .pill.r { background: rgba(255,82,82,.16); color: #ff9a9a; }
+  .pill.g { background: rgba(0,230,118,.14); color: #8affc0; }
+  .pill.a { background: rgba(255,214,0,.14); color: var(--amber); }
+  .pill.b { background: rgba(64,169,255,.14); color: #7cc4ff; }
+
+  /* formula strip */
+  .math { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0; }
+  @media (max-width: 820px) { .math { grid-template-columns: 1fr 1fr; } }
+  .math div { background: var(--card2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .math .k { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+  .math .v { font-family: var(--mono); font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .math .d { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+  .foot { margin-top: 44px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted); }
+  .foot a { color: #9fc0e8; }
+  .kbd { font-family: var(--mono); font-size: 11.5px; background: #232c40; border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Decision memo · 2026-10-23 · evidence read-only from the live shadow store</div>
+  <h1>The job I'd spend the budget on — and why the obvious one is a trap</h1>
+  <p class="lede">
+    You asked: with budget for a top-tier model, what is the most capable job to give on
+    Spread Hunter? Here is the answer, the evidence behind it, and the reasoning that
+    disqualified the alternatives — including the fix that looks correct and measurably
+    makes the engine worse.
+  </p>
+  <div class="chips">
+    <span class="chip open">243 closes measured</span>
+    <span class="chip">1 shadow window · 167 markets · 331 pairs</span>
+    <span class="chip ok">no signer · nothing spent</span>
+    <span class="chip bad">net −$9.99</span>
+    <span class="chip">counterfactual n = 18</span>
+  </div>
+
+  <div class="verdict">
+    <div class="k">The job</div>
+    <h2>Fill quality → entry gate: prove the edge survives adverse selection</h2>
+    <p>
+      Build the per-fill attribution that shows <em>which fills become dead legs and why</em>,
+      then gate entry on that evidence — and prove the gate in a shadow A/B judged on
+      inclusive PnL, never merge-only.
+    </p>
+    <p class="sub">
+      One sentence of why: the merge business is profitable (+$56.95), the stop-loss is doing
+      its job (it saved $7.49), and 100% of the loss is legs that were <em>bought</em> and
+      then died — so the only lever with money in it is the decision to own the leg at all.
+    </p>
+  </div>
+
+  <nav class="toc" aria-label="Contents">
+    <a href="#books">1 · What the books say</a>
+    <a href="#trap">2 · The trap</a>
+    <a href="#anatomy">3 · Anatomy of a dead leg</a>
+    <a href="#breakeven">4 · Break-even arithmetic</a>
+    <a href="#levers">5 · Two smaller levers</a>
+    <a href="#job">6 · The job spec</a>
+    <a href="#model">7 · Why the strongest model</a>
+    <a href="#rejected">8 · What I rejected</a>
+    <a href="#doubt">9 · What would change my mind</a>
+  </nav>
+
+  <h2 id="books"><span class="n">1</span>What the books actually say</h2>
+  <p class="sub">
+    Source: <span class="src">data/01_shadow_21-10_11-39.db</span> (session <code>shadow-01</code>),
+    table <code>closes</code>, 243 rows. This is a rehearsal DB — no signer, no money moved — so
+    the shapes are trustworthy even though the dollar scale is not.
+  </p>
+
+  <figure class="card" aria-labelledby="books-cap">
+    <figcaption id="books-cap" style="margin:0 0 10px;color:#c9d5e6;font-size:13px;">
+      Realized PnL by close path. Bars are scaled to the largest single path (−$93.56).
+    </figcaption>
+    <div class="bars">
+      <div class="brow">
+        <div class="bl">merge<small>173 closes · +$0.329 avg</small></div>
+        <div class="track dzero"><div class="fill fromc g" style="left:50%;width:30.4%"></div></div>
+        <div class="bv pos">+56.95</div>
+      </div>
+      <div class="brow">
+        <div class="bl">settlement<small>13 closes · +$1.957 avg</small></div>
+        <div class="track dzero"><div class="fill fromc g" style="left:50%;width:13.6%"></div></div>
+        <div class="bv pos">+25.44</div>
+      </div>
+      <div class="brow">
+        <div class="bl">aged-out rescue<small>25 closes · +$0.047 avg</small></div>
+        <div class="track dzero"><div class="fill fromc g" style="left:50%;width:0.63%;min-width:3px"></div></div>
+        <div class="bv pos">+1.18</div>
+      </div>
+      <div class="brow">
+        <div class="bl">lifecycle_hard_stop<small>32 closes · −$2.924 avg</small></div>
+        <div class="track dzero"><div class="fill fromc r" style="right:50%;width:50%"></div></div>
+        <div class="bv neg">−93.56</div>
+      </div>
+    </div>
+  </figure>
+
+  <div class="math">
+    <div><div class="k">closes that made money</div><div class="v pos">194 / 243</div><div class="d">79.8% — most things work</div></div>
+    <div><div class="k">gross wins</div><div class="v pos">+96.88</div><div class="d">sum of the 194 winners</div></div>
+    <div><div class="k">gross losses</div><div class="v neg">−106.87</div><div class="d">sum of 49 losers · −93.56 of it hard stops</div></div>
+    <div><div class="k">net</div><div class="v neg">−9.99</div><div class="d">the whole book, 243 closes</div></div>
+  </div>
+
+  <p class="sub" style="font-size:12.5px;margin-top:-4px;">
+    The 49 losing closes break down as 32 hard stops (−$93.56), 13 losing rescue exits (−$5.96) and
+    4 losing settlements (−$7.35) — which is why the settlement path nets positive (+$25.44) while
+    still containing losers.
+  </p>
+
+  <div class="callout amber">
+    <span class="lbl">The asymmetry that sets the whole agenda</span>
+    <p>
+      A merge earns <strong>$0.33</strong>. A hard stop costs <strong>$2.92</strong>.
+      One dead leg erases <strong>8.9 merges</strong> — so this is not a book where you can
+      win by improving the good half. You win by shrinking the bad half, or not at all.
+    </p>
+  </div>
+
+  <h2 id="trap"><span class="n">2</span>The trap: the obvious fix loses money</h2>
+  <p>
+    The first instinct on seeing −$93.56 from a stop-loss is to soften it, widen the floor, or
+    wait the leg out. That is the fix a cheap model reaches for, and it is wrong. The store can
+    answer it directly: for every hard stop whose market later <em>resolved</em>, we know both
+    branches — what the stop realized, and what the leg would have been worth at settlement.
+  </p>
+
+  <figure class="card">
+    <figcaption style="margin:0 0 10px;color:#c9d5e6;font-size:13px;">
+      Same 18 resolved hard stops, both branches. Bars scaled to the worse outcome (−$49.10).
+    </figcaption>
+    <div class="bars">
+      <div class="brow">
+        <div class="bl">what we did — stopped<small>realized, as booked</small></div>
+        <div class="track"><div class="fill r" style="left:0;width:84.7%"></div></div>
+        <div class="bv neg">−41.61</div>
+      </div>
+      <div class="brow">
+        <div class="bl">what if we held<small>leg valued at settlement</small></div>
+        <div class="track"><div class="fill r" style="left:0;width:100%"></div></div>
+        <div class="bv neg">−49.10</div>
+      </div>
+    </div>
+    <p class="sub" style="font-size:13px;margin:10px 0 0;">
+      The stopped leg went on to win <strong>1 time in 18</strong> (5.6%).
+    </p>
+  </figure>
+
+  <div class="callout red">
+    <span class="lbl">Verdict — do not touch the stop</span>
+    <p>
+      Stopping <strong>saved $7.49</strong> on the cases we can measure. Softening it, delaying
+      it, or holding to resolution all convert a bounded loss into a larger one. The stop is
+      not the bug — it is the only thing currently <em>limiting</em> the bug.
+    </p>
+    <p class="sub">
+      This is the highest-value thing the analysis produced: it kills the most attractive wrong
+      answer before anyone spends a week implementing it.
+    </p>
+  </div>
+
+</div>
+  <h2 id="anatomy"><span class="n">3</span>So the loss is upstream — anatomy of one dead leg</h2>
+  <p>
+    If the exit is not the problem, the problem must be the entry: something got <em>bought</em>
+    that should not have been. Step through the five stages of a leg that dies. Every figure is
+    measured from the 32 hard stops in the store.
+  </p>
+
+  <div class="stepper" role="group" aria-label="Stage of a dead leg">
+    <button type="button" data-stage="0" aria-pressed="true">1 · Quote</button>
+    <button type="button" data-stage="1" aria-pressed="false">2 · Fill</button>
+    <button type="button" data-stage="2" aria-pressed="false">3 · One-sided</button>
+    <button type="button" data-stage="3" aria-pressed="false">4 · Collapse</button>
+    <button type="button" data-stage="4" aria-pressed="false">5 · Stop</button>
+  </div>
+
+  <div class="stagebox">
+    <section class="stage on" data-stage="0">
+      <h3>Quote — both legs rest below mid</h3>
+      <p class="tagline">A binary market, mid 0.84 / 0.16. The bot posts offset prices.</p>
+      <p>
+        UP is quoted at <code>0.82</code>, DOWN at <code>0.14</code>. If both fill, the pair costs
+        <code>0.96</code> and the merge returns $1.00 — four cents of edge per share, which is the
+        entire thesis. Quote size is 120 shares per leg, up to three markets at a time.
+      </p>
+      <p class="sub">
+        Nothing is wrong here yet. This stage is where all 173 winning merges come from.
+      </p>
+    </section>
+    <section class="stage" data-stage="1">
+      <h3>Fill — only the leg somebody wanted to sell you</h3>
+      <p class="tagline">Adverse selection in one sentence: you get filled on the leg the market is leaving.</p>
+      <p>
+        In the 32 hard stops, the leg that filled cost <strong>$0.486 per share on average</strong>
+        across <strong>7.84 shares</strong>. The population that goes on to die clusters in the
+        expensive half of the book, not the cheap tail — but the tail dies too.
+      </p>
+      <p class="sub">
+        This is the stage the job targets. It is also the stage nothing currently measures: the
+        fill ledger records that a fill happened, not what the book looked like when it happened.
+      </p>
+    </section>
+    <section class="stage" data-stage="2">
+      <h3>One-sided — the hedge leg prices itself away</h3>
+      <p class="tagline">PATIENT_WAIT → ESCALATED_HEDGE → HARD_STOP.</p>
+      <p>
+        The lifecycle waits for the opposite leg, then escalates the hedge. By then the book has
+        moved: the cheap side is no longer cheap, and paying up for it would break the
+        pair-cost-under-$1 rule that defines the strategy. So the leg is held naked until the floor
+        fires.
+      </p>
+      <p class="sub">
+        The lifecycle machinery is working as designed. It is being fed a bad input.
+      </p>
+    </section>
+    <section class="stage" data-stage="3">
+      <h3>Collapse — the leg marks down roughly 76%</h3>
+      <p class="tagline">Entry $0.486 → exit $0.112, and the ratio is strikingly constant.</p>
+      <p>
+        Break the 32 stops out by entry price and the collapse is the <em>same percentage</em> in
+        every bucket (ladder below). Cheap legs lose 76%. Expensive legs lose 76%. Only the
+        dollar size of the position differs; the damage rate does not.
+      </p>
+    </section>
+    <section class="stage" data-stage="4">
+      <h3>Stop — a mechanical haircut, not a decision</h3>
+      <p class="tagline">The emergency floor sits 75% below the entry average, so it books ≈ −77% every time.</p>
+      <p>
+        That is why tuning the stop is futile: it has no way to tell a leg that will recover from
+        one that will not, because it only looks at distance from entry. Whatever you set, it
+        realizes that distance uniformly. You are choosing <em>which fixed percentage to pay</em>,
+        not whether the leg was worth owning.
+      </p>
+    </section>
+  </div>
+  <figure class="card" style="margin-top:16px;">
+    <figcaption style="margin:0 0 12px;color:#c9d5e6;font-size:13px;">
+      The same haircut at every entry price. <span style="color:#40a9ff">▍entry</span>
+      <span style="color:#ff5252">▍exit</span> — market value of one share on a $0→$1 scale;
+      the hatched span is money destroyed.
+    </figcaption>
+    <div class="haircut">
+      <div class="hl">entry ≥ $0.80<small>5 closes · biggest dollars</small></div>
+      <div class="hbar">
+        <div class="drop" style="left:18.4%;width:64.2%"></div>
+        <div class="mk exit" style="left:18.4%"></div>
+        <div class="mk entry" style="left:82.6%"></div>
+      </div>
+      <div class="hv">0.826 → 0.184 = −78%<br><span class="sub">avg −$6.42</span></div>
+    </div>
+    <div class="haircut">
+      <div class="hl">$0.60 – $0.80<small>2 closes</small></div>
+      <div class="hbar">
+        <div class="drop" style="left:18.0%;width:55.5%"></div>
+        <div class="mk exit" style="left:18.0%"></div>
+        <div class="mk entry" style="left:73.5%"></div>
+      </div>
+      <div class="hv">0.735 → 0.180 = −76%<br><span class="sub">avg −$5.55</span></div>
+    </div>
+    <div class="haircut">
+      <div class="hl">$0.40 – $0.60<small>15 closes · the bulk</small></div>
+      <div class="hbar">
+        <div class="drop" style="left:11.5%;width:38.9%"></div>
+        <div class="mk exit" style="left:11.5%"></div>
+        <div class="mk entry" style="left:50.4%"></div>
+      </div>
+      <div class="hv">0.504 → 0.115 = −77%<br><span class="sub">avg −$2.26</span></div>
+    </div>
+    <div class="haircut">
+      <div class="hl">entry &lt; $0.40<small>10 closes</small></div>
+      <div class="hbar">
+        <div class="drop" style="left:5.8%;width:18.0%"></div>
+        <div class="mk exit" style="left:5.8%"></div>
+        <div class="mk entry" style="left:23.8%"></div>
+      </div>
+      <div class="hv">0.238 → 0.058 = −76%<br><span class="sub">avg −$1.64</span></div>
+    </div>
+    <div class="haircut" style="border-top:1px solid var(--border);margin-top:4px;padding-top:10px;">
+      <div class="hl"><strong>all 32</strong><small>the whole book</small></div>
+      <div class="hbar">
+        <div class="drop" style="left:11.2%;width:37.4%"></div>
+        <div class="mk exit" style="left:11.2%"></div>
+        <div class="mk entry" style="left:48.6%"></div>
+      </div>
+      <div class="hv"><strong>0.486 → 0.112 = −77%</strong><br><span class="sub">avg −$2.92</span></div>
+    </div>
+  </figure>
+
+  <div class="callout blue">
+    <span class="lbl">What that chart proves</span>
+    <p>
+      The stop-loss has <strong>no information content</strong>. It fires at a fixed distance below
+      entry, so it books the same percentage whether the leg was a $0.83 mistake or a $0.24
+      mistake. No parameter you change alters the outcome — only which constant you pay.
+    </p>
+    <p class="sub">
+      Therefore the only lever with real money attached is <em>whether the leg is bought at all</em>,
+      and the only way to know that is to attribute outcomes back to fill conditions.
+    </p>
+  </div>
+  <h2 id="breakeven"><span class="n">4</span>The break-even arithmetic — what "good enough" means</h2>
+  <p>
+    Two averages decide everything: what a merge earns and what a dead leg costs. Their ratio is
+    the number of merges you must produce to pay for one dead leg.
+  </p>
+
+  <div class="math">
+    <div><div class="k">merge earns</div><div class="v pos">$0.329</div><div class="d">per close, 173 samples</div></div>
+    <div><div class="k">dead leg costs</div><div class="v neg">$2.924</div><div class="d">per close, 32 samples</div></div>
+    <div><div class="k">merges per dead leg</div><div class="v neu">8.9</div><div class="d">required to break even</div></div>
+    <div><div class="k">merges per dead leg</div><div class="v neg">5.4</div><div class="d">actually produced (173 ÷ 32)</div></div>
+  </div>
+
+  <p>
+    Two ways to read the same gap. In merges: 32 dead legs need <strong>284</strong> merges to pay
+    for themselves; the window produced <strong>173</strong> — so only about <strong>19</strong> dead
+    legs were affordable. In rates: the engine closed pairs 205 times (173 merges + 32 stops), and
+    the stop-loss share needs to sit under <strong>10.1%</strong> to break even. It sits at
+    <strong>15.6%</strong>.
+  </p>
+
+  <figure class="card">
+    <figcaption style="margin:0 0 10px;color:#c9d5e6;font-size:13px;">
+      Share of pair closings that became a dead leg. Scale 0–20%.
+    </figcaption>
+    <div class="bars">
+      <div class="brow">
+        <div class="bl">break-even share<small>0.329 ÷ (0.329 + 2.924)</small></div>
+        <div class="track"><div class="fill g" style="left:0;width:50.5%"></div></div>
+        <div class="bv neu">10.1%</div>
+      </div>
+      <div class="brow">
+        <div class="bl">actual share<small>32 of 205 pair closings</small></div>
+        <div class="track"><div class="fill r" style="left:0;width:78.0%"></div></div>
+        <div class="bv neg">15.6%</div>
+      </div>
+    </div>
+    <p class="sub" style="font-size:13px;margin:10px 0 0;">
+      Gap: <strong>5.5 points</strong>. At break-even the window would have booked about 21 dead
+      legs instead of 32 — eleven fewer, worth roughly <strong>+$32</strong> in merge income alone.
+      That is the whole distance between −$9.99 and clearly profitable.
+    </p>
+  </figure>
+
+  <div class="callout green">
+    <span class="lbl">The criterion that makes the job testable</span>
+    <p>
+      A gate is only worth shipping if the legs it rejects are <strong>more than 8.9× more likely
+      to die than to merge</strong>. That is a single number, computable from the store, and it
+      converts "should we add a filter?" from taste into arithmetic. Anything weaker than 8.9×
+      removes more profit than it saves, no matter how bad the rejected legs look.
+    </p>
+    <p class="sub">
+      This is also why the job must be a measurement job first. No one can guess which fill
+      conditions clear 8.9×; it has to be calibrated, then checked, then shadow-tested.
+    </p>
+  </div>
+
+  <h2 id="levers"><span class="n">5</span>Two smaller levers the same work exposes</h2>
+
+  <h3>5a · 38% of merges earn almost nothing</h3>
+  <p>
+    Sort merges by what the pair cost. The cheap half does the work; the expensive tail barely
+    pays for the risk it carries.
+  </p>
+
+  <figure class="card">
+    <figcaption style="margin:0 0 10px;color:#c9d5e6;font-size:13px;">
+      Average PnL per merge, by realized pair cost. Bar scale = best bucket ($0.540).
+    </figcaption>
+    <div class="bars">
+      <div class="brow">
+        <div class="bl">pair &lt; $0.94<small>62 merges · $27.90</small></div>
+        <div class="track"><div class="fill g" style="left:0;width:83.3%"></div></div>
+        <div class="bv pos">+0.450</div>
+      </div>
+      <div class="brow">
+        <div class="bl">$0.94 – $0.96<small>41 merges · $22.14</small></div>
+        <div class="track"><div class="fill g" style="left:0;width:100%"></div></div>
+        <div class="bv pos">+0.540</div>
+      </div>
+      <div class="brow">
+        <div class="bl">$0.96 – $0.98<small>5 merges · $0.92</small></div>
+        <div class="track"><div class="fill a" style="left:0;width:34.1%"></div></div>
+        <div class="bv neu">+0.184</div>
+      </div>
+      <div class="brow">
+        <div class="bl">pair ≥ $0.98<small>65 merges · $5.99</small></div>
+        <div class="track"><div class="fill r" style="left:0;width:17.1%"></div></div>
+        <div class="bv neg">+0.092</div>
+      </div>
+    </div>
+    <p class="sub" style="font-size:13px;margin:10px 0 0;">
+      65 merges assemble at $0.98+ and each returns about nine cents — while carrying exactly the
+      same single-leg risk that costs $2.92 when it goes wrong. Nine cents of upside against $2.92
+      of downside needs roughly <strong>32 merges per dead leg</strong> to pay for itself; the engine
+      produces 5.4 from all merge prices combined.
+    </p>
+  </figure>
+
+  <div class="callout amber">
+    <span class="lbl">Why this is evidence, not a plan</span>
+    <p>
+      It is tempting to bolt on a <code>pair_cost &lt; 0.98</code> filter today. Don't — not yet.
+      That number is an artifact of <em>this</em> window and it is the same measurement the job
+      produces properly. Ship a threshold before you have the per-fill attribution and you will be
+      tuning the wrong variable with 173 observations. The job produces the calibration; the gate
+      falls out of it.
+    </p>
+  </div>
+
+  <h3>5b · Dust that cannot be sold keeps hammering the exit</h3>
+  <p>
+    <strong>5,464 exit refusals</strong> across 10 pairs. The worst single pair logged
+    <strong>2,041 refusals in 68 minutes</strong> — one attempt every two seconds — because the
+    position was <code>0.1087</code> shares and the venue will not take an order below
+    <code>1.0</code> share. The engine already recognises this as a dust position; it just keeps
+    retrying anyway.
+  </p>
+  <p class="sub">
+    This is a symptom, not a cause: it moves no PnL directly. But it buries real errors in noise,
+    burns CPU, and would mask the gate's own telemetry during the A/B. It belongs in the same
+    session as the main job, as the one cheap fix.
+  </p>
+  <h2 id="job"><span class="n">6</span>The job, written as a spec</h2>
+  <p class="lede" style="font-size:15.5px;">
+    <strong>Fill quality → entry gate: prove the strategy's edge survives adverse selection.</strong>
+    Measurement first, gate second, proof third. Read-only until the gate is justified.
+  </p>
+
+  <div class="deliv">
+    <div class="d">
+      <h3>Per-fill attribution report — <span class="src">core_brain/fill_quality_report.py</span>, read-only</h3>
+      <p>
+        Join every fill to (a) the book state at fill time, (b) the lifecycle it became, and
+        (c) the terminal outcome of that pair. One row per fill, one CLI entry point, no writes,
+        no venue calls. This is the artifact that does not exist today — the fill ledger records
+        <em>that</em> a fill happened, never <em>what it looked like</em> when it happened.
+      </p>
+      <span class="why">Blocks everything else. Without it, every gate proposal is guessing.</span>
+    </div>
+    <div class="d">
+      <h3>Calibration: <span class="src">P(leg worthless | conditions)</span> with honest intervals</h3>
+      <p>
+        Bucket fills by the features that plausibly carry the adverse-selection signal — distance
+        from mid, spread at fill, depth on the opposite side, time to resolution, gap between the
+        two legs' fill times — and report death rate, merge rate, and lift versus base rate with
+        confidence intervals.
+      </p>
+      <span class="why">A bucket supported by 5 observations is not a finding. The report must say so itself.</span>
+    </div>
+    <div class="d">
+      <h3>Proposed gate + break-even table, defaults off</h3>
+      <p>
+        For each candidate threshold, the table shows: legs rejected, merges lost, dead legs
+        avoided, net PnL delta. A threshold ships only where the ratio clears 8.9:1. The gate goes
+        in off-by-default so it cannot change live behaviour by accident.
+      </p>
+      <span class="why">Turns "add a filter" into a decision the operator reads off one table.</span>
+    </div>
+    <div class="d">
+      <h3>Shadow A/B on inclusive PnL — never merge-only</h3>
+      <p>
+        Same window, gate on versus off, judged on total realized PnL including stops and
+        settlements. Merge-only scoring flatters every filter that reduces activity, because it
+        hides the dead legs the filter did not prevent.
+      </p>
+      <span class="why">This is the exact metric that would have made the stop-tuning mistake obvious.</span>
+    </div>
+    <div class="d">
+      <h3>Dust fix + absence test</h3>
+      <p>
+        Stop retrying exits on positions below the venue minimum (0.1087 shares vs 1.0). Log once,
+        then wait. Add a test asserting no repeated refusal loop for a dust position — the kind
+        that fails today, which is the only kind worth writing here.
+      </p>
+      <span class="why">Cheap, and it keeps the A/B telemetry readable.</span>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:16px;">
+    <div class="card">
+      <h3><span class="cross">✗</span> This is not done if…</h3>
+      <ul style="margin:6px 0 0;">
+        <li>the report exists but nothing is gated;</li>
+        <li>a gate ships without a break-even table;</li>
+        <li>the A/B is scored on merges alone;</li>
+        <li>the stop-loss, sizing, or tournament parameters were touched;</li>
+        <li>"no gate exists" was concluded but never written down as a result.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="check">✓</span> This is a win if…</h3>
+      <ul style="margin:6px 0 0;">
+        <li>we can name which fills die and by how much, with intervals;</li>
+        <li>a threshold clears 8.9:1 in shadow and survives the A/B;</li>
+        <li>or the same rigour shows no observable condition predicts the deaths — which
+          redirects the search to sizing and market selection instead.</li>
+      </ul>
+    </div>
+  </div>
+  <h2 id="model"><span class="n">7</span>Why this needs the strongest model, not the cheapest</h2>
+  <p>
+    This is the part of the answer that is about the <em>budget</em>. The job is not large in lines
+    of code. It is large in judgement, in five specific ways:
+  </p>
+
+  <table>
+    <thead>
+      <tr><th style="width:32%;">Temptation</th><th>Why it costs real money here</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Fix the thing that looks broken</strong></td>
+        <td>The stop-loss is the biggest negative line item and it is <em>correct</em>. Softening it
+          loses $7.49 on the 18 measurable cases. A model that optimises the visible number
+          actively damages the engine.</td>
+      </tr>
+      <tr>
+        <td><strong>Trust the aggregate metric</strong></td>
+        <td>Markouts across 421 fills run 0.4748 → 0.4804 — mildly <em>favourable</em>. At the
+          aggregate level these fills look fine. The bad population hides inside the average, so a
+          naive dashboard prints "no problem" while 32 legs bleed $93.56.</td>
+      </tr>
+      <tr>
+        <td><strong>Overfit small buckets</strong></td>
+        <td>32 stops, 18 resolved counterfactuals, one pipeline bucket with 5 closes. A confident
+          conclusion is one bad bucket away. The model must be willing to report "not enough data"
+          as a result.</td>
+      </tr>
+      <tr>
+        <td><strong>Measure the convenient way</strong></td>
+        <td>Merge-only PnL makes any activity-reducing gate look like a win. Inclusive PnL is the
+          only honest scoreboard, and choosing it requires knowing why.</td>
+      </tr>
+      <tr>
+        <td><strong>Refactor while you are in there</strong></td>
+        <td><code>trader_loop.py</code> is 158 KB and sits upstream of both failure modes this repo
+          exists to prevent: a pair assembled over $1.00, and an unhedged single leg. Scope
+          discipline is the safety property, not tidiness.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout green">
+    <span class="lbl">The budget argument, short</span>
+    <p>
+      A cheap model hands you a fix for the loudest number, and here the loudest number is a
+      symptom that is already being handled correctly. The expensive part of this job is refusing
+      four plausible answers and proving the fifth.
+    </p>
+  </div>
+  <h2 id="rejected"><span class="n">8</span>What I rejected, and why</h2>
+  <p class="sub">Every row was a real candidate. The reasons are measurable, not aesthetic.</p>
+
+  <table>
+    <thead>
+      <tr><th style="width:26%;">Candidate</th><th>Why it lost</th><th style="width:14%;">Verdict</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Remove, soften or delay the hard stop</td>
+        <td>Measured on both branches: <span class="no">−$7.49</span> on 18 resolved cases. The
+          stopped leg recovered 1 time in 18.</td>
+        <td><span class="pill r">trap</span></td>
+      </tr>
+      <tr>
+        <td>#471 — quote ladder / pricing shape</td>
+        <td>Changes what we quote without knowing which fills are toxic. It moves the input of a
+          function nobody has measured yet.</td>
+        <td><span class="pill a">premature</span></td>
+      </tr>
+      <tr>
+        <td>#474 — fill calibration (PR #757)</td>
+        <td>The right theme, and already built — but the PR is CONFLICTING and Windows shard 6/6 is
+          red. This is the <em>delivery vehicle</em> for the recommended job, not a competitor.</td>
+        <td><span class="pill b">land first</span></td>
+      </tr>
+      <tr>
+        <td>#487 — current-setup tournament retune</td>
+        <td>Optimises sizing and offsets against the current fill mix. Tunes the wrong function
+          before the entry gate exists.</td>
+        <td><span class="pill a">wrong order</span></td>
+      </tr>
+      <tr>
+        <td>Raise quote size for bigger dollar merges</td>
+        <td>Multiplies both sides of the ratio. Break-even stays 8.9:1 while the variance grows.</td>
+        <td><span class="pill r">no edge</span></td>
+      </tr>
+      <tr>
+        <td>Refactor <span class="src">dashboard/server.py</span></td>
+        <td>Zero PnL impact at a real regression cost. Cleanup, not leverage.</td>
+        <td><span class="pill r">no</span></td>
+      </tr>
+      <tr>
+        <td>#759 / #760 quick fixes</td>
+        <td>Cheap, correct, small. They ride along in the same session instead of anchoring it.</td>
+        <td><span class="pill g">bundle</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2 id="doubt"><span class="n">9</span>What could change my mind</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>Weak points in this evidence</h3>
+      <ul style="margin:6px 0 0;">
+        <li><strong>One window.</strong> 243 closes, 167 markets, a single shadow session. A
+          different regime could reorder every bucket.</li>
+        <li><strong>n = 18.</strong> The counterfactual rests on hard stops whose market later
+          resolved. 11 of 18 would flip the sign; since only 1 of 18 recovered, the direction is
+          safe and the magnitude is not.</li>
+        <li><strong>Shadow fills are models, not the venue.</strong> Real adverse selection is
+          usually <em>worse</em> than a fill model assumes — which strengthens the case for
+          measuring at the fill.</li>
+        <li><strong>The refusals may be shadow-specific.</strong> 5,464 is an upper bound.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Falsifiers — how the job can fail honestly</h3>
+      <ul style="margin:6px 0 0;">
+        <li>No bucket clears 8.9× with usable intervals → the gate does not exist, and the next job
+          is market selection, not entry filtering.</li>
+        <li>All buckets look identical → deaths are driven by post-fill events, not fill conditions,
+          and the lifecycle hedge path becomes the target.</li>
+        <li>A gate clears 8.9× in calibration then dies in the A/B → the calibration overfit this
+          window, and the finding is "recalibrate on fresh shadow data".</li>
+      </ul>
+    </div>
+  </div>
+  <div class="foot">
+    <p>
+      <strong>Sources.</strong> Every figure is a read-only query against
+      <span class="src">data/01_shadow_21-10_11-39.db</span> (session <code>shadow-01</code>, per
+      <span class="src">runtime/shadow-session-shadow-01.json</span>): tables <code>closes</code>,
+      <code>single_leg_lifecycle</code>, <code>shadow_fills</code>, <code>resolutions</code>, and
+      the exit-refusal log. Context from
+      <span class="src">docs/agents/architecture.md</span>,
+      <span class="src">docs/agents/strategy.md</span>,
+      <span class="src">docs/runs/2026-10-21-487-current-setup-tournament.md</span>,
+      <span class="src">docs/issues/487-noticed-but-not-touching.md</span>,
+      <span class="src">docs/audits/expectancy-vs-mean-return.md</span>.
+    </p>
+    <p>
+      <strong>Reproduce.</strong> Aggregate <code>closes</code> by <code>reason</code> and
+      <code>method</code>. The counterfactual joins each <code>lifecycle_hard_stop</code> row to its
+      market's entry in <code>resolutions</code> and values the held leg at its settlement price.
+      Open the DB read-only; nothing here writes to it.
+    </p>
+    <p>
+      No product code was changed to build this document. Open questions for the operator: file this
+      as a GitHub issue with the spec in §6, and clear PR #757 before any gate work starts.
+    </p>
+  </div>
+
+
+<script>
+(function () {
+  "use strict";
+  var btns = Array.prototype.slice.call(document.querySelectorAll(".stepper button"));
+  var stages = Array.prototype.slice.call(document.querySelectorAll(".stage"));
+  if (!btns.length || !stages.length) { return; }
+
+  function show(i) {
+    btns.forEach(function (b) {
+      b.setAttribute("aria-pressed", String(Number(b.dataset.stage) === i));
+    });
+    stages.forEach(function (s) {
+      s.classList.toggle("on", Number(s.dataset.stage) === i);
+    });
+  }
+
+  btns.forEach(function (b, idx) {
+    b.addEventListener("click", function () { show(Number(b.dataset.stage)); });
+    b.addEventListener("keydown", function (e) {
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") { return; }
+      e.preventDefault();
+      var next = e.key === "ArrowRight" ? (idx + 1) % btns.length : (idx - 1 + btns.length) % btns.length;
+      btns[next].focus();
+      show(Number(btns[next].dataset.stage));
+    });
+  });
+})();
+
+</script>
+</body>
+</html>
