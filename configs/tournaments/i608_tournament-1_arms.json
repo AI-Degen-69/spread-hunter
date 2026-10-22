@@ -32,19 +32,6 @@
     }
   },
   {
-    "name": "the-gambler",
-    "env": {
-      "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.0",
-      "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "800"
-    }
-  },
-  {
-    "name": "the-chaperone",
-    "env": {
-      "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500"
-    }
-  },
-  {
     "name": "the-graceful",
     "env": {}
   },

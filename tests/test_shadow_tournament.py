@@ -639,26 +639,29 @@ def test_hybrid_preset_configuration():
 
 
 def test_i608_character_arms_plan(tmp_path: Path):
-    """#608: the 10-character arms file builds a valid 10-arm plan."""
+    """#608: the character arms file builds a valid 8-arm plan.
+
+    #753 deleted `the-gambler` and `the-chaperone`: both existed only to set the
+    re-quote holds #387 retired, so removing those settings left them empty.
+    """
     from scripts.shadow_tournament import build_tournament_plan
 
     arms_file = Path(__file__).resolve().parent.parent / "configs" / "tournaments" / "i608_tournament-1_arms.json"
     arms = json.loads(arms_file.read_text(encoding="utf-8"))
-    assert len(arms) == 10
+    assert len(arms) == 8
 
     plan = build_tournament_plan(
         issue=608, arms=arms, base_port=8801, base_dir=tmp_path,
         run_number=1, check_ports=False,
     )
-    assert len(plan.arms) == 10
-    # Unique base names, run-number slugs <base>-1, ports 8801-8810.
+    assert len(plan.arms) == 8
+    # Unique base names, run-number slugs <base>-1, ports 8801-8808.
     bases = [a["name"] for a in arms]
-    assert len(set(bases)) == 10
+    assert len(set(bases)) == 8
     assert [a.name for a in plan.arms] == [f"{b}-1" for b in bases]
-    assert [a.dash_port for a in plan.arms] == list(range(8801, 8811))
+    assert [a.dash_port for a in plan.arms] == list(range(8801, 8809))
 
-    # One knob per character; the-gambler and the-strict-parent define two.
-    # #683 purged HUNTER_STOP_LOSS_TRIGGER_USD_CENTS and
+    # One knob per character. #683 purged HUNTER_STOP_LOSS_TRIGGER_USD_CENTS and
     # HUNTER_SINGLE_BUY_GRACE_SEC; the-accountant, the-patient-one,
     # the-graceful and the-strict-parent therefore carry no knobs.
     expected_knobs = {
@@ -668,8 +671,6 @@ def test_i608_character_arms_plan(tmp_path: Path):
         "the-daydreamer": {"BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"},
         "the-regular": {"BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"},
         "the-metronome": {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS"},
-        "the-gambler": {"BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS", "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"},
-        "the-chaperone": {"BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"},
         "the-graceful": set(),
         "the-strict-parent": set(),
     }
@@ -915,8 +916,6 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.25",
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
-        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0",
-        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "0",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
         "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.065",
     },
@@ -925,8 +924,6 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.50",
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
-        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "1.0",
-        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "800",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
         "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.050",
     },
@@ -936,8 +933,6 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "5",
         "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.01",
-        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500",
-        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.08",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
         "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.030",
     },
@@ -947,8 +942,6 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
         "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.06",
-        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500",
-        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.08",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
         "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.050",
     },
@@ -957,8 +950,6 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.25",
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
-        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500",
-        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS": "0.08",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
         "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.030",
     },
@@ -976,6 +967,9 @@ I492_RETIRED_KNOBS = {
     "HUNTER_REWARD_OFFSET",
     "HUNTER_REFUSAL_HOLD_POLICY",
     "HUNTER_REFUSAL_HOLD_DRIFT",
+    # #753: the requote holds #387 retired; no arm may set them again.
+    "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES",
+    "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS",
 }
 
 # The SUPERSEDED #487 premise: one "worst catalyst" tweaked per arm, read from
@@ -989,8 +983,6 @@ I487_TWEAKS = {
     ("balanced", "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"): "0.25",
     ("aggressive", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"): "0.045",
     ("prudent", "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"): "0.30",
-    ("stickhold", "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"): "500",
-    ("queuehug", "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS"): "0.08",
     ("deadband-tight", "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS"): "0.05",
     ("deadband-wide", "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"): "0.25",
     ("snapstop", "HUNTER_SINGLE_BUY_GRACE_SEC"): "45",
@@ -1149,7 +1141,7 @@ def test_a_retired_preset_selector_is_refused_at_plan_time(tmp_path):
         )
 
 
-def test_a_supported_legacy_alias_still_plans(tmp_path):
+def test_a_supported_alias_still_plans(tmp_path):
     from scripts.shadow_tournament import build_tournament_plan
 
     plan = build_tournament_plan(
@@ -1157,7 +1149,6 @@ def test_a_supported_legacy_alias_still_plans(tmp_path):
         arms=[{
             "name": "arm-one",
             "env": {
-                "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES": "500",
                 "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.05",
                 "BOT_QUOTE_PRICE_RISK_WIDEN": "0.02",
             },
@@ -1167,9 +1158,41 @@ def test_a_supported_legacy_alias_still_plans(tmp_path):
         check_ports=False,
     )
     env = plan.arms[0].env
-    assert env["BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES"] == "500"
     assert env["BOT_RISK_STOP_ADVERSE_DROP_CENTS"] == "0.05"
     assert env["BOT_QUOTE_PRICE_RISK_WIDEN"] == "0.02"
+
+
+@pytest.mark.parametrize("name", [
+    "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES",
+    "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS",
+])
+def test_an_arm_environment_setting_a_retired_hold_is_refused(tmp_path, name):
+    """#753: the holds #387 retired cannot be set through an arm's env block.
+
+    Nothing reads the variable, so the arm would quietly run the shipped
+    default and the tournament would compare a setting nobody chose.
+    """
+    from scripts.shadow_tournament import build_tournament_plan
+
+    with pytest.raises(ValueError, match=r"retired by #387"):
+        build_tournament_plan(
+            issue=753,
+            arms=[{"name": "arm-one", "env": {name: "500"}}],
+            base_dir=tmp_path,
+            run_number=1,
+            check_ports=False,
+        )
+
+
+@pytest.mark.parametrize("field", [
+    "bot_order_requote_hold_queue_shares",
+    "bot_order_requote_hold_below_target_cents",
+])
+def test_an_arm_preset_setting_a_retired_hold_is_refused(field):
+    from scripts.shadow_tournament import _preset_to_env
+
+    with pytest.raises(ValueError, match=r"retired by #387"):
+        _preset_to_env({"name": "arm-one", field: 500.0})
 
 
 def test_default_plan_interval_matches_max_rotation_ceiling(tmp_path: Path):

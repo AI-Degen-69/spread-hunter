@@ -118,8 +118,6 @@ Map all legacy variables to the new canonical names across the codebase:
 - `enable_aged_out_rescue`           -> `BOT_RISK_GATE_AGED_RESCUE_ON`
 - `aged_out_rescue_lead_sec`         -> `BOT_RISK_AGED_RESCUE_LEAD_SEC`
 - `requote_dead_band`                -> `BOT_RISK_REQUOTE_DEAD_BAND_CENTS`
-- `requote_hold_below_target`        -> `BOT_RISK_REQUOTE_HOLD_BELOW_CENTS`
-- `requote_hold_queue_shares`        -> `BOT_RISK_REQUOTE_MIN_QUEUE_SHARES`
 - `requote_interval_sec`             -> `BOT_RISK_REQUOTE_MIN_INTERVAL_SEC`
 - `poll_interval_sec`                -> `BOT_RISK_LOOP_POLL_INTERVAL_SEC`
 - `sweep_interval`                   -> `BOT_RISK_SYNC_SWEEP_INTERVAL_SEC`
