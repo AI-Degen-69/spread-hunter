@@ -152,16 +152,12 @@ def test_tournament_presets_registry_contents():
     assert balanced["bot_quote_spread_offset_multiplier"] == 0.50
     assert balanced["bot_quote_spread_offset_min_cents"] == 2
     assert balanced["bot_quote_spread_offset_max_cents"] == 4
-    assert balanced["bot_order_requote_hold_queue_shares"] == 500.0
-    assert balanced["bot_order_requote_hold_below_target_cents"] == 0.08
 
     prudent = TOURNAMENT_PRESETS["prudent"]
     assert prudent["bot_quote_gate_dynamic_offset_on"]
     assert prudent["bot_quote_spread_offset_multiplier"] == 0.60
     assert prudent["bot_quote_spread_offset_min_cents"] == 2
     assert prudent["bot_quote_spread_offset_max_cents"] == 4
-    assert prudent["bot_order_requote_hold_queue_shares"] == 500.0
-    assert prudent["bot_order_requote_hold_below_target_cents"] == 0.08
 
 
 def test_apply_tournament_preset():
@@ -171,32 +167,24 @@ def test_apply_tournament_preset():
     assert agg.bot_quote_spread_offset_multiplier == 0.25
     assert agg.bot_quote_spread_offset_min_cents == 2
     assert agg.bot_quote_spread_offset_max_cents == 3
-    assert agg.bot_order_requote_hold_queue_shares == 500.0
-    assert agg.bot_order_requote_hold_below_target_cents == 0.08
 
     bal = apply_tournament_preset(base, "balanced")
     assert bal.bot_quote_gate_dynamic_offset_on is True
     assert bal.bot_quote_spread_offset_multiplier == 0.50
     assert bal.bot_quote_spread_offset_min_cents == 2
     assert bal.bot_quote_spread_offset_max_cents == 4
-    assert bal.bot_order_requote_hold_queue_shares == 500.0
-    assert bal.bot_order_requote_hold_below_target_cents == 0.08
 
     cons = apply_tournament_preset(base, "conservative")
     assert cons.bot_quote_gate_dynamic_offset_on is True
     assert cons.bot_quote_spread_offset_multiplier == 0.75
     assert cons.bot_quote_spread_offset_min_cents == 2
     assert cons.bot_quote_spread_offset_max_cents == 5
-    assert cons.bot_order_requote_hold_queue_shares == 500.0
-    assert cons.bot_order_requote_hold_below_target_cents == 0.08
 
     pru = apply_tournament_preset(base, "prudent")
     assert pru.bot_quote_gate_dynamic_offset_on is True
     assert pru.bot_quote_spread_offset_multiplier == 0.60
     assert pru.bot_quote_spread_offset_min_cents == 2
     assert pru.bot_quote_spread_offset_max_cents == 4
-    assert pru.bot_order_requote_hold_queue_shares == 500.0
-    assert pru.bot_order_requote_hold_below_target_cents == 0.08
 
     with pytest.raises(ValueError, match="Unknown tournament preset"):
         apply_tournament_preset(base, "yolo")
