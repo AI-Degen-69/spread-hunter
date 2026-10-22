@@ -1276,8 +1276,6 @@ def test_cockpit_hybrid_blueprint_tab_purged():
         "BOT_QUOTE_TOURNAMENT_PRESET=hybrid",
         "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0",
         "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS",
-        "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES",
-        "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS",
         "BOT_RISK_STOP_MODE=ABSOLUTE_DROP",
         "BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
         "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC",
@@ -1285,6 +1283,11 @@ def test_cockpit_hybrid_blueprint_tab_purged():
     ]
     for key in canonical_keys:
         assert key in blueprint, f"Expected canonical key {key!r} in blueprint"
+
+    # #753: the retired requote holds are not presented as current settings.
+    assert "REQUOTE_HOLD" not in blueprint
+    assert "Queue Hold" not in blueprint
+    assert "Hold Deviation" not in blueprint
 
     # Preserved benchmark and preset references
     assert "Static benchmark synthesis" in blueprint

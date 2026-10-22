@@ -83,7 +83,7 @@ attributes. T5 asserts the end state and therefore comes last.
 
 ## Tasks
 
-### T1 · [Backend/Logic] · S · Delete the config surface
+### T1 · [Backend/Logic] · S · Delete the config surface — ✅ done
 **Files:** `core_brain/config.py`, `.env.example`,
 `tests/test_dynamic_offset.py`, `tests/test_completable_pair_gate.py`
 **Depends on:** none
@@ -98,7 +98,7 @@ ignored", asserted in T5.
 tests/test_completable_pair_gate.py tests/test_loose_baseline.py
 tests/test_screener_preset.py tests/test_config_single_source.py`
 
-### T2 · [Backend/Logic] · M · Trim the planner surface, keep the behaviour
+### T2 · [Backend/Logic] · M · Trim the planner surface, keep the behaviour — ✅ done
 **Files:** `core_brain/trader_loop.py`, `tests/test_plan_orders_asymmetric_hold.py`,
 `tests/test_trader_loop.py`, `tests/test_cancel_attribution.py`
 **Depends on:** none

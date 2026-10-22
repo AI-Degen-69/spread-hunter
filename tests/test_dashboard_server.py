@@ -3390,7 +3390,7 @@ def test_parameters_endpoint_emits_no_deprecation_warnings(client):
 
 
 def test_parameters_cards_canonical_env_var_badges(client):
-    """Verify that all 59 parameter cards have canonical env_var badges matching .env.example (#672)."""
+    """Verify that all 57 parameter cards have canonical env_var badges matching .env.example (#672)."""
     expected_badges = {
         # Scope 1: Market Screener
         "filter_live_vol_min_24h_usd": "FILTER_LIVE_VOL_MIN_24H_USD",
@@ -3411,8 +3411,6 @@ def test_parameters_cards_canonical_env_var_badges(client):
         "bot_pos_price_max_pair_cost_usd": "BOT_POS_PRICE_MAX_PAIR_COST_USD",
         "bot_pos_price_max_complete_usd": "BOT_POS_PRICE_MAX_COMPLETE_USD",
         "bot_order_requote_dead_band_cents": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS",
-        "bot_order_requote_hold_below_target_cents": "BOT_ORDER_REQUOTE_HOLD_BELOW_TARGET_CENTS",
-        "bot_order_requote_hold_queue_shares": "BOT_ORDER_REQUOTE_HOLD_QUEUE_SHARES",
         "sweep_interval": "LIVE_SWEEP_INTERVAL",
         "bot_risk_gate_pairs_rule_on": "BOT_RISK_GATE_PAIRS_RULE_ON",
         "bot_risk_aged_out_rescue_lead_sec": "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC",
@@ -3429,7 +3427,7 @@ def test_parameters_cards_canonical_env_var_badges(client):
     response = client.get("/api/parameters")
     assert response.status_code == 200
     params = response.json()["parameters"]
-    assert len(params) == 59
+    assert len(params) == 57
 
     card_keys = {p["key"] for p in params}
     assert card_keys >= set(expected_badges.keys())

@@ -96,30 +96,6 @@ def summarize(db_path: Path | str) -> dict[str, Any]:
     }
 
 
-def _hold_state() -> str:
-    """Whether the two re-quote holds are actually on, read from the config.
-
-    Printed rather than assumed: a hardcoded "currently off" would keep saying
-    so after someone turned it on, which is the reading that matters most.
-
-    BOTH holds are named. They keep a price move for different reasons -- the
-    queue hold for an order near the front of its level, the direction hold for
-    an order the book is falling onto -- and reporting only one of them tells
-    an operator the other is not there.
-    """
-    try:
-        from core_brain.config import load
-
-        cfg = load()
-        shares = float(getattr(cfg, "bot_order_requote_hold_queue_shares", 0.0) or 0.0)
-        below = float(getattr(cfg, "bot_order_requote_hold_below_target_cents", 0.0) or 0.0)
-    except Exception:
-        return "state unread"
-    queue = f"on at {shares:g} shares" if shares > 0 else "off"
-    drop = f"on within {below:g}" if below > 0 else "off"
-    return f"queue {queue}, direction {drop}"
-
-
 def format_report(summary: dict[str, Any]) -> str:
     """The block an operator reads."""
     if not summary.get("readable"):
@@ -150,12 +126,8 @@ def format_report(summary: dict[str, Any]) -> str:
     if price_moved and summary["cancelled"]:
         share = 100.0 * price_moved / summary["cancelled"]
         lines.append("")
-        lines.append(f"  {share:.0f}% of cancels were price moves. Those are the "
-                     f"only ones the re-quote holds can keep")
-        lines.append(f"  (bot_order_requote_hold_queue_shares / "
-                     f"bot_order_requote_hold_below_target_cents "
-                     f"in core_brain.config: {_hold_state()});")
-        lines.append(f"  the rest are gates doing their job.")
+        lines.append(f"  {share:.0f}% of cancels were price moves;")
+        lines.append("  the rest are gates doing their job.")
     return "\n".join(lines)
 
 
