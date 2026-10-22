@@ -21,6 +21,10 @@ jobs:
     # new test files are always assigned somewhere.
     name: pytest (windows shard ${{ matrix.shard }}/6)
     runs-on: windows-latest
+    # A normal shard finishes in 2-4 minutes. Without this cap a stalled
+    # runner holds the job for GitHub's 6-hour default instead of failing
+    # fast, so a pool hiccup blocks the gate for the rest of the day.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
