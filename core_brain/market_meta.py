@@ -168,17 +168,83 @@ def classify_display_category(title: Any, event_title: Any,
     return None
 
 
-def _canonical_feed_label(label: Optional[str]) -> Optional[str]:
-    """A feed label in canonical display form, or the label untouched.
+# Top-level venue shelves the word rules above do not name (#748). A tag or a
+# venue label is a category only when those rules name it or it appears here;
+# anything else (`NBA Tip-Off`, `Match Winner`, `Republican Party`) is a series,
+# group or outcome name and must never become the label. Whole-label match on
+# purpose: `Elections` is Politics, `Republican Party` is not.
+_CATEGORY_TAG_ALIASES: dict[str, str] = {
+    "sports": "Sports",
+    "politics": POLITICS_LABEL,
+    "elections": POLITICS_LABEL,
+    "geopolitics": "Geopolitics",
+    "crypto": "Crypto",
+    "culture": "Culture",
+    "economy": "Economy",
+    "tech": "Tech",
+    "weather": "Weather",
+    "world": "World",
+}
 
-    `None`/empty stays `None` so the keyword fallback still runs. A label
-    the display rules can name ("ATP Tour", "CS2", "LoL") comes back as the
-    game itself ("Tennis", "Counter-Strike 2", "League of Legends"); a label
-    they cannot name ("Crypto", "Match Winner") passes through verbatim.
+# The shelves that contain something more specific. A label here loses to a
+# named sport or game, so `Basketball` beats `Sports` whatever tag order says.
+_PARENT_CATEGORIES = frozenset({"Sports", ESPORTS_LABEL, POLITICS_LABEL,
+                               "Geopolitics"})
+
+
+def _category_tag_rank(label: str) -> Optional[tuple[int, str]]:
+    """`(specificity, canonical label)` for one tag or venue label, or None.
+
+    Rank 3 is a named sport or game the word rules can identify, rank 2 a parent
+    shelf (Politics, E-Sports, ...), rank 1 any other known top-level shelf.
+    None means the text names no category at all.
     """
-    if not label:
+    game = _classify_esports_game(label) or _classify_sport(label)
+    if game:
+        return 3, game
+    alias = _CATEGORY_TAG_ALIASES.get(label.strip().lower())
+    if alias is None:
+        canonical = classify_display_category(label, "", "")
+        return (2, canonical) if canonical else None
+    return (2 if alias in _PARENT_CATEGORIES else 1), alias
+
+
+def category_from_tags(row: dict) -> Optional[str]:
+    """The most specific category among a feed row's tags, or None.
+
+    Tags arrive as strings or as `{"label": ...}` objects, and most of a row's
+    tags are not categories at all (`Recurring`, `Hide From New`, team names),
+    so the winner is the highest-ranked recognised tag, never the first one.
+    """
+    if not isinstance(row, dict):
         return None
-    return classify_display_category(label, "", "") or label
+    tags = row.get("tags")
+    if not isinstance(tags, list):
+        return None
+    best: Optional[tuple[int, str]] = None
+    for tag in tags:
+        if isinstance(tag, dict):
+            tag = tag.get("label") or tag.get("slug")
+        if not isinstance(tag, str) or not tag.strip():
+            continue
+        ranked = _category_tag_rank(tag)
+        if ranked and (best is None or ranked[0] > best[0]):
+            best = ranked
+    return best[1] if best else None
+
+
+def _category_from_feed_label(label: Optional[str]) -> Optional[str]:
+    """A venue label as a category, only when the vocabulary actually names it.
+
+    gamma writes a real shelf into `venue_category`/`category` on some rows and
+    leaves an unrecognised series or group name there on others; returning None
+    for those lets the tags and the keyword fallback run instead of printing
+    `Match Winner` under every row (#748).
+    """
+    if not label or not label.strip():
+        return None
+    ranked = _category_tag_rank(label)
+    return ranked[1] if ranked else None
 
 
 class _FeedList(list):
@@ -240,20 +306,6 @@ def _find_row(rows: list[dict], cid: str) -> Optional[dict]:
     return None
 
 
-def _first_tag_label(row: dict) -> str:
-    tags = row.get("tags") or []
-    if not isinstance(tags, list):
-        return ""
-    for tag in tags:
-        if isinstance(tag, dict):
-            label = tag.get("label") or tag.get("slug")
-            if label:
-                return str(label).strip()
-        elif isinstance(tag, str) and tag.strip():
-            return tag.strip()
-    return ""
-
-
 def _slug_to_title(slug: str) -> str:
     return slug.replace("-", " ").title()
 
@@ -264,13 +316,13 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
     """Human-readable title, slug, link, and category for a condition id.
 
     `root` is the caller's repo root (KPI and registry state each pass their
-    own, which is also how tests redirect the feed). Precedence for category:
-    feed `venue_category`, `category`, `series_title`, `market_group`, first
-    tag label, keyword fallback, `Uncategorized`. A winning feed label is
-    canonicalized through the same display rules -- the venue names the
-    shelf ("ATP Tour", "CS2", "LoL"), the dashboard shows the game itself
-    ("Tennis", "Counter-Strike 2", "League of Legends"). A label the rules
-    cannot name passes through verbatim.
+    own, which is also how tests redirect the feed). Category comes from typed
+    candidates in order (#748): a venue label the vocabulary recognises, the
+    most specific recognised tag, then the title/slug keyword fallback, then
+    `Uncategorized`. A series title, a group name or an outcome name is never a
+    candidate -- those are what printed `NBA Tip-Off` and `Republican Party`
+    under a market name. `event_title` rides along because the Positions row
+    needs a real second line.
     """
     out: dict[str, Any] = {
         "condition_id": cid,
@@ -278,6 +330,7 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
         "slug": None,
         "url": None,
         "category": None,
+        "event_title": "",
         "days_to_resolve": None,
         "min_size": None,
         "volume_24h": None,
@@ -297,9 +350,10 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
     if row is None:
         row = _find_row(_feed_rows("market_universe.json", base), cid)
 
-    event_title = None
+    event_title = ""
     if row is not None:
-        event_title = row.get("event_title")
+        event_title = _text_of(row, "event_title")
+        out["event_title"] = event_title
         yes_d = row.get("yes_depth_usd")
         no_d = row.get("no_depth_usd")
         top3_d = None
@@ -314,23 +368,16 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
             top3_d = yes_d if yes_d is not None else no_d
 
         out.update({
-            "title": row.get("title") or event_title,
+            "title": row.get("title") or event_title or None,
             "slug": row.get("slug"),
-            # The live feed ships category="" on most rows, so the venue
-            # label, the series, the group, and the tags are the labels that
-            # actually survive. An empty cell teaches the reader nothing.
-            # Canonicalize the winner: a venue shorthand ("ATP Tour", "CS2",
-            # "LoL") must read as the game itself, exactly like a market the
-            # keyword fallback classified. Only the label itself is
-            # classified, never the title alongside it, so an explicit venue
-            # label is translated but never overridden by a keyword guess.
-            "category": _canonical_feed_label(
-                _text_of(row, "venue_category")
-                or _text_of(row, "category")
-                or _text_of(row, "series_title")
-                or _text_of(row, "market_group")
-                or _first_tag_label(row)
-                or None
+            # The live feed ships category="" on most rows. Candidate one is a
+            # venue label the vocabulary recognises; candidate two is the most
+            # specific recognised tag. Everything else -- series, group, first
+            # tag -- is not a category and is deliberately not consulted (#748).
+            "category": (
+                _category_from_feed_label(
+                    _text_of(row, "venue_category") or _text_of(row, "category"))
+                or category_from_tags(row)
             ),
             "days_to_resolve": row.get("days_to_resolve"),
             "min_size": row.get("min_size"),

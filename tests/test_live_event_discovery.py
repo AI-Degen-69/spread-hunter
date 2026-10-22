@@ -189,6 +189,9 @@ def test_the_fetch_asks_for_live_not_closed_events():
     assert url == fm.LIVE_EVENTS
     assert params["live"] == "true"
     assert params["closed"] == "false"
+    # Nested markets inherit the event's tags, so the event page must ask for
+    # them or every live row arrives with none (#748).
+    assert params["include_tag"] == "true"
 
 
 def test_only_the_main_line_is_taken_from_a_live_event():

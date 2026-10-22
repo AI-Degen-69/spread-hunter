@@ -7052,6 +7052,16 @@ function marketCategory(m) {
   return label || 'Uncategorized';
 }
 
+/* The one category chip every Orders & Trades view renders (#748): same
+ * element, same class, same position under the market title. `Uncategorized`
+ * is a real answer, so it renders too -- muted rather than hidden, which keeps
+ * the chip in the same place on every row instead of drifting. */
+function categoryPill(m) {
+  const label = marketCategory(m);
+  const muted = label === 'Uncategorized' ? ' is-muted' : '';
+  return `<span class="stitch-category-pill${muted}">${esc(label)}</span>`;
+}
+
 function marketCell(market, conditionId, opts) {
   const wantCaption = Boolean(opts && opts.categoryCaption);
   const named = market && (market.title || market.name || market.slug);
@@ -7983,7 +7993,6 @@ function stitchOpenOrdersRows(kpi, state, sort) {
 
     const title = (market && (market.title || market.name || market.slug))
       || (first.condition_id ? first.condition_id.slice(0, 10) + '…' : '--');
-    const category = marketCategory(market);
     const marketUrl = market && market.slug ? `https://polymarket.com/market/${market.slug}` : '#';
 
     const isPaired = status === 'paired';
@@ -8060,7 +8069,7 @@ function stitchOpenOrdersRows(kpi, state, sort) {
               <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
             </div>
             <div class="stitch-market-meta">
-              <span class="stitch-meta-category">${esc(category)}</span>
+              ${categoryPill(market)}
               <span class="stitch-meta-sep">•</span>
               <span class="stitch-meta-tag">${metaTag}</span>
               ${badgeHtml}
@@ -8192,7 +8201,6 @@ function stitchActiveMarketsRows(kpi, state, sort) {
 
   return sorted.map(({ cid, m, upPrice, dnPrice, upBid, dnBid, pairCost, edge, edgePct, restingHere, ts }) => {
     const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
-    const category = marketCategory(m);
     const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
 
     // Age / Stopwatch
@@ -8218,9 +8226,9 @@ function stitchActiveMarketsRows(kpi, state, sort) {
         <div class="stitch-market-title">
           <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
         </div>
-        ${(!category || category === 'Uncategorized') ? '' : `<div class="stitch-market-meta">
-          <span class="stitch-category-pill">${esc(category)}</span>
-        </div>`}
+        <div class="stitch-market-meta">
+          ${categoryPill(m)}
+        </div>
       </td>
 
       <!-- Col 2: YES PRICE — the venue's ask (what buying YES costs now) + bid subtext -->
@@ -8391,7 +8399,11 @@ function stitchPositionsRows(kpi, state, sort) {
   }) => {
     const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
     const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
-    const classification = m.event_title || m.subtitle || m.category || 'Polymarket Position';
+    // The second line answers "which event is this inside?". The category word
+    // is already on the chip above, so repeating it there is noise (#748).
+    const eventLine = [m.event_title, m.subtitle]
+      .map(v => (typeof v === 'string' ? v.trim() : ''))
+      .find(v => v && v !== category) || '';
 
     // Age / Stopwatch
     const ageSec = (ts && Number.isFinite(ts)) ? Math.max(0, Math.round((nowMs - toMs(ts)) / 1000)) : null;
@@ -8433,12 +8445,12 @@ function stitchPositionsRows(kpi, state, sort) {
           <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
         </div>
         ${activity ? `<div class="stitch-market-meta" style="margin-top:2px;">${activity}</div>` : ''}
-        ${(!category || category === 'Uncategorized') ? '' : `<div class="stitch-market-meta" style="margin-top:2px;">
-          <span class="stitch-category-pill">${esc(category)}</span>
-        </div>`}
         <div class="stitch-market-meta" style="margin-top:2px;">
-          <span style="font-size:11px;color:#94a3b8;">${esc(classification)}</span>
+          ${categoryPill(m)}
         </div>
+        ${eventLine ? `<div class="stitch-market-meta" style="margin-top:2px;">
+          <span style="font-size:11px;color:#94a3b8;">${esc(eventLine)}</span>
+        </div>` : ''}
       </td>
 
       <!-- Col 1: HELD INVENTORY (dual-leg YES / NO block, shared with Orders) -->
@@ -8732,8 +8744,6 @@ function stitchClosedTradesRows(kpi, state, sort) {
     const tsDisp = (closeTs && Number.isFinite(toMs(closeTs))) ? fmtTimestamp(closeTs) : '--';
     const marketUrl = m.url || (m.slug ? `https://polymarket.com/event/${m.slug}` : `https://polymarket.com/market/${cid}`);
     const title = m.title || m.name || m.slug || cid.slice(0, 16);
-    const category = marketCategory(m);
-    const categoryShort = (category || 'ARB').slice(0, 4).toUpperCase();
 
     // Summary counts of exit outcomes
     let mergedCount = 0;
@@ -8795,7 +8805,7 @@ function stitchClosedTradesRows(kpi, state, sort) {
           ${winnerHtml}
         </div>
         <div class="stitch-market-meta" style="margin-top:3px;gap:6px;">
-          ${(!category || category === 'Uncategorized') ? '' : `<span class="stitch-category-pill">${esc(category)}</span>`}
+          ${categoryPill(m)}
           ${reasonChipHtml}
           <span style="font-size:11px;color:#64748b;">· ${fillsCount} fill${fillsCount !== 1 ? 's' : ''}</span>
         </div>
@@ -10569,6 +10579,7 @@ if (typeof module !== 'undefined' && module.exports) {
     stitchOpenOrdersRows, stitchOpenOrdersHeadHtml,
     stitchPositionsRows, stitchPositionsHeadHtml, stitchHeldLegMarks,
     stitchActiveMarketsRows, stitchActiveMarketsHeadHtml,
+    marketCategory, categoryPill,
     showToast, dismissResetModal,
     noteShadowStartLaunched, clearPendingShadowStart,
     isShadowStartPending, checkPendingShadowStart, SHADOW_START_TIMEOUT_MS,

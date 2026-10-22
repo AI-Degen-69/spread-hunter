@@ -1322,6 +1322,15 @@
   font-weight: 500;
 }
 
+/* `Uncategorized` is an answer, not missing data: it keeps the chip in the
+ * same place on every row, dimmed so it never competes with a real category
+ * (#748). */
+.proto-body .stitch-category-pill.is-muted {
+  background: transparent;
+  border-color: #1e293b;
+  color: #64748b;
+}
+
 .proto-body .stitch-quote-yes,
 .proto-body .stitch-quote-up {
   color: #4ade80;

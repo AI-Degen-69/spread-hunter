@@ -117,6 +117,9 @@ def test_the_discovery_request_carries_no_end_date_and_orders_by_volume():
     params = s.gammas[0]
     assert params["order"] == "volume24hr"
     assert params["ascending"] == "false"
+    # Tags carry the only reliable category labels; gamma omits them otherwise
+    # (#748).
+    assert params["include_tag"] == "true"
     # The horizon is a scoring gate with its own rejection bucket, not a
     # request parameter: the raw population must include what it removes.
     assert "end_date_min" not in params
@@ -485,6 +488,22 @@ def test_event_category_and_tags_carried_verbatim():
     assert universe[0]["category"] == ""
     assert universe[0]["venue_category"] == "Politics"
     assert universe[0]["tags"] == ["Politics", "Elections"]
+
+
+def test_a_tag_the_event_and_market_share_is_carried_once():
+    # gamma repeats the event's shelf tags on the market; the display resolver
+    # only needs each label once, in venue order (#748).
+    s = _FakeSession([[
+        _gamma_row("dup", 900_000.0, category=None, categorySlug=None,
+                   tags=[{"label": "Sports", "slug": "sports"},
+                         {"label": "NBA", "slug": "nba"}],
+                   events=[{"tags": [{"label": "Sports", "slug": "sports"},
+                                     {"label": "Basketball", "slug": "basketball"}],
+                            "series": []}]),
+    ]])
+    universe, _ = gamma_universe(s, min_volume_usd=125_000.0)
+
+    assert universe[0]["tags"] == ["Sports", "NBA", "Basketball"]
 
 
 def test_event_category_never_reaches_the_identity_gate():
