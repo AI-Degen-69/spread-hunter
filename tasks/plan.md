@@ -247,14 +247,16 @@ testable without a file.
 
 ### T3 — Report rendering and CLI · size S · `[Backend/Logic]` · Depends on: T2
 **Files:** `core_brain/fill_calibration.py`, `tests/test_fill_calibration.py`
-**Build:** `render_text` (fixed-width, `--` for `None`, rates to 3 decimals, footer with the
-sign rule and the four honesty points), `to_dict`, `main` with `--shadow-db`/`--live-db`
+**Build:** `render_text` (fixed-width, `--` for `None`, rates as one-decimal percentages
+and gaps in `pp` so a signed gap reads as `+30.9pp` at a glance, footer with the sign rule and
+the honesty points), `to_dict`, `main` with `--shadow-db`/`--live-db`
 (required), `--shadow-run-id`/`--live-run-id`, `--min-orders` (default 10), `--json`;
 exit `0` when both sides are `OK`, else `1`. `python -m core_brain.fill_calibration` runs it.
 **Verification (automated):** the T3 test group, then a real run against a **copy** of
-`i608_tournament-1_the-accountant-1.db` (793 orders, 793 quotes, 246 fills — a real cohort)
-plus a copy of `data/orders.db` — the table prints with real shadow rates, live gaps are `--`,
-and nothing under `data/` changes.
+`01_shadow_21-10_11-39.db` (1,252 cohort orders — a real, long cohort) and a copy of
+`data/orders.db`, plus the same against `i608_tournament-1_the-accountant-1.db` (793 orders):
+the table prints with real shadow rates, price/queue gaps read `--` while the live side is
+below `min_orders`, the overall gap prints, and the copies' SHA-256 is unchanged afterwards.
 
 **Checkpoints:** after T1 (`load_store` returns `OK` with the expected 4/4 cohort on the
 fixture); after T3 (a full text table and `--json` on the copies). In Mode A each checkpoint
@@ -337,8 +339,9 @@ denominator.
 2. Run `python -m core_brain.fill_calibration --shadow-db "$env:TEMP\sh.db" --live-db "$env:TEMP\live.db"`.
 3. Expect a table whose **gap** column carries a `+`/`−` sign, and a footer stating
    *positive gap = shadow fills more than live*. The shadow side shows a real rate (roughly a
-   third of orders fill); the live column reads `0.000` and every gap reads `--` — the honest
-   answer today, not a failure.
+   third of orders fill); the live column reads `0.0%` because the live registry holds no
+   fills, so the overall gap is one-sided (`+30.9pp` on the accountant store) and every
+   per-price and per-queue gap reads `--` — the honest answer today, not a failure.
 4. Run it again with `--json` and check the same `order_gap` / `share_gap` values appear.
 5. Point `--shadow-db` at a `stats_21-10_*_shadow-01.db` file: expect `UNREADABLE` naming the
    missing table, not a silent empty report. Point `--live-db` at a missing path: expect
