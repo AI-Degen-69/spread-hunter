@@ -1,6 +1,6 @@
 """Fill-model calibration: the shadow fill rate beside the venue's own (#474).
 
-One question, two numbers: how far is `core_brain.shadow_fills` from what the
+One question, two numbers: how far is the shadow fill model from what the
 venue actually did? This module answers it per price bucket and per queue
 bucket, twice over -- share fill fraction and order any-fill rate -- with a
 signed gap of `shadow - live`.
@@ -17,11 +17,11 @@ auditable in one glance. The `kpi.py` queue boundaries are COPIED rather than
 imported for the same reason: importing `kpi` would drag a report builder into
 a tool whose only job is to read two files.
 
-`shadow_fills.credit_fills` is the model under measurement and is untouched by
-this file. Note what its own docstring says: one print below a resting bid
-credits EVERY order resting above it, so the model can over-fill as easily as
-under-fill. The gap is therefore signed both ways and the footer names the
-artefact instead of claiming the model is pessimistic.
+The shadow fill engine's credit pass is the model under measurement and is
+untouched by this file. That pass is explicit about itself: one print below a
+resting bid credits EVERY order resting above it, so the model can over-fill as
+easily as under-fill. The gap is therefore signed both ways and the footer names
+the artefact instead of claiming the model is pessimistic.
 """
 from __future__ import annotations
 
