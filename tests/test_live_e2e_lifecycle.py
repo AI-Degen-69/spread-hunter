@@ -213,9 +213,7 @@ def test_drifted_pair_rests_untouched_end_to_end(registry, venue):
                     size=down.original_size, mid=down.price + 0.01,
                     edge_vs_mid=0.01),
     ]
-    to_cancel, to_submit = plan_orders(
-        open_orders, drifted,
-        cfg=cfg, hedge_asks={"tok-up": 0.60, "tok-dn": down.price})
+    to_cancel, to_submit = plan_orders(open_orders, drifted, cfg=cfg)
     assert to_cancel == []
     assert to_submit == []
 
