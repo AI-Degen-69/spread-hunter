@@ -201,6 +201,28 @@ def test_unrecognised_venue_label_falls_through_to_the_tags(tmp_path):
     assert mm.resolve_market_meta(CID_TAG, [], [], root=tmp_path)["category"] == "Tennis"
 
 
+def test_a_political_keyword_tag_does_not_outrank_a_real_category(tmp_path):
+    # `Senate` is a tag, not a shelf. Ranking it as Politics by keyword would
+    # beat the explicit `Crypto` tag on the same market (#748).
+    _write_feed(tmp_path, [{
+        "cid": CID_TAG, "slug": "senate-crypto", "title": "Some market",
+        "category": "", "series_title": "", "market_group": "",
+        "tags": ["Senate", "Crypto"], "volume_24h": 1.0,
+    }])
+    assert mm.resolve_market_meta(CID_TAG, [], [], root=tmp_path)["category"] == "Crypto"
+
+
+def test_unrecognised_venue_label_falls_through_to_the_market_category(tmp_path):
+    # `venue_category` can carry a group name while `category` holds the real
+    # shelf; the second label must still be read (#748).
+    _write_feed(tmp_path, [{
+        "cid": CID_TAG, "slug": "venue-label", "title": "Some market",
+        "category": "Tennis", "venue_category": "Match Winner",
+        "series_title": "", "market_group": "", "tags": [], "volume_24h": 1.0,
+    }])
+    assert mm.resolve_market_meta(CID_TAG, [], [], root=tmp_path)["category"] == "Tennis"
+
+
 def test_event_title_travels_with_the_meta(tmp_path):
     # The Positions secondary line needs a real title, and `event_title` used to
     # be read and then dropped (#748).

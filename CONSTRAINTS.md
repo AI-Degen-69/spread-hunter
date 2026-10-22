@@ -9,12 +9,12 @@ Branch: `i748/consistent-category-label-orders-trades` | Issue: #748
   changes, and `scripts/filter_markets.py` changes only in what it **asks the
   venue for** and what it **writes into the row** — never in a filter, a score or
   a gate.
-- **Five files may change:** `core_brain/market_meta.py`,
+- **Nine files may change**, all of them named here: `core_brain/market_meta.py`,
   `scripts/filter_markets.py`, `dashboard/static/app.js`,
-  `tests/test_market_meta.py`, `tests/js/orders_trades_harness.cjs`,
-  `tests/test_orders_trades_table.py`, plus two existing test files that already
-  own the fetch seams (`tests/test_unified_universe.py`,
-  `tests/test_live_event_discovery.py`), and
+  `dashboard/static/prototype.css` (one muted-chip rule), `tests/test_market_meta.py`,
+  `tests/js/orders_trades_harness.cjs`, `tests/test_orders_trades_table.py`, plus three
+  existing test files: the two that own the fetch seams
+  (`tests/test_unified_universe.py`, `tests/test_live_event_discovery.py`) and
   `tests/test_portfolio_overview.py`, whose
   `test_blank_category_falls_back_to_series_title` asserted the retired
   `series_title` fallback — it is rewritten to the tag precedence with a

@@ -175,6 +175,8 @@ def classify_display_category(title: Any, event_title: Any,
 # purpose: `Elections` is Politics, `Republican Party` is not.
 _CATEGORY_TAG_ALIASES: dict[str, str] = {
     "sports": "Sports",
+    "e-sports": ESPORTS_LABEL,
+    "esports": ESPORTS_LABEL,
     "politics": POLITICS_LABEL,
     "elections": POLITICS_LABEL,
     "geopolitics": "Geopolitics",
@@ -202,10 +204,12 @@ def _category_tag_rank(label: str) -> Optional[tuple[int, str]]:
     game = _classify_esports_game(label) or _classify_sport(label)
     if game:
         return 3, game
+    # Only an exact shelf name counts. The title classifier is deliberately NOT
+    # consulted: it reads keywords, so a `Senate` tag would rank as Politics and
+    # outrank a real `Crypto` tag on the same market (#748).
     alias = _CATEGORY_TAG_ALIASES.get(label.strip().lower())
     if alias is None:
-        canonical = classify_display_category(label, "", "")
-        return (2, canonical) if canonical else None
+        return None
     return (2 if alias in _PARENT_CATEGORIES else 1), alias
 
 
@@ -245,6 +249,20 @@ def _category_from_feed_label(label: Optional[str]) -> Optional[str]:
         return None
     ranked = _category_tag_rank(label)
     return ranked[1] if ranked else None
+
+
+def _feed_label_category(row: dict) -> Optional[str]:
+    """The first venue label on the row the vocabulary recognises, or None.
+
+    Each label is validated on its own, in precedence order: a row can carry
+    `venue_category="Match Winner"` next to `category="Tennis"`, and stopping at
+    the first non-empty string would throw the real label away (#748).
+    """
+    for key in ("venue_category", "category"):
+        label = _category_from_feed_label(_text_of(row, key))
+        if label:
+            return label
+    return None
 
 
 class _FeedList(list):
@@ -370,15 +388,12 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
         out.update({
             "title": row.get("title") or event_title or None,
             "slug": row.get("slug"),
-            # The live feed ships category="" on most rows. Candidate one is a
-            # venue label the vocabulary recognises; candidate two is the most
-            # specific recognised tag. Everything else -- series, group, first
-            # tag -- is not a category and is deliberately not consulted (#748).
-            "category": (
-                _category_from_feed_label(
-                    _text_of(row, "venue_category") or _text_of(row, "category"))
-                or category_from_tags(row)
-            ),
+            # The live feed ships category="" on most rows. Candidate one is the
+            # first venue label the vocabulary recognises; candidate two is the
+            # most specific recognised tag. Everything else -- series, group,
+            # first tag -- is not a category and is deliberately not consulted
+            # (#748).
+            "category": _feed_label_category(row) or category_from_tags(row),
             "days_to_resolve": row.get("days_to_resolve"),
             "min_size": row.get("min_size"),
             "volume_24h": row.get("volume_24h"),
