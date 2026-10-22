@@ -14,7 +14,11 @@ Branch: `i748/consistent-category-label-orders-trades` | Issue: #748
   `tests/test_market_meta.py`, `tests/js/orders_trades_harness.cjs`,
   `tests/test_orders_trades_table.py`, plus two existing test files that already
   own the fetch seams (`tests/test_unified_universe.py`,
-  `tests/test_live_event_discovery.py`). A change outside this list is out of
+  `tests/test_live_event_discovery.py`), and
+  `tests/test_portfolio_overview.py`, whose
+  `test_blank_category_falls_back_to_series_title` asserted the retired
+  `series_title` fallback — it is rewritten to the tag precedence with a
+  `series_title`/`market_group` negative case. A change outside this list is out of
   scope — stop and split it.
 - **Never touch `data/orders.db`.** It is the production registry. Read only.
 - **No venue contact from this work.** No `quote`, no `complete`, no Trader
@@ -29,7 +33,7 @@ Branch: `i748/consistent-category-label-orders-trades` | Issue: #748
 
 - Targeted checks covering the touched files, run by the agent during
   development and after review fixes:
-  `python -m pytest -q tests/test_market_meta.py tests/test_orders_trades_table.py tests/test_unified_universe.py tests/test_live_event_discovery.py tests/test_stitch_active_markets.py tests/test_kpi.py`.
+  `python -m pytest -q tests/test_market_meta.py tests/test_orders_trades_table.py tests/test_unified_universe.py tests/test_live_event_discovery.py tests/test_stitch_active_markets.py tests/test_kpi.py tests/test_portfolio_overview.py`.
   The full `python -m pytest -q` suite is the GitHub CI merge gate; do not repeat
   it locally.
 - **`tests/test_stitch_active_markets.py` stays green untouched.** It pins the
