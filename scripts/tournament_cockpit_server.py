@@ -195,8 +195,8 @@ ARMS_CONFIG_487 = [
     # LIVE BOT_* setting. Worst-catalyst columns stay EMPTY: there is no
     # forensic run behind this set, and inventing numbers is the failure this
     # issue removes. Static db/run_id values are placeholders -- the launcher
-    # writes runtime/tournaments/487_current_setup_10arm.json at launch and
-    # resolve_tournament_arms() reads the real db/run_id/port from it. Before
+    # writes data/tournaments/i487-current-setup-10arm_<stamp>/plan.json at
+    # launch and resolve_tournament_arms() reads the real db/run_id/port from it. Before
     # launch a missing store reports NO_DATA, which is the honest fresh state.
     {
         "issue": 487,
@@ -345,7 +345,7 @@ ARMS_CONFIG_492 = [
     # Worst-catalyst columns stay EMPTY until this run produces results -- the
     # old #484/#485 hypotheses described buggy-code artifacts, not real
     # behavior, and must not anchor the new read. Static db/run_id values are
-    # placeholders (real paths land via runtime/tournaments/492_<stamp>.json
+    # placeholders (real paths land via data/tournaments/i492-r<run>_<stamp>/plan.json
     # once the run launches); missing files report as NO_DATA, which is the
     # honest fresh state.
     {
@@ -791,7 +791,7 @@ def resolve_tournament_arms_with_status(
     # One resolver for every key: `latest_tournament_record` ranks by parsed
     # (run number, stamp), so a named run (#487's `--stamp current_setup_10arm`)
     # no longer wins or loses on the accident of `c` sorting after a digit.
-    latest_plan = latest_tournament_record(tourney_key, ROOT / "runtime" / "tournaments")
+    latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
     if latest_plan is None:
         return default_arms, None
     try:

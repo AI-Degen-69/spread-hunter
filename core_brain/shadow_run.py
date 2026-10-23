@@ -121,41 +121,66 @@ TOURNAMENT_DB_RUN_PATTERN = re.compile(
 # ---------------------------------------------------------------------------
 # Tournament artifacts, grammar G3 in docs/agents/naming.md.
 #
-#   tournament_<key>_<stamp>.json          plan record      runtime/tournaments/
-#   tournament_<key>_<stamp>.log           launcher log     runtime/tournaments/
-#   tournament_results_<key>_<stamp>.json  results          reports/tournaments/
-#   tournament_<key>_<arm>.db              store            data/
-#   <key>_arms.json                        arm list (input) configs/tournaments/
+#   configs/tournaments/<key>_arms.json        arm list (input, hand-written)
+#   data/tournaments/<key>_<stamp>/            everything the run produced
+#       plan.json
+#       launch.log
+#       results.json
+#       <arm>.db
 #
 # <key> is `i<issue>-r<run>` when the run is numbered (unique by itself) and
 # `i<issue>` or `i<issue>-<name>` otherwise. The stamp is always the ISO launch
-# stamp, so `--stamp` names a run instead of replacing the timestamp -- that is
-# what let 487's record sort last by accident of the letter `c` beating a digit.
+# stamp and lives in the folder name: two runs of the same number must not
+# overwrite each other, and `--stamp` names a run instead of replacing the
+# timestamp.
+#
+# The folder is the unit. A run had its files in `runtime/`, `reports/` and
+# `data/` under three name grammars, so "what did i492-r1 produce" meant four
+# lookups and deleting a tournament meant picking its stores out of `data/`
+# among `orders.db` by hand.
 TOURNAMENT_KIND = "tournament"
+TOURNAMENT_ROOT = REPO_ROOT / "data" / "tournaments"
 
-# Run-numbered store: data/tournament_i<issue>-r<run>_<arm>.db
+TOURNAMENT_RUN_DIR_PATTERN = re.compile(
+    r"^i(?P<issue>\d+)"
+    r"(?:-r(?P<run>\d+)|-(?P<name>[a-z0-9][a-z0-9-]*))?"
+    r"_(?P<stamp>\d{4}-\d{2}-\d{2}T\d{2}-\d{2})$"
+)
+
+# A store inside a run folder is just the arm name. Legacy flat stores keep
+# parsing so files already on disk still read.
+TOURNAMENT_RUN_STORE_PATTERN = re.compile(r"^(?P<arm>[a-z0-9][a-z0-9-]*)\.db$")
 TOURNAMENT_DB_NAME_PATTERN = re.compile(
     r"^(?:.*[\\/])?tournament_i(?P<issue>\d+)-r(?P<run>\d+)_(?P<arm>[a-z0-9-]+)\.db$"
-)
-TOURNAMENT_RECORD_PATTERN = re.compile(
-    r"^(?:.*[\\/])?(?P<kind>tournament)_i(?P<issue>\d+)"
-    r"(?:-r(?P<run>\d+)|-(?P<name>[a-z0-9][a-z0-9-]*))?"
-    r"_(?P<stamp>\d{4}-\d{2}-\d{2}T\d{2}-\d{2})\.json$"
 )
 
 
 def parse_tournament_db_path(path: str | Path | None) -> dict | None:
-    """Parse a tournament scratch DB filename into its constituent parts.
+    """Parse a tournament scratch DB path into its constituent parts.
 
-    Legacy shape returns {'issue': int, 'index': int, 'arm': str, 'stamp': str}.
-    Run-number shape returns {'issue': int, 'arm': str, 'run_number': int,
-    'index': None, 'stamp': None} -- consumers key off issue/arm and tolerate
-    the Nones (dashboard clustering falls back to per-issue grouping).
+    Inside a run folder the identity comes from the folder, not the filename:
+    {'issue', 'run_number', 'name', 'arm', 'stamp', 'index': None}.
+
+    Legacy flat shapes still parse, so stores already on disk keep reading:
+    {'issue', 'index', 'arm', 'stamp'} for `<issue>_tournament_<idx>_...`, and
+    the run-number shape with 'index': None, 'stamp': None.
     Otherwise None. Specifically rejects non-tournament names and NN_shadow_*.db.
     """
     if not path:
         return None
     raw = str(path).strip()
+    candidate = Path(raw)
+    run_dir = parse_tournament_run_dir_name(candidate.parent.name)
+    store = TOURNAMENT_RUN_STORE_PATTERN.match(candidate.name)
+    if run_dir is not None and store is not None:
+        return {
+            "issue": run_dir["issue"],
+            "run_number": run_dir["run_number"],
+            "name": run_dir["name"],
+            "arm": store.group("arm"),
+            "stamp": run_dir["stamp"],
+            "index": None,
+        }
     named = TOURNAMENT_DB_NAME_PATTERN.match(raw)
     if named:
         try:
@@ -194,20 +219,6 @@ def parse_tournament_db_path(path: str | Path | None) -> dict | None:
     return None
 
 
-def build_tournament_db_path(
-    issue: int | str,
-    index: int,
-    arm: str,
-    stamp: str,
-    base_dir: str | Path = REPO_ROOT / "data",
-) -> Path:
-    """Generate canonical tournament DB path data/<issue>_tournament_<idx>_<arm>_<stamp>.db."""
-    clean_arm = re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-")[:24] or "arm"
-    idx_str = f"{int(index):02d}"
-    filename = f"{issue}_tournament_{idx_str}_{clean_arm}_{stamp}.db"
-    return Path(base_dir) / filename
-
-
 def build_tournament_run_id(
     issue: int | str,
     index: int,
@@ -225,20 +236,40 @@ def _clean_tournament_slug(arm: str) -> str:
     return re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-")[:24] or "arm"
 
 
+def build_tournament_run_dir(
+    issue: int | str,
+    stamp: str,
+    run_number: int | None = None,
+    name: str | None = None,
+    base_dir: str | Path = TOURNAMENT_ROOT,
+) -> Path:
+    """The folder for one run: data/tournaments/<key>_<stamp>/.
+
+    The stamp belongs here: a numbered run is unique only until it is repeated,
+    and the second launch of `i492-r1` must land beside the first, not on it.
+    """
+    key = tournament_key(issue, run_number, name)
+    return Path(base_dir) / f"{key}_{stamp}"
+
+
 def build_tournament_db_path_v2(
     issue: int | str,
     arm: str,
-    run_number: int = 1,
-    base_dir: str | Path = REPO_ROOT / "data",
+    stamp: str,
+    run_number: int | None = None,
+    name: str | None = None,
+    base_dir: str | Path = TOURNAMENT_ROOT,
 ) -> Path:
-    """Run-number store: data/tournament_i<issue>-r<run>_<arm>.db.
+    """A store inside its run folder: <run_dir>/<arm>.db.
 
-    No stamp: the run key is already unique, and the cockpit has to be able to
-    name the store before the run starts. The arm slug carries its own run
-    suffix (e.g. 'conservative-1'); the builder only cleans it.
+    The folder already says which run, so the filename is only the arm. The arm
+    slug carries its own run suffix (e.g. 'conservative-1'); the builder only
+    cleans it.
     """
     clean_arm = _clean_tournament_slug(arm)
-    return Path(base_dir) / f"{TOURNAMENT_KIND}_{tournament_key(issue, run_number)}_{clean_arm}.db"
+    return build_tournament_run_dir(
+        issue, stamp, run_number=run_number, name=name, base_dir=base_dir
+    ) / f"{clean_arm}.db"
 
 
 def tournament_key(
@@ -260,20 +291,17 @@ def tournament_key(
     return base
 
 
-def _tournament_artifact_name(kind: str, key: str, stamp: str, suffix: str) -> str:
-    return f"{kind}_{key}_{stamp}{suffix}"
-
-
 def build_tournament_record_path(
     issue: int | str,
     stamp: str,
     run_number: int | None = None,
     name: str | None = None,
-    base_dir: str | Path = REPO_ROOT / "runtime" / "tournaments",
+    base_dir: str | Path = TOURNAMENT_ROOT,
 ) -> Path:
-    """Plan record: runtime/tournaments/tournament_<key>_<stamp>.json."""
-    key = tournament_key(issue, run_number, name)
-    return Path(base_dir) / _tournament_artifact_name(TOURNAMENT_KIND, key, stamp, ".json")
+    """Plan record: <run_dir>/plan.json."""
+    return build_tournament_run_dir(
+        issue, stamp, run_number=run_number, name=name, base_dir=base_dir
+    ) / "plan.json"
 
 
 def build_tournament_results_path(
@@ -281,11 +309,12 @@ def build_tournament_results_path(
     stamp: str,
     run_number: int | None = None,
     name: str | None = None,
-    base_dir: str | Path = REPO_ROOT / "reports" / "tournaments",
+    base_dir: str | Path = TOURNAMENT_ROOT,
 ) -> Path:
-    """Results: reports/tournaments/tournament_results_<key>_<stamp>.json."""
-    key = tournament_key(issue, run_number, name)
-    return Path(base_dir) / _tournament_artifact_name(f"{TOURNAMENT_KIND}_results", key, stamp, ".json")
+    """Results: <run_dir>/results.json."""
+    return build_tournament_run_dir(
+        issue, stamp, run_number=run_number, name=name, base_dir=base_dir
+    ) / "results.json"
 
 
 def build_tournament_log_path(
@@ -293,26 +322,22 @@ def build_tournament_log_path(
     stamp: str,
     run_number: int | None = None,
     name: str | None = None,
-    base_dir: str | Path = REPO_ROOT / "runtime" / "tournaments",
+    base_dir: str | Path = TOURNAMENT_ROOT,
 ) -> Path:
-    """Launcher log: runtime/tournaments/tournament_<key>_<stamp>.log.
-
-    Same stem as the plan record, so the detached-launch stdout redirect sits
-    next to the plan it executed. Process logs live under runtime/ per
-    docs/agents/architecture.md -- never logs/ (which does not exist here).
-    """
-    key = tournament_key(issue, run_number, name)
-    return Path(base_dir) / _tournament_artifact_name(TOURNAMENT_KIND, key, stamp, ".log")
+    """Launcher log: <run_dir>/launch.log, next to the plan it executed."""
+    return build_tournament_run_dir(
+        issue, stamp, run_number=run_number, name=name, base_dir=base_dir
+    ) / "launch.log"
 
 
-def parse_tournament_record_name(filename: str | Path) -> dict | None:
-    """Parse `tournament_<key>_<stamp>.json` into issue / run / name / stamp.
+def parse_tournament_run_dir_name(filename: str | Path) -> dict | None:
+    """Parse `<key>_<stamp>` into issue / run / name / stamp.
 
-    Returns None for a results file, a store, or any legacy name. Consumers ask
+    Returns None for a flat legacy filename or an un-stamped key. Consumers ask
     this instead of hand-rolling a stamp regex, which is how two readers drifted
-    into disagreeing about what a plan record looks like.
+    into disagreeing about what a tournament record looks like.
     """
-    match = TOURNAMENT_RECORD_PATTERN.match(Path(filename).name)
+    match = TOURNAMENT_RUN_DIR_PATTERN.match(Path(filename).name)
     if not match:
         return None
     return {
@@ -325,39 +350,52 @@ def parse_tournament_record_name(filename: str | Path) -> dict | None:
 
 def latest_tournament_record(
     issue: int | str,
-    tourn_dir: str | Path = REPO_ROOT / "runtime" / "tournaments",
+    tourn_dir: str | Path = TOURNAMENT_ROOT,
 ) -> Path | None:
     """Newest plan record for `issue`: highest run number, then newest stamp.
 
-    Ranked on the parsed fields, not on the filename: the old scheme ranked by
-    string, so a named record (`487_current_setup_10arm.json`) beat every
-    timestamped one only because `c` sorts after a digit.
+    Ranked on the parsed folder fields, not on the directory name: string order
+    would put run 10 before run 9 and a named run before every numbered one.
     """
     directory = Path(tourn_dir)
     if not directory.is_dir():
         return None
-    best: tuple[int, str, Path] | None = None
+    best: tuple[tuple[int, str], Path] | None = None
     wanted = int(issue)
-    for candidate in directory.glob(f"{TOURNAMENT_KIND}_i{wanted}*.json"):
-        parsed = parse_tournament_record_name(candidate)
-        # The glob is a prefix, so `i48*` also matches `i487`: rank on the parsed id.
+    for candidate in directory.iterdir():
+        parsed = parse_tournament_run_dir_name(candidate)
+        # The prefix is gone, but i60 must still not accept i608.
         if parsed is None or parsed["issue"] != wanted:
             continue
-        rank = (parsed["run_number"] or 0, parsed["stamp"], candidate)
-        if best is None or rank[:2] > best[:2]:
-            best = rank
-    return best[2] if best else None
+        plan = candidate / "plan.json"
+        if not plan.is_file():
+            continue
+        rank = (parsed["run_number"] or 0, parsed["stamp"])
+        if best is None or rank > best[0]:
+            best = (rank, plan)
+    return best[1] if best else None
 
 
 def build_tournament_run_id_v2(
     issue: int | str,
     arm: str,
     run_number: int = 1,
+    stamp: str = "",
 ) -> str:
-    """Run-number run id: shadow-<issue>-tournament-<run>-<arm> (<= 64 chars)."""
+    """Run-number run id: shadow-<issue>-tournament-<run>-<stamp>-<arm> (<= 64).
+
+    The stamp belongs in the id for the same reason it belongs in the folder:
+    the run number alone no longer separates two launches. Without it a repeat
+    launch gets its own folder and store but rewrites the first launch's
+    heartbeat and event ring, so two runs report as one.
+
+    Truncation clips the arm, which sits last. Two launches therefore still
+    differ on issue/run/stamp; only arms of one launch can merge, and a second
+    launch of the same stamp is refused earlier by the existing store check.
+    """
     run = int(run_number)
     clean_arm = _clean_tournament_slug(arm)
-    token = f"shadow-{issue}-tournament-{run}-{clean_arm}"
+    token = f"shadow-{issue}-tournament-{run}-{stamp}-{clean_arm}"
     return re.sub(r"[^A-Za-z0-9_.-]", "-", token).strip("-.")[:64]
 
 

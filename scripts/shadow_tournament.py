@@ -35,7 +35,7 @@ from core_brain import naming
 from core_brain.kpi import MERGE_METHODS, NON_TRADE_CLOSE_METHODS
 from core_brain.shadow_guard import assert_not_production_registry
 from core_brain.shadow_run import (
-    build_tournament_db_path,
+    TOURNAMENT_ROOT,
     build_tournament_db_path_v2,
     build_tournament_log_path,
     build_tournament_record_path,
@@ -300,22 +300,20 @@ def build_tournament_plan(
     max_markets: Optional[int] = None,
     markets_path: Optional[str | Path] = None,
     stamp: Optional[str] = None,
-    base_dir: str | Path = ROOT / "data",
+    base_dir: str | Path = TOURNAMENT_ROOT,
     check_ports: bool = True,
     python_executable: str = sys.executable,
     run_number: Optional[int] = None,
     run_name: Optional[str] = None,
-    artifacts_root: Optional[str | Path] = None,
 ) -> TournamentPlan:
     """Build a validated, isolated tournament execution plan.
 
-    Naming follows docs/agents/naming.md (grammar G3): every artifact is
-    `tournament_<key>_<stamp>` where `key` is `i<issue>-r<run>` for a numbered
-    `i<issue>` or `i<issue>-<run_name>`. `stamp` is the ISO launch stamp
-    (`core_brain.naming.stamp`); `run_name` is an optional memorable identity,
-    not a replacement for the timestamp. Run-numbered stores drop the stamp
-    because the run key is already unique and the cockpit has to predict the
-    path.
+    Naming follows docs/agents/naming.md (grammar G3): the run folder is
+    `<base_dir>/<key>_<stamp>`, where `key` is `i<issue>-r<run>` for a numbered
+    run or `i<issue>` / `i<issue>-<run_name>` otherwise. `stamp` is the ISO
+    launch stamp (`core_brain.naming.stamp`); `run_name` is an optional
+    memorable identity, not a replacement for the timestamp. Everything the run
+    produces -- plan, log, results, stores -- lands in that one folder.
 
     The parameter is `run_name`, not `name`: the arm loop below iterates a local
     called `name`, and a same-named parameter was silently overwritten by the
@@ -341,6 +339,7 @@ def build_tournament_plan(
     seen_names: set[str] = set()
     arm_plans: list[ArmPlan] = []
     base_dir_path = Path(base_dir)
+    run_key = int(run_number) if run_number is not None else None
 
     for idx, arm_def in enumerate(arms, start=1):
         name = arm_def.get("name")
@@ -406,21 +405,14 @@ def build_tournament_plan(
             raise ValueError(f"Port {dash_port} is already in use or unavailable")
 
         # Database path & safety
-        if run_number is not None:
-            db_path = build_tournament_db_path_v2(
-                issue=issue,
-                arm=slug,
-                run_number=int(run_number),
-                base_dir=base_dir_path,
-            )
-        else:
-            db_path = build_tournament_db_path(
-                issue=issue,
-                index=idx,
-                arm=name,
-                stamp=stamp,
-                base_dir=base_dir_path,
-            )
+        db_path = build_tournament_db_path_v2(
+            issue=issue,
+            arm=slug,
+            stamp=stamp,
+            run_number=run_key,
+            name=run_name,
+            base_dir=base_dir_path,
+        )
         assert_not_production_registry(db_path)
         if db_path.exists():
             raise ValueError(f"Tournament database already exists: {db_path}")
@@ -430,6 +422,7 @@ def build_tournament_plan(
                 issue=issue,
                 arm=slug,
                 run_number=int(run_number),
+                stamp=stamp,
             )
         else:
             run_id = build_tournament_run_id(
@@ -483,24 +476,20 @@ def build_tournament_plan(
         )
 
     # Record, results and log come from the builders in core_brain.shadow_run so
-    # there is one place that knows the name (docs/agents/naming.md, grammar G3),
-    # and every path is anchored to a root rather than to the launch directory.
-    # `artifacts_root` exists so a test can build a plan whose artifacts land in
-    # its own tmp tree: `base_dir` only ever moved the stores, so a test that
-    # passed it still wrote its plan record into the real runtime/.
-    run_key = int(run_number) if run_number is not None else None
-    artifact_root = Path(artifacts_root) if artifacts_root is not None else ROOT
+    # there is one place that knows the name (docs/agents/naming.md, grammar G3).
+    # `base_dir` is the one root: the run folder under it holds the stores, the
+    # plan, the log and the results.
     record_path = build_tournament_record_path(
         issue=issue, stamp=stamp, run_number=run_key, name=run_name,
-        base_dir=artifact_root / "runtime" / "tournaments",
+        base_dir=base_dir_path,
     )
     results_path = build_tournament_results_path(
         issue=issue, stamp=stamp, run_number=run_key, name=run_name,
-        base_dir=artifact_root / "reports" / "tournaments",
+        base_dir=base_dir_path,
     )
     log_path = build_tournament_log_path(
         issue=issue, stamp=stamp, run_number=run_key, name=run_name,
-        base_dir=artifact_root / "runtime" / "tournaments",
+        base_dir=base_dir_path,
     )
     return TournamentPlan(
         issue=issue,
@@ -660,9 +649,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="Named identity for this run (kebab-case, e.g. current_setup_10arm). "
                              "It names the run; the ISO launch stamp is always appended, so records "
                              "still sort and never collide (docs/agents/naming.md).")
-    parser.add_argument("--run-number", type=int, default=None, help="Run-number naming scheme: slugs become <base>-<run>, DBs i<issue>_tournament-<run>_<slug>.db, no stamps (default: legacy scheme)")
-    parser.add_argument("--base-dir", type=str, default=str(ROOT / "data"), help="Target database directory (default: the repo's data/, never the cwd)")
-    parser.add_argument("--log-file", type=str, default=None, help="Override detached-launch stdout redirect (default: runtime/tournaments/tournament_<key>_<stamp>.log)")
+    parser.add_argument("--run-number", type=int, default=None, help="Run-number naming scheme: slugs become <base>-<run> and the folder is i<issue>-r<run>_<stamp> (default: unnumbered scheme)")
+    parser.add_argument("--base-dir", type=str, default=str(TOURNAMENT_ROOT), help="Root the run folder is created under (default: the repo's data/tournaments/, never the cwd). The cockpit and hubs only scan that default root, so a custom root is for isolated and test runs")
+    parser.add_argument("--log-file", type=str, default=None, help="Override detached-launch stdout redirect (default: <run folder>/launch.log)")
     parser.add_argument("--no-port-check", action="store_true", help="Skip TCP socket availability check")
 
     args = parser.parse_args(argv)

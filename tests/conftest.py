@@ -319,7 +319,7 @@ def block_real_state_writes(request):
     nobody has patched yet: it snapshots the three state directories before the
     test and fails, naming the exact paths, if anything was created, changed or
     removed. Point the test at `tmp_path` instead -- for a tournament plan that
-    means `artifacts_root=tmp_path`, because `base_dir` only moves the stores.
+    means `base_dir=tmp_path`, the root the run folder is created under.
 
     Opt out per test with `@pytest.mark.writes_real_state` for a test whose whole
     subject is the real path -- there is one such test for this guard.

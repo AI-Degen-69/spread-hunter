@@ -1,6 +1,6 @@
 """Tournament Dashboard Hub.
 
-Monitors active tournament arms from runtime/tournaments/ and ensures
+Monitors active tournament arms from data/tournaments/ and ensures
 each arm has a dedicated dashboard server running on its assigned port
 (e.g., ports 8801-8810). When a user clicks "Open Dash" in the Cockpit,
 the server responds immediately.
@@ -42,7 +42,7 @@ def get_latest_plan(tourney_id: str = "487", tourn_dir: Path | None = None) -> d
     `core_brain.shadow_run.latest_tournament_record` so this hub and the cockpit
     cannot drift into disagreeing about which file is "the plan".
     """
-    directory = tourn_dir if tourn_dir is not None else ROOT / "runtime" / "tournaments"
+    directory = tourn_dir if tourn_dir is not None else ROOT / "data" / "tournaments"
     latest = latest_tournament_record(tourney_id, directory)
     if latest is None:
         return None
