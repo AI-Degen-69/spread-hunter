@@ -7,12 +7,12 @@ list, and the consult only filters the intent-visible edge dimension.
 from core_brain import fill_quality_report as fqr
 from core_brain.config import MakerConfig
 from core_brain.quotes import QuoteIntent
-from core_brain.trader_loop import plan_orders
+from core_brain.trader_loop import CANCEL_NOT_QUOTED, plan_orders
 
 
-def _intent(edge: float, token: str = "tok-up") -> QuoteIntent:
-    return QuoteIntent(side="UP", token_id=token, price=0.60, size=10,
-                       mid=0.60 + edge, edge_vs_mid=edge)
+def _intent(edge: float, token: str = "tok-up", side: str = "UP") -> QuoteIntent:
+    return QuoteIntent(side=side, token_id=token, price=0.60, size=10,
+                       mid=0.60 + edge, edge_vs_mid=edge, pair_id="pair-1")
 
 
 def test_gate_is_off_and_empty_by_default():
@@ -58,3 +58,22 @@ def test_plan_orders_filters_blocked_edge_only_when_on():
     submitted = {i.token_id for i in to_submit}
     assert submitted == {"tok-good"}
     assert any("fill_quality_gate" in key for key in reasons)
+
+def test_blocking_one_leg_still_posts_the_other_and_cancels_the_resting_leg():
+    """The gate is per intent, not per pair (#787 decision input).
+
+    A raised edge floor therefore does not close a pair atomically: the leg
+    below the floor is dropped while its opposite leg still posts, and the
+    resting order on the dropped token is cancelled as not_quoted.
+    """
+    cfg = MakerConfig(bot_entry_fill_quality_gate_on=True,
+                      bot_entry_fill_quality_blocked_edge=("0.02-0.03",))
+    resting = {"id": "o-up", "token_id": "tok-up", "price": 0.60, "size": 10}
+    reasons: dict = {}
+    to_cancel, to_submit = plan_orders(
+        [resting], [_intent(0.025, "tok-up"), _intent(0.10, "tok-down", "DOWN")],
+        cfg=cfg, reasons=reasons,
+    )
+    assert [i.token_id for i in to_submit] == ["tok-down"]
+    assert [o["id"] for o in to_cancel] == ["o-up"]
+    assert reasons["o-up"] == CANCEL_NOT_QUOTED
