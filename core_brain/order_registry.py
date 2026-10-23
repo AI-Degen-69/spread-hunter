@@ -2725,36 +2725,70 @@ def inventory_from_registry(
 def registry_naked_usd(registry) -> float:
     """Dollars at risk on open, one-sided live exposure, from the registry.
 
-    Pairs whose condition already has a close are skipped: a merged pair has
-    no open exposure, and counting its fills would bill risk the venue no
-    longer carries. A partially-exited pair is skipped whole rather than
-    over-stated, which is the safe direction for a risk figure. Aggregate the
-    fills by pair and token in SQL so this remains one database round-trip,
-    even when the registry has thousands of unclosed pairs.
+    No pair is ever skipped for having a close on its condition (#763): a
+    market that re-qualifies after a merge/exit takes new fills that must
+    count, and a partially-exited pair still holds its leftover. Instead each
+    pair's fills are netted against exactly the rescue closes booked while it
+    existed (`closes.ts >= the pair's earliest order posted_ts`, seconds vs
+    milliseconds): a close booked before the pair opened belongs to a prior
+    pair and nets nothing. A fully rescued leg nets to zero; a balanced
+    merged pair reads zero through heavy-minus-light. Over-stating (a close
+    with no resolvable side) is the accepted direction; under-stating is the
+    bug. Aggregate the fills by pair and token in SQL so this remains one
+    database round-trip, even when the registry has thousands of pairs.
     """
+    rescue_placeholders = ",".join("?" for _ in RESCUE_METHODS)
     with registry._conn() as conn:
         row = conn.execute(
-            """
-            WITH closed_conditions AS (
-                SELECT DISTINCT condition_id
-                FROM closes
-                WHERE condition_id IS NOT NULL
+            f"""
+            WITH pair_min AS (
+                SELECT pair_id, condition_id, MIN(posted_ts) AS min_posted
+                FROM orders
+                WHERE pair_id IS NOT NULL
+                GROUP BY pair_id, condition_id
             ),
-            eligible_pairs AS (
-                SELECT DISTINCT o.pair_id, o.condition_id
-                FROM orders o
-                LEFT JOIN closed_conditions c ON c.condition_id = o.condition_id
-                WHERE o.pair_id IS NOT NULL
-                  AND c.condition_id IS NULL
+            token_side AS (
+                SELECT condition_id, token_id, side FROM (
+                    SELECT condition_id, token_id, UPPER(side) AS side,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY condition_id, token_id
+                               ORDER BY ts DESC
+                           ) AS rn
+                    FROM quotes
+                    WHERE UPPER(side) IN ('UP', 'DOWN')
+                ) WHERE rn = 1
+            ),
+            rescue_net AS (
+                SELECT pm.pair_id, pm.condition_id, ts.token_id,
+                       COALESCE(SUM(c.shares), 0.0) AS r_shares,
+                       COALESCE(SUM(COALESCE(c.up_cost_removed, 0.0)
+                                    + COALESCE(c.dn_cost_removed, 0.0)), 0.0) AS r_cost
+                FROM pair_min pm
+                JOIN closes c
+                  ON c.condition_id = pm.condition_id
+                 AND c.ts >= pm.min_posted / 1000.0
+                 AND c.method IN ({rescue_placeholders})
+                 AND ((c.up_price IS NOT NULL AND c.dn_price IS NULL)
+                      OR (c.up_price IS NULL AND c.dn_price IS NOT NULL))
+                JOIN token_side ts
+                  ON ts.condition_id = pm.condition_id
+                 AND ((c.up_price IS NOT NULL AND ts.side = 'UP')
+                      OR (c.up_price IS NULL AND ts.side = 'DOWN'))
+                GROUP BY pm.pair_id, pm.condition_id, ts.token_id
             ),
             token_stats AS (
                 SELECT o.pair_id, o.condition_id, o.token_id,
-                       COALESCE(SUM(f.size), 0.0) AS matched,
-                       COALESCE(SUM(f.size * f.price), 0.0) AS notional
+                       MAX(0.0, COALESCE(SUM(f.size), 0.0)
+                           - COALESCE(r.r_shares, 0.0)) AS matched,
+                       MAX(0.0, COALESCE(SUM(f.size * f.price), 0.0)
+                           - COALESCE(r.r_cost, 0.0)) AS notional
                 FROM orders o
-                JOIN eligible_pairs e
-                  ON e.pair_id = o.pair_id AND e.condition_id = o.condition_id
                 LEFT JOIN fills f ON f.order_uuid = o.id
+                LEFT JOIN rescue_net r
+                  ON r.pair_id = o.pair_id
+                 AND r.condition_id = o.condition_id
+                 AND r.token_id = o.token_id
+                WHERE o.pair_id IS NOT NULL
                 GROUP BY o.pair_id, o.condition_id, o.token_id
             ),
             ranked_legs AS (
@@ -2784,9 +2818,26 @@ def registry_naked_usd(registry) -> float:
                 END
             ), 0.0) AS naked_usd
             FROM pair_exposure p
-            """
+            """,
+            tuple(RESCUE_METHODS),
         ).fetchone()
     return float(row["naked_usd"]) if row else 0.0
+
+
+def _close_cutoff_map(registry) -> dict:
+    """Latest close `ts` (seconds) per condition, over every close method.
+
+    Shared by the committed-capital read (and mirrored as a CTE in its
+    inventory SQL): any close means the pair's pre-close capital is gone, so
+    only orders posted after the cutoff still commit. Rescue-share netting
+    (not this map) is what keeps partially-exited leftovers visible.
+    """
+    with registry._conn() as conn:
+        rows = conn.execute(
+            "SELECT condition_id, MAX(ts) AS cutoff FROM closes "
+            "WHERE condition_id IS NOT NULL GROUP BY condition_id"
+        ).fetchall()
+    return {r["condition_id"]: float(r["cutoff"]) for r in rows}
 
 
 def registry_committed_usd(registry) -> float:
@@ -2799,36 +2850,74 @@ def registry_committed_usd(registry) -> float:
     `fleet_committed_cost` sums, and the same gap that let $767
     of naked exposure hide behind $9,588 of committed capital in 2026-07-30.
 
-    Pairs whose condition already has a close are skipped whole: merged or
-    exited inventory is no longer committed. A filled SELL reduces cost basis
-    (money came back), so it subtracts; a resting SELL commits no new capital
-    and is excluded.
+    Pair-scoped (#763): a re-entered market's new fills and resting BUYs
+    count in full, while pre-close inventory commits only through its
+    rescue-netted leftover -- an uninformative close (no booked removal)
+    hides the fills it may have removed instead of double-counting them.
+    Per `(condition_id, pair_id)` group: when the pair filled anything after
+    the condition's latest close, or a rescue close booked removal while the
+    pair existed, inventory is all-fills cost minus that booked removal
+    (`up_cost_removed + dn_cost_removed`), clamped at zero; otherwise the
+    group commits nothing. A filled SELL reduces cost basis (money came back),
+    so it subtracts; a resting SELL commits no new capital and is excluded.
     """
+    rescue_placeholders = ",".join("?" for _ in RESCUE_METHODS)
     with registry._conn() as conn:
-        closed_cids = {
-            r["condition_id"]
-            for r in conn.execute(
-                "SELECT DISTINCT condition_id FROM closes WHERE condition_id IS NOT NULL"
-            ).fetchall()
-        }
         inventory = conn.execute(
-            """
-            SELECT COALESCE(SUM(
-                CASE WHEN o.side = 'BUY' THEN f.size * f.price
-                     ELSE -f.size * f.price END
-            ), 0.0)
-            FROM fills f
-            JOIN orders o ON f.order_uuid = o.id
-            WHERE o.condition_id NOT IN (
-                SELECT DISTINCT condition_id FROM closes
+            f"""
+            WITH cutoff AS (
+                SELECT condition_id, MAX(ts) AS ts
+                FROM closes
                 WHERE condition_id IS NOT NULL
+                GROUP BY condition_id
+            ),
+            pair_min AS (
+                SELECT condition_id, pair_id, MIN(posted_ts) AS min_posted
+                FROM orders
+                GROUP BY condition_id, pair_id
+            ),
+            rescue_cost AS (
+                SELECT pm.condition_id, pm.pair_id,
+                       COALESCE(SUM(COALESCE(c.up_cost_removed, 0.0)
+                                    + COALESCE(c.dn_cost_removed, 0.0)), 0.0) AS rcost
+                FROM pair_min pm
+                JOIN closes c
+                  ON c.condition_id = pm.condition_id
+                 AND c.ts >= pm.min_posted / 1000.0
+                 AND c.method IN ({rescue_placeholders})
+                GROUP BY pm.condition_id, pm.pair_id
+            ),
+            inventory AS (
+                SELECT o.condition_id, o.pair_id,
+                       SUM(CASE WHEN o.side = 'BUY' THEN f.size * f.price
+                                ELSE -f.size * f.price END) AS all_cost,
+                       SUM(CASE WHEN c.ts IS NULL OR o.posted_ts > c.ts * 1000
+                                THEN 1 ELSE 0 END) AS post_fills
+                FROM fills f
+                JOIN orders o ON f.order_uuid = o.id
+                LEFT JOIN cutoff c ON c.condition_id = o.condition_id
+                GROUP BY o.condition_id, o.pair_id
             )
-            """
+            SELECT COALESCE(SUM(CASE
+                WHEN i.post_fills > 0 OR COALESCE(r.rcost, 0.0) > 0
+                THEN MAX(i.all_cost - COALESCE(r.rcost, 0.0), 0.0)
+                ELSE 0.0 END), 0.0)
+            FROM inventory i
+            LEFT JOIN rescue_cost r
+              ON r.condition_id IS i.condition_id
+             AND r.pair_id IS i.pair_id
+            """,
+            tuple(RESCUE_METHODS),
         ).fetchone()[0]
+
+    cutoff = _close_cutoff_map(registry)
 
     resting = 0.0
     for o in registry.get_active_orders():
-        if o.side != "BUY" or o.condition_id in closed_cids:
+        if o.side != "BUY":
+            continue
+        cut = cutoff.get(o.condition_id)
+        if cut is not None and (o.posted_ts or 0) <= cut * 1000:
             continue
         resting += o.price * max(0.0, o.original_size - registry.get_size_matched(o.id))
 

@@ -19,7 +19,7 @@ import pytest
 from core_brain.config import MakerConfig
 from core_brain.market_resolution import MarketEndState
 from core_brain.order_registry import (
-    OrderRegistry, OrderRecord, FillRecord, QuoteRecord,
+    OrderRegistry, OrderRecord, FillRecord, QuoteRecord, CloseRecord,
 )
 from core_brain import single_buy_saver as lp
 from core_brain.statistical_analytics import rescue_friction_summary
@@ -258,6 +258,110 @@ def test_sell_size_is_capped_by_bid_depth(registry: OrderRegistry):
 # ---------------------------------------------------------------------------
 # Invariant 5 — registry/venue divergence refuses
 # ---------------------------------------------------------------------------
+
+
+def _up_leg_pair(registry: OrderRegistry, pair_id: str, cond: str = COND,
+                 posted_ms: int = 2_000_000, filled_size: float = 10.0,
+                 fill_price: float = 0.60) -> str:
+    """A heavy UP leg fully filled + resting DOWN leg, with explicit identity.
+
+    #763: lets a test open a SECOND pair on the same condition after a close,
+    so the suite can prove the first pair's rescue shares never explain the
+    second pair's venue gap.
+    """
+    heavy = OrderRecord(
+        id=str(uuid.uuid4()), order_id=f"venue-heavy-{pair_id}",
+        condition_id=cond, token_id=TOK_UP, side="BUY", price=fill_price,
+        original_size=filled_size, status="filled", posted_ts=posted_ms,
+        last_polled_ts=posted_ms, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(heavy)
+    registry.record_fill(FillRecord(
+        trade_id=f"trade-heavy-{pair_id}", order_uuid=heavy.id,
+        size=filled_size, price=fill_price, venue_ts=posted_ms,
+    ))
+    light = OrderRecord(
+        id=str(uuid.uuid4()), order_id=f"venue-light-{pair_id}",
+        condition_id=cond, token_id=TOK_DN, side="BUY", price=0.38,
+        original_size=filled_size, status="open", posted_ts=posted_ms,
+        last_polled_ts=posted_ms, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(light)
+    registry.log_quote(QuoteRecord(
+        ts=posted_ms / 1000.0, condition_id=cond, token_id=TOK_UP,
+        side="UP", price=fill_price, size=filled_size,
+    ))
+    registry.log_quote(QuoteRecord(
+        ts=posted_ms / 1000.0, condition_id=cond, token_id=TOK_DN,
+        side="DOWN", price=0.38, size=filled_size,
+    ))
+    return pair_id
+
+
+def _rescue_close(registry: OrderRegistry, cond: str, ts_sec: float,
+                  shares: float, cost_per_share: float = 0.60) -> None:
+    """One UP-side single_buy_exit close, exactly what _record_exit_close books."""
+    registry.log_close(CloseRecord(
+        ts=ts_sec, condition_id=cond, method="single_buy_exit",
+        shares=shares, up_price=0.55, dn_price=None,
+        cost_basis=shares * cost_per_share, proceeds=shares * 0.55,
+        up_cost_removed=shares * cost_per_share, dn_cost_removed=0.0,
+        run_id="run-test",
+    ))
+
+
+def test_prior_pair_rescue_shares_do_not_mask_new_pair_divergence(
+        registry: OrderRegistry):
+    """#763: pair-1 exits 10 UP; pair-2 opens later on the same condition.
+
+    The venue reports none of pair-2's 10 shares. Pair-1's 10 exited shares
+    must NOT explain the gap: the check refuses instead of passing silently.
+    """
+    _one_sided_pair(registry, filled_size=10.0)          # pair-1 @ 1000s
+    _rescue_close(registry, COND, ts_sec=1001.0, shares=10.0)
+    new_pair = _up_leg_pair(registry, "pair-2", posted_ms=2_000_000)
+
+    with pytest.raises(lp.PairExitRefused, match="diverge"):
+        lp._check_positions(lp.load_pair(registry, new_pair),
+                            {TOK_UP: 0.0}, registry)
+
+
+def test_prior_exit_shares_are_scoped_to_pairs_alive_at_the_close(
+        registry: OrderRegistry):
+    """#763: unit pin — the new pair gets zero credit, the old pair keeps it."""
+    _one_sided_pair(registry, filled_size=10.0)          # pair-1 @ 1000s
+    _rescue_close(registry, COND, ts_sec=1001.0, shares=10.0)
+    _up_leg_pair(registry, "pair-2", posted_ms=2_000_000)
+
+    assert lp._prior_exit_shares(registry, COND, TOK_UP, "pair-2") == 0.0
+    assert lp._prior_exit_shares(registry, COND, TOK_UP, "pair-1") == 10.0
+
+
+def test_same_pair_refill_still_nets_its_own_exit(registry: OrderRegistry):
+    """#763 pin: a same-pair partial exit keeps explaining its own gap."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0)
+    _rescue_close(registry, COND, ts_sec=1001.0, shares=4.0)
+
+    assert lp._check_positions(lp.load_pair(registry, pair_id),
+                               {TOK_UP: 6.0}, registry) is True
+
+
+def test_exit_netting_never_routes_a_new_pair_to_merge_on_a_real_gap(
+        registry: OrderRegistry):
+    """#763: the stray-guard path must refuse, not quietly route_to_merge."""
+    _one_sided_pair(registry, filled_size=10.0)          # pair-1 @ 1000s
+    _rescue_close(registry, COND, ts_sec=1001.0, shares=10.0)
+    new_pair = _up_leg_pair(registry, "pair-2", posted_ms=2_000_000)
+    client = FakeClient(best_ask=0.40)
+
+    with pytest.raises(lp.PairExitRefused):
+        lp.exit_naked_leg(client, registry, new_pair,
+                          bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+                          live=True, venue_positions={TOK_UP: 0.0})
+
+    assert not any(c.startswith("sell:") for c in client.calls)
 
 
 def test_position_divergence_refuses_the_exit(registry: OrderRegistry):
