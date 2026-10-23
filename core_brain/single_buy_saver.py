@@ -644,18 +644,18 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
     filled 4 of 10 is a 4-share position, and sizing an exit off 10 would sell
     shares that do not exist.
     """
-    orders = registry.get_orders_by_pair(pair_id)
-    if not orders:
+    rows = registry.get_pair_orders_with_fill_totals(pair_id)
+    if not rows:
         raise PairExitRefused(f"No orders carry pair_id={pair_id!r}.")
 
     by_token: dict[str, dict] = {}
-    for o in orders:
+    for o, matched, notional in rows:
         slot = by_token.setdefault(
             o.token_id,
             {"token_id": o.token_id, "matched": 0.0, "notional": 0.0, "orders": []},
         )
-        slot["matched"] += registry.get_size_matched(o.id)
-        slot["notional"] += registry.get_matched_notional(o.id)
+        slot["matched"] += matched
+        slot["notional"] += notional
         slot["orders"].append(o)
 
     if len(by_token) > 2:
@@ -678,7 +678,7 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
 
     return {
         "pair_id": pair_id,
-        "condition_id": orders[0].condition_id,
+        "condition_id": rows[0][0].condition_id,
         "heavy": heavy,
         "light": light,
         # Keyed by token as by rank. `heavy` and `light` are a ranking,
@@ -731,22 +731,19 @@ def _prior_exit_shares(registry, condition_id: str, token_id: str,
             return 0.0
         min_posted_sec = min(posted) / 1000.0
     total = 0.0
-    for c in registry.get_all_closes():
-        if c.get("condition_id") != condition_id:
-            continue
-        if c.get("method") not in RESCUE_METHODS:
-            continue
+    for up_price, shares, ts in registry.get_closes_for_condition(
+            condition_id, RESCUE_METHODS):
         if pair_id is not None:
             try:
-                ts = float(c.get("ts") or 0.0)
+                ts_f = float(ts or 0.0)
             except (TypeError, ValueError):
                 continue
-            if ts < min_posted_sec:
+            if ts_f < min_posted_sec:
                 continue
-        sold_up = c.get("up_price") is not None
+        sold_up = up_price is not None
         if (sold_up and side == "UP") or (not sold_up and side == "DOWN"):
             try:
-                total += float(c.get("shares") or 0.0)
+                total += float(shares or 0.0)
             except (TypeError, ValueError):
                 continue
     return total
@@ -831,20 +828,7 @@ def _token_side(registry: OrderRegistry, condition_id: str,
     never quoted; the caller must fail closed rather than guess, because an
     exit that cannot be recorded is the repeat-sell bug it exists to stop.
     """
-    best: Optional[str] = None
-    best_ts: float = -1.0
-    for q in registry.get_all_quotes():
-        if (q.get("condition_id") != condition_id
-                or q.get("token_id") != token_id):
-            continue
-        side = str(q.get("side") or "").upper()
-        if side not in ("UP", "DOWN"):
-            continue
-        ts = float(q.get("ts") or 0.0)
-        if ts >= best_ts:
-            best_ts = ts
-            best = side
-    return best
+    return registry.get_token_side(condition_id, token_id)
 
 
 def _exit_fill_price(resp, floor_price: float) -> float:
@@ -1804,7 +1788,8 @@ def _completion_target(client, pair_id: str):
         bind(None)
 
 
-def _latest_close_ms_by_condition(registry) -> dict[str, int]:
+def _latest_close_ms_by_condition(registry,
+                                   condition_ids=None) -> dict[str, int]:
     """When each condition was last closed, in venue milliseconds.
 
     A close covers only the fills that PREDATE it. The old condition-level
@@ -1820,10 +1805,13 @@ def _latest_close_ms_by_condition(registry) -> dict[str, int]:
     Shared by both arms on purpose: "never sell a leg the ledger says is
     already gone" has exactly one definition.
     """
+    if condition_ids is None:
+        rows = [(r.get("condition_id"), r.get("ts"))
+                for r in registry.get_all_closes()]
+    else:
+        rows = registry.get_close_timestamps(condition_ids)
     latest_close_ms: dict[str, int] = {}
-    for r in registry.get_all_closes():
-        cid = r.get("condition_id")
-        ts = r.get("ts")
+    for cid, ts in rows:
         if not cid or not ts:
             continue
         try:
@@ -1902,12 +1890,10 @@ def _last_fill_ms_by_pair(registry) -> tuple[dict[str, int], dict[str, str]]:
     """
     last_fill_ms: dict[str, int] = {}
     pair_cids: dict[str, str] = {}
-    for f in registry.get_all_fills():
-        pid = f.get("pair_id")
+    for pid, cid, vts in registry.get_fill_discovery_rows():
         if not pid:
             continue
-        pair_cids.setdefault(pid, f.get("condition_id") or "")
-        vts = f.get("venue_ts")
+        pair_cids.setdefault(pid, cid or "")
         if vts:
             last_fill_ms[pid] = max(last_fill_ms.get(pid, 0), int(vts))
     return last_fill_ms, pair_cids
@@ -2101,11 +2087,15 @@ def _manage_single_leg_positions_locked(
                 "error": f"positions read failed: {type(exc).__name__}: {exc}",
             }]
 
-    latest_close_ms = _latest_close_ms_by_condition(registry)
     last_fill_ms_by_pair, pair_cids = _last_fill_ms_by_pair(registry)
+    latest_close_ms = _latest_close_ms_by_condition(
+        registry,
+        [c for c in {pair_cids.get(pid) for pid in last_fill_ms_by_pair}
+         if c],
+    )
     base_offset = float(dynamic_offset_for(cfg)[0])
     quoted_tokens: dict[str, dict[str, tuple[float, str]]] = {}
-    for quote in registry.get_all_quotes():
+    for quote in registry.get_latest_tokens_by_condition_side():
         cid = str(quote.get("condition_id") or "")
         side = str(quote.get("side") or "").upper()
         token_id = str(quote.get("token_id") or "")

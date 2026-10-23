@@ -23,6 +23,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from core_brain.close_methods import RESCUE_METHODS as RESCUE_METHODS767
 from core_brain.order_registry import (
     OrderRegistry,
     OrderRecord,
@@ -1837,3 +1838,152 @@ def test_committed_prior_sale_does_not_shrink_new_pair(registry: OrderRegistry):
     _n763_pair(registry, "pair-b", 2_000_000, up_fill=10.0)
     # A nets to 3.60; B commits 6.00 inventory + 4.00 resting DN
     assert registry_committed_usd(registry) == pytest.approx(3.60 + 6.0 + 4.0)
+
+
+def _q767_quote(registry: OrderRegistry, ts: float, cid: str, tok: str,
+                side: str) -> None:
+    registry.log_quote(QuoteRecord(
+        ts=ts, condition_id=cid, token_id=tok, side=side,
+        price=0.5, size=1.0))
+
+
+def test_latest_tokens_by_condition_side_pins_tiebreak(registry: OrderRegistry):
+    """#767: newest inserted row wins ties; A/B conflict keeps token A."""
+    _q767_quote(registry, 1.0, "cond-a", "tok-a", "UP")
+    _q767_quote(registry, 2.0, "cond-a", "tok-b", "UP")
+    _q767_quote(registry, 2.0, "cond-a", "tok-b2", "UP")  # tie: last wins
+    _q767_quote(registry, 3.0, "cond-a", "tok-c", "DOWN")
+    _q767_quote(registry, 1.0, "cond-b", "tok-d", "down")  # lower-case ok
+    _q767_quote(registry, 5.0, "cond-b", "tok-e", "MAYBE")  # invalid side
+    _q767_quote(registry, 0.0, "cond-c", "tok-f", "UP")  # zero ts kept
+    _q767_quote(registry, -0.5, "cond-c", "tok-g", "DOWN")  # negative kept
+
+    rows = registry.get_latest_tokens_by_condition_side()
+    by_cid_side = {(r["condition_id"], r["side"]): r["token_id"] for r in rows}
+    assert by_cid_side[("cond-a", "UP")] == "tok-b2"
+    assert by_cid_side[("cond-a", "DOWN")] == "tok-c"
+    assert by_cid_side[("cond-b", "DOWN")] == "tok-d"
+    assert ("cond-b", "UP") not in by_cid_side
+    assert by_cid_side[("cond-c", "UP")] == "tok-f"
+    assert by_cid_side[("cond-c", "DOWN")] == "tok-g"
+
+
+def test_get_token_side_latest_wins_with_floor(registry: OrderRegistry):
+    """#767: Q2 keeps the A/B counter-example and the -1.0 floor."""
+    _q767_quote(registry, 1.0, "cond-x", "tok-a", "UP")
+    _q767_quote(registry, 2.0, "cond-x", "tok-b", "UP")
+    _q767_quote(registry, 3.0, "cond-x", "tok-b", "DOWN")
+    # The condition/side map loses tok-a here; the token lookup must not.
+    assert registry.get_token_side("cond-x", "tok-a") == "UP"
+    assert registry.get_token_side("cond-x", "tok-b") == "DOWN"
+    assert registry.get_token_side("cond-x", "tok-missing") is None
+
+    _q767_quote(registry, -1.5, "cond-y", "tok-n", "UP")
+    assert registry.get_token_side("cond-y", "tok-n") is None
+    _q767_quote(registry, -1.0, "cond-y", "tok-m", "down")
+    assert registry.get_token_side("cond-y", "tok-m") == "DOWN"
+
+
+def _q767_order(registry: OrderRegistry, oid: str, tok: str, pair: str,
+                 status: str = "open", posted_ms: int = 1_000_000) -> str:
+    uid = str(uuid.uuid4())
+    registry.create_order(OrderRecord(
+        id=uid, order_id=oid, condition_id="cond-p", token_id=tok,
+        side="BUY", price=0.60, original_size=10.0, status=status,
+        posted_ts=posted_ms, last_polled_ts=posted_ms, pair_id=pair))
+    return uid
+
+
+def test_pair_orders_with_fill_totals_matches_per_order_helpers(
+        registry: OrderRegistry):
+    """#767: Q3 equals get_orders_by_pair + per-order totals, one query."""
+    u_full = _q767_order(registry, "venue-1", "tok-up", "pair-q3",
+                          posted_ms=1_000_000)
+    registry.record_fill(FillRecord(trade_id="t1", order_uuid=u_full,
+                                     size=4.0, price=0.50, venue_ts=1000))
+    registry.record_fill(FillRecord(trade_id="t2", order_uuid=u_full,
+                                     size=6.0, price=0.70, venue_ts=2000))
+    u_zero = _q767_order(registry, "venue-2", "tok-up", "pair-q3",
+                          posted_ms=1_001_000)
+    u_cancel = _q767_order(registry, "venue-3", "tok-dn", "pair-q3",
+                            status="cancelled", posted_ms=1_002_000)
+    registry.record_fill(FillRecord(trade_id="t3", order_uuid=u_cancel,
+                                     size=2.0, price=0.40, venue_ts=1500))
+
+    rows = registry.get_pair_orders_with_fill_totals("pair-q3")
+    assert [o.id for o, _, _ in rows] == [u_full, u_zero, u_cancel]
+    by_id = {o.id: (m, n) for o, m, n in rows}
+    assert by_id[u_full] == (10.0, 4.0 * 0.50 + 6.0 * 0.70)
+    assert by_id[u_zero] == (0.0, 0.0)
+    assert by_id[u_cancel] == (2.0, 2.0 * 0.40)
+    for o, m, n in rows:
+        assert m == registry.get_size_matched(o.id)
+        assert n == registry.get_matched_notional(o.id)
+    assert registry.get_pair_orders_with_fill_totals("pair-missing") == []
+
+
+def test_fill_discovery_rows_match_last_fill_semantics(
+        registry: OrderRegistry):
+    """#767: Q4 carries (pair, condition, venue_ts) for the reducer."""
+    u1 = _q767_order(registry, "venue-1", "tok-up", "pair-d1")
+    registry.record_fill(FillRecord(trade_id="t1", order_uuid=u1,
+                                     size=1.0, price=0.5))  # undated first
+    registry.record_fill(FillRecord(trade_id="t2", order_uuid=u1,
+                                     size=1.0, price=0.5, venue_ts=5000))
+    u2 = _q767_order(registry, "venue-2", "tok-up", "pair-d2")
+    registry.record_fill(FillRecord(trade_id="t3", order_uuid=u2,
+                                     size=1.0, price=0.5, venue_ts=0))  # zero
+    u3 = _q767_order(registry, "venue-3", "tok-up", "")  # unpaired
+    registry.record_fill(FillRecord(trade_id="t4", order_uuid=u3,
+                                     size=1.0, price=0.5, venue_ts=9000))
+
+    rows = registry.get_fill_discovery_rows()
+    by_pair = {}
+    for pid, cid, vts in rows:
+        by_pair.setdefault(pid, []).append((cid, vts))
+    assert set(by_pair) == {"pair-d1", "pair-d2"}
+    assert by_pair["pair-d1"][0][0] == "cond-p"  # condition from 1st row
+    assert [v for _, v in by_pair["pair-d1"]] == [None, 5000]
+    assert [v for _, v in by_pair["pair-d2"]] == [0]
+
+
+def _q767_close(registry: OrderRegistry, ts: float, cid: str,
+                 method: str = "single_buy_exit", shares=5.0,
+                 up_price=None) -> None:
+    registry.log_close(CloseRecord(
+        ts=ts, condition_id=cid, method=method, shares=shares,
+        up_price=up_price, cost_basis=1.0, proceeds=1.0, realized_pnl=0.0))
+
+
+def test_close_timestamps_bounded_and_chunked(registry: OrderRegistry):
+    """#767: Q5 returns (condition_id, ts) for exact matches, any volume."""
+    _q767_close(registry, 100.0, "cond-a")
+    _q767_close(registry, 200.0, "cond-a", method="merge")
+    _q767_close(registry, 300.0, "cond-b", method="naked_exit")
+    rows = registry.get_close_timestamps(["cond-a"])
+    assert sorted(t for _, t in rows) == [100.0, 200.0]
+    assert all(c == "cond-a" for c, _ in rows)
+    assert registry.get_close_timestamps([]) == []
+    # 600 ids force a second chunk; only stored conditions come back.
+    many = [f"cond-{i}" for i in range(600)] + ["cond-a", "cond-b"]
+    rows = registry.get_close_timestamps(many)
+    assert len(rows) == 3
+
+
+def test_closes_for_condition_is_method_scoped(registry: OrderRegistry):
+    """#767: Q6 keeps rescue methods, drops merges and other conditions."""
+    _q767_close(registry, 100.0, "cond-a", method="single_buy_exit",
+                 shares=4.0, up_price=0.5)
+    _q767_close(registry, 101.0, "cond-a", method="ladder_exit",
+                 shares=2.0)  # dn leg: up_price NULL
+    _q767_close(registry, 102.0, "cond-a", method="merge", shares=99.0,
+                 up_price=0.5)  # not a rescue: excluded
+    _q767_close(registry, 103.0, "cond-a", method="single_buy_exit",
+                 shares=None, up_price=0.0)  # zero UP price counts as UP
+    _q767_close(registry, 104.0, "cond-other", method="single_buy_exit",
+                 shares=7.0, up_price=0.5)
+    rows = registry.get_closes_for_condition("cond-a", RESCUE_METHODS767)
+    assert rows == [(0.5, 4.0, 100.0), (None, 2.0, 101.0), (0.0, None, 103.0)]
+    assert registry.get_closes_for_condition("cond-a", []) == []
+    assert registry.get_closes_for_condition("cond-absent",
+                                              RESCUE_METHODS767) == []

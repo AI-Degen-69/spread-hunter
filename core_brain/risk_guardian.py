@@ -22,9 +22,8 @@ log = logging.getLogger("risk_guardian")
 
 def _group_condition_tokens(registry: OrderRegistry) -> dict[str, dict[str, str]]:
     """Group the latest UP and DOWN token IDs per condition_id from the quotes ledger."""
-    all_quotes = registry.get_all_quotes()
     latest: dict[str, dict[str, tuple[float, str]]] = {}
-    for q in all_quotes:
+    for q in registry.get_latest_tokens_by_condition_side():
         cid = q.get("condition_id")
         side = str(q.get("side") or "").upper()
         tok = q.get("token_id")

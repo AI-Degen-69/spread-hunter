@@ -3901,7 +3901,9 @@ class TestGuardianReactiveWake:
         from core_brain.quotes import Inventory
 
         registry = MagicMock()
-        registry.get_all_quotes.return_value = [
+        registry.get_all_quotes.side_effect = AssertionError(
+            "hot path must not full-scan quotes")
+        registry.get_latest_tokens_by_condition_side.return_value = [
             {"condition_id": "0x1", "side": "UP", "token_id": "tok-u", "ts": 1.0},
             {"condition_id": "0x1", "side": "DOWN", "token_id": "tok-d", "ts": 1.0},
         ]
@@ -3943,7 +3945,9 @@ class TestGuardianReactiveWake:
         from core_brain.quotes import Inventory
 
         registry = MagicMock()
-        registry.get_all_quotes.return_value = [
+        registry.get_all_quotes.side_effect = AssertionError(
+            "hot path must not full-scan quotes")
+        registry.get_latest_tokens_by_condition_side.return_value = [
             {"condition_id": "0x1", "side": "UP", "token_id": "tok-u", "ts": 1.0},
             {"condition_id": "0x1", "side": "DOWN", "token_id": "tok-d", "ts": 1.0},
         ]
@@ -3995,7 +3999,9 @@ class TestGuardianReactiveWake:
         from core_brain.trader_loop import start_risk_guardian
 
         registry = MagicMock()
-        registry.get_all_quotes.return_value = []
+        registry.get_all_quotes.side_effect = AssertionError(
+            "hot path must not full-scan quotes")
+        registry.get_latest_tokens_by_condition_side.return_value = []
         stop_evt = threading.Event()
         wake_evt = threading.Event()
 
@@ -4198,7 +4204,9 @@ class TestGuardianReactiveWake:
         monkeypatch.setitem(sys.modules, "websocket", types.SimpleNamespace(WebSocketApp=StubApp))
 
         registry = MagicMock()
-        registry.get_all_quotes.return_value = [
+        registry.get_all_quotes.side_effect = AssertionError(
+            "hot path must not full-scan quotes")
+        registry.get_latest_tokens_by_condition_side.return_value = [
             {"condition_id": "0x1", "side": "UP", "token_id": "tok-u", "ts": 1.0},
             {"condition_id": "0x1", "side": "DOWN", "token_id": "tok-d", "ts": 1.0},
         ]

@@ -1540,6 +1540,29 @@ class OrderRegistry:
             ).fetchall()
         return [self._row_to_order(r) for r in rows]
 
+    def get_pair_orders_with_fill_totals(
+            self, pair_id: str) -> list[tuple]:
+        """One pair's orders with per-order fill totals, one connection (#767).
+
+        Targeted replacement for `load_pair`'s 1 + 2*N round-trips. LEFT JOIN
+        keeps zero-fill orders (0.0/0.0); every status included, no side
+        filter, exact pair match, posted order. Unknown pair reads [].
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT o.*, COALESCE(SUM(f.size), 0.0) AS _matched,
+                       COALESCE(SUM(f.size * f.price), 0.0) AS _notional
+                FROM orders o LEFT JOIN fills f ON f.order_uuid = o.id
+                WHERE o.pair_id = ?
+                GROUP BY o.id
+                ORDER BY o.posted_ts ASC
+                """,
+                (pair_id,),
+            ).fetchall()
+        return [(self._row_to_order(r), float(r["_matched"]),
+                 float(r["_notional"])) for r in rows]
+
     def get_active_orders(self) -> list[OrderRecord]:
         """Return all orders in pending, open, or partial status."""
         with self._conn() as conn:
@@ -1996,6 +2019,55 @@ class OrderRegistry:
             rows = conn.execute("SELECT * FROM quotes ORDER BY ts ASC").fetchall()
             return [dict(r) for r in rows]
 
+    def get_latest_tokens_by_condition_side(self) -> list[dict]:
+        """Latest token per (condition_id, side) from the quotes ledger (#767).
+
+        Targeted replacement for the full-table `get_all_quotes()` grouping in
+        the 1Hz guardian and the lifecycle pass. One row per condition and
+        side; ties (tick rows share a millisecond) go to the newest inserted
+        row (`rowid DESC`), matching the old `>=` loop over `ts ASC` order.
+        Applies no timestamp floor -- the old grouping accepted any `ts`.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT condition_id, token_id, side, ts FROM (
+                    SELECT condition_id, token_id, UPPER(side) AS side, ts,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY condition_id, UPPER(side)
+                               ORDER BY COALESCE(ts, 0.0) DESC, rowid DESC
+                           ) AS rn
+                    FROM quotes
+                    WHERE condition_id IS NOT NULL AND condition_id != ''
+                      AND token_id IS NOT NULL AND token_id != ''
+                      AND UPPER(side) IN ('UP', 'DOWN')
+                ) WHERE rn = 1
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_token_side(self, condition_id: str, token_id: str) -> Optional[str]:
+        """Latest UP/DOWN label for one (condition, token) pair (#767).
+
+        Mirrors `_token_side`'s rule exactly: rows below `-1.0` never set the
+        answer, ties go to the newest inserted row. Must not be derived from
+        `get_latest_tokens_by_condition_side()` -- a token the map drops
+        (e.g. token A after B re-quotes the same side) still resolves here.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT UPPER(side) AS side FROM quotes
+                WHERE condition_id = ? AND token_id = ?
+                  AND UPPER(side) IN ('UP', 'DOWN')
+                  AND COALESCE(ts, 0.0) >= -1.0
+                ORDER BY COALESCE(ts, 0.0) DESC, rowid DESC
+                LIMIT 1
+                """,
+                (condition_id, token_id),
+            ).fetchone()
+            return row["side"] if row else None
+
     def get_all_fills(self) -> list[dict]:
         with self._conn() as conn:
             # The print lives in a SHADOW-only table (#531), so the join is
@@ -2029,6 +2101,25 @@ class OrderRegistry:
                 """
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def get_fill_discovery_rows(self) -> list[tuple]:
+        """Narrow (pair_id, condition_id, venue_ts) fill projection (#767).
+
+        Feeds `_last_fill_ms_by_pair` without the 13-column join. Inner join
+        plus the NULL/empty pair filter only; no status, side, size, run, or
+        timestamp filter. ORDER matches `get_all_fills` (NULLs first).
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT o.pair_id, o.condition_id, f.venue_ts
+                FROM fills f JOIN orders o ON o.id = f.order_uuid
+                WHERE o.pair_id IS NOT NULL AND o.pair_id != ''
+                ORDER BY f.recorded_ts ASC, f.rowid ASC
+                """
+            ).fetchall()
+            return [(r["pair_id"], r["condition_id"], r["venue_ts"])
+                    for r in rows]
 
     def get_all_market_events(self) -> list[dict]:
         with self._conn() as conn:
@@ -2067,6 +2158,47 @@ class OrderRegistry:
         with self._conn() as conn:
             rows = conn.execute("SELECT * FROM closes ORDER BY ts ASC").fetchall()
             return [dict(r) for r in rows]
+
+    def get_close_timestamps(self, condition_ids) -> list[tuple]:
+        """(condition_id, ts) for the given conditions, one connection (#767).
+
+        Exact `IN` matches in chunks of at most 500 (same placeholder pattern
+        as `queue_ahead_by_local_id`). Empty input reads nothing.
+        """
+        ids = [str(i) for i in (condition_ids or []) if i]
+        if not ids:
+            return []
+        out: list[tuple] = []
+        with self._conn() as conn:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                marks = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    "SELECT condition_id, ts FROM closes "
+                    f"WHERE condition_id IN ({marks})",
+                    tuple(chunk),
+                ).fetchall()
+                out.extend([(r["condition_id"], r["ts"]) for r in rows])
+        return out
+
+    def get_closes_for_condition(self, condition_id: str,
+                                 methods) -> list[tuple]:
+        """(up_price, shares, ts) rescue closes for one condition (#767).
+
+        Method ownership stays with the caller (`close_methods` taxonomy);
+        the registry never imports it. Empty method set reads nothing.
+        """
+        meths = [str(m) for m in (methods or []) if m]
+        if not meths:
+            return []
+        with self._conn() as conn:
+            marks = ",".join("?" for _ in meths)
+            rows = conn.execute(
+                "SELECT up_price, shares, ts FROM closes "
+                f"WHERE condition_id = ? AND method IN ({marks})",
+                (condition_id, *meths),
+            ).fetchall()
+            return [(r["up_price"], r["shares"], r["ts"]) for r in rows]
 
     def log_hard_stop_refusal(self, *, pair_id: str, condition_id: str,
                               trigger_bid: Optional[float], outcome: str,
