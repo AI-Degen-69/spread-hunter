@@ -481,6 +481,101 @@ def test_load_pair_reads_fills_without_per_order_helpers(
     assert uses["n"] == 1
 
 
+def test_prior_exit_shares_reads_only_rescue_closes_fresh(
+        registry: OrderRegistry):
+    """#767: rescue-only netting; a second exit's close is seen fresh."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    registry.log_close(CloseRecord(
+        ts=1001.0, condition_id=COND, method="single_buy_exit", shares=4.0,
+        up_price=0.55, cost_basis=2.2, proceeds=1.6, realized_pnl=-0.6))
+    registry.log_close(CloseRecord(
+        ts=1002.0, condition_id=COND, method="merge", shares=100.0,
+        up_price=0.55, cost_basis=1.0, proceeds=1.0, realized_pnl=0.0))
+    assert lp._prior_exit_shares(registry, COND, TOK_UP,
+                                 pair_id=pair_id) == pytest.approx(4.0)
+    assert lp._prior_exit_shares(registry, COND, TOK_DN,
+                                 pair_id=pair_id) == pytest.approx(0.0)
+    registry.log_close(CloseRecord(
+        ts=1003.0, condition_id=COND, method="ladder_exit", shares=3.0,
+        up_price=0.50, cost_basis=1.5, proceeds=1.2, realized_pnl=-0.3))
+    assert lp._prior_exit_shares(registry, COND, TOK_UP,
+                                 pair_id=pair_id) == pytest.approx(7.0)
+
+
+def test_latest_close_ms_scoped_read_matches_full_read(
+        registry: OrderRegistry):
+    """#767: condition-scoped timestamps equal the full-table reduction."""
+    registry.log_close(CloseRecord(
+        ts=100.0004, condition_id=COND, method="merge", shares=1.0,
+        cost_basis=1.0, proceeds=1.0, realized_pnl=0.0))
+    registry.log_close(CloseRecord(
+        ts=0.0, condition_id=COND, method="merge", shares=1.0,
+        cost_basis=1.0, proceeds=1.0, realized_pnl=0.0))
+    registry.log_close(CloseRecord(
+        ts=-5.0, condition_id="0xother", method="merge", shares=1.0,
+        cost_basis=1.0, proceeds=1.0, realized_pnl=0.0))
+    full = lp._latest_close_ms_by_condition(registry)
+    scoped = lp._latest_close_ms_by_condition(registry, [COND, "0xother"])
+    assert scoped == full == {COND: 100000}
+
+
+def test_hot_paths_run_the_full_pass_without_full_scans(
+        registry: OrderRegistry, monkeypatch):
+    """#767: a pass reaching exit + completion with every scan banned."""
+    from core_brain.config import MakerConfig
+    from core_brain.single_buy_saver import manage_single_leg_positions
+
+    pair_a = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    light_a = next(o for o in registry.get_orders_by_pair(pair_a)
+                   if o.token_id == TOK_DN)
+    registry.update_order_status(light_a.id, "cancelled", last_polled_ts=1000)
+
+    cond_b, up_b, dn_b = "0xcond-stage3-b", "tok-b-up", "tok-b-dn"
+    now = 1_000_000
+    heavy = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-heavy-b", condition_id=cond_b,
+        token_id=up_b, side="BUY", price=0.55, original_size=10.0,
+        status="filled", posted_ts=now, last_polled_ts=now, pair_id="pair-2",
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(heavy)
+    registry.record_fill(FillRecord(
+        trade_id="trade-heavy-b", order_uuid=heavy.id, size=10.0,
+        price=0.55, venue_ts=now,
+    ))
+    light = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-light-b", condition_id=cond_b,
+        token_id=dn_b, side="BUY", price=0.38, original_size=10.0,
+        status="open", posted_ts=now, last_polled_ts=now, pair_id="pair-2",
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(light)
+    registry.update_order_status(light.id, "cancelled", last_polled_ts=1000)
+    for tok, side in ((up_b, "UP"), (dn_b, "DOWN")):
+        registry.log_quote(QuoteRecord(
+            ts=now / 1000.0, condition_id=cond_b, token_id=tok, side=side,
+            price=0.55, size=10.0,
+        ))
+
+    for name in ("get_all_quotes", "get_all_fills", "get_all_closes",
+                 "get_size_matched", "get_matched_notional"):
+        monkeypatch.setattr(
+            registry, name,
+            lambda *a, _n=name, **k: (_ for _ in ()).throw(
+                AssertionError(f"hot path must not call {_n}")),
+        )
+
+    client = FakeClient(best_ask=0.40)
+    cfg = MakerConfig(bot_risk_stranded_completion_on=True,
+                      bot_pos_price_max_pair_cost_usd=0.99,
+                      bot_risk_stranded_max_wait_sec=300.0)
+    results = manage_single_leg_positions(client, registry, cfg, live=False,
+                                          now=1400.0)
+    actions = [r.get("action") for r in results]
+    assert "would_exit" in actions
+    assert "would_complete" in actions
+
+
 def test_a_balanced_pair_is_not_an_exit_candidate(registry: OrderRegistry):
     pair_id = _one_sided_pair(registry)
     light = next(o for o in registry.get_active_orders() if o.token_id == TOK_DN)

@@ -23,6 +23,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from core_brain.close_methods import RESCUE_METHODS as RESCUE_METHODS767
 from core_brain.order_registry import (
     OrderRegistry,
     OrderRecord,
@@ -1896,14 +1897,16 @@ def _q767_order(registry: OrderRegistry, oid: str, tok: str, pair: str,
 def test_pair_orders_with_fill_totals_matches_per_order_helpers(
         registry: OrderRegistry):
     """#767: Q3 equals get_orders_by_pair + per-order totals, one query."""
-    u_full = _q767_order(registry, "venue-1", "tok-up", "pair-q3")
+    u_full = _q767_order(registry, "venue-1", "tok-up", "pair-q3",
+                          posted_ms=1_000_000)
     registry.record_fill(FillRecord(trade_id="t1", order_uuid=u_full,
                                      size=4.0, price=0.50, venue_ts=1000))
     registry.record_fill(FillRecord(trade_id="t2", order_uuid=u_full,
                                      size=6.0, price=0.70, venue_ts=2000))
-    u_zero = _q767_order(registry, "venue-2", "tok-up", "pair-q3")
+    u_zero = _q767_order(registry, "venue-2", "tok-up", "pair-q3",
+                          posted_ms=1_001_000)
     u_cancel = _q767_order(registry, "venue-3", "tok-dn", "pair-q3",
-                            status="cancelled")
+                            status="cancelled", posted_ms=1_002_000)
     registry.record_fill(FillRecord(trade_id="t3", order_uuid=u_cancel,
                                      size=2.0, price=0.40, venue_ts=1500))
 
@@ -1942,3 +1945,45 @@ def test_fill_discovery_rows_match_last_fill_semantics(
     assert by_pair["pair-d1"][0][0] == "cond-p"  # condition from 1st row
     assert [v for _, v in by_pair["pair-d1"]] == [None, 5000]
     assert [v for _, v in by_pair["pair-d2"]] == [0]
+
+
+def _q767_close(registry: OrderRegistry, ts: float, cid: str,
+                 method: str = "single_buy_exit", shares=5.0,
+                 up_price=None) -> None:
+    registry.log_close(CloseRecord(
+        ts=ts, condition_id=cid, method=method, shares=shares,
+        up_price=up_price, cost_basis=1.0, proceeds=1.0, realized_pnl=0.0))
+
+
+def test_close_timestamps_bounded_and_chunked(registry: OrderRegistry):
+    """#767: Q5 returns (condition_id, ts) for exact matches, any volume."""
+    _q767_close(registry, 100.0, "cond-a")
+    _q767_close(registry, 200.0, "cond-a", method="merge")
+    _q767_close(registry, 300.0, "cond-b", method="naked_exit")
+    rows = registry.get_close_timestamps(["cond-a"])
+    assert sorted(t for _, t in rows) == [100.0, 200.0]
+    assert all(c == "cond-a" for c, _ in rows)
+    assert registry.get_close_timestamps([]) == []
+    # 600 ids force a second chunk; only stored conditions come back.
+    many = [f"cond-{i}" for i in range(600)] + ["cond-a", "cond-b"]
+    rows = registry.get_close_timestamps(many)
+    assert len(rows) == 3
+
+
+def test_closes_for_condition_is_method_scoped(registry: OrderRegistry):
+    """#767: Q6 keeps rescue methods, drops merges and other conditions."""
+    _q767_close(registry, 100.0, "cond-a", method="single_buy_exit",
+                 shares=4.0, up_price=0.5)
+    _q767_close(registry, 101.0, "cond-a", method="ladder_exit",
+                 shares=2.0)  # dn leg: up_price NULL
+    _q767_close(registry, 102.0, "cond-a", method="merge", shares=99.0,
+                 up_price=0.5)  # not a rescue: excluded
+    _q767_close(registry, 103.0, "cond-a", method="single_buy_exit",
+                 shares=None, up_price=0.0)  # zero UP price counts as UP
+    _q767_close(registry, 104.0, "cond-other", method="single_buy_exit",
+                 shares=7.0, up_price=0.5)
+    rows = registry.get_closes_for_condition("cond-a", RESCUE_METHODS767)
+    assert rows == [(0.5, 4.0, 100.0), (None, 2.0, 101.0), (0.0, None, 103.0)]
+    assert registry.get_closes_for_condition("cond-a", []) == []
+    assert registry.get_closes_for_condition("cond-absent",
+                                              RESCUE_METHODS767) == []

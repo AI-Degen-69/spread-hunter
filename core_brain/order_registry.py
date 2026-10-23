@@ -2159,6 +2159,47 @@ class OrderRegistry:
             rows = conn.execute("SELECT * FROM closes ORDER BY ts ASC").fetchall()
             return [dict(r) for r in rows]
 
+    def get_close_timestamps(self, condition_ids) -> list[tuple]:
+        """(condition_id, ts) for the given conditions, one connection (#767).
+
+        Exact `IN` matches in chunks of at most 500 (same placeholder pattern
+        as `queue_ahead_by_local_id`). Empty input reads nothing.
+        """
+        ids = [str(i) for i in (condition_ids or []) if i]
+        if not ids:
+            return []
+        out: list[tuple] = []
+        with self._conn() as conn:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                marks = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    "SELECT condition_id, ts FROM closes "
+                    f"WHERE condition_id IN ({marks})",
+                    tuple(chunk),
+                ).fetchall()
+                out.extend([(r["condition_id"], r["ts"]) for r in rows])
+        return out
+
+    def get_closes_for_condition(self, condition_id: str,
+                                 methods) -> list[tuple]:
+        """(up_price, shares, ts) rescue closes for one condition (#767).
+
+        Method ownership stays with the caller (`close_methods` taxonomy);
+        the registry never imports it. Empty method set reads nothing.
+        """
+        meths = [str(m) for m in (methods or []) if m]
+        if not meths:
+            return []
+        with self._conn() as conn:
+            marks = ",".join("?" for _ in meths)
+            rows = conn.execute(
+                "SELECT up_price, shares, ts FROM closes "
+                f"WHERE condition_id = ? AND method IN ({marks})",
+                (condition_id, *meths),
+            ).fetchall()
+            return [(r["up_price"], r["shares"], r["ts"]) for r in rows]
+
     def log_hard_stop_refusal(self, *, pair_id: str, condition_id: str,
                               trigger_bid: Optional[float], outcome: str,
                               detail: Optional[str] = None) -> None:

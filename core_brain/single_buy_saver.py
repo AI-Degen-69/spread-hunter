@@ -731,22 +731,19 @@ def _prior_exit_shares(registry, condition_id: str, token_id: str,
             return 0.0
         min_posted_sec = min(posted) / 1000.0
     total = 0.0
-    for c in registry.get_all_closes():
-        if c.get("condition_id") != condition_id:
-            continue
-        if c.get("method") not in RESCUE_METHODS:
-            continue
+    for up_price, shares, ts in registry.get_closes_for_condition(
+            condition_id, RESCUE_METHODS):
         if pair_id is not None:
             try:
-                ts = float(c.get("ts") or 0.0)
+                ts_f = float(ts or 0.0)
             except (TypeError, ValueError):
                 continue
-            if ts < min_posted_sec:
+            if ts_f < min_posted_sec:
                 continue
-        sold_up = c.get("up_price") is not None
+        sold_up = up_price is not None
         if (sold_up and side == "UP") or (not sold_up and side == "DOWN"):
             try:
-                total += float(c.get("shares") or 0.0)
+                total += float(shares or 0.0)
             except (TypeError, ValueError):
                 continue
     return total
@@ -1791,7 +1788,8 @@ def _completion_target(client, pair_id: str):
         bind(None)
 
 
-def _latest_close_ms_by_condition(registry) -> dict[str, int]:
+def _latest_close_ms_by_condition(registry,
+                                   condition_ids=None) -> dict[str, int]:
     """When each condition was last closed, in venue milliseconds.
 
     A close covers only the fills that PREDATE it. The old condition-level
@@ -1807,10 +1805,13 @@ def _latest_close_ms_by_condition(registry) -> dict[str, int]:
     Shared by both arms on purpose: "never sell a leg the ledger says is
     already gone" has exactly one definition.
     """
+    if condition_ids is None:
+        rows = [(r.get("condition_id"), r.get("ts"))
+                for r in registry.get_all_closes()]
+    else:
+        rows = registry.get_close_timestamps(condition_ids)
     latest_close_ms: dict[str, int] = {}
-    for r in registry.get_all_closes():
-        cid = r.get("condition_id")
-        ts = r.get("ts")
+    for cid, ts in rows:
         if not cid or not ts:
             continue
         try:
@@ -2086,8 +2087,12 @@ def _manage_single_leg_positions_locked(
                 "error": f"positions read failed: {type(exc).__name__}: {exc}",
             }]
 
-    latest_close_ms = _latest_close_ms_by_condition(registry)
     last_fill_ms_by_pair, pair_cids = _last_fill_ms_by_pair(registry)
+    latest_close_ms = _latest_close_ms_by_condition(
+        registry,
+        [c for c in {pair_cids.get(pid) for pid in last_fill_ms_by_pair}
+         if c],
+    )
     base_offset = float(dynamic_offset_for(cfg)[0])
     quoted_tokens: dict[str, dict[str, tuple[float, str]]] = {}
     for quote in registry.get_latest_tokens_by_condition_side():
