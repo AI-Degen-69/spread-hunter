@@ -1267,10 +1267,6 @@ def exit_single_buy(
     }
 
 
-def ask_depth(book) -> float:
-    return sum(s for _, s in _book_levels(book, "asks"))
-
-
 def ask_depth_at_or_below(book, limit: float) -> float:
     """Ask size a BUY at this limit price can take."""
     return sum(s for p, s in _book_levels(book, "asks")
