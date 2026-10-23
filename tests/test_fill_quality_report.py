@@ -272,6 +272,70 @@ def test_lift_marks_the_toxic_bucket(tmp_path: Path):
     db = _seeded_db(tmp_path)
     store = fqr.load_store(db, run_id="r1", label="shadow")
     report = fqr.build_report(store, min_obs=1)
-    toxic = [b for b in report.buckets
-             if b.n_dead > 0 and b.lift is not None and b.lift > 1.0]
+    toxic = [b for b in report.buckets if b.n_dead > 0 and b.lift is not None and b.lift > 1.0]
     assert toxic, "calibration must surface a slice deadlier than base"
+
+
+# --- Task 4: break-even table --------------------------------------------------
+
+def _synthetic_rows(n_clean: int, n_dead: int):
+    rows = []
+    for i in range(n_clean):
+        rows.append(fqr.FillRow(
+            trade_id=f"c{i}", order_id="o", pair_key=f"p{i}",
+            condition_id=f"c{i}", token_id="t", side="BUY", price=0.6,
+            size=1.0, fill_ts_sec=1.0, posted_ts_ms=1000, mid=0.6,
+            edge_vs_mid=0.10, queue_ahead=1.0, book_size=8.0, opp_price=0.38,
+            implied_pair_cost=0.98, outcome="merged", pair_pnl=0.329,
+            attr_pnl=0.329, t_to_res_sec=None, leg_gap_sec=0.0,
+        ))
+    for i in range(n_dead):
+        rows.append(fqr.FillRow(
+            trade_id=f"d{i}", order_id="o", pair_key=f"q{i}",
+            condition_id=f"d{i}", token_id="t", side="BUY", price=0.7,
+            size=1.0, fill_ts_sec=1.0, posted_ts_ms=1000, mid=0.6,
+            edge_vs_mid=0.025, queue_ahead=1.0, book_size=8.0, opp_price=0.38,
+            implied_pair_cost=1.08, outcome="dead_leg", pair_pnl=-2.924,
+            attr_pnl=-2.924, t_to_res_sec=None, leg_gap_sec=0.0,
+        ))
+    return tuple(rows)
+
+
+def test_break_even_row_carries_all_four_terms(tmp_path: Path):
+    db = _seeded_db(tmp_path)
+    store = fqr.load_store(db, run_id="r1", label="shadow")
+    report = fqr.build_report(store, min_obs=1)
+    candidates, _ = fqr.propose_gate(report)
+    assert candidates, "every OK bucket gets a break-even row"
+    row = candidates[0]
+    for term in ("legs_rejected", "merges_lost_n", "merges_lost_pnl",
+                 "dead_avoided_n", "dead_avoided_pnl", "net_pnl_delta"):
+        assert hasattr(row, term), term
+    # Blocking the unknown-edge bucket removes f2's loss and f3's rescue:
+    # net = -(attr_f2 + attr_f3) = -(-2.924 + -0.20).
+    unknown = [c for c in candidates
+               if c.dimension == "edge" and c.bucket == "unknown"]
+    assert unknown
+    assert abs(unknown[0].net_pnl_delta - 3.124) < 1e-9
+
+
+def test_no_bucket_clears_means_redirect(tmp_path: Path):
+    db = _seeded_db(tmp_path)  # fixture max lift is ~2x, far from 8.9x
+    store = fqr.load_store(db, run_id="r1", label="shadow")
+    report = fqr.build_report(store, min_obs=1)
+    _, verdict = fqr.propose_gate(report)
+    assert "redirect" in verdict
+
+
+def test_clearing_bucket_ships(tmp_path: Path):
+    rows = _synthetic_rows(90, 10)  # base 0.10; toxic bucket 1.0 -> lift 10x
+    store = fqr.StoreLoad(label="t", path="t", run_id=None, status=fqr.OK,
+                          detail="", cohort=None)
+    buckets = fqr._calibrate(rows, 10 / 100, 1)
+    report = fqr.QualityReport(store=store, min_obs=1, fills=rows,
+                               buckets=buckets,
+                               summary={"base_death_rate": 10 / 100})
+    candidates, verdict = fqr.propose_gate(report)
+    shipped = [c for c in candidates if c.clears]
+    assert shipped, f"a 10x-lift bucket must ship; verdict={verdict!r}"
+    assert "redirect" not in verdict

@@ -173,6 +173,13 @@ class MakerConfig:
     bot_quote_spread_offset_max_age_sec: float = 900.0
     bot_quote_telemetry_range_cents: float | None = None
     bot_quote_telemetry_velocity_measured_at: float | None = None
+    # Fill-quality entry gate (#761). Off by default: it cannot change live
+    # behavior until the operator flips it AND blocks a bucket that cleared
+    # the 8.9:1 break-even lift. Only the intent-visible edge dimension is
+    # enforceable at plan time; the other calibration dimensions are
+    # diagnostic until their features ride on the intent.
+    bot_entry_fill_quality_gate_on: bool = False
+    bot_entry_fill_quality_blocked_edge: tuple[str, ...] = ()
     bot_risk_exposure_max_naked_pct: float = 0.06
     bot_risk_exposure_max_order_pct: float = 0.25
     bot_risk_exposure_bankroll_ceiling_pct: float = 0.90
@@ -373,6 +380,16 @@ class MakerConfig:
         qcg = _env("BOT_ORDER_GATE_QUEUE_CLEAR_ON")
         if qcg:
             kw["bot_order_gate_queue_clear_on"] = qcg.strip().lower() not in ("0", "false", "off")
+
+        fqg = _env("BOT_ENTRY_FILL_QUALITY_GATE_ON")
+        if fqg:
+            kw["bot_entry_fill_quality_gate_on"] = fqg.strip().lower() not in ("0", "false", "off", "no")
+
+        fbe = _env("BOT_ENTRY_FILL_QUALITY_BLOCKED_EDGE")
+        if fbe:
+            kw["bot_entry_fill_quality_blocked_edge"] = tuple(
+                part.strip() for part in fbe.split(",") if part.strip()
+            )
 
         qcm = _env("BOT_ORDER_QUEUE_MAX_CLEAR_MIN")
         if qcm:

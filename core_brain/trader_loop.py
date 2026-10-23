@@ -258,6 +258,29 @@ def plan_orders(
     with no recorded reason cannot be tuned -- see #131.
     """
     tolerance = max(float(price_eps), float(dead_band))
+    # Fill-quality entry gate (#761). Off by default and empty by default,
+    # so this is a no-op until the operator flips the switch AND blocks a
+    # bucket that cleared the 8.9:1 lift. Only the intent-visible edge
+    # dimension is enforceable here; other calibration dimensions stay
+    # diagnostic until their features ride on the intent.
+    _fq_on = bool(getattr(cfg, "bot_entry_fill_quality_gate_on", False))
+    _fq_blocked = tuple(getattr(cfg, "bot_entry_fill_quality_blocked_edge", None) or ())
+    if _fq_on and _fq_blocked:
+        from core_brain.fill_quality_report import (
+            edge_bucket_for, evaluate_fill,
+        )
+        _fq_set = frozenset(("edge", b) for b in _fq_blocked)
+        _fq_kept: list[QuoteIntent] = []
+        for _intent in intents:
+            _allow, _why = evaluate_fill(
+                {"edge": edge_bucket_for(getattr(_intent, "edge_vs_mid", None))},
+                _fq_set,
+            )
+            if _allow:
+                _fq_kept.append(_intent)
+            elif reasons is not None:
+                reasons[f"fill_quality_gate:{_intent.token_id}:{_intent.price}"] = _why
+        intents = _fq_kept
     preserve_ids = {str(value) for value in preserve_order_ids or ()}
     replace_ids = {str(value) for value in replace_order_ids or ()}
     cancel_ids = {str(value) for value in cancel_order_ids or ()}

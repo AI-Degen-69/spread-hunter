@@ -269,6 +269,100 @@ def _calibrate(rows: tuple[FillRow, ...], base_rate: float | None,
     return tuple(summaries)
 
 
+def edge_bucket_for(value: float | None) -> str:
+    """Intent-visible edge dimension, shared by the report and the gate."""
+    return _bucketize(value, EDGE_EDGES, _EDGE_LABELS)
+
+
+def evaluate_fill(features: dict[str, str],
+                  blocked: set[tuple[str, str]] | frozenset | set[str]
+                  ) -> tuple[bool, str]:
+    """Pure entry decision: allow unless a feature sits in a blocked bucket.
+
+    `blocked` holds `(dimension, bucket)` pairs (or `"dim:bucket"` strings).
+    No I/O, no venue, no randomness -- the shadow A/B replays through this.
+    """
+    normalized: set[tuple[str, str]] = set()
+    for entry in blocked:
+        if isinstance(entry, str):
+            dim, _, bucket = entry.partition(":")
+            normalized.add((dim, bucket))
+        else:
+            normalized.add((str(entry[0]), str(entry[1])))
+    for dimension, bucket in features.items():
+        if (dimension, bucket) in normalized:
+            return (False, f"blocked:{dimension}:{bucket}")
+    return (True, "allowed")
+
+
+@dataclass(frozen=True)
+class GateCandidate:
+    """One break-even row: what blocking this bucket costs and saves."""
+
+    dimension: str
+    bucket: str
+    status: str
+    legs_rejected: int
+    pairs_rejected: int
+    merges_lost_n: int
+    merges_lost_pnl: float
+    dead_avoided_n: int
+    dead_avoided_pnl: float
+    net_pnl_delta: float
+    lift: float | None
+    clears: bool
+
+    def to_dict(self) -> dict:
+        return {k: getattr(self, k) for k in (
+            "dimension", "bucket", "status", "legs_rejected",
+            "pairs_rejected", "merges_lost_n", "merges_lost_pnl",
+            "dead_avoided_n", "dead_avoided_pnl", "net_pnl_delta",
+            "lift", "clears",
+        )}
+
+
+def propose_gate(report: QualityReport) -> tuple[list[GateCandidate], str]:
+    """One break-even row per OK bucket, plus the ship/no-ship verdict.
+
+    `net_pnl_delta` is minus the blocked fills' attributed PnL: blocking a
+    profitable fill forgoes profit, blocking a dead fill avoids its loss.
+    A threshold ships only where lift clears BREAK_EVEN_LIFT *and* the net
+    is positive; otherwise the verdict redirects per the §9 falsifier.
+    """
+    candidates: list[GateCandidate] = []
+    for bucket in report.buckets:
+        if bucket.status != "OK" or bucket.n_closed <= 0:
+            continue
+        members = [r for r in report.fills
+                   if _features(r).get(bucket.dimension) == bucket.bucket]
+        shut = [r for r in members if r.outcome != "open"]
+        dead = [r for r in shut if r.outcome == "dead_leg"]
+        kept = [r for r in shut if r.outcome != "dead_leg"]
+        foregone = sum(r.attr_pnl for r in kept)
+        avoided = -sum(r.attr_pnl for r in dead)
+        net = -(sum(r.attr_pnl for r in members))
+        lift = bucket.lift
+        candidates.append(GateCandidate(
+            dimension=bucket.dimension, bucket=bucket.bucket,
+            status=bucket.status, legs_rejected=len(members),
+            pairs_rejected=len({r.pair_key for r in members}),
+            merges_lost_n=len(kept), merges_lost_pnl=foregone,
+            dead_avoided_n=len(dead), dead_avoided_pnl=avoided,
+            net_pnl_delta=net, lift=lift,
+            clears=(lift is not None and lift >= BREAK_EVEN_LIFT and net > 0),
+        ))
+    candidates.sort(key=lambda c: c.net_pnl_delta, reverse=True)
+    shipped = [c for c in candidates if c.clears]
+    if shipped:
+        verdict = (f"{len(shipped)} threshold(s) clear {BREAK_EVEN_LIFT}:1 "
+                   f"with net>0 -- shippable; the rest stay out.")
+    else:
+        verdict = (f"no bucket clears {BREAK_EVEN_LIFT}:1 with net>0 -- "
+                   "redirect search to sizing/market selection "
+                   "(entry-gate-job §9 falsifier). No gate ships.")
+    return candidates, verdict
+
+
 def _read_table(conn: sqlite3.Connection, table: str,
                 run_id: str | None, has_run: bool) -> list[dict]:
     query = f"SELECT * FROM {table}"
@@ -587,6 +681,32 @@ def render_text(report: QualityReport) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_gate(report: QualityReport,
+                candidates: list[GateCandidate], verdict: str) -> str:
+    merged = [r.attr_pnl for r in report.fills if r.outcome == "merged"]
+    dead = [r.attr_pnl for r in report.fills if r.outcome == "dead_leg"]
+    merged_avg = sum(merged) / len(merged) if merged else None
+    dead_avg = -sum(dead) / len(dead) if dead else None
+    lines = ["  break-even table (one row per candidate threshold):"]
+    if merged_avg is not None and dead_avg:
+        lines.append(
+            f"  per-fill economics: merged avg +${merged_avg:.3f} "
+            f"(n={len(merged)}), dead avg -${dead_avg:.3f} (n={len(dead)}), "
+            f"implied {dead_avg / merged_avg:.1f}:1 "
+            f"(reference {BREAK_EVEN_LIFT}:1 per close, §4)")
+    for c in candidates:
+        lift = "n/a" if c.lift is None else f"{c.lift:.1f}x"
+        mark = "SHIPS" if c.clears else "no-ship"
+        lines.append(
+            f"  {c.dimension:<6} {c.bucket:<10} rejected={c.legs_rejected} "
+            f"fills/{c.pairs_rejected} pairs "
+            f"merges_lost={c.merges_lost_n} ({c.merges_lost_pnl:+.2f}) "
+            f"dead_avoided={c.dead_avoided_n} ({c.dead_avoided_pnl:+.2f}) "
+            f"net={c.net_pnl_delta:+.2f} lift={lift} {mark}")
+    lines.append(f"  verdict: {verdict}")
+    return "\n".join(lines) + "\n"
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m core_brain.fill_quality_report",
@@ -603,6 +723,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help=f"observations required before a bucket is a finding"
                              f" (default {DEFAULT_MIN_OBS})")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    parser.add_argument("--propose-gate", action="store_true",
+                        help="print the break-even table and ship/no-ship verdict")
     return parser
 
 
@@ -615,11 +737,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     store = load_store(args.shadow_db, run_id=args.run_id)
     report = build_report(store, min_obs=args.min_obs)
+    gate_text = ""
+    gate_payload: dict | None = None
+    if args.propose_gate:
+        candidates, verdict = propose_gate(report)
+        gate_text = render_gate(report, candidates, verdict)
+        gate_payload = {"candidates": [c.to_dict() for c in candidates],
+                        "verdict": verdict}
 
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2, allow_nan=False))
+        payload = report.to_dict()
+        if gate_payload is not None:
+            payload["gate"] = gate_payload
+        print(json.dumps(payload, indent=2, allow_nan=False))
     else:
-        print(render_text(report))
+        print(render_text(report) + gate_text, end="")
     return 0 if store.status == OK else 1
 
 
