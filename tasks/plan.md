@@ -147,8 +147,8 @@ occurrences. No code changed.
 ## How to verify (hands-on, no pytest / gh / git steps)
 
 1. From the repo root, run `python scripts/build_demo_db.py` only if
-   `data\demo_orders.db` is missing (never touch `data\orders.db`); then run
-   `python -m dashboard.server --db data\demo_orders.db --host 127.0.0.1 --port 8799`.
+   `data/demo_orders.db` is missing (never touch `data\orders.db`); then run
+   `python -m dashboard.server --db data/demo_orders.db --host 127.0.0.1 --port 8799`.
 2. Open `http://127.0.0.1:8799`, confirm the store is `demo_orders.db`, open
    **Performance & Analytics** (do not press START).
 3. In Statistical Decision Gates: the "Strategy Pricing Band" row is gone and no
