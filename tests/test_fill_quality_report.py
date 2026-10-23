@@ -107,6 +107,22 @@ def test_missing_path_is_no_data(tmp_path: Path):
     assert store.status == fqr.NO_DATA
 
 
+def test_connect_failure_is_unreadable_not_a_crash(tmp_path, monkeypatch):
+    db = tmp_path / "locked.db"
+    db.write_bytes(b"not a database")
+    real_connect = fqr.sqlite3.connect
+
+    def _boom(*args, **kwargs):
+        raise fqr.sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(fqr.sqlite3, "connect", _boom)
+    try:
+        store = fqr.load_store(db, run_id=None, label="shadow")
+    finally:
+        monkeypatch.setattr(fqr.sqlite3, "connect", real_connect)
+    assert store.status == fqr.UNREADABLE
+
+
 # --- Task 2: fill -> book -> lifecycle join ---------------------------------
 
 FILL_MS = 1_791_000_000_000

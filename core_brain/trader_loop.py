@@ -271,7 +271,7 @@ def plan_orders(
         )
         _fq_set = frozenset(("edge", b) for b in _fq_blocked)
         _fq_kept: list[QuoteIntent] = []
-        for _intent in intents:
+        for _idx, _intent in enumerate(intents):
             _allow, _why = evaluate_fill(
                 {"edge": edge_bucket_for(getattr(_intent, "edge_vs_mid", None))},
                 _fq_set,
@@ -279,7 +279,7 @@ def plan_orders(
             if _allow:
                 _fq_kept.append(_intent)
             elif reasons is not None:
-                reasons[f"fill_quality_gate:{_intent.token_id}:{_intent.price}"] = _why
+                reasons[f"fill_quality_gate:{_idx}:{_intent.token_id}:{_intent.price}"] = _why
         intents = _fq_kept
     preserve_ids = {str(value) for value in preserve_order_ids or ()}
     replace_ids = {str(value) for value in replace_order_ids or ()}

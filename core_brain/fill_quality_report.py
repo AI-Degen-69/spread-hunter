@@ -246,7 +246,6 @@ def _features(row: FillRow) -> dict[str, str]:
 
 def _calibrate(rows: tuple[FillRow, ...], base_rate: float | None,
                min_obs: int) -> tuple[BucketSummary, ...]:
-    closed = [r for r in rows if r.outcome != "open"]
     groups: dict[tuple[str, str], list[FillRow]] = {}
     for row in rows:
         for dimension, bucket in _features(row).items():
@@ -461,6 +460,7 @@ def load_store(
     # created it, read-write, because the `?mode=ro` then belonged to the
     # truncated path. `?` cannot exist in a Windows filename; `#` can.
     uri = f"{resolved.resolve().as_uri()}?mode=ro"
+    conn: sqlite3.Connection | None = None
     try:
         conn = sqlite3.connect(uri, uri=True, timeout=5.0)
     except sqlite3.Error as exc:
@@ -508,7 +508,8 @@ def load_store(
             status=UNREADABLE, detail=f"{exc}; nothing was repaired",
         )
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
     return StoreLoad(
         label=label, path=str(resolved), run_id=run_id,
         status=OK, detail=f"{len(cohort.fills)} fills read",
