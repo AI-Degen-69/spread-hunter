@@ -1563,6 +1563,80 @@ class OrderRegistry:
         return [(self._row_to_order(r), float(r["_matched"]),
                  float(r["_notional"])) for r in rows]
 
+    def get_pair_orders_with_rescue_totals(
+            self, pair_id: str) -> tuple[list[tuple], dict[tuple, dict]]:
+        """One pair's fill rows plus its own rescue-close totals (#795).
+
+        Same fill rows as `get_pair_orders_with_fill_totals`, plus a
+        per-(condition_id, token_id) map of rescued `shares` and `cost`.
+        The rescue predicates copy the `rescue_net` CTE inside
+        `registry_naked_usd` (same time scope, same methods, same
+        exactly-one-side rule, same latest-quote side mapping), restricted
+        to this pair — the two rules must stay in step. Both statements
+        run in one `_conn()` block with no per-order reads.
+        """
+        rescue_placeholders = ",".join("?" for _ in RESCUE_METHODS)
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT o.*, COALESCE(SUM(f.size), 0.0) AS _matched,
+                       COALESCE(SUM(f.size * f.price), 0.0) AS _notional
+                FROM orders o LEFT JOIN fills f ON f.order_uuid = o.id
+                WHERE o.pair_id = ?
+                GROUP BY o.id
+                ORDER BY o.posted_ts ASC
+                """,
+                (pair_id,),
+            ).fetchall()
+            rescued_rows = conn.execute(
+                f"""
+                WITH pair_min AS (
+                    SELECT pair_id, condition_id, MIN(posted_ts) AS min_posted
+                    FROM orders
+                    WHERE pair_id = ?
+                    GROUP BY pair_id, condition_id
+                ),
+                token_side AS (
+                    SELECT condition_id, token_id, side FROM (
+                        SELECT condition_id, token_id, UPPER(side) AS side,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY condition_id, token_id
+                                   ORDER BY ts DESC
+                               ) AS rn
+                        FROM quotes
+                        WHERE UPPER(side) IN ('UP', 'DOWN')
+                    ) WHERE rn = 1
+                ),
+                rescue_net AS (
+                    SELECT pm.condition_id, ts.token_id,
+                           COALESCE(SUM(c.shares), 0.0) AS r_shares,
+                           COALESCE(SUM(COALESCE(c.up_cost_removed, 0.0)
+                                        + COALESCE(c.dn_cost_removed, 0.0)),
+                                    0.0) AS r_cost
+                    FROM pair_min pm
+                    JOIN closes c
+                      ON c.condition_id = pm.condition_id
+                     AND c.ts >= pm.min_posted / 1000.0
+                     AND c.method IN ({rescue_placeholders})
+                     AND ((c.up_price IS NOT NULL AND c.dn_price IS NULL)
+                          OR (c.up_price IS NULL AND c.dn_price IS NOT NULL))
+                    JOIN token_side ts
+                      ON ts.condition_id = pm.condition_id
+                     AND ((c.up_price IS NOT NULL AND ts.side = 'UP')
+                          OR (c.up_price IS NULL AND ts.side = 'DOWN'))
+                    GROUP BY pm.condition_id, ts.token_id
+                )
+                SELECT condition_id, token_id, r_shares, r_cost
+                FROM rescue_net
+                """,
+                (pair_id, *tuple(RESCUE_METHODS)),
+            ).fetchall()
+        rescued = {(r["condition_id"], r["token_id"]):
+                   {"shares": float(r["r_shares"]),
+                    "cost": float(r["r_cost"])} for r in rescued_rows}
+        return ([(self._row_to_order(r), float(r["_matched"]),
+                  float(r["_notional"])) for r in rows], rescued)
+
     def get_active_orders(self) -> list[OrderRecord]:
         """Return all orders in pending, open, or partial status."""
         with self._conn() as conn:

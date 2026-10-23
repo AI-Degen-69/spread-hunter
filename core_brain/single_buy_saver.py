@@ -41,7 +41,6 @@ import urllib.request
 from contextlib import contextmanager
 from typing import Optional
 
-from core_brain.close_methods import RESCUE_METHODS
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
 
 log = logging.getLogger("single_buy_saver")
@@ -643,10 +642,26 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
     Sizes come from the fills, never from the intended size: an order that
     filled 4 of 10 is a 4-share position, and sizing an exit off 10 would sell
     shares that do not exist.
+
+    Fills are netted against the pair's own already-booked rescue closes
+    (#795): a pair that sold all 10 reads zero naked, so the stop path never
+    fires for it again. The rescue totals copy the `rescue_net` rule in
+    `registry_naked_usd` — same scope, restricted to this pair. Tokens with
+    no quote-side mapping net nothing (fail closed; #793 owns that gap).
     """
-    rows = registry.get_pair_orders_with_fill_totals(pair_id)
+    rows, rescued = registry.get_pair_orders_with_rescue_totals(pair_id)
     if not rows:
         raise PairExitRefused(f"No orders carry pair_id={pair_id!r}.")
+
+    pair_conditions = {o.condition_id for o, _, _ in rows}
+    rescued_by_token: dict[str, dict] = {}
+    for (condition_id, token_id), totals in rescued.items():
+        if condition_id not in pair_conditions:
+            continue
+        slot = rescued_by_token.setdefault(
+            token_id, {"shares": 0.0, "cost": 0.0})
+        slot["shares"] += totals["shares"]
+        slot["cost"] += totals["cost"]
 
     by_token: dict[str, dict] = {}
     for o, matched, notional in rows:
@@ -657,6 +672,17 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
         slot["matched"] += matched
         slot["notional"] += notional
         slot["orders"].append(o)
+
+    for token_id, slot in by_token.items():
+        net = rescued_by_token.get(token_id)
+        if net is None:
+            continue
+        slot["matched"] = max(0.0, slot["matched"] - net["shares"])
+        slot["notional"] = max(0.0, slot["notional"] - net["cost"])
+        if slot["matched"] <= SIZE_EPS:
+            # Cost with no shares has no meaning; without this a fully
+            # exited leg keeps a stale average that prices the next sale.
+            slot["notional"] = 0.0
 
     if len(by_token) > 2:
         # A pair is two tokens. Silently reducing three to the largest two would
@@ -692,63 +718,6 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
     }
 
 
-def _prior_exit_shares(registry, condition_id: str, token_id: str,
-                       pair_id: Optional[str] = None) -> float:
-    """Shares this token already gave up to single-leg exits on its condition.
-
-    Netting input for the refill-after-exit trap (#326): `load_pair` sizes
-    off fills only, so a refill under the same pair_id re-counts shares an
-    earlier exit already sold. Only `single_buy_exit`/`naked_exit` closes
-    count -- merges and settlements leave through other paths and must not
-    discount an exit. Fail-closed 0.0 when the token's side is unresolvable:
-    unattributed volume neither shrinks nor grows a later sale.
-
-    Pair-scoped (#763): when `pair_id` is given, a close counts only if this
-    pair already existed when it happened (`close.ts >= the pair's earliest
-    order posted_ts`). A close booked before the pair opened belongs to a
-    prior pair on a re-entered market and must never explain this pair's gap
-    or shrink its sale. `None` keeps the legacy whole-condition sum for
-    callers that carry no pair identity.
-
-    Known limit: two pairs live on one token at once share a single venue
-    number, so a close landing between their opens credits both. Refusing on
-    an unexplained gap stays the safe direction there; this scope fixes the
-    sequential re-entry the issue reports, not concurrent pairs.
-    """
-    if registry is None:
-        return 0.0
-    side = _token_side(registry, condition_id, token_id)
-    if side not in ("UP", "DOWN"):
-        return 0.0
-    min_posted_sec = 0.0
-    if pair_id is not None:
-        try:
-            posted = [o.posted_ts for o in registry.get_orders_by_pair(pair_id)
-                      if o.condition_id == condition_id and o.posted_ts]
-        except Exception:
-            return 0.0
-        if not posted:
-            return 0.0
-        min_posted_sec = min(posted) / 1000.0
-    total = 0.0
-    for up_price, shares, ts in registry.get_closes_for_condition(
-            condition_id, RESCUE_METHODS):
-        if pair_id is not None:
-            try:
-                ts_f = float(ts or 0.0)
-            except (TypeError, ValueError):
-                continue
-            if ts_f < min_posted_sec:
-                continue
-        sold_up = up_price is not None
-        if (sold_up and side == "UP") or (not sold_up and side == "DOWN"):
-            try:
-                total += float(shares or 0.0)
-            except (TypeError, ValueError):
-                continue
-    return total
-
-
 def _unexplained_divergence(believed: float, observed: float,
                             prior_exited: float) -> float:
     """Divergence no recorded exit accounts for -- the only part that refuses.
@@ -770,10 +739,9 @@ def _check_positions(pair: dict, venue_positions: Optional[dict[str, float]],
     view -- a caller decision, surfaced in the result as positions_checked=False
     rather than silently passing as agreement.
 
-    A gap fully explained by prior single-leg exits on the pair's condition
-    (#326) does not refuse: the exit sizing below nets exactly that explained
-    part, so the sale still cannot exceed what the venue agrees is held. Any
-    unexplained remainder refuses exactly as before.
+    The pair view is already netted against the pair's own rescue closes
+    (#795), so `believed` is remaining shares: any gap to the venue is
+    unexplained by construction and refuses exactly as before.
     """
     if venue_positions is None:
         return False
@@ -796,15 +764,10 @@ def _check_positions(pair: dict, venue_positions: Optional[dict[str, float]],
     # of a position may already have been merged. Refusing on it would block the
     # one action that closes exposure, over a discrepancy that cannot cause the
     # harm the gate exists to prevent.
-    # Attribution scans the closes/quotes tables, so it runs only when a raw
-    # gap exists to explain: with no gap the unexplained part is 0 whatever
-    # prior says, and the result would be unused.
-    gap = believed - observed
-    prior = 0.0
-    if gap > POSITION_DIVERGENCE_TOLERANCE and registry is not None:
-        prior = _prior_exit_shares(registry, pair["condition_id"], token,
-                                   pair.get("pair_id"))
-    if _unexplained_divergence(believed, observed, prior) \
+    # The inventory is netted at the source (#795), so there is no prior
+    # credit left to consult: a second subtraction here would hide a real
+    # shortfall. The backstop stays exact on the netted numbers.
+    if _unexplained_divergence(believed, observed, 0.0) \
             > POSITION_DIVERGENCE_TOLERANCE:
         raise PairExitRefused(
             f"Registry and venue diverge on {token}: registry holds "
@@ -928,7 +891,10 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
     matched = float(leg.get("matched") or 0.0)
     notional = float(leg.get("notional") or 0.0)
     heavy_avg = (notional / matched) if matched > 0 else 0.0
-    cost_basis = size * heavy_avg
+    # One close never removes more cost than the sold shares cost (#795):
+    # the average prices the sold shares, and the remaining notional caps
+    # the removal. Callers must pass the netted `after` view.
+    cost_basis = min(size * heavy_avg, notional)
     proceeds = size * sell_price
     realized = proceeds - cost_basis
     if heavy_side == "UP":
@@ -1135,17 +1101,9 @@ def exit_single_buy(
             f"registry reflects the fill, or close {light_token} deliberately."
         )
 
-    # Refill-after-exit (#326): size off what the venue still agrees is
-    # held. Prior single-leg exits on this condition explain their share of
-    # any gap; only the explained part is netted, so the cap solely shrinks
-    # the sale toward venue agreement and can never grow one past it.
-    if venue_positions is not None and heavy_token in venue_positions:
-        prior = _prior_exit_shares(registry, after["condition_id"],
-                                   heavy_token, after.get("pair_id"))
-        gap = naked - float(venue_positions[heavy_token])
-        if gap > 0:
-            naked = max(naked - min(gap, max(prior, 0.0)), 0.0)
-
+    # The re-read view is already netted against this pair's own closes
+    # (#795): subtracting a prior credit here again would count the same
+    # close twice and hide a real shortfall. `naked` is remaining shares.
     if naked <= SIZE_EPS:
         return {
             "action": "route_to_merge",
