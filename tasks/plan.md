@@ -109,7 +109,7 @@ Checkpoint C1 after T1: harness `render` on live + empty payloads shows no
 in gates context. Checkpoint C2 after T2+T3: focused suite green, hands-on check
 done → ready for `iii-build-plan auto` handoff (build station executes T1–T3).
 
-### T1 — [Frontend/Logic] Remove the gate row and its verdict logic (S)
+### T1 — [Frontend/Logic] Remove the gate row and its verdict logic (S) [x]
 
 - Files: `dashboard/static/index.html` (delete the `<tr>` at ~643),
   `dashboard/static/analysis_v2.js` (delete the `band:` entry in `gateVerdicts`

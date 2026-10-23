@@ -1,6 +1,6 @@
 # Todo — Issue #781 (Station II planned, build runs via `iii-build-plan auto`)
 
-- [ ] T1 — Remove the "Strategy Pricing Band" `<tr>` (`index.html`) + `band` verdict
+- [x] T1 — Remove the "Strategy Pricing Band" `<tr>` (`index.html`) + `band` verdict
   and `_gateBand` (`analysis_v2.js`); C1 harness/grep check
 - [ ] T2 — Update `tests/test_analysis_v2_binding.py` to absence assertions;
   focused suite green, fail-without-change confirmed
