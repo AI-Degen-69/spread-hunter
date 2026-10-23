@@ -923,3 +923,99 @@ def test_stray_prefetch_uses_decision_book_fn_when_wired(tmp_path):
                     decision_book_fn=decision_book_fn)
     assert "tok-live3" in via_decision
     assert via_client == []
+
+
+def _make_hopeless_setup(tmp_path, venue_get_order):
+    """Helper for #766: single hopeless UP order, no registry fills."""
+    from core_brain.order_registry import OrderRegistry, QuoteRecord
+    import time as _time
+    db_path = tmp_path / "orders.db"
+    reg = OrderRegistry(db_path=db_path)
+    now_s = _time.time()
+    cond = "0xcond_766"
+    tok_up = "tok_766_up"
+    tok_dn = "tok_766_dn"
+    o = make_order("o766", cond, tok_up, 0.78, order_id="v-o766", pair_id=None)
+    reg.create_order(o)
+    reg.log_quote(QuoteRecord(
+        ts=now_s, condition_id=cond, token_id=tok_up, side="UP",
+        price=0.78, size=100.0, local_id="o766",
+    ))
+    reg.log_quote(QuoteRecord(
+        ts=now_s, condition_id=cond, token_id=tok_dn, side="DOWN",
+        price=0.25, size=100.0,
+    ))
+
+    class _Client:
+        def __init__(self):
+            self.cancelled_ids = []
+
+        def get_order_book(self, token_id):
+            if token_id == tok_dn:
+                return {"asks": [{"price": "0.25", "size": "100.0"}], "bids": []}
+            return {"bids": [], "asks": []}
+
+        def cancel_order(self, payload_or_id):
+            target = getattr(payload_or_id, "orderID", None) or payload_or_id
+            self.cancelled_ids.append(str(target))
+            return {"success": True, "canceled": [str(target)]}
+
+        def get_order(self, order_id):
+            return venue_get_order(order_id)
+
+        def create_and_post_market_order(self, payload, options=None,
+                                         order_type=None, defer_exec=False):
+            return {"status": "matched", "takingAmount": "0.0", "size": "0.0"}
+
+    return reg, _Client(), cond
+
+
+def test_766_venue_matched_routes_to_unhedged(tmp_path):
+    """#766(a): live cancel + venue size_matched>0 -> in unhedged_positions."""
+    from core_brain.stray_guard import run_stray_guard
+    reg, client, _ = _make_hopeless_setup(
+        tmp_path, lambda oid: {"id": oid, "status": "cancelled", "size_matched": 5.0})
+    res = run_stray_guard(client, reg, live=True)
+    assert len(res["cancelled_orders"]) == 1
+    act = res["cancelled_orders"][0]
+    assert act["action"] == "cancelled"
+    assert act.get("venue_verified") is True
+    assert float(act.get("venue_matched") or 0) == 5.0
+    ids = {o.id for o in res["unhedged_positions"]}
+    assert "o766" in ids
+    # Safe pending: flagged unhedged, but no sale on a registry-unknown size
+    # (reconcile owns the exit next cycle).
+    assert all(r.get("action") != "exited" for r in res["remediated_positions"])
+
+
+def test_766_venue_read_failure_is_unverified(tmp_path):
+    """#766(b): venue read raises -> treated unverified/remediated."""
+    from core_brain.stray_guard import run_stray_guard
+    def _boom(oid):
+        raise RuntimeError("venue down")
+    reg, client, _ = _make_hopeless_setup(tmp_path, _boom)
+    res = run_stray_guard(client, reg, live=True)
+    assert len(res["cancelled_orders"]) == 1
+    act = res["cancelled_orders"][0]
+    assert act["action"] == "cancelled"
+    assert act.get("venue_verified") is False
+    assert act.get("venue_matched") is None
+    ids = {o.id for o in res["unhedged_positions"]}
+    assert "o766" in ids
+    # Unverified never sells on unknown size.
+    assert all(r.get("action") != "exited" for r in res["remediated_positions"])
+
+
+def test_766_venue_zero_reports_no_remediation(tmp_path):
+    """#766(c): venue reports 0 -> no remediation, no false positive."""
+    from core_brain.stray_guard import run_stray_guard
+    reg, client, _ = _make_hopeless_setup(
+        tmp_path, lambda oid: {"id": oid, "status": "cancelled", "size_matched": 0.0})
+    res = run_stray_guard(client, reg, live=True)
+    assert len(res["cancelled_orders"]) == 1
+    act = res["cancelled_orders"][0]
+    assert act.get("venue_verified") is True
+    assert float(act.get("venue_matched") or 0) == 0.0
+    ids = {o.id for o in res["unhedged_positions"]}
+    assert "o766" not in ids
+    assert res["remediated_positions"] == []

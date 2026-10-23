@@ -291,6 +291,29 @@ def cancel_hopeless_orders(
                 continue
 
         if cancel_success:
+            # #766: re-read venue state after the cancel. A fill that landed
+            # in the race window before the cancel arrived is invisible in
+            # local `fills` until the next reconcile -- without this read the
+            # caller trusts stale registry state and leaves a venue position
+            # unhedged. Fail-closed: an unreadable venue state is unverified
+            # (remediate), never zero.
+            venue_matched: float | None = None
+            venue_verified = False
+            # Rows without a venue order id have nothing to re-read:
+            # `_venue_matched` skips them and returns 0.0, which must not
+            # be marked verified.
+            if live and o.order_id:
+                try:
+                    from core_brain.single_buy_saver import _venue_matched
+                    venue_matched = float(_venue_matched(client, [o]))
+                    venue_verified = True
+                except Exception as exc:
+                    log.warning(
+                        "Venue re-read failed for cancelled hopeless order %s: %s",
+                        target_venue_id, exc,
+                    )
+                    venue_matched = None
+                    venue_verified = False
             registry.update_order_status(
                 o.id,
                 status="cancelled",
@@ -309,6 +332,8 @@ def cancel_hopeless_orders(
                 "order_id": target_venue_id,
                 "local_id": o.id,
                 "reason": hs.reason,
+                "venue_matched": venue_matched,
+                "venue_verified": venue_verified,
             })
 
     return actions
@@ -558,12 +583,26 @@ def run_stray_guard(
         o.id: o for o in unpaired_filled
         if o.id not in adopted_order_ids
     }
+    venue_by_local: dict[str, tuple[float | None, bool]] = {}
+    for _act in cancelled_orders:
+        if _act.get("action") == "cancelled" and _act.get("local_id"):
+            venue_by_local[_act["local_id"]] = (
+                _act.get("venue_matched"), bool(_act.get("venue_verified")),
+            )
     for hs in classification.hopeless_strays:
         if hs.order.id not in adopted_order_ids:
             try:
                 matched = registry.get_size_matched(hs.order.id)
             except Exception:
                 matched = 0.0
+            if matched > 1e-6:
+                pass
+            elif live and hs.order.id in venue_by_local:
+                _venue_matched_size, _venue_verified = venue_by_local[hs.order.id]
+                if not _venue_verified:
+                    matched = float("inf")
+                elif (_venue_matched_size or 0.0) > 1e-6:
+                    matched = float(_venue_matched_size or 0.0)
             if matched > 1e-6 and hs.order.id not in remaining_strays_map:
                 remaining_strays_map[hs.order.id] = hs.order
 
