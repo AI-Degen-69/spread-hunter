@@ -63,14 +63,14 @@ def test_position_bucket_is_the_weakest_leg_and_negative_is_its_own_bucket():
     assert positions["p3"].bucket == efa.UNKNOWN
 
 
-def test_position_sums_leg_pnl_shares_and_pair_cost():
+def test_position_sums_leg_pnl_shares_and_prices_paid():
     fills = (
         _leg(pair="p1", tok="tU", edge=0.05, pnl=1.0, size=4.0, price=0.60),
         _leg(pair="p1", tok="tD", edge=0.05, pnl=-0.4, size=6.0, price=0.38),
     )
     (position,) = efa.position_rows(fills)
     assert (position.pnl, position.shares) == (0.6, 10.0)
-    assert round(position.implied_pair_cost, 2) == 0.98
+    assert round(position.paid_pair_price, 2) == 0.98
 
 
 def test_bucket_table_reports_win_rate_mean_median_total_and_insufficiency():
@@ -201,6 +201,17 @@ def test_confound_split_flags_a_band_that_reverses_the_direction():
     assert shares["shares"].holds is False
 
 
+def test_confound_split_is_inconclusive_when_a_band_is_too_thin_to_measure():
+    """A band with nothing in it is not a reversal, so it must not read 'fails'."""
+    fills = (_leg(pair="p1", edge=0.01, pnl=-1.0),
+             _leg(pair="p2", edge=0.05, pnl=2.0))
+    positions = efa.position_rows(fills)
+    shares = {s.name: s for s in efa.confound_splits(positions, {})}["shares"]
+    assert shares.groups[0].holds is True
+    assert shares.groups[1].holds is None
+    assert shares.holds is None
+
+
 def test_demo_store_run_exits_zero_and_leaves_the_file_untouched(tmp_path: Path):
     # A copy: opening a WAL store read-only still creates its -shm beside it,
     # and the suite must never write into the repo's real data/ directory.
@@ -210,7 +221,7 @@ def test_demo_store_run_exits_zero_and_leaves_the_file_untouched(tmp_path: Path)
     done = subprocess.run(
         [sys.executable, str(REPO_ROOT / "scripts" / "edge_floor_analysis.py"),
          "--db", str(demo), "--out", str(tmp_path / "out")],
-        capture_output=True, text=True, cwd=REPO_ROOT, timeout=300,
+        capture_output=True, text=True, cwd=REPO_ROOT, timeout=300, check=False,
     )
     assert done.returncode == 0, done.stderr
     assert efa.REHEARSAL in done.stdout
@@ -223,7 +234,9 @@ def test_missing_store_exits_one_without_writing_a_table(tmp_path: Path):
     done = subprocess.run(
         [sys.executable, str(REPO_ROOT / "scripts" / "edge_floor_analysis.py"),
          "--db", str(tmp_path / "absent.db"), "--out", str(tmp_path / "out")],
-        capture_output=True, text=True, cwd=REPO_ROOT, timeout=300,
+        capture_output=True, text=True, cwd=REPO_ROOT, timeout=300, check=False,
     )
     assert done.returncode == 1
     assert "NO_DATA" in done.stdout
+    # An empty table on disk would read like a finding of zero.
+    assert not (tmp_path / "out").exists()

@@ -59,6 +59,10 @@ read but never written; all analysis opens stores with `mode=ro`.
 - `closes` carries no pair, fill, or token identity, so a close is attributed to a
   position by `(run_id, condition_id)` and shared pro-rata by filled shares. That is
   **inferred, never exact**, and it is the main attribution limit here.
+- **Pair price paid** is the legs' fill prices summed — the per-share pair cost when the
+  legs are one-for-one. A stranded single-leg position contributes only its own leg's
+  price, so the cheap band also collects the naked entries; that is a limit of this
+  split, not a finding about cost.
 - Bookkeeping closes (`venue_sync`) are excluded; settlement, merge and rescue closes
   are kept. No bookkeeping close appeared in either tape.
 - A win is a closed position with PnL > 0; a still-open position is counted in the
@@ -155,12 +159,14 @@ floor decision has to price that in.
 
 Each band is split at the same edge cut (the median position edge), so the comparison
 is consistent across bands. "Holds" means the high-edge half earns more than the
-low-edge half *inside that band*.
+low-edge half *inside that band*; "inconclusive" means a band was too thin to measure.
+Pair price paid stands in for the issue's "spread" confound — what a pair costs to
+assemble is where the spread, the fee and the queue all land.
 
 | Split | shadow-01 | shadow-01-prudent |
 |---|---|---|
-| Position size (≤ 12 / > 12 shares) | **holds** (−1.28 vs −0.19; +0.11 vs +0.37) | **holds** (−1.60 vs −0.15; +0.23 vs +0.30) |
-| Implied pair cost (≤ 0.93 / > 0.93) | **holds** (−1.35 vs −0.07; −0.15 vs +0.17) | **fails** (+0.09 vs +0.01 in the > 0.93 band) |
+| Shares filled across both legs (≤ 12 / > 12) | **holds** (−1.28 vs −0.19; +0.11 vs +0.37) | **holds** (−1.60 vs −0.15; +0.23 vs +0.30) |
+| Pair price paid, legs summed (≤ 0.93 / > 0.93) | **holds** (−1.35 vs −0.07; −0.15 vs +0.17) | **fails** (+0.09 vs +0.01 in the > 0.93 band) |
 | Category | **fails** (Basketball n=2 and Tennis n=13 reverse; the rest hold) | **fails** (Counter-Strike 2 n=5 and Tennis n=21 reverse) |
 
 So the effect survives size on both tapes, survives pair cost on one, and does **not**

@@ -60,7 +60,7 @@ UNKNOWN = "unknown"
 REHEARSAL = "rehearsal / not evidence"
 
 #: The boundaries a floor can sit on, ascending.
-SWEEP_FLOORS = tuple(e for e in EDGE_EDGES[1:-1])
+SWEEP_FLOORS = EDGE_EDGES[1:-1]
 
 
 @dataclass(frozen=True)
@@ -73,13 +73,15 @@ class Position:
     bucket: str
     pnl: float
     shares: float
-    implied_pair_cost: float
+    # Sum of the leg prices actually paid: the per-share pair cost when the
+    # legs are one-for-one, and only its own leg's price for a naked position.
+    paid_pair_price: float
     closed: bool
 
     def to_dict(self) -> dict:
         return {k: getattr(self, k) for k in (
             "pair_key", "condition_id", "edge", "bucket", "pnl", "shares",
-            "implied_pair_cost", "closed",
+            "paid_pair_price", "closed",
         )}
 
 
@@ -177,7 +179,7 @@ def position_rows(fills: Sequence[FillRow]) -> tuple[Position, ...]:
             bucket=_bucket(edge),
             pnl=sum(r.attr_pnl for r in group),
             shares=sum(r.size for r in group),
-            implied_pair_cost=sum(r.price for r in group),
+            paid_pair_price=sum(r.price for r in group),
             closed=group[0].outcome != "open",
         ))
     return tuple(positions)
@@ -292,10 +294,13 @@ def _split(name: str, parts: Sequence[tuple[str, Sequence[Position]]],
            edge_cut: float | None) -> Split:
     groups = tuple(_split_group(label, members, edge_cut)
                    for label, members in parts)
-    measured = [g.holds for g in groups if g.holds is not None]
-    # True only when every band was measurable and held: a band too thin to
-    # measure cannot vouch for the effect.
-    holds = (all(measured) and len(measured) == len(groups)) if measured else None
+    verdicts = [g.holds for g in groups]
+    if any(v is False for v in verdicts):
+        holds: bool | None = False       # a band reversed: the effect is not safe
+    elif any(v is None for v in verdicts):
+        holds = None                     # a band too thin to vouch either way
+    else:
+        holds = True
     return Split(name=name, groups=groups, holds=holds)
 
 
@@ -309,7 +314,7 @@ def confound_splits(
     splits: list[Split] = []
 
     for name, key in (("shares", lambda p: p.shares),
-                      ("pair_cost", lambda p: p.implied_pair_cost)):
+                      ("pair_cost", lambda p: p.paid_pair_price)):
         cut = statistics.median([key(p) for p in positions]) if positions else 0.0
         splits.append(_split(name, (
             (f"<= {cut:.2f}", [p for p in positions if key(p) <= cut]),
@@ -366,6 +371,7 @@ def _load(path: Path | str, run_id: str | None,
 
 def analyze(path: Path | str, run_id: str | None = None,
             min_obs: int = DEFAULT_MIN_OBS) -> dict:
+    """The whole analysis as one JSON-safe dict; never writes to the store."""
     store, report = _load(path, run_id, min_obs)
     quotes = list(store.cohort.quotes) if store.cohort is not None else []
     # Older stores carry no run_id on quotes; filter only when the column is
@@ -406,12 +412,17 @@ def _money(value: float | None) -> str:
 
 
 def render_text(result: dict) -> str:
+    """The human-readable report, and the exact body of `edge_floor.md`."""
     lines = [
         "Edge floor analysis (#787): realized money by entry edge.",
-        f"  store: {result['store']['path']} "
-        f"({result['store']['status']}: {result['store']['detail']})",
-        f"  run: {result['store']['run_id'] or 'all runs'}  "
-        f"min_obs: {result['min_obs']}",
+        (
+            f"  store: {result['store']['path']} "
+            f"({result['store']['status']}: {result['store']['detail']})"
+        ),
+        (
+            f"  run: {result['store']['run_id'] or 'all runs'}  "
+            f"min_obs: {result['min_obs']}"
+        ),
     ]
     if result["rehearsal"]:
         lines.append(f"  {REHEARSAL}: this store is not the live registry.")
@@ -426,7 +437,7 @@ def render_text(result: dict) -> str:
         "  data quality: "
         + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in quality.items()))
     lines.append("  buckets (position = one pair, edge = weakest leg, "
-                 f"win = PnL > 0):")
+                 "win = PnL > 0):")
     for row in result["buckets"]:
         lo, hi = row["wilson_lo"], row["wilson_hi"]
         span = (f"[{100 * lo:.0f}-{100 * hi:.0f}]"
@@ -492,6 +503,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0 if result["store"]["status"] == OK else 1
+    if result["store"]["status"] != OK:
+        # A store that opened nothing gets a printed reason, not a report
+        # folder: an empty table on disk reads like a finding of zero.
+        sys.stdout.write(text)
+        return 1
     out = args.out or Path("reports") / (
         "edge_floor_" + time.strftime("%d-%m_%H-%M", time.gmtime()))
     out.mkdir(parents=True, exist_ok=True)
@@ -501,7 +517,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "```\n" + text + "```\n", encoding="utf-8")
     sys.stdout.write(text)
     sys.stdout.write(f"  wrote: {out / 'edge_floor.json'} and edge_floor.md\n")
-    return 0 if result["store"]["status"] == OK else 1
+    return 0
 
 
 if __name__ == "__main__":
