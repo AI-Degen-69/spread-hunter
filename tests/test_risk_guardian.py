@@ -5,7 +5,9 @@ from core_brain.quotes import Inventory
 
 def test_detect_unhedged_positions(monkeypatch):
     registry = MagicMock()
-    registry.get_all_quotes.return_value = [
+    registry.get_all_quotes.side_effect = AssertionError(
+        "hot path must not full-scan quotes")
+    registry.get_latest_tokens_by_condition_side.return_value = [
         {"condition_id": "0x123", "side": "UP", "token_id": "tok_up"},
         {"condition_id": "0x123", "side": "DOWN", "token_id": "tok_dn"},
     ]
@@ -28,7 +30,9 @@ def test_detect_unhedged_positions(monkeypatch):
 
 def test_detect_unhedged_positions_balanced(monkeypatch):
     registry = MagicMock()
-    registry.get_all_quotes.return_value = [
+    registry.get_all_quotes.side_effect = AssertionError(
+        "hot path must not full-scan quotes")
+    registry.get_latest_tokens_by_condition_side.return_value = [
         {"condition_id": "0x123", "side": "UP", "token_id": "tok_up"},
         {"condition_id": "0x123", "side": "DOWN", "token_id": "tok_dn"},
     ]
@@ -48,7 +52,9 @@ def test_detect_unhedged_positions_balanced(monkeypatch):
 
 def test_run_guardian_tick_invokes_saver_when_unhedged(monkeypatch):
     registry = MagicMock()
-    registry.get_all_quotes.return_value = [
+    registry.get_all_quotes.side_effect = AssertionError(
+        "hot path must not full-scan quotes")
+    registry.get_latest_tokens_by_condition_side.return_value = [
         {"condition_id": "0x123", "side": "UP", "token_id": "tok_up"},
         {"condition_id": "0x123", "side": "DOWN", "token_id": "tok_dn"},
     ]
@@ -251,7 +257,9 @@ def test_build_watches_stop_level_and_average_fill_shift(monkeypatch):
     from core_brain.single_leg_lifecycle import stop_trigger
 
     registry = MagicMock()
-    registry.get_all_quotes.return_value = [
+    registry.get_all_quotes.side_effect = AssertionError(
+        "hot path must not full-scan quotes")
+    registry.get_latest_tokens_by_condition_side.return_value = [
         {"condition_id": "0x123", "side": "UP", "token_id": "tok_up", "ts": 10.0},
         {"condition_id": "0x123", "side": "DOWN", "token_id": "tok_dn", "ts": 10.0},
     ]
@@ -292,7 +300,9 @@ def test_build_watches_exclusions_and_optional_hedge_watch(monkeypatch):
     from core_brain.risk_guardian import build_watches
 
     registry = MagicMock()
-    registry.get_all_quotes.return_value = [
+    registry.get_all_quotes.side_effect = AssertionError(
+        "hot path must not full-scan quotes")
+    registry.get_latest_tokens_by_condition_side.return_value = [
         {"condition_id": "0x123", "side": "UP", "token_id": "tok_up", "ts": 10.0},
         {"condition_id": "0x123", "side": "DOWN", "token_id": "tok_dn", "ts": 10.0},
     ]
@@ -350,7 +360,9 @@ def test_run_guardian_tick_publishes_empty_when_nothing_unhedged(monkeypatch):
     )
 
     registry = MagicMock()
-    registry.get_all_quotes.return_value = []
+    registry.get_all_quotes.side_effect = AssertionError(
+        "hot path must not full-scan quotes")
+    registry.get_latest_tokens_by_condition_side.return_value = []
     client = MagicMock()
 
     res = run_guardian_tick(client, registry, MagicMock(), trigger_board=board)
@@ -364,7 +376,9 @@ def test_run_guardian_tick_publishes_empty_when_nothing_unhedged(monkeypatch):
 
 def _unhedged_registry(monkeypatch, *, up=5.0, down=0.0):
     registry = MagicMock()
-    registry.get_all_quotes.return_value = [
+    registry.get_all_quotes.side_effect = AssertionError(
+        "hot path must not full-scan quotes")
+    registry.get_latest_tokens_by_condition_side.return_value = [
         {"condition_id": "0x123", "side": "UP", "token_id": "tok_up"},
         {"condition_id": "0x123", "side": "DOWN", "token_id": "tok_dn"},
     ]
