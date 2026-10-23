@@ -180,6 +180,7 @@ def test_fleet_state_float_marks_fallback():
     mock_reg.get_all_float_marks.return_value = [
         {"ts": 100.0, "unrealized_usd": -10.0, "committed_open_usd": 0.0, "naked_usd": 0.0}
     ]
+    mock_reg.get_all_closes.return_value = []
 
     # $100 bankroll - $10 unrealized = $90 portfolio value
     state = _fleet_state(mock_reg, cfg)
@@ -187,6 +188,32 @@ def test_fleet_state_float_marks_fallback():
     assert state["bot_risk_exposure_max_naked_usd"] == 5.40
     assert state["bot_risk_exposure_max_order_usd"] == 22.50
     assert state["bot_risk_exposure_max_total_usd"] == 81.00
+
+
+def test_fleet_state_uses_registry_run_id_over_process_run_id(monkeypatch):
+    """A shadow registry's own run id scopes both filters, not the process id (#768)."""
+    import core_brain.order_registry as order_registry_mod
+
+    cfg = MakerConfig(bot_quote_bank_baseline_usd=100.0)
+    mock_reg = MagicMock()
+    mock_reg.run_id = "run-A"                       # the registry owns its run id
+    monkeypatch.setattr(order_registry_mod, "_CURRENT_RUN_ID", "run-B")
+    mock_reg.get_latest_account_mark.return_value = None
+    mock_reg.get_all_float_marks.return_value = [
+        {"ts": 50.0, "unrealized_usd": -5.0, "committed_open_usd": 0.0,
+         "naked_usd": 0.0, "run_id": "run-B"},      # another run's stale mark
+        {"ts": 100.0, "unrealized_usd": -10.0, "committed_open_usd": 0.0,
+         "naked_usd": 0.0, "run_id": "run-A"},
+    ]
+    mock_reg.get_all_closes.return_value = [
+        {"ts": 50.0, "run_id": "run-A", "realized_pnl": 4.0},
+        {"ts": 60.0, "run_id": "run-B", "realized_pnl": 99.0},   # another run
+    ]
+
+    # run-A won: $100 + $4.00 realized - $10 unrealized = $94.00, not $194.
+    state = _fleet_state(mock_reg, cfg)
+    assert state["bot_quote_bank_baseline_usd"] == pytest.approx(94.0)
+    assert state["bot_risk_exposure_max_naked_usd"] == pytest.approx(5.64)  # 6% of $94
 
 
 def test_fleet_state_float_marks_fallback_includes_run_realized(monkeypatch):

@@ -2810,11 +2810,26 @@ def _fleet_state(registry, cfg, baseline_includes_realized: bool = False) -> dic
             except Exception:
                 pass
         if portfolio_usd is None and hasattr(registry, "get_all_float_marks"):
+            from core_brain.order_registry import get_run_id
+            # A shadow session carries its run id on the registry, never
+            # process-wide, so the store's own id is the run that wrote these
+            # rows; the live fleet's shared store falls back to the process id.
+            registry_rid = getattr(registry, "run_id", None)
+            active_rid = (registry_rid if isinstance(registry_rid, str) and registry_rid
+                          else get_run_id())
+            # The run's closed PnL is read unwrapped on purpose: a failed read
+            # must raise to `run` and keep the previous cycle's caps, never
+            # size them as if realized were 0.0.
+            realized_usd = 0.0
+            if (not baseline_includes_realized and active_rid
+                    and hasattr(registry, "get_all_closes")):
+                realized_usd = sum(
+                    float(c.get("realized_pnl") or 0.0)
+                    for c in registry.get_all_closes()
+                    if c.get("run_id") == active_rid)
             try:
                 fms = registry.get_all_float_marks()
                 if fms:
-                    from core_brain.order_registry import get_run_id
-                    active_rid = get_run_id()
                     run_fms = [fm for fm in fms if (not fm.get("run_id") or fm.get("run_id") == active_rid)] if active_rid else fms
                     # Fallback to most recent global mark when filtered set is empty
                     if not run_fms:
@@ -2823,19 +2838,6 @@ def _fleet_state(registry, cfg, baseline_includes_realized: bool = False) -> dic
                         latest = run_fms[-1]
                         unrealized = latest.get("unrealized_usd")
                         if unrealized is not None:
-                            realized_usd = 0.0
-                            if (not baseline_includes_realized and active_rid
-                                    and hasattr(registry, "get_all_closes")):
-                                try:
-                                    # Paper baseline is the run's starting
-                                    # bankroll; scope to this run's closes
-                                    # exactly as paired_shadow.py does.
-                                    realized_usd = sum(
-                                        float(c.get("realized_pnl") or 0.0)
-                                        for c in registry.get_all_closes()
-                                        if c.get("run_id") == active_rid)
-                                except Exception:
-                                    pass
                             val = (float(cfg.bot_quote_bank_baseline_usd)
                                    + realized_usd + float(unrealized))
                             if val > 0:
