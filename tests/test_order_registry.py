@@ -1837,3 +1837,47 @@ def test_committed_prior_sale_does_not_shrink_new_pair(registry: OrderRegistry):
     _n763_pair(registry, "pair-b", 2_000_000, up_fill=10.0)
     # A nets to 3.60; B commits 6.00 inventory + 4.00 resting DN
     assert registry_committed_usd(registry) == pytest.approx(3.60 + 6.0 + 4.0)
+
+
+def _q767_quote(registry: OrderRegistry, ts: float, cid: str, tok: str,
+                side: str) -> None:
+    registry.log_quote(QuoteRecord(
+        ts=ts, condition_id=cid, token_id=tok, side=side,
+        price=0.5, size=1.0))
+
+
+def test_latest_tokens_by_condition_side_pins_tiebreak(registry: OrderRegistry):
+    """#767: newest inserted row wins ties; A/B conflict keeps token A."""
+    _q767_quote(registry, 1.0, "cond-a", "tok-a", "UP")
+    _q767_quote(registry, 2.0, "cond-a", "tok-b", "UP")
+    _q767_quote(registry, 2.0, "cond-a", "tok-b2", "UP")  # tie: last wins
+    _q767_quote(registry, 3.0, "cond-a", "tok-c", "DOWN")
+    _q767_quote(registry, 1.0, "cond-b", "tok-d", "down")  # lower-case ok
+    _q767_quote(registry, 5.0, "cond-b", "tok-e", "MAYBE")  # invalid side
+    _q767_quote(registry, 0.0, "cond-c", "tok-f", "UP")  # zero ts kept
+    _q767_quote(registry, -0.5, "cond-c", "tok-g", "DOWN")  # negative kept
+
+    rows = registry.get_latest_tokens_by_condition_side()
+    by_cid_side = {(r["condition_id"], r["side"]): r["token_id"] for r in rows}
+    assert by_cid_side[("cond-a", "UP")] == "tok-b2"
+    assert by_cid_side[("cond-a", "DOWN")] == "tok-c"
+    assert by_cid_side[("cond-b", "DOWN")] == "tok-d"
+    assert ("cond-b", "UP") not in by_cid_side
+    assert by_cid_side[("cond-c", "UP")] == "tok-f"
+    assert by_cid_side[("cond-c", "DOWN")] == "tok-g"
+
+
+def test_get_token_side_latest_wins_with_floor(registry: OrderRegistry):
+    """#767: Q2 keeps the A/B counter-example and the -1.0 floor."""
+    _q767_quote(registry, 1.0, "cond-x", "tok-a", "UP")
+    _q767_quote(registry, 2.0, "cond-x", "tok-b", "UP")
+    _q767_quote(registry, 3.0, "cond-x", "tok-b", "DOWN")
+    # The condition/side map loses tok-a here; the token lookup must not.
+    assert registry.get_token_side("cond-x", "tok-a") == "UP"
+    assert registry.get_token_side("cond-x", "tok-b") == "DOWN"
+    assert registry.get_token_side("cond-x", "tok-missing") is None
+
+    _q767_quote(registry, -1.5, "cond-y", "tok-n", "UP")
+    assert registry.get_token_side("cond-y", "tok-n") is None
+    _q767_quote(registry, -1.0, "cond-y", "tok-m", "down")
+    assert registry.get_token_side("cond-y", "tok-m") == "DOWN"

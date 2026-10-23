@@ -1996,6 +1996,55 @@ class OrderRegistry:
             rows = conn.execute("SELECT * FROM quotes ORDER BY ts ASC").fetchall()
             return [dict(r) for r in rows]
 
+    def get_latest_tokens_by_condition_side(self) -> list[dict]:
+        """Latest token per (condition_id, side) from the quotes ledger (#767).
+
+        Targeted replacement for the full-table `get_all_quotes()` grouping in
+        the 1Hz guardian and the lifecycle pass. One row per condition and
+        side; ties (tick rows share a millisecond) go to the newest inserted
+        row (`rowid DESC`), matching the old `>=` loop over `ts ASC` order.
+        Applies no timestamp floor -- the old grouping accepted any `ts`.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT condition_id, token_id, side, ts FROM (
+                    SELECT condition_id, token_id, UPPER(side) AS side, ts,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY condition_id, UPPER(side)
+                               ORDER BY COALESCE(ts, 0.0) DESC, rowid DESC
+                           ) AS rn
+                    FROM quotes
+                    WHERE condition_id IS NOT NULL AND condition_id != ''
+                      AND token_id IS NOT NULL AND token_id != ''
+                      AND UPPER(side) IN ('UP', 'DOWN')
+                ) WHERE rn = 1
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_token_side(self, condition_id: str, token_id: str) -> Optional[str]:
+        """Latest UP/DOWN label for one (condition, token) pair (#767).
+
+        Mirrors `_token_side`'s rule exactly: rows below `-1.0` never set the
+        answer, ties go to the newest inserted row. Must not be derived from
+        `get_latest_tokens_by_condition_side()` -- a token the map drops
+        (e.g. token A after B re-quotes the same side) still resolves here.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT UPPER(side) AS side FROM quotes
+                WHERE condition_id = ? AND token_id = ?
+                  AND UPPER(side) IN ('UP', 'DOWN')
+                  AND COALESCE(ts, 0.0) >= -1.0
+                ORDER BY COALESCE(ts, 0.0) DESC, rowid DESC
+                LIMIT 1
+                """,
+                (condition_id, token_id),
+            ).fetchone()
+            return row["side"] if row else None
+
     def get_all_fills(self) -> list[dict]:
         with self._conn() as conn:
             # The print lives in a SHADOW-only table (#531), so the join is
