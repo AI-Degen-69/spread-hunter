@@ -8089,7 +8089,7 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         dualLegLine({ side: 'NO', size: dnOrder ? dnSize : null, price: dnPrice, cost: dnCost, emptyLabel: '[Awaiting NO Quote]', counterpart: dnOrder ? null : dnFilled ? { state: 'filled', order: dnFilled } : dnCancelled ? { state: 'cancelled' } : null }),
         {})}
 
-      <!-- Col 3: Break-even max the other side may cost (cap minus resting price) -->
+      <!-- Col 4: Break-even max the other side may cost (cap minus resting price) -->
       <td>
         <div class="stitch-quote-box">
           <div class="stitch-quote-rung">${roomYes}</div>
@@ -8097,13 +8097,13 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         </div>
       </td>
 
-      <!-- Col 4: LAST UPDATED / AGE (stopwatch + timestamp, same as Markets) -->
+      <!-- Col 5: LAST UPDATED / AGE (stopwatch + timestamp, same as Markets) -->
       <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
         <div class="stitch-age-stopwatch">${ageSec !== null ? fmtStopwatch(ageSec) : '--'}</div>
         <div class="stitch-age-meta">${postedTs !== null ? fmtTimestamp(postedTs) : '--'}</div>
       </td>
 
-      <!-- Col 5: Actions -->
+      <!-- Col 6: Actions -->
       <td style="text-align:right;">
         <div class="stitch-action-group">
           ${isUnpaired ? `
@@ -8229,13 +8229,13 @@ function stitchActiveMarketsRows(kpi, state, sort) {
         ${categoryPill(m)}
       </td>
 
-      <!-- Col 2: YES PRICE — the venue's ask (what buying YES costs now) + bid subtext -->
+      <!-- Col 3: YES PRICE — the venue's ask (what buying YES costs now) + bid subtext -->
       <td class="mono font-tabular">
         <div class="stitch-quote-up">${fmtPrice(upPrice)}</div>
         ${upBid !== null ? `<div class="stitch-mid-sub">bid ${fmtPrice(upBid)}</div>` : ''}
       </td>
 
-      <!-- Col 3: NO PRICE — the venue's ask + bid subtext -->
+      <!-- Col 4: NO PRICE — the venue's ask + bid subtext -->
       <td class="mono font-tabular">
         <div class="stitch-quote-down">${fmtPrice(dnPrice)}</div>
         ${dnBid !== null ? `<div class="stitch-mid-sub">bid ${fmtPrice(dnBid)}</div>` : ''}
@@ -8447,30 +8447,30 @@ function stitchPositionsRows(kpi, state, sort) {
         ${categoryPill(m)}
       </td>
 
-      <!-- Col 1: HELD INVENTORY (dual-leg YES / NO block, shared with Orders) -->
+      <!-- Col 2: HELD INVENTORY (dual-leg YES / NO block, shared with Orders) -->
       ${stitchDualLegCell(
         dualLegLine({ side: 'YES', size: upSh, price: upAvg, cost: upCost, emptyLabel: 'No YES held', sizeSuffix: ' sh' }),
         dualLegLine({ side: 'NO', size: dnSh, price: dnAvg, cost: dnCost, emptyLabel: 'No NO held', sizeSuffix: ' sh' }),
         { cellClass: 'mono font-tabular' })}
 
-      <!-- Col 2: TOTAL COST -->
+      <!-- Col 3: TOTAL COST -->
       <td class="mono font-tabular">
         <div class="stitch-pair-cost">${fmtUSD(totalCost)}</div>
         <div class="stitch-mid-sub">${fmtShares(totalSh)} sh total</div>
       </td>
 
-      <!-- Col 3: CURRENT PRICE, one line per held leg (merged from #497) -->
+      <!-- Col 4: CURRENT PRICE, one line per held leg (merged from #497) -->
       <td class="mono font-tabular${liveCls}"${liveTitle} data-cid="${esc(cid)}" data-cell="cur-price">
         ${curPriceLines}
       </td>
 
-      <!-- Col 4: MARK VALUE -->
+      <!-- Col 5: MARK VALUE -->
       <td class="mono font-tabular"${liveTitle} data-cid="${esc(cid)}" data-cell="value">
         <div class="stitch-mark-val">${mark === null ? '--' : fmtUSD(mark)}</div>
         ${live ? `<div class="stitch-mid-sub" style="color:#34d399;">● live mark</div>` : ''}
       </td>
 
-      <!-- Col 5: UNREALIZED P&L, one line per held leg plus the total -->
+      <!-- Col 6: UNREALIZED P&L, one line per held leg plus the total -->
       <td class="mono font-tabular" data-cid="${esc(cid)}" data-cell="unrealized">
         <div class="stitch-pnl-cell">
           ${legMarks.map((e) => `
@@ -8486,12 +8486,12 @@ function stitchPositionsRows(kpi, state, sort) {
         </div>
       </td>
 
-      <!-- Col 6: HEDGE STATUS -->
+      <!-- Col 7: HEDGE STATUS -->
       <td>
         ${statusBadge}
       </td>
 
-      <!-- Col 7: LAST UPDATED / AGE (last cell, flush right) -->
+      <!-- Col 8: LAST UPDATED / AGE (last cell, flush right) -->
       <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
         <div class="stitch-age-stopwatch">${ageDisp}</div>
         <div class="stitch-age-meta">${tsDisp}</div>
@@ -8810,13 +8810,13 @@ function stitchClosedTradesRows(kpi, state, sort) {
         ${categoryPill(m)}
       </td>
 
-      <!-- Col 1: TOTAL COST -->
+      <!-- Col 2: TOTAL COST -->
       <td class="mono font-tabular">
         <div class="stitch-pair-cost">${fmtUSD(totalCost)}</div>
         <div class="stitch-mid-sub">${Number(m.total_sh || 0) > 0 ? `${fmtShares(m.total_sh)} sh` : `${executionItemsCount} items`}</div>
       </td>
 
-      <!-- Col 2: OUTCOME BREAKDOWN (summary counts) -->
+      <!-- Col 3: OUTCOME BREAKDOWN (summary counts) -->
       <td>
         <div class="stitch-breakdown-pills">
           ${mergedCount > 0 ? `<span class="stitch-pill-count merged" title="${mergedCount} merged pairs">● ${mergedCount} Merged</span>` : ''}
@@ -8826,7 +8826,7 @@ function stitchClosedTradesRows(kpi, state, sort) {
         </div>
       </td>
 
-      <!-- Col 3: REALIZED P&L ($ and %) -->
+      <!-- Col 4: REALIZED P&L ($ and %) -->
       <td class="mono font-tabular">
         <div class="stitch-pnl-cell">
           <div class="stitch-pnl-val ${pnlCls}">
@@ -8839,13 +8839,13 @@ function stitchClosedTradesRows(kpi, state, sort) {
       </td>
 
 
-      <!-- Col 4: CLOSED AT (stopwatch + timestamp, same as other tabs) -->
+      <!-- Col 5: CLOSED AT (stopwatch + timestamp, same as other tabs) -->
       <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
         <div class="stitch-age-stopwatch">${ageDisp}</div>
         <div class="stitch-age-meta">${tsDisp}</div>
       </td>
 
-      <!-- Col 5: LEDGER toggle (far right) -->
+      <!-- Col 6: LEDGER toggle (far right) -->
       <td>
         <button type="button" class="stitch-ledger-toggle-btn" data-cid="${esc(cid)}" aria-expanded="${isExpanded}">
           ${isExpanded ? '▲ Hide Ledger' : '▼ View Ledger'} (${executionItemsCount})
