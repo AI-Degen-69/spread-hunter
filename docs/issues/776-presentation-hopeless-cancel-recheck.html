@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>עדכון #776 — אחרי כל ביטול שואלים את הזירה: כמה התמלא?</title>
+<style>
+:root{--bg:#141210;--card:#201c17;--line:#3a3227;--txt:#f2ece1;--mut:#b8a98f;--good:#4fd68a;--bad:#ff7070;--warn:#ffcf5c;--acc:#e8a13d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,"Heebo",Arial,sans-serif}
+main{max-width:940px;margin:0 auto;padding:24px 18px 60px}
+.meta{display:flex;gap:10px;flex-wrap:wrap;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;font-size:14px;color:var(--mut)}
+.meta a{color:var(--acc)}
+h1{font-size:30px;line-height:1.3;margin:22px 0 6px}
+.lead{font-size:18px;color:var(--mut);margin:0 0 20px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin:16px 0}
+.panel h2{margin:0 0 10px;font-size:20px}
+code,[dir=ltr]{unicode-bidi:embed}
+code{background:#0006;padding:1px 7px;border-radius:6px;font-size:14px}
+.math{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;background:#0007;border:1px dashed var(--line);border-radius:10px;padding:14px;margin:12px 0;font-size:20px}
+.math b{color:var(--bad)}
+.btns{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+button.sc{flex:1;min-width:150px;background:#0007;color:var(--txt);border:2px solid var(--line);border-radius:10px;padding:12px;font-size:16px;cursor:pointer}
+button.sc[aria-pressed=true]{border-color:var(--acc);background:#e8a13d22}
+.flow{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+@media(max-width:640px){.flow{grid-template-columns:1fr}}
+.col{background:#0007;border:1px solid var(--line);border-radius:10px;padding:14px}
+.col h3{margin:0 0 8px;font-size:16px}
+.col ol{margin:8px 0;padding-inline-start:22px}
+.col li{margin:6px 0}
+.tag{display:inline-block;border-radius:6px;padding:0 8px;font-size:13px}
+.ok{background:#4fd68a26;color:var(--good)}
+.no{background:#ff707026;color:var(--bad)}
+.mid{background:#ffcf5c26;color:var(--warn)}
+.readout{margin-top:12px;border:1px solid var(--acc);border-radius:10px;padding:12px 14px;font-size:17px;background:#e8a13d14}
+.steps{margin:8px 0;padding-inline-start:22px}
+.steps li{margin:10px 0}
+.k{color:var(--mut);font-size:14px}
+</style>
+</head>
+<body>
+<main>
+<div class="meta">שינוי חי <span dir="ltr">#776</span> · <a href="https://github.com/AI-Degen-69/spread-hunter/pull/776">PR #776</a> · <a href="https://github.com/AI-Degen-69/spread-hunter/issues/766">Issue #766</a></div>
+
+<h1>הוראה חסרת סיכוי: מבטלים — ואז שואלים את הזירה מה באמת התמלא</h1>
+<p class="lead">לפני: ביטול הסתמך על רישום מקומי מיושן, ומילוי של הרגע האחרון נעלם. עכשיו: אחרי כל ביטול שואלים את הזירה, ומילוי חשוף עובר לטיפול במקום להישכח.</p>
+
+<div class="panel">
+<h2>מהי הוראה חסרת סיכוי?</h2>
+<p>הבוט מרוויח מקניית <span dir="ltr">UP</span> + <span dir="ltr">DOWN</span> בפחות מ־<span dir="ltr">$1.00</span> ומיזוג ל־<span dir="ltr">$1.00</span>. הוראה בודדת שמחירה + ההצעה הזולה בצד השני ≥ <span dir="ltr">$0.99</span> לעולם לא תיסגר בזול — השלמתה היא הפסד מובטח. השומר מבטל אותה.</p>
+<div class="math"><span dir="ltr">0.78 + 0.25 = 1.03 ≥ 0.99</span><b>← מבטלים</b></div>
+<p class="k">זה שונה מהוראה בודדת כדאית (עדיין יכולה להיסגר בזול — נשארת), ומפוזיציה חשופה (מניות שכבר התמלאו בלי גידור — הולכת למכירת חילוץ).</p>
+</div>
+
+<div class="panel">
+<h2>לפני / אחרי — לחצו על תשובת הזירה</h2>
+<div class="btns" role="tablist">
+<button class="sc" data-sc="fill" aria-pressed="true">הזירה: התמלא</button>
+<button class="sc" data-sc="empty" aria-pressed="false">הזירה: ריק</button>
+<button class="sc" data-sc="dark" aria-pressed="false">הזירה: לא עונה</button>
+</div>
+<div class="flow">
+<div class="col"><h3>לפני <span class="tag no">המילוי נעלם</span></h3><div id="before"></div></div>
+<div class="col"><h3>עכשיו <span class="tag ok">המילוי מטופל</span></h3><div id="after"></div></div>
+</div>
+<div class="readout" id="readout"></div>
+</div>
+
+<div class="panel">
+<h2>איך בודקים במו עיניים במוצר החי</h2>
+<ol class="steps">
+<li>מריצים תרגיל צל: <code dir="ltr">py -3.12 -m core_brain.shadow_run --minutes 5 --db data/NN_shadow_766check.db</code> <span class="k">(שם אמיתי — לא <span dir="ltr">&lt;stamp&gt;</span>)</span></li>
+<li>פותחים <code dir="ltr">http://127.0.0.1:8799</code> <span class="k">(קודם <code dir="ltr">python -m dashboard.server</code>)</span> → כרטיס הריצה של שומר ההוראות.</li>
+<li>מחפשים שורות <code dir="ltr">CANCEL_STRAY</code> בלוג — כל שורה היא ביטול של הוראה חסרת סיכוי.</li>
+<li>בודקים <code dir="ltr">Unhedged positions</code>: מילוי מחלון התחרות מופיע שם; <code dir="ltr">0</code> מהזירה נשאר בחוץ, בלי אזעקת שווא. <code dir="ltr">Cancelled orders</code> נושא כעת את תשובת הזירה; <code dir="ltr">Remediated positions</code> נשאר ריק כל עוד אין מילוי מאומת ברישום.</li>
+</ol>
+<p class="k">אם בריצה מסוימת אין שורות <span dir="ltr">CANCEL_STRAY</span> — השוק פשוט לא ייצר הוראה חסרת סיכוי הפעם. מריצים שוב.</p>
+</div>
+</main>
+<script>
+var d={
+fill:{b:"<ol><li>מבטלים בזירה.</li><li>בודקים רק רישום מקומי — ריק.</li><li>מסמנים <span class='tag ok'>הכל נקי</span>.</li><li>המניות שהתמלאו נשארות חשופות בזירה. אף אחד לא יודע.</li></ol>",
+a:"<ol><li>מבטלים בזירה.</li><li>שואלים את הזירה: כמה התמלא? → <b>5.0</b>.</li><li>ההוראה נכנסת ל־<code dir='ltr'>Unhedged positions</code>.</li><li>הסנכרון הבא מחלץ אותה. שום דבר לא נעלם.</li></ol>",
+r:"הזירה דיווחה מילוי שהרישום עוד לא ראה — ההוראה מסומנת חשופה ומטופלת בסנכרון הבא."},
+empty:{b:"<ol><li>מבטלים בזירה.</li><li>בודקים רק רישום מקומי — ריק.</li><li>מסמנים <span class='tag ok'>הכל נקי</span>. (נכון במקרה)</li></ol>",
+a:"<ol><li>מבטלים בזירה.</li><li>שואלים את הזירה → <b>0</b>.</li><li>נשאר בחוץ. אין טיפול, אין אזעקת שווא.</li></ol>",
+r:"הזירה אישרה שאין מילוי — אין מה לטפל, ואין התרעה מיותרת."},
+dark:{b:"<ol><li>מבטלים בזירה.</li><li>הזירה לא עונה — מניחים <span class='tag no'>0</span>.</li><li>מסמנים <span class='tag ok'>הכל נקי</span>. (מסוכן — אולי יש מילוי)</li></ol>",
+a:"<ol><li>מבטלים בזירה.</li><li>הזירה לא עונה → מסמנים <b>לא מאומת</b>.</li><li>ההוראה נכנסת ל־<code dir='ltr'>Unhedged positions</code> לבדיקה. לעולם לא מנחשים 0.</li></ol>",
+r:"תשובה שלא התקבלה היא לא תשובת אפס — ההוראה נשמרת חשופה עד לבירור, ולא נמכר דבר על סמך ניחוש."}};
+function pick(k){document.getElementById('before').innerHTML=d[k].b;document.getElementById('after').innerHTML=d[k].a;document.getElementById('readout').textContent=d[k].r;var b=document.querySelectorAll('button.sc');for(var i=0;i<b.length;i++){b[i].setAttribute('aria-pressed',b[i].getAttribute('data-sc')===k?'true':'false');}}
+var btns=document.querySelectorAll('button.sc');for(var i=0;i<btns.length;i++){btns[i].addEventListener('click',function(){pick(this.getAttribute('data-sc'));});}
+pick('fill');
+</script>
+</body>
+</html>
