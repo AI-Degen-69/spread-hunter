@@ -83,7 +83,7 @@ so hand-editing version strings is churn with zero browser effect.
   `category`; colspans 6 / 9 / 7 (+ expand row); `OT_TEXT_COLUMNS['open-orders']` += 8.
 - **Verify:** T1 suites turn green.
 
-### T3 — Row rhythm in stylesheet (GREEN) [size S, Design/UI]
+### T3 — Row rhythm in stylesheet (GREEN) [x] [size S, Design/UI]
 **Depends on:** T2.
 - `dashboard/static/prototype.css`: body `td` + `.stitch-market-cell` vertical padding `14px→8px`;
   `.stitch-market-title` line-height `1.35→~1.25`; `.stitch-market-meta` margin-top `4px→~2px`;
