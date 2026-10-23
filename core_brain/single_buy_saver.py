@@ -1256,6 +1256,38 @@ def ask_depth(book) -> float:
     return sum(s for _, s in _book_levels(book, "asks"))
 
 
+def _venue_id_from_submit_error(exc: BaseException) -> str:
+    """Recover a venue order id carried on a submit exception, if any.
+
+    A timeout can arrive after the venue accepted the BUY, and some clients
+    surface the accepted id on the error (attribute or dict payload). An id
+    here means unknown-outcome-but-reconcilable; absence means there is
+    nothing to reconcile against. Never guesses: returns "" when no
+    spelling is present.
+    """
+    for key in ("orderID", "orderId", "order_id", "id", "venue_order_id"):
+        value = getattr(exc, key, None)
+        if value:
+            return str(value)
+    args = getattr(exc, "args", ()) or ()
+    for arg in args:
+        if isinstance(arg, dict):
+            for key in ("orderID", "orderId", "order_id", "id"):
+                if arg.get(key):
+                    return str(arg.get(key))
+        else:
+            for key in ("orderID", "orderId", "order_id", "id"):
+                value = getattr(arg, key, None)
+                if value:
+                    return str(value)
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None and cause is not exc:
+        recovered = _venue_id_from_submit_error(cause)
+        if recovered:
+            return recovered
+    return ""
+
+
 def complete_pair(
     client,
     registry: OrderRegistry,
@@ -1440,6 +1472,7 @@ def complete_pair(
     local_comp_id = str(uuid.uuid4())
     now_ms = int(time.time() * 1000)
     is_shadow = type(client).__name__ == "ShadowExecutionClient" or getattr(client, "is_shadow", False)
+    created_local_row = False
     if not is_shadow:
         registry.create_order(
             OrderRecord(
@@ -1457,15 +1490,88 @@ def complete_pair(
                 max_pair_cost_at_post=bot_pos_price_max_pair_cost_usd,
             )
         )
+        created_local_row = True
 
-    resp = client.create_and_post_market_order(
-        MarketOrderArgsV2(token_id=light_token, amount=notional, side="BUY",
-                          price=ask)
-    )
+    try:
+        resp = client.create_and_post_market_order(
+            MarketOrderArgsV2(token_id=light_token, amount=notional, side="BUY",
+                              price=ask)
+        )
+    except Exception as exc:
+        # Branch A — submit raised. An exception does NOT prove the order never
+        # posted: a response timeout can arrive after the venue accepted the
+        # BUY. When the error carries a venue order id we keep the row live
+        # (unknown outcome, reconcilable) and let the stray guard own
+        # reconciliation. Without an id there is nothing to reconcile against,
+        # so we cancel ONLY local_comp_id to release the bankroll ceiling and
+        # re-raise the original error; the operator must still check the venue
+        # after a timeout because a cancelled local row cannot hide a live one.
+        if not created_local_row:
+            raise
+        recovered_oid = _venue_id_from_submit_error(exc)
+        if recovered_oid:
+            try:
+                registry.attach_venue_order_id(local_comp_id, recovered_oid)
+            except Exception as attach_exc:
+                log.warning(
+                    "completion submit for pair %s raised %s; failed to attach "
+                    "recovered venue id %s to local order %s (%s); manual "
+                    "reconciliation may need this ID",
+                    pair_id, type(exc).__name__, recovered_oid,
+                    local_comp_id, attach_exc,
+                )
+            raise
+        try:
+            registry.update_order_status(
+                local_comp_id, "cancelled", int(time.time() * 1000),
+                cancel_reason=f"completion_submit_failed:{type(exc).__name__}",
+            )
+        except Exception as cancel_exc:
+            # Never mask the venue error with a registry-write error.
+            log.warning(
+                "cancelling orphaned completion %s after %s failed: %s",
+                local_comp_id, type(exc).__name__, cancel_exc,
+            )
+        else:
+            log.warning(
+                "completion submit for pair %s failed (%s); local order %s "
+                "cancelled to release bankroll ceiling",
+                pair_id, type(exc).__name__, local_comp_id,
+            )
+        raise
 
     venue_oid = ""
     if isinstance(resp, dict):
-        venue_oid = str(resp.get("orderID") or resp.get("order_id") or resp.get("id") or "")
+        venue_oid = str(resp.get("orderID") or resp.get("orderId")
+                        or resp.get("order_id") or resp.get("id") or "")
+    else:
+        venue_oid = str(
+            getattr(resp, "orderID", None)
+            or getattr(resp, "orderId", None)
+            or getattr(resp, "order_id", None)
+            or getattr(resp, "id", None)
+            or ""
+        )
+    if not venue_oid and created_local_row:
+        # Branch B — submit returned but with no venue order id (provably not
+        # posted: nothing trackable exists to reconcile). Cancel ONLY
+        # local_comp_id so no unattached pending row survives in
+        # get_active_orders() to lock the bankroll ceiling, then refuse
+        # fail-closed rather than returning a "completed" that never crossed.
+        try:
+            registry.update_order_status(
+                local_comp_id, "cancelled", int(time.time() * 1000),
+                cancel_reason="completion_missing_venue_id",
+            )
+        except Exception as cancel_exc:
+            log.warning(
+                "cancelling id-less completion %s failed: %s",
+                local_comp_id, cancel_exc,
+            )
+        raise PairCompletionRefused(
+            f"Completion BUY for pair {pair_id} returned no venue order id; "
+            f"local order {local_comp_id} cancelled, nothing crossed."
+        )
     if venue_oid and not is_shadow:
         registry.attach_venue_order_id(local_comp_id, venue_oid)
         if hasattr(client, "get_order"):
