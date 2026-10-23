@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 import scripts.edge_floor_analysis as efa
-from core_brain.fill_quality_report import FillRow
+from core_brain.fill_quality_report import OK, Cohort, FillRow, StoreLoad
 from tests.test_fill_quality_report import (
     FILL_MS,
     FILL_SEC,
@@ -181,16 +181,19 @@ def test_run_filter_excludes_another_runs_positions(tmp_path: Path):
     db = _seeded_db(tmp_path)
     filtered = efa.analyze(db, run_id="r1")
     assert "p9" not in {p["pair_key"] for p in filtered["positions"]}
+    # Two runs would be pooled without --run-id, so the analysis refuses them.
     everything = efa.analyze(db)
-    assert "p9" in {p["pair_key"] for p in everything["positions"]}
+    assert everything["store"]["status"] == efa.MULTI_RUN
+    assert everything["positions"] == []
 
 
 def test_confound_split_flags_a_band_that_reverses_the_direction():
-    fills = (
-        _leg(pair="p1", edge=0.01, pnl=-1.0, size=1.0),
-        _leg(pair="p2", edge=0.05, pnl=2.0, size=1.0),
-        _leg(pair="p3", edge=0.01, pnl=5.0, size=100.0),
-        _leg(pair="p4", edge=0.05, pnl=-3.0, size=100.0),
+    # Enough on every side to be measured: 5 per side per band.
+    fills = tuple(
+        [_leg(pair=f"s{i}l", edge=0.01, pnl=-1.0, size=1.0) for i in range(5)]
+        + [_leg(pair=f"s{i}h", edge=0.05, pnl=2.0, size=1.0) for i in range(5)]
+        + [_leg(pair=f"b{i}l", edge=0.01, pnl=5.0, size=100.0) for i in range(5)]
+        + [_leg(pair=f"b{i}h", edge=0.05, pnl=-3.0, size=100.0) for i in range(5)]
     )
     positions = efa.position_rows(fills)
     categories = {p.condition_id: "Sports" for p in positions}
@@ -201,13 +204,47 @@ def test_confound_split_flags_a_band_that_reverses_the_direction():
     assert shares["shares"].holds is False
 
 
+def test_partial_fills_of_one_leg_average_to_one_leg_price():
+    """A twice-filled leg is still one leg: summing prices would read 1.58."""
+    fills = (
+        _leg(pair="p1", tok="tU", price=0.60, size=5.0),
+        _leg(pair="p1", tok="tU", price=0.60, size=5.0),
+        _leg(pair="p1", tok="tD", price=0.38, size=10.0),
+    )
+    (position,) = efa.position_rows(fills)
+    assert round(position.paid_pair_price, 2) == 0.98
+
+
+def test_split_side_needs_enough_positions_before_naming_a_direction():
+    thin = [_leg(pair="p1", tok="tU", edge=0.01, pnl=-5.0)]
+    thin += [_leg(pair=f"q{i}", tok="tU", edge=0.05, pnl=1.0) for i in range(6)]
+    group = efa._split_group("band", efa.position_rows(thin), 0.03)
+    assert (group.low_n, group.high_n) == (1, 6)
+    assert group.holds is None
+
+    enough = [_leg(pair=f"l{i}", tok="tU", edge=0.01, pnl=-5.0) for i in range(5)]
+    enough += [_leg(pair=f"h{i}", tok="tU", edge=0.05, pnl=1.0) for i in range(5)]
+    holds = efa._split_group("band", efa.position_rows(enough), 0.03)
+    assert holds.holds is True
+
+
+def test_multi_run_store_is_refused_rather_than_pooled():
+    """Two runs of one market can share a pair key; pooling merges them."""
+    store = StoreLoad(label="shadow", path="x.db", run_id=None, status=OK,
+                      detail="", cohort=Cohort(orders=({"run_id": "a"},
+                                                       {"run_id": "b"})))
+    refused = efa._one_run(store)
+    assert refused.status == efa.MULTI_RUN
+    assert "--run-id" in refused.detail and "a, b" in refused.detail
+
+
 def test_confound_split_is_inconclusive_when_a_band_is_too_thin_to_measure():
     """A band with nothing in it is not a reversal, so it must not read 'fails'."""
     fills = (_leg(pair="p1", edge=0.01, pnl=-1.0),
              _leg(pair="p2", edge=0.05, pnl=2.0))
     positions = efa.position_rows(fills)
     shares = {s.name: s for s in efa.confound_splits(positions, {})}["shares"]
-    assert shares.groups[0].holds is True
+    assert shares.groups[0].holds is None
     assert shares.groups[1].holds is None
     assert shares.holds is None
 

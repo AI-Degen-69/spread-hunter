@@ -59,12 +59,16 @@ read but never written; all analysis opens stores with `mode=ro`.
 - `closes` carries no pair, fill, or token identity, so a close is attributed to a
   position by `(run_id, condition_id)` and shared pro-rata by filled shares. That is
   **inferred, never exact**, and it is the main attribution limit here.
-- **Pair price paid** is the legs' fill prices summed — the per-share pair cost when the
-  legs are one-for-one. A stranded single-leg position contributes only its own leg's
-  price, so the cheap band also collects the naked entries; that is a limit of this
-  split, not a finding about cost.
+- **Pair price paid** is each leg's size-weighted fill price, summed — the per-share pair
+  cost when the legs are one-for-one, and still one price per leg when a leg filled in
+  pieces. A stranded single-leg position contributes only its own leg's price, so the
+  cheap band also collects the naked entries; that is a limit of this split, not a
+  finding about cost.
 - Bookkeeping closes (`venue_sync`) are excluded; settlement, merge and rescue closes
   are kept. No bookkeeping close appeared in either tape.
+- **Runs are never pooled.** A store holding more than one run is refused unless
+  `--run-id` names one, because two runs of one market can share a pair key and would
+  otherwise land as a single observation.
 - A win is a closed position with PnL > 0; a still-open position is counted in the
   position total and left out of the win-rate denominator.
 - Data-quality counts for both tapes: 0 orphan fills, 2 open positions each, 0
@@ -159,18 +163,21 @@ floor decision has to price that in.
 
 Each band is split at the same edge cut (the median position edge), so the comparison
 is consistent across bands. "Holds" means the high-edge half earns more than the
-low-edge half *inside that band*; "inconclusive" means a band was too thin to measure.
-Pair price paid stands in for the issue's "spread" confound — what a pair costs to
-assemble is where the spread, the fee and the queue all land.
+low-edge half *inside that band*; "inconclusive" means a band — or one side of it — was
+too thin to measure. A side needs **5 closed positions** (`MIN_SPLIT_SIDE`) before it
+can name a direction: one position a side is not a trend. Pair price paid stands in for
+the issue's "spread" confound — what a pair costs to assemble is where the spread, the
+fee and the queue all land.
 
 | Split | shadow-01 | shadow-01-prudent |
 |---|---|---|
-| Shares filled across both legs (≤ 12 / > 12) | **holds** (−1.28 vs −0.19; +0.11 vs +0.37) | **holds** (−1.60 vs −0.15; +0.23 vs +0.30) |
-| Pair price paid, legs summed (≤ 0.93 / > 0.93) | **holds** (−1.35 vs −0.07; −0.15 vs +0.17) | **fails** (+0.09 vs +0.01 in the > 0.93 band) |
-| Category | **fails** (Basketball n=2 and Tennis n=13 reverse; the rest hold) | **fails** (Counter-Strike 2 n=5 and Tennis n=21 reverse) |
+| Shares filled across both legs (≤ 12 / > 12) | **holds** (−1.28 vs −0.19; +0.11 vs +0.37) | **inconclusive** (−1.60 vs −0.15 holds; the > 12 band's high side is only 4 positions) |
+| Pair price paid, legs summed (≤ 0.93 / > 0.93) | **holds** (−1.56 vs −0.07; −0.14 vs +0.17) | **fails** (+0.09 vs +0.04 in the > 0.93 band) |
+| Category | **fails** (Tennis n=13 reverses; every other category is too thin a side to tell) | **fails** (Tennis n=21 reverses; the rest too thin) |
 
-So the effect survives size on both tapes, survives pair cost on one, and does **not**
-survive category on either — Tennis reverses it on both. Category is display-only
+So the effect survives size on one tape and is undecided on the other, survives pair
+cost on one, and does **not** survive category on either — Tennis reverses it on both.
+Category is display-only
 metadata derived from the current title/slug (`market_meta.classify_display_category`),
 not from metadata at entry time, and the per-category counts are 1–21 positions, so
 this is a flag on the trend rather than a settled confound. It is enough to stop a
@@ -210,22 +217,26 @@ Its projected effect on this rehearsal data, if it ever clears the bar:
 | Net PnL on the same tape | −21.65 → **−8.10** (+13.55) | −25.74 → **−11.57** (+14.17) |
 | Win rate of retained positions | 56.6% → **66.7%** | 64.4% → **65.1%** |
 | Positions dropped | 18 of 55 (33%) | 17 of 61 (28%) |
-| Posted quotes filtered | 51 of 284 (18%) | 78 of 349 (22%) |
+| Posted quotes below floor | 51 of 284 (18%) | 78 of 349 (22%) |
 | Book after the floor | still **negative** | still **negative** |
 
 ## Shadow rehearsal at the candidate settings
 
-One 5-minute `shadow_run` with the candidate floor loaded, on a fresh store — the
-end-to-end proof that the setting parses, the gate fires, and the loop exits clean. It
-is *not* the comparison (that is the paired A/B above), because a second fresh run
-samples different markets.
+One 5-minute `shadow_run` with the candidate floor loaded, on a fresh store — a
+configuration and clean-exit check: the setting parses, the gate is armed, and the loop
+runs to the end with no errors. It does **not** show the gate firing (see below: nothing
+was below the floor). It is also *not* the comparison (that is the paired A/B above),
+because a second fresh run samples different markets.
 
 ```
-BOT_ENTRY_FILL_QUALITY_GATE_ON=1
-BOT_ENTRY_FILL_QUALITY_BLOCKED_EDGE=0.00-0.02,0.02-0.03
+export BOT_ENTRY_FILL_QUALITY_GATE_ON=1
+export BOT_ENTRY_FILL_QUALITY_BLOCKED_EDGE=0.00-0.02,0.02-0.03
 python -m core_brain.shadow_run --minutes 5 --max-markets 5 \
   --db data/01_shadow_787_floor.db --run-id shadow-787-floor --starting-bankroll-usd 100
 ```
+
+`export` is load-bearing: bare `NAME=value` lines create shell variables that the
+Python process never sees, so the run would silently start with the gate off.
 
 | | Result |
 |---|---|
@@ -287,10 +298,11 @@ BOT_ENTRY_FILL_QUALITY_GATE_ON=1
 BOT_ENTRY_FILL_QUALITY_BLOCKED_EDGE=0.00-0.02,0.02-0.03
 ```
 
-**Undo:** set `BOT_ENTRY_FILL_QUALITY_GATE_ON=0` and restart. The gate only removes
-entries, so **added dollars at risk are $0** — it cannot open a position the current
-configuration would not have opened. Its real risk is the single-leg state described
-above, not extra exposure.
+**Undo:** set `BOT_ENTRY_FILL_QUALITY_GATE_ON=0` and restart. The gate adds no buy
+intent — it cannot open a position the current configuration would not have opened. It
+does *not* follow that the change is risk-neutral in dollars: blocking one leg leaves the
+other eligible to post, and the single-leg directional state described above is a risk
+the gate can create where the pair would otherwise have completed.
 
 ## Reproduce
 

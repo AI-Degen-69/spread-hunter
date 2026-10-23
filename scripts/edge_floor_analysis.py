@@ -20,6 +20,8 @@ Two limits are deliberate and stated in the output:
   A negative edge buckets as `"negative"` here, but the live gate labels it
   `"0.06+"` (`edge_bucket_for` has no negative interval), so a label floor
   cannot block it. The sweep reports those positions instead of hiding them.
+* Runs are never pooled: without `--run-id` a store holding several runs is
+  refused, because two runs of one market can share a pair key.
 """
 
 from __future__ import annotations
@@ -58,9 +60,13 @@ from core_brain.order_registry import DEFAULT_DB_PATH
 NEGATIVE = "negative"
 UNKNOWN = "unknown"
 REHEARSAL = "rehearsal / not evidence"
+MULTI_RUN = "MULTI_RUN"
 
 #: The boundaries a floor can sit on, ascending.
 SWEEP_FLOORS = EDGE_EDGES[1:-1]
+
+#: Closed positions each side of a split needs before it may name a direction.
+MIN_SPLIT_SIDE = 5
 
 
 @dataclass(frozen=True)
@@ -163,6 +169,17 @@ def _edge_label_order() -> tuple[str, ...]:
     return tuple(edge_bucket_for(e) for e in EDGE_EDGES[:-1])
 
 
+def _leg_prices(group: Sequence[FillRow]) -> float:
+    """One size-weighted price per leg, summed; a twice-filled leg is one leg."""
+    spend: dict[str, float] = {}
+    size: dict[str, float] = {}
+    for row in group:
+        spend[row.token_id] = spend.get(row.token_id, 0.0) + row.price * row.size
+        size[row.token_id] = size.get(row.token_id, 0.0) + row.size
+    return sum(spend[token] / size[token]
+               for token in spend if size[token] > 0)
+
+
 def position_rows(fills: Sequence[FillRow]) -> tuple[Position, ...]:
     """Group fills into positions; the bucket key is the weakest leg's edge."""
     legs: dict[str, list[FillRow]] = {}
@@ -179,7 +196,7 @@ def position_rows(fills: Sequence[FillRow]) -> tuple[Position, ...]:
             bucket=_bucket(edge),
             pnl=sum(r.attr_pnl for r in group),
             shares=sum(r.size for r in group),
-            paid_pair_price=sum(r.price for r in group),
+            paid_pair_price=_leg_prices(group),
             closed=group[0].outcome != "open",
         ))
     return tuple(positions)
@@ -284,8 +301,11 @@ def _split_group(name: str, members: Sequence[Position],
     high = [p.pnl for p in closed if p.edge > edge_cut]
     low_mean = statistics.fmean(low) if low else None
     high_mean = statistics.fmean(high) if high else None
-    holds = (high_mean > low_mean
-             if low_mean is not None and high_mean is not None else None)
+    if (low_mean is None or high_mean is None
+            or len(low) < MIN_SPLIT_SIDE or len(high) < MIN_SPLIT_SIDE):
+        holds: bool | None = None       # one observation a side is not a trend
+    else:
+        holds = high_mean > low_mean
     return GroupRow(name, len(members), len(low), low_mean, len(high), high_mean,
                     holds)
 
@@ -354,10 +374,28 @@ def data_quality(store: StoreLoad, positions: Sequence[Position]) -> dict:
     }
 
 
+def _one_run(store: StoreLoad) -> StoreLoad:
+    """Refuse to pool runs: two of one market can share a pair key.
+
+    Older orders fall back to `condition_id` for that key, so pooling would
+    count two runs' edges and PnL as one observation.
+    """
+    if store.status != OK or store.cohort is None:
+        return store
+    runs = {str(o["run_id"]) for o in store.cohort.orders
+            if o.get("run_id") is not None}
+    if len(runs) <= 1:
+        return store
+    return dataclasses.replace(
+        store, status=MULTI_RUN,
+        detail=(f"{len(runs)} runs in this store; pass --run-id to analyse one "
+                f"({', '.join(sorted(runs))})"))
+
+
 def _load(path: Path | str, run_id: str | None,
           min_obs: int) -> tuple[StoreLoad, QualityReport]:
     """Load, drop bookkeeping closes, then attribute. Never edits the module."""
-    raw = load_store(path, run_id=run_id)
+    raw = _one_run(load_store(path, run_id=run_id))
     if raw.status != OK or raw.cohort is None:
         return raw, build_report(raw, min_obs=min_obs)
     kept = tuple(
@@ -509,7 +547,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write(text)
         return 1
     out = args.out or Path("reports") / (
-        "edge_floor_" + time.strftime("%d-%m_%H-%M", time.gmtime()))
+        "edge_floor_" + time.strftime("%d-%m_%H-%M-%S", time.gmtime()))
     out.mkdir(parents=True, exist_ok=True)
     (out / "edge_floor.json").write_text(
         json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
