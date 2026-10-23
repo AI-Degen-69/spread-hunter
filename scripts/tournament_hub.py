@@ -1,7 +1,7 @@
 """Tournament hub: one page that lists every running tournament arm and links to its dashboard.
 
 Read-only by design. It reads the launcher's plan record
-(`runtime/tournaments/<issue>_<stamp>.json`) and each arm's shadow heartbeat
+(`data/tournaments/<key>_<stamp>/plan.json`) and each arm's shadow heartbeat
 (`runtime/shadow_run_<run_id>.json`) to show live status, then links straight to
 the arm's own dashboard port. It never reads or writes `data/orders.db`, never
 places an order, and exposes no control endpoints.
@@ -9,7 +9,7 @@ places an order, and exposes no control endpoints.
 Usage:
     python -m scripts.tournament_hub --port 8798
 
-Defaults to the newest tournament record under `runtime/tournaments/`.
+Defaults to the newest tournament record under `data/tournaments/`.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ if str(ROOT) not in sys.path:
 from core_brain.close_methods import SHADOW_MERGE_NOTE  # noqa: E402
 from dashboard.server import read_shadow_run  # noqa: E402
 
-TOURNAMENT_DIR = ROOT / "runtime" / "tournaments"
+TOURNAMENT_DIR = ROOT / "data" / "tournaments"
 
 
 def _read_json(path: Path) -> Optional[dict]:
@@ -45,7 +45,7 @@ def find_latest_record() -> Optional[Path]:
     if not TOURNAMENT_DIR.is_dir():
         return None
     records = sorted(
-        (p for p in TOURNAMENT_DIR.glob("*.json") if p.is_file()),
+        (p for p in TOURNAMENT_DIR.glob("*/plan.json") if p.is_file()),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -182,11 +182,10 @@ def find_all_records() -> list[Path]:
     if not TOURNAMENT_DIR.is_dir():
         return []
     records = []
-    for p in TOURNAMENT_DIR.glob("*.json"):
+    for p in TOURNAMENT_DIR.glob("*/plan.json"):
         if not p.is_file():
             continue
-        # Only real plan records: a dict carrying "arms". The arms-definition
-        # file (a bare list) lives in the same directory and must be skipped.
+        # Only real plan records: a dict carrying "arms".
         plan = _read_json(p)
         if isinstance(plan, dict) and isinstance(plan.get("arms"), list):
             records.append(p)

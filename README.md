@@ -87,8 +87,9 @@ spread-hunter/
   scoring/                Scoring, allocation and selection rules the Market Filter uses
   strategy/               Signal and sizing logic
   server.ts               TS dashboard bridge (:8800, read-only reverse proxy)
-  configs/                Runner / preset configuration
+  configs/                Runner / preset configuration (tournament arm lists: configs/tournaments/)
   data/                   Order registry (orders.db — not committed) + per-run stores
+  data/tournaments/       One folder per tournament run: plan.json, launch.log, results.json, <arm>.db (not committed)
   runtime/                Market universe, process registry, logs, cycle telemetry (not committed)
   reports/                Generated statistics reports (not committed)
   docs/agents/            Live agent contracts (safety, architecture, strategy, first-run, ...)

@@ -126,6 +126,7 @@ each ended up with two homes, decided by which code path produced it:
 | Visual explainer, no ticket | `docs/explanations/` | the `explain` skill, `<topic-slug>.html` (kebab-case, starts with a letter, no id) |
 | Out-of-scope candidate ledger | `docs/backlog/` | written by Station III/IV, rows resolved only by Station VI: `i<id>-<slug>.md`; an `open` row is never deleted |
 | Design spec, plan, interview note | `docs/specs/`, `docs/plans/`, `docs/interviews/` | `brainstorming`, `writing-plans`, `interview-me`; plain kebab-case slug |
+| Tournament run | `data/tournaments/<key>_<stamp>/` | `core_brain.shadow_run.build_tournament_run_dir`; the folder holds `plan.json`, `launch.log`, `results.json` and one `<arm>.db` per arm. The arm list stays in `configs/tournaments/` because the folder is safe to delete |
 
 Every `.html` under `docs/` is guarded, not just showcase-named ones: those two
 homes are the only legal ones, and a file placed correctly but named wrongly
@@ -150,7 +151,8 @@ Two rules keep it that way:
    removes a file under `data/`, `runtime/` or `reports/`, naming the path. It
    exists because two full-suite runs rewrote the tracked `data/demo_orders.db`
    and left ~55 heartbeats in `runtime/`. Point the test at `tmp_path`; for a
-   tournament plan that means `artifacts_root=tmp_path`, not `base_dir`.
+   tournament plan that means `base_dir=tmp_path`, the root the run folder sits
+   under.
 
 Ignore patterns for these directories are anchored with a leading `/`. An
 unanchored `reports/` matches a directory of that name at ANY depth, and it

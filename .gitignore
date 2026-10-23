@@ -55,6 +55,9 @@ htmlcov/
 /runtime/*.py
 /runtime/.current_run_id
 /data/*.db*
+# Tournament run folders: generated plan, log, results and one store per arm.
+# The hand-written arm list is tracked under configs/tournaments/.
+/data/tournaments/
 # Exception: the demo registry is a synthetic fixture (bogus run, no live
 # data), committed so anyone can serve it for dashboard review without
 # running the builder first.

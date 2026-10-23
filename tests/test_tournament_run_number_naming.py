@@ -1,20 +1,20 @@
-"""Tournament artifact naming (docs/agents/naming.md, grammar G3).
+"""Tournament artifacts: one folder per run (docs/agents/naming.md, grammar G3).
 
-One grammar covers every tournament file, in every directory:
-
-    tournament_<key>_<stamp>.json          plan record      runtime/tournaments/
-    tournament_<key>_<stamp>.log           launcher log     runtime/tournaments/
-    tournament_results_<key>_<stamp>.json  results          reports/tournaments/
-    tournament_<key>_<arm>.db              store            data/
-    <key>_arms.json                        arm list (input) configs/tournaments/
+    configs/tournaments/<key>_arms.json        arm list (input, hand-written)
+    data/tournaments/<key>_<stamp>/            everything the run produced
+        plan.json
+        launch.log
+        results.json
+        <arm>.db
 
 `<key>` is `i<issue>-r<run>` for a numbered run, else `i<issue>` or
-`i<issue>-<name>` from `--stamp`. The stamp is always the ISO launch stamp.
+`i<issue>-<name>` from `--stamp`. The stamp is always the ISO launch stamp, in
+the folder name: two runs of the same number must not overwrite each other.
 
-Before this, one directory held four generations -- `i492_tournament-1.json`,
-`371_20261005-032000.json`, `487_current_setup_10arm.json`, and results with a
-reversed suffix -- and two readers each re-derived "the latest plan" with their
-own regex.
+Before the folder, one tournament was spread over `configs/`, `runtime/`,
+`reports/` and `data/` under three filename grammars -- and the stores sat in
+`data/` among `orders.db`. Answering "what did i492-r1 produce" meant four
+lookups, and deleting one tournament meant picking its files out by hand.
 """
 from __future__ import annotations
 
@@ -25,14 +25,16 @@ from core_brain.shadow_run import (
     build_tournament_log_path,
     build_tournament_record_path,
     build_tournament_results_path,
+    build_tournament_run_dir,
     build_tournament_run_id_v2,
     latest_tournament_record,
     parse_tournament_db_path,
-    parse_tournament_record_name,
+    parse_tournament_run_dir_name,
     tournament_key,
 )
 
 STAMP = "2026-10-05T03-20"
+RUN_DIR = f"i492-r1_{STAMP}"
 
 
 def test_key_shapes():
@@ -41,35 +43,44 @@ def test_key_shapes():
     assert tournament_key(371) == "i371"
 
 
-def test_v2_db_path_shape():
-    assert build_tournament_db_path_v2(
-        issue=492, arm="control-1", run_number=1, base_dir="data"
-    ) == Path("data/tournament_i492-r1_control-1.db")
-    assert build_tournament_db_path_v2(
-        issue=492, arm="deadband-tight-1", run_number=2, base_dir="data"
-    ) == Path("data/tournament_i492-r2_deadband-tight-1.db")
+def test_the_run_folder_carries_the_key_and_the_stamp():
+    assert build_tournament_run_dir(492, STAMP, run_number=1, base_dir="data/tournaments") == (
+        Path("data/tournaments") / RUN_DIR
+    )
+    # Same run number, different launch: two folders, no overwrite.
+    assert build_tournament_run_dir(492, "2026-10-06T09-00", run_number=1, base_dir="data/tournaments")
+    assert (
+        build_tournament_run_dir(492, STAMP, run_number=1, base_dir="data/tournaments").name
+        != build_tournament_run_dir(
+            492, "2026-10-06T09-00", run_number=1, base_dir="data/tournaments"
+        ).name
+    )
 
 
-def test_record_results_and_log_share_one_stem():
+def test_every_generated_file_sits_in_the_run_folder():
     record = build_tournament_record_path(492, STAMP, run_number=1)
     log = build_tournament_log_path(492, STAMP, run_number=1)
     results = build_tournament_results_path(492, STAMP, run_number=1)
+    store = build_tournament_db_path_v2(492, "control-1", run_number=1, stamp=STAMP)
 
-    assert record.parent.name == "tournaments" and record.parent.parent.name == "runtime"
-    assert record.name == f"tournament_i492-r1_{STAMP}.json"
-    # Same stem as the record, different extension: the detached-launch stdout
-    # redirect sits next to the plan it executed.
-    assert log.name == f"tournament_i492-r1_{STAMP}.log"
-    assert record.stem == log.stem
-    assert results.parent.parent.name == "reports"
-    assert results.name == f"tournament_results_i492-r1_{STAMP}.json"
+    for path in (record, log, results, store):
+        assert path.parent.name == RUN_DIR
+        assert path.parent.parent.name == "tournaments"
+        assert path.parent.parent.parent.name == "data"
+
+    # The folder says which run; the names inside say what each file is.
+    assert record.name == "plan.json"
+    assert log.name == "launch.log"
+    assert results.name == "results.json"
+    assert store.name == "control-1.db"
 
 
 def test_a_named_run_still_carries_the_iso_stamp():
     # `--stamp current_setup_10arm` names the run; it does not replace the
-    # timestamp, so the record sorts and can never collide with a repeat.
+    # timestamp, so the folder sorts and can never collide with a repeat.
     record = build_tournament_record_path(487, STAMP, name="current_setup_10arm")
-    assert record.name == f"tournament_i487-current-setup-10arm_{STAMP}.json"
+    assert record.parent.name == f"i487-current-setup-10arm_{STAMP}"
+    assert record.name == "plan.json"
 
 
 def test_v2_run_id_shape():
@@ -79,14 +90,40 @@ def test_v2_run_id_shape():
     assert run_id.startswith("shadow-")
 
 
-def test_parse_v2_db_path():
-    parsed = parse_tournament_db_path("data/tournament_i492-r1_control-1.db")
+def test_parse_a_run_folder_name():
+    assert parse_tournament_run_dir_name(RUN_DIR) == {
+        "issue": 492,
+        "run_number": 1,
+        "name": None,
+        "stamp": STAMP,
+    }
+    assert parse_tournament_run_dir_name("i608-r2_2026-10-17T18-48") == {
+        "issue": 608,
+        "run_number": 2,
+        "name": None,
+        "stamp": "2026-10-17T18-48",
+    }
+    assert parse_tournament_run_dir_name("i487-current-setup-10arm_2026-10-01T09-00") == {
+        "issue": 487,
+        "run_number": None,
+        "name": "current-setup-10arm",
+        "stamp": "2026-10-01T09-00",
+    }
+    # Not a run folder: an unnumbered key with no stamp, and the old generations.
+    assert parse_tournament_run_dir_name("i492-r1") is None
+    assert parse_tournament_run_dir_name("tournament_i608-r2_2026-10-17T18-48.json") is None
+    assert parse_tournament_run_dir_name("608_20261017-184837") is None
+
+
+def test_parse_a_store_inside_a_run_folder():
+    parsed = parse_tournament_db_path(f"data/tournaments/{RUN_DIR}/control-1.db")
     assert parsed == {
         "issue": 492,
-        "arm": "control-1",
         "run_number": 1,
+        "name": None,
+        "arm": "control-1",
+        "stamp": STAMP,
         "index": None,
-        "stamp": None,
     }
 
 
@@ -97,107 +134,85 @@ def test_parse_still_rejects_non_tournament():
     assert parse_tournament_db_path(None) is None
 
 
-def test_legacy_shape_still_parses():
-    # Files already on disk keep parsing: the legacy spelling stays in the
-    # pattern, and the ISO spelling is accepted for the same shape.
-    parsed = parse_tournament_db_path("data/484_tournament_01_control_20261011-120000.db")
-    assert parsed is not None
-    assert parsed["issue"] == 484
-    assert parsed["arm"] == "control"
-    assert parsed["index"] == 1
+def test_stores_from_before_the_folder_still_parse():
+    """Files already on disk keep parsing; the writers no longer produce them."""
+    legacy = parse_tournament_db_path("data/484_tournament_01_control_20261011-120000.db")
+    assert legacy is not None
+    assert legacy["issue"] == 484
+    assert legacy["arm"] == "control"
+    assert legacy["index"] == 1
 
     current = parse_tournament_db_path("data/484_tournament_01_control_2026-10-11T12-00.db")
     assert current is not None
     assert current["stamp"] == "2026-10-11T12-00"
 
-
-def test_parse_record_name():
-    assert parse_tournament_record_name("tournament_i608-r2_2026-10-17T18-48.json") == {
-        "issue": 608,
-        "run_number": 2,
-        "name": None,
-        "stamp": "2026-10-17T18-48",
-    }
-    assert parse_tournament_record_name(
-        "tournament_i487-current-setup-10arm_2026-10-01T09-00.json"
-    ) == {
-        "issue": 487,
-        "run_number": None,
-        "name": "current-setup-10arm",
-        "stamp": "2026-10-01T09-00",
-    }
-    # Not a plan record: results, a store, and the pre-rename generations.
-    assert parse_tournament_record_name("tournament_results_i608-r2_2026-10-17T18-48.json") is None
-    assert parse_tournament_record_name("tournament_i608-r2_the-surgeon-2.db") is None
-    assert parse_tournament_record_name("i608_tournament-2.json") is None
-    assert parse_tournament_record_name("608_20261017-184837.json") is None
+    flat = parse_tournament_db_path("data/tournament_i492-r1_control-1.db")
+    assert flat is not None
+    assert flat["issue"] == 492
+    assert flat["run_number"] == 1
 
 
-def test_latest_record_ranks_on_fields_not_on_the_filename(tmp_path: Path):
+def test_latest_run_folder_ranks_on_fields_not_on_the_name(tmp_path: Path):
     """Highest run wins, then newest stamp -- never string order.
 
     The old ranked-by-string readers picked a named record last only because
     `c` sorts after a digit, and would have picked run 10 before run 9.
     """
-    for name in (
-        "tournament_i608-r1_2026-10-17T18-48.json",
-        "tournament_i608-r9_2026-10-18T09-00.json",
-        "tournament_i608-r10_2026-10-19T09-00.json",
-        "tournament_i608-current-setup_2026-10-20T09-00.json",
-        "tournament_i608-r10_2026-10-19T08-00.json",
-        "tournament_results_i608-r11_2026-10-21T09-00.json",  # not a plan record
-        "tournament_i609-r99_2026-10-21T09-00.json",  # another issue
+    for folder in (
+        "i608-r1_2026-10-17T18-48",
+        "i608-r9_2026-10-18T09-00",
+        "i608-r10_2026-10-19T09-00",
+        "i608-current-setup_2026-10-20T09-00",
+        "i608-r10_2026-10-19T08-00",
+        "i609-r99_2026-10-21T09-00",  # another issue
+        "i608-r11_2026-10-21T09-00",  # a folder with no plan is not a plan
     ):
-        (tmp_path / name).write_text("{}", encoding="utf-8")
+        run_dir = tmp_path / folder
+        run_dir.mkdir()
+        if folder != "i608-r11_2026-10-21T09-00":
+            (run_dir / "plan.json").write_text("{}", encoding="utf-8")
 
     latest = latest_tournament_record(608, tmp_path)
     assert latest is not None
-    # Run 10 beats run 9 and the unnamed-run record; the later of the two run-10
-    # records wins on stamp. The results file and issue 609 are ignored.
-    assert latest.name == "tournament_i608-r10_2026-10-19T09-00.json"
+    assert latest == tmp_path / "i608-r10_2026-10-19T09-00" / "plan.json"
 
 
-def test_latest_record_ignores_a_longer_issue_number(tmp_path: Path):
-    """`tournament_i60*` also matches `i608`, so the parsed id has to decide.
+def test_latest_run_ignores_a_longer_issue_number(tmp_path: Path):
+    """`i60*` also matches `i608`, so the parsed id has to decide.
 
     Without the check the higher run number of the *other* issue wins, and the
     cockpit reads a plan that belongs to a different tournament.
     """
-    (tmp_path / "tournament_i608-r9_2026-10-19T09-00.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "tournament_i60-r1_2026-10-01T09-00.json").write_text("{}", encoding="utf-8")
+    for folder in ("i608-r9_2026-10-19T09-00", "i60-r1_2026-10-01T09-00"):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "plan.json").write_text("{}", encoding="utf-8")
 
     latest = latest_tournament_record(60, tmp_path)
     assert latest is not None
-    assert latest.name == "tournament_i60-r1_2026-10-01T09-00.json"
+    assert latest.parent.name == "i60-r1_2026-10-01T09-00"
 
 
-def test_build_plan_run_number_scheme(tmp_path: Path):
+def test_build_plan_puts_everything_in_one_folder(tmp_path: Path):
     from scripts.shadow_tournament import build_tournament_plan
 
-    arms = [{"name": "baseline"}, {"name": "conservative"}]
     plan = build_tournament_plan(
         issue=492,
-        arms=arms,
+        arms=[{"name": "baseline"}, {"name": "conservative"}],
         base_port=8801,
         base_dir=tmp_path,
         check_ports=False,
         run_number=1,
     )
+    run_dir = tmp_path / f"i492-r1_{plan.stamp}"
     assert plan.run_number == 1
     assert [a.name for a in plan.arms] == ["baseline-1", "conservative-1"]
-    assert plan.arms[0].db_path.name == "tournament_i492-r1_baseline-1.db"
+    assert plan.record_path == run_dir / "plan.json"
+    assert plan.results_path == run_dir / "results.json"
+    assert plan.log_path == run_dir / "launch.log"
+    assert plan.arms[0].db_path == run_dir / "baseline-1.db"
+    assert plan.arms[1].db_path == run_dir / "conservative-1.db"
     assert plan.arms[0].run_id == "shadow-492-tournament-1-baseline-1"
-    assert plan.arms[1].db_path.name == "tournament_i492-r1_conservative-1.db"
-    assert plan.record_path.name == f"tournament_i492-r1_{plan.stamp}.json"
-    assert plan.results_path.name == f"tournament_results_i492-r1_{plan.stamp}.json"
-    assert plan.log_path is not None
-    assert plan.log_path.name == f"tournament_i492-r1_{plan.stamp}.log"
-    assert plan.log_path.parent.name == "tournaments"
-    assert plan.log_path.parent.parent.name == "runtime"
     assert plan.to_dict()["log_path"] == str(plan.log_path)
-    # The store drops the stamp (the run key is already unique); every other
-    # artifact carries it.
-    assert plan.stamp not in plan.arms[0].db_path.name
     assert plan.record_path.is_absolute()
     # Base name still drives the preset selector, not the suffixed slug.
     assert plan.arms[0].env["BOT_QUOTE_TOURNAMENT_PRESET"] == "baseline"
@@ -215,17 +230,16 @@ def test_build_plan_run_number_two(tmp_path: Path):
         run_number=2,
     )
     assert plan.arms[0].name == "snapstop-2"
-    assert plan.arms[0].db_path.name == "tournament_i492-r2_snapstop-2.db"
-    assert plan.record_path.name == f"tournament_i492-r2_{plan.stamp}.json"
-    assert plan.log_path is not None
-    assert plan.log_path.name == f"tournament_i492-r2_{plan.stamp}.log"
+    assert plan.arms[0].db_path.name == "snapstop-2.db"
+    assert plan.record_path.parent.name == f"i492-r2_{plan.stamp}"
 
 
-def test_build_plan_legacy_branch_keeps_its_store_shape(tmp_path: Path):
-    """No run number: the legacy indexed store survives, the artifacts do not.
+def test_an_unnumbered_run_also_drops_the_arm_index(tmp_path: Path):
+    """No run number: the folder carries the identity, so the store is `<arm>.db`.
 
-    The store shape is load-bearing for the dashboard's clustering parser (it
-    reads the arm index), so it stays. Everything else follows the one grammar.
+    The old indexed shape (`371_tournament_01_conservative_<stamp>.db`) existed
+    only so the dashboard's clustering parser could read the arm index out of
+    the filename. The folder and the plan record carry it now.
     """
     from scripts.shadow_tournament import build_tournament_plan
 
@@ -238,9 +252,9 @@ def test_build_plan_legacy_branch_keeps_its_store_shape(tmp_path: Path):
     )
     assert plan.run_number is None
     assert [a.name for a in plan.arms][:2] == ["conservative", "balanced"]
-    assert plan.arms[0].db_path.name == f"371_tournament_01_conservative_{STAMP}.db"
-    assert plan.record_path.name == f"tournament_i371_{STAMP}.json"
-    assert plan.results_path.name == f"tournament_results_i371_{STAMP}.json"
+    assert plan.arms[0].db_path == tmp_path / f"i371_{STAMP}" / "conservative.db"
+    assert plan.record_path == tmp_path / f"i371_{STAMP}" / "plan.json"
+    assert plan.results_path == tmp_path / f"i371_{STAMP}" / "results.json"
 
 
 def test_build_plan_named_run(tmp_path: Path):
@@ -254,5 +268,5 @@ def test_build_plan_named_run(tmp_path: Path):
         run_name="current_setup_10arm",
         check_ports=False,
     )
-    assert plan.record_path.name == f"tournament_i487-current-setup-10arm_{STAMP}.json"
-    assert plan.results_path.name == f"tournament_results_i487-current-setup-10arm_{STAMP}.json"
+    assert plan.record_path.parent.name == f"i487-current-setup-10arm_{STAMP}"
+    assert plan.results_path.parent == plan.record_path.parent

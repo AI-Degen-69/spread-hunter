@@ -8,23 +8,15 @@ from pathlib import Path
 import pytest
 
 from core_brain.shadow_run import (
-    build_tournament_db_path,
     build_tournament_run_id,
     parse_tournament_db_path,
     write_shadow_heartbeat,
 )
 
 
-def test_build_and_parse_tournament_db_path():
-    db_path = build_tournament_db_path(
-        issue=371,
-        index=1,
-        arm="aggressive",
-        stamp="20261005-031500",
-        base_dir="data",
-    )
-    assert db_path == Path("data/371_tournament_01_aggressive_20261005-031500.db")
-
+def test_parse_legacy_tournament_db_path():
+    """Writers no longer emit this shape; the stores already on disk still read."""
+    db_path = Path("data/371_tournament_01_aggressive_20261005-031500.db")
     parsed = parse_tournament_db_path(db_path)
     assert parsed is not None
     assert parsed["issue"] == 371
@@ -128,7 +120,6 @@ def test_build_tournament_plan_defaults(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -144,7 +135,8 @@ def test_build_tournament_plan_defaults(tmp_path: Path):
     first = plan.arms[0]
     assert first.index == 1
     assert first.dash_port == 8801
-    assert first.db_path.name.startswith("371_tournament_01_")
+    assert first.db_path.name == "conservative.db"
+    assert first.db_path.parent.name == f"i371_{plan.stamp}"
     assert first.run_id.startswith("shadow-371-t01-")
     assert "--db" in first.shadow_argv
     assert str(first.db_path) in first.shadow_argv
@@ -218,7 +210,8 @@ def test_build_tournament_plan_rejects_live_port_8799():
 def test_build_tournament_plan_rejects_existing_db(tmp_path: Path):
     from scripts.shadow_tournament import build_tournament_plan
 
-    existing_db = tmp_path / "371_tournament_01_arm-one_20261005-032000.db"
+    existing_db = tmp_path / "i371_20261005-032000" / "arm-one.db"
+    existing_db.parent.mkdir(parents=True)
     existing_db.write_text("existing content", encoding="utf-8")
 
     arms = [{"name": "arm-one"}]
@@ -261,7 +254,8 @@ def test_dry_run_cli_output(capsys, tmp_path: Path):
     # `--stamp` names the run; the plan still carries the ISO launch stamp.
     import re as _re
     assert _re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}", data["stamp"]), data["stamp"]
-    assert "tournament_i371-current-setup_" in data["record_path"].replace("\\", "/")
+    assert "i371-current-setup_" in data["record_path"].replace("\\", "/")
+    assert data["record_path"].replace("\\", "/").endswith("/plan.json")
     assert len(data["arms"]) == 4
 
 
@@ -272,7 +266,6 @@ def test_default_arms_set_preset_selector(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -288,7 +281,6 @@ def test_default_arm_offsets_agree_with_presets(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -317,7 +309,6 @@ def test_default_arm_ports_and_paths(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -327,7 +318,8 @@ def test_default_arm_ports_and_paths(tmp_path: Path):
     run_ids = [a.run_id for a in plan.arms]
     assert len(set(run_ids)) == 4
     for arm in plan.arms:
-        assert f"_tournament_{arm.index:02d}_{arm.name}_" in arm.db_path.name
+        assert arm.db_path.name == f"{arm.name}.db"
+        assert arm.db_path.parent == plan.record_path.parent
 
 
 def _seed_arm_db(path, run_id, fills, closes):
@@ -447,7 +439,6 @@ def test_write_tournament_results_rejects_length_mismatch(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -484,7 +475,6 @@ def test_write_tournament_results_file(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -520,8 +510,8 @@ def test_dry_run_logs_to_stderr_and_keeps_stdout_pure_json(tmp_path: Path):
     assert "Tournament dry-run" in proc.stderr
     data = json.loads(proc.stdout)
     assert len(data["arms"]) == 4
-    assert "tournaments/tournament_i999-r9_" in data["log_path"].replace("\\", "/")
-    assert data["log_path"].endswith(".log")
+    assert "i999-r9_" in data["log_path"].replace("\\", "/")
+    assert data["log_path"].endswith("launch.log")
 
 
 def test_dry_run_shows_results_path_and_writes_nothing(tmp_path: Path, capsys):
@@ -538,9 +528,9 @@ def test_dry_run_shows_results_path_and_writes_nothing(tmp_path: Path, capsys):
     data = json.loads(capsys.readouterr().out)
     # `--stamp` names the run; the ISO launch stamp is always appended, so the
     # assertion pins the prefix and the extension, never the clock.
-    assert "tournaments/tournament_results_i371-20261005-039999_" in data["results_path"].replace("\\", "/")
-    assert data["results_path"].endswith(".json")
-    assert list(tmp_path.glob("*results.json")) == []
+    assert "i371-20261005-039999_" in data["results_path"].replace("\\", "/")
+    assert data["results_path"].endswith("results.json")
+    assert list(tmp_path.glob("*/results.json")) == []
     assert not (ROOT / data["results_path"]).exists()
 
 
@@ -598,7 +588,6 @@ def test_launch_starts_and_stops_the_market_filter(tmp_path, monkeypatch):
         issue=371,
         arms=[{"name": "solo", **st.TOURNAMENT_PRESETS["balanced"]}],
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         stamp="20261010-120000",
         check_ports=False,
     )
@@ -728,7 +717,6 @@ def test_worker_environment_strips_parent_config_env(tmp_path, monkeypatch):
             {"name": "explicit", "env": {"BOT_QUOTE_PRICE_RISK_WIDEN": "0.02"}},
         ],
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         stamp="20261016-120000",
         check_ports=False,
     )
@@ -854,9 +842,11 @@ def test_the_i622_arms_file_is_refused_at_plan_time(tmp_path):
 
 
 def test_no_arm_is_pointed_at_the_production_registry(tmp_path):
-    for arm in _supported_plan(tmp_path).arms:
+    plan = _supported_plan(tmp_path)
+    for arm in plan.arms:
         assert Path(arm.db_path).name != "orders.db"
-        assert "tournament" in Path(arm.db_path).name
+        # The store lives in the run folder, not loose in data/.
+        assert Path(arm.db_path).parent == plan.record_path.parent
 
 
 def test_every_arm_names_a_distinct_store_and_run(tmp_path):
@@ -1068,8 +1058,9 @@ def test_i492_plan_names_ten_fresh_stores_and_ports(tmp_path):
     assert len({a.run_id for a in plan.arms}) == 10
     for arm in plan.arms:
         name = Path(arm.db_path).name
-        assert name.startswith("tournament_i492-r1_"), name
+        assert name == f"{arm.name}.db", name
         assert name != "orders.db"
+        assert Path(arm.db_path).parent.name.startswith("i492-r1_")
 
 
 def test_run_numbered_dry_run_reads_the_conventional_arms_file(tmp_path, capsys):
@@ -1087,19 +1078,19 @@ def test_run_numbered_dry_run_reads_the_conventional_arms_file(tmp_path, capsys)
         f"{name}-1" for name in I492_EXPECTED_ENV
     ]
     assert [a["dash_port"] for a in data["arms"]] == list(range(8801, 8811))
-    # Anchored to the repo, never to the cwd: a relative path here is what let a
-    # launch from scripts/ write the plan record somewhere nobody looks.
-    for key, expected in (
-        ("record_path", "runtime/tournaments/tournament_i492-r1_"),
-        ("results_path", "reports/tournaments/tournament_results_i492-r1_"),
-        ("log_path", "runtime/tournaments/tournament_i492-r1_"),
-    ):
+    # Anchored to the run root, never to the cwd: a relative path here is what
+    # let a launch from scripts/ write the plan record somewhere nobody looks.
+    # Plan, results and log share one folder; only the filenames differ.
+    run_dir = Path(data["record_path"])
+    assert run_dir.is_absolute(), data["record_path"]
+    assert run_dir.parent.parent == tmp_path
+    assert run_dir.parent.name.startswith("i492-r1_")
+    assert run_dir.name == "plan.json"
+    for key, filename in (("results_path", "results.json"), ("log_path", "launch.log")):
         reported = Path(data[key])
         assert reported.is_absolute(), (key, data[key])
-        # The ISO launch stamp is generated at build time, so pin the prefix and
-        # the extension rather than the clock.
-        assert reported.as_posix().endswith(".json" if key != "log_path" else ".log"), data[key]
-        assert "/" + expected in reported.as_posix(), (key, data[key])
+        assert reported.parent == run_dir.parent, (key, data[key])
+        assert reported.name == filename, (key, data[key])
     assert data["arms_source"] == "configs/tournaments/i492-r1_arms.json"
 
 
@@ -1176,7 +1167,6 @@ def test_a_supported_alias_still_plans(tmp_path):
             },
         }],
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         run_number=1,
         check_ports=False,
     )
@@ -1224,7 +1214,6 @@ def test_default_plan_interval_matches_max_rotation_ceiling(tmp_path: Path):
 
     plan = build_tournament_plan(
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         stamp="20261019-120000",
         check_ports=False,
     )
@@ -1254,7 +1243,6 @@ def test_worker_argument_interval_passes_silently_to_shadow_run(tmp_path: Path, 
 
     plan = build_tournament_plan(
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         stamp="20261019-120000",
         check_ports=False,
     )
@@ -1276,7 +1264,6 @@ def test_explicit_interval_retention_and_clamping(tmp_path: Path, caplog):
     # Explicit 0.25 (below ceiling): plan retains it, parsed returns 0.25, no warnings
     plan_fast = build_tournament_plan(
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         interval=0.25,
         stamp="20261019-120001",
         check_ports=False,
@@ -1294,7 +1281,6 @@ def test_explicit_interval_retention_and_clamping(tmp_path: Path, caplog):
     caplog.clear()
     plan_slow = build_tournament_plan(
         base_dir=tmp_path,
-        artifacts_root=tmp_path,
         interval=5.0,
         stamp="20261019-120002",
         check_ports=False,
@@ -1477,6 +1463,7 @@ def test_i487_plan_names_ten_fresh_stores_and_ports(tmp_path):
     assert len({str(a.db_path) for a in plan.arms}) == 10
     assert len({a.run_id for a in plan.arms}) == 10
     for arm in plan.arms:
-        assert Path(arm.db_path).name.startswith("487_tournament_")
+        assert Path(arm.db_path).name == f"{arm.name}.db"
         assert Path(arm.db_path).name != "orders.db"
+        assert Path(arm.db_path).parent == plan.record_path.parent
 

@@ -28,9 +28,19 @@ def _spec_arm_names() -> list[str]:
     return [a["name"] for a in json.loads(I487_ARMS_SPEC.read_text(encoding="utf-8"))]
 
 
-def _record(tmp_path: Path, filename: str, arms: list[dict]) -> Path:
-    """Drop a plan record into the temporary tournaments directory."""
-    tourn_dir = tmp_path / "runtime" / "tournaments"
+def _record(tmp_path: Path, run_dir: str, arms: list[dict]) -> Path:
+    """Drop a run folder with its plan record into the tournaments root."""
+    tourn_dir = tmp_path / "data" / "tournaments"
+    folder = tourn_dir / run_dir
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "plan.json"
+    path.write_text(json.dumps({"arms": arms}), encoding="utf-8")
+    return path
+
+
+def _legacy_file(tmp_path: Path, filename: str, arms: list[dict]) -> Path:
+    """A pre-folder record: a flat file directly in the root, not a plan."""
+    tourn_dir = tmp_path / "data" / "tournaments"
     tourn_dir.mkdir(parents=True, exist_ok=True)
     path = tourn_dir / filename
     path.write_text(json.dumps({"arms": arms}), encoding="utf-8")
@@ -74,7 +84,7 @@ def test_i487_each_arm_tweak_names_the_one_knob_the_spec_file_sets():
 
 def test_i487_resolves_the_named_plan_record(tmp_path, monkeypatch):
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
-    _record(tmp_path, "tournament_i487-current-setup-10arm_2026-10-17T18-48.json", [
+    _record(tmp_path, "i487-current-setup-10arm_2026-10-17T18-48", [
         {
             "name": "control",
             "db_path": "data/real_control.db",
@@ -102,21 +112,22 @@ def test_i487_resolves_the_named_plan_record(tmp_path, monkeypatch):
     assert arms["widen-on"]["hypothesized_tweak"] == "quote_gate_widen_on = 1"
 
 
-def test_i487_prefers_the_named_record_over_a_leftover_timestamped_one(tmp_path, monkeypatch):
-    """Both record shapes can sit in the folder; the named one is this run.
+def test_i487_prefers_the_named_record_over_a_leftover_legacy_file(tmp_path, monkeypatch):
+    """Only a run folder is a plan; a pre-folder file is not one.
 
-    A timestamped `487_<stamp>.json` could only be the superseded catalyst round,
-    so the resolver must read db/run_id/port from the named record. That choice is
-    a sort, so it gets a test rather than a comment.
+    A flat `487_<stamp>.json` could only be the superseded catalyst round -- the
+    writers no longer produce that shape -- so the resolver must read
+    db/run_id/port from the named run folder. That choice is a scan, so it gets a
+    test rather than a comment.
     """
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
-    _record(tmp_path, "487_20261018-140000.json", [{
+    _legacy_file(tmp_path, "487_20261018-140000.json", [{
         "name": "control",
         "db_path": "data/stale_control.db",
         "run_id": "shadow-stale-control",
         "dash_port": 9999,
     }])
-    _record(tmp_path, "tournament_i487-current-setup-10arm_2026-10-17T18-48.json", [{
+    _record(tmp_path, "i487-current-setup-10arm_2026-10-17T18-48", [{
         "name": "control",
         "db_path": "data/named_control.db",
         "run_id": "shadow-named-control",
@@ -135,13 +146,13 @@ def test_i487_without_a_record_falls_back_to_the_static_table(tmp_path, monkeypa
 
 def test_492_and_608_still_resolve_from_their_run_numbered_records(tmp_path, monkeypatch):
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
-    _record(tmp_path, "tournament_i492-r2_2026-10-17T18-48.json", [{
+    _record(tmp_path, "i492-r2_2026-10-17T18-48", [{
         "name": "control-1",
         "db_path": "data/real492.db",
         "run_id": "shadow-real-492",
         "dash_port": 8901,
     }])
-    _record(tmp_path, "tournament_i608-r1_2026-10-17T18-48.json", [{
+    _record(tmp_path, "i608-r1_2026-10-17T18-48", [{
         # The real #608 record names its arms WITHOUT the round suffix the
         # cockpit's static table carries; the resolver strips it to match.
         "name": "the-accountant",
@@ -150,7 +161,7 @@ def test_492_and_608_still_resolve_from_their_run_numbered_records(tmp_path, mon
         "dash_port": 8902,
     }])
     # A #487 named record sitting beside them must not bleed into either key.
-    _record(tmp_path, "tournament_i487-current-setup-10arm_2026-10-17T18-48.json", [])
+    _record(tmp_path, "i487-current-setup-10arm_2026-10-17T18-48", [])
 
     c492 = {a["name"]: a for a in cockpit.resolve_tournament_arms("492")}
     assert len(c492) == len(cockpit.ARMS_CONFIG_492)
@@ -253,9 +264,9 @@ BROKEN_RECORD = '{"arms": [{"name": "control",'
 
 
 def _broken_record(tmp_path: Path) -> Path:
-    tourn_dir = tmp_path / "runtime" / "tournaments"
-    tourn_dir.mkdir(parents=True, exist_ok=True)
-    path = tourn_dir / "tournament_i487-current-setup-10arm_2026-10-17T18-48.json"
+    folder = tmp_path / "data" / "tournaments" / "i487-current-setup-10arm_2026-10-17T18-48"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "plan.json"
     path.write_text(BROKEN_RECORD, encoding="utf-8")
     return path
 
@@ -295,9 +306,9 @@ def test_broken_record_shape_errors_name_the_arm_at_fault(
     """A record that parses but is the wrong shape is just as unreadable."""
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
-    tourn_dir = tmp_path / "runtime" / "tournaments"
-    tourn_dir.mkdir(parents=True, exist_ok=True)
-    (tourn_dir / "tournament_i487-current-setup-10arm_2026-10-17T18-48.json").write_text(payload, encoding="utf-8")
+    folder = tmp_path / "data" / "tournaments" / "i487-current-setup-10arm_2026-10-17T18-48"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "plan.json").write_text(payload, encoding="utf-8")
 
     arms, record_error = cockpit.resolve_tournament_arms_with_status("487")
 
@@ -320,7 +331,7 @@ def test_no_record_is_not_an_error(tmp_path, monkeypatch):
 def test_a_readable_record_reports_no_error(tmp_path, monkeypatch):
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
-    _record(tmp_path, "tournament_i487-current-setup-10arm_2026-10-17T18-48.json", [{
+    _record(tmp_path, "i487-current-setup-10arm_2026-10-17T18-48", [{
         "name": "control",
         "db_path": "data/real_control.db",
         "run_id": "shadow-real-control",
@@ -354,7 +365,7 @@ def test_null_db_path_warns_instead_of_crashing_the_stats(tmp_path, monkeypatch)
     """
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
-    _record(tmp_path, "tournament_i487-current-setup-10arm_2026-10-17T18-48.json", [
+    _record(tmp_path, "i487-current-setup-10arm_2026-10-17T18-48", [
         {"name": "control", "db_path": None, "run_id": "shadow-real", "dash_port": 8801},
     ])
 
@@ -404,12 +415,12 @@ def test_cockpit_page_shows_the_broken_record_warning():
     """The fallback table must say, on screen, that it is the fallback."""
     broken = cockpit.generate_cockpit_html({
         "arms": [], "tourney_key": "487",
-        "record_error": "C:/run/tournament_i487-current-setup-10arm_2026-10-17T18-48.json: line 1 column 27",
+        "record_error": "C:/run/i487-current-setup-10arm_2026-10-17T18-48/plan.json: line 1 column 27",
     })
     assert 'id="record-warning"' in broken
     assert 'record-warning" class="badge-red" style="display: block;' in broken
     assert "failed to parse" in broken
-    assert "tournament_i487-current-setup-10arm_2026-10-17T18-48.json: line 1 column 27" in broken
+    assert "i487-current-setup-10arm_2026-10-17T18-48/plan.json: line 1 column 27" in broken
 
     healthy = cockpit.generate_cockpit_html(
         {"arms": [], "tourney_key": "487", "record_error": None})
