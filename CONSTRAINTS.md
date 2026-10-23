@@ -1,70 +1,65 @@
-# CONSTRAINTS.md — Issue #787: decide whether to raise the entry edge floor
+# CONSTRAINTS.md — Issue #795: hard-stopped pair resells its own closed shares
 
-Branch: `i787/decide-whether-to-raise-the-ev-edge-floor` | Issue: #787
+Branch: `i795/fix-a-hard-stopped-pair-keeps-reselling-its-own-cl` | Issue: #795
 
 Locked during Station II planning. Stations III–V must hold every line below.
 Tighten only with operator approval; never loosen silently.
 
-This issue is **analysis and a decision record**. It changes no live behaviour.
-
 ## Zero regressions
 
-- Focused suites for the touched files must be green after the change:
-  `python -m pytest -q tests/test_edge_floor_analysis.py tests/test_fill_quality_gate.py`.
-- `tests/test_fill_quality_report.py` and `tests/test_fill_quality_gate.py` must stay
-  green **untouched in their existing assertions**: the analysis script imports
-  `fill_quality_report` and must not alter it (no edit to `core_brain/**`).
-- Every new behaviour needs a test that fails without it: the pair/position grouping,
-  the negative-edge bucket, the floor sweep conservation, and the crossover
-  sufficiency rule each get one.
+- Focused suites for the touched modules must be green after the change:
+  `tests/test_single_buy_saver.py tests/test_single_leg_lifecycle.py`
+  `tests/test_refill_after_exit.py tests/test_partial_exit_stays_managed.py`
+  `tests/test_hard_stop_reset.py tests/test_order_registry.py tests/test_rc_fixes.py`.
+- Existing behaviors stay pinned with unchanged outcomes: the 5-share
+  shortfall refusal in `test_refill_after_exit.py`, the `[10, 10]` refill
+  sales, the partial-exit replay, the one-connection test
+  (`tests/test_single_buy_saver.py:458-481`), and the `6.0` expectation in
+  `tests/test_rc_fixes.py:151-177`.
+- Every new behavior needs a test that fails without it: the moe two-pass
+  replay (old pair reads zero naked, new close books new-pair cost), the
+  close cost cap (second close books 1.00 not 5.00), and the netting
+  boundaries (inclusive earliest-`posted_ts`, both-prices-set exclusion,
+  unmapped-token exclusion).
 
 ## Scope fences (hard)
 
-- **No changes under `core_brain/`.** Not `fill_quality_report.py`, not `config.py`,
-  not `trader_loop.py`. The gate's live behaviour is out of scope by the issue's own
-  acceptance line ("No live behaviour changes without operator sign-off").
-- **No writes to any `.db`.** Every read opens `mode=ro`; the script never creates,
-  migrates, or repairs a store. `data/orders.db` is the production registry: read only.
-- **No venue-reaching command.** `shadow_run` is allowed (no signer, spends nothing);
-  `quote`, `complete`, the Trader loop and dashboard START are the operator's.
-- No new files under `core_brain/` or `dashboard/`. Deliverables are one script, its
-  test file, one test added to an existing file, and one audit document.
+- **Only these production files change:** `core_brain/order_registry.py`
+  (one new pair-scoped rescue-totals read next to
+  `get_pair_orders_with_fill_totals`) and `core_brain/single_buy_saver.py`
+  (`load_pair` netting, removal of the two `_prior_exit_shares` credits,
+  `cost_basis` cap in `_record_exit_close`, poll-loop review).
+- `registry_naked_usd` and its `rescue_net` CTE stay byte-identical in
+  behavior — the new read copies its predicates, never edits them.
+  `get_pair_orders_with_fill_totals` keeps its signature and behavior for
+  its other callers.
+- **No writes to any named `.db`.** All new tests use temporary
+  `OrderRegistry` databases. `data/orders.db` and
+  `data/01_shadow_23-10_20-16.db` are read-only evidence, never fixtures.
+- **No venue-reaching command.** No `quote`, `complete`, Trader loop, or
+  dashboard START. Verification is `pytest` on the focused suites only.
 
 ## Anti-cheat
 
-- Never skip, xfail, or delete a test to get green; never weaken an assertion.
-- The decision rule is fixed **before** the numbers are read (see
-  `docs/audits/edge-floor-decision.md` § *The locked decision rule, applied*).
-  Reading the buckets first and then choosing a rule is the exact
-  failure this issue exists to prevent — if a rule changes after the numbers, the
-  document must say so and why.
-- Never present a rehearsal number as evidence about live performance: shadow numbers
-  are labelled "rehearsal" in every table, heading and summary sentence.
-- Never state a crossover, a bucket, or a floor the data does not support. A bucket
-  under `DEFAULT_MIN_OBS = 30` closed positions is `insufficient`, and "keep current"
-  is a valid, expected outcome.
+- Never skip, xfail, or delete a test to get green; never weaken an
+  assertion or suppress a linter to pass.
+- The netting and the removal of BOTH prior-exit credits land in the same
+  change: `load_pair` netting with either credit left in place double-counts
+  (credit hides real shortfalls) and is a red state, never a checkpoint.
+- Never widen the time scope beyond `rescue_net`'s rule (closes at or after
+  the pair's earliest `posted_ts`). The known concurrent-pairs-on-one-token
+  limit stays documented, not fixed here.
 
 ## Performance / architecture ceilings
 
-- The analysis reuses `fill_quality_report.load_store` / `build_report` /
-  `edge_bucket_for` / `score_ab`. **No second SQLite loader, no second bucketing
-  function, no second PnL attribution.** The only bookkeeping filter is a
-  `dataclasses.replace` on the loaded `StoreLoad` with closes filtered by
-  `close_methods.BOOKKEEPING_METHODS`.
-- The script stays offline and deterministic: no network, no clock-dependent numbers
-  inside the tables (the only clock use is the output folder stamp), and the same
-  store + args always produce the same table.
-- One store per invocation. The two shadow tapes have different presets
-  (`shadow-01`, `shadow-01-prudent`); pooling them would mix configurations, so they
-  are reported side by side, never summed.
-
-## Dependencies
-
-- No new external dependency, no new package. Standard library plus this repo only.
+- The pair read stays at **one connection** (`tests/test_single_buy_saver.py:458-481`):
+  fill rows + rescued totals in a single `_conn()` block, no per-order reads.
+- No new external dependency, no new package, no new file under
+  `core_brain/`. One registry method, netting inside the existing
+  `load_pair` view — no second inventory abstraction.
 
 ## Safety (repo rules)
 
-- `data/*.db` are gitignored and must never be committed. `reports/` is gitignored too.
-- The live step — setting `BOT_ENTRY_FILL_QUALITY_GATE_ON` /
-  `BOT_ENTRY_FILL_QUALITY_BLOCKED_EDGE` and restarting the trader — is written as the
-  operator's action in the decision record, never executed by the agent.
+- `data/*.db` are gitignored and must never be committed.
+- Retire `_prior_exit_shares` only when a grep proves zero remaining
+  callers; its scoping tests move to `load_pair`, never dropped.
