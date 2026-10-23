@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>הרווחים שנסגרו סוף סוף נספרים — עדכון #768</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #273449;
+    --ink: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #14b8a6;
+    --accent-soft: rgba(20, 184, 166, 0.15);
+    --loss: #ef4444;
+    --gain: #10b981;
+    --warn: #d97706;
+    --line: #334155;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Heebo", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.6;
+    padding: 24px 16px 64px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  header { text-align: center; padding: 20px 0 8px; }
+  h1 { font-size: clamp(26px, 5vw, 40px); font-weight: 800; }
+  h1 em { color: var(--accent); font-style: normal; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+    margin: 14px 0 6px; font-size: 14px;
+  }
+  .meta a {
+    color: var(--accent); text-decoration: none;
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 4px 14px; background: var(--panel);
+  }
+  .meta a:hover { border-color: var(--accent); }
+  .lede {
+    text-align: center; color: var(--muted);
+    max-width: 560px; margin: 10px auto 0; font-size: 17px;
+  }
+  section { margin-top: 28px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 20px;
+  }
+  h2 { font-size: 20px; margin-bottom: 10px; }
+  h2 .num {
+    display: inline-block; background: var(--accent-soft); color: var(--accent);
+    border-radius: 8px; padding: 0 10px; margin-inline-start: 8px;
+    font-size: 15px;
+  }
+  /* centerpiece */
+  .demo { padding: 20px 20px 14px; }
+  .demo-top {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    justify-content: space-between; margin-bottom: 12px;
+  }
+  .slider-box { flex: 1 1 300px; min-width: 240px; }
+  .slider-box label { font-size: 15px; display: block; margin-bottom: 4px; }
+  .slider-row { display: flex; align-items: center; gap: 12px; direction: ltr; }
+  input[type="range"] {
+    flex: 1; accent-color: var(--accent); height: 28px; cursor: pointer;
+  }
+  .pnl-val {
+    font-size: 20px; font-weight: 700; min-width: 84px; text-align: center;
+    border-radius: 8px; padding: 2px 8px; background: var(--panel-2);
+  }
+  .pnl-val.gain { color: var(--gain); }
+  .pnl-val.loss { color: var(--loss); }
+  canvas { width: 100%; height: auto; display: block; }
+  .hint { color: var(--muted); font-size: 13px; text-align: center; margin-top: 8px; }
+  /* caps chips */
+  .caps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .cap {
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px 16px;
+  }
+  .cap .name {
+    direction: ltr; text-align: left; font-size: 13px; color: var(--muted);
+    letter-spacing: 0.2px;
+  }
+  .cap .vals { display: flex; align-items: baseline; gap: 10px; margin-top: 6px; direction: ltr; justify-content: flex-start; }
+  .cap .was { color: var(--muted); text-decoration: line-through; font-size: 16px; }
+  .cap .now { color: var(--accent); font-size: 24px; font-weight: 800; }
+  .cap .now.gain { color: var(--gain); }
+  .cap .now.loss { color: var(--loss); }
+  .cap .dir { font-size: 12px; color: var(--muted); }
+  /* story */
+  .story p { margin-bottom: 12px; font-size: 17px; }
+  .story b { color: var(--accent); font-weight: 700; }
+  .note {
+    border-inline-start: 3px solid var(--warn); padding: 10px 14px;
+    background: var(--panel-2); border-radius: 8px; font-size: 15px; margin-top: 6px;
+  }
+  /* runway */
+  ol.run { counter-reset: step; list-style: none; }
+  ol.run li {
+    counter-increment: step; position: relative;
+    padding: 10px 46px 10px 12px; margin-bottom: 10px;
+    background: var(--panel-2); border-radius: 10px; font-size: 15.5px;
+  }
+  ol.run li::before {
+    content: counter(step);
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px;
+  }
+  code, .ltr { direction: ltr; unicode-bidi: isolate; }
+  code {
+    background: #0b1220; border: 1px solid var(--line); border-radius: 6px;
+    padding: 1px 7px; font-size: 0.92em; color: #7dd3fc;
+  }
+  footer { margin-top: 40px; text-align: center; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>הרווחים שנסגרו <em>סוף סוף נספרים</em></h1>
+    <div class="meta">
+      <a href="https://github.com/AI-Degen-69/spread-hunter/pull/769" target="_blank" rel="noopener">העדכון שהועלה לאוויר — PR&nbsp;#769</a>
+      <a href="https://github.com/AI-Degen-69/spread-hunter/issues/768" target="_blank" rel="noopener">הבקשה המקורית — Issue&nbsp;#768</a>
+    </div>
+    <p class="lede">לפני: רווח או הפסד מעסקאות שנסגרו לא השפיעו על גבולות הסיכון.
+    עכשיו: כל רווח שנסגר מזיז את הגבולות באותו רגע.</p>
+  </header>
+
+  <!-- ============ CENTERPIECE: the two-bar portfolio demo ============ -->
+  <section class="panel demo" aria-label="הדגמה אינטראקטיבית">
+    <div class="demo-top">
+      <div class="slider-box">
+        <label for="pnl">רווח / הפסד מעסקאות שנסגרו באותה ריצה <span style="color:var(--muted)">(גררו)</span></label>
+        <div class="slider-row">
+          <input type="range" id="pnl" min="-20" max="20" step="0.5" value="6.5" aria-label="רווח או הפסד שנסגר">
+          <span class="pnl-val gain" id="pnlVal" dir="ltr">+$6.50</span>
+        </div>
+      </div>
+    </div>
+
+    <canvas id="chart" width="760" height="400" role="img"
+      aria-label="שני עמודות: לפני העדכון התיק תמיד 90 דולר למרות הרווח הסגור; אחרי העדכון התיק הוא 100 ועוד הרווח פחות 10"></canvas>
+
+    <p class="hint">עמודה ימנית: החישוב הישן — הרווח הסגור מתעלם. עמודה שמאלית: החישוב החדש — הרווח הסגור נכנס לתיק.</p>
+
+    <div class="caps" style="margin-top:16px">
+      <div class="cap">
+        <div class="name">Max Capital Per Order</div>
+        <div class="vals"><span class="was" id="wasOrder">$22.50</span><span class="now gain" id="nowOrder">$24.12</span></div>
+        <div class="dir">25% משווי התיק — תקרת ההזמנה הבודדת</div>
+      </div>
+      <div class="cap">
+        <div class="name">Single-Leg Unwind Cap</div>
+        <div class="vals"><span class="was" id="wasNaked">$5.40</span><span class="now gain" id="nowNaked">$5.79</span></div>
+        <div class="dir">6% משווי התיק — תקרת הסיכון על רגל בודדת</div>
+      </div>
+      <div class="cap">
+        <div class="name">Bankroll Deployment Ceiling</div>
+        <div class="vals"><span class="was" id="wasTotal">$81.00</span><span class="now gain" id="nowTotal">$86.85</span></div>
+        <div class="dir">90% משווי התיק — תקרת הפריסה הכוללת</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ THE STORY ============ -->
+  <section class="panel story" aria-label="הסיפור">
+    <h2>מה היה הבעיה</h2>
+    <p>הבוט קונה זוג מניות (UP וגם DOWN) מתחת לדולר וממזג אותן בחזרה לדולר שלם.
+    כשעסקה נסגרת — הרווח או ההפסד שלה הפך ל… כלום בעיני גבולות הסיכון.</p>
+    <p>המערכת חישבה את שווי התיק רק מהבנק ההתחלתי ומהשינוי בעמדות הפתוחות.
+    רווח שנסגר? התקרות נשארו קפואות על אותו מספר. הפסד שנסגר? גם כן.</p>
+
+    <h2 style="margin-top:18px">מה השתנה</h2>
+    <p>עכשיו, כשאין קריאה ישירה של יתרת החשבון מהבורסה, שווי התיק כולל גם את
+    <b>כל הרווחים וההפסדים שנסגרו באותה ריצה</b> — ושלוש התקרות
+    (<span class="ltr">Max Capital Per Order</span>,
+    <span class="ltr">Single-Leg Unwind Cap</span>,
+    <span class="ltr">Bankroll Deployment Ceiling</span>)
+    זזות איתו מיד.</p>
+
+    <h2 style="margin-top:18px">המציאות החדשה</h2>
+    <p>אחרי עסקה מרווחית — התקרות עולות מיד.
+    אחרי עסקה מפסדת — הן מתכווצות מיד.
+    אין עוד מצב שבו הבוט סוחר עם תקרות שלא ראו חצי מהכסף.</p>
+
+    <p class="note">במצב לייב (כסף אמיתי) הבסיס הוא יתרת המזומנים בפועל —
+    שכבר מכילה את הרווחים שנסגרו, אז המערכת זהירה ולא מוסיפה אותם פעמיים.</p>
+  </section>
+
+  <!-- ============ RUNWAY ============ -->
+  <section class="panel" aria-label="איך בודקים באמת">
+    <h2>בדיקה במקום — בדקות הבאות</h2>
+    <ol class="run">
+      <li>פתחו את הדשבורד: <code>.\scripts\spread-hunter-menu.ps1 start</code>
+        ואז <code>http://127.0.0.1:8799</code></li>
+      <li>חשוב לדעת לפני הבדיקה: הפרמטרים בטאב האסטרטגיה
+        (<span class="ltr">Max Capital Per Order</span> וחבריו)
+        <b>לא מציגים</b> את השינוי הזה — הם נקראים תמיד ממסד הנתונים הראשי
+        ומתעלמים מהחלפת מסד הנתונים. ערכים זהים בין מסדי נתונים שונים הם
+        הבאג הזה (תועד ודווח כ-<span class="ltr">Issue #772</span>) — לא כשל של העדכון הנוכחי.</li>
+      <li>הבדיקה האמיתית של השינוי: הריצו חזרה (shadow) שסוגרת עסקה —
+        <code>python -m core_brain.shadow_run --minutes 5 --db data/NN_shadow_&lt;stamp&gt;.db</code>.
+        הלולאה מחשבת לעצמה את מגבלות הסיכון בכל מחזור מחדש: אחרי סגירה רווחית
+        המגבלות של המחזור הבא עולות, ואחרי סגירה מפסדת — יורדות.
+        קודם הן נשארו על אותו מספר קבוע למרות הרווח.</li>
+      <li>במצב לייב (כסף אמיתי) אין מה לבדוק — שם הבסיס הוא יתרת המזומנים
+        שכבר כוללת את הרווחים, וההתנהגות לא השתנתה.</li>
+    </ol>
+  </section>
+
+  <footer>
+    Spread Hunter · עדכון #768 · העמוד עומד בפני עצמו — בלי חיבור לאינטרנט, בלי שרתים.
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var BASELINE = 100.0;   // דולר — הבנק ההתחלתי של הריצה
+  var UNREALIZED = -10.0; // דולר — השינוי בעמדות הפתוחות (דוגמה)
+  var CAPS = [           // היחסים האמיתיים מהקוד
+    { id: "Order", pct: 0.25 },
+    { id: "Naked", pct: 0.06 },
+    { id: "Total", pct: 0.90 }
+  ];
+
+  function round2(x) { return Math.round(x * 100) / 100; }
+  function fmt(x) { return "$" + round2(x).toFixed(2); }
+  function sgn(x) { return (x >= 0 ? "+" : "-") + "$" + Math.abs(round2(x)).toFixed(2); }
+
+  var slider = document.getElementById("pnl");
+  var pnlVal = document.getElementById("pnlVal");
+  var canvas = document.getElementById("chart");
+
+  function initCanvas(c) {
+    var dpr = window.devicePixelRatio || 1;
+    var w = c.clientWidth || 760;
+    var h = Math.max(300, Math.round(w * 0.52));
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+    var ctx = c.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx: ctx, w: w, h: h };
+  }
+
+  function segRect(ctx, x, y, w, h, fill) {
+    ctx.fillStyle = fill;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "rgba(15,23,42,0.9)";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x, y, w, h);
+  }
+
+  function drawBar(g, x, w, segs, label, ghost) {
+    var ctx = g.ctx;
+    var top = 34, bottom = g.h - 58;
+    var maxV = 120;
+    var yOf = function (v) { return bottom - (v / maxV) * (bottom - top); };
+    var cum = 0;
+    for (var i = 0; i < segs.length; i++) {
+      var s = segs[i];
+      if (s.v === 0) continue;
+      var y0 = yOf(cum), y1 = yOf(cum + s.v);
+      segRect(ctx, x, Math.min(y0, y1), w, Math.abs(y0 - y1), s.c);
+      if (ghost) {
+        ctx.save();
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = "#000";
+        for (var d = 0; d < w + 14; d += 9) {
+          ctx.beginPath();
+          ctx.moveTo(x + d, Math.min(y0, y1));
+          ctx.lineTo(x + d - 14, Math.max(y0, y1));
+          ctx.strokeStyle = "rgba(148,163,184,0.5)";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+      cum += s.v;
+    }
+    var total = cum;
+    var yt = yOf(total);
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = ghost ? "#64748b" : "#14b8a6";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x - 12, yt); ctx.lineTo(x + w + 12, yt);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = ghost ? "#94a3b8" : "#14b8a6";
+    ctx.font = "700 15px system-ui, Segoe UI, Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(fmt(total), x + w / 2, yt - 8);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.font = "600 14px system-ui, Segoe UI, Arial";
+    ctx.fillText(label, x + w / 2, g.h - 34);
+  }
+
+  function render() {
+    var realized = parseFloat(slider.value);
+    pnlVal.textContent = sgn(realized);
+    pnlVal.className = "pnl-val " + (realized >= 0 ? "gain" : "loss");
+
+    var g = initCanvas(canvas);
+    var ctx = g.ctx;
+    ctx.clearRect(0, 0, g.w, g.h);
+
+    // grid
+    var top = 34, bottom = g.h - 58, maxV = 120;
+    ctx.strokeStyle = "#26344b"; ctx.lineWidth = 1;
+    ctx.fillStyle = "#64748b"; ctx.font = "12px system-ui, Arial"; ctx.textAlign = "left";
+    for (var v = 0; v <= maxV; v += 20) {
+      var y = bottom - (v / maxV) * (bottom - top);
+      ctx.beginPath(); ctx.moveTo(40, y); ctx.lineTo(g.w - 40, y); ctx.stroke();
+      ctx.fillText("$" + v, 4, y + 4);
+    }
+
+    var bw = Math.min(130, g.w * 0.19);
+    var cx = g.w / 2, gap = Math.min(90, g.w * 0.14);
+    var xBefore = cx + gap / 2;          // RTL: ימין = לפני
+    var xAfter = cx - gap / 2 - bw;      // שמאל = אחרי
+
+    var beforeTotal = BASELINE + UNREALIZED;
+    var afterTotal = beforeTotal + realized;
+
+    drawBar(g, xBefore, bw, [
+      { v: BASELINE, c: "#475569" },
+      { v: UNREALIZED, c: "#b45309" }
+    ], "לפני העדכון", false);
+
+    // "הרווח שנסגר — התעלמו" annotation on the before bar
+    if (Math.abs(realized) > 0.01) {
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "12.5px system-ui, Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("הרווח שנסגר: " + sgn(realized) + " — לא נספר", xBefore + bw / 2, top - 14);
+    }
+
+    drawBar(g, xAfter, bw, [
+      { v: BASELINE, c: "#475569" },
+      { v: Math.max(realized, 0), c: "#10b981" },
+      { v: Math.min(realized, 0), c: "#ef4444" },
+      { v: UNREALIZED, c: "#b45309" }
+    ], "אחרי העדכון", false);
+
+    // legend
+    var items = [
+      ["#475569", "הבנק ההתחלתי $100"],
+      ["#10b981", "רווח שנסגר"],
+      ["#ef4444", "הפסד שנסגר"],
+      ["#b45309", "שינוי בעמדות פתוחות (דוגמה: ‎-$10‎)"]
+    ];
+    ctx.font = "12.5px system-ui, Arial";
+    var lx = g.w - 12;
+    for (var i = 0; i < items.length; i++) {
+      var tw = ctx.measureText(items[i][1]).width;
+      ctx.fillStyle = items[i][0];
+      ctx.fillRect(lx - 14, g.h - 18, 12, 12);
+      ctx.fillStyle = "#cbd5e1";
+      ctx.textAlign = "right";
+      ctx.fillText(items[i][1], lx - 20, g.h - 8);
+      lx -= tw + 42;
+    }
+
+    // caps readouts
+    for (var k = 0; k < CAPS.length; k++) {
+      var c = CAPS[k];
+      var wasEl = document.getElementById("was" + c.id);
+      var nowEl = document.getElementById("now" + c.id);
+      wasEl.textContent = fmt(beforeTotal * c.pct);
+      nowEl.textContent = fmt(afterTotal * c.pct);
+      nowEl.className = "now " + (afterTotal >= beforeTotal ? "gain" : "loss");
+    }
+  }
+
+  slider.addEventListener("input", render);
+  window.addEventListener("resize", render);
+  render();
+})();
+</script>
+</body>
+</html>
