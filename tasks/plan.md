@@ -76,7 +76,7 @@ T2 (naked) independent of T1. Order risk-first: T1, T2, T3.
 
 ## Tasks
 
-### T1 [Debug] Scope `_prior_exit_shares` to pairs alive at close time — S
+### T1 [x] [Debug] Scope `_prior_exit_shares` to pairs alive at close time — S
 Files: `core_brain/single_buy_saver.py` (~690-782, ~1092-1112).
 Do: add `pair_id` param; `min_posted` from `get_orders_by_pair`; count rescue
 closes on the `_token_side` side with `ts >= min_posted/1000`; thread through
@@ -85,7 +85,7 @@ two pairs live on one token at once share one venue number — a close between
 their opens credits both; refusing-unknown stays safe, note it.
 Depends on: —. Verify: new tests below RED before fix, GREEN after.
 
-### T2 [Backend/Logic] `registry_naked_usd`: rescue netting, no cutoff — M
+### T2 [x] [Backend/Logic] `registry_naked_usd`: rescue netting, no cutoff — M
 Files: `core_brain/order_registry.py` (~2725-2789).
 Do: DROP the `closed_conditions`/`eligible_pairs` exclusion (netting replaces
 it: balanced merged pairs read 0 via heavy-minus-light; fully rescued pairs
@@ -95,7 +95,7 @@ match, `ts >= min_posted/1000`); clamp per-token matched/notional ≥ 0; keep
 heavy-light + token-count rules; update docstring (drop "skipped whole").
 Depends on: —. Verify: new tests RED→GREEN; `test_account_marks.py` unchanged.
 
-### T3 [Backend/Logic] `registry_committed_usd`: cutoff inventory + resting — M
+### T3 [x] [Backend/Logic] `registry_committed_usd`: cutoff inventory + resting — M
 Files: `core_brain/order_registry.py` (~2792-2835).
 Do: reuse `_close_cutoff_map`; inventory per `(condition_id, pair_id)` after
 cutoff with rescue netting clamped ≥ 0; resting loop uses cutoff map instead of
