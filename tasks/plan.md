@@ -172,7 +172,7 @@ single-leg state the strategy exists to avoid — and nothing currently pins it.
 
 **Verify:** focused file green; the test fails if the gate is made pair-atomic.
 
-### T3 — [Docs] M — the numbers and the decision record
+### T3 - [x] - [Docs] M - the numbers and the decision record
 
 `docs/audits/edge-floor-decision.md`. Depends on: T1, T2.
 

@@ -17,10 +17,10 @@
 - [x] focused file green
 
 ## T3 — numbers + decision record [Docs]
-- [ ] run the script on `shadow-01` and `shadow-01-prudent` (read-only, in place)
-- [ ] `score_ab` per candidate floor per tape
-- [ ] one 5-minute shadow run at the proposed settings; record exit code / errors /
+- [x] run the script on `shadow-01` and `shadow-01-prudent` (read-only, in place)
+- [x] `score_ab` per candidate floor per tape
+- [x] one 5-minute shadow run at the proposed settings; record exit code / errors /
       heartbeat / open inventory
-- [ ] apply the locked decision rule
-- [ ] `docs/audits/edge-floor-decision.md` with tables, limits, proposal, operator live
+- [x] apply the locked decision rule
+- [x] `docs/audits/edge-floor-decision.md` with tables, limits, proposal, operator live
       step, undo, $0 added risk, follow-ups, hands-on "How to verify"
