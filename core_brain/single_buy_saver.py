@@ -687,7 +687,8 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
     }
 
 
-def _prior_exit_shares(registry, condition_id: str, token_id: str) -> float:
+def _prior_exit_shares(registry, condition_id: str, token_id: str,
+                       pair_id: Optional[str] = None) -> float:
     """Shares this token already gave up to single-leg exits on its condition.
 
     Netting input for the refill-after-exit trap (#326): `load_pair` sizes
@@ -696,18 +697,47 @@ def _prior_exit_shares(registry, condition_id: str, token_id: str) -> float:
     count -- merges and settlements leave through other paths and must not
     discount an exit. Fail-closed 0.0 when the token's side is unresolvable:
     unattributed volume neither shrinks nor grows a later sale.
+
+    Pair-scoped (#763): when `pair_id` is given, a close counts only if this
+    pair already existed when it happened (`close.ts >= the pair's earliest
+    order posted_ts`). A close booked before the pair opened belongs to a
+    prior pair on a re-entered market and must never explain this pair's gap
+    or shrink its sale. `None` keeps the legacy whole-condition sum for
+    callers that carry no pair identity.
+
+    Known limit: two pairs live on one token at once share a single venue
+    number, so a close landing between their opens credits both. Refusing on
+    an unexplained gap stays the safe direction there; this scope fixes the
+    sequential re-entry the issue reports, not concurrent pairs.
     """
     if registry is None:
         return 0.0
     side = _token_side(registry, condition_id, token_id)
     if side not in ("UP", "DOWN"):
         return 0.0
+    min_posted_sec = 0.0
+    if pair_id is not None:
+        try:
+            posted = [o.posted_ts for o in registry.get_orders_by_pair(pair_id)
+                      if o.condition_id == condition_id and o.posted_ts]
+        except Exception:
+            return 0.0
+        if not posted:
+            return 0.0
+        min_posted_sec = min(posted) / 1000.0
     total = 0.0
     for c in registry.get_all_closes():
         if c.get("condition_id") != condition_id:
             continue
         if c.get("method") not in RESCUE_METHODS:
             continue
+        if pair_id is not None:
+            try:
+                ts = float(c.get("ts") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts < min_posted_sec:
+                continue
         sold_up = c.get("up_price") is not None
         if (sold_up and side == "UP") or (not sold_up and side == "DOWN"):
             try:
@@ -770,7 +800,8 @@ def _check_positions(pair: dict, venue_positions: Optional[dict[str, float]],
     gap = believed - observed
     prior = 0.0
     if gap > POSITION_DIVERGENCE_TOLERANCE and registry is not None:
-        prior = _prior_exit_shares(registry, pair["condition_id"], token)
+        prior = _prior_exit_shares(registry, pair["condition_id"], token,
+                                   pair.get("pair_id"))
     if _unexplained_divergence(believed, observed, prior) \
             > POSITION_DIVERGENCE_TOLERANCE:
         raise PairExitRefused(
@@ -1095,7 +1126,7 @@ def exit_single_buy(
     # the sale toward venue agreement and can never grow one past it.
     if venue_positions is not None and heavy_token in venue_positions:
         prior = _prior_exit_shares(registry, after["condition_id"],
-                                   heavy_token)
+                                   heavy_token, after.get("pair_id"))
         gap = naked - float(venue_positions[heavy_token])
         if gap > 0:
             naked = max(naked - min(gap, max(prior, 0.0)), 0.0)
