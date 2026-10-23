@@ -81,6 +81,7 @@ class FakeClient:
 
     def __init__(self, best_ask=0.40, best_bid=0.55, cancel_ok=True,
                  bid_depth=100.0, ask_depth=100.0, bid_levels=None,
+                 ask_levels=None,
                  venue_matched=None, get_order_ok=True, tick_size="0.01"):
         self.best_ask = best_ask
         self.best_bid = best_bid
@@ -88,6 +89,7 @@ class FakeClient:
         self.bid_depth = bid_depth
         self.ask_depth = ask_depth
         self.bid_levels = bid_levels
+        self.ask_levels = ask_levels
         self.tick_size = tick_size
         # What the VENUE says each order has matched. Deliberately separate from
         # the registry: the whole point of the post-cancel read is that the two
@@ -100,8 +102,11 @@ class FakeClient:
 
     def get_order_book(self, token_id):
         self.calls.append(f"book:{token_id}")
-        asks = ([] if self.best_ask is None
-                else [{"price": str(self.best_ask), "size": str(self.ask_depth)}])
+        if self.ask_levels is not None:
+            asks = self.ask_levels
+        else:
+            asks = ([] if self.best_ask is None
+                    else [{"price": str(self.best_ask), "size": str(self.ask_depth)}])
         bids = (self.bid_levels if self.bid_levels is not None
                 else [{"price": str(self.best_bid), "size": str(self.bid_depth)}])
         return {
@@ -532,6 +537,85 @@ def test_completion_is_capped_by_ask_depth(registry: OrderRegistry):
     result = lp.complete_pair(client, registry, pair_id,
                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
     assert result["size"] == pytest.approx(3.0)
+
+
+def test_ask_depth_at_or_below_counts_only_asks_at_or_below_the_limit():
+    book = {
+        "asks": [
+            {"price": "0.29", "size": "2.0"},
+            {"price": "0.30", "size": "2.0"},
+            {"price": "0.30", "size": "1.0"},
+            {"price": str(0.1 + 0.2), "size": "4.0"},
+            {"price": "0.31", "size": "100.0"},
+        ],
+        "bids": [],
+    }
+    assert lp.ask_depth_at_or_below(book, 0.30) == pytest.approx(9.0)
+
+
+def test_completion_sizes_only_from_depth_at_or_below_best_ask(
+        registry: OrderRegistry):
+    """Deep asks above the limit must not inflate the completion size."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30, ask_levels=[
+        {"price": "0.30", "size": "2.0"},
+        {"price": "0.30", "size": "1.0"},
+        {"price": "0.31", "size": "100.0"},
+    ])
+
+    result = lp.complete_pair(client, registry, pair_id,
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
+    assert result["size"] == pytest.approx(3.0)
+    assert result["ask"] == pytest.approx(0.30)
+    sent = next(o for o in client.orders if o["side"] == "BUY")
+    assert sent["amount"] == pytest.approx(0.90)
+    assert sent["price"] == pytest.approx(0.30)
+
+
+def test_completion_refuses_when_best_ask_depth_below_minimum(
+        registry: OrderRegistry):
+    """1 share @ $0.45 + 50 @ $0.90 shape: thin best ask, deep book above."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30, ask_levels=[
+        {"price": "0.30", "size": "0.5"},
+        {"price": "0.31", "size": "100.0"},
+    ])
+
+    with pytest.raises(lp.PairCompletionRefused):
+        lp.complete_pair(client, registry, pair_id,
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
+
+    assert not any(c.startswith("cancel:") for c in client.calls)
+    assert not any(c.startswith("buy:") for c in client.calls)
+
+
+def test_completion_refuses_on_zero_size_best_ask(registry: OrderRegistry):
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30, ask_levels=[
+        {"price": "0.30", "size": "0"},
+        {"price": "0.31", "size": "100.0"},
+    ])
+
+    with pytest.raises(lp.PairCompletionRefused):
+        lp.complete_pair(client, registry, pair_id,
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
+
+    assert not any(c.startswith("cancel:") for c in client.calls)
+    assert not any(c.startswith("buy:") for c in client.calls)
+
+
+def test_completion_completes_at_exact_minimum(registry: OrderRegistry):
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30, ask_levels=[
+        {"price": "0.30", "size": "1.0"},
+        {"price": "0.31", "size": "100.0"},
+    ])
+
+    result = lp.complete_pair(client, registry, pair_id,
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
+    assert result["size"] == pytest.approx(1.0)
+    sent = next(o for o in client.orders if o["side"] == "BUY")
+    assert sent["amount"] == pytest.approx(0.30)
 
 
 def test_completion_refuses_without_an_ask(registry: OrderRegistry):
