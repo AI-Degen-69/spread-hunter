@@ -131,7 +131,12 @@ done → ready for `iii-build-plan auto` handoff (build station executes T1–T3
 - Verify: `python -m pytest -q tests/test_analysis_v2_binding.py` green; each new
   assertion fails without T1 (checked via `git stash` round-trip).
 
-### T3 — [Verify] Confirm the quoting band is live in the Parameters view (XS)
+### T3 — [Verify] Confirm the quoting band is live in the Parameters view (XS) [x]
+
+Executed: served a copy of the demo DB on 127.0.0.1:8801 — `/api/parameters`
+returns `bot_quote_price_band_min_cents` raw `0.1` → `$0.10`, `max_cents` raw
+`0.9` → `$0.90`, gate `True`; served `/` contains zero `Strategy Pricing Band`
+occurrences. No code changed.
 
 - No code. Confirm `/api/parameters` serves `bot_quote_price_band_min_cents`,
   `max_cents`, and `bot_quote_gate_price_band_on` with correct `raw_value`s and
