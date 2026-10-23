@@ -355,3 +355,14 @@ only the hands-on surface. Operator steps (each on a **copy** in scratch —
 
 Full `python -m pytest -q` stays the GitHub CI merge gate; it is not an
 operator step and is never cited as verification to the Owner.
+
+## Build status (Station III, 2026-10-23)
+
+- [x] T1 Q1+Q2 + tiebreak equivalence tests (RED: AttributeError pre-impl)
+- [x] T2 guardian rewire + mock hardening (14 passed)
+- [x] T3 lifecycle quote paths + no-scan test
+- [x] T4 Q3+Q4, load_pair/_last_fill rewire, one-connection test
+- [x] T5 Q5+Q6, close helpers + pass order, rescue-only + scoped tests
+- [x] Full-pass guard (exit + completion, all scans banned), executor mock fix,
+      scratch-copy timing. Deviations: Q6 carries `ts` (N2) and
+      `test_lifecycle_single_executor.py` mock update — both recorded.

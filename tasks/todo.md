@@ -15,11 +15,14 @@
       complete_pair line) shift saver lines; builder re-derives via grep
 - [x] Write `tasks/plan.md` (header `Branch: i767/registry-targeted-queries |
       Issue: #767`), `tasks/todo.md`, `CONSTRAINTS.md`
-- [ ] Station III (builder, after #764 merges): T1 quote queries → T2 guardian
+- [x] Station III (builder, after #764 merges): T1 quote queries → T2 guardian
       → T3 lifecycle quotes → T4 pair totals + fill discovery → T5 bounded
       closes; each RED-first, independently revertible, targeted pytest green
-- [ ] Station III perf note: tick-timing on a **copy** in scratch
-      (`cp` to `/tmp`/fresh shadow DB), never `data/orders.db`
+      (5 local commits; executor mock fix in test_lifecycle_single_executor
+      rides with T5 — same mock-hardening pattern, 4th test file)
+- [x] Station III perf note: tick-timing on a **copy** in scratch
+      (`tempfile` bench DB), never `data/orders.db`: 40k quotes full scan
+      285ms → targeted 67ms; 6-order load_pair 13 conns/18.7ms → 1 conn/1.3ms
 - [ ] Station IV: single focused CodeRabbit round, one push, targeted checks
 - [ ] Station VI: closeout with hands-on verify (menu/stack + dashboard
       `http://127.0.0.1:8799` + shadow rehearsal), never pytest counts as proof
