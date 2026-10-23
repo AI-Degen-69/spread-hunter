@@ -17,6 +17,6 @@ while the pair existed. This ledger records what was found during the fix and
 
 ## Noticed but not touching
 
-| # | Noticed | Why out of scope | Owner | When | Status |
-|---|---|---|---|---|---|
-| N1 | Two pairs live on one token at once share a single venue number: a rescue close landing between their opens credits both pairs' `_prior_exit_shares` and both pairs' `rescue_net`, so one close can net twice. `core_brain/single_buy_saver.py:690` and `core_brain/order_registry.py` (rescue CTEs) document it as a known limit. | Fixing it needs per-pair close attribution (`closes` has no `pair_id`, and the issue's Job Guards forbid adding one). The strategy opens one pair per market; sequential re-entry — the reported bug — is fixed. Refusing on an unexplained gap stays the safe direction for the concurrent case. | you | when a second live pair per condition becomes a real pattern, with its own ticket | open |
+| # | Noticed | Why out of scope | Owner | When | Status | Resolution |
+|---|---|---|---|---|---|---|
+| N1 | Two pairs live on one token at once share a single venue number: a rescue close landing between their opens credits both pairs' `_prior_exit_shares` and both pairs' `rescue_net`, so one close can net twice. `core_brain/single_buy_saver.py:690` and `core_brain/order_registry.py` (rescue CTEs) document it as a known limit. | Fixing it needs per-pair close attribution (`closes` has no `pair_id`, and the issue's Job Guards forbid adding one). The strategy opens one pair per market; sequential re-entry — the reported bug — is fixed. Refusing on an unexplained gap stays the safe direction for the concurrent case. | — | — | dismissed | Not filed (operator decision 2026-10-23): unreachable while sizing keeps one pair per market — `rescue_net` credits a close only to pairs whose `MIN(posted_ts) <= c.ts`, and a second concurrent pair on one condition never exists. Re-open with its own ticket if concurrent pairs per condition ever ship. |
