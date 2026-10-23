@@ -37,7 +37,6 @@ spread-hunter/
     audit_settlement.py   Settlement & balance verification
     spread-hunter-menu.ps1 Interactive operations menu
   scoring/                Scoring, allocation and selection rules the Market Filter uses
-  strategy/               Signal and sizing logic
   data/
     orders.db             THE primary order and fill registry
     NN_shadow_*.db        Per-rehearsal shadow stores
@@ -49,8 +48,14 @@ spread-hunter/
     cycle_events.jsonl    Ring buffer of operational events
     *.log                 Every process log the menu redirects
   reports/                Generated statistics reports (gitignored)
-  docs/issues/            Issue showcases: <id>-presentation-<slug>.html (nowhere else under docs/)
-  docs/superpowers/specs/ Design specs an agent must read before coding (e.g. the shadow fill model)
+  docs/                   One folder per kind of document; nothing loose at docs/ root
+    agents/               This rulebook: architecture, domain, safety, conventions, glossary
+    runs/                 Dated run and experiment records, YYYY-MM-DD-<slug>.md (evidence, not output)
+    issues/               Issue showcases: <id>-presentation-<slug>.html (nowhere else under docs/)
+    superpowers/specs/    Design specs an agent must read before coding (e.g. the shadow fill model)
+    ideas/                Unshaped ideas that are not yet an issue
+    audits/               Analyses of committed evidence
+    reference/            External facts we had to look up (API endpoints, enum values)
   tests/                  Full hermetic unit & integration test suite
 ```
 
