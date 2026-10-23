@@ -1,14 +1,16 @@
-"""Refill-after-exit netting (issue #326): the fix and its guard cases.
+"""Refill-after-exit netting (issue #326, scope #795): the fix and its guard cases.
 
-`load_pair` sizes exits off fills only; prior `single_buy_exit` closes net
-solely on the venue side. Re-posting exited shares under the SAME pair_id
-used to make the next exit size fills-only naked against a netted venue
-position, so `_check_positions` refused as a would-be oversell -- and the
-refilled leg stranded, every rotation the same way.
+`load_pair` nets the pair's own rescue closes into the size and cost view
+it returns (same scope rule as `registry_naked_usd`). Re-posting exited
+shares under the SAME pair_id used to make the next exit size fills-only
+naked against a netted venue position, so `_check_positions` refused as a
+would-be oversell -- and the refilled leg stranded, every rotation the
+same way.
 
-The exit now nets prior single-leg exits on the condition (capped by the
-observed venue gap), so a refill exits exactly the remainder with no
-oversell. These tests pin the fixed behavior plus the guard cases that
+A refill now exits exactly the remainder with no oversell, and any gap
+between the netted inventory and the venue still refuses: netting lives in
+exactly one place, so a second credit can never hide a real shortfall
+(#795). These tests pin the fixed behavior plus the guard cases that
 still refuse: genuine and partially-explained divergence. The two routing
 cases drive the unified lifecycle (`manage_single_leg_positions`), which is
 the pass the live loop actually runs.
@@ -206,7 +208,7 @@ def test_genuine_divergence_with_no_prior_exits_still_refuses(registry):
 
 
 def test_partially_explained_divergence_still_refuses(registry):
-    """Priors explain 10 of a 15-share gap: the unexplained 5 still refuse."""
+    """Netted 10 vs venue 5: the unexplained 5 still refuse."""
     _ladder_market(registry, NOW)
     venue = FakeVenue(best_ask=0.40, best_bid=0.55)
 
@@ -232,8 +234,8 @@ def test_manager_exits_the_refill_on_second_pass(registry, saver_clock):
 
     Pass 1 (3900s) exits the 1000s-old fill; the refill lands a second later
     under the same pair_id. Pass 2 (5000s) must sell just the refill: the
-    registry believes 20 shares, the venue agrees to 10, and the one recorded
-    exit explains the gap (#326). 20 shares sold across two closes, never 30.
+    registry nets the recorded exit and believes 10 shares, and the venue
+    agrees to 10 (#795). 20 shares sold across two closes, never 30.
     """
     # Timestamps are ms throughout; the manager's own routes own these fills
     # (an old fill, an open market inside the 900s lead, a bid of 0.57 that is

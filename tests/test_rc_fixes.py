@@ -108,9 +108,10 @@ def _cfg(**kw) -> MakerConfig:
 
 def _one_sided_pair(registry: OrderRegistry, filled_size: float = 10.0,
                     fill_price: float = 0.60, pair_id: str = "pair-1",
-                    cond: str = COND, venue_ts: int = FILL_TS_MS) -> str:
+                    cond: str = COND, venue_ts: int = FILL_TS_MS,
+                    posted_ms: int | None = None) -> str:
     """A heavy UP leg fully filled, a light DOWN leg still resting."""
-    now = 1_000_000
+    now = 1_000_000 if posted_ms is None else posted_ms
 
     heavy = OrderRecord(
         id=str(uuid.uuid4()), order_id=f"venue-heavy-{pair_id}",
@@ -276,7 +277,7 @@ def test_a_fill_after_the_close_re_arms_the_rule(registry: OrderRegistry):
     import time as _time
     after_close_ms = int(_time.time() * 1000) + 60_000
     _one_sided_pair(registry, filled_size=10.0, fill_price=0.60, pair_id="pair-2",
-                    venue_ts=after_close_ms)
+                    venue_ts=after_close_ms, posted_ms=after_close_ms)
 
     client = FakeClient(best_ask=0.40)
     out = auto_manage_pairs(client, registry, _cfg(),

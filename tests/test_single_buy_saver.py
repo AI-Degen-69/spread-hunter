@@ -11,6 +11,7 @@ Stage 3 invariants:
 6. No network in any test.
 """
 
+import time
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -20,9 +21,11 @@ from core_brain.config import MakerConfig
 from core_brain.market_resolution import MarketEndState
 from core_brain.order_registry import (
     OrderRegistry, OrderRecord, FillRecord, QuoteRecord, CloseRecord,
+    registry_naked_usd,
 )
 from core_brain import single_buy_saver as lp
 from core_brain.statistical_analytics import rescue_friction_summary
+from tests.test_hard_stop_reset import ProvingVenue, _balances
 
 
 MAX_PAIR_COST = 0.995
@@ -333,15 +336,19 @@ def test_prior_pair_rescue_shares_do_not_mask_new_pair_divergence(
                             {TOK_UP: 0.0}, registry)
 
 
-def test_prior_exit_shares_are_scoped_to_pairs_alive_at_the_close(
+def test_pair_scope_nets_only_pairs_alive_at_the_close(
         registry: OrderRegistry):
-    """#763: unit pin — the new pair gets zero credit, the old pair keeps it."""
+    """#763/#795: the same scoping, now asserted through `load_pair`.
+
+    The new pair keeps its full size (the old close is out of scope) while
+    the old pair nets to zero.
+    """
     _one_sided_pair(registry, filled_size=10.0)          # pair-1 @ 1000s
     _rescue_close(registry, COND, ts_sec=1001.0, shares=10.0)
     _up_leg_pair(registry, "pair-2", posted_ms=2_000_000)
 
-    assert lp._prior_exit_shares(registry, COND, TOK_UP, "pair-2") == 0.0
-    assert lp._prior_exit_shares(registry, COND, TOK_UP, "pair-1") == 10.0
+    assert lp.load_pair(registry, "pair-2")["naked"] == pytest.approx(10.0)
+    assert lp.load_pair(registry, "pair-1")["naked"] == pytest.approx(0.0)
 
 
 def test_same_pair_refill_still_nets_its_own_exit(registry: OrderRegistry):
@@ -481,9 +488,14 @@ def test_load_pair_reads_fills_without_per_order_helpers(
     assert uses["n"] == 1
 
 
-def test_prior_exit_shares_reads_only_rescue_closes_fresh(
-        registry: OrderRegistry):
-    """#767: rescue-only netting; a second exit's close is seen fresh."""
+def test_load_pair_nets_only_rescue_closes_fresh(registry: OrderRegistry):
+    """#767/#795: rescue-only netting through the shared inventory view.
+
+    A second exit's close is seen fresh; the merge close (100 shares) nets
+    nothing. Legacy closes carry no removed-cost fields, so only the share
+    assertions transfer — cost netting for fresh closes is pinned by the
+    #795 tests above.
+    """
     pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
     registry.log_close(CloseRecord(
         ts=1001.0, condition_id=COND, method="single_buy_exit", shares=4.0,
@@ -491,15 +503,14 @@ def test_prior_exit_shares_reads_only_rescue_closes_fresh(
     registry.log_close(CloseRecord(
         ts=1002.0, condition_id=COND, method="merge", shares=100.0,
         up_price=0.55, cost_basis=1.0, proceeds=1.0, realized_pnl=0.0))
-    assert lp._prior_exit_shares(registry, COND, TOK_UP,
-                                 pair_id=pair_id) == pytest.approx(4.0)
-    assert lp._prior_exit_shares(registry, COND, TOK_DN,
-                                 pair_id=pair_id) == pytest.approx(0.0)
+    pair = lp.load_pair(registry, pair_id)
+    assert pair["legs"][TOK_UP]["matched"] == pytest.approx(6.0)
+    assert pair["legs"][TOK_DN]["matched"] == pytest.approx(0.0)
+    assert pair["naked"] == pytest.approx(6.0)
     registry.log_close(CloseRecord(
         ts=1003.0, condition_id=COND, method="ladder_exit", shares=3.0,
         up_price=0.50, cost_basis=1.5, proceeds=1.2, realized_pnl=-0.3))
-    assert lp._prior_exit_shares(registry, COND, TOK_UP,
-                                 pair_id=pair_id) == pytest.approx(7.0)
+    assert lp.load_pair(registry, pair_id)["naked"] == pytest.approx(3.0)
 
 
 def test_latest_close_ms_scoped_read_matches_full_read(
@@ -1589,7 +1600,10 @@ def test_taker_paths_never_set_post_only(registry):
 
     # 2. Test complete_pair (taker BUY)
     pair_id_2 = "pair-comp-1"
-    now = 1_000_000
+    # A genuinely new pair: stamped after part 1's close so the #795 time
+    # scope (closes at/after the pair's earliest posted_ts) does not net a
+    # prior pair's rescue close into it.
+    now = int(time.time() * 1000) + 60_000
     heavy = OrderRecord(
         id=str(uuid.uuid4()), order_id="venue-h2", condition_id=COND,
         token_id=TOK_UP, side="BUY", price=0.60, original_size=10.0,
@@ -2604,3 +2618,263 @@ def test_completion_accepts_orderId_spelling_in_response(
                  if o.id not in before_ids]
     assert len(comp_rows) == 1
     assert comp_rows[0].order_id == "venue-orderId-1"
+
+
+# ---------------------------------------------------------------------------
+# #795 — a hard-stopped pair must not resell its own closed shares
+# ---------------------------------------------------------------------------
+
+
+def _down_leg_pair(registry: OrderRegistry, pair_id: str,
+                   posted_ms: int, filled_size: float = 10.0,
+                   fill_price: float = 0.82,
+                   light_price: float = 0.12) -> str:
+    """A heavy DOWN leg fully filled + resting UP leg, with explicit identity.
+
+    #795: the moe shape — the DOWN leg fills first and the hard stop sells
+    it, so the suite can replay the shadow-01 double-liquidation.
+    """
+    heavy = OrderRecord(
+        id=str(uuid.uuid4()), order_id=f"venue-heavy-{pair_id}",
+        condition_id=COND, token_id=TOK_DN, side="BUY", price=fill_price,
+        original_size=filled_size, status="filled", posted_ts=posted_ms,
+        last_polled_ts=posted_ms, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(heavy)
+    registry.record_fill(FillRecord(
+        trade_id=f"trade-heavy-{pair_id}", order_uuid=heavy.id,
+        size=filled_size, price=fill_price, venue_ts=posted_ms,
+    ))
+    light = OrderRecord(
+        id=str(uuid.uuid4()), order_id=f"venue-light-{pair_id}",
+        condition_id=COND, token_id=TOK_UP, side="BUY", price=light_price,
+        original_size=filled_size, status="open", posted_ts=posted_ms,
+        last_polled_ts=posted_ms, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(light)
+    registry.log_quote(QuoteRecord(
+        ts=posted_ms / 1000.0, condition_id=COND, token_id=TOK_DN,
+        side="DOWN", price=fill_price, size=filled_size,
+    ))
+    registry.log_quote(QuoteRecord(
+        ts=posted_ms / 1000.0, condition_id=COND, token_id=TOK_UP,
+        side="UP", price=light_price, size=filled_size,
+    ))
+    return pair_id
+
+
+def _dn_rescue_close(registry: OrderRegistry, cond: str, ts_sec: float,
+                     shares: float, cost_per_share: float = 0.82) -> None:
+    """One DOWN-side single_buy_exit close, exactly what _record_exit_close books."""
+    registry.log_close(CloseRecord(
+        ts=ts_sec, condition_id=cond, method="single_buy_exit",
+        shares=shares, up_price=None, dn_price=0.21,
+        cost_basis=shares * cost_per_share, proceeds=shares * 0.21,
+        up_cost_removed=0.0, dn_cost_removed=shares * cost_per_share,
+        run_id="run-test",
+    ))
+
+
+class _MoeVenue(ProvingVenue):
+    """DOWN bids with an explicit execution price. No network."""
+
+    def __init__(self, down_bid: float, fill_price: float, depth: float = 100.0):
+        super().__init__(decision_bid=down_bid, execution_bid=down_bid,
+                         depth=depth)
+        self._fill_price = fill_price
+
+    def get_order_book(self, token_id):
+        if token_id == TOK_UP:
+            return self._book(None)
+        cancelled = any(c.startswith("cancel:") for c in self.calls)
+        return self._book(self.execution_bid if cancelled else self.decision_bid)
+
+    def create_and_post_market_order(self, order_args, options=None,
+                                     order_type="FOK", defer_exec=False):
+        verb = "sell" if order_args.side == "SELL" else "buy"
+        self.calls.append(f"{verb}:{order_args.token_id}:{order_args.amount}")
+        return {"success": True, "size": float(order_args.amount),
+                "price": str(self._fill_price), "orderID": "venue-moe-sell"}
+
+
+def _moe_cfg():
+    return MakerConfig(
+        bot_risk_gate_pairs_rule_on=True, bot_risk_gate_aged_out_rescue_on=True,
+        bot_risk_pairs_exit_window_sec=900.0,
+        bot_risk_aged_out_rescue_lead_sec=900.0,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+        bot_risk_exposure_max_order_usd=100.0,
+        bot_risk_stop_mode="ABSOLUTE_DROP",
+        bot_risk_stop_adverse_drop_cents=0.02)
+
+
+def _moe_market_state_fn():
+    return lambda cid: MarketEndState(
+        condition_id=COND, closed=False, end_ts=time.time() + 600.0,
+        end_date_iso=None, end_date_passed=False, accepting_orders=True,
+        resolved=False, unreachable=False)
+
+
+def test_hard_stopped_pair_does_not_resell_its_closed_shares(
+        registry: OrderRegistry, monkeypatch):
+    """#795 moe replay: the old pair reads zero naked, the new close books new cost.
+
+    Pass 1 stops pair-d347 (DOWN 10 @ 0.82, sold @ 0.21). Pass 2 re-enters
+    the same condition as pair-9e5e (DOWN 10 @ 0.15) with the venue genuinely
+    holding those 10 again. Before the fix the poll sold d347 a second time
+    and booked the new shares at the old 0.82 cost; after the fix d347 is
+    skipped and exactly one sale — 9e5e at its own cost — goes out.
+    """
+    _balances(monkeypatch, [])
+    # Frozen clock in two steps: pass 1 books close #41 at T1, then the
+    # market re-enters as pair-9e5e strictly between T1 and T2, so the old
+    # close is out of the new pair's time scope while the new close counts.
+    clock = {"t": 2_000_000_000.0}
+    monkeypatch.setattr(time, "time", lambda: clock["t"])
+    t1_ms = int(clock["t"] * 1000)
+    d347 = _down_leg_pair(registry, "pair-d347", posted_ms=t1_ms - 60_000,
+                          fill_price=0.82)
+    cfg = _moe_cfg()
+
+    first = lp.manage_single_leg_positions(
+        _MoeVenue(down_bid=0.21, fill_price=0.21), registry, cfg, live=True,
+        now=clock["t"] - 50.0,
+        venue_positions={TOK_DN: 10.0, TOK_UP: 0.0},
+        funder="0xfunder", market_state_fn=_moe_market_state_fn())
+    assert [r.get("pair_id") for r in first] == [d347]
+    assert first[0]["action"] == "exited"
+    assert first[0]["size"] == pytest.approx(10.0)
+    closes = sorted(registry.get_all_closes(), key=lambda r: r["ts"])
+    assert len(closes) == 1
+    assert closes[0]["cost_basis"] == pytest.approx(8.20)
+    assert closes[0]["realized_pnl"] == pytest.approx(-6.10)
+
+    clock["t"] += 300.0
+    pair_9e5e = _down_leg_pair(registry, "pair-9e5e",
+                              posted_ms=int(clock["t"] * 1000) - 10_000,
+                              fill_price=0.15)
+    second = lp.manage_single_leg_positions(
+        _MoeVenue(down_bid=0.129, fill_price=0.129), registry, cfg, live=True,
+        now=clock["t"] + 10.0,
+        venue_positions={TOK_DN: 10.0, TOK_UP: 0.0},
+        funder="0xfunder", market_state_fn=_moe_market_state_fn())
+    assert [r.get("pair_id") for r in second] == [pair_9e5e]
+    assert second[0]["action"] == "exited"
+    assert second[0]["size"] == pytest.approx(10.0)
+
+    assert lp.load_pair(registry, d347)["naked"] == pytest.approx(0.0)
+    closes = sorted(registry.get_all_closes(), key=lambda r: r["ts"])
+    assert len(closes) == 2
+    assert closes[1]["cost_basis"] == pytest.approx(1.50)
+    assert closes[1]["proceeds"] == pytest.approx(1.29)
+    assert closes[1]["realized_pnl"] == pytest.approx(-0.21)
+    assert registry_naked_usd(registry) == pytest.approx(0.0)
+
+
+def test_close_at_earliest_posted_ts_nets(registry: OrderRegistry):
+    """#795: a close exactly at the pair's earliest posted_ts counts."""
+    pair_id = _down_leg_pair(registry, "pair-ts-inc", posted_ms=2_000_000,
+                            fill_price=0.82)
+    _dn_rescue_close(registry, COND, ts_sec=2000.0, shares=10.0)
+
+    assert lp.load_pair(registry, pair_id)["naked"] == pytest.approx(0.0)
+
+
+def test_close_one_second_before_posted_ts_does_not_net(
+        registry: OrderRegistry):
+    """#795: a close from a prior pair on a re-entered market never nets."""
+    pair_id = _down_leg_pair(registry, "pair-ts-exc", posted_ms=2_000_000,
+                            fill_price=0.82)
+    _dn_rescue_close(registry, COND, ts_sec=1999.0, shares=10.0)
+
+    assert lp.load_pair(registry, pair_id)["naked"] == pytest.approx(10.0)
+
+
+def test_close_with_both_or_neither_side_price_does_not_net(
+        registry: OrderRegistry):
+    """#795: an ambiguous close cannot attribute to a token, so it nets nothing."""
+    pair_id = _down_leg_pair(registry, "pair-amb", posted_ms=2_000_000,
+                            fill_price=0.82)
+    registry.log_close(CloseRecord(
+        ts=2001.0, condition_id=COND, method="single_buy_exit", shares=10.0,
+        up_price=0.50, dn_price=0.40, cost_basis=8.20, proceeds=2.10,
+        up_cost_removed=4.10, dn_cost_removed=4.10, run_id="run-test"))
+    assert lp.load_pair(registry, pair_id)["naked"] == pytest.approx(10.0)
+    registry.log_close(CloseRecord(
+        ts=2002.0, condition_id=COND, method="single_buy_exit", shares=10.0,
+        up_price=None, dn_price=None, cost_basis=8.20, proceeds=2.10,
+        up_cost_removed=4.10, dn_cost_removed=4.10, run_id="run-test"))
+    assert lp.load_pair(registry, pair_id)["naked"] == pytest.approx(10.0)
+
+
+def test_unmapped_token_does_not_net(registry: OrderRegistry):
+    """#795: a token with no quote-side mapping fails closed — no netting."""
+    posted_ms = 2_000_000
+    heavy = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-heavy-unmapped",
+        condition_id=COND, token_id="tok-ghost", side="BUY", price=0.82,
+        original_size=10.0, status="filled", posted_ts=posted_ms,
+        last_polled_ts=posted_ms, pair_id="pair-ghost",
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(heavy)
+    registry.record_fill(FillRecord(
+        trade_id="trade-ghost", order_uuid=heavy.id, size=10.0,
+        price=0.82, venue_ts=posted_ms,
+    ))
+    _dn_rescue_close(registry, COND, ts_sec=2001.0, shares=10.0)
+
+    assert lp.load_pair(registry, "pair-ghost")["naked"] == pytest.approx(10.0)
+
+
+def test_partial_exit_nets_proportionally(registry: OrderRegistry):
+    """#795: selling 4 of 10 leaves 6 shares at the proportional cost."""
+    pair_id = _down_leg_pair(registry, "pair-part", posted_ms=2_000_000,
+                            fill_price=0.60)
+    client = FakeClient(best_ask=0.40, bid_depth=4.0)
+
+    result = lp.exit_naked_leg(client, registry, pair_id,
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+                               live=True,
+                               venue_positions={TOK_DN: 10.0, TOK_UP: 0.0})
+    assert result["size"] == pytest.approx(4.0)
+
+    pair = lp.load_pair(registry, pair_id)
+    assert pair["legs"][TOK_DN]["matched"] == pytest.approx(6.0)
+    assert pair["legs"][TOK_DN]["notional"] == pytest.approx(3.60)
+    assert pair["naked"] == pytest.approx(6.0)
+
+
+def test_same_pair_refill_books_only_refill_cost(registry: OrderRegistry):
+    """#795: after a full exit, a same-pair refill exits at the refill's cost."""
+    pair_id = _down_leg_pair(registry, "pair-refill", posted_ms=2_000_000,
+                            fill_price=0.90)
+    client = FakeClient(best_ask=0.40)
+    first = lp.exit_naked_leg(client, registry, pair_id,
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+                              live=True, force=True,
+                              venue_positions={TOK_DN: 10.0, TOK_UP: 0.0})
+    assert first["size"] == pytest.approx(10.0)
+
+    refill = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-refill", condition_id=COND,
+        token_id=TOK_DN, side="BUY", price=0.10, original_size=10.0,
+        status="filled", posted_ts=2_000_000, last_polled_ts=2_000_000,
+        pair_id=pair_id, max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(refill)
+    registry.record_fill(FillRecord(
+        trade_id="trade-refill", order_uuid=refill.id, size=10.0,
+        price=0.10, venue_ts=2_000_000,
+    ))
+    second = lp.exit_naked_leg(client, registry, pair_id,
+                               bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+                               live=True, force=True,
+                               venue_positions={TOK_DN: 10.0, TOK_UP: 0.0})
+    assert second["size"] == pytest.approx(10.0)
+
+    closes = sorted(registry.get_all_closes(), key=lambda r: r["ts"])
+    assert len(closes) == 2
+    assert closes[1]["cost_basis"] == pytest.approx(1.00)
