@@ -2353,3 +2353,27 @@ def test_completion_missing_venue_id_cancels_and_refuses(
     assert comp_rows[0].cancel_reason == "completion_missing_venue_id"
     assert not any(o.id == comp_rows[0].id
                    for o in registry.get_active_orders())
+
+
+def test_completion_accepts_orderId_spelling_in_response(
+    registry: OrderRegistry,
+):
+    """A response carrying `orderId` is a tracked submit, not a missing id."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    before_ids = {o.id for o in registry.get_orders_by_pair(pair_id)}
+
+    class OrderIdClient(FakeClient):
+        def create_and_post_market_order(self, *args, **kwargs):
+            return {"success": True, "orderId": "venue-orderId-1"}
+
+    client = OrderIdClient(best_ask=0.30)
+    result = lp.complete_pair(client, registry, pair_id,
+                              bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+                              live=True)
+
+    assert result["action"] == "completed"
+    assert result["order_id"] == "venue-orderId-1"
+    comp_rows = [o for o in registry.get_orders_by_pair(pair_id)
+                 if o.id not in before_ids]
+    assert len(comp_rows) == 1
+    assert comp_rows[0].order_id == "venue-orderId-1"

@@ -1514,9 +1514,11 @@ def complete_pair(
                 registry.attach_venue_order_id(local_comp_id, recovered_oid)
             except Exception as attach_exc:
                 log.warning(
-                    "completion submit raised %s but attach of recovered venue id "
-                    "for %s failed (%s); keeping local row for stray guard",
-                    type(exc).__name__, local_comp_id, attach_exc,
+                    "completion submit for pair %s raised %s; failed to attach "
+                    "recovered venue id %s to local order %s (%s); manual "
+                    "reconciliation may need this ID",
+                    pair_id, type(exc).__name__, recovered_oid,
+                    local_comp_id, attach_exc,
                 )
             raise
         try:
@@ -1540,10 +1542,12 @@ def complete_pair(
 
     venue_oid = ""
     if isinstance(resp, dict):
-        venue_oid = str(resp.get("orderID") or resp.get("order_id") or resp.get("id") or "")
+        venue_oid = str(resp.get("orderID") or resp.get("orderId")
+                        or resp.get("order_id") or resp.get("id") or "")
     else:
         venue_oid = str(
             getattr(resp, "orderID", None)
+            or getattr(resp, "orderId", None)
             or getattr(resp, "order_id", None)
             or getattr(resp, "id", None)
             or ""
