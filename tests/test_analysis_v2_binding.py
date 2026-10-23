@@ -44,14 +44,19 @@ def _run(payload: dict, action: str = "render", tmp_path=None) -> dict:
 
 
 @pytest.fixture(scope="module")
-def live_payload() -> dict:
+def live_payload(tmp_path_factory) -> dict:
     """The real /api/kpi shape from the committed demo registry.
 
     ``data/demo_orders.db`` is the one database in ``data/`` the repo
     tracks (the .gitignore negation exists so it can be served for
     dashboard review), so a fresh checkout -- CI included -- has it.
+
+    The report is taken from a COPY: `kpi_report` opens the registry
+    read-write (schema check plus WAL), so a full-suite run rewrote the tracked
+    fixture's bytes and showed up as `M data/demo_orders.db` every time.
     """
-    return kpi_report(db_path=str(DEMO_DB))
+    demo_copy = Path(shutil.copy(DEMO_DB, tmp_path_factory.mktemp("demo") / DEMO_DB.name))
+    return kpi_report(db_path=str(demo_copy))
 
 
 def test_page_and_assets_are_served_from_static():

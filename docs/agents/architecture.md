@@ -143,6 +143,12 @@ Two rules keep it that way:
    was added with the comment *"databases dropped in the repo root"* -- the
    spill was hidden rather than the writer fixed, and 436 MB accumulated.
    Fix the writer, then move what already landed.
+3. **The test suite has no business writing here.** `tests/conftest.py`'s
+   autouse `block_real_state_writes` fails any test that creates, changes or
+   removes a file under `data/`, `runtime/` or `reports/`, naming the path. It
+   exists because two full-suite runs rewrote the tracked `data/demo_orders.db`
+   and left ~55 heartbeats in `runtime/`. Point the test at `tmp_path`; for a
+   tournament plan that means `artifacts_root=tmp_path`, not `base_dir`.
 
 Ignore patterns for these directories are anchored with a leading `/`. An
 unanchored `reports/` matches a directory of that name at ANY depth, and it

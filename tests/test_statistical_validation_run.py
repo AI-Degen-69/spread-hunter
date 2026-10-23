@@ -358,7 +358,8 @@ class TestEndToEndHarness:
 
         with caplog.at_level(logging.INFO):
             rc = main(
-                ["--target-closes", "2", "--max-hours", "0.001", "--db", str(db)],
+                ["--target-closes", "2", "--max-hours", "0.001", "--db", str(db),
+                 "--report", str(tmp_path / "stat_artifacts")],
                 markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
                 client_fn=lambda: object(),
                 decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([intent], ""),

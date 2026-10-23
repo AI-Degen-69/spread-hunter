@@ -305,6 +305,7 @@ def build_tournament_plan(
     python_executable: str = sys.executable,
     run_number: Optional[int] = None,
     run_name: Optional[str] = None,
+    artifacts_root: Optional[str | Path] = None,
 ) -> TournamentPlan:
     """Build a validated, isolated tournament execution plan.
 
@@ -483,16 +484,23 @@ def build_tournament_plan(
 
     # Record, results and log come from the builders in core_brain.shadow_run so
     # there is one place that knows the name (docs/agents/naming.md, grammar G3),
-    # and every path is anchored to ROOT rather than to the launch directory.
+    # and every path is anchored to a root rather than to the launch directory.
+    # `artifacts_root` exists so a test can build a plan whose artifacts land in
+    # its own tmp tree: `base_dir` only ever moved the stores, so a test that
+    # passed it still wrote its plan record into the real runtime/.
     run_key = int(run_number) if run_number is not None else None
+    artifact_root = Path(artifacts_root) if artifacts_root is not None else ROOT
     record_path = build_tournament_record_path(
         issue=issue, stamp=stamp, run_number=run_key, name=run_name,
+        base_dir=artifact_root / "runtime" / "tournaments",
     )
     results_path = build_tournament_results_path(
         issue=issue, stamp=stamp, run_number=run_key, name=run_name,
+        base_dir=artifact_root / "reports" / "tournaments",
     )
     log_path = build_tournament_log_path(
         issue=issue, stamp=stamp, run_number=run_key, name=run_name,
+        base_dir=artifact_root / "runtime" / "tournaments",
     )
     return TournamentPlan(
         issue=issue,

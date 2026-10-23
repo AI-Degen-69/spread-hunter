@@ -128,6 +128,7 @@ def test_build_tournament_plan_defaults(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -271,6 +272,7 @@ def test_default_arms_set_preset_selector(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -286,6 +288,7 @@ def test_default_arm_offsets_agree_with_presets(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -314,6 +317,7 @@ def test_default_arm_ports_and_paths(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -443,6 +447,7 @@ def test_write_tournament_results_rejects_length_mismatch(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -479,6 +484,7 @@ def test_write_tournament_results_file(tmp_path: Path):
         issue=371,
         base_port=8801,
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         stamp="20261005-032000",
         check_ports=False,
     )
@@ -592,6 +598,7 @@ def test_launch_starts_and_stops_the_market_filter(tmp_path, monkeypatch):
         issue=371,
         arms=[{"name": "solo", **st.TOURNAMENT_PRESETS["balanced"]}],
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         stamp="20261010-120000",
         check_ports=False,
     )
@@ -721,6 +728,7 @@ def test_worker_environment_strips_parent_config_env(tmp_path, monkeypatch):
             {"name": "explicit", "env": {"BOT_QUOTE_PRICE_RISK_WIDEN": "0.02"}},
         ],
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         stamp="20261016-120000",
         check_ports=False,
     )
@@ -1168,6 +1176,7 @@ def test_a_supported_alias_still_plans(tmp_path):
             },
         }],
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         run_number=1,
         check_ports=False,
     )
@@ -1215,6 +1224,7 @@ def test_default_plan_interval_matches_max_rotation_ceiling(tmp_path: Path):
 
     plan = build_tournament_plan(
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         stamp="20261019-120000",
         check_ports=False,
     )
@@ -1244,6 +1254,7 @@ def test_worker_argument_interval_passes_silently_to_shadow_run(tmp_path: Path, 
 
     plan = build_tournament_plan(
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         stamp="20261019-120000",
         check_ports=False,
     )
@@ -1265,6 +1276,7 @@ def test_explicit_interval_retention_and_clamping(tmp_path: Path, caplog):
     # Explicit 0.25 (below ceiling): plan retains it, parsed returns 0.25, no warnings
     plan_fast = build_tournament_plan(
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         interval=0.25,
         stamp="20261019-120001",
         check_ports=False,
@@ -1282,6 +1294,7 @@ def test_explicit_interval_retention_and_clamping(tmp_path: Path, caplog):
     caplog.clear()
     plan_slow = build_tournament_plan(
         base_dir=tmp_path,
+        artifacts_root=tmp_path,
         interval=5.0,
         stamp="20261019-120002",
         check_ports=False,

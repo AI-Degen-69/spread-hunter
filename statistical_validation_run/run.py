@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from core_brain import naming
 from core_brain.config import MakerConfig, load as load_cfg
 from core_brain.runtime_paths import resolve_runtime_file
 from core_brain.shadow_guard import assert_not_production_registry
@@ -339,8 +340,12 @@ def main(
         raise SystemExit("--target-closes must be >= 0 (0 opts out)")
 
     run_id = a.run_id or shadow_run_id()
-    ts_str = datetime.datetime.now().strftime("%d-%m_%H-%M")
-    db_path = Path(a.db) if a.db else Path(f"data/shadow_stat_{ts_str}_{run_id}.db")
+    # Anchored to the repo and stamped by the one stamp function: these two
+    # defaults were cwd-relative, so a harness started from anywhere else wrote
+    # its store and artifacts into whatever directory it happened to start in.
+    ts_str = naming.stamp()
+    repo_root = Path(__file__).resolve().parent.parent
+    db_path = Path(a.db) if a.db else repo_root / "data" / f"shadow_stat_{ts_str}_{run_id}.db"
 
     # Fail fast if production registry is passed
     assert_not_production_registry(db_path)
@@ -360,7 +365,7 @@ def main(
     artifact_dir = (
         Path(a.report)
         if a.report
-        else Path(f"reports/stat_{ts_str}_{run_id}")
+        else repo_root / "reports" / f"stat_{ts_str}_{run_id}"
     )
 
     # The rehearsal bankroll is the config value (#422), never the live wallet.
