@@ -189,6 +189,60 @@ def test_fleet_state_float_marks_fallback():
     assert state["bot_risk_exposure_max_total_usd"] == 81.00
 
 
+def test_fleet_state_float_marks_fallback_includes_run_realized(monkeypatch):
+    """Paper path: the float-mark fallback adds THIS run's realized PnL (#768).
+
+    the paper baseline is the run's starting bankroll, so closed PnL recorded
+    in `closes.realized_pnl` belongs in the portfolio value the caps scale on.
+    Realized from other runs stays out.
+    """
+    import core_brain.order_registry as order_registry_mod
+
+    cfg = MakerConfig(bot_quote_bank_baseline_usd=100.0)
+    mock_reg = MagicMock()
+    mock_reg.get_latest_account_mark.return_value = None
+    mock_reg.get_all_float_marks.return_value = [
+        {"ts": 100.0, "unrealized_usd": -10.0, "committed_open_usd": 0.0,
+         "naked_usd": 0.0, "run_id": "run-A"}
+    ]
+    mock_reg.get_all_closes.return_value = [
+        {"ts": 50.0, "run_id": "run-A", "realized_pnl": 4.0},
+        {"ts": 60.0, "run_id": "run-B", "realized_pnl": 99.0},   # a different run
+        {"ts": 70.0, "run_id": "run-A", "realized_pnl": 2.5},
+    ]
+    monkeypatch.setattr(order_registry_mod, "_CURRENT_RUN_ID", "run-A")
+
+    # $100 baseline + $6.50 run-A realized - $10 unrealized = $96.50
+    state = _fleet_state(mock_reg, cfg)
+    assert state["bot_quote_bank_baseline_usd"] == pytest.approx(96.50)
+    assert state["bot_risk_exposure_max_naked_usd"] == pytest.approx(5.79)    # 6% of $96.50
+    assert state["bot_risk_exposure_max_order_usd"] == pytest.approx(24.12)   # 25% of $96.50
+    assert state["bot_risk_exposure_max_total_usd"] == pytest.approx(86.85)   # 90% of $96.50
+
+
+def test_fleet_state_live_baseline_does_not_double_count_realized(monkeypatch):
+    """Live path: the cash baseline already holds realized PnL -- it is not re-added (#768)."""
+    import core_brain.order_registry as order_registry_mod
+
+    cfg = MakerConfig(bot_quote_bank_baseline_usd=100.0)
+    mock_reg = MagicMock()
+    mock_reg.get_latest_account_mark.return_value = None
+    mock_reg.get_all_float_marks.return_value = [
+        {"ts": 100.0, "unrealized_usd": -10.0, "committed_open_usd": 0.0,
+         "naked_usd": 0.0, "run_id": "run-A"}
+    ]
+    mock_reg.get_all_closes.return_value = [
+        {"ts": 50.0, "run_id": "run-A", "realized_pnl": 4.0},
+    ]
+    monkeypatch.setattr(order_registry_mod, "_CURRENT_RUN_ID", "run-A")
+
+    # $100 cash - $10 unrealized = $90; the $4.00 realized already sits in cash.
+    state = _fleet_state(mock_reg, cfg, baseline_includes_realized=True)
+    assert state["bot_quote_bank_baseline_usd"] == 90.0
+    assert state["bot_risk_exposure_max_naked_usd"] == 5.40
+    assert state["bot_risk_exposure_max_order_usd"] == 22.50
+
+
 def test_max_pair_cost_enforcement_at_99_cents():
     """risk.hard_block enforces the $0.99 ceiling on pair cost."""
     cfg = MakerConfig(bot_pos_price_max_pair_cost_usd=0.99)

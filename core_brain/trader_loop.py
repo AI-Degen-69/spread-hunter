@@ -2765,7 +2765,7 @@ def _make_sweep_fn(funder: Optional[str], db_path: Path, registry):
     return sweep_fn
 
 
-def _fleet_state(registry, cfg) -> dict:
+def _fleet_state(registry, cfg, baseline_includes_realized: bool = False) -> dict:
     """The fleet-wide aggregates `decide_quotes` gates on, read once per cycle.
 
     `run` recomputes these before every rotation and merges them into the base
@@ -2773,6 +2773,12 @@ def _fleet_state(registry, cfg) -> dict:
     instead of their 0.0 / NORMAL defaults. A failure raises to `run`, which
     keeps the previous cycle's values -- never resetting a live cap to open on
     a bad read.
+
+    `baseline_includes_realized` marks a cfg whose
+    `bot_quote_bank_baseline_usd` already embeds the run's realized PnL (the
+    live USDC cash balance holds it); the paper path starts from a fixed
+    starting bankroll, so its float-mark fallback must add the run's closed
+    PnL back in (#768).
     """
     from core_brain.unhedged_stop_loss import bot_risk_circuit_fleet_posture
     from core_brain.markout import fleet_stats
@@ -2817,7 +2823,21 @@ def _fleet_state(registry, cfg) -> dict:
                         latest = run_fms[-1]
                         unrealized = latest.get("unrealized_usd")
                         if unrealized is not None:
-                            val = float(cfg.bot_quote_bank_baseline_usd) + float(unrealized)
+                            realized_usd = 0.0
+                            if (not baseline_includes_realized and active_rid
+                                    and hasattr(registry, "get_all_closes")):
+                                try:
+                                    # Paper baseline is the run's starting
+                                    # bankroll; scope to this run's closes
+                                    # exactly as paired_shadow.py does.
+                                    realized_usd = sum(
+                                        float(c.get("realized_pnl") or 0.0)
+                                        for c in registry.get_all_closes()
+                                        if c.get("run_id") == active_rid)
+                                except Exception:
+                                    pass
+                            val = (float(cfg.bot_quote_bank_baseline_usd)
+                                   + realized_usd + float(unrealized))
                             if val > 0:
                                 portfolio_usd = val
             except Exception:
@@ -3307,11 +3327,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
     cfg = load()
+    baseline_includes_realized = False
     try:
         from core_brain.account import fetch_live_balance
         live_bal = fetch_live_balance(a.funder)
         if live_bal is not None and live_bal > 0:
             cfg = replace(cfg, bot_quote_bank_baseline_usd=live_bal)
+            # Live cash already holds the run's realized PnL; adding it again
+            # in the float-mark fallback would size caps on double-counted
+            # bankroll (#768).
+            baseline_includes_realized = True
     except Exception as e:
         log.warning("live balance read failed, using config bankroll: %s", e)
 
@@ -3417,7 +3442,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
         inventory_fn=_make_inventory_fn(registry, db_path),
         open_orders_fn=_make_open_orders_fn(registry),
-        fleet_state_fn=lambda r: _fleet_state(r, cfg),
+        fleet_state_fn=lambda r: _fleet_state(r, cfg, baseline_includes_realized),
         resting_order_ids_fn=_venue_resting_order_ids,
         emit_fn=decide_emit,
         # The live fleet measures reachable tape flow for the queue-clear gate.
