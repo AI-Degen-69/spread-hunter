@@ -20,7 +20,6 @@ ALLOW_DIRS = {
     pathlib.Path("docs/runs"),
     pathlib.Path("docs/superpowers"),
     pathlib.Path("docs/issues"),
-    pathlib.Path("docs/presentations"),
 }
 
 ALLOW_FILES = {

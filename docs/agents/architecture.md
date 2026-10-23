@@ -121,7 +121,14 @@ each ended up with two homes, decided by which code path produced it:
 | Statistics report | `reports/` | `statistics_report.DEFAULT_REPORT_DIR` (`LIVE_ROOT / "reports"`) |
 | Runtime state | `runtime/` | `core_brain/runtime_paths.py` |
 | Process logs | `runtime/` | the menu's `-RedirectStandard*` arguments |
-| Issue showcase | `docs/issues/` (or a folder below it) | Station VII's `<id>-presentation-<slug>.html` contract; `tests/test_docs_layout.py` fails for one anywhere else under `docs/` |
+| Issue showcase | `docs/issues/` (or a folder below it) | the `present-pr` skill's `<id>-presentation-<slug>.html` contract, committed by Station VI; `tests/test_docs_layout.py` fails for one anywhere else under `docs/` |
+| Visual explanation, no ticket | `docs/issues/` | the `explain` skill, `<topic-slug>.html` (kebab-case, no id); rename to `<id>-presentation-<slug>.html` once it has an issue |
+| Noticed-but-not-touching ledger | `docs/issues/` | written by Station III/IV, rows resolved only by Station VI: `<id>-noticed-but-not-touching.md`; an `open` row is never deleted |
+
+Every `.html` under `docs/` is guarded, not just showcase-named ones: the three
+forms above are the only legal ones, and `docs/explanations/` is why -- ten
+ad-hoc explainers accumulated there because `explain` suggested the folder while
+no test, writer or Station owned it, so nothing failed when they piled up.
 
 Two rules keep it that way:
 
