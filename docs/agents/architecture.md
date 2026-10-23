@@ -37,7 +37,6 @@ spread-hunter/
     audit_settlement.py   Settlement & balance verification
     spread-hunter-menu.ps1 Interactive operations menu
   scoring/                Scoring, allocation and selection rules the Market Filter uses
-  strategy/               Signal and sizing logic
   data/
     orders.db             THE primary order and fill registry
     NN_shadow_*.db        Per-rehearsal shadow stores
@@ -49,8 +48,15 @@ spread-hunter/
     cycle_events.jsonl    Ring buffer of operational events
     *.log                 Every process log the menu redirects
   reports/                Generated statistics reports (gitignored)
-  docs/issues/            Issue showcases: <id>-presentation-<slug>.html (nowhere else under docs/)
-  docs/superpowers/specs/ Design specs an agent must read before coding (e.g. the shadow fill model)
+  docs/                   One folder per kind of document; nothing loose at docs/ root
+    agents/               This rulebook: architecture, domain, safety, conventions, glossary
+                          (naming.md holds the filename + path contract for every artifact)
+    runs/                 Dated run and experiment records, YYYY-MM-DD-<slug>.md (evidence, not output)
+    issues/               Issue showcases: <id>-presentation-<slug>.html (nowhere else under docs/)
+    superpowers/specs/    Design specs an agent must read before coding (e.g. the shadow fill model)
+    ideas/                Unshaped ideas that are not yet an issue
+    audits/               Analyses of committed evidence
+    reference/            External facts we had to look up (API endpoints, enum values)
   tests/                  Full hermetic unit & integration test suite
 ```
 
@@ -116,7 +122,16 @@ each ended up with two homes, decided by which code path produced it:
 | Statistics report | `reports/` | `statistics_report.DEFAULT_REPORT_DIR` (`LIVE_ROOT / "reports"`) |
 | Runtime state | `runtime/` | `core_brain/runtime_paths.py` |
 | Process logs | `runtime/` | the menu's `-RedirectStandard*` arguments |
-| Issue showcase | `docs/issues/` (or a folder below it) | Station VII's `<id>-presentation-<slug>.html` contract; `tests/test_docs_layout.py` fails for one anywhere else under `docs/` |
+| PR showcase | `docs/pr-presentations/` | the `present-pr` skill's `<pr>-<slug>.html` contract, committed by Station VI; `tests/test_docs_layout.py` fails for one anywhere else under `docs/` |
+| Visual explainer, no ticket | `docs/explanations/` | the `explain` skill, `<topic-slug>.html` (kebab-case, starts with a letter, no id) |
+| Out-of-scope candidate ledger | `docs/backlog/` | written by Station III/IV, rows resolved only by Station VI: `i<id>-<slug>.md`; an `open` row is never deleted |
+| Design spec, plan, interview note | `docs/specs/`, `docs/plans/`, `docs/interviews/` | `brainstorming`, `writing-plans`, `interview-me`; plain kebab-case slug |
+
+Every `.html` under `docs/` is guarded, not just showcase-named ones: those two
+homes are the only legal ones, and a file placed correctly but named wrongly
+fails too. Ownership is the point -- ten ad-hoc explainers accumulated in
+`docs/explanations/` while it sat outside the guard, and `docs/issues/` collected
+every kind of document until each kind got a folder of its own (#780).
 
 Two rules keep it that way:
 
@@ -130,6 +145,12 @@ Two rules keep it that way:
    was added with the comment *"databases dropped in the repo root"* -- the
    spill was hidden rather than the writer fixed, and 436 MB accumulated.
    Fix the writer, then move what already landed.
+3. **The test suite has no business writing here.** `tests/conftest.py`'s
+   autouse `block_real_state_writes` fails any test that creates, changes or
+   removes a file under `data/`, `runtime/` or `reports/`, naming the path. It
+   exists because two full-suite runs rewrote the tracked `data/demo_orders.db`
+   and left ~55 heartbeats in `runtime/`. Point the test at `tmp_path`; for a
+   tournament plan that means `artifacts_root=tmp_path`, not `base_dir`.
 
 Ignore patterns for these directories are anchored with a leading `/`. An
 unanchored `reports/` matches a directory of that name at ANY depth, and it
@@ -139,13 +160,13 @@ silently swallowed `docs/reports/` -- two issue showcases sat there untracked.
 
 | File | Decision | Destination / rationale |
 | --- | --- | --- |
-| `docs/297-`, `304-`, `310-`, `343-presentation-*.html` | Moved | `docs/issues/`, per the showcase contract above |
+| `docs/297-`, `304-`, `310-`, `343-presentation-*.html` | Moved | `docs/pr-presentations/`, per the showcase contract above |
 | `project/` | Deleted | Empty leftover directory; sole tracked file was its own `.gitignore`, nothing imports from it |
 | `SHARED_TASK_NOTES.md` | Deleted | Backlog of already-implemented iterations, referenced nowhere |
 | `SPEC.md`, `CONSTRAINTS.md` | Deleted | Root files stay the live copies; the `docs/archive/` duplicates were removed |
 | `metadata.json` | Kept at root | Host-owned: no repo reference found, so deleting could break tooling outside this repo |
 
-Enforced by `tests/test_docs_layout.py` (recursive showcase placement -- `docs/issues/` and its subfolders only -- plus `project/` absence).
+Enforced by `tests/test_docs_layout.py` (recursive list of every stray or misnamed `.html` under `docs/`, plus `project/` absence).
 
 ## Data storage retention policy
 

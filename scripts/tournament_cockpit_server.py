@@ -42,6 +42,7 @@ from core_brain.close_methods import (  # noqa: E402
     SETTLEMENT,
     SHADOW_MERGE_NOTE,
 )
+from core_brain.shadow_run import latest_tournament_record  # noqa: E402
 
 ARMS_CONFIG_484 = [
     # Issue #484: Strategy Profiles
@@ -352,7 +353,7 @@ ARMS_CONFIG_492 = [
         "name": "control-1",
         "label": "Control (#1)",
         "port": 8801,
-        "db": "data/i492_tournament-1_control-1.db",
+        "db": "data/tournament_i492-r1_control-1.db",
         "run_id": "shadow-492-tournament-1-control-1",
         "color": "#00e676",
         "desc": "Baseline fixed 2c offset, 4.5c single-buy loss stop",
@@ -366,7 +367,7 @@ ARMS_CONFIG_492 = [
         "name": "conservative-1",
         "label": "Conservative (#1)",
         "port": 8802,
-        "db": "data/i492_tournament-1_conservative-1.db",
+        "db": "data/tournament_i492-r1_conservative-1.db",
         "run_id": "shadow-492-tournament-1-conservative-1",
         "color": "#00b0ff",
         "desc": "Dynamic offset 0.75x (2-5c), tighter 3.0c single-buy stop",
@@ -380,7 +381,7 @@ ARMS_CONFIG_492 = [
         "name": "balanced-1",
         "label": "Balanced (#1)",
         "port": 8803,
-        "db": "data/i492_tournament-1_balanced-1.db",
+        "db": "data/tournament_i492-r1_balanced-1.db",
         "run_id": "shadow-492-tournament-1-balanced-1",
         "color": "#e040fb",
         "desc": "Dynamic offset 0.50x (2-4c), standard 4.5c single-buy stop",
@@ -394,7 +395,7 @@ ARMS_CONFIG_492 = [
         "name": "aggressive-1",
         "label": "Aggressive (#1)",
         "port": 8804,
-        "db": "data/i492_tournament-1_aggressive-1.db",
+        "db": "data/tournament_i492-r1_aggressive-1.db",
         "run_id": "shadow-492-tournament-1-aggressive-1",
         "color": "#ffd600",
         "desc": "Dynamic offset 0.25x (2-3c), wider 6.0c single-buy stop",
@@ -408,7 +409,7 @@ ARMS_CONFIG_492 = [
         "name": "prudent-1",
         "label": "Prudent (#1)",
         "port": 8805,
-        "db": "data/i492_tournament-1_prudent-1.db",
+        "db": "data/tournament_i492-r1_prudent-1.db",
         "run_id": "shadow-492-tournament-1-prudent-1",
         "color": "#ff6d00",
         "desc": "Fixed 3c offset, conservative 3.5c single-buy stop",
@@ -422,7 +423,7 @@ ARMS_CONFIG_492 = [
         "name": "stickhold-1",
         "label": "Stick-Hold (#1)",
         "port": 8806,
-        "db": "data/i492_tournament-1_stickhold-1.db",
+        "db": "data/tournament_i492-r1_stickhold-1.db",
         "run_id": "shadow-492-tournament-1-stickhold-1",
         "color": "#69f0ae",
         "desc": "Dynamic offset 0.25x, 45s single grace, 6.5c loss cap",
@@ -436,7 +437,7 @@ ARMS_CONFIG_492 = [
         "name": "queuehug-1",
         "label": "Queue-Hug (#1)",
         "port": 8807,
-        "db": "data/i492_tournament-1_queuehug-1.db",
+        "db": "data/tournament_i492-r1_queuehug-1.db",
         "run_id": "shadow-492-tournament-1-queuehug-1",
         "color": "#ff4081",
         "desc": "Requote hold below 100 shares, queue hold 150 shares (retired by #387)",
@@ -450,7 +451,7 @@ ARMS_CONFIG_492 = [
         "name": "deadband-tight-1",
         "label": "Deadband-Tight (#1)",
         "port": 8808,
-        "db": "data/i492_tournament-1_deadband-tight-1.db",
+        "db": "data/tournament_i492-r1_deadband-tight-1.db",
         "run_id": "shadow-492-tournament-1-deadband-tight-1",
         "color": "#ff5252",
         "desc": "Strict 1c requote deadband, frequent requoting",
@@ -464,7 +465,7 @@ ARMS_CONFIG_492 = [
         "name": "deadband-wide-1",
         "label": "Deadband-Wide (#1)",
         "port": 8809,
-        "db": "data/i492_tournament-1_deadband-wide-1.db",
+        "db": "data/tournament_i492-r1_deadband-wide-1.db",
         "run_id": "shadow-492-tournament-1-deadband-wide-1",
         "color": "#76ff03",
         "desc": "Wide 2c requote deadband, reduces unnecessary churn",
@@ -478,7 +479,7 @@ ARMS_CONFIG_492 = [
         "name": "snapstop-1",
         "label": "Snap-Stop (#1)",
         "port": 8810,
-        "db": "data/i492_tournament-1_snapstop-1.db",
+        "db": "data/tournament_i492-r1_snapstop-1.db",
         "run_id": "shadow-492-tournament-1-snapstop-1",
         "color": "#b388ff",
         "desc": "Fast 30s single buy grace, tight 4.0c loss cap",
@@ -787,30 +788,10 @@ def resolve_tournament_arms_with_status(
     if tourney_key not in ("487", "492", "608"):
         return default_arms, None
 
-    tourn_dir = ROOT / "runtime" / "tournaments"
-    latest_plan = None
-    if tourney_key in ("492", "608"):
-        # Run-number scheme: i492_tournament-<run>.json, highest run wins.
-        run_pattern = re.compile(rf"^i{tourney_key}_tournament-(?P<run>\d+)\.json$")
-        best = None
-        for p in tourn_dir.glob(f"i{tourney_key}_tournament-*.json"):
-            m = run_pattern.match(p.name)
-            if m and (best is None or int(m.group("run")) > best[0]):
-                best = (int(m.group("run")), p)
-        latest_plan = best[1] if best else None
-    else:
-        # #487's plan record carries a NAMED stamp (`487_current_setup_10arm.json`,
-        # written by `--stamp current_setup_10arm`) instead of the legacy
-        # `<issue>_<YYYYMMDD-HHMMSS>.json`. Both count as this key's record; nothing
-        # else matches. A leading digit sorts before a letter, so the named record
-        # is picked last -- which is what this key wants: the named record is THIS
-        # run, while a leftover timestamped record could only be the superseded
-        # catalyst round.
-        pattern = re.compile(
-            rf"{tourney_key}_(\d{{8}}-\d{{6}}|current_setup_10arm)\.json$"
-        )
-        plan_files = sorted([p for p in tourn_dir.glob(f"{tourney_key}_*.json") if pattern.search(p.name)])
-        latest_plan = plan_files[-1] if plan_files else None
+    # One resolver for every key: `latest_tournament_record` ranks by parsed
+    # (run number, stamp), so a named run (#487's `--stamp current_setup_10arm`)
+    # no longer wins or loses on the accident of `c` sorting after a digit.
+    latest_plan = latest_tournament_record(tourney_key, ROOT / "runtime" / "tournaments")
     if latest_plan is None:
         return default_arms, None
     try:

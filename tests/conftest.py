@@ -257,3 +257,91 @@ def redirect_cycle_ring(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(cycle_stream, "LIVE_ROOT", ring_dir)
     monkeypatch.setattr(cycle_stream, "DEFAULT_RING_PATH",
                         ring_dir / "runtime" / "cycle_events.jsonl")
+
+
+@pytest.fixture(autouse=True)
+def redirect_runtime_dir(tmp_path_factory, monkeypatch):
+    """Point every runtime-state writer at a per-test temp dir.
+
+    `core_brain.runtime_paths.RUNTIME_DIR` is where `runtime_file()` puts
+    everything that is not given an explicit path, and `order_manager.RUN` is
+    where `live_orders.json` / `live_events.log` go. A shadow run in a test
+    passes its own DB path but not its heartbeat, so a full-suite run left ~55
+    `shadow_run_<id>.json` files in the operator's `runtime/` and overwrote the
+    live order log. Same fix as `redirect_cycle_ring`: keep the layout, move the
+    root.
+
+    Readers that resolve through `resolve_runtime_file(root=...)` still point at
+    the real tree; tests that need them patch their own module.
+    """
+    from pathlib import Path as _Path
+
+    import core_brain.order_manager as order_manager
+    import core_brain.runtime_paths as runtime_paths
+
+    runtime_dir = tmp_path_factory.mktemp("runtime-state") / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(runtime_paths, "RUNTIME_DIR", _Path(runtime_dir))
+    monkeypatch.setattr(order_manager, "RUN", _Path(runtime_dir))
+
+
+#: The real, operator-facing state a test must never touch.
+REAL_STATE_DIRS = ("data", "runtime", "reports")
+
+
+def _real_state_snapshot() -> dict[str, tuple[int, int]]:
+    """`relative path -> (size, mtime_ns)` for every file under the state dirs."""
+    state: dict[str, tuple[int, int]] = {}
+    for name in REAL_STATE_DIRS:
+        root = REPO_ROOT / name
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            stat = path.stat()
+            state[path.relative_to(REPO_ROOT).as_posix()] = (stat.st_size, stat.st_mtime_ns)
+    return state
+
+
+@pytest.fixture(autouse=True)
+def block_real_state_writes(request):
+    """Fail any test that writes into the repo's own `data/`, `runtime/` or `reports/`.
+
+    Two full-suite runs left the operator's tree dirtier than any code change did:
+    ~55 heartbeats under `runtime/`, a `reports/stat_*` directory per run, and
+    `data/demo_orders.db` -- a **tracked** fixture -- rewritten on every run by a
+    KPI read that opens it read-write. Each one looked like a real change in
+    `git status`, and each one had to be cleaned up by hand.
+
+    The other hermetic fixtures each patch one writer (credentials, sockets, the
+    production registry, the cycle ring). This one is the backstop for the writers
+    nobody has patched yet: it snapshots the three state directories before the
+    test and fails, naming the exact paths, if anything was created, changed or
+    removed. Point the test at `tmp_path` instead -- for a tournament plan that
+    means `artifacts_root=tmp_path`, because `base_dir` only moves the stores.
+
+    Opt out per test with `@pytest.mark.writes_real_state` for a test whose whole
+    subject is the real path -- there is one such test for this guard.
+    """
+    if request.node.get_closest_marker("writes_real_state"):
+        yield
+        return
+
+    before = _real_state_snapshot()
+    yield
+    after = _real_state_snapshot()
+
+    created = sorted(set(after) - set(before))
+    changed = [path for path in sorted(set(before) & set(after)) if before[path] != after[path]]
+    removed = sorted(set(before) - set(after))
+    offenders = (
+        [f"+ {path}" for path in created]
+        + [f"~ {path}" for path in changed]
+        + [f"- {path}" for path in removed]
+    )
+    assert not offenders, (
+        "this test wrote into the repo's real state instead of tmp_path "
+        "(data/, runtime/, reports/ are the operator's, not the suite's):\n"
+        + "\n".join(offenders)
+    )

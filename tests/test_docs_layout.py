@@ -1,14 +1,24 @@
-"""Docs layout guard (issue #366): showcases live in docs/issues/, never elsewhere in docs/.
+"""Docs layout guard (issue #366): one home per artifact kind under docs/.
 
-Issue showcases belong in `docs/issues/` per the layout contract in
-`docs/agents/architecture.md` ("Where generated files go"). This guard walks
-every folder under `docs/` and fails while any `<id>-presentation-*.html` (or
-the sibling `<id>-showcase-*.html` form) sits outside the `docs/issues/`
-subtree, and while the leftover `project/` directory exists.
+HTML has exactly two homes, and the name says which:
+
+  docs/pr-presentations/<pr>-<slug>.html   a visual summary of a pull request
+  docs/explanations/<topic-slug>.html      a visual explainer, no ticket
+
+The contract is `docs/agents/naming.md`. This guard walks every folder under
+`docs/` and fails on an `.html` file that is in neither home, and on one whose
+name does not match the home it sits in. Everything else — the ledger, specs,
+plans, interviews, ideas, references, agents — is Markdown in its own folder,
+and `tests/test_naming.py` polices those names.
 
 The scan is recursive since #719: two showcases sat one folder down, in
 `docs/explanations/` and `docs/presentations/`, and a top-level-only scan stayed
 green while they did.
+
+One home per kind replaced `docs/issues/` (#780): a folder nobody reserves dies
+unowned — no writer, no guard, no reader — and ten ad-hoc explainers accumulated
+in `docs/explanations/` while it was outside the guard. The fix is ownership,
+not a shorter allowlist.
 """
 from __future__ import annotations
 
@@ -17,21 +27,34 @@ import re
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCS_DIR = ROOT / "docs"
-ISSUES_DIR = DOCS_DIR / "issues"
 
-# The one legal home: docs/issues/ itself and every folder below it.
-ALLOWED_SHOWCASE_SUBTREE = ISSUES_DIR.name
+PRESENTATIONS_DIR = "pr-presentations"
+EXPLANATIONS_DIR = "explanations"
 
-# Numeric issue id, then the showcase kind, then a slug: 297-presentation-foo.html.
-# Both contract forms are covered -- docs/issues/ already holds presentation and
-# showcase files, so a presentation-only pattern would let a stray showcase slip past.
-SHOWCASE_RE = re.compile(r"^\d+-(presentation|showcase)-.+\.html$")
+# <pr>-<slug>.html: the pull-request number first, because that is how the
+# operator looks for the page, and because Station VI commits showcases by id.
+# A legacy `-presentation-`/`-showcase-` slug stays legal; the word is just part
+# of the slug.
+PRESENTATION_NAME_RE = re.compile(r"^\d+-[a-z0-9]+(?:-[a-z0-9]+)*\.html$")
+
+# A topic slug and nothing else: no id, no date, no underscore. A leading digit
+# would read as a PR number, which is why the explainers named
+# `471-statistical-go-gate.html` were ambiguous about whether they were ticketed.
+EXPLAIN_NAME_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\.html$")
+
+#: folder under docs/ -> the name grammar its HTML must follow.
+HTML_HOMES = {
+    PRESENTATIONS_DIR: PRESENTATION_NAME_RE,
+    EXPLANATIONS_DIR: EXPLAIN_NAME_RE,
+}
+
+HTML_SUFFIX = ".html"
 
 
-def _stray_showcases(docs_dir: pathlib.Path = DOCS_DIR) -> list[str]:
-    """POSIX paths, relative to `docs_dir`, of showcases outside the issues/ subtree.
+def _html_offenders(docs_dir: pathlib.Path = DOCS_DIR) -> list[str]:
+    """POSIX paths, relative to `docs_dir`, of HTML in the wrong folder or name.
 
-    Every depth is scanned, so a showcase sitting directly under `docs/` is caught
+    Every depth is scanned, so a file sitting directly under `docs/` is caught
     the same way as one buried five folders down. `docs_dir` is a parameter so a
     test can plant a whole tree in `tmp_path` instead of trusting the real one to
     stay broken.
@@ -39,53 +62,73 @@ def _stray_showcases(docs_dir: pathlib.Path = DOCS_DIR) -> list[str]:
     offenders: list[str] = []
     if docs_dir.is_dir():
         for path in sorted(docs_dir.rglob("*")):
-            if not path.is_file() or not SHOWCASE_RE.match(path.name):
+            if not path.is_file() or path.suffix.lower() != HTML_SUFFIX:
                 continue
             relative = path.relative_to(docs_dir)
-            if relative.parts[0] != ALLOWED_SHOWCASE_SUBTREE:
+            name_re = HTML_HOMES.get(relative.parts[0])
+            if name_re is None or not name_re.match(path.name):
                 offenders.append(relative.as_posix())
     return offenders
 
 
-def test_no_showcase_outside_docs_issues():
-    offenders = _stray_showcases()
+def test_every_html_has_one_home_and_a_legal_name():
+    offenders = _html_offenders()
     assert not offenders, (
-        "issue showcases belong in docs/issues/ or a folder below it, "
-        "nowhere else under docs/:\n"
+        "HTML belongs to docs/pr-presentations/<pr>-<slug>.html or "
+        "docs/explanations/<topic-slug>.html, and nowhere else under docs/:\n"
         + "\n".join(f"docs/{path}" for path in offenders)
     )
 
 
-def test_a_stray_showcase_at_any_depth_is_caught(tmp_path):
+def test_a_stray_html_at_any_depth_is_caught(tmp_path):
     """Regression (#719): a subfolder under docs/ was a blind spot.
 
     The helper used to iterate `docs/` one level deep, so the two showcases in
     `docs/explanations/` and `docs/presentations/` never reached it. This plants
-    a stray at the top, one folder down, and two folders down, next to two legal
-    showcases inside `docs/issues/`, and pins the exact offender list.
+    legal files in both homes plus strays at the top, one folder down and two
+    folders down, and pins the exact offender list.
     """
     docs = tmp_path / "docs"
-    (docs / "explanations").mkdir(parents=True)
+    (docs / PRESENTATIONS_DIR).mkdir(parents=True)
+    (docs / EXPLANATIONS_DIR).mkdir(parents=True)
     (docs / "presentations" / "old").mkdir(parents=True)
     (docs / "issues" / "nested").mkdir(parents=True)
+    (docs / "agents").mkdir(parents=True)
 
     for stray in (
         "123-showcase-top-level.html",
-        "explanations/498-presentation-tournament-run.html",
+        "entry-gate-job.html",
+        "issues/297-presentation-instance-lock.html",  # the retired home
         "presentations/old/695-showcase-retired-env.html",
+        # Right folder, wrong name: the number is missing.
+        f"{PRESENTATIONS_DIR}/one-naming-contract.html",
+        # Right folder, wrong name: a digit reads as a PR number.
+        f"{EXPLANATIONS_DIR}/471-statistical-go-gate.html",
+        # Right folder, wrong shape.
+        f"{EXPLANATIONS_DIR}/skew_and_taker_cross_hebrew.html",
     ):
         (docs / stray).write_text("<html></html>", encoding="utf-8")
 
     for kept in (
-        "issues/297-presentation-instance-lock.html",
-        "issues/nested/366-showcase-repo-tidy.html",
+        f"{PRESENTATIONS_DIR}/780-one-naming-contract.html",
+        f"{PRESENTATIONS_DIR}/297-presentation-instance-lock.html",  # legacy slug
+        f"{EXPLANATIONS_DIR}/skew-and-taker-cross.html",
+        f"{EXPLANATIONS_DIR}/entry-gate-job.html",
     ):
         (docs / kept).write_text("<html></html>", encoding="utf-8")
-    (docs / "issues" / "219-noticed-but-not-touching.md").write_text("note", encoding="utf-8")
 
-    assert _stray_showcases(docs) == [
+    # Markdown is not this guard's business.
+    (docs / "backlog" / "i219-auth-timeout.md").parent.mkdir(parents=True)
+    (docs / "backlog" / "i219-auth-timeout.md").write_text("note", encoding="utf-8")
+    (docs / "agents" / "architecture.md").write_text("note", encoding="utf-8")
+
+    assert _html_offenders(docs) == [
         "123-showcase-top-level.html",
-        "explanations/498-presentation-tournament-run.html",
+        "entry-gate-job.html",
+        f"{EXPLANATIONS_DIR}/471-statistical-go-gate.html",
+        f"{EXPLANATIONS_DIR}/skew_and_taker_cross_hebrew.html",
+        "issues/297-presentation-instance-lock.html",
+        f"{PRESENTATIONS_DIR}/one-naming-contract.html",
         "presentations/old/695-showcase-retired-env.html",
     ]
 
@@ -97,8 +140,8 @@ def test_project_directory_absent():
     )
 
 
-def test_the_showcase_pattern_still_matches_the_contract():
-    """Sentinel: the guard above must not pass with nothing to check.
+def test_the_naming_contracts_are_alive():
+    """Sentinel: the naming contract is alive, independently of what is on disk.
 
     It used to require four named showcases to be present in `docs/issues/`.
     The e2f648e sweep deletes a closed issue's showcase artifacts, so "these
@@ -108,9 +151,19 @@ def test_the_showcase_pattern_still_matches_the_contract():
     the pattern itself: both contract forms must be recognised, and the
     near-misses must not be.
     """
-    assert ISSUES_DIR.is_dir(), "docs/issues/ is missing entirely"
-    assert SHOWCASE_RE.match("297-presentation-instance-lock.html")
-    assert SHOWCASE_RE.match("297-showcase-instance-lock.html")
-    assert not SHOWCASE_RE.match("297-presentation.html")
-    assert not SHOWCASE_RE.match("presentation-297.html")
-    assert not SHOWCASE_RE.match("297-slide-presentation-instance-lock.html")
+    assert PRESENTATION_NAME_RE.match("780-one-naming-contract.html")
+    assert PRESENTATION_NAME_RE.match("297-presentation-instance-lock.html")
+    assert PRESENTATION_NAME_RE.match("297-showcase-instance-lock.html")
+    assert not PRESENTATION_NAME_RE.match("one-naming-contract.html")
+    assert not PRESENTATION_NAME_RE.match("presentation-297.html")
+    assert not PRESENTATION_NAME_RE.match("297-slide_presentation.html")
+
+    # Explain-mode names, which the ten orphaned explainers did not follow:
+    # 471-statistical-go-gate.html read as ticketed, and
+    # skew_and_taker_cross_hebrew.html used underscores.
+    assert EXPLAIN_NAME_RE.match("skew-and-taker-cross.html")
+    assert not EXPLAIN_NAME_RE.match("471-statistical-go-gate.html")
+    assert not EXPLAIN_NAME_RE.match("skew_and_taker_cross_hebrew.html")
+    assert not EXPLAIN_NAME_RE.match("entry-gate.html.bak")
+
+    assert not (DOCS_DIR / "issues").exists(), "docs/issues/ is back; it has no owner"

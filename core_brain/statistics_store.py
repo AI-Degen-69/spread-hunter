@@ -43,7 +43,10 @@ class StatisticsStore:
         data = Path(data_dir)
         if data.name == "orders.db":
             raise ValueError("production registry cannot be used as a statistics store")
-        path = data / f"stats_{timestamp}_{_sanitize(run_id)}.db"
+        # `<kind>_<identity>_<stamp>.db`, the state grammar in docs/agents/naming.md.
+        # The `stats_` prefix is load-bearing: data_retention.py classifies the
+        # rehearsal family by it.
+        path = data / f"stats_{_sanitize(run_id)}_{timestamp}.db"
         assert_not_production_registry(path)
         data.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(path) as con:

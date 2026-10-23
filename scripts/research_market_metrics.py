@@ -22,6 +22,7 @@ from typing import Mapping, Sequence
 
 import requests
 
+from core_brain import naming
 from core_brain.runtime_paths import LIVE_ROOT
 from scoring.markets import full_book, parse_book
 from scoring.selector import top_depth_usd
@@ -546,10 +547,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.output:
             out_path = Path(args.output)
         else:
-            stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
             reports_dir = LIVE_ROOT / "reports"
             reports_dir.mkdir(parents=True, exist_ok=True)
-            out_path = reports_dir / f"market_metrics_statistics_report_{stamp}.json"
+            # `<kind>_<identity>_<stamp>.json`, the state grammar in docs/agents/naming.md.
+            out_path = reports_dir / f"statistics_report_market_metrics_{naming.stamp()}.json"
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:

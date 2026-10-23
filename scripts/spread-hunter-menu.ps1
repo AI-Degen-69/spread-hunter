@@ -440,6 +440,13 @@ function ConvertTo-RelativePath {
     return $norm
 }
 
+function Get-NamingStamp {
+    <# The one stamp shape for generated filenames: 2026-10-23T08-47. Mirrors
+    core_brain.naming.stamp() -- ISO 8601 basic with a hyphen in the time because
+    Windows forbids ":", so names carry the year and sort (docs/agents/naming.md). #>
+    return (Get-Date).ToString("yyyy-MM-ddTHH-mm")
+}
+
 function Get-NextShadowSeq {
     <# Next 2-digit run id (01..99) used to name the NN_shadow_<stamp>.db db
     and the shadow-NN run id itself. It is derived from existing data/*.db files
@@ -784,7 +791,7 @@ function Start-ShadowDashboard {
         $script:ShadowRunId = $ShadowRunId
         $script:ShadowDbPath = Join-Path $ProjectPath "data/${dbSeq}_shadow_${stamp}.db"
         if (-not $StatsDbPath) {
-            $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_${ShadowRunId}.db"
+            $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${ShadowRunId}_$(Get-NamingStamp).db"
         }
         Lsh-Step "Minted per-run shadow DB for dashboard: $script:ShadowDbPath"
     }
@@ -1289,7 +1296,7 @@ function Resume-ShadowRun {
         Lsh-Ok "Released the previous loop's fleet lock (holder $($lockRow.holder))."
     }
     $stamp = Get-Date -Format "dd-MM_HH-mm"
-    $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$($script:ShadowRunId).db"
+    $script:StatsDbPath = Join-Path $ProjectPath "data/stats_$($script:ShadowRunId)_$(Get-NamingStamp).db"
     $mins = Resolve-ShadowMinutes -RequestedMinutes $Minutes
 
     $durationLabel = if ($mins -lt 0) { "until stopped" } else { "for $mins minute(s)" }
@@ -1484,7 +1491,7 @@ function Start-NewShadowRun {
         $script:ShadowDbPath = Join-Path $ProjectPath "data/${dbSeq}_shadow_${stamp}.db"
     }
     $runId = $script:ShadowRunId
-    $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$runId.db"
+    $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${runId}_$(Get-NamingStamp).db"
     $mins = Resolve-ShadowMinutes -RequestedMinutes $Minutes
     $presetManifest = Join-Path (Split-Path $script:ShadowDbPath -Parent) (([IO.Path]::GetFileNameWithoutExtension($script:ShadowDbPath)) + ".preset.json")
 
@@ -2622,7 +2629,7 @@ function Reset-Environment {
             $dbSeq = Get-NextShadowSeq
             $ShadowRunId = "shadow-$dbSeq"
             $ShadowDbPath = Join-Path $ProjectPath "data/${dbSeq}_shadow_${stamp}.db"
-            $StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_${ShadowRunId}.db"
+            $StatsDbPath = Join-Path $ProjectPath "data/stats_${ShadowRunId}_$(Get-NamingStamp).db"
             if (Start-ShadowDashboard) {
                 $shadowMinutes = Resolve-ShadowMinutes -RequestedMinutes $Minutes
                 if ($shadowMinutes -ne 0) {
@@ -2764,7 +2771,7 @@ function Reset-Environment {
             $dbSeq = Get-NextShadowSeq
             $ShadowRunId = "shadow-$dbSeq"
             $ShadowDbPath = Join-Path $ProjectPath "data/${dbSeq}_shadow_${stamp}.db"
-            $StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_${ShadowRunId}.db"
+            $StatsDbPath = Join-Path $ProjectPath "data/stats_${ShadowRunId}_$(Get-NamingStamp).db"
             $reportPath = Join-Path $ProjectPath "reports/validation_${stamp}_${ShadowRunId}"
             $runHours = if ($Hours -gt 0) { $Hours } else { 12.0 }
             Lsh-Ok "Run id:   $ShadowRunId"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime as _datetime
 import math
 import re
 import sqlite3
@@ -10,6 +9,7 @@ from typing import Any
 
 from core_brain.config import MakerConfig, load as load_cfg
 from core_brain.kpi import report as kpi_report
+from core_brain.naming import stamp
 from core_brain.order_registry import OrderRegistry
 from core_brain.queue_math import queue_multiple as _queue_multiple
 from core_brain.runtime_paths import LIVE_ROOT
@@ -247,11 +247,12 @@ def write_statistics_report(
         threshold_pct=cfg.bot_eval_stat_gate_threshold_pct,
     )
 
-    timestamp = _datetime.datetime.now().strftime("%d-%m_%H-%M")
+    timestamp = stamp()
     destination = Path(out_dir) if out_dir is not None else DEFAULT_REPORT_DIR
     destination.mkdir(parents=True, exist_ok=True)
     safe_run_id = re.sub(r"[^A-Za-z0-9.-]+", "_", run_id).strip("._") or "run"
-    report_path = destination / f"{timestamp}_{mode}_{safe_run_id}_statistics_report.md"
+    # `<kind>_<identity>_<stamp>.md`, the state grammar in docs/agents/naming.md.
+    report_path = destination / f"statistics_report_{mode}_{safe_run_id}_{timestamp}.md"
     text = render_report_md(
         run_id=run_id,
         db_path=db,

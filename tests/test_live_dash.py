@@ -105,9 +105,9 @@ def test_run_number_arms_order_by_dash_port_not_file_order(tmp_path, monkeypatch
     """
     runtime = _wire_runtime(tmp_path, monkeypatch)
 
-    db_a = _make_db(tmp_path, "i492_tournament-1_stickhold-1.db")
-    db_b = _make_db(tmp_path, "i492_tournament-1_control-1.db")
-    db_c = _make_db(tmp_path, "i492_tournament-1_queuehug-1.db")
+    db_a = _make_db(tmp_path, "tournament_i492-r1_stickhold-1.db")
+    db_b = _make_db(tmp_path, "tournament_i492-r1_control-1.db")
+    db_c = _make_db(tmp_path, "tournament_i492-r1_queuehug-1.db")
 
     _write_hb(runtime, "shadow_run_a.json", db_a,
               "shadow-492-tournament-1-stickhold-1", age=2.0, dash_port=8806)
