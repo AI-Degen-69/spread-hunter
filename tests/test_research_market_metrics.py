@@ -360,6 +360,6 @@ def test_main_cli_save_flag(tmp_path, monkeypatch):
          patch("scripts.research_market_metrics.fetch_window_trades", return_value=([], True)):
         ret = main(["--sample-size", "1", "--save"])
         assert ret == 0
-        reports = list((tmp_path / "reports").glob("market_metrics_statistics_report_*.json"))
+        reports = list((tmp_path / "reports").glob("statistics_report_market_metrics_*.json"))
         assert len(reports) == 1
 

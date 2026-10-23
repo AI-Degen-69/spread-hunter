@@ -12,7 +12,6 @@ import json
 import logging
 import os
 from pathlib import Path
-import re
 import socket
 import subprocess
 import sys
@@ -21,6 +20,8 @@ import time
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from core_brain.shadow_run import latest_tournament_record  # noqa: E402
 
 log = logging.getLogger("dashboard_hub")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -35,33 +36,21 @@ def is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
 
 
 def get_latest_plan(tourney_id: str = "487", tourn_dir: Path | None = None) -> dict | None:
-    tourn_dir = tourn_dir if tourn_dir is not None else ROOT / "runtime" / "tournaments"
-    # Run-number scheme (Issue #492): i<issue>_tournament-<run>.json. Highest
-    # run number wins; checked first so a fresh v2 plan is never shadowed by
-    # a legacy stamped plan for the same issue.
-    v2_pattern = re.compile(rf"^i{tourney_id}_tournament-(?P<run>\d+)\.json$")
-    v2_hits: list[tuple[int, Path]] = []
-    for candidate in tourn_dir.glob(f"i{tourney_id}_tournament-*.json"):
-        match = v2_pattern.match(candidate.name)
-        if match:
-            v2_hits.append((int(match.group("run")), candidate))
-    if v2_hits:
-        v2_hits.sort(key=lambda hit: hit[0])
-        try:
-            with open(v2_hits[-1][1], "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as exc:
-            log.warning("Could not read tournament plan %s: %s", v2_hits[-1][1], exc)
-            return None
-    pattern = re.compile(rf"{tourney_id}_\d{{8}}-\d{{6}}\.json$")
-    plan_files = sorted([p for p in tourn_dir.glob(f"{tourney_id}_*.json") if pattern.search(p.name)])
-    if not plan_files:
+    """Newest plan record for this issue, resolved by the shared ranker.
+
+    The ranking (highest run number, then newest stamp) lives in
+    `core_brain.shadow_run.latest_tournament_record` so this hub and the cockpit
+    cannot drift into disagreeing about which file is "the plan".
+    """
+    directory = tourn_dir if tourn_dir is not None else ROOT / "runtime" / "tournaments"
+    latest = latest_tournament_record(tourney_id, directory)
+    if latest is None:
         return None
     try:
-        with open(plan_files[-1], "r", encoding="utf-8") as f:
+        with open(latest, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as exc:
-        log.warning("Could not read tournament plan %s: %s", plan_files[-1], exc)
+        log.warning("Could not read tournament plan %s: %s", latest, exc)
         return None
 
 

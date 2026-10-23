@@ -96,10 +96,12 @@ A document's folder is decided by **who reads it**, not by who wrote it:
 | Statistics store | `data/` | G3 |
 | Production registry, price tape, demo fixture | `data/` | singleton |
 | Event rings, logs, heartbeats, PIDs, snapshots | `runtime/` | G3 or singleton |
-| Tournament plan record | `runtime/tournaments/` | G3 (deviation below) |
+| Tournament plan record | `runtime/tournaments/` | G3 — `tournament_<key>_<stamp>.json` |
+| Tournament launcher log | `runtime/tournaments/` | G3 — same stem as the record, `.log` |
+| Tournament results | `reports/tournaments/` | G3 — `tournament_results_<key>_<stamp>.json` |
+| Tournament store | `data/` | G3 — `tournament_<key>_<arm>.db`, no stamp (the run key is unique and the cockpit predicts the path) |
+| Tournament arm definitions | `configs/tournaments/` | `<key>_arms.json`, hand-written input, not generated |
 | Generated reports | `reports/` | G3 |
-| Tournament results | `reports/tournaments/` | G3 (deviation below) |
-| Tournament arm definitions | `configs/tournaments/` | `<id>_<run>_arms.json`, hand-written input, not generated |
 
 Two rules keep this true, both from "Where generated files go" in
 `architecture.md`: the destination is a **module constant**, never a path
@@ -111,11 +113,15 @@ fixed**, never hidden behind a new `.gitignore` rule.
 | Artifact | What it does today | Upgrade trigger |
 | --- | --- | --- |
 | Shadow ring | `shadow_<run-id>.jsonl` — no stamp, so a reused `--run-id` appends to the previous run's tape | when run ids become reusable by design; the name is resolved in `core_brain.shadow_run._run_ring_name` and four dashboard call sites |
-| Tournament plan/arms | `configs/tournaments/i<id>_tournament-<run>_arms.json` | when tournament globs are refactored: `scripts/tournament_cockpit_server.py:796`, `scripts/tournament_dashboard_hub.py:44,57` all glob `i<id>_tournament-*` |
-| Tournament stores | `data/i<id>_tournament-<run>_<arm>-<run>.db` | same task as above; the cockpit hardcodes ten of these names |
-| Tournament record | `runtime/tournaments/` — two generations side by side: `i<id>_tournament-<run>.json` and `<id>_<YYYYMMDD-HHMMSS>.json`, the second with its own `%Y%m%d-%H%M%S` stamp | one task covering writer + both readers: `tournament_cockpit_server.py` (`\d{8}-\d{6}` pattern, plus the free-form `--stamp` name) and `tournament_dashboard_hub.py:57`. Existing timestamped records stop matching if only the writer changes |
-| Tournament results | `reports/tournaments/<id>_<stamp>_results.json`, same non-ISO stamp | same task |
+| Legacy tournament store | No run number: `data/<issue>_tournament_<NN>_<arm>_<stamp>.db` keeps its shape because the dashboard's clustering parser reads the arm index out of it | when the clustering parser is rewritten to take the arm from the plan record instead |
 | Report identity | `statistics_report_<mode>_<run-id>_<stamp>.md` reads `..._shadow_shadow-01_...` because run ids conventionally repeat the mode | when run ids stop carrying the mode word; today the uniformity is worth the redundancy |
+
+The tournament family closed its deviation: writer, both record readers and every
+on-disk record moved in one change. `<key>` is `i<issue>-r<run>`, `i<issue>` or
+`i<issue>-<run_name>`; `--stamp` now *names* a run instead of replacing the
+timestamp, and `core_brain.shadow_run.latest_tournament_record` is the only
+"which plan is current" ranker (highest run, then newest stamp — never string
+order).
 
 ## Adding a new artifact
 

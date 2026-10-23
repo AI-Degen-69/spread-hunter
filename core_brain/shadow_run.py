@@ -108,13 +108,39 @@ def shadow_heartbeat_path(root=None, run_id: str = "") -> Path:
 
 
 TOURNAMENT_DB_PATTERN = re.compile(
-    r"^(?:.*[\\/])?(?P<issue>\d+)_tournament_(?P<index>\d+)_(?P<arm>[a-z0-9-]+)_(?P<stamp>\d{8}-\d{6})\.db$"
+    r"^(?:.*[\\/])?(?P<issue>\d+)_tournament_(?P<index>\d+)_(?P<arm>[a-z0-9-]+)_"
+    r"(?P<stamp>\d{8}-\d{6}|\d{4}-\d{2}-\d{2}T\d{2}-\d{2})\.db$"
 )
 
 # Run-number scheme (Issue #492): i<issue>_tournament-<run>_<arm>-<run>.db --
 # no index prefix, no stamp. The arm slug already carries the run suffix.
 TOURNAMENT_DB_RUN_PATTERN = re.compile(
     r"^(?:.*[\\/])?i(?P<issue>\d+)_tournament-(?P<run>\d+)_(?P<arm>[a-z0-9-]+)\.db$"
+)
+
+# ---------------------------------------------------------------------------
+# Tournament artifacts, grammar G3 in docs/agents/naming.md.
+#
+#   tournament_<key>_<stamp>.json          plan record      runtime/tournaments/
+#   tournament_<key>_<stamp>.log           launcher log     runtime/tournaments/
+#   tournament_results_<key>_<stamp>.json  results          reports/tournaments/
+#   tournament_<key>_<arm>.db              store            data/
+#   <key>_arms.json                        arm list (input) configs/tournaments/
+#
+# <key> is `i<issue>-r<run>` when the run is numbered (unique by itself) and
+# `i<issue>` or `i<issue>-<name>` otherwise. The stamp is always the ISO launch
+# stamp, so `--stamp` names a run instead of replacing the timestamp -- that is
+# what let 487's record sort last by accident of the letter `c` beating a digit.
+TOURNAMENT_KIND = "tournament"
+
+# Run-numbered store: data/tournament_i<issue>-r<run>_<arm>.db
+TOURNAMENT_DB_NAME_PATTERN = re.compile(
+    r"^(?:.*[\\/])?tournament_i(?P<issue>\d+)-r(?P<run>\d+)_(?P<arm>[a-z0-9-]+)\.db$"
+)
+TOURNAMENT_RECORD_PATTERN = re.compile(
+    r"^(?:.*[\\/])?(?P<kind>tournament)_i(?P<issue>\d+)"
+    r"(?:-r(?P<run>\d+)|-(?P<name>[a-z0-9][a-z0-9-]*))?"
+    r"_(?P<stamp>\d{4}-\d{2}-\d{2}T\d{2}-\d{2})\.json$"
 )
 
 
@@ -130,6 +156,18 @@ def parse_tournament_db_path(path: str | Path | None) -> dict | None:
     if not path:
         return None
     raw = str(path).strip()
+    named = TOURNAMENT_DB_NAME_PATTERN.match(raw)
+    if named:
+        try:
+            return {
+                "issue": int(named.group("issue")),
+                "arm": named.group("arm"),
+                "run_number": int(named.group("run")),
+                "index": None,
+                "stamp": None,
+            }
+        except (ValueError, TypeError):
+            return None
     m = TOURNAMENT_DB_PATTERN.match(raw)
     if m:
         try:
@@ -161,7 +199,7 @@ def build_tournament_db_path(
     index: int,
     arm: str,
     stamp: str,
-    base_dir: str | Path = "data",
+    base_dir: str | Path = REPO_ROOT / "data",
 ) -> Path:
     """Generate canonical tournament DB path data/<issue>_tournament_<idx>_<arm>_<stamp>.db."""
     clean_arm = re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-")[:24] or "arm"
@@ -193,40 +231,120 @@ def build_tournament_db_path_v2(
     run_number: int = 1,
     base_dir: str | Path = REPO_ROOT / "data",
 ) -> Path:
-    """Run-number DB path: data/i<issue>_tournament-<run>_<arm>-<run>.db.
+    """Run-number store: data/tournament_i<issue>-r<run>_<arm>.db.
 
-    No index prefix, no stamp. The arm slug is expected to already carry the
-    run suffix (e.g. 'conservative-1'); the builder only cleans it.
+    No stamp: the run key is already unique, and the cockpit has to be able to
+    name the store before the run starts. The arm slug carries its own run
+    suffix (e.g. 'conservative-1'); the builder only cleans it.
     """
-    run = int(run_number)
     clean_arm = _clean_tournament_slug(arm)
-    filename = f"i{issue}_tournament-{run}_{clean_arm}.db"
-    return Path(base_dir) / filename
+    return Path(base_dir) / f"{TOURNAMENT_KIND}_{tournament_key(issue, run_number)}_{clean_arm}.db"
 
 
-def build_tournament_log_path_v2(
+def tournament_key(
     issue: int | str,
-    run_number: int = 1,
+    run_number: int | None = None,
+    name: str | None = None,
+) -> str:
+    """The identity segment of every tournament artifact: `i608-r1`, `i487-current-setup-10arm`.
+
+    A numbered run is unique on its own. Without one, the identity needs either
+    an explicit `--stamp` name or nothing (a single unnumbered tournament per
+    issue) -- and the ISO stamp in the filename separates repeats.
+    """
+    base = f"i{int(issue)}"
+    if run_number is not None:
+        return f"{base}-r{int(run_number)}"
+    if name:
+        return f"{base}-{_clean_tournament_slug(name)}"
+    return base
+
+
+def _tournament_artifact_name(kind: str, key: str, stamp: str, suffix: str) -> str:
+    return f"{kind}_{key}_{stamp}{suffix}"
+
+
+def build_tournament_record_path(
+    issue: int | str,
+    stamp: str,
+    run_number: int | None = None,
+    name: str | None = None,
     base_dir: str | Path = REPO_ROOT / "runtime" / "tournaments",
 ) -> Path:
-    """Run-number launcher log: runtime/tournaments/i<issue>_tournament-<run>.log.
+    """Plan record: runtime/tournaments/tournament_<key>_<stamp>.json."""
+    key = tournament_key(issue, run_number, name)
+    return Path(base_dir) / _tournament_artifact_name(TOURNAMENT_KIND, key, stamp, ".json")
 
-    Same stem as the plan record (i<issue>_tournament-<run>.json) so the
-    detached-launch stdout redirect sits next to the plan it executed.
-    Process logs live under runtime/ per docs/agents/architecture.md -- never
-    logs/ (which does not exist in this repo).
-    """
-    run = int(run_number)
-    return Path(base_dir) / f"i{issue}_tournament-{run}.log"
+
+def build_tournament_results_path(
+    issue: int | str,
+    stamp: str,
+    run_number: int | None = None,
+    name: str | None = None,
+    base_dir: str | Path = REPO_ROOT / "reports" / "tournaments",
+) -> Path:
+    """Results: reports/tournaments/tournament_results_<key>_<stamp>.json."""
+    key = tournament_key(issue, run_number, name)
+    return Path(base_dir) / _tournament_artifact_name(f"{TOURNAMENT_KIND}_results", key, stamp, ".json")
 
 
 def build_tournament_log_path(
     issue: int | str,
     stamp: str,
+    run_number: int | None = None,
+    name: str | None = None,
     base_dir: str | Path = REPO_ROOT / "runtime" / "tournaments",
 ) -> Path:
-    """Legacy launcher log: runtime/tournaments/<issue>_<stamp>.log."""
-    return Path(base_dir) / f"{issue}_{stamp}.log"
+    """Launcher log: runtime/tournaments/tournament_<key>_<stamp>.log.
+
+    Same stem as the plan record, so the detached-launch stdout redirect sits
+    next to the plan it executed. Process logs live under runtime/ per
+    docs/agents/architecture.md -- never logs/ (which does not exist here).
+    """
+    key = tournament_key(issue, run_number, name)
+    return Path(base_dir) / _tournament_artifact_name(TOURNAMENT_KIND, key, stamp, ".log")
+
+
+def parse_tournament_record_name(filename: str | Path) -> dict | None:
+    """Parse `tournament_<key>_<stamp>.json` into issue / run / name / stamp.
+
+    Returns None for a results file, a store, or any legacy name. Consumers ask
+    this instead of hand-rolling a stamp regex, which is how two readers drifted
+    into disagreeing about what a plan record looks like.
+    """
+    match = TOURNAMENT_RECORD_PATTERN.match(Path(filename).name)
+    if not match:
+        return None
+    return {
+        "issue": int(match.group("issue")),
+        "run_number": int(match.group("run")) if match.group("run") else None,
+        "name": match.group("name"),
+        "stamp": match.group("stamp"),
+    }
+
+
+def latest_tournament_record(
+    issue: int | str,
+    tourn_dir: str | Path = REPO_ROOT / "runtime" / "tournaments",
+) -> Path | None:
+    """Newest plan record for `issue`: highest run number, then newest stamp.
+
+    Ranked on the parsed fields, not on the filename: the old scheme ranked by
+    string, so a named record (`487_current_setup_10arm.json`) beat every
+    timestamped one only because `c` sorts after a digit.
+    """
+    directory = Path(tourn_dir)
+    if not directory.is_dir():
+        return None
+    best: tuple[int, str, Path] | None = None
+    for candidate in directory.glob(f"{TOURNAMENT_KIND}_i{int(issue)}*.json"):
+        parsed = parse_tournament_record_name(candidate)
+        if parsed is None:
+            continue
+        rank = (parsed["run_number"] or 0, parsed["stamp"], candidate)
+        if best is None or rank[:2] > best[:2]:
+            best = rank
+    return best[2] if best else None
 
 
 def build_tournament_run_id_v2(

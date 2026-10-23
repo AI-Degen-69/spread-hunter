@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
 
 from scripts import tournament_cockpit_server as cockpit  # noqa: E402
 
-I487_ARMS_SPEC = ROOT / "configs" / "tournaments" / "i487_current_setup_10arm_arms.json"
+I487_ARMS_SPEC = ROOT / "configs" / "tournaments" / "i487-current-setup-10arm_arms.json"
 
 
 def _spec_arm_names() -> list[str]:
@@ -74,7 +74,7 @@ def test_i487_each_arm_tweak_names_the_one_knob_the_spec_file_sets():
 
 def test_i487_resolves_the_named_plan_record(tmp_path, monkeypatch):
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
-    _record(tmp_path, "487_current_setup_10arm.json", [
+    _record(tmp_path, "tournament_i487-current-setup-10arm_2026-10-17T18-48.json", [
         {
             "name": "control",
             "db_path": "data/real_control.db",
@@ -116,7 +116,7 @@ def test_i487_prefers_the_named_record_over_a_leftover_timestamped_one(tmp_path,
         "run_id": "shadow-stale-control",
         "dash_port": 9999,
     }])
-    _record(tmp_path, "487_current_setup_10arm.json", [{
+    _record(tmp_path, "tournament_i487-current-setup-10arm_2026-10-17T18-48.json", [{
         "name": "control",
         "db_path": "data/named_control.db",
         "run_id": "shadow-named-control",
@@ -135,13 +135,13 @@ def test_i487_without_a_record_falls_back_to_the_static_table(tmp_path, monkeypa
 
 def test_492_and_608_still_resolve_from_their_run_numbered_records(tmp_path, monkeypatch):
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
-    _record(tmp_path, "i492_tournament-2.json", [{
+    _record(tmp_path, "tournament_i492-r2_2026-10-17T18-48.json", [{
         "name": "control-1",
         "db_path": "data/real492.db",
         "run_id": "shadow-real-492",
         "dash_port": 8901,
     }])
-    _record(tmp_path, "i608_tournament-1.json", [{
+    _record(tmp_path, "tournament_i608-r1_2026-10-17T18-48.json", [{
         # The real #608 record names its arms WITHOUT the round suffix the
         # cockpit's static table carries; the resolver strips it to match.
         "name": "the-accountant",
@@ -150,7 +150,7 @@ def test_492_and_608_still_resolve_from_their_run_numbered_records(tmp_path, mon
         "dash_port": 8902,
     }])
     # A #487 named record sitting beside them must not bleed into either key.
-    _record(tmp_path, "487_current_setup_10arm.json", [])
+    _record(tmp_path, "tournament_i487-current-setup-10arm_2026-10-17T18-48.json", [])
 
     c492 = {a["name"]: a for a in cockpit.resolve_tournament_arms("492")}
     assert len(c492) == len(cockpit.ARMS_CONFIG_492)
@@ -255,7 +255,7 @@ BROKEN_RECORD = '{"arms": [{"name": "control",'
 def _broken_record(tmp_path: Path) -> Path:
     tourn_dir = tmp_path / "runtime" / "tournaments"
     tourn_dir.mkdir(parents=True, exist_ok=True)
-    path = tourn_dir / "487_current_setup_10arm.json"
+    path = tourn_dir / "tournament_i487-current-setup-10arm_2026-10-17T18-48.json"
     path.write_text(BROKEN_RECORD, encoding="utf-8")
     return path
 
@@ -297,7 +297,7 @@ def test_broken_record_shape_errors_name_the_arm_at_fault(
     monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
     tourn_dir = tmp_path / "runtime" / "tournaments"
     tourn_dir.mkdir(parents=True, exist_ok=True)
-    (tourn_dir / "487_current_setup_10arm.json").write_text(payload, encoding="utf-8")
+    (tourn_dir / "tournament_i487-current-setup-10arm_2026-10-17T18-48.json").write_text(payload, encoding="utf-8")
 
     arms, record_error = cockpit.resolve_tournament_arms_with_status("487")
 
@@ -320,7 +320,7 @@ def test_no_record_is_not_an_error(tmp_path, monkeypatch):
 def test_a_readable_record_reports_no_error(tmp_path, monkeypatch):
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
-    _record(tmp_path, "487_current_setup_10arm.json", [{
+    _record(tmp_path, "tournament_i487-current-setup-10arm_2026-10-17T18-48.json", [{
         "name": "control",
         "db_path": "data/real_control.db",
         "run_id": "shadow-real-control",
@@ -354,7 +354,7 @@ def test_null_db_path_warns_instead_of_crashing_the_stats(tmp_path, monkeypatch)
     """
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
-    _record(tmp_path, "487_current_setup_10arm.json", [
+    _record(tmp_path, "tournament_i487-current-setup-10arm_2026-10-17T18-48.json", [
         {"name": "control", "db_path": None, "run_id": "shadow-real", "dash_port": 8801},
     ])
 
@@ -404,12 +404,12 @@ def test_cockpit_page_shows_the_broken_record_warning():
     """The fallback table must say, on screen, that it is the fallback."""
     broken = cockpit.generate_cockpit_html({
         "arms": [], "tourney_key": "487",
-        "record_error": "C:/run/487_current_setup_10arm.json: line 1 column 27",
+        "record_error": "C:/run/tournament_i487-current-setup-10arm_2026-10-17T18-48.json: line 1 column 27",
     })
     assert 'id="record-warning"' in broken
     assert 'record-warning" class="badge-red" style="display: block;' in broken
     assert "failed to parse" in broken
-    assert "487_current_setup_10arm.json: line 1 column 27" in broken
+    assert "tournament_i487-current-setup-10arm_2026-10-17T18-48.json: line 1 column 27" in broken
 
     healthy = cockpit.generate_cockpit_html(
         {"arms": [], "tourney_key": "487", "record_error": None})

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import re
+
 import pytest
 
 from core_brain.order_registry import CloseRecord, OrderRecord, OrderRegistry, QuoteRecord
@@ -55,7 +57,11 @@ def test_shadow_vs_live_disclaimer(tmp_path: Path):
     live_text = Path(live["report_path"]).read_text(encoding="utf-8")
     assert "rehearsal, not results" in shadow_text
     assert "observational, read-only, live caveats" in live_text
-    assert Path(shadow["report_path"]).name.endswith("_shadow_run-1_statistics_report.md")
+    # `<kind>_<identity>_<stamp>.md`, the state grammar in docs/agents/naming.md.
+    assert re.fullmatch(
+        r"statistics_report_shadow_run-1_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}\.md",
+        Path(shadow["report_path"]).name,
+    ), shadow["report_path"]
 
 
 def test_sample_size_gate_bites_on_config_target(tmp_path: Path):

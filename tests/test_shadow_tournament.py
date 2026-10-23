@@ -250,14 +250,17 @@ def test_dry_run_cli_output(capsys, tmp_path: Path):
         "--dry-run",
         "--issue", "371",
         "--base-dir", str(tmp_path),
-        "--stamp", "20261005-032000",
+        "--stamp", "current-setup",
         "--no-port-check",
     ])
     assert rc == 0
     captured = capsys.readouterr()
     data = json.loads(captured.out)
     assert data["issue"] == 371
-    assert data["stamp"] == "20261005-032000"
+    # `--stamp` names the run; the plan still carries the ISO launch stamp.
+    import re as _re
+    assert _re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}", data["stamp"]), data["stamp"]
+    assert "tournament_i371-current-setup_" in data["record_path"].replace("\\", "/")
     assert len(data["arms"]) == 4
 
 
@@ -511,7 +514,8 @@ def test_dry_run_logs_to_stderr_and_keeps_stdout_pure_json(tmp_path: Path):
     assert "Tournament dry-run" in proc.stderr
     data = json.loads(proc.stdout)
     assert len(data["arms"]) == 4
-    assert data["log_path"].endswith("i999_tournament-9.log")
+    assert "tournaments/tournament_i999-r9_" in data["log_path"].replace("\\", "/")
+    assert data["log_path"].endswith(".log")
 
 
 def test_dry_run_shows_results_path_and_writes_nothing(tmp_path: Path, capsys):
@@ -526,7 +530,10 @@ def test_dry_run_shows_results_path_and_writes_nothing(tmp_path: Path, capsys):
     ])
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
-    assert data["results_path"].endswith("371_20261005-039999_results.json")
+    # `--stamp` names the run; the ISO launch stamp is always appended, so the
+    # assertion pins the prefix and the extension, never the clock.
+    assert "tournaments/tournament_results_i371-20261005-039999_" in data["results_path"].replace("\\", "/")
+    assert data["results_path"].endswith(".json")
     assert list(tmp_path.glob("*results.json")) == []
     assert not (ROOT / data["results_path"]).exists()
 
@@ -646,7 +653,7 @@ def test_i608_character_arms_plan(tmp_path: Path):
     """
     from scripts.shadow_tournament import build_tournament_plan
 
-    arms_file = Path(__file__).resolve().parent.parent / "configs" / "tournaments" / "i608_tournament-1_arms.json"
+    arms_file = Path(__file__).resolve().parent.parent / "configs" / "tournaments" / "i608-r1_arms.json"
     arms = json.loads(arms_file.read_text(encoding="utf-8"))
     assert len(arms) == 8
 
@@ -764,7 +771,7 @@ def test_worker_environment_strips_parent_config_env(tmp_path, monkeypatch):
 # --- #622: the refusal-hold arms file ---------------------------------------
 
 I622_ARMS = (Path(__file__).resolve().parent.parent
-             / "configs" / "tournaments" / "i622_tournament-1_arms.json")
+             / "configs" / "tournaments" / "i622-r1_arms.json")
 
 #: The only keys an arm may differ on. Everything else must be identical, or the
 #: comparison measures two changes at once. After the #683 purge of
@@ -854,7 +861,7 @@ def test_every_arm_names_a_distinct_store_and_run(tmp_path):
 
 I492_ARMS = (
     Path(__file__).resolve().parent.parent
-    / "configs" / "tournaments" / "i492_tournament-1_arms.json"
+    / "configs" / "tournaments" / "i492-r1_arms.json"
 )
 
 # The first run's per-leg stop cap was `single_buy_max_loss_usd`, in DOLLARS.
@@ -1053,7 +1060,7 @@ def test_i492_plan_names_ten_fresh_stores_and_ports(tmp_path):
     assert len({a.run_id for a in plan.arms}) == 10
     for arm in plan.arms:
         name = Path(arm.db_path).name
-        assert name.startswith("i492_tournament-1_"), name
+        assert name.startswith("tournament_i492-r1_"), name
         assert name != "orders.db"
 
 
@@ -1075,14 +1082,17 @@ def test_run_numbered_dry_run_reads_the_conventional_arms_file(tmp_path, capsys)
     # Anchored to the repo, never to the cwd: a relative path here is what let a
     # launch from scripts/ write the plan record somewhere nobody looks.
     for key, expected in (
-        ("record_path", "runtime/tournaments/i492_tournament-1.json"),
-        ("results_path", "reports/tournaments/i492_tournament-1_results.json"),
-        ("log_path", "runtime/tournaments/i492_tournament-1.log"),
+        ("record_path", "runtime/tournaments/tournament_i492-r1_"),
+        ("results_path", "reports/tournaments/tournament_results_i492-r1_"),
+        ("log_path", "runtime/tournaments/tournament_i492-r1_"),
     ):
         reported = Path(data[key])
         assert reported.is_absolute(), (key, data[key])
-        assert reported.as_posix().endswith("/" + expected), (key, data[key])
-    assert data["arms_source"] == "configs/tournaments/i492_tournament-1_arms.json"
+        # The ISO launch stamp is generated at build time, so pin the prefix and
+        # the extension rather than the clock.
+        assert reported.as_posix().endswith(".json" if key != "log_path" else ".log"), data[key]
+        assert "/" + expected in reported.as_posix(), (key, data[key])
+    assert data["arms_source"] == "configs/tournaments/i492-r1_arms.json"
 
 
 def test_explicit_arms_file_beats_the_convention(tmp_path, capsys):
@@ -1349,7 +1359,7 @@ def test_cockpit_hybrid_blueprint_tab_purged():
 
 I487_ARMS = (
     Path(__file__).resolve().parent.parent
-    / "configs" / "tournaments" / "i487_current_setup_10arm_arms.json"
+    / "configs" / "tournaments" / "i487-current-setup-10arm_arms.json"
 )
 
 # The plan's Decision 3 table, arm for arm. The control runs today's

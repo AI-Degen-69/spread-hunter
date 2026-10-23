@@ -31,15 +31,18 @@ if str(ROOT) not in sys.path:
 
 from core_brain.config import MAX_ROTATION_INTERVAL_SEC, TOURNAMENT_PRESETS
 
+from core_brain import naming
 from core_brain.kpi import MERGE_METHODS, NON_TRADE_CLOSE_METHODS
 from core_brain.shadow_guard import assert_not_production_registry
 from core_brain.shadow_run import (
     build_tournament_db_path,
     build_tournament_db_path_v2,
     build_tournament_log_path,
-    build_tournament_log_path_v2,
+    build_tournament_record_path,
+    build_tournament_results_path,
     build_tournament_run_id,
     build_tournament_run_id_v2,
+    tournament_key,
 )
 
 # The Market Filter (`scripts.filter_loop`) refreshes the shared market feed
@@ -297,20 +300,28 @@ def build_tournament_plan(
     max_markets: Optional[int] = None,
     markets_path: Optional[str | Path] = None,
     stamp: Optional[str] = None,
-    base_dir: str | Path = "data",
+    base_dir: str | Path = ROOT / "data",
     check_ports: bool = True,
     python_executable: str = sys.executable,
     run_number: Optional[int] = None,
+    run_name: Optional[str] = None,
 ) -> TournamentPlan:
     """Build a validated, isolated tournament execution plan.
 
-    run_number selects the stamp-less naming scheme (Issue #492): arm slugs
-    become <base>-<run>, DBs become data/i<issue>_tournament-<run>_<slug>.db,
-    and the plan/results files drop the stamp. None keeps the legacy scheme
-    byte-identical.
+    Naming follows docs/agents/naming.md (grammar G3): every artifact is
+    `tournament_<key>_<stamp>` where `key` is `i<issue>-r<run>` for a numbered
+    `i<issue>` or `i<issue>-<run_name>`. `stamp` is the ISO launch stamp
+    (`core_brain.naming.stamp`); `run_name` is an optional memorable identity,
+    not a replacement for the timestamp. Run-numbered stores drop the stamp
+    because the run key is already unique and the cockpit has to predict the
+    path.
+
+    The parameter is `run_name`, not `name`: the arm loop below iterates a local
+    called `name`, and a same-named parameter was silently overwritten by the
+    last preset in the list.
     """
     if stamp is None:
-        stamp = time.strftime("%Y%m%d-%H%M%S")
+        stamp = naming.stamp()
 
     # If arms not provided, default to TOURNAMENT_PRESETS in balanced order.
     # The legacy "control" arm was purged 2026-10-12 (broken capped logic); the
@@ -470,21 +481,19 @@ def build_tournament_plan(
             )
         )
 
-    # Anchored to ROOT, never to the cwd: a plain Path("reports") resolves against
-    # whatever directory launched the tournament, which is the spill that
-    # `docs/agents/architecture.md` ("Where generated files go") bans.
-    if run_number is not None:
-        record_path = (
-            ROOT / "runtime" / "tournaments" / f"i{issue}_tournament-{int(run_number)}.json"
-        )
-        results_path = (
-            ROOT / "reports" / "tournaments" / f"i{issue}_tournament-{int(run_number)}_results.json"
-        )
-        log_path = build_tournament_log_path_v2(issue=issue, run_number=int(run_number))
-    else:
-        record_path = ROOT / "runtime" / "tournaments" / f"{issue}_{stamp}.json"
-        results_path = ROOT / "reports" / "tournaments" / f"{issue}_{stamp}_results.json"
-        log_path = build_tournament_log_path(issue=issue, stamp=stamp)
+    # Record, results and log come from the builders in core_brain.shadow_run so
+    # there is one place that knows the name (docs/agents/naming.md, grammar G3),
+    # and every path is anchored to ROOT rather than to the launch directory.
+    run_key = int(run_number) if run_number is not None else None
+    record_path = build_tournament_record_path(
+        issue=issue, stamp=stamp, run_number=run_key, name=run_name,
+    )
+    results_path = build_tournament_results_path(
+        issue=issue, stamp=stamp, run_number=run_key, name=run_name,
+    )
+    log_path = build_tournament_log_path(
+        issue=issue, stamp=stamp, run_number=run_key, name=run_name,
+    )
     return TournamentPlan(
         issue=issue,
         stamp=stamp,
@@ -639,10 +648,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--max-markets", type=int, default=None, help="Cap number of rotated markets")
     parser.add_argument("--markets-path", type=str, default=None, help="Path to trial universe feed")
     parser.add_argument("--dry-run", action="store_true", help="Print tournament plan JSON and exit")
-    parser.add_argument("--stamp", type=str, default=None, help="Explicit timestamp identifier override")
+    parser.add_argument("--stamp", type=str, default=None,
+                        help="Named identity for this run (kebab-case, e.g. current_setup_10arm). "
+                             "It names the run; the ISO launch stamp is always appended, so records "
+                             "still sort and never collide (docs/agents/naming.md).")
     parser.add_argument("--run-number", type=int, default=None, help="Run-number naming scheme: slugs become <base>-<run>, DBs i<issue>_tournament-<run>_<slug>.db, no stamps (default: legacy scheme)")
-    parser.add_argument("--base-dir", type=str, default="data", help="Target database directory (default: data)")
-    parser.add_argument("--log-file", type=str, default=None, help="Override detached-launch stdout redirect (default: canonical runtime/tournaments/i<issue>_tournament-<run>.log)")
+    parser.add_argument("--base-dir", type=str, default=str(ROOT / "data"), help="Target database directory (default: the repo's data/, never the cwd)")
+    parser.add_argument("--log-file", type=str, default=None, help="Override detached-launch stdout redirect (default: runtime/tournaments/tournament_<key>_<stamp>.log)")
     parser.add_argument("--no-port-check", action="store_true", help="Skip TCP socket availability check")
 
     args = parser.parse_args(argv)
@@ -660,15 +672,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         arms_source = str(args.arms_file)
         log.info("Tournament arms: %s (%d arms)", args.arms_file, len(arms))
     elif args.run_number is not None:
-        # Run-number convention (#492): a numbered tournament reads its arm
-        # definitions from configs/tournaments/i<issue>_tournament-<run>_arms.json
-        # when that file exists, so the documented command
-        # (`--issue 492 --run-number 1 --dry-run`) carries the arm list without
-        # an extra flag. An explicit --arms-file always wins, and no file means
-        # the shipped preset defaults.
+        # Convention (#492): a run reads its arm definitions from
+        # configs/tournaments/<key>_arms.json when that file exists, so the
+        # documented command (`--issue 492 --run-number 1 --dry-run`) carries the
+        # arm list without an extra flag. An explicit --arms-file always wins,
+        # and no file means the shipped preset defaults.
         conventional = (
             ROOT / "configs" / "tournaments"
-            / f"i{args.issue}_tournament-{int(args.run_number)}_arms.json"
+            / f"{tournament_key(args.issue, int(args.run_number), args.stamp)}_arms.json"
         )
         if conventional.is_file():
             arms = json.loads(conventional.read_text(encoding="utf-8"))
@@ -688,7 +699,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         run_number=args.run_number,
         max_markets=args.max_markets,
         markets_path=args.markets_path,
-        stamp=args.stamp,
+        run_name=args.stamp,
         base_dir=args.base_dir,
         check_ports=(args.dashboards and not args.no_port_check) if not args.dry_run else False,
     )
