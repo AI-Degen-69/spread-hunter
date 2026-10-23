@@ -121,7 +121,7 @@ done → ready for `iii-build-plan auto` handoff (build station executes T1–T3
   returns nothing under `dashboard/`; (2) harness `render` + `empty` actions run
   clean with no `_gateBand` key in `painted` and no `band` key in `gates`.
 
-### T2 — [Test] Replace band assertions with absence assertions (S)
+### T2 — [Test] Replace band assertions with absence assertions (S) [x]
 
 - File: `tests/test_analysis_v2_binding.py` (lines ~333–341 and the empty-payload
   test): assert `gates` has no `band` key, `bands` has no `gates.band` ref, the
