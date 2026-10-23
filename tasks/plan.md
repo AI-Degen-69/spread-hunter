@@ -90,7 +90,7 @@ so hand-editing version strings is churn with zero browser effect.
   new `.stitch-category-cell` rule; `th` padding untouched; no `nth-child`/`td:first-child`.
 - **Verify:** sidebar-prototype suite green; visual check in T4.
 
-### T4 — Focused checks + hands-on surface pass [size S, Design/UI]
+### T4 — Focused checks + hands-on surface pass [x] [size S, Design/UI]
 **Depends on:** T3.
 - Run `python -m pytest tests/test_orders_trades_table.py tests/test_sidebar_prototype.py -q`
   and `python -m pytest tests/test_stitch_active_markets.py tests/test_stitch_open_orders.py
@@ -104,3 +104,6 @@ so hand-editing version strings is churn with zero browser effect.
 test_orders_trades_table (chip x4, head x4, positions-sort, orders-sort, first-click-asc),
 7 fail across the four stitch suites + 1 sidebar CSS check; all other tests green.
 **Checkpoint after T3:** all six focused suites green, ready for T4 surface pass.
+**Done 2026-10-23:** 241/241 focused checks green; live demo-server pass on all four tabs
+(CATEGORY present + sortable A→Z, no EDGE, volume-only cells, full-width ledger, no app
+console errors). Noticed-but-not-touching: none.
