@@ -1043,6 +1043,7 @@
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .proto-body .stitch-arb-badge.is-paired {
@@ -1052,33 +1053,15 @@
 }
 
 .proto-body .stitch-arb-badge.is-unpaired {
-  background: rgba(120, 53, 15, 0.6);
-  border: 1px solid rgba(245, 158, 11, 0.5);
-  color: #fcd34d;
-}
-
-.proto-body .stitch-arb-badge.is-partial {
-  background: rgba(120, 53, 15, 0.5);
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  color: #fbbf24;
+  background: rgba(127, 29, 29, 0.6);
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  color: #f87171;
 }
 
 .proto-body .stitch-arb-badge.is-hedge-pending {
   background: rgba(14, 116, 144, 0.5);
   border: 1px solid rgba(56, 189, 248, 0.5);
   color: #7dd3fc;
-}
-
-.proto-body .stitch-arb-badge .badge-val {
-  color: #ffffff;
-}
-
-.proto-body .stitch-arb-badge .badge-edge {
-  color: #6ee7b7;
-}
-
-.proto-body .stitch-arb-badge .badge-sep {
-  color: #64748b;
 }
 
 /* Quotes */

@@ -2563,3 +2563,144 @@ def test_the_retired_category_markup_is_gone_from_the_renderer():
     assert "categoryShort" not in source
 
 
+# ── Status pill + Pair Cost column (#784) ────────────────────────────────────
+#
+# The Orders stitch table splits the old long Market badge into two columns: a
+# word-only STATUS pill and a dedicated PAIR COST figure. The pill carries no
+# value/edge text, and the Market cell keeps only the category chip.
+
+
+@requires_node
+def test_stitch_orders_status_and_pair_cost_columns_render():
+    # Arrange / Act
+    rendered = _render("open-orders", _kpi(), _state(), surface="stitch")
+    head = rendered["stitchHead"]
+    html = rendered["html"]
+
+    # Assert — the header carries STATUS (key 9) and PAIR COST (key 10).
+    assert "STATUS" in head
+    assert "PAIR COST" in head
+    assert 'data-ot-sort="9"' in head
+    assert 'data-ot-sort="10"' in head
+
+    # The Orders output has no % Edge, no "Pair Cost:" label inside a pill,
+    # and no leftover badge-value/edge/sep spans.
+    assert "% Edge" not in html
+    assert "Pair Cost:" not in html
+    assert "badge-val" not in html
+    assert "badge-edge" not in html
+    assert "badge-sep" not in html
+    assert "stitch-meta-tag" not in html
+    assert "Paired Arb" not in html
+
+
+@requires_node
+def test_stitch_orders_status_pills_are_word_only():
+    # Arrange — a paired pair (equal sizes) and a lone resting leg.
+    kpi = _kpi()
+    state = _state()
+    html = _render("open-orders", kpi, state, surface="stitch")["html"]
+
+    # Assert — each pill is exactly its label: no dollar signs, no Edge/Cost.
+    for pill in re.findall(r'<span class="stitch-arb-badge[^"]*">([^<]*)</span>', html):
+        assert "$" not in pill
+        assert "Edge" not in pill
+        assert "Pair Cost" not in pill
+
+
+@requires_node
+def test_stitch_orders_hedge_pending_pill_blue():
+    # Arrange — filled DN + resting UP is hedge-pending.
+    kpi = _kpi()
+    state = {
+        "orders": [
+            {"order_id": "ord-up", "condition_id": CID_QUOTED, "token_id": "tok-up",
+             "pair_id": "pair-h", "side": "BUY", "price": 0.47, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 1000, "age_sec": 90.0},
+            {"order_id": "ord-filled", "condition_id": CID_QUOTED, "token_id": "tok-dn",
+             "pair_id": "pair-h", "side": "BUY", "price": 0.51, "original_size": 5.0,
+             "size_matched": 5.0, "size_remaining": 0.0, "status": "filled",
+             "posted_ts": 900, "age_sec": 120.0},
+        ]
+    }
+    html = _render("open-orders", kpi, state, surface="stitch")["html"]
+
+    # Assert
+    assert "SINGLE FILL" in html
+    assert "is-hedge-pending" in html
+    assert "PAIRED" not in html
+    assert "MISSING PAIR" not in html
+
+
+@requires_node
+def test_stitch_orders_partial_pair_is_paired_green():
+    # Arrange — unequal resting sizes (UP 5 open, DN 3 partial) = partial pair.
+    kpi = _kpi()
+    state = {
+        "orders": [
+            {"order_id": "ord-up", "condition_id": CID_QUOTED, "token_id": "tok-up",
+             "pair_id": "pair-a", "side": "BUY", "price": 0.47, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 1000, "age_sec": 90.0},
+            {"order_id": "ord-dn", "condition_id": CID_QUOTED, "token_id": "tok-dn",
+             "pair_id": "pair-a", "side": "BUY", "price": 0.51, "original_size": 5.0,
+             "size_matched": 2.0, "size_remaining": 3.0, "status": "partial",
+             "posted_ts": 900, "age_sec": 120.0},
+        ]
+    }
+    html = _render("open-orders", kpi, state, surface="stitch")["html"]
+
+    # Assert — partial is treated as paired: green, with the note in hover.
+    assert "PAIRED" in html
+    assert "is-paired" in html
+    assert "Unequal leg sizes" in html
+    assert "PARTIAL" not in html
+    assert "is-partial" not in html
+    assert "MISSING PAIR" not in html
+
+
+@requires_node
+def test_stitch_orders_status_first_click_sorts_ascending():
+    # Act — STATUS (key 9) is a word column: first click asks A-Z.
+    result = _clicks([{"view": "open-orders", "col": 9}])
+
+    # Assert
+    assert result["toggles"][0] == {"col": 9, "dir": "asc"}
+
+
+@requires_node
+def test_stitch_orders_pair_cost_first_click_sorts_descending():
+    # Act — PAIR COST (key 10) is a money column: first click asks biggest first.
+    result = _clicks([{"view": "open-orders", "col": 10}])
+
+    # Assert
+    assert result["toggles"][0] == {"col": 10, "dir": "desc"}
+
+
+def test_stitch_orders_unpaired_badge_is_red_and_paired_green_hedge_blue():
+    # Arrange
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+
+    # Assert — unpaired recoloured to red, paired green and hedge-pending blue
+    # preserved, and the old amber is gone from the unpaired rule.
+    unpaired = css.split(".stitch-arb-badge.is-unpaired")[1].split("}")[0]
+    assert "#f87171" in unpaired
+    assert "#fcd34d" not in unpaired
+    paired = css.split(".stitch-arb-badge.is-paired")[1].split("}")[0]
+    assert "#34d399" in paired
+    hedge = css.split(".stitch-arb-badge.is-hedge-pending")[1].split("}")[0]
+    assert "#7dd3fc" in hedge
+
+
+def test_stitch_orders_badge_value_edge_sep_styles_are_removed():
+    # Arrange
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+
+    # Assert — no leftover badge sub-element styles.
+    assert ".badge-val" not in css
+    assert ".badge-edge" not in css
+    assert ".badge-sep" not in css
+    assert ".is-partial" not in css
+
+
