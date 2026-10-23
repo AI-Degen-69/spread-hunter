@@ -6560,7 +6560,7 @@ function normalizeLeg(side) {
  * descending. One rule, two directions, no per-column special cases. */
 const OT_TEXT_COLUMNS = {
   'active-markets': new Set([1, 2, 10]),  // Market, Category, Status
-  'open-orders': new Set([1, 2, 8]),      // Market, Leg, Category
+  'open-orders': new Set([1, 2, 8, 9]),   // Market, Leg, Category, Status
   'positions': new Set([1, 2]),           // Market, Leg
   'closed-trades': new Set([1, 2, 5]),    // Market, Hedge, Status
 };
@@ -7849,12 +7849,96 @@ function stitchDualLegCell(yesLine, noLine, opts) {
 }
 
 
+/* Status for a rest group, computed once so the sort column and the row
+ * render the same verdict. label: the word-only pill text; cls: the badge
+ * class; title: the hover explanation. isHedgePending (one leg filled, the
+ * other resting) beats pairStatus; partial is treated as paired (both orders
+ * are on the book), so it is green with an "Unequal leg sizes" note. */
+function groupStatus(g, allOrders, legs, byMarket, kpi, state) {
+  const first = g.orders[0];
+  const market = orderGroupMarket(g, first.condition_id, byMarket, state);
+  const restingLegs = restingPairLegs(g.orders, kpi);
+  const status = pairStatus(
+    restingLegs.UP ? restingLegs.UP.size : 0,
+    restingLegs.DN ? restingLegs.DN.size : 0
+  );
+
+  const upOrder = g.orders.find(o => legForOrder(o, legs, byMarket) === 'UP');
+  const dnOrder = g.orders.find(o => {
+    const l = legForOrder(o, legs, byMarket);
+    return l === 'DN' || l === 'DOWN';
+  });
+
+  // --- Counterpart lookup for missing legs (unchanged semantics) ---
+  const pairId = first.pair_id || null;
+  const cid = first.condition_id;
+  function findCounterpart(missingLeg) {
+    const candidates = allOrders.filter(o => {
+      if (g.orders.includes(o)) return false;
+      const oLeg = legForOrder(o, legs, byMarket);
+      const legMatch = missingLeg === 'UP' ? oLeg === 'UP' : (oLeg === 'DN' || oLeg === 'DOWN');
+      if (pairId && o.pair_id) return o.pair_id === pairId && legMatch;
+      if (pairId) return false;
+      return o.condition_id === cid && legMatch;
+    });
+    if (!candidates.length) return null;
+    const fills = candidates.filter(o => {
+      const s = (o.status || '').toLowerCase();
+      return s === 'filled' || s === 'matched';
+    });
+    const pool = fills.length ? fills : candidates;
+    return pool.reduce((best, o) =>
+      (Number(o.posted_ts) || 0) > (Number(best.posted_ts) || 0) ? o : best
+    );
+  }
+  let upFilled = null, upCancelled = false;
+  let dnFilled = null, dnCancelled = false;
+  if (!upOrder) {
+    const cp = findCounterpart('UP');
+    if (cp) {
+      const s = (cp.status || '').toLowerCase();
+      if (s === 'filled' || s === 'matched') upFilled = cp;
+      else if (s === 'cancelled' || s === 'canceled') upCancelled = true;
+    }
+  }
+  if (!dnOrder) {
+    const cp = findCounterpart('DN');
+    if (cp) {
+      const s = (cp.status || '').toLowerCase();
+      if (s === 'filled' || s === 'matched') dnFilled = cp;
+      else if (s === 'cancelled' || s === 'canceled') dnCancelled = true;
+    }
+  }
+
+  const isHedgePending = (upFilled !== null && !!dnOrder) || (dnFilled !== null && !!upOrder);
+
+  const matchedHeld = g.orders.some(o => Number(o.size_matched) > 0);
+  let label, cls, title;
+  if (isHedgePending) {
+    label = 'SINGLE FILL'; cls = 'is-hedge-pending'; title = 'Position Held';
+  } else if (status === 'paired' || status === 'partial') {
+    label = 'PAIRED'; cls = 'is-paired';
+    title = status === 'partial' ? 'Unequal leg sizes' : '';
+  } else {
+    label = 'MISSING PAIR'; cls = 'is-unpaired';
+    title = matchedHeld ? 'Partial Fill Held' : 'No Position';
+  }
+  return { status, label, cls, title, isHedgePending,
+           upFilled, dnFilled, upCancelled, dnCancelled };
+}
+
+function groupStatusLabel(g, first, legs, byMarket, kpi, state) {
+  return groupStatus(g, (state && state.orders) || [], legs, byMarket, kpi, state).label;
+}
+
 function stitchOpenOrdersHeadHtml(sort) {
   const active = (sort && Number.isInteger(sort.col)) ? sort : null;
   const cols = [
     { label: 'Market & Arbitrage Status', sortIdx: 1 },
     { label: 'CATEGORY', sortIdx: 8 },
+    { label: 'STATUS', sortIdx: 9 },
     { label: 'Dual-Leg Quotes (YES / NO)', sortIdx: 3 },
+    { label: 'PAIR COST', sortIdx: 10 },
     { label: 'Total Committed', sortIdx: 5 },
     { label: 'LAST UPDATED', sortIdx: 0 },
     { label: 'Actions', sortIdx: null, right: true },
@@ -7879,7 +7963,7 @@ function stitchOpenOrdersHeadHtml(sort) {
 function stitchOpenOrdersRows(kpi, state, sort) {
   const orders = ((state && state.orders) || []).filter(isRestingOrder);
   if (!orders.length) {
-    return `<tr><td colspan="6" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No orders are resting on the book.</td></tr>`;
+    return `<tr><td colspan="8" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No orders are resting on the book.</td></tr>`;
   }
 
   const byMarket = (kpi && kpi.by_market) || {};
@@ -7896,6 +7980,8 @@ function stitchOpenOrdersRows(kpi, state, sort) {
       case 1: return String((market && (market.title || market.name || market.slug)) || '');
       case 2: return legForOrder(first, legs, byMarket) || '';
       case 8: return marketCategory(market);
+      case 9: return "" + groupStatusLabel(g, first, legs, byMarket, kpi, state);
+      case 10: return restingPairCost(g.orders, kpi);
       case 3: return otExtreme(g.orders.map(o => o.price), dir);
       case 4: return otSum(g.orders.map(o => o.original_size));
       case 5: {
@@ -7914,14 +8000,9 @@ function stitchOpenOrdersRows(kpi, state, sort) {
   return sorted.map((group) => {
     const first = group.orders[0];
     const market = orderGroupMarket(group, first.condition_id, byMarket, state);
-    const restingLegs = restingPairLegs(group.orders, kpi);
-    const status = pairStatus(
-      restingLegs.UP ? restingLegs.UP.size : 0,
-      restingLegs.DN ? restingLegs.DN.size : 0
-    );
+    const gs = groupStatus(group, allOrders, legs, byMarket, kpi, state);
+    const status = gs.status;
     const pairCost = restingPairCost(group.orders, kpi);
-    const edge = (pairCost !== null && pairCost > 0 && pairCost < 1.0)
-      ? ((1.0 - pairCost) * 100) : null;
 
     const upOrder = group.orders.find(o => legForOrder(o, legs, byMarket) === 'UP');
     const dnOrder = group.orders.find(o => {
@@ -7929,54 +8010,7 @@ function stitchOpenOrdersRows(kpi, state, sort) {
       return l === 'DN' || l === 'DOWN';
     });
 
-    // --- Counterpart lookup for missing legs ---
-    // When a resting group has only one leg, check the full order history to
-    // classify the absent leg as: filled (position held), cancelled, or genuinely missing.
-    const pairId = first.pair_id || null;
-    const cid = first.condition_id;
-    function findCounterpart(missingLeg) {
-      const candidates = allOrders.filter(o => {
-        if (group.orders.includes(o)) return false; // skip legs already in group
-        const oLeg = legForOrder(o, legs, byMarket);
-        const legMatch = missingLeg === 'UP' ? oLeg === 'UP' : (oLeg === 'DN' || oLeg === 'DOWN');
-        if (pairId && o.pair_id) return o.pair_id === pairId && legMatch;
-        // A paired resting leg only trusts same-pair history: pair-less
-        // history belongs to an earlier trade in this market, not this pair.
-        if (pairId) return false;
-        return o.condition_id === cid && legMatch;
-      });
-      if (!candidates.length) return null;
-      // Shares held beat requotes: a fill survives any later cancellation,
-      // so the held-position warning cannot be hidden by a newer cancel.
-      const fills = candidates.filter(o => {
-        const s = (o.status || '').toLowerCase();
-        return s === 'filled' || s === 'matched';
-      });
-      const pool = fills.length ? fills : candidates;
-      return pool.reduce((best, o) =>
-        (Number(o.posted_ts) || 0) > (Number(best.posted_ts) || 0) ? o : best
-      );
-    }
-    let upFilled = null, upCancelled = false;
-    let dnFilled = null, dnCancelled = false;
-    if (!upOrder) {
-      const cp = findCounterpart('UP');
-      if (cp) {
-        const s = (cp.status || '').toLowerCase();
-        if (s === 'filled' || s === 'matched') upFilled = cp;
-        else if (s === 'cancelled' || s === 'canceled') upCancelled = true;
-      }
-    }
-    if (!dnOrder) {
-      const cp = findCounterpart('DN');
-      if (cp) {
-        const s = (cp.status || '').toLowerCase();
-        if (s === 'filled' || s === 'matched') dnFilled = cp;
-        else if (s === 'cancelled' || s === 'canceled') dnCancelled = true;
-      }
-    }
-    // Hedge-pending: one resting leg exists and the counterpart already filled
-    const isHedgePending = (upFilled !== null && !!dnOrder) || (dnFilled !== null && !!upOrder);
+    const isHedgePending = gs.isHedgePending;
 
     const upSize = upOrder ? Number(upOrder.original_size) || 0 : 0;
     const upPrice = upOrder ? Number(upOrder.price) || 0 : 0;
@@ -7998,42 +8032,29 @@ function stitchOpenOrdersRows(kpi, state, sort) {
     const marketUrl = market && market.slug ? `https://polymarket.com/market/${market.slug}` : '#';
 
     const isPaired = status === 'paired';
-    const isPartial = status === 'partial';
     // isUnpaired only when truly missing — hedge-pending has a filled counterpart, not missing
     const isUnpaired = status === 'unpaired' && !isHedgePending;
 
-    let badgeHtml = '';
-    if (isPaired) {
-      badgeHtml = `<span class="stitch-arb-badge is-paired">`
-        + `<span>PAIRED</span><span class="badge-sep">|</span>`
-        + `<span class="badge-val">Pair Cost: ${fmtPrice(pairCost)}</span>`
-        + (edge !== null ? `<span class="badge-edge">(+${edge.toFixed(1)}% Edge)</span>` : '')
-        + `</span>`;
-    } else if (isHedgePending) {
-      badgeHtml = `<span class="stitch-arb-badge is-hedge-pending">`
-        + `<span>🛡️ HEDGE PENDING</span><span class="badge-sep">|</span>`
-        + `<span>Single Leg Filled — Position Held</span>`
-        + `</span>`;
-    } else if (isPartial) {
-      badgeHtml = `<span class="stitch-arb-badge is-partial">`
-        + `<span>PARTIAL</span><span class="badge-sep">|</span>`
-        + `<span class="badge-val">Pair Cost: ${fmtPrice(pairCost)}</span>`
-        + `</span>`;
-    } else {
-      // A partially matched resting leg still holds shares: never claim
-      // "No Position" while matched size exists on this pair.
-      const matchedHeld = group.orders.some(o => Number(o.size_matched) > 0);
-      badgeHtml = `<span class="stitch-arb-badge is-unpaired">`
-        + `<span>⚠️ UNPAIRED</span><span class="badge-sep">|</span>`
-        + `<span>Missing Leg — ${matchedHeld ? 'Partial Fill Held' : 'No Position'}</span>`
-        + `</span>`;
-    }
+    const upFilled = gs.upFilled;
+    const dnFilled = gs.dnFilled;
+    const upCancelled = gs.upCancelled;
+    const dnCancelled = gs.dnCancelled;
+
+    // Word-only status pill. The old badge's value/edge text moved to the
+    // dedicated PAIR COST column; the label alone stands here. The hover
+    // explanation (e.g. "Unequal leg sizes") is also exposed to keyboard and
+    // screen-reader users via tabindex and aria-label, not just on mouse hover.
+    const badgeHtml = `<span class="stitch-arb-badge ${gs.cls}"`
+      + (gs.title ? ` title="${esc(gs.title)}" tabindex="0" aria-label="${esc(gs.label + ': ' + gs.title)}"` : '')
+      + `>${esc(gs.label)}</span>`;
 
     const rowBgClass = isHedgePending ? 'stitch-ot-row is-hedge-pending'
       : isUnpaired ? 'stitch-ot-row is-unpaired'
       : 'stitch-ot-row';
-    const dotClass = isPaired ? 'is-paired' : isHedgePending ? 'is-hedge-pending' : 'is-unpaired';
-    const metaTag = isPaired ? 'Paired Arb' : isHedgePending ? 'Hedge Pending' : 'Resting';
+    // A partial pair shows the green PAIRED pill, so its dot matches unless a
+    // hedge is pending (which reads SINGLE FILL).
+    const isPairedDot = isPaired || (status === 'partial' && !isHedgePending);
+    const dotClass = isPairedDot ? 'is-paired' : isHedgePending ? 'is-hedge-pending' : 'is-unpaired';
 
     // Break-even max for the missing side: the pair cap minus the resting
     // price. Green while completion can still land under the cap, red once
@@ -8070,10 +8091,6 @@ function stitchOpenOrdersRows(kpi, state, sort) {
             <div class="stitch-market-title">
               <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
             </div>
-            <div class="stitch-market-meta">
-              <span class="stitch-meta-tag">${metaTag}</span>
-              ${badgeHtml}
-            </div>
           </div>
         </div>
       </td>
@@ -8083,13 +8100,23 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         ${categoryPill(market)}
       </td>
 
-      <!-- Col 3: Dual-Leg Quotes (YES / NO) -->
+      <!-- Col 3: STATUS -->
+      <td>
+        ${badgeHtml}
+      </td>
+
+      <!-- Col 4: Dual-Leg Quotes (YES / NO) -->
       ${stitchDualLegCell(
         dualLegLine({ side: 'YES', size: upOrder ? upSize : null, price: upPrice, cost: upCost, emptyLabel: '[Awaiting YES Quote]', counterpart: upOrder ? null : upFilled ? { state: 'filled', order: upFilled } : upCancelled ? { state: 'cancelled' } : null }),
         dualLegLine({ side: 'NO', size: dnOrder ? dnSize : null, price: dnPrice, cost: dnCost, emptyLabel: '[Awaiting NO Quote]', counterpart: dnOrder ? null : dnFilled ? { state: 'filled', order: dnFilled } : dnCancelled ? { state: 'cancelled' } : null }),
         {})}
 
-      <!-- Col 4: Break-even max the other side may cost (cap minus resting price) -->
+      <!-- Col 5: PAIR COST -->
+      <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
+        ${fmtPrice(pairCost)}
+      </td>
+
+      <!-- Col 6: Break-even max the other side may cost (cap minus resting price) -->
       <td>
         <div class="stitch-quote-box">
           <div class="stitch-quote-rung">${roomYes}</div>
@@ -8097,13 +8124,13 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         </div>
       </td>
 
-      <!-- Col 5: LAST UPDATED / AGE (stopwatch + timestamp, same as Markets) -->
+      <!-- Col 7: LAST UPDATED / AGE (stopwatch + timestamp, same as Markets) -->
       <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
         <div class="stitch-age-stopwatch">${ageSec !== null ? fmtStopwatch(ageSec) : '--'}</div>
         <div class="stitch-age-meta">${postedTs !== null ? fmtTimestamp(postedTs) : '--'}</div>
       </td>
 
-      <!-- Col 6: Actions -->
+      <!-- Col 8: Actions -->
       <td style="text-align:right;">
         <div class="stitch-action-group">
           ${isUnpaired ? `

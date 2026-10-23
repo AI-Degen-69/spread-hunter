@@ -115,22 +115,24 @@ const lateCancelDN = { order_id: 'ord-d8', condition_id: '0xalp', token_id: 'tok
 
 
 @requires_node
-def test_stitch_orders_head_has_five_columns_in_spec_order():
+def test_stitch_orders_head_has_eight_columns_in_spec_order():
     code = _FIXTURE + """
     const head = app.stitchOpenOrdersHeadHtml(null);
     console.log(JSON.stringify({ head }));
     """
     res = json.loads(_eval_js(code))
     head = res["head"]
-    positions = ["Market", "CATEGORY", "Dual-Leg Quotes (YES / NO)", "Total Committed",
-                 "LAST UPDATED", "Actions"]
+    positions = ["Market", "CATEGORY", "STATUS", "Dual-Leg Quotes (YES / NO)",
+                 "PAIR COST", "Total Committed", "LAST UPDATED", "Actions"]
     for label in positions:
         assert label in head, f"missing header: {label}"
     assert [head.index(p) for p in positions] == sorted(head.index(p) for p in positions)
-    # CATEGORY is a real sort button on the new key 8, not a label.
+    # CATEGORY is a real sort button on key 8, STATUS on key 9, PAIR COST on key 10.
     assert 'data-ot-sort="8"' in head
+    assert 'data-ot-sort="9"' in head
+    assert 'data-ot-sort="10"' in head
     assert 'data-ot-sort' not in head.split("Actions")[1]
-    assert head.count("<th") == 6
+    assert head.count("<th") == 8
 
 
 @requires_node
@@ -146,8 +148,9 @@ def test_stitch_orders_unpaired_row_shows_resting_leg_and_missing_counterpart():
     assert "10 @ $0.25" in html
     assert "cost $2.50" in html
     assert "[Awaiting NO Quote]" in html
-    assert "UNPAIRED" in html
-    assert "Missing Leg" in html
+    assert "MISSING PAIR" in html
+    # The unpaired pill carries the explanation in its hover title.
+    assert 'title="No Position"' in html
     assert "00:45" in html
     assert "Cancel" in html
 
@@ -160,7 +163,7 @@ def test_stitch_orders_filled_counterpart_holds_position():
     """
     res = json.loads(_eval_js(code))
     html = res["html"]
-    assert "HEDGE PENDING" in html
+    assert "SINGLE FILL" in html
     assert "Position Held" in html
     assert "5 @ $0.70" in html
     assert "is-hedge-pending" in html
@@ -192,7 +195,7 @@ def test_stitch_orders_earlier_pair_fill_does_not_classify_current_row():
     """
     res = json.loads(_eval_js(code))
     html = res["html"]
-    assert "HEDGE PENDING" not in html
+    assert "SINGLE FILL" not in html
     assert "Position Held" not in html
     assert "[Awaiting NO Quote]" in html
 
@@ -205,7 +208,7 @@ def test_stitch_orders_late_cancel_does_not_hide_earlier_fill():
     """
     res = json.loads(_eval_js(code))
     html = res["html"]
-    assert "HEDGE PENDING" in html
+    assert "SINGLE FILL" in html
     assert "Position Held" in html
 
 
@@ -223,13 +226,13 @@ def test_stitch_orders_partially_matched_leg_never_claims_no_position():
 
 
 @requires_node
-def test_stitch_orders_empty_state_spans_all_five_columns():
+def test_stitch_orders_empty_state_spans_all_eight_columns():
     code = """
     const html = app.stitchOpenOrdersRows({ by_market: {} }, { orders: [] }, null);
     console.log(JSON.stringify({ html }));
     """
     res = json.loads(_eval_js(code))
-    assert 'colspan="6"' in res["html"]
+    assert 'colspan="8"' in res["html"]
     assert "No orders are resting on the book." in res["html"]
 
 
@@ -406,3 +409,70 @@ def test_stitch_orders_filled_leg_shows_room_on_resting_side():
     sub2 = res["html2"].split('stitch-commit-sub"')[1].split("</span>")[0]
     assert "0.59" in sub1
     assert "0.44" in sub2
+
+
+@requires_node
+def test_stitch_orders_paired_row_shows_pair_cost_cell():
+    # Paired row (0.42 + 0.53) renders $0.95 in the PAIR COST cell.
+    code = _FIXTURE + """
+    const html = app.stitchOpenOrdersRows(
+        kpi, { orders: [pairedUP, pairedDN] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    html = res["html"]
+    assert "$0.95" in html
+    assert "PAIRED" in html
+    assert "is-paired" in html
+    # The pill is word-only: no Pair Cost / % Edge text inside it.
+    assert "Pair Cost:" not in html
+    assert "% Edge" not in html
+
+
+@requires_node
+def test_stitch_orders_unpaired_row_shows_pair_cost_dash():
+    # A lone resting leg has no cost: PAIR COST shows --.
+    code = _FIXTURE + """
+    const html = app.stitchOpenOrdersRows(kpi, { orders: [restingUP] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    html = res["html"]
+    assert "MISSING PAIR" in html
+    assert "$0.25" in html  # the resting leg cost still renders
+    assert "--" in html
+
+
+@requires_node
+def test_stitch_orders_status_sorts_alphabetically():
+    # STATUS (key 9) is a text column: ascending puts MISSING PAIR first.
+    code = _FIXTURE + """
+    const html = app.stitchOpenOrdersRows(
+        kpi, { orders: [restingUP, pairedUP, pairedDN] }, { col: 9, dir: 'asc' });
+    const missingFirst = html.indexOf('data-pair="pair-u1"') < html.indexOf('data-pair="pair-p1"');
+    console.log(JSON.stringify({ missingFirst, defaultDir: app.otDefaultDir('open-orders', 9) }));
+    """
+    res = json.loads(_eval_js(code))
+    assert res["missingFirst"] is True, "key 9 must sort MISSING PAIR before PAIRED"
+    assert res["defaultDir"] == "asc", "status is a word column: first click sorts A-Z"
+
+
+@requires_node
+def test_stitch_orders_pair_cost_sorts_numerically():
+    # PAIR COST (key 10) is a money column: descending puts the larger pair first.
+    # The older pair-q is costlier (0.46 + 0.52 = 0.98) and posts before pair-p
+    # (0.42 + 0.53 = 0.95); the default order puts the newer, cheaper pair first,
+    # so only a working numeric sort moves the costlier pair ahead.
+    code = _FIXTURE + """
+    const olderUP = Object.assign({}, pairedUP,
+        { order_id: 'ord-q-up', pair_id: 'pair-q1', price: 0.46, posted_ts: 1700000010 });
+    const olderDN = Object.assign({}, pairedDN,
+        { order_id: 'ord-q-dn', pair_id: 'pair-q1', price: 0.52, posted_ts: 1700000011 });
+    const html = app.stitchOpenOrdersRows(
+        kpi, { orders: [pairedUP, pairedDN, olderUP, olderDN] }, { col: 10, dir: 'desc' });
+    const costlierFirst = html.indexOf('data-pair="pair-q1"') < html.indexOf('data-pair="pair-p1"');
+    console.log(JSON.stringify({ costlierFirst, defaultDir: app.otDefaultDir('open-orders', 10) }));
+    """
+    res = json.loads(_eval_js(code))
+    assert res["costlierFirst"] is True, "key 10 must sort the costlier pair first"
+    assert res["defaultDir"] == "desc", "pair cost is a money column: first click sorts high-low"
