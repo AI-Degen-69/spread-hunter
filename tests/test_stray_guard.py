@@ -60,6 +60,94 @@ def test_classify_registry_paired():
     assert len(res.hopeless_strays) == 0
 
 
+def test_classify_multi_order_pair_spans_both_tokens_stays_registry_paired():
+    """#765: a pair_id group spanning both tokens is healthy regardless of row count.
+
+    A replaced hedge leaves more than 2 rows under one pair_id; every row must
+    stay registry_paired instead of being dismantled into weldable strays.
+    """
+    cond = "0xcond_multi"
+    o1 = make_order("o1", cond, "tok_up", 0.70, pair_id="pair-multi")
+    o2 = make_order("o2", cond, "tok_dn", 0.25, pair_id="pair-multi")
+    o3 = make_order("o3", cond, "tok_up", 0.70, pair_id="pair-multi")
+
+    res = classify_market_orders(
+        orders=[o1, o2, o3],
+        books={},
+        bot_pos_price_max_pair_cost_usd=0.99,
+    )
+
+    assert len(res.registry_paired) == 1
+    pair_id, legs = res.registry_paired[0]
+    assert pair_id == "pair-multi"
+    assert {leg.id for leg in legs} == {"o1", "o2", "o3"}
+    assert len(res.complementary_detached) == 0
+    assert len(res.hopeless_strays) == 0
+    assert len(res.viable_strays) == 0
+
+
+def test_classify_same_token_group_stays_unpaired():
+    """#765: many rows on ONE token only must stay unpaired (duplicated legs)."""
+    cond = "0xcond_dup"
+    o1 = make_order("o1", cond, "tok_up", 0.70, pair_id="pair-dup")
+    o2 = make_order("o2", cond, "tok_up", 0.70, pair_id="pair-dup")
+
+    res = classify_market_orders(
+        orders=[o1, o2],
+        books={},
+        bot_pos_price_max_pair_cost_usd=0.99,
+    )
+
+    assert len(res.registry_paired) == 0
+    stray_ids = {v.order.id for v in res.viable_strays}
+    assert {"o1", "o2"} <= stray_ids
+
+
+def test_classify_mismatched_sizes_not_welded():
+    """#765: detached legs whose original sizes differ stay unwelded strays.
+
+    OrderRecord carries only original_size (no remaining fill field) -- any
+    size gap is a naked leg, the failure this guard exists to stop.
+    """
+    cond = "0xcond_mismatch"
+    o1 = make_order("o1", cond, "tok_up", 0.70, size=5.0, pair_id="pair-1")
+    o2 = make_order("o2", cond, "tok_dn", 0.25, size=8.0, pair_id="pair-2")
+
+    res = classify_market_orders(
+        orders=[o1, o2],
+        books={},
+        bot_pos_price_max_pair_cost_usd=0.99,
+    )
+
+    assert len(res.complementary_detached) == 0
+    stray_ids = {v.order.id for v in res.viable_strays}
+    assert {"o1", "o2"} <= stray_ids
+
+
+def test_matched_sizes_welded_under_fresh_pair_id(tmp_path):
+    """#765: size-matched detached legs weld, under a freshly minted pair id."""
+    from core_brain.order_registry import OrderRegistry
+    from core_brain.stray_guard import adopt_detached_legs
+
+    reg = OrderRegistry(db_path=tmp_path / "orders.db")
+    cond = "0xcond_fresh"
+    o1 = make_order("o1", cond, "tok_up", 0.70, size=5.0, pair_id="pair-old-1")
+    o2 = make_order("o2", cond, "tok_dn", 0.25, size=5.0, pair_id="pair-old-2")
+    reg.create_order(o1)
+    reg.create_order(o2)
+
+    res = classify_market_orders(reg.get_active_orders(), books={},
+                                 bot_pos_price_max_pair_cost_usd=0.99)
+    assert len(res.complementary_detached) == 1
+
+    adopted = adopt_detached_legs(reg, res.complementary_detached)
+    shared_pid = adopted[0]
+    assert shared_pid.startswith("pair-")
+    assert shared_pid not in ("pair-old-1", "pair-old-2")
+    assert reg.get_order("o1").pair_id == shared_pid
+    assert reg.get_order("o2").pair_id == shared_pid
+
+
 def test_classify_complementary_detached():
     """Two orders on same market with different pair_ids summing <= max_pair_cost are COMPLEMENTARY_DETACHED."""
     cond = "0xcond1"
@@ -159,7 +247,10 @@ def test_adopt_detached_legs_idempotent(tmp_path):
     adopted = adopt_detached_legs(reg, res.complementary_detached)
     assert len(adopted) == 1
     shared_pid = adopted[0]
-    assert shared_pid in ("pair-stray-1", "pair-stray-2")
+    # #765: a welded stray is a NEW pairing, so a fresh pair id is minted.
+    # Reusing an old `pair-stray-*` id was the bug; that id's sibling is gone.
+    assert shared_pid.startswith("pair-")
+    assert shared_pid not in ("pair-stray-1", "pair-stray-2")
 
     # Verify both orders in registry now share the same pair_id
     o1_fresh = reg.get_order("o1")
