@@ -60,8 +60,8 @@ Narrow `except` clauses only (`except sqlite3.Error`, `except OSError`). A bare
 
 - **Never close a connection inside `with get_connection(...)`.** The context manager
   commits on exit; use `contextlib.closing`.
-- `complete_pair` sizes against `ask_depth` (the asks ladder). `depth_at_or_above` reads
-  **bids** and will oversize a buy.
+- `complete_pair` sizes against `ask_depth_at_or_below(book, ask)` — only asks priced at or
+  below the limit it is buying at. `depth_at_or_above` reads **bids** and will oversize a buy.
 - Fill attribution must not silently drop fills. Under-counting a position invites fresh
   exposure on top of it.
 
