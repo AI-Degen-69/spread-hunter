@@ -70,8 +70,11 @@ def test_source_contains_no_write_statements():
     assert ".commit()" not in src
     # Named in prose (as in fill_calibration.py); never imported or built.
     assert "OrderRegistry(" not in src
-    assert "from core_brain" not in src
+    # One function-local exception: the z-table reader (pure math, no
+    # registry). No top-level core_brain import, ever.
     assert "import core_brain" not in src
+    assert not re.search(r"^from core_brain", src, re.MULTILINE)
+    assert not re.search(r"^import core_brain", src, re.MULTILINE)
 
 
 def test_hash_in_path_opens_the_intended_file(tmp_path: Path):

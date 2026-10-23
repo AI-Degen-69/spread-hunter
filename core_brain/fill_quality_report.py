@@ -10,8 +10,11 @@ constructor creates and migrates tables, which against a production registry
 would rewrite it); no transaction is ever opened. A query that fails is
 reported as UNREADABLE, never repaired.
 
-The module imports nothing from `core_brain`, which is what makes that claim
-auditable in one glance. The queue bucket boundaries are COPIED from `kpi.py`
+The module imports nothing from `core_brain` at load time, which is what
+makes that claim auditable in one glance. The single exception is a
+function-local reader of the z-table (`statistical_analytics.ci_z`, pure
+math with no registry access): the normal multiplier lives in that table
+and nowhere else. The queue bucket boundaries are COPIED from `kpi.py`
 rather than imported for the same reason.
 
 Units: `fills.venue_ts` / `recorded_ts` and `orders.posted_ts` are
@@ -178,9 +181,23 @@ class QualityReport:
         }
 
 
-def wilson_interval(k: int, n: int, z: float = 1.96) -> tuple[float | None, float | None]:
-    """Wilson 95% interval for k deaths in n closed fills. No scipy needed."""
+def wilson_interval(k: int, n: int, z: float | None = None) -> tuple[float | None, float | None]:
+    """Wilson 95% interval for k deaths in n closed fills. No scipy needed.
+
+    The multiplier is read from the one table (`statistical_analytics.ci_z`)
+    rather than written down here: a second literal would let a caller read
+    a different 95% from the one the table holds (see the guard test
+    `test_no_other_core_brain_module_writes_a_normal_multiplier_down`).
+    """
+    if z is None:
+        # Local import, the module's single exception to the no-core_brain
+        # rule: ci_z is pure math with no registry access, and the table
+        # stays the only place the number lives.
+        from core_brain.statistical_analytics import ci_z
+        z = ci_z(95)
     if n <= 0:
+        return (None, None)
+    if z is None:  # unknown level has no multiplier; never invent one
         return (None, None)
     p = k / n
     denom = 1.0 + z * z / n
