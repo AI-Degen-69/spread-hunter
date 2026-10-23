@@ -804,9 +804,9 @@ dynamic_base = round(clamped_cents / 100.0, 4)  # תוצאה: 0.0200$
                         </div>
                     </div>
                     <div class="branch-card branch-info">
-                        <strong>בדיקת סובלנות תור (Queue Hold & Deadband):</strong>
+                        <strong>שמירת הוראה קיימת (Hold &amp; Wait):</strong>
                         <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
-                            אם קיימת כבר הוראה בספר בסטיית <code>dead_band</code> ובעמדת תור טובה (Queue Ahead קטן) — ההוראה נשמרת ולא מבוטלת!
+                            כל עוד השוק עדיין בציטוט, ההוראה שנחה בספר נשמרת במחיר שלה ואינה מבוטלת — לא סחיפת מחיר ולא מיקום בתור הם סיבת ביטול. זה מה שמונע בזבוז של ביטול והגשה מחדש בכל תנודת ספר; ההוראה מתבטלת רק כשהשוק כבר לא מצוטט (<code>not_quoted</code>), ורק לטוקן שאין לו הוראה נחה מוגשת הוראה חדשה.
                         </div>
                     </div>
                 </div>
