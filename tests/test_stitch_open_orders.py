@@ -1,9 +1,9 @@
 """Tab 2 (Orders): the stitch terminal's resting-order table.
 
-Five columns, left to right: Market & Arbitrage Status | Dual-Leg Quotes
-(YES / NO) | Total Committed | LAST UPDATED | Actions. An absent leg renders
-its counterpart fate: a filled counterpart holds a position (green), a
-cancelled one is requoting, a genuinely missing one awaits a quote.
+Six columns, left to right: Market & Arbitrage Status | CATEGORY | Dual-Leg
+Quotes (YES / NO) | Total Committed | LAST UPDATED | Actions. An absent leg
+renders its counterpart fate: a filled counterpart holds a position (green),
+a cancelled one is requoting, a genuinely missing one awaits a quote.
 """
 from __future__ import annotations
 
@@ -122,13 +122,15 @@ def test_stitch_orders_head_has_five_columns_in_spec_order():
     """
     res = json.loads(_eval_js(code))
     head = res["head"]
-    positions = ["Market", "Dual-Leg Quotes (YES / NO)", "Total Committed",
+    positions = ["Market", "CATEGORY", "Dual-Leg Quotes (YES / NO)", "Total Committed",
                  "LAST UPDATED", "Actions"]
     for label in positions:
         assert label in head, f"missing header: {label}"
     assert [head.index(p) for p in positions] == sorted(head.index(p) for p in positions)
+    # CATEGORY is a real sort button on the new key 8, not a label.
+    assert 'data-ot-sort="8"' in head
     assert 'data-ot-sort' not in head.split("Actions")[1]
-    assert head.count("<th") == 5
+    assert head.count("<th") == 6
 
 
 @requires_node
@@ -227,8 +229,28 @@ def test_stitch_orders_empty_state_spans_all_five_columns():
     console.log(JSON.stringify({ html }));
     """
     res = json.loads(_eval_js(code))
-    assert 'colspan="5"' in res["html"]
+    assert 'colspan="6"' in res["html"]
     assert "No orders are resting on the book." in res["html"]
+
+
+@requires_node
+def test_stitch_orders_category_key_groups_by_category_and_defaults_ascending():
+    code = _FIXTURE + """
+    const cats = {
+        '0xalp': { ...kpi.by_market['0xalp'], category: 'Tennis' },
+        '0xswi': { ...kpi.by_market['0xswi'], category: 'Golf' },
+    };
+    const catKpi = { by_market: cats };
+    const html = app.stitchOpenOrdersRows(
+        catKpi, { orders: [restingUP, pairedUP, pairedDN] }, { col: 8, dir: 'asc' });
+    const golfFirst = html.indexOf('data-pair="pair-p1"') < html.indexOf('data-pair="pair-u1"');
+    console.log(JSON.stringify({
+        golfFirst, defaultDir: app.otDefaultDir('open-orders', 8)
+    }));
+    """
+    res = json.loads(_eval_js(code))
+    assert res["golfFirst"] is True, "key 8 must group rows by category"
+    assert res["defaultDir"] == "asc", "category is a word column: first click sorts A-Z"
 
 
 @requires_node

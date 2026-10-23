@@ -802,7 +802,7 @@
 
 .proto-body #orders-trades-table td {
   border-bottom: 1px solid #162030;
-  padding: 14px 16px;
+  padding: 8px 16px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
   color: #cbd5e1;
@@ -960,7 +960,12 @@
 }
 
 .proto-body .stitch-market-cell {
-  padding: 14px 16px;
+  padding: 8px 16px;
+  vertical-align: middle;
+}
+
+.proto-body .stitch-category-cell {
+  white-space: nowrap;
   vertical-align: middle;
 }
 
@@ -986,7 +991,7 @@
   font-size: 13.5px;
   font-weight: 600;
   color: #ffffff;
-  line-height: 1.35;
+  line-height: 1.25;
   transition: color 0.15s ease;
 }
 
@@ -1005,7 +1010,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .proto-body .stitch-meta-category {

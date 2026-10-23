@@ -254,3 +254,24 @@ def test_stitch_open_orders_and_positions_headers_and_pills():
     assert "LAST UPDATED" in res["posHead"]
     assert "YES PRICE" in res["mktsHead"]
     assert "NO PRICE" in res["mktsHead"]
+
+
+@requires_node
+def test_stitch_closed_trades_empty_and_ledger_row_span_all_seven_columns():
+    code = """
+    const kpi = { by_market: { '0x123': {
+        condition_id: '0x123', title: 'M', category: 'C',
+        settlements: [{ method: 'merge', shares: 5, cost_basis: 5.0,
+            proceeds: 5.5, realized_pnl: 0.5, ts: 1700000000 }],
+        realized_pnl: 0.5, total_cost: 0, total_sh: 0 } } };
+    const empty = app.stitchClosedTradesRows({ by_market: {} }, { orders: [] }, null);
+    app.expandedMarkets.add('0x123');
+    const full = app.stitchClosedTradesRows(kpi, { orders: [] }, null);
+    app.expandedMarkets.delete('0x123');
+    console.log(JSON.stringify({ empty, full }));
+    """
+    res = json.loads(_eval_js(code))
+    assert 'colspan="7"' in res["empty"]
+    assert "No closed trades yet" in res["empty"]
+    expand = res["full"].split("stitch-expand-row")[1].split("</td>")[0]
+    assert 'colspan="7"' in expand, "the ledger detail row must span the new column count"
