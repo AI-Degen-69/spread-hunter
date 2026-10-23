@@ -1658,3 +1658,110 @@ def test_mark_reads_fail_closed_on_db_errors(
     monkeypatch.setattr(registry, "_conn", _broken)
     with pytest.raises(sqlite3.OperationalError):
         registry.requalification_marks()
+
+
+# ---------------------------------------------------------------------------
+# #763: pair-scoped close netting in registry_naked_usd
+# ---------------------------------------------------------------------------
+# A close on a condition must never zero a LATER pair's exposure, and a rescue
+# close nets exactly the shares it booked against pairs alive at the time.
+
+N763_COND = "0xcond-763"
+N763_UP = "tok-763-up"
+N763_DN = "tok-763-dn"
+
+
+def _n763_pair(registry: OrderRegistry, pair_id: str, posted_ms: int,
+               up_fill: float, dn_fill: float = 0.0,
+               up_price: float = 0.60, dn_price: float = 0.40) -> None:
+    heavy = OrderRecord(
+        id=f"{pair_id}-up", order_id=f"venue-{pair_id}-up",
+        condition_id=N763_COND, token_id=N763_UP, side="BUY", price=up_price,
+        original_size=10.0, status="filled" if up_fill else "open",
+        posted_ts=posted_ms, last_polled_ts=posted_ms, pair_id=pair_id,
+    )
+    registry.create_order(heavy)
+    if up_fill:
+        registry.record_fill(FillRecord(
+            trade_id=f"t-{pair_id}-up", order_uuid=heavy.id, size=up_fill,
+            price=up_price, venue_ts=posted_ms,
+        ))
+    light = OrderRecord(
+        id=f"{pair_id}-dn", order_id=f"venue-{pair_id}-dn",
+        condition_id=N763_COND, token_id=N763_DN, side="BUY", price=dn_price,
+        original_size=10.0, status="filled" if dn_fill else "open",
+        posted_ts=posted_ms, last_polled_ts=posted_ms, pair_id=pair_id,
+    )
+    registry.create_order(light)
+    if dn_fill:
+        registry.record_fill(FillRecord(
+            trade_id=f"t-{pair_id}-dn", order_uuid=light.id, size=dn_fill,
+            price=dn_price, venue_ts=posted_ms,
+        ))
+    registry.log_quote(QuoteRecord(
+        ts=posted_ms / 1000.0, condition_id=N763_COND, token_id=N763_UP,
+        side="UP", price=up_price, size=10.0,
+    ))
+    registry.log_quote(QuoteRecord(
+        ts=posted_ms / 1000.0, condition_id=N763_COND, token_id=N763_DN,
+        side="DOWN", price=dn_price, size=10.0,
+    ))
+
+
+def _n763_close(registry: OrderRegistry, ts_sec: float, shares: float,
+                method: str = "single_buy_exit",
+                up_cost: float = 0.0, dn_cost: float = 0.0) -> None:
+    registry.log_close(CloseRecord(
+        ts=ts_sec, condition_id=N763_COND, method=method, shares=shares,
+        up_price=0.55 if up_cost else None,
+        dn_price=0.45 if dn_cost else None,
+        up_cost_removed=up_cost, dn_cost_removed=dn_cost,
+        run_id="run-763",
+    ))
+
+
+def test_new_pair_after_merge_close_counts(registry: OrderRegistry):
+    """#763: a balanced pair merges; the re-entered pair counts in full."""
+    from core_brain.order_registry import registry_naked_usd
+    _n763_pair(registry, "pair-a", 1_000_000, up_fill=5.0, dn_fill=5.0)
+    _n763_close(registry, 1001.0, shares=5.0, method="merge")
+    _n763_pair(registry, "pair-b", 2_000_000, up_fill=5.0, dn_fill=2.0)
+
+    assert registry_naked_usd(registry) == pytest.approx((5.0 - 2.0) * 0.60)
+
+
+def test_close_before_pair_opens_does_not_net(registry: OrderRegistry):
+    """#763: a rescue booked before the pair existed nets nothing (ms/s pinned)."""
+    from core_brain.order_registry import registry_naked_usd
+    _n763_close(registry, 1001.0, shares=4.0, up_cost=4.0 * 0.60)
+    _n763_pair(registry, "pair-b", 2_000_000, up_fill=10.0)
+
+    assert registry_naked_usd(registry) == pytest.approx(10.0 * 0.60)
+
+
+def test_partial_rescue_nets_leftover(registry: OrderRegistry):
+    """#763: 10 filled, 4 rescued -> naked is exactly the 6-share leftover."""
+    from core_brain.order_registry import registry_naked_usd
+    _n763_pair(registry, "pair-a", 1_000_000, up_fill=10.0)
+    _n763_close(registry, 1001.0, shares=4.0, up_cost=4.0 * 0.60)
+
+    assert registry_naked_usd(registry) == pytest.approx(6.0 * 0.60)
+
+
+def test_full_rescue_reads_zero(registry: OrderRegistry):
+    """#763 pin: a fully rescued leg contributes nothing (never negative)."""
+    from core_brain.order_registry import registry_naked_usd
+    _n763_pair(registry, "pair-a", 1_000_000, up_fill=10.0)
+    _n763_close(registry, 1001.0, shares=10.0, up_cost=10.0 * 0.60)
+
+    assert registry_naked_usd(registry) == pytest.approx(0.0)
+
+
+def test_prior_pair_sale_does_not_shrink_new_pair(registry: OrderRegistry):
+    """#763: A's 4-share rescue nets A to 6; B (opened later) counts all 10."""
+    from core_brain.order_registry import registry_naked_usd
+    _n763_pair(registry, "pair-a", 1_000_000, up_fill=10.0)
+    _n763_close(registry, 1001.0, shares=4.0, up_cost=4.0 * 0.60)
+    _n763_pair(registry, "pair-b", 2_000_000, up_fill=10.0)
+
+    assert registry_naked_usd(registry) == pytest.approx(16.0 * 0.60)

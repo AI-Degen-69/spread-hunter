@@ -2725,36 +2725,70 @@ def inventory_from_registry(
 def registry_naked_usd(registry) -> float:
     """Dollars at risk on open, one-sided live exposure, from the registry.
 
-    Pairs whose condition already has a close are skipped: a merged pair has
-    no open exposure, and counting its fills would bill risk the venue no
-    longer carries. A partially-exited pair is skipped whole rather than
-    over-stated, which is the safe direction for a risk figure. Aggregate the
-    fills by pair and token in SQL so this remains one database round-trip,
-    even when the registry has thousands of unclosed pairs.
+    No pair is ever skipped for having a close on its condition (#763): a
+    market that re-qualifies after a merge/exit takes new fills that must
+    count, and a partially-exited pair still holds its leftover. Instead each
+    pair's fills are netted against exactly the rescue closes booked while it
+    existed (`closes.ts >= the pair's earliest order posted_ts`, seconds vs
+    milliseconds): a close booked before the pair opened belongs to a prior
+    pair and nets nothing. A fully rescued leg nets to zero; a balanced
+    merged pair reads zero through heavy-minus-light. Over-stating (a close
+    with no resolvable side) is the accepted direction; under-stating is the
+    bug. Aggregate the fills by pair and token in SQL so this remains one
+    database round-trip, even when the registry has thousands of pairs.
     """
+    rescue_placeholders = ",".join("?" for _ in RESCUE_METHODS)
     with registry._conn() as conn:
         row = conn.execute(
-            """
-            WITH closed_conditions AS (
-                SELECT DISTINCT condition_id
-                FROM closes
-                WHERE condition_id IS NOT NULL
+            f"""
+            WITH pair_min AS (
+                SELECT pair_id, condition_id, MIN(posted_ts) AS min_posted
+                FROM orders
+                WHERE pair_id IS NOT NULL
+                GROUP BY pair_id, condition_id
             ),
-            eligible_pairs AS (
-                SELECT DISTINCT o.pair_id, o.condition_id
-                FROM orders o
-                LEFT JOIN closed_conditions c ON c.condition_id = o.condition_id
-                WHERE o.pair_id IS NOT NULL
-                  AND c.condition_id IS NULL
+            token_side AS (
+                SELECT condition_id, token_id, side FROM (
+                    SELECT condition_id, token_id, UPPER(side) AS side,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY condition_id, token_id
+                               ORDER BY ts DESC
+                           ) AS rn
+                    FROM quotes
+                    WHERE UPPER(side) IN ('UP', 'DOWN')
+                ) WHERE rn = 1
+            ),
+            rescue_net AS (
+                SELECT pm.pair_id, pm.condition_id, ts.token_id,
+                       COALESCE(SUM(c.shares), 0.0) AS r_shares,
+                       COALESCE(SUM(COALESCE(c.up_cost_removed, 0.0)
+                                    + COALESCE(c.dn_cost_removed, 0.0)), 0.0) AS r_cost
+                FROM pair_min pm
+                JOIN closes c
+                  ON c.condition_id = pm.condition_id
+                 AND c.ts >= pm.min_posted / 1000.0
+                 AND c.method IN ({rescue_placeholders})
+                 AND ((c.up_price IS NOT NULL AND c.dn_price IS NULL)
+                      OR (c.up_price IS NULL AND c.dn_price IS NOT NULL))
+                JOIN token_side ts
+                  ON ts.condition_id = pm.condition_id
+                 AND ((c.up_price IS NOT NULL AND ts.side = 'UP')
+                      OR (c.up_price IS NULL AND ts.side = 'DOWN'))
+                GROUP BY pm.pair_id, pm.condition_id, ts.token_id
             ),
             token_stats AS (
                 SELECT o.pair_id, o.condition_id, o.token_id,
-                       COALESCE(SUM(f.size), 0.0) AS matched,
-                       COALESCE(SUM(f.size * f.price), 0.0) AS notional
+                       MAX(0.0, COALESCE(SUM(f.size), 0.0)
+                           - COALESCE(r.r_shares, 0.0)) AS matched,
+                       MAX(0.0, COALESCE(SUM(f.size * f.price), 0.0)
+                           - COALESCE(r.r_cost, 0.0)) AS notional
                 FROM orders o
-                JOIN eligible_pairs e
-                  ON e.pair_id = o.pair_id AND e.condition_id = o.condition_id
                 LEFT JOIN fills f ON f.order_uuid = o.id
+                LEFT JOIN rescue_net r
+                  ON r.pair_id = o.pair_id
+                 AND r.condition_id = o.condition_id
+                 AND r.token_id = o.token_id
+                WHERE o.pair_id IS NOT NULL
                 GROUP BY o.pair_id, o.condition_id, o.token_id
             ),
             ranked_legs AS (
@@ -2784,7 +2818,8 @@ def registry_naked_usd(registry) -> float:
                 END
             ), 0.0) AS naked_usd
             FROM pair_exposure p
-            """
+            """,
+            tuple(RESCUE_METHODS),
         ).fetchone()
     return float(row["naked_usd"]) if row else 0.0
 
