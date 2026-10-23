@@ -831,20 +831,7 @@ def _token_side(registry: OrderRegistry, condition_id: str,
     never quoted; the caller must fail closed rather than guess, because an
     exit that cannot be recorded is the repeat-sell bug it exists to stop.
     """
-    best: Optional[str] = None
-    best_ts: float = -1.0
-    for q in registry.get_all_quotes():
-        if (q.get("condition_id") != condition_id
-                or q.get("token_id") != token_id):
-            continue
-        side = str(q.get("side") or "").upper()
-        if side not in ("UP", "DOWN"):
-            continue
-        ts = float(q.get("ts") or 0.0)
-        if ts >= best_ts:
-            best_ts = ts
-            best = side
-    return best
+    return registry.get_token_side(condition_id, token_id)
 
 
 def _exit_fill_price(resp, floor_price: float) -> float:
@@ -2105,7 +2092,7 @@ def _manage_single_leg_positions_locked(
     last_fill_ms_by_pair, pair_cids = _last_fill_ms_by_pair(registry)
     base_offset = float(dynamic_offset_for(cfg)[0])
     quoted_tokens: dict[str, dict[str, tuple[float, str]]] = {}
-    for quote in registry.get_all_quotes():
+    for quote in registry.get_latest_tokens_by_condition_side():
         cid = str(quote.get("condition_id") or "")
         side = str(quote.get("side") or "").upper()
         token_id = str(quote.get("token_id") or "")

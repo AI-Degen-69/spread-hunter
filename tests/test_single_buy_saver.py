@@ -433,6 +433,28 @@ def test_dry_run_sends_no_venue_writes(registry: OrderRegistry):
     assert not any(c.startswith(("cancel:", "sell:")) for c in client.calls)
 
 
+def test_lifecycle_quote_paths_never_full_scan(registry: OrderRegistry, monkeypatch):
+    """#767: _token_side + one lifecycle pass work with get_all_quotes banned."""
+    from core_brain.config import MakerConfig
+    from core_brain.single_buy_saver import manage_single_leg_positions
+
+    _one_sided_pair(registry, filled_size=10.0, fill_price=0.55)
+
+    def _boom():
+        raise AssertionError("hot path must not full-scan quotes")
+    monkeypatch.setattr(registry, "get_all_quotes", _boom)
+
+    assert lp._token_side(registry, COND, TOK_UP) == "UP"
+    assert lp._token_side(registry, COND, TOK_DN) == "DOWN"
+
+    client = FakeClient(best_ask=0.40)
+    cfg = MakerConfig(bot_risk_stranded_completion_on=False,
+                      bot_pos_price_max_pair_cost_usd=0.99)
+    results = manage_single_leg_positions(client, registry, cfg, live=False,
+                                          now=1010.0)
+    assert isinstance(results, list)
+
+
 def test_a_balanced_pair_is_not_an_exit_candidate(registry: OrderRegistry):
     pair_id = _one_sided_pair(registry)
     light = next(o for o in registry.get_active_orders() if o.token_id == TOK_DN)
