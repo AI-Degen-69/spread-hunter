@@ -422,6 +422,7 @@ def build_tournament_plan(
                 issue=issue,
                 arm=slug,
                 run_number=int(run_number),
+                stamp=stamp,
             )
         else:
             run_id = build_tournament_run_id(
@@ -649,7 +650,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "It names the run; the ISO launch stamp is always appended, so records "
                              "still sort and never collide (docs/agents/naming.md).")
     parser.add_argument("--run-number", type=int, default=None, help="Run-number naming scheme: slugs become <base>-<run> and the folder is i<issue>-r<run>_<stamp> (default: unnumbered scheme)")
-    parser.add_argument("--base-dir", type=str, default=str(TOURNAMENT_ROOT), help="Root the run folder is created under (default: the repo's data/tournaments/, never the cwd)")
+    parser.add_argument("--base-dir", type=str, default=str(TOURNAMENT_ROOT), help="Root the run folder is created under (default: the repo's data/tournaments/, never the cwd). The cockpit and hubs only scan that default root, so a custom root is for isolated and test runs")
     parser.add_argument("--log-file", type=str, default=None, help="Override detached-launch stdout redirect (default: <run folder>/launch.log)")
     parser.add_argument("--no-port-check", action="store_true", help="Skip TCP socket availability check")
 

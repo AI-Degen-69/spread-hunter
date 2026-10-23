@@ -380,11 +380,22 @@ def build_tournament_run_id_v2(
     issue: int | str,
     arm: str,
     run_number: int = 1,
+    stamp: str = "",
 ) -> str:
-    """Run-number run id: shadow-<issue>-tournament-<run>-<arm> (<= 64 chars)."""
+    """Run-number run id: shadow-<issue>-tournament-<run>-<stamp>-<arm> (<= 64).
+
+    The stamp belongs in the id for the same reason it belongs in the folder:
+    the run number alone no longer separates two launches. Without it a repeat
+    launch gets its own folder and store but rewrites the first launch's
+    heartbeat and event ring, so two runs report as one.
+
+    Truncation clips the arm, which sits last. Two launches therefore still
+    differ on issue/run/stamp; only arms of one launch can merge, and a second
+    launch of the same stamp is refused earlier by the existing store check.
+    """
     run = int(run_number)
     clean_arm = _clean_tournament_slug(arm)
-    token = f"shadow-{issue}-tournament-{run}-{clean_arm}"
+    token = f"shadow-{issue}-tournament-{run}-{stamp}-{clean_arm}"
     return re.sub(r"[^A-Za-z0-9_.-]", "-", token).strip("-.")[:64]
 
 

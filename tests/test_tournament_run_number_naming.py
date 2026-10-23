@@ -84,10 +84,27 @@ def test_a_named_run_still_carries_the_iso_stamp():
 
 
 def test_v2_run_id_shape():
-    run_id = build_tournament_run_id_v2(issue=492, arm="conservative-1", run_number=1)
-    assert run_id == "shadow-492-tournament-1-conservative-1"
+    run_id = build_tournament_run_id_v2(
+        issue=492, arm="conservative-1", run_number=1, stamp=STAMP
+    )
+    assert run_id == f"shadow-492-tournament-1-{STAMP}-conservative-1"
     assert len(run_id) <= 64
     assert run_id.startswith("shadow-")
+
+
+def test_two_launches_of_one_run_number_do_not_share_a_run_id():
+    """The folder separates the stores; without the stamp the ids still collide.
+
+    Two launches share every heartbeat and event-ring name, so the later one
+    overwrites the earlier one's heartbeat and both report as a single run.
+    """
+    first = build_tournament_run_id_v2(
+        issue=492, arm="control-1", run_number=1, stamp="2026-10-23T19-05"
+    )
+    second = build_tournament_run_id_v2(
+        issue=492, arm="control-1", run_number=1, stamp="2026-10-24T09-00"
+    )
+    assert first != second
 
 
 def test_parse_a_run_folder_name():
@@ -211,7 +228,7 @@ def test_build_plan_puts_everything_in_one_folder(tmp_path: Path):
     assert plan.log_path == run_dir / "launch.log"
     assert plan.arms[0].db_path == run_dir / "baseline-1.db"
     assert plan.arms[1].db_path == run_dir / "conservative-1.db"
-    assert plan.arms[0].run_id == "shadow-492-tournament-1-baseline-1"
+    assert plan.arms[0].run_id == f"shadow-492-tournament-1-{plan.stamp}-baseline-1"
     assert plan.to_dict()["log_path"] == str(plan.log_path)
     assert plan.record_path.is_absolute()
     # Base name still drives the preset selector, not the suffixed slug.
