@@ -339,3 +339,37 @@ def test_clearing_bucket_ships(tmp_path: Path):
     shipped = [c for c in candidates if c.clears]
     assert shipped, f"a 10x-lift bucket must ship; verdict={verdict!r}"
     assert "redirect" not in verdict
+
+
+# --- Task 5: shadow A/B on inclusive PnL -------------------------------------
+
+def test_ab_off_equals_total_realized_pnl(tmp_path: Path):
+    db = _seeded_db(tmp_path)
+    store = fqr.load_store(db, run_id="r1", label="shadow")
+    report = fqr.build_report(store, min_obs=1)
+    ab = fqr.score_ab(report, set())
+    assert abs(ab["off_total"] - (3.29 - 2.924 - 0.20)) < 1e-9
+    assert abs(ab["on_total"] - ab["off_total"]) < 1e-9
+    assert abs(ab["delta"]) < 1e-9
+
+
+def test_ab_is_inclusive_never_merge_only(tmp_path: Path):
+    db = _seeded_db(tmp_path)
+    store = fqr.load_store(db, run_id="r1", label="shadow")
+    report = fqr.build_report(store, min_obs=1)
+    ab = fqr.score_ab(report, set())
+    # The hard-stop loss must be inside the scored total: merge-only (+3.29)
+    # would hide it. A merge-only scorer fails this test by construction.
+    assert "lifecycle_hard_stop" in ab["reasons_included"]
+    assert ab["off_total"] < 3.29
+
+
+def test_ab_blocked_first_leg_removes_the_pair(tmp_path: Path):
+    db = _seeded_db(tmp_path)
+    store = fqr.load_store(db, run_id="r1", label="shadow")
+    report = fqr.build_report(store, min_obs=1)
+    ab = fqr.score_ab(report, {("edge", "unknown")})
+    # p2 (-2.924), p3 (-0.20) and p4 (0.0) never open; only c1's +3.29 stays.
+    assert abs(ab["on_total"] - 3.29) < 1e-9
+    assert abs(ab["delta"] - 3.124) < 1e-9
+    assert set(ab["pairs_excluded"]) == {"p2", "p3", "p4"}

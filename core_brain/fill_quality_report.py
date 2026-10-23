@@ -363,6 +363,75 @@ def propose_gate(report: QualityReport) -> tuple[list[GateCandidate], str]:
     return candidates, verdict
 
 
+def score_ab(report: QualityReport,
+             blocked: set[tuple[str, str]] | frozenset | set[str]) -> dict:
+    """Same window, gate off vs on, judged on total realized inclusive PnL.
+
+    A pair whose earliest fill is blocked never opens ($0). A pair with a
+    blocked later fill stays single and is scored at its observed inclusive
+    outcome -- never silently dropped. Merge-only scoring is rejected by
+    construction: both branches sum every method and reason.
+    """
+    normalized: set[tuple[str, str]] = set()
+    for entry in blocked:
+        if isinstance(entry, str):
+            dim, _, bucket = entry.partition(":")
+            normalized.add((dim, bucket))
+        else:
+            normalized.add((str(entry[0]), str(entry[1])))
+    pairs: dict[str, list[FillRow]] = {}
+    for row in report.fills:
+        pairs.setdefault(row.pair_key, []).append(row)
+    methods: set[str] = set()
+    reasons: set[str] = set()
+    if report.store.cohort is not None:
+        for close in report.store.cohort.closes:
+            if close.get("method") is not None:
+                methods.add(str(close["method"]))
+            if close.get("reason") is not None:
+                reasons.add(str(close["reason"]))
+    off_total = float(report.summary.get("inclusive_pnl", 0.0))
+    on_total = 0.0
+    excluded: list[str] = []
+    single_kept = 0
+    for pair_key, fills in pairs.items():
+        ordered = sorted(fills, key=lambda r: r.fill_ts_sec)
+        hits = [any((dim, feat) in normalized
+                    for dim, feat in _features(r).items()) for r in ordered]
+        if hits and hits[0]:
+            excluded.append(pair_key)
+            continue
+        if any(hits):
+            single_kept += 1
+        on_total += sum(r.attr_pnl for r in ordered)
+    return {
+        "off_total": off_total,
+        "on_total": on_total,
+        "delta": on_total - off_total,
+        "n_pairs": len(pairs),
+        "n_excluded": len(excluded),
+        "pairs_excluded": sorted(excluded),
+        "n_single_kept": single_kept,
+        "methods_included": sorted(methods),
+        "reasons_included": sorted(reasons),
+        "blocked": sorted(f"{d}:{b}" for d, b in normalized),
+    }
+
+
+def render_ab(ab: dict) -> str:
+    lines = [
+        "  shadow A/B (same window, inclusive realized PnL -- never merge-only):",
+        f"  gate off: {ab['off_total']:+.2f} "
+        f"gate on: {ab['on_total']:+.2f} "
+        f"delta: {ab['delta']:+.2f} (n_pairs={ab['n_pairs']})",
+        f"  excluded pairs: {ab['n_excluded']}, "
+        f"single-kept pairs: {ab['n_single_kept']}",
+        f"  methods scored: {', '.join(ab['methods_included']) or 'none'}",
+        f"  reasons scored: {', '.join(ab['reasons_included']) or 'none'}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _read_table(conn: sqlite3.Connection, table: str,
                 run_id: str | None, has_run: bool) -> list[dict]:
     query = f"SELECT * FROM {table}"
@@ -725,6 +794,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
     parser.add_argument("--propose-gate", action="store_true",
                         help="print the break-even table and ship/no-ship verdict")
+    parser.add_argument("--ab", action="store_true",
+                        help="score gate off vs on on inclusive realized PnL")
+    parser.add_argument("--block", action="append", default=[],
+                        metavar="DIM:BUCKET",
+                        help="block one calibration bucket in the A/B"
+                             " (repeatable, e.g. --block edge:0.02-0.03)")
     return parser
 
 
@@ -739,19 +814,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = build_report(store, min_obs=args.min_obs)
     gate_text = ""
     gate_payload: dict | None = None
-    if args.propose_gate:
+    candidates: list[GateCandidate] = []
+    if args.propose_gate or args.ab:
         candidates, verdict = propose_gate(report)
-        gate_text = render_gate(report, candidates, verdict)
         gate_payload = {"candidates": [c.to_dict() for c in candidates],
                         "verdict": verdict}
+    if args.propose_gate and gate_payload is not None:
+        gate_text = render_gate(report, candidates, gate_payload["verdict"])
+    ab_text = ""
+    ab_payload: dict | None = None
+    if args.ab:
+        shipped = [c for c in candidates if c.clears]
+        blocked = set(args.block) | {f"{c.dimension}:{c.bucket}" for c in shipped}
+        ab_payload = score_ab(report, blocked)
+        ab_text = render_ab(ab_payload)
 
     if args.json:
         payload = report.to_dict()
         if gate_payload is not None:
             payload["gate"] = gate_payload
+        if ab_payload is not None:
+            payload["ab"] = ab_payload
         print(json.dumps(payload, indent=2, allow_nan=False))
     else:
-        print(render_text(report) + gate_text, end="")
+        print(render_text(report) + gate_text + ab_text, end="")
     return 0 if store.status == OK else 1
 
 
