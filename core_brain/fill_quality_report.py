@@ -46,6 +46,22 @@ INSUFFICIENT = "insufficient"
 
 SIGN_RULE = "death rate = dead legs / closed fills; lift = bucket / base"
 DEFAULT_MIN_OBS = 30
+#: A gate threshold ships only where the rejected legs are more than this
+#: many times more likely to die than the base rate (entry-gate-job.html §4).
+BREAK_EVEN_LIFT = 8.9
+
+#: Copied verbatim from `kpi.py`. `lo <= q < hi`.
+QUEUE_BUCKETS = ((0.0, 1.0), (1.0, 50.0), (50.0, 150.0), (150.0, 400.0),
+                 (400.0, math.inf))
+QUEUE_UNKNOWN = "unknown"
+
+#: Fixed before the build from the shadow-01 histograms (Task 3). Distance
+#: from mid clusters at 2.5c-4c; implied pair cost edges are economic (a pair
+#: assembled over $1.00 is a booked loss); time edges are wall-clock.
+EDGE_EDGES = (0.0, 0.02, 0.03, 0.04, 0.06, math.inf)
+COST_EDGES = (0.0, 0.97, 0.99, 1.00, math.inf)
+TTR_EDGES = (0.0, 3600.0, 21600.0, 86400.0, math.inf)
+GAP_EDGES = (0.0, 60.0, 600.0, 3600.0, math.inf)
 
 _MS_CUTOFF = 1e11  # above this a timestamp is milliseconds, not seconds
 
@@ -115,12 +131,35 @@ class FillRow:
 
 
 @dataclass(frozen=True)
+class BucketSummary:
+    """One calibration bucket. A zero denominator yields None, never 0.0."""
+
+    dimension: str
+    bucket: str
+    n: int
+    n_closed: int
+    n_dead: int
+    death_rate: float | None
+    wilson_lo: float | None
+    wilson_hi: float | None
+    lift: float | None
+    status: str  # OK | INSUFFICIENT
+
+    def to_dict(self) -> dict:
+        return {k: getattr(self, k) for k in (
+            "dimension", "bucket", "n", "n_closed", "n_dead", "death_rate",
+            "wilson_lo", "wilson_hi", "lift", "status",
+        )}
+
+
+@dataclass(frozen=True)
 class QualityReport:
-    """Per-fill attribution plus cohort summary. Buckets land in Task 3."""
+    """Per-fill attribution plus cohort summary and calibration."""
 
     store: StoreLoad
     min_obs: int
     fills: tuple[FillRow, ...] = ()
+    buckets: tuple[BucketSummary, ...] = ()
     summary: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -134,9 +173,20 @@ class QualityReport:
             },
             "min_obs": self.min_obs,
             "fills": [r.to_dict() for r in self.fills],
-            "buckets": [],
+            "buckets": [b.to_dict() for b in self.buckets],
             "summary": self.summary,
         }
+
+
+def wilson_interval(k: int, n: int, z: float = 1.96) -> tuple[float | None, float | None]:
+    """Wilson 95% interval for k deaths in n closed fills. No scipy needed."""
+    if n <= 0:
+        return (None, None)
+    p = k / n
+    denom = 1.0 + z * z / n
+    center = (p + z * z / (2.0 * n)) / denom
+    half = z * math.sqrt(p * (1.0 - p) / n + z * z / (4.0 * n * n)) / denom
+    return (max(0.0, center - half), min(1.0, center + half))
 
 
 def _finite(value: object, what: str) -> float:
@@ -155,6 +205,68 @@ def _to_sec(value: object) -> float | None:
         return None
     number = _finite(value, "ts")
     return number / 1000.0 if number > _MS_CUTOFF else number
+
+
+def _bucketize(value: float | None, edges: tuple, labels: tuple) -> str:
+    if value is None:
+        return QUEUE_UNKNOWN
+    for lo, hi, label in zip(edges[:-1], edges[1:], labels):
+        if lo <= value < hi:
+            return label
+    return labels[-1]
+
+
+_EDGE_LABELS = ("0.00-0.02", "0.02-0.03", "0.03-0.04", "0.04-0.06", "0.06+")
+_QUEUE_LABELS = ("0-1", "1-50", "50-150", "150-400", "400+")
+_COST_LABELS = ("<0.97", "0.97-0.99", "0.99-1.00", "1.00+")
+_TTR_LABELS = ("<1h", "1-6h", "6-24h", "24h+")
+_GAP_LABELS = ("<60s", "60-600s", "600-3600s", "3600s+")
+
+
+def _queue_bucket(value: float | None) -> str:
+    if value is None:
+        return QUEUE_UNKNOWN
+    for (lo, hi), label in zip(QUEUE_BUCKETS, _QUEUE_LABELS):
+        if lo <= value < hi:
+            return label
+    return _QUEUE_LABELS[-1]
+
+
+def _features(row: FillRow) -> dict[str, str]:
+    ttr = "unresolved" if row.t_to_res_sec is None else _bucketize(
+        row.t_to_res_sec, TTR_EDGES, _TTR_LABELS)
+    return {
+        "edge": _bucketize(row.edge_vs_mid, EDGE_EDGES, _EDGE_LABELS),
+        "depth": _queue_bucket(row.queue_ahead),
+        "cost": _bucketize(row.implied_pair_cost, COST_EDGES, _COST_LABELS),
+        "ttres": ttr,
+        "gap": _bucketize(row.leg_gap_sec, GAP_EDGES, _GAP_LABELS),
+    }
+
+
+def _calibrate(rows: tuple[FillRow, ...], base_rate: float | None,
+               min_obs: int) -> tuple[BucketSummary, ...]:
+    closed = [r for r in rows if r.outcome != "open"]
+    groups: dict[tuple[str, str], list[FillRow]] = {}
+    for row in rows:
+        for dimension, bucket in _features(row).items():
+            groups.setdefault((dimension, bucket), []).append(row)
+    summaries: list[BucketSummary] = []
+    for (dimension, bucket) in sorted(groups):
+        members = groups[(dimension, bucket)]
+        shut = [r for r in members if r.outcome != "open"]
+        dead = sum(1 for r in shut if r.outcome == "dead_leg")
+        rate = (dead / len(shut)) if shut else None
+        lo, hi = wilson_interval(dead, len(shut))
+        lift = (rate / base_rate
+                if rate is not None and base_rate else None)
+        summaries.append(BucketSummary(
+            dimension=dimension, bucket=bucket, n=len(members),
+            n_closed=len(shut), n_dead=dead, death_rate=rate,
+            wilson_lo=lo, wilson_hi=hi, lift=lift,
+            status="OK" if len(members) >= min_obs else INSUFFICIENT,
+        ))
+    return tuple(summaries)
 
 
 def _read_table(conn: sqlite3.Connection, table: str,
@@ -302,7 +414,7 @@ def _condition_outcomes(closes: tuple[dict, ...]) -> dict[str, tuple[str, float]
 
 
 def build_report(store: StoreLoad, *, min_obs: int = DEFAULT_MIN_OBS) -> QualityReport:
-    """Attribute every fill to its book state and terminal outcome. Pure."""
+    """Attribute every fill, then calibrate. Pure: no I/O."""
     if store.status != OK or store.cohort is None:
         return QualityReport(store=store, min_obs=min_obs)
     cohort = store.cohort
@@ -416,20 +528,35 @@ def build_report(store: StoreLoad, *, min_obs: int = DEFAULT_MIN_OBS) -> Quality
     by_label: dict[str, int] = {}
     for row in rows:
         by_label[row.outcome] = by_label.get(row.outcome, 0) + 1
+    base_rate = (len(dead) / len(closed)) if closed else None
     summary = {
         "n_fills": len(rows),
         "n_closed_fills": len(closed),
         "n_dead": len(dead),
-        "base_death_rate": (len(dead) / len(closed) if closed else None),
+        "base_death_rate": base_rate,
         "inclusive_pnl": sum(r.attr_pnl for r in rows),
         "by_label": by_label,
     }
+    buckets = _calibrate(tuple(rows), base_rate, min_obs)
     return QualityReport(store=store, min_obs=min_obs, fills=tuple(rows),
-                         summary=summary)
+                         buckets=buckets, summary=summary)
 
 
 def _pct(value: float | None) -> str:
     return "n/a" if value is None else f"{100.0 * value:.1f}%"
+
+
+def _bucket_line(bucket: BucketSummary) -> str:
+    rate = _pct(bucket.death_rate)
+    lo = _pct(bucket.wilson_lo)
+    hi = _pct(bucket.wilson_hi)
+    lift = "n/a" if bucket.lift is None else f"{bucket.lift:.1f}x"
+    flag = "OK" if bucket.status == "OK" else "not-a-finding"
+    return (
+        f"  {bucket.dimension:<6} {bucket.bucket:<10} n={bucket.n} "
+        f"closed={bucket.n_closed} dead={bucket.n_dead} rate={rate} "
+        f"[{lo}-{hi}] lift={lift} {flag}"
+    )
 
 
 def render_text(report: QualityReport) -> str:
@@ -454,6 +581,9 @@ def render_text(report: QualityReport) -> str:
             f"across {report.summary['n_fills']} fills "
             f"(n={report.summary['n_fills']})"
         )
+    if report.buckets:
+        lines.append("  calibration: death rate by book state at fill")
+        lines.extend(_bucket_line(b) for b in report.buckets)
     return "\n".join(lines) + "\n"
 
 

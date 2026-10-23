@@ -224,3 +224,54 @@ def test_pnl_attribution_is_pro_rata(tmp_path: Path):
     assert rows["f1a"].attr_pnl == abs(3.29 * 4.0 / 10.0)
     assert rows["f1b"].attr_pnl == abs(3.29 * 6.0 / 10.0)
     assert rows["f2"].attr_pnl == -abs(2.924)
+
+
+# --- Task 3: Wilson calibration buckets -------------------------------------
+
+def test_wilson_interval_known_values():
+    lo, hi = fqr.wilson_interval(50, 100)
+    assert abs(lo - 0.4038) < 0.001
+    assert abs(hi - 0.5962) < 0.001
+
+
+def test_wilson_interval_empty_is_none():
+    assert fqr.wilson_interval(0, 0) == (None, None)
+
+
+def test_sparse_buckets_are_not_a_finding(tmp_path: Path):
+    db = _seeded_db(tmp_path)
+    store = fqr.load_store(db, run_id="r1", label="shadow")
+    report = fqr.build_report(store)  # min_obs=30, fixture has 5 fills
+    assert report.buckets, "calibration must always print its buckets"
+    assert all(b.status == fqr.INSUFFICIENT for b in report.buckets)
+    text = fqr.render_text(report)
+    assert "not-a-finding" in text
+
+
+def test_small_min_obs_unlocks_buckets_and_prints_n(tmp_path: Path):
+    db = _seeded_db(tmp_path)
+    store = fqr.load_store(db, run_id="r1", label="shadow")
+    report = fqr.build_report(store, min_obs=1)
+    assert any(b.status == "OK" for b in report.buckets)
+    for line in fqr.render_text(report).splitlines():
+        if line.strip().startswith(("edge", "depth", "cost", "ttres", "gap")):
+            assert "n=" in line, f"a percentage without n is a defect: {line!r}"
+
+
+def test_unknown_book_state_is_its_own_bucket(tmp_path: Path):
+    db = _seeded_db(tmp_path)  # c2/c4 have no quote rows at all
+    store = fqr.load_store(db, run_id="r1", label="shadow")
+    report = fqr.build_report(store, min_obs=1)
+    unknown = [b for b in report.buckets
+               if b.dimension == "edge" and b.bucket == "unknown"]
+    # f2, f3 and f4 never saw the book (only c1 has quote rows).
+    assert unknown and unknown[0].n == 3 and unknown[0].n_dead == 1
+
+
+def test_lift_marks_the_toxic_bucket(tmp_path: Path):
+    db = _seeded_db(tmp_path)
+    store = fqr.load_store(db, run_id="r1", label="shadow")
+    report = fqr.build_report(store, min_obs=1)
+    toxic = [b for b in report.buckets
+             if b.n_dead > 0 and b.lift is not None and b.lift > 1.0]
+    assert toxic, "calibration must surface a slice deadlier than base"
