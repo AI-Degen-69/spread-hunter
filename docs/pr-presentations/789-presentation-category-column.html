@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>עמודת קטגוריה משלה — Orders &amp; Trades</title>
+<style>
+  :root { --ink:#eaf1f6; --muted:#9aabb8; --bg:#0b1117; --panel:#121c25; --panel-2:#172530;
+    --line:#29404d; --accent:#82AAFF; --accent-ink:#0a1c3d; --shadow:0 20px 55px rgba(0,0,0,.28); }
+  * { box-sizing:border-box }
+  body { margin:0; color:var(--ink); background:var(--bg); font:16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, "Hebrew", Arial, sans-serif }
+  main { max-width:1100px; margin:auto; padding:40px 20px 70px }
+  a { color:var(--accent) }
+  .kicker { font-size:.75rem; letter-spacing:.09em; text-transform:uppercase; color:var(--muted) }
+  h1 { font-size:1.9rem; line-height:1.25; margin:.4rem 0 .6rem }
+  .lead { color:var(--muted); font-size:1.05rem; max-width:52rem; margin:0 0 .9rem }
+  .meta { font-size:.85rem; color:var(--muted); display:flex; gap:1rem; flex-wrap:wrap; align-items:center }
+  .merged { color:#4ade80; font-weight:700 }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:26px; margin-top:24px; box-shadow:var(--shadow) }
+  .panel h2 { font-size:1.15rem; margin:0 0 .6rem }
+  .figure { border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--panel-2) }
+  .figure-label { font-size:.7rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); padding:.8rem 1rem 0 }
+  .figure-controls { display:flex; gap:.5rem; align-items:center; padding:.6rem 1rem; border-top:1px solid var(--line); flex-wrap:wrap }
+  .ctrl-btn { font-size:.8rem; padding:.45rem 1rem; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--ink); cursor:pointer }
+  .ctrl-btn.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:700 }
+  .ctrl-btn.active { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:700 }
+  .figure-caption { font-size:.8rem; color:var(--muted); padding:.6rem 1rem .8rem; border-top:1px solid var(--line) }
+  .callout { border-right:3px solid var(--accent); background:rgba(255,255,255,.04); padding:1rem 1.2rem; border-radius:8px 0 0 8px; margin:1.2rem 0 0 }
+  code, .mono { font-family:'JetBrains Mono', ui-monospace, Consolas, monospace; direction:ltr; unicode-bidi:embed }
+  code { font-size:.85em; background:rgba(255,255,255,.06); padding:.1em .4em; border-radius:5px }
+
+  /* ── mock of the dashboard's Orders & Trades table (LTR, like the real one) ── */
+  .mock-wrap { direction:ltr; unicode-bidi:isolate; overflow-x:auto; background:#0d1420 }
+  table.mock { border-collapse:collapse; width:100%; font:12px 'JetBrains Mono', ui-monospace, Consolas, monospace; color:#cbd5e1 }
+  table.mock th { text-align:left; font-size:11px; font-weight:600; letter-spacing:.04em; color:#94a3b8; padding:12px 16px; border-bottom:1px solid #1c2940; white-space:nowrap }
+  table.mock td { padding:8px 16px; border-bottom:1px solid #162030; vertical-align:middle; white-space:nowrap }
+  .mode-before table.mock td { padding:14px 16px }
+  .mkt { font-family:system-ui, "Segoe UI", Arial, sans-serif; font-size:13.5px; font-weight:600; color:#fff; line-height:1.25 }
+  .mode-before .mkt { line-height:1.35 }
+  .pill { display:inline-block; padding:2px 8px; border-radius:6px; background:#182232; border:1px solid #233147; color:#94a3b8; font-size:11px; font-weight:500 }
+  .pill.muted { background:transparent; border-color:#1e293b; color:#64748b }
+  .sub { color:#64748b; font-size:10px; margin-top:2px }
+  .mode-before .mkt-sub { margin-top:4px }
+  .q-up { color:#4ade80 } .q-dn { color:#f87171 }
+  .edge-pos { color:#34d399; font-weight:700 } .edge-neg { color:#f43f5e; font-weight:700 }
+  .status { display:inline-flex; align-items:center; gap:6px; font-size:11px }
+  .dot { width:6px; height:6px; border-radius:50%; display:inline-block }
+  .age { color:#94a3b8 }
+  th .sort-btn { background:none; border:none; color:inherit; font:inherit; letter-spacing:inherit; padding:0; cursor:pointer }
+  th .sort-btn[disabled] { cursor:default }
+  th .arrow { margin-left:4px; color:#eaf1f6 }
+  .col-cat { background:rgba(130,170,255,.07) }
+  .th-cat { background:rgba(130,170,255,.10); color:#82AAFF }
+  .bad-pill-spot { outline:1px dashed rgba(244,63,94,.55); outline-offset:3px; border-radius:6px }
+
+  /* ── four-tab strip (replica of the real tab bar) ── */
+  .tabbar { direction:ltr; unicode-bidi:isolate; display:flex; gap:8px; flex-wrap:wrap; padding:10px; border:1px solid var(--line); border-radius:12px; background:var(--panel-2) }
+  .ot-tab { font:600 12.5px system-ui, "Segoe UI", Arial, sans-serif; color:var(--muted); padding:.5rem .9rem; border-radius:8px; border:1px solid var(--line); background:transparent }
+  .ot-tab.on { color:#fff; background:#182232; border-color:#33415c }
+  .ot-count { font-family:'JetBrains Mono', ui-monospace, Consolas, monospace; font-size:10.5px; background:#22304a; color:#94a3b8; border-radius:5px; padding:1px 6px; margin-left:6px }
+  .tabbar-note { font-size:.88rem; color:var(--muted); margin-top:.7rem }
+
+  ol.steps { margin:.4rem 0 0; padding-right:1.2rem; color:var(--ink) }
+  ol.steps li { margin:.55rem 0 }
+  ol.steps li .where { color:var(--muted) }
+  .arrow-he { direction:ltr; unicode-bidi:isolate }
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important } }
+  @media (max-width:720px) { h1 { font-size:1.45rem } .panel { padding:18px } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="kicker">Spread Hunter · דשבורד המסחר</div>
+    <h1>לקטגוריה יש עכשיו עמודה משלה</h1>
+    <p class="lead">בכל ארבע הלשוניות של <code>Orders &amp; Trades</code>, תגית הקטגוריה ישבה מתחת לשם השוק והכפילה את גובה כל שורה — ואי אפשר היה למיין לפיה. עכשיו היא עמודה עצמאית, מיד אחרי השוק, זמינה למיון בכל לשונית. השורות חטבויות, ובלשונית <code>Active Markets</code> גם נוקו שני מיותרים.</p>
+    <div class="meta">
+      <span>בקשה <a href="https://github.com/AI-Degen-69/spread-hunter/issues/783">#783</a></span>
+      <span>עדכון <a href="https://github.com/AI-Degen-69/spread-hunter/pull/789">#789</a> <span class="merged">✓ מוזג</span></span>
+      <span><span dir="ltr">23 Oct 2026</span></span>
+    </div>
+  </header>
+
+  <!-- ═══ Centerpiece: live before/after mock of the Active Markets table ═══ -->
+  <section class="panel">
+    <div class="figure-label">לשונית <span dir="ltr">Active Markets</span> — השוואה חיה</div>
+    <div class="figure">
+      <div class="mock-wrap mode-after" id="mock-wrap">
+        <table class="mock" id="mock-table">
+          <thead id="mock-head"></thead>
+          <tbody id="mock-body"></tbody>
+        </table>
+      </div>
+      <div class="figure-controls">
+        <button class="ctrl-btn" id="btn-before">לפני</button>
+        <button class="ctrl-btn active" id="btn-after">אחרי</button>
+        <span style="color:var(--muted);font-size:.78rem" id="mode-hint"></span>
+      </div>
+      <div class="figure-caption" id="fig-caption"></div>
+    </div>
+  </section>
+
+  <!-- ═══ Support 1: same column in all four tabs ═══ -->
+  <section class="panel">
+    <h2>אותה עמודה, בכל ארבע הלשוניות</h2>
+    <div class="tabbar">
+      <span class="ot-tab on">Active Markets <span class="ot-count">21</span></span>
+      <span class="ot-tab">Orders <span class="ot-count">14</span></span>
+      <span class="ot-tab">Open Positions <span class="ot-count">4</span></span>
+      <span class="ot-tab">Closed Trades <span class="ot-count">3</span></span>
+    </div>
+    <p class="tabbar-note">
+      בכל לשונית, <code>CATEGORY</code> היא העמודה השנייה — מיד אחרי עמודת השוק — ולחיצה על הכותרת ממיינת את השורות.
+      בלשונית <code>Active Markets</code> הוסרה בנוסף עמודת <code>EDGE</code> (מספרים שאיש לא קרא),
+      ועמודת <code>24H VOLUME</code> מציגה עכשיו נפח בלבד — בלי שורת ימים-עד-פתרון שהצטופפה מתחתיו.
+    </p>
+  </section>
+
+  <!-- ═══ Support 2: try it in the real dashboard ═══ -->
+  <section class="panel">
+    <h2>נסו בעצמכם בדשבורד האמיתי</h2>
+    <ol class="steps">
+      <li><strong>הפעילו את המחסנית:</strong> <code>.\scripts\spread-hunter-menu.ps1 start</code> (או <code>python -m dashboard.server</code>) ופתחו בדפדפן את <code>http://127.0.0.1:8799</code>.</li>
+      <li>גללו אל כרטיס <code>Orders &amp; Trades</code> ועמדו על לשונית <code>Active Markets</code>.</li>
+      <li>חפשו את עמודת <code>CATEGORY</code> — היא מופיעה מיד אחרי עמודת השוק. תגית קטגוריה מתחת לשם השוק = תקלה.</li>
+      <li>לחצו פעמיים על כותרת <code>CATEGORY</code>: פעם ראשונה מיון <span class="arrow-he">A→Z</span>, פעם שנייה <span class="arrow-he">Z→A</span>.</li>
+      <li>ודאו שאין עמודת <code>EDGE</code>, וש-<code>24H VOLUME</code> מציג סכום דולר בלבד — בלי שורה כמו <code>3.2d</code>.</li>
+      <li>הביטו בגובה השורות: שמות שווקים נכנסים בשורה אחת, והכותרות נשארות קריאות.</li>
+      <li>עברו גם ל-<code>Orders</code>, <code>Open Positions</code> ו-<code>Closed Trades</code> — עמודת <code>CATEGORY</code> שנייה בכולן. ב-<code>Closed Trades</code> פתחו שורת <code>LEDGER</code>: עליה להגיע עד קצה הטבלה, בלי קיצוץ.</li>
+    </ol>
+    <div class="callout">בדיקת הבעלים היא ידנית בלבד: מסך, לחיצה, תוצאה. כל הבדיקות האוטומטיות רצו ברקע כחלק מהעדכון ועברו.</div>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  // Verbatim column headers from dashboard/static/app.js stitchActiveMarketsHeadHtml.
+  var ROWS = [
+    { t: 'Will Bitcoin close above $130,000 on Nov 30?', cat: 'Crypto',
+      yes: '$0.47', yesBid: 'bid $0.45', no: '$0.51', noBid: 'bid $0.49',
+      vol: '$1.8M', d: '3.4d', edge: '+2.0c', edgePct: '(+4.3%)', good: true,
+      status: 'RESTING', age: '38s', ts: '21:03:44' },
+    { t: 'Will the Fed cut rates at the December meeting?', cat: 'Economics',
+      yes: '$0.62', yesBid: 'bid $0.60', no: '$0.38', noBid: 'bid $0.36',
+      vol: '$940k', d: '45.9d', edge: '-0.4c', edgePct: '(-0.8%)', good: false,
+      status: 'QUOTING', age: '4s', ts: '21:04:18' },
+    { t: 'Will Real Madrid win La Liga?', cat: 'Sports',
+      yes: '$0.29', yesBid: 'bid $0.27', no: '$0.71', noBid: 'bid $0.69',
+      vol: '$610k', d: '231.0d', edge: '-3.0c', edgePct: '(-5.9%)', good: false,
+      status: 'IDLE', age: '2m', ts: '21:02:07' },
+    { t: 'Will the government shutdown end this week?', cat: 'Politics',
+      yes: '$0.83', yesBid: 'bid $0.81', no: '$0.17', noBid: 'bid $0.15',
+      vol: '$2.4M', d: '5.2d', edge: '+0.5c', edgePct: '(+1.0%)', good: true,
+      status: 'RESTING', age: '11s', ts: '21:04:11' }
+  ];
+  var STATUS_COLOR = { RESTING: '#34d399', QUOTING: '#f4b860', IDLE: '#64748b' };
+  var mode = 'after';   // 'before' | 'after'
+  var catSort = null;   // null | 'asc' | 'desc' (after mode only)
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function pill(cat) {
+    var muted = cat === 'Uncategorized' ? ' muted' : '';
+    return '<span class="pill' + muted + '">' + esc(cat) + '</span>';
+  }
+  function statusBadge(s) {
+    return '<span class="status"><span class="dot" style="background:' + STATUS_COLOR[s] + '"></span>' + s + '</span>';
+  }
+
+  function headHtml() {
+    var cols = mode === 'before'
+      ? ['MARKET &amp; CATEGORY', 'YES PRICE', 'NO PRICE', 'EDGE', '24H VOLUME', 'STATUS', 'LAST UPDATED']
+      : ['MARKET &amp; CATEGORY', 'CATEGORY', 'YES PRICE', 'NO PRICE', '24H VOLUME', 'STATUS', 'LAST UPDATED'];
+    return '<tr>' + cols.map(function (label, i) {
+      var catCol = mode === 'after' && i === 1;
+      var cls = catCol ? ' class="th-cat"' : '';
+      var inner;
+      if (catCol) {
+        var arrow = catSort ? '<span class="arrow">' + (catSort === 'asc' ? '▲' : '▼') + '</span>' : '';
+        var aria = catSort ? ' aria-sort="' + (catSort === 'asc' ? 'ascending' : 'descending') + '"' : '';
+        return '<th' + aria + cls + '><button type="button" class="sort-btn" id="cat-sort-btn" title="מיון לפי קטגוריה">' + label + arrow + '</button></th>';
+      }
+      inner = '<span style="cursor:default">' + label + '</span>';
+      var hl = mode === 'before' && (i === 3 || i === 4);
+      return '<th' + (hl ? ' style="color:#f43f5e"' : '') + '>' + inner + '</th>';
+    }).join('') + '</tr>';
+  }
+
+  function rowsHtml() {
+    var list = ROWS.map(function (r, i) { return { r: r, i: i }; });
+    if (mode === 'after' && catSort) {
+      list.sort(function (a, b) {
+        var c = a.r.cat.localeCompare(b.r.cat);
+        return catSort === 'asc' ? c : -c || (a.i - b.i);
+      });
+    }
+    return list.map(function (entry) {
+      var r = entry.r;
+      var marketCell = mode === 'before'
+        ? '<div class="mkt">' + esc(r.t) + '</div><div class="mkt-sub">' + pill(r.cat) + '</div>'
+        : '<div class="mkt">' + esc(r.t) + '</div>';
+      var cells = mode === 'before'
+        ? [
+            '<td>' + marketCell.replace('<span class="pill', '<span class="pill bad-pill-spot') + '</td>',
+            '<td><div class="q-up">' + r.yes + '</div><div class="sub">' + r.yesBid + '</div></td>',
+            '<td><div class="q-dn">' + r.no + '</div><div class="sub">' + r.noBid + '</div></td>',
+            '<td><span class="' + (r.good ? 'edge-pos' : 'edge-neg') + '">' + r.edge + ' ' + r.edgePct + '</span></td>',
+            '<td style="color:#94a3b8"><div>' + r.vol + '</div><div class="sub">(' + r.d + ')</div></td>',
+            '<td>' + statusBadge(r.status) + '</td>',
+            '<td class="age"><div>' + r.age + '</div><div class="sub">' + r.ts + '</div></td>'
+          ]
+        : [
+            '<td>' + marketCell + '</td>',
+            '<td class="col-cat">' + pill(r.cat) + '</td>',
+            '<td><div class="q-up">' + r.yes + '</div><div class="sub">' + r.yesBid + '</div></td>',
+            '<td><div class="q-dn">' + r.no + '</div><div class="sub">' + r.noBid + '</div></td>',
+            '<td style="color:#94a3b8"><div>' + r.vol + '</div></td>',
+            '<td>' + statusBadge(r.status) + '</td>',
+            '<td class="age"><div>' + r.age + '</div><div class="sub">' + r.ts + '</div></td>'
+          ];
+      return '<tr>' + cells.join('') + '</tr>';
+    }).join('');
+  }
+
+  function render() {
+    var wrap = document.getElementById('mock-wrap');
+    wrap.className = 'mock-wrap mode-' + mode;
+    document.getElementById('mock-head').innerHTML = headHtml();
+    document.getElementById('mock-body').innerHTML = rowsHtml();
+    document.getElementById('mode-hint').textContent = mode === 'before'
+      ? 'התגית תקועה מתחת לשם השוק — אין עמודה ואין מיון'
+      : 'לחצו על CATEGORY בכותרת כדי למיין';
+    document.getElementById('fig-caption').innerHTML = mode === 'before'
+      ? 'לפני: הקטגוריה שוכבת מתחת לשם השוק (קו מקווקו אדום) — כל שורה גבוהה פי שניים, <code>EDGE</code> מציג מספרים שאיש לא קרא, ומתחת לנפח מסתתרת שורת <span dir="ltr">(Nd)</span>.'
+      : 'אחרי: <code>CATEGORY</code> עמודה שנייה (מסומנת בכחול) וניתנת למיון בלחיצה, השוק בשורה אחת, <code>EDGE</code> נעלמה, ו-<code>24H VOLUME</code> מציג נפח בלבד. זהו העתק נאמן של המסך האמיתי.';
+    var btn = document.getElementById('cat-sort-btn');
+    if (btn) btn.addEventListener('click', function () {
+      catSort = catSort === 'asc' ? 'desc' : 'asc';
+      render();
+    });
+  }
+
+  document.getElementById('btn-before').addEventListener('click', function () {
+    mode = 'before'; catSort = null;
+    document.getElementById('btn-before').classList.add('active');
+    document.getElementById('btn-after').classList.remove('active');
+    render();
+  });
+  document.getElementById('btn-after').addEventListener('click', function () {
+    mode = 'after';
+    document.getElementById('btn-after').classList.add('active');
+    document.getElementById('btn-before').classList.remove('active');
+    render();
+  });
+  render();
+})();
+</script>
+</body>
+</html>
