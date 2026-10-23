@@ -157,6 +157,20 @@ def test_latest_record_ranks_on_fields_not_on_the_filename(tmp_path: Path):
     assert latest.name == "tournament_i608-r10_2026-10-19T09-00.json"
 
 
+def test_latest_record_ignores_a_longer_issue_number(tmp_path: Path):
+    """`tournament_i60*` also matches `i608`, so the parsed id has to decide.
+
+    Without the check the higher run number of the *other* issue wins, and the
+    cockpit reads a plan that belongs to a different tournament.
+    """
+    (tmp_path / "tournament_i608-r9_2026-10-19T09-00.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "tournament_i60-r1_2026-10-01T09-00.json").write_text("{}", encoding="utf-8")
+
+    latest = latest_tournament_record(60, tmp_path)
+    assert latest is not None
+    assert latest.name == "tournament_i60-r1_2026-10-01T09-00.json"
+
+
 def test_build_plan_run_number_scheme(tmp_path: Path):
     from scripts.shadow_tournament import build_tournament_plan
 

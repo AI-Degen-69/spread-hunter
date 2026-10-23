@@ -337,9 +337,11 @@ def latest_tournament_record(
     if not directory.is_dir():
         return None
     best: tuple[int, str, Path] | None = None
-    for candidate in directory.glob(f"{TOURNAMENT_KIND}_i{int(issue)}*.json"):
+    wanted = int(issue)
+    for candidate in directory.glob(f"{TOURNAMENT_KIND}_i{wanted}*.json"):
         parsed = parse_tournament_record_name(candidate)
-        if parsed is None:
+        # The glob is a prefix, so `i48*` also matches `i487`: rank on the parsed id.
+        if parsed is None or parsed["issue"] != wanted:
             continue
         rank = (parsed["run_number"] or 0, parsed["stamp"], candidate)
         if best is None or rank[:2] > best[:2]:

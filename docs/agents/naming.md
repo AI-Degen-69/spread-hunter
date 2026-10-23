@@ -115,6 +115,7 @@ fixed**, never hidden behind a new `.gitignore` rule.
 | Shadow ring | `shadow_<run-id>.jsonl` — no stamp, so a reused `--run-id` appends to the previous run's tape | when run ids become reusable by design; the name is resolved in `core_brain.shadow_run._run_ring_name` and four dashboard call sites |
 | Legacy tournament store | No run number: `data/<issue>_tournament_<NN>_<arm>_<stamp>.db` keeps its shape because the dashboard's clustering parser reads the arm index out of it | when the clustering parser is rewritten to take the arm from the plan record instead |
 | Report identity | `statistics_report_<mode>_<run-id>_<stamp>.md` reads `..._shadow_shadow-01_...` because run ids conventionally repeat the mode | when run ids stop carrying the mode word; today the uniformity is worth the redundancy |
+| Menu shadow store, validation report dir | `data/NN_shadow_<dd-MM_HH-mm>.db` and `reports/validation_<dd-MM_HH-mm>_<run-id>/` keep the old stamp: the dashboard run switcher, the KPI funnel and `data_retention.py` all recognise the `NN_shadow_` shape | when those readers take the stamp from the session file instead of the filename — the menu's *statistics* store already follows G3 |
 
 The tournament family closed its deviation: writer, both record readers and every
 on-disk record moved in one change. `<key>` is `i<issue>-r<run>`, `i<issue>` or
