@@ -983,6 +983,9 @@ def test_766_venue_matched_routes_to_unhedged(tmp_path):
     assert float(act.get("venue_matched") or 0) == 5.0
     ids = {o.id for o in res["unhedged_positions"]}
     assert "o766" in ids
+    # Safe pending: flagged unhedged, but no sale on a registry-unknown size
+    # (reconcile owns the exit next cycle).
+    assert all(r.get("action") != "exited" for r in res["remediated_positions"])
 
 
 def test_766_venue_read_failure_is_unverified(tmp_path):
@@ -999,6 +1002,8 @@ def test_766_venue_read_failure_is_unverified(tmp_path):
     assert act.get("venue_matched") is None
     ids = {o.id for o in res["unhedged_positions"]}
     assert "o766" in ids
+    # Unverified never sells on unknown size.
+    assert all(r.get("action") != "exited" for r in res["remediated_positions"])
 
 
 def test_766_venue_zero_reports_no_remediation(tmp_path):

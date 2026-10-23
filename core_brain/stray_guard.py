@@ -299,7 +299,10 @@ def cancel_hopeless_orders(
             # (remediate), never zero.
             venue_matched: float | None = None
             venue_verified = False
-            if live:
+            # Rows without a venue order id have nothing to re-read:
+            # `_venue_matched` skips them and returns 0.0, which must not
+            # be marked verified.
+            if live and o.order_id:
                 try:
                     from core_brain.single_buy_saver import _venue_matched
                     venue_matched = float(_venue_matched(client, [o]))
