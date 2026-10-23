@@ -89,6 +89,21 @@ def test_positions_head_has_current_price():
 
 
 @requires_node
+def test_positions_head_has_sortable_category_column_after_market():
+    res = json.loads(_eval_js(
+        "console.log(JSON.stringify({head: app.stitchPositionsHeadHtml(null)}));"))
+    head = res["head"]
+    assert 'data-ot-sort="2"' in head, "positions needs a sortable CATEGORY key 2"
+    market = head.index('data-ot-sort="1"')
+    category = head.index(">CATEGORY</span>")
+    assert market < category
+    between = head[market:category]
+    assert between.count("data-ot-sort") == 1
+    assert between.count("<th") == 1
+    assert head.count("<th") == 9
+
+
+@requires_node
 def test_single_leg_row_shows_its_own_current_price_and_pnl():
     # 10 UP @ $0.80 avg against a $0.76 mid: a loss, priced live.
     res = json.loads(_eval_js(f"""

@@ -1,8 +1,8 @@
 """Tab 1 (Active Markets): the stitch terminal's quoted-market table.
 
-Seven columns, left to right: MARKET & CATEGORY (title with the category
-badge underneath -- no standalone Category column) | YES PRICE | NO PRICE |
-EDGE | 24H VOLUME | STATUS | LAST UPDATED.
+Seven columns, left to right: MARKET (title only) | CATEGORY | YES PRICE |
+NO PRICE | 24H VOLUME (volume only) | STATUS | LAST UPDATED. The EDGE column
+is gone; the category badge lives in its own cell.
 """
 from __future__ import annotations
 
@@ -85,13 +85,14 @@ def test_stitch_markets_head_has_seven_columns_in_spec_order():
     """
     res = json.loads(_eval_js(code))
     head = res["head"]
-    ordered = ["MARKET", "YES PRICE", "NO PRICE", "EDGE",
+    ordered = ["MARKET", "CATEGORY", "YES PRICE", "NO PRICE",
                "24H VOLUME", "STATUS", "LAST UPDATED"]
     for label in ordered:
         assert label in head, f"missing header: {label}"
     assert [head.index(p) for p in ordered] == sorted(head.index(p) for p in ordered)
-    # No standalone category column: the tag lives under the title now.
-    assert "CATEGORY" not in head.replace("MARKET &amp; CATEGORY", "")
+    # CATEGORY is a real sort button on the category key, not a label.
+    assert 'data-ot-sort="2"' in head
+    assert "EDGE" not in head
     assert head.count("<th") == 7
 
 
@@ -103,17 +104,22 @@ def test_stitch_markets_row_stacks_each_metric_per_spec():
     """
     res = json.loads(_eval_js(code))
     html = res["html"]
-    # Market anchors the row; the category badge sits under the title.
+    # Market anchors the row; the category badge lives in its own cell now.
     row = html.split('data-cid="0xalp"')[1]
-    assert row.index("Alcaraz vs Sinner") < row.index("ATP Tour")
+    assert "Alcaraz vs Sinner" in row
+    market_cell = row.split('class="stitch-market-cell"')[1].split("</td>")[0]
+    assert "stitch-category-pill" not in market_cell
+    category_cell = row.split('class="stitch-category-cell"')[1].split("</td>")[0]
+    assert "ATP Tour" in category_cell
     # Prices fall back to the quote mids here (no live-mark worker in the
-    # harness): 0.275/0.725 render as $0.28/$0.72; pair cost and edge beside.
+    # harness): 0.275/0.725 render as $0.28/$0.72. No edge, no horizon.
     assert "$0.28" in row
     assert "$0.72" in row
-    assert "+0.0c" in row
-    # Volume over resolves in one column.
+    assert "stitch-edge" not in row
+    assert "+0.0c" not in row
+    # Volume stands alone in its column.
     assert "$152k" in row
-    assert "6.9d" in row
+    assert "6.9d" not in row
     # Status pill last for a market with a resting leg.
     assert "RESTING" in row
     assert "stitch-age-stopwatch" in row

@@ -2363,15 +2363,16 @@ def test_every_stitch_view_renders_one_category_chip_per_market_row(view):
     # Act
     rendered = _render(view, _kpi(), _state(), surface="stitch")
 
-    # Assert — one chip per row and no second label markup, so the eye finds it
-    # in the same place whatever view is open.
+    # Assert — one chip per row, living in its own Category cell: the chip no
+    # longer rides under the market title, so the Market cell holds none.
     html = rendered["html"]
     assert rendered["surface"] == "stitch"
     rows = _STITCH_ROW.findall(html)
     assert rows, f"{view} rendered no rows"
     assert len(_STITCH_PILL.findall(html)) == len(rows)
+    assert html.count("stitch-category-cell") == len(rows)
     for cell in html.split('class="stitch-market-cell"')[1:]:
-        assert cell.split("</td>")[0].count("stitch-category-pill") == 1
+        assert "stitch-category-pill" not in cell.split("</td>")[0]
 
 
 @requires_node
@@ -2403,6 +2404,121 @@ def test_an_unlabelled_market_still_shows_a_chip_in_every_view(view, cid):
     # Assert — "Uncategorized" is an answer, and a dimmed chip keeps the column
     # aligned instead of leaving a hole on that one row.
     assert '<span class="stitch-category-pill is-muted">Uncategorized</span>' in html
+
+
+_STITCH_HEAD_KEYS = [
+    ("active-markets", 2),
+    ("open-orders", 8),
+    ("positions", 2),
+    ("closed-trades", 2),
+]
+
+
+@requires_node
+@pytest.mark.parametrize("view,key", _STITCH_HEAD_KEYS)
+def test_every_stitch_view_heads_a_sortable_category_column_after_market(view, key):
+    # Act
+    rendered = _render(view, _kpi(), _state(), surface="stitch")
+
+    # Assert — CATEGORY is a real sort button (not a label) sitting in the
+    # header cell directly after the Market header: exactly one column
+    # boundary between the Market sort key and the CATEGORY label.
+    head = rendered["stitchHead"]
+    assert f'data-ot-sort="{key}"' in head, f"{view} has no sortable CATEGORY key {key}"
+    market = head.index('data-ot-sort="1"')
+    category = head.index(">CATEGORY</span>")
+    assert market < category, f"{view} CATEGORY does not follow Market"
+    between = head[market:category]
+    assert between.count("data-ot-sort") == 1, f"{view} has a column between Market and CATEGORY"
+    assert between.count("<th") == 1, f"{view} CATEGORY is not the next header cell"
+
+
+def _two_category_sort_kpi() -> dict:
+    # Two held-or-quoted markets the category sort must order alphabetically:
+    # E-Sports before Politics on the first click.
+    kpi = _category_kpi()
+    esp = kpi["by_market"][CID_ESPORTS]
+    esp.update({"up_sh": 10.0, "dn_sh": 10.0, "total_sh": 20.0,
+                "up_cost": 4.5, "dn_cost": 4.8, "total_cost": 9.3})
+    return kpi
+
+
+def _two_category_sort_state() -> dict:
+    # Politics is the NEWER pair on purpose: unsorted builders rank newest
+    # first, so ascending category sort must pull the older E-Sports pair up.
+    return {
+        "orders": [
+            {"order_id": "ord-p-up", "condition_id": CID_POLITICS, "token_id": "tok-p-up",
+             "pair_id": "pair-p", "side": "BUY", "price": 0.55, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 1002, "age_sec": 88.0},
+            {"order_id": "ord-p-dn", "condition_id": CID_POLITICS, "token_id": "tok-p-dn",
+             "pair_id": "pair-p", "side": "BUY", "price": 0.40, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 1003, "age_sec": 87.0},
+            {"order_id": "ord-e-up", "condition_id": CID_ESPORTS, "token_id": "tok-e-up",
+             "pair_id": "pair-e", "side": "BUY", "price": 0.45, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 1000, "age_sec": 90.0},
+            {"order_id": "ord-e-dn", "condition_id": CID_ESPORTS, "token_id": "tok-e-dn",
+             "pair_id": "pair-e", "side": "BUY", "price": 0.48, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 1001, "age_sec": 89.0},
+        ]
+    }
+
+
+@requires_node
+@pytest.mark.parametrize("view,key", [("active-markets", 2), ("positions", 2)])
+def test_stitch_category_sort_orders_market_rows_alphabetically(view, key):
+    # Act — ascending category sort over E-Sports + Politics.
+    rendered = _render(view, _two_category_sort_kpi(), _two_category_sort_state(),
+                       sort={"col": key, "dir": "asc"}, surface="stitch")
+
+    # Assert — E-Sports above Politics.
+    assert _cids(rendered) == [CID_ESPORTS, CID_POLITICS]
+
+
+@requires_node
+def test_stitch_orders_category_sort_orders_pairs_alphabetically():
+    # Act — ascending category sort over E-Sports + Politics (Politics posted first).
+    rendered = _render("open-orders", _two_category_sort_kpi(), _two_category_sort_state(),
+                       sort={"col": 8, "dir": "asc"}, surface="stitch")
+
+    # Assert — the E-Sports pair floats above the Politics pair.
+    assert _pairs(rendered) == ["pair-e", "pair-p"]
+
+
+@requires_node
+def test_stitch_closed_trades_category_sort_orders_rows_alphabetically():
+    # Arrange — two settled markets, Zebra before Apple in the registry.
+    kpi = {"by_market": {
+        "0xca": {"condition_id": "0xca", "title": "Zebra Market", "category": "Zebra",
+                  "settlements": [{"method": "merge", "shares": 5, "cost_basis": 5.0,
+                                     "proceeds": 5.5, "realized_pnl": 0.5, "ts": 1700000000}],
+                  "realized_pnl": 0.5, "total_cost": 0.0, "total_sh": 0},
+        "0xcb": {"condition_id": "0xcb", "title": "Apple Market", "category": "Apple",
+                  "settlements": [{"method": "merge", "shares": 5, "cost_basis": 5.0,
+                                     "proceeds": 5.5, "realized_pnl": 0.5, "ts": 1700000000}],
+                  "realized_pnl": 0.5, "total_cost": 0.0, "total_sh": 0},
+    }}
+
+    # Act
+    rendered = _render("closed-trades", kpi, {"orders": []},
+                       sort={"col": 2, "dir": "asc"}, surface="stitch")
+
+    # Assert — Apple above Zebra.
+    assert _cids(rendered) == ["0xcb", "0xca"]
+
+
+@requires_node
+def test_stitch_orders_category_first_click_sorts_ascending():
+    # Act — the new Category key behaves like every other word column: the
+    # first click asks "which name comes first".
+    result = _clicks([{"view": "open-orders", "col": 8}])
+
+    # Assert
+    assert result["toggles"][0] == {"col": 8, "dir": "asc"}
 
 
 @requires_node

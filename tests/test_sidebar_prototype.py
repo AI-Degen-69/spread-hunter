@@ -675,6 +675,24 @@ def test_top_nav_to_body_spacing_and_legacy_tab_suppression():
     assert "gap: 10px" in rule
 
 
+def test_orders_rows_read_shorter_while_headers_stay_legible():
+    # #783: the pill moves into its own column, so body rows slim down —
+    # headers keep their 12px vertical rhythm.
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+
+    def vertical_px(selector: str) -> int:
+        block = _rule(css, selector)
+        assert block, f"no rule for {selector}"
+        match = re.search(r"padding:\s*(\d+)px", block)
+        assert match, f"no vertical padding in {selector}"
+        return int(match.group(1))
+
+    assert vertical_px(".proto-body #orders-trades-table td") <= 10
+    assert vertical_px(".proto-body .stitch-market-cell") <= 10
+    assert vertical_px(".proto-body #orders-trades-table th") == 12
+    assert ".stitch-category-cell" in css
+
+
 def test_page_title_prepends_icon_and_hides_note():
     js = (_STATIC / "prototype.js").read_text(encoding="utf-8")
     assert "proto-page-icon" in js

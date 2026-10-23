@@ -70,6 +70,13 @@ const STITCH_ROWS = {
   'closed-trades': () => app.stitchClosedTradesRows(kpi, state, sort),
 };
 
+const STITCH_HEAD = {
+  'open-orders': () => app.stitchOpenOrdersHeadHtml(sort),
+  'active-markets': () => app.stitchActiveMarketsHeadHtml(sort),
+  'positions': () => app.stitchPositionsHeadHtml(sort),
+  'closed-trades': () => app.stitchClosedTradesHeadHtml(sort),
+};
+
 const html = surface === 'stitch'
   ? STITCH_ROWS[view]()
   : app.ordersTradesRows(view, kpi, state, sort);
@@ -92,6 +99,7 @@ if (toggle) {
     sort,
     columns: app.OT_COLUMNS[view],
     head: app.otHeadHtml(view, sort),
+    stitchHead: surface === 'stitch' ? STITCH_HEAD[view]() : null,
     html,
     rows: (html.match(/<tr /g) || []).length,
     counts: app.ordersTradesCounts(kpi, state),
