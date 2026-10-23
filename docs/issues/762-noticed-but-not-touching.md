@@ -16,6 +16,6 @@ This ledger records what was found during the fix and **deliberately left alone*
 
 ## Noticed but not touching
 
-| # | Noticed | Why out of scope | Owner | When | Status |
-|---|---|---|---|---|---|
-| N1 | `complete_pair` sizes with `size = min(pair["naked"], ask_depth(book))` where `ask_depth` sums ALL ask levels, while the BUY is submitted at `price=ask` (best ask). Depth above the limit price is counted as fillable. | Bounding depth to levels at or below the limit price is #764's scope; changing it here would alter sizing/pricing semantics the issue forbids touching. | you | when #764 lands, with its own ticket | open |
+| # | Noticed | Why out of scope | Owner | When | Status | Resolution |
+|---|---|---|---|---|---|---|
+| N1 | `complete_pair` sizes with `size = min(pair["naked"], ask_depth(book))` where `ask_depth` sums ALL ask levels, while the BUY is submitted at `price=ask` (best ask). Depth above the limit price is counted as fillable. | Bounding depth to levels at or below the limit price is #764's scope; changing it here would alter sizing/pricing semantics the issue forbids touching. | — | — | published | #764 (PR #778) — `complete_pair` now sizes against `ask_depth_at_or_below(book, ask)` and refuses when that depth is under the minimum; the row's premise no longer holds. |
