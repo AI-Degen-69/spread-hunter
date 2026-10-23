@@ -328,7 +328,7 @@ def main() -> int:
                         help="Path to market_universe.json")
     parser.add_argument("--out-dir", type=Path, default=ROOT / "runtime" / "audit_355",
                         help="Output directory for raw responses and audit summary")
-    parser.add_argument("--report-md", type=Path, default=ROOT / "docs" / "issues" / "355-matchup-refusal-audit.md",
+    parser.add_argument("--report-md", type=Path, default=ROOT / "docs" / "issues" / "355-audit-matchup-refusal.md",
                         help="Path to generate markdown report")
     args = parser.parse_args()
 

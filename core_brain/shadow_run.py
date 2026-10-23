@@ -71,6 +71,12 @@ SHADOW_HEARTBEAT_NAME = "shadow_run.json"
 #: fix the per-run cycle ring got (`shadow-<run_id>.jsonl`).
 SHADOW_HEARTBEAT_PREFIX = "shadow_run_"
 
+#: Anchor for every generated tournament path. A bare `Path("data")` or
+#: `Path("runtime")` default resolves against whatever directory launched the
+#: script, which is how a plan record ends up somewhere nobody looks
+#: (`docs/agents/architecture.md`, "Where generated files go").
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def _run_heartbeat_name(run_id: str) -> str:
     """File name for a run-scoped heartbeat: `shadow_run_<run_id>.json`.
@@ -185,7 +191,7 @@ def build_tournament_db_path_v2(
     issue: int | str,
     arm: str,
     run_number: int = 1,
-    base_dir: str | Path = "data",
+    base_dir: str | Path = REPO_ROOT / "data",
 ) -> Path:
     """Run-number DB path: data/i<issue>_tournament-<run>_<arm>-<run>.db.
 
@@ -201,7 +207,7 @@ def build_tournament_db_path_v2(
 def build_tournament_log_path_v2(
     issue: int | str,
     run_number: int = 1,
-    base_dir: str | Path = "runtime/tournaments",
+    base_dir: str | Path = REPO_ROOT / "runtime" / "tournaments",
 ) -> Path:
     """Run-number launcher log: runtime/tournaments/i<issue>_tournament-<run>.log.
 
@@ -217,7 +223,7 @@ def build_tournament_log_path_v2(
 def build_tournament_log_path(
     issue: int | str,
     stamp: str,
-    base_dir: str | Path = "runtime/tournaments",
+    base_dir: str | Path = REPO_ROOT / "runtime" / "tournaments",
 ) -> Path:
     """Legacy launcher log: runtime/tournaments/<issue>_<stamp>.log."""
     return Path(base_dir) / f"{issue}_{stamp}.log"

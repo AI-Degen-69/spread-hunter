@@ -1072,12 +1072,16 @@ def test_run_numbered_dry_run_reads_the_conventional_arms_file(tmp_path, capsys)
         f"{name}-1" for name in I492_EXPECTED_ENV
     ]
     assert [a["dash_port"] for a in data["arms"]] == list(range(8801, 8811))
-    assert data["record_path"].replace("\\", "/") == (
-        "runtime/tournaments/i492_tournament-1.json")
-    assert data["results_path"].replace("\\", "/") == (
-        "reports/tournaments/i492_tournament-1_results.json")
-    assert data["log_path"].replace("\\", "/") == (
-        "runtime/tournaments/i492_tournament-1.log")
+    # Anchored to the repo, never to the cwd: a relative path here is what let a
+    # launch from scripts/ write the plan record somewhere nobody looks.
+    for key, expected in (
+        ("record_path", "runtime/tournaments/i492_tournament-1.json"),
+        ("results_path", "reports/tournaments/i492_tournament-1_results.json"),
+        ("log_path", "runtime/tournaments/i492_tournament-1.log"),
+    ):
+        reported = Path(data[key])
+        assert reported.is_absolute(), (key, data[key])
+        assert reported.as_posix().endswith("/" + expected), (key, data[key])
     assert data["arms_source"] == "configs/tournaments/i492_tournament-1_arms.json"
 
 

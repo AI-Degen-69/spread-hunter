@@ -50,6 +50,7 @@ spread-hunter/
   reports/                Generated statistics reports (gitignored)
   docs/                   One folder per kind of document; nothing loose at docs/ root
     agents/               This rulebook: architecture, domain, safety, conventions, glossary
+                          (naming.md holds the filename + path contract for every artifact)
     runs/                 Dated run and experiment records, YYYY-MM-DD-<slug>.md (evidence, not output)
     issues/               Issue showcases: <id>-presentation-<slug>.html (nowhere else under docs/)
     superpowers/specs/    Design specs an agent must read before coding (e.g. the shadow fill model)

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import datetime
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
 from core_brain.kpi import report as kpi_report
+from core_brain.naming import stamp
 from core_brain.statistics_report import (DEFAULT_REPORT_DIR,
                                           write_statistics_report)
 from core_brain.statistics_store import StatisticsStore
@@ -29,7 +29,7 @@ def observe(
     watch_path = Path(watch)
     if mode == "shadow":
         assert_not_production_registry(watch_path)
-    store = StatisticsStore.create(data_dir, datetime.datetime.now().strftime("%d-%m_%H-%M"), run_id)
+    store = StatisticsStore.create(data_dir, stamp(), run_id)
     started = time.monotonic()
     count = 0
     try:

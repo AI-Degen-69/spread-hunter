@@ -62,8 +62,13 @@ class TestParity541:
         out = tmp_path / "stats_report"
         write_statistics_report(db, RUN_ID_541, "shadow", out_dir=out)
         # 1d: never predict the timestamped name — glob the output dir.
-        mds = sorted(out.glob("*_statistics_report.md"))
+        mds = sorted(out.glob("statistics_report_*.md"))
         assert len(mds) == 1
+        # `<kind>_<identity>_<stamp>.md`, the state grammar in docs/agents/naming.md.
+        assert re.fullmatch(
+            rf"statistics_report_shadow_{re.escape(str(RUN_ID_541))}_\d{{4}}-\d{{2}}-\d{{2}}T\d{{2}}-\d{{2}}\.md",
+            mds[0].name,
+        ), mds[0].name
         lines = mds[0].read_text(encoding="utf-8").splitlines()
 
         def bullet(label: str) -> str:

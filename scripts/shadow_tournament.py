@@ -470,17 +470,20 @@ def build_tournament_plan(
             )
         )
 
+    # Anchored to ROOT, never to the cwd: a plain Path("reports") resolves against
+    # whatever directory launched the tournament, which is the spill that
+    # `docs/agents/architecture.md` ("Where generated files go") bans.
     if run_number is not None:
         record_path = (
-            Path("runtime") / "tournaments" / f"i{issue}_tournament-{int(run_number)}.json"
+            ROOT / "runtime" / "tournaments" / f"i{issue}_tournament-{int(run_number)}.json"
         )
         results_path = (
-            Path("reports") / "tournaments" / f"i{issue}_tournament-{int(run_number)}_results.json"
+            ROOT / "reports" / "tournaments" / f"i{issue}_tournament-{int(run_number)}_results.json"
         )
         log_path = build_tournament_log_path_v2(issue=issue, run_number=int(run_number))
     else:
-        record_path = Path("runtime") / "tournaments" / f"{issue}_{stamp}.json"
-        results_path = Path("reports") / "tournaments" / f"{issue}_{stamp}_results.json"
+        record_path = ROOT / "runtime" / "tournaments" / f"{issue}_{stamp}.json"
+        results_path = ROOT / "reports" / "tournaments" / f"{issue}_{stamp}_results.json"
         log_path = build_tournament_log_path(issue=issue, stamp=stamp)
     return TournamentPlan(
         issue=issue,
