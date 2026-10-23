@@ -160,7 +160,7 @@ Depends on: nothing.
 `python scripts/edge_floor_analysis.py --db data/demo_orders.db` prints a table with the
 rehearsal banner.
 
-### T2 — [Backend/Logic] XS — pin the single-buy consequence of the gate
+### T2 — [x] — [Backend/Logic] XS — pin the single-buy consequence of the gate
 
 `tests/test_fill_quality_gate.py`. Depends on: nothing.
 

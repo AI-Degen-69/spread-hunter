@@ -12,9 +12,9 @@
 - [x] focused file green; demo-store run prints a table
 
 ## T2 — pin the single-buy consequence [Backend/Logic]
-- [ ] `tests/test_fill_quality_gate.py`: UP leg blocked → DOWN still posts, resting UP
+- [x] `tests/test_fill_quality_gate.py`: UP leg blocked → DOWN still posts, resting UP
       cancelled `not_quoted`
-- [ ] focused file green
+- [x] focused file green
 
 ## T3 — numbers + decision record [Docs]
 - [ ] run the script on `shadow-01` and `shadow-01-prudent` (read-only, in place)
