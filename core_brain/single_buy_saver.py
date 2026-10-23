@@ -644,18 +644,18 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
     filled 4 of 10 is a 4-share position, and sizing an exit off 10 would sell
     shares that do not exist.
     """
-    orders = registry.get_orders_by_pair(pair_id)
-    if not orders:
+    rows = registry.get_pair_orders_with_fill_totals(pair_id)
+    if not rows:
         raise PairExitRefused(f"No orders carry pair_id={pair_id!r}.")
 
     by_token: dict[str, dict] = {}
-    for o in orders:
+    for o, matched, notional in rows:
         slot = by_token.setdefault(
             o.token_id,
             {"token_id": o.token_id, "matched": 0.0, "notional": 0.0, "orders": []},
         )
-        slot["matched"] += registry.get_size_matched(o.id)
-        slot["notional"] += registry.get_matched_notional(o.id)
+        slot["matched"] += matched
+        slot["notional"] += notional
         slot["orders"].append(o)
 
     if len(by_token) > 2:
@@ -678,7 +678,7 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
 
     return {
         "pair_id": pair_id,
-        "condition_id": orders[0].condition_id,
+        "condition_id": rows[0][0].condition_id,
         "heavy": heavy,
         "light": light,
         # Keyed by token as by rank. `heavy` and `light` are a ranking,
@@ -1889,12 +1889,10 @@ def _last_fill_ms_by_pair(registry) -> tuple[dict[str, int], dict[str, str]]:
     """
     last_fill_ms: dict[str, int] = {}
     pair_cids: dict[str, str] = {}
-    for f in registry.get_all_fills():
-        pid = f.get("pair_id")
+    for pid, cid, vts in registry.get_fill_discovery_rows():
         if not pid:
             continue
-        pair_cids.setdefault(pid, f.get("condition_id") or "")
-        vts = f.get("venue_ts")
+        pair_cids.setdefault(pid, cid or "")
         if vts:
             last_fill_ms[pid] = max(last_fill_ms.get(pid, 0), int(vts))
     return last_fill_ms, pair_cids

@@ -1881,3 +1881,64 @@ def test_get_token_side_latest_wins_with_floor(registry: OrderRegistry):
     assert registry.get_token_side("cond-y", "tok-n") is None
     _q767_quote(registry, -1.0, "cond-y", "tok-m", "down")
     assert registry.get_token_side("cond-y", "tok-m") == "DOWN"
+
+
+def _q767_order(registry: OrderRegistry, oid: str, tok: str, pair: str,
+                 status: str = "open", posted_ms: int = 1_000_000) -> str:
+    uid = str(uuid.uuid4())
+    registry.create_order(OrderRecord(
+        id=uid, order_id=oid, condition_id="cond-p", token_id=tok,
+        side="BUY", price=0.60, original_size=10.0, status=status,
+        posted_ts=posted_ms, last_polled_ts=posted_ms, pair_id=pair))
+    return uid
+
+
+def test_pair_orders_with_fill_totals_matches_per_order_helpers(
+        registry: OrderRegistry):
+    """#767: Q3 equals get_orders_by_pair + per-order totals, one query."""
+    u_full = _q767_order(registry, "venue-1", "tok-up", "pair-q3")
+    registry.record_fill(FillRecord(trade_id="t1", order_uuid=u_full,
+                                     size=4.0, price=0.50, venue_ts=1000))
+    registry.record_fill(FillRecord(trade_id="t2", order_uuid=u_full,
+                                     size=6.0, price=0.70, venue_ts=2000))
+    u_zero = _q767_order(registry, "venue-2", "tok-up", "pair-q3")
+    u_cancel = _q767_order(registry, "venue-3", "tok-dn", "pair-q3",
+                            status="cancelled")
+    registry.record_fill(FillRecord(trade_id="t3", order_uuid=u_cancel,
+                                     size=2.0, price=0.40, venue_ts=1500))
+
+    rows = registry.get_pair_orders_with_fill_totals("pair-q3")
+    assert [o.id for o, _, _ in rows] == [u_full, u_zero, u_cancel]
+    by_id = {o.id: (m, n) for o, m, n in rows}
+    assert by_id[u_full] == (10.0, 4.0 * 0.50 + 6.0 * 0.70)
+    assert by_id[u_zero] == (0.0, 0.0)
+    assert by_id[u_cancel] == (2.0, 2.0 * 0.40)
+    for o, m, n in rows:
+        assert m == registry.get_size_matched(o.id)
+        assert n == registry.get_matched_notional(o.id)
+    assert registry.get_pair_orders_with_fill_totals("pair-missing") == []
+
+
+def test_fill_discovery_rows_match_last_fill_semantics(
+        registry: OrderRegistry):
+    """#767: Q4 carries (pair, condition, venue_ts) for the reducer."""
+    u1 = _q767_order(registry, "venue-1", "tok-up", "pair-d1")
+    registry.record_fill(FillRecord(trade_id="t1", order_uuid=u1,
+                                     size=1.0, price=0.5))  # undated first
+    registry.record_fill(FillRecord(trade_id="t2", order_uuid=u1,
+                                     size=1.0, price=0.5, venue_ts=5000))
+    u2 = _q767_order(registry, "venue-2", "tok-up", "pair-d2")
+    registry.record_fill(FillRecord(trade_id="t3", order_uuid=u2,
+                                     size=1.0, price=0.5, venue_ts=0))  # zero
+    u3 = _q767_order(registry, "venue-3", "tok-up", "")  # unpaired
+    registry.record_fill(FillRecord(trade_id="t4", order_uuid=u3,
+                                     size=1.0, price=0.5, venue_ts=9000))
+
+    rows = registry.get_fill_discovery_rows()
+    by_pair = {}
+    for pid, cid, vts in rows:
+        by_pair.setdefault(pid, []).append((cid, vts))
+    assert set(by_pair) == {"pair-d1", "pair-d2"}
+    assert by_pair["pair-d1"][0][0] == "cond-p"  # condition from 1st row
+    assert [v for _, v in by_pair["pair-d1"]] == [None, 5000]
+    assert [v for _, v in by_pair["pair-d2"]] == [0]

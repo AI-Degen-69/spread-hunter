@@ -455,6 +455,32 @@ def test_lifecycle_quote_paths_never_full_scan(registry: OrderRegistry, monkeypa
     assert isinstance(results, list)
 
 
+def test_load_pair_reads_fills_without_per_order_helpers(
+        registry: OrderRegistry, monkeypatch):
+    """#767: load_pair batches totals in one connection, no N+1 fan-out."""
+    import contextlib
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+
+    def _boom(*a, **k):
+        raise AssertionError("load_pair must not fan out per-order reads")
+    monkeypatch.setattr(registry, "get_size_matched", _boom)
+    monkeypatch.setattr(registry, "get_matched_notional", _boom)
+    uses = {"n": 0}
+    real_conn = registry._conn
+
+    @contextlib.contextmanager
+    def _counting():
+        uses["n"] += 1
+        with real_conn() as conn:
+            yield conn
+    monkeypatch.setattr(registry, "_conn", _counting)
+
+    pair = lp.load_pair(registry, pair_id)
+    assert pair["heavy"]["matched"] == pytest.approx(10.0)
+    assert pair["naked"] == pytest.approx(10.0)
+    assert uses["n"] == 1
+
+
 def test_a_balanced_pair_is_not_an_exit_candidate(registry: OrderRegistry):
     pair_id = _one_sided_pair(registry)
     light = next(o for o in registry.get_active_orders() if o.token_id == TOK_DN)

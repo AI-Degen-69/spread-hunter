@@ -1540,6 +1540,29 @@ class OrderRegistry:
             ).fetchall()
         return [self._row_to_order(r) for r in rows]
 
+    def get_pair_orders_with_fill_totals(
+            self, pair_id: str) -> list[tuple]:
+        """One pair's orders with per-order fill totals, one connection (#767).
+
+        Targeted replacement for `load_pair`'s 1 + 2*N round-trips. LEFT JOIN
+        keeps zero-fill orders (0.0/0.0); every status included, no side
+        filter, exact pair match, posted order. Unknown pair reads [].
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT o.*, COALESCE(SUM(f.size), 0.0) AS _matched,
+                       COALESCE(SUM(f.size * f.price), 0.0) AS _notional
+                FROM orders o LEFT JOIN fills f ON f.order_uuid = o.id
+                WHERE o.pair_id = ?
+                GROUP BY o.id
+                ORDER BY o.posted_ts ASC
+                """,
+                (pair_id,),
+            ).fetchall()
+        return [(self._row_to_order(r), float(r["_matched"]),
+                 float(r["_notional"])) for r in rows]
+
     def get_active_orders(self) -> list[OrderRecord]:
         """Return all orders in pending, open, or partial status."""
         with self._conn() as conn:
@@ -2078,6 +2101,25 @@ class OrderRegistry:
                 """
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def get_fill_discovery_rows(self) -> list[tuple]:
+        """Narrow (pair_id, condition_id, venue_ts) fill projection (#767).
+
+        Feeds `_last_fill_ms_by_pair` without the 13-column join. Inner join
+        plus the NULL/empty pair filter only; no status, side, size, run, or
+        timestamp filter. ORDER matches `get_all_fills` (NULLs first).
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT o.pair_id, o.condition_id, f.venue_ts
+                FROM fills f JOIN orders o ON o.id = f.order_uuid
+                WHERE o.pair_id IS NOT NULL AND o.pair_id != ''
+                ORDER BY f.recorded_ts ASC, f.rowid ASC
+                """
+            ).fetchall()
+            return [(r["pair_id"], r["condition_id"], r["venue_ts"])
+                    for r in rows]
 
     def get_all_market_events(self) -> list[dict]:
         with self._conn() as conn:
