@@ -1,6 +1,10 @@
-# Todo — Issue #783
+# Todo — Issue #781 (Station II planned, build runs via `iii-build-plan auto`)
 
-- [ ] T1: harness `stitchHead` + failing tests (RED confirmed, rest green)
-- [ ] T2: four stitch renderers per contract (suites green)
-- [ ] T3: stylesheet row rhythm (suites green)
-- [ ] T4: focused checks green + hands-on demo-server surface pass
+- [x] T1 — Remove the "Strategy Pricing Band" `<tr>` (`index.html`) + `band` verdict
+  and `_gateBand` (`analysis_v2.js`); C1 harness/grep check
+- [x] T2 — Update `tests/test_analysis_v2_binding.py` to absence assertions;
+  focused suite green, fail-without-change confirmed
+- [x] T3 — Confirm live quoting band ($0.10–$0.90) in Parameters view (no code);
+  hands-on dashboard check (demo store, no START)
+- [ ] Operator decision (opt-in only): align older `decisionGatesRows` table in
+  `app.js` the same way, or keep it as a recorded follow-up

@@ -330,17 +330,25 @@ def test_gate_verdicts_follow_the_payload(tmp_path, live_payload):
     # badge span, so the verdict updates while the observed cell keeps its
     # own bound value (a band on the value cell would clobber the number).
     b = out["bands"]
-    assert b["gates.band"]["text"] == "Active Rule"
+    # #781: the mislabeled "Strategy Pricing Band / Active Rule" row is gone.
+    # The sweet spot is a descriptive chart metric now, never a gate verdict.
+    assert "band" not in g, f"gateVerdicts still carries a band verdict: {g['band']!r}"
+    assert "gates.band" not in b, "stale gates.band badge ref still paints"
     assert b["gates.edge_viability"]["text"] == "Go"
     assert b["gates.power"]["text"] == "Accumulating"
     assert b["gates.markout"]["text"] == "Accumulating"
     assert b["gates.neutrality"]["text"] == "Go"
     assert b["gates.drawdown_guard"]["text"] == "Go"
-    for ref in ("gates.band", "gates.edge_viability", "gates.power",
+    for ref in ("gates.edge_viability", "gates.power",
                 "gates.markout", "gates.neutrality", "gates.drawdown_guard"):
         assert b[ref]["cls"].endswith("badge--go") or b[ref]["cls"].endswith("badge--nogo") \
-            or b[ref]["cls"].endswith("badge--accum") or b[ref]["cls"].endswith("badge--active"), ref
+            or b[ref]["cls"].endswith("badge--accum"), ref
     assert out["painted"]["trade_analytics.ci90_lower_pct"] == "5.65%"
+    # The row's markup hooks are gone from the Data Analysis panel.
+    section = _panel(INDEX.read_text(encoding="utf-8"))
+    assert "Strategy Pricing Band" not in section
+    assert 'data-band="gates.band"' not in section
+    assert 'data-bind="_gateBand"' not in section
 
 
 @requires_node
@@ -384,6 +392,11 @@ def test_empty_payload_mounts_without_throwing(tmp_path):
     assert p["_var"] == "unmeasured" and p["_cvar"] == "unmeasured"
     # No samples: the markout honestly says "unmeasured", never a fabricated number.
     assert "unmeasured" in p["_gateMarkout"]
+    # #781: the removed gate row leaves no cells behind. It used to paint
+    # "0.0% in sweet spot" + "Active Rule" on zero data — a fabricated verdict.
+    assert "_gateBand" not in p, f"stale band cell painted {p['_gateBand']!r}"
+    assert "gates.band" not in out["bands"]
+    assert "band" not in out["gates"]
     # Nothing numeric from the live sample may appear.
     for key in ("trade_analytics.mean_return_pct", "trade_analytics.n_closes",
                 "statistical_analytics.fill_path_edge.net_expectancy_usd",

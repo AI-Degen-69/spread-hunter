@@ -126,7 +126,6 @@ function gateVerdicts(kpi) {
   const stats = kpi.statistical_analytics || {};
   const n = num(ta.n_closes) || 0;
   const required = num(ta.required_observations) || POWER_GATE;
-  const bell = stats.probability_bell || {};
   const mo = (stats.robustness && stats.robustness.markout && stats.robustness.markout.intervals) || [];
   const mo5 = mo.filter((x) => x.horizon === '5m')[0] || {};
 
@@ -137,11 +136,6 @@ function gateVerdicts(kpi) {
   const adverse = num(kpi.adverse_selection);
 
   return {
-    band: {
-      text: `${format((num(bell.sweet_spot_pct) || 0) / 100, 'pctmul')} in sweet spot`,
-      cls: 'pos',
-      badge: 'badge--active', badgeText: 'Active Rule',
-    },
     edge_viability: {
       observed: ci90 === null ? 'unmeasured' : format(ci90, 'pcts'),
       cls: ci90 === null ? '' : signClass(ci90),
@@ -207,7 +201,6 @@ function derived(kpi) {
     _var: ta.var_95_usd === null || ta.var_95_usd === undefined ? 'unmeasured' : format(ta.var_95_usd, 'usd'),
     _cvar: ta.cvar_95_usd === null || ta.cvar_95_usd === undefined ? 'unmeasured' : format(ta.cvar_95_usd, 'usd'),
     _neu: 'Neutral',
-    _gateBand: `<span class="${gates.band.cls}">$0.15–$0.85 (${gates.band.text})</span>`,
     _gatePower: `<span class="${gates.power.cls}">${gates.power.observed}</span>`,
     _gateMarkout: `<span class="${gates.markout.cls}">${gates.markout.observed}</span>`,
     _suffPct: `${required > 0 ? Math.min(100, Math.round((n / required) * 100)) : 0}% of the gate`,
