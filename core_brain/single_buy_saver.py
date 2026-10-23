@@ -63,6 +63,11 @@ MIN_ORDER_SHARES: float = 1.0
 # the name outlived the scope.
 MIN_SELL_SHARES: float = MIN_ORDER_SHARES
 
+# Price-comparison tolerance, in absolute price. A BUY fills at levels priced
+# at or below its limit, but float noise (e.g. 0.1 + 0.2 vs 0.30) must still
+# count as equal. Separate from SIZE_EPS, which is a share-count tolerance.
+PRICE_EPS_OFFSET: float = 1e-9
+
 # How far below the best bid a market sell may be filled, in absolute price.
 #
 # Absolute rather than proportional: these are probability prices in [0, 1],
@@ -1282,6 +1287,12 @@ def ask_depth(book) -> float:
     return sum(s for _, s in _book_levels(book, "asks"))
 
 
+def ask_depth_at_or_below(book, limit: float) -> float:
+    """Ask size a BUY at this limit price can take."""
+    return sum(s for p, s in _book_levels(book, "asks")
+               if p <= limit + PRICE_EPS_OFFSET)
+
+
 def _venue_id_from_submit_error(exc: BaseException) -> str:
     """Recover a venue order id carried on a submit exception, if any.
 
@@ -1370,12 +1381,13 @@ def complete_pair(
     # other side -- the opposite of this path's purpose.
     # `depth_at_or_above` reads the bids ladder. This path buys, so it must
     # size against the asks ladder or it will order shares nobody is offering.
-    size = min(pair["naked"], ask_depth(book))
+    bounded_depth = ask_depth_at_or_below(book, ask)
+    size = min(pair["naked"], bounded_depth)
     if size < MIN_ORDER_SHARES:
         raise PairCompletionRefused(
             f"Completable size {size:.4f} is below the venue minimum of "
             f"{MIN_ORDER_SHARES}. Naked {pair['naked']:.4f}, ask depth "
-            f"{ask_depth(book):.4f}."
+            f"at or below {ask:.4f} is {bounded_depth:.4f}."
         )
 
     notional = size * ask
