@@ -653,11 +653,10 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
     if not rows:
         raise PairExitRefused(f"No orders carry pair_id={pair_id!r}.")
 
-    pair_conditions = {o.condition_id for o, _, _ in rows}
+    # The rescue map is already pair-scoped, so every entry belongs to this
+    # pair; summing per token matches how the fills above aggregate per token.
     rescued_by_token: dict[str, dict] = {}
-    for (condition_id, token_id), totals in rescued.items():
-        if condition_id not in pair_conditions:
-            continue
+    for (_, token_id), totals in rescued.items():
         slot = rescued_by_token.setdefault(
             token_id, {"shares": 0.0, "cost": 0.0})
         slot["shares"] += totals["shares"]
