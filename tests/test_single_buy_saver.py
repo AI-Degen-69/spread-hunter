@@ -2237,3 +2237,119 @@ def test_manage_held_bid_falls_back_to_client_without_decision_fn(
         client, registry, MakerConfig(), live=False, now=1010.0)
     assert f"book:{TOK_UP}" in client.calls
     assert results
+
+
+# ---------------------------------------------------------------------------
+# Issue #762 — orphaned pending completion order on failed submit
+# ---------------------------------------------------------------------------
+
+
+def _committed(registry: OrderRegistry) -> float:
+    from core_brain.order_registry import registry_committed_usd
+
+    return float(registry_committed_usd(registry))
+
+
+def test_completion_submit_raise_cancels_orphan_and_releases_bankroll(
+    registry: OrderRegistry,
+):
+    """A raised submit must not leave a live commitment behind (#762).
+
+    The pre-inserted pending row is provably untrackable here (no venue id),
+    so it is cancelled and the bankroll figure returns to its pre-call value.
+    The naked leg itself is untouched — the pair still reads one-sided.
+    """
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    before = _committed(registry)
+    before_ids = {o.id for o in registry.get_orders_by_pair(pair_id)}
+
+    class RaisingClient(FakeClient):
+        def create_and_post_market_order(self, *args, **kwargs):
+            raise TimeoutError("venue down")
+
+    client = RaisingClient(best_ask=0.30)
+    with pytest.raises(TimeoutError, match="venue down"):
+        lp.complete_pair(client, registry, pair_id,
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
+
+    after = _committed(registry)
+    assert after == pytest.approx(before)
+
+    comp_rows = [o for o in registry.get_orders_by_pair(pair_id)
+                 if o.id not in before_ids]
+    assert len(comp_rows) == 1
+    assert comp_rows[0].status == "cancelled"
+    assert (comp_rows[0].cancel_reason or "").startswith(
+        "completion_submit_failed")
+    assert all(o.id in before_ids for o in registry.get_active_orders()
+               if o.pair_id == pair_id) or not any(
+        o.id == comp_rows[0].id for o in registry.get_active_orders())
+
+    pair = lp.load_pair(registry, pair_id)
+    assert pair["naked"] == pytest.approx(10.0)
+
+
+def test_completion_submit_raise_after_accept_stays_reconcilable(
+    registry: OrderRegistry,
+):
+    """A timeout after the venue accepted must not be silently cancelled.
+
+    The error carries the accepted venue id, so the row is attached (kept
+    live) for the stray guard to reconcile instead of being cancelled.
+    """
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    before_ids = {o.id for o in registry.get_orders_by_pair(pair_id)}
+
+    class AcceptThenTimeout(FakeClient):
+        def create_and_post_market_order(self, *args, **kwargs):
+            self.orders.append({"side": "BUY", "token_id": TOK_DN})
+            err = TimeoutError("response lost after accept")
+            err.orderID = "venue-accepted-1"  # type: ignore[attr-defined]
+            raise err
+
+    client = AcceptThenTimeout(best_ask=0.30)
+    with pytest.raises(TimeoutError, match="response lost"):
+        lp.complete_pair(client, registry, pair_id,
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
+
+    comp_rows = [o for o in registry.get_orders_by_pair(pair_id)
+                 if o.id not in before_ids]
+    assert len(comp_rows) == 1
+    assert comp_rows[0].status != "cancelled"
+    assert comp_rows[0].order_id == "venue-accepted-1"
+    assert any(o.id == comp_rows[0].id
+               for o in registry.get_active_orders())
+
+    pair = lp.load_pair(registry, pair_id)
+    assert pair["naked"] == pytest.approx(10.0)
+
+
+def test_completion_missing_venue_id_cancels_and_refuses(
+    registry: OrderRegistry,
+):
+    """A response with no venue id leaves no unattached pending row (#762).
+
+    Nothing trackable was returned, so the local row is cancelled and the
+    cross refuses fail-closed instead of reporting a completion.
+    """
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    before = _committed(registry)
+    before_ids = {o.id for o in registry.get_orders_by_pair(pair_id)}
+
+    class IdLessClient(FakeClient):
+        def create_and_post_market_order(self, *args, **kwargs):
+            return {"success": True}
+
+    client = IdLessClient(best_ask=0.30)
+    with pytest.raises(lp.PairCompletionRefused, match="no venue order id"):
+        lp.complete_pair(client, registry, pair_id,
+                         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST, live=True)
+
+    assert _committed(registry) == pytest.approx(before)
+    comp_rows = [o for o in registry.get_orders_by_pair(pair_id)
+                 if o.id not in before_ids]
+    assert len(comp_rows) == 1
+    assert comp_rows[0].status == "cancelled"
+    assert comp_rows[0].cancel_reason == "completion_missing_venue_id"
+    assert not any(o.id == comp_rows[0].id
+                   for o in registry.get_active_orders())
