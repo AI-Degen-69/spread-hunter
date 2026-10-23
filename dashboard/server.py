@@ -4283,7 +4283,10 @@ def get_parameters(registry=None):
         reg = registry
         if reg is None:
             from core_brain.order_registry import OrderRegistry
-            reg = OrderRegistry()
+            # Build from the dashboard's active store, not DEFAULT_DB_PATH: a
+            # panel that reads data/orders.db ignores --db / set_db_override and
+            # shows the production wallet's caps against a demo or shadow DB.
+            reg = OrderRegistry(db_path=resolve_db_path(_ACTIVE_DB_OVERRIDE))
         am = reg.get_latest_account_mark()
         if am and am.get("account_value_usd") is not None and float(am["account_value_usd"]) > 0:
             portfolio_usd = float(am["account_value_usd"])

@@ -3211,6 +3211,31 @@ def test_get_parameters_endpoint(client):
         assert required_key in first
 
 
+def test_parameters_follow_the_active_db_not_the_production_wallet(client, temp_db):
+    """#772: caps must scale from the active DB's mark, not data/orders.db.
+
+    `get_parameters` built `OrderRegistry()` with no db_path, which resolves to
+    DEFAULT_DB_PATH (data/orders.db) and ignores --db / set_db_override. The
+    caps on the Strategy tab therefore showed the production wallet's numbers
+    on every demo or shadow DB.
+    """
+    from core_brain.order_registry import OrderRegistry
+
+    OrderRegistry(temp_db).log_account_mark(
+        {"account_value_usd": 200.0, "source": "venue"}, ts=time.time()
+    )
+
+    cards = {
+        p["key"]: p["value"]
+        for p in client.get("/api/parameters").json()["parameters"]
+    }
+    # 90% / 6% / 25% of this DB's own $200 mark.
+    assert "$180.00" in cards["bot_risk_exposure_max_total_usd"]
+    assert "$12.00" in cards["bot_risk_exposure_max_naked_usd"]
+    assert "$50.00" in cards["bot_risk_exposure_max_order_usd"]
+    assert "account value" in cards["bot_risk_exposure_max_naked_usd"]
+
+
 # The eight picker filter bars' card keys (#652).
 PICKER_BAR_CARD_KEYS = (
     "filter_live_vel_lookback_sec",
