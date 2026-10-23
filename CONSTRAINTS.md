@@ -33,8 +33,9 @@ This issue is **analysis and a decision record**. It changes no live behaviour.
 ## Anti-cheat
 
 - Never skip, xfail, or delete a test to get green; never weaken an assertion.
-- The decision rule is fixed **before** the numbers are read (see `tasks/plan.md`
-  §Decision rule). Reading the buckets first and then choosing a rule is the exact
+- The decision rule is fixed **before** the numbers are read (see
+  `docs/audits/edge-floor-decision.md` § *The locked decision rule, applied*).
+  Reading the buckets first and then choosing a rule is the exact
   failure this issue exists to prevent — if a rule changes after the numbers, the
   document must say so and why.
 - Never present a rehearsal number as evidence about live performance: shadow numbers
