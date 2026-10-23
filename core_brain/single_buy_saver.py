@@ -1036,6 +1036,32 @@ def exit_single_buy(
     if pair["naked"] <= SIZE_EPS:
         return {"action": "balanced", "pair_id": pair_id, "size": 0.0}
 
+    if pair["naked"] < MIN_ORDER_SHARES:
+        # Dust (#761): below the venue minimum no sale can ever clear, so a
+        # sell attempt refuses on every poll -- 5,464 refusal rows in
+        # shadow-01, worst pair 2,041 in 68 minutes. Log once per pair,
+        # before any cancel or book read, then hold without another write.
+        already = any(
+            r.get("pair_id") == pair_id and r.get("outcome") == "dust_skip"
+            for r in registry.get_hard_stop_refusals()
+        )
+        if not already:
+            try:
+                registry.log_hard_stop_refusal(
+                    pair_id=pair_id,
+                    condition_id=pair.get("condition_id", ""),
+                    trigger_bid=None,
+                    outcome="dust_skip",
+                    detail=(
+                        f"Dust {pair['naked']:.4f} below the venue minimum "
+                        f"of {MIN_ORDER_SHARES}."
+                    ),
+                )
+            except Exception:  # noqa: BLE001 - telemetry never masks a hold
+                pass
+        return {"action": "dust_hold", "pair_id": pair_id,
+                "size": pair["naked"]}
+
     # Before any venue write: does the venue agree we hold what we think we
     # hold? Checked first so a divergence costs nothing, rather than after a
     # cancel has already gone out.
