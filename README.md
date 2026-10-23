@@ -94,7 +94,6 @@ spread-hunter/
   docs/agents/            Live agent contracts (safety, architecture, strategy, first-run, ...)
   docs/issues/            Issue showcases (<id>-presentation-<slug>.html)
   docs/runs/              Run notes and experiment records
-  tasks/                  Implementation plans
   tests/                  Full hermetic unit & integration test suite
 ```
 
