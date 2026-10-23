@@ -5,9 +5,9 @@ creates, changes or removes a file under those three directories. This module
 proves the guard can see a write, so it is not a guard that silently stopped
 guarding -- the same reason `test_docs_layout.py` keeps a sentinel.
 
-The probe writes under the marker, which is the documented opt-out, and removes
-itself in a finally block: a failing assert must not leave litter behind, or the
-next test in the same run reports it.
+The snapshot probes use the documented marker opt-out and restore real state
+in finally blocks. The rejection probe is unmarked and uses a temporary repo
+root to exercise the guard without touching the operator's state.
 """
 from __future__ import annotations
 
@@ -15,9 +15,23 @@ import pathlib
 
 import pytest
 
+import tests.conftest as root_conftest
 from tests.conftest import REPO_ROOT, _real_state_snapshot
 
 PROBE = "runtime/real-state-guard-probe.tmp"
+
+
+def test_an_unmarked_write_is_rejected(tmp_path, monkeypatch, request):
+    with monkeypatch.context() as patch:
+        patch.setattr(root_conftest, "REPO_ROOT", tmp_path)
+        guard = root_conftest.block_real_state_writes.__wrapped__(request)
+        next(guard)
+        probe = tmp_path / PROBE
+        probe.parent.mkdir(parents=True)
+        probe.write_text("probe", encoding="utf-8")
+
+        with pytest.raises(AssertionError, match=r"\+ runtime/real-state-guard-probe\.tmp"):
+            next(guard)
 
 
 @pytest.mark.writes_real_state

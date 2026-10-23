@@ -30,12 +30,13 @@ because Station VI commits showcases by id. Never `rebate-settled-655.html`.
 ## G2 — Moment grammar (records that happened on a date)
 
 ```
-<YYYY-MM-DD>-<kind>[-<id>-]<slug>.<ext>        docs/runs/, docs/audits/, docs/superpowers/specs/
+<YYYY-MM-DD>-<kind>[-<id>]-<slug>.<ext>        docs/runs/, docs/audits/, docs/superpowers/specs/
 ```
 
 - `<kind>` is a closed vocabulary: `run`, `tournament`, `audit`, `spec`.
 - The issue id follows the kind when the record is about an issue, so it stays
   secondary to the date: `2026-10-16-run-622-refusal-hold.md`.
+- Without an issue id: `2026-10-16-run-refusal-hold.md`.
 - The date is the day the run **started**, not the day the note was written.
 
 Undated documents (`docs/ideas/`, `docs/reference/`, `docs/agents/`) are the
