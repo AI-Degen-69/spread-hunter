@@ -16,6 +16,12 @@ from core_brain.order_registry import OrderRecord
 
 log = logging.getLogger("stray_guard")
 
+# A weld requires exact size match on original_size (OrderRecord carries no
+# filled/remaining field): any size gap is a naked leg, the real-money
+# failure this guard exists to stop. Epsilon matches the module's other
+# matched-size checks.
+WELD_SIZE_EPSILON = 1e-6
+
 
 class StrayClassificationType(str, Enum):
     REGISTRY_PAIRED = "registry_paired"
@@ -110,7 +116,11 @@ def classify_market_orders(
 
         for pid, pair_orders in by_pair.items():
             distinct_tokens = {o.token_id for o in pair_orders}
-            if len(distinct_tokens) >= 2 and len(pair_orders) == 2:
+            # A token-spanning group is a healthy pair no matter how many
+            # order rows it carries (replaced hedge, partial fills) (#765).
+            # A same-token-only group stays loose below: rows on one token
+            # are duplicated/replaced legs, not a pair.
+            if len(distinct_tokens) >= 2:
                 result.registry_paired.append((pid, pair_orders))
             else:
                 unpaired_orders.extend(pair_orders)
@@ -133,7 +143,11 @@ def classify_market_orders(
                     continue
                 if o1.token_id != o2.token_id:
                     cost = o1.price + o2.price
-                    if cost <= bot_pos_price_max_pair_cost_usd and cost < best_cost:
+                    if (
+                        cost <= bot_pos_price_max_pair_cost_usd
+                        and cost < best_cost
+                        and abs(o1.original_size - o2.original_size) <= WELD_SIZE_EPSILON
+                    ):
                         matched_partner = o2
                         best_cost = cost
 
@@ -199,20 +213,9 @@ def adopt_detached_legs(
     """
     adopted: list[str] = []
     for dp in detached_pairs:
-        # Determine shared pair_id: pick an existing valid pair_id, or mint fresh
-        p1 = dp.leg1.pair_id
-        p2 = dp.leg2.pair_id
-        shared_pid: str
-        if p1 and p1.startswith("pair-"):
-            shared_pid = p1
-        elif p2 and p2.startswith("pair-"):
-            shared_pid = p2
-        elif p1:
-            shared_pid = p1
-        elif p2:
-            shared_pid = p2
-        else:
-            shared_pid = f"pair-{uuid.uuid4().hex[:12]}"
+        # A welded stray is a NEW pairing (#765): the old pair id's sibling is
+        # gone, so never resurrect either leg's pair_id -- mint fresh.
+        shared_pid = f"pair-{uuid.uuid4().hex[:12]}"
 
         order_ids = [dp.leg1.id, dp.leg2.id]
         if live:
