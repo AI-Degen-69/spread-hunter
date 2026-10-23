@@ -92,7 +92,10 @@ spread-hunter/
   runtime/                Market universe, process registry, logs, cycle telemetry (not committed)
   reports/                Generated statistics reports (not committed)
   docs/agents/            Live agent contracts (safety, architecture, strategy, first-run, ...)
-  docs/issues/            Issue showcases (<id>-presentation-<slug>.html)
+  docs/pr-presentations/  PR showcases (<pr>-<slug>.html)
+  docs/explanations/      Visual explainers (<topic-slug>.html)
+  docs/backlog/           Out-of-scope candidate ledgers (i<id>-<slug>.md)
+  docs/specs/             Design specs; docs/plans/ implementation plans
   docs/runs/              Run notes and experiment records
   tests/                  Full hermetic unit & integration test suite
 ```

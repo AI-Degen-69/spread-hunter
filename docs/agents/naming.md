@@ -7,41 +7,47 @@ Anything a human opens and reads is a **document**. Anything a process writes
 and a program reads back is **state**. Documents live under `docs/`, state lives
 under `data/`, `runtime/` and `reports/`.
 
-## G1 — Identity grammar (documents about an issue or PR)
+## G1 — Identity grammar (documents about a PR or an issue)
 
 ```
-<id>-<kind>[-<slug>].<ext>        docs/issues/
+<id>-<slug>.<ext>        docs/pr-presentations/
+i<id>-<slug>.<ext>       docs/backlog/
 ```
 
-- `<id>` is the issue or PR number, bare: `655`.
-- `<kind>` is a closed vocabulary: `presentation`, `showcase` (legacy),
-  `noticed-but-not-touching`, `audit`.
-- `<slug>` is optional when the kind is self-explanatory.
+- `<id>` is the number that identifies the thing: the pull request for a
+  showcase, the issue for a ledger row.
+- **An issue number carries the `i` prefix.** A bare number is always the
+  document's own sequence or a PR number; `i` makes it read as a reference.
+  Never `655-auth-timeout.md` for issue #655 — that is `i655-auth-timeout.md`.
+- `<slug>` is what the document is about, kebab-case.
 
 | Name | What it is |
 | --- | --- |
-| `655-presentation-rebate-settled.html` | visual showcase of what shipped for #655 |
-| `655-noticed-but-not-touching.md` | out-of-scope ledger for #655 |
-| `355-audit-matchup-refusal.md` | generated audit of #355's question |
+| `655-rebate-settled.html` | visual summary of PR #655 and the run that produced it |
+| `655-presentation-rebate-settled.html` | same, in the legacy `-presentation-` form |
+| `i655-auth-timeout.md` | out-of-scope candidate ledger for issue #655 |
 
-The id comes first because that is how the operator looks for the file, and
+The number comes first because that is how the operator looks for the file, and
 because Station VI commits showcases by id. Never `rebate-settled-655.html`.
 
 ## G2 — Moment grammar (records that happened on a date)
 
 ```
-<YYYY-MM-DD>-<kind>[-<id>]-<slug>.<ext>        docs/runs/, docs/audits/, docs/superpowers/specs/
+<YYYY-MM-DD>-<kind>-<slug>.<ext>             docs/runs/, docs/audits/
+<YYYY-MM-DD>-<kind>-<id>-<slug>.<ext>      the same, about an issue
 ```
 
-- `<kind>` is a closed vocabulary: `run`, `tournament`, `audit`, `spec`.
-- The issue id follows the kind when the record is about an issue, so it stays
-  secondary to the date: `2026-10-16-run-622-refusal-hold.md`.
-- Without an issue id: `2026-10-16-run-refusal-hold.md`.
+- `<kind>` is a closed vocabulary: `run`, `tournament`, `audit`.
+- The hyphens are literal: `2026-10-16-run-refusal-hold.md` with no id,
+  `2026-10-16-run-622-refusal-hold.md` with one. The issue id follows the kind
+  when the record is about an issue, so it stays secondary to the date.
 - The date is the day the run **started**, not the day the note was written.
 
-Undated documents (`docs/ideas/`, `docs/reference/`, `docs/agents/`) are the
+Undated documents (`docs/specs/`, `docs/plans/`, `docs/interviews/`,
+`docs/explanations/`, `docs/ideas/`, `docs/reference/`, `docs/agents/`) are the
 plain kebab-case slug with no prefix: `short-window-ladder.md`,
-`sports-game-status-values.md`.
+`price-ladder.md`, `skew-and-taker-cross.html`. A spec or plan is not a moment —
+the name says what it is about, not when it was written.
 
 ## G3 — State grammar (generated stores, tapes, reports)
 
@@ -73,6 +79,8 @@ db", a question that must never be asked.
 ## Slug rules (all grammars)
 
 - kebab-case, `[a-z0-9-]` only: `rebate-settled`, not `Rebate_Settled`.
+- An explainer starts with a letter. A leading digit reads as a PR number, so
+  `471-statistical-go-gate.html` was ambiguous about whether it was ticketed.
 - 2–5 words, describing the content, not the type. `presentation` already says
   it is a presentation.
 - Never `final`, `new`, `v2`, `updated`, `copy`, `old` — a name that claims
@@ -88,11 +96,14 @@ A document's folder is decided by **who reads it**, not by who wrote it:
 
 | Artifact | Home | Grammar |
 | --- | --- | --- |
-| Issue showcase / explainer | `docs/issues/` | G1 |
-| Noticed-but-not-touching ledger | `docs/issues/` | G1 |
+| PR showcase | `docs/pr-presentations/` | G1 — `<pr>-<slug>.html` |
+| Visual explainer, no ticket | `docs/explanations/` | slug only — `<topic-slug>.html` |
+| Out-of-scope candidate ledger | `docs/backlog/` | G1 — `i<id>-<slug>.md` |
+| Design spec | `docs/specs/` | slug only |
+| Implementation plan | `docs/plans/` | slug only |
+| Intent record (interview) | `docs/interviews/` | slug only |
 | Run / experiment / tournament record | `docs/runs/` | G2 |
 | Analysis of committed evidence | `docs/audits/` | G2 |
-| Design spec | `docs/superpowers/specs/` | G2 |
 | Unshaped idea, external fact | `docs/ideas/`, `docs/reference/` | slug only |
 | Statistics store | `data/` | G3 |
 | Production registry, price tape, demo fixture | `data/` | singleton |

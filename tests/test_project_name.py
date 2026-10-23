@@ -18,8 +18,9 @@ BANNED_RE = re.compile(r"hunter[\s_-]+live", re.IGNORECASE)
 
 ALLOW_DIRS = {
     pathlib.Path("docs/runs"),
-    pathlib.Path("docs/superpowers"),
-    pathlib.Path("docs/issues"),
+    pathlib.Path("docs/pr-presentations"),
+    pathlib.Path("docs/explanations"),
+    pathlib.Path("docs/backlog"),
 }
 
 ALLOW_FILES = {
