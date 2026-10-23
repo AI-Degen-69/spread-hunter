@@ -133,7 +133,7 @@ win-rate denominator.
 
 ## Tasks
 
-### T1 — [Backend/Logic] S/M — the analysis + its tests
+### T1 — [x] — [Backend/Logic] S/M — the analysis + its tests
 
 `scripts/edge_floor_analysis.py`, `tests/test_edge_floor_analysis.py`.
 Depends on: nothing.
