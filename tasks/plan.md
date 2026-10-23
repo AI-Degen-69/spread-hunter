@@ -73,7 +73,7 @@ so hand-editing version strings is churn with zero browser effect.
 - `tests/test_sidebar_prototype.py`: one CSS check — body/`market-cell` vertical padding ≤ 10px, `th` keeps 12px.
 - **Verify:** focused suites fail exactly on the new/changed assertions; everything else still passes.
 
-### T2 — Four stitch renderers (GREEN) [size L, Backend/Logic]
+### T2 — Four stitch renderers (GREEN) [x] [size L, Backend/Logic]
 **Depends on:** T1.
 - `dashboard/static/app.js`: per SPEC.md contract — add `{label:'CATEGORY',…}` after each Market entry;
   new `<td class="stitch-category-cell">` with `categoryPill(...)`; remove pill from each Market cell

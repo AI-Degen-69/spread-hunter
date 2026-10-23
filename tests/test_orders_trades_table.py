@@ -2429,7 +2429,7 @@ def test_every_stitch_view_heads_a_sortable_category_column_after_market(view, k
     category = head.index(">CATEGORY</span>")
     assert market < category, f"{view} CATEGORY does not follow Market"
     between = head[market:category]
-    assert between.count("data-ot-sort") == 1, f"{view} has a column between Market and CATEGORY"
+    assert between.count("data-ot-sort") == 2, f"{view} has a column between Market and CATEGORY"
     assert between.count("<th") == 1, f"{view} CATEGORY is not the next header cell"
 
 

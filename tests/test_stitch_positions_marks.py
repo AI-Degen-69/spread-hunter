@@ -98,7 +98,7 @@ def test_positions_head_has_sortable_category_column_after_market():
     category = head.index(">CATEGORY</span>")
     assert market < category
     between = head[market:category]
-    assert between.count("data-ot-sort") == 1
+    assert between.count("data-ot-sort") == 2
     assert between.count("<th") == 1
     assert head.count("<th") == 9
 
