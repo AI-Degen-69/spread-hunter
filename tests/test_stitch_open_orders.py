@@ -460,12 +460,19 @@ def test_stitch_orders_status_sorts_alphabetically():
 @requires_node
 def test_stitch_orders_pair_cost_sorts_numerically():
     # PAIR COST (key 10) is a money column: descending puts the larger pair first.
+    # The older pair-q is costlier (0.46 + 0.52 = 0.98) and posts before pair-p
+    # (0.42 + 0.53 = 0.95); the default order puts the newer, cheaper pair first,
+    # so only a working numeric sort moves the costlier pair ahead.
     code = _FIXTURE + """
+    const olderUP = Object.assign({}, pairedUP,
+        { order_id: 'ord-q-up', pair_id: 'pair-q1', price: 0.46, posted_ts: 1700000010 });
+    const olderDN = Object.assign({}, pairedDN,
+        { order_id: 'ord-q-dn', pair_id: 'pair-q1', price: 0.52, posted_ts: 1700000011 });
     const html = app.stitchOpenOrdersRows(
-        kpi, { orders: [restingUP, pairedUP, pairedDN] }, { col: 10, dir: 'desc' });
-    const pairedFirst = html.indexOf('data-pair="pair-p1"') < html.indexOf('data-pair="pair-u1"');
-    console.log(JSON.stringify({ pairedFirst, defaultDir: app.otDefaultDir('open-orders', 10) }));
+        kpi, { orders: [pairedUP, pairedDN, olderUP, olderDN] }, { col: 10, dir: 'desc' });
+    const costlierFirst = html.indexOf('data-pair="pair-q1"') < html.indexOf('data-pair="pair-p1"');
+    console.log(JSON.stringify({ costlierFirst, defaultDir: app.otDefaultDir('open-orders', 10) }));
     """
     res = json.loads(_eval_js(code))
-    assert res["pairedFirst"] is True, "key 10 must sort the costed pair first"
+    assert res["costlierFirst"] is True, "key 10 must sort the costlier pair first"
     assert res["defaultDir"] == "desc", "pair cost is a money column: first click sorts high-low"

@@ -2602,7 +2602,11 @@ def test_stitch_orders_status_pills_are_word_only():
     html = _render("open-orders", kpi, state, surface="stitch")["html"]
 
     # Assert — each pill is exactly its label: no dollar signs, no Edge/Cost.
-    for pill in re.findall(r'<span class="stitch-arb-badge[^"]*">([^<]*)</span>', html):
+    # The badge may carry optional attributes (e.g. title/tabindex/aria-label),
+    # so the opening tag is matched loosely; assert at least one badge was found.
+    pills = re.findall(r'<span class="stitch-arb-badge[^"]*"[^>]*>([^<]*)</span>', html)
+    assert pills, "expected at least one status badge in Orders output"
+    for pill in pills:
         assert "$" not in pill
         assert "Edge" not in pill
         assert "Pair Cost" not in pill
@@ -2658,6 +2662,10 @@ def test_stitch_orders_partial_pair_is_paired_green():
     assert "PARTIAL" not in html
     assert "is-partial" not in html
     assert "MISSING PAIR" not in html
+    # The market dot matches the PAIRED pill; the explanation is keyboard-accessible.
+    assert "stitch-market-dot is-paired" in html
+    assert 'tabindex="0"' in html
+    assert 'aria-label=' in html
 
 
 @requires_node

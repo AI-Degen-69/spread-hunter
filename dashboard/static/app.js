@@ -8041,13 +8041,20 @@ function stitchOpenOrdersRows(kpi, state, sort) {
     const dnCancelled = gs.dnCancelled;
 
     // Word-only status pill. The old badge's value/edge text moved to the
-    // dedicated PAIR COST column; the label alone stands here.
-    const badgeHtml = `<span class="stitch-arb-badge ${gs.cls}"${gs.title ? ` title="${esc(gs.title)}"` : ''}>${esc(gs.label)}</span>`;
+    // dedicated PAIR COST column; the label alone stands here. The hover
+    // explanation (e.g. "Unequal leg sizes") is also exposed to keyboard and
+    // screen-reader users via tabindex and aria-label, not just on mouse hover.
+    const badgeHtml = `<span class="stitch-arb-badge ${gs.cls}"`
+      + (gs.title ? ` title="${esc(gs.title)}" tabindex="0" aria-label="${esc(gs.label + ': ' + gs.title)}"` : '')
+      + `>${esc(gs.label)}</span>`;
 
     const rowBgClass = isHedgePending ? 'stitch-ot-row is-hedge-pending'
       : isUnpaired ? 'stitch-ot-row is-unpaired'
       : 'stitch-ot-row';
-    const dotClass = isPaired ? 'is-paired' : isHedgePending ? 'is-hedge-pending' : 'is-unpaired';
+    // A partial pair shows the green PAIRED pill, so its dot matches unless a
+    // hedge is pending (which reads SINGLE FILL).
+    const isPairedDot = isPaired || (status === 'partial' && !isHedgePending);
+    const dotClass = isPairedDot ? 'is-paired' : isHedgePending ? 'is-hedge-pending' : 'is-unpaired';
 
     // Break-even max for the missing side: the pair cap minus the resting
     // price. Green while completion can still land under the cap, red once
@@ -8083,9 +8090,6 @@ function stitchOpenOrdersRows(kpi, state, sort) {
           <div>
             <div class="stitch-market-title">
               <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
-            </div>
-            <div class="stitch-market-meta">
-              ${badgeHtml}
             </div>
           </div>
         </div>
