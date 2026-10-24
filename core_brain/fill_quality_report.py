@@ -233,6 +233,12 @@ def _bucketize(value: float | None, edges: tuple, labels: tuple) -> str:
     return labels[-1]
 
 
+#: A losing entry (paid over mid) is its own intent-visible bucket (#791).
+#: Shares the analysis-side name (`scripts/edge_floor_analysis.NEGATIVE`) so
+#: the report, the gate, and the analysis mean the same thing by it. It is
+#: blockable through `bot_entry_fill_quality_blocked_edge` like any other
+#: edge band. Non-negative boundaries stay exactly as shipped under #787.
+NEGATIVE_EDGE_BUCKET = "negative"
 _EDGE_LABELS = ("0.00-0.02", "0.02-0.03", "0.03-0.04", "0.04-0.06", "0.06+")
 _QUEUE_LABELS = ("0-1", "1-50", "50-150", "150-400", "400+")
 _COST_LABELS = ("<0.97", "0.97-0.99", "0.99-1.00", "1.00+")
@@ -253,7 +259,7 @@ def _features(row: FillRow) -> dict[str, str]:
     ttr = "unresolved" if row.t_to_res_sec is None else _bucketize(
         row.t_to_res_sec, TTR_EDGES, _TTR_LABELS)
     return {
-        "edge": _bucketize(row.edge_vs_mid, EDGE_EDGES, _EDGE_LABELS),
+        "edge": edge_bucket_for(row.edge_vs_mid),
         "depth": _queue_bucket(row.queue_ahead),
         "cost": _bucketize(row.implied_pair_cost, COST_EDGES, _COST_LABELS),
         "ttres": ttr,
@@ -286,7 +292,14 @@ def _calibrate(rows: tuple[FillRow, ...], base_rate: float | None,
 
 
 def edge_bucket_for(value: float | None) -> str:
-    """Intent-visible edge dimension, shared by the report and the gate."""
+    """Intent-visible edge dimension, shared by the report and the gate.
+
+    A negative edge is a losing entry, not the best bucket: it returns
+    `NEGATIVE_EDGE_BUCKET` instead of falling through to `"0.06+"` (#791).
+    `None` stays `"unknown"`; non-negative bands are unchanged (#787).
+    """
+    if value is not None and value < 0:
+        return NEGATIVE_EDGE_BUCKET
     return _bucketize(value, EDGE_EDGES, _EDGE_LABELS)
 
 
