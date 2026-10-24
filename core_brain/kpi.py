@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Optional
 from contextlib import closing
 
+from core_brain.pair_status import pair_status as _pair_status
 from core_brain.close_methods import (
     MERGE_METHODS,
     SETTLEMENT_METHODS,
@@ -57,7 +58,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 260
+KPI_PAYLOAD_VERSION = 261
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -1636,6 +1637,10 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
                 resolution_by_cid.get(cid.lower()), up_fills, dn_fills),
             "up_sh": up_sh,
             "dn_sh": dn_sh,
+            # Single-shaped pair status: the dashboard reads this instead
+            # of recomputing paired/partial/unpaired per view. Same rule
+            # as the held-share counts beside it, additive only.
+            "pair_status": _pair_status(up_sh, dn_sh),
             "up_cost": up_cost,
             "dn_cost": dn_cost,
             "total_sh": up_sh + dn_sh,

@@ -7112,11 +7112,24 @@ const PAIR_STATUS = {
   unpaired: { label: 'Unpaired', tone: 'alert' },
 };
 
+/* Adapter over core_brain/pair_status.py: the server shapes each KPI market
+ * as `pair_status` from the same held-share counts; this fallback keeps the
+ * rule identical where only raw counts exist (resting pairs, older payloads).
+ * The Python module is the single owner -- do not fork the rule here. */
 function pairStatus(upSize, downSize) {
   const up = Number(upSize) || 0;
   const dn = Number(downSize) || 0;
   if (up > 0 && dn > 0) return (up === dn) ? 'paired' : 'partial';
   return 'unpaired';
+}
+
+/* Held-market adapter: prefer the server-shaped `pair_status`, fall back to
+ * the local rule so fixtures and older payloads without the field render
+ * byte-identical. */
+function pairStatusFromMarket(m) {
+  const shaped = m && m.pair_status;
+  if (shaped === 'paired' || shaped === 'partial' || shaped === 'unpaired') return shaped;
+  return pairStatus(m && m.up_sh, m && m.dn_sh);
 }
 
 function pairStatusTag(status) {
@@ -7696,7 +7709,7 @@ function positionsRows(kpi, state, sort) {
     const cost = Number(m.total_cost) || 0;
     const up = Number(m.up_sh) || 0;
     const dn = Number(m.dn_sh) || 0;
-    const status = pairStatus(up, dn);
+    const status = pairStatusFromMarket(m);
 
     const legs = held;
     if (!legs.length) return '';
@@ -8361,7 +8374,7 @@ function stitchPositionsRows(kpi, state, sort) {
     const dnCost = Number(m.dn_cost) || 0;
     const dnAvg = dnSh > 0 ? (dnCost / dnSh) : null;
     const totalSh = upSh + dnSh;
-    const status = pairStatus(upSh, dnSh);
+    const status = pairStatusFromMarket(m);
     const unrealized = mark === null ? null : (mark - cost);
     const unrealizedPct = (cost > 0 && unrealized !== null) ? ((unrealized / cost) * 100) : null;
     // Per-leg economics for the CURRENT PRICE and UNREALIZED cells: each held
@@ -9193,7 +9206,7 @@ function hedgeStateOf(m) {
     return { state: 'Flat', tone: 'quiet',
              title: 'nothing held: every position under this market is closed' };
   }
-  const status = pairStatus(up, dn);
+  const status = pairStatusFromMarket(m);
   const settled = isFinishedMarket(m);
   if (settled && status === 'unpaired') {
     return { state: 'Unsettled', tone: 'alert',
@@ -10577,7 +10590,7 @@ if (typeof module !== 'undefined' && module.exports) {
     marketActivityPill,
     normalizeLeg, groupOrdersByPair, restingPairCost, restingPairLegs,
     fmtTimestamp, toMs, latestQuoteTs, latestFillTs, closeTsOf, fmtRelAgo, timestampCell,
-    pairStatus, PAIR_STATUS, isMarketInferredPosition, pairSummary,
+    pairStatus, pairStatusFromMarket, PAIR_STATUS, isMarketInferredPosition, pairSummary,
     get isStopping() { return isStopping; },
     // The table's own expand state, so a harness can open a row and read the
     // sub-table that the real click path renders.
