@@ -1,0 +1,117 @@
+[
+  {
+    "name": "loose-baseline",
+    "label": "Loose Baseline",
+    "color": "#00e676",
+    "profile": "shipped baseline: dynamic 0.50x, 1-20c, 15c window, no widen snap-back",
+    "desc": "Control. The shipped loose baseline with nothing changed; every other arm is read against it.",
+    "thesis": "The shipped defaults are the reference: any arm must beat this to earn a change.",
+    "env": {}
+  },
+  {
+    "name": "tight-touch",
+    "label": "Tight Touch",
+    "color": "#00b0ff",
+    "profile": "aggressive preset: dynamic 0.25x, 2-3c",
+    "desc": "Quotes hug the mid with the tightest dynamic offset the presets ship.",
+    "thesis": "A tight offset fills both legs sooner; volume and merge rate beat per-pair edge.",
+    "env": {
+      "BOT_QUOTE_TOURNAMENT_PRESET": "aggressive"
+    }
+  },
+  {
+    "name": "balanced-mid",
+    "label": "Balanced Mid",
+    "color": "#e040fb",
+    "profile": "balanced preset: dynamic 0.50x, 2-4c",
+    "desc": "The middle preset: proportional volatility tracking without the aggressive clamp.",
+    "thesis": "A 2-4c band trades some edge for reach, which should merge more pairs than the wide arms.",
+    "env": {
+      "BOT_QUOTE_TOURNAMENT_PRESET": "balanced"
+    }
+  },
+  {
+    "name": "wide-shield",
+    "label": "Wide Shield",
+    "color": "#ffd600",
+    "profile": "conservative preset 0.75x / 2-5c + 8c absolute stop",
+    "desc": "Widest preset offset with a loose loss stop, sized to survive volatile books.",
+    "thesis": "In volatility the cushion matters more than the fill: wide offset plus an 8c stop keeps naked legs from bleeding.",
+    "env": {
+      "BOT_QUOTE_TOURNAMENT_PRESET": "conservative",
+      "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+      "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.080"
+    }
+  },
+  {
+    "name": "prudent-hybrid",
+    "label": "Prudent Hybrid",
+    "color": "#ff6d00",
+    "profile": "prudent preset: dynamic 0.60x, 2-6c",
+    "desc": "The hybrid preset between conservative and balanced, with the preset's 4c clamp lifted to 6c so it is not the same arm as balanced.",
+    "thesis": "A 0.60x multiplier is the compromise: enough cushion for swings, close enough to fill.",
+    "env": {
+      "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
+      "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "6"
+    }
+  },
+  {
+    "name": "static-floor-2c",
+    "label": "Static Floor 2c",
+    "color": "#69f0ae",
+    "profile": "dynamic offset off, fixed 2c offset",
+    "desc": "Volatility tracking switched off; every quote rests a flat 2c under the mid.",
+    "thesis": "The dynamic offset is mostly noise; a fixed 2c floor should quote more consistently for less machinery.",
+    "env": {
+      "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0"
+    }
+  },
+  {
+    "name": "low-churn-deadband",
+    "label": "Low Churn Deadband",
+    "color": "#ff5252",
+    "profile": "static 2c + 10c requote dead band",
+    "desc": "Static offset with the widest dead band config allows: almost no requoting.",
+    "thesis": "Churn is the cost: holding a resting quote through small moves keeps queue position and cuts cancel/repost fees.",
+    "env": {
+      "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0",
+      "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.10"
+    }
+  },
+  {
+    "name": "hair-trigger-2c",
+    "label": "Hair Trigger 2c",
+    "color": "#ff4081",
+    "profile": "2c absolute stop on a naked leg",
+    "desc": "Single-leg stop armed at 2c: the earliest exit the shipped risk modes allow.",
+    "thesis": "A naked leg is an unchosen bet; cutting it at 2c caps the downside before it becomes a directional loss.",
+    "env": {
+      "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+      "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.020"
+    }
+  },
+  {
+    "name": "patient-stop-9c",
+    "label": "Patient Stop 9c",
+    "color": "#b388ff",
+    "profile": "9c absolute stop on a naked leg",
+    "desc": "Single-leg stop armed at 9c: the widest leash the tournament runs.",
+    "thesis": "Most 2-5c drops are noise a hedge can still recover; a 9c stop only cuts legs that truly broke.",
+    "env": {
+      "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+      "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.090"
+    }
+  },
+  {
+    "name": "queue-clear-5m",
+    "label": "Queue Clear 5m",
+    "color": "#18ffff",
+    "profile": "queue-clear gate on, 5-minute max clear",
+    "desc": "Only quotes books whose queue is likely to clear inside five minutes.",
+    "thesis": "A quote stuck behind a slow queue is dead capital; refusing those books should lift fill quality per order.",
+    "env": {
+      "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
+      "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"
+    }
+  }
+]

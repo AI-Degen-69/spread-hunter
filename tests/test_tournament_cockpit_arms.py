@@ -440,3 +440,278 @@ def test_nav_pill_is_the_single_current_setup_badge():
     html = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "487"})
     assert html.count("CURRENT SETUP</span>") == 1
     assert html.count('class="tourney-pill') == 1
+
+
+# --- The page follows the newest run, whatever issue launched it -------------
+#
+# A #799 ten-arm run launched into `data/tournaments/` and the cockpit kept
+# showing the #487 presets underneath a "#487" header: ten rows of tweaks that
+# never ran, over zeroed metrics. The key in the URL is a page, not a claim
+# about which run is live, so the page reads the newest record on disk and says
+# whose run it is.
+
+I799_ARMS_SPEC = ROOT / "configs" / "tournaments" / "i799-tournament-test_arms.json"
+
+
+def _i799_source() -> list[dict]:
+    return json.loads(I799_ARMS_SPEC.read_text(encoding="utf-8"))
+
+
+def _i799_records() -> list[dict]:
+    return [
+        {
+            "name": arm["name"],
+            "db_path": f"data/tournaments/i799/tournament-test/{arm['name']}.db",
+            "run_id": f"shadow-799-{arm['name']}",
+            "dash_port": 8810 + i,
+        }
+        for i, arm in enumerate(_i799_source())
+    ]
+
+
+def _plan(tmp_path: Path, run_dir: str, arms: list[dict], *, source=None, minutes=None) -> Path:
+    """A run folder with the full plan record the launcher writes."""
+    folder = tmp_path / "data" / "tournaments" / run_dir
+    folder.mkdir(parents=True, exist_ok=True)
+    plan: dict = {"arms": arms}
+    if source is not None:
+        spec = tmp_path / "configs" / "tournaments" / f"{run_dir}_arms.json"
+        spec.parent.mkdir(parents=True, exist_ok=True)
+        spec.write_text(json.dumps(source), encoding="utf-8")
+        plan["arms_source"] = f"configs/tournaments/{run_dir}_arms.json"
+    if minutes is not None:
+        plan["minutes"] = minutes
+    path = folder / "plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    return path
+
+
+def test_newest_run_of_another_issue_owns_the_arm_table(tmp_path, monkeypatch):
+    """The ten rows must be the ten arms that are actually running."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _record(tmp_path, "i487-current-setup-10arm_2026-10-17T18-48", [{
+        "name": "control",
+        "db_path": "data/487/control.db",
+        "run_id": "shadow-487-control",
+        "dash_port": 8801,
+    }])
+    _plan(
+        tmp_path, "i799-tournament-test_2026-10-24T09-05", _i799_records(),
+        source=_i799_source(), minutes=1440,
+    )
+
+    arms = cockpit.resolve_tournament_arms("487")
+
+    spec = {a["name"]: a for a in _i799_source()}
+    assert [a["name"] for a in arms] == list(spec)
+    loose = arms[0]
+    assert loose["label"] == "Loose Baseline"
+    assert loose["db"] == "data/tournaments/i799/tournament-test/loose-baseline.db"
+    assert loose["port"] == 8810
+    assert loose["tweak_rationale"] == spec["loose-baseline"]["thesis"]
+    # The control moves no knob, so it must not borrow one from another arm.
+    assert loose["hypothesized_tweak"] == ""
+    tight = {a["name"]: a for a in arms}["tight-touch"]
+    assert tight["hypothesized_tweak"] == "quote_tournament_preset = aggressive"
+    assert tight["desc"] == spec["tight-touch"]["desc"]
+
+
+def test_page_header_and_progress_follow_the_newest_run(tmp_path, monkeypatch):
+    """"#487" over ten #799 arms is the same lie, one line higher up."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _plan(
+        tmp_path, "i799-tournament-test_2026-10-24T09-05", _i799_records(),
+        source=_i799_source(), minutes=1440,
+    )
+
+    meta, target_minutes = cockpit.resolve_tournament_meta("487")
+    assert target_minutes == 1440.0
+    assert meta["issue_primary"] == 799
+    assert "#799" in meta["title"]
+    assert "24-Hour" in meta["subtitle"]
+    assert meta["nav_label"].startswith("#799")
+    assert "10 Arms" in meta["nav_label"]
+    # The #487 presets must not ride into the browser inside the meta payload.
+    assert "arms" not in meta
+
+    # The leaderboard card titles read from the same meta.
+    stats = cockpit.collect_all_stats("487")
+    assert stats["l1_title"] == "#799 Top Performer"
+
+
+def test_progress_counts_against_the_launched_length_not_twelve_hours(tmp_path, monkeypatch):
+    """A 1440-minute run read as a 720-minute one reports 100% halfway through."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _plan(
+        tmp_path, "i799-tournament-test_2026-10-24T09-05", _i799_records(),
+        source=_i799_source(), minutes=1440,
+    )
+
+    stats = cockpit.collect_all_stats("487")
+
+    assert stats["target_hours"] == 24.0
+    assert stats["rem_hours"] == 24.0
+    assert stats["is_completed"] is False
+    assert stats["progress_pct"] == 0.0
+
+
+def test_pnl_chart_labels_follow_the_launched_length(tmp_path, monkeypatch):
+    """A 24-hour run under "Across 12 Hours (0 to 720)" labels a false axis."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _plan(
+        tmp_path, "i799-tournament-test_2026-10-24T09-05", _i799_records(),
+        source=_i799_source(), minutes=1440,
+    )
+
+    html = cockpit.generate_cockpit_html(cockpit.collect_all_stats("487"))
+
+    assert "Across 24 Hours (Minutes 0 to 1440)" in html
+    assert "Elapsed Minutes (0 to 1440)" in html
+    assert "Elapsed Minutes (0 to 720)" not in html
+
+
+def test_launch_stamp_decides_not_the_issue_number(tmp_path, monkeypatch):
+    """Newest launch wins: an issue number says nothing about launch order."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _plan(tmp_path, "i608-r1_2026-10-24T08-00", [{
+        "name": "the-accountant",
+        "db_path": "data/older608.db",
+        "run_id": "shadow-608-accountant",
+        "dash_port": 8902,
+    }])
+    _plan(tmp_path, "i492-r2_2026-10-24T09-05", [{
+        "name": "control-1",
+        "db_path": "data/newer492.db",
+        "run_id": "shadow-492-control",
+        "dash_port": 8901,
+    }])
+
+    arms = cockpit.resolve_tournament_arms("487")
+
+    assert [a["name"] for a in arms] == ["control-1"]
+    assert arms[0]["db"] == "data/newer492.db"
+    assert cockpit.resolve_tournament_meta("487")[0]["issue_primary"] == 492
+
+
+def test_archive_keys_keep_their_own_records(tmp_path, monkeypatch):
+    """#492 and #608 are frozen contracts, not the live page."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _record(tmp_path, "i492-r2_2026-10-17T18-48", [{
+        "name": "control-1",
+        "db_path": "data/real492.db",
+        "run_id": "shadow-real-492",
+        "dash_port": 8901,
+    }])
+    _plan(
+        tmp_path, "i799-tournament-test_2026-10-24T09-05", _i799_records(),
+        source=_i799_source(), minutes=1440,
+    )
+
+    c492 = {a["name"]: a for a in cockpit.resolve_tournament_arms("492")}
+    assert len(c492) == len(cockpit.ARMS_CONFIG_492)
+    assert c492["control-1"]["db"] == "data/real492.db"
+
+    meta, minutes = cockpit.resolve_tournament_meta("492")
+    assert meta is cockpit.TOURNAMENTS["492"]
+    assert minutes == cockpit.DEFAULT_TOURNAMENT_MINUTES
+
+
+def test_a_launch_without_a_plan_does_not_take_over_the_page(tmp_path, monkeypatch):
+    """The launcher writes launch.log first; a half-made run is not a run."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _record(tmp_path, "i487-current-setup-10arm_2026-10-17T18-48", [{
+        "name": "control",
+        "db_path": "data/real_control.db",
+        "run_id": "shadow-real-control",
+        "dash_port": 9901,
+    }])
+    half = tmp_path / "data" / "tournaments" / "i799-tournament-test_2026-10-24T10-00"
+    half.mkdir(parents=True, exist_ok=True)
+    (half / "launch.log").write_text("booting\n", encoding="utf-8")
+
+    arms = cockpit.resolve_tournament_arms("487")
+
+    assert [a["name"] for a in arms] == _spec_arm_names()
+    assert {a["name"]: a for a in arms}["control"]["db"] == "data/real_control.db"
+    assert cockpit.resolve_tournament_meta("487")[0]["issue_primary"] == 487
+
+
+def test_a_record_without_a_length_keeps_the_twelve_hour_default(tmp_path, monkeypatch):
+    """Older records carry no `minutes`; progress must still have a denominator."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _record(tmp_path, "i487-current-setup-10arm_2026-10-17T18-48", [{
+        "name": "control",
+        "db_path": "data/real_control.db",
+        "run_id": "shadow-real-control",
+        "dash_port": 9901,
+    }])
+
+    meta, target_minutes = cockpit.resolve_tournament_meta("487")
+
+    assert target_minutes == cockpit.DEFAULT_TOURNAMENT_MINUTES == 720.0
+    assert meta["issue_primary"] == 487
+    assert meta["title"] == "Issue #487 Current-Setup Tournament"
+
+
+def test_a_newer_run_of_the_same_issue_beats_an_older_numbered_run(tmp_path, monkeypatch):
+    """"Newest run" must hold inside one issue too, not only across issues.
+
+    `latest_tournament_record` ranks run number before launch stamp, so a named
+    run launched today loses the lookup to an r1 from last week and the rows
+    merge last week's db/port into today's table.
+    """
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _plan(tmp_path, "i487-r1_2026-10-17T10-00", [{
+        "name": "control",
+        "db_path": "data/stale_control.db",
+        "run_id": "shadow-487-r1-control",
+        "dash_port": 8850,
+    }])
+    _plan(tmp_path, "i487-current-setup-10arm_2026-10-24T09-05", [{
+        "name": "control",
+        "db_path": "data/todays_control.db",
+        "run_id": "shadow-487-today-control",
+        "dash_port": 8801,
+    }])
+
+    arms = {a["name"]: a for a in cockpit.resolve_tournament_arms("487")}
+
+    assert list(arms) == _spec_arm_names()
+    assert arms["control"]["db"] == "data/todays_control.db"
+    assert arms["control"]["run_id"] == "shadow-487-today-control"
+    assert arms["control"]["port"] == 8801
+
+
+def test_a_run_with_no_arms_does_not_own_a_header_that_keeps_old_rows(tmp_path, monkeypatch):
+    """The rows fall back to the older record, so the header must fall back too.
+
+    A plan whose `arms` is empty cannot describe a table; the header claiming
+    #799 over the #487 control row would be the same lie in reverse.
+    """
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _record(tmp_path, "i487-current-setup-10arm_2026-10-17T18-48", [{
+        "name": "control",
+        "db_path": "data/real_control.db",
+        "run_id": "shadow-real-control",
+        "dash_port": 9901,
+    }])
+    _plan(tmp_path, "i799-tournament-test_2026-10-24T09-05", [], minutes=1440)
+
+    arms = cockpit.resolve_tournament_arms("487")
+    meta, target_minutes = cockpit.resolve_tournament_meta("487")
+
+    assert [a["name"] for a in arms] == _spec_arm_names()
+    assert {a["name"]: a for a in arms}["control"]["db"] == "data/real_control.db"
+    assert meta["issue_primary"] == 487
+    assert meta["title"] == "Issue #487 Current-Setup Tournament"
+    assert target_minutes == cockpit.DEFAULT_TOURNAMENT_MINUTES
