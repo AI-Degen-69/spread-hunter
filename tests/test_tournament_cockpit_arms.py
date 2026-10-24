@@ -176,6 +176,53 @@ def test_492_and_608_still_resolve_from_their_run_numbered_records(tmp_path, mon
     assert c608["the-accountant-1"]["port"] == 8902
 
 
+# --- Issue #799: the tournament-test run --------------------------------------
+#
+# Its arm table is not hand-written here: the cockpit builds it from the same
+# spec file the launcher reads, so the page cannot describe an arm the run does
+# not start. These tests pin that source and the 24-hour target derived from the
+# plan record.
+
+I799_ARMS_SPEC = ROOT / "configs" / "tournaments" / "i799-tournament-test_arms.json"
+
+
+def test_799_table_comes_from_the_launch_spec():
+    spec = json.loads(I799_ARMS_SPEC.read_text(encoding="utf-8"))
+    arms = cockpit._arm_specs("i799-tournament-test")
+    assert [a["name"] for a in arms] == [a["name"] for a in spec]
+    assert len(arms) == 10
+    for row, source in zip(arms, spec):
+        assert row["label"] == source["label"], row["name"]
+        assert row["hypothesized_tweak"] == source["profile"], row["name"]
+        assert row["tweak_rationale"] == source["thesis"], row["name"]
+        # No store exists before the launcher writes the plan record.
+        assert row["db"] == "" and row["run_id"] == "", row["name"]
+
+
+def test_799_without_a_record_shows_the_spec_arms_as_no_data(tmp_path, monkeypatch):
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    (tmp_path / cockpit.ARM_SPEC_DIR).mkdir(parents=True)
+    (tmp_path / cockpit.ARM_SPEC_DIR / "i799-tournament-test_arms.json").write_text(
+        I799_ARMS_SPEC.read_text(encoding="utf-8"), encoding="utf-8")
+
+    arms = cockpit.resolve_tournament_arms("799")
+    assert len(arms) == 10
+    assert all(a["db"] == "" for a in arms)
+
+
+def test_plan_minutes_drive_progress_instead_of_a_hardcoded_12h(tmp_path, monkeypatch):
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    folder = tmp_path / "data" / "tournaments" / "i799-tournament-test_2026-10-24T10-00"
+    folder.mkdir(parents=True)
+    (folder / "plan.json").write_text(json.dumps({
+        "minutes": 1440,
+        "arms": [{"name": "loose-baseline", "db_path": "x.db", "run_id": "r", "dash_port": 8801}],
+    }), encoding="utf-8")
+
+    assert cockpit.plan_target_minutes("799") == 1440.0
+
+
 # --- The purged past-run pages ------------------------------------------------
 #
 # Issue #698 ordered the broken past-run pages purged. PR #703 closed the issue
@@ -216,14 +263,17 @@ def _stub_stats(monkeypatch) -> None:
 
 def test_cockpit_serves_only_the_current_setup_page(monkeypatch):
     _stub_stats(monkeypatch)
+    key = cockpit.CURRENT_SETUP_KEY
 
-    for path in ("/", "/index.html", "/487", "/487.html", "/cockpit_487", "/487?refresh=1"):
+    for path in ("/", "/index.html", f"/{key}", f"/{key}.html", f"/cockpit_{key}",
+                 f"/{key}?refresh=1"):
         handler = _CockpitHandlerStub(path)
         handler.do_GET()
         assert handler.statuses == [200], path
-        assert b"#487 Current Setup" in handler.wfile.getvalue(), path
+        assert f"#{key} Current Setup".encode() in handler.wfile.getvalue(), path
 
-    for path in ("/484", "/484.html", "/492", "/492.html", "/608", "/608.html", "/nope"):
+    for path in ("/484", "/484.html", "/487", "/487.html", "/492", "/492.html",
+                 "/608", "/608.html", "/nope"):
         handler = _CockpitHandlerStub(path)
         handler.do_GET()
         assert handler.statuses == [404], f"{path} must not render a page"
@@ -237,7 +287,8 @@ def test_stats_api_will_not_serve_a_purged_tournament(monkeypatch):
     """
     _stub_stats(monkeypatch)
 
-    for query in ("tourney=608", "tourney=492", "tourney=484", "tourney=", "tourney=../487", ""):
+    for query in ("tourney=608", "tourney=492", "tourney=487", "tourney=484",
+                  "tourney=", "tourney=../487", ""):
         handler = _CockpitHandlerStub(f"/api/stats?{query}")
         handler.do_GET()
         assert handler.statuses == [200], query
@@ -246,10 +297,11 @@ def test_stats_api_will_not_serve_a_purged_tournament(monkeypatch):
 
 
 def test_cockpit_html_links_to_no_purged_page():
-    html = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "487"})
-    for dead in ('href="/484"', 'href="/492"', 'href="/608"'):
+    key = cockpit.CURRENT_SETUP_KEY
+    html = cockpit.generate_cockpit_html({"arms": [], "tourney_key": key})
+    for dead in ('href="/484"', 'href="/487"', 'href="/492"', 'href="/608"'):
         assert dead not in html, f"purged page still linked: {dead}"
-    assert 'href="/487"' in html
+    assert f'href="/{key}"' in html
 
 
 # --- A record that cannot be read is not the same as no record ---------------

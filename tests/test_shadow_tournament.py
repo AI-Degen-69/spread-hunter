@@ -1467,3 +1467,59 @@ def test_i487_plan_names_ten_fresh_stores_and_ports(tmp_path):
         assert Path(arm.db_path).name != "orders.db"
         assert Path(arm.db_path).parent == plan.record_path.parent
 
+
+# --- Issue #799: the 24-hour tournament-test run -----------------------------
+
+I799_ARMS = (
+    Path(__file__).resolve().parent.parent
+    / "configs" / "tournaments" / "i799-tournament-test_arms.json"
+)
+
+
+def _i799_arms() -> list[dict]:
+    return json.loads(I799_ARMS.read_text(encoding="utf-8"))
+
+
+def test_i799_spec_is_ten_named_trading_theses():
+    from core_brain.config import TOURNAMENT_PRESETS
+    from scripts.shadow_tournament import ARM_NAME_PATTERN
+
+    arms = _i799_arms()
+    assert len(arms) == 10
+    names = [a["name"] for a in arms]
+    assert len(set(names)) == 10
+    assert not set(names) & set(TOURNAMENT_PRESETS)
+    for arm in arms:
+        assert ARM_NAME_PATTERN.match(arm["name"]), arm["name"]
+        # The cockpit reads these three; a blank one renders an empty row.
+        assert arm["label"] and arm["profile"] and arm["thesis"], arm["name"]
+        assert arm["desc"], arm["name"]
+        for key, value in (arm.get("env") or {}).items():
+            assert key.startswith("BOT_"), (arm["name"], key)
+            if key == "BOT_QUOTE_TOURNAMENT_PRESET":
+                assert value in TOURNAMENT_PRESETS, (arm["name"], value)
+    assert arms[0]["env"] == {}, "the first arm is the unchanged baseline"
+
+
+def test_i799_plan_is_a_24_hour_ten_arm_run_on_the_shared_feed(tmp_path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        issue=799,
+        arms=_i799_arms(),
+        minutes=1440,
+        run_name="tournament-test",
+        base_dir=tmp_path,
+        check_ports=False,
+    )
+    assert plan.minutes == 1440
+    assert [a.name for a in plan.arms] == [a["name"] for a in _i799_arms()]
+    assert [a.dash_port for a in plan.arms] == list(range(8801, 8811))
+    assert len({str(a.db_path) for a in plan.arms}) == 10
+    assert len({a.run_id for a in plan.arms}) == 10
+    # No arm carries its own feed file: all ten read the one runtime/markets.json
+    # the launcher's shared filter loop refreshes.
+    assert plan.markets_path is None
+    assert all("--markets-path" not in a.shadow_argv for a in plan.arms)
+    assert plan.record_path.parent.name.startswith("i799-tournament-test_")
+

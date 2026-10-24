@@ -2,9 +2,10 @@
 
 Interactive real-time visualization and statistical analysis cockpit for
 Spread Hunter multi-arm shadow tournaments. One page is served: the current
-setup (#487). The past-run pages (#484, #492, #608) were purged on 2026-10-21 --
-their routes 404 now, and their static snapshots are no longer written. Their
-arm records and stores stay: they are launch/compare data, not pages.
+setup (#799), whose arm table comes from its launch spec file. The past-run
+pages (#484, #487, #492, #608) were purged -- their routes 404 now, and their
+static snapshots are no longer written. Their arm records and stores stay: they
+are launch/compare data, not pages.
 Computes risk, expectancy (EV), standard deviation, max drawdown,
 Monte Carlo projections, and Live Readiness Scoring.
 
@@ -637,10 +638,67 @@ ARMS_CONFIG_608 = [
 ]
 
 # Legacy alias kept for older imports. The tournament the cockpit serves by
-# default is CURRENT_SETUP_KEY (#487); this constant no longer selects a page.
+# default is CURRENT_SETUP_KEY; this constant no longer selects a page.
 ARMS_CONFIG = ARMS_CONFIG_492
 
+# Arm tables for a run whose arms are defined by its spec file instead of a
+# hand-written block below. The file is the same one the launcher reads, so the
+# table cannot describe an arm the run does not start.
+ARM_SPEC_DIR = Path("configs") / "tournaments"
+
+
+def _arm_specs(tourney_key: str) -> list[dict[str, Any]]:
+    """Cockpit rows built from `configs/tournaments/<key>_arms.json`.
+
+    Static db/run_id/port are empty on purpose: the plan record fills them once
+    the run launches, and `analyze_arm_database` reports NO_DATA until then.
+    """
+    path = ROOT / ARM_SPEC_DIR / f"{tourney_key}_arms.json"
+    try:
+        specs = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(specs, list):
+        return []
+    issue_match = re.match(r"i(\d+)", tourney_key)
+    issue = int(issue_match.group(1)) if issue_match else 0
+    rows: list[dict[str, Any]] = []
+    for idx, spec in enumerate(specs, start=1):
+        if not isinstance(spec, dict) or not isinstance(spec.get("name"), str):
+            continue
+        name = spec["name"]
+        env = spec.get("env") or {}
+        rows.append({
+            "issue": issue,
+            "name": name,
+            "label": spec.get("label") or name.replace("-", " ").title(),
+            "port": 8800 + idx,
+            "db": "",
+            "run_id": "",
+            "color": spec.get("color") or "#8b9bb4",
+            "desc": spec.get("desc") or "",
+            "worst_catalyst": "",
+            "worst_catalyst_desc": "",
+            "hypothesized_tweak": spec.get("profile") or ", ".join(
+                f"{k.removeprefix('BOT_').lower()} = {v}" for k, v in env.items()),
+            "tweak_rationale": spec.get("thesis") or "",
+        })
+    return rows
+
+
 TOURNAMENTS = {
+    "799": {
+        "id": "799",
+        "title": "Issue #799 Tournament Test (24h)",
+        "subtitle": "24-Hour Multi-Arm Live Shadow Evaluation | 10 strategy profiles on one shared market feed",
+        "description": "Ten trading theses run side by side for 24 hours: five preset profiles and five single-knob risk/quoting arms, all quoting the same runtime/markets.json refreshed by the same filter loop. Arm rows come from the run spec file.",
+        "arms": [],
+        # The run's spec file is named by its tournament key (issue + stamp),
+        # not by the bare issue number.
+        "spec": "i799-tournament-test",
+        "issue_primary": 799,
+        "issue_secondary": 799,
+    },
     "492": {
         "id": "492",
         "title": "Issue #492 Baseline Re-run (Fixed Code)",
@@ -683,14 +741,17 @@ TOURNAMENTS = {
 # The cockpit serves one page: the current setup. Everything past-run is a
 # launch/compare record only. These paths are the only ones that render, and the
 # current setup is the only tournament key the JSON API will serve.
-CURRENT_SETUP_KEY = "487"
+CURRENT_SETUP_KEY = "799"
 PAGE_PATHS: dict[str, str] = {
     "": CURRENT_SETUP_KEY,
     "/index.html": CURRENT_SETUP_KEY,
-    "/487": CURRENT_SETUP_KEY,
-    "/487.html": CURRENT_SETUP_KEY,
-    "/cockpit_487": CURRENT_SETUP_KEY,
+    "/799": CURRENT_SETUP_KEY,
+    "/799.html": CURRENT_SETUP_KEY,
+    "/cockpit_799": CURRENT_SETUP_KEY,
 }
+# Every tournament whose plan record still resolves. #484 is the static
+# archive: it never had a folder record, so it keeps its hand-written table.
+LIVE_TOURNAMENT_KEYS = frozenset(TOURNAMENTS) - {"484"}
 # The keys the JSON API may serve: the served pages' own tournaments, derived so
 # a new page cannot forget to widen this.
 SERVED_TOURNAMENT_KEYS = frozenset(PAGE_PATHS.values())
@@ -783,9 +844,9 @@ def resolve_tournament_arms_with_status(
     """
     global _WARNED_RECORD
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
-    default_arms = meta["arms"]
+    default_arms = meta["arms"] or _arm_specs(meta.get("spec") or tourney_key)
     # #484 stays fully static (archive); live keys resolve their plan file.
-    if tourney_key not in ("487", "492", "608"):
+    if tourney_key not in LIVE_TOURNAMENT_KEYS:
         return default_arms, None
 
     # One resolver for every key: `latest_tournament_record` ranks by parsed
@@ -832,10 +893,22 @@ def resolve_tournament_arms(tourney_key: str = CURRENT_SETUP_KEY) -> list[dict[s
     return resolve_tournament_arms_with_status(tourney_key)[0]
 
 
+def plan_target_minutes(tourney_key: str) -> float:
+    """The run length the plan recorded, so progress is not pinned to 12 hours."""
+    latest = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
+    if latest is None:
+        return 720.0
+    try:
+        minutes = float(json.loads(latest.read_text(encoding="utf-8")).get("minutes") or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 720.0
+    return minutes if minutes > 0 else 720.0
+
+
 def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> dict[str, Any]:
     """Extract comprehensive statistical, risk, and time series metrics for one arm."""
-    db_path = ROOT / cfg["db"]
-    if not db_path.exists():
+    db_path = ROOT / cfg["db"] if cfg.get("db") else None
+    if db_path is None or not db_path.exists():
         return {
             **cfg,
             "status": "missing_db",
@@ -1089,7 +1162,8 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
     """Analyze all tournament arms for the selected tournament and compile overall metrics."""
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     arms_config, record_error = resolve_tournament_arms_with_status(tourney_key)
-    arms_data = [analyze_arm_database(cfg) for cfg in arms_config]
+    target_minutes = plan_target_minutes(tourney_key)
+    arms_data = [analyze_arm_database(cfg, target_minutes) for cfg in arms_config]
     
     # Sort by Total PnL descending for leaderboard
     sorted_arms = sorted(arms_data, key=lambda x: x.get("total_pnl", -999.0), reverse=True)
@@ -1130,8 +1204,8 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
     
     # Global tournament progress
     max_elapsed = max((a.get("elapsed_min", 0.0) for a in arms_data), default=0.0)
-    progress_pct = min(100.0, round((max_elapsed / 720.0) * 100.0, 1))
-    time_rem_min = max(0.0, 720.0 - max_elapsed)
+    progress_pct = min(100.0, round((max_elapsed / target_minutes) * 100.0, 1))
+    time_rem_min = max(0.0, target_minutes - max_elapsed)
     
     # Leaders
     leader_1 = None
@@ -1179,6 +1253,8 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
         "agg_win_rate": agg_win_rate,
         "agg_merge_rate": agg_merge_rate,
         "agg_spread": agg_spread,
+        "target_minutes": target_minutes,
+        "target_hours": round(target_minutes / 60.0, 1),
         "max_elapsed_min": round(max_elapsed, 1),
         "elapsed_hours": round(max_elapsed / 60.0, 2),
         "rem_hours": round(time_rem_min / 60.0, 2),
@@ -1215,6 +1291,10 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
             f"{html.escape(str(record_error))}. "
             "The table shows default arms, not live data."
         )
+    tourney_key = initial_data.get("tourney_key") or CURRENT_SETUP_KEY
+    target_minutes = float(initial_data.get("target_minutes") or 720.0)
+    target_hours = initial_data.get("target_hours") or round(target_minutes / 60.0, 1)
+    arm_count = len(initial_data.get("arms") or [])
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1500,12 +1580,12 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 <body>
 
 <!-- Tournament Navigation Switcher: the current setup is the only page served.
-     The past-run pages (#484, #492, #608) were purged; their routes 404. -->
+     The past-run pages (#484, #487, #492, #608) were purged; their routes 404. -->
 <div class="tourney-nav">
   <span class="tourney-nav-label">Tournament Evaluation:</span>
-  <a href="/487" class="tourney-pill active">
+  <a href="/{tourney_key}" class="tourney-pill active">
     <span>🧪</span>
-    <span>#487 Current Setup (10 Arms)</span>
+    <span>#{tourney_key} Current Setup ({arm_count} Arms)</span>
     <span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">CURRENT SETUP</span>
   </a>
 </div>
@@ -1741,7 +1821,7 @@ BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
 <div id="tab-pnl-chart" class="tab-pane">
   <div class="chart-box" style="margin-bottom: 20px;">
     <div class="chart-header">
-      <div class="chart-title">Cumulative PnL Trajectory Across 12 Hours (Minutes 0 to 720)</div>
+      <div class="chart-title">Cumulative PnL Trajectory Across {target_hours} Hours (Minutes 0 to {target_minutes:g})</div>
       <div class="chart-legend">Click legend items to toggle arms</div>
     </div>
     <div style="height: 480px;">
@@ -1931,7 +2011,7 @@ function renderCharts() {{
         responsive: true,
         maintainAspectRatio: false,
         scales: {{
-          x: {{ type: 'linear', title: {{ display: true, text: 'Elapsed Minutes (0 to 720)', color: '#8b9bb4' }}, grid: {{ color: '#1c2436' }} }},
+          x: {{ type: 'linear', title: {{ display: true, text: 'Elapsed Minutes (0 to {target_minutes:g})', color: '#8b9bb4' }}, grid: {{ color: '#1c2436' }} }},
           y: {{ title: {{ display: true, text: 'Cumulative Realized PnL ($)', color: '#8b9bb4' }}, grid: {{ color: '#1c2436' }} }}
         }},
         plugins: {{
@@ -2138,7 +2218,7 @@ let lastUpdateTime = new Date().toLocaleTimeString();
 
 function fetchLiveStats() {{
   const statusEl = document.getElementById('refresh-status');
-  const tourneyKey = (state && state.tourney_key) ? state.tourney_key : '487';
+  const tourneyKey = (state && state.tourney_key) ? state.tourney_key : '{tourney_key}';
   fetch('/api/stats?tourney=' + tourneyKey)
     .then(r => {{
       if (!r.ok) {{
@@ -2203,8 +2283,8 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
 
         # Route 1: the current setup page (/ and its aliases) -- the only page.
         # Ten arms are listed with their hypothesis; every metric reads NO_DATA
-        # until the 720-minute run writes its record. The purged past-run paths
-        # (/492, /484, /608) are absent from PAGE_PATHS, so they fall to the 404.
+        # until the run writes its plan record. The purged past-run paths
+        # (/487, /492, /484, /608) are absent from PAGE_PATHS, so they 404.
         page_key = tourney_key_for_path(self.path)
         if page_key is not None:
             stats = get_cached_stats(page_key)
@@ -2249,7 +2329,7 @@ def run_cockpit_server(port: int = 8800) -> None:
     static_current = generate_cockpit_html(stats_current)
     out_file_main = reports_dir / "tournament_cockpit.html"
     out_file_main.write_text(static_current, encoding="utf-8")
-    print(f"Static Cockpit (#487 current setup) generated at: {out_file_main}")
+    print(f"Static Cockpit (#{CURRENT_SETUP_KEY} current setup) generated at: {out_file_main}")
 
     # The purged pages leave stale snapshots behind on every machine that ran
     # the old server; drop them so nothing links to a page that no longer exists.
@@ -2267,7 +2347,7 @@ def run_cockpit_server(port: int = 8800) -> None:
         allow_reuse_address = True
 
     server = ThreadedServer(("127.0.0.1", port), CockpitHandler)
-    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (page: / and /487 [#487 current setup]; the purged past-run pages /484, /492 and /608 return 404)")
+    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (page: / and /{CURRENT_SETUP_KEY} [#{CURRENT_SETUP_KEY} current setup]; the purged past-run pages /484, /487, /492 and /608 return 404)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
