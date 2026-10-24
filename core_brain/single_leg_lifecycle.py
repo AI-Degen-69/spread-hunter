@@ -245,6 +245,81 @@ def max_profitable_hedge_bid(
     return float(bid_decimal)
 
 
+def capped_hedge_tick_exists(
+    held_average: float, bot_pos_price_max_pair_cost_usd: float, tick_size: float,
+) -> bool:
+    """Whether a capped, tick-aligned hedge bid exists, without pricing it.
+
+    The saver's stranded-exposure probe asks this state-independent question:
+    a tick can exist before the drawdown crosses the escalation threshold, so
+    the answer must not depend on the current lifecycle state. One predicate,
+    one module -- callers never re-derive it.
+    """
+    try:
+        max_profitable_hedge_bid(
+            held_average, bot_pos_price_max_pair_cost_usd, tick_size,
+        )
+    except ValueError:
+        return False
+    return True
+
+
+def validate_escalation_override(
+    override: LifecycleQuoteOverride, *, cap: float, tick_size: float,
+) -> str | None:
+    """Refusal reason when an escalated-hedge override is unusable, else None.
+
+    One owner for what counts as a valid escalation: the Trader produces the
+    override through `transition`, the quoting path enforces this check, and
+    both read the same rule. A mismatch between the override price and the
+    recomputed maximum profitable bid refuses -- the guard against quoting a
+    hedge that cannot merge at a profit.
+    """
+    if override.state is not LegState.ESCALATED_HEDGE:
+        return "lifecycle quote override is not an escalated hedge"
+    if not isinstance(override.pair_id, str) or not override.pair_id.strip():
+        return "lifecycle escalation requires a pair ID"
+    if not isinstance(override.token_id, str) or not override.token_id:
+        return "lifecycle escalation requires a token ID"
+    if (not isinstance(override.price, (int, float))
+            or isinstance(override.price, bool)
+            or not math.isfinite(override.price)
+            or not 0 < override.price < 1):
+        return "lifecycle escalation price must be finite and between zero and one"
+    if (not isinstance(override.held_average_price, (int, float))
+            or isinstance(override.held_average_price, bool)
+            or not math.isfinite(override.held_average_price)
+            or not 0 < override.held_average_price < 1):
+        return "lifecycle held-leg average must be finite and between zero and one"
+    if (not isinstance(override.size, int) or isinstance(override.size, bool)
+            or override.size <= 0):
+        return "lifecycle escalation size must be a positive integer"
+
+    if not math.isfinite(cap) or cap <= 0:
+        return "lifecycle pair cap must be finite and positive"
+    cap_dec = min(Decimal("0.99"), Decimal(str(cap)))
+    pair_cost = (
+        Decimal(str(override.held_average_price))
+        + Decimal(str(override.price))
+    )
+    if pair_cost > cap_dec:
+        return (
+            f"lifecycle pair cost ${pair_cost:.4f} exceeds ${cap_dec:.3f} cap")
+    try:
+        maximum_bid = max_profitable_hedge_bid(
+            override.held_average_price,
+            cap,
+            tick_size,
+        )
+    except ValueError as exc:
+        return f"lifecycle maximum profitable bid unavailable: {exc}"
+    if Decimal(str(override.price)) != Decimal(str(maximum_bid)):
+        return (
+            f"lifecycle bid ${override.price:.4f} does not match the "
+            f"maximum profitable bid ${maximum_bid:.4f}")
+    return None
+
+
 def _validated_stop_knobs(
     mode: str,
     bot_risk_stop_adverse_drop_cents: float,

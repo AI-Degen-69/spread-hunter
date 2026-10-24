@@ -1928,7 +1928,7 @@ def _manage_single_leg_positions_locked(
 
     from core_brain.quotes import dynamic_offset_for
     from core_brain.single_leg_lifecycle import (
-        LegState, SingleLegPosition, evaluate, max_profitable_hedge_bid,
+        LegState, SingleLegPosition, capped_hedge_tick_exists, evaluate,
         persist_decision, transition,
     )
 
@@ -2275,13 +2275,13 @@ def _manage_single_leg_positions_locked(
                         out.append(res)
                         continue
 
-                    # Otherwise, check maker tick availability & age
+                    # Otherwise, check maker tick availability & age. The tick
+                    # question lives in the lifecycle module: same predicate
+                    # the escalation path derives from, asked with this probe's
+                    # own venue-view inputs rather than re-derived here.
                     age_s = (now_s * 1000.0 - last_fill_ms) / 1000.0 if last_fill_ms > 0 else 0.0
-                    try:
-                        max_profitable_hedge_bid(held_avg, bot_pos_price_max_pair_cost_usd, grid_tick)
-                        has_maker_tick = True
-                    except ValueError:
-                        has_maker_tick = False
+                    has_maker_tick = capped_hedge_tick_exists(
+                        held_avg, bot_pos_price_max_pair_cost_usd, grid_tick)
 
                     if has_maker_tick and age_s <= stranded_max_wait:
                         out.append({

@@ -34,10 +34,9 @@ from typing import Any, Callable, Optional
 from core_brain import config, risk, unhedged_stop_loss
 from core_brain.config import MakerConfig
 from core_brain.single_leg_lifecycle import (
-    LegState,
     LifecycleQuoteContext,
     LifecycleQuoteOverride,
-    max_profitable_hedge_bid,
+    validate_escalation_override,
 )
 
 
@@ -598,49 +597,16 @@ def _decide_lifecycle_escalation(
     override: LifecycleQuoteOverride,
 ) -> tuple[list[QuoteIntent], str]:
     """Validate and size one pair-scoped escalation without ordinary repricing."""
-    if override.state is not LegState.ESCALATED_HEDGE:
-        return [], "lifecycle quote override is not an escalated hedge"
-    if not isinstance(override.pair_id, str) or not override.pair_id.strip():
-        return [], "lifecycle escalation requires a pair ID"
-    if not isinstance(override.token_id, str) or not override.token_id:
-        return [], "lifecycle escalation requires a token ID"
-    if (not isinstance(override.price, (int, float))
-            or isinstance(override.price, bool)
-            or not math.isfinite(override.price)
-            or not 0 < override.price < 1):
-        return [], "lifecycle escalation price must be finite and between zero and one"
-    if (not isinstance(override.held_average_price, (int, float))
-            or isinstance(override.held_average_price, bool)
-            or not math.isfinite(override.held_average_price)
-            or not 0 < override.held_average_price < 1):
-        return [], "lifecycle held-leg average must be finite and between zero and one"
-    if (not isinstance(override.size, int) or isinstance(override.size, bool)
-            or override.size <= 0):
-        return [], "lifecycle escalation size must be a positive integer"
-
-    if (not math.isfinite(cfg.bot_pos_price_max_pair_cost_usd)
-            or cfg.bot_pos_price_max_pair_cost_usd <= 0):
-        return [], "lifecycle pair cap must be finite and positive"
-    cap = min(Decimal("0.99"), Decimal(str(cfg.bot_pos_price_max_pair_cost_usd)))
-    pair_cost = (
-        Decimal(str(override.held_average_price))
-        + Decimal(str(override.price))
+    # The escalation-validity rule lives in the lifecycle module: the Trader
+    # produces the override through `transition`, this path enforces the same
+    # rule, and both read it from one place.
+    refusal = validate_escalation_override(
+        override,
+        cap=cfg.bot_pos_price_max_pair_cost_usd,
+        tick_size=cfg.bot_quote_grid_tick_size_usd,
     )
-    if pair_cost > cap:
-        return [], (
-            f"lifecycle pair cost ${pair_cost:.4f} exceeds ${cap:.3f} cap")
-    try:
-        maximum_bid = max_profitable_hedge_bid(
-            override.held_average_price,
-            cfg.bot_pos_price_max_pair_cost_usd,
-            cfg.bot_quote_grid_tick_size_usd,
-        )
-    except ValueError as exc:
-        return [], f"lifecycle maximum profitable bid unavailable: {exc}"
-    if Decimal(str(override.price)) != Decimal(str(maximum_bid)):
-        return [], (
-            f"lifecycle bid ${override.price:.4f} does not match the "
-            f"maximum profitable bid ${maximum_bid:.4f}")
+    if refusal is not None:
+        return [], refusal
 
     matches = [
         (side, book, hedge_book)
