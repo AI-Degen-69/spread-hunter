@@ -436,9 +436,36 @@ class VenueSeam:
 
     The interface of the loop: `run` reads every port off the seam, so
     adding a port does not rewire every call site. Production builds one
-    in `main` (real venue calls); tests build one with fakes. A seam
-    missing a required port raises in `run`, never silently.
+    in `main` (real venue calls); the rehearsal builds one in
+    `core_brain.shadow_run.build_shadow_seam` (recorded writes); tests build
+    one with fakes. A seam missing a required port raises, never silently --
+    `check_ready` is the one owner of that contract, so both adapters are
+    checked the same way.
     """
+
+    #: The market-visit interface: decide, plan, submit, cancel and sweep,
+    #: plus the reads they need. Every other port is optional and inert
+    #: when unset.
+    VISIT_PORTS = (
+        "fetch_market",
+        "fetch_books",
+        "decide",
+        "submit_fn",
+        "cancel_fn",
+        "reconcile_fn",
+        "sweep_fn",
+    )
+
+    @classmethod
+    def required_ports(cls) -> tuple:
+        """The ports a market visit cannot run without."""
+        return cls.VISIT_PORTS
+
+    def check_ready(self) -> None:
+        """Raise naming every missing required port; pass silently otherwise."""
+        missing = [n for n in self.required_ports() if getattr(self, n) is None]
+        if missing:
+            raise TypeError(f"VenueSeam missing required ports: {', '.join(missing)}")
     client: Any = None
     registry: Any = None
     base_cfg: Any = None
@@ -544,14 +571,7 @@ def run(
     if seam.clob_host is None:
         seam.clob_host = os.environ.get("CLOB_HOST", "https://clob.polymarket.com")
 
-    missing = [n for n, v in (
-        ("fetch_market", seam.fetch_market), ("fetch_books", seam.fetch_books),
-        ("decide", seam.decide), ("submit_fn", seam.submit_fn),
-        ("cancel_fn", seam.cancel_fn), ("reconcile_fn", seam.reconcile_fn),
-        ("sweep_fn", seam.sweep_fn),
-    ) if v is None]
-    if missing:
-        raise TypeError(f"VenueSeam missing required ports: {', '.join(missing)}")
+    seam.check_ready()
 
     # Telemetry is opt-in: main() wires core_brain.cycle_stream.emit; tests drive
     # the loop without it so no test ever writes into live/run/.
