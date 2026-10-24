@@ -462,6 +462,48 @@ def test_lifecycle_quote_paths_never_full_scan(registry: OrderRegistry, monkeypa
     assert isinstance(results, list)
 
 
+@pytest.mark.parametrize(("decision", "row"), [
+    ("wait", "patient_wait"),
+    ("hedge", "escalated_wait"),
+    ("locked", "pair_locked"),
+    ("rest", "dual_resting"),
+    ("refused", "refused"),
+])
+def test_saver_action_for_maps_decision_to_row_action(decision, row):
+    assert lp.saver_action_for(decision) == row
+
+
+@pytest.mark.parametrize("unknown", ["bogus", "hold", "hard_stop", "settlement_fallback"])
+def test_saver_action_for_rejects_unreachable_actions(unknown):
+    # "hold" is a saver-side row from another path, never a decision action;
+    # the old `.get(action, action)` pass-through would have echoed these.
+    with pytest.raises(KeyError):
+        lp.saver_action_for(unknown)
+
+
+def test_unknown_exposure_keeps_identical_row(registry: OrderRegistry):
+    """A failing venue open-orders read keeps the lifecycle's own verdict.
+
+    The exposure check is skipped, the pair stays managed under the decision
+    above, and the emitted row is identical to the known-exposure row.
+    """
+    _one_sided_pair(registry, filled_size=10.0, fill_price=0.55)
+    cfg = MakerConfig(bot_risk_stranded_completion_on=False,
+                      bot_pos_price_max_pair_cost_usd=0.99)
+    run = dict(live=False, now=1010.0)
+    known_client = FakeClient(best_ask=0.40)
+    known_client.get_open_orders = lambda: [{"id": "venue-light"}]
+    failing_client = FakeClient(best_ask=0.40)
+    def _venue_down():
+        raise RuntimeError("venue down")
+    failing_client.get_open_orders = _venue_down
+    known_rows = lp.manage_single_leg_positions(known_client, registry, cfg, **run)
+    failing_rows = lp.manage_single_leg_positions(failing_client, registry, cfg, **run)
+    assert len(known_rows) == len(failing_rows) == 1
+    assert failing_rows[0] == known_rows[0]
+    assert failing_rows[0]["action"] == "patient_wait"
+
+
 def test_load_pair_reads_fills_without_per_order_helpers(
         registry: OrderRegistry, monkeypatch):
     """#767: load_pair batches totals in one connection, no N+1 fan-out."""

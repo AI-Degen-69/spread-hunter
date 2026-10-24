@@ -1639,6 +1639,24 @@ SINGLE_LEG_QUIET_ACTIONS = frozenset({
     STRANDED_MISSING_SIDE_ACTION,
 })
 
+# Row words for lifecycle decisions, owned here -- the saver is their only
+# renderer. Exactly the tail-reachable actions of
+# `single_leg_lifecycle.transition` (`hard_stop` exits upstream;
+# `settlement_fallback` needs `settlement_due=True`); anything else is a bug.
+_SAVER_ACTION_BY_DECISION = {
+    "wait": "patient_wait",
+    "hedge": "escalated_wait",
+    "locked": "pair_locked",
+    "rest": "dual_resting",
+    "refused": "refused",
+}
+
+
+def saver_action_for(action: str) -> str:
+    """Return this row's `action` word for a lifecycle decision action."""
+    return _SAVER_ACTION_BY_DECISION[action]
+
+
 # The verdicts `aged_out_verdict` returns. `due` is the only one that acts.
 AGED_OUT_DUE = "due"
 AGED_OUT_AWAITING_LEAD = "awaiting_lead"
@@ -2640,13 +2658,9 @@ def _manage_single_leg_positions_locked(
                 out.append(bailout)
                 continue
 
-            action = {
-                "wait": "patient_wait",
-                "hedge": "escalated_wait",
-                "locked": "pair_locked",
-                "rest": "dual_resting",
-                "refused": "refused",
-            }.get(decision.action, decision.action)
+            # Unknown exposure keeps the lifecycle's verdict; the check retries
+            # next rotation. Row words come from the contract above.
+            action = saver_action_for(decision.action)
             out.append({
                 "pair_id": pair_id, "condition_id": condition_id,
                 "action": action,
