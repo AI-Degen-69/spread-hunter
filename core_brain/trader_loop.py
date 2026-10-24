@@ -2442,6 +2442,12 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
             "event_live": getattr(gm, "event_live", False),
             "event_ended": getattr(gm, "event_ended", False),
             "series_ts": getattr(gm, "series_ts", None),
+            # Range telemetry for the dynamic quote offset (#370). `_market_cfg`
+            # reads these off a dict spec; dropping them here pinned every
+            # rotation to the static 2c fallback and made the multiplier/min/max
+            # knobs -- and every tournament preset -- inert on the live path.
+            "range_cents": getattr(gm, "range_cents", None),
+            "velocity_measured_at": getattr(gm, "velocity_measured_at", None),
         }
         if paired_arm is not None:
             spec.update({

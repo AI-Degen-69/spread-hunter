@@ -47,11 +47,12 @@
     "name": "prudent-hybrid",
     "label": "Prudent Hybrid",
     "color": "#ff6d00",
-    "profile": "prudent preset: dynamic 0.60x, 2-4c",
-    "desc": "The hybrid preset between conservative and balanced.",
+    "profile": "prudent preset: dynamic 0.60x, 2-6c",
+    "desc": "The hybrid preset between conservative and balanced, with the preset's 4c clamp lifted to 6c so it is not the same arm as balanced.",
     "thesis": "A 0.60x multiplier is the compromise: enough cushion for swings, close enough to fill.",
     "env": {
-      "BOT_QUOTE_TOURNAMENT_PRESET": "prudent"
+      "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
+      "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "6"
     }
   },
   {

@@ -1501,6 +1501,36 @@ def test_i799_spec_is_ten_named_trading_theses():
     assert arms[0]["env"] == {}, "the first arm is the unchanged baseline"
 
 
+def test_i799_arms_do_not_resolve_to_the_same_quote_offset(monkeypatch):
+    """Five preset arms must quote at five different offsets, not one shared 2c.
+
+    The measured feed range (~16-22c) is what the offsets are read at: every preset
+    arm then lands on its own clamped cent, so a run of identical quote prices is a
+    wiring bug (`_market_specs` dropping `range_cents`), never the arm design.
+    """
+    from dataclasses import replace
+
+    from core_brain.config import load
+    from core_brain.quotes import dynamic_offset_for
+
+    offsets = {}
+    for arm in _i799_arms():
+        for key in list(os.environ):
+            if key.startswith("BOT_"):
+                monkeypatch.delenv(key)
+        for key, value in (arm.get("env") or {}).items():
+            monkeypatch.setenv(key, value)
+        cfg = load()
+        cfg = replace(cfg, bot_quote_telemetry_range_cents=22.0,
+                      bot_quote_telemetry_velocity_measured_at=None)
+        offsets[arm["name"]] = dynamic_offset_for(cfg)[0]
+
+    preset_arms = ["loose-baseline", "tight-touch", "balanced-mid",
+                   "wide-shield", "prudent-hybrid"]
+    assert len({offsets[a] for a in preset_arms}) == len(preset_arms), offsets
+    assert offsets["loose-baseline"] > offsets["balanced-mid"] > offsets["tight-touch"]
+
+
 def test_i799_plan_is_a_24_hour_ten_arm_run_on_the_shared_feed(tmp_path):
     from scripts.shadow_tournament import build_tournament_plan
 
