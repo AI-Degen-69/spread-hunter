@@ -42,7 +42,10 @@ from core_brain.close_methods import (  # noqa: E402
     SETTLEMENT,
     SHADOW_MERGE_NOTE,
 )
-from core_brain.shadow_run import latest_tournament_record  # noqa: E402
+from core_brain.shadow_run import (  # noqa: E402
+    latest_tournament_record,
+    parse_tournament_run_dir_name,
+)
 
 ARMS_CONFIG_484 = [
     # Issue #484: Strategy Profiles
@@ -770,6 +773,191 @@ def _read_arm_record(path: Path) -> list[dict[str, Any]]:
     return record_arms
 
 
+# What a run's own record says about the page: the arms it launched, the prose
+# from its arms file, and how long it planned to run.
+DEFAULT_TOURNAMENT_MINUTES = 720.0
+
+# Colours for plan arms whose arms file names none. Ten entries, so a ten-arm
+# run that carries no colour still reads as ten distinct lines on the charts.
+_PLAN_ARM_COLORS = (
+    "#00e676", "#00b0ff", "#e040fb", "#ffd600", "#ff6d00",
+    "#76ff03", "#b388ff", "#ff5252", "#18ffff", "#ffab40",
+)
+
+
+def _tournament_root() -> Path:
+    """The run-folder root, read through this module's ROOT so it is patchable."""
+    return ROOT / "data" / "tournaments"
+
+
+def _newest_plan_record() -> Optional[Path]:
+    """The most recently launched `plan.json`, whatever issue it belongs to.
+
+    Ranked on the folder's parsed launch stamp: the run an operator just started
+    is the one the page must follow, and an issue number says nothing about
+    launch order (a #799 run on top of a #608 one is newer, not "lower").
+    """
+    directory = _tournament_root()
+    if not directory.is_dir():
+        return None
+    best: Optional[tuple[tuple[str, str], Path]] = None
+    for candidate in directory.iterdir():
+        parsed = parse_tournament_run_dir_name(candidate)
+        plan = candidate / "plan.json"
+        if parsed is None or not plan.is_file():
+            continue
+        rank = (parsed["stamp"], candidate.name)
+        if best is None or rank > best[0]:
+            best = (rank, plan)
+    return best[1] if best else None
+
+
+def _plan_identity(plan_path: Path) -> tuple[Optional[int], Optional[float]]:
+    """`(issue, planned minutes)` for a run folder, from its folder or record."""
+    parsed = parse_tournament_run_dir_name(plan_path.parent)
+    issue = parsed["issue"] if parsed else None
+    try:
+        with open(plan_path, "r", encoding="utf-8") as f:
+            plan = json.load(f)
+    except (OSError, ValueError):
+        return issue, None
+    if not isinstance(plan, dict):
+        return issue, None
+    if issue is None and isinstance(plan.get("issue"), int):
+        issue = plan["issue"]
+    minutes = plan.get("minutes")
+    if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or minutes <= 0:
+        return issue, None
+    return issue, float(minutes)
+
+
+def _plan_arm_source(plan_path: Path) -> dict[str, dict[str, Any]]:
+    """The plan's own arms file (`arms_source`), keyed by arm name.
+
+    That file is where a run keeps the prose for its arms: the cockpit's #487
+    presets describe a different ten arms, so a newer table has to read its
+    hypotheses from the file the launcher actually executed. Best-effort -- a
+    missing or broken file leaves names only, which is still true about the run.
+    """
+    try:
+        with open(plan_path, "r", encoding="utf-8") as f:
+            plan = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(plan, dict):
+        return {}
+    source = plan.get("arms_source")
+    if not isinstance(source, str) or not source:
+        return {}
+    path = Path(source)
+    if not path.is_absolute():
+        path = ROOT / path
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            spec = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(spec, list):
+        return {}
+    return {
+        entry["name"]: entry
+        for entry in spec
+        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+    }
+
+
+def _tweak_text(env: Any) -> str:
+    """`key = value` pairs for an arm's env, in the cockpit's own prose form."""
+    if not isinstance(env, dict):
+        return ""
+    lines = []
+    for key, value in env.items():
+        lines.append(f"{str(key).removeprefix('BOT_').lower()} = {value}")
+    return " \u00b7 ".join(lines)
+
+
+def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
+    """The arms a plan actually launched, shaped like the static preset rows."""
+    try:
+        record_arms = _read_arm_record(plan_path)
+    except TournamentRecordError:
+        return []
+    issue, _ = _plan_identity(plan_path)
+    source = _plan_arm_source(plan_path)
+    arms = []
+    for i, record_arm in enumerate(record_arms):
+        name = record_arm["name"]
+        entry = source.get(name) or {}
+        arms.append({
+            "issue": issue if issue is not None else 0,
+            "name": name,
+            "label": entry.get("label") or name.replace("-", " ").title(),
+            "port": record_arm.get("dash_port", 0),
+            "db": record_arm.get("db_path", ""),
+            "run_id": record_arm.get("run_id", ""),
+            "color": entry.get("color") or _PLAN_ARM_COLORS[i % len(_PLAN_ARM_COLORS)],
+            "desc": entry.get("desc") or entry.get("profile") or "",
+            "worst_catalyst": "",
+            "worst_catalyst_desc": "",
+            "hypothesized_tweak": _tweak_text(entry.get("env") or record_arm.get("env")),
+            "tweak_rationale": entry.get("thesis") or "",
+        })
+    return arms
+
+
+def _arms_from_newest_plan(meta: dict[str, Any]) -> Optional[list[dict[str, Any]]]:
+    """The newest run's own arms when it is not the run this page describes."""
+    newest = _newest_plan_record()
+    if newest is None:
+        return None
+    issue, _ = _plan_identity(newest)
+    if issue is None or issue == int(meta.get("issue_primary") or 0):
+        return None
+    return build_plan_arms(newest) or None
+
+
+def resolve_tournament_meta(
+    tourney_key: str = CURRENT_SETUP_KEY,
+) -> tuple[dict[str, Any], float]:
+    """The page's branding and planned length, following the newest run.
+
+    A table that follows a newer run of another issue needs a header that says
+    so: "#487" over ten #799 arms is the same lie as ten #487 presets over a
+    #799 run. Planned minutes come from that record, so progress is measured
+    against the length the run was launched with, not a fixed 12 hours.
+    """
+    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
+    if tourney_key != CURRENT_SETUP_KEY:
+        return meta, DEFAULT_TOURNAMENT_MINUTES
+    newest = _newest_plan_record()
+    if newest is None:
+        return meta, DEFAULT_TOURNAMENT_MINUTES
+    issue, minutes = _plan_identity(newest)
+    target_minutes = minutes or DEFAULT_TOURNAMENT_MINUTES
+    if issue is None or issue == int(meta.get("issue_primary") or 0):
+        return meta, target_minutes
+    arms_label = f"{len(build_plan_arms(newest))} Arms"
+    run_label = (parse_tournament_run_dir_name(newest.parent) or {}).get("name")
+    run_label = (run_label or "run").replace("-", " ").title()
+    # The #487 preset table rides along inside its meta; leaving it there would
+    # ship those ten arms to the browser as this run's arms, under a #799 title.
+    branding = {key: value for key, value in meta.items() if key != "arms"}
+    return {
+        **branding,
+        "id": str(issue),
+        "title": f"Issue #{issue} Tournament \u2014 Live Run",
+        "subtitle": f"{target_minutes / 60.0:g}-Hour Multi-Arm Shadow Evaluation | {run_label} | {arms_label}",
+        "description": (
+            f"Following the newest tournament record on disk: issue #{issue}, {arms_label.lower()} "
+            "launched from its own arms file. Comparative reading happens after the planned run "
+            "length; catalyst columns stay empty until this run reports."
+        ),
+        "issue_primary": issue,
+        "issue_secondary": issue,
+        "nav_label": f"#{issue} {run_label} ({arms_label})",
+    }, target_minutes
+
+
 def resolve_tournament_arms_with_status(
     tourney_key: str = CURRENT_SETUP_KEY,
 ) -> tuple[list[dict[str, Any]], Optional[str]]:
@@ -787,6 +975,17 @@ def resolve_tournament_arms_with_status(
     # #484 stays fully static (archive); live keys resolve their plan file.
     if tourney_key not in ("487", "492", "608"):
         return default_arms, None
+
+    # The served page follows the newest run on disk, whatever issue launched it:
+    # an operator who starts a ten-arm #799 run must see ten #799 arms, not the
+    # #487 presets that happen to share the key. Only when an older run of this
+    # key is the newest thing on disk does the key's own record apply. Archive
+    # keys keep their own records -- #492 and #608 are frozen contracts, and the
+    # newest run on disk says nothing about what they evaluated.
+    if tourney_key == CURRENT_SETUP_KEY:
+        page_arms = _arms_from_newest_plan(meta)
+        if page_arms:
+            return page_arms, None
 
     # One resolver for every key: `latest_tournament_record` ranks by parsed
     # (run number, stamp), so a named run (#487's `--stamp current_setup_10arm`)
@@ -1087,9 +1286,9 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
 
 def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
     """Analyze all tournament arms for the selected tournament and compile overall metrics."""
-    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
+    meta, target_minutes = resolve_tournament_meta(tourney_key)
     arms_config, record_error = resolve_tournament_arms_with_status(tourney_key)
-    arms_data = [analyze_arm_database(cfg) for cfg in arms_config]
+    arms_data = [analyze_arm_database(cfg, target_minutes) for cfg in arms_config]
     
     # Sort by Total PnL descending for leaderboard
     sorted_arms = sorted(arms_data, key=lambda x: x.get("total_pnl", -999.0), reverse=True)
@@ -1130,8 +1329,8 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
     
     # Global tournament progress
     max_elapsed = max((a.get("elapsed_min", 0.0) for a in arms_data), default=0.0)
-    progress_pct = min(100.0, round((max_elapsed / 720.0) * 100.0, 1))
-    time_rem_min = max(0.0, 720.0 - max_elapsed)
+    progress_pct = min(100.0, round((max_elapsed / target_minutes) * 100.0, 1))
+    time_rem_min = max(0.0, target_minutes - max_elapsed)
     
     # Leaders
     leader_1 = None
@@ -1181,9 +1380,10 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
         "agg_spread": agg_spread,
         "max_elapsed_min": round(max_elapsed, 1),
         "elapsed_hours": round(max_elapsed / 60.0, 2),
+        "target_hours": round(target_minutes / 60.0, 2),
         "rem_hours": round(time_rem_min / 60.0, 2),
         "progress_pct": progress_pct,
-        "is_completed": max_elapsed >= 719.0,
+        "is_completed": max_elapsed >= target_minutes - 1.0,
         "l1_title": l1_title,
         "leader_484": leader_1["name"] if leader_1 else "N/A",
         "leader_484_label": leader_1.get("label", "N/A") if leader_1 else "N/A",
@@ -1505,7 +1705,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <span class="tourney-nav-label">Tournament Evaluation:</span>
   <a href="/487" class="tourney-pill active">
     <span>🧪</span>
-    <span>#487 Current Setup (10 Arms)</span>
+    <span>{initial_data.get('tourney_meta', {}).get('nav_label') or '#487 Current Setup (10 Arms)'}</span>
     <span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">CURRENT SETUP</span>
   </a>
 </div>
@@ -1519,7 +1719,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <div class="header-controls">
     <div class="progress-card">
       <div style="font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between;">
-        <span>Progress: <strong id="progress-text" class="tabular">{initial_data.get('elapsed_hours', 0.0):.1f}h / 12.0h</strong></span>
+        <span>Progress: <strong id="progress-text" class="tabular">{initial_data.get('elapsed_hours', 0.0):.1f}h / {initial_data.get('target_hours', 12.0):.1f}h</strong></span>
         <span id="rem-text" class="tabular">~{initial_data.get('rem_hours', 12.0):.1f}h rem</span>
       </div>
       <div class="progress-bar-bg">
@@ -1550,7 +1750,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <div class="m-card">
     <div class="m-label">Total Pair Merges</div>
     <div class="m-val tabular" id="m-merges">{initial_data.get('total_merges', 0):,}</div>
-    <div class="m-sub" id="m-merges-sub">Across all 10 tournament arms</div>
+    <div class="m-sub" id="m-merges-sub">Across all {len(initial_data.get('arms') or [])} tournament arms</div>
   </div>
   <div class="m-card">
     <div class="m-label">Total Quoted Orders</div>
@@ -1625,7 +1825,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     </div>
     <div class="chart-box">
       <div class="chart-header">
-        <div class="chart-title">Multi-Factor Radar: Control vs Deadband-Wide</div>
+        <div class="chart-title" id="radar-title">Multi-Factor Radar: Leader vs Control</div>
         <div class="chart-legend">Balanced profile comparison</div>
       </div>
       <div style="height: 280px;">
@@ -1849,8 +2049,9 @@ function renderAll() {{
   // Header metrics
   const elapsedH = (state.elapsed_hours != null ? Number(state.elapsed_hours) : 0).toFixed(1);
   const remH = (state.rem_hours != null ? Number(state.rem_hours) : 12.0).toFixed(1);
+  const targetH = (state.target_hours != null ? Number(state.target_hours) : 12.0).toFixed(1);
   const pct = Math.min(100, Math.max(0, state.progress_pct || 0)).toFixed(1);
-  document.getElementById('progress-text').innerText = elapsedH + 'h / 12.0h';
+  document.getElementById('progress-text').innerText = elapsedH + 'h / ' + targetH + 'h';
   document.getElementById('rem-text').innerText = '~' + remH + 'h rem';
   document.getElementById('progress-bar').style.width = pct + '%';
   document.getElementById('m-leader-484').innerText = state.leader_484_label || state.leader_484;
@@ -1971,8 +2172,15 @@ function renderCharts() {{
   const radarCtx = document.getElementById('radarChart');
   if (radarCtx) {{
     if (charts.radar) charts.radar.destroy();
-    const ctrl = state.arms.find(a => a.name.startsWith('control')) || state.arms[0];
-    const dbw = state.arms.find(a => a.name.startsWith('deadband-wide')) || state.arms[1];
+    const ctrl = state.arms.find(a => /^(control|.*baseline)/.test(a.name)) || state.arms[0];
+    // The leaderboard is sorted by PnL, so `arms[0]` is the arm to read against
+    // the control. The old pair was pinned to #487's `control` and
+    // `deadband-wide` names, which no other run has.
+    const rival = state.arms.find(a => a.name !== (ctrl && ctrl.name)) || ctrl;
+    const radarTitle = document.getElementById('radar-title');
+    if (radarTitle && ctrl && rival) {{
+      radarTitle.innerText = 'Multi-Factor Radar: ' + rival.label + ' vs ' + ctrl.label;
+    }}
     charts.radar = new Chart(radarCtx, {{
       type: 'radar',
       data: {{
@@ -1992,16 +2200,16 @@ function renderCharts() {{
             backgroundColor: 'rgba(0, 230, 118, 0.2)'
           }},
           {{
-            label: dbw.label,
+            label: rival.label,
             data: [
-              Math.max(0, dbw.total_pnl * 4),
-              dbw.win_rate,
-              dbw.merge_rate,
-              Math.max(0, 100 - dbw.max_drawdown * 8),
-              Math.min(100, dbw.profit_factor * 40),
-              Math.max(0, dbw.mean_pnl * 300)
+              Math.max(0, rival.total_pnl * 4),
+              rival.win_rate,
+              rival.merge_rate,
+              Math.max(0, 100 - rival.max_drawdown * 8),
+              Math.min(100, rival.profit_factor * 40),
+              Math.max(0, rival.mean_pnl * 300)
             ],
-            borderColor: dbw.color,
+            borderColor: rival.color,
             backgroundColor: 'rgba(118, 255, 3, 0.2)'
           }}
         ]
