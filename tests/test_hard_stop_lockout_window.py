@@ -156,3 +156,23 @@ def test_a_zero_lockout_leaves_the_publication_gate_alone(tmp_path):
     assert [r.status for r in results] == ["QUOTED"]
     assert submitted == [["UP"]]
     assert reg.requalification_marks() == {}
+
+
+def test_a_zero_lockout_still_waits_for_a_publication(tmp_path):
+    """Turning the floor off must not turn #816's block off with it.
+
+    Nothing but a newer qualifying publication may clear a hard-stop mark when
+    the window is disabled -- the sweep is not a back door where the supplier
+    carries no publication metadata at all.
+    """
+    reg = _reg(tmp_path)
+    reg.mark_hard_stop_block(CID, "hard_stop_exited",
+                             int(time.time() * 1000) - 60_000)
+    submitted = []
+
+    results = _run_once(reg, submitted, [FakeMarket(CID)], lockout_sec=0.0)
+
+    assert [(r.status, r.why) for r in results] == [
+        ("SKIPPED", "awaiting_requalification")]
+    assert submitted == []
+    assert CID.lower() in reg.requalification_marks()

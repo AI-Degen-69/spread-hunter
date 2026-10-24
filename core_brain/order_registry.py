@@ -1377,10 +1377,14 @@ class OrderRegistry:
         window has passed the block is over and the market is quotable again
         even if the feed never re-lists it. An in-flight `resetting` mark is
         never touched, and merge marks keep clearing on publication only.
-        Returns how many blocks were released; `lockout_sec` of 0 releases
-        immediately, matching the "0 disables" convention.
+        Returns how many blocks were released. A `lockout_sec` of 0 disables
+        the floor without weakening #816: the sweep does nothing and the mark
+        stays until a newer qualifying publication clears it, exactly as
+        before the window existed.
         """
-        cutoff_ms = int(now_ms) - int(max(0.0, float(lockout_sec)) * 1000)
+        if float(lockout_sec) <= 0.0:
+            return 0
+        cutoff_ms = int(now_ms) - int(float(lockout_sec) * 1000)
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             cur = conn.execute(
