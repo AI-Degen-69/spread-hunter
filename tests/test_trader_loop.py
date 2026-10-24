@@ -25,13 +25,12 @@ import pytest
 from core_brain.trader_loop import (
     LiveFleetResult,
     VenueSeam,
-    VisitOutcome,
-    _classify_refusal,
     _production_reconcile_fn,
     _visit_one,
     plan_orders,
     run,
 )
+from core_brain.visit_outcome import VisitOutcome, classify_refusal_text
 from core_brain import trader_loop
 from core_brain.config import MakerConfig
 from core_brain.quotes import Inventory, QuoteIntent, decide_quotes
@@ -1322,7 +1321,7 @@ class TestClassifyRefusal:
         "hit 25 fills for this market",
     ])
     def test_terminal_markers_cancel(self, why):
-        assert _classify_refusal(why) is VisitOutcome.REFUSED_TERMINAL
+        assert classify_refusal_text(why) is VisitOutcome.REFUSED_TERMINAL
 
     @pytest.mark.parametrize("why", [
         "UP: 8.0c from mid > 4.5c quote window; "
@@ -1331,7 +1330,7 @@ class TestClassifyRefusal:
         "",
     ])
     def test_flicker_reasons_hold(self, why):
-        assert _classify_refusal(why) is VisitOutcome.REFUSED_TRANSIENT
+        assert classify_refusal_text(why) is VisitOutcome.REFUSED_TRANSIENT
 
 
 class TestRefusedHold:
@@ -1570,8 +1569,8 @@ class TestLifecycleStops:
     def test_trader_classifier_delegates_without_changing_outcomes(self):
         # Parity with the old TERMINAL_REFUSAL_MARKERS table.
         for why, _code in self.CASES:
-            assert _classify_refusal(why) is VisitOutcome.REFUSED_TERMINAL
-        assert _classify_refusal("wide book, retry") is VisitOutcome.REFUSED_TRANSIENT
+            assert classify_refusal_text(why) is VisitOutcome.REFUSED_TERMINAL
+        assert classify_refusal_text("wide book, retry") is VisitOutcome.REFUSED_TRANSIENT
 
 
 class _TokMarket:
@@ -2999,7 +2998,7 @@ class TestHeldFirstRotation:
 class TestRefusalVisitRows:
     """#622 T3: the rate denominator.
 
-    `_note_lifecycle_stop` writes nothing for a HELD refusal -- `_visit_stop`
+    `_note_lifecycle_stop` writes nothing for a HELD refusal -- `visit_stop`
     returns `None` when the reason is transient -- so under `keep`/`drift` almost
     every refusal left no row at all and the arms had no comparable denominator.
     Without a count of refusal VISITS, "this arm cancelled more" cannot be told

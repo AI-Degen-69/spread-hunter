@@ -26,7 +26,6 @@ import uuid
 from collections import deque
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
-from enum import Enum
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -42,6 +41,9 @@ from core_brain.rotation_priority import order_by_exposure
 from core_brain.cycle_stream import emit as _emit_cycle_event
 from core_brain.market_lifecycle import (
     LifecycleStop, classify_refusal, resolved_condition_ids,
+)
+from core_brain.visit_outcome import (
+    VisitOutcome, classify_refusal_text, visit_stop,
 )
 from core_brain.order_registry import InstanceInUse, OrderRegistry
 from core_brain import risk
@@ -101,31 +103,6 @@ UMA_RESOLUTION_STATUS_REASONS = {
 
 # Attribute attached to exceptions when submit raises after placing some legs.
 PARTIAL_SUBMIT_PLACED_ATTR = "placed"
-
-
-class VisitOutcome(Enum):
-    """What one market visit decided, beyond the intents list."""
-    QUOTED = "quoted"                    # intents present (or no opinion)
-    REFUSED_TRANSIENT = "refused_transient"  # visited, refused: transient reason
-    REFUSED_TERMINAL = "refused_cancel"  # visited, refused for good: named stop
-
-
-def _classify_refusal(why: str) -> VisitOutcome:
-    """Terminal or transient, from `decide`'s refusal reason (pure).
-
-    Delegates to the single enumerated list in `market_lifecycle`: a named
-    stop refuses for good, everything else (wide book, completable cap,
-    quote window, mid band, ...) is transient -- the book moved, not the
-    market. Matched case-insensitively.
-    """
-    if classify_refusal(why) is not None:
-        return VisitOutcome.REFUSED_TERMINAL
-    return VisitOutcome.REFUSED_TRANSIENT
-
-
-def _visit_stop(why: str) -> Optional[LifecycleStop]:
-    """Name the lifecycle stop for a refused visit (pure)."""
-    return classify_refusal(why or "")
 
 
 
@@ -2112,7 +2089,7 @@ def _visit_one(
         visit_outcome = (
             VisitOutcome.REFUSED_TERMINAL
             if lifecycle_refused and not lifecycle_holds
-            else _classify_refusal(why) if not intents
+            else classify_refusal_text(why) if not intents
             else VisitOutcome.QUOTED
         )
         if intents:
@@ -2121,7 +2098,7 @@ def _visit_one(
                 stop_memory.pop(cid, None)
         else:
             _note_lifecycle_stop(
-                seam, cid, title, _visit_stop(why),
+                seam, cid, title, visit_stop(why),
                 why, stop_memory, cycle, emit_fn)
             _note_refusal_visit(
                 seam, cid, title,
