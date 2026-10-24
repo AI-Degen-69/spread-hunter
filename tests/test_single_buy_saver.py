@@ -2878,3 +2878,139 @@ def test_same_pair_refill_books_only_refill_cost(registry: OrderRegistry):
     closes = sorted(registry.get_all_closes(), key=lambda r: r["ts"])
     assert len(closes) == 2
     assert closes[1]["cost_basis"] == pytest.approx(1.00)
+
+
+# ---------------------------------------------------------------------------
+# Issue #797 — a hedge the pair cap cannot reach bails out on time
+# ---------------------------------------------------------------------------
+# shadow-01 / moe: UP 10 @ 0.82 was entered against a 0.17 hedge that was
+# reachable when the entry was quoted (DOWN ask 0.151). Fifteen minutes later
+# the DOWN market had walked to 0.4225 while the best hedge the cap allows
+# stayed at 0.17 -- unreachable, not merely wide. Nothing in the poll could act
+# on that, so the naked leg waited out the whole 900s window and was finally
+# stopped by the 75% circuit floor at 22:57, booking -6.10. The bail-out below
+# exits at the strategy's own hedge window instead of the catastrophe floor,
+# through the same exit, and books its own reason so a cap bail-out and a
+# lifecycle stop stay distinguishable in the ledger.
+
+CAP797_COND = "0xcond-moe-797"
+CAP797_PAIR = "pair-moe-797"
+CAP797_FILL_MS = 1_000_000
+CAP797_FILL_S = CAP797_FILL_MS / 1000.0
+# 300s: the existing maker window a naked leg is granted before the poll gives
+# up on the hedge (`bot_risk_stranded_max_wait_sec`).
+CAP797_WAIT_S = 300.0
+
+
+def _cap797_pair(registry: OrderRegistry, filled_ms: int) -> None:
+    """UP 10 @ 0.82 filled, DOWN 10 resting at the 0.17 hedge that was reachable.
+
+    The pair cap (0.995, capped at 0.99) leaves 0.17 for the hedge -- exactly
+    the bid moe posted. Only the DOWN market's movement decides whether that
+    bid can still reach it.
+    """
+    up = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-up-797",
+        condition_id=CAP797_COND, token_id=TOK_UP, side="BUY", price=0.82,
+        original_size=10.0, status="filled", posted_ts=filled_ms,
+        last_polled_ts=filled_ms, pair_id=CAP797_PAIR,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(up)
+    registry.record_fill(FillRecord(
+        trade_id=f"trade-{up.id}", order_uuid=up.id, size=10.0,
+        price=0.82, venue_ts=filled_ms,
+    ))
+    down = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-dn-797",
+        condition_id=CAP797_COND, token_id=TOK_DN, side="BUY", price=0.17,
+        original_size=10.0, status="open", posted_ts=filled_ms,
+        last_polled_ts=filled_ms, pair_id=CAP797_PAIR,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(down)
+    registry.log_quote(QuoteRecord(
+        ts=filled_ms / 1000.0, condition_id=CAP797_COND, token_id=TOK_UP,
+        side="UP", price=0.82, size=10.0,
+    ))
+    registry.log_quote(QuoteRecord(
+        ts=filled_ms / 1000.0, condition_id=CAP797_COND, token_id=TOK_DN,
+        side="DOWN", price=0.17, size=10.0,
+    ))
+
+
+def _cap797_route(registry: OrderRegistry, venue, now_s: float) -> dict:
+    results = lp.manage_single_leg_positions(
+        venue, registry, _trig525_cfg(), live=True, now=now_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+    assert len(results) == 1
+    return results[0]
+
+
+def test_cap_unreachable_hedge_exits_on_time_not_on_price(
+        registry: OrderRegistry):
+    """moe replay: 301s in, a capped hedge under the ask exits deliberately.
+
+    The held leg's own bid is 0.35 -- nowhere near the 75% circuit floor
+    (0.205) -- so an exit here can only come from the cap check, and the sale
+    must be the existing exit's taker sell, not a second resting quote.
+    """
+    _cap797_pair(registry, CAP797_FILL_MS)
+    venue = DecisionThenExecutionBook(
+        decision_bid=0.35, execution_bid=0.34, light_ask=0.4225)
+
+    routed = _cap797_route(registry, venue, CAP797_FILL_S + CAP797_WAIT_S + 1.0)
+
+    assert routed["action"] == "exited"
+    assert routed["route"] == "pair_cap_bailout"
+    closes = [c for c in registry.get_all_closes()
+              if c.get("method") == "single_buy_exit"]
+    assert len(closes) == 1
+    assert closes[0]["reason"] == "pair_cap_hedge_unreachable"
+    assert [c for c in venue.calls if c.startswith("sell:")] == ["sell:tok-up:10.0"]
+    assert not any(c.startswith("buy:") for c in venue.calls)
+
+
+def test_reachable_hedge_is_never_a_cap_bailout(registry: OrderRegistry):
+    """Invariant: a reachable-but-wide hedge keeps waiting, however long.
+
+    0.17 hedge bid against a 0.16 ask fits the pair cap, so the pair can still
+    complete at a profit -- it is wide, not unreachable. Two windows of wait
+    must not sell it.
+    """
+    _cap797_pair(registry, CAP797_FILL_MS)
+    venue = DecisionThenExecutionBook(
+        decision_bid=0.35, execution_bid=0.34, light_ask=0.16)
+
+    routed = _cap797_route(
+        registry, venue, CAP797_FILL_S + (2 * CAP797_WAIT_S))
+
+    assert routed["action"] != "exited"
+    assert not any(c.startswith("sell:") for c in venue.calls)
+
+
+def test_unreachable_hedge_inside_the_window_keeps_waiting(
+        registry: OrderRegistry):
+    """The window is the rule: unreachable for 10s is not a bail-out."""
+    _cap797_pair(registry, CAP797_FILL_MS)
+    venue = DecisionThenExecutionBook(
+        decision_bid=0.35, execution_bid=0.34, light_ask=0.4225)
+
+    routed = _cap797_route(registry, venue, CAP797_FILL_S + 10.0)
+
+    assert routed["action"] != "exited"
+    assert not any(c.startswith("sell:") for c in venue.calls)
+
+
+def test_cap_bailout_does_not_fire_without_an_opposing_ask(
+        registry: OrderRegistry):
+    """An unreadable hedge book is unknown, and unknown never sells a leg."""
+    _cap797_pair(registry, CAP797_FILL_MS)
+    venue = DecisionThenExecutionBook(
+        decision_bid=0.35, execution_bid=0.34, light_ask=None)
+
+    routed = _cap797_route(registry, venue, CAP797_FILL_S + CAP797_WAIT_S + 1.0)
+
+    assert routed["action"] != "exited"
+    assert not any(c.startswith("sell:") for c in venue.calls)

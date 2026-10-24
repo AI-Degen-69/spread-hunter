@@ -69,6 +69,20 @@ def test_hard_stop_reason_alias_uses_fresh_book(registry):
     assert resp["price"] == pytest.approx(0.13)
 
 
+def test_pair_cap_bailout_uses_fresh_book(registry):
+    """#797: the cap bail-out is decided off the live hedge ask, so it sells
+    into the fresh book too -- measuring it against the stale snapshot would
+    book the fictional fill the hard-stop reasons exist to prevent."""
+    _stale_snapshot(registry, best_bid=0.24, best_bid_size=10.0)
+    client = _client(registry, {"bids": {0.13: 20.0}, "asks": {}})
+
+    resp = client.create_and_post_market_order(
+        _args("tok-dn", 5.0, 0.11), reason="pair_cap_hedge_unreachable")
+
+    assert resp["size"] == pytest.approx(5.0)
+    assert resp["price"] == pytest.approx(0.13)
+
+
 def test_sell_into_bids_fresh_flag_skips_snapshot(registry):
     """Direct ladder-walk coverage, independent of the order entry point."""
     _stale_snapshot(registry, best_bid=0.83, best_bid_size=10.0)

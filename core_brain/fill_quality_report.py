@@ -580,7 +580,7 @@ def _condition_outcomes(closes: tuple[dict, ...]) -> dict[str, tuple[str, float]
         reasons = {r.get("reason") for r in rows}
         methods = {r.get("method") for r in rows}
         pnl = sum(float(r.get("realized_pnl") or 0.0) for r in rows)
-        if "lifecycle_hard_stop" in reasons:
+        if reasons & {"lifecycle_hard_stop", "pair_cap_hedge_unreachable"}:
             label = "dead_leg"
         elif "aged_out_rescue" in reasons:
             label = "aged_out_rescue"

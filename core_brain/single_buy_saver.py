@@ -1931,6 +1931,85 @@ class AgedOutMarketStateCache:
         return (float(end_ts) - float(lead_sec) - now_s) > self._skip_margin_sec
 
 
+def _pair_cap_hedge_bailout(
+    client,
+    registry: OrderRegistry,
+    *,
+    pair_id: str,
+    position,
+    side_tokens: dict,
+    held_token: str,
+    held_bid: Optional[float],
+    last_fill_ms: float,
+    now_s: float,
+    cfg,
+    bot_pos_price_max_pair_cost_usd: float,
+    tick_size: float,
+    live: bool,
+    venue_positions: Optional[dict[str, float]],
+    lifecycle_state: Optional[str],
+) -> Optional[dict]:
+    """Exit a naked leg whose capped hedge has left the market behind (#797).
+
+    moe/shadow-01: UP 10 @ 0.82 was entered against a 0.17 hedge that was
+    reachable when the entry was quoted (DOWN ask 0.151). Fifteen minutes later
+    the DOWN market had walked to 0.4225 while the best hedge the pair cap
+    allows stayed at 0.17 -- unreachable, not merely wide. Waiting cannot
+    complete that pair, so the naked leg leaves through the existing exit at
+    the strategy's own hedge window instead of holding to the 75% circuit
+    floor. Its own reason keeps a cap bail-out distinguishable from a
+    lifecycle stop, and its own route keeps the two apart in the ledger.
+
+    Returns None when the hedge is still reachable, when the ask is unknown,
+    or when the leg is younger than the window -- the ordinary wait owns it.
+    """
+    from core_brain.single_leg_lifecycle import hedge_unreachable_at_cap
+
+    age_s = ((now_s * 1000.0 - last_fill_ms) / 1000.0) if last_fill_ms > 0 else 0.0
+    try:
+        hedge_wait_s = float(getattr(cfg, "bot_risk_stranded_max_wait_sec", 300.0))
+    except (TypeError, ValueError):
+        hedge_wait_s = 300.0
+    if last_fill_ms <= 0 or age_s <= hedge_wait_s:
+        return None
+
+    held_is_up = held_token == side_tokens["UP"]
+    opposing_token = side_tokens["DOWN"] if held_is_up else side_tokens["UP"]
+    held_average_price = (
+        position.up_avg_price if held_is_up else position.down_avg_price
+    )
+    try:
+        opposing_book = (
+            client.get_order_book(opposing_token)
+            if hasattr(client, "get_order_book") else None
+        )
+        opposing_ask = best_ask(opposing_book) if opposing_book else None
+    except Exception as ask_exc:
+        # An unreadable hedge book is unknown, and unknown never sells a leg.
+        log.debug("Hedge ask read failed for pair %s: %s", pair_id, ask_exc)
+        opposing_ask = None
+
+    if not hedge_unreachable_at_cap(
+        held_average_price, opposing_ask,
+        bot_pos_price_max_pair_cost_usd, tick_size,
+    ):
+        return None
+
+    bailout = exit_single_buy(
+        client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
+        live=live, venue_positions=venue_positions,
+        reason="pair_cap_hedge_unreachable", force=True,
+        trigger_bid=held_bid,
+    )
+    bailout.update(
+        route="pair_cap_bailout",
+        lifecycle_state=lifecycle_state,
+        unreachable_for_sec=round(age_s, 3),
+        opposing_best_ask=opposing_ask,
+    )
+    return bailout
+
+
 def manage_single_leg_positions(
     client,
     registry: OrderRegistry,
@@ -2005,8 +2084,8 @@ def _manage_single_leg_positions_locked(
 
     from core_brain.quotes import dynamic_offset_for
     from core_brain.single_leg_lifecycle import (
-        LegState, SingleLegPosition, evaluate, max_profitable_hedge_bid,
-        persist_decision, transition,
+        LegState, SingleLegPosition, evaluate, hedge_unreachable_at_cap,
+        max_profitable_hedge_bid, persist_decision, transition,
     )
 
     now_s = now if now is not None else time.time()
@@ -2300,6 +2379,33 @@ def _manage_single_leg_positions_locked(
                     out.append(result)
                     continue
                 if verdict != AGED_OUT_NOT_AGED_OUT:
+                    # A long-dated market keeps a naked leg in `awaiting_lead`
+                    # for hours, and that is precisely the leg the cap
+                    # bail-out exists for (#797). `end_unknown` and
+                    # `venue_closed` stay with settlement, and `due` never
+                    # reaches this branch.
+                    bailout = None
+                    if verdict == AGED_OUT_AWAITING_LEAD:
+                        bailout = _pair_cap_hedge_bailout(
+                            client, registry,
+                            pair_id=pair_id,
+                            position=position,
+                            side_tokens=side_tokens,
+                            held_token=held_token,
+                            held_bid=held_bid,
+                            last_fill_ms=last_fill_ms,
+                            now_s=now_s,
+                            cfg=cfg,
+                            bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
+                            tick_size=tick_size,
+                            live=live,
+                            venue_positions=venue_positions,
+                            lifecycle_state=decision.state.value,
+                        )
+                    if bailout is not None:
+                        bailout.update(aged_out_verdict=verdict)
+                        out.append(bailout)
+                        continue
                     out.append({
                         "pair_id": pair_id, "condition_id": condition_id,
                         "action": verdict, "lifecycle_state": decision.state.value,
@@ -2382,6 +2488,27 @@ def _manage_single_leg_positions_locked(
                 log.info("Exposure check skipped for pair %s: %s", pair_id, exp_exc)
             except Exception as exp_exc:
                 log.debug("Exposure resolution check skipped for pair %s: %s", pair_id, exp_exc)
+
+            # Pair-cap hedge bail-out (#797)
+            bailout = _pair_cap_hedge_bailout(
+                client, registry,
+                pair_id=pair_id,
+                position=position,
+                side_tokens=side_tokens,
+                held_token=held_token,
+                held_bid=held_bid,
+                last_fill_ms=last_fill_ms,
+                now_s=now_s,
+                cfg=cfg,
+                bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
+                tick_size=tick_size,
+                live=live,
+                venue_positions=venue_positions,
+                lifecycle_state=decision.state.value,
+            )
+            if bailout is not None:
+                out.append(bailout)
+                continue
 
             action = {
                 "wait": "patient_wait",
