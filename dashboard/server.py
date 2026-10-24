@@ -2886,20 +2886,19 @@ def api_system_cancel_all(request: Request):
     to 127.0.0.1:8799 can cancel every resting order on a live bot.
     """
     _authorize_control(request)
-    from core_brain.order_manager import cancel_all
-    try:
-        cancel_all(live=True)
-        return JSONResponse({"ok": True, "message": "All open orders cancelled on the venue."})
-    except SystemExit as e:
+    # Direct seam adapter: the Order Manager verb keeps the CLI rendering
+    # (stdout print, SystemExit); the server renders the same refusal as JSON.
+    from core_brain.order_execution import cancel_all_orders
+    from core_brain.order_manager import client as build_venue_client
+    # The seam maps every venue failure to a refusal, so there is nothing to
+    # catch here: a raise would mean the seam itself broke.
+    result = cancel_all_orders(client_fn=build_venue_client, live=True)
+    if not result.ok:
         return JSONResponse(
-            {"ok": False, "message": f"Venue rejected cancel-all: {e}"},
+            {"ok": False, "message": f"Venue rejected cancel-all: {result.refusal}"},
             status_code=502,
         )
-    except Exception as e:
-        return JSONResponse(
-            {"ok": False, "message": f"Cancel-all failed: {e}"},
-            status_code=500,
-        )
+    return JSONResponse({"ok": True, "message": "All open orders cancelled on the venue."})
 
 
 @app.post("/api/system/reset")
@@ -2920,7 +2919,8 @@ def api_system_reset(request: Request):
     cancelled, and the account value at reset time becomes the starting capital.
     """
     _authorize_control(request)
-    from core_brain.order_manager import cancel_all, account_sweep
+    from core_brain.order_execution import cancel_all_orders
+    from core_brain.order_manager import account_sweep, client as build_venue_client
 
     steps = []
 
@@ -2943,11 +2943,11 @@ def api_system_reset(request: Request):
 
     # 2. Cancel all open orders on the venue (best-effort; if credentials
     #    are missing or the venue is down, the reset still proceeds)
-    try:
-        cancel_all(live=True)
+    reset_cancel = cancel_all_orders(client_fn=build_venue_client, live=True)
+    if reset_cancel.ok:
         steps.append("venue: all open orders cancelled")
-    except (Exception, SystemExit) as e:
-        steps.append(f"venue: cancel-all skipped ({e})")
+    else:
+        steps.append(f"venue: cancel-all skipped ({reset_cancel.refusal})")
 
     # 3. Archive + wipe the database
     reset_result = reset_database()
