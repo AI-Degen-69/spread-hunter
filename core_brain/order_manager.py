@@ -2939,13 +2939,20 @@ def cancel_market(condition_id: str, live: bool,
 
 
 def cancel_all(live: bool) -> None:
+    # Thin CLI adapter over the owned execution seam: this verb keeps the
+    # exact CLI behavior (dry-run print, SystemExit message, response print)
+    # while the Dashboard server renders the same result as JSON.
+    from core_brain.order_execution import cancel_all_orders
+
     if not live:
         print("DRY RUN -- would cancel ALL open orders. Re-run with --live.")
         return
-    try:
-        resp = client().cancel_all()
-    except Exception as exc:
-        raise SystemExit(f"CANCEL-ALL REFUSED: venue rejected cancel-all: {exc}") from exc
+    result = cancel_all_orders(client_fn=client, live=True)
+    if not result.ok:
+        raise SystemExit(
+            f"CANCEL-ALL REFUSED: venue rejected cancel-all: {result.refusal}"
+        )
+    resp = result.response
     print(json.dumps(resp, indent=2, default=str) if isinstance(resp, (dict, list)) else resp)
 
 
