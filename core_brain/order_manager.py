@@ -85,6 +85,7 @@ if str(ROOT) not in sys.path:
 # The pre-rename run/ path, for readers that must not miss state written before
 # the rename. Imported below the sys.path bootstrap, like every other
 # core_brain import here. See core_brain/runtime_paths.py.
+from core_brain.env_file import find_env_file  # noqa: E402
 from core_brain.runtime_paths import legacy_runtime_file  # noqa: E402
 
 
@@ -113,19 +114,9 @@ from core_brain.account import fetch_live_balance, log_float_mark_if_measured
 
 
 def _find_env_file() -> Path | None:
-    curr = Path(__file__).resolve().parent
-    for _ in range(4):
-        if (curr / ".env").is_file():
-            return curr / ".env"
-        if (curr / "AGENTS.md").is_file():
-            # Repo root reached and the .env check above already missed here, so
-            # there is nothing further up worth loading. Stop rather than walk
-            # out of the project and pick up a stranger's .env.
-            break
-        if curr.parent == curr:
-            break
-        curr = curr.parent
-    return None
+    # One seam for .env lookup: the Dashboard server resolves the same file
+    # through core_brain.env_file without importing this heavy CLI module.
+    return find_env_file(Path(__file__).resolve().parent)
 
 
 _env_file = _find_env_file()
