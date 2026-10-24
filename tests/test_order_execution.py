@@ -125,7 +125,7 @@ def test_server_cancel_all_adapts_the_seam_not_the_cli_verb(_server_client, monk
     assert callable(seen["client_fn"])
 
 
-def test_server_cancel_all_refusal_is_a_502_with_the_cli_message(_server_client, monkeypatch):
+def test_server_cancel_all_refusal_is_a_502_with_the_venue_refusal(_server_client, monkeypatch):
     import core_brain.order_execution as seam
     from core_brain.order_execution import CancelAllResult
 
@@ -138,7 +138,9 @@ def test_server_cancel_all_refusal_is_a_502_with_the_cli_message(_server_client,
     assert res.status_code == 502
     assert res.json() == {
         "ok": False,
-        "message": "Venue rejected cancel-all: CANCEL-ALL REFUSED: venue rejected cancel-all: Unauthorized",
+        # One prefix and the venue's own words -- not the CLI verb's
+        # "CANCEL-ALL REFUSED: venue rejected cancel-all:" wrapper re-prefixed.
+        "message": "Venue rejected cancel-all: Unauthorized",
     }
 
 
@@ -174,7 +176,7 @@ def test_server_reset_survives_a_venue_refusal(_server_client, monkeypatch):
     res = _server_client.post("/api/system/reset", headers=_server_control())
     assert res.status_code == 200
     assert res.json()["ok"] is True
-    assert "venue: cancel-all skipped (CANCEL-ALL REFUSED: venue rejected cancel-all: boom)" in res.json()["steps"]
+    assert "venue: cancel-all skipped (boom)" in res.json()["steps"]
 
 
 def test_client_construction_failure_is_a_refusal_not_an_exit():

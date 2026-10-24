@@ -2890,16 +2890,12 @@ def api_system_cancel_all(request: Request):
     # (stdout print, SystemExit); the server renders the same refusal as JSON.
     from core_brain.order_execution import cancel_all_orders
     from core_brain.order_manager import client as build_venue_client
-    try:
-        result = cancel_all_orders(client_fn=build_venue_client, live=True)
-    except Exception as e:
-        return JSONResponse(
-            {"ok": False, "message": f"Cancel-all failed: {e}"},
-            status_code=500,
-        )
+    # The seam maps every venue failure to a refusal, so there is nothing to
+    # catch here: a raise would mean the seam itself broke.
+    result = cancel_all_orders(client_fn=build_venue_client, live=True)
     if not result.ok:
         return JSONResponse(
-            {"ok": False, "message": f"Venue rejected cancel-all: CANCEL-ALL REFUSED: venue rejected cancel-all: {result.refusal}"},
+            {"ok": False, "message": f"Venue rejected cancel-all: {result.refusal}"},
             status_code=502,
         )
     return JSONResponse({"ok": True, "message": "All open orders cancelled on the venue."})
@@ -2947,15 +2943,11 @@ def api_system_reset(request: Request):
 
     # 2. Cancel all open orders on the venue (best-effort; if credentials
     #    are missing or the venue is down, the reset still proceeds)
-    try:
-        reset_cancel = cancel_all_orders(client_fn=build_venue_client, live=True)
-    except Exception as e:
-        steps.append(f"venue: cancel-all skipped ({e})")
+    reset_cancel = cancel_all_orders(client_fn=build_venue_client, live=True)
+    if reset_cancel.ok:
+        steps.append("venue: all open orders cancelled")
     else:
-        if reset_cancel.ok:
-            steps.append("venue: all open orders cancelled")
-        else:
-            steps.append(f"venue: cancel-all skipped (CANCEL-ALL REFUSED: venue rejected cancel-all: {reset_cancel.refusal})")
+        steps.append(f"venue: cancel-all skipped ({reset_cancel.refusal})")
 
     # 3. Archive + wipe the database
     reset_result = reset_database()
