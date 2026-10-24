@@ -2354,7 +2354,7 @@ _STITCH_VIEWS = ["open-orders", "active-markets", "positions", "closed-trades"]
 
 _STITCH_ROW = re.compile(r'<tr class="stitch-')
 _STITCH_PILL = re.compile(
-    r'<span class="stitch-category-pill(?: is-muted)?">([^<]*)</span>')
+    r'<span class="stitch-category-pill[^"]*">(?:<span[^>]*>[^<]*</span>\s*)?([^<]*)</span>')
 
 
 @requires_node
@@ -2404,6 +2404,147 @@ def test_an_unlabelled_market_still_shows_a_chip_in_every_view(view, cid):
     # Assert — "Uncategorized" is an answer, and a dimmed chip keeps the column
     # aligned instead of leaving a hole on that one row.
     assert '<span class="stitch-category-pill is-muted">Uncategorized</span>' in html
+
+
+# ── Category label identity (#786) ─────────────────────────────────────────
+#
+# One icon + colour per family, inside the one `categoryPill` helper. The
+# resolver decides the label; the pill only maps that string to an emoji and
+# a tone class. `Uncategorized` stays muted with no icon; unknown labels fall
+# back to a neutral tag glyph, never a broken glyph.
+
+def _icon_kpi() -> dict:
+    # One quoted market per sampled family; each carries quotes so the
+    # Active Markets stitch builder keeps the row.
+    def _market(cid: str, title: str, category: str) -> dict:
+        return {
+            "condition_id": cid, "title": title, "category": category,
+            "days_to_resolve": 6.9, "volume_24h": 10000.0, "resolved": False,
+            "quotes_count": 2, "up_sh": 0, "dn_sh": 0, "total_sh": 0,
+            "total_cost": 0, "pair_cost": None, "realized_pnl": 0,
+            "quotes": [
+                _quote(f"{cid}-up", "UP", 0.49, 100.0),
+                _quote(f"{cid}-dn", "DN", 0.51, 101.0),
+            ],
+        }
+    return {"by_market": {
+        "0xesp": _market("0xesp", "Esp Market", "E-Sports"),
+        "0xbb": _market("0xbb", "Ball Market", "Basketball"),
+        "0xpol": _market("0xpol", "Pol Market", "Politics"),
+        "0xcry": _market("0xcry", "Cry Market", "Crypto"),
+    }}
+
+
+@requires_node
+@pytest.mark.parametrize("category,icon,tone", [
+    ("E-Sports", "\U0001F3AE", "is-esports"),
+    ("League of Legends", "\U0001F3AE", "is-esports"),
+    ("Basketball", "\U0001F3C0", "is-ball"),
+    ("Football", "\U0001F3C8", "is-ball"),
+    ("Politics", "\U0001F5F3\uFE0F", "is-politics"),
+    ("Geopolitics", "\U0001F5F3\uFE0F", "is-politics"),
+    ("Crypto", "\U0001FA99", "is-crypto"),
+])
+def test_category_pill_carries_the_family_icon_and_tone(category, icon, tone):
+    # Arrange — one quoted market carrying the sampled label.
+    kpi = {"by_market": {
+        "0xsample": {
+            "condition_id": "0xsample", "title": "Sample Market",
+            "category": category,
+            "days_to_resolve": 6.9, "volume_24h": 10000.0, "resolved": False,
+            "quotes_count": 2, "up_sh": 0, "dn_sh": 0, "total_sh": 0,
+            "total_cost": 0, "pair_cost": None, "realized_pnl": 0,
+            "quotes": [
+                _quote("tok-s-up", "UP", 0.49, 100.0),
+                _quote("tok-s-dn", "DN", 0.51, 101.0),
+            ],
+        },
+    }}
+
+    # Act
+    html = _render("active-markets", kpi, {"orders": []}, surface="stitch")["html"]
+
+    # Assert — the chip names the label, wears the family tone, and shows
+    # the family icon beside it.
+    assert f'stitch-category-pill {tone}' in html
+    assert icon in html
+    assert category in html
+
+
+@requires_node
+@pytest.mark.parametrize("view", _STITCH_VIEWS)
+def test_category_identity_renders_in_every_view(view):
+    # Arrange — a Basketball market visible in every view: quoted, resting,
+    # held and settled-with-profit so each view has a row to render.
+    kpi = _kpi()
+    for market in kpi["by_market"].values():
+        market["category"] = "Basketball"
+
+    # Act
+    html = _render(view, kpi, _state(), surface="stitch")["html"]
+
+    # Assert — the ball icon and the shared ball accent survive in all four.
+    assert "\U0001F3C0" in html
+    assert "stitch-category-pill is-ball" in html
+
+
+@requires_node
+def test_uncategorized_stays_muted_with_no_icon():
+    # Arrange — a market the resolver could not name.
+    kpi = {"by_market": {
+        "0xghost": {
+            "condition_id": "0xghost", "title": "Ghost Market", "category": "",
+            "days_to_resolve": 6.9, "volume_24h": 10000.0, "resolved": False,
+            "quotes_count": 2, "up_sh": 0, "dn_sh": 0, "total_sh": 0,
+            "total_cost": 0, "pair_cost": None, "realized_pnl": 0,
+            "quotes": [
+                _quote("tok-g-up", "UP", 0.49, 100.0),
+                _quote("tok-g-dn", "DN", 0.51, 101.0),
+            ],
+        },
+    }}
+
+    # Act
+    html = _render("active-markets", kpi, {"orders": []}, surface="stitch")["html"]
+
+    # Assert — exactly as before: muted, no icon beside the word.
+    assert '<span class="stitch-category-pill is-muted">Uncategorized</span>' in html
+
+
+@requires_node
+def test_unknown_category_falls_back_to_a_neutral_glyph():
+    # Arrange — a label the vocabulary never named.
+    kpi = {"by_market": {
+        "0xodd": {
+            "condition_id": "0xodd", "title": "Odd Market", "category": "Pickleball",
+            "days_to_resolve": 6.9, "volume_24h": 10000.0, "resolved": False,
+            "quotes_count": 2, "up_sh": 0, "dn_sh": 0, "total_sh": 0,
+            "total_cost": 0, "pair_cost": None, "realized_pnl": 0,
+            "quotes": [
+                _quote("tok-o-up", "UP", 0.49, 100.0),
+                _quote("tok-o-dn", "DN", 0.51, 101.0),
+            ],
+        },
+    }}
+
+    # Act
+    html = _render("active-markets", kpi, {"orders": []}, surface="stitch")["html"]
+
+    # Assert — a generic tag glyph on the neutral `is-other` tone, never empty.
+    assert "\U0001F3F7\uFE0F" in html
+    assert "stitch-category-pill is-other" in html
+    assert "Pickleball" in html
+
+
+def test_category_tones_have_distinct_colours():
+    # Arrange
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+
+    # Act / Assert — one rule per family, each with its own accent, and the
+    # muted Uncategorized rule is untouched.
+    for tone in ("is-esports", "is-ball", "is-politics", "is-crypto", "is-other"):
+        assert f".stitch-category-pill.{tone}" in css
+    assert ".stitch-category-pill.is-muted" in css
 
 
 _STITCH_HEAD_KEYS = [
