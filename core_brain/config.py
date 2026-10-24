@@ -30,6 +30,11 @@ from core_brain.single_leg_lifecycle import (
 
 ROOT = Path(__file__).resolve().parent.parent
 
+#: Default floor between a hard stop and its own market being quotable again
+#: (#796). `MakerConfig` reads it for the field default; the trader's
+#: re-qualification gate and `release_hard_stop_blocks` read the field.
+DEFAULT_HARD_STOP_LOCKOUT_SEC: float = 900.0
+
 @dataclass(frozen=True)
 class MakerConfig:
     # =========================================================================
@@ -217,6 +222,19 @@ class MakerConfig:
     bot_risk_circuit_fleet_posture: str = "NORMAL"
     bot_risk_gate_pairs_rule_on: bool = True
     bot_risk_pairs_exit_window_sec: float = 900.0
+    # A hard stop shuts its market to FRESH entries for this long (#796). The
+    # stop already leaves a mark, but the gate that clears marks is the
+    # picker's publication mtime, and a 15-minute sports market can be
+    # re-listed seconds after the exit -- run shadow-01 re-entered
+    # `bun-stu-moe` four minutes after stopping out of it, and the replacement
+    # was itself liquidated. This is the floor: no publication younger than
+    # the window may clear a hard-stop mark, and when the window ends the
+    # block releases on its own (`release_hard_stop_blocks`), so a market the
+    # feed stopped listing is not locked out for the rest of the run. Anchored
+    # to `bot_risk_pairs_exit_window_sec`: inside 15 minutes a naked leg still
+    # counts as fresh. 0 disables the floor, leaving the publication gate
+    # alone as before.
+    bot_risk_hard_stop_entry_lockout_sec: float = DEFAULT_HARD_STOP_LOCKOUT_SEC
     bot_risk_gate_aged_out_rescue_on: bool = True
     bot_risk_aged_out_rescue_lead_sec: float = 900.0
     bot_risk_pairs_complete_gain_cents: float = 3.68
@@ -448,6 +466,13 @@ class MakerConfig:
                         f"{_can_name}={_raw!r} must be greater than zero"
                     )
                 kw[_field] = _val
+
+        hsl = _env("BOT_RISK_HARD_STOP_ENTRY_LOCKOUT_SEC")
+        if hsl is not None:
+            # 0 is a real value here (it disables the floor), so the window is
+            # 0..24h rather than "positive only".
+            kw["bot_risk_hard_stop_entry_lockout_sec"] = _bounded_float(
+                "BOT_RISK_HARD_STOP_ENTRY_LOCKOUT_SEC", hsl, 0.0, 86_400.0)
 
         aorl = _env("BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC")
         if aorl:

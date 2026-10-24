@@ -45,7 +45,7 @@ from core_brain.market_lifecycle import (
 from core_brain.visit_outcome import (
     VisitOutcome, classify_refusal_text, visit_stop,
 )
-from core_brain.order_registry import InstanceInUse, OrderRegistry
+from core_brain.order_registry import InstanceInUse, OrderRegistry, is_hard_stop_mark
 from core_brain import risk
 from core_brain.single_leg_lifecycle import (
     LegState,
@@ -674,6 +674,28 @@ def run(
                 except Exception as e:
                     log.warning("reconcile failed: %s: %s", type(e).__name__, e)
 
+                # The other end of the hard-stop window (#796). A mark alone
+                # reopens a stopped market as soon as a newer publication lists
+                # it again; once the floor has passed the block is over on its
+                # own, so a market the feed stopped listing is not locked out
+                # for the rest of the run. Before the marks read below, so this
+                # rotation already sees the released state.
+                if registry is not None:
+                    try:
+                        released = registry.release_hard_stop_blocks(
+                            int(time.time() * 1000),
+                            _hard_stop_lockout_sec(seam.base_cfg))
+                        if released:
+                            log.info(
+                                "released %d hard-stop entry block(s) past "
+                                "their window", released)
+                    except Exception as e:
+                        # Isolation, same as reconcile and sweep: a failed
+                        # release leaves the block in place, which is the safe
+                        # direction.
+                        log.warning("hard-stop release sweep failed: %s: %s",
+                                    type(e).__name__, e)
+
                 # An empty refresh is never obeyed. `load_graduated_markets` raises on a
                 # missing, empty, malformed or stale feed, but a well-formed `[]` -- the
                 # ranker finding nothing that cycle -- returns cleanly. Adopting it would
@@ -686,7 +708,9 @@ def run(
                         log.warning("markets_fn failed: %s: %s", type(e).__name__, e)
                     else:
                         if fresh:
-                            _evaluate_requalification(registry, fresh)
+                            _evaluate_requalification(
+                                registry, fresh,
+                                lockout_sec=_hard_stop_lockout_sec(seam.base_cfg))
                             current_markets = list(fresh)
                         elif seam.markets_fn_empty_is_routine:
                             # Normal for this caller (see the seam field). Still
@@ -2332,15 +2356,43 @@ class MarketSpecList(list):
         self.publication_condition_ids = frozenset(condition_ids)
 
 
-def _evaluate_requalification(registry, fresh) -> None:
-    """Clear or retain reset marks against one publication (#646).
+def _hard_stop_lockout_sec(cfg) -> float:
+    """Seconds a hard stop keeps its own market closed to fresh entries (#796).
+
+    Read off the config field so a run can lengthen or shorten the floor with
+    an env value rather than a code change. A missing, unreadable or
+    non-positive value returns 0.0 -- the floor is off, which is exactly the
+    pre-#796 behaviour: the publication gate alone decides.
+    """
+    raw = getattr(cfg, "bot_risk_hard_stop_entry_lockout_sec", None)
+    if raw is None:
+        from core_brain.config import DEFAULT_HARD_STOP_LOCKOUT_SEC
+        raw = DEFAULT_HARD_STOP_LOCKOUT_SEC
+    try:
+        sec = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    return sec if math.isfinite(sec) and sec > 0 else 0.0
+
+
+def _evaluate_requalification(registry, fresh, *,
+                              lockout_sec: Optional[float] = None,
+                              now_ms: Optional[int] = None) -> None:
+    """Clear or retain reset marks against one publication (#646, #796).
 
     Runs after a successful `markets_fn()` load, before empty-result
     handling. Only a publication strictly newer than the reset clears its
     generation when it includes the market; a newer one that excludes it is
-    recorded and the market stays blocked. Suppliers without metadata,
-    and any failure here, leave every mark exactly where it was.
+    recorded and the market stays blocked. A hard-stop mark is the exception
+    the window carves out: no publication clears it inside `lockout_sec`,
+    because a feed that re-lists the condition seconds after the exit is
+    exactly how the run re-opened a market it had just stopped out. Past the
+    window the floor expires and the ordinary rule applies (the release sweep
+    usually drops the mark first). Suppliers without metadata, and any
+    failure here, leave every mark exactly where it was.
     """
+    if lockout_sec is None:
+        lockout_sec = _hard_stop_lockout_sec(None)
     published_ns = getattr(fresh, "published_mtime_ns", None)
     raw_cids = getattr(fresh, "publication_condition_ids", None)
     if published_ns is None or raw_cids is None or registry is None:
@@ -2350,8 +2402,13 @@ def _evaluate_requalification(registry, fresh) -> None:
     except Exception as exc:
         log.warning("re-qualification evaluation skipped: %s", exc)
         return
+    lockout_ms = int(max(0.0, float(lockout_sec)) * 1000)
+    now = int(now_ms if now_ms is not None else time.time() * 1000)
     for cid, mark in marks.items():
         try:
+            if (lockout_ms > 0 and is_hard_stop_mark(mark)
+                    and now - int(mark.reset_ts_ms) < lockout_ms):
+                continue
             if published_ns <= int(mark.reset_ts_ms) * 1_000_000:
                 continue
             if cid in raw_cids:

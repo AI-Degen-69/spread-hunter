@@ -110,6 +110,29 @@ mtime, and trader and filter share one machine and clock. Only a publication
 strictly newer than the reset clears the mark when it includes the market; a
 newer one that excludes it drops the market from trading but keeps the mark.
 
+## The hard-stop lockout window (#796)
+
+A hard-stop exit leaves residual shares, so its lifecycle row survives the stop
+and `reset_condition`'s flat proof abandons the mark. `mark_hard_stop_block`
+(`core_brain/order_registry.py`, written by the saver at each stop path) puts a
+stable `awaiting` mark back without touching the row: fresh-entry submits stop,
+while the managed remainder keeps hedging and merging through the same final
+entry gate. The mark lives in the registry, so it survives a restart inside the
+run; it carries a `hard_stop` reason prefix that separates it from a merge's
+mark (`is_hard_stop_mark`).
+
+Publication alone is not enough permission for one of these. A short-lived
+sports market can be re-listed seconds after the exit, and run `shadow-01`
+re-entered `bun-stu-moe` four minutes after stopping out and liquidated the
+replacement too. `bot_risk_hard_stop_entry_lockout_sec`
+(`BOT_RISK_HARD_STOP_ENTRY_LOCKOUT_SEC`, default 900s, `0` disables) is a
+floor: inside it `_evaluate_requalification` ignores even a newer publication
+that lists the market, and the trader's rotation calls
+`release_hard_stop_blocks` before it reads marks, so a market the feed never
+re-lists is quotable again once the window ends instead of staying blocked for
+the rest of the run. Merge marks keep their #646 rule: publication only, no
+timed release.
+
 ## Where generated files go
 
 Every writer names an absolute destination anchored to the repo, never a path
