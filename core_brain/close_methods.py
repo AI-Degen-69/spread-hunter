@@ -109,7 +109,13 @@ RESCUE_METHODS = tuple(r.name for r in METHODS if r.bucket == RESCUE_BUCKET)
 # lifecycle string and the older alias route here. It lives in this leaf
 # because the shadow fill engine and the pure analytics both read it, and the
 # analytics must not import across the live/shadow boundary.
-HARD_STOP_SELL_REASONS = frozenset({"hard_stop", "lifecycle_hard_stop"})
+#
+# `pair_cap_hedge_unreachable` (#797) joins them: the cap bail-out is decided
+# off the live hedge ask and then sells into the book, so measuring it against
+# a pre-decision snapshot would book the same fictional fill.
+HARD_STOP_SELL_REASONS = frozenset({
+    "hard_stop", "lifecycle_hard_stop", "pair_cap_hedge_unreachable",
+})
 SETTLEMENT_METHODS = tuple(r.name for r in METHODS if r.bucket == SETTLEMENT_BUCKET)
 BOOKKEEPING_METHODS = tuple(r.name for r in METHODS if r.bucket == BOOKKEEPING_BUCKET)
 ALL_METHOD_NAMES = frozenset(r.name for r in METHODS)

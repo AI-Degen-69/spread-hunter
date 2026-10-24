@@ -42,6 +42,105 @@ STALE_THRESHOLD_SEC = 30.0
 # from the canonical leaf (imported above as MERGE_CLOSE_METHODS).
 
 
+# A run accumulates cancelled orders without bound -- a requote cycle cancels
+# both legs every few seconds -- and after a day they were the bulk of a
+# 14.78 MB payload the page asked for every two seconds. The page only ever
+# shows them inside one expanded market, behind a "Show N cancelled orders"
+# toggle, so a recent slice per market is all it can display. Live orders
+# and live pairs are never trimmed. This shaping lives here, on the read
+# side, so the Dashboard server renders it without recomputing it.
+CANCELLED_ORDERS_PER_MARKET = 5
+
+_CANCELLED_STATUSES = frozenset({"cancelled", "canceled"})
+
+
+def _order_recency(order: dict) -> int:
+    """Newest-first sort key: when the venue last spoke about this order."""
+    for field in ("last_polled_ts", "posted_ts"):
+        value = order.get(field)
+        if isinstance(value, (int, float)):
+            return int(value)
+    return 0
+
+
+def _is_cancelled(order: dict) -> bool:
+    return str(order.get("status") or "").lower() in _CANCELLED_STATUSES
+
+
+def _newest_per_market(dead: dict[str, list[dict]], recency) -> list[dict]:
+    """The newest `CANCELLED_ORDERS_PER_MARKET` of each market's dead entries."""
+    kept: list[dict] = []
+    for entries in dead.values():
+        entries.sort(key=recency, reverse=True)
+        kept.extend(entries[:CANCELLED_ORDERS_PER_MARKET])
+    return kept
+
+
+def trim_cancelled_orders(state: dict) -> dict:
+    """Drop all but the newest `CANCELLED_ORDERS_PER_MARKET` per market.
+
+    Both lists are trimmed, because `pairs` embeds each pair's orders in full
+    and so carries a second, larger copy of the same dead history -- 10.6 MB of
+    one 14.8 MB payload here. A pair is dead only when every one of its orders
+    is; a pair holding anything live is kept whole.
+
+    Returns a shallow copy: the cached snapshot this reads from is shared, so
+    trimming in place would mutate what other readers get.
+    """
+    trimmed = dict(state)
+
+    orders = state.get("orders")
+    if isinstance(orders, list):
+        live: list[dict] = []
+        dead: dict[str, list[dict]] = {}
+        for order in orders:
+            if _is_cancelled(order):
+                dead.setdefault(str(order.get("condition_id") or ""), []).append(order)
+            else:
+                live.append(order)
+        trimmed["orders"] = live + _newest_per_market(dead, _order_recency)
+        # What the page would have been sent, so nothing has to infer the cap
+        # from a short list.
+        trimmed["cancelled_orders_total"] = sum(len(v) for v in dead.values())
+
+    pairs = state.get("pairs")
+    if isinstance(pairs, list):
+        live_pairs: list[dict] = []
+        dead_pairs: dict[str, list[dict]] = {}
+        for pair in pairs:
+            pair_orders = pair.get("orders") or []
+            if pair_orders and all(_is_cancelled(o) for o in pair_orders):
+                dead_pairs.setdefault(str(pair.get("condition_id") or ""), []).append(pair)
+            else:
+                live_pairs.append(pair)
+
+        def pair_recency(pair: dict) -> int:
+            return max((_order_recency(o) for o in (pair.get("orders") or [])), default=0)
+
+        kept_dead = _newest_per_market(dead_pairs, pair_recency)
+        # Dead pairs are only ever read by orderGroupMarket for metadata fallback,
+        # never for order manipulation. Stripping raw nested order and token arrays
+        # eliminates 10MB+ of redundant JSON on large run stores.
+        lean_dead = []
+        for p in kept_dead:
+            lean_dead.append({
+                "pair_id": p.get("pair_id"),
+                "condition_id": p.get("condition_id"),
+                "market": p.get("market"),
+                "orders": [],
+                "tokens": [],
+                "max_pair_cost_at_post": p.get("max_pair_cost_at_post"),
+                "combined_price": p.get("combined_price"),
+                "combined_price_is_paid": p.get("combined_price_is_paid"),
+                "hedge_state": p.get("hedge_state"),
+            })
+        trimmed["pairs"] = live_pairs + lean_dead
+        trimmed["cancelled_pairs_total"] = sum(len(v) for v in dead_pairs.values())
+
+    trimmed["cancelled_orders_per_market_cap"] = CANCELLED_ORDERS_PER_MARKET
+    return trimmed
+
+
 def break_even_price(fill_price: float) -> float:
     """The price the pair's missing leg must beat, from the fill that opened it.
 

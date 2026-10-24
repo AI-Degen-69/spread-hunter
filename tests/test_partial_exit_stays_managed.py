@@ -80,7 +80,10 @@ def test_a_partial_stop_leaves_the_row_and_sells_only_the_remainder(
     assert first["size"] == pytest.approx(4.0)
     assert first["reset_status"] == "RESIDUAL"
     assert registry.get_lifecycle_state(PAIR).state == "HARD_STOP"
-    assert registry.requalification_marks() == {}
+    # #796: the remainder stays managed AND fresh entries stay blocked.
+    first_mark = registry.requalification_marks()[COND]
+    assert first_mark.status == "awaiting"
+    assert "hard_stop" in first_mark.reason
 
     # The venue sold those 4: 6 remain, and the close covers the old fill --
     # the exact shape the old skip hid. The pass must still sell the 6.
@@ -131,4 +134,7 @@ def test_a_late_fill_after_cancel_blocks_the_reset(registry, monkeypatch):
     assert routed["action"] == "exited"
     assert routed["reset_status"] == "LATE_FILL"
     assert registry.get_lifecycle_state(PAIR).state == "HARD_STOP"
-    assert registry.requalification_marks() == {}
+    # #796: a late fill keeps the row managed but still blocks fresh entries.
+    mark = registry.requalification_marks()[COND]
+    assert mark.status == "awaiting"
+    assert "hard_stop" in mark.reason

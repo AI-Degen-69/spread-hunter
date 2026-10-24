@@ -17,9 +17,11 @@ Two limits are deliberate and stated in the output:
 * `closes` carries no pair or fill identity, so a close is attributed to a
   position by `(run_id, condition_id)` -- inferred, never exact.
 * A floor exists only as a label list (`BOT_ENTRY_FILL_QUALITY_BLOCKED_EDGE`).
-  A negative edge buckets as `"negative"` here, but the live gate labels it
-  `"0.06+"` (`edge_bucket_for` has no negative interval), so a label floor
-  cannot block it. The sweep reports those positions instead of hiding them.
+  A negative edge buckets as `"negative"` here and in the live gate
+  (`edge_bucket_for`, #791), so naming `"negative"` in the blocked list
+  refuses it. A floor-derived sweep still never names it (sweep labels come
+  from non-negative `EDGE_EDGES` bounds), so the sweep reports those
+  positions instead of hiding them.
 * Runs are never pooled: without `--run-id` a store holding several runs is
   refused, because two runs of one market can share a pair key.
 """
@@ -45,6 +47,7 @@ from core_brain import close_methods
 from core_brain.fill_quality_report import (
     DEFAULT_MIN_OBS,
     EDGE_EDGES,
+    NEGATIVE_EDGE_BUCKET,
     OK,
     FillRow,
     QualityReport,
@@ -57,7 +60,9 @@ from core_brain.fill_quality_report import (
 from core_brain.market_meta import UNCATEGORIZED, resolve_market_meta
 from core_brain.order_registry import DEFAULT_DB_PATH
 
-NEGATIVE = "negative"
+#: Shared with the live report/gate (`fill_quality_report.NEGATIVE_EDGE_BUCKET`).
+#: Kept as an alias so existing callers keep reading `efa.NEGATIVE` (#791).
+NEGATIVE = NEGATIVE_EDGE_BUCKET
 UNKNOWN = "unknown"
 REHEARSAL = "rehearsal / not evidence"
 MULTI_RUN = "MULTI_RUN"

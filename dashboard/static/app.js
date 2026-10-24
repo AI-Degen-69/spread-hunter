@@ -7052,14 +7052,64 @@ function marketCategory(m) {
   return label || 'Uncategorized';
 }
 
+/* Category label identity (#786): one icon + colour per family, inside the
+ * one chip every Orders & Trades view renders (#748). Display-only: the
+ * label vocabulary lives in `core_brain/market_meta.py` (read-only here),
+ * this table only maps the resolved `category` string to an emoji + tone.
+ * `Uncategorized` stays muted exactly as before; unknown labels fall back to
+ * a neutral tag glyph, never a broken glyph. Ball sports share one accent,
+ * the sport-specific ball does the differentiating. */
+const CATEGORY_ESPORTS_LABELS = new Set([
+  'e-sports', 'league of legends', 'counter-strike 2', 'counter-strike',
+  'valorant', 'dota 2', 'overwatch 2', 'overwatch', 'rainbow six siege',
+  'starcraft ii', 'rocket league', 'apex legends', 'ea sports fc',
+  'call of duty', 'pubg', 'fortnite', 'hearthstone', 'honor of kings',
+  'mobile legends', 'tekken', 'street fighter', 'super smash bros.',
+  'super smash bros', 'chess',
+]);
+const CATEGORY_BALL_ICONS = {
+  'basketball': '\uD83C\uDFC0',
+  'football': '\uD83C\uDFC8',
+  'baseball': '\u26BE',
+  'hockey': '\uD83C\uDFD2',
+  'soccer': '\u26BD',
+  'tennis': '\uD83C\uDFBE',
+  'golf': '\u26F3',
+  'cricket': '\uD83C\uDFCF',
+  'rugby': '\uD83C\uDFC9',
+};
+const CATEGORY_OTHER_ICONS = {
+  'racing': '\uD83C\uDFC1',
+  'mma': '\uD83E\uDD4B',
+  'boxing': '\uD83E\uDD4A',
+  'muay thai': '\uD83E\uDD4A',
+  'economy': '\uD83D\uDCC8',
+  'tech': '\uD83D\uDCBB',
+  'weather': '\uD83C\uDF26\uFE0F',
+  'world': '\uD83C\uDF0D',
+  'culture': '\uD83C\uDFAD',
+  'sports': '\uD83C\uDFDF\uFE0F',
+};
+function categoryIconTone(label) {
+  const key = String(label || '').trim().toLowerCase();
+  if (CATEGORY_ESPORTS_LABELS.has(key)) return { icon: '\uD83C\uDFAE', tone: 'is-esports' };
+  if (key in CATEGORY_BALL_ICONS) return { icon: CATEGORY_BALL_ICONS[key], tone: 'is-ball' };
+  if (key === 'politics' || key === 'geopolitics') return { icon: '\uD83D\uDDF3\uFE0F', tone: 'is-politics' };
+  if (key === 'crypto') return { icon: '\uD83E\uDE99', tone: 'is-crypto' };
+  if (key in CATEGORY_OTHER_ICONS) return { icon: CATEGORY_OTHER_ICONS[key], tone: 'is-other' };
+  return { icon: '\uD83C\uDFF7\uFE0F', tone: 'is-other' };
+}
 /* The one category chip every Orders & Trades view renders (#748): same
  * element, same class, same position under the market title. `Uncategorized`
  * is a real answer, so it renders too -- muted rather than hidden, which keeps
  * the chip in the same place on every row instead of drifting. */
 function categoryPill(m) {
   const label = marketCategory(m);
-  const muted = label === 'Uncategorized' ? ' is-muted' : '';
-  return `<span class="stitch-category-pill${muted}">${esc(label)}</span>`;
+  if (label === 'Uncategorized') {
+    return `<span class="stitch-category-pill is-muted">${esc(label)}</span>`;
+  }
+  const identified = categoryIconTone(label);
+  return `<span class="stitch-category-pill ${identified.tone}"><span aria-hidden="true">${identified.icon}</span> ${esc(label)}</span>`;
 }
 
 function marketCell(market, conditionId, opts) {
@@ -10605,7 +10655,7 @@ if (typeof module !== 'undefined' && module.exports) {
     stitchOpenOrdersRows, stitchOpenOrdersHeadHtml,
     stitchPositionsRows, stitchPositionsHeadHtml, stitchHeldLegMarks,
     stitchActiveMarketsRows, stitchActiveMarketsHeadHtml,
-    marketCategory, categoryPill,
+    marketCategory, categoryPill, categoryIconTone,
     showToast, dismissResetModal,
     noteShadowStartLaunched, clearPendingShadowStart,
     isShadowStartPending, checkPendingShadowStart, SHADOW_START_TIMEOUT_MS,

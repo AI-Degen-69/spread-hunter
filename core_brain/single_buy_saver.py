@@ -1732,13 +1732,18 @@ def _retry_pending_reset(client, funder, live: bool, registry,
     live retry has no funder to read balances with).
     """
     from core_brain.lifecycle_reset import reset_condition
+    cid = str(condition_id or "").lower()
+    try:
+        prev_marks = registry.requalification_marks()
+    except Exception:
+        prev_marks = {}
+    prev_mark = prev_marks.get(cid)
+    prev_hard_stop = (prev_mark is not None
+                      and prev_mark.status == "awaiting"
+                      and "hard_stop" in str(prev_mark.reason or ""))
     pending = registry.has_lifecycle_for_condition(condition_id)
     if not pending:
-        try:
-            marks = registry.requalification_marks()
-        except Exception:
-            return None
-        mark = marks.get(str(condition_id or "").lower())
+        mark = prev_mark
         pending = mark is not None and mark.status == "resetting"
     if not pending:
         return None
@@ -1754,8 +1759,24 @@ def _retry_pending_reset(client, funder, live: bool, registry,
             registry, db_path, condition_id, up_token_id, down_token_id)
         if ports is None:
             return None
-    return reset_condition(registry, condition_id, up_token_id, down_token_id,
-                           ports, reason="reset_retry", now_ms=now_ms)
+    outcome = reset_condition(registry, condition_id, up_token_id, down_token_id,
+                              ports, reason="reset_retry", now_ms=now_ms)
+    if outcome.status != "RESET" and prev_hard_stop:
+        # The retry's begin/abandon cycle lifts the `resetting` mark on
+        # failure -- restore the stable hard-stop block (#796) so a delayed
+        # balance read cannot reopen fresh entries mid-run. Rows untouched.
+        try:
+            still = registry.requalification_marks().get(cid)
+        except Exception:
+            still = None
+        if still is None:
+            try:
+                registry.mark_hard_stop_block(
+                    condition_id, prev_mark.reason, now_ms)
+            except Exception as exc:
+                log.warning("hard-stop block restore failed for %s: %s",
+                            condition_id, exc)
+    return outcome
 
 
 def _last_fill_ms_by_pair(registry) -> tuple[dict[str, int], dict[str, str]]:
@@ -1854,6 +1875,85 @@ class AgedOutMarketStateCache:
         return (float(end_ts) - float(lead_sec) - now_s) > self._skip_margin_sec
 
 
+def _pair_cap_hedge_bailout(
+    client,
+    registry: OrderRegistry,
+    *,
+    pair_id: str,
+    position,
+    side_tokens: dict,
+    held_token: str,
+    held_bid: Optional[float],
+    last_fill_ms: float,
+    now_s: float,
+    cfg,
+    bot_pos_price_max_pair_cost_usd: float,
+    tick_size: float,
+    live: bool,
+    venue_positions: Optional[dict[str, float]],
+    lifecycle_state: Optional[str],
+) -> Optional[dict]:
+    """Exit a naked leg whose capped hedge has left the market behind (#797).
+
+    moe/shadow-01: UP 10 @ 0.82 was entered against a 0.17 hedge that was
+    reachable when the entry was quoted (DOWN ask 0.151). Fifteen minutes later
+    the DOWN market had walked to 0.4225 while the best hedge the pair cap
+    allows stayed at 0.17 -- unreachable, not merely wide. Waiting cannot
+    complete that pair, so the naked leg leaves through the existing exit at
+    the strategy's own hedge window instead of holding to the 75% circuit
+    floor. Its own reason keeps a cap bail-out distinguishable from a
+    lifecycle stop, and its own route keeps the two apart in the ledger.
+
+    Returns None when the hedge is still reachable, when the ask is unknown,
+    or when the leg is younger than the window -- the ordinary wait owns it.
+    """
+    from core_brain.single_leg_lifecycle import hedge_unreachable_at_cap
+
+    age_s = ((now_s * 1000.0 - last_fill_ms) / 1000.0) if last_fill_ms > 0 else 0.0
+    try:
+        hedge_wait_s = float(getattr(cfg, "bot_risk_stranded_max_wait_sec", 300.0))
+    except (TypeError, ValueError):
+        hedge_wait_s = 300.0
+    if last_fill_ms <= 0 or age_s <= hedge_wait_s:
+        return None
+
+    held_is_up = held_token == side_tokens["UP"]
+    opposing_token = side_tokens["DOWN"] if held_is_up else side_tokens["UP"]
+    held_average_price = (
+        position.up_avg_price if held_is_up else position.down_avg_price
+    )
+    try:
+        opposing_book = (
+            client.get_order_book(opposing_token)
+            if hasattr(client, "get_order_book") else None
+        )
+        opposing_ask = best_ask(opposing_book) if opposing_book else None
+    except Exception as ask_exc:
+        # An unreadable hedge book is unknown, and unknown never sells a leg.
+        log.debug("Hedge ask read failed for pair %s: %s", pair_id, ask_exc)
+        opposing_ask = None
+
+    if not hedge_unreachable_at_cap(
+        held_average_price, opposing_ask,
+        bot_pos_price_max_pair_cost_usd, tick_size,
+    ):
+        return None
+
+    bailout = exit_single_buy(
+        client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
+        live=live, venue_positions=venue_positions,
+        reason="pair_cap_hedge_unreachable", force=True,
+        trigger_bid=held_bid,
+    )
+    bailout.update(
+        route="pair_cap_bailout",
+        lifecycle_state=lifecycle_state,
+        unreachable_for_sec=round(age_s, 3),
+        opposing_best_ask=opposing_ask,
+    )
+    return bailout
+
+
 def manage_single_leg_positions(
     client,
     registry: OrderRegistry,
@@ -1929,7 +2029,8 @@ def _manage_single_leg_positions_locked(
     from core_brain.quotes import dynamic_offset_for
     from core_brain.single_leg_lifecycle import (
         LegState, SingleLegPosition, capped_hedge_tick_exists, evaluate,
-        persist_decision, transition,
+        hedge_unreachable_at_cap, max_profitable_hedge_bid, persist_decision,
+        transition,
     )
 
     now_s = now if now is not None else time.time()
@@ -2171,6 +2272,16 @@ def _manage_single_leg_positions_locked(
                             registry, db_path, position.condition_id,
                             position.up_token_id, position.down_token_id)
                         if ports is None:
+                            # No proof ports (shadow without a store factory):
+                            # the exit still happened, so block fresh entries
+                            # for the rest of the run (#796). Rows untouched.
+                            try:
+                                registry.mark_hard_stop_block(
+                                    position.condition_id, "hard_stop_exited",
+                                    int(time.time() * 1000))
+                            except Exception as exc:
+                                log.warning("hard-stop block failed for %s: %s",
+                                            position.condition_id, exc)
                             out.append(result)
                             continue
                     reset_outcome = reset_condition(
@@ -2184,6 +2295,20 @@ def _manage_single_leg_positions_locked(
                     )
                     if reset_outcome.status == "RESET":
                         result.update(lifecycle_state=None)
+                    else:
+                        # #796: the proof keeps the row managed (residual /
+                        # late fill / unreadable venue), but fresh entries on
+                        # this condition stay blocked for the rest of the run
+                        # until a newer qualifying publication clears the
+                        # mark. Managed hedges/merges still flow via the final
+                        # entry gate; only fresh submits are dropped.
+                        try:
+                            registry.mark_hard_stop_block(
+                                position.condition_id, "hard_stop_exited",
+                                int(time.time() * 1000))
+                        except Exception as exc:
+                            log.warning("hard-stop block failed for %s: %s",
+                                        position.condition_id, exc)
                 out.append(result)
                 continue
 
@@ -2223,6 +2348,33 @@ def _manage_single_leg_positions_locked(
                     out.append(result)
                     continue
                 if verdict != AGED_OUT_NOT_AGED_OUT:
+                    # A long-dated market keeps a naked leg in `awaiting_lead`
+                    # for hours, and that is precisely the leg the cap
+                    # bail-out exists for (#797). `end_unknown` and
+                    # `venue_closed` stay with settlement, and `due` never
+                    # reaches this branch.
+                    bailout = None
+                    if verdict == AGED_OUT_AWAITING_LEAD:
+                        bailout = _pair_cap_hedge_bailout(
+                            client, registry,
+                            pair_id=pair_id,
+                            position=position,
+                            side_tokens=side_tokens,
+                            held_token=held_token,
+                            held_bid=held_bid,
+                            last_fill_ms=last_fill_ms,
+                            now_s=now_s,
+                            cfg=cfg,
+                            bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
+                            tick_size=grid_tick,
+                            live=live,
+                            venue_positions=venue_positions,
+                            lifecycle_state=decision.state.value,
+                        )
+                    if bailout is not None:
+                        bailout.update(aged_out_verdict=verdict)
+                        out.append(bailout)
+                        continue
                     out.append({
                         "pair_id": pair_id, "condition_id": condition_id,
                         "action": verdict, "lifecycle_state": decision.state.value,
@@ -2305,6 +2457,27 @@ def _manage_single_leg_positions_locked(
                 log.info("Exposure check skipped for pair %s: %s", pair_id, exp_exc)
             except Exception as exp_exc:
                 log.debug("Exposure resolution check skipped for pair %s: %s", pair_id, exp_exc)
+
+            # Pair-cap hedge bail-out (#797)
+            bailout = _pair_cap_hedge_bailout(
+                client, registry,
+                pair_id=pair_id,
+                position=position,
+                side_tokens=side_tokens,
+                held_token=held_token,
+                held_bid=held_bid,
+                last_fill_ms=last_fill_ms,
+                now_s=now_s,
+                cfg=cfg,
+                bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
+                tick_size=grid_tick,
+                live=live,
+                venue_positions=venue_positions,
+                lifecycle_state=decision.state.value,
+            )
+            if bailout is not None:
+                out.append(bailout)
+                continue
 
             action = {
                 "wait": "patient_wait",
