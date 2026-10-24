@@ -462,34 +462,23 @@ def test_lifecycle_quote_paths_never_full_scan(registry: OrderRegistry, monkeypa
     assert isinstance(results, list)
 
 
-class _ExposureClient(FakeClient):
-    """FakeClient with a venue open-orders read: a list, or a venue failure."""
-
-    def __init__(self, open_orders=None, open_orders_error=None, **kwargs):
-        super().__init__(**kwargs)
-        self._open_orders = open_orders
-        self._open_orders_error = open_orders_error
-
-    def get_open_orders(self):
-        if self._open_orders_error is not None:
-            raise self._open_orders_error
-        return self._open_orders
+@pytest.mark.parametrize(("decision", "row"), [
+    ("wait", "patient_wait"),
+    ("hedge", "escalated_wait"),
+    ("locked", "pair_locked"),
+    ("rest", "dual_resting"),
+    ("refused", "refused"),
+])
+def test_saver_action_for_maps_decision_to_row_action(decision, row):
+    assert lp.saver_action_for(decision) == row
 
 
-def test_saver_action_for_maps_decision_to_row_action():
-    assert lp.saver_action_for("wait") == "patient_wait"
-    assert lp.saver_action_for("hedge") == "escalated_wait"
-    assert lp.saver_action_for("locked") == "pair_locked"
-    assert lp.saver_action_for("rest") == "dual_resting"
-    assert lp.saver_action_for("refused") == "refused"
-
-
-def test_saver_action_for_rejects_unreachable_actions():
+@pytest.mark.parametrize("unknown", ["bogus", "hold", "hard_stop", "settlement_fallback"])
+def test_saver_action_for_rejects_unreachable_actions(unknown):
     # "hold" is a saver-side row from another path, never a decision action;
     # the old `.get(action, action)` pass-through would have echoed these.
-    for unknown in ("bogus", "hold", "hard_stop", "settlement_fallback"):
-        with pytest.raises(KeyError):
-            lp.saver_action_for(unknown)
+    with pytest.raises(KeyError):
+        lp.saver_action_for(unknown)
 
 
 def test_unknown_exposure_keeps_identical_row(registry: OrderRegistry):
@@ -502,13 +491,14 @@ def test_unknown_exposure_keeps_identical_row(registry: OrderRegistry):
     cfg = MakerConfig(bot_risk_stranded_completion_on=False,
                       bot_pos_price_max_pair_cost_usd=0.99)
     run = dict(live=False, now=1010.0)
-    known_rows = lp.manage_single_leg_positions(
-        _ExposureClient(best_ask=0.40, open_orders=[{"id": "venue-light"}]),
-        registry, cfg, **run)
-    failing_rows = lp.manage_single_leg_positions(
-        _ExposureClient(best_ask=0.40,
-                        open_orders_error=RuntimeError("venue down")),
-        registry, cfg, **run)
+    known_client = FakeClient(best_ask=0.40)
+    known_client.get_open_orders = lambda: [{"id": "venue-light"}]
+    failing_client = FakeClient(best_ask=0.40)
+    def _venue_down():
+        raise RuntimeError("venue down")
+    failing_client.get_open_orders = _venue_down
+    known_rows = lp.manage_single_leg_positions(known_client, registry, cfg, **run)
+    failing_rows = lp.manage_single_leg_positions(failing_client, registry, cfg, **run)
     assert len(known_rows) == len(failing_rows) == 1
     assert failing_rows[0] == known_rows[0]
     assert failing_rows[0]["action"] == "patient_wait"
