@@ -41,6 +41,16 @@ import urllib.request
 from contextlib import contextmanager
 from typing import Optional
 
+from core_brain.book_math import (
+    ask_depth_at_or_below,
+    best_ask,
+    best_bid,
+    bid_depth,
+    book_levels,
+    depth_at_or_above,
+    floor_to_tick,
+    tick_size,
+)
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
 
 log = logging.getLogger("single_buy_saver")
@@ -178,47 +188,6 @@ def should_exit(fill_cost: float, light_ask: Optional[float],
     if light_ask is None or light_ask <= 0:
         return True
     return (fill_cost + light_ask) >= bot_pos_price_max_pair_cost_usd
-
-
-def _book_levels(book, key: str) -> list[tuple[float, float]]:
-    """Normalise one side of a book to [(price, size)].
-
-    Accepts the SDK's object shape and a plain dict, because the CLOB client
-    has returned both across versions and a book parser that only handles one
-    of them fails at the moment the book matters most.
-    """
-    if isinstance(book, dict):
-        raw = book.get(key)
-    else:
-        raw = getattr(book, key, None)
-
-    levels: list[tuple[float, float]] = []
-    for lvl in raw or []:
-        if isinstance(lvl, dict):
-            price, size = lvl.get("price"), lvl.get("size")
-        else:
-            price, size = getattr(lvl, "price", None), getattr(lvl, "size", None)
-        if price is None or size is None:
-            continue
-        try:
-            levels.append((float(price), float(size)))
-        except (TypeError, ValueError):
-            continue
-    return levels
-
-
-def best_ask(book) -> Optional[float]:
-    levels = _book_levels(book, "asks")
-    return min(p for p, _ in levels) if levels else None
-
-
-def best_bid(book) -> Optional[float]:
-    levels = _book_levels(book, "bids")
-    return max(p for p, _ in levels) if levels else None
-
-
-def bid_depth(book) -> float:
-    return sum(s for _, s in _book_levels(book, "bids"))
 
 
 def fetch_positions(funder: str, timeout: float = 10.0) -> dict[str, float]:
@@ -603,37 +572,6 @@ def _venue_matched(client, orders: list, refusal: type = PairExitRefused) -> flo
                 f"({matched!r}). Refusing to sell on an unreadable state."
             ) from exc
     return total
-
-
-def _tick_size(book) -> float:
-    raw = book.get("tick_size") if isinstance(book, dict) else getattr(book, "tick_size", None)
-    try:
-        tick = float(raw)
-    except (TypeError, ValueError):
-        return DEFAULT_TICK_SIZE
-    return tick if tick > 0 else DEFAULT_TICK_SIZE
-
-
-def _floor_to_tick(price: float, tick: float) -> float:
-    """Round down onto the venue's grid. Off-grid prices are rejected orders.
-
-    The nudge before truncating is not cosmetic: in binary floating point
-    `0.29 / 0.01` is 28.999999999999996, so a bare `int()` floors an
-    already-aligned price a whole tick lower. The sell bound would sit a tick
-    below what we chose and `depth_at_or_above` would count one extra level --
-    safe in direction, wrong in value.
-    """
-    steps = int(round(price / tick, 9))
-    return round(steps * tick, 10)
-
-
-def depth_at_or_above(book, limit: float) -> float:
-    """Bid size available at or above a price floor.
-
-    Summing the whole ladder would size an order against depth we have already
-    decided is too cheap to accept.
-    """
-    return sum(s for p, s in _book_levels(book, "bids") if p >= limit)
 
 
 def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
@@ -1141,8 +1079,8 @@ def exit_single_buy(
     # Without a floor the SDK derives the price from the requested amount and
     # will walk the ladder down to whatever clears it. Depth is counted only at
     # levels we would actually accept, so size and price agree.
-    tick = _tick_size(heavy_book)
-    min_price = _floor_to_tick(max(bid - MAX_SELL_SLIPPAGE, tick), tick)
+    tick = tick_size(heavy_book)
+    min_price = floor_to_tick(max(bid - MAX_SELL_SLIPPAGE, tick), tick)
     depth = depth_at_or_above(heavy_book, min_price)
 
     size = min(naked, depth)
@@ -1222,12 +1160,6 @@ def exit_single_buy(
         "positions_checked": positions_checked,
         "response": resp,
     }
-
-
-def ask_depth_at_or_below(book, limit: float) -> float:
-    """Ask size a BUY at this limit price can take."""
-    return sum(s for p, s in _book_levels(book, "asks")
-               if p <= limit + PRICE_EPS_OFFSET)
 
 
 def _venue_id_from_submit_error(exc: BaseException) -> str:
@@ -2014,7 +1946,7 @@ def _manage_single_leg_positions_locked(
     lead_sec = float(getattr(cfg, "bot_risk_aged_out_rescue_lead_sec", 900.0))
     _mpc = getattr(cfg, "bot_pos_price_max_pair_cost_usd", None)
     bot_pos_price_max_pair_cost_usd = float(0.995 if _mpc is None else _mpc)
-    tick_size = float(getattr(cfg, "bot_quote_grid_tick_size_usd", DEFAULT_TICK_SIZE))
+    grid_tick = float(getattr(cfg, "bot_quote_grid_tick_size_usd", DEFAULT_TICK_SIZE))
     bot_risk_stop_mode = str(getattr(cfg, "bot_risk_stop_mode", "NONE"))
     bot_risk_stop_adverse_drop_cents = float(getattr(cfg, "bot_risk_stop_adverse_drop_cents", 0.05))
     bot_risk_stop_max_drawdown_pct = float(getattr(cfg, "bot_risk_stop_max_drawdown_pct", 10.0))
@@ -2183,7 +2115,7 @@ def _manage_single_leg_positions_locked(
             )
             decision = transition(
                 position, previous_state, bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
-                settlement_due=False, tick_size=tick_size,
+                settlement_due=False, tick_size=grid_tick,
                 bot_risk_stop_mode=bot_risk_stop_mode, bot_risk_stop_adverse_drop_cents=bot_risk_stop_adverse_drop_cents,
                 bot_risk_stop_max_drawdown_pct=bot_risk_stop_max_drawdown_pct,
                 bot_risk_circuit_max_drawdown_pct=bot_risk_circuit_max_drawdown_pct,
@@ -2280,7 +2212,7 @@ def _manage_single_leg_positions_locked(
                 if verdict == AGED_OUT_DUE:
                     decision = evaluate(
                         position, registry, bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
-                        settlement_due=True, tick_size=tick_size,
+                        settlement_due=True, tick_size=grid_tick,
                         bot_risk_stop_mode=bot_risk_stop_mode,
                         bot_risk_stop_adverse_drop_cents=bot_risk_stop_adverse_drop_cents,
                         bot_risk_stop_max_drawdown_pct=bot_risk_stop_max_drawdown_pct,
@@ -2355,7 +2287,7 @@ def _manage_single_leg_positions_locked(
                     # Otherwise, check maker tick availability & age
                     age_s = (now_s * 1000.0 - last_fill_ms) / 1000.0 if last_fill_ms > 0 else 0.0
                     try:
-                        max_profitable_hedge_bid(held_avg, bot_pos_price_max_pair_cost_usd, tick_size)
+                        max_profitable_hedge_bid(held_avg, bot_pos_price_max_pair_cost_usd, grid_tick)
                         has_maker_tick = True
                     except ValueError:
                         has_maker_tick = False

@@ -1011,18 +1011,8 @@ def test_a_token_absent_from_the_positions_read_refuses(registry: OrderRegistry)
 # Review round 3
 # ---------------------------------------------------------------------------
 
-
-def test_tick_floor_does_not_drop_a_whole_tick_on_binary_float_error():
-    """`0.29 / 0.01` is 28.999999999999996 in binary floating point.
-
-    A bare int() floors an already-aligned price one whole tick lower, which
-    moves the sell bound below what we chose and lets depth_at_or_above count an
-    extra level. Safe in direction, wrong in value.
-    """
-    assert lp._floor_to_tick(0.29, 0.01) == pytest.approx(0.29)
-    assert lp._floor_to_tick(0.53, 0.01) == pytest.approx(0.53)
-    assert lp._floor_to_tick(0.535, 0.01) == pytest.approx(0.53)
-    assert lp._floor_to_tick(0.07, 0.001) == pytest.approx(0.07)
+# NOTE (#806): the tick-floor unit test moved with the helper it covers to
+# tests/test_book_math.py, the new interface's test surface.
 
 
 def test_completion_refusals_use_the_completion_exception(registry: OrderRegistry):
