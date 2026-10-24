@@ -154,10 +154,11 @@ def test_live_overlay_moves_the_per_leg_lines():
     assert "YES $0.77" in html
     assert "-$0.30" in html
     assert "live mark" in html
-    # #656: the activity pill is not a live cell -- the marks pass leaves it in
-    # place, and it never lands inside a cell paintLiveMarks() rewrites.
-    assert 'class="pill quoting-breathing"' in html
-    assert "quoting-breathing" in html.split("data-cell")[0]
+    # #785: no activity pill in the Market cell — HEDGE STATUS alone is the
+    # position state.
+    assert "quoting-breathing" not in html
+    assert "resting-breathing" not in html
+    assert "stitch-status-badge" in html
 
 
 @requires_node
@@ -274,8 +275,9 @@ def test_market_activity_pill_prefers_resting_and_stays_empty_when_idle():
 
 @requires_node
 @pytest.mark.parametrize("status", ["open", "partial", "pending", "Open"])
-def test_stitch_positions_resting_order_shows_resting_pill(status):
-    # isRestingOrder reads its three live statuses case-insensitively.
+def test_stitch_positions_resting_order_shows_no_activity_pill(status):
+    # #785: a resting order on the held market no longer adds a RESTING pill —
+    # the Market cell carries title + category chip only.
     res = json.loads(_eval_js(f"""
     const kpi = {json.dumps(_kpi())};
     console.log(JSON.stringify({{
@@ -284,13 +286,15 @@ def test_stitch_positions_resting_order_shows_resting_pill(status):
     }}));
     """))
     html = res["html"]
-    assert 'class="pill resting-breathing"' in html
-    assert ">RESTING</span>" in html
+    assert "resting-breathing" not in html
     assert "quoting-breathing" not in html
+    assert ">RESTING</span>" not in html
+    assert "stitch-status-badge" in html
 
 
 @requires_node
-def test_stitch_positions_resting_wins_over_quoting():
+def test_stitch_positions_resting_and_quoting_show_no_activity_pill():
+    # #785: neither RESTING nor QUOTING may appear in the Market cell.
     res = json.loads(_eval_js(f"""
     const kpi = {json.dumps(_kpi(quotes_count=3))};
     console.log(JSON.stringify({{
@@ -299,13 +303,14 @@ def test_stitch_positions_resting_wins_over_quoting():
     }}));
     """))
     html = res["html"]
-    assert "resting-breathing" in html
+    assert "resting-breathing" not in html
     assert "quoting-breathing" not in html
+    assert "stitch-status-badge" in html
 
 
 @requires_node
-def test_stitch_positions_quoting_only_shows_quoting_pill():
-    # Filled and cancelled orders are not resting, so the market reads QUOTING.
+def test_stitch_positions_quoting_only_shows_no_activity_pill():
+    # #785: quote activity no longer adds a QUOTING pill to the held row.
     res = json.loads(_eval_js(f"""
     const kpi = {json.dumps(_kpi(quotes_count=1))};
     console.log(JSON.stringify({{
@@ -315,9 +320,10 @@ def test_stitch_positions_quoting_only_shows_quoting_pill():
     }}));
     """))
     html = res["html"]
-    assert 'class="pill quoting-breathing"' in html
-    assert ">QUOTING</span>" in html
+    assert "quoting-breathing" not in html
     assert "resting-breathing" not in html
+    assert ">QUOTING</span>" not in html
+    assert "stitch-status-badge" in html
 
 
 @requires_node
@@ -370,9 +376,9 @@ def test_stitch_positions_finished_market_has_no_activity_pill():
     assert "quoting-breathing" not in html
 
 @requires_node
-def test_stitch_positions_sorted_render_keeps_each_markets_pill():
-    # The pill is decided before the rows are ordered, so clicking a column
-    # header must not drop it, and each market keeps its own verdict.
+def test_stitch_positions_sorted_render_has_no_activity_pill():
+    # #785: sorting must not reintroduce the removed activity pill; each
+    # market keeps its HEDGE STATUS badge.
     kpi = _two_market_kpi(0.40, 0.80)
     kpi["by_market"]["0xabc"]["quotes_count"] = 2
     kpi["by_market"]["0xdef"]["quotes_count"] = 1
@@ -389,6 +395,7 @@ def test_stitch_positions_sorted_render_keeps_each_markets_pill():
     by_cid = {cid: body for cid, body in re.findall(
         r'<tr[^>]*data-cid="([^"]+)"[^>]*>(.*?)</tr>', html, re.S)}
     assert len(by_cid) == 2
-    assert "resting-breathing" in by_cid["0xdef"]
-    assert "quoting-breathing" in by_cid["0xabc"]
-    assert "resting-breathing" not in by_cid["0xabc"]
+    assert "resting-breathing" not in html
+    assert "quoting-breathing" not in html
+    for body in by_cid.values():
+        assert "stitch-status-badge" in body

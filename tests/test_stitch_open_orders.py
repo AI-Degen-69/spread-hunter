@@ -157,7 +157,11 @@ def test_stitch_orders_unpaired_row_shows_resting_leg_and_missing_counterpart():
 
 @requires_node
 def test_stitch_orders_filled_counterpart_holds_position():
+    # #785: the DN fill counts only while KPI inventory still holds DN shares.
     code = _FIXTURE + """
+    kpi.by_market['0xalp'].dn_sh = 5.0;
+    kpi.by_market['0xalp'].dn_cost = 3.5;
+    kpi.by_market['0xalp'].total_sh = 5.0;
     const html = app.stitchOpenOrdersRows(kpi, { orders: [restingUP, filledDN] }, null);
     console.log(JSON.stringify({ html }));
     """
@@ -202,7 +206,11 @@ def test_stitch_orders_earlier_pair_fill_does_not_classify_current_row():
 
 @requires_node
 def test_stitch_orders_late_cancel_does_not_hide_earlier_fill():
+    # #785: inventory-gated — the held DN fill survives the later cancel.
     code = _FIXTURE + """
+    kpi.by_market['0xalp'].dn_sh = 5.0;
+    kpi.by_market['0xalp'].dn_cost = 3.5;
+    kpi.by_market['0xalp'].total_sh = 5.0;
     const html = app.stitchOpenOrdersRows(kpi, { orders: [restingUP, filledDN, lateCancelDN] }, null);
     console.log(JSON.stringify({ html }));
     """
@@ -210,6 +218,23 @@ def test_stitch_orders_late_cancel_does_not_hide_earlier_fill():
     html = res["html"]
     assert "SINGLE FILL" in html
     assert "Position Held" in html
+
+
+@requires_node
+def test_stitch_orders_stale_fill_without_inventory_is_unpaired():
+    # #785: same pair_id fill in history but KPI holds no DN shares — stale,
+    # not held. Renders unpaired (red), never hedge-pending.
+    code = _FIXTURE + """
+    const html = app.stitchOpenOrdersRows(kpi, { orders: [restingUP, filledDN] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    html = res["html"]
+    assert "MISSING PAIR" in html
+    assert "is-unpaired" in html
+    assert "SINGLE FILL" not in html
+    assert "Position Held" not in html
+    assert "[Awaiting NO Quote]" in html
 
 
 @requires_node

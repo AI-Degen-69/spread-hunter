@@ -7698,8 +7698,6 @@ function positionsRows(kpi, state, sort) {
 
   if (!entries.length) return otEmptyRow('positions', 'No legs have filled, so nothing is held.');
 
-  const ordersByMarket = groupOrdersByMarket(state && state.orders);
-
   // The held market is the sort unit, for the same reason the pair is in Open
   // Orders: a market renders as one row per held leg, with the market name and
   // all three pair-level numbers spanning them.
@@ -7754,9 +7752,6 @@ function positionsRows(kpi, state, sort) {
     const isInferred = (status !== 'unpaired') && isMarketInferredPosition(cid, kpi, state);
     const pairTags = pairSummary(status, (status === 'unpaired') ? null : m.pair_cost, isInferred);
     const span = legs.length;
-    // The engine's activity on this market, stated once per market on the row
-    // that carries the market cell (issue #656).
-    const activity = marketActivityPill(m, ordersByMarket[cid]);
 
     return legs.map((entry, legIndex) => {
       const rowClass = ['ot-pair-row'];
@@ -7767,7 +7762,7 @@ function positionsRows(kpi, state, sort) {
       // reason the market name does: they describe the pair, not one leg.
       const tsHtml = legIndex === 0 ? timestampCell(ts, { rowspan: span }) : '';
       const pairCells = legIndex === 0
-        ? `<td class="ot-market" rowspan="${span}">${marketCell(m, cid, { categoryCaption: true })}${activity}${pairTags}</td>`
+        ? `<td class="ot-market" rowspan="${span}">${marketCell(m, cid, { categoryCaption: true })}${pairTags}</td>`
         : '';
       // Live cells carry their address (data-cid + data-cell) so the rAF
       // pass can rewrite them without a table rebuild; the `live` class and
@@ -7959,6 +7954,15 @@ function groupStatus(g, allOrders, legs, byMarket, kpi, state) {
       else if (s === 'cancelled' || s === 'canceled') dnCancelled = true;
     }
   }
+
+  // A fill from order history only counts when KPI inventory still holds
+  // shares on that leg (#785). A stale fill with no shares in inventory is
+  // not a held position, so it must not mark the row hedge-pending and must
+  // not render the "Position Held" rung.
+  const heldUp = Number((byMarket[cid] || {}).up_sh) > 0;
+  const heldDn = Number((byMarket[cid] || {}).dn_sh) > 0;
+  if (!heldUp) upFilled = null;
+  if (!heldDn) dnFilled = null;
 
   const isHedgePending = (upFilled !== null && !!dnOrder) || (dnFilled !== null && !!upOrder);
 
@@ -8398,8 +8402,6 @@ function stitchPositionsRows(kpi, state, sort) {
     return `<tr><td colspan="9" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No legs have filled, so nothing is held.</td></tr>`;
   }
 
-  const ordersByMarket = groupOrdersByMarket(state && state.orders);
-
   const rows = entries.map(([cid, m]) => {
     const overlay = liveLegMids(m);
     const mark = positionMarkValue(m, overlay.mids);
@@ -8429,12 +8431,10 @@ function stitchPositionsRows(kpi, state, sort) {
     const curSort = (upSh > 0 ? overlay.mids.up : null)
       ?? (dnSh > 0 ? overlay.mids.dn : null) ?? null;
     const ts = latestFillTs(m);
-    const category = marketCategory(m);
-    const activity = marketActivityPill(m, ordersByMarket[cid]);
     return {
       cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost: cost, totalSh,
       mark, unrealized, unrealizedPct, legMarks, curSort,
-      status, ts, category, activity,
+      status, ts,
       live: overlay.live, liveAgeMs: overlay.ageMs,
     };
   });
@@ -8464,15 +8464,10 @@ function stitchPositionsRows(kpi, state, sort) {
   return sorted.map(({
     cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost, totalSh,
     mark, unrealized, unrealizedPct, legMarks, curSort,
-    status, ts, category, activity, live, liveAgeMs
+    status, ts, live, liveAgeMs
   }) => {
     const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
     const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
-    // The second line answers "which event is this inside?". The category word
-    // is already on the chip above, so repeating it there is noise (#748).
-    const eventLine = [m.event_title, m.subtitle]
-      .map(v => (typeof v === 'string' ? v.trim() : ''))
-      .find(v => v && v !== category) || '';
 
     // Age / Stopwatch
     const ageSec = (ts && Number.isFinite(ts)) ? Math.max(0, Math.round((nowMs - toMs(ts)) / 1000)) : null;
@@ -8513,10 +8508,6 @@ function stitchPositionsRows(kpi, state, sort) {
         <div class="stitch-market-title">
           <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
         </div>
-        ${activity ? `<div class="stitch-market-meta" style="margin-top:2px;">${activity}</div>` : ''}
-        ${eventLine ? `<div class="stitch-market-meta" style="margin-top:2px;">
-          <span style="font-size:11px;color:#94a3b8;">${esc(eventLine)}</span>
-        </div>` : ''}
       </td>
 
       <!-- Col 1: CATEGORY -->
