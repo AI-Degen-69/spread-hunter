@@ -6,10 +6,35 @@ from core_brain.single_leg_lifecycle import (
     LegState,
     SingleLegPosition,
     evaluate,
+    hedge_unreachable_at_cap,
     max_profitable_hedge_bid,
     stop_trigger,
     transition,
 )
+
+
+def test_hedge_unreachable_at_cap_is_about_the_cap_not_the_spread():
+    """#797: wide is reachable; only a market past the cap is unreachable.
+
+    Held 0.82 against a 0.99 cap leaves a 0.17 hedge bid. An ask of 0.17 or
+    0.05 is still reachable at the cap, however wide the spread looks; only an
+    ask above 0.17 has walked away from what the cap can pay.
+    """
+    assert hedge_unreachable_at_cap(0.82, 0.17, 0.99, 0.01) is False
+    assert hedge_unreachable_at_cap(0.82, 0.05, 0.99, 0.01) is False
+    assert hedge_unreachable_at_cap(0.82, 0.4225, 0.99, 0.01) is True
+
+
+def test_hedge_unreachable_at_cap_treats_unknown_as_reachable():
+    """An unreadable hedge price is unknown, and unknown never sells a leg."""
+    assert hedge_unreachable_at_cap(0.82, None, 0.99, 0.01) is False
+    assert hedge_unreachable_at_cap(0.82, 0.0, 0.99, 0.01) is False
+    assert hedge_unreachable_at_cap(0.82, float("nan"), 0.99, 0.01) is False
+
+
+def test_hedge_unreachable_at_cap_without_a_tick_under_the_cap():
+    """Held at 0.99 leaves no positive tick: no market can reach the cap."""
+    assert hedge_unreachable_at_cap(0.99, 0.02, 0.99, 0.01) is True
 
 
 def _position(*, up_size, down_size, up_avg, down_avg=0.0,
