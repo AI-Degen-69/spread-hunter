@@ -1809,13 +1809,18 @@ def _retry_pending_reset(client, funder, live: bool, registry,
     live retry has no funder to read balances with).
     """
     from core_brain.lifecycle_reset import reset_condition
+    cid = str(condition_id or "").lower()
+    try:
+        prev_marks = registry.requalification_marks()
+    except Exception:
+        prev_marks = {}
+    prev_mark = prev_marks.get(cid)
+    prev_hard_stop = (prev_mark is not None
+                      and prev_mark.status == "awaiting"
+                      and "hard_stop" in str(prev_mark.reason or ""))
     pending = registry.has_lifecycle_for_condition(condition_id)
     if not pending:
-        try:
-            marks = registry.requalification_marks()
-        except Exception:
-            return None
-        mark = marks.get(str(condition_id or "").lower())
+        mark = prev_mark
         pending = mark is not None and mark.status == "resetting"
     if not pending:
         return None
@@ -1831,8 +1836,24 @@ def _retry_pending_reset(client, funder, live: bool, registry,
             registry, db_path, condition_id, up_token_id, down_token_id)
         if ports is None:
             return None
-    return reset_condition(registry, condition_id, up_token_id, down_token_id,
-                           ports, reason="reset_retry", now_ms=now_ms)
+    outcome = reset_condition(registry, condition_id, up_token_id, down_token_id,
+                              ports, reason="reset_retry", now_ms=now_ms)
+    if outcome.status != "RESET" and prev_hard_stop:
+        # The retry's begin/abandon cycle lifts the `resetting` mark on
+        # failure -- restore the stable hard-stop block (#796) so a delayed
+        # balance read cannot reopen fresh entries mid-run. Rows untouched.
+        try:
+            still = registry.requalification_marks().get(cid)
+        except Exception:
+            still = None
+        if still is None:
+            try:
+                registry.mark_hard_stop_block(
+                    condition_id, prev_mark.reason, now_ms)
+            except Exception as exc:
+                log.warning("hard-stop block restore failed for %s: %s",
+                            condition_id, exc)
+    return outcome
 
 
 def _last_fill_ms_by_pair(registry) -> tuple[dict[str, int], dict[str, str]]:
@@ -2248,6 +2269,16 @@ def _manage_single_leg_positions_locked(
                             registry, db_path, position.condition_id,
                             position.up_token_id, position.down_token_id)
                         if ports is None:
+                            # No proof ports (shadow without a store factory):
+                            # the exit still happened, so block fresh entries
+                            # for the rest of the run (#796). Rows untouched.
+                            try:
+                                registry.mark_hard_stop_block(
+                                    position.condition_id, "hard_stop_exited",
+                                    int(time.time() * 1000))
+                            except Exception as exc:
+                                log.warning("hard-stop block failed for %s: %s",
+                                            position.condition_id, exc)
                             out.append(result)
                             continue
                     reset_outcome = reset_condition(
@@ -2261,6 +2292,20 @@ def _manage_single_leg_positions_locked(
                     )
                     if reset_outcome.status == "RESET":
                         result.update(lifecycle_state=None)
+                    else:
+                        # #796: the proof keeps the row managed (residual /
+                        # late fill / unreadable venue), but fresh entries on
+                        # this condition stay blocked for the rest of the run
+                        # until a newer qualifying publication clears the
+                        # mark. Managed hedges/merges still flow via the final
+                        # entry gate; only fresh submits are dropped.
+                        try:
+                            registry.mark_hard_stop_block(
+                                position.condition_id, "hard_stop_exited",
+                                int(time.time() * 1000))
+                        except Exception as exc:
+                            log.warning("hard-stop block failed for %s: %s",
+                                        position.condition_id, exc)
                 out.append(result)
                 continue
 
