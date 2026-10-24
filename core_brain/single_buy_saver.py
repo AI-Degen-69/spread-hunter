@@ -805,18 +805,25 @@ MISSING_SIDE_REFUSAL_OUTCOME = "missing_side_tokens"
 STRANDED_MISSING_SIDE_ACTION = "stranded_missing_side"
 
 
-def _lifecycle_held_and_opposite(registry: OrderRegistry, pair_id: str) -> tuple[Optional[str], Optional[str]]:
+def _lifecycle_held_and_opposite(
+    registry: OrderRegistry, pair_id: str,
+    condition_id: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
     """Held + opposite token ids from the persisted lifecycle record (#793).
 
     Returns (held_token_id, opposite_token_id); either may be None when no
-    record exists or its evidence carries neither. Never raises: an
-    unreadable row is "no record", and the caller keeps refusing.
+    record exists or its evidence carries neither. A record naming another
+    condition is not this pair's record, so it reads as no record. Never
+    raises: an unreadable row is "no record", and the caller keeps refusing.
     """
     try:
         record = registry.get_lifecycle_state(pair_id)
     except Exception:
         return None, None
     if record is None:
+        return None, None
+    if condition_id is not None and str(
+        getattr(record, "condition_id", "") or "").lower() != str(condition_id).lower():
         return None, None
     raw = getattr(record, "evidence_json", None)
     if not raw:
@@ -838,6 +845,7 @@ def _resolve_side_tokens_with_lifecycle(
     registry: OrderRegistry,
     pair_id: str,
     side_tokens: dict[str, str],
+    condition_id: Optional[str] = None,
 ) -> dict[str, str]:
     """Fill the one empty UP/DOWN slot from the lifecycle record (#793).
 
@@ -853,7 +861,8 @@ def _resolve_side_tokens_with_lifecycle(
     missing = [side for side in ("UP", "DOWN") if side not in side_tokens]
     if len(missing) != 1:
         return side_tokens
-    _, opposite_token = _lifecycle_held_and_opposite(registry, pair_id)
+    _, opposite_token = _lifecycle_held_and_opposite(
+        registry, pair_id, condition_id)
     if not opposite_token:
         return side_tokens
     if opposite_token in side_tokens.values():
@@ -879,7 +888,8 @@ def _heavy_side_with_lifecycle(
     side = _token_side(registry, condition_id, heavy_token)
     if side in ("UP", "DOWN"):
         return side
-    held_token, opposite_token = _lifecycle_held_and_opposite(registry, pair_id)
+    held_token, opposite_token = _lifecycle_held_and_opposite(
+        registry, pair_id, condition_id)
     if heavy_token not in (held_token, opposite_token):
         return None
     other_token = opposite_token if heavy_token == held_token else held_token
@@ -2246,7 +2256,7 @@ def _manage_single_leg_positions_locked(
             # the record is not a guess; refusing stays correct only when
             # the registry genuinely has no record.
             side_tokens = _resolve_side_tokens_with_lifecycle(
-                registry, pair_id, side_tokens)
+                registry, pair_id, side_tokens, pair["condition_id"])
             if set(side_tokens) != {"UP", "DOWN"}:
                 held_tok = pair["heavy"]["token_id"]
                 stranded_size = float(pair["naked"])
