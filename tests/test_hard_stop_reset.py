@@ -172,7 +172,11 @@ def test_a_full_exit_with_a_fresh_zero_read_resets(registry, monkeypatch):
 
 def test_a_full_exit_with_an_unreadable_balance_does_not_reset(
         registry, monkeypatch):
-    """#646: the old fallback assumed flat here; the proof refuses instead."""
+    """#646: the old fallback assumed flat here; the proof refuses instead.
+
+    #796: the row stays managed AND fresh entries stay blocked -- the
+    unreadable venue cannot prove flat, but the exit still happened.
+    """
     import urllib.request
 
     def _boom(req, timeout=None):
@@ -186,7 +190,9 @@ def test_a_full_exit_with_an_unreadable_balance_does_not_reset(
     assert routed["action"] == "exited"
     assert routed["reset_status"] == "UNAVAILABLE"
     assert registry.get_lifecycle_state(PAIR).state == "HARD_STOP"
-    assert registry.requalification_marks() == {}
+    mark = registry.requalification_marks()[COND]
+    assert mark.status == "awaiting"
+    assert "hard_stop" in mark.reason
 
 
 def test_an_exited_result_with_a_nonzero_balance_does_not_reset(
@@ -200,3 +206,7 @@ def test_an_exited_result_with_a_nonzero_balance_does_not_reset(
     assert routed["action"] == "exited"
     assert routed["reset_status"] == "RESIDUAL"
     assert registry.get_lifecycle_state(PAIR).state == "HARD_STOP"
+    # #796: residual keeps the row managed but still blocks fresh entries.
+    mark = registry.requalification_marks()[COND]
+    assert mark.status == "awaiting"
+    assert "hard_stop" in mark.reason

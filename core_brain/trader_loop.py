@@ -26,7 +26,6 @@ import uuid
 from collections import deque
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
-from enum import Enum
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -42,6 +41,9 @@ from core_brain.rotation_priority import order_by_exposure
 from core_brain.cycle_stream import emit as _emit_cycle_event
 from core_brain.market_lifecycle import (
     LifecycleStop, classify_refusal, resolved_condition_ids,
+)
+from core_brain.visit_outcome import (
+    VisitOutcome, classify_refusal_text, visit_stop,
 )
 from core_brain.order_registry import InstanceInUse, OrderRegistry
 from core_brain import risk
@@ -101,31 +103,6 @@ UMA_RESOLUTION_STATUS_REASONS = {
 
 # Attribute attached to exceptions when submit raises after placing some legs.
 PARTIAL_SUBMIT_PLACED_ATTR = "placed"
-
-
-class VisitOutcome(Enum):
-    """What one market visit decided, beyond the intents list."""
-    QUOTED = "quoted"                    # intents present (or no opinion)
-    REFUSED_TRANSIENT = "refused_transient"  # visited, refused: transient reason
-    REFUSED_TERMINAL = "refused_cancel"  # visited, refused for good: named stop
-
-
-def _classify_refusal(why: str) -> VisitOutcome:
-    """Terminal or transient, from `decide`'s refusal reason (pure).
-
-    Delegates to the single enumerated list in `market_lifecycle`: a named
-    stop refuses for good, everything else (wide book, completable cap,
-    quote window, mid band, ...) is transient -- the book moved, not the
-    market. Matched case-insensitively.
-    """
-    if classify_refusal(why) is not None:
-        return VisitOutcome.REFUSED_TERMINAL
-    return VisitOutcome.REFUSED_TRANSIENT
-
-
-def _visit_stop(why: str) -> Optional[LifecycleStop]:
-    """Name the lifecycle stop for a refused visit (pure)."""
-    return classify_refusal(why or "")
 
 
 
@@ -262,19 +239,19 @@ def plan_orders(
     # so this is a no-op until the operator flips the switch AND blocks a
     # bucket that cleared the 8.9:1 lift. Only the intent-visible edge
     # dimension is enforceable here; other calibration dimensions stay
-    # diagnostic until their features ride on the intent.
+    # diagnostic until their features ride on the intent. An edge no band can
+    # measure is refused by the gate's own rule, never allowed by omission
+    # (#792), and the refusal is recorded under `UNMEASURABLE_EDGE` so the
+    # caller can count it.
     _fq_on = bool(getattr(cfg, "bot_entry_fill_quality_gate_on", False))
     _fq_blocked = tuple(getattr(cfg, "bot_entry_fill_quality_blocked_edge", None) or ())
     if _fq_on and _fq_blocked:
-        from core_brain.fill_quality_report import (
-            edge_bucket_for, evaluate_fill,
-        )
+        from core_brain.fill_quality_report import evaluate_edge
         _fq_set = frozenset(("edge", b) for b in _fq_blocked)
         _fq_kept: list[QuoteIntent] = []
         for _idx, _intent in enumerate(intents):
-            _allow, _why = evaluate_fill(
-                {"edge": edge_bucket_for(getattr(_intent, "edge_vs_mid", None))},
-                _fq_set,
+            _allow, _why = evaluate_edge(
+                getattr(_intent, "edge_vs_mid", None), _fq_set,
             )
             if _allow:
                 _fq_kept.append(_intent)
@@ -459,9 +436,36 @@ class VenueSeam:
 
     The interface of the loop: `run` reads every port off the seam, so
     adding a port does not rewire every call site. Production builds one
-    in `main` (real venue calls); tests build one with fakes. A seam
-    missing a required port raises in `run`, never silently.
+    in `main` (real venue calls); the rehearsal builds one in
+    `core_brain.shadow_run.build_shadow_seam` (recorded writes); tests build
+    one with fakes. A seam missing a required port raises, never silently --
+    `check_ready` is the one owner of that contract, so both adapters are
+    checked the same way.
     """
+
+    #: The market-visit interface: decide, plan, submit, cancel and sweep,
+    #: plus the reads they need. Every other port is optional and inert
+    #: when unset.
+    VISIT_PORTS = (
+        "fetch_market",
+        "fetch_books",
+        "decide",
+        "submit_fn",
+        "cancel_fn",
+        "reconcile_fn",
+        "sweep_fn",
+    )
+
+    @classmethod
+    def required_ports(cls) -> tuple:
+        """The ports a market visit cannot run without."""
+        return cls.VISIT_PORTS
+
+    def check_ready(self) -> None:
+        """Raise naming every missing required port; pass silently otherwise."""
+        missing = [n for n in self.required_ports() if getattr(self, n) is None]
+        if missing:
+            raise TypeError(f"VenueSeam missing required ports: {', '.join(missing)}")
     client: Any = None
     registry: Any = None
     base_cfg: Any = None
@@ -567,14 +571,7 @@ def run(
     if seam.clob_host is None:
         seam.clob_host = os.environ.get("CLOB_HOST", "https://clob.polymarket.com")
 
-    missing = [n for n, v in (
-        ("fetch_market", seam.fetch_market), ("fetch_books", seam.fetch_books),
-        ("decide", seam.decide), ("submit_fn", seam.submit_fn),
-        ("cancel_fn", seam.cancel_fn), ("reconcile_fn", seam.reconcile_fn),
-        ("sweep_fn", seam.sweep_fn),
-    ) if v is None]
-    if missing:
-        raise TypeError(f"VenueSeam missing required ports: {', '.join(missing)}")
+    seam.check_ready()
 
     # Telemetry is opt-in: main() wires core_brain.cycle_stream.emit; tests drive
     # the loop without it so no test ever writes into live/run/.
@@ -2112,7 +2109,7 @@ def _visit_one(
         visit_outcome = (
             VisitOutcome.REFUSED_TERMINAL
             if lifecycle_refused and not lifecycle_holds
-            else _classify_refusal(why) if not intents
+            else classify_refusal_text(why) if not intents
             else VisitOutcome.QUOTED
         )
         if intents:
@@ -2121,7 +2118,7 @@ def _visit_one(
                 stop_memory.pop(cid, None)
         else:
             _note_lifecycle_stop(
-                seam, cid, title, _visit_stop(why),
+                seam, cid, title, visit_stop(why),
                 why, stop_memory, cycle, emit_fn)
             _note_refusal_visit(
                 seam, cid, title,
@@ -2150,6 +2147,17 @@ def _visit_one(
         to_cancel, to_submit = (plan_fn or plan_orders)(
             open_orders, intents, **plan_kwargs,
         )
+        # Fail-closed refusals (#792). Counted here rather than in the report:
+        # the report's `unknown` bucket only sees FILLS, and a refused intent
+        # never becomes one, so without this count the drop is silent.
+        from core_brain.fill_quality_report import UNMEASURABLE_EDGE
+        fq_refused = sum(1 for _why in cancel_reasons.values()
+                         if _why == UNMEASURABLE_EDGE)
+        if fq_refused:
+            _tail_note(
+                tail_memory, cid, "fill_quality", str(fq_refused),
+                "[FILL QUALITY] %s | refused %d intent(s): edge unmeasurable",
+                title, fq_refused)
         # THE QUEUE-CLEAR GATE (#393), on NEW placements only and after the
         # planner, so held orders, the refusal-grace counter and every recorded
         # cancel reason stay exactly as they were. Record-only at ship: it
@@ -2169,6 +2177,8 @@ def _visit_one(
                                error=f"{type(e).__name__}: {e}")
 
     event_extra = {"intent_count": len(intents), "condition_id": cid}
+    if fq_refused:
+        event_extra["fill_quality_refused"] = fq_refused
     # WS-book provenance (#650): when the loop reads books from the stream
     # cache instead of REST, say so on the row so a quote is traceable to its
     # source. Unwired seams (shadow, tests, `--no-ws-books`) emit byte-identical

@@ -392,3 +392,29 @@ def test_ab_blocked_first_leg_removes_the_pair(tmp_path: Path):
     assert abs(ab["on_total"] - 3.29) < 1e-9
     assert abs(ab["delta"] - 3.124) < 1e-9
     assert set(ab["pairs_excluded"]) == {"p2", "p3", "p4"}
+
+
+# --- #797: the cap bail-out is a forced dead leg ----------------------------
+
+def test_pair_cap_bailout_labels_the_condition_dead_leg(tmp_path: Path):
+    """#797: a hedge the cap never reached exits as a dead leg, not 'other'.
+
+    The report is the evidence an operator reads to decide whether the pair
+    cap is still worth paying for; a cap-forced sale that landed under 'other'
+    would hide exactly the population the cap creates.
+    """
+    db = tmp_path / "cap.db"
+    _write_ddl(db)
+    conn = sqlite3.connect(db)
+    _seed_order(conn, "o7", "c7", "tD", "BUY", 0.52, 3.0, "filled", "p7")
+    _seed_fill(conn, "f7", "o7", 3.0, 0.52)
+    _seed_close(conn, "c7", "single_buy_exit", -1.10,
+                reason="pair_cap_hedge_unreachable")
+    conn.commit()
+    conn.close()
+
+    store = fqr.load_store(db, run_id="r1", label="shadow")
+    assert store.status == fqr.OK
+    rows = {r.trade_id: r for r in fqr.build_report(store).fills}
+
+    assert rows["f7"].outcome == "dead_leg"
