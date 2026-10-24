@@ -7106,6 +7106,11 @@ function orderGroupMarket(group, conditionId, byMarket, state) {
  * Tone follows the state, not the money: good, warning, alert. `Pair Cost`
  * carries its own tag and its own tone, so no single tag is asked to mean two
  * things at once. */
+/* Fallback mirror of core_brain.pair_status.PAIR_STATUS, kept only for payloads
+ * that predate the shaped `pair_status_label` / `pair_status_tone` fields and
+ * for book-derived resting statuses the server never shapes. The Python module
+ * is the single owner -- live held paths must read via pairStatusMetaFromMarket,
+ * never this table directly. Do not fork the words or tones here. */
 const PAIR_STATUS = {
   paired: { label: 'Paired', tone: 'good' },
   partial: { label: 'Partial', tone: 'warn' },
@@ -7132,9 +7137,39 @@ function pairStatusFromMarket(m) {
   return pairStatus(m && m.up_sh, m && m.dn_sh);
 }
 
+/* Fallback adapter: label and tone for a status word without a market.
+ * Resting pairs (book-derived, never server-shaped) and older payloads render
+ * through here. Held paths use pairStatusTagFromMarket. */
 function pairStatusTag(status) {
+  return otTag(pairStatusMeta(status).tone, pairStatusMeta(status).label, null);
+}
+
+/* Fallback reader over the mirror table above. */
+function pairStatusMeta(status) {
   const state = PAIR_STATUS[status] || PAIR_STATUS.unpaired;
-  return otTag(state.tone, state.label, null);
+  return { label: state.label, tone: state.tone };
+}
+
+/* Held-market adapter: prefer the server-shaped label and tone, but only for
+ * the status the server actually shaped -- a stale `m` whose counts moved on
+ * must never dress a recomputed word in another word's clothes. Anything
+ * missing or mismatched falls back so older payloads render byte-identical. */
+function pairStatusMetaFromMarket(m, status) {
+  const shaped = m && m.pair_status;
+  const label = m && m.pair_status_label;
+  const tone = m && m.pair_status_tone;
+  if (shaped === status
+      && (status === 'paired' || status === 'partial' || status === 'unpaired')
+      && typeof label === 'string' && label
+      && typeof tone === 'string' && tone) {
+    return { label, tone };
+  }
+  return pairStatusMeta(status);
+}
+
+function pairStatusTagFromMarket(m, status) {
+  const meta = pairStatusMetaFromMarket(m, status);
+  return otTag(meta.tone, meta.label, null);
 }
 
 /* Pair cost sits beside the status, not inside a second pill. A pill reads as
@@ -7153,10 +7188,18 @@ function pairCostText(pairCost) {
     + `<span class="ot-cost-value mono">${esc(fmtPrice(pairCost))}</span></span>`;
 }
 
-/* The status and its measurement on one line, under the market name. */
+/* The status and its measurement on one line, under the market name.
+ * Resting-pair adapter: the book-derived status has no server shape, so the
+ * tag falls back to the mirror table (same words the server owns). */
 function pairSummary(status, pairCost, inferred) {
   const inferredTag = inferred ? `<div class="ot-tag is-info" title="Complementary legs grouped by market (no shared pair_id)">Inferred</div>` : '';
   return `<div class="ot-pair-line">${pairStatusTag(status)}${inferredTag}${pairCostText(pairCost)}</div>`;
+}
+
+/* Held-market adapter: the tag reads the server-shaped label and tone. */
+function pairSummaryFromMarket(m, status, pairCost, inferred) {
+  const inferredTag = inferred ? `<div class="ot-tag is-info" title="Complementary legs grouped by market (no shared pair_id)">Inferred</div>` : '';
+  return `<div class="ot-pair-line">${pairStatusTagFromMarket(m, status)}${inferredTag}${pairCostText(pairCost)}</div>`;
 }
 
 /* A labelled status tag: a named condition, optionally with the number behind
@@ -7715,7 +7758,7 @@ function positionsRows(kpi, state, sort) {
     if (!legs.length) return '';
 
     const isInferred = (status !== 'unpaired') && isMarketInferredPosition(cid, kpi, state);
-    const pairTags = pairSummary(status, (status === 'unpaired') ? null : m.pair_cost, isInferred);
+    const pairTags = pairSummaryFromMarket(m, status, (status === 'unpaired') ? null : m.pair_cost, isInferred);
     const span = legs.length;
     // The engine's activity on this market, stated once per market on the row
     // that carries the market cell (issue #656).
@@ -9182,8 +9225,9 @@ function closeReasonTitle(info) {
  * markets said One-Sided with zero shares held.
  *
  * It now speaks the vocabulary the rows inside it speak. `Paired`, `Partial`
- * and `Unpaired` are `PAIR_STATUS` -- the same three words and the same three
- * tones the OPEN POSITIONS table uses on the positions themselves -- and
+ * and `Unpaired` are the server-shaped words -- the same three words and the
+ * same three tones the OPEN POSITIONS table uses on the positions themselves,
+ * all owned by core_brain.pair_status -- and
  * `Flat` is added for a market holding nothing, which those three cannot say:
  * `Unpaired` would claim a single buy that is not there. So the market row and
  * the rows under it agree, and DESIGN.md's rule holds -- no saturated hue for
@@ -9212,7 +9256,8 @@ function hedgeStateOf(m) {
     return { state: 'Unsettled', tone: 'alert',
              title: hedgeTitle('unpaired', up, dn) + ' -- settled without its counter-leg' };
   }
-  return { state: PAIR_STATUS[status].label, tone: PAIR_STATUS[status].tone,
+  const meta = pairStatusMetaFromMarket(m, status);
+  return { state: meta.label, tone: meta.tone,
            title: hedgeTitle(status, up, dn) + (settled ? ' -- settled' : '') };
 }
 
@@ -10590,7 +10635,8 @@ if (typeof module !== 'undefined' && module.exports) {
     marketActivityPill,
     normalizeLeg, groupOrdersByPair, restingPairCost, restingPairLegs,
     fmtTimestamp, toMs, latestQuoteTs, latestFillTs, closeTsOf, fmtRelAgo, timestampCell,
-    pairStatus, pairStatusFromMarket, PAIR_STATUS, isMarketInferredPosition, pairSummary,
+    pairStatus, pairStatusFromMarket, pairStatusMeta, pairStatusMetaFromMarket,
+    pairStatusTagFromMarket, PAIR_STATUS, isMarketInferredPosition, pairSummary, pairSummaryFromMarket,
     get isStopping() { return isStopping; },
     // The table's own expand state, so a harness can open a row and read the
     // sub-table that the real click path renders.

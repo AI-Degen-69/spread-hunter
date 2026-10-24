@@ -10,6 +10,12 @@ Rule (verbatim from the JS it replaces): coerce each side with `Number(x) ||
 0`; paired when both are held and equal, partial when both are held and
 unequal, unpaired otherwise. A missing number must never decide a paired
 verdict, so unmeasurable inputs fall to unpaired.
+
+This module also owns what each word reads as: `status_meta` is the single
+source of the label and tone the dashboard pills show. The KPI report shapes
+all three onto each market (`pair_status`, `pair_status_label`,
+`pair_status_tone`); the page adapts by reading them, falling back to this
+same table only for payloads that predate it.
 """
 from __future__ import annotations
 
@@ -45,3 +51,21 @@ def pair_status(up_size: Any, down_size: Any) -> str:
     if up > 0 and dn > 0:
         return PAIRED if up == dn else PARTIAL
     return UNPAIRED
+
+
+def status_meta(status: Any) -> dict[str, str]:
+    """The label and tone for a status word, defaulting to unpaired.
+
+    Mirrors the old JS `PAIR_STATUS[status] || PAIR_STATUS.unpaired`: an
+    unknown word reads as the alert state, never as a blank pill.
+    """
+    meta = PAIR_STATUS.get(status) if isinstance(status, str) else None
+    if meta is None:
+        meta = PAIR_STATUS[UNPAIRED]
+    return {"label": meta["label"], "tone": meta["tone"]}
+
+
+def describe(up_size: Any, down_size: Any) -> dict[str, str]:
+    """The full shape for two share counts: word plus its label and tone."""
+    status = pair_status(up_size, down_size)
+    return {"status": status, **status_meta(status)}
