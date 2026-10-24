@@ -722,6 +722,130 @@ def _token_side(registry: OrderRegistry, condition_id: str,
     return registry.get_token_side(condition_id, token_id)
 
 
+# Outcome tag for the once-per-pair missing-side report (#793). The detail
+# carries the stranded token + shares; the outcome lets the pass recognise
+# a pair it already reported so the second cycle collapses to a quiet row
+# instead of a second identical warning.
+MISSING_SIDE_REFUSAL_OUTCOME = "missing_side_tokens"
+
+# Collapsed repeat for a pair whose sides the registry cannot resolve. Loud
+# once (the `error` above), then this quiet row: same token + shares, no
+# per-cycle warning. A member of SINGLE_LEG_QUIET_ACTIONS below.
+STRANDED_MISSING_SIDE_ACTION = "stranded_missing_side"
+
+
+def _lifecycle_held_and_opposite(
+    registry: OrderRegistry, pair_id: str,
+    condition_id: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """Held + opposite token ids from the persisted lifecycle record (#793).
+
+    Returns (held_token_id, opposite_token_id); either may be None when no
+    record exists or its evidence carries neither. A record naming another
+    condition is not this pair's record, so it reads as no record. Never
+    raises: an unreadable row is "no record", and the caller keeps refusing.
+    """
+    try:
+        record = registry.get_lifecycle_state(pair_id)
+    except Exception:
+        return None, None
+    if record is None:
+        return None, None
+    if condition_id is not None and str(
+        getattr(record, "condition_id", "") or "").lower() != str(condition_id).lower():
+        return None, None
+    raw = getattr(record, "evidence_json", None)
+    if not raw:
+        return None, None
+    try:
+        evidence = json.loads(raw)
+    except Exception:
+        return None, None
+    if not isinstance(evidence, dict):
+        return None, None
+    held = evidence.get("held_token_id")
+    opposite = evidence.get("opposite_token_id")
+    held_token = str(held) if held else None
+    opposite_token = str(opposite) if opposite else None
+    return held_token, opposite_token
+
+
+def _resolve_side_tokens_with_lifecycle(
+    registry: OrderRegistry,
+    pair_id: str,
+    side_tokens: dict[str, str],
+    condition_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Fill the one empty UP/DOWN slot from the lifecycle record (#793).
+
+    The missing side was never quoted, so the quotes-ledger fallback cannot
+    see it -- but the single-leg lifecycle already recorded that token as
+    `opposite_token_id`. Assigning it to the empty slot is not a guess: the
+    known slot is still anchored in fills/quotes, and the recorded opposite
+    only names the other leg. Both slots empty, both filled, or no record
+    all return the mapping unchanged so the caller keeps refusing.
+    """
+    if set(side_tokens) == {"UP", "DOWN"}:
+        return side_tokens
+    missing = [side for side in ("UP", "DOWN") if side not in side_tokens]
+    if len(missing) != 1:
+        return side_tokens
+    _, opposite_token = _lifecycle_held_and_opposite(
+        registry, pair_id, condition_id)
+    if not opposite_token:
+        return side_tokens
+    if opposite_token in side_tokens.values():
+        return side_tokens
+    resolved = dict(side_tokens)
+    resolved[missing[0]] = opposite_token
+    return resolved
+
+
+def _heavy_side_with_lifecycle(
+    registry: OrderRegistry,
+    condition_id: str,
+    pair_id: str,
+    heavy_token: str,
+) -> Optional[str]:
+    """Heavy-leg side via quotes, falling back to the lifecycle record (#793).
+
+    When the heavy token itself was never quoted, its side is still known
+    whenever the lifecycle names it as held/opposite and the other token's
+    side resolves from quotes: the heavy leg is then the other side. Any
+    other shape stays None so the exit keeps refusing rather than guessing.
+    """
+    side = _token_side(registry, condition_id, heavy_token)
+    if side in ("UP", "DOWN"):
+        return side
+    held_token, opposite_token = _lifecycle_held_and_opposite(
+        registry, pair_id, condition_id)
+    if heavy_token not in (held_token, opposite_token):
+        return None
+    other_token = opposite_token if heavy_token == held_token else held_token
+    if not other_token:
+        return None
+    other_side = _token_side(registry, condition_id, other_token)
+    if other_side == "UP":
+        return "DOWN"
+    if other_side == "DOWN":
+        return "UP"
+    return None
+
+
+def _missing_side_already_reported(registry: OrderRegistry, pair_id: str) -> bool:
+    """Whether this pair already logged its once-per-pair report (#793)."""
+    try:
+        refusals = registry.get_hard_stop_refusals()
+    except Exception:
+        return False
+    return any(
+        isinstance(row, dict)
+        and row.get("pair_id") == pair_id
+        and row.get("outcome") == MISSING_SIDE_REFUSAL_OUTCOME
+        for row in refusals
+    )
+
+
 def _exit_fill_price(resp, floor_price: float) -> float:
     """What the exit actually sold at, or the floor when nobody will say.
 
@@ -956,7 +1080,8 @@ def exit_single_buy(
     # ledger entry exists to stop -- resolved now, so an unresolvable side
     # costs nothing and refuses rather than selling unrecorded.
     heavy_token = pair["heavy"]["token_id"]
-    heavy_side = _token_side(registry, pair["condition_id"], heavy_token)
+    heavy_side = _heavy_side_with_lifecycle(
+        registry, pair["condition_id"], pair_id, heavy_token)
     if heavy_side is None:
         raise PairExitRefused(
             f"Cannot resolve whether {heavy_token} is the UP or DOWN leg: the "
@@ -1511,6 +1636,7 @@ AGED_OUT_QUIET_ACTIONS = (
 SINGLE_LEG_QUIET_ACTIONS = frozenset({
     "patient_wait", "escalated_wait", "pair_locked", "dual_resting",
     "awaiting_lead", "would_exit", "would_complete",
+    STRANDED_MISSING_SIDE_ACTION,
 })
 
 # The verdicts `aged_out_verdict` returns. `due` is the only one that acts.
@@ -2148,11 +2274,46 @@ def _manage_single_leg_positions_locked(
                     token = quoted_tokens.get(pair["condition_id"], {}).get(side)
                     if token is not None:
                         side_tokens[side] = token[1]
+            # #793: the missing leg was never quoted, so the quotes ledger
+            # cannot name it -- but the lifecycle record already holds that
+            # token as `opposite_token_id`. Filling the one empty slot from
+            # the record is not a guess; refusing stays correct only when
+            # the registry genuinely has no record.
+            side_tokens = _resolve_side_tokens_with_lifecycle(
+                registry, pair_id, side_tokens, pair["condition_id"])
             if set(side_tokens) != {"UP", "DOWN"}:
-                raise PairExitRefused(
+                held_tok = pair["heavy"]["token_id"]
+                stranded_size = float(pair["naked"])
+                detail = (
                     f"pair_id={pair_id!r} does not identify one UP token and "
-                    "one DOWN token in the quotes ledger"
+                    f"one DOWN token in the quotes ledger; stranded leg "
+                    f"{held_tok} holds {stranded_size:.4f} shares with no "
+                    f"recorded opposite side"
                 )
+                # Once per pair (#793): the first cycle raises loud so the
+                # log + cycle event carry the token + shares; every later
+                # cycle collapses to a quiet row with the same payload.
+                # Telemetry never masks the refusal: a failing write falls
+                # through to the loud raise.
+                if _missing_side_already_reported(registry, pair_id):
+                    out.append({
+                        "pair_id": pair_id, "condition_id": condition_id,
+                        "action": STRANDED_MISSING_SIDE_ACTION,
+                        "reason": detail,
+                        "token_id": held_tok, "size": stranded_size,
+                    })
+                    continue
+                try:
+                    registry.log_hard_stop_refusal(
+                        pair_id=pair_id,
+                        condition_id=pair.get("condition_id", ""),
+                        trigger_bid=None,
+                        outcome=MISSING_SIDE_REFUSAL_OUTCOME,
+                        detail=detail,
+                    )
+                except Exception:  # noqa: BLE001 - telemetry never masks a hold
+                    pass
+                raise PairExitRefused(detail)
 
             empty_leg = {"matched": 0.0, "notional": 0.0}
             up_leg = pair["legs"].get(side_tokens["UP"], empty_leg)

@@ -316,6 +316,7 @@ def status(registry=None) -> None:
     print("\nConfirm the address above is the account holding your USDC "
           "BEFORE sending anything.")
     _print_requalification_section(registry)
+    _print_stranded_section(registry)
 
 
 def _print_requalification_section(registry=None) -> None:
@@ -338,6 +339,38 @@ def _print_requalification_section(registry=None) -> None:
                     if mark.excluded_publication_ns is not None else "")
         print(f"  {cid[:16]:<18} {mark.status} gen={mark.generation}"
               f" reason={mark.reason}{excluded}")
+
+
+def _print_stranded_section(registry=None) -> None:
+    """Read-only stranded single-buy legs for the operator (#793).
+
+    Lists the once-per-pair missing-side reports (token + shares) so a pair
+    whose opposite leg was never quoted stays visible after its first
+    warning collapses to a quiet row. Never writes.
+    """
+    from core_brain.order_registry import OrderRegistry
+    try:
+        reg = registry or OrderRegistry()
+        refusals = reg.get_hard_stop_refusals()
+    except Exception as exc:
+        print(f"\nstranded single-buy  ERROR {type(exc).__name__}: {exc}")
+        return
+    stranded = [
+        r for r in refusals
+        if isinstance(r, dict) and r.get("outcome") == "missing_side_tokens"
+    ]
+    # Newest report per pair: one line per stranded leg, not per cycle.
+    latest: dict[str, dict] = {}
+    for row in stranded:
+        pid = str(row.get("pair_id") or "")
+        if not pid:
+            continue
+        prev = latest.get(pid)
+        if prev is None or float(row.get("ts") or 0.0) >= float(prev.get("ts") or 0.0):
+            latest[pid] = row
+    print(f"\nstranded single-buy  {len(latest)} pair(s)")
+    for pid in sorted(latest):
+        print(f"  {pid}  {latest[pid].get('detail') or ''}")
 
 
 def balance(funder: str | None) -> None:
