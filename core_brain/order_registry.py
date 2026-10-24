@@ -1315,6 +1315,47 @@ class OrderRegistry:
             conn.commit()
             return cur.rowcount > 0
 
+    def mark_hard_stop_block(self, condition_id: str, reason: str,
+                             now_ms: int) -> int:
+        """Block fresh entries after a hard stop without clearing rows (#796).
+
+        A hard-stop exit can leave residual shares, so the lifecycle row
+        survives the stop and the shared `reset_condition` proof abandons
+        its `resetting` mark. This writes (or refreshes) a stable
+        `awaiting` mark with a bumped generation while leaving every
+        `single_leg_lifecycle` row untouched, so the remainder stays managed
+        (hedges/merges keep flowing through the final entry gate) while
+        fresh-entry submits stay blocked until a newer qualifying
+        publication clears the mark via `_evaluate_requalification`. Lives in
+        the registry, so it survives a restart inside the run.
+        """
+        cid = str(condition_id or "").lower()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT generation FROM lifecycle_requalification WHERE condition_id = ?",
+                (cid,),
+            ).fetchone()
+            generation = int(row["generation"]) + 1 if row is not None else 1
+            conn.execute(
+                """
+                INSERT INTO lifecycle_requalification (
+                    condition_id, status, generation, reset_ts_ms, reason,
+                    excluded_publication_ns, updated_ts_ms
+                ) VALUES (?, 'awaiting', ?, ?, ?, NULL, ?)
+                ON CONFLICT(condition_id) DO UPDATE SET
+                    status = 'awaiting',
+                    generation = excluded.generation,
+                    reset_ts_ms = excluded.reset_ts_ms,
+                    reason = excluded.reason,
+                    excluded_publication_ns = NULL,
+                    updated_ts_ms = excluded.updated_ts_ms
+                """,
+                (cid, generation, int(now_ms), str(reason or ""), int(now_ms)),
+            )
+            conn.commit()
+            return generation
+
     def requalification_marks(self) -> dict[str, RequalificationMark]:
         """All reset marks keyed by lowercased condition id. DB errors propagate."""
         with self._conn() as conn:
