@@ -290,6 +290,11 @@ def edge_bucket_for(value: float | None) -> str:
     return _bucketize(value, EDGE_EDGES, _EDGE_LABELS)
 
 
+#: #792: a floor names a price band, so an edge with no book quote behind it
+#: has no band to match. The gate refuses it under this one reason string.
+UNMEASURABLE_EDGE = f"blocked:edge:{QUEUE_UNKNOWN}"
+
+
 def evaluate_fill(features: dict[str, str],
                   blocked: set[tuple[str, str]] | frozenset | set[str]
                   ) -> tuple[bool, str]:
@@ -309,6 +314,21 @@ def evaluate_fill(features: dict[str, str],
         if (dimension, bucket) in normalized:
             return (False, f"blocked:{dimension}:{bucket}")
     return (True, "allowed")
+
+
+def evaluate_edge(value: float | None,
+                  blocked: set[tuple[str, str]] | frozenset | set[str]
+                  ) -> tuple[bool, str]:
+    """Entry decision for the intent-visible edge floor, fail closed (#792).
+
+    An unmeasurable edge is the case with the least support for an entry, so
+    it is refused by this rule rather than passed by omission. It keeps its
+    own `unknown` label in the report, where it is counted separately from
+    the price bands.
+    """
+    if value is None:
+        return (False, UNMEASURABLE_EDGE)
+    return evaluate_fill({"edge": edge_bucket_for(value)}, blocked)
 
 
 @dataclass(frozen=True)

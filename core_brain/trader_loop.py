@@ -262,19 +262,19 @@ def plan_orders(
     # so this is a no-op until the operator flips the switch AND blocks a
     # bucket that cleared the 8.9:1 lift. Only the intent-visible edge
     # dimension is enforceable here; other calibration dimensions stay
-    # diagnostic until their features ride on the intent.
+    # diagnostic until their features ride on the intent. An edge no band can
+    # measure is refused by the gate's own rule, never allowed by omission
+    # (#792), and the refusal is recorded under `UNMEASURABLE_EDGE` so the
+    # caller can count it.
     _fq_on = bool(getattr(cfg, "bot_entry_fill_quality_gate_on", False))
     _fq_blocked = tuple(getattr(cfg, "bot_entry_fill_quality_blocked_edge", None) or ())
     if _fq_on and _fq_blocked:
-        from core_brain.fill_quality_report import (
-            edge_bucket_for, evaluate_fill,
-        )
+        from core_brain.fill_quality_report import evaluate_edge
         _fq_set = frozenset(("edge", b) for b in _fq_blocked)
         _fq_kept: list[QuoteIntent] = []
         for _idx, _intent in enumerate(intents):
-            _allow, _why = evaluate_fill(
-                {"edge": edge_bucket_for(getattr(_intent, "edge_vs_mid", None))},
-                _fq_set,
+            _allow, _why = evaluate_edge(
+                getattr(_intent, "edge_vs_mid", None), _fq_set,
             )
             if _allow:
                 _fq_kept.append(_intent)
@@ -2150,6 +2150,17 @@ def _visit_one(
         to_cancel, to_submit = (plan_fn or plan_orders)(
             open_orders, intents, **plan_kwargs,
         )
+        # Fail-closed refusals (#792). Counted here rather than in the report:
+        # the report's `unknown` bucket only sees FILLS, and a refused intent
+        # never becomes one, so without this count the drop is silent.
+        from core_brain.fill_quality_report import UNMEASURABLE_EDGE
+        fq_refused = sum(1 for _why in cancel_reasons.values()
+                         if _why == UNMEASURABLE_EDGE)
+        if fq_refused:
+            _tail_note(
+                tail_memory, cid, "fill_quality", str(fq_refused),
+                "[FILL QUALITY] %s | refused %d intent(s): edge unmeasurable",
+                title, fq_refused)
         # THE QUEUE-CLEAR GATE (#393), on NEW placements only and after the
         # planner, so held orders, the refusal-grace counter and every recorded
         # cancel reason stay exactly as they were. Record-only at ship: it
@@ -2169,6 +2180,8 @@ def _visit_one(
                                error=f"{type(e).__name__}: {e}")
 
     event_extra = {"intent_count": len(intents), "condition_id": cid}
+    if fq_refused:
+        event_extra["fill_quality_refused"] = fq_refused
     # WS-book provenance (#650): when the loop reads books from the stream
     # cache instead of REST, say so on the row so a quote is traceable to its
     # source. Unwired seams (shadow, tests, `--no-ws-books`) emit byte-identical
