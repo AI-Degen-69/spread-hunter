@@ -2355,7 +2355,7 @@ def test_snapshot_ttl_for_key_falls_back_when_heartbeat_unreadable(monkeypatch):
 
 
 def test_trim_cancelled_orders_strips_bloat_from_dead_pairs():
-    from dashboard.server import _trim_cancelled_orders
+    from core_brain.registry_state import trim_cancelled_orders as _trim_cancelled_orders
     state = {
         "orders": [
             {"id": "o1", "condition_id": "c1", "status": "cancelled", "posted_ts": 100},

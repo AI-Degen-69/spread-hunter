@@ -28,12 +28,12 @@ def clean_snapshot_cache(monkeypatch):
 
 def test_cancelled_orders_are_capped_per_market():
     # Arrange
-    cap = server.CANCELLED_ORDERS_PER_MARKET
+    cap = registry_state.CANCELLED_ORDERS_PER_MARKET
     state = {"orders": [_order("0xaaa", "cancelled", i) for i in range(cap + 50)]
                        + [_order("0xbbb", "cancelled", i) for i in range(cap + 50)]}
 
     # Act
-    trimmed = server._trim_cancelled_orders(state)
+    trimmed = registry_state.trim_cancelled_orders(state)
 
     # Assert
     assert len(trimmed["orders"]) == cap * 2
@@ -42,11 +42,11 @@ def test_cancelled_orders_are_capped_per_market():
 
 def test_the_newest_cancelled_orders_are_the_ones_kept():
     # Arrange
-    cap = server.CANCELLED_ORDERS_PER_MARKET
+    cap = registry_state.CANCELLED_ORDERS_PER_MARKET
     state = {"orders": [_order("0xaaa", "cancelled", i) for i in range(cap + 50)]}
 
     # Act
-    kept = server._trim_cancelled_orders(state)["orders"]
+    kept = registry_state.trim_cancelled_orders(state)["orders"]
 
     # Assert
     newest = set(range(50, cap + 50))
@@ -55,13 +55,13 @@ def test_the_newest_cancelled_orders_are_the_ones_kept():
 
 def test_live_orders_are_never_trimmed():
     # Arrange — far more resting orders than the cancelled cap.
-    cap = server.CANCELLED_ORDERS_PER_MARKET
+    cap = registry_state.CANCELLED_ORDERS_PER_MARKET
     live = [_order("0xaaa", "open", i) for i in range(cap + 50)]
     live += [_order("0xaaa", "filled", i) for i in range(cap + 50)]
     state = {"orders": live + [_order("0xaaa", "cancelled", i) for i in range(5)]}
 
     # Act
-    kept = server._trim_cancelled_orders(state)["orders"]
+    kept = registry_state.trim_cancelled_orders(state)["orders"]
 
     # Assert
     assert sum(1 for o in kept if o["status"] == "open") == cap + 50
@@ -71,7 +71,7 @@ def test_live_orders_are_never_trimmed():
 
 def test_the_state_endpoint_trims_what_it_serves(monkeypatch, tmp_path):
     # Arrange
-    cap = server.CANCELLED_ORDERS_PER_MARKET
+    cap = registry_state.CANCELLED_ORDERS_PER_MARKET
     monkeypatch.setattr(server, "_ACTIVE_DB_OVERRIDE", tmp_path / "orders.db")
     monkeypatch.setattr(
         registry_state, "summarize_state",
