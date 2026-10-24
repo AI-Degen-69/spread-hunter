@@ -42,6 +42,7 @@ from contextlib import contextmanager
 from typing import Optional
 
 from core_brain.book_math import (
+    DEFAULT_TICK_SIZE,
     ask_depth_at_or_below,
     best_ask,
     best_bid,
@@ -72,11 +73,6 @@ MIN_ORDER_SHARES: float = 1.0
 # the name outlived the scope.
 MIN_SELL_SHARES: float = MIN_ORDER_SHARES
 
-# Price-comparison tolerance, in absolute price. A BUY fills at levels priced
-# at or below its limit, but float noise (e.g. 0.1 + 0.2 vs 0.30) must still
-# count as equal. Separate from SIZE_EPS, which is a share-count tolerance.
-PRICE_EPS_OFFSET: float = 1e-9
-
 # How far below the best bid a market sell may be filled, in absolute price.
 #
 # Absolute rather than proportional: these are probability prices in [0, 1],
@@ -88,11 +84,6 @@ PRICE_EPS_OFFSET: float = 1e-9
 # Without a bound the SDK derives the sell price from the requested amount and
 # will happily walk the book down to whatever level clears it.
 MAX_SELL_SLIPPAGE: float = 0.02
-
-# Fallback venue tick when the book does not carry one. The venue rejects prices
-# off its tick grid, so a limit computed at full float precision is a rejected
-# order rather than a careful one.
-DEFAULT_TICK_SIZE: float = 0.01
 
 # Page size for the Data API positions read.
 POSITIONS_PAGE_SIZE: int = 500

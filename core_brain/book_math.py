@@ -9,7 +9,13 @@ from __future__ import annotations
 
 from typing import Optional
 
+# Fallback venue tick when the book does not carry one. The venue rejects prices
+# off its tick grid, so a limit computed at full float precision is a rejected
+# order rather than a careful one.
 DEFAULT_TICK_SIZE: float = 0.01
+# Price-comparison tolerance, in absolute price. A BUY fills at levels priced
+# at or below its limit, but float noise (e.g. 0.1 + 0.2 vs 0.30) must still
+# count as equal. Separate from SIZE_EPS, which is a share-count tolerance.
 PRICE_EPS_OFFSET: float = 1e-9
 
 
