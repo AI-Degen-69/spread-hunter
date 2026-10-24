@@ -1430,21 +1430,20 @@ def _reduced_motion_block(css: str, selector: str) -> str:
 
 
 def test_positions_renderers_wire_activity_pill():
-    """Both OPEN POSITIONS tables wear the ACTIVE MARKETS RESTING/QUOTING pill."""
+    """Neither OPEN POSITIONS table wears the RESTING/QUOTING pill (#785)."""
     app_js = _read_static("app.js")
 
-    # One shared rule, beside the pill helper it wraps.
+    # The shared helper stays for reference, but neither positions renderer
+    # may call it: HEDGE STATUS alone is the position state.
     assert "function marketActivityPill(" in app_js
 
     for name in ("positionsRows", "stitchPositionsRows"):
         body = _js_function_body(app_js, name)
-        # Orders are grouped once per render and the pill comes from the shared
-        # rule: a renderer missing either line silently loses the indicator.
-        assert "groupOrdersByMarket(" in body, name
-        assert "marketActivityPill(" in body, name
-        # Decided before the row is assembled, so the pill can only ride in the
-        # market cell -- never in a cell paintLiveMarks() rewrites.
-        assert body.index("marketActivityPill(") < body.index("data-cell"), name
+        assert "marketActivityPill(" not in body, name
+        assert "resting-breathing" not in body, name
+        assert "quoting-breathing" not in body, name
+        # The hedge badge still carries the position state.
+        assert "stitch-status-badge" in body or "pairSummary" in body or "statusBadge" in body, name
 
 
 def test_styles_css_reduced_motion_covers_breathing_pills():

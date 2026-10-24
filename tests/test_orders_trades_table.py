@@ -859,22 +859,28 @@ def _held_resting_order(status: str = "open") -> dict:
 
 
 @requires_node
-def test_positions_quoting_held_market_shows_quoting_pill():
+def test_positions_held_market_shows_no_activity_pill():
     # Arrange — the held market has quotes logged and nothing resting on it.
+    # #785: a held position's state is its HEDGE STATUS badge (PAIRED /
+    # PARTIAL / UNPAIRED); the Active-Markets RESTING/QUOTING vocabulary must
+    # not leak into the Open Positions Market cell.
     rendered = _render("positions", _kpi(), _state())
 
-    # Assert
+    # Assert — no activity pill anywhere; the hedge badge carries the state.
     block = _held_block(rendered)
     assert CID_HELD in block
-    assert 'class="pill quoting-breathing"' in block
-    assert ">QUOTING</span>" in block
-    assert "resting-breathing" not in block
+    assert "quoting-breathing" not in rendered["html"]
+    assert "resting-breathing" not in rendered["html"]
+    assert "pill stopped" not in rendered["html"]
+    assert ">QUOTING</span>" not in block
+    assert ">RESTING</span>" not in block
 
 
 @requires_node
-def test_positions_held_market_with_resting_order_shows_resting_pill():
-    # Arrange — an order is still resting on the held market, so RESTING wins
-    # over the quotes the market also logged.
+def test_positions_held_market_with_resting_order_shows_no_activity_pill():
+    # Arrange — an order is still resting on the held market.
+    # #785: even then the position row shows no RESTING pill — HEDGE STATUS
+    # alone is the position state.
     state = _state()
     state["orders"].append(_held_resting_order())
 
@@ -882,10 +888,9 @@ def test_positions_held_market_with_resting_order_shows_resting_pill():
     rendered = _render("positions", _kpi(), state)
 
     # Assert
-    block = _held_block(rendered)
-    assert 'class="pill resting-breathing"' in block
-    assert ">RESTING</span>" in block
-    assert "quoting-breathing" not in block
+    assert "resting-breathing" not in rendered["html"]
+    assert "quoting-breathing" not in rendered["html"]
+    assert ">RESTING</span>" not in rendered["html"]
 
 
 @requires_node
@@ -917,9 +922,11 @@ def test_positions_idle_held_market_keeps_standard_tags():
 
 
 @requires_node
-def test_positions_activity_pill_keeps_banding_and_live_cells():
+def test_positions_no_activity_pill_keeps_banding_and_live_cells():
     # Arrange — two held markets, so the second renders the striped band; the
     # first has an order resting on it.
+    # #785: no activity pill is rendered, so banding and live cells must hold
+    # without it.
     kpi = _kpi()
     kpi["by_market"]["0xheld2"] = {**kpi["by_market"][CID_HELD],
                                     "condition_id": "0xheld2",
@@ -931,7 +938,7 @@ def test_positions_activity_pill_keeps_banding_and_live_cells():
     rendered = _render("positions", kpi, state)
     html = rendered["html"]
 
-    # Assert — the pill adds no column and no row.
+    # Assert — no activity pill, and the table shape is unchanged.
     assert rendered["columns"] == ["Timestamp", "Market", "Leg", "Size",
                                    "Avg Price", "Cost", "Mark Value",
                                    "Unrealized", "Realized"]
@@ -940,10 +947,8 @@ def test_positions_activity_pill_keeps_banding_and_live_cells():
     assert "ot-pair-alt" in html
     assert 'data-cell="value"' in html
     assert 'data-cell="unrealized"' in html
-    # The pill rides in the market cell: before the first live cell, and inside
-    # none of the cells the live-marks pass rewrites.
-    assert "resting-breathing" in html.split("data-cell")[0]
-    assert "quoting-breathing" in _held_block(rendered, 2)
+    assert "resting-breathing" not in html
+    assert "quoting-breathing" not in html
     for cell in html.split('data-cell="')[1:]:
         assert "breathing" not in cell.split("</td>")[0]
 
@@ -2522,8 +2527,10 @@ def test_stitch_orders_category_first_click_sorts_ascending():
 
 
 @requires_node
-def test_positions_second_line_names_the_event_not_the_category():
+def test_positions_market_cell_has_no_second_line():
     # Arrange — the market the position sits inside.
+    # #785: title + category chip are the only name lines; the event_title /
+    # subtitle second line is removed entirely.
     kpi = _kpi()
     kpi["by_market"][CID_HELD]["category"] = "Politics"
     kpi["by_market"][CID_HELD]["event_title"] = "Brazilian Presidential Election"
@@ -2531,15 +2538,16 @@ def test_positions_second_line_names_the_event_not_the_category():
     # Act
     html = _render("positions", kpi, _state(), surface="stitch")["html"]
 
-    # Assert — the event name is there, and "Politics" appears exactly once:
-    # on the chip, never repeated as the line under it.
-    assert "Brazilian Presidential Election" in html
+    # Assert — the event name is gone; "Politics" appears exactly once on the
+    # chip, never as a line under the title.
+    assert "Brazilian Presidential Election" not in html
     assert html.count("Politics") == 1
 
 
 @requires_node
-def test_positions_second_line_disappears_when_the_feed_names_no_event():
+def test_positions_market_cell_stays_single_line_without_event_title():
     # Arrange — a resolved category with no event title behind it.
+    # #785: the second line is gone in all cases; the chip still answers.
     kpi = _kpi()
     kpi["by_market"][CID_HELD]["category"] = "Politics"
     kpi["by_market"][CID_HELD].pop("event_title", None)
@@ -2614,8 +2622,14 @@ def test_stitch_orders_status_pills_are_word_only():
 
 @requires_node
 def test_stitch_orders_hedge_pending_pill_blue():
-    # Arrange — filled DN + resting UP is hedge-pending.
+    # Arrange — filled DN + resting UP is hedge-pending when the DN fill is
+    # still held in KPI inventory (#785 gates the history lookup on up_sh /
+    # dn_sh so a stale fill cannot mark the row).
     kpi = _kpi()
+    kpi["by_market"][CID_QUOTED]["dn_sh"] = 5.0
+    kpi["by_market"][CID_QUOTED]["dn_cost"] = 2.55
+    kpi["by_market"][CID_QUOTED]["total_sh"] = 5.0
+    kpi["by_market"][CID_QUOTED]["total_cost"] = 2.55
     state = {
         "orders": [
             {"order_id": "ord-up", "condition_id": CID_QUOTED, "token_id": "tok-up",
@@ -2634,6 +2648,65 @@ def test_stitch_orders_hedge_pending_pill_blue():
     assert "SINGLE FILL" in html
     assert "is-hedge-pending" in html
     assert "PAIRED" not in html
+    assert "MISSING PAIR" not in html
+
+
+@requires_node
+def test_stitch_orders_stale_fill_without_inventory_is_unpaired():
+    # Arrange — the DN fill is in order history but KPI holds no DN shares:
+    # a stale fill, not a held position (#785). The resting UP leg must read
+    # unpaired/orphaned (red), never "Hedge Pending / Position Held".
+    kpi = _kpi()
+    state = {
+        "orders": [
+            {"order_id": "ord-up", "condition_id": CID_QUOTED, "token_id": "tok-up",
+             "pair_id": "pair-h", "side": "BUY", "price": 0.47, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 1000, "age_sec": 90.0},
+            {"order_id": "ord-filled", "condition_id": CID_QUOTED, "token_id": "tok-dn",
+             "pair_id": "pair-h", "side": "BUY", "price": 0.51, "original_size": 5.0,
+             "size_matched": 5.0, "size_remaining": 0.0, "status": "filled",
+             "posted_ts": 900, "age_sec": 120.0},
+        ]
+    }
+    html = _render("open-orders", kpi, state, surface="stitch")["html"]
+
+    # Assert — red unpaired, no blue hedge-pending, no Position Held rung.
+    assert "MISSING PAIR" in html
+    assert "is-unpaired" in html
+    assert "SINGLE FILL" not in html
+    assert "is-hedge-pending" not in html
+    assert "Position Held" not in html
+    assert "[Awaiting NO Quote]" in html
+
+
+@requires_node
+def test_stitch_orders_held_fill_with_inventory_stays_blue():
+    # Arrange — the same pair, but the DN fill is still held in KPI inventory:
+    # the blue hedge-pending badge and Position Held rung are unchanged.
+    kpi = _kpi()
+    kpi["by_market"][CID_QUOTED]["dn_sh"] = 5.0
+    kpi["by_market"][CID_QUOTED]["dn_cost"] = 2.55
+    kpi["by_market"][CID_QUOTED]["total_sh"] = 5.0
+    kpi["by_market"][CID_QUOTED]["total_cost"] = 2.55
+    state = {
+        "orders": [
+            {"order_id": "ord-up", "condition_id": CID_QUOTED, "token_id": "tok-up",
+             "pair_id": "pair-h", "side": "BUY", "price": 0.47, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 1000, "age_sec": 90.0},
+            {"order_id": "ord-filled", "condition_id": CID_QUOTED, "token_id": "tok-dn",
+             "pair_id": "pair-h", "side": "BUY", "price": 0.51, "original_size": 5.0,
+             "size_matched": 5.0, "size_remaining": 0.0, "status": "filled",
+             "posted_ts": 900, "age_sec": 120.0},
+        ]
+    }
+    html = _render("open-orders", kpi, state, surface="stitch")["html"]
+
+    # Assert
+    assert "SINGLE FILL" in html
+    assert "is-hedge-pending" in html
+    assert "Position Held" in html
     assert "MISSING PAIR" not in html
 
 
