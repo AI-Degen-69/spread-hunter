@@ -558,6 +558,22 @@ def test_progress_counts_against_the_launched_length_not_twelve_hours(tmp_path, 
     assert stats["progress_pct"] == 0.0
 
 
+def test_pnl_chart_labels_follow_the_launched_length(tmp_path, monkeypatch):
+    """A 24-hour run under "Across 12 Hours (0 to 720)" labels a false axis."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _plan(
+        tmp_path, "i799-tournament-test_2026-10-24T09-05", _i799_records(),
+        source=_i799_source(), minutes=1440,
+    )
+
+    html = cockpit.generate_cockpit_html(cockpit.collect_all_stats("487"))
+
+    assert "Across 24 Hours (Minutes 0 to 1440)" in html
+    assert "Elapsed Minutes (0 to 1440)" in html
+    assert "Elapsed Minutes (0 to 720)" not in html
+
+
 def test_launch_stamp_decides_not_the_issue_number(tmp_path, monkeypatch):
     """Newest launch wins: an issue number says nothing about launch order."""
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
@@ -643,3 +659,59 @@ def test_a_record_without_a_length_keeps_the_twelve_hour_default(tmp_path, monke
     assert target_minutes == cockpit.DEFAULT_TOURNAMENT_MINUTES == 720.0
     assert meta["issue_primary"] == 487
     assert meta["title"] == "Issue #487 Current-Setup Tournament"
+
+
+def test_a_newer_run_of_the_same_issue_beats_an_older_numbered_run(tmp_path, monkeypatch):
+    """"Newest run" must hold inside one issue too, not only across issues.
+
+    `latest_tournament_record` ranks run number before launch stamp, so a named
+    run launched today loses the lookup to an r1 from last week and the rows
+    merge last week's db/port into today's table.
+    """
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _plan(tmp_path, "i487-r1_2026-10-17T10-00", [{
+        "name": "control",
+        "db_path": "data/stale_control.db",
+        "run_id": "shadow-487-r1-control",
+        "dash_port": 8850,
+    }])
+    _plan(tmp_path, "i487-current-setup-10arm_2026-10-24T09-05", [{
+        "name": "control",
+        "db_path": "data/todays_control.db",
+        "run_id": "shadow-487-today-control",
+        "dash_port": 8801,
+    }])
+
+    arms = {a["name"]: a for a in cockpit.resolve_tournament_arms("487")}
+
+    assert list(arms) == _spec_arm_names()
+    assert arms["control"]["db"] == "data/todays_control.db"
+    assert arms["control"]["run_id"] == "shadow-487-today-control"
+    assert arms["control"]["port"] == 8801
+
+
+def test_a_run_with_no_arms_does_not_own_a_header_that_keeps_old_rows(tmp_path, monkeypatch):
+    """The rows fall back to the older record, so the header must fall back too.
+
+    A plan whose `arms` is empty cannot describe a table; the header claiming
+    #799 over the #487 control row would be the same lie in reverse.
+    """
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _record(tmp_path, "i487-current-setup-10arm_2026-10-17T18-48", [{
+        "name": "control",
+        "db_path": "data/real_control.db",
+        "run_id": "shadow-real-control",
+        "dash_port": 9901,
+    }])
+    _plan(tmp_path, "i799-tournament-test_2026-10-24T09-05", [], minutes=1440)
+
+    arms = cockpit.resolve_tournament_arms("487")
+    meta, target_minutes = cockpit.resolve_tournament_meta("487")
+
+    assert [a["name"] for a in arms] == _spec_arm_names()
+    assert {a["name"]: a for a in arms}["control"]["db"] == "data/real_control.db"
+    assert meta["issue_primary"] == 487
+    assert meta["title"] == "Issue #487 Current-Setup Tournament"
+    assert target_minutes == cockpit.DEFAULT_TOURNAMENT_MINUTES

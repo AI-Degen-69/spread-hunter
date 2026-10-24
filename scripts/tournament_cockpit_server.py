@@ -906,7 +906,11 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
 
 
 def _arms_from_newest_plan(meta: dict[str, Any]) -> Optional[list[dict[str, Any]]]:
-    """The newest run's own arms when it is not the run this page describes."""
+    """The newest run's own arms when it is not the run this page describes.
+
+    A run of the page's own issue is merged over the static presets instead, so
+    a partial record still reads as the ten-arm table it was launched from.
+    """
     newest = _newest_plan_record()
     if newest is None:
         return None
@@ -936,7 +940,13 @@ def resolve_tournament_meta(
     target_minutes = minutes or DEFAULT_TOURNAMENT_MINUTES
     if issue is None or issue == int(meta.get("issue_primary") or 0):
         return meta, target_minutes
-    arms_label = f"{len(build_plan_arms(newest))} Arms"
+    # A newest run whose arms cannot be read cannot own the header either: the
+    # arm table falls back to the older record, and a header naming the failed
+    # run would sit above another run's arms.
+    plan_arms = build_plan_arms(newest)
+    if not plan_arms:
+        return meta, DEFAULT_TOURNAMENT_MINUTES
+    arms_label = f"{len(plan_arms)} Arms"
     run_label = (parse_tournament_run_dir_name(newest.parent) or {}).get("name")
     run_label = (run_label or "run").replace("-", " ").title()
     # The #487 preset table rides along inside its meta; leaving it there would
@@ -991,6 +1001,14 @@ def resolve_tournament_arms_with_status(
     # (run number, stamp), so a named run (#487's `--stamp current_setup_10arm`)
     # no longer wins or loses on the accident of `c` sorting after a digit.
     latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
+    if tourney_key == CURRENT_SETUP_KEY:
+        # A newer run of the page's own issue outranks the highest-numbered one:
+        # run number is not launch order, so a named run started today would
+        # otherwise merge last week's r1 db/port into today's rows.
+        newest = _newest_plan_record()
+        newest_issue = _plan_identity(newest)[0] if newest is not None else None
+        if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
+            latest_plan = newest
     if latest_plan is None:
         return default_arms, None
     try:
@@ -1941,7 +1959,7 @@ BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
 <div id="tab-pnl-chart" class="tab-pane">
   <div class="chart-box" style="margin-bottom: 20px;">
     <div class="chart-header">
-      <div class="chart-title">Cumulative PnL Trajectory Across 12 Hours (Minutes 0 to 720)</div>
+      <div class="chart-title">Cumulative PnL Trajectory Across {initial_data.get('target_hours', 12.0):g} Hours (Minutes 0 to {initial_data.get('target_hours', 12.0) * 60:g})</div>
       <div class="chart-legend">Click legend items to toggle arms</div>
     </div>
     <div style="height: 480px;">
@@ -2132,7 +2150,7 @@ function renderCharts() {{
         responsive: true,
         maintainAspectRatio: false,
         scales: {{
-          x: {{ type: 'linear', title: {{ display: true, text: 'Elapsed Minutes (0 to 720)', color: '#8b9bb4' }}, grid: {{ color: '#1c2436' }} }},
+          x: {{ type: 'linear', title: {{ display: true, text: 'Elapsed Minutes (0 to {initial_data.get('target_hours', 12.0) * 60:g})', color: '#8b9bb4' }}, grid: {{ color: '#1c2436' }} }},
           y: {{ title: {{ display: true, text: 'Cumulative Realized PnL ($)', color: '#8b9bb4' }}, grid: {{ color: '#1c2436' }} }}
         }},
         plugins: {{
