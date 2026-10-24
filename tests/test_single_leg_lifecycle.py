@@ -30,6 +30,23 @@ def test_hedge_unreachable_at_cap_treats_unknown_as_reachable():
     assert hedge_unreachable_at_cap(0.82, None, 0.99, 0.01) is False
     assert hedge_unreachable_at_cap(0.82, 0.0, 0.99, 0.01) is False
     assert hedge_unreachable_at_cap(0.82, float("nan"), 0.99, 0.01) is False
+    # Above 1.0 is not a price in a binary market: a corrupt read is unknown,
+    # and unknown never sells a leg.
+    assert hedge_unreachable_at_cap(0.82, 1.2, 0.99, 0.01) is False
+
+
+def test_hedge_unreachable_at_cap_leaves_the_cap_its_own_tick():
+    """A market one tick past the cap bid is at the cap, not past it (#797).
+
+    The escalated hedge bids the cap; a market sitting a single tick above that
+    bid is the escalation path's ordinary case, so the bail-out must not dump
+    the leg there. Only a market that has left the cap's own tick behind is
+    unreachable.
+    """
+    # cap 0.995 is clamped to 0.99: held 0.60 leaves a 0.39 hedge bid.
+    assert hedge_unreachable_at_cap(0.60, 0.40, 0.995, 0.01) is False
+    assert hedge_unreachable_at_cap(0.60, 0.39, 0.995, 0.01) is False
+    assert hedge_unreachable_at_cap(0.60, 0.41, 0.995, 0.01) is True
 
 
 def test_hedge_unreachable_at_cap_without_a_tick_under_the_cap():

@@ -255,9 +255,12 @@ def hedge_unreachable_at_cap(
 
     A hedge that fits the cap but is merely wide -- the cap's best bid at or
     above the ask -- is still reachable and must keep waiting; only a market
-    that has walked away from the cap is unreachable. An unknown ask, an
-    unreadable price and a non-positive ask are all "unknown", and unknown
-    never sells a leg.
+    that has walked away from the cap is unreachable. The cap keeps its own
+    tick of slack: an ask a single tick above the best bid the cap allows is
+    the escalated hedge's ordinary case, and dumping the leg there would exit
+    on a one-tick spread rather than on a market that left the cap behind. An
+    unknown ask, an unreadable price and a non-positive ask are all "unknown",
+    and unknown never sells a leg.
     """
     if opposing_best_ask is None:
         return False
@@ -265,7 +268,10 @@ def hedge_unreachable_at_cap(
         ask = float(opposing_best_ask)
     except (TypeError, ValueError):
         return False
-    if not math.isfinite(ask) or ask <= 0:
+    # Above 1.0 is not a price in a binary market, so it is a bad read, not an
+    # unreachable hedge: selling a leg on corrupt data is the one thing the
+    # exit must never do.
+    if not math.isfinite(ask) or ask <= 0 or ask > 1:
         return False
     try:
         held = float(held_average)
@@ -285,7 +291,7 @@ def hedge_unreachable_at_cap(
         # No positive tick-aligned bid fits under the cap at all, so the hedge
         # cannot be reached however the market moves.
         return True
-    return cap_bid < ask
+    return ask > cap_bid + tick
 
 
 def _validated_stop_knobs(

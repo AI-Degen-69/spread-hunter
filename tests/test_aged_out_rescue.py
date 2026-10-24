@@ -465,19 +465,44 @@ def test_a_market_the_venue_closed_is_left_to_settlement(registry):
     assert registry.get_all_closes() == []
 
 
-def test_a_future_end_outside_the_lead_waits(registry):
-    # Arrange - ends in 6h, lead is 15min.
-    _naked_pair(registry, fill_price=0.60)
-    client = FakeClient()
+def test_an_unreachable_hedge_bails_out_instead_of_awaiting_the_lead(registry):
+    # Arrange - #797: a 0.82 fill leaves a 0.17 hedge under the cap, and the
+    # opposing ask has walked to 0.4225. The market still ends six hours out,
+    # so the aged-out verdict is `awaiting_lead`; waiting for the rescue lead
+    # is how the shadow-01 pair rode to the 75% circuit floor.
+    _naked_pair(registry, fill_price=0.82)
+    client = FakeClient(best_ask=0.4225, best_bid=0.60)
 
     # Act
     results = rescue_aged_out_legs(
         client, registry, _cfg(), now=NOW_S,
         market_state_fn=_states(_open_state(end_ts=NOW_S + 21_600.0)))
 
-    # Assert
+    # Assert - the cap bail-out owns the exit, with its own reason.
+    assert len(results) == 1
+    assert results[0]["action"] == "exited"
+    assert results[0]["route"] == "pair_cap_bailout"
+    assert any(c.startswith("sell:") for c in client.calls)
+    closes = registry.get_all_closes()
+    assert len(closes) == 1
+    assert closes[0]["reason"] == "pair_cap_hedge_unreachable"
+
+
+def test_a_future_end_outside_the_lead_waits(registry):
+    # Arrange - ends in 6h, lead is 15min, and the hedge is still inside the
+    # cap, so waiting can still complete the pair.
+    _naked_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.39)
+
+    # Act
+    results = rescue_aged_out_legs(
+        client, registry, _cfg(), now=NOW_S,
+        market_state_fn=_states(_open_state(end_ts=NOW_S + 21_600.0)))
+
+    # Assert - the leg keeps waiting: one held-leg read, one hedge-reachability
+    # read (#797), and no sell.
     assert results[0]["action"] == "awaiting_lead"
-    assert client.calls == ["book:tok-up"]
+    assert client.calls == ["book:tok-up", "book:tok-dn"]
 
 
 # --- 7. the window's own behaviour is untouched ---------------------------
@@ -690,9 +715,11 @@ def test_the_shadow_sweep_runs_the_aged_out_arm(tmp_path):
 # hours. These pin the reuse, and that nothing is reused that must not be.
 
 def test_one_market_read_serves_every_cycle_inside_the_ttl(registry):
-    # Arrange - a leg waiting for its lead, four cycles inside one TTL.
+    # Arrange - a leg waiting for its lead, four cycles inside one TTL. The
+    # hedge sits inside the cap's tick, so the leg stays in `awaiting_lead`;
+    # a hedge that had left the cap behind is the #797 bail-out's business.
     _naked_pair(registry, fill_price=0.60)
-    client = FakeClient(best_ask=0.45)
+    client = FakeClient(best_ask=0.39)
     reads: list[str] = []
 
     def fn(condition_id):
@@ -708,15 +735,19 @@ def test_one_market_read_serves_every_cycle_inside_the_ttl(registry):
             market_state_fn=fn, state_cache=cache)
         assert results[0]["action"] == "awaiting_lead"
 
-    # Assert - one market-state read, one held-leg book read per cycle, no writes.
+    # Assert - one market-state read, one held-leg book read per cycle, no
+    # writes. The hedge-reachability read is per cycle too (#797), and it is a
+    # CLOB book read, not a gamma listing.
     assert reads == [COND]
-    assert client.calls == ["book:tok-up"] * 4
+    assert [c for c in client.calls if c == "book:tok-up"] == ["book:tok-up"] * 4
+    assert "sell:tok-up" not in client.calls
 
 
 def test_a_deadline_hours_away_is_not_read_again_at_all(registry):
-    # Arrange - ends in 2h, so the read cannot change a verdict this rotation.
+    # Arrange - ends in 2h, so the read cannot change a verdict this rotation,
+    # and the hedge is inside the cap so the leg keeps waiting.
     _naked_pair(registry, fill_price=0.60)
-    client = FakeClient(best_ask=0.45)
+    client = FakeClient(best_ask=0.39)
     reads: list[str] = []
 
     def fn(condition_id):

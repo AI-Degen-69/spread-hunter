@@ -9,14 +9,20 @@ existing `exit_single_buy` route with `reason=pair_cap_hedge_unreachable`.
 
 Owner: agent. When: the first run that books both shapes.
 
-The cap check sits after the #453 stranded block on purpose: when exposure is
-readable AND the pair is stranded/under-covered, that block already force-exits
-after the same 300s window with `reason=stranded_unhedged_exit`. So a leg that
-is both stranded and cap-unreachable books the #453 reason, not the cap reason.
-A cap bail-out therefore appears where the stranded block could not act (moe:
-exposure unreadable / not classified stranded). If the ledger needs the cap
-cause to win in the overlapping case, that is a deliberate change to the #453
-contract and its test, not a silent reordering — decide it on a real run.
+Ordering, as shipped:
+
+- `awaiting_lead` (a long-dated market, which is the moe case) returns before
+the #453 stranded block, exactly as it always did. The cap bail-out is the one
+exit that now fires there, and it books `reason=pair_cap_hedge_unreachable`.
+- Every other verdict falls through to the #453 block first, then the cap
+check. When exposure is readable AND the pair is stranded/under-covered, that
+block already force-exits after the same 300s window with
+`reason=stranded_unhedged_exit`, so a leg that is both stranded and
+cap-unreachable books the #453 reason, not the cap reason.
+
+If the ledger needs the cap cause to win in the overlapping case, that is a
+deliberate change to the #453 contract and its test, not a silent reordering —
+decide it on a real run.
 
 ## 2. One window, two legs of behaviour
 
