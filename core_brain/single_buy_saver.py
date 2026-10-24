@@ -1513,6 +1513,31 @@ SINGLE_LEG_QUIET_ACTIONS = frozenset({
     "awaiting_lead", "would_exit", "would_complete",
 })
 
+# Row vocabulary for lifecycle decisions. Owned here: the saver is the only
+# renderer of these rows, so the lifecycle owns decision actions and this
+# module owns their reporting names. Covers exactly the tail-reachable
+# actions of `single_leg_lifecycle.transition` -- `hard_stop` exits upstream
+# and `settlement_fallback` only arises with `settlement_due=True`, which the
+# main transition call never uses. Anything else is a bug, not a row.
+_SAVER_ACTION_BY_DECISION = {
+    "wait": "patient_wait",
+    "hedge": "escalated_wait",
+    "locked": "pair_locked",
+    "rest": "dual_resting",
+    "refused": "refused",
+}
+
+
+def saver_action_for(action: str) -> str:
+    """Return this row's `action` word for a lifecycle decision action."""
+    try:
+        return _SAVER_ACTION_BY_DECISION[action]
+    except KeyError:
+        raise KeyError(
+            f"unknown lifecycle decision action: {action!r} "
+            f"(reachable: {sorted(_SAVER_ACTION_BY_DECISION)})"
+        ) from None
+
 # The verdicts `aged_out_verdict` returns. `due` is the only one that acts.
 AGED_OUT_DUE = "due"
 AGED_OUT_AWAITING_LEAD = "awaiting_lead"
@@ -2030,7 +2055,7 @@ def _manage_single_leg_positions_locked(
     from core_brain.single_leg_lifecycle import (
         LegState, SingleLegPosition, capped_hedge_tick_exists, evaluate,
         hedge_unreachable_at_cap, max_profitable_hedge_bid, persist_decision,
-        saver_action_for, transition,
+        transition,
     )
 
     now_s = now if now is not None else time.time()
@@ -2481,8 +2506,8 @@ def _manage_single_leg_positions_locked(
 
             # Unknown exposure keeps the lifecycle's own verdict: the pair is
             # still managed under the decision above and the check retries
-            # next rotation. The row vocabulary is owned by the lifecycle,
-            # which fails loud on any action `transition` cannot emit.
+            # next rotation. Row words are this module's contract, which fails
+            # loud on any action `transition` cannot emit.
             action = saver_action_for(decision.action)
             out.append({
                 "pair_id": pair_id, "condition_id": condition_id,

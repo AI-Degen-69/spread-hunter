@@ -462,6 +462,58 @@ def test_lifecycle_quote_paths_never_full_scan(registry: OrderRegistry, monkeypa
     assert isinstance(results, list)
 
 
+class _ExposureClient(FakeClient):
+    """FakeClient with a venue open-orders read: a list, or a venue failure."""
+
+    def __init__(self, open_orders=None, open_orders_error=None, **kwargs):
+        super().__init__(**kwargs)
+        self._open_orders = open_orders
+        self._open_orders_error = open_orders_error
+
+    def get_open_orders(self):
+        if self._open_orders_error is not None:
+            raise self._open_orders_error
+        return self._open_orders
+
+
+def test_saver_action_for_maps_decision_to_row_action():
+    assert lp.saver_action_for("wait") == "patient_wait"
+    assert lp.saver_action_for("hedge") == "escalated_wait"
+    assert lp.saver_action_for("locked") == "pair_locked"
+    assert lp.saver_action_for("rest") == "dual_resting"
+    assert lp.saver_action_for("refused") == "refused"
+
+
+def test_saver_action_for_rejects_unreachable_actions():
+    # "hold" is a saver-side row from another path, never a decision action;
+    # the old `.get(action, action)` pass-through would have echoed these.
+    for unknown in ("bogus", "hold", "hard_stop", "settlement_fallback"):
+        with pytest.raises(KeyError):
+            lp.saver_action_for(unknown)
+
+
+def test_unknown_exposure_keeps_identical_row(registry: OrderRegistry):
+    """A failing venue open-orders read keeps the lifecycle's own verdict.
+
+    The exposure check is skipped, the pair stays managed under the decision
+    above, and the emitted row is identical to the known-exposure row.
+    """
+    _one_sided_pair(registry, filled_size=10.0, fill_price=0.55)
+    cfg = MakerConfig(bot_risk_stranded_completion_on=False,
+                      bot_pos_price_max_pair_cost_usd=0.99)
+    run = dict(live=False, now=1010.0)
+    known_rows = lp.manage_single_leg_positions(
+        _ExposureClient(best_ask=0.40, open_orders=[{"id": "venue-light"}]),
+        registry, cfg, **run)
+    failing_rows = lp.manage_single_leg_positions(
+        _ExposureClient(best_ask=0.40,
+                        open_orders_error=RuntimeError("venue down")),
+        registry, cfg, **run)
+    assert len(known_rows) == len(failing_rows) == 1
+    assert failing_rows[0] == known_rows[0]
+    assert failing_rows[0]["action"] == "patient_wait"
+
+
 def test_load_pair_reads_fills_without_per_order_helpers(
         registry: OrderRegistry, monkeypatch):
     """#767: load_pair batches totals in one connection, no N+1 fan-out."""

@@ -193,25 +193,6 @@ class LifecycleDecision:
     reason: str = ""
 
 
-# The saver's row vocabulary for lifecycle decisions. Owned here, beside the
-# decision, so the decision and its reporting name change in one place: the
-# saver renders rows through `saver_action_for` and never maps these itself.
-# Unknown actions fail loud (KeyError), never silently reworded.
-# Reachable tail actions of `transition`: `hard_stop` exits upstream and
-# `settlement_fallback` only arises with `settlement_due=True`, which the
-# saver's main transition call never uses. Anything else is a bug, not a row.
-_SAVER_ACTIONS = {
-    "wait": "patient_wait",
-    "hedge": "escalated_wait",
-    "locked": "pair_locked",
-    "rest": "dual_resting",
-    "refused": "refused",
-}
-
-
-def saver_action_for(action: str) -> str:
-    """Return the saver row's `action` word for a lifecycle decision action."""
-    return _SAVER_ACTIONS[action]
 
 
 @dataclass(frozen=True)
