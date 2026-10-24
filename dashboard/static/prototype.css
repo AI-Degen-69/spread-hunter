@@ -1319,6 +1319,42 @@
   color: #64748b;
 }
 
+/* Category label identity (#786): one accent per family. Ball sports share
+ * `is-ball`; the sport-specific ball emoji does the differentiating. */
+.proto-body .stitch-category-pill.is-esports {
+  background: rgba(34, 211, 238, 0.12);
+  border-color: #155e75;
+  color: #22d3ee;
+}
+
+.proto-body .stitch-category-pill.is-ball {
+  background: rgba(96, 165, 250, 0.12);
+  border-color: #1e40af;
+  color: #60a5fa;
+}
+
+.proto-body .stitch-category-pill.is-politics {
+  background: rgba(251, 191, 36, 0.12);
+  border-color: #92400e;
+  color: #fbbf24;
+}
+
+.proto-body .stitch-category-pill.is-crypto {
+  background: rgba(251, 146, 60, 0.12);
+  border-color: #9a3412;
+  color: #fb923c;
+}
+
+.proto-body .stitch-category-pill.is-other {
+  background: rgba(196, 181, 253, 0.10);
+  border-color: #4c1d95;
+  color: #c4b5fd;
+}
+
+.proto-body .stitch-category-pill span[aria-hidden="true"] {
+  margin-right: 4px;
+}
+
 .proto-body .stitch-quote-yes,
 .proto-body .stitch-quote-up {
   color: #4ade80;

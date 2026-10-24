@@ -245,6 +245,55 @@ def max_profitable_hedge_bid(
     return float(bid_decimal)
 
 
+def hedge_unreachable_at_cap(
+    held_average: float,
+    opposing_best_ask: float | None,
+    bot_pos_price_max_pair_cost_usd: float,
+    tick_size: float,
+) -> bool:
+    """True when the pair cap cannot reach the opposing side's best ask (#797).
+
+    A hedge that fits the cap but is merely wide -- the cap's best bid at or
+    above the ask -- is still reachable and must keep waiting; only a market
+    that has walked away from the cap is unreachable. The cap keeps its own
+    tick of slack: an ask a single tick above the best bid the cap allows is
+    the escalated hedge's ordinary case, and dumping the leg there would exit
+    on a one-tick spread rather than on a market that left the cap behind. An
+    unknown ask, an unreadable price and a non-positive ask are all "unknown",
+    and unknown never sells a leg.
+    """
+    if opposing_best_ask is None:
+        return False
+    try:
+        ask = float(opposing_best_ask)
+    except (TypeError, ValueError):
+        return False
+    # Above 1.0 is not a price in a binary market, so it is a bad read, not an
+    # unreachable hedge: selling a leg on corrupt data is the one thing the
+    # exit must never do.
+    if not math.isfinite(ask) or ask <= 0 or ask > 1:
+        return False
+    try:
+        held = float(held_average)
+        cap = float(bot_pos_price_max_pair_cost_usd)
+        tick = float(tick_size)
+    except (TypeError, ValueError):
+        return False
+    # Unusable inputs are unknown, not unreachable. Validating them here leaves
+    # exactly one failure inside `max_profitable_hedge_bid` below.
+    if (not math.isfinite(held) or not 0 < held < 1
+            or not math.isfinite(cap) or cap <= 0
+            or not math.isfinite(tick) or tick <= 0):
+        return False
+    try:
+        cap_bid = max_profitable_hedge_bid(held, cap, tick)
+    except ValueError:
+        # No positive tick-aligned bid fits under the cap at all, so the hedge
+        # cannot be reached however the market moves.
+        return True
+    return ask > cap_bid + tick
+
+
 def _validated_stop_knobs(
     mode: str,
     bot_risk_stop_adverse_drop_cents: float,

@@ -233,6 +233,12 @@ def _bucketize(value: float | None, edges: tuple, labels: tuple) -> str:
     return labels[-1]
 
 
+#: A losing entry (paid over mid) is its own intent-visible bucket (#791).
+#: Shares the analysis-side name (`scripts/edge_floor_analysis.NEGATIVE`) so
+#: the report, the gate, and the analysis mean the same thing by it. It is
+#: blockable through `bot_entry_fill_quality_blocked_edge` like any other
+#: edge band. Non-negative boundaries stay exactly as shipped under #787.
+NEGATIVE_EDGE_BUCKET = "negative"
 _EDGE_LABELS = ("0.00-0.02", "0.02-0.03", "0.03-0.04", "0.04-0.06", "0.06+")
 _QUEUE_LABELS = ("0-1", "1-50", "50-150", "150-400", "400+")
 _COST_LABELS = ("<0.97", "0.97-0.99", "0.99-1.00", "1.00+")
@@ -253,7 +259,7 @@ def _features(row: FillRow) -> dict[str, str]:
     ttr = "unresolved" if row.t_to_res_sec is None else _bucketize(
         row.t_to_res_sec, TTR_EDGES, _TTR_LABELS)
     return {
-        "edge": _bucketize(row.edge_vs_mid, EDGE_EDGES, _EDGE_LABELS),
+        "edge": edge_bucket_for(row.edge_vs_mid),
         "depth": _queue_bucket(row.queue_ahead),
         "cost": _bucketize(row.implied_pair_cost, COST_EDGES, _COST_LABELS),
         "ttres": ttr,
@@ -286,8 +292,20 @@ def _calibrate(rows: tuple[FillRow, ...], base_rate: float | None,
 
 
 def edge_bucket_for(value: float | None) -> str:
-    """Intent-visible edge dimension, shared by the report and the gate."""
+    """Intent-visible edge dimension, shared by the report and the gate.
+
+    A negative edge is a losing entry, not the best bucket: it returns
+    `NEGATIVE_EDGE_BUCKET` instead of falling through to `"0.06+"` (#791).
+    `None` stays `"unknown"`; non-negative bands are unchanged (#787).
+    """
+    if value is not None and value < 0:
+        return NEGATIVE_EDGE_BUCKET
     return _bucketize(value, EDGE_EDGES, _EDGE_LABELS)
+
+
+#: #792: a floor names a price band, so an edge with no book quote behind it
+#: has no band to match. The gate refuses it under this one reason string.
+UNMEASURABLE_EDGE = f"blocked:edge:{QUEUE_UNKNOWN}"
 
 
 def evaluate_fill(features: dict[str, str],
@@ -309,6 +327,21 @@ def evaluate_fill(features: dict[str, str],
         if (dimension, bucket) in normalized:
             return (False, f"blocked:{dimension}:{bucket}")
     return (True, "allowed")
+
+
+def evaluate_edge(value: float | None,
+                  blocked: set[tuple[str, str]] | frozenset | set[str]
+                  ) -> tuple[bool, str]:
+    """Entry decision for the intent-visible edge floor, fail closed (#792).
+
+    An unmeasurable edge is the case with the least support for an entry, so
+    it is refused by this rule rather than passed by omission. It keeps its
+    own `unknown` label in the report, where it is counted separately from
+    the price bands.
+    """
+    if value is None:
+        return (False, UNMEASURABLE_EDGE)
+    return evaluate_fill({"edge": edge_bucket_for(value)}, blocked)
 
 
 @dataclass(frozen=True)
@@ -580,7 +613,7 @@ def _condition_outcomes(closes: tuple[dict, ...]) -> dict[str, tuple[str, float]
         reasons = {r.get("reason") for r in rows}
         methods = {r.get("method") for r in rows}
         pnl = sum(float(r.get("realized_pnl") or 0.0) for r in rows)
-        if "lifecycle_hard_stop" in reasons:
+        if reasons & {"lifecycle_hard_stop", "pair_cap_hedge_unreachable"}:
             label = "dead_leg"
         elif "aged_out_rescue" in reasons:
             label = "aged_out_rescue"
