@@ -24,7 +24,7 @@ only already-ended games.
 | `tight-touch` | `aggressive` preset: dynamic 0.25x, 2-3c | Tight quotes fill sooner; volume beats per-pair edge. |
 | `balanced-mid` | `balanced` preset: dynamic 0.50x, 2-4c | A middle band trades edge for reach. |
 | `wide-shield` | `conservative` preset 0.75x / 2-5c + 8c absolute stop | Volatility wants cushion more than fills. |
-| `prudent-hybrid` | `prudent` preset: dynamic 0.60x, 2-4c | The compromise between cushion and reach. |
+| `prudent-hybrid` | `prudent` preset: dynamic 0.60x, 2-4c, clamp lifted to 6c | The compromise between cushion and reach. |
 | `static-floor-2c` | dynamic offset off, fixed 2c | Volatility tracking is mostly noise. |
 | `low-churn-deadband` | static 2c + 10c requote dead band | Churn is the cost; hold queue position. |
 | `hair-trigger-2c` | 2c absolute stop | A naked leg is an unchosen bet; cut it early. |
@@ -47,13 +47,25 @@ python scripts/shadow_tournament.py `
   --dashboards
 ```
 
-Started 2026-10-24 04:05 local, deadline 2026-10-25 04:05 local.
+Started 2026-10-24 04:20 local, deadline 2026-10-25 04:20 local.
+
+### Restart at 04:20 — first launch quoted one offset for all ten arms
+
+The 04:05 launch was killed after 17 minutes and its folder deleted. Every arm
+reported the same quotes, fills, PnL and Sharpe because `_market_specs()`
+(`core_brain/trader_loop.py`) built its per-market dict **without** `range_cents` /
+`velocity_measured_at`. `_market_cfg()` therefore handed `dynamic_offset_for()` a
+`None` range, which returns the static 2c fallback — so the multiplier, min and max
+knobs (and every tournament preset) were inert, not just in the tournament but on
+the live path too. Fixed in `54890ae`; the restart runs the same arms on real
+dynamic offsets (baseline 11c, prudent 6c, conservative 5c, balanced 4c,
+aggressive 3c, static 2c at a 22c feed range).
 
 ## Where the evidence lands
 
 | Artifact | Path |
 |---|---|
-| Plan (arms, env, ports, stores) | `data/tournaments/i799-tournament-test_2026-10-24T04-05/plan.json` |
+| Plan (arms, env, ports, stores) | `data/tournaments/i799-tournament-test_2026-10-24T04-20/plan.json` |
 | Per-arm stores | same folder, `<arm>.db` |
 | Behaviour log (every cycle, skip, tape read) | `data/tournaments/tournament-test-launch.err.log` |
 | Results written at the deadline | same folder, `results.json` |
