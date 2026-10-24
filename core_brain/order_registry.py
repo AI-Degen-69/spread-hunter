@@ -918,6 +918,18 @@ class RequalificationMark:
     updated_ts_ms: int
 
 
+#: The `reason` prefix of a hard-stop entry block (#796). Only these marks get
+#: the lockout window and the timed release; a merge's mark keeps its
+#: publication-only semantics. `mark_hard_stop_block` writes it, the trader's
+#: floor and `release_hard_stop_blocks` read it, so it lives here once.
+HARD_STOP_MARK_PREFIX = "hard_stop"
+
+
+def is_hard_stop_mark(mark) -> bool:
+    """Whether one requalification mark is a hard-stop entry block (#796)."""
+    return str(getattr(mark, "reason", "") or "").startswith(HARD_STOP_MARK_PREFIX)
+
+
 class OrderRegistry:
     """Thread-safe SQLite-backed registry for live orders, fills, and operational telemetry."""
 
@@ -1355,6 +1367,30 @@ class OrderRegistry:
             )
             conn.commit()
             return generation
+
+    def release_hard_stop_blocks(self, now_ms: int, lockout_sec: float) -> int:
+        """Drop hard-stop entry blocks whose window has ended (#796).
+
+        A mark alone reopens a stopped market as soon as a newer publication
+        lists it again, which for a short-lived sports market is seconds. The
+        window is the floor on that, and this is its other end: once the
+        window has passed the block is over and the market is quotable again
+        even if the feed never re-lists it. An in-flight `resetting` mark is
+        never touched, and merge marks keep clearing on publication only.
+        Returns how many blocks were released; `lockout_sec` of 0 releases
+        immediately, matching the "0 disables" convention.
+        """
+        cutoff_ms = int(now_ms) - int(max(0.0, float(lockout_sec)) * 1000)
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "DELETE FROM lifecycle_requalification "
+                "WHERE status = 'awaiting' AND reset_ts_ms <= ? "
+                "AND reason LIKE ?",
+                (cutoff_ms, f"{HARD_STOP_MARK_PREFIX}%"),
+            )
+            conn.commit()
+            return cur.rowcount
 
     def requalification_marks(self) -> dict[str, RequalificationMark]:
         """All reset marks keyed by lowercased condition id. DB errors propagate."""
