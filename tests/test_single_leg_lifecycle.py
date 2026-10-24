@@ -610,3 +610,22 @@ def test_escalated_hedge_never_cancels():
     assert decision.action == "hedge"
     assert decision.action != "cancel"
 
+
+
+def test_saver_action_for_maps_decision_to_row_action():
+    from core_brain.single_leg_lifecycle import saver_action_for
+    assert saver_action_for("wait") == "patient_wait"
+    assert saver_action_for("hedge") == "escalated_wait"
+    assert saver_action_for("locked") == "pair_locked"
+    assert saver_action_for("rest") == "dual_resting"
+    assert saver_action_for("refused") == "refused"
+
+
+def test_saver_action_for_rejects_unreachable_actions():
+    # "hold" is a saver-side row from another path, never a decision action;
+    # the old `.get(action, action)` pass-through would have echoed these.
+    import pytest
+    from core_brain.single_leg_lifecycle import saver_action_for
+    for unknown in ("bogus", "hold", "hard_stop", "settlement_fallback"):
+        with pytest.raises(KeyError):
+            saver_action_for(unknown)

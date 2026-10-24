@@ -1929,7 +1929,7 @@ def _manage_single_leg_positions_locked(
     from core_brain.quotes import dynamic_offset_for
     from core_brain.single_leg_lifecycle import (
         LegState, SingleLegPosition, capped_hedge_tick_exists, evaluate,
-        persist_decision, transition,
+        persist_decision, saver_action_for, transition,
     )
 
     now_s = now if now is not None else time.time()
@@ -2306,13 +2306,11 @@ def _manage_single_leg_positions_locked(
             except Exception as exp_exc:
                 log.debug("Exposure resolution check skipped for pair %s: %s", pair_id, exp_exc)
 
-            action = {
-                "wait": "patient_wait",
-                "hedge": "escalated_wait",
-                "locked": "pair_locked",
-                "rest": "dual_resting",
-                "refused": "refused",
-            }.get(decision.action, decision.action)
+            # Unknown exposure keeps the lifecycle's own verdict: the pair is
+            # still managed under the decision above and the check retries
+            # next rotation. The row vocabulary is owned by the lifecycle,
+            # which fails loud on any action `transition` cannot emit.
+            action = saver_action_for(decision.action)
             out.append({
                 "pair_id": pair_id, "condition_id": condition_id,
                 "action": action,
