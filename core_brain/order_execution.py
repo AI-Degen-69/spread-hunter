@@ -37,12 +37,15 @@ def cancel_all_orders(
 
     `live=False` is a dry run: the client is never built, let alone called.
     A venue failure is returned as a refusal so adapters decide how to
-    report it (CLI exit code, dashboard status code).
+    report it (CLI exit code, dashboard status code). That includes a
+    client that cannot be built: this repo's venue client signals missing
+    credentials with SystemExit, which is not an Exception subclass, so the
+    guard names it explicitly rather than leaking a raw exit.
     """
     if not live:
         return CancelAllResult(ok=False, dry_run=True)
     try:
         response = client_fn().cancel_all()
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         return CancelAllResult(ok=False, dry_run=False, refusal=str(exc))
     return CancelAllResult(ok=True, dry_run=False, response=response)
