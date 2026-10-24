@@ -2878,3 +2878,120 @@ def test_same_pair_refill_books_only_refill_cost(registry: OrderRegistry):
     closes = sorted(registry.get_all_closes(), key=lambda r: r["ts"])
     assert len(closes) == 2
     assert closes[1]["cost_basis"] == pytest.approx(1.00)
+
+
+# ---------------------------------------------------------------------------
+# Issue #793 - one-sided pair whose opposite leg was never quoted
+# ---------------------------------------------------------------------------
+
+
+def _one_sided_pair_without_down_quote(
+    registry: OrderRegistry, pair_id: str = "pair-793",
+    filled_size: float = 10.0, fill_price: float = 0.60,
+) -> str:
+    """Heavy UP filled; DOWN rests but was NEVER quoted (the #793 shape)."""
+    now = 1_000_000
+    heavy = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-heavy-793", condition_id=COND,
+        token_id=TOK_UP, side="BUY", price=fill_price,
+        original_size=filled_size, status="filled",
+        posted_ts=now, last_polled_ts=now, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(heavy)
+    registry.record_fill(FillRecord(
+        trade_id="trade-heavy-793", order_uuid=heavy.id, size=filled_size,
+        price=fill_price, venue_ts=now,
+    ))
+    light = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-light-793", condition_id=COND,
+        token_id=TOK_DN, side="BUY", price=0.38,
+        original_size=filled_size, status="open",
+        posted_ts=now, last_polled_ts=now, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(light)
+    # Only the UP leg is ever quoted: the DOWN side is unknown to the
+    # quotes ledger, exactly as in the #787 rehearsal.
+    registry.log_quote(QuoteRecord(
+        ts=now / 1000.0, condition_id=COND, token_id=TOK_UP, side="UP",
+        price=fill_price, size=filled_size,
+    ))
+    return pair_id
+
+
+def _seed_lifecycle_opposite(
+    registry: OrderRegistry, pair_id: str = "pair-793",
+) -> None:
+    import json as _json
+
+    from core_brain.order_registry import LifecycleStateRecord
+
+    registry.save_lifecycle_state(LifecycleStateRecord(
+        pair_id=pair_id, condition_id=COND, state="PATIENT_WAIT",
+        reason="held leg has not crossed the escalation threshold",
+        updated_ts_ms=1_000_000,
+        evidence_json=_json.dumps({
+            "previous_state": None, "state": "PATIENT_WAIT",
+            "action": "wait", "held_token_id": TOK_UP,
+            "held_average_price": 0.60, "naked_size": 10.0,
+            "opposite_token_id": TOK_DN, "up_size": 10.0,
+            "down_size": 0.0,
+        }),
+    ))
+
+
+def test_793_recorded_opposite_resolves_instead_of_refusing(
+    registry: OrderRegistry,
+):
+    """#793: opposite recorded in lifecycle but never quoted resolves."""
+    from core_brain.config import MakerConfig
+    from core_brain.single_buy_saver import manage_single_leg_positions
+
+    pair_id = _one_sided_pair_without_down_quote(registry)
+    _seed_lifecycle_opposite(registry, pair_id)
+    client = FakeClient(best_ask=0.40, best_bid=0.59)
+    cfg = MakerConfig(bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST)
+    results = manage_single_leg_positions(
+        client, registry, cfg, live=False, now=1010.0)
+    assert len(results) == 1
+    assert results[0].get("action") != "error", results
+    assert "does not identify one UP token" not in str(
+        results[0].get("error") or results[0].get("reason") or "")
+
+
+def test_793_unrecorded_opposite_still_refuses_once_then_collapses(
+    registry: OrderRegistry,
+):
+    """#793: no record still refuses, but once with token+shares, then quiet."""
+    from core_brain.config import MakerConfig
+    from core_brain.single_buy_saver import (
+        MISSING_SIDE_REFUSAL_OUTCOME, STRANDED_MISSING_SIDE_ACTION,
+        manage_single_leg_positions,
+    )
+
+    pair_id = _one_sided_pair_without_down_quote(registry)
+    client = FakeClient(best_ask=0.40, best_bid=0.59)
+    cfg = MakerConfig(bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST)
+    first = manage_single_leg_positions(
+        client, registry, cfg, live=False, now=1010.0)
+    assert len(first) == 1
+    assert first[0].get("action") == "error", first
+    assert "stranded leg" in str(first[0].get("error") or "")
+    assert TOK_UP in str(first[0].get("error") or "")
+    rows = [r for r in registry.get_hard_stop_refusals()
+            if r.get("pair_id") == pair_id
+            and r.get("outcome") == MISSING_SIDE_REFUSAL_OUTCOME]
+    assert len(rows) == 1
+    assert TOK_UP in str(rows[0].get("detail") or "")
+    assert "10.0000" in str(rows[0].get("detail") or "")
+    second = manage_single_leg_positions(
+        client, registry, cfg, live=False, now=1015.0)
+    assert len(second) == 1
+    assert second[0].get("action") == STRANDED_MISSING_SIDE_ACTION, second
+    assert second[0].get("token_id") == TOK_UP
+    assert second[0].get("size") == 10.0
+    rows_after = [r for r in registry.get_hard_stop_refusals()
+                  if r.get("pair_id") == pair_id
+                  and r.get("outcome") == MISSING_SIDE_REFUSAL_OUTCOME]
+    assert len(rows_after) == 1
