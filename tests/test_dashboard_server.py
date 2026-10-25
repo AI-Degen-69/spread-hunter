@@ -991,6 +991,35 @@ def test_status_surfaces_engine_sweep_cadence(monkeypatch, tmp_path):
     assert dash_mod.get_system_status()["services"]["query"]["sweep_interval_sec"] is None
 
 
+def test_status_reports_a_filter_started_outside_the_registry(monkeypatch, tmp_path):
+    """A filter the registry never saw is still reported as observed running.
+
+    The tournament launcher spawns `scripts.filter_loop` itself, so
+    `processes.json` has no `filter` entry; the page then painted the filter
+    OFF beside a venue-engine row painted ON. The filter's own snapshot is the
+    evidence, and `running` keeps meaning "the registry says so" because that
+    is what refuses a second start.
+    """
+    import dashboard.server as dash_mod
+
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.delenv("SH_FILTER_INTERVAL_SEC", raising=False)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    snapshot = runtime / "pipeline.json"
+    snapshot.write_text("{}", encoding="utf-8")
+
+    fresh = dash_mod.get_system_status()["services"]["filter"]
+    assert fresh["observed_running"] is True
+    assert fresh["running"] is False, "the registry must stay the control truth"
+
+    stale = time.time() - 3 * dash_mod.resolve_scan_interval()
+    os.utime(snapshot, (stale, stale))
+    aged = dash_mod.get_system_status()["services"]["filter"]
+    assert aged["observed_running"] is False
+    assert aged["running"] is False
+
+
 def test_start_bot_passes_sweep_interval_to_poll(monkeypatch, tmp_path):
     """start_bot launches poll with --sweep-interval when one is configured."""
     import subprocess

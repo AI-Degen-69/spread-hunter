@@ -321,6 +321,31 @@ def test_no_scanner_process_is_red_whatever_the_file_says():
 
 
 @requires_node
+def test_a_scanner_started_outside_the_registry_is_not_red():
+    # The ten-arm tournament launches scripts.filter_loop directly, so the
+    # process registry has no `filter` entry and the pill painted SCAN DOWN
+    # while the filter re-ranked the universe every ten minutes. A fresh
+    # snapshot is the evidence that it runs.
+    v = _harness("marketscan")["unregisteredFresh"]
+    assert (v["state"], v["label"]) == ("running", "SCAN RUNNING")
+    assert "outside the process registry" in v["title"]
+
+
+@requires_node
+def test_the_active_count_matches_the_rows_beside_it():
+    # The reported contradiction: "0 ACTIVE · STOPPED" above a Venue Engine row
+    # painted ON. Counting registry entries alone cannot see a stack the
+    # tournament launcher started, and in a rehearsal the shadow loop IS the
+    # engine. Two services are working here, so the header must say two.
+    v = _harness("telemetrycount")
+    assert v["tournamentStack"] == 2
+    assert v["registryStack"] == 2
+    assert v["nothing"] == 0
+    assert v["guardrailOnly"] == 1
+    assert v["engineWithoutFilter"] == 1
+
+
+@requires_node
 def test_a_live_scanner_whose_snapshot_went_stale_is_amber_not_red():
     # The process is up, so it is not DOWN; the file it should be refreshing
     # is older than two full cycles, so it is not healthy either.

@@ -405,12 +405,37 @@ function marketScanVerdicts() {
     upStale: call(up, stale),
     upNoFile: call(up, {}),
     processDead: call(down, fresh),
+    // Started outside the process registry (tournament launcher): no registry
+    // entry, but the filter's own snapshot keeps landing.
+    unregisteredFresh: call(
+      { services: { filter: { running: false, observed_running: true } } }, fresh),
+    unregisteredNoSnapshot: call(
+      { services: { filter: { running: false, observed_running: true } } }, {}),
     noStatus: call(null, fresh),
     registryUnreadable: call({ registry_unreadable: true, services: { filter: { running: true } } }, fresh),
     // Issue #348: a failed KPI read is not a missing snapshot file.
     kpiFailedNoData: call(up, null, { kpiReadFailed: true }),
     heldFresh: call(up, fresh, { kpiReadFailed: true, ageOffsetSec: 60 }),
     heldStale: call(up, fresh, { kpiReadFailed: true, ageOffsetSec: 2000 }),
+  };
+}
+
+/* SERVICE TELEMETRY's "N active" must count what its own rows paint. */
+function telemetryCountVerdicts() {
+  const n = (st, guard) => app.telemetryActiveCount(st, guard);
+  return {
+    // The live case: tournament launcher, so no registry entries at all, but
+    // the filter's snapshot is fresh and the shadow loop is beating.
+    tournamentStack: n({ services: { filter: { running: false, observed_running: true } },
+                         shadow_run: { running: true } }, false),
+    // Registry-started live stack is unchanged.
+    registryStack: n({ services: { filter: { running: true }, query: { running: true } } }, false),
+    // Nothing at all, and the guardrail alone.
+    nothing: n({ services: {} }, false),
+    guardrailOnly: n({ services: {} }, true),
+    // The engine still counts when the filter is genuinely dead.
+    engineWithoutFilter: n({ services: { filter: { running: false, observed_running: false } },
+                             shadow_run: { running: true } }, false),
   };
 }
 
@@ -742,6 +767,7 @@ if (script === 'dbmode') out = dbModeVerdicts();
 else if (script === 'runswitcher') out = runSwitcherVerdicts();
 else if (script === 'trialbanner') out = trialBannerVerdicts();
 else if (script === 'marketscan') out = marketScanVerdicts();
+else if (script === 'telemetrycount') out = telemetryCountVerdicts();
 else if (script === 'heldresolve') out = heldResolveVerdicts();
 else if (script === 'enginehold') out = engineHoldVerdicts();
 else if (script === 'scanpill') out = scanPillVerdicts();
@@ -758,6 +784,7 @@ else out = {
   enginepill: enginePillVerdicts(),
   guardrailHud: guardrailHudVerdict(),
   marketscan: marketScanVerdicts(),
+  telemetrycount: telemetryCountVerdicts(),
   heldresolve: heldResolveVerdicts(),
   enginehold: engineHoldVerdicts(),
   trialbanner: trialBannerVerdicts(),

@@ -264,10 +264,17 @@ function marketScanState(status, kpi, opts) {
              title: 'Cannot read the process registry, so the state of the Market Filter is unknown.' };
   }
   const svc = (status.services || {}).filter || {};
-  if (!svc.running) {
+  // A filter launched outside the process registry (the tournament launcher
+  // spawns scripts.filter_loop directly) has no registry entry, so the registry
+  // alone painted OFF while it re-ranked the universe every cycle. The server
+  // reports `observed_running` from the filter's own snapshot; the registry
+  // stays authoritative for stopping it, not for believing it runs.
+  if (!svc.running && !svc.observed_running) {
     return { state: 'down', label: 'SCAN DOWN',
              title: 'No Market Filter process (scripts.filter_loop) is running. Nothing is scanning markets.' };
   }
+  const unregisteredNote = svc.running ? ''
+    : ' It was started outside the process registry, so its own snapshot is the evidence it runs.';
   const kpiFailed = !!(opts && opts.kpiReadFailed);
   const ageOff = (opts && isFinite(opts.ageOffsetSec)) ? opts.ageOffsetSec : 0;
   let age = kpi && kpi.funnel ? kpi.funnel.snapshot_age : null;
@@ -277,17 +284,17 @@ function marketScanState(status, kpi, opts) {
   if (age === null || age === undefined) {
     if (kpiFailed) {
       return { state: 'degraded', label: 'SCAN DEGRADED', ageSec: null,
-               title: 'The Market Filter is running, but the KPI read did not land, so the snapshot age is unknown.' };
+               title: 'The Market Filter is running, but the KPI read did not land, so the snapshot age is unknown.' + unregisteredNote };
     }
     return { state: 'degraded', label: 'SCAN DEGRADED', ageSec: null,
-             title: 'The Market Filter is running but has not written runtime/pipeline.json yet.' };
+             title: 'The Market Filter is running but has not written runtime/pipeline.json yet.' + unregisteredNote };
   }
   if (age > scanIntervalSec(status) * 2) {
     return { state: 'degraded', label: 'SCAN DEGRADED', ageSec: age,
-             title: 'The Market Filter is running, but its last snapshot is older than two scan cycles.' + heldNote };
+             title: 'The Market Filter is running, but its last snapshot is older than two scan cycles.' + heldNote + unregisteredNote };
   }
   return { state: 'running', label: 'SCAN RUNNING', ageSec: age,
-           title: 'The Market Filter is running and its snapshot is fresh.' + heldNote };
+           title: 'The Market Filter is running and its snapshot is fresh.' + heldNote + unregisteredNote };
 }
 
 /* ── Shared status pill markup helper (#504) ── */
@@ -2328,6 +2335,26 @@ function getMasterToggleClasses(action, isShadow) {
   return `ctrl-btn ctrl-btn-primary ${modeClass}`;
 }
 
+/* Which telemetry services count as ACTIVE, from the same evidence their rows
+ * paint with.
+ *
+ * Registry entries alone are not that evidence. The tournament launcher starts
+ * `scripts.filter_loop` and ten shadow arms directly, so `processes.json` has
+ * no entry for any of them; the header then read "0 ACTIVE" beside an engine
+ * row painted ON, because that row is driven by the loop's heartbeat. In a
+ * rehearsal the shadow loop IS the engine -- there is no separate poller to
+ * report. `observed_running` covers the unregistered filter (its own snapshot
+ * proves it works); registry `running` still wins where it exists.
+ */
+function telemetryActiveCount(status, guardrailRunning) {
+  const filterActive = Boolean(status?.services?.filter?.running
+                               || status?.services?.filter?.observed_running);
+  const engineActive = Boolean(status?.services?.query?.running
+                              || status?.shadow_run?.running);
+  const count = (filterActive ? 1 : 0) + (engineActive ? 1 : 0);
+  return count + (guardrailRunning ? 1 : 0);
+}
+
 function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const executionServiceKeys = ['filter', 'query', 'decide'];
   const anyExecutionServiceRunning = executionServiceKeys.some(k => Boolean(status?.services?.[k]?.running));
@@ -2345,12 +2372,13 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
 
   const anyServiceRunning = anyExecutionServiceRunning;
 
-  const telemetryServiceKeys = ['filter', 'query'];
-  let activeCount = 0;
-  if (status?.services) {
-    activeCount = telemetryServiceKeys.filter(k => Boolean(status.services[k]?.running)).length;
-  }
-  if (guardrailHealth?.running) activeCount++;
+  // The count must agree with the rows beside it, so both read the same
+  // evidence (telemetryActiveCount owns that rule).
+  const filterActive = Boolean(status?.services?.filter?.running
+                               || status?.services?.filter?.observed_running);
+  const engineActive = Boolean(status?.services?.query?.running
+                              || status?.shadow_run?.running);
+  const activeCount = telemetryActiveCount(status, Boolean(guardrailHealth?.running));
 
   const alertsCount = guardrailAlertCount(guardrailHealth, guardrailAlerts);
   const guardrailTelemetryError = guardrailHealth?.telemetry_error || guardrailAlerts?.telemetry_error;
@@ -2373,10 +2401,10 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   subStates.push(guardrailState);
   for (const def of SERVICE_DEFS) {
     if (def.key !== 'filter' && def.key !== 'query') continue;
-    const svc = status?.services?.[def.key];
+    const active = def.key === 'filter' ? filterActive : engineActive;
     if (status?.registry_unreadable) {
       subStates.push('unknown');
-    } else if (svc?.running) {
+    } else if (active) {
       subStates.push('running');
     } else if (isRunning) {
       subStates.push('down');
@@ -2488,7 +2516,10 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     } else if (servicesState === 'degraded') {
       hudServicesSub.textContent = `${activeCount} active · degraded`;
     } else {
-      hudServicesSub.textContent = isRunning ? `${activeCount} active` : 'all stopped';
+      // `activeCount` counts observable liveness, so it decides this line:
+      // asking the registry-only `isRunning` here printed "all stopped" under
+      // an activeCount of 2 for a stack the registry never saw.
+      hudServicesSub.textContent = activeCount > 0 ? `${activeCount} active` : 'all stopped';
     }
   }
 
@@ -10640,7 +10671,7 @@ if (typeof module !== 'undefined' && module.exports) {
     liveMarks, LIVE_MARK_MAX_AGE_MS, liveMarkMid, applyLiveMarks, clearLiveMarks,
     liveLegMids, paintLiveMarks, scheduleLiveMarksPaint,
     isQuotedMarket, isRestingOrder, tokenLegMap, legForOrder, marketStatusPill,
-    marketActivityPill,
+    marketActivityPill, telemetryActiveCount,
     normalizeLeg, groupOrdersByPair, restingPairCost, restingPairLegs,
     fmtTimestamp, toMs, latestQuoteTs, latestFillTs, closeTsOf, fmtRelAgo, timestampCell,
     pairStatus, PAIR_STATUS, isMarketInferredPosition, pairSummary,
