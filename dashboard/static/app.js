@@ -2516,7 +2516,10 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     } else if (servicesState === 'degraded') {
       hudServicesSub.textContent = `${activeCount} active · degraded`;
     } else {
-      hudServicesSub.textContent = isRunning ? `${activeCount} active` : 'all stopped';
+      // `activeCount` counts observable liveness, so it decides this line:
+      // asking the registry-only `isRunning` here printed "all stopped" under
+      // an activeCount of 2 for a stack the registry never saw.
+      hudServicesSub.textContent = activeCount > 0 ? `${activeCount} active` : 'all stopped';
     }
   }
 
