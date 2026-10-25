@@ -6971,11 +6971,32 @@ function isFinishedMarket(m) {
     || (m.days_to_resolve !== null && m.days_to_resolve !== undefined && m.days_to_resolve < 0);
 }
 
-/* Quoted means the bot is working this market right now: it has posted quotes,
- * or it still has an order alive on it. */
-function isQuotedMarket(m, orders) {
+/* How old a market's newest quote may be and still count as "being quoted".
+ *
+ * `quotes_count` counts the append-only quotes ledger, so it never decays: a
+ * market queried once reads QUOTING for the rest of the run's life -- at the
+ * last price it ever saw, hours after the game ended. The engine re-quotes
+ * every rotation (seconds), so a market with no quote for this long is not
+ * being worked: it ended, or the engine stopped writing. Either way the tab's
+ * claim ("markets that graduated and are being quoted") is false.
+ *
+ * A market with a resting order stays listed whatever its quote age: the order
+ * is the live fact there. */
+const QUOTE_STALE_MS = 15 * 60 * 1000;
+
+/* Quoted means the bot is working this market right now: it has a resting
+ * order, or it logged a quote inside QUOTE_STALE_MS. */
+function isQuotedMarket(m, orders, nowMs) {
   if (isFinishedMarket(m)) return false;
-  return (m.quotes_count || 0) > 0 || (orders || []).some(o => isActiveOrder(o));
+  if ((orders || []).some(o => isRestingOrder(o))) return true;
+  if (!((m.quotes_count || 0) > 0)) return false;
+  // No timestamp in the payload is unmeasured, not stale: the trim keeps the
+  // newest quote per leg, so this only fires on a payload that dropped them --
+  // and hiding a market nobody can date is a guess, not a fact.
+  const last = latestQuoteTs(m);
+  if (last === null) return true;
+  const now = (nowMs === undefined || nowMs === null) ? Date.now() : Number(nowMs);
+  return Number.isFinite(now) && (now - last) <= QUOTE_STALE_MS;
 }
 
 function isRestingOrder(o) {
@@ -7320,13 +7341,13 @@ function marketActivityPill(m, orders) {
   return marketStatusPill(m, restingHere);
 }
 
-function activeMarketsRows(kpi, state, sort) {
+function activeMarketsRows(kpi, state, sort, nowMs) {
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
   const entries = Object.entries((kpi && kpi.by_market) || {})
     // Everything listed here is being worked, so IDLE cannot appear: a market
     // with no quote activity and only a filled/cancelled order has nothing
     // active to show (issue #272; CodeRabbit round on this PR).
-    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid])
+    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid], nowMs)
       && ((m.quotes_count || 0) > 0
         || (ordersByMarket[cid] || []).some(o => isRestingOrder(o))));
 
@@ -7788,11 +7809,11 @@ function positionsRows(kpi, state, sort) {
   }).join('');
 }
 
-function ordersTradesCounts(kpi, state) {
+function ordersTradesCounts(kpi, state, nowMs) {
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
   const markets = Object.entries((kpi && kpi.by_market) || {});
   return {
-    'active-markets': markets.filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid])).length,
+    'active-markets': markets.filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid], nowMs)).length,
     'open-orders': ((state && state.orders) || []).filter(isRestingOrder).length,
     'positions': markets.filter(([, m]) => (Number(m.total_sh) || 0) > 0
                                             && !isFinishedMarket(m)).length,
@@ -7800,11 +7821,11 @@ function ordersTradesCounts(kpi, state) {
   };
 }
 
-function ordersTradesRows(view, kpi, state, sort) {
+function ordersTradesRows(view, kpi, state, sort, nowMs) {
   if (view === 'open-orders') return openOrdersRows(kpi, state, sort);
   if (view === 'positions') return positionsRows(kpi, state, sort);
   if (view === 'closed-trades') return closedTradesRows(kpi, state, sort);
-  return activeMarketsRows(kpi, state, sort);
+  return activeMarketsRows(kpi, state, sort, nowMs);
 }
 
 /* Per-view sort state, in memory. Each view keeps its own column and direction:
@@ -8228,10 +8249,10 @@ function stitchActiveMarketsHeadHtml(sort) {
   return `<tr>${cells}</tr>`;
 }
 
-function stitchActiveMarketsRows(kpi, state, sort) {
+function stitchActiveMarketsRows(kpi, state, sort, clockMs) {
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
   const entries = Object.entries((kpi && kpi.by_market) || {})
-    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid])
+    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid], clockMs)
       && ((m.quotes_count || 0) > 0
         || (ordersByMarket[cid] || []).some(o => isRestingOrder(o))));
 
@@ -8239,7 +8260,8 @@ function stitchActiveMarketsRows(kpi, state, sort) {
     return `<tr><td colspan="7" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No markets are being quoted.</td></tr>`;
   }
 
-  const nowMs = Date.now();
+  // One clock for the gate, the live-mark freshness check and the age column.
+  const nowMs = (clockMs === undefined || clockMs === null) ? Date.now() : Number(clockMs);
 
   const rows = entries.map(([cid, m]) => {
     const legs = latestLegQuotes(m);
@@ -8999,12 +9021,15 @@ function renderOrdersTrades(kpi, state) {
     && typeof document.body.classList.contains === 'function'
     && document.body.classList.contains('proto-body');
 
+  // One clock for the whole paint, so the table, its count and the staleness
+  // gate can never disagree about the same tick.
+  const nowMs = Date.now();
   if (isStitchTerminal && view === 'open-orders') {
     head.innerHTML = stitchOpenOrdersHeadHtml(sort);
     body.innerHTML = stitchOpenOrdersRows(kpi, state, sort);
   } else if (isStitchTerminal && view === 'active-markets') {
     head.innerHTML = stitchActiveMarketsHeadHtml(sort);
-    body.innerHTML = stitchActiveMarketsRows(kpi, state, sort);
+    body.innerHTML = stitchActiveMarketsRows(kpi, state, sort, nowMs);
   } else if (isStitchTerminal && view === 'positions') {
     head.innerHTML = stitchPositionsHeadHtml(sort);
     body.innerHTML = stitchPositionsRows(kpi, state, sort);
@@ -9013,7 +9038,7 @@ function renderOrdersTrades(kpi, state) {
     body.innerHTML = stitchClosedTradesRows(kpi, state, sort);
   } else {
     head.innerHTML = otHeadHtml(view, sort);
-    body.innerHTML = ordersTradesRows(view, kpi, state, sort);
+    body.innerHTML = ordersTradesRows(view, kpi, state, sort, nowMs);
   }
 
   // Preserve search query filtering across poll ticks
@@ -9041,7 +9066,7 @@ function renderOrdersTrades(kpi, state) {
   const note = document.getElementById('orders-trades-note');
   if (note) note.textContent = OT_NOTES[view];
 
-  const counts = ordersTradesCounts(kpi, state);
+  const counts = ordersTradesCounts(kpi, state, nowMs);
   // `ordersTradesCounts` returns a number for every view, so an unknown key
   // here is a typo in the markup, not an unmeasured value: show it as blank
   // rather than dressing it up as a real count of zero.
