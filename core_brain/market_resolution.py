@@ -452,13 +452,15 @@ def fetch_market_end_state(
 ) -> MarketEndState:
     """Public gamma read for one market's end state.
 
-    ``GET {gamma_host}/markets?condition_ids={cid}&closed=true`` is read-only,
-    no key. A User-Agent header is required (gamma 403s without one), and
-    ``closed=true`` is required to see ends markets at all. Any failure
-    (network, malformed payload, empty result) returns an ``unreachable``
-    state -- the caller degrades and retries next rotation. A confirmed read
-    with no resolution signal returns ``resolved=False``, which is distinct
-    from unreachable: the market is genuinely still open.
+    ``GET {gamma_host}/markets?condition_ids={cid}`` is read-only, no key, and
+    is asked twice: with ``&closed=true`` (the only way to see a settled
+    market) and then unfiltered (the only way to see one that finished trading
+    but has not been marked closed yet). A User-Agent header is required
+    (gamma 403s without one). Any failure on both reads (network, malformed
+    payload, empty result) returns an ``unreachable`` state -- the caller
+    degrades and retries next rotation. A confirmed read with no resolution
+    signal returns ``resolved=False``, which is distinct from unreachable: the
+    market is genuinely still open.
     """
     cid = (condition_id or "").strip()
     if not cid:
@@ -469,28 +471,38 @@ def fetch_market_end_state(
     #     market would come back as an empty list (indistinguishable, to us,
     #     from "not confirmed"). Asking for the closed side explicitly is what
     #     lets a resolution sweeper actually see the market is done.
-    url = (f"{gamma_host.rstrip('/')}/markets"
-           f"?condition_ids={cid}&closed=true")
+    #
+    # The closed read is not enough on its own. A market stops trading
+    # when the game ends, but gamma keeps `closed=false` until the UMA proposal
+    # clears its liveness window -- during that window the closed read returns
+    # an empty list, the sweep reported "unreachable", and a dead market read
+    # QUOTING on the dashboard at its last price. The unfiltered listing DOES
+    # carry that row, with `umaResolutionStatus` set, which `parse_end_state`
+    # already reads as resolved. So: the closed side first (settled markets,
+    # the original behaviour), then the default listing for the window before
+    # settlement completes.
     headers = {"User-Agent": "spread-hunter/0.1 (market resolution sweeper)"}
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        with urlopen(req, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return MarketEndState(condition_id=condition_id, unreachable=True)
-    rows = None
-    if isinstance(payload, list):
-        rows = payload
-    elif isinstance(payload, dict):
-        rows = payload.get("data") or payload.get("markets")
-    if not isinstance(rows, list) or not rows:
-        # No row is "unreachable" for our purposes: we could not confirm, so
-        # we do NOT mark resolved. Distinct from "confirmed still open".
-        return MarketEndState(condition_id=condition_id, unreachable=True)
-    state = parse_end_state(rows[0], now_ts=now_ts)
-    if state is None:
-        return MarketEndState(condition_id=condition_id, unreachable=True)
-    return state
+    for query in ("&closed=true", ""):
+        url = f"{gamma_host.rstrip('/')}/markets?condition_ids={cid}{query}"
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urlopen(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            continue
+        rows = None
+        if isinstance(payload, list):
+            rows = payload
+        elif isinstance(payload, dict):
+            rows = payload.get("data") or payload.get("markets")
+        if not isinstance(rows, list) or not rows:
+            continue
+        state = parse_end_state(rows[0], now_ts=now_ts)
+        if state is not None:
+            return state
+    # No row on either read is "unreachable" for our purposes: we could not
+    # confirm, so we do NOT mark resolved. Distinct from "confirmed still open".
+    return MarketEndState(condition_id=condition_id, unreachable=True)
 
 
 def fetch_open_market_state(

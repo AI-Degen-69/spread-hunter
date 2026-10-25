@@ -287,6 +287,35 @@ def test_fetch_returns_unreachable_on_empty_result():
     assert state.unreachable is True
 
 
+def test_fetch_confirms_a_market_that_finished_trading_but_is_not_closed_yet():
+    # Arrange - a game that ended minutes ago, exactly the shape the live venue
+    # returned for mls-nyr-mia-2026-10-24-mia: outcome prices settled at
+    # 0.0005/0.9995, UMA proposed, but gamma still says closed=false and
+    # acceptingOrders=true. The `closed=true` read returns NOTHING for it, so
+    # the sweep reported "unreachable" and the market stayed QUOTING on the
+    # dashboard at its last price. Only the unfiltered listing carries the row.
+    payload = [{
+        "condition_id": "0xC", "closed": False, "acceptingOrders": True,
+        "endDate": "1970-01-01T00:00:00Z",
+        "umaResolutionStatus": "proposed",
+        "outcomes": ["Yes", "No"], "outcomePrices": ["0.0005", "0.9995"],
+        "clobTokenIds": ["tok-yes", "tok-no"],
+    }]
+
+    def urlopen(req, timeout=10):
+        # The closed side hides it; the default listing is the only way in.
+        return _FakeResp([] if "closed=true" in req.full_url else payload)
+
+    # Act
+    state = fetch_market_end_state(
+        "https://gamma", "0xC", urlopen=urlopen, now_ts=1_000_000_000)
+
+    # Assert
+    assert state.unreachable is False
+    assert state.resolved is True
+    assert state.winning_token_id == "tok-no"
+
+
 # ---------------------------------------------------------------------------
 # sweep_market_resolutions: end-to-end against a real registry
 # ---------------------------------------------------------------------------
