@@ -42,14 +42,37 @@ CID_CLOSED = "0xclosed"
 CID_SETTLED = "0xsettled"
 
 
+def _to_ms(ts: float) -> float:
+    """`toMs` in app.js: seconds below 1e11, milliseconds above."""
+    return float(ts) * 1000 if float(ts) < 1e11 else float(ts)
+
+
+def _fixture_now_ms(kpi: dict | None) -> float:
+    """The clock this render runs against: just after the newest quote in the
+    fixture.
+
+    Active Markets drops a market whose newest quote is older than
+    QUOTE_STALE_MS, so a fixture written in epoch seconds (ts=100.0) would read
+    as dead. Pinning the clock one second past its own newest quote keeps those
+    fixtures "being quoted" and makes every timestamp assertion deterministic.
+    A test about staleness passes `now` itself.
+    """
+    stamps = [q["ts"]
+              for m in ((kpi or {}).get("by_market") or {}).values()
+              for q in (m.get("quotes") or [])
+              if isinstance(q.get("ts"), (int, float))]
+    return _to_ms(max(stamps)) + 1000 if stamps else 1_700_000_000_000.0
+
+
 def _render(view: str, kpi: dict | None = None, state: dict | None = None,
             *, sort: dict | None = None, expand: list[str] | None = None,
-            surface: str = "classic") -> dict:
+            surface: str = "classic", now: float | None = None) -> dict:
     # `sort` is keyword-only on purpose: as a positional third argument it lands
     # in `state`, the render comes back unsorted, and the sort assertion passes
     # against output the sort never touched.
     payload = {"view": view, "kpi": kpi or {}, "state": state or {}, "sort": sort,
-               "expand": expand or [], "surface": surface}
+               "expand": expand or [], "surface": surface,
+               "nowMs": _fixture_now_ms(kpi) if now is None else now}
     out = subprocess.run([shutil.which("node"), str(HARNESS), json.dumps(payload)],
                          capture_output=True, text=True, check=True, encoding="utf-8")
     return json.loads(out.stdout)
@@ -1506,6 +1529,33 @@ def test_active_markets_excludes_a_zero_quote_market_with_only_a_filled_order():
     # Assert
     assert "Held Market" not in rendered["html"]
     assert rendered["rows"] == 1
+
+
+@requires_node
+def test_active_markets_drops_a_market_the_engine_stopped_quoting():
+    # Arrange — the quotes ledger is append-only, so a market quoted once reads
+    # QUOTING forever at the last price it ever saw, hours after its game ended
+    # (`quotes_count` never decays). A market with no quote inside
+    # QUOTE_STALE_MS is not being worked, whatever the ledger still counts.
+    #
+    # CID_HELD has only old quotes and no resting order. CID_QUOTED has old
+    # quotes too, but a resting order — the live fact outranks quote age.
+    kpi = _kpi()
+    state = _state()
+    clock = _fixture_now_ms(kpi) + 16 * 60 * 1000  # past QUOTE_STALE_MS
+
+    for surface in ("classic", "stitch"):
+        # Act
+        fresh = _render("active-markets", kpi, state, surface=surface)
+        stale = _render("active-markets", kpi, state, surface=surface, now=clock)
+
+        # Assert — the stale quote-only market is gone; the resting one stays.
+        assert "Held Market" in fresh["html"], surface
+        assert "Held Market" not in stale["html"], surface
+        assert "Quoted Market" in stale["html"], surface
+        # The tab count reads the same clock as the rows it counts.
+        assert fresh["counts"]["active-markets"] == 2, surface
+        assert stale["counts"]["active-markets"] == 1, surface
 
 
 @requires_node
