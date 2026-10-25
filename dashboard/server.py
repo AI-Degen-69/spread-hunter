@@ -1489,6 +1489,14 @@ def stop_service(name: str) -> dict:
         _release_ops_lock(lock_fd)
 
 
+def _runtime_file_age_sec(name: str) -> float | None:
+    """Seconds since a runtime file last changed, or None when it is unreadable."""
+    try:
+        return max(0.0, time.time() - resolve_runtime_file(name, root=LIVE_ROOT).stat().st_mtime)
+    except OSError:
+        return None
+
+
 def get_system_status() -> dict:
     """Return live running status for 3 sub-services (Market Filter, Query Polymarket, Decide & Execute) and Telemetry."""
     procs_file = resolve_runtime_file("processes.json", root=LIVE_ROOT)
@@ -1526,6 +1534,20 @@ def get_system_status() -> dict:
     decide_pid = decide_info.get("pid")
     decide_running = _is_pid_alive(decide_pid, decide_info.get("started_at"))
 
+    # A Market Filter started outside the process registry is still a running
+    # filter: the tournament launcher spawns `scripts.filter_loop` directly, so
+    # the registry has no entry for it and the page painted OFF while it
+    # re-ranked the universe every cycle. `running` stays registry-only -- it is
+    # what refuses a second start, so it must keep failing closed -- and this
+    # second flag carries the observable truth for the display. The filter's own
+    # output is the evidence: a snapshot inside two cycles means it is working.
+    filter_observed_age = _runtime_file_age_sec("pipeline.json")
+    filter_observed_running = bool(
+        not filter_running
+        and filter_observed_age is not None
+        and filter_observed_age <= resolve_scan_interval() * 2
+    )
+
     filter_started_at = _service_started_at(filter_pid, filter_info, filter_running)
     query_started_at = _service_started_at(query_pid, query_info, query_running)
     decide_started_at = _service_started_at(decide_pid, decide_info, decide_running)
@@ -1554,6 +1576,10 @@ def get_system_status() -> dict:
                 "pid": filter_pid if filter_running else None,
                 "started_at": filter_started_at,
                 "uptime_sec": _uptime_sec(filter_started_at),
+                # Display-only: the filter is demonstrably working without a
+                # registry entry. Never read this for start/stop decisions.
+                "observed_running": filter_observed_running,
+                "observed_age_sec": filter_observed_age,
             },
             "query": {
                 "name": "Query Polymarket",
