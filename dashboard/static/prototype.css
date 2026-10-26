@@ -1600,22 +1600,19 @@
   white-space: nowrap;
 }
 
-.proto-body .stitch-pill-count.merged {
+/* Green and red mean exactly one thing on this column now (#831): the money
+ * went up, or it went down. Method-based tones left with the method-based
+ * counts, so a losing merge can never render green. */
+.proto-body .stitch-pill-count.win {
   background: rgba(16, 185, 129, 0.12);
   border: 1px solid rgba(16, 185, 129, 0.3);
   color: #34d399;
 }
 
-.proto-body .stitch-pill-count.stop-loss {
+.proto-body .stitch-pill-count.loss {
   background: rgba(244, 63, 94, 0.12);
   border: 1px solid rgba(244, 63, 94, 0.3);
   color: #fb7185;
-}
-
-.proto-body .stitch-pill-count.grace-expired {
-  background: rgba(251, 146, 60, 0.12);
-  border: 1px solid rgba(251, 146, 60, 0.3);
-  color: #fb923c;
 }
 
 .proto-body .stitch-pill-count.neutral {
@@ -1652,87 +1649,6 @@
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
-}
-
-.proto-body .stitch-closed-ledger-strip {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 16px;
-  background: #0f172a;
-  border-bottom: 1px solid #1e293b;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.proto-body .stitch-strip-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  color: #94a3b8;
-}
-
-.proto-body .stitch-strip-divider {
-  color: #334155;
-}
-
-.proto-body .stitch-strip-metric b {
-  color: #f8fafc;
-  font-weight: 700;
-  margin-left: 4px;
-}
-
-.proto-body .stitch-strip-metric b.pos {
-  color: #34d399 !important;
-}
-
-.proto-body .stitch-strip-metric b.neg {
-  color: #f43f5e !important;
-}
-
-.proto-body .stitch-strip-badges {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.proto-body .stitch-badge-outcome {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 10px;
-  border-radius: 9999px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-}
-
-.proto-body .stitch-badge-outcome.merged {
-  background: rgba(16, 185, 129, 0.15);
-  border: 1px solid rgba(16, 185, 129, 0.4);
-  color: #34d399;
-}
-
-.proto-body .stitch-badge-outcome.stop-loss {
-  background: rgba(244, 63, 94, 0.15);
-  border: 1px solid rgba(244, 63, 94, 0.4);
-  color: #fb7185;
-}
-
-.proto-body .stitch-badge-outcome.grace-expired {
-  background: rgba(251, 146, 60, 0.15);
-  border: 1px solid rgba(251, 146, 60, 0.4);
-  color: #fb923c;
-}
-
-.proto-body .stitch-badge-outcome.clean {
-  background: rgba(100, 116, 139, 0.12);
-  border: 1px solid rgba(100, 116, 139, 0.3);
-  color: #94a3b8;
 }
 
 .proto-body .stitch-ledger-table-wrap {

@@ -73,7 +73,7 @@ Dependency graph: `T1 → T2`; `T3` independent; `T4` needs `T1,T2,T3`.
 - Verify: `python -m pytest -q tests/test_stitch_closed_trades.py` (all currently green
   before and after; this task is a refactor, its proof is the unchanged suite).
 
-### T2 — Outcome Breakdown counts Wins and Losses (S, `[Design/UI]`)
+### [x] T2 — Outcome Breakdown counts Wins and Losses (S, `[Design/UI]`)
 - Files: `dashboard/static/app.js` (`stitchClosedTradesRows`), `dashboard/static/prototype.css`.
 - Delete the four method counters and their classification loop; count
   `winCount` / `lossCount` off `stitchSettlementPnl`.
@@ -81,22 +81,21 @@ Dependency graph: `T1 → T2`; `T3` independent; `T4` needs `T1,T2,T3`.
   when both are 0. Title attributes in the existing style.
 - CSS: `.stitch-pill-count.win`, `.stitch-pill-count.loss`; retire `.merged`,
   `.stop-loss`, `.grace-expired` count modifiers after a grep proves zero uses.
+- **Strip removal landed here, not in T3:** the strip read the deleted counters, so it
+  could not outlive them by one commit. Its markup and its dead CSS (`.stitch-strip-*`,
+  `.stitch-badge-outcome*`) went with it; T3 keeps only the exec-type work.
 - Depends on: T1.
 - Verify: page renders both pills for a mixed market; focused tests in T4.
 
-### T3 — Exec-type pills and the summary strip (S, `[Design/UI]`)
+### [ ] T3 — Exec-type pills (S, `[Design/UI]`)
 - Files: `dashboard/static/app.js`, `dashboard/static/prototype.css`.
 - `stitchLedgerChildRow`: pill class + label-derived modifier on `.stitch-exec-type`.
 - Labels: `Pair Merge` → `Merge` (classification + both synthetic fallbacks),
   `Settlement` → `Resolved`. `Sale`, `Stop Loss`, `Grace Expired` unchanged; the
-  classification chain and its order untouched.
-- Delete the `stitch-closed-ledger-strip` block (Total Cost / Net Realized / merged, stop,
-  grace and "0 Orphan / 0 Stops" badges). Keep the card, the table, `colspan="7"`.
-- CSS: scoped neutral pill rule; drop `.stitch-closed-ledger-strip`, `.stitch-strip-*`,
-  `.stitch-strip-metric b.pos/.neg`, `.stitch-strip-badges`, `.stitch-badge-outcome*`
-  once a grep proves no `dashboard/static/*.js` emits them.
+  classification chain and its order untouched. Keep the card, the table, `colspan="7"`.
+- CSS: scoped neutral pill rule under `.proto-body .stitch-ledger-subtable`.
 - Depends on: —.
-- Verify: expand a row, five labels readable, no strip.
+- Verify: expand a row, five labels readable.
 
 ### T4 — Regression tests (S, `[Tests]`)
 - Files: `tests/test_stitch_closed_trades.py`.

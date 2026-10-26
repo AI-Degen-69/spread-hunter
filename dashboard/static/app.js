@@ -9170,24 +9170,18 @@ function stitchClosedTradesRows(kpi, state, sort) {
     const marketUrl = m.url || (m.slug ? `https://polymarket.com/event/${m.slug}` : `https://polymarket.com/market/${cid}`);
     const title = m.title || m.name || m.slug || cid.slice(0, 16);
 
-    // Summary counts of exit outcomes
-    let mergedCount = 0;
-    let stopLossCount = 0;
-    let graceExpiredCount = 0;
-    let settledCount = 0;
-
+    // Outcome counts are money, not mechanics (#831). The column used to count
+    // HOW each execution closed (merged / stopped / expired), so a market with
+    // two profitable merges and four losing sales read "2 Merged" and hid the
+    // four losses. Now an execution that booked a profit is a win, one that
+    // booked a loss is a loss, and an exact $0.00 is neither — the same rule the
+    // ledger row prints, so the count and the rows can never disagree.
+    let winCount = 0;
+    let lossCount = 0;
     for (const s of settlements) {
-      const method = String(s.method || '').toLowerCase();
-      const reason = String(s.reason || '').toLowerCase();
-      if (method === 'merge' || method === 'shadow_merge') {
-        mergedCount++;
-      } else if (reason === 'lifecycle_hard_stop' || method === 'stop_loss_exit' || reason.includes('stop_loss') || reason === 'adverse_drift') {
-        stopLossCount++;
-      } else if (reason === 'grace_expired' || reason === 'aged_out_rescue' || reason.includes('grace_expired') || method.includes('aged_out')) {
-        graceExpiredCount++;
-      } else if (method === 'settlement' || method === 'shadow_settlement') {
-        settledCount++;
-      }
+      const pnl = stitchSettlementPnl(s);
+      if (pnl > 0) winCount++;
+      else if (pnl < 0) lossCount++;
     }
 
     // Total Cost is the basis of what CLOSED in this market, summed from the
@@ -9249,10 +9243,9 @@ function stitchClosedTradesRows(kpi, state, sort) {
       <!-- Col 3: OUTCOME BREAKDOWN (summary counts) -->
       <td>
         <div class="stitch-breakdown-pills">
-          ${mergedCount > 0 ? `<span class="stitch-pill-count merged" title="${mergedCount} merged pairs">● ${mergedCount} Merged</span>` : ''}
-          ${stopLossCount > 0 ? `<span class="stitch-pill-count stop-loss" title="${stopLossCount} exited at stop loss">⚠️ ${stopLossCount} Stop</span>` : ''}
-          ${graceExpiredCount > 0 ? `<span class="stitch-pill-count grace-expired" title="${graceExpiredCount} grace period expired">⏱ ${graceExpiredCount} Expired</span>` : ''}
-          ${(mergedCount === 0 && stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-pill-count neutral">${settledCount > 0 ? `${settledCount} Settled` : `${executionItemsCount} Closed`}</span>` : ''}
+          ${winCount > 0 ? `<span class="stitch-pill-count win" title="${winCount} execution${winCount !== 1 ? 's' : ''} booked a profit">● ${winCount} ${winCount === 1 ? 'Win' : 'Wins'}</span>` : ''}
+          ${lossCount > 0 ? `<span class="stitch-pill-count loss" title="${lossCount} execution${lossCount !== 1 ? 's' : ''} booked a loss">● ${lossCount} ${lossCount === 1 ? 'Loss' : 'Losses'}</span>` : ''}
+          ${(winCount === 0 && lossCount === 0) ? `<span class="stitch-pill-count neutral" title="Every execution in this market closed exactly flat">${executionItemsCount} Closed</span>` : ''}
         </div>
       </td>
 
@@ -9288,21 +9281,6 @@ function stitchClosedTradesRows(kpi, state, sort) {
       html += `<tr class="stitch-expand-row">
         <td colspan="7" style="padding:0;background:#090d16;">
           <div class="stitch-closed-ledger-card">
-            <!-- Summary Strip -->
-            <div class="stitch-closed-ledger-strip">
-              <div class="stitch-strip-left">
-                <span class="stitch-strip-metric">Total Cost: <b>${fmtUSD(totalCost)}</b></span>
-                <span class="stitch-strip-divider">|</span>
-                <span class="stitch-strip-metric">Net Realized: <b class="${pnlCls}">${realizedPnl >= 0 ? '+' : ''}${fmtUSD(realizedPnl)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</b></span>
-              </div>
-              <div class="stitch-strip-badges">
-                <span class="stitch-badge-outcome merged">● ${mergedCount} Merged Pair${mergedCount !== 1 ? 's' : ''}</span>
-                ${stopLossCount > 0 ? `<span class="stitch-badge-outcome stop-loss">⚠️ ${stopLossCount} Stop Loss</span>` : ''}
-                ${graceExpiredCount > 0 ? `<span class="stitch-badge-outcome grace-expired">⏱ ${graceExpiredCount} Grace Expired</span>` : ''}
-                ${(stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-badge-outcome clean">✓ 0 Orphan / 0 Stops</span>` : ''}
-              </div>
-            </div>
-
             <!-- Ledger Table -->
             <div class="stitch-ledger-table-wrap">
               <table class="stitch-ledger-subtable">

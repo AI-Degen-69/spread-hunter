@@ -94,7 +94,9 @@ def test_stitch_closed_trades_pair_renders_single_row_with_both_legs_and_single_
     assert "stitch-exec-type" in res["html"]
     assert "Fed Rate Cut in June" in res["parentTableHtml"]
     assert "+$0.70" in res["parentTableHtml"]
-    assert "1 Merged" in res["parentTableHtml"]
+    # The outcome column counts money now, not the method that closed it (#831).
+    assert "1 Win" in res["parentTableHtml"]
+    assert "Merged" not in res["parentTableHtml"]
 
 
 @requires_node
