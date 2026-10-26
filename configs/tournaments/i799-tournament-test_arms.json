@@ -8,7 +8,7 @@
     "thesis": "The shipped defaults are the reference: any arm must beat this to earn a change.",
     "env": {},
     "worst_catalyst": "Stop-loss exits 27.5% of closes (11/40)",
-    "worst_catalyst_desc": "6.4 h snapshot: 11 stop exits on 40 trades -- the most filled orders in the run -- clustered between minute 194 and 268, the volatile print every arm met; the arm runs the shipped 5c stop.",
+    "worst_catalyst_desc": "6.4 h snapshot: 11 stop exits on 40 trades -- the most filled orders in the run -- clustered between minute 194 and 268, the volatile print every arm met; this arm sets no stop mode in its env, so 5c is the shipped default threshold, not an active stop.",
     "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06",
     "tweak_rationale": "Hypothesis: the shipped 3c deadband requotes into the volatile cluster and re-enters lower; 6c holds queue position and only re-prices on a real move."
   },
@@ -86,7 +86,7 @@
       "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0"
     },
     "worst_catalyst": "One close of -$2.28 at minute 304.8, the run's largest",
-    "worst_catalyst_desc": "6.4 h snapshot: 66 fills on 173 quotes (38.2% fill rate) and one close 9x any other arm's worst; a flat 2c offset prices a calm and a volatile book identically.",
+    "worst_catalyst_desc": "6.4 h snapshot: 66 fills on 173 quotes (38.2% fill rate) and one close of -$2.28, the run's largest and about 9% worse than the next-worst -$2.10; a flat 2c offset prices a calm and a volatile book identically.",
     "hypothesized_tweak": "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1",
     "tweak_rationale": "Hypothesis: the orphan formed because the resting quote was priced for a calm book during a volatile print; a volatility-tracking offset widens exactly then."
   },

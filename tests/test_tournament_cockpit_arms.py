@@ -1027,9 +1027,12 @@ def test_i799_notes_do_not_change_the_launch_plan():
         for arm in spec
     ]
 
+    fixed_stamp = "2026-10-26T10-00"
     annotated = build_tournament_plan(
-        issue=799, arms=spec, base_port=8801, minutes=5, check_ports=False)
+        issue=799, arms=spec, base_port=8801, minutes=5, check_ports=False,
+        stamp=fixed_stamp)
     plain = build_tournament_plan(
-        issue=799, arms=stripped, base_port=8801, minutes=5, check_ports=False)
+        issue=799, arms=stripped, base_port=8801, minutes=5, check_ports=False,
+        stamp=fixed_stamp)
 
     assert [arm.to_dict() for arm in annotated.arms] == [arm.to_dict() for arm in plain.arms]
