@@ -103,7 +103,9 @@ class TestDeadline:
 
         # 5 + 5 sleeps land at t=1010; the third check is past t=1012 only after
         # the clamped final sleep, so the loop stops without overshooting.
-        assert sum(slept) <= 12.0, f"slept past the deadline: {slept}"
+        # Float addition can exceed 12.0 by femtoscopy (e.g. 5.7e-14); that is
+        # representation noise, not an overshoot.
+        assert sum(slept) <= 12.0 + 1e-9, f"slept past the deadline: {slept}"
         assert results, "the loop must return the last rotation, not nothing"
 
     def test_the_deadline_returns_results_rather_than_escaping_as_an_error(self):

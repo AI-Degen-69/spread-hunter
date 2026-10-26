@@ -250,6 +250,21 @@ def test_implemented_run_pills_in_header(dom: DOMNode):
         assert value is not None, f"#{pid} must carry .pill-value span"
 
 
+def test_superseded_top_nav_pills_hidden(dom: DOMNode, css: str):
+    """#shadow-run-clock and LIVE/SHADOW IMPLEMENTED pills were superseded:
+    - #shadow-run-clock was migrated to the #code-version-badge pill to the left.
+    - #live-implemented-pill and #shadow-implemented-pill are shown in the database picker.
+    They must be hidden in markup and style to eliminate topbar clutter."""
+    for pid in ("shadow-run-clock", "live-implemented-pill", "shadow-implemented-pill"):
+        el = dom.find_one(id=pid)
+        assert el is not None, f"Expected #{pid} in DOM"
+        assert "display:none" in el.get_attr("style").replace(" ", "").lower(), f"#{pid} must have display:none in style attribute"
+        assert f"#{pid}" in css, f"#{pid} must be styled in CSS"
+        match = re.search(rf"#{pid}[^{{]*\{{([^}}]*)\}}", css)
+        assert match is not None, f"#{pid} CSS rule not found"
+        assert "display" in match.group(1) and "none" in match.group(1), f"#{pid} must have display: none in CSS"
+
+
 def test_master_status_indicator_hidden_to_prevent_duplicate_with_run_pills(dom: DOMNode, css: str):
     """#master-status-indicator was superseded by LIVE/SHADOW IMPLEMENTED pills.
     It must be hidden in markup and style to eliminate duplicate execution pills."""

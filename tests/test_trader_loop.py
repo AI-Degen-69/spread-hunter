@@ -1169,6 +1169,79 @@ class TestMarketSpecsPath:
 
         assert [s["cid"] for s in specs] == ["0xtrial0"]
 
+    def test_max_markets_three_caps_pathed_feed(self, tmp_path):
+        from core_brain.trader_loop import _market_specs
+
+        specs = _market_specs(3, path=str(self._feed(tmp_path, n=5)))
+
+        assert [s["cid"] for s in specs] == ["0xtrial0", "0xtrial1", "0xtrial2"]
+
+    def test_max_markets_three_prioritizes_active_orders(self, tmp_path):
+        from unittest.mock import MagicMock
+        from core_brain.trader_loop import _market_specs
+
+        # Mock registry with active order on 0xtrial3 (ranked 4th in feed)
+        mock_reg = MagicMock()
+        mock_order = MagicMock()
+        mock_order.condition_id = "0xtrial3"
+        mock_order.status = "open"
+        mock_reg.get_active_orders.return_value = [mock_order]
+
+        specs = _market_specs(3, registry=mock_reg, path=str(self._feed(tmp_path, n=5)))
+
+        # Active market 0xtrial3 is prioritized first, then top inactive 0xtrial0 and 0xtrial1
+        assert [s["cid"] for s in specs] == ["0xtrial3", "0xtrial0", "0xtrial1"]
+
+    def test_max_markets_three_full_active_does_not_admit_inactive(self, tmp_path):
+        from unittest.mock import MagicMock
+        from core_brain.trader_loop import _market_specs
+
+        mock_reg = MagicMock()
+        orders = []
+        for cid in ["0xtrial2", "0xtrial3", "0xtrial4"]:
+            o = MagicMock()
+            o.condition_id = cid
+            o.status = "open"
+            orders.append(o)
+        mock_reg.get_active_orders.return_value = orders
+
+        specs = _market_specs(3, registry=mock_reg, path=str(self._feed(tmp_path, n=5)))
+
+        assert [s["cid"] for s in specs] == ["0xtrial2", "0xtrial3", "0xtrial4"]
+
+    def test_max_markets_three_caps_more_active_orders_than_slots(self, tmp_path):
+        from unittest.mock import MagicMock
+        from core_brain.trader_loop import _market_specs
+
+        mock_reg = MagicMock()
+        orders = []
+        for cid in ["0xtrial0", "0xtrial1", "0xtrial2", "0xtrial3", "0xtrial4"]:
+            o = MagicMock()
+            o.condition_id = cid
+            o.status = "open"
+            orders.append(o)
+        mock_reg.get_active_orders.return_value = orders
+
+        specs = _market_specs(3, registry=mock_reg, path=str(self._feed(tmp_path, n=5)))
+
+        assert [s["cid"] for s in specs] == ["0xtrial0", "0xtrial1", "0xtrial2"]
+
+    def test_max_markets_three_fills_slots_when_active_cid_left_the_feed(self, tmp_path):
+        from unittest.mock import MagicMock
+        from core_brain.trader_loop import _market_specs
+
+        mock_reg = MagicMock()
+        mock_order = MagicMock()
+        mock_order.condition_id = "0xdelisted"
+        mock_order.status = "open"
+        mock_reg.get_active_orders.return_value = [mock_order]
+
+        specs = _market_specs(3, registry=mock_reg, path=str(self._feed(tmp_path, n=5)))
+
+        # An active order whose market left the feed can still fill: never
+        # quote an unrelated market beside it.
+        assert specs == []
+
     def test_market_specs_select_one_paired_depth_arm(self, tmp_path):
         from core_brain.trader_loop import _market_specs
 

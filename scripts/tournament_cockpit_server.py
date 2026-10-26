@@ -2121,7 +2121,7 @@ function renderAll() {{
       </td>
       <td class="tabular"><strong>${{arm.score || 0}}</strong></td>
       <td><span class="badge ${{arm.badge_cls}}">${{arm.readiness}}</span></td>
-      <td><a href="http://127.0.0.1:${{arm.port}}" target="_blank" class="btn" style="padding: 3px 8px; font-size: 11px;">Open Dash</a></td>
+      <td><a href="/open-dash?port=${{arm.port}}&db=${{encodeURIComponent(arm.db || '')}}" target="_blank" class="btn" style="padding: 3px 8px; font-size: 11px;">Open Dash</a></td>
     `;
     tbody.appendChild(tr);
   }});
@@ -2418,6 +2418,76 @@ def get_cached_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
         return _STATS_CACHE[tourney_key]
 
 
+
+def open_dash_target(query: str) -> tuple[int, Path] | None:
+    """Parse `/open-dash`'s query into (arm port, db file), or None when out of bounds.
+
+    A GET that kills a listening process must not be aimable at whatever the
+    caller likes -- any page the operator has open can navigate to it. Only an
+    arm port is accepted, and only a store inside `data/tournaments`.
+    """
+    import urllib.parse
+    params = urllib.parse.parse_qs(query, keep_blank_values=True)
+    try:
+        port = int(params.get("port", ["0"])[0])
+    except ValueError:
+        return None
+    if not 8801 <= port <= 8810:
+        return None
+    db_path = params.get("db", [""])[0]
+    db_file = (ROOT / db_path if db_path else ROOT).resolve()
+    if (ROOT / "data" / "tournaments").resolve() not in db_file.parents:
+        return None
+    return port, db_file
+
+
+def _ensure_arm_dashboard(port: int, db_path: str) -> None:
+    from scripts.reconcile_tournament_stack import (
+        is_port_listening, kill_process_on_port, _detached_kwargs, ROOT
+    )
+    from core_brain.code_revision import decision_code_mtime
+    import urllib.error
+    import urllib.request
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    tree_mtime = decision_code_mtime() or time.time()
+    needs_restart = False
+    full_db = Path(db_path) if Path(db_path).is_absolute() else (ROOT / db_path)
+
+    if not is_port_listening(port):
+        needs_restart = True
+    else:
+        try:
+            url = f"http://127.0.0.1:{port}/api/system/status"
+            req = urllib.request.Request(url, headers={"User-Agent": "Cockpit-AutoEnsure"})
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                dash_started = data.get("services", {}).get("dash", {}).get("started_at", 0)
+                if dash_started and dash_started < tree_mtime:
+                    needs_restart = True
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, ConnectionRefusedError) or "refused" in str(exc.reason).lower():
+                needs_restart = True
+            else:
+                print(f"[cockpit] dash :{port} status timeout; leaving it running ({exc})")
+        except Exception as exc:
+            print(f"[cockpit] dash :{port} status check failed; leaving it running ({exc})")
+
+    if needs_restart:
+        kill_process_on_port(port)
+        log_dir = ROOT / "runtime" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        lf = open(log_dir / f"dash_{port}.log", "a", encoding="utf-8")
+        cmd = [sys.executable, "-m", "dashboard.server", "--port", str(port), "--db", str(full_db)]
+        subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, **_detached_kwargs())
+        for _ in range(15):
+            if is_port_listening(port):
+                break
+            time.sleep(0.1)
+
 class CockpitHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         # Mute normal HTTP log spam
@@ -2445,6 +2515,16 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
         # button and the menu's service probe (`probe_path` in dashboard/server.py).
         # A retired key serves the page's own tournament instead of resurrecting
         # a purged one.
+        elif clean_path == "/open-dash":
+            target = open_dash_target(query)
+            if target is None:
+                self.send_error(400, "open-dash needs port=8801..8810 and a db= inside data/tournaments")
+                return
+            port, db_file = target
+            _ensure_arm_dashboard(port, str(db_file))
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{port}")
+            self.end_headers()
         elif clean_path == "/api/stats":
             tourney = CURRENT_SETUP_KEY
             for param in query.split("&"):

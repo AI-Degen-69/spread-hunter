@@ -715,3 +715,21 @@ def test_a_run_with_no_arms_does_not_own_a_header_that_keeps_old_rows(tmp_path, 
     assert meta["issue_primary"] == 487
     assert meta["title"] == "Issue #487 Current-Setup Tournament"
     assert target_minutes == cockpit.DEFAULT_TOURNAMENT_MINUTES
+
+
+def test_open_dash_accepts_only_an_arm_port_and_a_tournament_store():
+    """The cockpit's Open Dash link kills a listener, so the GET must not be
+    aimable at anything on the host -- any page can navigate to it."""
+    from urllib.parse import quote
+
+    db = ROOT / "data" / "tournaments" / "i799-run" / "loose-baseline.db"
+
+    port, resolved = cockpit.open_dash_target(f"port=8803&db={quote(str(db))}")
+    assert port == 8803
+    assert resolved == db.resolve()
+
+    assert cockpit.open_dash_target(f"port=8800&db={quote(str(db))}") is None, "the cockpit's own port"
+    assert cockpit.open_dash_target(f"port=8799&db={quote(str(db))}") is None
+    assert cockpit.open_dash_target("port=8801") is None, "no store"
+    assert cockpit.open_dash_target("port=8801&db=C:/Windows/System32/config") is None
+    assert cockpit.open_dash_target(f"port=abc&db={quote(str(db))}") is None

@@ -66,19 +66,30 @@
       </div>
     </div>
     <div class="top-meta" tabindex="0">
+      <!-- Block 0: which code this process is holding. Lives inside the strip
+           so the header keeps its brand-then-strip order (test_ui_top_nav_groups). -->
+      <div id="code-version-section" class="code-version-section" style="display: flex; align-items: center; gap: 8px; margin-left: 8px;">
+        <span id="code-version-badge" class="pill state-unknown mono" title="Repository Code Status">
+          <span class="pill-label">#CODE</span>
+          <span id="code-version-value" class="pill-value">--</span>
+        </span>
+        <button id="btn-reserve-dash" class="ctrl-btn ctrl-btn-secondary" type="button" style="display: none; padding: 2px 8px; font-size: 11px; height: 26px;" title="Restart and re-serve this dashboard to load latest code">
+          ↻ Re-serve
+        </button>
+      </div>
       <!-- All at-a-glance operational state lives in this single bar. Keep the
            IDs stable: app.js updates these pills and the existing controls. -->
       <div class="top-group top-group-source" role="group" aria-label="Data source">
         <!-- Mode & execution state indicator superseded by LIVE/SHADOW IMPLEMENTED pills; hidden from layout to eliminate duplication while preserved in DOM for test harnesses -->
         <span id="master-status-indicator" class="pill state-unknown mono" style="display:none"><span class="pill-label">STACK</span> <span class="pill-value">UNKNOWN</span></span>
         <span id="db-mode-badge" class="pill state-unknown mono" title="Active registry"><span class="pill-label">DB</span> <span class="pill-value">UNKNOWN</span></span>
-        <span id="shadow-run-clock" class="mono top-status-clock"></span>
+        <span id="shadow-run-clock" class="mono top-status-clock" style="display:none"></span>
         <span id="scan-engine-elsewhere" class="pill engine-elsewhere-pill mono" style="display:none"></span>
       </div>
 
       <div class="top-group top-group-state" role="group" aria-label="Live state">
-        <span id="live-implemented-pill" class="pill state-stopped mono mode-live" title="Live Implemented: Real-money maker execution quoter (python -m core_brain.trader_loop)"><span class="pill-label">LIVE IMPLEMENTED</span> <span class="pill-value">OFF</span></span>
-        <span id="shadow-implemented-pill" class="pill state-stopped mono mode-shadow" title="Shadow Implemented: Paper rehearsal arbitrage loop on live CLOB (python -m core_brain.shadow_run)"><span class="pill-label">SHADOW IMPLEMENTED</span> <span class="pill-value">OFF</span></span>
+        <span id="live-implemented-pill" class="pill state-stopped mono mode-live" style="display:none" title="Live Implemented: Real-money maker execution quoter (python -m core_brain.trader_loop)"><span class="pill-label">LIVE IMPLEMENTED</span> <span class="pill-value">OFF</span></span>
+        <span id="shadow-implemented-pill" class="pill state-stopped mono mode-shadow" style="display:none" title="Shadow Implemented: Paper rehearsal arbitrage loop on live CLOB (python -m core_brain.shadow_run)"><span class="pill-label">SHADOW IMPLEMENTED</span> <span class="pill-value">OFF</span></span>
         <!-- Consolidated SERVICES pill: live summary and dropdown trigger for all stack services -->
         <button id="hud-services-pill" class="pill state-unknown mono services-pill-trigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="services-dropdown" title="Stack services telemetry: how many of the stack's services (and the watchdog) are running. Click to inspect telemetry details."><span class="pill-label">SERVICES</span> <span id="hud-services-state" class="pill-value">UNKNOWN</span> <span id="hud-services-sub" class="pill-detail">--</span> <span class="services-caret" aria-hidden="true">▾</span></button>
       </div>

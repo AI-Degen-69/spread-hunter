@@ -73,6 +73,7 @@ def test_frontend_control_surface_is_expected() -> None:
         "/api/system/db",
         "/api/system/demo",
         "/api/system/reset",
+        "/api/system/restart-dash",
         "/api/system/service/start",
         "/api/system/service/stop",
         "/api/system/shadow/start",

@@ -92,6 +92,12 @@ from core_brain.runtime_paths import (  # noqa: E402
 REPO_ROOT = LIVE_ROOT
 DEFAULT_PORT = 8799
 
+#: Which code THIS dashboard process loaded. `read_code_revision` shells out to
+#: git twice, and /api/system/status is polled by every open dashboard, so it is
+#: read once at start -- the same contract the rehearsal heartbeats follow. A
+#: per-request read would also let an edit rewrite what the page claims to hold.
+_DASH_CODE = code_revision.read_code_revision()
+
 
 def resolve_port(explicit: int | None = None) -> int:
     """Which port to bind: the flag, then `PORT`, then the operator's default.
@@ -1558,6 +1564,12 @@ def get_system_status() -> dict:
     dash_running = True
     dash_pid = os.getpid()
     dash_started_at = _process_start_time(dash_pid)
+    # One walk of core_brain/ + scoring/ per request: it is the whole staleness
+    # verdict, and the status endpoint is polled continuously.
+    tree_mtime = code_revision.decision_code_mtime()
+    dash_code_stale = bool(
+        dash_started_at is not None and tree_mtime is not None and dash_started_at < tree_mtime
+    )
 
     bot_running = bool(filter_running or query_running or decide_running)
 
@@ -1628,6 +1640,14 @@ def get_system_status() -> dict:
         # is down" while a healthy trial writes to a file nobody is watching.
         "shadow_runs": _recent_shadow_runs(db_identity["path"]),
         "starting_capital": get_starting_capital(),
+        "repo_revision": _DASH_CODE,
+        "dash_revision": {
+            "commit": _DASH_CODE.get("commit"),
+            "dirty": _DASH_CODE.get("dirty"),
+            "started_at": dash_started_at,
+            "code_mtime": tree_mtime,
+            "code_stale": dash_code_stale,
+        },
         "timestamp": time.time(),
     }
 
@@ -2892,7 +2912,10 @@ def api_system_restart_dash(request: Request):
     def _do_restart():
         time.sleep(0.8)
         # Launch detached replacement dashboard process.
-        subprocess.Popen(relaunch_argv(), cwd=str(LIVE_ROOT))
+        kwargs = {"cwd": str(LIVE_ROOT), "stdin": subprocess.DEVNULL}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(relaunch_argv(), **kwargs)
         # Exit current instance to immediately release port 8799. Engine and
         # screener are separate processes and keep running; they are only
         # orphaned, never signalled.

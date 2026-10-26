@@ -194,6 +194,18 @@ header {
   display: none !important;
 }
 
+/* Superseded pills kept in DOM for test harness compatibility, hidden from UI to remove duplication:
+   - #shadow-run-clock: code revision migrated to #code-version-badge pill to the left
+   - #live-implemented-pill, #shadow-implemented-pill: mode and runs shown in database picker */
+#shadow-run-clock {
+  display: none !important;
+}
+
+#live-implemented-pill,
+#shadow-implemented-pill {
+  display: none !important;
+}
+
 /* One compact operational language across the header. Every status uses the
    same pill shell and the canonical state classes below; labels add context,
    not a second visual vocabulary. */

@@ -59,7 +59,7 @@ def test_menu_key_set_is_identical_everywhere():
     place silently misses another — the exact drift that hid `t` from the
     prompt and let `audit`/`prune` live outside the grid.
     """
-    assert _menu_keys() == ["1", "2", "3", "4", "5", "6", "7", "8", "9", "r", "a", "p", "c", "q"]
+    assert _menu_keys() == ["1", "2", "3", "4", "5", "6", "7", "8", "9", "r", "a", "p", "c", "t", "q"]
     src = _menu_source()
     # The allow-list reads that same list, not a hand-written literal.
     assert "$script:MenuKeys -notcontains $key" in src
@@ -87,6 +87,8 @@ def test_storage_words_map_to_letter_keys():
         assert mapping.get(word) == "p", f"{word!r} must map to 'p'"
     for word in ("cockpit", "tournament-cockpit"):
         assert mapping.get(word) == "c", f"{word!r} must map to 'c'"
+    for word in ("tournament", "tourney", "align", "reconcile", "t"):
+        assert mapping.get(word) == "t", f"{word!r} must map to 't'"
 
 
 def test_every_key_has_a_branch():
@@ -144,6 +146,7 @@ function Lsh-Warn   { param($m) Write-Host ("WARN " + $m) }
 function Lsh-Banner { param($Title,$Subtitle) }
 function Lsh-Fail   { param($m) Write-Host ("FAIL " + $m) }
 function Lsh-Ok     { param($m) Write-Host ("OK " + $m) }
+function Lsh-Step   { param($m) Write-Host ("STEP " + $m) }
 function Start-Sleep { }
 $failures = New-Object System.Collections.Generic.List[string]
 Invoke-LiveAction "a"
@@ -157,7 +160,7 @@ if ($script:startedProcesses.Count -ne 1 -or $script:startedProcesses[0] -ne "ht
     $failures.Add("c did not start cockpit URL http://127.0.0.1:8800") | Out-Null
 }
 $warned = (Invoke-LiveAction "z" *>&1 | Out-String)
-if (-not $warned.Contains("1-9, r, a, p, c, q")) { $failures.Add("warn did not name the full hint") | Out-Null }
+if (-not $warned.Contains("1-9, r, a, p, c, t, q")) { $failures.Add("warn did not name the full hint") | Out-Null }
 if ($failures.Count) { $failures | ForEach-Object { Write-Host ("FAIL " + $_) }; exit 1 }
 Write-Host "ALL DISPATCH CHECKS PASS"
 """,
