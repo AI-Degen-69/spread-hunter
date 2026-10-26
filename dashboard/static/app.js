@@ -8999,7 +8999,7 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
       const shares = Number(s.shares || 0);
       const costBasis = Number(s.cost_basis || 0);
       const proceeds = Number(s.proceeds || 0);
-      const realizedPnl = Number(s.realized_pnl != null ? s.realized_pnl : (proceeds - costBasis));
+      const realizedPnl = stitchSettlementPnl(s);
       const pnlPct = costBasis > 0 ? (realizedPnl / costBasis) * 100 : 0;
 
       const method = String(s.method || '').toLowerCase();
@@ -9123,6 +9123,18 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
  * column and the column sort read this one number. */
 function closedTradeCostBasis(m) {
   return (m.settlements || []).reduce((acc, s) => acc + (Number(s.cost_basis) || 0), 0);
+}
+
+/* One money rule for one execution, shared by the ledger row that prints it and
+ * the parent row's Outcome Breakdown that counts it (#831): an explicit
+ * `realized_pnl` always wins — a booked zero stays zero, never re-derived from
+ * the prices — and an execution that never recorded one is measured as
+ * proceeds minus cost basis, exactly the arithmetic its row shows. */
+function stitchSettlementPnl(s) {
+  if (!s) return 0;
+  const raw = s.realized_pnl;
+  if (raw !== null && raw !== undefined) return Number(raw);
+  return (Number(s.proceeds) || 0) - (Number(s.cost_basis) || 0);
 }
 
 function stitchClosedTradesRows(kpi, state, sort) {

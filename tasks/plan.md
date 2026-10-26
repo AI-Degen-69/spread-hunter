@@ -64,7 +64,7 @@ the legacy Closed Trades renderer, the seven-column layout.
 
 Dependency graph: `T1 → T2`; `T3` independent; `T4` needs `T1,T2,T3`.
 
-### T1 — Extract the money rule `stitchSettlementPnl` (S, `[Logic]`)
+### [x] T1 — Extract the money rule `stitchSettlementPnl` (S, `[Logic]`)
 - Files: `dashboard/static/app.js` (only).
 - Add the helper next to `closedTradeCostBasis`; `renderStitchClosedLedgerRows` calls it
   instead of its inline `s.realized_pnl != null ? … : proceeds - costBasis`. Behaviour
