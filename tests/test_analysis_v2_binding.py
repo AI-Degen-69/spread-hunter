@@ -405,16 +405,13 @@ def test_empty_payload_mounts_without_throwing(tmp_path):
                 "statistical_analytics.fill_path_edge.net_expectancy_usd",
                 "trade_analytics.win_rate"):
         assert p[key] == "", f"{key} painted {p[key]!r} on an empty payload"
-    # No chart may draw a series with no data behind it. Cards with no sample
-    # name the unmeasured state outright instead of an empty box
-    # (docs/specs/ci-visualizer.md); ch5 has no unmeasured copy and stays blank.
+    # No chart may draw a series with no data behind it. Every card names the
+    # unmeasured state outright instead of an empty box
+    # (docs/specs/ci-visualizer.md); the svg stays empty behind the badge.
     for c in out["charts"]:
         assert c["svg"] == "", f"{c['id']} drew on empty data"
-        if c["id"] in ("ch1", "ch2", "ch3", "ch4"):
-            assert c["badge"] == "Unmeasured", f"{c['id']} hides its empty state"
-            assert "Unmeasured" in c["stats"], f"{c['id']} hides its empty state"
-        else:
-            assert c["badge"] == "", f"{c['id']} drew on empty data"
+        assert c["badge"] == "Unmeasured", f"{c['id']} hides its empty state"
+        assert "Unmeasured" in c["stats"], f"{c['id']} hides its empty state"
 
 
 @requires_node

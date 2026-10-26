@@ -436,6 +436,16 @@ function telemetryCountVerdicts() {
     // The engine still counts when the filter is genuinely dead.
     engineWithoutFilter: n({ services: { filter: { running: false, observed_running: false } },
                              shadow_run: { running: true } }, false),
+    // Shadow rehearsal with a live filter: guardrail + filter + quoter rows
+    // are all ON, so the header must say three, not two. The guardrail row
+    // mirrors the shadow loop in shadow mode; it does not read the separate
+    // watchdog process.
+    shadowStack: n({ db_mode: 'SHADOW',
+                      services: { filter: { running: true } },
+                      shadow_run: { running: true } }, false),
+    shadowStackFilterObserved: n({ db_mode: 'SHADOW',
+                      services: { filter: { running: false, observed_running: true } },
+                      shadow_run: { running: true } }, false),
   };
 }
 

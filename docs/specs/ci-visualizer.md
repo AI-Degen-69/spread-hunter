@@ -72,7 +72,9 @@ no axes, no hover values, inconsistent footers.
   per key, plus a no-band case — each fails if the field mapping is wrong.
 - Node assertions per chart card: axes ticks present, every bar/path carries a
   `<title>`, footers follow the µ/σ/n order, empty sample renders the Unmeasured
-  note. No golden-payload churn: `kpi.py` is untouched.
+  note (all five cards, ch5 included), and a stale-then-empty repaint clears
+  the old series. No golden-payload churn: `kpi.py` gains one additive field
+  (`win_rate_ci90`) and existing goldens are unchanged.
 
 ## How to verify (hands-on, no pytest)
 

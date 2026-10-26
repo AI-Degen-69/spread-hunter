@@ -452,6 +452,13 @@ function paintCharts(root, kpi) {
     const area = q('#' + id + ' .chart-area');
     if (area) area.innerHTML = svg(body, vb);
   };
+  /* An unmeasured card draws nothing: clear the area so a repaint from a
+   * populated run to an empty one cannot leave a stale series behind a
+   * fresh Unmeasured badge. */
+  const clear = (id) => {
+    const area = q('#' + id + ' .chart-area');
+    if (area) area.innerHTML = '';
+  };
   const badge = (id, html, cls) => {
     const el = q('#' + id + ' .chart-badge');
     if (el) { el.innerHTML = html; if (cls) el.className = 'chart-badge ' + cls; }
@@ -493,6 +500,7 @@ function paintCharts(root, kpi) {
       `<span class="k">SE <b>${format(num(pr.sem_pnl_pct), 'pct')}</b></span>` +
       `<span class="k warn">95% CI <b>[${format(ci95.lower, 'pcts')}, ${format(ci95.upper, 'pcts')}]</b></span>`);
   } else {
+    clear('ch1');
     badge('ch1', 'Unmeasured');
     statsLine('ch1', 'Unmeasured · no measured closes');
     foot('ch1', '<span class="k">samples <b>0</b></span>');
@@ -517,6 +525,7 @@ function paintCharts(root, kpi) {
       `<span class="k">σ <b>${format(num(pc.stdev), 'usd')}</b></span>` +
       `<span class="k">samples <b>${num(pc.samples_count) || 0}</b></span>`);
   } else {
+    clear('ch2');
     badge('ch2', 'Unmeasured');
     statsLine('ch2', 'Unmeasured · no executed pairs');
     foot('ch2', '<span class="k">samples <b>0</b></span>');
@@ -543,6 +552,7 @@ function paintCharts(root, kpi) {
       `<span class="k warn">worst DD <b>${format(num(mc.worst_case_drawdown_pct), 'pct')}</b></span>` +
       `<span class="k">P(profit) <b>${format(prob, 'pct1')}</b></span>`);
   } else {
+    clear('ch3');
     badge('ch3', 'Unmeasured');
     statsLine('ch3', 'Unmeasured · below Monte Carlo sample gate');
     foot('ch3', '<span class="k">samples <b>0</b></span>');
@@ -565,6 +575,7 @@ function paintCharts(root, kpi) {
       `<span class="k">sweet bins <b>${sweet.length}</b></span>` +
       `<span class="k">samples <b>${num(pb.samples_count) || 0}</b></span>`);
   } else {
+    clear('ch4');
     badge('ch4', 'Unmeasured');
     statsLine('ch4', 'Unmeasured · no fills sampled');
     foot('ch4', '<span class="k">samples <b>0</b></span>');
@@ -592,6 +603,11 @@ function paintCharts(root, kpi) {
     badge('ch5', `Markout Status: ${allOk ? 'FAVOURABLE' : 'MIXED'}`, allOk ? 'good' : 'warn');
     statsLine('ch5', `Worst horizon ${worst.horizon} · Displacement ${format(num(worst.displacement_bps), 'pcts').replace('%', ' bps')} · Matured samples ${num(kpi.markout_samples) || 0} fills`);
     foot('ch5', mo.map((m) => `<span class="k">${m.horizon} <b>${(num(m.displacement_bps) || 0) >= 0 ? '+' : ''}${(num(m.displacement_bps) || 0).toFixed(1)} bps</b> (${m.samples})</span>`).join(''));
+  } else {
+    clear('ch5');
+    badge('ch5', 'Unmeasured');
+    statsLine('ch5', 'Unmeasured · no markout samples');
+    foot('ch5', '<span class="k">samples <b>0</b></span>');
   }
 }
 

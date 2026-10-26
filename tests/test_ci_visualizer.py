@@ -3,8 +3,9 @@
 V1 upgrades the Tier 1 Average Close card in place with a KPI picker over core
 means (Mean PnL $, Expectancy $, Mean Return %, Win Rate) driven by one shared
 JS adapter, and lifts the ch1-ch5 chart grid with axes, native-SVG hover
-values and consistent footers. No backend change: every field the adapter
-reads already ships in the /api/kpi payload.
+values and consistent footers. One additive backend field (`win_rate_ci90`,
+the 90% Wilson row from the backend's critical-value table per #535); every
+other field the adapter reads already ships in the /api/kpi payload.
 
 The adapter runs against the stub DOM in
 tests/js/analytics_surface_harness.cjs; the charts run through
@@ -223,3 +224,18 @@ def test_empty_charts_name_what_is_unmeasured(tmp_path):
     out = _av2({"trade_analytics": {"n_closes": 0}}, tmp_path)
     charts = {c["id"]: c for c in out["charts"]}
     assert "Unmeasured" in _visible(charts["ch1"]["stats"] + charts["ch1"]["foot"])
+
+
+def test_repaint_to_empty_clears_stale_series(tmp_path):
+    # A run switch from populated to empty must not leave the old series
+    # drawn behind a fresh Unmeasured badge: the harness prefills every
+    # chart area with a stale svg, then renders the empty payload.
+    target = tmp_path / "av2_ci_stale.json"
+    target.write_text(json.dumps({"kpi": {}}), encoding="utf-8")
+    out = subprocess.run([shutil.which("node"), str(AV2_HARNESS), str(target), "stale"],
+                         capture_output=True, text=True, check=True, encoding="utf-8")
+    charts = {c["id"]: c for c in json.loads(out.stdout)["charts"]}
+    assert set(charts) == {"ch1", "ch2", "ch3", "ch4", "ch5"}
+    for cid, c in charts.items():
+        assert c["svg"] == "", f"{cid} kept its stale series"
+        assert c["badge"] == "Unmeasured", f"{cid} hides its empty state"
