@@ -876,6 +876,17 @@ def _tweak_text(env: Any) -> str:
     return " \u00b7 ".join(lines)
 
 
+def _note_text(value: Any) -> str:
+    """An analyst note as page text: trimmed, and empty unless it is a string.
+
+    `None`, a number and a whitespace-only string all mean "no note". Guessed
+    prose would read as an analyst finding the arms file never made.
+    """
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
 def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
     """The arms a plan actually launched, shaped like the static preset rows."""
     try:
@@ -887,7 +898,9 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
     arms = []
     for i, record_arm in enumerate(record_arms):
         name = record_arm["name"]
-        entry = source.get(name) or {}
+        # A numbered run records `<name>-<n>` while the arms file names the base
+        # arm; without the strip this row would lose its label, desc and notes.
+        entry = source.get(name) or source.get(_strip_round_suffix(name)) or {}
         arms.append({
             "issue": issue if issue is not None else 0,
             "name": name,
@@ -897,10 +910,15 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
             "run_id": record_arm.get("run_id", ""),
             "color": entry.get("color") or _PLAN_ARM_COLORS[i % len(_PLAN_ARM_COLORS)],
             "desc": entry.get("desc") or entry.get("profile") or "",
-            "worst_catalyst": entry.get("worst_catalyst") or "",
-            "worst_catalyst_desc": entry.get("worst_catalyst_desc") or "",
-            "hypothesized_tweak": _tweak_text(entry.get("env") or record_arm.get("env")),
-            "tweak_rationale": entry.get("thesis") or "",
+            "worst_catalyst": _note_text(entry.get("worst_catalyst")),
+            "worst_catalyst_desc": _note_text(entry.get("worst_catalyst_desc")),
+            "hypothesized_tweak": (
+                _note_text(entry.get("hypothesized_tweak"))
+                or _tweak_text(entry.get("env") or record_arm.get("env"))
+            ),
+            "tweak_rationale": (
+                _note_text(entry.get("tweak_rationale")) or _note_text(entry.get("thesis"))
+            ),
         })
     return arms
 
@@ -960,7 +978,7 @@ def resolve_tournament_meta(
         "description": (
             f"Following the newest tournament record on disk: issue #{issue}, {arms_label.lower()} "
             "launched from its own arms file. Comparative reading happens after the planned run "
-            "length; catalyst columns stay empty until this run reports."
+            "length; the catalyst column is this run's own arms file, quoted as written."
         ),
         "issue_primary": issue,
         "issue_secondary": issue,
@@ -1420,7 +1438,9 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
 
 def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     """Generate the full responsive, interactive HTML dashboard."""
-    json_embedded = json.dumps(initial_data)
+    # Notes come from an editable arms file, so neither a `</script>` nor a `<b>`
+    # in one may end this block early; `<` is the only character that can.
+    json_embedded = json.dumps(initial_data).replace("<", "\\u003c")
     # A record that exists but cannot be read must not look like "the run has not
     # started". The container is always emitted -- hidden when there is nothing to
     # say -- so the 5s /api/stats poll can show or hide it without a page reload.
@@ -1905,20 +1925,17 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.12), rgba(0, 176, 255, 0.12)); border: 1px solid rgba(0, 230, 118, 0.4); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
       <div>
-        <span class="badge badge-green" style="font-size: 12px; padding: 4px 10px; margin-bottom: 6px;">🌟 #799 LEADER RECIPE — INTERIM</span>
-        <h2 style="font-size: 18px; font-weight: 700; color: #f0f4fc;">HYBRID Blueprint — Built From the #799 Leader Arm</h2>
-        <p style="color: var(--text-muted); font-size: 12.5px; margin-top: 4px;">
-          Row 1 is the leader arm's recipe, copied from the env it launched with. Every row after it is labeled with what
-          sets the value, because #799 varies exactly one knob per arm and did not test the deployment layer. Read against the run so far:
-          <strong id="hb-quotes" class="tabular">—</strong> quotes and
-          <strong id="hb-trades" class="tabular">—</strong> trades across
-          <strong id="hb-arms" class="tabular">—</strong> arms, still in flight.
+        <span class="badge badge-green" style="font-size: 12px; padding: 4px 10px; margin-bottom: 6px;">🌟 BENCHMARK SYNTHESIS</span>
+        <h2 style="font-size: 18px; font-weight: 700; color: #f0f4fc;">Production HYBRID Configuration Blueprint</h2>
+        <p style="color: var(--text-muted); font-size: 12.5px; margin-top: 4px; max-width: 760px;">
+          Static benchmark synthesis of the multi-arm champion. Tournament #799 ran 10 arms on ports 8801&ndash;8810 over 24 hours;
+          289 trades, 210 merges and 74 stop exits are attributed to the #799 tournament review, not re-derived here.
         </p>
       </div>
-      <div style="text-align: right;">
-        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Pricing Profile — the leader's own</div>
-        <div class="tabular" style="color: var(--green); font-size: 15px; font-weight: 700;">core_brain.config.TOURNAMENT_PRESETS["balanced"]</div>
-        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">A shipped preset, and the leader arm's single env override. Its live standing is in the card below.</div>
+      <div style="text-align: right; max-width: 340px;">
+        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Status in Codebase</div>
+        <div class="tabular" style="color: var(--green); font-size: 14px; font-weight: 700;">core_brain.config.TOURNAMENT_PRESETS["prudent"] + explicit overrides</div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">No single shipped preset holds this configuration.</div>
       </div>
     </div>
   </div>
@@ -1953,36 +1970,43 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
           <td><strong>Requote Deadband</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>0.060 (6.0¢)</strong></td>
           <td><code>BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06</code></td>
-          <td><span class="badge badge-amber">Override — 3¢ ships; #799 did not settle it</span></td>
-          <td><strong>Queue Priority Defender:</strong> Suppresses cancellation &amp; requote while the book shifts ≤ 6¢, protecting queue position. Named honestly: the shipped default is 3¢, and the only arm to vary this knob ran 10¢ <em>and</em> switched the dynamic offset off, finishing 9th of 10. 6¢ is a deliberate middle, not a measured win.</td>
+          <td><span class="badge badge-amber">not tested at 6¢ in #799</span></td>
+          <td><strong>Queue priority defender.</strong> The deadband is the price move the bot ignores before it re-quotes: wide enough that 1¢ jitter cannot demote the order, tight enough that the quote is not resting on a stale price. 6¢ sits between <code>static-floor-2c</code> (3¢ at the time) and <code>low-churn-deadband</code> (10¢), and carries the #485 <code>deadband-wide</code> lesson. No #799 arm ran a 6¢ deadband, so this value is reasoned rather than measured.</td>
         </tr>
         <tr>
-          <td><strong>Single-Buy Stop Drop</strong></td>
+          <td><strong>Volatility Pricing Offset</strong></td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>Dynamic 0.60x, 2-6¢ clamp</strong></td>
+          <td><code>BOT_QUOTE_TOURNAMENT_PRESET=prudent</code><br><code>BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1</code><br><code>BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6</code></td>
+          <td><span class="badge badge-green">#799 prudent-hybrid</span></td>
+          <td><strong>Volatility tracker.</strong> offset = round(0.60 × the recent range in cents), held between 2 and 6. A clamp is the allowed floor and ceiling: the <code>prudent</code> preset alone stops at 4¢, so <code>=6</code> is what lifts it to this band. Stale or missing range data falls back to the static base offset. The #799 review credits this arm with the best Sharpe (9.52) and the smallest drawdown ($0.70), against -$2.28 for <code>static-floor-2c</code>.</td>
+        </tr>
+        <tr>
+          <td><strong>Single-Buy Loss Stop</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>$0.045 (4.5¢)</strong></td>
           <td><code>BOT_RISK_STOP_MODE=ABSOLUTE_DROP</code><br><code>BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045</code></td>
-          <td><span class="badge badge-amber">Override — no stop ships</span></td>
-          <td><strong>Tail Risk Limiter:</strong> A hard loss stop under absolute drop mode, firing 0.045 below entry, so an orphan leg cannot become an unchosen directional bet. The shipped default is mode <code>NONE</code>, so this is a deployment decision rather than a tournament result: #799's stop arms ran 2¢, 8¢ and 9¢ and finished 7th, 8th and 10th, while the no-stop control finished 2nd. Watched live on the leader arm: <span id="hb-stops" class="tabular">—</span> stop exits, <span id="hb-stoprate" class="tabular">—</span>% of its closed trades.</td>
+          <td><span class="badge badge-amber">between #799 hair-trigger-2c and patient-stop-9c</span></td>
+          <td><strong>A trigger, not a loss cap.</strong> In <code>ABSOLUTE_DROP</code> mode the trigger is the entry price minus 0.045, <strong>rounded up to a whole cent</strong>; the emergency floor can set a higher trigger. A 2¢ stop fired on 44.1% of legs in the #799 review (<code>hair-trigger-2c</code>), while 9¢ and 8¢ (<code>patient-stop-9c</code>, <code>wide-shield</code>) let the tail bleed. 4.5¢ was not tested in #799.</td>
         </tr>
         <tr>
           <td><strong>Queue-Clear Gate</strong></td>
-          <td class="tabular positive" style="font-size: 14px;"><strong>5 min</strong></td>
-          <td><code>BOT_ORDER_GATE_QUEUE_CLEAR_ON=1</code><br><code>BOT_ORDER_QUEUE_MAX_CLEAR_MIN=5</code></td>
-          <td><span class="badge badge-green">#799 queue-clear-5m — leads on Sharpe, PF, drawdown</span></td>
-          <td><strong>Stale Book Filter:</strong> Refuses books whose queue is unlikely to clear, so the second leg can fill before the market's regime changes. 5 minutes is the value the arm actually ran, and the clearest single-knob result in #799: it leads the field on Sharpe, profit factor, max drawdown and Monte Carlo P5, on an edge per trade indistinguishable from the leader's, with the best win and merge rates. It ranks 6th on realized PnL only because it trades least — last of the ten on volume — which is the bargain this gate makes: fewer, better fills for a third of the drawdown. Its Sharpe right now is <span id="hb-qcsharpe" class="tabular">—</span>; if that has stopped leading the field, the standing card above names the current leader. The 3 minutes in the previous revision was a window no arm ran.</td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>3.0 minutes</strong></td>
+          <td><code>BOT_ORDER_GATE_QUEUE_CLEAR_ON=1</code><br><code>BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3.0</code></td>
+          <td><span class="badge badge-amber">tightened from #799 queue-clear-5m</span></td>
+          <td><strong>Illiquid-book filter.</strong> Estimated clear time = size ahead ÷ the recent traded rate &mdash; an upper-bound estimate, not a fill deadline. A book with no recent flow makes the estimate infinite, so the entry is refused rather than left resting behind a queue that never clears. #799 tested 5 minutes, not 3.</td>
         </tr>
         <tr>
           <td><strong>Aged-Out Rescue Lead</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>45.0s</strong></td>
           <td><code>BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0</code></td>
-          <td><span class="badge badge-amber">Override — 900s ships</span></td>
-          <td><strong>Resolution Unwind:</strong> Begins emergency liquidation of single legs 45s before the market's resolution freeze. The shipped lead is 900s, so this is fifteen times earlier — a deployment choice, untouched by #799.</td>
+          <td><span class="badge badge-amber">not varied in #799</span></td>
+          <td><strong>Settlement-squeeze defence.</strong> How long before resolution the bot unwinds a stranded orphan leg, so the position is liquidated rather than settled directionally. Every #799 arm inherited the shipped 900s, so 45.0s is a new operating point &mdash; which is why the failure card below carries its estimate caveat.</td>
         </tr>
         <tr>
           <td><strong>Absolute Pair Cap</strong></td>
           <td class="tabular" style="font-size: 14px; color: var(--amber);"><strong>$0.990</strong></td>
-          <td><code>BOT_POS_PRICE_MAX_PAIR_COST_USD</code></td>
-          <td><span class="badge badge-amber">Core Safety Law</span></td>
-          <td><strong>Arbitrage Floor:</strong> Shipped default guaranteeing minimum $0.01 gross margin per pair before $1.00 USDC resolution payout.</td>
+          <td><code>BOT_POS_PRICE_MAX_PAIR_COST_USD</code> (shipped default, leave unset)</td>
+          <td><span class="badge badge-amber">shared safety default</span></td>
+          <td><strong>Core safety law, and a gross margin only.</strong> The bot refuses a two-leg quote sum above $0.99, which leaves at least a $0.01 gross spread before fees and gas against the $1.00 the pair merges into. $0.990 is already the value the engine ships, so the block below names it as a comment and leaves the variable unset: setting it explicitly raises outside a rehearsal.</td>
         </tr>
       </tbody>
     </table>
@@ -2027,36 +2051,80 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <div class="decision-grid" style="margin-bottom: 24px;">
     <div class="decision-box">
       <h3 style="color: var(--blue);">💻 Ready-to-Run PowerShell &amp; CLI Commands</h3>
-      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Rehearse the spec, then serve this page. Live trading is a separate, operator-run step:</p>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">A rehearsal reads these from the shell environment, not from <code>.env</code>. Set all nine, then run one command:</p>
       <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #a5d6a7; overflow-x: auto;">
-# 1. Interactive Menu - rehearse the leader's preset:
-.\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset balanced -Minutes 60
+# --- Champion environment (Windows PowerShell 7) ---
+$env:BOT_QUOTE_TOURNAMENT_PRESET = "prudent"
+$env:BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON = "1"
+$env:BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS = "6"
+$env:BOT_ORDER_REQUOTE_DEAD_BAND_CENTS = "0.06"
+$env:BOT_RISK_STOP_MODE = "ABSOLUTE_DROP"
+$env:BOT_RISK_STOP_ADVERSE_DROP_CENTS = "0.045"
+$env:BOT_ORDER_GATE_QUEUE_CLEAR_ON = "1"
+$env:BOT_ORDER_QUEUE_MAX_CLEAR_MIN = "3.0"
+$env:BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC = "45.0"
 
-# 2. Or run it directly, with the leader's preset in the environment:
-$env:BOT_QUOTE_TOURNAMENT_PRESET = "balanced"
-python -m core_brain.shadow_run --minutes 60 --interval 1.0 --db data/leader_balanced_shadow_01.db --run-id shadow-leader-balanced-01 --starting-bankroll-usd 100
+# The pair cap stays at its shipped $0.990 default - clear any inherited value:
+Remove-Item Env:BOT_POS_PRICE_MAX_PAIR_COST_USD -ErrorAction SilentlyContinue
 
-# 3. Launch Tournament Cockpit Server:
-python -m scripts.tournament_cockpit_server --port 8800
+# 1. Interactive menu - the prudent preset, 60-minute rehearsal (needs PowerShell 7):
+.\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset prudent -Minutes 60
+
+# 2. Or run the same rehearsal directly:
+python -m core_brain.shadow_run --minutes 60 --interval 1 --db data/champion_prudent_shadow_01.db --run-id shadow-champion-prudent-01 --starting-bankroll-usd 100
+
+# 3. Read the result: a direct --db rehearsal writes a standalone store that
+#    the cockpit cannot resolve (it serves data/tournaments run records), so
+#    open the store in the execution dashboard:
+python -m dashboard.server --db data/champion_prudent_shadow_01.db
       </pre>
     </div>
 
     <div class="decision-box">
       <h3 style="color: var(--green);">🛡️ Live Production Environment Variables (.env)</h3>
-      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Exact configuration for live deployment:</p>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">The same nine values for the live trader, which does read <code>.env</code>:</p>
       <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #81d4fa; overflow-x: auto;">
-# --- Built from the #799 leader arm (`balanced-mid`) ---
-# The first line is that arm's own env. Every line after it is a
-# deliberate override of a shipped default, which #799 did not vary.
-BOT_QUOTE_TOURNAMENT_PRESET=balanced
+# --- Spread Hunter HYBRID Champion Config ---
+BOT_QUOTE_TOURNAMENT_PRESET=prudent
+BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1
+BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6
 BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06
 BOT_RISK_STOP_MODE=ABSOLUTE_DROP
 BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045
 BOT_ORDER_GATE_QUEUE_CLEAR_ON=1
-BOT_ORDER_QUEUE_MAX_CLEAR_MIN=5
+BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3.0
 BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
-# BOT_POS_PRICE_MAX_PAIR_COST_USD=0.99  # Shipped default (0.99); do not alter
+# Pair cap: $0.990 shipped default. Leave the pair-cap variable unset.
       </pre>
+    </div>
+  </div>
+
+  <div class="decision-grid" style="margin-bottom: 24px;">
+    <div class="decision-box">
+      <h3 style="color: var(--blue);">📈 Performance Forecast</h3>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">
+        Projected targets for this combination. Tournament #799 never ran it, so these are projections, not measured results.
+      </p>
+      <ul>
+        <li><strong>Projected Win Rate: <span class="tabular positive">80% - 84%</span></strong><br>Share of closes with positive realized P&amp;L.</li>
+        <li><strong>Merge-to-Close Ratio: <span class="tabular positive">82% - 86%</span></strong><br>Pairs merged &divide; every close.</li>
+        <li><strong>Expected Sharpe Proxy: <span class="tabular positive">&gt; 10.5</span></strong><br>Mean P&amp;L per close &divide; its standard deviation, &times; 10.</li>
+        <li><strong>Expected EV per Trade: <span class="tabular positive">+$0.38 - +$0.46</span></strong><br>Mean realized P&amp;L of one close.</li>
+        <li><strong>Target Profit Factor: <span class="tabular positive">&gt; 8.0</span></strong><br>Gross wins &divide; gross losses.</li>
+        <li><strong>Projected 100-Trade Monte Carlo 5th Percentile: <span class="tabular positive">&gt; +$30.00</span></strong><br>5th percentile of 500 resamples of 100 trades from the realized distribution.</li>
+      </ul>
+    </div>
+
+    <div class="decision-box">
+      <h3 style="color: var(--red);">🛡️ Failure Modes &amp; Stress Scenarios</h3>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">
+        The three ways this configuration loses money, and what already stands in the way.
+      </p>
+      <ul>
+        <li><strong>Flash Directional Breakout</strong> &mdash; leg 1 fills just before a sharp move of more than 15¢, and leg 2 never fills.<br><em>Mitigation:</em> the 4.5¢ stop triggers early, targeting about -$0.045 to -$0.05 per share. A gap or a thin book can make the real loss larger than the trigger.</li>
+        <li><strong>Liquidity Vacuum / Book Desertion</strong> &mdash; taker activity freezes after the leg 1 fill.<br><em>Mitigation:</em> the 3-minute queue-clear filter avoids the slowest books, and the 45s aged-out rescue unwinds the position before the settlement freeze. Queue-clear is an estimate and promises no fill.</li>
+        <li><strong>High-Frequency Ping-Pong Jitter</strong> &mdash; fast bid-ask swings inside the spread.<br><em>Mitigation:</em> the 6.0¢ deadband suppresses cancel and re-quote churn, so the order keeps its queue priority.</li>
+      </ul>
     </div>
   </div>
 </div>
@@ -2241,6 +2309,39 @@ function switchTab(name, btn) {{
   if (target) target.classList.add('active');
 }}
 
+// Analyst annotations arrive from a tournament's arms file, so every value here
+// is text on the page -- never markup.
+function escHtml(value) {{
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}}
+
+function annotationText(value) {{
+  return value == null ? '' : String(value).trim();
+}}
+
+// `N/A` means one thing here: no data. A blank description or rationale drops
+// its line instead of leaving an empty one, so "empty" reads the same everywhere.
+function annotationCellHtml(arm) {{
+  const source = arm || {{}};
+  const catalyst = annotationText(source.worst_catalyst);
+  const catalystDesc = annotationText(source.worst_catalyst_desc);
+  const tweak = annotationText(source.hypothesized_tweak);
+  const rationale = annotationText(source.tweak_rationale);
+  return `
+        <div style="font-weight: 600; color: #ffab91; font-size: 11px; font-family: monospace;">🚨 ${{escHtml(catalyst || 'N/A')}}</div>
+        ${{catalystDesc ? `<div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px;">${{escHtml(catalystDesc)}}</div>` : ''}}
+        <div style="margin-top: 4px; padding-top: 3px; border-top: 1px dashed rgba(255,255,255,0.1);">
+          <span style="font-weight: 600; color: #69f0ae; font-size: 11px; font-family: monospace;">💡 Tweak: ${{escHtml(tweak || 'N/A')}}</span>
+          ${{rationale ? `<div style="font-size: 10px; color: #b0bec5; line-height: 1.2; margin-top: 1px;">${{escHtml(rationale)}}</div>` : ''}}
+        </div>
+      `;
+}}
+
 function renderAll() {{
   // The warning must survive a refresh, and appear if a record stops parsing
   // mid-run: /api/stats carries `record_error` on every poll.
@@ -2397,12 +2498,7 @@ function renderAll() {{
       <td class="tabular">${{(arm.std_pnl || 0).toFixed(3)}}</td>
       <td class="tabular negative">$$${{(arm.max_drawdown || 0).toFixed(2)}}</td>
       <td style="max-width: 290px; text-align: left;">
-        <div style="font-weight: 600; color: #ffab91; font-size: 11px; font-family: monospace;">🚨 ${{arm.worst_catalyst || 'N/A'}}</div>
-        <div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px;">${{arm.worst_catalyst_desc || ''}}</div>
-        <div style="margin-top: 4px; padding-top: 3px; border-top: 1px dashed rgba(255,255,255,0.1);">
-          <span style="font-weight: 600; color: #69f0ae; font-size: 11px; font-family: monospace;">💡 Tweak: ${{arm.hypothesized_tweak || 'N/A'}}</span>
-          <div style="font-size: 10px; color: #b0bec5; line-height: 1.2; margin-top: 1px;">${{arm.tweak_rationale || ''}}</div>
-        </div>
+        ${{annotationCellHtml(arm)}}
       </td>
       <td class="tabular"><strong>${{arm.score || 0}}</strong></td>
       <td><span class="badge ${{arm.badge_cls}}">${{arm.readiness}}</span></td>

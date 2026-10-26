@@ -248,14 +248,14 @@ def scenario_naked_single_leg(reg: OrderRegistry, t: int, out: Path) -> str:
         evidence_json='{"up_filled": true, "dn_declined": true, '
                       '"naked_usd": 6.53}',
     ))
-    # Rescue exit: the adverse-drift route on the single-buy exit path,
-    # with the hard-stop audit pair. `single_buy_exit` is the recorded
-    # method that puts the close in the rescue bucket.
+    # Rescue exit: the stranded-leg route on the single-buy exit path, with the
+    # hard-stop audit pair. `single_buy_exit` is the recorded method that puts
+    # the close in the rescue bucket.
     reg.log_close(CloseRecord(
         ts=float(t - 600), condition_id=m["condition_id"],
         market_slug=m["slug"], method="single_buy_exit", gas=0.02, shares=15,
         up_price=0.29, dn_price=0.71, cost_basis=6.53, proceeds=4.35,
-        fee=0.45, realized_pnl=-1.80, reason="adverse_drift",
+        fee=0.45, realized_pnl=-1.80, reason="stranded_unhedged_exit",
         trigger_bid=0.31, fresh_bid=0.29,
         tx_hash="0xdeadbeef2",
     ))
@@ -663,7 +663,7 @@ def scenario_markouts(reg: OrderRegistry, t: int, out: Path) -> str:
         ts=float(t - 8900), condition_id=m["condition_id"], market_slug=m["slug"],
         method="single_buy_exit", gas=0.0, shares=10, up_price=0.47,
         cost_basis=5.00, proceeds=4.70, fee=0.0, realized_pnl=-0.30,
-        trigger_bid=0.48, fresh_bid=0.475, reason="adverse_drift",
+        trigger_bid=0.48, fresh_bid=0.475, reason="stranded_unhedged_exit",
         tx_hash="0xdemo516exit",
     ))
     return (f"markouts ........... markout-mix: {len(rows)} trajectories "
@@ -775,12 +775,12 @@ def scenario_trade_history(reg: OrderRegistry, t: int, out: Path) -> str:
         (16, "old-merge-a", "merge", 10, 9.55, 10.00, 0.0, 0.45, None, None, None, None),
         (17, "old-merge-b", "merge", 8, 7.92, 8.00, 0.0, 0.08, None, None, None, None),
         (18, "old-rescue-a", "single_buy_exit", 10, 4.40, 4.85, 0.30, 0.15, "grace_expired", 0.50, 0.485, None),
-        (19, "old-rescue-b", "single_buy_exit", 12, 5.76, 4.20, 0.36, -1.20, "adverse_drift", 0.36, 0.35, -0.60),
-        (20, "old-rescue-c", "naked_exit", 6, 2.88, 2.70, 0.0, -0.18, "adverse_drift", None, None, -0.30),
+        (19, "old-rescue-b", "single_buy_exit", 12, 5.76, 4.20, 0.36, -1.20, "stranded_unhedged_exit", 0.36, 0.35, -0.60),
+        (20, "old-rescue-c", "naked_exit", 6, 2.88, 2.70, 0.0, -0.18, "stranded_unhedged_exit", None, None, -0.30),
         (21, "old-merge-c", "merge", 15, 14.10, 15.00, 0.0, 0.90, None, None, None, None),
         (22, "old-rescue-d", "single_buy_exit", 20, 9.20, 10.40, 0.60, 0.60, "grace_expired", 0.48, 0.52, None),
         (23, "old-merge-d", "merge", 6, 5.94, 6.00, 0.0, 0.06, None, None, None, None),
-        (24, "old-rescue-e", "single_buy_exit", 10, 4.60, 3.10, 0.30, -1.20, "adverse_drift", 0.29, 0.31, -0.50),
+        (24, "old-rescue-e", "single_buy_exit", 10, 4.60, 3.10, 0.30, -1.20, "pair_cap_hedge_unreachable", 0.29, 0.31, -0.50),
         (25, "old-merge-e", "merge", 12, 11.28, 12.00, 0.0, 0.72, None, None, None, None),
     ]
     for i, (idx, slug, method, shares, cost, proceeds, fee, pnl, reason,

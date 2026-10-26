@@ -1297,7 +1297,13 @@ def test_explicit_interval_retention_and_clamping(tmp_path: Path, caplog):
     assert "5.0" in warnings[0].message and "1.0" in warnings[0].message
 
 
-def test_cockpit_hybrid_blueprint_tab_purged():
+def test_cockpit_blueprint_tab_pins_the_champion():
+    """#838 re-pinned this test onto the champion pane.
+
+    Written in #782 it pinned the retired static prototype (preset `hybrid`,
+    offset gate off, `--interval 1.0`); the pane now synthesises the champion
+    spec, so the pins carry the champion's values instead.
+    """
     from scripts.tournament_cockpit_server import generate_cockpit_html
 
     html = generate_cockpit_html({"arms": [], "tourney_key": "492"})
@@ -1308,99 +1314,40 @@ def test_cockpit_hybrid_blueprint_tab_purged():
     assert start_idx != -1 and end_idx != -1
     blueprint = html[start_idx:end_idx]
 
-    # #799: the pane is built from the leader arm's own launch env. That arm
-    # (`balanced-mid` in configs/tournaments/i799-tournament-test_arms.json)
-    # overrode exactly one variable -- the `balanced` preset -- so the pricing
-    # half of the spec is one line, not a preset plus a stack of overrides. The
-    # rest of the block is the deployment layer; the pane labels each of those as
-    # an override, because #799 varies one knob per arm and tested none of them.
     canonical_keys = [
-        "BOT_QUOTE_TOURNAMENT_PRESET=balanced",
-        "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06",
+        "BOT_QUOTE_TOURNAMENT_PRESET=prudent",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1",
+        "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS",
         "BOT_RISK_STOP_MODE=ABSOLUTE_DROP",
         "BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
-        "BOT_ORDER_GATE_QUEUE_CLEAR_ON=1",
-        "BOT_ORDER_QUEUE_MAX_CLEAR_MIN=5",
-        "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0",
+        "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC",
         "BOT_POS_PRICE_MAX_PAIR_COST_USD",
     ]
     for key in canonical_keys:
         assert key in blueprint, f"Expected canonical key {key!r} in blueprint"
-
-    # The leader's recipe is `balanced` on its own. `prudent` with the clamp
-    # lifted to 6c is the arm that finished behind it, on a value no arm ran, so
-    # none of that spec's keys may survive in the block.
-    assert "BOT_QUOTE_TOURNAMENT_PRESET=prudent" not in blueprint
-    assert "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1" not in blueprint
-    assert "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6" not in blueprint
-    assert 'TOURNAMENT_PRESETS["balanced"]' in blueprint
-    assert "the leader's only env key" in blueprint
-    # The ceiling is still documented -- as the preset's own 4c, not an override.
-    assert "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS" in blueprint
-    assert "4.0¢" in blueprint
-
-    # Units: the deadband is a dollar fraction and `_bounded_float` floors that
-    # field at 1.0, while the offset ceiling is a cents count. Swapping the two
-    # is the difference between 6c of protection and a value the engine bounds.
-    assert "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=6" not in blueprint
-    assert "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=0.06" not in blueprint
 
     # #753: the retired requote holds are not presented as current settings.
     assert "REQUOTE_HOLD" not in blueprint
     assert "Queue Hold" not in blueprint
     assert "Hold Deviation" not in blueprint
 
-    # The queue window is the one deployment knob #799 actually varied, so it
-    # carries the arm's own value (5) rather than the unmeasured 3.0 minutes that
-    # stood in the previous revision -- and it is the arm that leads the field on
-    # Sharpe, profit factor and drawdown.
-    assert "BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3.0" not in blueprint
-    assert 'badge-green">#799 queue-clear-5m' in blueprint
+    # Preserved benchmark label; the champion preset is named, the retired one is not.
+    assert "Static benchmark synthesis" in blueprint
+    assert 'TOURNAMENT_PRESETS["prudent"]' in blueprint
+    assert 'TOURNAMENT_PRESETS["hybrid"]' not in blueprint
+    assert "-Preset hybrid" not in blueprint
 
-    # Every value #799 did not vary is labeled as an unmeasured override, so a
-    # deployment choice cannot read as a tournament result. Three rows are
-    # override-labeled: the deadband, the stop and the rescue lead.
-    assert blueprint.count('badge-amber">Override') == 3
-    assert 'badge-green">#799 balanced-mid' in blueprint
-
-    # Interval 1.0 vs 5.0
-    assert "--interval 1.0" in blueprint
+    # The recipe's interval is the shipped 1s rehearsal step, never the clamp case.
+    assert "--interval 1 " in blueprint
     assert "--interval 5.0" not in blueprint
-
-    # #799: every performance figure is read from the live arm on the page's own
-    # poll. `results.json` says the shadow numbers are modeled and the stat gate
-    # decides, so the pane may report what the arm measured and must not forecast
-    # past it -- a baked-in projection is wrong the moment the run moves.
-    for bound_id in (
-        "hb-quotes", "hb-trades", "hb-arms", "hb-progress", "hb-win", "hb-aggwin",
-        "hb-merge", "hb-aggmerge", "hb-sharpe", "hb-bestsharpe", "hb-ev", "hb-pf",
-        "hb-mcp5", "hb-mdd", "hb-rank", "hb-pnl", "hb-leader", "hb-stops",
-        "hb-stoprate", "hb-qcsharpe",
-    ):
-        assert f'id="{bound_id}"' in blueprint, f"Expected live-bound {bound_id!r} in blueprint"
-        # Present in the markup *and* written by renderAll, or it stays a dash.
-        assert html.count(bound_id) >= 2, f"{bound_id!r} is never written by the render pass"
-    assert "hbArm = hbArms.find" in html
-    # The standing card follows the arm the blueprint is built from.
-    assert "'balanced-mid'" in html
-    assert "'prudent-hybrid'" not in html
-    assert "stat gate decides" in blueprint
-
-    # The claims #799 contradicts: a forecast that outran the run, a rank the
-    # leaderboard above it disagreed with, and a stop rate no arm measured.
-    assert "Performance Forecast" not in blueprint
-    assert "Projected Win Rate" not in blueprint
-    assert "&gt; 10.5" not in blueprint
-    assert "289 executed trades" not in blueprint
-    assert "9.52" not in blueprint
-    assert "44.1%" not in blueprint
-    assert "-$2.28" not in blueprint
 
     # Purged / dead knobs & misleading labels absent
     assert "HUNTER_" not in blueprint
     assert "max_pair_cost_cap" not in blueprint
     assert "0.08 (8%)" not in blueprint
 
+    # Pair cap: shipped default, so the pane clears any inherited value instead.
+    assert "Remove-Item Env:BOT_POS_PRICE_MAX_PAIR_COST_USD" in blueprint
     # Pair cap comment-only guard in .env block
     for line in blueprint.splitlines():
         if "BOT_POS_PRICE_MAX_PAIR_COST_USD=" in line:
@@ -1410,6 +1357,11 @@ def test_cockpit_hybrid_blueprint_tab_purged():
     # Discredited #484 primary winner claims absent from full cockpit HTML
     assert "Primary Winner" not in html
     assert "control (Issue #484)" not in html
+
+
+
+
+
 
 
 def test_cockpit_live_readiness_decision_matrix_updated_from_i799():

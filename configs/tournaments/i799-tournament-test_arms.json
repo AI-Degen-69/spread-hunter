@@ -6,9 +6,11 @@
     "profile": "shipped baseline: dynamic 0.50x, 1-20c, 15c window, no widen snap-back",
     "desc": "Control. The shipped loose baseline with nothing changed; every other arm is read against it.",
     "thesis": "The shipped defaults are the reference: any arm must beat this to earn a change.",
-    "worst_catalyst": "stop_loss_trigger (4.5¢ noise)",
-    "worst_catalyst_desc": "11 stops on 40 trades (27.5% stop rate); 4.5¢ drop triggers prematurely on normal spread bounce.",
-    "env": {}
+    "env": {},
+    "worst_catalyst": "Stop-loss exits 27.5% of closes (11/40)",
+    "worst_catalyst_desc": "6.4 h snapshot: 11 stop exits on 40 trades -- the most filled orders in the run -- clustered between minute 194 and 268, the volatile print every arm met; this arm sets no stop mode in its env, so 5c is the shipped default threshold, not an active stop.",
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06",
+    "tweak_rationale": "Hypothesis: the shipped 3c deadband requotes into the volatile cluster and re-enters lower; 6c holds queue position and only re-prices on a real move."
   },
   {
     "name": "tight-touch",
@@ -21,7 +23,11 @@
     "worst_catalyst_desc": "Severe quote starvation: only 6 completed trades in 6.4h (14 fills / 30 quotes = 46.7% fill rate).",
     "env": {
       "BOT_QUOTE_TOURNAMENT_PRESET": "aggressive"
-    }
+    },
+    "worst_catalyst": "Fill rate 46.7% (14/30), 6 completed trades",
+    "worst_catalyst_desc": "6.4 h snapshot: 14 fills on 30 quotes and only 6 merged pairs; the 0.25x offset wins the spread but leaves the second leg unreachable when the book moves.",
+    "hypothesized_tweak": "BOT_QUOTE_TOURNAMENT_PRESET=balanced",
+    "tweak_rationale": "Hypothesis: the aggressive 0.25x offset (2-3c) has no cushion for leg two; the balanced preset (0.50x, 2-4c) widens the acceptance window while keeping the queue."
   },
   {
     "name": "balanced-mid",
@@ -34,7 +40,11 @@
     "worst_catalyst_desc": "8 stops on 33 trades (24.2%); 2-4¢ dynamic band leaves orphan legs vulnerable to fast runs.",
     "env": {
       "BOT_QUOTE_TOURNAMENT_PRESET": "balanced"
-    }
+    },
+    "worst_catalyst": "8 stop exits on 33 closes (24.2%)",
+    "worst_catalyst_desc": "6.4 h snapshot: two early stops at minute 194 (-$0.70) and 205 (-$0.40) landed in the same volatile cluster that hit every arm; the 2-4c offset gave up before the pair completed.",
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06",
+    "tweak_rationale": "Hypothesis: a 6c deadband holds the resting quote through the volatile window instead of cancelling and re-entering at a worse price."
   },
   {
     "name": "wide-shield",
@@ -49,7 +59,11 @@
       "BOT_QUOTE_TOURNAMENT_PRESET": "conservative",
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
       "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.080"
-    }
+    },
+    "worst_catalyst": "9 stop exits on 34 closes (26.5%), -$0.37 average loss",
+    "worst_catalyst_desc": "6.4 h snapshot: the widest offset did not stop the stops -- average loss per stop was -$0.37 against -$0.19 for Hair Trigger, with VaR95 at -$0.70.",
+    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.050",
+    "tweak_rationale": "Hypothesis: the 0.75x offset already cushions price, so an 8c stop only enlarges each loss; the shipped 5c stop cuts the tail without firing on spread noise."
   },
   {
     "name": "prudent-hybrid",
@@ -63,7 +77,11 @@
     "env": {
       "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
       "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "6"
-    }
+    },
+    "worst_catalyst": "Gap trade at minute 193.8: cumulative $1.19 to $0.49",
+    "worst_catalyst_desc": "6.4 h snapshot: 7 stops, worst single loss -$0.70, Sharpe 9.52 and profit factor 7.36 -- the best risk-adjusted arm; its one structural exposure is the cluster every arm met.",
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06",
+    "tweak_rationale": "Hypothesis: no stop change is warranted; a 6c deadband is the cheapest way to turn that recurring cluster stop into a hold."
   },
   {
     "name": "static-floor-2c",
@@ -76,7 +94,11 @@
     "worst_catalyst_desc": "Catastrophic -$2.28 single loss at min 304.8; static 2¢ failed to widen during vol spike.",
     "env": {
       "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0"
-    }
+    },
+    "worst_catalyst": "One close of -$2.28 at minute 304.8, the run's largest",
+    "worst_catalyst_desc": "6.4 h snapshot: 66 fills on 173 quotes (38.2% fill rate) and one close of -$2.28, the run's largest and about 9% worse than the next-worst -$2.10; a flat 2c offset prices a calm and a volatile book identically.",
+    "hypothesized_tweak": "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1",
+    "tweak_rationale": "Hypothesis: the orphan formed because the resting quote was priced for a calm book during a volatile print; a volatility-tracking offset widens exactly then."
   },
   {
     "name": "low-churn-deadband",
@@ -90,7 +112,11 @@
     "env": {
       "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0",
       "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.10"
-    }
+    },
+    "worst_catalyst": "10 stop exits on 37 closes (27.0%)",
+    "worst_catalyst_desc": "6.4 h snapshot: back-to-back losses at minute 280 (-$0.09, -$0.31) filled right after -- the 10c deadband holds a quote after the book has already moved against it.",
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06",
+    "tweak_rationale": "Hypothesis: 6c still suppresses churn on micro-moves but re-prices before a stale quote fills into an adverse book."
   },
   {
     "name": "hair-trigger-2c",
@@ -104,7 +130,11 @@
     "env": {
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
       "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.020"
-    }
+    },
+    "worst_catalyst": "Stop-loss exit rate 44.1% (15/34)",
+    "worst_catalyst_desc": "6.4 h snapshot: 15 stops against 19 merges -- the arm mostly stops out; average loss -$0.19 and the lowest total PnL of the active arms.",
+    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
+    "tweak_rationale": "Hypothesis: 2c is tighter than normal spread noise, so the stop fragments the pairs it means to protect; 4.5c only fires on a genuine adverse move."
   },
   {
     "name": "patient-stop-9c",
@@ -118,7 +148,11 @@
     "env": {
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
       "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.090"
-    }
+    },
+    "worst_catalyst": "6 completed trades; -$2.10 close at minute 360.6",
+    "worst_catalyst_desc": "6.4 h snapshot: 13 fills on 24 quotes (54.2%) and no stops, but near-inactive quoting; the single -$2.10 loss (VaR95 -$2.10) erased most of the session's gains.",
+    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.060",
+    "tweak_rationale": "Hypothesis: a 9c leash is wide enough to never fire and to hold an orphan through a real break; 6c keeps the stop a circuit breaker rather than decoration."
   },
   {
     "name": "queue-clear-5m",
@@ -132,6 +166,10 @@
     "env": {
       "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
       "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"
-    }
+    },
+    "worst_catalyst": "Max drawdown -$1.00; -$0.80 close at minute 218.9",
+    "worst_catalyst_desc": "6.4 h snapshot: 8 stop exits, the same count as Balanced Mid, and a -$0.80 loss where the book moved right after the fill; five minutes let a slow queue turn into a bad one.",
+    "hypothesized_tweak": "BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3",
+    "tweak_rationale": "Hypothesis: a 3-minute window excludes books whose queue velocity is uncertain, trading quote count for quality per quote."
   }
 ]

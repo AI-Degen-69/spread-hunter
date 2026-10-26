@@ -1681,10 +1681,12 @@
   vertical-align: middle;
 }
 
-/* EXEC TYPE is a tag, not a sentence. One neutral pill shape for all five
- * labels: green and red already mean win and loss in the outcome column, and a
- * tag may not be asked to mean two things at once (glossary). The `is-*`
- * modifier names the type for later styling and for tests. */
+/* EXEC TYPE is a tag, not a sentence, and it carries the TYPE's own tone so a
+ * ledger reads down the column. One hue per close type, and green stays out of
+ * the palette: a pair merged under $1.00 pays, but a pair assembled OVER $1.00
+ * merges at a loss, so Merge may not borrow the win tone the outcome column
+ * owns. Filled / Partial / Cancelled / Open are order states, not close types,
+ * and they ride a neutral slate ladder instead of competing with the six. */
 .proto-body .stitch-ledger-subtable .stitch-exec-type {
   display: inline-flex;
   align-items: center;
@@ -1697,6 +1699,80 @@
   background: rgba(100, 116, 139, 0.15);
   border: 1px solid rgba(100, 116, 139, 0.3);
   color: #cbd5e1;
+}
+
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-merge {
+  background: rgba(56, 189, 248, 0.13);
+  border-color: rgba(56, 189, 248, 0.34);
+  color: #7dd3fc;
+}
+
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-stop-loss {
+  background: rgba(244, 63, 94, 0.13);
+  border-color: rgba(244, 63, 94, 0.34);
+  color: #fda4af;
+}
+
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-grace-expired {
+  background: rgba(245, 158, 11, 0.13);
+  border-color: rgba(245, 158, 11, 0.34);
+  color: #fcd34d;
+}
+
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-resolved {
+  background: rgba(167, 139, 250, 0.13);
+  border-color: rgba(167, 139, 250, 0.34);
+  color: #c4b5fd;
+}
+
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-single-buy-exit {
+  background: rgba(251, 146, 60, 0.13);
+  border-color: rgba(251, 146, 60, 0.34);
+  color: #fdba74;
+}
+
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-venue-sync {
+  background: rgba(100, 116, 139, 0.16);
+  border-color: rgba(100, 116, 139, 0.34);
+  color: #94a3b8;
+}
+
+/* Dashed, and drifting out of the palette on purpose: an unclassified close is
+ * a hole in the taxonomy, and it should look like one. */
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-unclassified {
+  background: transparent;
+  border: 1px dashed rgba(185, 196, 210, 0.55);
+  color: #b9c4d2;
+}
+
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-order-filled {
+  background: rgba(226, 232, 240, 0.10);
+  border-color: rgba(226, 232, 240, 0.26);
+  color: #e2e8f0;
+}
+
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-order-partial {
+  background: rgba(203, 213, 225, 0.07);
+  border-color: rgba(203, 213, 225, 0.20);
+  color: #cbd5e1;
+}
+
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-order-cancelled {
+  background: rgba(148, 163, 184, 0.09);
+  border-color: rgba(148, 163, 184, 0.22);
+  color: #7f8ea3;
+}
+
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-order-open {
+  background: transparent;
+  border-color: rgba(182, 194, 209, 0.40);
+  color: #b6c2d1;
+}
+
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-order-pending {
+  background: rgba(159, 179, 200, 0.08);
+  border-color: rgba(159, 179, 200, 0.24);
+  color: #9fb3c8;
 }
 
 .proto-body .stitch-ledger-row:hover {

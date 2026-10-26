@@ -52,7 +52,9 @@ from core_brain.book_math import (
     floor_to_tick,
     tick_size,
 )
+from core_brain.close_methods import ORPHAN_PROFIT_EXIT, SINGLE_BUY_EXIT
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
+from core_brain.single_leg_lifecycle import orphan_profit_floor
 
 log = logging.getLogger("single_buy_saver")
 
@@ -936,9 +938,11 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
     carries no fills, so live still records the floor; the rehearsal walks the
     bid ladder and knows better. See `_exit_fill_price`.
 
-    `reason` is the route's trigger (`adverse_drift` / `grace_expired`), and is
+    `reason` is the route's trigger (`grace_expired` / `pair_cap_hedge_unreachable`), and is
     part of this close -- written here, after the sale succeeded, never before.
     """
+    # Recognised exit close methods: "single_buy_exit", "orphan_profit_exit"
+    _is_orphan = (method == "orphan_profit_exit")
     leg = (pair.get("legs") or {}).get(heavy_token, {})
     matched = float(leg.get("matched") or 0.0)
     notional = float(leg.get("notional") or 0.0)
@@ -1013,14 +1017,16 @@ def exit_single_buy(
     live: bool = True,
     venue_positions: Optional[dict[str, float]] = None,
     reason: Optional[str] = None,
-    method: str = "single_buy_exit",
+    method: str = SINGLE_BUY_EXIT,
     *,
     force: bool = False,
     trigger_bid: Optional[float] = None,
+    min_profit_pct: Optional[float] = None,
 ) -> dict:
     """Close a single-sided fill: cancel resting opposite leg, then sell filled inventory.
 
-    `reason` is the caller's route trigger (`adverse_drift` / `grace_expired`),
+    `reason` is the caller's route trigger (`grace_expired` /
+    `pair_cap_hedge_unreachable`),
     persisted on the close so later forensics need not reconstruct it. Purely
     instrumentation: it changes no trigger, threshold, or route decision, and
     callers without one (stray-guard) keep working unchanged.
@@ -1182,6 +1188,20 @@ def exit_single_buy(
             f"poll loop reconcile it, then re-run."
         )
 
+    # When min_profit_pct is set, ensure opposite leg was not filled and remains zero
+    light_matched = float((after.get("legs") or {}).get(light_token, {}).get("matched", 0.0)) if light_token else 0.0
+    if min_profit_pct is not None and (light_matched > SIZE_EPS or venue_light_matched > SIZE_EPS):
+        return {
+            "action": "orphan_profit_hold",
+            "reason": "opposite_filled",
+            "pair_id": pair_id,
+            "condition_id": after["condition_id"],
+            "cancelled": cancelled,
+            "size": 0.0,
+            "venue_light_matched": venue_light_matched,
+            "positions_checked": positions_checked,
+        }
+
     # 3. Sell, sized by the registry and bounded by a price we will accept.
     heavy_book = client.get_order_book(heavy_token)
     bid = best_bid(heavy_book)
@@ -1196,7 +1216,31 @@ def exit_single_buy(
     # will walk the ladder down to whatever clears it. Depth is counted only at
     # levels we would actually accept, so size and price agree.
     tick = tick_size(heavy_book)
-    min_price = floor_to_tick(max(bid - MAX_SELL_SLIPPAGE, tick), tick)
+    slippage_floor = floor_to_tick(max(bid - MAX_SELL_SLIPPAGE, tick), tick)
+    profit_floor = None
+    if min_profit_pct is not None:
+        heavy_leg = (after.get("legs") or {}).get(heavy_token, {})
+        heavy_matched = float(heavy_leg.get("matched") or 0.0)
+        heavy_notional = float(heavy_leg.get("notional") or 0.0)
+        held_cost = (heavy_notional / heavy_matched) if heavy_matched > 0.0 else 0.0
+        profit_floor = orphan_profit_floor(held_cost, float(min_profit_pct), tick)
+        if bid < profit_floor - 1e-9:
+            return {
+                "action": "orphan_profit_hold",
+                "reason": "profit_gone",
+                "pair_id": pair_id,
+                "condition_id": after["condition_id"],
+                "cancelled": cancelled,
+                "size": 0.0,
+                "venue_light_matched": venue_light_matched,
+                "positions_checked": positions_checked,
+                "bid": bid,
+                "profit_floor": profit_floor,
+            }
+        min_price = max(slippage_floor, profit_floor)
+    else:
+        min_price = slippage_floor
+
     depth = depth_at_or_above(heavy_book, min_price)
 
     size = min(naked, depth)
@@ -1256,7 +1300,7 @@ def exit_single_buy(
                        submitted_floor=min_price,
                        fill_source=fill_source)
 
-    return {
+    res = {
         "action": "exited",
         "pair_id": pair_id,
         "condition_id": after["condition_id"],
@@ -1276,6 +1320,9 @@ def exit_single_buy(
         "positions_checked": positions_checked,
         "response": resp,
     }
+    if profit_floor is not None:
+        res["profit_floor"] = profit_floor
+    return res
 
 
 def _venue_id_from_submit_error(exc: BaseException) -> str:
@@ -1636,6 +1683,7 @@ AGED_OUT_QUIET_ACTIONS = (
 SINGLE_LEG_QUIET_ACTIONS = frozenset({
     "patient_wait", "escalated_wait", "pair_locked", "dual_resting",
     "awaiting_lead", "would_exit", "would_complete",
+    "orphan_profit_hold",
     STRANDED_MISSING_SIDE_ACTION,
 })
 
@@ -1649,6 +1697,7 @@ _SAVER_ACTION_BY_DECISION = {
     "locked": "pair_locked",
     "rest": "dual_resting",
     "refused": "refused",
+    "orphan_profit_hold": "orphan_profit_hold",
 }
 
 
@@ -2126,7 +2175,8 @@ def manage_single_leg_positions(
     """
     pairs_enabled = bool(getattr(cfg, "bot_risk_gate_pairs_rule_on", True))
     aged_out_enabled = bool(getattr(cfg, "bot_risk_gate_aged_out_rescue_on", True))
-    if not pairs_enabled and not aged_out_enabled:
+    orphan_profit_on = bool(getattr(cfg, "bot_risk_gate_orphan_profit_close_on", False))
+    if not pairs_enabled and not aged_out_enabled and not orphan_profit_on:
         return []
 
     # Single-executor guarantee. The whole venue-mutating pass runs under one
@@ -2266,7 +2316,8 @@ def _manage_single_leg_positions_locked(
             last_fill_ms > 0
             and (now_s * 1000.0 - last_fill_ms) > window_ms
         )
-        if not pairs_enabled and not (is_aged_out and aged_out_enabled):
+        orphan_profit_on = bool(getattr(cfg, "bot_risk_gate_orphan_profit_close_on", False))
+        if not pairs_enabled and not (is_aged_out and aged_out_enabled) and not orphan_profit_on:
             continue
 
         try:
@@ -2490,6 +2541,76 @@ def _manage_single_leg_positions_locked(
                                         position.condition_id, exc)
                 out.append(result)
                 continue
+
+            # Orphan profit exit (#842): auto-close profitable orphaned positions after duration threshold
+            if orphan_profit_on:
+                from core_brain.single_leg_lifecycle import evaluate_orphan_profit
+                min_age_sec = float(getattr(cfg, "bot_risk_orphan_profit_min_age_sec", 3600.0))
+                min_profit_pct = float(getattr(cfg, "bot_risk_orphan_min_profit_pct", 0.05))
+                age_s = ((now_s * 1000.0 - last_fill_ms) / 1000.0) if last_fill_ms > 0 else None
+                orphan_verdict = evaluate_orphan_profit(
+                    position, age_s, min_age_sec, min_profit_pct, grid_tick,
+                )
+                if orphan_verdict.eligible:
+                    try:
+                        result = exit_single_buy(
+                            client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
+                            live=live, venue_positions=venue_positions,
+                            reason="orphan_profit_exit", force=True,
+                            trigger_bid=held_bid,
+                            method=ORPHAN_PROFIT_EXIT,
+                            min_profit_pct=min_profit_pct,
+                        )
+                    except Exception as exc:
+                        try:
+                            registry.log_hard_stop_refusal(
+                                pair_id=pair_id,
+                                condition_id=position.condition_id,
+                                trigger_bid=held_bid,
+                                outcome=("refused" if isinstance(exc, PairExitRefused)
+                                         else "error"),
+                                detail=f"{type(exc).__name__}: {exc}",
+                            )
+                        except Exception:
+                            pass
+                        raise
+                    result.update(
+                        route="orphan_profit_exit",
+                        lifecycle_state=(previous_state.value if previous_state else None),
+                        reason=orphan_verdict.reason,
+                    )
+                    if result.get("action") == "exited":
+                        sold_size = float(result.get("size", 0.0) or 0.0)
+                        heavy_tok = result.get("token_id")
+                        if (venue_positions is not None
+                                and heavy_tok and heavy_tok in venue_positions):
+                            venue_positions[heavy_tok] = max(
+                                0.0, float(venue_positions[heavy_tok]) - sold_size)
+                        from core_brain.lifecycle_reset import reset_condition
+                        if live:
+                            ports = live_reset_ports(
+                                client, funder, registry, position.condition_id,
+                                position.up_token_id, position.down_token_id)
+                        else:
+                            db_path = (getattr(client, "_db_path", None)
+                                       or getattr(registry, "db_path", None))
+                            ports = _shadow_reset_ports_or_none(
+                                registry, db_path, position.condition_id,
+                                position.up_token_id, position.down_token_id)
+                        if ports is not None:
+                            reset_outcome = reset_condition(
+                                registry, position.condition_id,
+                                position.up_token_id, position.down_token_id,
+                                ports, reason="orphan_profit_exited",
+                                now_ms=int(time.time() * 1000))
+                            result.update(
+                                reset_status=reset_outcome.status,
+                                reset_reason=reset_outcome.reason,
+                            )
+                            if reset_outcome.status == "RESET":
+                                result.update(lifecycle_state=None)
+                    out.append(result)
+                    continue
 
             if (is_aged_out and aged_out_enabled and last_fill_ms > 0
                     and condition_id):
