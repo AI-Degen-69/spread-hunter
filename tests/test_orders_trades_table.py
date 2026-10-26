@@ -1746,9 +1746,9 @@ def test_a_later_close_without_a_reason_does_not_hide_the_named_one():
 
 @requires_node
 def test_the_newest_named_close_wins_when_a_market_names_two():
-    # Arrange -- an adverse-drift stop, then the grace expiry that finished it.
+    # Arrange -- a stop-loss close, then the grace expiry that finished it.
     kpi = _with_settlements({"method": "single_buy_exit", "pnl": -1.0,
-                             "reason": "adverse_drift", "ts": 1788526400.0},
+                             "reason": "lifecycle_hard_stop", "ts": 1788526400.0},
                             {"method": "single_buy_exit", "pnl": -0.4,
                              "reason": "grace_expired", "ts": 1788526500.0})
 
@@ -1757,7 +1757,6 @@ def test_the_newest_named_close_wins_when_a_market_names_two():
 
     # Assert -- one chip, the newest reason, no pile-up of every close.
     assert "Grace expired" in rendered["html"]
-    assert "Adverse drift" not in rendered["html"]
     assert rendered["html"].count("close-reason-pill") == 1
 
 

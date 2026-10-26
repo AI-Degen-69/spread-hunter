@@ -77,6 +77,14 @@ three tones and each tone means one thing — good, warning, alert — and no ta
 to mean two things at once. Pair status and Pair Cost are separate tags because they
 answer separate questions: is the pair whole, and does merging it pay.
 
+A column may keep its own vocabulary when it is not a status tag. The Closed Trades
+ledger's **Exec Type** pill gives each close type its own hue — Merge, Stop Loss, Grace
+Expired, Resolved, Single Buy Exit, Venue Sync — and says **Unclassified** for a close
+the dashboard cannot name. There is no catch-all "Sale": a vague word hides a drifted
+close method behind a plausible one. Green and red stay with the money, so no close type
+borrows them: a merged pair is not automatically a win, because a pair bought over $1.00
+merges at a loss.
+
 Old module paths (`scripts/rank_markets.py`, `scripts/rerank_loop.py`,
 `scripts/live-spread-hunter-menu.ps1`) survive only as thin forwarders for anything still
 calling them. Do not add to them.

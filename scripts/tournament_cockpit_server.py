@@ -876,6 +876,17 @@ def _tweak_text(env: Any) -> str:
     return " \u00b7 ".join(lines)
 
 
+def _note_text(value: Any) -> str:
+    """An analyst note as page text: trimmed, and empty unless it is a string.
+
+    `None`, a number and a whitespace-only string all mean "no note". Guessed
+    prose would read as an analyst finding the arms file never made.
+    """
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
 def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
     """The arms a plan actually launched, shaped like the static preset rows."""
     try:
@@ -887,7 +898,9 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
     arms = []
     for i, record_arm in enumerate(record_arms):
         name = record_arm["name"]
-        entry = source.get(name) or {}
+        # A numbered run records `<name>-<n>` while the arms file names the base
+        # arm; without the strip this row would lose its label, desc and notes.
+        entry = source.get(name) or source.get(_strip_round_suffix(name)) or {}
         arms.append({
             "issue": issue if issue is not None else 0,
             "name": name,
@@ -897,10 +910,15 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
             "run_id": record_arm.get("run_id", ""),
             "color": entry.get("color") or _PLAN_ARM_COLORS[i % len(_PLAN_ARM_COLORS)],
             "desc": entry.get("desc") or entry.get("profile") or "",
-            "worst_catalyst": "",
-            "worst_catalyst_desc": "",
-            "hypothesized_tweak": _tweak_text(entry.get("env") or record_arm.get("env")),
-            "tweak_rationale": entry.get("thesis") or "",
+            "worst_catalyst": _note_text(entry.get("worst_catalyst")),
+            "worst_catalyst_desc": _note_text(entry.get("worst_catalyst_desc")),
+            "hypothesized_tweak": (
+                _note_text(entry.get("hypothesized_tweak"))
+                or _tweak_text(entry.get("env") or record_arm.get("env"))
+            ),
+            "tweak_rationale": (
+                _note_text(entry.get("tweak_rationale")) or _note_text(entry.get("thesis"))
+            ),
         })
     return arms
 
@@ -960,7 +978,7 @@ def resolve_tournament_meta(
         "description": (
             f"Following the newest tournament record on disk: issue #{issue}, {arms_label.lower()} "
             "launched from its own arms file. Comparative reading happens after the planned run "
-            "length; catalyst columns stay empty until this run reports."
+            "length; the catalyst column is this run's own arms file, quoted as written."
         ),
         "issue_primary": issue,
         "issue_secondary": issue,
@@ -1420,7 +1438,9 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
 
 def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     """Generate the full responsive, interactive HTML dashboard."""
-    json_embedded = json.dumps(initial_data)
+    # Notes come from an editable arms file, so neither a `</script>` nor a `<b>`
+    # in one may end this block early; `<` is the only character that can.
+    json_embedded = json.dumps(initial_data).replace("<", "\\u003c")
     # A record that exists but cannot be read must not look like "the run has not
     # started". The container is always emitted -- hidden when there is nothing to
     # say -- so the 5s /api/stats poll can show or hide it without a page reload.
@@ -2052,6 +2072,39 @@ function switchTab(name, btn) {{
   if (target) target.classList.add('active');
 }}
 
+// Analyst annotations arrive from a tournament's arms file, so every value here
+// is text on the page -- never markup.
+function escHtml(value) {{
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}}
+
+function annotationText(value) {{
+  return value == null ? '' : String(value).trim();
+}}
+
+// `N/A` means one thing here: no data. A blank description or rationale drops
+// its line instead of leaving an empty one, so "empty" reads the same everywhere.
+function annotationCellHtml(arm) {{
+  const source = arm || {{}};
+  const catalyst = annotationText(source.worst_catalyst);
+  const catalystDesc = annotationText(source.worst_catalyst_desc);
+  const tweak = annotationText(source.hypothesized_tweak);
+  const rationale = annotationText(source.tweak_rationale);
+  return `
+        <div style="font-weight: 600; color: #ffab91; font-size: 11px; font-family: monospace;">🚨 ${{escHtml(catalyst || 'N/A')}}</div>
+        ${{catalystDesc ? `<div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px;">${{escHtml(catalystDesc)}}</div>` : ''}}
+        <div style="margin-top: 4px; padding-top: 3px; border-top: 1px dashed rgba(255,255,255,0.1);">
+          <span style="font-weight: 600; color: #69f0ae; font-size: 11px; font-family: monospace;">💡 Tweak: ${{escHtml(tweak || 'N/A')}}</span>
+          ${{rationale ? `<div style="font-size: 10px; color: #b0bec5; line-height: 1.2; margin-top: 1px;">${{escHtml(rationale)}}</div>` : ''}}
+        </div>
+      `;
+}}
+
 function renderAll() {{
   // The warning must survive a refresh, and appear if a record stops parsing
   // mid-run: /api/stats carries `record_error` on every poll.
@@ -2112,12 +2165,7 @@ function renderAll() {{
       <td class="tabular">${{(arm.std_pnl || 0).toFixed(3)}}</td>
       <td class="tabular negative">$$${{(arm.max_drawdown || 0).toFixed(2)}}</td>
       <td style="max-width: 290px; text-align: left;">
-        <div style="font-weight: 600; color: #ffab91; font-size: 11px; font-family: monospace;">🚨 ${{arm.worst_catalyst || 'N/A'}}</div>
-        <div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px;">${{arm.worst_catalyst_desc || ''}}</div>
-        <div style="margin-top: 4px; padding-top: 3px; border-top: 1px dashed rgba(255,255,255,0.1);">
-          <span style="font-weight: 600; color: #69f0ae; font-size: 11px; font-family: monospace;">💡 Tweak: ${{arm.hypothesized_tweak || 'N/A'}}</span>
-          <div style="font-size: 10px; color: #b0bec5; line-height: 1.2; margin-top: 1px;">${{arm.tweak_rationale || ''}}</div>
-        </div>
+        ${{annotationCellHtml(arm)}}
       </td>
       <td class="tabular"><strong>${{arm.score || 0}}</strong></td>
       <td><span class="badge ${{arm.badge_cls}}">${{arm.readiness}}</span></td>

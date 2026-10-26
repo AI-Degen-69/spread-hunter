@@ -163,6 +163,26 @@ def test_the_scanner_flags_a_query_in_string():
     assert hits
 
 
+RETIRED_REASON = "adverse_drift"
+
+
+def test_a_retired_reason_is_written_and_labelled_nowhere():
+    """`adverse_drift` is retired (#835, finished in #836): no writer emits it, so the demo
+    builder must not seed it and the dashboard must keep no label for it. A row
+    already in a store still renders -- that is the reader test in
+    tests/test_stitch_closed_trades.py -- but nothing new may produce the
+    token, and a label would be a claim the page can no longer back."""
+    demo = (ROOT / "scripts" / "build_demo_db.py").read_text(encoding="utf-8-sig")
+    assert RETIRED_REASON not in demo, "the demo builder still seeds a retired reason"
+
+    labelled = [
+        path.name for path in sorted(STATIC.glob("*.js"))
+        if re.search(r"^\s*" + RETIRED_REASON + r"\s*:", path.read_text(encoding="utf-8-sig"),
+                     flags=re.M)
+    ]
+    assert not labelled, f"a retired reason still has a label in {labelled}"
+
+
 def test_the_scanner_flags_a_js_set_array():
     assert _js_hits(["const E = new Set(['single_buy_exit', 'naked_exit']);"])
     assert _js_hits(['const E = ["ladder_exit"];'])
