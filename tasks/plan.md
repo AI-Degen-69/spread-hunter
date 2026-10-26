@@ -97,7 +97,7 @@ Dependency graph: `T1 → T2`; `T3` independent; `T4` needs `T1,T2,T3`.
 - Depends on: —.
 - Verify: expand a row, five labels readable.
 
-### T4 — Regression tests (S, `[Tests]`)
+### [x] T4 — Regression tests (S, `[Tests]`)
 - Files: `tests/test_stitch_closed_trades.py`.
 - Update the pair test: `Pair Merge` assertion → `is-merge` pill plus
   `"Pair Merge" not in html` (`"Merge"` alone would also match the old label);
