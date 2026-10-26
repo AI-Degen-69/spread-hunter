@@ -85,7 +85,7 @@ This work creates `configs/tournaments/i843-pair-test_arms.json` with 4 isolated
   - Section 3: Metric recording tables (placeholder for post-run results).
 - **Verification:** Document inspection and verification of embedded CLI commands.
 
-### Task 4: [Verification] Execute Dry-Run & Run Regression Suite
+### Task 4: [Verification] Execute Dry-Run & Run Regression Suite [x]
 - **Size:** XS
 - **Target Files:** None (Execution only)
 - **Helper Skill:** `verification-before-completion`
