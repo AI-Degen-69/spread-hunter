@@ -1364,6 +1364,111 @@ def test_cockpit_blueprint_tab_pins_the_champion():
 
 
 
+def test_cockpit_live_readiness_decision_matrix_updated_from_i799():
+    from scripts.tournament_cockpit_server import generate_cockpit_html
+
+    sample_arms = [
+        {
+            "name": "balanced-mid",
+            "label": "Balanced Mid",
+            "color": "#e040fb",
+            "desc": "balanced preset: dynamic 0.50x, 2-4c",
+            "total_pnl": 23.39,
+            "mean_pnl": 0.145,
+            "sharpe_proxy": 1.70,
+            "profit_factor": 1.84,
+            "win_rate": 60.2,
+            "merge_rate": 59.0,
+            "max_drawdown": 9.64,
+            "mc_p5": 2.17,
+            "score": 93,
+            "readiness": "READY FOR LIVE",
+            "badge_cls": "badge-green",
+        },
+        {
+            "name": "queue-clear-5m",
+            "label": "Queue Clear 5m",
+            "color": "#18ffff",
+            "desc": "queue-clear gate on, 5-minute max clear",
+            "total_pnl": 17.39,
+            "mean_pnl": 0.202,
+            "sharpe_proxy": 4.67,
+            "profit_factor": 3.23,
+            "win_rate": 66.3,
+            "merge_rate": 64.0,
+            "max_drawdown": 2.60,
+            "mc_p5": 12.90,
+            "score": 98,
+            "readiness": "READY FOR LIVE",
+            "badge_cls": "badge-green",
+        },
+        {
+            "name": "hair-trigger-2c",
+            "label": "Hair Trigger 2c",
+            "color": "#ff4081",
+            "desc": "2c absolute stop on a naked leg",
+            "total_pnl": 10.31,
+            "mean_pnl": 0.074,
+            "sharpe_proxy": 1.40,
+            "profit_factor": 1.44,
+            "win_rate": 42.4,
+            "merge_rate": 41.0,
+            "max_drawdown": 7.49,
+            "mc_p5": -0.35,
+            "score": 77,
+            "readiness": "READY FOR LIVE",
+            "badge_cls": "badge-green",
+        },
+        {
+            "name": "patient-stop-9c",
+            "label": "Patient Stop 9c",
+            "color": "#b388ff",
+            "desc": "9c absolute stop on a naked leg",
+            "total_pnl": 6.43,
+            "mean_pnl": 0.051,
+            "sharpe_proxy": 0.52,
+            "profit_factor": 1.20,
+            "win_rate": 51.2,
+            "merge_rate": 49.6,
+            "max_drawdown": 11.09,
+            "mc_p5": -9.56,
+            "score": 68,
+            "readiness": "NEEDS TUNING",
+            "badge_cls": "badge-amber",
+        },
+    ]
+    html = generate_cockpit_html({"arms": sample_arms, "tourney_key": "799"})
+    start_marker = "<!-- TAB 6: RECOMMENDATIONS -->"
+    end_marker = "<script>"
+    start_idx = html.find(start_marker)
+    end_idx = html.find(end_marker)
+    assert start_idx != -1 and end_idx != -1
+    rec_tab = html[start_idx:end_idx]
+
+    # Stale #485 evaluation text must be completely purged
+    assert "deadband-wide (Issue #485)" not in rec_tab
+    assert "queuehug" not in rec_tab
+    assert "-$14.96" not in rec_tab
+    assert "deadband-tight" not in rec_tab
+    assert "-$17.40" not in rec_tab
+    assert "Avoid: <code>balanced</code>" not in rec_tab
+
+    # Updated #799 Live Readiness Decision Matrix must be present
+    assert "Live Readiness Decision Matrix" in rec_tab
+    assert "decision-matrix-tbody" in rec_tab
+    assert "queue-clear-5m" in rec_tab
+    assert "balanced-mid" in rec_tab
+    assert "READY FOR LIVE" in rec_tab
+    assert "hair-trigger" in rec_tab.lower()
+    assert "patient-stop" in rec_tab.lower()
+    assert "score" in rec_tab.lower()
+
+
+
+
+
+
+
 # --- Issue #487: the current-setup ten-arm tournament ------------------------
 
 I487_ARMS = (
