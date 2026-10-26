@@ -89,12 +89,17 @@ def test_stitch_closed_trades_pair_renders_single_row_with_both_legs_and_single_
     assert "+$0.70" in res["html"]
     assert "YES" in res["html"]
     assert "NO" in res["html"]
-    # EXEC TYPE replaces the old STATUS badge: same outcome, own column.
-    assert "Pair Merge" in res["html"]
+    # EXEC TYPE replaces the old STATUS badge: same outcome, own column, and it
+    # is a pill now (#831). "Merge" alone also matches the old "Pair Merge", so
+    # the old wording is asserted gone rather than merely shadowed.
+    assert 'stitch-exec-type is-merge">Merge</span>' in res["html"]
+    assert "Pair Merge" not in res["html"]
     assert "stitch-exec-type" in res["html"]
     assert "Fed Rate Cut in June" in res["parentTableHtml"]
     assert "+$0.70" in res["parentTableHtml"]
-    assert "1 Merged" in res["parentTableHtml"]
+    # The outcome column counts money now, not the method that closed it (#831).
+    assert "1 Win" in res["parentTableHtml"]
+    assert "Merged" not in res["parentTableHtml"]
 
 
 @requires_node
@@ -275,3 +280,162 @@ def test_stitch_closed_trades_empty_and_ledger_row_span_all_seven_columns():
     assert "No closed trades yet" in res["empty"]
     expand = res["full"].split("stitch-expand-row")[1].split("</td>")[0]
     assert 'colspan="7"' in expand, "the ledger detail row must span the new column count"
+
+# --- #831: the outcome column counts money, and the type is a pill ----------
+
+@requires_node
+def test_stitch_closed_trades_outcome_counts_money_not_method():
+    """#831: 2 profitable merges + 4 losing sales used to read "2 Merged" and
+    say nothing about the four losses. The column counts the money now."""
+    code = """
+    const settlements = [
+        { method: 'merge', shares: 10, cost_basis: 9.30, proceeds: 10.00, realized_pnl: 0.70, ts: 1700000000 },
+        { method: 'merge', shares: 10, cost_basis: 9.40, proceeds: 10.00, realized_pnl: 0.60, ts: 1700000010 },
+        { method: 'sell', shares: 5, cost_basis: 2.50, proceeds: 1.00, realized_pnl: -1.50, ts: 1700000020 },
+        { method: 'sell', shares: 5, cost_basis: 2.50, proceeds: 1.00, realized_pnl: -1.50, ts: 1700000030 },
+        { method: 'sell', shares: 5, cost_basis: 2.50, proceeds: 1.00, realized_pnl: -1.50, ts: 1700000040 },
+        { method: 'sell', shares: 5, cost_basis: 2.50, proceeds: 1.00, realized_pnl: -1.50, ts: 1700000050 }
+    ];
+    const kpi = { by_market: { '0xmix': {
+        condition_id: '0xmix', title: 'Mixed Market', category: 'Sports',
+        settlements, realized_pnl: -5.40, total_cost: 0, total_sh: 0 } } };
+    const html = app.stitchClosedTradesRows(kpi, { orders: [] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    html = json.loads(_eval_js(code))["html"]
+    assert "stitch-pill-count win" in html
+    assert "\u25cf 2 Wins" in html, "two profitable merges are two wins"
+    assert "stitch-pill-count loss" in html
+    assert "\u25cf 4 Losses" in html, "four losing sales are four losses"
+    # The method vocabulary is gone from this column: it counted mechanics.
+    assert "Merged" not in html
+    assert "Stop<" not in html
+    assert "Expired<" not in html
+
+
+@requires_node
+def test_stitch_closed_trades_flat_execution_counts_as_neither():
+    """An explicit realized_pnl of 0 is a booked zero: it must stay zero (never
+    re-derived from prices) and must not tip either count."""
+    code = """
+    const settlements = [
+        { method: 'merge', shares: 10, cost_basis: 9.30, proceeds: 10.00, realized_pnl: 0.70, ts: 1700000000 },
+        { method: 'merge', shares: 10, cost_basis: 9.00, proceeds: 10.00, realized_pnl: 0, ts: 1700000010 }
+    ];
+    const kpi = { by_market: { '0xflat': {
+        condition_id: '0xflat', title: 'Flat Market', category: 'Sports',
+        settlements, realized_pnl: 0.70, total_cost: 0, total_sh: 0 } } };
+    // The ledger rows only exist while the market is open, so open it.
+    app.expandedMarkets.add('0xflat');
+    const html = app.stitchClosedTradesRows(kpi, { orders: [] }, null);
+    app.expandedMarkets.delete('0xflat');
+    console.log(JSON.stringify({ html }));
+    """
+    html = json.loads(_eval_js(code))["html"]
+    assert "\u25cf 1 Win" in html
+    assert "1 Wins" not in html, "one win is singular"
+    assert "stitch-pill-count loss" not in html, "a booked zero is not a loss"
+    assert "stitch-pill-count neutral" not in html, "one win means the column is not empty"
+    # Explicit zero survives: proceeds - cost_basis would have said +$1.00.
+    assert "+$1.00" not in html
+    assert "+$0.00" in html
+
+
+@requires_node
+def test_stitch_closed_trades_missing_realized_pnl_falls_back_to_proceeds_minus_cost():
+    """An execution that never recorded realized_pnl is measured as proceeds
+    minus cost basis — the same arithmetic its own row prints."""
+    code = """
+    const settlements = [
+        { method: 'sell', shares: 5, cost_basis: 2.50, proceeds: 1.00, ts: 1700000000 },
+        { method: 'sell', shares: 5, cost_basis: 2.50, proceeds: 5.00, realized_pnl: null, ts: 1700000010 }
+    ];
+    const kpi = { by_market: { '0xnull': {
+        condition_id: '0xnull', title: 'Null Market', category: 'Sports',
+        settlements, realized_pnl: 1.00, total_cost: 0, total_sh: 0 } } };
+    const html = app.stitchClosedTradesRows(kpi, { orders: [] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    html = json.loads(_eval_js(code))["html"]
+    assert "\u25cf 1 Win" in html, "proceeds 5.00 over a 2.50 basis is a win"
+    assert "\u25cf 1 Loss" in html, "proceeds 1.00 under a 2.50 basis is a loss"
+
+
+@requires_node
+def test_stitch_closed_trades_every_exec_type_is_a_labelled_pill():
+    """One pill per row, five labels: Merge / Sale / Stop Loss / Grace Expired /
+    Resolved. The backend's method words never reach the operator."""
+    code = """
+    const settlements = [
+        { method: 'merge', shares: 5, cost_basis: 5.0, proceeds: 5.5, realized_pnl: 0.5, ts: 1700000000 },
+        { method: 'shadow_merge', shares: 5, cost_basis: 5.0, proceeds: 5.5, realized_pnl: 0.5, ts: 1700000001 },
+        { method: 'sell', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000002 },
+        { method: 'stop_loss_exit', reason: 'lifecycle_hard_stop', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000003 },
+        { method: 'aged_out_exit', reason: 'grace_expired', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000004 },
+        { method: 'settlement', shares: 5, cost_basis: 5.0, proceeds: 0.0, realized_pnl: -5.0, ts: 1700000005 },
+        { method: 'shadow_settlement', shares: 5, cost_basis: 5.0, proceeds: 0.0, realized_pnl: -5.0, ts: 1700000006 }
+    ];
+    const html = app.renderStitchClosedLedgerRows('0x123', {}, settlements, [], Date.now());
+    console.log(JSON.stringify({ html }));
+    """
+    html = json.loads(_eval_js(code))["html"]
+    for modifier, label in (("is-merge", "Merge"), ("is-sale", "Sale"),
+                            ("is-stop-loss", "Stop Loss"),
+                            ("is-grace-expired", "Grace Expired"),
+                            ("is-resolved", "Resolved")):
+        assert f'stitch-exec-type {modifier}">{label}</span>' in html, label
+    assert "Pair Merge" not in html
+    assert ">Settlement<" not in html, "a resolved market reads Resolved"
+
+
+@requires_node
+def test_stitch_closed_trades_order_fallback_keeps_merge_and_sale_labels():
+    """A market with orders but no settlements still gets pills: merged pairs
+    read Merge, everything else Sale."""
+    code = """
+    const orders = [
+        { pair_id: 'p1', condition_id: '0x1', token_side: 'UP', price: 0.50, size_matched: 5, original_size: 5, status: 'merged', age_sec: 60 },
+        { pair_id: 'p1', condition_id: '0x1', token_side: 'DOWN', price: 0.48, size_matched: 5, original_size: 5, status: 'merged', age_sec: 60 },
+        { pair_id: 'p2', condition_id: '0x1', token_side: 'UP', price: 0.50, size_matched: 5, original_size: 5, status: 'filled', age_sec: 60 },
+        { pair_id: 'p2', condition_id: '0x1', token_side: 'DOWN', price: 0.48, size_matched: 5, original_size: 5, status: 'filled', age_sec: 60 },
+        { pair_id: 'p3', condition_id: '0x1', token_side: 'UP', price: 0.50, size_matched: 5, original_size: 5, status: 'merged', age_sec: 60 },
+        { pair_id: 'p4', condition_id: '0x1', token_side: 'DOWN', price: 0.48, size_matched: 5, original_size: 5, status: 'filled', age_sec: 60 }
+    ];
+    const html = app.renderStitchClosedLedgerRows('0x1', {}, [], orders, Date.now());
+    console.log(JSON.stringify({ html }));
+    """
+    html = json.loads(_eval_js(code))["html"]
+    assert html.count('<span class="stitch-exec-type is-merge">Merge</span>') == 2
+    assert html.count('<span class="stitch-exec-type is-sale">Sale</span>') == 2
+    assert "Pair Merge" not in html
+
+
+@requires_node
+def test_stitch_closed_trades_expanded_row_drops_the_duplicate_summary_strip():
+    """The strip repeated the parent row's Total Cost and Net Realized inside
+    the ledger. The parent keeps both; the duplicate is gone."""
+    code = """
+    const settlements = [
+        { method: 'merge', shares: 10, cost_basis: 9.30, proceeds: 10.00, realized_pnl: 0.70, ts: 1700000000 }
+    ];
+    const kpi = { by_market: { '0xdup': {
+        condition_id: '0xdup', title: 'Dup Market', category: 'Sports',
+        settlements, realized_pnl: 0.55, total_cost: 0.35, total_sh: 0 } } };
+    app.expandedMarkets.add('0xdup');
+    const html = app.stitchClosedTradesRows(kpi, { orders: [] }, null);
+    app.expandedMarkets.delete('0xdup');
+    const parts = html.split('class="stitch-expand-row"');
+    console.log(JSON.stringify({ html, parent: parts[0], ledger: parts[1] }));
+    """
+    res = json.loads(_eval_js(code))
+    html = res["html"]
+    assert "stitch-closed-ledger-strip" not in html
+    assert "Net Realized" not in html
+    assert "Orphan" not in html
+    assert "Total Cost:" not in html
+    # The parent row still carries the settlement-summed basis and the market's
+    # OWN realized PnL — 0.55, not the 0.70 the settlements would re-sum to.
+    assert "$9.30" in res["parent"]
+    assert "+$0.55" in res["parent"]
+    assert "+$0.70" not in res["parent"]
+    assert "stitch-exec-type is-merge" in res["ledger"]

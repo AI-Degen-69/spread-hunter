@@ -1,65 +1,79 @@
-# CONSTRAINTS.md — Issue #795: hard-stopped pair resells its own closed shares
+# CONSTRAINTS.md — Issue #831: Closed-trades outcome shows wins and losses with exec-type pills
 
-Branch: `i795/fix-a-hard-stopped-pair-keeps-reselling-its-own-cl` | Issue: #795
+Branch: `i831/closed-trades-wins-losses-exec-pills` | Issue: #831
 
 Locked during Station II planning. Stations III–V must hold every line below.
 Tighten only with operator approval; never loosen silently.
 
 ## Zero regressions
 
-- Focused suites for the touched modules must be green after the change:
-  `tests/test_single_buy_saver.py tests/test_single_leg_lifecycle.py`
-  `tests/test_refill_after_exit.py tests/test_partial_exit_stays_managed.py`
-  `tests/test_hard_stop_reset.py tests/test_order_registry.py tests/test_rc_fixes.py`.
-- Existing behaviors stay pinned with unchanged outcomes: the 5-share
-  shortfall refusal in `test_refill_after_exit.py`, the `[10, 10]` refill
-  sales, the partial-exit replay, the one-connection test
-  (`tests/test_single_buy_saver.py:458-481`), and the `6.0` expectation in
-  `tests/test_rc_fixes.py:151-177`.
-- Every new behavior needs a test that fails without it: the moe two-pass
-  replay (old pair reads zero naked, new close books new-pair cost), the
-  close cost cap (second close books 1.00 not 5.00), and the netting
-  boundaries (inclusive earliest-`posted_ts`, both-prices-set exclusion,
-  unmapped-token exclusion).
+- Focused suites for the touched module must be green after the change:
+  `tests/test_stitch_closed_trades.py tests/test_orders_trades_table.py
+  tests/test_close_method_taxonomy.py`. The full `python -m pytest -q` regression
+  suite is the GitHub CI merge gate; it is not re-run locally during review.
+- Pinned and unchanged: #579 cost-basis Total Cost and its column sort
+  (`tests/test_stitch_closed_trades.py:193-234`), the `colspan="7"` span of the
+  expanded row (`:267-277`), the Stop Loss / Grace Expired label checks
+  (`:137-145`), the classic zero-profit exclusion
+  (`tests/test_orders_trades_table.py:1299-1310`), the classic Orders badge tones
+  (`:2953-2965`), and every classic-surface assertion in
+  `tests/test_orders_trades_table.py` (it renders `surface="classic"` unless it
+  says otherwise, so the legacy Closed Trades renderer is not touched).
+- Every new behaviour needs a test that fails without it: the mixed
+  2-win/4-loss count, the explicit-zero exclusion, the missing/null
+  `realized_pnl` fallback, all five exec-type labels with their modifiers, the
+  synthetic order fallback, and the removed summary strip with the parent row's
+  totals still rendered.
 
 ## Scope fences (hard)
 
-- **Only these production files change:** `core_brain/order_registry.py`
-  (one new pair-scoped rescue-totals read next to
-  `get_pair_orders_with_fill_totals`) and `core_brain/single_buy_saver.py`
-  (`load_pair` netting, removal of the two `_prior_exit_shares` credits,
-  `cost_basis` cap in `_record_exit_close`, poll-loop review).
-- `registry_naked_usd` and its `rescue_net` CTE stay byte-identical in
-  behavior — the new read copies its predicates, never edits them.
-  `get_pair_orders_with_fill_totals` keeps its signature and behavior for
-  its other callers.
-- **No writes to any named `.db`.** All new tests use temporary
-  `OrderRegistry` databases. `data/orders.db` and
-  `data/01_shadow_23-10_20-16.db` are read-only evidence, never fixtures.
-- **No venue-reaching command.** No `quote`, `complete`, Trader loop, or
-  dashboard START. Verification is `pytest` on the focused suites only.
+- **Only these files change:** `dashboard/static/app.js`,
+  `dashboard/static/prototype.css`, `tests/test_stitch_closed_trades.py`
+  (plus planning artifacts `tasks/plan.md`, `tasks/todo.md`).
+- **Presentation only.** `m.realized_pnl`, `closedTradeCostBasis`,
+  `closedTradesEntries`, `closeTsOf`, the KPI envelope and every file under
+  `core_brain/` and `dashboard/` outside `static/` stay byte-identical. No
+  backend rename of a settlement method.
+- **Legacy renderer untouched:** `closedTradesRows`, `marketRowPairHtml`,
+  `renderExpandedOrders`. Only the Stitch builders change
+  (`stitchClosedTradesRows`, `renderStitchClosedLedgerRows`,
+  `stitchLedgerChildRow`).
+- **Open Orders and Positions are out of scope.** Shared base rules
+  (`.stitch-leg-pill`, `.stitch-pnl-val`, `.stitch-arb-badge`,
+  `.stitch-status-badge`) are not edited.
+- **Seven columns stay seven**, in the same order; the expanded row keeps
+  `colspan="7"`; the `OUTCOME BREAKDOWN` header and the reason chip / winner
+  badge stay as they are.
+- **No new method-name string list in `app.js`.** The taxonomy guard
+  (`tests/test_close_method_taxonomy.py`) flags JS arrays of quoted strings
+  holding a lowercase close method. Classification stays the existing
+  comparison chain; a display-label → CSS-class map is allowed.
+- **No writes to any named `.db`.** No venue-reaching command: no `quote`,
+  `complete`, Trader loop, or dashboard START.
 
 ## Anti-cheat
 
-- Never skip, xfail, or delete a test to get green; never weaken an
-  assertion or suppress a linter to pass.
-- The netting and the removal of BOTH prior-exit credits land in the same
-  change: `load_pair` netting with either credit left in place double-counts
-  (credit hides real shortfalls) and is a red state, never a checkpoint.
-- Never widen the time scope beyond `rescue_net`'s rule (closes at or after
-  the pair's earliest `posted_ts`). The known concurrent-pairs-on-one-token
-  limit stays documented, not fixed here.
+- Never skip, xfail, or delete a test to get green; never weaken an assertion,
+  and never edit the CSS or HTML just to satisfy a substring assertion.
+- The classification order (`merge` → stop → grace → settlement → sale) and the
+  null check on `realized_pnl` land unchanged: an explicit `realized_pnl: 0`
+  stays `0` even when `proceeds - cost_basis` is non-zero, and counts as neither
+  a win nor a loss.
+- Green means a win and red means a loss, and nothing else. No exec-type pill
+  may reuse those tones; a losing merge must never render green.
+- Delete a CSS rule only after a grep proves no `dashboard/static/*.js` string
+  still emits its class.
 
 ## Performance / architecture ceilings
 
-- The pair read stays at **one connection** (`tests/test_single_buy_saver.py:458-481`):
-  fill rows + rescued totals in a single `_conn()` block, no per-order reads.
-- No new external dependency, no new package, no new file under
-  `core_brain/`. One registry method, netting inside the existing
-  `load_pair` view — no second inventory abstraction.
+- One money rule, one source: the parent counts and the ledger rows read the
+  same helper. No second classification loop in `stitchClosedTradesRows`.
+- No new external dependency, no new file under `dashboard/static/`, no new
+  render pass: the parent row keeps computing from data it already has.
+- Pure functions only — no globals, no timers, no extra DOM reads.
 
 ## Safety (repo rules)
 
 - `data/*.db` are gitignored and must never be committed.
-- Retire `_prior_exit_shares` only when a grep proves zero remaining
-  callers; its scoping tests move to `load_pair`, never dropped.
+- Verification for the operator is the dashboard click path, never `pytest`,
+  `gh`, or `git`.

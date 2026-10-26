@@ -8947,6 +8947,25 @@ function stitchClosedTradesHeadHtml(sort) {
   return `<tr>${cells}</tr>`;
 }
 
+/* The five labels one execution can carry, and the class each one wears. An
+ * object map, never a string list: this is display vocabulary, and the
+ * close-method taxonomy guard forbids a second method-name list in this file
+ * (#520 / #558). */
+const EXEC_TYPE_CLASSES = Object.freeze({
+  'Merge': 'is-merge',
+  'Sale': 'is-sale',
+  'Stop Loss': 'is-stop-loss',
+  'Grace Expired': 'is-grace-expired',
+  'Resolved': 'is-resolved',
+});
+
+/* Returns the class SUFFIX, leading space included, so the caller can append it
+ * straight into the attribute and an unmapped label renders as no modifier. */
+function execTypeClassSuffix(execType) {
+  const cls = EXEC_TYPE_CLASSES[execType];
+  return cls ? ` ${cls}` : '';
+}
+
 /* Shared Closed-Trades ledger row: TIMESTAMP | EXEC TYPE | DUAL LEGS |
  * ENTRY | EXIT | SIZE | PNL. One builder for all three row sources
  * (settlements, paired orders, single orders) so the child table can
@@ -8955,7 +8974,7 @@ function stitchLedgerChildRow(tsDisp, execType, legsHtml, entryPrice, entryCost,
   const cls = pnl > 0 ? 'pos' : (pnl < 0 ? 'neg' : 'flat');
   return `<tr class="stitch-ledger-row">`
     + `<td class="mono font-tabular"><div class="stitch-age-stopwatch">${tsDisp}</div></td>`
-    + `<td><span class="stitch-exec-type">${execType}</span></td>`
+    + `<td><span class="stitch-exec-type${execTypeClassSuffix(execType)}">${execType}</span></td>`
     + `<td>${legsHtml}</td>`
     + `<td class="mono font-tabular"><div class="stitch-price-val">${entryPrice !== null ? fmtPrice(entryPrice) : '--'}</div>`
     + `<div class="stitch-mid-sub">cost ${fmtUSD(entryCost)}</div></td>`
@@ -8999,7 +9018,7 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
       const shares = Number(s.shares || 0);
       const costBasis = Number(s.cost_basis || 0);
       const proceeds = Number(s.proceeds || 0);
-      const realizedPnl = Number(s.realized_pnl != null ? s.realized_pnl : (proceeds - costBasis));
+      const realizedPnl = stitchSettlementPnl(s);
       const pnlPct = costBasis > 0 ? (realizedPnl / costBasis) * 100 : 0;
 
       const method = String(s.method || '').toLowerCase();
@@ -9009,10 +9028,19 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
       const isStopLoss = reason === 'lifecycle_hard_stop' || method === 'stop_loss_exit' || reason.includes('stop_loss') || reason === 'adverse_drift';
       const isGraceExpired = reason === 'grace_expired' || reason === 'aged_out_rescue' || reason.includes('grace_expired') || method.includes('aged_out');
       const isSettlement = method === 'settlement' || method === 'shadow_settlement';
-      // EXEC TYPE replaces the STATUS badge: the outcome IS the type.
-      const execType = isMerge ? 'Pair Merge'
-        : (isStopLoss ? 'Stop Loss'
-        : (isGraceExpired ? 'Grace Expired' : (isSettlement ? 'Settlement' : 'Sale')));
+      // EXEC TYPE replaces the STATUS badge: the outcome IS the type. The words
+      // are the operator's, not the backend's: a merged pair reads Merge, and a
+      // settlement reads Resolved — the position was held until the market ended.
+      // First match wins, top to bottom: a merged pair is Merge, a stopped one
+      // Stop Loss, an aged-out one Grace Expired, a settlement Resolved, and
+      // anything else was sold on the book.
+      const execTypeRule = [
+        [isMerge, 'Merge'],
+        [isStopLoss, 'Stop Loss'],
+        [isGraceExpired, 'Grace Expired'],
+        [isSettlement, 'Resolved'],
+      ].find(([matches]) => matches);
+      const execType = execTypeRule ? execTypeRule[1] : 'Sale';
 
       const upCostRem = Number(s.up_cost_removed || 0);
       const dnCostRem = Number(s.dn_cost_removed || 0);
@@ -9087,7 +9115,7 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
         const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
         const ageSec = upOrder.age_sec != null ? upOrder.age_sec : dnOrder.age_sec;
         const tsDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
-        return stitchLedgerChildRow(tsDisp, isMerged ? 'Pair Merge' : 'Sale',
+        return stitchLedgerChildRow(tsDisp, isMerged ? 'Merge' : 'Sale',
           stitchLedgerLegs(true, upSize, upPx, upCost, dnSize, dnPx, dnCost),
           entryPrice, costBasis, exitPrice, proceeds,
           `${fmtShares(shares)} pairs`, pnl, pnlPct);
@@ -9106,7 +9134,7 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
         const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
         const ageSec = o.age_sec != null ? o.age_sec : null;
         const tsDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
-        return stitchLedgerChildRow(tsDisp, isMerged ? 'Pair Merge' : 'Sale',
+        return stitchLedgerChildRow(tsDisp, isMerged ? 'Merge' : 'Sale',
           stitchLedgerLegs(false, 0, 0, 0, 0, 0, 0, isUp ? 'YES' : 'NO', isUp ? 'yes' : 'no', size, price, costBasis),
           price, costBasis, exitPrice, proceeds,
           `${fmtShares(size)} sh`, pnl, pnlPct);
@@ -9123,6 +9151,18 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
  * column and the column sort read this one number. */
 function closedTradeCostBasis(m) {
   return (m.settlements || []).reduce((acc, s) => acc + (Number(s.cost_basis) || 0), 0);
+}
+
+/* One money rule for one execution, shared by the ledger row that prints it and
+ * the parent row's Outcome Breakdown that counts it (#831): an explicit
+ * `realized_pnl` always wins — a booked zero stays zero, never re-derived from
+ * the prices — and an execution that never recorded one is measured as
+ * proceeds minus cost basis, exactly the arithmetic its row shows. */
+function stitchSettlementPnl(s) {
+  if (!s) return 0;
+  const raw = s.realized_pnl;
+  if (raw !== null && raw !== undefined) return Number(raw);
+  return (Number(s.proceeds) || 0) - (Number(s.cost_basis) || 0);
 }
 
 function stitchClosedTradesRows(kpi, state, sort) {
@@ -9158,24 +9198,18 @@ function stitchClosedTradesRows(kpi, state, sort) {
     const marketUrl = m.url || (m.slug ? `https://polymarket.com/event/${m.slug}` : `https://polymarket.com/market/${cid}`);
     const title = m.title || m.name || m.slug || cid.slice(0, 16);
 
-    // Summary counts of exit outcomes
-    let mergedCount = 0;
-    let stopLossCount = 0;
-    let graceExpiredCount = 0;
-    let settledCount = 0;
-
+    // Outcome counts are money, not mechanics (#831). The column used to count
+    // HOW each execution closed (merged / stopped / expired), so a market with
+    // two profitable merges and four losing sales read "2 Merged" and hid the
+    // four losses. Now an execution that booked a profit is a win, one that
+    // booked a loss is a loss, and an exact $0.00 is neither — the same rule the
+    // ledger row prints, so the count and the rows can never disagree.
+    let winCount = 0;
+    let lossCount = 0;
     for (const s of settlements) {
-      const method = String(s.method || '').toLowerCase();
-      const reason = String(s.reason || '').toLowerCase();
-      if (method === 'merge' || method === 'shadow_merge') {
-        mergedCount++;
-      } else if (reason === 'lifecycle_hard_stop' || method === 'stop_loss_exit' || reason.includes('stop_loss') || reason === 'adverse_drift') {
-        stopLossCount++;
-      } else if (reason === 'grace_expired' || reason === 'aged_out_rescue' || reason.includes('grace_expired') || method.includes('aged_out')) {
-        graceExpiredCount++;
-      } else if (method === 'settlement' || method === 'shadow_settlement') {
-        settledCount++;
-      }
+      const pnl = stitchSettlementPnl(s);
+      if (pnl > 0) winCount++;
+      else if (pnl < 0) lossCount++;
     }
 
     // Total Cost is the basis of what CLOSED in this market, summed from the
@@ -9237,10 +9271,9 @@ function stitchClosedTradesRows(kpi, state, sort) {
       <!-- Col 3: OUTCOME BREAKDOWN (summary counts) -->
       <td>
         <div class="stitch-breakdown-pills">
-          ${mergedCount > 0 ? `<span class="stitch-pill-count merged" title="${mergedCount} merged pairs">● ${mergedCount} Merged</span>` : ''}
-          ${stopLossCount > 0 ? `<span class="stitch-pill-count stop-loss" title="${stopLossCount} exited at stop loss">⚠️ ${stopLossCount} Stop</span>` : ''}
-          ${graceExpiredCount > 0 ? `<span class="stitch-pill-count grace-expired" title="${graceExpiredCount} grace period expired">⏱ ${graceExpiredCount} Expired</span>` : ''}
-          ${(mergedCount === 0 && stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-pill-count neutral">${settledCount > 0 ? `${settledCount} Settled` : `${executionItemsCount} Closed`}</span>` : ''}
+          ${winCount > 0 ? `<span class="stitch-pill-count win" title="${winCount} execution${winCount !== 1 ? 's' : ''} booked a profit">● ${winCount} ${winCount === 1 ? 'Win' : 'Wins'}</span>` : ''}
+          ${lossCount > 0 ? `<span class="stitch-pill-count loss" title="${lossCount} execution${lossCount !== 1 ? 's' : ''} booked a loss">● ${lossCount} ${lossCount === 1 ? 'Loss' : 'Losses'}</span>` : ''}
+          ${(winCount === 0 && lossCount === 0) ? `<span class="stitch-pill-count neutral" title="Every execution in this market closed exactly flat">${executionItemsCount} Closed</span>` : ''}
         </div>
       </td>
 
@@ -9276,21 +9309,6 @@ function stitchClosedTradesRows(kpi, state, sort) {
       html += `<tr class="stitch-expand-row">
         <td colspan="7" style="padding:0;background:#090d16;">
           <div class="stitch-closed-ledger-card">
-            <!-- Summary Strip -->
-            <div class="stitch-closed-ledger-strip">
-              <div class="stitch-strip-left">
-                <span class="stitch-strip-metric">Total Cost: <b>${fmtUSD(totalCost)}</b></span>
-                <span class="stitch-strip-divider">|</span>
-                <span class="stitch-strip-metric">Net Realized: <b class="${pnlCls}">${realizedPnl >= 0 ? '+' : ''}${fmtUSD(realizedPnl)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</b></span>
-              </div>
-              <div class="stitch-strip-badges">
-                <span class="stitch-badge-outcome merged">● ${mergedCount} Merged Pair${mergedCount !== 1 ? 's' : ''}</span>
-                ${stopLossCount > 0 ? `<span class="stitch-badge-outcome stop-loss">⚠️ ${stopLossCount} Stop Loss</span>` : ''}
-                ${graceExpiredCount > 0 ? `<span class="stitch-badge-outcome grace-expired">⏱ ${graceExpiredCount} Grace Expired</span>` : ''}
-                ${(stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-badge-outcome clean">✓ 0 Orphan / 0 Stops</span>` : ''}
-              </div>
-            </div>
-
             <!-- Ledger Table -->
             <div class="stitch-ledger-table-wrap">
               <table class="stitch-ledger-subtable">
