@@ -29,15 +29,18 @@ no axes, no hover values, inconsistent footers.
 
 ### 1. CI card (`#pnl-ci-readout`)
 
-- Add a KPI picker to the card header (Mean PnL $ / Expectancy $ / Mean Return %
-  / Win Rate). Selection is view-local state; a poll repaint preserves it.
+- Add a KPI picker to the card (segmented control above the band, rendered by
+  the same readout so it survives repaints): Mean PnL $ / Expectancy $ /
+  Mean Return % / Win Rate. Selection is view-local module state; a poll
+  repaint preserves it.
 - Add `resolveCiView(kpiKey, trade_analytics)` in `app.js`: one adapter returning
   `{mean, n, l90, l95, verdict, units}` from fields the payload already ships —
   `mean_pnl_ci` for Mean PnL $, the same spread for Expectancy $, `mean_return_pct`
   + `ci95_return_pct` + `ci90_lower_pct` for Mean Return %, `win_rate` +
-  `win_rate_ci95` for the 95 band, and a JS Wilson recomputation from
-  (`wins`, `n_closes`) at z=1.645 for the 90 band, matching the
-  `core_brain/kpi.py::_wilson_ci` formula. No `core_brain/kpi.py` change.
+  `win_rate_ci95` for the 95 band and the shipped `win_rate_ci90` for the 90
+  band (both Wilson rows from `core_brain/kpi.py::_wilson_ci`; the z lives in
+  the backend's one critical-value table per #535, so no renderer writes one
+  down). The only `kpi.py` change is the additive `win_rate_ci90` field.
 - Keep the nested-bar language: 90 inner, 95 outer, mean-diamond pointer,
   zero line (`$0.00` for $ metrics, `0%` for return %, `50%` reference for win
   rate), per-KPI verdict text ("band clear of zero" for $/% means; "band clear

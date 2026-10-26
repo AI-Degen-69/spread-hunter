@@ -242,7 +242,16 @@ function chartScales(values, opts) {
   };
 }
 
-/* Histogram bars (equal-width bins) -> `<rect>` list. */
+/* Histogram bars (equal-width bins) -> `<rect>` list. Every bar carries a
+ * native-SVG `<title>` with its bin range and value, so the operator can read
+ * exact figures without a tooltip library or a new dependency. */
+function barTitle(b, i, v, key) {
+  const hasRange = b.min !== undefined && b.max !== undefined
+    && num(b.min) !== null && num(b.max) !== null;
+  const range = hasRange ? `${num(b.min)}–${num(b.max)}` : `bin ${i + 1}`;
+  return `${range}: ${key === 'count' || key === 'empirical_count' ? v : num(v) !== null ? Number(v).toFixed(3) : v} ${key}`;
+}
+
 function barsFromBins(bins, field) {
   if (!bins || !bins.length) return '';
   const key = field || 'count';
@@ -255,8 +264,25 @@ function barsFromBins(bins, field) {
     const v = num(b[key]) || 0;
     if (v <= 0) return '';
     const y = s.y(v);
-    return `<rect x="${(CH.pad + i * slot + (slot - bw) / 2).toFixed(2)}" y="${y.toFixed(2)}" width="${bw.toFixed(2)}" height="${(CH.base - y).toFixed(2)}" fill="#1E293B" stroke="#334155" stroke-width="0.5"/>`;
+    return `<rect x="${(CH.pad + i * slot + (slot - bw) / 2).toFixed(2)}" y="${y.toFixed(2)}" width="${bw.toFixed(2)}" height="${(CH.base - y).toFixed(2)}" fill="#1E293B" stroke="#334155" stroke-width="0.5"><title>${esc(barTitle(b, i, v, key))}</title></rect>`;
   }).join('');
+}
+
+/* Axis end labels: the data minimum at the left pad, the maximum at the
+ * right, one line below the bars. A chart without named ends is a shape;
+ * with them it is a measurement. */
+function axisEnds(lo, hi, text) {
+  const t = text || ((v) => String(v));
+  return `<text x="${CH.pad}" y="${CH.base + 16}" fill="#64748B" font-size="10" text-anchor="start">${esc(t(lo))}</text>` +
+    `<text x="${CH.w - CH.pad}" y="${CH.base + 16}" fill="#64748B" font-size="10" text-anchor="end">${esc(t(hi))}</text>`;
+}
+
+/* A named zero line at its data position, not at the panel centre. */
+function zeroLine(lo, hi, label) {
+  if (!(lo <= 0 && 0 <= hi) || hi === lo) return '';
+  const x = CH.pad + ((0 - lo) / (hi - lo)) * (CH.w - CH.pad * 2);
+  return `<line x1="${x.toFixed(1)}" y1="${CH.pad}" x2="${x.toFixed(1)}" y2="${CH.base}" stroke="#F9FAFB" stroke-width="1" stroke-dasharray="4 3"><title>${esc(label || 'zero')}</title></line>` +
+    `<text x="${x.toFixed(1)}" y="${CH.base + 16}" fill="#94A3B8" font-size="10" text-anchor="middle">${esc(label || '0')}</text>`;
 }
 
 /* Gaussian bell over the bin centres -> path. */
@@ -454,9 +480,11 @@ function paintCharts(root, kpi) {
     });
     const mean = num(pr.mean_pnl_pct), sd = num(pr.stdev_pnl_pct);
     const ci95 = ta.ci95_return_pct || {};
+    const bell = bellPath(hist, mean, sd);
     set('ch1', gridlines() + barsFromBins(hist, 'count') +
-      (bellPath(hist, mean, sd) ? `<path d="${bellPath(hist, mean, sd)}" fill="none" stroke="#38BDF8" stroke-width="2"/>` : '') +
-      `<line x1="240" y1="14" x2="240" y2="180" stroke="#F9FAFB" stroke-width="1" stroke-dasharray="4 3"/>`);
+      (bell ? `<g><title>Normal fit: µ ${format(mean, 'pct')}, σ ±${format(sd, 'pct')}</title><path d="${bell}" fill="none" stroke="#38BDF8" stroke-width="2"/></g>` : '') +
+      zeroLine(lo, hi, '0%') +
+      axisEnds(lo, hi, (v) => format(v, 'pct')));
     badge('ch1', `${ci95.lower !== undefined ? '95% CI: [' + format(ci95.lower, 'pcts') + ', ' + format(ci95.upper, 'pcts') + ']' : 'CI unmeasured'} · ${ci95.lower !== undefined && ci95.lower < 0 && ci95.upper > 0 ? 'ZERO CROSSING' : 'EXCLUDES ZERO'}`,
       ci95.lower !== undefined && ci95.lower < 0 && ci95.upper > 0 ? 'warn' : 'good');
     statsLine('ch1', `Sample universe: ${pos.length} · Mean ${format(mean, 'pct')} · σ ±${format(sd, 'pct')} · SE ${format(num(pr.sem_pnl_pct), 'pct')}`);
@@ -464,6 +492,10 @@ function paintCharts(root, kpi) {
       `<span class="k">σ <b>±${format(sd, 'pct')}</b></span>` +
       `<span class="k">SE <b>${format(num(pr.sem_pnl_pct), 'pct')}</b></span>` +
       `<span class="k warn">95% CI <b>[${format(ci95.lower, 'pcts')}, ${format(ci95.upper, 'pcts')}]</b></span>`);
+  } else {
+    badge('ch1', 'Unmeasured');
+    statsLine('ch1', 'Unmeasured · no measured closes');
+    foot('ch1', '<span class="k">samples <b>0</b></span>');
   }
 
   /* 2 — pair cost distribution. */
@@ -472,15 +504,22 @@ function paintCharts(root, kpi) {
     const dens = pc.bins.map((b) => num(b.density) || 0);
     const s = chartScales(dens, { lo: 0 });
     const pts = dens.map((v, i) => `${s.x(i, dens.length).toFixed(1)},${s.y(v).toFixed(1)}`);
+    const pcLo = num(pc.min_observed), pcHi = num(pc.max);
     set('ch2', gridlines() +
       barsFromBins(pc.bins, 'density') +
-      `<path d="M${pts.join(' L')}" fill="none" stroke="#34D399" stroke-width="2"/>`);
+      `<g><title>Density over pair-cost bins · median ${format(num(pc.median), 'usd')}</title><path d="M${pts.join(' L')}" fill="none" stroke="#34D399" stroke-width="2"/></g>` +
+      (pcLo !== null && pcHi !== null && pcHi > pcLo
+        ? axisEnds(pcLo, pcHi, (v) => format(v, 'usd')) : ''));
     badge('ch2', `Median: ${format(num(pc.median), 'usd')}`);
     statsLine('ch2', `Mean cost µ ${format(num(pc.mean), 'usd')} · Max ${format(num(pc.max), 'usd')} · Min ${format(num(pc.min_observed), 'usd')} · Executed pairs: ${num(kpi.pairs_under_1) || 0} under $1.00`);
     foot('ch2', `<span class="k">µ <b>${format(num(pc.mean), 'usd')}</b></span>` +
       `<span class="k">median <b>${format(num(pc.median), 'usd')}</b></span>` +
       `<span class="k">σ <b>${format(num(pc.stdev), 'usd')}</b></span>` +
       `<span class="k">samples <b>${num(pc.samples_count) || 0}</b></span>`);
+  } else {
+    badge('ch2', 'Unmeasured');
+    statsLine('ch2', 'Unmeasured · no executed pairs');
+    foot('ch2', '<span class="k">samples <b>0</b></span>');
   }
 
   /* 3 — Monte Carlo fan (p01-p99 band + p50 median). */
@@ -492,9 +531,10 @@ function paintCharts(root, kpi) {
     const p50 = steps.map((s2) => num(s2.p50));
     const prob = num(mc.prob_positive_return);
     set('ch3', gridlines() +
-      `<path d="${bandPath(p01, p99)}" fill="rgba(56,189,248,.10)" stroke="none"/>` +
-      `<path d="${linePath(p50)}" fill="none" stroke="#38BDF8" stroke-width="2"/>` +
-      `<path d="${linePath(p01)}" fill="none" stroke="#64748B" stroke-width="1" stroke-dasharray="3 3"/>`);
+      `<g><title>p01–p99 fan over ${steps.length} cycles · worst drawdown ${format(num(mc.worst_case_drawdown_pct), 'pct')}</title><path d="${bandPath(p01, p99)}" fill="rgba(56,189,248,.10)" stroke="none"/></g>` +
+      `<g><title>Median trajectory · ends ${format(p50[p50.length - 1], 'usd')}</title><path d="${linePath(p50)}" fill="none" stroke="#38BDF8" stroke-width="2"/></g>` +
+      `<path d="${linePath(p01)}" fill="none" stroke="#64748B" stroke-width="1" stroke-dasharray="3 3"><title>p01 floor path</title></path>` +
+      axisEnds(1, steps.length, (v) => `cycle ${v}`));
     badge('ch3', `P(Profit &gt; 0): ${format(prob, 'pct1')}`,
       prob !== null && prob >= 50 ? 'good' : 'warn'); // prob_positive_return is a PERCENT
     statsLine('ch3', `Simulations: ${num(mc.paths) || 0} paths · ${steps.length} cycles · Worst-case drawdown ${format(num(mc.worst_case_drawdown_pct), 'pct')} · Median return ${format(p50[p50.length - 1], 'usd')}`);
@@ -502,6 +542,10 @@ function paintCharts(root, kpi) {
       `<span class="k">samples <b>${num(mc.samples_count) || 0}</b></span>` +
       `<span class="k warn">worst DD <b>${format(num(mc.worst_case_drawdown_pct), 'pct')}</b></span>` +
       `<span class="k">P(profit) <b>${format(prob, 'pct1')}</b></span>`);
+  } else {
+    badge('ch3', 'Unmeasured');
+    statsLine('ch3', 'Unmeasured · below Monte Carlo sample gate');
+    foot('ch3', '<span class="k">samples <b>0</b></span>');
   }
 
   /* 4 — outcome probability bell. */
@@ -512,13 +556,18 @@ function paintCharts(root, kpi) {
     const pts = pdf.map((v, i) => `${s.x(i, pdf.length).toFixed(1)},${s.y(v).toFixed(1)}`);
     const sweet = pb.bins.filter((b) => b.in_sweet_spot);
     set('ch4', gridlines() + barsFromBins(pb.bins, 'empirical_count') +
-      `<path d="M${pts.join(' L')}" fill="none" stroke="#38BDF8" stroke-width="2"/>`);
+      `<g><title>Theoretical bell · mean ${format(num(pb.mean), 'pctmul')} · sweet-spot ${format(num(pb.sweet_spot_pct), 'pct1')}</title><path d="M${pts.join(' L')}" fill="none" stroke="#38BDF8" stroke-width="2"/></g>` +
+      axisEnds(0, 100, (v) => `${v}% prob`));
     badge('ch4', `${format(num(pb.sweet_spot_pct), 'pct1')} In Sweet Spot`, 'good');
     statsLine('ch4', `Mean probability ${format(num(pb.mean), 'pctmul')} · σ ±${format(num(pb.stdev), 'pctmul')} · Sweet-spot concentration ${format(num(pb.sweet_spot_pct), 'pct1')} · Executed sample ${num(pb.samples_count) || 0} fills`);
     foot('ch4', `<span class="k">µ <b>${format(num(pb.mean), 'pctmul')}</b></span>` +
       `<span class="k">σ <b>±${format(num(pb.stdev), 'pctmul')}</b></span>` +
       `<span class="k">sweet bins <b>${sweet.length}</b></span>` +
       `<span class="k">samples <b>${num(pb.samples_count) || 0}</b></span>`);
+  } else {
+    badge('ch4', 'Unmeasured');
+    statsLine('ch4', 'Unmeasured · no fills sampled');
+    foot('ch4', '<span class="k">samples <b>0</b></span>');
   }
 
   /* 5 — markout by horizon (bps). */
@@ -532,11 +581,12 @@ function paintCharts(root, kpi) {
       const y0 = s.y(0), y1 = s.y(v);
       const top = Math.min(y0, y1), hgt = Math.max(1, Math.abs(y1 - y0));
       const col = v >= 0 ? '#34D399' : '#F87171';
-      return `<rect x="${(8 + i * slot + slot * 0.2).toFixed(1)}" y="${top.toFixed(1)}" width="${(slot * 0.6).toFixed(1)}" height="${hgt.toFixed(1)}" fill="${col}" opacity="0.85"/>` +
+      return `<rect x="${(8 + i * slot + slot * 0.2).toFixed(1)}" y="${top.toFixed(1)}" width="${(slot * 0.6).toFixed(1)}" height="${hgt.toFixed(1)}" fill="${col}" opacity="0.85"><title>${esc(`${m.horizon}: ${v >= 0 ? '+' : ''}${v.toFixed(1)} bps over ${m.samples} fills`)}</title></rect>` +
         `<text x="${(8 + i * slot + slot * 0.5).toFixed(1)}" y="${(v >= 0 ? top - 5 : top + hgt + 12).toFixed(1)}" fill="${col}" font-size="10" text-anchor="middle">${v >= 0 ? '+' : ''}${v.toFixed(1)}</text>` +
         `<text x="${(8 + i * slot + slot * 0.5).toFixed(1)}" y="194" fill="#64748B" font-size="10" text-anchor="middle">${m.horizon}</text>`;
     }).join('');
-    set('ch5', `<line x1="0" y1="${s.y(0).toFixed(1)}" x2="800" y2="${s.y(0).toFixed(1)}" stroke="#1E293B" stroke-width="1"/>` + bars, '800 200');
+    set('ch5', `<line x1="0" y1="${s.y(0).toFixed(1)}" x2="800" y2="${s.y(0).toFixed(1)}" stroke="#1E293B" stroke-width="1">` +
+      `<title>Zero displacement — fills holding mid or better</title></line>` + bars, '800 200');
     const worst = mo.reduce((a, b) => ((num(a.displacement_bps) || 0) < (num(b.displacement_bps) || 0) ? a : b), mo[0]);
     const allOk = vals.every((v) => v >= 0);
     badge('ch5', `Markout Status: ${allOk ? 'FAVOURABLE' : 'MIXED'}`, allOk ? 'good' : 'warn');
