@@ -89,8 +89,11 @@ def test_stitch_closed_trades_pair_renders_single_row_with_both_legs_and_single_
     assert "+$0.70" in res["html"]
     assert "YES" in res["html"]
     assert "NO" in res["html"]
-    # EXEC TYPE replaces the old STATUS badge: same outcome, own column.
-    assert "Pair Merge" in res["html"]
+    # EXEC TYPE replaces the old STATUS badge: same outcome, own column, and it
+    # is a pill now (#831). "Merge" alone also matches the old "Pair Merge", so
+    # the old wording is asserted gone rather than merely shadowed.
+    assert 'stitch-exec-type is-merge">Merge</span>' in res["html"]
+    assert "Pair Merge" not in res["html"]
     assert "stitch-exec-type" in res["html"]
     assert "Fed Rate Cut in June" in res["parentTableHtml"]
     assert "+$0.70" in res["parentTableHtml"]

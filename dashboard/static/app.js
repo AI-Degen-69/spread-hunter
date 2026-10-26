@@ -8947,6 +8947,23 @@ function stitchClosedTradesHeadHtml(sort) {
   return `<tr>${cells}</tr>`;
 }
 
+/* The five labels one execution can carry, and the class each one wears. An
+ * object map, never a string list: this is display vocabulary, and the
+ * close-method taxonomy guard forbids a second method-name list in this file
+ * (#520 / #558). */
+const EXEC_TYPE_CLASSES = {
+  'Merge': 'is-merge',
+  'Sale': 'is-sale',
+  'Stop Loss': 'is-stop-loss',
+  'Grace Expired': 'is-grace-expired',
+  'Resolved': 'is-resolved',
+};
+
+function execTypeClass(execType) {
+  const cls = EXEC_TYPE_CLASSES[execType];
+  return cls ? ` ${cls}` : '';
+}
+
 /* Shared Closed-Trades ledger row: TIMESTAMP | EXEC TYPE | DUAL LEGS |
  * ENTRY | EXIT | SIZE | PNL. One builder for all three row sources
  * (settlements, paired orders, single orders) so the child table can
@@ -8955,7 +8972,7 @@ function stitchLedgerChildRow(tsDisp, execType, legsHtml, entryPrice, entryCost,
   const cls = pnl > 0 ? 'pos' : (pnl < 0 ? 'neg' : 'flat');
   return `<tr class="stitch-ledger-row">`
     + `<td class="mono font-tabular"><div class="stitch-age-stopwatch">${tsDisp}</div></td>`
-    + `<td><span class="stitch-exec-type">${execType}</span></td>`
+    + `<td><span class="stitch-exec-type${execTypeClass(execType)}">${execType}</span></td>`
     + `<td>${legsHtml}</td>`
     + `<td class="mono font-tabular"><div class="stitch-price-val">${entryPrice !== null ? fmtPrice(entryPrice) : '--'}</div>`
     + `<div class="stitch-mid-sub">cost ${fmtUSD(entryCost)}</div></td>`
@@ -9009,10 +9026,12 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
       const isStopLoss = reason === 'lifecycle_hard_stop' || method === 'stop_loss_exit' || reason.includes('stop_loss') || reason === 'adverse_drift';
       const isGraceExpired = reason === 'grace_expired' || reason === 'aged_out_rescue' || reason.includes('grace_expired') || method.includes('aged_out');
       const isSettlement = method === 'settlement' || method === 'shadow_settlement';
-      // EXEC TYPE replaces the STATUS badge: the outcome IS the type.
-      const execType = isMerge ? 'Pair Merge'
+      // EXEC TYPE replaces the STATUS badge: the outcome IS the type. The words
+      // are the operator's, not the backend's: a merged pair reads Merge, and a
+      // settlement reads Resolved — the position was held until the market ended.
+      const execType = isMerge ? 'Merge'
         : (isStopLoss ? 'Stop Loss'
-        : (isGraceExpired ? 'Grace Expired' : (isSettlement ? 'Settlement' : 'Sale')));
+        : (isGraceExpired ? 'Grace Expired' : (isSettlement ? 'Resolved' : 'Sale')));
 
       const upCostRem = Number(s.up_cost_removed || 0);
       const dnCostRem = Number(s.dn_cost_removed || 0);
@@ -9087,7 +9106,7 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
         const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
         const ageSec = upOrder.age_sec != null ? upOrder.age_sec : dnOrder.age_sec;
         const tsDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
-        return stitchLedgerChildRow(tsDisp, isMerged ? 'Pair Merge' : 'Sale',
+        return stitchLedgerChildRow(tsDisp, isMerged ? 'Merge' : 'Sale',
           stitchLedgerLegs(true, upSize, upPx, upCost, dnSize, dnPx, dnCost),
           entryPrice, costBasis, exitPrice, proceeds,
           `${fmtShares(shares)} pairs`, pnl, pnlPct);
@@ -9106,7 +9125,7 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
         const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
         const ageSec = o.age_sec != null ? o.age_sec : null;
         const tsDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
-        return stitchLedgerChildRow(tsDisp, isMerged ? 'Pair Merge' : 'Sale',
+        return stitchLedgerChildRow(tsDisp, isMerged ? 'Merge' : 'Sale',
           stitchLedgerLegs(false, 0, 0, 0, 0, 0, 0, isUp ? 'YES' : 'NO', isUp ? 'yes' : 'no', size, price, costBasis),
           price, costBasis, exitPrice, proceeds,
           `${fmtShares(size)} sh`, pnl, pnlPct);

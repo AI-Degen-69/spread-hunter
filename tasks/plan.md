@@ -87,7 +87,7 @@ Dependency graph: `T1 → T2`; `T3` independent; `T4` needs `T1,T2,T3`.
 - Depends on: T1.
 - Verify: page renders both pills for a mixed market; focused tests in T4.
 
-### [ ] T3 — Exec-type pills (S, `[Design/UI]`)
+### [x] T3 — Exec-type pills (S, `[Design/UI]`)
 - Files: `dashboard/static/app.js`, `dashboard/static/prototype.css`.
 - `stitchLedgerChildRow`: pill class + label-derived modifier on `.stitch-exec-type`.
 - Labels: `Pair Merge` → `Merge` (classification + both synthetic fallbacks),

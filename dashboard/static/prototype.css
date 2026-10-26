@@ -1681,6 +1681,24 @@
   vertical-align: middle;
 }
 
+/* EXEC TYPE is a tag, not a sentence. One neutral pill shape for all five
+ * labels: green and red already mean win and loss in the outcome column, and a
+ * tag may not be asked to mean two things at once (glossary). The `is-*`
+ * modifier names the type for later styling and for tests. */
+.proto-body .stitch-ledger-subtable .stitch-exec-type {
+  display: inline-flex;
+  align-items: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  white-space: nowrap;
+  background: rgba(100, 116, 139, 0.15);
+  border: 1px solid rgba(100, 116, 139, 0.3);
+  color: #cbd5e1;
+}
+
 .proto-body .stitch-ledger-row:hover {
   background: rgba(255, 255, 255, 0.02);
 }
