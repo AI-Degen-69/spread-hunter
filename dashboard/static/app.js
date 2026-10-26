@@ -8947,17 +8947,52 @@ function stitchClosedTradesHeadHtml(sort) {
   return `<tr>${cells}</tr>`;
 }
 
-/* The five labels one execution can carry, and the class each one wears. An
- * object map, never a string list: this is display vocabulary, and the
- * close-method taxonomy guard forbids a second method-name list in this file
- * (#520 / #558). */
+/* Every label one ledger row can wear, and the class that tones it. An object
+ * map, never a string list: this is display vocabulary, and the close-method
+ * taxonomy guard forbids a second method-name list in this file (#520 / #558).
+ *
+ * The six close types are the code's own states in operator words: a pair the
+ * bot merged (`merge` / `shadow_merge`), a leg a risk guard sold (the hard-stop
+ * reasons), a leg whose grace window ran out, a leg held to resolution
+ * (`settlement` / `shadow_settlement`), a lone leg the single-buy saver exited
+ * (`single_buy_exit`), and a bookkeeping reconciliation (`venue_sync`). There is
+ * no catch-all "Sold": a close this dashboard cannot name says Unclassified,
+ * because a vague word hides taxonomy drift behind a plausible one. */
 const EXEC_TYPE_CLASSES = Object.freeze({
   'Merge': 'is-merge',
-  'Sale': 'is-sale',
   'Stop Loss': 'is-stop-loss',
   'Grace Expired': 'is-grace-expired',
   'Resolved': 'is-resolved',
+  'Single Buy Exit': 'is-single-buy-exit',
+  'Venue Sync': 'is-venue-sync',
+  'Filled': 'is-order-filled',
+  'Partial': 'is-order-partial',
+  'Cancelled': 'is-order-cancelled',
+  'Open': 'is-order-open',
+  'Pending': 'is-order-pending',
+  'Unclassified': 'is-unclassified',
 });
+
+/* The order fallback (a market with orders but no settlements) has no close to
+ * classify: there the row's type IS the order's own status, read from the order
+ * and never guessed. Filled / Partial / Cancelled / Open / Pending are order
+ * states, not close types, and they ride their own neutral slate ladder. */
+const ORDER_STATE_LABELS = Object.freeze({
+  'merged': 'Merge',
+  'filled': 'Filled',
+  'matched': 'Filled',
+  'partial': 'Partial',
+  'partially_filled': 'Partial',
+  'cancelled': 'Cancelled',
+  'canceled': 'Cancelled',
+  'open': 'Open',
+  'pending': 'Pending',
+});
+
+/* An unmapped status is never silently blank. */
+function orderStateLabel(status) {
+  return ORDER_STATE_LABELS[String(status || '').toLowerCase()] || 'Unclassified';
+}
 
 /* Returns the class SUFFIX, leading space included, so the caller can append it
  * straight into the attribute and an unmapped label renders as no modifier. */
@@ -9025,22 +9060,39 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
       const reason = String(s.reason || '').toLowerCase();
 
       const isMerge = method === 'merge' || method === 'shadow_merge';
-      const isStopLoss = reason === 'lifecycle_hard_stop' || method === 'stop_loss_exit' || reason.includes('stop_loss') || reason === 'adverse_drift';
+      // The hard-stop family is the leaf's own: `hard_stop` is the current
+      // lifecycle spelling, `lifecycle_hard_stop` the older alias, and
+      // `pair_cap_hedge_unreachable` the cap bail-out (#797) -- every one of
+      // them sells into the book on a risk decision, so every one is Stop Loss.
+      const isStopLoss = method === 'stop_loss_exit' || reason.includes('stop_loss')
+        || reason === 'hard_stop' || reason === 'lifecycle_hard_stop'
+        || reason === 'adverse_drift' || reason === 'pair_cap_hedge_unreachable';
       const isGraceExpired = reason === 'grace_expired' || reason === 'aged_out_rescue' || reason.includes('grace_expired') || method.includes('aged_out');
       const isSettlement = method === 'settlement' || method === 'shadow_settlement';
+      // The rescue bucket and bookkeeping, named by the method that wrote them:
+      // a lone leg the saver exited before resolution, and a reconciliation
+      // that closed nothing at the market. `naked_exit` / `ladder_exit` are the
+      // leaf's legacy spellings of the same rescue, still in historical rows.
+      const isSingleBuyExit = method === 'single_buy_exit'
+        || method === 'naked_exit' || method === 'ladder_exit';
+      const isVenueSync = method === 'venue_sync';
       // EXEC TYPE replaces the STATUS badge: the outcome IS the type. The words
       // are the operator's, not the backend's: a merged pair reads Merge, and a
       // settlement reads Resolved — the position was held until the market ended.
-      // First match wins, top to bottom: a merged pair is Merge, a stopped one
-      // Stop Loss, an aged-out one Grace Expired, a settlement Resolved, and
-      // anything else was sold on the book.
+      // First match wins, top to bottom: a merged pair is Merge, a guard-sold one
+      // Stop Loss, an aged-out one Grace Expired, a settlement Resolved, a
+      // saver's lone-leg exit Single Buy Exit, a reconciliation Venue Sync.
       const execTypeRule = [
         [isMerge, 'Merge'],
         [isStopLoss, 'Stop Loss'],
         [isGraceExpired, 'Grace Expired'],
         [isSettlement, 'Resolved'],
+        [isSingleBuyExit, 'Single Buy Exit'],
+        [isVenueSync, 'Venue Sync'],
       ].find(([matches]) => matches);
-      const execType = execTypeRule ? execTypeRule[1] : 'Sale';
+      // A method or reason this dashboard does not know is SAID. It is never
+      // dressed up as a sale -- that is how a drifted method hid here before.
+      const execType = execTypeRule ? execTypeRule[1] : 'Unclassified';
 
       const upCostRem = Number(s.up_cost_removed || 0);
       const dnCostRem = Number(s.dn_cost_removed || 0);
@@ -9115,7 +9167,7 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
         const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
         const ageSec = upOrder.age_sec != null ? upOrder.age_sec : dnOrder.age_sec;
         const tsDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
-        return stitchLedgerChildRow(tsDisp, isMerged ? 'Merge' : 'Sale',
+        return stitchLedgerChildRow(tsDisp, isMerged ? 'Merge' : orderStateLabel(upOrder.status),
           stitchLedgerLegs(true, upSize, upPx, upCost, dnSize, dnPx, dnCost),
           entryPrice, costBasis, exitPrice, proceeds,
           `${fmtShares(shares)} pairs`, pnl, pnlPct);
@@ -9134,7 +9186,7 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
         const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
         const ageSec = o.age_sec != null ? o.age_sec : null;
         const tsDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
-        return stitchLedgerChildRow(tsDisp, isMerged ? 'Merge' : 'Sale',
+        return stitchLedgerChildRow(tsDisp, isMerged ? 'Merge' : orderStateLabel(status),
           stitchLedgerLegs(false, 0, 0, 0, 0, 0, 0, isUp ? 'YES' : 'NO', isUp ? 'yes' : 'no', size, price, costBasis),
           price, costBasis, exitPrice, proceeds,
           `${fmtShares(size)} sh`, pnl, pnlPct);

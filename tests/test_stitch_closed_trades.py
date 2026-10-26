@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent
 _APP_JS = _ROOT / "dashboard" / "static" / "app.js"
+_PROTOTYPE_CSS = _ROOT / "dashboard" / "static" / "prototype.css"
 
 requires_node = pytest.mark.skipif(shutil.which("node") is None,
                                    reason="node is not installed on this host")
@@ -363,35 +365,51 @@ def test_stitch_closed_trades_missing_realized_pnl_falls_back_to_proceeds_minus_
 
 @requires_node
 def test_stitch_closed_trades_every_exec_type_is_a_labelled_pill():
-    """One pill per row, five labels: Merge / Sale / Stop Loss / Grace Expired /
-    Resolved. The backend's method words never reach the operator."""
+    """One pill per row, one label per close state the code can write: Merge /
+    Stop Loss / Grace Expired / Resolved / Single Buy Exit / Venue Sync. A close
+    the dashboard cannot name reads Unclassified — there is no catch-all "Sale"
+    left to hide a drifted method behind."""
     code = """
     const settlements = [
         { method: 'merge', shares: 5, cost_basis: 5.0, proceeds: 5.5, realized_pnl: 0.5, ts: 1700000000 },
         { method: 'shadow_merge', shares: 5, cost_basis: 5.0, proceeds: 5.5, realized_pnl: 0.5, ts: 1700000001 },
-        { method: 'sell', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000002 },
-        { method: 'stop_loss_exit', reason: 'lifecycle_hard_stop', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000003 },
-        { method: 'aged_out_exit', reason: 'grace_expired', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000004 },
-        { method: 'settlement', shares: 5, cost_basis: 5.0, proceeds: 0.0, realized_pnl: -5.0, ts: 1700000005 },
-        { method: 'shadow_settlement', shares: 5, cost_basis: 5.0, proceeds: 0.0, realized_pnl: -5.0, ts: 1700000006 }
+        { method: 'single_buy_exit', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000002 },
+        { method: 'single_buy_exit', reason: 'stranded_unhedged_exit', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000003 },
+        { method: 'stop_loss_exit', reason: 'lifecycle_hard_stop', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000004 },
+        { method: 'single_buy_exit', reason: 'pair_cap_hedge_unreachable', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000005 },
+        { method: 'aged_out_exit', reason: 'grace_expired', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000006 },
+        { method: 'settlement', shares: 5, cost_basis: 5.0, proceeds: 0.0, realized_pnl: -5.0, ts: 1700000007 },
+        { method: 'shadow_settlement', shares: 5, cost_basis: 5.0, proceeds: 0.0, realized_pnl: -5.0, ts: 1700000008 },
+        { method: 'venue_sync', shares: 5, cost_basis: 5.0, proceeds: 5.0, realized_pnl: 0.0, ts: 1700000009 },
+        { method: 'sell', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000010 }
     ];
     const html = app.renderStitchClosedLedgerRows('0x123', {}, settlements, [], Date.now());
     console.log(JSON.stringify({ html }));
     """
     html = json.loads(_eval_js(code))["html"]
-    for modifier, label in (("is-merge", "Merge"), ("is-sale", "Sale"),
+    for modifier, label in (("is-merge", "Merge"),
                             ("is-stop-loss", "Stop Loss"),
                             ("is-grace-expired", "Grace Expired"),
-                            ("is-resolved", "Resolved")):
+                            ("is-resolved", "Resolved"),
+                            ("is-single-buy-exit", "Single Buy Exit"),
+                            ("is-venue-sync", "Venue Sync"),
+                            ("is-unclassified", "Unclassified")):
         assert f'stitch-exec-type {modifier}">{label}</span>' in html, label
+    assert ">Sale<" not in html, "no close is a vague sale any more"
     assert "Pair Merge" not in html
     assert ">Settlement<" not in html, "a resolved market reads Resolved"
+    # The hard-stop family shares one label: the cap bail-out is a stop too.
+    assert html.count('is-stop-loss">Stop Loss</span>') == 2
+    # The rescue method wins over its route reason: a stranded leg is the
+    # saver's lone-leg exit, not the Global Stop Loss.
+    assert html.count('is-single-buy-exit">Single Buy Exit</span>') == 2
 
 
 @requires_node
-def test_stitch_closed_trades_order_fallback_keeps_merge_and_sale_labels():
-    """A market with orders but no settlements still gets pills: merged pairs
-    read Merge, everything else Sale."""
+def test_stitch_closed_trades_order_fallback_names_the_order_state():
+    """A market with orders but no settlements still gets pills, and each pill
+    is the order's own state — merged pairs read Merge, a filled pair Filled, a
+    cancelled order Cancelled. No row guesses "Sale" from a status it can read."""
     code = """
     const orders = [
         { pair_id: 'p1', condition_id: '0x1', token_side: 'UP', price: 0.50, size_matched: 5, original_size: 5, status: 'merged', age_sec: 60 },
@@ -399,15 +417,41 @@ def test_stitch_closed_trades_order_fallback_keeps_merge_and_sale_labels():
         { pair_id: 'p2', condition_id: '0x1', token_side: 'UP', price: 0.50, size_matched: 5, original_size: 5, status: 'filled', age_sec: 60 },
         { pair_id: 'p2', condition_id: '0x1', token_side: 'DOWN', price: 0.48, size_matched: 5, original_size: 5, status: 'filled', age_sec: 60 },
         { pair_id: 'p3', condition_id: '0x1', token_side: 'UP', price: 0.50, size_matched: 5, original_size: 5, status: 'merged', age_sec: 60 },
-        { pair_id: 'p4', condition_id: '0x1', token_side: 'DOWN', price: 0.48, size_matched: 5, original_size: 5, status: 'filled', age_sec: 60 }
+        { pair_id: 'p4', condition_id: '0x1', token_side: 'DOWN', price: 0.48, size_matched: 5, original_size: 5, status: 'filled', age_sec: 60 },
+        { pair_id: 'p5', condition_id: '0x1', token_side: 'UP', price: 0.50, size_matched: 0, original_size: 5, status: 'cancelled', age_sec: 60 }
     ];
     const html = app.renderStitchClosedLedgerRows('0x1', {}, [], orders, Date.now());
     console.log(JSON.stringify({ html }));
     """
     html = json.loads(_eval_js(code))["html"]
     assert html.count('<span class="stitch-exec-type is-merge">Merge</span>') == 2
-    assert html.count('<span class="stitch-exec-type is-sale">Sale</span>') == 2
+    assert html.count('<span class="stitch-exec-type is-order-filled">Filled</span>') == 2
+    assert html.count('<span class="stitch-exec-type is-order-cancelled">Cancelled</span>') == 1
+    assert ">Sale<" not in html
     assert "Pair Merge" not in html
+
+
+def test_every_exec_type_label_owns_a_distinct_css_tone():
+    """Colour is how a ledger row's type is read down the column: every label
+    in EXEC_TYPE_CLASSES has a `is-*` class, that class has its own rule in
+    prototype.css, and no two types share the same text colour."""
+    app_js = _APP_JS.read_text(encoding="utf-8-sig")
+    labels = dict(re.findall(r"'([A-Za-z][A-Za-z ]+)': '(is-[a-z-]+)',", app_js))
+    assert labels, "EXEC_TYPE_CLASSES was not found in app.js"
+
+    css = _PROTOTYPE_CSS.read_text(encoding="utf-8-sig")
+    tones: dict[str, str] = {}
+    for label, modifier in labels.items():
+        rule = re.search(
+            r"\.stitch-exec-type\." + re.escape(modifier) + r"\s*\{([^}]*)\}", css)
+        assert rule, f"{label}: no CSS rule for .stitch-exec-type.{modifier}"
+        colour = re.search(r"color:\s*(#[0-9a-f]{6})", rule.group(1))
+        assert colour, f"{label}: {modifier} declares no text colour"
+        tones[label] = colour.group(1)
+
+    duplicates = {c: [l for l, v in tones.items() if v == c]
+                  for c in set(tones.values()) if list(tones.values()).count(c) > 1}
+    assert not duplicates, f"two exec types share a tone: {duplicates}"
 
 
 @requires_node
