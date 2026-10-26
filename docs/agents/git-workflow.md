@@ -192,3 +192,36 @@ CI (`.github/workflows/tests.yml`) must be green on both ubuntu and windows.
 The agent merges autonomously once CI (`.github/workflows/tests.yml`) is green on both
 Ubuntu and Windows and CodeRabbit review blockers are resolved. Report concise status
 when merged (e.g. `Merged PR #...`).
+
+### Stale blocking reviews
+
+CodeRabbit now skips reviews here (see the trigger notice above), which means it can never
+supersede its own earlier `CHANGES_REQUESTED`. That review stays a merge blocker forever,
+even after every finding in it was fixed in a later commit and every thread was answered.
+PR #844 sat behind exactly that with all six CI shards green; the PR became mergeable only
+when that review was dismissed by hand.
+
+The guard ends this. On `gh pr merge` it reads the reviews, and dismisses any CodeRabbit
+review that is `CHANGES_REQUESTED` **against a commit the branch has since left**, recording
+why in the dismissal message. Then the merge proceeds. Those reviews were never going to
+be re-reviewed, so nothing is being waived.
+
+What it will not touch:
+
+| Review | Why it stays |
+| --- | --- |
+| A person's `CHANGES_REQUESTED`, on any commit | A human decision is not the agent's to dismiss |
+| CodeRabbit's `CHANGES_REQUESTED` on the current head | A live blocker. Fix it, or decline it on the thread |
+| Anything missing an id or a commit | Staleness is unproven, so nothing is dismissed |
+
+If the dismissal cannot run (expired token, no network), the merge still goes ahead and the
+message names the command to finish the job by hand:
+
+```bash
+gh api -X PUT repos/{owner}/{repo}/pulls/<n>/reviews/<id>/dismissals \
+  -f message="Superseded commit"
+```
+
+Read the code and the review before reaching for that. The only review worth dismissing is
+one whose findings are already fixed or declined on its threads — with no thread left open,
+the `CHANGES_REQUESTED` is bookkeeping, not a decision.

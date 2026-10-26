@@ -244,8 +244,36 @@ class TestPush:
         assert guard.check_push()[0] == 0
 
 
+class TestOutputDecoding:
+    """Review bodies are arbitrary text, and the hook must survive all of it.
+
+    `text=True` decodes with the locale encoding -- cp1252 on Windows. One emoji
+    in a review body made the reader thread raise, left `stdout` as None, and
+    killed the guard on `None.strip()`. Reading PR #844's real reviews hit
+    exactly this.
+    """
+
+    def test_invalid_utf8_is_replaced_not_raised(self, guard):
+        assert guard._decode(b"caf\xe9 \x9d") == "caf\ufffd \ufffd"
+
+    def test_missing_output_decodes_to_an_empty_string(self, guard):
+        assert guard._decode(None) == ""
+
+    def test_a_review_body_with_an_emoji_survives(self, guard, monkeypatch):
+        body = "looks good \U0001f600"
+        page = [{"id": 1, "user": {"login": guard.REVIEW_BOT},
+                 "state": "CHANGES_REQUESTED", "commit_id": "abc",
+                 "body": body}]
+        monkeypatch.setattr(
+            guard, "_run",
+            lambda args: guard._decode(json.dumps([page]).encode("utf-8")),
+        )
+        assert guard._review_records("844")[0]["id"] == 1
+
+
 class TestMerge:
-    def test_merge_of_a_pr_is_allowed_with_rules(self, guard):
+    def test_merge_of_a_pr_is_allowed_with_rules(self, guard, monkeypatch):
+        monkeypatch.setattr(guard, "dismiss_stale_reviews", lambda pr: ([], []))
         code, message = guard.check_merge("15")
         assert code == 0
         assert "merge check" in message.lower()
@@ -256,6 +284,145 @@ class TestMerge:
         code, message = guard.check_merge(None)
         assert code == 0
         assert "Before merging" in message
+
+    def test_a_dismissal_is_reported_in_the_merge_message(self, guard, monkeypatch):
+        monkeypatch.setattr(guard, "dismiss_stale_reviews", lambda pr: ([99], []))
+        code, message = guard.check_merge("15")
+        assert code == 0
+        assert "Dismissed stale CodeRabbit review(s) 99" in message
+        assert "could never be superseded" in message
+
+    def test_a_failed_dismissal_names_the_manual_command(self, guard, monkeypatch):
+        """A dismissal that cannot run must not become a silent deadlock."""
+        monkeypatch.setattr(guard, "dismiss_stale_reviews", lambda pr: ([], [99]))
+        code, message = guard.check_merge("15")
+        assert code == 0
+        assert "Could not dismiss" in message
+        assert "pulls/15/reviews/<id>/dismissals" in message
+
+
+class TestStaleReviewDismissal:
+    """CodeRabbit can no longer supersede its own review here.
+
+    It skips reviews on this OSS repository, so a `CHANGES_REQUESTED` from an
+    earlier commit stays a merge blocker forever with nothing left to fix.
+    PR #844 was merged only after that review was dismissed by hand.
+    """
+
+    HEAD = "bbbbbbb2"
+
+    def _setup(self, guard, monkeypatch, reviews, ok=True):
+        monkeypatch.setattr(guard, "_head_sha", lambda pr: self.HEAD)
+        monkeypatch.setattr(guard, "_review_records", lambda pr: reviews)
+        calls: list[list[str]] = []
+
+        def fake_ok(args):
+            calls.append(args)
+            return ok
+
+        monkeypatch.setattr(guard, "_ok", fake_ok)
+        return calls
+
+    def test_a_review_on_an_older_commit_is_dismissed(self, guard, monkeypatch):
+        calls = self._setup(guard, monkeypatch, [
+            {"id": 7, "state": "CHANGES_REQUESTED", "commit_id": "aaaaaaa1"},
+        ])
+
+        dismissed, failed = guard.dismiss_stale_reviews("844")
+
+        assert dismissed == [7]
+        assert failed == []
+        assert any(arg.endswith("pulls/844/reviews/7/dismissals") for arg in calls[0])
+        assert "-X" in calls[0] and "PUT" in calls[0]
+        # The message has to say why, so the PR timeline explains the dismissal.
+        assert any("Superseded" in arg for arg in calls[0])
+
+    def test_a_review_on_the_current_head_is_left_alone(self, guard, monkeypatch):
+        """A live blocker is a live blocker. Fixing it is the answer."""
+        calls = self._setup(guard, monkeypatch, [
+            {"id": 8, "state": "CHANGES_REQUESTED", "commit_id": self.HEAD},
+        ])
+
+        assert guard.dismiss_stale_reviews("844") == ([], [])
+        assert calls == []
+
+    def test_a_humans_review_is_never_dismissed(self, guard, monkeypatch):
+        """_review_records is filtered to the bot, so a human record cannot
+        reach the dismissal, but the stale filter must not widen that."""
+        calls = self._setup(guard, monkeypatch, [])
+
+        assert guard.dismiss_stale_reviews("844") == ([], [])
+        assert calls == []
+        assert guard.REVIEW_BOT == "coderabbitai[bot]"
+
+    def test_an_approved_review_on_an_old_commit_is_not_dismissed(
+        self, guard, monkeypatch
+    ):
+        calls = self._setup(guard, monkeypatch, [
+            {"id": 9, "state": "APPROVED", "commit_id": "aaaaaaa1"},
+        ])
+
+        assert guard.dismiss_stale_reviews("844") == ([], [])
+        assert calls == []
+
+    @pytest.mark.parametrize("review", [
+        {"id": None, "state": "CHANGES_REQUESTED", "commit_id": "aaaaaaa1"},
+        {"id": 10, "state": "CHANGES_REQUESTED", "commit_id": None},
+    ])
+    def test_unprovable_staleness_is_not_dismissed(self, guard, monkeypatch,
+                                                   review):
+        """No id, no commit: nothing proves it is stale, so nothing is touched."""
+        calls = self._setup(guard, monkeypatch, [review])
+
+        assert guard.dismiss_stale_reviews("844") == ([], [])
+        assert calls == []
+
+    def test_an_unknown_head_dismisses_nothing(self, guard, monkeypatch):
+        """Without the head commit every review would look stale."""
+        monkeypatch.setattr(guard, "_head_sha", lambda pr: "")
+        monkeypatch.setattr(guard, "_review_records", lambda pr: [
+            {"id": 11, "state": "CHANGES_REQUESTED", "commit_id": "aaaaaaa1"},
+        ])
+        monkeypatch.setattr(guard, "_ok", lambda args: pytest.fail("dismissed"))
+
+        assert guard.dismiss_stale_reviews("844") == ([], [])
+
+    def test_a_failed_dismissal_is_reported_not_raised(self, guard, monkeypatch):
+        self._setup(guard, monkeypatch, [
+            {"id": 12, "state": "CHANGES_REQUESTED", "commit_id": "aaaaaaa1"},
+        ], ok=False)
+
+        assert guard.dismiss_stale_reviews("844") == ([], [12])
+
+    def test_every_stale_review_is_dismissed(self, guard, monkeypatch):
+        calls = self._setup(guard, monkeypatch, [
+            {"id": 1, "state": "CHANGES_REQUESTED", "commit_id": "aaaaaaa1"},
+            {"id": 2, "state": "APPROVED", "commit_id": "aaaaaaa1"},
+            {"id": 3, "state": "CHANGES_REQUESTED", "commit_id": "aaaaaaa2"},
+        ])
+
+        dismissed, failed = guard.dismiss_stale_reviews("844")
+
+        assert dismissed == [1, 3]
+        assert failed == []
+        assert len(calls) == 2
+
+    def test_records_keep_the_commit_a_review_was_submitted_against(
+        self, guard, monkeypatch
+    ):
+        page = [
+            {"id": 5, "user": {"login": guard.REVIEW_BOT},
+             "state": "CHANGES_REQUESTED", "commit_id": "aaaaaaa1"},
+            {"id": 6, "user": {"login": "a-human"},
+             "state": "CHANGES_REQUESTED", "commit_id": "aaaaaaa1"},
+        ]
+        monkeypatch.setattr(guard, "_run", lambda args: json.dumps([page]))
+
+        assert guard._review_records("844") == [
+            {"id": 5, "state": "CHANGES_REQUESTED", "commit_id": "aaaaaaa1"},
+        ]
+        # The round counter reads the same records, so it is unchanged.
+        assert guard._reviews("844") == ["CHANGES_REQUESTED"]
 
 
 class TestDegradesToAllow:

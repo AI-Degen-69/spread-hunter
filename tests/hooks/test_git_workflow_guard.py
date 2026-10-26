@@ -41,11 +41,10 @@ def test_no_merge_sign_off_api_remains():
 def test_a_merge_payload_still_reaches_the_policy_and_allows(monkeypatch):
     """The dispatch path a removal could sever.
 
-    This change deleted `_changed_paths` and `_head_sha` from the module. Both
-    sat among the `gh`-shelling helpers the merge policy uses, so cutting one
-    too many, or cutting the argv branch such that a payload no longer reaches
-    `classify`, breaks exactly here. Driving it through `main` rather than
-    calling `check_merge` directly is what makes that reachable.
+    The merge route shells out to `gh` for the pull request and for the stale
+    review check, so both are stubbed: a test that reaches the real API could
+    dismiss a review on a live pull request. Driving it through `main` rather
+    than calling `check_merge` directly is what makes the dispatch reachable.
     """
     # Arrange
     payload = {
@@ -54,6 +53,7 @@ def test_a_merge_payload_still_reaches_the_policy_and_allows(monkeypatch):
     }
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     monkeypatch.setattr(guard, "_open_pr_for_head", lambda: "104")
+    monkeypatch.setattr(guard, "dismiss_stale_reviews", lambda pr: ([], []))
 
     # Act
     code = guard.main([])

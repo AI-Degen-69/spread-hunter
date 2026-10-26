@@ -69,6 +69,12 @@ Before merging, from {DOC}:
   * Check what else is in the stack. A stacked merge can carry another pull
     request onto `main` with it.
   * Ensure CI is green and CodeRabbit review blockers are resolved.
+  * A CodeRabbit `CHANGES_REQUESTED` on a commit the branch has since left is
+    stale, not a finding. CodeRabbit skips reviews here now, so it can never
+    supersede one; the guard dismisses those automatically at merge time.
+    Review threads on the CURRENT head are live blockers -- fix or decline them.
+  * Never dismiss a person's review. Only the automatic reviewer's superseded
+    ones are dismissed, and only because they can no longer be re-reviewed.
   * Report concise status upon merge (e.g. `Merged PR #...`).
 """
 
@@ -140,15 +146,26 @@ def classify(command: str) -> tuple[str, str | None]:
 # github lookups -- every one degrades to allow
 # ---------------------------------------------------------------------------
 
+def _decode(data: bytes | None) -> str:
+    """Decode command output as UTF-8 regardless of the console code page.
+
+    `text=True` decodes with the locale encoding, which on Windows is cp1252.
+    Review bodies are arbitrary user text: a single emoji or CJK character made
+    the reader thread raise, `stdout` come back as None, and the guard die on
+    `None.strip()` -- in a hook, that is a wedged repo. Invalid bytes are
+    replaced rather than raised; a mangled character is harmless, a crash is
+    not.
+    """
+    return (data or b"").decode("utf-8", errors="replace")
+
+
 def _run(args: list[str]) -> str:
     """Return stdout, or an empty string if the command fails for any reason."""
     try:
-        out = subprocess.run(
-            args, capture_output=True, text=True, timeout=20, check=False
-        )
+        out = subprocess.run(args, capture_output=True, timeout=20, check=False)
     except (OSError, subprocess.SubprocessError):
         return ""
-    return out.stdout if out.returncode == 0 else ""
+    return _decode(out.stdout) if out.returncode == 0 else ""
 
 
 def _pr_json(pr: str | None, fields: str) -> dict:
@@ -171,6 +188,40 @@ def _open_pr_for_head() -> str | None:
     return str(number) if number is not None else None
 
 
+def _review_records(pr: str) -> list[dict]:
+    """The automatic reviewer's reviews on a pull request, oldest first.
+
+    Each record keeps the review id and the commit it was submitted against,
+    which is what tells a live blocker from one its author can no longer
+    refresh.
+    """
+    raw = _run(["gh", "api", "--paginate", "--slurp",
+                f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews"])
+    try:
+        pages = json.loads(raw.strip() or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(pages, list):
+        return []
+
+    records: list[dict] = []
+    for page in pages:
+        for review in page if isinstance(page, list) else []:
+            if not isinstance(review, dict):
+                continue
+            user = review.get("user")
+            if not isinstance(user, dict) or user.get("login") != REVIEW_BOT:
+                continue
+            state = review.get("state")
+            if isinstance(state, str):
+                records.append({
+                    "id": review.get("id"),
+                    "state": state,
+                    "commit_id": review.get("commit_id"),
+                })
+    return records
+
+
 def _reviews(pr: str) -> list[str]:
     """States of the automatic reviews on a pull request, oldest first.
 
@@ -184,27 +235,71 @@ def _reviews(pr: str) -> list[str]:
     into silence. `--slurp` gives a list of page-lists and cannot be combined
     with `--jq`, so the filtering happens below.
     """
-    raw = _run(["gh", "api", "--paginate", "--slurp",
-                f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews"])
-    try:
-        pages = json.loads(raw.strip() or "[]")
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(pages, list):
-        return []
+    return [record["state"] for record in _review_records(pr)]
 
-    states: list[str] = []
-    for page in pages:
-        for review in page if isinstance(page, list) else []:
-            if not isinstance(review, dict):
-                continue
-            user = review.get("user")
-            if not isinstance(user, dict) or user.get("login") != REVIEW_BOT:
-                continue
-            state = review.get("state")
-            if isinstance(state, str):
-                states.append(state)
-    return states
+
+def _head_sha(pr: str) -> str:
+    """The commit the branch points at now, or "" if that cannot be read."""
+    return str(_pr_json(pr, "headRefOid").get("headRefOid") or "")
+
+
+def _ok(args: list[str]) -> bool:
+    """True only when the command genuinely succeeded.
+
+    `_run` cannot answer this: it returns an empty string for both a failed
+    call and a successful one with no body, and a dismissal that silently did
+    not happen is the deadlock this module exists to end.
+    """
+    try:
+        done = subprocess.run(args, capture_output=True, timeout=20, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def dismiss_stale_reviews(pr: str) -> tuple[list[int], list[int]]:
+    """Dismiss the automatic reviewer's changes-requested reviews on old commits.
+
+    A review submitted against a commit the branch has since left is stale by
+    definition: its findings were fixed in the commit that followed, or
+    declined with a reason on the thread. CodeRabbit can no longer supersede
+    such a review here -- it skips reviews on this OSS repository -- so the
+    frozen `CHANGES_REQUESTED` blocks every merge attempt with nothing left to
+    fix. PR #844 spent its whole merge on exactly that; dismissing by hand was
+    the only way out.
+
+    Three things are never touched: a human's review, a review on the current
+    head (that is a live blocker, and fixing it is the answer), and anything
+    whose staleness cannot be proven. Returns the dismissed review ids and the
+    ids whose dismissal failed, so the caller can name what happened. A failed
+    dismissal must still leave the merge allowed -- an expired token is not a
+    reason to wedge the repo.
+    """
+    head = _head_sha(pr)
+    if not head:
+        return [], []
+
+    stale = [
+        record for record in _review_records(pr)
+        if record["state"] == "CHANGES_REQUESTED"
+        and record["id"] is not None
+        and isinstance(record["commit_id"], str)
+        and record["commit_id"] != head
+    ]
+
+    dismissed: list[int] = []
+    failed: list[int] = []
+    for record in stale:
+        review_id = record["id"]
+        message = (f"Superseded: submitted against {record['commit_id'][:7]}, "
+                   f"the branch now points at {head[:7]}.")
+        if _ok(["gh", "api", "-X", "PUT",
+                f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews/{review_id}/dismissals",
+                "-f", f"message={message}"]):
+            dismissed.append(review_id)
+        else:
+            failed.append(review_id)
+    return dismissed, failed
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +333,26 @@ def check_merge(pr: str | None) -> tuple[int, str]:
     pr = pr or _open_pr_for_head()
     if pr is None:
         return 0, MERGE_RULES
-    return 0, f"Pull request #{pr} merge check:\n\n{MERGE_RULES}"
+
+    dismissed, failed = dismiss_stale_reviews(pr)
+    stale_note = ""
+    if dismissed:
+        ids = ", ".join(str(i) for i in dismissed)
+        stale_note += (
+            f"\nDismissed stale CodeRabbit review(s) {ids}: each was submitted "
+            "against a commit the branch has left, so it could never be "
+            "superseded and nothing was left to fix.\n"
+        )
+    if failed:
+        ids = " ,".join(str(i) for i in failed)
+        stale_note += (
+            f"\nCould not dismiss stale CodeRabbit review(s) {ids}. If the merge "
+            "is still refused for them, dismiss by hand and say so:\n\n"
+            f"  gh api -X PUT repos/{{owner}}/{{repo}}/pulls/{pr}/reviews/<id>/dismissals "
+            "-f message=\"Superseded commit\"\n\n"
+            "Never dismiss a person's review that way.\n"
+        )
+    return 0, f"Pull request #{pr} merge check:\n{stale_note}\n{MERGE_RULES}"
 
 
 
