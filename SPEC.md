@@ -1,101 +1,46 @@
-# SPEC.md — Issue #838: HYBRID Configuration Blueprint, multi-arm champion spec
+# SPEC.md — Issue #843: Rehearse the balanced preset and the 5-minute queue-clear gate together as one arm
 
-Branch: `i838/cockpit-hybrid-blueprint-champion-spec` | Issue: #838
+Branch: `i843/rehearse-balanced-preset-queue-gate` | Issue: #843
 
 ## Goal
 
-The Tournament Cockpit's **HYBRID Configuration Blueprint** tab is a static
-5-parameter prototype that advertises `core_brain.config.TOURNAMENT_PRESETS["hybrid"]`.
-That preset is `bot_quote_gate_dynamic_offset_on=False` plus a 6¢ deadband — it is
-not the configuration the multi-arm tournament evidence points at. An operator who
-opens the tab and copies what it prints gets a different bot than the one the tab
-claims to describe.
+Determine empirically whether combining the `balanced` quoting preset (`BOT_QUOTE_TOURNAMENT_PRESET=balanced`) with the 5-minute queue-clear gate (`BOT_ORDER_GATE_QUEUE_CLEAR_ON=1`, `BOT_ORDER_QUEUE_MAX_CLEAR_MIN=5`) maintains the risk-adjusted benefits observed when each knob ran individually in Tournament #799. 
 
-This change replaces the pane's contents with the synthesised champion
-specification: six parameters with their grounded sources, a performance forecast
-card, a failure-mode card, and copyable commands that actually produce the champion.
+The Tournament Cockpit HYBRID blueprint synthesised both knobs into its champion specification, but no tournament arm has ever tested both knobs active simultaneously. This issue defines the 4-arm tournament configuration, locks the pre-registered decision rule and statistical sample power requirements before running, and verifies execution via shadow rehearsal dry-run and targeted tests.
 
-## Champion specification (locked)
+## 4-Arm Tournament Specification
 
-Nine environment keys, and the pane must show these exact values in all three
-places (parameter table, PowerShell block, `.env` block):
+The arms configuration file `configs/tournaments/i843-pair-test_arms.json` defines four arms:
 
-| Key | Value |
-| --- | --- |
-| `BOT_QUOTE_TOURNAMENT_PRESET` | `prudent` |
-| `BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON` | `1` |
-| `BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS` | `6` |
-| `BOT_ORDER_REQUOTE_DEAD_BAND_CENTS` | `0.06` |
-| `BOT_RISK_STOP_MODE` | `ABSOLUTE_DROP` |
-| `BOT_RISK_STOP_ADVERSE_DROP_CENTS` | `0.045` |
-| `BOT_ORDER_GATE_QUEUE_CLEAR_ON` | `1` |
-| `BOT_ORDER_QUEUE_MAX_CLEAR_MIN` | `3.0` |
-| `BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC` | `45.0` |
+1. **`control`**: The shipped loose baseline with no tournament preset and no queue-clear gate (`env: {}`).
+2. **`balanced-only`**: Isolates the balanced preset alone (`env: {"BOT_QUOTE_TOURNAMENT_PRESET": "balanced"}`).
+3. **`queue5-only`**: Isolates the 5-minute queue-clear gate alone (`env: {"BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1", "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"}`).
+4. **`balanced-queue5`**: Combines both knobs (`env: {"BOT_QUOTE_TOURNAMENT_PRESET": "balanced", "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1", "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"}`).
 
-Six parameter rows, in this order: Requote Deadband, Volatility Pricing Offset,
-Single-Buy Loss Stop, Queue-Clear Gate, Aged-Out Rescue Lead, Absolute Pair Cap.
-Five columns, unchanged: Parameter | Config Value | CLI / Env Key | Source Champion |
-Live Function & Mathematical Rationale.
+### Scope Fences
+- **Zero modification to `core_brain/config.py`**: Shipped defaults and `TOURNAMENT_PRESETS` must remain untouched.
+- **No safety-layer overrides in arms**: Arms must not set stop loss drop (`BOT_RISK_STOP_ADVERSE_DROP_CENTS`), requote deadband (`BOT_ORDER_REQUOTE_DEAD_BAND_CENTS`), or rescue lead (`BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC`).
+- **Shadow execution only**: Uses `core_brain.shadow_run` / `scripts.shadow_tournament`. No signer is loaded; spends zero real capital.
+- **No changes to in-flight Tournament #799**: Neither the running #799 tournament nor its arms file `configs/tournaments/i799-tournament-test_arms.json` may be edited.
 
-Six forecast figures: `80% - 84%`, `82% - 86%`, `> 10.5`, `+$0.38 - +$0.46`,
-`> 8.0`, `> +$30.00`.
+## Decision Rule & Statistical Gate
 
-Three failure scenarios: Flash Directional Breakout, Liquidity Vacuum / Book
-Desertion, High-Frequency Ping-Pong Jitter.
+Pre-registered in `docs/runs/2026-10-26-843-balanced-queue5-pair.md` before execution:
+1. **Directional Expectation**:
+   - `balanced-queue5` is hypothesized to match or exceed `queue5-only` on Sharpe proxy ($\ge 2.70$), profit factor ($\ge 2.50$), and drawdown mitigation ($< \$4.00$) while maintaining higher trade velocity and fill efficiency via the balanced 2¢–4¢ band.
+   - If the gate refuses the same books the balanced preset targets, the arms will demonstrate mechanistic overlap or volume starvation.
+2. **Power & Sample Size Requirements**:
+   - Using `python scripts/stat_gate.py --dry-calc --sigma <s>`:
+     - At $\sigma = 0.37$ (`queue-clear-5m` baseline), resolving a \$0.02/trade difference requires 2,117 closed trades.
+     - At $\sigma = 0.87$ (`balanced-mid` baseline), resolving a \$0.02/trade difference requires 11,701 closed trades.
+   - Any 24-hour rehearsal (~150–250 trades per arm) is statistically underpowered to declare a nominal profit winner; conclusions must focus on risk shape, queue clearance distribution, and merge rates.
+3. **Mechanism Verification**:
+   - Run `python scripts/queue_report.py` across arm databases to assess the proportion of books sitting near the 5-minute clear boundary.
 
-## Acceptance criteria
+## Acceptance Criteria
 
-1. `tab-hybrid-config` in `scripts/tournament_cockpit_server.py` renders the full
-   champion parameter suite with explicit configuration values, CLI/Env keys,
-   source arms, and mathematical grounding.
-2. A dedicated Performance Forecast card displays projected Win Rate, Merge Ratio,
-   Sharpe Proxy, EV/Trade, Profit Factor, and the Monte Carlo floor.
-3. A dedicated Failure Modes & Stress Scenarios card documents Flash Breakout,
-   Liquidity Vacuum, and Ping-Pong Jitter alongside their built-in mitigations.
-4. Ready-to-run PowerShell / CLI commands and `.env` variables match the champion
-   parameters exactly — **with one deliberate deviation on the pair cap** (below).
-5. `reports/tournament_cockpit.html` shows the matching markup. It is gitignored
-   generated output, so this is satisfied by regenerating it from the template,
-   not by hand-editing it.
-6. `python -m pytest -q tests/test_tournament_cockpit_arms.py tests/test_tournament_cockpit_funnel.py`
-   passes.
-
-## Edge cases and honesty rules
-
-- **Pair cap.** The issue specifies `BOT_POS_PRICE_MAX_PAIR_COST_USD=0.990` and
-  criterion 4 says the `.env` block must match exactly. Putting that assignment in
-  a `.env` blocks the live engine: `resolve_pair_cost_trial` raises `ValueError`
-  for any non-blank value outside a rehearsal, and `core_brain/venue.py:24` calls
-  `load()` at import time. `$0.990` is already the shipped default
-  (`core_brain/config.py:56`). The blueprint therefore shows `$0.990` as the
-  shipped default, says to leave the variable unset, and prints no assignment —
-  not even a commented one, so an operator cannot paste it back.
-- **Stop distance is a trigger, not a loss cap.** A gap or a thin book can make the
-  realised single-leg loss larger than the trigger distance. The card says so.
-- **Queue-clear is an estimate, not a fill deadline.** It is an upper-bound
-  estimate from size ahead ÷ recent traded rate, and no recent flow makes it
-  infinite (entry refused).
-- **Aged-out rescue lead was not varied by the tournament.** Every arm inherited
-  the shipped value; `45.0` is a new, untested operating point.
-- **`prudent` alone gives 2–4¢.** The `2-6¢` band needs
-  `BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6`, which is what the `prudent-hybrid` arm
-  ran and what the pane must say.
-- **The forecast figures are projections, not measurements.** `data/tournaments/`
-  holds no #799 run record in a fresh checkout, so `289 trades / 210 merges /
-  74 stops / Sharpe 9.52 / $0.70 drawdown / -$2.28 / 44.1%` cannot be reproduced
-  from the repository. They stay in the pane as **attributed** evidence, clearly
-  labelled, never as a locally verified result, and the forecast card is labelled
-  as a projection for an untested combination.
-- **Shadow runs read the shell environment, not `.env`.** `core_brain.shadow_run`
-  reads `os.environ` and never loads a dotenv file, so the `.env` block applies to
-  the live trader while the `$env:` lines drive a rehearsal. The pane says so.
-
-## Explicitly out of scope
-
-- Any change under `core_brain/` — no execution, risk, or quoting behaviour moves.
-- Every other cockpit pane, the CSS, the tab bar and the `switchTab` script.
-- `.env.example`. Its stop-mode names are stale, but fixing them is a separate
-  issue with its own blast radius.
-- Making `reports/tournament_cockpit.html` tracked, or any `.gitignore` change.
-- Populating the leaderboard's worst-catalyst / hypothesised-tweak columns for the
-  #799 arms — that is issue #837's job, not this one's.
+- [ ] `configs/tournaments/i843-pair-test_arms.json` exists with all four arms, valid JSON, and exact env keys.
+- [ ] Dedicated unit test `tests/test_tournament_arms_i843.py` passes, asserting arms count, names, env contents, and schema validity.
+- [ ] Pre-registered decision rule document `docs/runs/2026-10-26-843-balanced-queue5-pair.md` is committed with status `RULE LOCKED, RESULTS PENDING`.
+- [ ] Dry-run command `python -m scripts.shadow_tournament --issue 843 --arms-file configs/tournaments/i843-pair-test_arms.json --dry-run` exits with code 0 and prints valid plan JSON.
+- [ ] Regression test suite passes: `python -m pytest -q tests/test_tournament_arms_i843.py tests/test_shadow_tournament.py tests/test_tournament_cockpit_arms.py tests/test_tournament_run_number_naming.py`.

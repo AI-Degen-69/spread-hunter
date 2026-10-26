@@ -1,158 +1,105 @@
-# Implementation Plan — Issue #842: Auto-close profitable orphaned positions after duration threshold
+# Implementation Plan — Issue #843: Rehearse the balanced preset and the 5-minute queue-clear gate together as one arm
 
-Branch: `plan_issue_842` | Issue: #842
+Branch: `i843/rehearse-balanced-preset-queue-gate` | Issue: #843
 
 ## Summary
 
-When only one leg of a binary pair fills and counter-buy orders remain unfilled past the entry window without reaching resolution, a position can sit as an unhedged directional bet for hours. When market prices move favorably, these orphaned legs often build significant unrealized profits (+5% to +18%+). 
-This feature adds an automated exit mechanism that detects orphaned single-leg positions held beyond a configurable age threshold (`bot_risk_orphan_profit_min_age_sec`, default 1 hour / 3600s), verifies that the executable best bid meets or exceeds a target gross profit threshold (`bot_risk_orphan_min_profit_pct`, default 0.05 / 5%), cancels resting counter-orders, executes a guarded market sell at or above the profit floor, books the close as `orphan_profit_exit`, and resets the market condition without triggering a punitive hard-stop lockout.
+Tournament #799 identified two single-knob champions: `balanced-mid` (leading in realized PnL and trade count via dynamic 2¢–4¢ offset) and `queue-clear-5m` (leading in Sharpe proxy, profit factor, and drawdown mitigation via 5-minute queue clearance filter). The Tournament Cockpit HYBRID blueprint specified both knobs simultaneously. However, because both knobs interact with resting quote wait times, their interaction is untested—they may complement each other, overlap redundantly, or induce volume starvation.
+This work creates `configs/tournaments/i843-pair-test_arms.json` with 4 isolated arms, builds unit tests in `tests/test_tournament_arms_i843.py`, establishes a pre-registered decision rule and statistical power threshold document in `docs/runs/2026-10-26-843-balanced-queue5-pair.md`, and validates dry-run execution.
 
 ---
 
 ## Step 0A: CodeRabbit Plan Intake & Analysis
 
 - **Adopted:**
-  - Config knobs: `bot_risk_gate_orphan_profit_close_on` (bool, default `False`), `bot_risk_orphan_profit_min_age_sec` (float, default `3600.0`, bounds `1.0..86400.0`), `bot_risk_orphan_min_profit_pct` (float, default `0.05`, bounds `0.0..1.0`).
-  - Canonical close method `ORPHAN_PROFIT_EXIT = "orphan_profit_exit"` added to `RESCUE_METHODS` in `core_brain/close_methods.py`. Netting in `order_registry.py` already selects `RESCUE_METHODS`, so inventory deduction works automatically.
-  - Pinned `EXIT_METHODS` update in `dashboard/static/app.js` to stay in sync with `DASHBOARD_FORCED_EXIT_METHODS`.
-  - Pure verdict in `core_brain/single_leg_lifecycle.py`: `OrphanProfitVerdict` dataclass and `evaluate_orphan_profit(...)` pure helper.
-  - Guarded execution in `exit_single_buy`: parameter `min_profit_pct`, rechecking opposite fills and profit floor post-cancel, setting limit price to `max(slippage_floor, profit_floor)`.
-  - Manager integration in `_manage_single_leg_positions_locked`: placing the orphan-profit branch immediately after hard-stop and before aged-out rescue, ensuring hard-stop priority is preserved.
-  - Reset behavior: calling `reset_condition(..., reason="orphan_profit_exited")` without calling `mark_hard_stop_block`.
+  - 4-arm tournament specification isolating `control` (`{}`), `balanced-only`, `queue5-only`, and `balanced-queue5`.
+  - Exact environment keys: `BOT_QUOTE_TOURNAMENT_PRESET=balanced`, `BOT_ORDER_GATE_QUEUE_CLEAR_ON=1`, `BOT_ORDER_QUEUE_MAX_CLEAR_MIN=5`.
+  - Exclusion of deployment-layer overrides (stop 4.5¢, deadband 6¢, rescue lead 45s) to avoid confounding factors.
+  - Dedicated unit test pinning the 4 arms, their keys, and checking plan build via `scripts.shadow_tournament.build_tournament_plan`.
+  - Pre-registered decision rule document committed before run execution with statistical power requirements from `scripts/stat_gate.py`.
 - **Rejected:**
-  - Net profit after fees model: Fees on live taker sales are unknown at sell time (and cost basis excludes entry fees). Gross profit over cost basis is the robust, consistent standard.
-  - Extra dashboard status cards: Not requested in issue scope.
-  - Optional `fresh` parameter in `core_brain/shadow_exec.py`: Shadow ladder walk already guarantees execution at or above the submitted limit.
+  - 50+ lines of speculative interaction regression equations in markdown: Existing run reports (e.g. `docs/runs/2026-10-16-622-refusal-hold-tournament.md`) provide the concise, standard format.
+  - Modification of any core configuration file (`core_brain/config.py` is frozen for this issue).
 - **Verified:**
-  - All file paths and seam symbols (`single_buy_saver.py`, `single_leg_lifecycle.py`, `close_methods.py`, `config.py`) confirmed live in the repository.
-  - `scoring/config.py` inherits from `core_brain.config.MakerConfig` and requires zero edits.
+  - `configs/tournaments/i799-tournament-test_arms.json` exists and validates arms schema.
+  - `scripts/shadow_tournament.py` supports `--arms-file`, `--dry-run`, `--issue`, `--stamp`.
+  - `core_brain/config.py` lines 400 & 414 parse `BOT_ORDER_GATE_QUEUE_CLEAR_ON` and `BOT_ORDER_QUEUE_MAX_CLEAR_MIN`.
+  - `scripts/stat_gate.py` runs `--dry-calc --sigma <s>` cleanly.
 
 ---
 
-## Step 5: Committed Enhancement
+## Step 5: Improvement Proposal
 
-- **Edge-Case Hardening (Post-Cancel Verification):**
-  - *Evidence:* In `core_brain/single_buy_saver.py` lines 1124-1144, `_cancel_orders` cancels working orders on both legs before reading venue state via `_venue_extra`. In fast-moving markets, a resting counter-order on the light leg may fill right as cancellation is initiated.
-  - *Enhancement:* When `min_profit_pct` is set in `exit_single_buy`, we explicitly verify after cancellation that `after["legs"][light_token]["matched"] == 0` and `venue_light_matched == 0`. If an opposite fill is detected, the function aborts the sell with `action: "orphan_profit_hold", reason: "opposite_filled"`. Furthermore, if the fresh book bid has dropped below the calculated profit floor, it holds with `action: "orphan_profit_hold", reason: "profit_gone"`.
-  - *Verification:* Tested via unit tests simulating late counter-fill and book drop after cancellation.
-
----
-
-## Interface Contracts
-
-### 1. `core_brain/config.py`
-```python
-bot_risk_gate_orphan_profit_close_on: bool = False
-bot_risk_orphan_profit_min_age_sec: float = 3600.0  # seconds in 1.0..86400.0
-bot_risk_orphan_min_profit_pct: float = 0.05         # fraction in 0.0..1.0
-```
-
-### 2. `core_brain/close_methods.py`
-```python
-ORPHAN_PROFIT_EXIT = "orphan_profit_exit"
-# Included in METHODS with RESCUE_BUCKET, auto-populating RESCUE_METHODS
-```
-
-### 3. `core_brain/single_leg_lifecycle.py`
-```python
-@dataclass(frozen=True)
-class OrphanProfitVerdict:
-    eligible: bool
-    reason: str
-    held_token_id: Optional[str] = None
-    held_size: float = 0.0
-    average_cost: float = 0.0
-    profit_floor: float = 0.0
-    observed_bid: Optional[float] = None
-
-def orphan_profit_floor(average_cost: float, min_profit_pct: float, tick_size: float = 0.01) -> float: ...
-
-def evaluate_orphan_profit(
-    position: SingleLegPosition,
-    age_s: Optional[float],
-    min_age_sec: float,
-    min_profit_pct: float,
-    tick_size: float = 0.01,
-) -> OrphanProfitVerdict: ...
-```
-
-### 4. `core_brain/single_buy_saver.py`
-```python
-def exit_single_buy(
-    client, registry, pair_id: str, bot_pos_price_max_pair_cost_usd: float,
-    *, live: bool = True, venue_positions: Optional[dict[str, float]] = None,
-    reason: str = "single_buy_exit", force: bool = False,
-    trigger_bid: Optional[float] = None, method: str = SINGLE_BUY_EXIT,
-    min_profit_pct: Optional[float] = None,
-) -> dict: ...
-```
+- **Proposal:** Comprehensive programmatic validation in `tests/test_tournament_arms_i843.py`.
+- **Evidence:** In `scripts/shadow_tournament.py` lines 345-385, arms definitions with unexpected keys or misconfigured preset names can trigger validation errors at runtime or quietly inherit default presets.
+- **Classification:** Simplification / edge-case hardening (adopted by default).
+- **Impact:** Ensures the arms JSON is not only valid JSON, but builds a clean `TournamentPlan` through `build_tournament_plan` where `balanced-queue5` contains exactly the expected keys and no unexpected keys, and verifies subprocess `--dry-run` invocation exits with code 0.
 
 ---
 
 ## Tasks
 
-### Task 1: Configuration, Close Method Taxonomy & Pure Verdict [Backend/Logic] [x]
-- **Size:** M
-- **Target files:**
-  - `core_brain/config.py`
-  - `.env.example`
-  - `core_brain/close_methods.py`
-  - `dashboard/static/app.js`
-  - `core_brain/single_leg_lifecycle.py`
-  - `tests/test_single_leg_lifecycle.py`
-  - `tests/test_close_method_taxonomy.py`
-  - `tests/test_config_single_source.py`
-- **What is built:**
-  - Add `bot_risk_gate_orphan_profit_close_on`, `bot_risk_orphan_profit_min_age_sec`, and `bot_risk_orphan_min_profit_pct` to `MakerConfig` and `from_env()`.
-  - Document knobs in `.env.example`.
-  - Add `ORPHAN_PROFIT_EXIT = "orphan_profit_exit"` to `core_brain/close_methods.py` in `RESCUE_METHODS`.
-  - Add `"orphan_profit_exit"` to `const EXIT_METHODS` in `dashboard/static/app.js`.
-  - Implement `orphan_profit_floor` and `evaluate_orphan_profit` in `core_brain/single_leg_lifecycle.py`.
-  - Add unit tests for configuration bounds, taxonomy sync, and verdict calculations (boundary tests, tick ceiling, flat, two-sided, age unknown/too young, below floor, eligible).
+### Task 1: [Design/Config] Define 4-Arm Tournament Configuration File [x]
+- **Size:** S
+- **Target Files:** `configs/tournaments/i843-pair-test_arms.json`
+- **Helper Skill:** `source-driven-development`
 - **Depends on:** None
-- **Verification:**
-  - `python -m pytest tests/test_single_leg_lifecycle.py tests/test_close_method_taxonomy.py tests/test_config_single_source.py -q`
+- **Details:**
+  - Create `configs/tournaments/i843-pair-test_arms.json` containing an array of 4 arm objects:
+    1. `control`: label "Control (Loose Baseline)", color `#00e676`, env `{}`.
+    2. `balanced-only`: label "Balanced Only", color `#e040fb`, env `{"BOT_QUOTE_TOURNAMENT_PRESET": "balanced"}`.
+    3. `queue5-only`: label "Queue Clear 5m Only", color `#18ffff`, env `{"BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1", "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"}`.
+    4. `balanced-queue5`: label "Balanced + Queue Clear 5m", color `#ff6d00`, env `{"BOT_QUOTE_TOURNAMENT_PRESET": "balanced", "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1", "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"}`.
+  - Ensure all names match `^[a-z0-9-]{1,24}$`.
+  - Include descriptive fields (`desc`, `thesis`, `profile`) consistent with `i799-tournament-test_arms.json`.
+- **Verification:** `python -c "import json; json.loads(open('configs/tournaments/i843-pair-test_arms.json').read())"`
 
-### Task 2: Guarded Execution in `exit_single_buy` [Backend/Logic]
+### Task 2: [Testing/TDD] Create Unit Test Suite for Arms Configuration & Plan Resolution
 - **Size:** S
-- **Target files:**
-  - `core_brain/single_buy_saver.py`
-  - `tests/test_single_buy_saver.py`
-- **What is built:**
-  - Add `min_profit_pct: Optional[float] = None` to `exit_single_buy`.
-  - When `min_profit_pct` is provided, after cancel and venue re-read:
-    - Verify light leg has 0 matched shares in registry and `venue_light_matched <= SIZE_EPS`. If not, return `{"action": "orphan_profit_hold", "reason": "opposite_filled", ...}`.
-    - Recompute held cost and profit floor; check if fresh `bid < profit_floor`. If so, return `{"action": "orphan_profit_hold", "reason": "profit_gone", ...}`.
-    - Set `min_price = max(min_price, profit_floor)`.
-    - Record close with `method=ORPHAN_PROFIT_EXIT`, `reason="orphan_profit_exit"`, `submitted_floor=min_price`.
+- **Target Files:** `tests/test_tournament_arms_i843.py`
+- **Helper Skill:** `test-driven-development`
 - **Depends on:** Task 1
-- **Verification:**
-  - `python -m pytest tests/test_single_buy_saver.py -k "test_orphan_exit" -q`
+- **Details:**
+  - Test file `tests/test_tournament_arms_i843.py` asserting:
+    1. Arms JSON file existence and valid schema.
+    2. Exactly 4 arms with exact expected names.
+    3. Exact environment variables for each arm (and strictly verifying that no arm contains `BOT_RISK_STOP_ADVERSE_DROP_CENTS`, `BOT_ORDER_REQUOTE_DEAD_BAND_CENTS`, or other safety overrides).
+    4. Integration with `build_tournament_plan(issue=843, arms=..., dry_run=True)` succeeds and assigns distinct database paths.
+    5. Subprocess `--dry-run` invocation test (`python -m scripts.shadow_tournament --issue 843 --arms-file configs/tournaments/i843-pair-test_arms.json --dry-run`) returns code 0 and valid JSON.
+- **Verification:** `python -m pytest -q tests/test_tournament_arms_i843.py`
 
-### Task 3: Manager Routing & Reset in `_manage_single_leg_positions_locked` [Backend/Logic] [x]
-- **Size:** M
-- **Target files:**
-  - `core_brain/single_buy_saver.py`
-  - `tests/test_single_buy_saver.py`
-- **What is built:**
-  - Insert orphan profit check in `_manage_single_leg_positions_locked` after hard stop and before aged-out rescue.
-  - Check `cfg.bot_risk_gate_orphan_profit_close_on`.
-  - Calculate `age_s = (now_s * 1000.0 - last_fill_ms) / 1000.0` if `last_fill_ms > 0` else `None`.
-  - Call `evaluate_orphan_profit(position, age_s, cfg.bot_risk_orphan_profit_min_age_sec, cfg.bot_risk_orphan_min_profit_pct, grid_tick)`.
-  - If eligible, persist lifecycle decision, call `exit_single_buy(..., force=True, reason="orphan_profit_exit", method=ORPHAN_PROFIT_EXIT, trigger_bid=held_bid, min_profit_pct=...)`.
-  - On `exited`: decrement venue position, call `reset_condition(..., reason="orphan_profit_exited")` (never calling `mark_hard_stop_block`), update result.
-  - On hold (`orphan_profit_hold`, `dust_hold`, `route_to_merge`), append result and keep managing.
-  - Add comprehensive manager tests (toggle off, age boundary, bid below floor, two-sided skip, hard stop precedence, aged-out precedence, partial fills, repeat-sale prevention, refill reset).
-- **Depends on:** Task 2
-- **Verification:**
-  - `python -m pytest tests/test_single_buy_saver.py -k "test_manager_orphan" -q`
-
-### Task 4: Regression Suites and Divergence Checks [Backend/Logic] [x]
+### Task 3: [Docs/Research] Write Pre-Registered Decision Rule and Run Document
 - **Size:** S
-- **Target files:**
-  - `tests/`
-- **What is built:**
-  - Verify all related regression suites: taxonomy, single source config, config divergence guard, single buy saver, single leg lifecycle, lifecycle reset, hard stop lockout window.
-- **Depends on:** Task 3
-- **Verification:**
-  - `python -m pytest tests/test_single_leg_lifecycle.py tests/test_single_buy_saver.py tests/test_close_method_taxonomy.py tests/test_config_single_source.py tests/test_config_divergence_guard.py -q`
+- **Target Files:** `docs/runs/2026-10-26-843-balanced-queue5-pair.md`
+- **Helper Skill:** `documentation-and-adrs`
+- **Depends on:** Task 1
+- **Details:**
+  - Create `docs/runs/2026-10-26-843-balanced-queue5-pair.md` following the proven pattern from `docs/runs/2026-10-16-622-refusal-hold-tournament.md`.
+  - State clearly: `Status: RULE LOCKED, RESULTS PENDING.`
+  - Section 1: Pre-registered decision rule:
+    - Primary hypothesis: `balanced-queue5` combines the fill speed of the balanced offset band with the adverse-selection filter of the queue gate.
+    - Competing hypothesis: Both knobs constrain quote duration, leading to volume starvation or mutual redundancy.
+    - Separation standard: "Clearly different" defined across Sharpe proxy ($\pm 25\%$), profit factor, and maximum drawdown.
+    - Statistical power threshold: Quote sample sizes required from `stat_gate.py` for $\sigma=0.37$ and $\sigma=0.87$; explicit rule that if required $n$ is not achieved in 24h, no arm is declared winner on nominal PnL.
+  - Section 2: Exact commands to launch and measure (PowerShell `scripts.shadow_tournament`, `analyze_arm_database`, `queue_report.py`, `stat_gate.py`).
+  - Section 3: Metric recording tables (placeholder for post-run results).
+- **Verification:** Document inspection and verification of embedded CLI commands.
+
+### Task 4: [Verification] Execute Dry-Run & Run Regression Suite
+- **Size:** XS
+- **Target Files:** None (Execution only)
+- **Helper Skill:** `verification-before-completion`
+- **Depends on:** Tasks 1, 2, 3
+- **Details:**
+  - Execute `python -m scripts.shadow_tournament --issue 843 --arms-file configs/tournaments/i843-pair-test_arms.json --dry-run`.
+  - Run targeted test suite:
+    `python -m pytest -q tests/test_tournament_arms_i843.py tests/test_shadow_tournament.py tests/test_tournament_cockpit_arms.py tests/test_tournament_run_number_naming.py`
+- **Verification:** Zero errors, all tests pass.
+
+---
+
+## Checkpoints
+
+- **Checkpoint 1 (after Tasks 1 & 2):** Arms configuration file created and verified by unit tests.
+- **Checkpoint 2 (after Task 3):** Pre-registered decision rule document locked.
+- **Checkpoint 3 (after Task 4):** Dry-run execution verified and full targeted test suite green.
