@@ -36,6 +36,6 @@ Derived checklist — `tasks/plan.md` is the authoritative completion record.
 - [x] Regenerate `reports/tournament_cockpit.html` by starting and stopping the cockpit once
 - [x] Read the report back from disk: `BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3.0`, `Performance Forecast`, `Failure Modes &amp; Stress Scenarios` all present; `BOT_POS_PRICE_MAX_PAIR_COST_USD=` and `-Preset hybrid` absent
 - [x] Backlog note written: `docs/backlog/i838-cockpit-hybrid-blueprint.md` (N1–N8)
-- [x] Browser check: the tab opens and renders the table, both cards and both command blocks
+- [x] Static markup check (no browser click-through): the regenerated report file read back from disk carries the table, both cards and both command blocks — a live browser pass was not performed, as noted in the PR description
 - [x] Operator "How to verify" walkthrough included, no `pytest` / `git` / `gh`
-- [ ] Open the PR through Station IV
+- [x] Open the PR through Station IV (PR #844); CodeRabbit round triaged: 3 accepted (backlog N2 correction, blueprint step-3 inspection command, todo honesty), 1 rejected (Recommendations avoid-note label — fenced by SPEC out-of-scope, tracked as backlog N7)

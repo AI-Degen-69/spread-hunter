@@ -1976,8 +1976,10 @@ Remove-Item Env:BOT_POS_PRICE_MAX_PAIR_COST_USD -ErrorAction SilentlyContinue
 # 2. Or run the same rehearsal directly:
 python -m core_brain.shadow_run --minutes 60 --interval 1 --db data/champion_prudent_shadow_01.db --run-id shadow-champion-prudent-01 --starting-bankroll-usd 100
 
-# 3. Then read the result here:
-python -m scripts.tournament_cockpit_server --port 8800
+# 3. Read the result: a direct --db rehearsal writes a standalone store that
+#    the cockpit cannot resolve (it serves data/tournaments run records), so
+#    open the store in the execution dashboard:
+python -m dashboard.server --db data/champion_prudent_shadow_01.db
       </pre>
     </div>
 

@@ -829,6 +829,12 @@ def test_hybrid_blueprint_shows_the_champion_values_in_all_three_places():
     for flag in ("--db", "--run-id", "--interval", "--starting-bankroll-usd"):
         assert flag in commands, f"the direct rehearsal command lost {flag}"
 
+    # The direct rehearsal writes a standalone store the cockpit cannot resolve
+    # (it serves data/tournaments run records), so the recipe's read-back step
+    # must point at the dashboard that opens that store.
+    assert "python -m dashboard.server --db data/champion_prudent_shadow_01.db" in commands
+    assert "python -m scripts.tournament_cockpit_server" not in commands
+
     assert "Performance Forecast" in blueprint
     assert "Failure Modes &amp; Stress Scenarios" in blueprint
     for figure in (
