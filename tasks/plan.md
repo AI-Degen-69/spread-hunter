@@ -129,7 +129,7 @@ def exit_single_buy(
 - **Verification:**
   - `python -m pytest tests/test_single_buy_saver.py -k "test_orphan_exit" -q`
 
-### Task 3: Manager Routing & Reset in `_manage_single_leg_positions_locked` [Backend/Logic]
+### Task 3: Manager Routing & Reset in `_manage_single_leg_positions_locked` [Backend/Logic] [x]
 - **Size:** M
 - **Target files:**
   - `core_brain/single_buy_saver.py`

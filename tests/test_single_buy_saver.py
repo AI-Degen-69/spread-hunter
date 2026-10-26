@@ -40,10 +40,10 @@ def registry(tmp_path: Path) -> OrderRegistry:
 
 
 def _one_sided_pair(registry: OrderRegistry, filled_size: float = 10.0,
-                    fill_price: float = 0.60) -> str:
+                    fill_price: float = 0.60, now_ms: int | None = None) -> str:
     """A heavy UP leg fully filled, a light DOWN leg still resting."""
     pair_id = "pair-1"
-    now = 1_000_000
+    now = now_ms if now_ms is not None else 1_000_000
 
     heavy = OrderRecord(
         id=str(uuid.uuid4()), order_id="venue-heavy", condition_id=COND,
@@ -3293,3 +3293,324 @@ def test_orphan_profit_close_nets_inventory(registry: OrderRegistry):
 
     after_naked = registry_naked_usd(registry)
     assert after_naked == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Issue #842: Task 3 Manager Routing & Reset in _manage_single_leg_positions_locked
+# ---------------------------------------------------------------------------
+
+
+def test_manager_orphan_profit_happy_path(registry: OrderRegistry):
+    """Profitable orphaned position older than threshold auto-closes without hard stop block."""
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50, now_ms=int((base_s - 4000.0) * 1000))
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_gate_aged_out_rescue_on=False,
+        bot_risk_gate_orphan_profit_close_on=True,
+        bot_risk_orphan_profit_min_age_sec=3600.0,
+        bot_risk_orphan_min_profit_pct=0.05,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    client = FakeClient(best_bid=0.55, bid_depth=10.0)
+
+    results = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+
+    assert len(results) == 1
+    res = results[0]
+    assert res["action"] == "exited"
+    assert res["route"] == "orphan_profit_exit"
+    assert res["size"] == 10.0
+    assert res["min_price"] == 0.53
+
+    closes = registry.get_all_closes()
+    assert len(closes) == 1
+    assert closes[0]["method"] == lp.ORPHAN_PROFIT_EXIT
+    assert closes[0]["reason"] == "orphan_profit_exit"
+    # Never marked with hard_stop_block
+    assert registry.requalification_marks().get(COND) is None
+
+
+def test_manager_orphan_profit_toggle_off(registry: OrderRegistry):
+    """When toggle is False, profitable orphan does not exit via orphan_profit_exit."""
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50, now_ms=int((base_s - 4000.0) * 1000))
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_gate_aged_out_rescue_on=False,
+        bot_risk_gate_orphan_profit_close_on=False,
+        bot_risk_orphan_profit_min_age_sec=3600.0,
+        bot_risk_orphan_min_profit_pct=0.05,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    client = FakeClient(best_bid=0.55, bid_depth=10.0)
+
+    results = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+
+    assert len(results) == 1
+    assert results[0]["action"] == "patient_wait"
+    assert len(registry.get_all_closes()) == 0
+
+
+def test_manager_orphan_profit_age_boundary(registry: OrderRegistry):
+    """Position younger than min_age_sec is not eligible."""
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50, now_ms=int((base_s - 3500.0) * 1000))
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_gate_aged_out_rescue_on=False,
+        bot_risk_gate_orphan_profit_close_on=True,
+        bot_risk_orphan_profit_min_age_sec=3600.0,
+        bot_risk_orphan_min_profit_pct=0.05,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    client = FakeClient(best_bid=0.55, bid_depth=10.0)
+
+    results = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+
+    assert len(results) == 1
+    assert results[0]["action"] == "patient_wait"
+    assert len(registry.get_all_closes()) == 0
+
+
+def test_manager_orphan_profit_bid_below_floor(registry: OrderRegistry):
+    """When bid is below profit floor, orphan profit exit does not fire."""
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50, now_ms=int((base_s - 4000.0) * 1000))
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_gate_aged_out_rescue_on=False,
+        bot_risk_gate_orphan_profit_close_on=True,
+        bot_risk_orphan_profit_min_age_sec=3600.0,
+        bot_risk_orphan_min_profit_pct=0.05,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    client = FakeClient(best_bid=0.51, bid_depth=10.0)
+
+    results = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+
+    assert len(results) == 1
+    assert results[0]["action"] == "patient_wait"
+    assert len(registry.get_all_closes()) == 0
+
+
+def test_manager_orphan_profit_skips_two_sided(registry: OrderRegistry):
+    """Two-sided inventory is never exited via orphan profit exit."""
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50, now_ms=int((base_s - 4000.0) * 1000))
+    light_order = next(o for o in registry.get_active_orders() if o.token_id == TOK_DN)
+    registry.record_fill(FillRecord(
+        trade_id="trade-light", order_uuid=light_order.id, size=10.0,
+        price=0.38, venue_ts=int((base_s - 4000.0) * 1000),
+    ))
+
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_gate_aged_out_rescue_on=False,
+        bot_risk_gate_orphan_profit_close_on=True,
+        bot_risk_orphan_profit_min_age_sec=3600.0,
+        bot_risk_orphan_min_profit_pct=0.05,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    client = FakeClient(best_bid=0.55, bid_depth=10.0)
+
+    results = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 10.0},
+    )
+
+    assert len(results) == 0
+    assert len(registry.get_all_closes()) == 0
+
+
+def test_manager_orphan_profit_beats_aged_out(registry: OrderRegistry):
+    """Orphan profit exit sits above aged-out rescue in priority."""
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50, now_ms=int((base_s - 4000.0) * 1000))
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_gate_aged_out_rescue_on=True,
+        bot_risk_pairs_exit_window_sec=900.0,
+        bot_risk_aged_out_rescue_lead_sec=900.0,
+        bot_risk_gate_orphan_profit_close_on=True,
+        bot_risk_orphan_profit_min_age_sec=3600.0,
+        bot_risk_orphan_min_profit_pct=0.05,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    market_state = MarketEndState(
+        condition_id=COND, closed=False, end_ts=base_s + 100.0,
+        end_date_iso=None, end_date_passed=False, accepting_orders=True,
+        resolved=False, unreachable=False,
+    )
+    client = FakeClient(best_bid=0.55, bid_depth=10.0)
+
+    results = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+        market_state_fn=lambda cid: market_state,
+    )
+
+    assert len(results) == 1
+    res = results[0]
+    assert res["action"] == "exited"
+    assert res["route"] == "orphan_profit_exit"
+    closes = registry.get_all_closes()
+    assert len(closes) == 1
+    assert closes[0]["method"] == lp.ORPHAN_PROFIT_EXIT
+
+
+def test_manager_hard_stop_unchanged_with_orphan_toggle_on(registry: OrderRegistry):
+    """Hard stop takes priority over orphan profit exit when loss threshold is hit."""
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60, now_ms=int((base_s - 4000.0) * 1000))
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_gate_aged_out_rescue_on=False,
+        bot_risk_gate_orphan_profit_close_on=True,
+        bot_risk_orphan_profit_min_age_sec=3600.0,
+        bot_risk_orphan_min_profit_pct=0.05,
+        bot_risk_stop_mode="ABSOLUTE_DROP",
+        bot_risk_stop_adverse_drop_cents=0.05,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    client = FakeClient(best_bid=0.50, bid_depth=10.0)
+
+    results = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+
+    assert len(results) == 1
+    res = results[0]
+    assert res["action"] == "exited"
+    assert res["route"] == "hard_stop"
+    closes = registry.get_all_closes()
+    assert len(closes) == 1
+    assert closes[0]["method"] == lp.SINGLE_BUY_EXIT
+    assert closes[0]["reason"] == "lifecycle_hard_stop"
+
+
+def test_manager_orphan_profit_partial_fill_stays_managed(registry: OrderRegistry):
+    """Partial exit leaves remaining shares managed in subsequent cycles."""
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50, now_ms=int((base_s - 4000.0) * 1000))
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_gate_aged_out_rescue_on=False,
+        bot_risk_gate_orphan_profit_close_on=True,
+        bot_risk_orphan_profit_min_age_sec=3600.0,
+        bot_risk_orphan_min_profit_pct=0.05,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    client = FakeClient(best_bid=0.55, bid_depth=4.0)
+
+    results = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+
+    assert len(results) == 1
+    assert results[0]["action"] == "exited"
+    assert results[0]["size"] == 4.0
+
+    results_next = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s + 10.0,
+        venue_positions={TOK_UP: 6.0, TOK_DN: 0.0},
+    )
+    assert len(results_next) == 1
+    assert results_next[0]["action"] == "exited"
+    assert results_next[0]["size"] == 4.0
+
+
+def test_manager_orphan_profit_no_repeat_sale(registry: OrderRegistry):
+    """Once fully exited, condition is skipped on next rotation."""
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50, now_ms=int((base_s - 4000.0) * 1000))
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_gate_aged_out_rescue_on=False,
+        bot_risk_gate_orphan_profit_close_on=True,
+        bot_risk_orphan_profit_min_age_sec=3600.0,
+        bot_risk_orphan_min_profit_pct=0.05,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    client = FakeClient(best_bid=0.55, bid_depth=10.0)
+
+    results1 = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+    assert len(results1) == 1
+    assert results1[0]["action"] == "exited"
+    assert len(registry.get_all_closes()) == 1
+
+    results2 = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s + 10.0,
+        venue_positions={TOK_UP: 0.0, TOK_DN: 0.0},
+    )
+    assert len(results2) == 0
+    assert len(registry.get_all_closes()) == 1
+
+
+def test_manager_orphan_profit_refill_resets_age(registry: OrderRegistry):
+    """A fresh fill on a previously exited condition resets the age calculation."""
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50, now_ms=int((base_s - 4000.0) * 1000))
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_gate_aged_out_rescue_on=False,
+        bot_risk_gate_orphan_profit_close_on=True,
+        bot_risk_orphan_profit_min_age_sec=3600.0,
+        bot_risk_orphan_min_profit_pct=0.05,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    client = FakeClient(best_bid=0.55, bid_depth=10.0)
+
+    # First rotation: exits at base_s
+    lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+
+    # New fill arrives postdating the close
+    refill_ts_ms = int((base_s + 50.0) * 1000)
+    new_order = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-refill", condition_id=COND,
+        token_id=TOK_UP, side="BUY", price=0.50, original_size=10.0,
+        status="filled", posted_ts=refill_ts_ms, last_polled_ts=refill_ts_ms,
+        pair_id="pair-refill", max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(new_order)
+    registry.record_fill(FillRecord(
+        trade_id="trade-refill", order_uuid=new_order.id, size=10.0,
+        price=0.50, venue_ts=refill_ts_ms,
+    ))
+
+    # At base_s + 100s (age = 50s < 3600s): not eligible
+    results_young = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s + 100.0,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+    assert len(results_young) == 1
+    assert results_young[0]["action"] == "patient_wait"
+
+    # At base_s + 3700s (age = 3650s > 3600s): eligible and exits
+    results_aged = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s + 3700.0,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+    assert len(results_aged) == 1
+    assert results_aged[0]["action"] == "exited"
+    assert results_aged[0]["route"] == "orphan_profit_exit"

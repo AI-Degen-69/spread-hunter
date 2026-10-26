@@ -2174,7 +2174,8 @@ def manage_single_leg_positions(
     """
     pairs_enabled = bool(getattr(cfg, "bot_risk_gate_pairs_rule_on", True))
     aged_out_enabled = bool(getattr(cfg, "bot_risk_gate_aged_out_rescue_on", True))
-    if not pairs_enabled and not aged_out_enabled:
+    orphan_profit_on = bool(getattr(cfg, "bot_risk_gate_orphan_profit_close_on", False))
+    if not pairs_enabled and not aged_out_enabled and not orphan_profit_on:
         return []
 
     # Single-executor guarantee. The whole venue-mutating pass runs under one
@@ -2314,7 +2315,8 @@ def _manage_single_leg_positions_locked(
             last_fill_ms > 0
             and (now_s * 1000.0 - last_fill_ms) > window_ms
         )
-        if not pairs_enabled and not (is_aged_out and aged_out_enabled):
+        orphan_profit_on = bool(getattr(cfg, "bot_risk_gate_orphan_profit_close_on", False))
+        if not pairs_enabled and not (is_aged_out and aged_out_enabled) and not orphan_profit_on:
             continue
 
         try:
@@ -2538,6 +2540,76 @@ def _manage_single_leg_positions_locked(
                                         position.condition_id, exc)
                 out.append(result)
                 continue
+
+            # Orphan profit exit (#842): auto-close profitable orphaned positions after duration threshold
+            if orphan_profit_on:
+                from core_brain.single_leg_lifecycle import evaluate_orphan_profit
+                min_age_sec = float(getattr(cfg, "bot_risk_orphan_profit_min_age_sec", 3600.0))
+                min_profit_pct = float(getattr(cfg, "bot_risk_orphan_min_profit_pct", 0.05))
+                age_s = ((now_s * 1000.0 - last_fill_ms) / 1000.0) if last_fill_ms > 0 else None
+                orphan_verdict = evaluate_orphan_profit(
+                    position, age_s, min_age_sec, min_profit_pct, grid_tick,
+                )
+                if orphan_verdict.eligible:
+                    try:
+                        result = exit_single_buy(
+                            client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
+                            live=live, venue_positions=venue_positions,
+                            reason="orphan_profit_exit", force=True,
+                            trigger_bid=held_bid,
+                            method=ORPHAN_PROFIT_EXIT,
+                            min_profit_pct=min_profit_pct,
+                        )
+                    except Exception as exc:
+                        try:
+                            registry.log_hard_stop_refusal(
+                                pair_id=pair_id,
+                                condition_id=position.condition_id,
+                                trigger_bid=held_bid,
+                                outcome=("refused" if isinstance(exc, PairExitRefused)
+                                         else "error"),
+                                detail=f"{type(exc).__name__}: {exc}",
+                            )
+                        except Exception:
+                            pass
+                        raise
+                    result.update(
+                        route="orphan_profit_exit",
+                        lifecycle_state=(previous_state.value if previous_state else None),
+                        reason=orphan_verdict.reason,
+                    )
+                    if result.get("action") == "exited":
+                        sold_size = float(result.get("size", 0.0) or 0.0)
+                        heavy_tok = result.get("token_id")
+                        if (venue_positions is not None
+                                and heavy_tok and heavy_tok in venue_positions):
+                            venue_positions[heavy_tok] = max(
+                                0.0, float(venue_positions[heavy_tok]) - sold_size)
+                        from core_brain.lifecycle_reset import reset_condition
+                        if live:
+                            ports = live_reset_ports(
+                                client, funder, registry, position.condition_id,
+                                position.up_token_id, position.down_token_id)
+                        else:
+                            db_path = (getattr(client, "_db_path", None)
+                                       or getattr(registry, "db_path", None))
+                            ports = _shadow_reset_ports_or_none(
+                                registry, db_path, position.condition_id,
+                                position.up_token_id, position.down_token_id)
+                        if ports is not None:
+                            reset_outcome = reset_condition(
+                                registry, position.condition_id,
+                                position.up_token_id, position.down_token_id,
+                                ports, reason="orphan_profit_exited",
+                                now_ms=int(time.time() * 1000))
+                            result.update(
+                                reset_status=reset_outcome.status,
+                                reset_reason=reset_outcome.reason,
+                            )
+                            if reset_outcome.status == "RESET":
+                                result.update(lifecycle_state=None)
+                    out.append(result)
+                    continue
 
             if (is_aged_out and aged_out_enabled and last_fill_ms > 0
                     and condition_id):
