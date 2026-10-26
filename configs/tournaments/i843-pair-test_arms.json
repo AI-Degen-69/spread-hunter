@@ -1,0 +1,47 @@
+[
+  {
+    "name": "control",
+    "label": "Control (Loose Baseline)",
+    "color": "#00e676",
+    "profile": "shipped baseline: dynamic 0.50x, 1-20c, 15c window, no widen snap-back, gate off",
+    "desc": "Control. The shipped loose baseline with nothing changed; every other arm is read against it.",
+    "thesis": "The shipped defaults are the reference: any change must beat this on risk-adjusted metrics.",
+    "env": {}
+  },
+  {
+    "name": "balanced-only",
+    "label": "Balanced Only",
+    "color": "#e040fb",
+    "profile": "balanced preset: dynamic 0.50x, 2-4c",
+    "desc": "The balanced preset: proportional volatility tracking inside a 2-4c band.",
+    "thesis": "A 2-4c band trades some edge for reach, completing pairs faster while bounding adverse runs.",
+    "env": {
+      "BOT_QUOTE_TOURNAMENT_PRESET": "balanced"
+    }
+  },
+  {
+    "name": "queue5-only",
+    "label": "Queue Clear 5m Only",
+    "color": "#18ffff",
+    "profile": "queue-clear gate on, 5-minute max clear",
+    "desc": "Only quotes books whose queue is likely to clear inside five minutes.",
+    "thesis": "A quote stuck behind a slow queue is dead capital; refusing slow books lifts Sharpe and limits drawdown.",
+    "env": {
+      "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
+      "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"
+    }
+  },
+  {
+    "name": "balanced-queue5",
+    "label": "Balanced + Queue Clear 5m",
+    "color": "#ff6d00",
+    "profile": "balanced preset (2-4c) + queue-clear gate (5m max)",
+    "desc": "Combines the balanced dynamic offset band with the 5-minute queue-clear refusal gate.",
+    "thesis": "Testing whether pairing the balanced band and queue gate compounds risk-adjusted return or induces volume starvation.",
+    "env": {
+      "BOT_QUOTE_TOURNAMENT_PRESET": "balanced",
+      "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
+      "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"
+    }
+  }
+]

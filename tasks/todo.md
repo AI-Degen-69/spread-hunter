@@ -1,6 +1,8 @@
-# Tasks: Issue #842
+# TODO — Issue #843: Rehearse the balanced preset and the 5-minute queue-clear gate together as one arm
 
-- [x] Task 1: Configuration, Close Method Taxonomy & Pure Verdict
-- [x] Task 2: Guarded Execution in `exit_single_buy`
-- [x] Task 3: Manager Routing & Reset in `_manage_single_leg_positions_locked`
-- [x] Task 4: Regression Suites and Divergence Checks
+Branch: `i843/rehearse-balanced-preset-queue-gate` | Issue: #843
+
+- [x] Task 1: Define 4-arm tournament configuration file `configs/tournaments/i843-pair-test_arms.json`
+- [x] Task 2: Create unit test suite `tests/test_tournament_arms_i843.py`
+- [x] Task 3: Write pre-registered decision rule document `docs/runs/2026-10-26-843-balanced-queue5-pair.md`
+- [x] Task 4: Execute dry-run and verify regression test suite
