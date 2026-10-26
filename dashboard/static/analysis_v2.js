@@ -248,7 +248,7 @@ function chartScales(values, opts) {
 function barTitle(b, i, v, key) {
   const hasRange = b.min !== undefined && b.max !== undefined
     && num(b.min) !== null && num(b.max) !== null;
-  const range = hasRange ? `${num(b.min)}–${num(b.max)}` : `bin ${i + 1}`;
+  const range = hasRange ? `${num(b.min).toFixed(3)} to ${num(b.max).toFixed(3)}` : `bin ${i + 1}`;
   return `${range}: ${key === 'count' || key === 'empirical_count' ? v : num(v) !== null ? Number(v).toFixed(3) : v} ${key}`;
 }
 
@@ -458,6 +458,10 @@ function paintCharts(root, kpi) {
   const clear = (id) => {
     const area = q('#' + id + ' .chart-area');
     if (area) area.innerHTML = '';
+    // The badge helper only recolors when a class is passed, so an
+    // Unmeasured badge would keep the old good/warn color: reset it here.
+    const el = q('#' + id + ' .chart-badge');
+    if (el) el.className = 'chart-badge';
   };
   const badge = (id, html, cls) => {
     const el = q('#' + id + ' .chart-badge');

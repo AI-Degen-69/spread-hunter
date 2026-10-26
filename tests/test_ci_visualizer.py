@@ -167,6 +167,19 @@ def test_no_band_renders_standby_not_zero_per_kpi():
     assert "NO BAND YET" in _visible(out["ci_html"]["mean_pnl"])
 
 
+def test_unmeasured_fields_show_no_mean_for_every_kpi():
+    # Number(null) is 0, not NaN: every KPI must render `--`, never a zero.
+    ta = {"n_closes": 0, "win_rate": None, "win_rate_ci95": None,
+          "win_rate_ci90": None, "expectancy_usd": None,
+          "mean_return_pct": None, "ci95_return_pct": None,
+          "ci90_lower_pct": None, "n_measured_returns": None,
+          "mean_pnl_ci": {"mean_usd": None, "n": 0, "levels": [], "verdict": None}}
+    views = _surface({"trade_analytics": ta})["ci_views"]
+    for key in ("mean_pnl", "expectancy", "mean_return", "win_rate"):
+        assert views[key]["noBand"] is True
+        assert views[key]["mean"] is None, key
+
+
 def test_win_rate_readout_judges_against_fifty_percent():
     out = _surface({"trade_analytics": _full_ta()})
     text = _visible(out["ci_html"]["win_rate"])
@@ -191,7 +204,14 @@ def test_return_distribution_bars_carry_hover_values_and_axis_ends(tmp_path):
     }
     charts = {c["id"]: c for c in _av2(kpi, tmp_path)["charts"]}
     svg = charts["ch1"]["svg"]
-    assert "<title>" in svg
+    # Every bar carries its own closing title (a lone curve/zero-line title
+    # must not satisfy this), axis ends are labeled, and bin ranges read
+    # as short "a to b" text rather than raw 16-decimal floats.
+    assert svg.count("<rect ") >= 1
+    assert svg.count("</title></rect>") == svg.count("<rect ")
+    assert ">-8.00%</text>" in svg
+    assert ">9.00%</text>" in svg
+    assert " to " in svg
     assert charts["ch1"]["stats"] and "Unmeasured" not in charts["ch1"]["stats"]
 
 
@@ -239,3 +259,4 @@ def test_repaint_to_empty_clears_stale_series(tmp_path):
     for cid, c in charts.items():
         assert c["svg"] == "", f"{cid} kept its stale series"
         assert c["badge"] == "Unmeasured", f"{cid} hides its empty state"
+        assert c["badgeCls"] == "chart-badge", f"{cid} kept its stale badge color"

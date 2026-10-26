@@ -33,7 +33,7 @@ no axes, no hover values, inconsistent footers.
   the same readout so it survives repaints): Mean PnL $ / Expectancy $ /
   Mean Return % / Win Rate. Selection is view-local module state; a poll
   repaint preserves it.
-- Add `resolveCiView(kpiKey, trade_analytics)` in `app.js`: one adapter returning
+- Add `resolveCiView(trade_analytics, kpiKey)` in `app.js`: one adapter returning
   `{mean, n, l90, l95, verdict, units}` from fields the payload already ships —
   `mean_pnl_ci` for Mean PnL $, the same spread for Expectancy $, `mean_return_pct`
   + `ci95_return_pct` + `ci90_lower_pct` for Mean Return %, `win_rate` +

@@ -147,7 +147,7 @@ def test_da_capital_keeps_account_curve_meaning(tmp_path):
 
 @requires_node
 def test_da_charts_each_get_their_own_series(tmp_path):
-    """ch1-ch4 draw their own series; ch5 blanks honestly with no matured fills."""
+    """ch1-ch4 draw their own series; ch5 names Unmeasured with no matured fills."""
     rendered = _run(_fixture_payload(tmp_path), tmp_path=tmp_path)
     assert rendered["errors"] == []
     charts = {c["id"]: c for c in rendered["charts"]}
@@ -159,6 +159,8 @@ def test_da_charts_each_get_their_own_series(tmp_path):
         assert c["badge"], f"{cid} has no badge"
         assert c["stats"], f"{cid} has no stats line"
     # ch5 (markout by horizon) needs matured fills the 8-close fixture has
-    # none of: it must blank, never fabricate. The demo-DB binding suite
-    # (test_all_five_charts_paint_real_series) proves ch5 draws with data.
-    assert charts["ch5"]["svg"] == "" and charts["ch5"]["badge"] == ""
+    # none of: it must name Unmeasured, never fabricate. The demo-DB binding
+    # suite (test_all_five_charts_paint_real_series) proves ch5 draws with data.
+    assert charts["ch5"]["svg"] == ""
+    assert charts["ch5"]["badge"] == "Unmeasured"
+    assert "Unmeasured" in charts["ch5"]["stats"]

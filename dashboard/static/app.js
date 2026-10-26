@@ -5321,6 +5321,9 @@ let pnlCiMetric = 'mean_pnl';
 let lastPnlCiTa = null;
 
 function numOrNull(v) {
+  // Number(null) is 0, not NaN: an unmeasured payload field must stay
+  // missing (renders `--`) rather than read as a real zero.
+  if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -5541,14 +5544,14 @@ function renderPnlCiReadout(ta, hostId, key) {
 
   host.innerHTML = picker + `
     <div class="pnl-ci-head-row">
-      <div class="pnl-ci-mean mono ${mean === null ? '' : signClass(mean)}">${esc(mean === null ? '--' : fmt(mean))}</div>
+      <div class="pnl-ci-mean mono ${mean === null || view.metric === 'win_rate' ? '' : signClass(mean)}">${esc(mean === null ? '--' : fmt(mean))}</div>
       <div class="pnl-ci-sub">${esc(view.sub)} · ${n} ${n === 1 ? 'close' : 'closes'}</div>
     </div>
 
     <!-- Visual Scale Bar: ---|----------|--- -->
     <div class="pnl-ci-scale-container">
       <div class="pnl-ci-mean-pointer" style="left:${meanPct.toFixed(1)}%">
-        <div class="pnl-ci-mean-badge mono ${signClass(meanVal)}">Mean ${esc(fmt(meanVal))}</div>
+        <div class="pnl-ci-mean-badge mono ${view.metric === 'win_rate' ? '' : signClass(meanVal)}">Mean ${esc(fmt(meanVal))}</div>
         <div class="pnl-ci-mean-pin"></div>
       </div>
 

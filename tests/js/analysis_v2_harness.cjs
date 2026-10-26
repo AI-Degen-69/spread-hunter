@@ -260,6 +260,7 @@ try {
     chartAreas.forEach((c) => {
       c._children['.chart-area'].innerHTML = '<svg viewBox="0 0 400 200"><rect/></svg>';
       c._children['.chart-badge'].innerHTML = 'STALE';
+      c._children['.chart-badge'].className = 'chart-badge good';
     });
   }
   app.renderAnalysisV2(rootStub, kpi);
@@ -286,6 +287,7 @@ try {
     out.charts.push({
       id: c.attrs.id,
       badge: c._children['.chart-badge'].innerHTML,
+      badgeCls: c._children['.chart-badge'].className,
       stats: c._children['.chart-stats'].innerHTML,
       svg: c._children['.chart-area'].innerHTML,
       foot: c._children['.chart-foot'].innerHTML,
