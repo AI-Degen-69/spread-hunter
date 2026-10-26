@@ -9576,7 +9576,7 @@ const CLOSE_REASON_LABELS = {
  * this list and keep the quiet gray chip: red is for "money left by force".
  * The WHY rides INSIDE the red badge, not beside it -- one red thing to find
  * on the row, not two pills to read in sequence. */
-const EXIT_METHODS = new Set(['single_buy_exit', 'naked_exit', 'ladder_exit', 'aged_out_exit', 'stop_loss_exit']);
+const EXIT_METHODS = new Set(['single_buy_exit', 'orphan_profit_exit', 'naked_exit', 'ladder_exit', 'aged_out_exit', 'stop_loss_exit']);
 
 function closeReasonIsExit(info) {
   if (!info) return false;

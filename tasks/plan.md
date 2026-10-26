@@ -1,366 +1,158 @@
-# Plan — Issue #838: Update Hybrid Configuration Blueprint in Tournament Cockpit
+# Implementation Plan — Issue #842: Auto-close profitable orphaned positions after duration threshold
 
-Branch: `i838/cockpit-hybrid-blueprint-champion-spec` | Issue: #838
-Tier: **Standard** | Task type: **UX / Copy** (primary) + **Code** (regression tests) + **Docs** (backlog note)
-Stack: Python 3, standard library only, pytest. Test runner: `python -m pytest -q`.
+Branch: `plan_issue_842` | Issue: #842
 
-Tier rationale: three files change — one existing pane, one existing test module, one
-new backlog note — with a single real decision in it (how the blueprint presents the
-pair cap). No interface, schema, dependency or `core_brain/` behaviour changes, so it
-is not Large; it is more than one file, so it is not Small.
+## Summary
 
-Skill routing (verified to exist in this environment): `incremental-implementation`
-(core execution), `humanizer` (UX / Copy — the pane's claims are read as safety
-promises), `documentation-and-adrs` (the backlog note). `frontend-design` is **not**
-loaded: the pane introduces no new visual language and reuses existing classes.
-`test-driven-development`, `spec-driven-development`, `planning-and-task-breakdown`,
-`performance-optimization` and `security-and-hardening` are **not installed** in this
-environment; the TDD loop is carried by `iii-build-plan`. The `code-explorer` and
-`type-design-analyzer` personas were **not** deployed: this change touches one static
-HTML pane with no interface or type contract, and the pane, its callers and the
-config loader were read directly.
+When only one leg of a binary pair fills and counter-buy orders remain unfilled past the entry window without reaching resolution, a position can sit as an unhedged directional bet for hours. When market prices move favorably, these orphaned legs often build significant unrealized profits (+5% to +18%+). 
+This feature adds an automated exit mechanism that detects orphaned single-leg positions held beyond a configurable age threshold (`bot_risk_orphan_profit_min_age_sec`, default 1 hour / 3600s), verifies that the executable best bid meets or exceeds a target gross profit threshold (`bot_risk_orphan_min_profit_pct`, default 0.05 / 5%), cancels resting counter-orders, executes a guarded market sell at or above the profit floor, books the close as `orphan_profit_exit`, and resets the market condition without triggering a punitive hard-stop lockout.
 
 ---
 
-## 1. Grounded seams (every line verified in the working tree at `3daa04a0`)
+## Step 0A: CodeRabbit Plan Intake & Analysis
 
-| Seam | Location | What it means here |
-| --- | --- | --- |
-| `generate_cockpit_html(initial_data)` | `scripts/tournament_cockpit_server.py:1421` | Returns the whole page as one f-string. The blueprint pane is static markup inside it. |
-| `tab-hybrid-config` pane | `scripts/tournament_cockpit_server.py:1857-1956` | The only region this plan edits. The next pane (`tab-pnl-chart`) starts at 1959. |
-| Tab button | `:1788` | `onclick="switchTab('hybrid-config', this)"` — stays byte-identical. |
-| Other pane ids | `:1797, 1959, 1972, 1996, 2009, 2022` | `tab-overview`, `tab-pnl-chart`, `tab-risk-stats`, `tab-execution`, `tab-monte-carlo`, `tab-recommendations` — the isolation test pins all six plus the edited one. |
-| `run_cockpit_server(port)` | `:2547` | Writes `reports/tournament_cockpit.html` at `:2556` from `generate_cockpit_html(collect_all_stats("487"))`, then serves. |
-| `TOURNAMENT_PRESETS` | `core_brain/config.py:556-598` | `prudent` = dynamic on, `0.60` multiplier, `2`–`4`¢ clamp. `hybrid` = dynamic **off** plus a `0.060` deadband. Neither alone is the champion. |
-| `MakerConfig.bot_pos_price_max_pair_cost_usd` | `core_brain/config.py:56` | Ships as `0.99`. |
-| `resolve_pair_cost_trial` | `core_brain/config.py:705-722` | Raises `ValueError` for any non-blank value when the process has not declared a rehearsal. |
-| `core_brain/venue.py:24` | `_CFG = _load_cfg()` at import time | This is why a pair-cap assignment in `.env` breaks the live engine rather than merely being ignored. |
-| `shadow_run` | `core_brain/shadow_run.py:2012` | Calls `rehearsal.declare_rehearsal()` before anything reads config, and reads `os.environ` only — never a dotenv file. |
-| shadow-run CLI | `core_brain/shadow_run.py:1944-1990` | `--minutes`, `--interval`, `--db` (**required**), `--run-id`, `--starting-bankroll-usd` all exist. |
-| menu `-Preset` | `scripts/spread-hunter-menu.ps1:3032-3040` | The `shadow-run` action validates `-Preset` against `control, conservative, balanced, aggressive, prudent, hybrid` and exports `BOT_QUOTE_TOURNAMENT_PRESET` for the child. `-Preset prudent` is real and effective. |
-| menu preset plumbing | `scripts/spread-hunter-menu.ps1:109-137` | Captures an inherited `BOT_POS_PRICE_MAX_PAIR_COST_USD` / `BOT_QUOTE_TOURNAMENT_PRESET`, restores them after the shadow launch. |
-| #799 arm definitions | `configs/tournaments/i799-tournament-test_arms.json` | Ten arms, including `prudent-hybrid` (`prudent` + `BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6`), `wide-shield` (8¢ stop), `hair-trigger-2c` (2¢), `patient-stop-9c` (9¢), `low-churn-deadband` (static + 10¢), `static-floor-2c` (dynamic off), `queue-clear-5m` (5 min). |
-| Bounds that must accept the champion | `core_brain/config.py:393-415, 442-482, 515-532`; `core_brain/single_leg_lifecycle.py:25-30` | Deadband `0.06` is inside `0.0..1.0`; max offset `6` is an `int` inside `1..20`; clear minutes `3.0` is inside `0.1..1440.0`; rescue lead `45.0` is finite and non-negative; `ABSOLUTE_DROP` is in `STOP_LOSS_MODES`; drop `0.045` is inside `DROP_CENTS_MIN 0.01 .. DROP_CENTS_MAX 0.90`. Every champion value loads. |
-| Existing render calls | `tests/test_tournament_cockpit_arms.py:249, 440`; `tests/test_tournament_cockpit_funnel.py:153` | `cockpit.generate_cockpit_html({"arms": [], "tourney_key": "487"})` is the established, working form. Reuse it; add no fixture. |
-| Test write guard | `tests/conftest.py` autouse `block_real_state_writes` (`docs/agents/architecture.md:172-178`) | A test that writes under `data/`, `runtime/` or `reports/` fails. The new tests render strings in memory only. |
-
-**Must not be modified:** `core_brain/**`, `.gitignore`, `.env.example`,
-`configs/tournaments/**`, `scripts/shadow_tournament.py`,
-`scripts/spread-hunter-menu.ps1`, `tests/test_tournament_cockpit_funnel.py`, and
-every pane in `scripts/tournament_cockpit_server.py` other than `tab-hybrid-config`.
-`reports/tournament_cockpit.html` is generated output: never hand-edited, never committed.
+- **Adopted:**
+  - Config knobs: `bot_risk_gate_orphan_profit_close_on` (bool, default `False`), `bot_risk_orphan_profit_min_age_sec` (float, default `3600.0`, bounds `1.0..86400.0`), `bot_risk_orphan_min_profit_pct` (float, default `0.05`, bounds `0.0..1.0`).
+  - Canonical close method `ORPHAN_PROFIT_EXIT = "orphan_profit_exit"` added to `RESCUE_METHODS` in `core_brain/close_methods.py`. Netting in `order_registry.py` already selects `RESCUE_METHODS`, so inventory deduction works automatically.
+  - Pinned `EXIT_METHODS` update in `dashboard/static/app.js` to stay in sync with `DASHBOARD_FORCED_EXIT_METHODS`.
+  - Pure verdict in `core_brain/single_leg_lifecycle.py`: `OrphanProfitVerdict` dataclass and `evaluate_orphan_profit(...)` pure helper.
+  - Guarded execution in `exit_single_buy`: parameter `min_profit_pct`, rechecking opposite fills and profit floor post-cancel, setting limit price to `max(slippage_floor, profit_floor)`.
+  - Manager integration in `_manage_single_leg_positions_locked`: placing the orphan-profit branch immediately after hard-stop and before aged-out rescue, ensuring hard-stop priority is preserved.
+  - Reset behavior: calling `reset_condition(..., reason="orphan_profit_exited")` without calling `mark_hard_stop_block`.
+- **Rejected:**
+  - Net profit after fees model: Fees on live taker sales are unknown at sell time (and cost basis excludes entry fees). Gross profit over cost basis is the robust, consistent standard.
+  - Extra dashboard status cards: Not requested in issue scope.
+  - Optional `fresh` parameter in `core_brain/shadow_exec.py`: Shadow ladder walk already guarantees execution at or above the submitted limit.
+- **Verified:**
+  - All file paths and seam symbols (`single_buy_saver.py`, `single_leg_lifecycle.py`, `close_methods.py`, `config.py`) confirmed live in the repository.
+  - `scoring/config.py` inherits from `core_brain.config.MakerConfig` and requires zero edits.
 
 ---
 
-## 2. CodeRabbit plan intake (read once, then not again)
+## Step 5: Committed Enhancement
 
-**Adopted:** the single-pane / markup-only shape; the one-value-set rule across table,
-commands and `.env`; leaving the pair cap unset in the `.env` block; `prudent` plus
-explicit overrides rather than `-Preset hybrid`; the honest labels ("attributed",
-"projected target", "not tested in #799", "trigger, not cap"); the slice-based tests;
-regenerate-the-report-from-the-template step; removing the `scripts.shadow_tournament`
-and `-Preset hybrid` commands.
-
-**Rejected:** its line-number range "about lines 1856–2028" for the pane (the pane
-ends at 1956; 2028 is inside `tab-recommendations`); its `--db data/champion_prudent_shadow_01.db`
-peculiarity is kept because `--db` is genuinely required, but the surrounding prose was
-cut; its implication that the report file exists in the checkout (it does not); and its
-"record the current tab-pane ids before editing" *as a step* — the ids are recorded in
-§1 and in `CONSTRAINTS.md` instead, so the plan needs one fewer task.
-
-**Left `[UNVERIFIED]` (and therefore not relied on):** the #799 figures
-(`289 / 210 / 74 / 9.52 / $0.70 / -$2.28 / 44.1%`). `data/tournaments/` is empty in
-this checkout and no committed file carries them, so the pane attributes them instead
-of asserting them; the source of the ticket's Sharpe 9.52 is unknown. Also unverified:
-that GitHub issue #799 is the tournament — #799 is a merged PR titled
-`feat(dashboard): Orders tab split STATUS pair COST columns`, and "Tournament #799"
-here means the run keyed to that issue number, whose arms file is committed.
-
-**CodeRabbit's own contradiction, confirmed:** "An explicit pair-cap value crashes
-outside rehearsal." Verified directly — see §3 C2.
+- **Edge-Case Hardening (Post-Cancel Verification):**
+  - *Evidence:* In `core_brain/single_buy_saver.py` lines 1124-1144, `_cancel_orders` cancels working orders on both legs before reading venue state via `_venue_extra`. In fast-moving markets, a resting counter-order on the light leg may fill right as cancellation is initiated.
+  - *Enhancement:* When `min_profit_pct` is set in `exit_single_buy`, we explicitly verify after cancellation that `after["legs"][light_token]["matched"] == 0` and `venue_light_matched == 0`. If an opposite fill is detected, the function aborts the sell with `action: "orphan_profit_hold", reason: "opposite_filled"`. Furthermore, if the fresh book bid has dropped below the calculated profit floor, it holds with `action: "orphan_profit_hold", reason: "profit_gone"`.
+  - *Verification:* Tested via unit tests simulating late counter-fill and book drop after cancellation.
 
 ---
 
-## 3. Contradictions between the issue and the code, and how each resolves
+## Interface Contracts
 
-- **C1 — the report file is not in the checkout.** The issue cites
-  `reports/tournament_cockpit.html` lines ~422–522. The file does not exist; `/reports/`
-  is gitignored (`docs/agents/architecture.md:50`) and `run_cockpit_server` regenerates
-  it from the template on every start (`:2547-2558`). *Resolution:* edit only the
-  template, then start the cockpit once to regenerate the report. Never hand-edit it,
-  never change `.gitignore` (`docs/agents/architecture.md:168-170` forbids exactly that).
-  Acceptance criterion 5 is met by regeneration.
-- **C2 — the issue's pair-cap line breaks the live engine.** The issue asks for
-  `BOT_POS_PRICE_MAX_PAIR_COST_USD=0.990` and for the `.env` block to match "exactly".
-  `resolve_pair_cost_trial` (`core_brain/config.py:705`) raises `ValueError` for **any**
-  non-blank value unless the process declared a rehearsal, and `core_brain/venue.py:24`
-  loads config at import time. `$0.990` is already the shipped default (`:56`).
-  *Resolution:* show `$0.990` as the shipped default, state that the variable must stay
-  unset, and print no assignment — not even a comment, so it cannot be pasted back.
-  This is the one deliberate deviation from criterion 4, and it is the plan's most
-  important single decision; the operator can reject it before build (see §7).
-- **C3 — `prudent` alone clamps at 2–4¢, not 2–6¢.** The `prudent` preset is
-  `0.60x` held between 2¢ and 4¢. The `2-6¢` band the issue specifies requires
-  `BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6`, which is exactly what the `prudent-hybrid`
-  arm ran. *Resolution:* keep `6` in all three places and name the arm as the source.
-- **C4 — several champion values were never varied by #799.** No arm sets a 6¢ deadband,
-  a 4.5¢ stop, a 3-minute queue-clear, or a 45s rescue lead; `#799`'s deadband arms ran
-  10¢, and its stop arms ran 2¢ / 8¢ / 9¢. *Resolution:* the Source Champion column says
-  where each value comes from and `badge-amber` marks the values #799 did not test
-  directly, instead of implying a measured optimum.
-- **C5 — "ready-to-run" must not mean "runs the wrong thing".** `python -m
-  scripts.shadow_tournament --minutes 60.0 --interval 1.0` runs four default presets,
-  not the champion, and the tournament launcher strips inherited `BOT_*` variables.
-  *Resolution:* drop that command and print the nine `$env:` assignments, the pair-cap
-  `Remove-Item` guard, `-Preset prudent` for the menu, the direct `shadow_run` command,
-  and the cockpit command.
-- **C6 — shadow runs and live runs read settings from different places.**
-  `core_brain.shadow_run` reads `os.environ` and never loads a dotenv file, while the
-  live trader reads `.env`. *Resolution:* the pane states which block applies to which,
-  so the operator does not set `.env`, start a rehearsal, and wonder why nothing changed.
-
-**Resolved from code, no operator input needed:** no `needs-answers` label, no
-`quick-fix` label and no Open questions section on the issue, so the quick-fix gate
-does not run and nothing is unresolvable from the code.
-
----
-
-## 4. Interface contract (locked before any markup is written)
-
-This change has no type or function contract; its contract is the rendered HTML, and
-the tests are its enforcement.
-
-- **Pane boundary:** starts at `id="tab-hybrid-config"`, ends before the next
-  `<div id="tab-`.
-- **Table:** the blueprint slice's first `<table>` … `</table>` keeps five columns in
-  today's order: Parameter | Config Value | CLI / Env Key | Source Champion | Live
-  Function & Mathematical Rationale.
-- **Command block:** heading contains `Ready-to-Run PowerShell`, then the nine
-  `$env:KEY = "VALUE"` lines, the pair-cap `Remove-Item` line, the menu command, the
-  direct `shadow_run` command, the cockpit command — in that order.
-- **`.env` block:** heading contains `Live Production Environment Variables`, then the
-  same nine `KEY=VALUE` lines, then a plain comment naming `$0.990` as the shipped
-  default. The slice must not contain the substring `BOT_POS_PRICE_MAX_PAIR_COST_USD=`.
-- **Cards:** a `Performance Forecast` card and a card headed
-  `Failure Modes &amp; Stress Scenarios`, both built from the existing
-  `decision-grid` / `decision-box` classes.
-- **Value form:** `KEY=VALUE` (no spaces) in the table and `.env`; `$env:KEY = "VALUE"`
-  (spaces) in the command block.
-- **Untouched:** the seven `id="tab-…"` pane ids, the tab button, the CSS, the
-  `switchTab` script, `analyze_arm_database`, `collect_all_stats`,
-  `run_cockpit_server` and `CockpitHandler`.
-
----
-
-## 5. Tasks
-
-Dependency graph:
-
-```
-T1 (tests, RED) ──┬─> T2 (pane content) ──┐
-                  └─> T3 (two cards)   ──┴─> T4 (verify + regenerate + backlog)
-```
-
-T2 and T3 touch the same pane but different regions; T3 needs T2's insertion point.
-T1 is first because it is the riskiest: if the slice boundaries cannot be cut cleanly,
-every later task is built on a contract that does not hold.
-
-### [x] T1 — Add the blueprint regression tests (size S, `[Code]`)
-
-**Target file:** `tests/test_tournament_cockpit_arms.py` (append; do not touch
-`tests/test_tournament_cockpit_funnel.py`).
-**Depends on:** nothing. **Verification:** run the focused suite; both new tests must
-**fail** on the unmodified markup, each for the stated reason, and no existing test
-may change status.
-
-Render with the established call, adding no fixture and no production helper:
-
+### 1. `core_brain/config.py`
 ```python
-html = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "487"})
+bot_risk_gate_orphan_profit_close_on: bool = False
+bot_risk_orphan_profit_min_age_sec: float = 3600.0  # seconds in 1.0..86400.0
+bot_risk_orphan_min_profit_pct: float = 0.05         # fraction in 0.0..1.0
 ```
 
-Cut four slices, and fail with a clear message when the blueprint start marker is
-missing:
+### 2. `core_brain/close_methods.py`
+```python
+ORPHAN_PROFIT_EXIT = "orphan_profit_exit"
+# Included in METHODS with RESCUE_BUCKET, auto-populating RESCUE_METHODS
+```
 
-- blueprint = `'id="tab-hybrid-config"'` … the next `'<div id="tab-'` (or end of HTML)
-- table = first `<table` … `</table>` inside the blueprint
-- commands = `Ready-to-Run PowerShell` … `Live Production Environment Variables`
-- env = `Live Production Environment Variables` … end of the blueprint slice
+### 3. `core_brain/single_leg_lifecycle.py`
+```python
+@dataclass(frozen=True)
+class OrphanProfitVerdict:
+    eligible: bool
+    reason: str
+    held_token_id: Optional[str] = None
+    held_size: float = 0.0
+    average_cost: float = 0.0
+    profit_floor: float = 0.0
+    observed_bid: Optional[float] = None
 
-**Test 1 — champion content and cross-block agreement.** A local dict of the nine
-pairs, exactly as in `SPEC.md`. For each pair assert `f"{k}={v}"` is in the table
-slice, `f'$env:{k} = "{v}"'` is in the command slice, and `f"{k}={v}"` is in the env
-slice. Then assert, in the table slice, the seven source arm ids `prudent-hybrid`,
-`static-floor-2c`, `low-churn-deadband`, `hair-trigger-2c`, `patient-stop-9c`,
-`wide-shield`, `queue-clear-5m`. Then, in the blueprint slice: `rounded up to a whole
-cent`, `$0.990`, `Performance Forecast`,
-`Failure Modes &amp; Stress Scenarios`, the six escaped forecast values `80% - 84%`,
-`82% - 86%`, `&gt; 10.5`, `+$0.38 - +$0.46`, `&gt; 8.0`, `&gt; +$30.00`, and the three
-scenario names. Then, in the command slice, the menu command
-`.\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset prudent -Minutes 60` (a **raw
-string** in the test, so the rendered backslashes stay single) and
-`python -m core_brain.shadow_run`, plus `--db`, `--run-id`, `--interval` and
-`--starting-bankroll-usd`.
+def orphan_profit_floor(average_cost: float, min_profit_pct: float, tick_size: float = 0.01) -> float: ...
 
-**Test 2 — safety and tab isolation.** The blueprint slice contains none of
-`BOT_POS_PRICE_MAX_PAIR_COST_USD=`, `$env:BOT_POS_PRICE_MAX_PAIR_COST_USD =`,
-`-Preset hybrid`, `scripts.shadow_tournament`, `TOURNAMENT_PRESETS["hybrid"]`. The full
-page still contains `switchTab('hybrid-config'` and all seven pane ids —
-`tab-overview`, `tab-hybrid-config`, `tab-pnl-chart`, `tab-risk-stats`,
-`tab-execution`, `tab-monte-carlo`, `tab-recommendations` — hard-coded, `tab-pnl-chart`
-included.
+def evaluate_orphan_profit(
+    position: SingleLegPosition,
+    age_s: Optional[float],
+    min_age_sec: float,
+    min_profit_pct: float,
+    tick_size: float = 0.01,
+) -> OrphanProfitVerdict: ...
+```
 
-**Expected RED:** test 1 fails on the missing queue-clear keys and the absent cards;
-test 2 fails on `-Preset hybrid`, `scripts.shadow_tournament` and
-`TOURNAMENT_PRESETS["hybrid"]`.
-
-### [x] T2 — Rewrite the banner, parameter table, commands and `.env` block (size M, `[UX / Copy]`)
-
-**Target file:** `scripts/tournament_cockpit_server.py`, `tab-hybrid-config` only.
-**Depends on:** T1. **Verification:** focused suite green for the T2 slice of test 1 and
-test 2's safety assertions; then render the page and confirm the tab.
-
-- **Banner.** Keep the `🌟 BENCHMARK SYNTHESIS` badge and the "Static benchmark
-  synthesis" wording. Name Tournament #799, ten arms, ports 8801–8810, and cite
-  `289 trades`, `210 merges`, `74 stop exits` as *attributed to the #799 tournament
-  review*. Replace the "Status in Codebase" value: the champion is
-  `core_brain.config.TOURNAMENT_PRESETS["prudent"]` plus explicit overrides, and **no
-  single shipped preset holds the full champion**.
-- **Six rows**, using the exact values from `SPEC.md`. `badge-green` where an arm
-  sourced the value (`prudent-hybrid` for the offset); `badge-amber` where #799 did not
-  test it (deadband, stop, queue-clear, rescue lead) or where it is a shared safety
-  default (the cap). Rationales:
-  - *Requote Deadband* — the queue-priority defender: the price move the bot ignores
-    before re-quoting; a 10¢ deadband risks stale fills. Between `static-floor-2c`
-    (3¢ at the time) and `low-churn-deadband` (10¢); not tested at 6¢ in #799.
-  - *Volatility Pricing Offset* — offset = round(0.60 × recent range in cents), held
-    between 2 and 6; stale or missing range data falls back to the static base offset.
-    Source `prudent-hybrid`. Attribute the arm's Sharpe 9.52 / `$0.70` drawdown and
-    `static-floor-2c`'s `-$2.28` outlier to the #799 review.
-  - *Single-Buy Loss Stop* — trigger is entry minus 0.045, **rounded up to a whole
-    cent**; the emergency floor can raise the trigger. Between `hair-trigger-2c` (2¢,
-    44.1% stop rate per the #799 review) and `patient-stop-9c` / `wide-shield`
-    (9¢ / 8¢, tail losses). Not tested at 4.5¢ in #799.
-  - *Queue-Clear Gate* — estimated clear time = size ahead ÷ recent traded rate, an
-    upper-bound estimate; no recent flow makes it infinite, so the entry is refused.
-    Tightened from `queue-clear-5m`; not tested at 3 minutes.
-  - *Aged-Out Rescue Lead* — unwinds stranded orphan legs before the settlement freeze.
-    Not varied in #799 (all arms inherit the shipped 900s).
-  - *Absolute Pair Cap* — value `$0.990`; the key cell reads
-    `BOT_POS_PRICE_MAX_PAIR_COST_USD (shipped default, leave unset)` with **no `=`**;
-    rationale: the bot refuses a two-leg sum above $0.99, which leaves at least a
-    $0.01 gross spread before costs.
-- **Command block**, in order: nine `$env:KEY = "VALUE"` lines;
-  `Remove-Item Env:BOT_POS_PRICE_MAX_PAIR_COST_USD -ErrorAction SilentlyContinue`; the
-  menu command with a note that it needs PowerShell 7; the direct command
-  `python -m core_brain.shadow_run --minutes 60 --interval 1 --db data/champion_prudent_shadow_01.db --run-id shadow-champion-prudent-01 --starting-bankroll-usd 100`;
-  and `python -m scripts.tournament_cockpit_server --port 8800`. Remove the bare
-  `python -m scripts.shadow_tournament` line and the `-Preset hybrid` line.
-- **`.env` block:** the same nine lines, then
-  `# Pair cap: $0.990 shipped default. Leave the pair-cap variable unset.`, then a line
-  saying a shadow run reads the shell environment and not `.env`.
-- Apply the f-string rules from `CONSTRAINTS.md` (doubled braces and backslashes,
-  `&amp;`, literal `"` in `<pre>`).
-
-### [x] T3 — Add the Performance Forecast and Failure Modes cards (size S, `[UX / Copy]`)
-
-**Target file:** the same pane. **Depends on:** T2 (insertion point).
-**Verification:** focused suite green for the card assertions; both cards visible in
-the browser.
-
-- **Performance Forecast** card, reusing `decision-grid` / `decision-box`, with the six
-  figures in their escaped form (`&gt;` for `>`) and, under each, one line saying how
-  the cockpit computes it — verified against `analyze_arm_database`
-  (`scripts/tournament_cockpit_server.py:1052-1300`): win rate is the share of closes
-  with positive PnL (`:1185`); merge ratio is merges ÷ closes (`:1186`); EV is mean PnL
-  per close (`:1180`); profit factor is gross wins ÷ gross losses (`:1191`); the Sharpe
-  proxy is mean ÷ standard deviation × 10 (`:1221`); the Monte Carlo floor is the 5th
-  percentile of 500 resamples of 100 trades (`:1223-1230`). Close with one line saying
-  these are projected targets for a combination #799 never ran, not measured results.
-- **Failure Modes &amp; Stress Scenarios** card, three scenarios, each with a
-  description and a mitigation:
-  - *Flash Directional Breakout* — leg 1 fills just before a move of more than 15¢ and
-    leg 2 cannot fill. Mitigation: the 4.5¢ stop triggers early, targeting about
-    -$0.045 to -$0.05 per share — and a gap or a thin book can make the real loss larger.
-  - *Liquidity Vacuum / Book Desertion* — taker activity freezes after the leg 1 fill.
-    Mitigation: the 3-minute queue-clear filter avoids the slowest books and the 45s
-    aged-out rescue unwinds before the settlement freeze — with the estimate caveat.
-  - *High-Frequency Ping-Pong Jitter* — fast bid-ask swings inside the spread.
-    Mitigation: the 6.0¢ deadband suppresses cancel / re-quote churn and keeps queue
-    priority.
-
-### [x] T4 — Verify, regenerate the report, record out-of-scope discoveries (size XS, `[Docs]`)
-
-**Depends on:** T2, T3. **Verification:** the focused suite green with zero failures and
-zero errors; the regenerated report read back from disk.
-
-- Run `python -m pytest -q tests/test_tournament_cockpit_arms.py tests/test_tournament_cockpit_funnel.py`
-  yourself and paste the real output. Never hand the command to the operator.
-- Regenerate the report: start `python -m scripts.tournament_cockpit_server --port 8800`
-  once, then stop it. Read `reports/tournament_cockpit.html` and confirm it contains
-  `BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3.0`, `Failure Modes &amp; Stress Scenarios` and
-  `Performance Forecast`. Do not hand-edit, stage or commit it.
-- Record the out-of-scope discoveries in
-  `docs/backlog/i838-cockpit-hybrid-blueprint.md`: `.env.example`'s stale stop-mode
-  names; the leaderboard's empty worst-catalyst / hypothesised-tweak columns for the
-  #799 arms (issue #837 owns that); the absence of any committed #799 run record, so
-  the attributed figures cannot be re-derived; and that the cockpit's Sharpe proxy
-  (mean ÷ σ × 10) is not the same statistic as the ticket's Sharpe 9.52.
-- End the hand-off with the operator block in §8 — five steps or fewer, no `pytest`,
-  no `git`, no `gh`.
+### 4. `core_brain/single_buy_saver.py`
+```python
+def exit_single_buy(
+    client, registry, pair_id: str, bot_pos_price_max_pair_cost_usd: float,
+    *, live: bool = True, venue_positions: Optional[dict[str, float]] = None,
+    reason: str = "single_buy_exit", force: bool = False,
+    trigger_bid: Optional[float] = None, method: str = SINGLE_BUY_EXIT,
+    min_profit_pct: Optional[float] = None,
+) -> dict: ...
+```
 
 ---
 
-## 6. Checkpoints
+## Tasks
 
-- **After T1:** exact focused-test output pasted, showing the two new tests red for the
-  stated reasons and every pre-existing test still green. In `auto` mode this is a
-  one-line progress report, not an approval pause.
-- **After T3:** the focused suite fully green, and the page opened at
-  `http://127.0.0.1:8800/487` with the blueprint tab showing the six-row table, both
-  cards, and the two command blocks.
-- **After T4:** the regenerated report on disk carries the same markup.
+### Task 1: Configuration, Close Method Taxonomy & Pure Verdict [Backend/Logic] [x]
+- **Size:** M
+- **Target files:**
+  - `core_brain/config.py`
+  - `.env.example`
+  - `core_brain/close_methods.py`
+  - `dashboard/static/app.js`
+  - `core_brain/single_leg_lifecycle.py`
+  - `tests/test_single_leg_lifecycle.py`
+  - `tests/test_close_method_taxonomy.py`
+  - `tests/test_config_single_source.py`
+- **What is built:**
+  - Add `bot_risk_gate_orphan_profit_close_on`, `bot_risk_orphan_profit_min_age_sec`, and `bot_risk_orphan_min_profit_pct` to `MakerConfig` and `from_env()`.
+  - Document knobs in `.env.example`.
+  - Add `ORPHAN_PROFIT_EXIT = "orphan_profit_exit"` to `core_brain/close_methods.py` in `RESCUE_METHODS`.
+  - Add `"orphan_profit_exit"` to `const EXIT_METHODS` in `dashboard/static/app.js`.
+  - Implement `orphan_profit_floor` and `evaluate_orphan_profit` in `core_brain/single_leg_lifecycle.py`.
+  - Add unit tests for configuration bounds, taxonomy sync, and verdict calculations (boundary tests, tick ceiling, flat, two-sided, age unknown/too young, below floor, eligible).
+- **Depends on:** None
+- **Verification:**
+  - `python -m pytest tests/test_single_leg_lifecycle.py tests/test_close_method_taxonomy.py tests/test_config_single_source.py -q`
 
-## 7. One improvement proposal (evidence-based, adopt-by-default)
+### Task 2: Guarded Execution in `exit_single_buy` [Backend/Logic]
+- **Size:** S
+- **Target files:**
+  - `core_brain/single_buy_saver.py`
+  - `tests/test_single_buy_saver.py`
+- **What is built:**
+  - Add `min_profit_pct: Optional[float] = None` to `exit_single_buy`.
+  - When `min_profit_pct` is provided, after cancel and venue re-read:
+    - Verify light leg has 0 matched shares in registry and `venue_light_matched <= SIZE_EPS`. If not, return `{"action": "orphan_profit_hold", "reason": "opposite_filled", ...}`.
+    - Recompute held cost and profit floor; check if fresh `bid < profit_floor`. If so, return `{"action": "orphan_profit_hold", "reason": "profit_gone", ...}`.
+    - Set `min_price = max(min_price, profit_floor)`.
+    - Record close with `method=ORPHAN_PROFIT_EXIT`, `reason="orphan_profit_exit"`, `submitted_floor=min_price`.
+- **Depends on:** Task 1
+- **Verification:**
+  - `python -m pytest tests/test_single_buy_saver.py -k "test_orphan_exit" -q`
 
-**Proposal — pin the blueprint's champion values to the committed #799 arms file, the
-way the #487 table already pins itself.**
+### Task 3: Manager Routing & Reset in `_manage_single_leg_positions_locked` [Backend/Logic] [x]
+- **Size:** M
+- **Target files:**
+  - `core_brain/single_buy_saver.py`
+  - `tests/test_single_buy_saver.py`
+- **What is built:**
+  - Insert orphan profit check in `_manage_single_leg_positions_locked` after hard stop and before aged-out rescue.
+  - Check `cfg.bot_risk_gate_orphan_profit_close_on`.
+  - Calculate `age_s = (now_s * 1000.0 - last_fill_ms) / 1000.0` if `last_fill_ms > 0` else `None`.
+  - Call `evaluate_orphan_profit(position, age_s, cfg.bot_risk_orphan_profit_min_age_sec, cfg.bot_risk_orphan_min_profit_pct, grid_tick)`.
+  - If eligible, persist lifecycle decision, call `exit_single_buy(..., force=True, reason="orphan_profit_exit", method=ORPHAN_PROFIT_EXIT, trigger_bid=held_bid, min_profit_pct=...)`.
+  - On `exited`: decrement venue position, call `reset_condition(..., reason="orphan_profit_exited")` (never calling `mark_hard_stop_block`), update result.
+  - On hold (`orphan_profit_hold`, `dust_hold`, `route_to_merge`), append result and keep managing.
+  - Add comprehensive manager tests (toggle off, age boundary, bid below floor, two-sided skip, hard stop precedence, aged-out precedence, partial fills, repeat-sale prevention, refill reset).
+- **Depends on:** Task 2
+- **Verification:**
+  - `python -m pytest tests/test_single_buy_saver.py -k "test_manager_orphan" -q`
 
-Evidence, quoted verbatim from `tests/test_tournament_cockpit_arms.py`:
-
-> """The cockpit prose and the executable env live in two files.
->
-> Names alone are not enough: a value edited in one file and not the other
-> would misreport what the arm actually ran, which is the whole promise the
-> table makes to the operator.
-> """
-
-That test (`test_i487_each_arm_tweak_names_the_one_knob_the_spec_file_sets`) reads
-`configs/tournaments/i487-current-setup-10arm_arms.json` and asserts the cockpit's prose
-matches the file the launcher actually executes. The blueprint tab has exactly the same
-drift exposure — it names seven #799 source arms — and the equivalent file,
-`configs/tournaments/i799-tournament-test_arms.json`, is committed and already carries
-the champion's two preset-sourced values (`prudent-hybrid`: `BOT_QUOTE_TOURNAMENT_PRESET=prudent`,
-`BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6`).
-
-**Classification:** edge-case hardening / better fit to an existing repo pattern →
-**adopt-by-default**. It costs one more test function in the same file and no production
-code: assert that the pane's `prudent-hybrid` row agrees with the arm file's `env`, so a
-future edit to either file is caught rather than misreported to the operator. Recorded
-here so it is not re-litigated; if it is dropped, drop it deliberately.
-
-## 8. How to verify (operator, hands-on)
-
-1. Start the cockpit: `python -m scripts.tournament_cockpit_server --port 8800`.
-2. Open `http://127.0.0.1:8800/487` and click **⚙️ HYBRID Configuration Blueprint**.
-3. In the parameter table, the Queue-Clear Gate row reads **3.0 minutes**, and the
-   Volatility Pricing Offset row reads **2-6¢** with `BOT_QUOTE_TOURNAMENT_PRESET=prudent`.
-4. Under the table, the **Performance Forecast** and **Failure Modes & Stress
-   Scenarios** cards are both rendered, and the `.env` box has **no**
-   `BOT_POS_PRICE_MAX_PAIR_COST_USD=` line — the pair-cap row instead says *shipped
-   default, leave unset*.
-5. Open `reports/tournament_cockpit.html` from disk and confirm the same tab and the
-   same values. A failure looks like a 404, a missing tab, a table still showing
-   `TOURNAMENT_PRESETS["hybrid"]`, or a leftover `-Preset hybrid` line.
-
-No money is at risk and nothing is placed, so no undo step is needed.
+### Task 4: Regression Suites and Divergence Checks [Backend/Logic] [x]
+- **Size:** S
+- **Target files:**
+  - `tests/`
+- **What is built:**
+  - Verify all related regression suites: taxonomy, single source config, config divergence guard, single buy saver, single leg lifecycle, lifecycle reset, hard stop lockout window.
+- **Depends on:** Task 3
+- **Verification:**
+  - `python -m pytest tests/test_single_leg_lifecycle.py tests/test_single_buy_saver.py tests/test_close_method_taxonomy.py tests/test_config_single_source.py tests/test_config_divergence_guard.py -q`

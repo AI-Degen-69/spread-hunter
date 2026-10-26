@@ -162,4 +162,4 @@ def test_audit_is_read_only(moe_db: Path) -> None:
 
 def test_rescue_methods_match_the_code_taxonomy() -> None:
     """The audit's close-side filter is the code's own set, not a re-spelling."""
-    assert RESCUE_METHODS == ("single_buy_exit", "naked_exit", "ladder_exit")
+    assert RESCUE_METHODS == ("single_buy_exit", "orphan_profit_exit", "naked_exit", "ladder_exit")
