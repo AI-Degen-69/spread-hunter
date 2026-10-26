@@ -1979,6 +1979,35 @@ BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
       </pre>
     </div>
   </div>
+
+  <div class="decision-grid" style="margin-bottom: 24px;">
+    <div class="decision-box">
+      <h3 style="color: var(--blue);">📈 Performance Forecast</h3>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">
+        Projected targets for this combination. Tournament #799 never ran it, so these are projections, not measured results.
+      </p>
+      <ul>
+        <li><strong>Projected Win Rate: <span class="tabular positive">80% - 84%</span></strong><br>Share of closes with positive realized P&amp;L.</li>
+        <li><strong>Merge-to-Close Ratio: <span class="tabular positive">82% - 86%</span></strong><br>Pairs merged &divide; every close.</li>
+        <li><strong>Expected Sharpe Proxy: <span class="tabular positive">&gt; 10.5</span></strong><br>Mean P&amp;L per close &divide; its standard deviation, &times; 10.</li>
+        <li><strong>Expected EV per Trade: <span class="tabular positive">+$0.38 - +$0.46</span></strong><br>Mean realized P&amp;L of one close.</li>
+        <li><strong>Target Profit Factor: <span class="tabular positive">&gt; 8.0</span></strong><br>Gross wins &divide; gross losses.</li>
+        <li><strong>Projected 100-Trade Monte Carlo 5th Percentile: <span class="tabular positive">&gt; +$30.00</span></strong><br>5th percentile of 500 resamples of 100 trades from the realized distribution.</li>
+      </ul>
+    </div>
+
+    <div class="decision-box">
+      <h3 style="color: var(--red);">🛡️ Failure Modes &amp; Stress Scenarios</h3>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">
+        The three ways this configuration loses money, and what already stands in the way.
+      </p>
+      <ul>
+        <li><strong>Flash Directional Breakout</strong> &mdash; leg 1 fills just before a sharp move of more than 15¢, and leg 2 never fills.<br><em>Mitigation:</em> the 4.5¢ stop triggers early, targeting about -$0.045 to -$0.05 per share. A gap or a thin book can make the real loss larger than the trigger.</li>
+        <li><strong>Liquidity Vacuum / Book Desertion</strong> &mdash; taker activity freezes after the leg 1 fill.<br><em>Mitigation:</em> the 3-minute queue-clear filter avoids the slowest books, and the 45s aged-out rescue unwinds the position before the settlement freeze. Queue-clear is an estimate and promises no fill.</li>
+        <li><strong>High-Frequency Ping-Pong Jitter</strong> &mdash; fast bid-ask swings inside the spread.<br><em>Mitigation:</em> the 6.0¢ deadband suppresses cancel and re-quote churn, so the order keeps its queue priority.</li>
+      </ul>
+    </div>
+  </div>
 </div>
 
 <!-- TAB 2: PNL CURVES -->

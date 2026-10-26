@@ -262,7 +262,7 @@ test 2's safety assertions; then render the page and confirm the tab.
 - Apply the f-string rules from `CONSTRAINTS.md` (doubled braces and backslashes,
   `&amp;`, literal `"` in `<pre>`).
 
-### [ ] T3 — Add the Performance Forecast and Failure Modes cards (size S, `[UX / Copy]`)
+### [x] T3 — Add the Performance Forecast and Failure Modes cards (size S, `[UX / Copy]`)
 
 **Target file:** the same pane. **Depends on:** T2 (insertion point).
 **Verification:** focused suite green for the card assertions; both cards visible in
