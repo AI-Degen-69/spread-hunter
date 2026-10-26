@@ -165,7 +165,7 @@ T2 and T3 touch the same pane but different regions; T3 needs T2's insertion poi
 T1 is first because it is the riskiest: if the slice boundaries cannot be cut cleanly,
 every later task is built on a contract that does not hold.
 
-### T1 — Add the two blueprint regression tests (size S, `[Code]`)
+### [x] T1 — Add the blueprint regression tests (size S, `[Code]`)
 
 **Target file:** `tests/test_tournament_cockpit_arms.py` (append; do not touch
 `tests/test_tournament_cockpit_funnel.py`).
@@ -214,7 +214,7 @@ included.
 test 2 fails on `-Preset hybrid`, `scripts.shadow_tournament` and
 `TOURNAMENT_PRESETS["hybrid"]`.
 
-### T2 — Rewrite the banner, parameter table, commands and `.env` block (size M, `[UX / Copy]`)
+### [ ] T2 — Rewrite the banner, parameter table, commands and `.env` block (size M, `[UX / Copy]`)
 
 **Target file:** `scripts/tournament_cockpit_server.py`, `tab-hybrid-config` only.
 **Depends on:** T1. **Verification:** focused suite green for the T2 slice of test 1 and
@@ -262,7 +262,7 @@ test 2's safety assertions; then render the page and confirm the tab.
 - Apply the f-string rules from `CONSTRAINTS.md` (doubled braces and backslashes,
   `&amp;`, literal `"` in `<pre>`).
 
-### T3 — Add the Performance Forecast and Failure Modes cards (size S, `[UX / Copy]`)
+### [ ] T3 — Add the Performance Forecast and Failure Modes cards (size S, `[UX / Copy]`)
 
 **Target file:** the same pane. **Depends on:** T2 (insertion point).
 **Verification:** focused suite green for the card assertions; both cards visible in
@@ -289,7 +289,7 @@ the browser.
     Mitigation: the 6.0¢ deadband suppresses cancel / re-quote churn and keeps queue
     priority.
 
-### T4 — Verify, regenerate the report, record out-of-scope discoveries (size XS, `[Docs]`)
+### [ ] T4 — Verify, regenerate the report, record out-of-scope discoveries (size XS, `[Docs]`)
 
 **Depends on:** T2, T3. **Verification:** the focused suite green with zero failures and
 zero errors; the regenerated report read back from disk.

@@ -733,3 +733,143 @@ def test_open_dash_accepts_only_an_arm_port_and_a_tournament_store():
     assert cockpit.open_dash_target("port=8801") is None, "no store"
     assert cockpit.open_dash_target("port=8801&db=C:/Windows/System32/config") is None
     assert cockpit.open_dash_target(f"port=abc&db={quote(str(db))}") is None
+
+
+# --- The HYBRID blueprint is a configuration an operator copies --------------
+#
+# The pane reads as a recipe: values, keys, and commands meant to be pasted into
+# a shell or a `.env`. The prose and the executable settings live in two files --
+# this markup and `configs/tournaments/i799-tournament-test_arms.json` -- and one
+# value edited in one file and not the other would misreport what the champion
+# actually is. So the nine values are asserted across all three places at once,
+# and the ways the pane could break the engine are asserted absent.
+
+CHAMPION_ENV = {
+    "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
+    "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+    "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "6",
+    "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.06",
+    "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+    "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.045",
+    "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
+    "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "3.0",
+    "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC": "45.0",
+}
+
+# The seven panes the blueprint sits among, recorded before it was rewritten: a
+# stray edit to one of the other six would otherwise ride along unnoticed.
+PANE_IDS = (
+    "tab-overview",
+    "tab-hybrid-config",
+    "tab-pnl-chart",
+    "tab-risk-stats",
+    "tab-execution",
+    "tab-monte-carlo",
+    "tab-recommendations",
+)
+
+BLUEPRINT_START = 'id="tab-hybrid-config"'
+
+
+def _blueprint_slice(html: str) -> str:
+    """The blueprint pane alone: from its own id to the next pane's."""
+    start = html.find(BLUEPRINT_START)
+    assert start != -1, f"the blueprint pane is gone: no {BLUEPRINT_START} in the page"
+    end = html.find('<div id="tab-', start)
+    return html[start:] if end == -1 else html[start:end]
+
+
+def _between(text: str, start_marker: str, end_marker: str | None) -> str:
+    """The text from `start_marker` up to `end_marker`, or to the end."""
+    start = text.find(start_marker)
+    assert start != -1, f"the blueprint pane no longer says {start_marker!r}"
+    end = text.find(end_marker, start) if end_marker else -1
+    return text[start:] if end == -1 else text[start:end]
+
+
+def _champion_slices() -> tuple[str, str, str, str]:
+    """The blueprint, and its table, command and `.env` regions."""
+    blueprint = _blueprint_slice(
+        cockpit.generate_cockpit_html({"arms": [], "tourney_key": "487"})
+    )
+    return (
+        blueprint,
+        _between(blueprint, "<table", "</table>"),
+        _between(blueprint, "Ready-to-Run PowerShell", "Live Production Environment Variables"),
+        _between(blueprint, "Live Production Environment Variables", None),
+    )
+
+
+def test_hybrid_blueprint_shows_the_champion_values_in_all_three_places():
+    blueprint, table, commands, env = _champion_slices()
+
+    for key, value in CHAMPION_ENV.items():
+        assert f"{key}={value}" in table, f"{key} is missing from the parameter table"
+        assert f'$env:{key} = "{value}"' in commands, f"{key} is missing from the PowerShell block"
+        assert f"{key}={value}" in env, f"{key} is missing from the .env block"
+
+    for arm in (
+        "prudent-hybrid", "static-floor-2c", "low-churn-deadband", "hair-trigger-2c",
+        "patient-stop-9c", "wide-shield", "queue-clear-5m",
+    ):
+        assert arm in table, f"source arm {arm} is not named in the table"
+
+    assert "rounded up to a whole cent" in blueprint
+    assert "$0.990" in blueprint, "the pair cap value must stay visible"
+
+    # Raw so the single backslashes survive the render.
+    assert r".\scripts\spread-hunter-menu.ps1 shadow-run -Preset prudent -Minutes 60" in commands
+    assert "python -m core_brain.shadow_run" in commands
+    for flag in ("--db", "--run-id", "--interval", "--starting-bankroll-usd"):
+        assert flag in commands, f"the direct rehearsal command lost {flag}"
+
+    assert "Performance Forecast" in blueprint
+    assert "Failure Modes &amp; Stress Scenarios" in blueprint
+    for figure in (
+        "80% - 84%", "82% - 86%", "&gt; 10.5", "+$0.38 - +$0.46", "&gt; 8.0", "&gt; +$30.00",
+    ):
+        assert figure in blueprint, f"forecast figure {figure} is missing"
+    for scenario in (
+        "Flash Directional Breakout",
+        "Liquidity Vacuum / Book Desertion",
+        "High-Frequency Ping-Pong Jitter",
+    ):
+        assert scenario in blueprint, f"failure scenario {scenario} is missing"
+
+
+def test_hybrid_blueprint_never_tells_an_operator_to_break_the_engine():
+    """The two ways this pane could do real damage, both asserted absent.
+
+    Setting `BOT_POS_PRICE_MAX_PAIR_COST_USD` explicitly raises outside a
+    rehearsal, and `core_brain.venue` loads the config at import time -- so a
+    copyable assignment would stop the live engine from starting. The other
+    three strings are the retired champion the pane used to advertise.
+    """
+    html = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "487"})
+    blueprint = _blueprint_slice(html)
+
+    assert "BOT_POS_PRICE_MAX_PAIR_COST_USD=" not in blueprint, "a copyable pair-cap assignment is back"
+    assert "$env:BOT_POS_PRICE_MAX_PAIR_COST_USD =" not in blueprint
+    assert "-Preset hybrid" not in blueprint
+    assert "scripts.shadow_tournament" not in blueprint
+    assert 'TOURNAMENT_PRESETS["hybrid"]' not in blueprint
+
+    assert "switchTab('hybrid-config'" in html
+    for pane in PANE_IDS:
+        assert f'id="{pane}"' in html, f"pane {pane} disappeared"
+
+
+def test_hybrid_blueprint_offset_row_matches_the_799_arm_that_ran_it():
+    """The pane names `prudent-hybrid` as the offset's source, so the two must
+    agree: the arm file is what the launcher executes, and a value edited in one
+    file and not the other would misreport the champion to the operator."""
+    arm_env = {a["name"]: a.get("env", {}) for a in _i799_source()}[("prudent-hybrid")]
+
+    for key, value in arm_env.items():
+        assert CHAMPION_ENV[key] == value, (
+            f"the blueprint's {key} is {CHAMPION_ENV[key]}, but #799 ran {value}"
+        )
+
+    _, table, _, _ = _champion_slices()
+    for key, value in arm_env.items():
+        assert f"{key}={value}" in table, f"the table disagrees with {key} in the #799 arm file"
