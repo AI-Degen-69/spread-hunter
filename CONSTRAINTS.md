@@ -28,8 +28,7 @@ Tighten only with operator approval; never loosen silently.
 ## Scope fences (hard)
 
 - **Only these files change:** `dashboard/static/app.js`,
-  `dashboard/static/prototype.css`, `tests/test_stitch_closed_trades.py`
-  (plus planning artifacts `tasks/plan.md`, `tasks/todo.md`).
+  `dashboard/static/prototype.css`, `tests/test_stitch_closed_trades.py`.
 - **Presentation only.** `m.realized_pnl`, `closedTradeCostBasis`,
   `closedTradesEntries`, `closeTsOf`, the KPI envelope and every file under
   `core_brain/` and `dashboard/` outside `static/` stay byte-identical. No
