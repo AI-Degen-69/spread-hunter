@@ -366,7 +366,10 @@ def test_all_five_charts_paint_real_series(tmp_path, live_payload):
         assert "<path" in c["svg"] or "<rect" in c["svg"], f"{cid} drew no series"
         assert c["badge"], f"{cid} has no badge"
         assert c["stats"], f"{cid} has no stats line"
-    assert charts["ch3"]["svg"] == "" and charts["ch3"]["badge"] == ""
+    # ch3 names its unmeasured state instead of an empty box
+    # (docs/specs/ci-visualizer.md); the svg still draws no series.
+    assert charts["ch3"]["svg"] == ""
+    assert charts["ch3"]["badge"] == "Unmeasured"
 
     # Chart 1's CI badge is the payload's own 95% band, from the real run.
     assert "95% CI: [+5.12%, +8.41%] · EXCLUDES ZERO" in charts["ch1"]["badge"]
@@ -402,9 +405,13 @@ def test_empty_payload_mounts_without_throwing(tmp_path):
                 "statistical_analytics.fill_path_edge.net_expectancy_usd",
                 "trade_analytics.win_rate"):
         assert p[key] == "", f"{key} painted {p[key]!r} on an empty payload"
-    # No chart may draw a series with no data behind it.
+    # No chart may draw a series with no data behind it. Every card names the
+    # unmeasured state outright instead of an empty box
+    # (docs/specs/ci-visualizer.md); the svg stays empty behind the badge.
     for c in out["charts"]:
-        assert c["svg"] == "" and c["badge"] == "", f"{c['id']} drew on empty data"
+        assert c["svg"] == "", f"{c['id']} drew on empty data"
+        assert c["badge"] == "Unmeasured", f"{c['id']} hides its empty state"
+        assert "Unmeasured" in c["stats"], f"{c['id']} hides its empty state"
 
 
 @requires_node

@@ -121,9 +121,32 @@ try {
   errors.push(`capital_risk: ${e && e.message}`);
 }
 
+/* Interactive CI visualizer (docs/specs/ci-visualizer.md): one shared adapter
+ * view per KPI plus the per-key readout, so the field mapping is pinned per
+ * KPI instead of only for the default dollar band. */
+const ciViews = {};
+const ciHtml = {};
+for (const key of ['mean_pnl', 'expectancy', 'mean_return', 'win_rate', 'bogus']) {
+  try {
+    ciViews[key] = typeof app.resolveCiView === 'function'
+      ? app.resolveCiView(kpi.trade_analytics || {}, key)
+      : { error: 'resolveCiView is not a function' };
+  } catch (e) {
+    ciViews[key] = { error: `${e && e.message}` };
+  }
+  try {
+    app.renderPnlCiReadout(kpi.trade_analytics || {}, 'pnl-ci-readout', key);
+    ciHtml[key] = element('pnl-ci-readout').innerHTML;
+  } catch (e) {
+    ciHtml[key] = `THREW: ${e && e.message}`;
+  }
+}
+
 process.stdout.write(JSON.stringify({
   errors,
   pnl_ci_html: element('pnl-ci-readout').innerHTML,
+  ci_views: ciViews,
+  ci_html: ciHtml,
   funnel_html: element('execution-funnel').innerHTML,
   sample_sufficiency_html: element('sample-sufficiency-readout').innerHTML,
   fill_path_edge_html: element('fill-path-edge-readout').innerHTML,

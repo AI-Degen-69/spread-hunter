@@ -8,6 +8,8 @@
  * Reads a JSON payload from argv[2]; action on argv[3]:
  *   render   full renderAnalysisV2(root, kpi) against the stubbed DOM (default)
  *   empty    renderAnalysisV2(root, {}) -- must not throw and must paint nothing
+ *   stale    prefill every chart area with a stale series, then render empty --
+ *            the repaint must clear the series, not badge over it
  *   toggle   render, then click the confidence pills like the page does
  */
 const fs = require('fs');
@@ -253,7 +255,14 @@ const out = {
 };
 
 try {
-  const kpi = action === 'empty' ? {} : (input.kpi || {});
+  const kpi = (action === 'empty' || action === 'stale') ? {} : (input.kpi || {});
+  if (action === 'stale') {
+    chartAreas.forEach((c) => {
+      c._children['.chart-area'].innerHTML = '<svg viewBox="0 0 400 200"><rect/></svg>';
+      c._children['.chart-badge'].innerHTML = 'STALE';
+      c._children['.chart-badge'].className = 'chart-badge good';
+    });
+  }
   app.renderAnalysisV2(rootStub, kpi);
   bindNodes.forEach((e) => {
     out.painted[e.attrs['data-bind']] = e.innerHTML || e.textContent;
@@ -278,6 +287,7 @@ try {
     out.charts.push({
       id: c.attrs.id,
       badge: c._children['.chart-badge'].innerHTML,
+      badgeCls: c._children['.chart-badge'].className,
       stats: c._children['.chart-stats'].innerHTML,
       svg: c._children['.chart-area'].innerHTML,
       foot: c._children['.chart-foot'].innerHTML,

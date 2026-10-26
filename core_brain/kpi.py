@@ -414,6 +414,9 @@ def compute_trade_analytics(
     n_losses = len(losses)
     win_rate = (n_wins / n) if n else None
     win_rate_ci95 = _wilson_ci(n_wins, n) if n else None
+    # The 90% sibling for the interactive CI card. The z ships from the one
+    # critical-value table via the payload, so no renderer writes one down (#535).
+    win_rate_ci90 = _wilson_ci(n_wins, n, ci_z(90)) if n else None
 
     # All-None run: n > 0 but nothing measured — mean([]) would raise (#552).
     measured_pnls = wins + losses
@@ -614,6 +617,7 @@ def compute_trade_analytics(
         "losses": n_losses,
         "win_rate": win_rate,
         "win_rate_ci95": win_rate_ci95,
+        "win_rate_ci90": win_rate_ci90,
         "expectancy_usd": expectancy_usd,
         "mean_return_pct": mean_return_pct,
         "n_measured_returns": n_measured_returns,

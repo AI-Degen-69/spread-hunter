@@ -2472,8 +2472,15 @@ function telemetryActiveCount(status, guardrailRunning) {
                                || status?.services?.filter?.observed_running);
   const engineActive = Boolean(status?.services?.query?.running
                               || status?.shadow_run?.running);
+  // In a shadow rehearsal the guardrail row mirrors the shadow loop
+  // (renderServicesDropdown), it does not read guardrailHealth.running.
+  // Count the same evidence the row paints, or a running rehearsal with a
+  // live filter reads "2 ACTIVE" beside three ON rows.
+  const shadowUp = Boolean(status?.shadow_run?.running);
+  const isShadow = (typeof isShadowMode === 'function') ? isShadowMode(status) : false;
+  const guardrailActive = isShadow ? shadowUp : Boolean(guardrailRunning);
   const count = (filterActive ? 1 : 0) + (engineActive ? 1 : 0);
-  return count + (guardrailRunning ? 1 : 0);
+  return count + (guardrailActive ? 1 : 0);
 }
 
 function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
@@ -5290,29 +5297,171 @@ function decisionGatesHtml(ta, stats, n, kpi) {
   `;
 }
 
+/* Interactive CI visualizer (docs/specs/ci-visualizer.md): one shared adapter
+ * over the core means, so the Tier 1 band card pivots KPIs without a backend
+ * change. Every field read here already ships in `trade_analytics`; an unknown
+ * key falls back to the dollar band, never to a fabricated zero.
+ *
+ * Design notes (frontend-design): the card keeps its one signature element --
+ * the nested 90-inside-95 band with the mean-diamond pointer -- and the
+ * existing verdict vocabulary. The picker is a quiet segmented control above
+ * the band; all colour/type decisions stay on the repo's own tokens.
+ */
+const PNL_CI_METRICS = {
+  mean_pnl:   { label: 'Mean PnL',   sub: 'Mean realized PnL per close',   units: 'usd',
+                refLabel: '$0.00', refValue: 0 },
+  expectancy: { label: 'Expectancy',  sub: 'Mean expectancy per close',     units: 'usd',
+                refLabel: '$0.00', refValue: 0 },
+  mean_return:{ label: 'Mean Return', sub: 'Mean return per measured close', units: 'pct',
+                refLabel: '0%', refValue: 0 },
+  win_rate:   { label: 'Win Rate',    sub: 'Win rate across closes',        units: 'winrate',
+                refLabel: '50%', refValue: 50 },
+};
+let pnlCiMetric = 'mean_pnl';
+let lastPnlCiTa = null;
+
+function numOrNull(v) {
+  // Number(null) is 0, not NaN: an unmeasured payload field must stay
+  // missing (renders `--`) rather than read as a real zero.
+  if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/* One view per KPI: `{ metric, label, sub, units, refLabel, refValue, mean,
+ * n, l90, l95, verdict }`, or the same shape with `noBand: true` when the
+ * sample cannot carry an interval. A band that cannot be measured is standby,
+ * never zero. */
+function resolveCiView(ta, key) {
+  const metric = PNL_CI_METRICS[key] ? key : 'mean_pnl';
+  const meta = PNL_CI_METRICS[metric];
+  ta = ta || {};
+  const ci = ta.mean_pnl_ci || {};
+  const closesRaw = numOrNull(ta.n_closes);
+  const closes = closesRaw !== null ? closesRaw : (numOrNull(ci.n) !== null ? numOrNull(ci.n) : 0);
+
+  if (metric === 'mean_return') {
+    const mean = numOrNull(ta.mean_return_pct);
+    const c95 = ta.ci95_return_pct || {};
+    const lo95 = numOrNull(c95.lower), hi95 = numOrNull(c95.upper);
+    const lo90 = numOrNull(ta.ci90_lower_pct);
+    const measured = numOrNull(ta.n_measured_returns);
+    const n = measured !== null ? measured : closes;
+    // The payload carries only the 90% lower bound (the one-sided gate); the
+    // normal interval is symmetric, so the upper mirrors it around the mean.
+    if (mean === null || lo95 === null || hi95 === null || lo90 === null || !(n >= 2)) {
+      return { metric, ...meta, mean, n, noBand: true };
+    }
+    const l95 = { lower: lo95, upper: hi95 };
+    const l90 = { lower: lo90, upper: mean + (mean - lo90) };
+    return { metric, ...meta, mean, n, l90, l95,
+             depth: lo95 < 0 ? Math.abs(lo95) : null,
+             verdict: l95.lower > 0 ? 'positive' : (l95.upper < 0 ? 'negative' : 'spans_zero') };
+  }
+
+  if (metric === 'win_rate') {
+    // Both rows ship in the payload (`win_rate_ci90`, `win_rate_ci95`); the z
+    // lives in the backend's one critical-value table, never in this file
+    // (#535). A missing 90% row is no band, not a recomputation.
+    const rate = numOrNull(ta.win_rate);
+    const w95 = ta.win_rate_ci95 || {};
+    const w90 = ta.win_rate_ci90 || {};
+    const lo95 = numOrNull(w95.lower), hi95 = numOrNull(w95.upper);
+    const lo90 = numOrNull(w90.lower), hi90 = numOrNull(w90.upper);
+    if (rate === null || lo95 === null || hi95 === null || lo90 === null || hi90 === null || !(closes >= 2)) {
+      return { metric, ...meta, mean: rate === null ? null : rate * 100, n: closes, noBand: true };
+    }
+    const l95 = { lower: lo95 * 100, upper: hi95 * 100 };
+    const l90 = { lower: lo90 * 100, upper: hi90 * 100 };
+    return { metric, ...meta, mean: rate * 100, n: closes, l90, l95, depth: null,
+             verdict: l95.lower > 50 ? 'positive' : (l95.upper < 50 ? 'negative' : 'spans_zero') };
+  }
+
+  // Dollar metrics share the one backend spread: expectancy IS the mean of the
+  // same measured closes, so the same band answers both sub-labels.
+  const levels = Array.isArray(ci.levels) ? ci.levels : [];
+  const mean = metric === 'expectancy' ? numOrNull(ta.expectancy_usd) : numOrNull(ci.mean_usd);
+  const n = numOrNull(ci.n) !== null ? numOrNull(ci.n) : closes;
+  if (!levels.length) {
+    return { metric, ...meta, mean, n, noBand: true };
+  }
+  const l95 = levels.find(l => Number(l.level) === 95) || levels[levels.length - 1];
+  const l90 = levels.find(l => Number(l.level) === 90) || levels[0];
+  // The backend ships how far the wide band reaches below zero alongside the
+  // band itself; read that figure rather than recomputing it, and fall back to
+  // the band edge only when an older payload predates the field.
+  const shippedDepth = numOrNull(l95.negative_depth_usd);
+  const edgeDepth = Number(l95.lower) < 0 ? Math.abs(Number(l95.lower)) : null;
+  return { metric, ...meta,
+           mean: mean !== null ? mean : (Number(l90.lower) + Number(l90.upper)) / 2,
+           n,
+           l90: { lower: Number(l90.lower), upper: Number(l90.upper) },
+           l95: { lower: Number(l95.lower), upper: Number(l95.upper) },
+           depth: shippedDepth !== null ? shippedDepth : edgeDepth,
+           verdict: ci.verdict || 'unknown' };
+}
+
+/* Per-units value format. Win rate is a clamped magnitude (51.0%), never a
+ * signed figure; means carry their sign, because direction is the point. */
+function fmtCiVal(v, units) {
+  const n = Number(v);
+  if (v === null || v === undefined || !Number.isFinite(n)) return '--';
+  if (units === 'usd') return fmtSignedUSD(n);
+  if (units === 'pct') return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
+  return n.toFixed(1) + '%';
+}
+
+function pnlCiPickerHtml(active) {
+  return `<div class="pnl-ci-picker" role="group" aria-label="CI metric">` +
+    Object.keys(PNL_CI_METRICS).map(k =>
+      `<button type="button" class="pill${k === active ? ' active' : ''}" data-ci-metric="${k}">${PNL_CI_METRICS[k].label}</button>`
+    ).join('') + `</div>`;
+}
+
+function wirePnlCiPicker(host, hostId) {
+  if (!host || !host.querySelectorAll) return;
+  host.querySelectorAll('[data-ci-metric]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const k = btn.getAttribute ? btn.getAttribute('data-ci-metric') : null;
+      pnlCiMetric = PNL_CI_METRICS[k] ? k : 'mean_pnl';
+      renderPnlCiReadout(lastPnlCiTa, hostId);
+    });
+  });
+}
+
 /* Tier 1: the band around our average close, and whether it still contains a
  * loss. `mean_pnl_ci` answers that in dollars; this only has to not soften it.
  */
-function renderPnlCiReadout(ta, hostId) {
+function renderPnlCiReadout(ta, hostId, key) {
   const host = document.getElementById(hostId || 'pnl-ci-readout');
   if (!host) return;
+  lastPnlCiTa = ta || {};
 
-  const ci = ta?.mean_pnl_ci || {};
-  const n = ci.n != null ? Number(ci.n) : 0;
-  const mean = ci.mean_usd != null ? Number(ci.mean_usd) : null;
-  const levels = Array.isArray(ci.levels) ? ci.levels : [];
+  const view = resolveCiView(lastPnlCiTa, key !== undefined ? key : pnlCiMetric);
+  const units = view.units;
+  const fmt = (v) => fmtCiVal(v, units);
+  const picker = pnlCiPickerHtml(view.metric);
 
   // No band is not a zero band. A run under two closes says what it has,
   // which is a mean and a sample size, and stops there.
-  if (!levels.length) {
-    host.innerHTML = `
-      <div class="pnl-ci-mean mono">${esc(mean === null ? '--' : fmtSignedUSD(mean))}</div>
-      <div class="pnl-ci-sub">Mean realized PnL per close</div>
+  if (view.noBand) {
+    const n = view.n || 0;
+    host.innerHTML = picker + `
+      <div class="pnl-ci-mean mono">${esc(view.mean === null ? '--' : fmt(view.mean))}</div>
+      <div class="pnl-ci-sub">${esc(view.sub)} · ${n} ${n === 1 ? 'close' : 'closes'}</div>
       <div class="pnl-ci-verdict standby">NO BAND YET · ${n} ${n === 1 ? 'CLOSE' : 'CLOSES'}</div>
       <div class="pnl-ci-note">A confidence interval needs at least two closes. Nothing is being withheld; nothing has been measured.</div>
     `;
+    wirePnlCiPicker(host, hostId);
     return;
   }
+
+  const n = view.n || 0;
+  const mean = view.mean;
+  const levels = [
+    { level: 90, lower: view.l90.lower, upper: view.l90.upper },
+    { level: 95, lower: view.l95.lower, upper: view.l95.upper },
+  ];
 
   const rows = levels.map(lv => {
     const lower = Number(lv.lower);
@@ -5321,40 +5470,56 @@ function renderPnlCiReadout(ta, hostId) {
       <div class="pnl-ci-band-row">
         <span class="pnl-ci-band-label mono">${esc(String(lv.level))}%</span>
         <span class="pnl-ci-band-range mono">
-          <b class="${lower < 0 ? 'negative' : 'positive'}">${esc(fmtSignedUSD(lower))}</b>
+          <b class="${lower < view.refValue ? 'negative' : 'positive'}">${esc(fmt(lower))}</b>
           <span class="pnl-ci-band-dash">to</span>
-          <b class="${upper < 0 ? 'negative' : 'positive'}">${esc(fmtSignedUSD(upper))}</b>
+          <b class="${upper < view.refValue ? 'negative' : 'positive'}">${esc(fmt(upper))}</b>
         </span>
       </div>`;
   }).join('');
 
   const widest = levels[levels.length - 1];
-  const depth = widest.negative_depth_usd != null ? Number(widest.negative_depth_usd) : null;
+  const depth = view.depth;
+  const depthText = depth === null ? '--'
+    : (units === 'usd' ? '-$' + depth.toFixed(3)
+      : (units === 'pct' ? '-' + depth.toFixed(2) + '%' : depth.toFixed(1) + ' pts'));
+  // Every verdict branch is spelled out: a band that reaches below the
+  // reference says so in the copy, never by colour alone.
   const verdictMap = {
-    positive: { cls: 'go', text: `BAND CLEAR OF ZERO · NO LOSS INCLUDED AT ${widest.level}%` },
+    positive: { cls: 'go', text: units === 'winrate'
+      ? `BAND CLEAR OF 50% · MAJORITY WIN RATE AT ${widest.level}%`
+      : `BAND CLEAR OF ZERO · NO LOSS INCLUDED AT ${widest.level}%` },
     spans_zero: {
       cls: 'warn',
-      text: `BAND INCLUDES A LOSS DOWN TO ${depth === null ? '--' : '-$' + depth.toFixed(3)} PER CLOSE`,
+      text: units === 'winrate'
+        ? `BAND INCLUDES 50% · NOT A MAJORITY AT ${widest.level}%`
+        : `BAND INCLUDES A LOSS DOWN TO ${depthText} PER CLOSE`,
     },
-    negative: { cls: 'nogo', text: `BAND ENTIRELY BELOW ZERO AT ${widest.level}%` },
+    negative: units === 'winrate'
+      ? { cls: 'nogo', text: `BAND ENTIRELY BELOW 50% AT ${widest.level}%` }
+      : { cls: 'nogo', text: `BAND ENTIRELY BELOW ZERO AT ${widest.level}%` },
   };
-  const verdict = verdictMap[ci.verdict] || { cls: 'standby', text: 'VERDICT UNAVAILABLE' };
+  const verdict = verdictMap[view.verdict] || { cls: 'standby', text: 'VERDICT UNAVAILABLE' };
 
   // Determine band colors
-  const bandCls = ci.verdict === 'positive' ? 'band-positive'
-    : (ci.verdict === 'negative' ? 'band-negative' : 'band-warn');
+  const bandCls = view.verdict === 'positive' ? 'band-positive'
+    : (view.verdict === 'negative' ? 'band-negative' : 'band-warn');
 
-  // Find 90% and 95% levels for visual bar
-  const l95 = levels.find(l => Number(l.level) === 95) || levels[levels.length - 1];
-  const l90 = levels.find(l => Number(l.level) === 90) || levels[0];
+  // The view owns the levels, ordered narrow-to-wide; the bar reads it back.
+  const l95 = view.l95;
+  const l90 = view.l90;
   const l95Lower = Number(l95.lower);
   const l95Upper = Number(l95.upper);
   const l90Lower = Number(l90.lower);
   const l90Upper = Number(l90.upper);
+  const refVal = view.refValue;
   const meanVal = mean !== null ? mean : (l90Lower + l90Upper) / 2;
+  const w95 = l95Upper - l95Lower;
+  const w90 = l90Upper - l90Lower;
+  const widerPct = w90 > 0 ? Math.round(((w95 - w90) / w90) * 100) : null;
 
-  // Scale axis bounds
-  const keyPoints = [0, l95Lower, l95Upper, l90Lower, l90Upper, meanVal];
+  // Scale axis bounds. The reference (zero, or 50% for win rate) anchors the
+  // scale so the band's position against it is what the eye compares.
+  const keyPoints = [refVal, l95Lower, l95Upper, l90Lower, l90Upper, meanVal];
   const minVal = Math.min(...keyPoints);
   const maxVal = Math.max(...keyPoints);
   const span = (maxVal - minVal) || 0.1;
@@ -5374,19 +5539,19 @@ function renderPnlCiReadout(ta, hostId) {
   const pct90Width = Math.max(2, pct90Right - pct90Left);
 
   const meanPct = toPct(meanVal);
-  const zeroPct = toPct(0);
-  const showZero = (axisMin <= 0 && 0 <= axisMax);
+  const zeroPct = toPct(refVal);
+  const showZero = (axisMin <= refVal && refVal <= axisMax);
 
-  host.innerHTML = `
+  host.innerHTML = picker + `
     <div class="pnl-ci-head-row">
-      <div class="pnl-ci-mean mono ${mean === null ? '' : signClass(mean)}">${esc(mean === null ? '--' : fmtSignedUSD(mean))}</div>
-      <div class="pnl-ci-sub">Mean realized PnL per close · ${n} ${n === 1 ? 'close' : 'closes'}</div>
+      <div class="pnl-ci-mean mono ${mean === null || view.metric === 'win_rate' ? '' : signClass(mean)}">${esc(mean === null ? '--' : fmt(mean))}</div>
+      <div class="pnl-ci-sub">${esc(view.sub)} · ${n} ${n === 1 ? 'close' : 'closes'}</div>
     </div>
 
     <!-- Visual Scale Bar: ---|----------|--- -->
     <div class="pnl-ci-scale-container">
       <div class="pnl-ci-mean-pointer" style="left:${meanPct.toFixed(1)}%">
-        <div class="pnl-ci-mean-badge mono ${signClass(meanVal)}">Mean ${esc(fmtSignedUSD(meanVal))}</div>
+        <div class="pnl-ci-mean-badge mono ${view.metric === 'win_rate' ? '' : signClass(meanVal)}">Mean ${esc(fmt(meanVal))}</div>
         <div class="pnl-ci-mean-pin"></div>
       </div>
 
@@ -5395,19 +5560,19 @@ function renderPnlCiReadout(ta, hostId) {
 
         ${showZero ? `
           <div class="pnl-ci-zero-line" style="left:${zeroPct.toFixed(1)}%">
-            <span class="pnl-ci-zero-tag mono">$0.00</span>
+            <span class="pnl-ci-zero-tag mono">${esc(view.refLabel)}</span>
           </div>
         ` : ''}
 
         <!-- 95% CI Outer Band -->
-        <div class="pnl-ci-band-bar band-95 ${bandCls}" style="left:${pct95Left.toFixed(1)}%;width:${pct95Width.toFixed(1)}%" title="95% Confidence Interval">
+        <div class="pnl-ci-band-bar band-95 ${bandCls}" style="left:${pct95Left.toFixed(1)}%;width:${pct95Width.toFixed(1)}%" title="95% CI: ${esc(fmt(l95Lower))} to ${esc(fmt(l95Upper))}">
           <span class="pnl-ci-band-tick">|</span>
           <span class="pnl-ci-band-name">95% CI</span>
           <span class="pnl-ci-band-tick">|</span>
         </div>
 
         <!-- 90% CI Inner Band -->
-        <div class="pnl-ci-band-bar band-90 ${bandCls}" style="left:${pct90Left.toFixed(1)}%;width:${pct90Width.toFixed(1)}%" title="90% Confidence Interval">
+        <div class="pnl-ci-band-bar band-90 ${bandCls}" style="left:${pct90Left.toFixed(1)}%;width:${pct90Width.toFixed(1)}%" title="90% CI: ${esc(fmt(l90Lower))} to ${esc(fmt(l90Upper))}">
           <span class="pnl-ci-band-tick">|</span>
           <span class="pnl-ci-band-name">90% CI</span>
           <span class="pnl-ci-band-tick">|</span>
@@ -5417,26 +5582,28 @@ function renderPnlCiReadout(ta, hostId) {
       <div class="pnl-ci-scale-ticks mono">
         <div class="pnl-ci-tick-callout tick-95" style="left:${pct95Left.toFixed(1)}%">
           <span class="pnl-ci-tick-tag">95% Low</span>
-          <span class="pnl-ci-tick-val ${l95Lower < 0 ? 'negative' : 'positive'}">${esc(fmtSignedUSD(l95Lower))}</span>
+          <span class="pnl-ci-tick-val ${l95Lower < refVal ? 'negative' : 'positive'}">${esc(fmt(l95Lower))}</span>
         </div>
         <div class="pnl-ci-tick-callout tick-90" style="left:${pct90Left.toFixed(1)}%">
           <span class="pnl-ci-tick-tag">90% Low</span>
-          <span class="pnl-ci-tick-val ${l90Lower < 0 ? 'negative' : 'positive'}">${esc(fmtSignedUSD(l90Lower))}</span>
+          <span class="pnl-ci-tick-val ${l90Lower < refVal ? 'negative' : 'positive'}">${esc(fmt(l90Lower))}</span>
         </div>
         <div class="pnl-ci-tick-callout tick-90" style="left:${pct90Right.toFixed(1)}%">
           <span class="pnl-ci-tick-tag">90% High</span>
-          <span class="pnl-ci-tick-val ${l90Upper < 0 ? 'negative' : 'positive'}">${esc(fmtSignedUSD(l90Upper))}</span>
+          <span class="pnl-ci-tick-val ${l90Upper < refVal ? 'negative' : 'positive'}">${esc(fmt(l90Upper))}</span>
         </div>
         <div class="pnl-ci-tick-callout tick-95" style="left:${pct95Right.toFixed(1)}%">
           <span class="pnl-ci-tick-tag">95% High</span>
-          <span class="pnl-ci-tick-val ${l95Upper < 0 ? 'negative' : 'positive'}">${esc(fmtSignedUSD(l95Upper))}</span>
+          <span class="pnl-ci-tick-val ${l95Upper < refVal ? 'negative' : 'positive'}">${esc(fmt(l95Upper))}</span>
         </div>
       </div>
     </div>
 
     <div class="pnl-ci-bands">${rows}</div>
+    ${widerPct !== null ? `<div class="pnl-ci-width-note mono">95% is ${widerPct}% wider than 90%</div>` : ''}
     <div class="pnl-ci-verdict ${verdict.cls}">${esc(verdict.text)}</div>
   `;
+  wirePnlCiPicker(host, hostId);
 }
 
 /* Tier 1: Sample size & confidence level sufficiency (#443).
@@ -10789,7 +10956,8 @@ if (typeof module !== 'undefined' && module.exports) {
     setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,
-    renderPnlCiReadout, renderExecutionFunnel, renderSampleSufficiency,
+    renderPnlCiReadout, resolveCiView, PNL_CI_METRICS,
+    renderExecutionFunnel, renderSampleSufficiency,
     OT_VIEWS, OT_COLUMNS, ordersTradesRows, ordersTradesCounts, otHeadHtml,
     otSortGroups, otCompare, otDefaultDir, otIsTextColumn, otToggleSort, otActiveSort,
     activeMarketsRows, openOrdersRows, positionsRows, closedTradesRows,
@@ -10815,6 +10983,10 @@ if (typeof module !== 'undefined' && module.exports) {
     // be pinned per arm.
     set distMetric(v) { currentDistMetric = v; },
     set distCiLevel(v) { currentCiLevel = v; },
+    // The CI card's KPI picker. The page writes through clicks; a harness
+    // writes the key it means to test the same way.
+    set pnlCiMetric(v) { pnlCiMetric = PNL_CI_METRICS[v] ? v : 'mean_pnl'; },
+    get pnlCiMetric() { return pnlCiMetric; },
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState, resolveHeldRead,
     engineReasonText, engineProvenanceText, renderScanStatePill,
     renderMarketScanPill, renderPillHtml, renderDbMode, renderServiceHeader,

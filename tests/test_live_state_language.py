@@ -343,6 +343,10 @@ def test_the_active_count_matches_the_rows_beside_it():
     assert v["nothing"] == 0
     assert v["guardrailOnly"] == 1
     assert v["engineWithoutFilter"] == 1
+    # Shadow rehearsal with a live filter paints three ON rows (guardrail
+    # mirrors the shadow loop), so the header must say three, not two.
+    assert v["shadowStack"] == 3
+    assert v["shadowStackFilterObserved"] == 3
 
 
 @requires_node
