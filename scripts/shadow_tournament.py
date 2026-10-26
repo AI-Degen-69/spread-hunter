@@ -552,6 +552,10 @@ def launch_tournament(plan: TournamentPlan) -> int:
         #    It must be up before the arms start, so a long run never begins on
         #    a feed already older than the staleness window.
         filter_proc = None
+        extra_popen_kwargs: dict[str, Any] = {}
+        if sys.platform == "win32":
+            extra_popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
         try:
             filter_env = {
                 k: v for k, v in os.environ.items()
@@ -560,7 +564,9 @@ def launch_tournament(plan: TournamentPlan) -> int:
             filter_env.setdefault("SH_FILTER_INTERVAL_SEC", str(FILTER_INTERVAL_SEC))
             filter_proc = subprocess.Popen(
                 FILTER_LOOP_ARGV, env=filter_env,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                **extra_popen_kwargs,
             )
             procs.append((filter_proc, "market-filter"))
             log.info("Started Market Filter (scripts.filter_loop, PID %d, "
@@ -580,7 +586,12 @@ def launch_tournament(plan: TournamentPlan) -> int:
                 }
                 dash_env["PORT"] = str(arm.dash_port)
                 dash_env["LIVE_DB_PATH"] = str(arm.db_path)
-                p = subprocess.Popen(arm.dash_argv, env=dash_env)
+                p = subprocess.Popen(
+                    arm.dash_argv, env=dash_env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    **extra_popen_kwargs,
+                )
                 procs.append((p, f"dashboard-{arm.dash_port}"))
                 log.info(
                     "Started dashboard server for arm #%02d [%s] on port %d (PID %d)",
@@ -596,7 +607,11 @@ def launch_tournament(plan: TournamentPlan) -> int:
                 if not (k.startswith("FILTER_") or k.startswith("BOT_"))
             }
             shadow_env = {**clean_env, **arm.env, "SPREAD_HUNTER_DB": str(arm.db_path)}
-            p = subprocess.Popen(arm.shadow_argv, env=shadow_env)
+            p = subprocess.Popen(
+                arm.shadow_argv, env=shadow_env,
+                stdin=subprocess.DEVNULL,
+                **extra_popen_kwargs,
+            )
             procs.append((p, f"shadow-{arm.name}"))
             shadow_procs.append(p)
             log.info(

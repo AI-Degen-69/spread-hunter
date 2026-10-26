@@ -1147,11 +1147,14 @@ def _is_pipeline_shadow_db(db_path: Path | str) -> bool:
     # markets despite a fully populated pipeline.json.
     path = Path(db_path).resolve()
     name = path.name
+    posix_path = path.as_posix().lower()
     return path.suffix == ".db" and (
         name.startswith("shadow_")
         or "_shadow_" in name
         or "_shadow-" in name
         or "_tournament_" in name
+        or "/tournaments/" in posix_path
+        or "tournaments/" in posix_path
     )
 
 

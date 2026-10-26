@@ -2121,7 +2121,7 @@ function renderAll() {{
       </td>
       <td class="tabular"><strong>${{arm.score || 0}}</strong></td>
       <td><span class="badge ${{arm.badge_cls}}">${{arm.readiness}}</span></td>
-      <td><a href="http://127.0.0.1:${{arm.port}}" target="_blank" class="btn" style="padding: 3px 8px; font-size: 11px;">Open Dash</a></td>
+      <td><a href="/open-dash?port=${{arm.port}}&db=${{encodeURIComponent(arm.db_path || '')}}" target="_blank" class="btn" style="padding: 3px 8px; font-size: 11px;">Open Dash</a></td>
     `;
     tbody.appendChild(tr);
   }});
@@ -2418,6 +2418,48 @@ def get_cached_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
         return _STATS_CACHE[tourney_key]
 
 
+
+def _ensure_arm_dashboard(port: int, db_path: str) -> None:
+    from scripts.reconcile_tournament_stack import (
+        is_port_listening, kill_process_on_port, _detached_kwargs, ROOT
+    )
+    from core_brain.code_revision import decision_code_mtime
+    import urllib.request
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    tree_mtime = decision_code_mtime() or time.time()
+    needs_restart = False
+    full_db = Path(db_path) if Path(db_path).is_absolute() else (ROOT / db_path)
+
+    if not is_port_listening(port):
+        needs_restart = True
+    else:
+        try:
+            url = f"http://127.0.0.1:{port}/api/system/status"
+            req = urllib.request.Request(url, headers={"User-Agent": "Cockpit-AutoEnsure"})
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                dash_started = data.get("services", {}).get("dash", {}).get("started_at", 0)
+                if dash_started and dash_started < tree_mtime:
+                    needs_restart = True
+        except Exception:
+            needs_restart = True
+
+    if needs_restart:
+        kill_process_on_port(port)
+        log_dir = ROOT / "runtime" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        lf = open(log_dir / f"dash_{port}.log", "a", encoding="utf-8")
+        cmd = [sys.executable, "-m", "dashboard.server", "--port", str(port), "--db", str(full_db)]
+        subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, **_detached_kwargs())
+        for _ in range(15):
+            if is_port_listening(port):
+                break
+            time.sleep(0.1)
+
 class CockpitHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         # Mute normal HTTP log spam
@@ -2445,6 +2487,23 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
         # button and the menu's service probe (`probe_path` in dashboard/server.py).
         # A retired key serves the page's own tournament instead of resurrecting
         # a purged one.
+        elif clean_path == "/open-dash":
+            import urllib.parse
+            port = 8801
+            db_path = ""
+            for param in query.split("&"):
+                if param.startswith("port="):
+                    try:
+                        port = int(param.split("=")[1])
+                    except Exception:
+                        pass
+                elif param.startswith("db="):
+                    db_path = urllib.parse.unquote(param.split("=")[1])
+
+            _ensure_arm_dashboard(port, db_path)
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{port}")
+            self.end_headers()
         elif clean_path == "/api/stats":
             tourney = CURRENT_SETUP_KEY
             for param in query.split("&"):
