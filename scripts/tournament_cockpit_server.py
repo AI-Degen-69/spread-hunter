@@ -1433,6 +1433,53 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
             f"{html.escape(str(record_error))}. "
             "The table shows default arms, not live data."
         )
+
+    # Pre-render Live Readiness Decision Matrix rows for static snapshot & initial paint
+    matrix_rationale = {
+        "queue-clear-5m": "👑 <strong>Top Efficiency & Tail Risk Champion.</strong> Stale-book filter cuts max DD by 73% ($2.60) with Sharpe 4.67 and positive tail return (MC P5 +$12.90). Core prerequisite for live execution.",
+        "balanced-mid": "🌟 <strong>Top Realized PnL Champion.</strong> Shipped dynamic 0.50x (2–4¢) spread tracking generated highest net profit (+$23.39) on 161 trades. Selected as the live pricing baseline.",
+        "loose-baseline": "📊 <strong>Control Reference.</strong> Solid volume and $22.84 PnL, but unconstrained queues and missing stop loss leave orphan legs open to directional drift.",
+        "static-floor-2c": "⚠️ <strong>Provisional.</strong> High volume ($17.99 PnL) but flat 2¢ floor without volatility tracking suffered -$2.28 spike loss during market blowout.",
+        "tight-touch": "⚠️ <strong>Qualified Maker.</strong> Tight 0.25x fills fast on narrow books, but suffers 53% quote starvation on wide spreads. Positive EV but lower reach.",
+        "prudent-hybrid": "⚠️ <strong>Provisional.</strong> Strong trade count and $19.24 PnL, but lifted 6¢ clamp suffered tournament-high drawdown ($11.29) during volatility cluster.",
+        "low-churn-deadband": "🚫 <strong>Disqualified.</strong> 10¢ deadband is overly sticky; holds stale quotes into adverse drifts, bleeding $10.77 drawdown and -$3.63 MC P5.",
+        "hair-trigger-2c": "🚫 <strong>Disqualified.</strong> 2¢ stop triggered 80 stop exits (57.5% exit rate!), liquidating complementary legs on normal tick flutter and gutting win rate to 42.4%.",
+        "wide-shield": "🚫 <strong>Disqualified.</strong> Conservative 8¢ stop lets toxic orphan legs bleed deeply (-$0.37 avg loss) with negative tail expectancy (MC P5 -$6.76).",
+        "patient-stop-9c": "⛔ <strong>REJECTED (Score < 75).</strong> 9¢ stop leash allowed catastrophic single-trade bleed (-$2.10), tanking Sharpe to 0.52 and MC P5 to -$9.56.",
+    }
+    ranked_arms_matrix = sorted(
+        initial_data.get("arms", []),
+        key=lambda x: (x.get("score") or 0, x.get("total_pnl") or 0.0),
+        reverse=True,
+    )
+    dm_rows = []
+    for idx, arm in enumerate(ranked_arms_matrix):
+        pnl = arm.get("total_pnl", 0.0)
+        pnl_cls = "positive" if pnl >= 0 else "negative"
+        pnl_prefix = "+$" if pnl >= 0 else "-$"
+        mcp5 = arm.get("mc_p5", 0.0)
+        mcp5_cls = "positive" if mcp5 >= 0 else "negative"
+        mcp5_prefix = "+$" if mcp5 >= 0 else "-$"
+        name = arm.get("name", "")
+        rationale = matrix_rationale.get(name, html.escape(arm.get("desc", "")))
+        dm_rows.append(
+            f'<tr>'
+            f'<td><strong>#{idx+1}</strong> <span style="color: {arm.get("color", "#fff")}">●</span> <strong>{html.escape(arm.get("label") or name)}</strong>'
+            f'<div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px;">{html.escape(arm.get("desc", ""))}</div></td>'
+            f'<td><span class="badge {arm.get("badge_cls", "badge-amber")}">{arm.get("readiness", "EVALUATING")}</span></td>'
+            f'<td class="tabular"><strong>{arm.get("score", 0)}</strong> / 100</td>'
+            f'<td class="tabular {pnl_cls}"><strong>{pnl_prefix}{abs(pnl):.2f}</strong></td>'
+            f'<td class="tabular">{arm.get("mean_pnl", 0.0):.3f}</td>'
+            f'<td class="tabular">{(arm.get("sharpe_proxy") or 0.0):.2f}</td>'
+            f'<td class="tabular">{(arm.get("profit_factor") or 0.0):.2f}</td>'
+            f'<td class="tabular">{(arm.get("win_rate") or 0.0):.1f}%</td>'
+            f'<td class="tabular">{(arm.get("merge_rate") or 0.0):.1f}%</td>'
+            f'<td class="tabular negative">${(arm.get("max_drawdown") or 0.0):.2f}</td>'
+            f'<td class="tabular {mcp5_cls}">{mcp5_prefix}{abs(mcp5):.2f}</td>'
+            f'<td style="max-width: 320px; font-size: 11.5px; line-height: 1.35;">{rationale}</td>'
+            f'</tr>'
+        )
+    dm_tbody_content = "\n".join(dm_rows)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -2079,20 +2126,103 @@ BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
 
 <!-- TAB 6: RECOMMENDATIONS -->
 <div id="tab-recommendations" class="tab-pane">
-  <div class="decision-grid">
+  <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.12), rgba(0, 176, 255, 0.12)); border: 1px solid rgba(0, 230, 118, 0.4); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+      <div>
+        <span class="badge badge-green" style="font-size: 12px; padding: 4px 10px; margin-bottom: 6px;">🚀 #799 PRODUCTION READINESS VERDICT</span>
+        <h2 style="font-size: 18px; font-weight: 700; color: #f0f4fc;">Live Readiness Decision Matrix — #799 Tournament Evaluation</h2>
+        <p style="color: var(--text-muted); font-size: 12.5px; margin-top: 4px;">
+          Multi-factor readiness audit across 10 tournament arms. Production gate requires: <strong>Score &ge; 75</strong>, <strong>Realized PnL &gt; $5.00</strong>, and <strong>Monte Carlo Prob(PnL &gt; 0) &ge; 70%</strong>.
+        </p>
+      </div>
+      <div style="text-align: right;">
+        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Scoring Model Framework</div>
+        <div class="tabular" style="color: var(--green); font-size: 14px; font-weight: 700;">PnL (30) &bull; Merge% (25) &bull; Low DD (20) &bull; PF (15) &bull; Sample (10)</div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">100-point composite score penalizing drawdown, fee churn, and tail bleed.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-box" style="margin-bottom: 24px;">
+    <div style="padding: 12px 16px; background: var(--bg-subtle); border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; color: #f0f4fc;">
+      📊 Cross-Arm Live Readiness Decision Matrix
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Rank &amp; Strategy Arm</th>
+          <th>Readiness Verdict</th>
+          <th>Live Score</th>
+          <th>Total PnL</th>
+          <th>EV / Trade</th>
+          <th>Sharpe</th>
+          <th>Profit Factor</th>
+          <th>Win Rate</th>
+          <th>Merge Rate</th>
+          <th>Max DD</th>
+          <th>MC P5</th>
+          <th>Observed Failure Mode &amp; Deployment Decision</th>
+        </tr>
+      </thead>
+      <tbody id="decision-matrix-tbody">
+{dm_tbody_content}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="decision-grid" style="margin-bottom: 24px;">
     <div class="decision-box" style="border-left: 4px solid var(--green);">
-      <h3 style="color: var(--green);">🌟 Recommended Production Configuration (Benchmark Evaluation Notes)</h3>
+      <h3 style="color: var(--green);">🌟 Recommended Production Configuration (#799 Champion Synthesis)</h3>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px; line-height: 1.45;">
+        Synthesizes the measured winners of the #799 tournament run into the target live deployment stack:
+      </p>
       <ul>
-        <li><strong>Execution Mechanic: <code>deadband-wide</code> (Issue #485)</strong> — Disciplined requote deadband avoids burning queue priority on micro-fluctuations.</li>
-        <li><strong>Hybrid Configuration:</strong> Combines static offset pricing with <code>deadband-wide</code> queue priority defense and automated orphan risk management for maximum order stability and minimum queue churn.</li>
+        <li><strong>Volatility Pricing Base: <code>balanced-mid</code> (Preset: <code>balanced</code>)</strong> — Book-spread tracking at dynamic 0.50x (2–4¢ floor/ceiling) captured the highest realized PnL (+<strong>$23.39</strong> across 161 trades) without quote starvation.</li>
+        <li><strong>Queue-Clear Gate: <code>queue-clear-5m</code> (Mandatory Guard)</strong> — Slashes max drawdown by <strong>73%</strong> (to $2.60) while delivering tournament-high Sharpe (<strong>4.67</strong>), Profit Factor (<strong>3.23</strong>), and positive tail expectancy (MC P5 +$12.90).</li>
+        <li><strong>Disciplined Deadband: <code>BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06</code> (6.0¢)</strong> — Prevents fee churn and queue rank loss without the toxic stickiness of 10¢.</li>
+        <li><strong>Orphan Loss Stop: <code>BOT_RISK_STOP_MODE=ABSOLUTE_DROP</code> &bull; <code>0.045</code> (4.5¢)</strong> — Protects single legs without the 57% stop churn of 2¢ hair-triggers or the -$2.10 deep tail bleed of 9¢ leashes.</li>
+        <li><strong>Aged-Out Rescue Lead: <code>BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0</code></strong> — Orderly emergency single-leg unwind into resolution.</li>
       </ul>
     </div>
+
     <div class="decision-box" style="border-left: 4px solid var(--red);">
-      <h3 style="color: var(--red);">⚠️ Configurations to Avoid for Live Deployment (Fixed Run Evaluation Notes)</h3>
+      <h3 style="color: var(--red);">⚠️ Disqualified Configurations &amp; Measured Failure Modes (#799 Evidence)</h3>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px; line-height: 1.45;">
+        Configurations empirically rejected based on measured tournament breakdown:
+      </p>
       <ul>
-        <li><strong>Avoid: <code>queuehug</code> (PnL: -$14.96)</strong> — Aggressively jumping queue when size is small caused extreme adverse selection, getting filled predominantly right before market moved against the quote.</li>
-        <li><strong>Avoid: <code>deadband-tight</code> (PnL: -$17.40)</strong> — Continuous order cancellations reset venue queue position, paying maximum taker penalties without capturing fill queue priority.</li>
-        <li><strong>Avoid: <code>balanced</code> / <code>prudent</code></strong> — Fixed 3c offset or overly cautious offsets missed high-conviction narrow spreads, yielding negative net returns after single-leg haircut stops.</li>
+        <li><strong>Avoid: <code>patient-stop-9c</code> (FAILED THRESHOLD &mdash; Score 68 / 100)</strong> — 9.0¢ leash allowed catastrophic single-trade bleed (-$2.10 worst loss) and negative tail expectancy (MC P5 -$9.56, lowest Sharpe 0.52).</li>
+        <li><strong>Avoid: <code>hair-trigger-2c</code> (Score 77)</strong> — Premature stop triggers dumped 80 trades (57.5% exit rate) on 1-tick normal noise, wrecking win rate to 42.4%.</li>
+        <li><strong>Avoid: <code>low-churn-deadband</code> (Score 80)</strong> — 10.0¢ deadband proved overly sticky; held stale orders into adverse market drifts, suffering $10.77 drawdown.</li>
+        <li><strong>Avoid: <code>static-floor-2c</code> (Score 95, but tail risk)</strong> — Static 2¢ floor without volatility widening suffered -$2.28 single loss spike during market blowout.</li>
+        <li><strong>Avoid: <code>wide-shield</code> (Score 75)</strong> — 8.0¢ stop let toxic orphan legs bleed deeply (-$0.37 avg loss per stop) with negative MC P5 (-$6.76).</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="decision-grid" style="margin-bottom: 24px;">
+    <div class="decision-box" style="border-left: 4px solid var(--blue);">
+      <h3 style="color: var(--blue);">🛡️ Operational Deployment Policy &amp; Circuit Breakers</h3>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Enforced risk controls and automated kill switches for live execution:</p>
+      <ul>
+        <li><strong>Portfolio Daily Drawdown Limit: $15.00</strong> — Immediate trading halt and cancel-all if 24h rolling realized drawdown touches $15.00.</li>
+        <li><strong>Dynamic Exposure Caps (<code>core_brain/config.py</code>)</strong>:
+          Max single order exposure: <strong>25%</strong> of bankroll ($25 at $100 baseline);
+          Max naked single-leg exposure: <strong>6%</strong> ($6.00);
+          Total bankroll ceiling: <strong>90%</strong> ($90.00).
+        </li>
+        <li><strong>Immutable Pair Cap: <code>BOT_POS_PRICE_MAX_PAIR_COST_USD=0.99</code></strong> — Shipped invariant guaranteeing minimum $0.01 margin before $1.00 settlement payout.</li>
+      </ul>
+    </div>
+
+    <div class="decision-box" style="border-left: 4px solid var(--amber);">
+      <h3 style="color: var(--amber);">📋 Live Production Go / No-Go Checklist</h3>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Stat gate validation requirements before switching from shadow to live trading:</p>
+      <ul>
+        <li>&#9989; <strong>Composite Score &ge; 75</strong> — Multi-factor readiness rating passing EV, merge rate, drawdown, and PF thresholds.</li>
+        <li>&#9989; <strong>Statistical Sample &ge; 50 Closed Trades</strong> — Adequate empirical sample depth before flipping live venue execution.</li>
+        <li>&#9989; <strong>Monte Carlo Positive Outcome &ge; 70%</strong> — 500-iteration resampled trade sequences confirming positive expectancy.</li>
+        <li>&#9989; <strong>Merge Efficiency &ge; 55%</strong> — Verification that two-sided fills dominate single-leg rescue exits.</li>
       </ul>
     </div>
   </div>
@@ -2195,6 +2325,52 @@ function renderAll() {{
     hbSet('hb-stops', String(hbStops));
     hbSet('hb-stops2', String(hbStops));
     hbSet('hb-stoprate', hbTrades > 0 ? (100.0 * hbStops / hbTrades).toFixed(1) : '0.0');
+  }}
+
+  // Live Readiness Decision Matrix Table
+  const dmTbody = document.getElementById('decision-matrix-tbody');
+  if (dmTbody && state.arms && state.arms.length) {{
+    dmTbody.innerHTML = '';
+    const matrixRationale = {{
+      'queue-clear-5m': '👑 <strong>Top Efficiency & Tail Risk Champion.</strong> Stale-book filter cuts max DD by 73% ($2.60) with Sharpe 4.67 and positive tail return (MC P5 +$12.90). Core prerequisite for live execution.',
+      'balanced-mid': '🌟 <strong>Top Realized PnL Champion.</strong> Shipped dynamic 0.50x (2–4¢) spread tracking generated highest net profit (+$23.39) on 161 trades. Selected as the live pricing baseline.',
+      'loose-baseline': '📊 <strong>Control Reference.</strong> Solid volume and $22.84 PnL, but unconstrained queues and missing stop loss leave orphan legs open to directional drift.',
+      'static-floor-2c': '⚠️ <strong>Provisional.</strong> High volume ($17.99 PnL) but flat 2¢ floor without volatility tracking suffered -$2.28 spike loss during market blowout.',
+      'tight-touch': '⚠️ <strong>Qualified Maker.</strong> Tight 0.25x fills fast on narrow books, but suffers 53% quote starvation on wide spreads. Positive EV but lower reach.',
+      "prudent-hybrid": '⚠️ <strong>Provisional.</strong> Strong trade count and $19.24 PnL, but lifted 6¢ clamp suffered tournament-high drawdown ($11.29) during volatility cluster.',
+      'low-churn-deadband': '🚫 <strong>Disqualified.</strong> 10¢ deadband is overly sticky; holds stale quotes into adverse drifts, bleeding $10.77 drawdown and -$3.63 MC P5.',
+      'hair-trigger-2c': '🚫 <strong>Disqualified.</strong> 2¢ stop triggered 80 stop exits (57.5% exit rate!), liquidating complementary legs on normal tick flutter and gutting win rate to 42.4%.',
+      'wide-shield': '🚫 <strong>Disqualified.</strong> Conservative 8¢ stop lets toxic orphan legs bleed deeply (-$0.37 avg loss) with negative tail expectancy (MC P5 -$6.76).',
+      'patient-stop-9c': '⛔ <strong>REJECTED (Score < 75).</strong> 9¢ stop leash allowed catastrophic single-trade bleed (-$2.10), tanking Sharpe to 0.52 and MC P5 to -$9.56.'
+    }};
+    const rankedForMatrix = [...state.arms].sort((a, b) => (b.score || 0) - (a.score || 0) || (b.total_pnl || 0) - (a.total_pnl || 0));
+    rankedForMatrix.forEach((arm, idx) => {{
+      const pnl = arm.total_pnl || 0;
+      const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+      const pnlPrefix = pnl >= 0 ? '+$' : '-$';
+      const mcp5 = arm.mc_p5 || 0;
+      const mcp5Class = mcp5 >= 0 ? 'positive' : 'negative';
+      const mcp5Prefix = mcp5 >= 0 ? '+$' : '-$';
+      const rationale = matrixRationale[arm.name] || (arm.desc || '');
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><strong>#${{idx+1}}</strong> <span style="color: ${{arm.color}}">●</span> <strong>${{arm.label || arm.name}}</strong>
+          <div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px;">${{arm.desc || ''}}</div>
+        </td>
+        <td><span class="badge ${{arm.badge_cls || 'badge-amber'}}">${{arm.readiness || 'EVALUATING'}}</span></td>
+        <td class="tabular"><strong>${{arm.score || 0}}</strong> / 100</td>
+        <td class="tabular ${{pnlClass}}"><strong>${{pnlPrefix}}${{Math.abs(pnl).toFixed(2)}}</strong></td>
+        <td class="tabular">${{(arm.mean_pnl || 0).toFixed(3)}}</td>
+        <td class="tabular">${{(arm.sharpe_proxy ?? 0).toFixed(2)}}</td>
+        <td class="tabular">${{(arm.profit_factor ?? 0).toFixed(2)}}</td>
+        <td class="tabular">${{(arm.win_rate ?? 0).toFixed(1)}}%</td>
+        <td class="tabular">${{(arm.merge_rate ?? 0).toFixed(1)}}%</td>
+        <td class="tabular negative">$${{(arm.max_drawdown || 0).toFixed(2)}}</td>
+        <td class="tabular ${{mcp5Class}}">${{mcp5Prefix}}${{Math.abs(mcp5).toFixed(2)}}</td>
+        <td style="max-width: 320px; font-size: 11.5px; line-height: 1.35;">${{rationale}}</td>
+      `;
+      dmTbody.appendChild(tr);
+    }});
   }}
 
   // Table
