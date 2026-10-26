@@ -939,6 +939,8 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
     `reason` is the route's trigger (`adverse_drift` / `grace_expired`), and is
     part of this close -- written here, after the sale succeeded, never before.
     """
+    # Recognised exit close methods: "single_buy_exit", "orphan_profit_exit"
+    _is_orphan = (method == "orphan_profit_exit")
     leg = (pair.get("legs") or {}).get(heavy_token, {})
     matched = float(leg.get("matched") or 0.0)
     notional = float(leg.get("notional") or 0.0)

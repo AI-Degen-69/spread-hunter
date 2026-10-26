@@ -652,3 +652,98 @@ def test_escalated_hedge_never_cancels():
     assert decision.action == "hedge"
     assert decision.action != "cancel"
 
+def test_orphan_profit_age_must_exceed_minimum():
+    from core_brain.single_leg_lifecycle import evaluate_orphan_profit
+    pos = _position(up_size=10.0, down_size=0.0, up_avg=0.60, up_bid=0.66)
+    v_exact = evaluate_orphan_profit(pos, age_s=3600.0, min_age_sec=3600.0, min_profit_pct=0.05)
+    assert not v_exact.eligible
+    assert v_exact.reason == "too_young"
+
+    v_eligible = evaluate_orphan_profit(pos, age_s=3601.0, min_age_sec=3600.0, min_profit_pct=0.05)
+    assert v_eligible.eligible
+    assert v_eligible.reason == "eligible"
+    assert v_eligible.held_token_id == "token-up"
+    assert v_eligible.held_size == 10.0
+    assert v_eligible.average_cost == 0.60
+    assert v_eligible.profit_floor == 0.63
+    assert v_eligible.observed_bid == 0.66
+
+
+def test_orphan_profit_floor_boundary():
+    from core_brain.single_leg_lifecycle import evaluate_orphan_profit
+    # floor for 0.60 * 1.05 = 0.63
+    pos_at_floor = _position(up_size=10.0, down_size=0.0, up_avg=0.60, up_bid=0.63)
+    v_at = evaluate_orphan_profit(pos_at_floor, age_s=3601.0, min_age_sec=3600.0, min_profit_pct=0.05)
+    assert v_at.eligible
+    assert v_at.profit_floor == 0.63
+
+    pos_below = _position(up_size=10.0, down_size=0.0, up_avg=0.60, up_bid=0.62)
+    v_below = evaluate_orphan_profit(pos_below, age_s=3601.0, min_age_sec=3600.0, min_profit_pct=0.05)
+    assert not v_below.eligible
+    assert v_below.reason == "below_floor"
+    assert v_below.profit_floor == 0.63
+
+
+def test_orphan_profit_zero_pct_needs_strict_gain():
+    from core_brain.single_leg_lifecycle import evaluate_orphan_profit
+    # pct 0.0 with avg 0.60 requires lowest tick strictly > 0.60 -> 0.61
+    pos_equal = _position(up_size=10.0, down_size=0.0, up_avg=0.60, up_bid=0.60)
+    v_equal = evaluate_orphan_profit(pos_equal, age_s=3601.0, min_age_sec=3600.0, min_profit_pct=0.0)
+    assert not v_equal.eligible
+    assert v_equal.reason == "below_floor"
+    assert v_equal.profit_floor == 0.61
+
+    pos_above = _position(up_size=10.0, down_size=0.0, up_avg=0.60, up_bid=0.61)
+    v_above = evaluate_orphan_profit(pos_above, age_s=3601.0, min_age_sec=3600.0, min_profit_pct=0.0)
+    assert v_above.eligible
+    assert v_above.profit_floor == 0.61
+
+
+def test_orphan_profit_rejects_two_sided_inventory():
+    from core_brain.single_leg_lifecycle import evaluate_orphan_profit
+    pos = _position(up_size=10.0, down_size=4.0, up_avg=0.60, down_avg=0.35, up_bid=0.65)
+    v = evaluate_orphan_profit(pos, age_s=5000.0, min_age_sec=3600.0, min_profit_pct=0.05)
+    assert not v.eligible
+    assert v.reason == "opposite_leg_filled"
+
+
+def test_orphan_profit_rejects_missing_inputs():
+    from core_brain.single_leg_lifecycle import evaluate_orphan_profit
+    # No bid
+    pos_no_bid = _position(up_size=10.0, down_size=0.0, up_avg=0.60, up_bid=None)
+    assert evaluate_orphan_profit(pos_no_bid, age_s=5000.0, min_age_sec=3600.0, min_profit_pct=0.05).reason == "no_bid"
+
+    # Age None
+    pos = _position(up_size=10.0, down_size=0.0, up_avg=0.60, up_bid=0.66)
+    assert evaluate_orphan_profit(pos, age_s=None, min_age_sec=3600.0, min_profit_pct=0.05).reason == "age_unknown"
+
+    # Flat (0/0)
+    pos_flat = _position(up_size=0.0, down_size=0.0, up_avg=0.0, up_bid=0.66)
+    assert evaluate_orphan_profit(pos_flat, age_s=5000.0, min_age_sec=3600.0, min_profit_pct=0.05).reason == "flat"
+
+    # No cost
+    pos_no_cost = _position(up_size=10.0, down_size=0.0, up_avg=0.0, up_bid=0.66)
+    assert evaluate_orphan_profit(pos_no_cost, age_s=5000.0, min_age_sec=3600.0, min_profit_pct=0.05).reason == "no_cost"
+
+
+def test_orphan_profit_down_side_mirrors_up():
+    from core_brain.single_leg_lifecycle import evaluate_orphan_profit
+    pos_down = _position(up_size=0.0, down_size=10.0, up_avg=0.0, down_avg=0.40, up_bid=0.50, down_bid=0.45)
+    # floor for 0.40 * 1.05 = 0.42
+    v = evaluate_orphan_profit(pos_down, age_s=3601.0, min_age_sec=3600.0, min_profit_pct=0.05)
+    assert v.eligible
+    assert v.held_token_id == "token-down"
+    assert v.held_size == 10.0
+    assert v.average_cost == 0.40
+    assert v.profit_floor == 0.42
+    assert v.observed_bid == 0.45
+
+
+def test_transition_unchanged_for_hard_stop():
+    # A position hitting hard stop still produces hard_stop action
+    pos = _position(up_size=10.0, down_size=0.0, up_avg=0.60, up_bid=0.50)
+    decision = transition(
+        pos, None, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents=0.05,
+    )
+    assert decision.action == "hard_stop"

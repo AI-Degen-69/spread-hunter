@@ -28,8 +28,9 @@ from dataclasses import dataclass
 MERGE = "merge"
 SHADOW_MERGE = "shadow_merge"
 SINGLE_BUY_EXIT = "single_buy_exit"
+ORPHAN_PROFIT_EXIT = "orphan_profit_exit"
 LADDER_EXIT = "ladder_exit"
-NAKED_EXIT = "naked_exit"
+NAKED_EXIT = "naked_exit" 
 SHADOW_SETTLEMENT = "shadow_settlement"
 SETTLEMENT = "settlement"
 VENUE_SYNC = "venue_sync"
@@ -70,6 +71,9 @@ METHODS: tuple[CloseMethod, ...] = (
     CloseMethod(SINGLE_BUY_EXIT, RESCUE_BUCKET,
                 "core_brain.single_buy_saver._record_exit_close", False,
                 "written through the method parameter default"),
+    CloseMethod(ORPHAN_PROFIT_EXIT, RESCUE_BUCKET,
+                "core_brain.single_buy_saver._record_exit_close", False,
+                "automated profitable exit of orphaned held leg"),
     CloseMethod(NAKED_EXIT, RESCUE_BUCKET, None, True,
                 "legacy U35 single-leg exit shape; no current writer"),
     CloseMethod(LADDER_EXIT, RESCUE_BUCKET, None, True,

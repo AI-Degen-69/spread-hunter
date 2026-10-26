@@ -911,3 +911,32 @@ def test_both_config_modules_describe_the_quote_window_identically():
         "the two config modules describe the quote window differently:\n"
         f"scoring: {scoring_block}\ncore: {core_block}"
     )
+
+def test_orphan_min_age_bounds(monkeypatch):
+    from core_brain import config as core_config
+    # 1 and 86400 load
+    monkeypatch.setenv("BOT_RISK_ORPHAN_PROFIT_MIN_AGE_SEC", "1")
+    assert core_config.load().bot_risk_orphan_profit_min_age_sec == 1.0
+    monkeypatch.setenv("BOT_RISK_ORPHAN_PROFIT_MIN_AGE_SEC", "86400")
+    assert core_config.load().bot_risk_orphan_profit_min_age_sec == 86400.0
+
+    # 0, -1, nan, inf, abc raise ValueError
+    for bad in ("0", "-1", "nan", "inf", "-inf", "abc"):
+        monkeypatch.setenv("BOT_RISK_ORPHAN_PROFIT_MIN_AGE_SEC", bad)
+        with pytest.raises(ValueError):
+            core_config.load()
+
+
+def test_orphan_min_profit_pct_bounds(monkeypatch):
+    from core_brain import config as core_config
+    # 0.0 and 1.0 load
+    monkeypatch.setenv("BOT_RISK_ORPHAN_MIN_PROFIT_PCT", "0.0")
+    assert core_config.load().bot_risk_orphan_min_profit_pct == 0.0
+    monkeypatch.setenv("BOT_RISK_ORPHAN_MIN_PROFIT_PCT", "1.0")
+    assert core_config.load().bot_risk_orphan_min_profit_pct == 1.0
+
+    # -0.01, 1.01, nan, inf, abc raise ValueError
+    for bad in ("-0.01", "1.01", "nan", "inf", "-inf", "abc"):
+        monkeypatch.setenv("BOT_RISK_ORPHAN_MIN_PROFIT_PCT", bad)
+        with pytest.raises(ValueError):
+            core_config.load()
