@@ -1769,6 +1769,12 @@
   color: #b6c2d1;
 }
 
+.proto-body .stitch-ledger-subtable .stitch-exec-type.is-order-pending {
+  background: rgba(159, 179, 200, 0.08);
+  border-color: rgba(159, 179, 200, 0.24);
+  color: #9fb3c8;
+}
+
 .proto-body .stitch-ledger-row:hover {
   background: rgba(255, 255, 255, 0.02);
 }

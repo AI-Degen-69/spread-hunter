@@ -8969,14 +8969,14 @@ const EXEC_TYPE_CLASSES = Object.freeze({
   'Partial': 'is-order-partial',
   'Cancelled': 'is-order-cancelled',
   'Open': 'is-order-open',
+  'Pending': 'is-order-pending',
   'Unclassified': 'is-unclassified',
 });
 
 /* The order fallback (a market with orders but no settlements) has no close to
  * classify: there the row's type IS the order's own status, read from the order
- * and never guessed. `pending` is an order still resting at the venue, which is
- * what Open says. Filled / Partial / Cancelled / Open are order states, not
- * close types, and they ride their own neutral tones. */
+ * and never guessed. Filled / Partial / Cancelled / Open / Pending are order
+ * states, not close types, and they ride their own neutral slate ladder. */
 const ORDER_STATE_LABELS = Object.freeze({
   'merged': 'Merge',
   'filled': 'Filled',
@@ -8986,7 +8986,7 @@ const ORDER_STATE_LABELS = Object.freeze({
   'cancelled': 'Cancelled',
   'canceled': 'Cancelled',
   'open': 'Open',
-  'pending': 'Open',
+  'pending': 'Pending',
 });
 
 /* An unmapped status is never silently blank. */
