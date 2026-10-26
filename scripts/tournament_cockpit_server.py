@@ -643,6 +643,43 @@ ARMS_CONFIG_608 = [
 # default is CURRENT_SETUP_KEY (#487); this constant no longer selects a page.
 ARMS_CONFIG = ARMS_CONFIG_492
 
+I843_ARMS_FILE = ROOT / "configs" / "tournaments" / "i843-pair-test_arms.json"
+I799_ARMS_FILE = ROOT / "configs" / "tournaments" / "i799-tournament-test_arms.json"
+
+
+def _load_arms_from_file(file_path: Path, issue_num: int, start_port: int = 8801) -> list[dict[str, Any]]:
+    if not file_path.exists():
+        return []
+    try:
+        raw = json.loads(file_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    arms = []
+    for idx, item in enumerate(raw):
+        port = start_port + idx
+        name = item["name"]
+        db_sub = f"i{issue_num}-pair-test_pair-test/{name}.db" if issue_num == 843 else f"i{issue_num}_tournament_{name}.db"
+        arms.append({
+            "issue": issue_num,
+            "name": name,
+            "label": item.get("label", name),
+            "port": port,
+            "db": f"data/tournaments/{db_sub}",
+            "run_id": f"i{issue_num}_{name}",
+            "color": item.get("color", "#00e676"),
+            "desc": item.get("desc", ""),
+            "worst_catalyst": item.get("worst_catalyst", ""),
+            "worst_catalyst_desc": item.get("worst_catalyst_desc", ""),
+            "hypothesized_tweak": item.get("hypothesized_tweak", ""),
+            "tweak_rationale": item.get("tweak_rationale", ""),
+            "env": item.get("env", {}),
+        })
+    return arms
+
+
+ARMS_CONFIG_843 = _load_arms_from_file(I843_ARMS_FILE, 843, 8801)
+ARMS_CONFIG_799 = _load_arms_from_file(I799_ARMS_FILE, 799, 8801)
+
 TOURNAMENTS = {
     "492": {
         "id": "492",
@@ -679,6 +716,27 @@ TOURNAMENTS = {
         "arms": ARMS_CONFIG_487,
         "issue_primary": 487,
         "issue_secondary": 487,
+        "nav_label": "#487 Current Setup (10 Arms)",
+    },
+    "843": {
+        "id": "843",
+        "title": "Issue #843 Balanced Preset & Queue-5m Gate Rehearsal",
+        "subtitle": "24-Hour 4-Arm Multi-Arm Shadow Rehearsal | Control, Balanced-Only, Queue5-Only, Balanced-Queue5",
+        "description": "Pre-registered head-to-head empirical rehearsal evaluating whether combining the dynamic balanced quoting preset (2c-4c) with the 5-minute queue-clear gate preserves risk-adjusted edge without volume starvation.",
+        "arms": ARMS_CONFIG_843,
+        "issue_primary": 843,
+        "issue_secondary": 843,
+        "nav_label": "#843 Pair Test (4 Arms)",
+    },
+    "799": {
+        "id": "799",
+        "title": "Issue #799 Multi-Arm Tournament",
+        "subtitle": "10-Arm Live Shadow Evaluation | Strategy Presets and Execution Mechanics",
+        "description": "Ten arms evaluating dynamic offset bands, queue-clear gates, requote deadbands, and stop modes under live shadow conditions.",
+        "arms": ARMS_CONFIG_799,
+        "issue_primary": 799,
+        "issue_secondary": 799,
+        "nav_label": "#799 Presets (10 Arms)",
     },
 }
 
@@ -690,9 +748,15 @@ CURRENT_SETUP_KEY = "487"
 PAGE_PATHS: dict[str, str] = {
     "": CURRENT_SETUP_KEY,
     "/index.html": CURRENT_SETUP_KEY,
-    "/487": CURRENT_SETUP_KEY,
-    "/487.html": CURRENT_SETUP_KEY,
-    "/cockpit_487": CURRENT_SETUP_KEY,
+    "/487": "487",
+    "/487.html": "487",
+    "/cockpit_487": "487",
+    "/843": "843",
+    "/843.html": "843",
+    "/cockpit_843": "843",
+    "/799": "799",
+    "/799.html": "799",
+    "/cockpit_799": "799",
 }
 # The keys the JSON API may serve: the served pages' own tournaments, derived so
 # a new page cannot forget to widen this.
@@ -1320,6 +1384,172 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
     }
 
 
+def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "843") -> dict[str, Any]:
+    """Compute 5 critical decision gates and overall verdict from arms data.
+    
+    Evaluates:
+    - Gate 1: Statistical Sample Power Gate (target N >= 2,117 trades for 0.02 resolve; flags nominal PnL as underpowered if N < 2,117)
+    - Gate 2: Sharpe Proxy Gate (target >= 2.70)
+    - Gate 3: Profit Factor Gate (target >= 2.50)
+    - Gate 4: Max Drawdown Gate (target < $4.00)
+    - Gate 5: Volume Starvation Gate (test arm trades drop < 40% vs baseline)
+    """
+    total_trades = sum(a.get("trades_count", 0) for a in arms_data)
+    ok_arms = [a for a in arms_data if a.get("status") == "ok"]
+    
+    test_arm = next((a for a in arms_data if "balanced-queue5" in a.get("name", "")), None)
+    baseline_arm = next((a for a in arms_data if a.get("name") in ("control", "loose-baseline")), None)
+    balanced_only_arm = next((a for a in arms_data if "balanced-only" in a.get("name", "") or a.get("name") == "balanced-mid"), None)
+    
+    if test_arm is None and ok_arms:
+        test_arm = max(ok_arms, key=lambda x: x.get("sharpe_proxy", 0.0))
+    elif test_arm is None and arms_data:
+        test_arm = arms_data[0]
+        
+    target_n = 2117
+    test_n = test_arm.get("trades_count", 0) if test_arm else 0
+    power_ratio = round((test_n / target_n) * 100.0, 1) if target_n > 0 else 0.0
+    
+    if test_n >= target_n:
+        gate_power_status = "PASS"
+        gate_power_badge = "badge-green"
+        gate_power_text = f"N = {test_n:,} / {target_n:,} ({power_ratio}%) — Statistically Powered for PnL"
+    elif test_n > 0:
+        gate_power_status = "UNDERPOWERED"
+        gate_power_badge = "badge-amber"
+        gate_power_text = f"N = {test_n:,} / {target_n:,} ({power_ratio}%) — Nominal PnL Inconclusive; Evaluating Risk Shape"
+    else:
+        gate_power_status = "NO_DATA"
+        gate_power_badge = "badge-amber"
+        gate_power_text = f"0 / {target_n:,} Closed Trades — Rehearsal Initializing"
+        
+    target_sharpe = 2.70
+    observed_sharpe = test_arm.get("sharpe_proxy", 0.0) if test_arm else 0.0
+    if not test_arm or test_n == 0:
+        gate_sharpe_status = "NO_DATA"
+        gate_sharpe_badge = "badge-amber"
+        gate_sharpe_text = f"Target: ≥ {target_sharpe:.2f} | Observed: NO_DATA"
+    elif observed_sharpe >= target_sharpe:
+        gate_sharpe_status = "PASS"
+        gate_sharpe_badge = "badge-green"
+        gate_sharpe_text = f"Target: ≥ {target_sharpe:.2f} | Observed: {observed_sharpe:.2f} (+{((observed_sharpe/target_sharpe)-1)*100:.1f}%)"
+    elif observed_sharpe >= 2.20:
+        gate_sharpe_status = "MARGINAL"
+        gate_sharpe_badge = "badge-amber"
+        gate_sharpe_text = f"Target: ≥ {target_sharpe:.2f} | Observed: {observed_sharpe:.2f} (Within 20%)"
+    else:
+        gate_sharpe_status = "FAIL"
+        gate_sharpe_badge = "badge-red"
+        gate_sharpe_text = f"Target: ≥ {target_sharpe:.2f} | Observed: {observed_sharpe:.2f} (Below threshold)"
+        
+    target_pf = 2.50
+    observed_pf = test_arm.get("profit_factor", 0.0) if test_arm else 0.0
+    if not test_arm or test_n == 0:
+        gate_pf_status = "NO_DATA"
+        gate_pf_badge = "badge-amber"
+        gate_pf_text = f"Target: ≥ {target_pf:.2f} | Observed: NO_DATA"
+    elif observed_pf >= target_pf:
+        gate_pf_status = "PASS"
+        gate_pf_badge = "badge-green"
+        gate_pf_text = f"Target: ≥ {target_pf:.2f} | Observed: {observed_pf:.2f}"
+    elif observed_pf >= 1.80:
+        gate_pf_status = "MARGINAL"
+        gate_pf_badge = "badge-amber"
+        gate_pf_text = f"Target: ≥ {target_pf:.2f} | Observed: {observed_pf:.2f}"
+    else:
+        gate_pf_status = "FAIL"
+        gate_pf_badge = "badge-red"
+        gate_pf_text = f"Target: ≥ {target_pf:.2f} | Observed: {observed_pf:.2f}"
+        
+    target_mdd = 4.00
+    observed_mdd = test_arm.get("max_drawdown", 0.0) if test_arm else 0.0
+    if not test_arm or test_n == 0:
+        gate_mdd_status = "NO_DATA"
+        gate_mdd_badge = "badge-amber"
+        gate_mdd_text = f"Target: < ${target_mdd:.2f} | Observed: NO_DATA"
+    elif observed_mdd < target_mdd:
+        gate_mdd_status = "PASS"
+        gate_mdd_badge = "badge-green"
+        gate_mdd_text = f"Target: < ${target_mdd:.2f} | Observed: ${observed_mdd:.2f} (Protected)"
+    elif observed_mdd <= 5.50:
+        gate_mdd_status = "MARGINAL"
+        gate_mdd_badge = "badge-amber"
+        gate_mdd_text = f"Target: < ${target_mdd:.2f} | Observed: ${observed_mdd:.2f}"
+    else:
+        gate_mdd_status = "FAIL"
+        gate_mdd_badge = "badge-red"
+        gate_mdd_text = f"Target: < ${target_mdd:.2f} | Observed: ${observed_mdd:.2f} (Excessive Drawdown)"
+        
+    ref_arm = balanced_only_arm or baseline_arm
+    ref_n = ref_arm.get("trades_count", 0) if ref_arm else 0
+    if not test_arm or test_n == 0 or ref_n == 0:
+        gate_starv_status = "NO_DATA"
+        gate_starv_badge = "badge-amber"
+        gate_starv_text = "Baseline comparison pending trade activity"
+    else:
+        drop_pct = ((ref_n - test_n) / ref_n) * 100.0 if ref_n > 0 else 0.0
+        if drop_pct <= 20.0:
+            gate_starv_status = "HEALTHY"
+            gate_starv_badge = "badge-green"
+            gate_starv_text = f"Drop: {drop_pct:+.1f}% vs {ref_arm.get('name')} ({test_n} vs {ref_n} trades) — Fast Fills Preserved"
+        elif drop_pct <= 40.0:
+            gate_starv_status = "MODERATE"
+            gate_starv_badge = "badge-amber"
+            gate_starv_text = f"Drop: {drop_pct:+.1f}% vs {ref_arm.get('name')} ({test_n} vs {ref_n} trades) — Moderate Restriction"
+        else:
+            gate_starv_status = "STARVATION"
+            gate_starv_badge = "badge-red"
+            gate_starv_text = f"Drop: {drop_pct:+.1f}% vs {ref_arm.get('name')} — Volume Starvation Detected"
+            
+    if test_n == 0:
+        overall_verdict = "PENDING REHEARSAL DATA"
+        overall_badge = "badge-amber"
+        overall_desc = "No completed trades recorded in active arm database yet. Rehearsal loop is running."
+    elif gate_starv_status == "STARVATION":
+        overall_verdict = "REJECTED: VOLUME STARVATION DETECTED"
+        overall_badge = "badge-red"
+        overall_desc = "Combining the balanced preset and 5m queue-clear gate severely chokes order fills. Knobs are mutually restrictive."
+    elif gate_sharpe_status == "FAIL" or gate_mdd_status == "FAIL":
+        overall_verdict = "REJECTED: CRITICAL RISK GATES FAILED"
+        overall_badge = "badge-red"
+        overall_desc = "Observed risk metrics fail required Sharpe proxy (>= 2.70) or max drawdown (< $4.00) limits."
+    elif test_n < target_n:
+        if gate_sharpe_status == "PASS" and gate_mdd_status == "PASS" and gate_starv_status == "HEALTHY":
+            overall_verdict = "PROVISIONAL PASS: COMPLEMENTARY RISK SHAPE"
+            overall_badge = "badge-green"
+            overall_desc = f"Observed Sharpe ({observed_sharpe:.2f}) and Drawdown (${observed_mdd:.2f}) validate the hybrid hypothesis without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades)."
+        else:
+            overall_verdict = "INCONCLUSIVE: SAMPLE UNDERPOWERED"
+            overall_badge = "badge-amber"
+            overall_desc = f"Sample size (N={test_n}) is statistically underpowered. Risk shape is currently evaluating."
+    else:
+        if gate_sharpe_status == "PASS" and gate_mdd_status == "PASS" and gate_pf_status == "PASS" and gate_starv_status == "HEALTHY":
+            overall_verdict = "EMPIRICAL WINNER: COMPLEMENTARY EDGE VALIDATED"
+            overall_badge = "badge-green"
+            overall_desc = f"Both knobs complement each other with statistical confidence (N={test_n:,}). Champion blueprint fully cleared for production consideration."
+        else:
+            overall_verdict = "REJECTED: POWERED TEST FAILED CRITICAL CRITERIA"
+            overall_badge = "badge-red"
+            overall_desc = "Sample size is sufficient but arm failed one or more critical decision gates."
+
+    return {
+        "overall_verdict": overall_verdict,
+        "overall_badge": overall_badge,
+        "overall_desc": overall_desc,
+        "test_arm_name": test_arm.get("name", "N/A") if test_arm else "N/A",
+        "test_arm_label": test_arm.get("label", "N/A") if test_arm else "N/A",
+        "total_trades": total_trades,
+        "target_n": target_n,
+        "gates": {
+            "power": {"status": gate_power_status, "badge": gate_power_badge, "text": gate_power_text, "current": test_n, "target": target_n},
+            "sharpe": {"status": gate_sharpe_status, "badge": gate_sharpe_badge, "text": gate_sharpe_text, "current": observed_sharpe, "target": target_sharpe},
+            "pf": {"status": gate_pf_status, "badge": gate_pf_badge, "text": gate_pf_text, "current": observed_pf, "target": target_pf},
+            "mdd": {"status": gate_mdd_status, "badge": gate_mdd_badge, "text": gate_mdd_text, "current": observed_mdd, "target": target_mdd},
+            "starvation": {"status": gate_starv_status, "badge": gate_starv_badge, "text": gate_starv_text},
+        },
+    }
+
+
 def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
     """Analyze all tournament arms for the selected tournament and compile overall metrics."""
     meta, target_minutes = resolve_tournament_meta(tourney_key)
@@ -1433,11 +1663,55 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
         "top_score": top_arm.get("score", 0),
         "top_readiness": top_arm.get("readiness", "PENDING"),
         "arms": sorted_arms,
+        "decision_gates": compute_decision_gates(sorted_arms, tourney_key),
     }
 
 
 def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     """Generate the full responsive, interactive HTML dashboard."""
+    tourney_key = str(initial_data.get("tourney_key") or "487")
+    decision_gates = initial_data.get("decision_gates") or compute_decision_gates(
+        initial_data.get("arms", []), tourney_key
+    )
+    
+    # Generate Per-Arm Cards for Decision Gates Tab
+    arm_cards = []
+    for a in initial_data.get("arms", []):
+        is_test = "balanced-queue5" in a.get("name", "")
+        card_border = "border: 2px solid var(--blue);" if is_test else "border: 1px solid var(--border);"
+        test_badge = '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px; margin-left: 6px;">TEST ARM</span>' if is_test else ''
+        pnl = a.get("total_pnl", 0.0)
+        pnl_str = ("+$" if pnl >= 0 else "-$") + f"{abs(pnl):.2f}"
+        pnl_cls = "positive" if pnl >= 0 else "negative"
+        trades_cnt = a.get("trades_count", 0)
+        sharpe = a.get("sharpe_proxy", 0.0)
+        mdd = a.get("max_drawdown", 0.0)
+        merge_pct = a.get("merge_rate", 0.0)
+        stops = a.get("stop_loss_exits_count", 0)
+        status = a.get("status", "pending")
+        arm_cards.append(f"""
+        <div class="m-card" style="{card_border}">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+            <div>
+              <div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">{html.escape(a.get('label', a.get('name', '')))}{test_badge}</div>
+              <div style="font-size: 11px; color: var(--text-muted); font-family: monospace;">{html.escape(a.get('name', ''))} | Port {a.get('port', 0)}</div>
+            </div>
+            <span class="badge {'badge-green' if status == 'ok' else 'badge-amber'}">{html.escape(status.upper())}</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; padding: 8px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font-size: 12px;">
+            <div>PnL: <strong class="tabular {pnl_cls}">{pnl_str}</strong></div>
+            <div>Trades: <strong class="tabular">{trades_cnt:,}</strong></div>
+            <div>Sharpe: <strong class="tabular">{sharpe:.2f}</strong></div>
+            <div>Max DD: <strong class="tabular">${mdd:.2f}</strong></div>
+            <div>Merge Rate: <strong class="tabular">{merge_pct:.1f}%</strong></div>
+            <div>Stop Exits: <strong class="tabular">{stops}</strong></div>
+          </div>
+          <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4;">
+            {html.escape(a.get('desc', ''))}
+          </div>
+        </div>
+        """)
+    arm_cards_html = "\n".join(arm_cards)
     # Notes come from an editable arms file, so neither a `</script>` nor a `<b>`
     # in one may end this block early; `<` is the only character that can.
     json_embedded = json.dumps(initial_data).replace("<", "\\u003c")
@@ -1852,6 +2126,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 <!-- Tabs Navigation -->
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('overview', this)">🏆 Leaderboard &amp; Overview</button>
+  <button class="tab-btn" onclick="switchTab('decision-gates', this)">🚦 Decision Gates &amp; Rehearsal Status</button>
   <button class="tab-btn" onclick="switchTab('hybrid-config', this)">⚙️ HYBRID Configuration Blueprint</button>
   <button class="tab-btn" onclick="switchTab('pnl-chart', this)">📈 Cumulative PnL Curves</button>
   <button class="tab-btn" onclick="switchTab('risk-stats', this)">⚖️ Risk &amp; Volatility (EV, &sigma;, MDD)</button>
@@ -1917,6 +2192,100 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         <canvas id="radarChart"></canvas>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- TAB: DECISION GATES & REHEARSAL STATUS -->
+<div id="tab-decision-gates" class="tab-pane">
+  <!-- Run Selector Bar -->
+  <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; padding: 12px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;">
+    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+      <span style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Rehearsal Evaluation:</span>
+      <div style="display: flex; gap: 6px;">
+        <button class="btn" style="padding: 5px 12px; font-size: 12px; cursor: pointer;" onclick="selectGatesTourney('843', this)">🚦 #843 Pair Test (Balanced + Queue-5m)</button>
+        <button class="btn" style="padding: 5px 12px; font-size: 12px; cursor: pointer;" onclick="selectGatesTourney('799', this)">📊 #799 Strategy Presets (10 Arms)</button>
+        <button class="btn" style="padding: 5px 12px; font-size: 12px; cursor: pointer;" onclick="selectGatesTourney('487', this)">🧪 #487 Current Setup (10 Arms)</button>
+      </div>
+    </div>
+    <div style="font-size: 11.5px; color: var(--text-muted);">
+      Pre-registered rule: <code style="color: var(--blue);">docs/runs/2026-10-26-843-balanced-queue5-pair.md</code>
+    </div>
+  </div>
+
+  <!-- Overall Verdict Banner -->
+  <div style="padding: 16px 20px; border-radius: 10px; margin-bottom: 20px; border: 1px solid var(--border); background: var(--bg-card); display: flex; flex-direction: column; gap: 8px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span class="badge {decision_gates['overall_badge']}" id="dg-verdict-badge" style="font-size: 12px; padding: 4px 10px;">{decision_gates['overall_verdict']}</span>
+        <span id="dg-test-arm" style="font-size: 13px; font-weight: 600; color: var(--text-primary);">{decision_gates['test_arm_label']}</span>
+      </div>
+      <div id="dg-trades-text" style="font-size: 12px; color: var(--text-muted);">
+        Sample Size: <strong class="tabular" style="color: var(--text-primary);">{decision_gates['gates']['power']['current']:,}</strong> / {decision_gates['target_n']:,} closed trades
+      </div>
+    </div>
+    <div id="dg-verdict-desc" style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5;">
+      {decision_gates['overall_desc']}
+    </div>
+  </div>
+
+  <!-- 5 Critical Decision Gate Cards -->
+  <div style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;">Critical Decision Gates (5-Second Skim)</div>
+  <div class="metrics-grid" style="margin-bottom: 24px;">
+    <!-- Gate 1: Stat Power -->
+    <div class="m-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span class="m-label">1. Sample Power Gate</span>
+        <span class="badge {decision_gates['gates']['power']['badge']}" id="dg-gate-power-badge">{decision_gates['gates']['power']['status']}</span>
+      </div>
+      <div class="m-val tabular" id="dg-gate-power-val">{decision_gates['gates']['power']['current']:,} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">/ {decision_gates['target_n']:,}</span></div>
+      <div class="m-sub" id="dg-gate-power-sub">{decision_gates['gates']['power']['text']}</div>
+    </div>
+
+    <!-- Gate 2: Sharpe Proxy -->
+    <div class="m-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span class="m-label">2. Sharpe Proxy Gate</span>
+        <span class="badge {decision_gates['gates']['sharpe']['badge']}" id="dg-gate-sharpe-badge">{decision_gates['gates']['sharpe']['status']}</span>
+      </div>
+      <div class="m-val tabular" id="dg-gate-sharpe-val">{decision_gates['gates']['sharpe']['current']:.2f} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; {decision_gates['gates']['sharpe']['target']:.2f})</span></div>
+      <div class="m-sub" id="dg-gate-sharpe-sub">{decision_gates['gates']['sharpe']['text']}</div>
+    </div>
+
+    <!-- Gate 3: Profit Factor -->
+    <div class="m-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span class="m-label">3. Profit Factor Gate</span>
+        <span class="badge {decision_gates['gates']['pf']['badge']}" id="dg-gate-pf-badge">{decision_gates['gates']['pf']['status']}</span>
+      </div>
+      <div class="m-val tabular" id="dg-gate-pf-val">{decision_gates['gates']['pf']['current']:.2f} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; {decision_gates['gates']['pf']['target']:.2f})</span></div>
+      <div class="m-sub" id="dg-gate-pf-sub">{decision_gates['gates']['pf']['text']}</div>
+    </div>
+
+    <!-- Gate 4: Max Drawdown -->
+    <div class="m-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span class="m-label">4. Max Drawdown Gate</span>
+        <span class="badge {decision_gates['gates']['mdd']['badge']}" id="dg-gate-mdd-badge">{decision_gates['gates']['mdd']['status']}</span>
+      </div>
+      <div class="m-val tabular" id="dg-gate-mdd-val">${decision_gates['gates']['mdd']['current']:.2f} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &lt; ${decision_gates['gates']['mdd']['target']:.2f})</span></div>
+      <div class="m-sub" id="dg-gate-mdd-sub">{decision_gates['gates']['mdd']['text']}</div>
+    </div>
+
+    <!-- Gate 5: Volume Starvation -->
+    <div class="m-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span class="m-label">5. Volume Starvation Check</span>
+        <span class="badge {decision_gates['gates']['starvation']['badge']}" id="dg-gate-starvation-badge">{decision_gates['gates']['starvation']['status']}</span>
+      </div>
+      <div class="m-val tabular" style="font-size: 18px;">Drop &lt; 40% Target</div>
+      <div class="m-sub" id="dg-gate-starvation-sub">{decision_gates['gates']['starvation']['text']}</div>
+    </div>
+  </div>
+
+  <!-- Per-Arm Comparative Cards -->
+  <div style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;">Per-Arm Breakdown ({len(initial_data.get('arms', []))} Arms Under Evaluation)</div>
+  <div id="dg-arm-cards-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-bottom: 24px;">
+    {arm_cards_html}
   </div>
 </div>
 
@@ -2343,6 +2712,7 @@ function annotationCellHtml(arm) {{
 }}
 
 function renderAll() {{
+  updateDecisionGatesUI();
   // The warning must survive a refresh, and appear if a record stops parsing
   // mid-run: /api/stats carries `record_error` on every poll.
   const recWarn = document.getElementById('record-warning');
@@ -2771,8 +3141,97 @@ function fetchLiveStats() {{
     }});
 }}
 
-// Initial render
-renderAll();
+function selectGatesTourney(key, btn) {{
+  if (btn && btn.parentElement) {{
+    btn.parentElement.querySelectorAll('.btn').forEach(b => {{
+      b.style.background = 'transparent';
+      b.style.borderColor = 'var(--border)';
+    }});
+    btn.style.background = 'var(--bg-subtle)';
+    btn.style.borderColor = 'var(--text-primary)';
+  }}
+  fetch('/api/stats?tourney=' + key)
+    .then(r => r.json())
+    .then(data => {{
+      state = data;
+      renderAll();
+      if (data.arms) {{
+        renderDgArmCards(data.arms);
+      }}
+    }})
+    .catch(err => console.log('Error loading tourney:', err));
+}}
+
+function renderDgArmCards(arms) {{
+  const container = document.getElementById('dg-arm-cards-container');
+  if (!container) return;
+  let html = '';
+  arms.forEach(a => {{
+    const isTest = (a.name || '').includes('balanced-queue5');
+    const border = isTest ? 'border: 2px solid var(--blue);' : 'border: 1px solid var(--border);';
+    const badge = isTest ? '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px; margin-left: 6px;">TEST ARM</span>' : '';
+    const pnl = a.total_pnl || 0.0;
+    const pnlStr = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
+    const pnlCls = pnl >= 0 ? 'positive' : 'negative';
+    const statusCls = a.status === 'ok' ? 'badge-green' : 'badge-amber';
+    html += '<div class="m-card" style="' + border + '">' +
+      '<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">' +
+        '<div>' +
+          '<div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">' + escHtml(a.label || a.name) + badge + '</div>' +
+          '<div style="font-size: 11px; color: var(--text-muted); font-family: monospace;">' + escHtml(a.name) + ' | Port ' + (a.port || 0) + '</div>' +
+        '</div>' +
+        '<span class="badge ' + statusCls + '">' + escHtml((a.status || 'pending').toUpperCase()) + '</span>' +
+      '</div>' +
+      '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; padding: 8px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font-size: 12px;">' +
+        '<div>PnL: <strong class="tabular ' + pnlCls + '">' + pnlStr + '</strong></div>' +
+        '<div>Trades: <strong class="tabular">' + (a.trades_count || 0).toLocaleString() + '</strong></div>' +
+        '<div>Sharpe: <strong class="tabular">' + (a.sharpe_proxy || 0).toFixed(2) + '</strong></div>' +
+        '<div>Max DD: <strong class="tabular">$' + (a.max_drawdown || 0).toFixed(2) + '</strong></div>' +
+        '<div>Merge Rate: <strong class="tabular">' + (a.merge_rate || 0).toFixed(1) + '%</strong></div>' +
+        '<div>Stop Exits: <strong class="tabular">' + (a.stop_loss_exits_count || 0) + '</strong></div>' +
+      '</div>' +
+      '<div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4;">' + escHtml(a.desc || '') + '</div>' +
+    '</div>';
+  }});
+  container.innerHTML = html;
+}}
+
+function updateDecisionGatesUI() {{
+  if (!state || !state.decision_gates) return;
+  const dg = state.decision_gates;
+  const vBadge = document.getElementById('dg-verdict-badge');
+  if (vBadge) {{
+    vBadge.className = 'badge ' + (dg.overall_badge || 'badge-amber');
+    vBadge.textContent = dg.overall_verdict || 'PENDING';
+  }}
+  const vDesc = document.getElementById('dg-verdict-desc');
+  if (vDesc) vDesc.textContent = dg.overall_desc || '';
+  const vArm = document.getElementById('dg-test-arm');
+  if (vArm) vArm.textContent = dg.test_arm_label || '';
+  const vTrades = document.getElementById('dg-trades-text');
+  if (vTrades && dg.gates && dg.gates.power) {{
+    vTrades.innerHTML = 'Sample Size: <strong class="tabular" style="color: var(--text-primary);">' + (dg.gates.power.current || 0).toLocaleString() + '</strong> / ' + (dg.target_n || 2117).toLocaleString() + ' closed trades';
+  }}
+  ['power', 'sharpe', 'pf', 'mdd', 'starvation'].forEach(g => {{
+    if (dg.gates && dg.gates[g]) {{
+      const gate = dg.gates[g];
+      const badge = document.getElementById('dg-gate-' + g + '-badge');
+      if (badge) {{
+        badge.className = 'badge ' + (gate.badge || 'badge-amber');
+        badge.textContent = gate.status || 'NO_DATA';
+      }}
+      const val = document.getElementById('dg-gate-' + g + '-val');
+      if (val) {{
+        if (g === 'power') val.innerHTML = (gate.current || 0).toLocaleString() + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">/ ' + (gate.target || 2117).toLocaleString() + '</span>';
+        else if (g === 'sharpe') val.innerHTML = (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.7).toFixed(2) + ')</span>';
+        else if (g === 'pf') val.innerHTML = (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.5).toFixed(2) + ')</span>';
+        else if (g === 'mdd') val.innerHTML = '$' + (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &lt; $' + (gate.target || 4.0).toFixed(2) + ')</span>';
+      }}
+      const sub = document.getElementById('dg-gate-' + g + '-sub');
+      if (sub) sub.textContent = gate.text || '';
+    }}
+  }});
+}}
 // Polling interval
 setInterval(fetchLiveStats, 5000);
 </script>
