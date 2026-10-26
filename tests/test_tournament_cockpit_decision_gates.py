@@ -172,3 +172,17 @@ def test_cockpit_serves_843_page_and_stats():
     assert data["tourney_key"] == "843"
     assert "decision_gates" in data
     assert data["decision_gates"]["target_n"] == 2117
+
+
+def test_meta_and_arms_resolve_same_plan_record():
+    meta, minutes = cockpit.resolve_tournament_meta("843")
+    arms, err = cockpit.resolve_tournament_arms_with_status("843")
+    plan = cockpit._resolve_plan_for_tourney_key("843", meta)
+    if plan is not None:
+        _, plan_mins = cockpit._plan_identity(plan)
+        assert minutes == plan_mins
+        assert err is None
+        # Check that arms match plan's arms
+        record_arms = cockpit._read_arm_record(plan)
+        assert len(arms) == len(record_arms)
+        assert {a["name"] for a in arms} == {ra["name"] for ra in record_arms}

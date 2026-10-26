@@ -1002,6 +1002,25 @@ def _arms_from_newest_plan(meta: dict[str, Any]) -> Optional[list[dict[str, Any]
     return build_plan_arms(newest) or None
 
 
+def _resolve_plan_for_tourney_key(
+    tourney_key: str,
+    meta: dict[str, Any],
+) -> Optional[Path]:
+    """Select the plan record for a given tournament key consistently.
+
+    A newer run of the page's own issue outranks the highest-numbered one:
+    run number is not launch order, so a named run started today would
+    otherwise merge last week's r1 db/port into today's rows.
+    """
+    latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
+    if tourney_key in (CURRENT_SETUP_KEY, "843", "799"):
+        newest = _newest_plan_record()
+        newest_issue = _plan_identity(newest)[0] if newest is not None else None
+        if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
+            latest_plan = newest
+    return latest_plan
+
+
 def resolve_tournament_meta(
     tourney_key: str = CURRENT_SETUP_KEY,
 ) -> tuple[dict[str, Any], float]:
@@ -1014,7 +1033,7 @@ def resolve_tournament_meta(
     """
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     if tourney_key != CURRENT_SETUP_KEY:
-        plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
+        plan = _resolve_plan_for_tourney_key(tourney_key, meta)
         if plan is not None:
             _, minutes = _plan_identity(plan)
             if minutes:
@@ -1087,15 +1106,7 @@ def resolve_tournament_arms_with_status(
     # One resolver for every key: `latest_tournament_record` ranks by parsed
     # (run number, stamp), so a named run (#487's `--stamp current_setup_10arm`)
     # no longer wins or loses on the accident of `c` sorting after a digit.
-    latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
-    if tourney_key in (CURRENT_SETUP_KEY, "843", "799"):
-        # A newer run of the page's own issue outranks the highest-numbered one:
-        # run number is not launch order, so a named run started today would
-        # otherwise merge last week's r1 db/port into today's rows.
-        newest = _newest_plan_record()
-        newest_issue = _plan_identity(newest)[0] if newest is not None else None
-        if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
-            latest_plan = newest
+    latest_plan = _resolve_plan_for_tourney_key(tourney_key, meta)
     if latest_plan is None:
         return default_arms, None
     try:
