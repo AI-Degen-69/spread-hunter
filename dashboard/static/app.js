@@ -9060,13 +9060,17 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
       const reason = String(s.reason || '').toLowerCase();
 
       const isMerge = method === 'merge' || method === 'shadow_merge';
-      // The hard-stop family is the leaf's own: `hard_stop` is the current
+      // The hard-stop family is the leaf's own HARD_STOP_SELL_REASONS, spelled
+      // out here because JS cannot import it: `hard_stop` is the current
       // lifecycle spelling, `lifecycle_hard_stop` the older alias, and
       // `pair_cap_hedge_unreachable` the cap bail-out (#797) -- every one of
       // them sells into the book on a risk decision, so every one is Stop Loss.
+      // Only reasons a writer still emits belong in this list. `adverse_drift`
+      // is retired: a stored row that carries it falls to its method, which is
+      // the saver's rescue exit -- exactly what its docstrings call it.
       const isStopLoss = method === 'stop_loss_exit' || reason.includes('stop_loss')
         || reason === 'hard_stop' || reason === 'lifecycle_hard_stop'
-        || reason === 'adverse_drift' || reason === 'pair_cap_hedge_unreachable';
+        || reason === 'pair_cap_hedge_unreachable';
       const isGraceExpired = reason === 'grace_expired' || reason === 'aged_out_rescue' || reason.includes('grace_expired') || method.includes('aged_out');
       const isSettlement = method === 'settlement' || method === 'shadow_settlement';
       // The rescue bucket and bookkeeping, named by the method that wrote them:
@@ -9545,10 +9549,11 @@ function initOrdersTradesTabs() {
 
 /* Why a trade closed, in the operator's words.
  *
- * The registry has always written a `reason` on the closes that have one --
- * `aged_out_rescue` for the leg the 900s window cannot reach, `grace_expired`
- * and `adverse_drift` for the two stops -- and the dashboard dropped it, so a
- * rescue and a stop both read as a bare One-Sided row with a loss and telling
+ * The registry writes a `reason` on the closes that have one -- `grace_expired`
+ * for the leg the 900s window cannot reach, `lifecycle_hard_stop` for the one
+ * the stop took, `pair_cap_hedge_unreachable` for the cap bail-out -- and the
+ * dashboard dropped it, so a rescue and a stop both read as a bare One-Sided
+ * row with a loss and telling
  * them apart meant opening `scripts/rescue_exit_report.py`. A merge or a
  * settlement books its close without a reason, and a close with nothing to say
  * gets no chip: an empty label is worse than no label.
@@ -9558,6 +9563,8 @@ function initOrdersTradesTabs() {
  * be the one the page hides. */
 const CLOSE_REASON_LABELS = {
   aged_out_rescue: 'Aged-out rescue',
+  // Retired trigger: nothing emits it any more, but stored and demo rows still
+  // carry the token, so the reader keeps a readable label rather than raw text.
   adverse_drift: 'Adverse drift',
   grace_expired: 'Grace expired',
   ladder_exit: 'Ladder exit',
