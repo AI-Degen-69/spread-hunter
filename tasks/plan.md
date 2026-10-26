@@ -147,7 +147,7 @@ def exit_single_buy(
 - **Verification:**
   - `python -m pytest tests/test_single_buy_saver.py -k "test_manager_orphan" -q`
 
-### Task 4: Regression Suites and Divergence Checks [Backend/Logic]
+### Task 4: Regression Suites and Divergence Checks [Backend/Logic] [x]
 - **Size:** S
 - **Target files:**
   - `tests/`
