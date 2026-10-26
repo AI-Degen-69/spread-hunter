@@ -10,6 +10,8 @@ from __future__ import annotations
 import io
 import json
 import logging
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -733,3 +735,167 @@ def test_open_dash_accepts_only_an_arm_port_and_a_tournament_store():
     assert cockpit.open_dash_target("port=8801") is None, "no store"
     assert cockpit.open_dash_target("port=8801&db=C:/Windows/System32/config") is None
     assert cockpit.open_dash_target(f"port=abc&db={quote(str(db))}") is None
+
+COCKPIT_HARNESS = Path(__file__).resolve().parent / "js" / "cockpit_annotation_harness.cjs"
+
+NODE_REQUIRED = pytest.mark.skipif(
+    shutil.which("node") is None, reason="node is not installed on this host"
+)
+
+
+def _annotation_arm(**overrides) -> dict:
+    """One arm as the page receives it, with only the cell's fields populated."""
+    arm = {
+        "name": "arm-a",
+        "label": "Arm A",
+        "color": "#00e676",
+        "desc": "",
+        "port": 8801,
+        "db": "data/tournaments/i837/arm-a.db",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    }
+    arm.update(overrides)
+    return arm
+
+
+def _run_annotation_cases(cells: dict, rows: dict | None = None) -> dict:
+    """Drive the generated page's own inline script under Node.
+
+    The unit under test is the shipped page script, not a re-implementation: the
+    harness extracts it from `generate_cockpit_html()`'s output and runs it with
+    a stub DOM, so these assertions describe what the operator's browser renders.
+    """
+    state = {
+        # The page always renders ten arms; one arm keeps the chart pass (which
+        # is not under test here) from reaching an undefined control/rival pair.
+        "arms": [_annotation_arm(name="control", label="Control")],
+        "tourney_key": "487",
+        "elapsed_hours": 0.0,
+        "rem_hours": 24.0,
+        "target_hours": 24.0,
+        "progress_pct": 0.0,
+        "total_merges": 0,
+        "total_quoted": 0,
+    }
+    payload = {
+        "html": cockpit.generate_cockpit_html(state),
+        "cells": cells,
+        "rows": rows or {},
+    }
+    out = subprocess.run(
+        [shutil.which("node"), str(COCKPIT_HARNESS)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=True,
+        encoding="utf-8",
+    )
+    return json.loads(out.stdout)
+
+
+@NODE_REQUIRED
+def test_annotation_cell_renders_every_populated_field():
+    """A filled arm shows cause, facts, tweak and rationale -- and no `N/A`."""
+    filled = _annotation_arm(
+        worst_catalyst="Stop-out rate 44.1% (15/34)",
+        worst_catalyst_desc="6.4 h snapshot: 15 stops on 34 trades, 19 merges",
+        hypothesized_tweak="BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
+        tweak_rationale="Hypothesis: 2c fires on normal spread noise.",
+    )
+
+    out = _run_annotation_cases({"filled": filled})
+
+    assert out["errors"] == []
+    cell = out["cells"]["filled"]
+    positions = [
+        cell.find("Stop-out rate 44.1% (15/34)"),
+        cell.find("6.4 h snapshot: 15 stops"),
+        cell.find("BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045"),
+        cell.find("Hypothesis: 2c fires"),
+    ]
+    assert all(pos >= 0 for pos in positions), cell
+    assert positions == sorted(positions), "cause, facts, tweak, rationale -- in that order"
+    assert "N/A" not in cell, cell
+
+
+@NODE_REQUIRED
+def test_annotation_cell_says_na_only_for_a_missing_catalyst_or_tweak():
+    """`N/A` keeps one meaning -- no data -- and an absent line is not a blank line."""
+    absent = _annotation_arm()
+    for key in ("worst_catalyst", "worst_catalyst_desc", "hypothesized_tweak", "tweak_rationale"):
+        absent.pop(key)
+    empty_values = {
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    }
+    out = _run_annotation_cases({
+        "blank": _annotation_arm(**empty_values),
+        "null": _annotation_arm(**{key: None for key in empty_values}),
+        "absent": absent,
+        "spaces": _annotation_arm(**{key: "   " for key in empty_values}),
+        "partial": _annotation_arm(hypothesized_tweak="BOT_X=1"),
+    })
+
+    assert out["errors"] == []
+    for name in ("blank", "null", "absent", "spaces"):
+        cell = out["cells"][name]
+        assert cell.count("N/A") == 2, (name, cell)
+        # headline + tweak wrapper only: no empty description or rationale line
+        assert cell.count("<div") == 2, (name, cell)
+    partial = out["cells"]["partial"]
+    assert partial.count("N/A") == 1, partial
+    assert "BOT_X=1" in partial
+    assert partial.count("<div") == 2, partial
+
+
+@NODE_REQUIRED
+def test_annotation_cell_escapes_config_text_instead_of_rendering_it():
+    """An analyst note is free-form config text, so it is text -- never markup."""
+    out = _run_annotation_cases({"hostile": _annotation_arm(
+        worst_catalyst="<img src=x onerror=1>",
+        worst_catalyst_desc="<b>desc</b>",
+        hypothesized_tweak="BOT_X=1 & 2",
+        tweak_rationale="<script>alert(1)</script>",
+    )})
+
+    assert out["errors"] == []
+    cell = out["cells"]["hostile"]
+    assert "&lt;img" in cell and "<img" not in cell
+    assert "&lt;b&gt;" in cell and "<b>" not in cell
+    assert "&lt;script&gt;" in cell and "<script" not in cell
+    assert "BOT_X=1 &amp; 2" in cell
+
+
+@NODE_REQUIRED
+def test_render_all_renders_the_row_through_the_same_cell():
+    """The first render and every 5s poll go through one code path."""
+    filled = _annotation_arm(
+        worst_catalyst="Stop-out rate 44.1% (15/34)",
+        hypothesized_tweak="BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
+        tweak_rationale="Hypothesis: 2c is tighter than normal spread noise.",
+    )
+
+    refilled = _run_annotation_cases({}, rows={"one": filled, "bare": _annotation_arm()})
+
+    assert refilled["errors"] == []
+    assert "Stop-out rate 44.1% (15/34)" in refilled["rows"]["one"]
+    assert "Hypothesis: 2c is tighter" in refilled["rows"]["one"]
+    # An arm with no notes still renders through the same helper: two `N/A`, no
+    # empty description or rationale line, and no throw.
+    assert refilled["rows"]["bare"].count("N/A") == 2, refilled["rows"]["bare"]
+
+
+def test_embedded_state_cannot_close_its_own_script_tag():
+    """A note holding `</script>` would end the page's script block early."""
+    html = cockpit.generate_cockpit_html({
+        "arms": [_annotation_arm(worst_catalyst="</script><b>x</b>")],
+        "total_merges": 0,
+    })
+
+    assert "</script><b>" not in html
+    assert "</script" in html

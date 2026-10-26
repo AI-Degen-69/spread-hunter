@@ -1420,7 +1420,9 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
 
 def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     """Generate the full responsive, interactive HTML dashboard."""
-    json_embedded = json.dumps(initial_data)
+    # Notes come from an editable arms file, so neither a `</script>` nor a `<b>`
+    # in one may end this block early; `<` is the only character that can.
+    json_embedded = json.dumps(initial_data).replace("<", "\\u003c")
     # A record that exists but cannot be read must not look like "the run has not
     # started". The container is always emitted -- hidden when there is nothing to
     # say -- so the 5s /api/stats poll can show or hide it without a page reload.
@@ -2052,6 +2054,39 @@ function switchTab(name, btn) {{
   if (target) target.classList.add('active');
 }}
 
+// Analyst annotations arrive from a tournament's arms file, so every value here
+// is text on the page -- never markup.
+function escHtml(value) {{
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}}
+
+function annotationText(value) {{
+  return value == null ? '' : String(value).trim();
+}}
+
+// `N/A` means one thing here: no data. A blank description or rationale drops
+// its line instead of leaving an empty one, so "empty" reads the same everywhere.
+function annotationCellHtml(arm) {{
+  const source = arm || {{}};
+  const catalyst = annotationText(source.worst_catalyst);
+  const catalystDesc = annotationText(source.worst_catalyst_desc);
+  const tweak = annotationText(source.hypothesized_tweak);
+  const rationale = annotationText(source.tweak_rationale);
+  return `
+        <div style="font-weight: 600; color: #ffab91; font-size: 11px; font-family: monospace;">🚨 ${{escHtml(catalyst || 'N/A')}}</div>
+        ${{catalystDesc ? `<div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px;">${{escHtml(catalystDesc)}}</div>` : ''}}
+        <div style="margin-top: 4px; padding-top: 3px; border-top: 1px dashed rgba(255,255,255,0.1);">
+          <span style="font-weight: 600; color: #69f0ae; font-size: 11px; font-family: monospace;">💡 Tweak: ${{escHtml(tweak || 'N/A')}}</span>
+          ${{rationale ? `<div style="font-size: 10px; color: #b0bec5; line-height: 1.2; margin-top: 1px;">${{escHtml(rationale)}}</div>` : ''}}
+        </div>
+      `;
+}}
+
 function renderAll() {{
   // The warning must survive a refresh, and appear if a record stops parsing
   // mid-run: /api/stats carries `record_error` on every poll.
@@ -2112,12 +2147,7 @@ function renderAll() {{
       <td class="tabular">${{(arm.std_pnl || 0).toFixed(3)}}</td>
       <td class="tabular negative">$$${{(arm.max_drawdown || 0).toFixed(2)}}</td>
       <td style="max-width: 290px; text-align: left;">
-        <div style="font-weight: 600; color: #ffab91; font-size: 11px; font-family: monospace;">🚨 ${{arm.worst_catalyst || 'N/A'}}</div>
-        <div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px;">${{arm.worst_catalyst_desc || ''}}</div>
-        <div style="margin-top: 4px; padding-top: 3px; border-top: 1px dashed rgba(255,255,255,0.1);">
-          <span style="font-weight: 600; color: #69f0ae; font-size: 11px; font-family: monospace;">💡 Tweak: ${{arm.hypothesized_tweak || 'N/A'}}</span>
-          <div style="font-size: 10px; color: #b0bec5; line-height: 1.2; margin-top: 1px;">${{arm.tweak_rationale || ''}}</div>
-        </div>
+        ${{annotationCellHtml(arm)}}
       </td>
       <td class="tabular"><strong>${{arm.score || 0}}</strong></td>
       <td><span class="badge ${{arm.badge_cls}}">${{arm.readiness}}</span></td>
