@@ -823,7 +823,7 @@ class CloseRecord:
     dn_cost_removed: Optional[float] = None
     tx_hash: Optional[str] = None
     run_id: Optional[str] = None
-    # Why a rescue route fired (`adverse_drift` / `grace_expired`). Only the
+    # Why a rescue route fired (`grace_expired` / `stranded_unhedged_exit`). Only the
     # single-buy exit writes it, and only after the venue sale succeeded --
     # recorded data beats reconstructing the trigger from bid marks later.
     reason: Optional[str] = None

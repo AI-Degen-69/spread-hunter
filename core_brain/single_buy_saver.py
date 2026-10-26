@@ -936,7 +936,7 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
     carries no fills, so live still records the floor; the rehearsal walks the
     bid ladder and knows better. See `_exit_fill_price`.
 
-    `reason` is the route's trigger (`adverse_drift` / `grace_expired`), and is
+    `reason` is the route's trigger (`grace_expired` / `pair_cap_hedge_unreachable`), and is
     part of this close -- written here, after the sale succeeded, never before.
     """
     leg = (pair.get("legs") or {}).get(heavy_token, {})
@@ -1020,7 +1020,8 @@ def exit_single_buy(
 ) -> dict:
     """Close a single-sided fill: cancel resting opposite leg, then sell filled inventory.
 
-    `reason` is the caller's route trigger (`adverse_drift` / `grace_expired`),
+    `reason` is the caller's route trigger (`grace_expired` /
+    `pair_cap_hedge_unreachable`),
     persisted on the close so later forensics need not reconstruct it. Purely
     instrumentation: it changes no trigger, threshold, or route decision, and
     callers without one (stray-guard) keep working unchanged.

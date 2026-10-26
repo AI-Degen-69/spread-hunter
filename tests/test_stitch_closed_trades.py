@@ -431,6 +431,38 @@ def test_stitch_closed_trades_order_fallback_names_the_order_state():
     assert "Pair Merge" not in html
 
 
+@requires_node
+def test_a_retired_reason_is_classified_by_its_method_not_as_a_stop():
+    """`adverse_drift` has no writer left, so it is out of the Stop Loss set: a
+    stored row still carrying it is classified by its method, which is the
+    saver's rescue exit -- the same thing its docstrings call it."""
+    code = """
+    const settlements = [
+        { method: 'single_buy_exit', reason: 'adverse_drift', shares: 5, cost_basis: 5.0, proceeds: 3.0, realized_pnl: -2.0, ts: 1700000000 }
+    ];
+    const html = app.renderStitchClosedLedgerRows('0x123', {}, settlements, [], Date.now());
+    console.log(JSON.stringify({ html }));
+    """
+    html = json.loads(_eval_js(code))["html"]
+    assert 'stitch-exec-type is-single-buy-exit">Single Buy Exit</span>' in html
+    assert "is-stop-loss" not in html, "a retired reason never borrows the stop pill"
+
+
+def test_the_ledger_stop_loss_reasons_are_the_leaves_hard_stop_family():
+    """Every reason the Stop Loss rule names is one a writer still emits, and
+    the whole family is named: app.js cannot import the Python leaf, so its
+    literals are pinned to `close_methods.HARD_STOP_SELL_REASONS` (#730)."""
+    from core_brain.close_methods import HARD_STOP_SELL_REASONS
+
+    app_js = _APP_JS.read_text(encoding="utf-8-sig")
+    rule = re.search(r"const isStopLoss = [^;]*;", app_js)
+    assert rule, "the ledger's Stop Loss rule was not found in app.js"
+    named = set(re.findall(r"reason === '([a-z_]+)'", rule.group(0)))
+    assert named == set(HARD_STOP_SELL_REASONS), (
+        f"app.js names {sorted(named)}, the leaf writes "
+        f"{sorted(HARD_STOP_SELL_REASONS)}")
+
+
 def test_every_exec_type_label_owns_a_distinct_css_tone():
     """Colour is how a ledger row's type is read down the column: every label
     in EXEC_TYPE_CLASSES has a `is-*` class, that class has its own rule in
