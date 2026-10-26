@@ -1238,7 +1238,9 @@ class TestMarketSpecsPath:
 
         specs = _market_specs(3, registry=mock_reg, path=str(self._feed(tmp_path, n=5)))
 
-        assert [s["cid"] for s in specs] == ["0xtrial0", "0xtrial1", "0xtrial2"]
+        # An active order whose market left the feed can still fill: never
+        # quote an unrelated market beside it.
+        assert specs == []
 
     def test_market_specs_select_one_paired_depth_arm(self, tmp_path):
         from core_brain.trader_loop import _market_specs

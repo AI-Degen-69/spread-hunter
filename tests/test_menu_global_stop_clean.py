@@ -74,6 +74,7 @@ def test_clear_runtime_state_preserves_presets_and_configs():
         assert ".env" not in line.lower()
 
     assert "data/orders.db untouched" in clear_func
-    # Tournament run directories and runtime logs are cleaned
+    # Tournament runs are opt-in: only the explicit clean path wipes them.
+    assert "IncludeTournaments" in clear_func
     assert "data/tournaments" in clear_func
     assert "runtime/logs" in clear_func

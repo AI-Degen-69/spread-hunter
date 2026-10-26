@@ -77,28 +77,20 @@ def test_depth_bar_trial_launcher_is_gone():
     # The regex \$(script:)?TrialDepth\b skips the resume session field
     # TrialDepthUsd and $trial.trial_depth_usd, both of which stay.
     assert re.search(r"\$(script:)?TrialDepth\b", src) is None
-    # No alias maps to a retired "t" key.
+    # The trial aliases are gone; "t" is now the tournament reconcile key.
     mapping = _action_map()
     assert "shadow-trial" not in mapping
     assert "trial-shadow" not in mapping
-    assert "t" not in mapping.values()
-    # No switch branch for "t", and the allow-list no longer contains it. The
-    # allow-list is now the shared $script:MenuKeys list (#475), so assert that
-    # the guard reads that list and that "t" is not one of its entries.
-    assert not re.search(r'^\s*"t" \{', src, re.MULTILINE)
-    allow = re.search(r"if \(\$script:MenuKeys -notcontains \$key\)", src)
-    assert allow, "the allow-list guard must read $script:MenuKeys"
-    menu_keys = re.search(r"\$script:MenuKeys\s*=\s*@\(([^)]*)\)", src)
-    assert "t" not in menu_keys.group(1)
     # The grid label is gone too.
     assert "Depth-Bar Trial" not in src
 
 
 @requires_pwsh
-@pytest.mark.parametrize("word", ["shadow-trial", "trial-shadow", "t"])
+@pytest.mark.parametrize("word", ["shadow-trial", "trial-shadow"])
 def test_trial_aliases_are_unknown_actions(word):
     # After the deletions these words fall through to the existing
-    # "Unknown action" check and exit non-zero.
+    # "Unknown action" check and exit non-zero. "t" is excluded: it now
+    # routes to the tournament reconcile action.
     res = subprocess.run(
         [PWSH, "-NoProfile", "-File", str(MENU), word],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,

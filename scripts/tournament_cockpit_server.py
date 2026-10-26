@@ -2121,7 +2121,7 @@ function renderAll() {{
       </td>
       <td class="tabular"><strong>${{arm.score || 0}}</strong></td>
       <td><span class="badge ${{arm.badge_cls}}">${{arm.readiness}}</span></td>
-      <td><a href="/open-dash?port=${{arm.port}}&db=${{encodeURIComponent(arm.db_path || '')}}" target="_blank" class="btn" style="padding: 3px 8px; font-size: 11px;">Open Dash</a></td>
+      <td><a href="/open-dash?port=${{arm.port}}&db=${{encodeURIComponent(arm.db || '')}}" target="_blank" class="btn" style="padding: 3px 8px; font-size: 11px;">Open Dash</a></td>
     `;
     tbody.appendChild(tr);
   }});
@@ -2446,6 +2446,7 @@ def _ensure_arm_dashboard(port: int, db_path: str) -> None:
         is_port_listening, kill_process_on_port, _detached_kwargs, ROOT
     )
     from core_brain.code_revision import decision_code_mtime
+    import urllib.error
     import urllib.request
     import subprocess
     import sys
@@ -2467,8 +2468,13 @@ def _ensure_arm_dashboard(port: int, db_path: str) -> None:
                 dash_started = data.get("services", {}).get("dash", {}).get("started_at", 0)
                 if dash_started and dash_started < tree_mtime:
                     needs_restart = True
-        except Exception:
-            needs_restart = True
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, ConnectionRefusedError) or "refused" in str(exc.reason).lower():
+                needs_restart = True
+            else:
+                print(f"[cockpit] dash :{port} status timeout; leaving it running ({exc})")
+        except Exception as exc:
+            print(f"[cockpit] dash :{port} status check failed; leaving it running ({exc})")
 
     if needs_restart:
         kill_process_on_port(port)

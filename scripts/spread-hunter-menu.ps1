@@ -928,7 +928,7 @@ function Stop-ShadowRun {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
-                (($_.CommandLine -like "*$ProjectPath*") -or ($_.CommandLine -match 'core_brain\.shadow_run|statistics_observer|scripts\.global_stop_loss')) -and `
+                ($_.CommandLine -like "*$ProjectPath*") -and `
                 ((($_.CommandLine -like "*core_brain.shadow_run*") -or ($_.CommandLine -like "*statistics_observer*")) -and ((-not $RunId) -or ($_.CommandLine -like "*--run-id $RunId*")) -or `
                  (($_.CommandLine -like "*scripts.global_stop_loss*") -and ($_.CommandLine -like "*shadow_*.db*" -or $_.CommandLine -like "*shadow.db*") -and ((-not $RunId) -or ($_.CommandLine -like "*$RunId*"))))
             })
@@ -2298,7 +2298,7 @@ function Test-OrphanStackProcess {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
-                (($_.CommandLine -like "*$ProjectPath*") -or ($_.CommandLine -match $markerPattern)) -and `
+                ($_.CommandLine -like "*$ProjectPath*") -and ($_.CommandLine -match $markerPattern) -and `
                 ($_.CommandLine -notmatch 'polymarket_docs_mcp')
             })
     } catch { return $null }
@@ -2380,6 +2380,7 @@ function Stop-Guardrail {
 }
 
 function Clear-RuntimeState {
+    param([switch]$IncludeTournaments)
     <# Wipe every regenerable runtime artifact for a first-run feel.
 
     NEVER touches data/orders.db (the production registry) or anything
@@ -2407,11 +2408,14 @@ function Clear-RuntimeState {
     Get-ChildItem (Join-Path $ProjectPath "data") -Directory -Filter "shadow_stat_*" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     Get-ChildItem (Join-Path $ProjectPath "data") -File -Filter "stats_*.db*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Get-ChildItem (Join-Path $ProjectPath "data") -File -Filter "*.db*" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(overnight_validation_|\d{2}-\d{2}_\d{2}-\d{2}_shadow-\d+|\d{1,2}_shadow_|shadow_\d{8}_\d{6}_shadow-)' } | Remove-Item -Force -ErrorAction SilentlyContinue
-    # Clean running written tournament data and connected execution logs
-    # (leave all presets, configs, and .env files alone!)
-    $tournamentsDir = Join-Path $ProjectPath "data/tournaments"
-    if (Test-Path $tournamentsDir) {
-        Remove-Item (Join-Path $tournamentsDir "*") -Recurse -Force -ErrorAction SilentlyContinue
+    # Tournament runs are preserved by default: a live or statistical start
+    # must never wipe a multi-hour tournament. Only the explicit
+    # "Stop & CLEAN Data" path passes -IncludeTournaments.
+    if ($IncludeTournaments) {
+        $tournamentsDir = Join-Path $ProjectPath "data/tournaments"
+        if (Test-Path $tournamentsDir) {
+            Remove-Item (Join-Path $tournamentsDir "*") -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
     Get-ChildItem (Join-Path $ProjectPath "runtime/logs") -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Get-ChildItem $ProjectPath -File -Filter "stats_*.db*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
@@ -2574,14 +2578,15 @@ function Stop-AllSpreadHunterProcesses {
     $null = Stop-Dashboard
     $null = Stop-ShadowDashboard
 
-    # 2 · Orphan & tournament processes
+    # 2 · Orphan & tournament processes (this checkout only: the module match
+    # alone could hit a sibling checkout, so ProjectPath is required)
     Lsh-Phase -Text "PHASE 2 · SCANNING FOR LINGERING PROCESSES"
     $shPattern = '-m\s+(core_brain\.|dashboard\.server|scripts\.(filter_loop|tournament_|shadow_tournament|statistical_validation|global_stop_loss|reconcile_tournament_stack|resume_tournament_arms))'
     try {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
-                (($_.CommandLine -like "*$ProjectPath*") -or ($_.CommandLine -match $shPattern)) -and `
+                ($_.CommandLine -like "*$ProjectPath*") -and ($_.CommandLine -match $shPattern) -and `
                 ($_.CommandLine -notmatch 'polymarket_docs_mcp')
             })
         foreach ($p in $procs) {
@@ -2593,14 +2598,20 @@ function Stop-AllSpreadHunterProcesses {
         Lsh-Warn "Process table scan encountered an issue."
     }
 
-    # Free known dashboard and cockpit ports if any are still occupied
+    # Free known dashboard and cockpit ports only when the holder is ours.
     $portsToCheck = @(8798, 8799, 8800) + @(8801..8810)
     foreach ($port in $portsToCheck) {
         $pidOnPort = Get-PortPid -PortNumber $port
         if ($pidOnPort) {
-            Lsh-Step "Freeing port :$port (PID $pidOnPort)..."
-            taskkill /F /T /PID $pidOnPort 2>$null | Out-Null
-            Wait-ProcessGone -ProcessId $pidOnPort | Out-Null
+            try { $holder = @(Get-CimInstance Win32_Process -Filter "ProcessId=$pidOnPort" -ErrorAction Stop)[0] } catch { $holder = $null }
+            $holderCmd = if ($holder -and $holder.CommandLine) { $holder.CommandLine } else { "" }
+            if ($holderCmd -like "*$ProjectPath*" -and $holderCmd -match $shPattern) {
+                Lsh-Step "Freeing port :$port (PID $pidOnPort)..."
+                taskkill /F /T /PID $pidOnPort 2>$null | Out-Null
+                Wait-ProcessGone -ProcessId $pidOnPort | Out-Null
+            } elseif ($holderCmd) {
+                Lsh-Warn "Port :$port held by foreign process PID $pidOnPort; leaving it running."
+            }
         }
     }
 
@@ -2618,7 +2629,7 @@ function Stop-AllSpreadHunterProcesses {
     $lingering = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
             $_.Name -match '^python' -and $_.CommandLine -and `
-            (($_.CommandLine -like "*$ProjectPath*") -or ($_.CommandLine -match $shPattern)) -and `
+            ($_.CommandLine -like "*$ProjectPath*") -and ($_.CommandLine -match $shPattern) -and `
             ($_.CommandLine -notmatch 'polymarket_docs_mcp')
         })
     if ((Test-StackAlive) -or ($lingering.Count -gt 0)) {
@@ -3209,7 +3220,12 @@ function Invoke-LiveAction {
         }
         "t" {
             Lsh-Step "Aligning and reconciling tournament stack..."
-            & python -m scripts.reconcile_tournament_stack --tourney 799 --max-markets 3 --minutes 1440
+            Push-Location $ProjectPath
+            try {
+                & python -m scripts.reconcile_tournament_stack --tourney 799 --max-markets 3 --minutes 1440
+            } finally {
+                Pop-Location
+            }
             if ($LASTEXITCODE -eq 0) {
                 Lsh-Ok "Tournament stack aligned: 10 arms running, dashboards fresh, Cockpit active on :8800."
             } else {

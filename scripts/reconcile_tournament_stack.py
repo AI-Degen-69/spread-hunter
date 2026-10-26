@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence
+import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -72,13 +73,32 @@ def _is_pid_alive(pid: int) -> bool:
     try:
         if sys.platform == "win32":
             out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                                 capture_output=True, text=True, check=False).stdout
+                                 capture_output=True, text=True, check=False, timeout=30).stdout
             return str(pid) in out
         else:
             os.kill(pid, 0)
             return True
+    except subprocess.TimeoutExpired:
+        log.warning("tasklist timed out for PID %s; treating as unknown", pid)
+        return False
     except Exception:
         return False
+
+
+def _pid_commandline(pid: int) -> str:
+    """Best-effort command line for PID, '' when unknown. Never raises."""
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(
+                ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine", "/value"],
+                capture_output=True, text=True, check=False, timeout=15,
+            ).stdout or ""
+            return out.strip()
+        else:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                return fh.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+    except Exception:
+        return ""
 
 
 def kill_pid(pid: int) -> bool:
@@ -88,7 +108,7 @@ def kill_pid(pid: int) -> bool:
     try:
         if sys.platform == "win32":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                           capture_output=True, text=True, check=False)
+                           capture_output=True, text=True, check=False, timeout=30)
         else:
             os.kill(pid, 9)
         time.sleep(0.3)
@@ -104,7 +124,7 @@ def kill_process_on_port(port: int) -> bool:
         return False
     try:
         out = subprocess.run(["netstat", "-ano", "-p", "tcp"],
-                             capture_output=True, text=True, check=False).stdout
+                             capture_output=True, text=True, check=False, timeout=30).stdout
         for line in out.splitlines():
             line = line.strip()
             if f":{port} " in line and "LISTENING" in line:
@@ -114,6 +134,8 @@ def kill_process_on_port(port: int) -> bool:
                 kill_pid(pid)
                 time.sleep(0.5)
                 return True
+    except subprocess.TimeoutExpired:
+        log.warning("netstat timed out looking for port %d; leaving it alone", port)
     except Exception as exc:
         log.warning("Error finding process on port %d: %s", port, exc)
     return False
@@ -138,16 +160,25 @@ def sweep_stale_orders(db_path: Path, slugs: Sequence[str]) -> int:
             con.close()
             return 0
 
+        cols = {r[1] for r in cur.execute("PRAGMA table_info(orders)").fetchall()}
+        fills_cols = {r[1] for r in cur.execute("PRAGMA table_info(fills)").fetchall()} if "fills" in tables else set()
         for pat in slugs:
-            cur.execute("SELECT order_id FROM orders WHERE condition_id LIKE ? OR order_id LIKE ?", (pat, pat))
-            order_ids = [r[0] for r in cur.fetchall()]
-            if order_ids:
-                cur.execute("DELETE FROM orders WHERE condition_id LIKE ? OR order_id LIKE ?", (pat, pat))
-                if "fills" in tables:
+            cur.execute("SELECT id, order_id FROM orders WHERE condition_id LIKE ? OR order_id LIKE ?", (pat, pat))
+            rows = cur.fetchall()
+            if not rows:
+                continue
+            ids = [r[0] for r in rows]
+            order_ids = [r[1] for r in rows if r[1]]
+            cur.execute("DELETE FROM orders WHERE condition_id LIKE ? OR order_id LIKE ?", (pat, pat))
+            if "fills" in tables and ids:
+                if "order_uuid" in fills_cols:
+                    cur.execute("DELETE FROM fills WHERE order_uuid IN ({})".format(",".join("?" for _ in ids)), ids)
+                elif "order_id" in fills_cols and order_ids:
                     cur.execute("DELETE FROM fills WHERE order_id IN ({})".format(",".join("?" for _ in order_ids)), order_ids)
-                if "closes" in tables:
-                    cur.execute("DELETE FROM closes WHERE order_id IN ({})".format(",".join("?" for _ in order_ids)), order_ids)
-                removed += len(order_ids)
+            if "closes" in tables:
+                # Production closes has no order_id; match by market identity.
+                cur.execute("DELETE FROM closes WHERE condition_id LIKE ? OR market_slug LIKE ?", (pat, pat))
+            removed += len(rows)
 
         if removed > 0:
             con.commit()
@@ -245,8 +276,15 @@ def reconcile_dashboards(arms: List[Dict[str, Any]], tree_mtime: float) -> None:
                     dash_started = data.get("services", {}).get("dash", {}).get("started_at", 0)
                     if dash_started and dash_started < tree_mtime:
                         needs_restart = True
-            except Exception:
-                needs_restart = True
+            except urllib.error.URLError as exc:
+                # Connection refused = down. A timeout is a slow dashboard,
+                # not a dead one; leave it running.
+                if isinstance(exc.reason, ConnectionRefusedError) or "refused" in str(exc.reason).lower():
+                    needs_restart = True
+                else:
+                    log.warning("Dashboard :%d status check failed (%s); leaving it running", port, exc)
+            except Exception as exc:
+                log.warning("Dashboard :%d status check failed (%s); leaving it running", port, exc)
 
         if needs_restart:
             log.info("Restarting dashboard for [%s] on port %d (fresh code)...", name, port)
@@ -308,8 +346,12 @@ def reconcile_arms(
 
         if needs_restart:
             if old_pid:
-                log.info("Stopping stale/dead arm #%02d [%s] (PID %d)...", idx, name, old_pid)
-                kill_pid(old_pid)
+                cmdline = _pid_commandline(old_pid)
+                if cmdline and run_id not in cmdline and "shadow_run" not in cmdline:
+                    log.warning("PID %d is not arm %s (%s); leaving it running", old_pid, run_id, cmdline[:120])
+                else:
+                    log.info("Stopping stale/dead arm #%02d [%s] (PID %d)...", idx, name, old_pid)
+                    kill_pid(old_pid)
 
             clear_instance_lock(full_db)
 

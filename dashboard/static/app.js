@@ -1774,11 +1774,45 @@ function renderShadowClock() {
     ? (Date.now() - shadowRunAnchor.receivedAtMs) / 1000
     : 0;
   const elapsed = fmtStopwatch(shadowRunAnchor.elapsedSec + drift);
+  const code = shadowCodeNote(shadowRunAnchor);
   const headline = shadowRunAnchor.running
     ? `Shadow rehearsal ${shadowRunAnchor.runId || ''} running, ${shadowRunAnchor.minutes < 0 ? 'no time box (runs until stopped)' : `time box ${shadowRunAnchor.minutes ?? '--'} min`}`
     : 'This shadow rehearsal is no longer running.';
-  el.textContent = shadowRunAnchor.running ? '· ' + elapsed : '· ' + elapsed + ' ended';
-  el.title = headline;
+  el.textContent = (shadowRunAnchor.running ? '· ' + elapsed : '· ' + elapsed + ' ended') + code.text;
+  // The code sentence is appended only when there is one, so a run that
+  // recorded nothing keeps the exact title it had before this existed.
+  el.title = code.title ? headline.replace(/\.$/, '') + '.' + code.title : headline;
+}
+
+/* The code stamp on the stopwatch: which revision this rehearsal loaded, and
+ * whether the tree has moved on since.
+ *
+ * A rehearsal outlives the code it started with, and it used to say nothing
+ * about it: on 2026-10-07 three runs sat side by side, two of them deciding
+ * with the previous morning's ranker and no queue gate, all three reading
+ * identically. The stamp is what separates them, and "older than this tree" is
+ * the actionable half -- the numbers on a stale page were produced by code that
+ * is no longer here, so comparing them against a fresh run compares two
+ * strategies.
+ *
+ * A run that recorded no revision gets no stamp: an old heartbeat has nothing
+ * to say, and a badge reading "unknown" on every run is noise, not a warning.
+ */
+function shadowCodeNote(anchor) {
+  const label = anchor.codeLabel ? `code ${anchor.codeLabel}` : 'code unknown';
+  if (anchor.codeStale) {
+    return {
+      text: ` · ${label} (older than this tree)`,
+      title: ` It loaded ${label}, but core_brain/ or scoring/ has changed since it started, so its numbers describe code that is no longer here. Restart it to compare like with like.`,
+    };
+  }
+  if (anchor.codeLabel) {
+    return {
+      text: ` · ${label}`,
+      title: ` It is holding ${label}; no decision code has changed since this run started.`,
+    };
+  }
+  return { text: '', title: '' };
 }
 
 function setShadowRun(status) {
@@ -1789,6 +1823,9 @@ function setShadowRun(status) {
         running: run.running === true,
         runId: run.run_id,
         minutes: run.minutes,
+        // Which code this run loaded, and whether the tree moved past it.
+        codeLabel: run.code_revision ? run.code_revision.label : null,
+        codeStale: run.code_stale === true,
         receivedAtMs: Date.now(),
       }
     : null;
@@ -2059,7 +2096,7 @@ function renderCodeVersion(status) {
 
   const commit = repoRev.commit || dashRev.commit || shadowRun.code_revision?.commit || 'unknown';
   const shortCommit = commit.slice(0, 8);
-  const isStale = Boolean(shadowRun.code_stale || dashRev.code_stale);
+  const isStale = Boolean(dashRev.code_stale);
   const isDevTree = Boolean(repoRev.dirty || dashRev.dirty);
 
   badge.classList.remove('state-unknown', 'state-running', 'state-degraded', 'state-stopped');
@@ -2123,7 +2160,7 @@ if (typeof window !== 'undefined' && !window.__reserveBtnBound) {
         btn.disabled = false;
         btn.textContent = '↻ Re-serve';
         if (typeof showToast === 'function') {
-          showToast('Dashboard restart timed out.', { tone: 'down' });
+          showToast('Dashboard restart timed out.', { tone: 'error' });
         }
       };
       const pollInterval = setInterval(async () => {
@@ -2283,7 +2320,8 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
   const telemetryDefs = SERVICE_DEFS.filter(def => def.key === 'guardrail' || def.key === 'filter' || def.key === 'query');
 
   const rows = telemetryDefs.map(def => {
-    let state = 'stopped', meta = '', pid = null, pillId = '';
+    let state, meta, pid, pillId = '';
+    state = 'stopped'; meta = ''; pid = null;
     let isSvcRunning = false;
     if (def.key === 'guardrail') {
       pillId = ' id="hud-guardrail-pill"';
@@ -2319,7 +2357,7 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
         isSvcRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
         pid = status?.shadow_run?.pid;
         state = isSvcRunning ? 'running' : 'stopped';
-        meta = isSvcRunning ? (pid ? `pid ${pid} · paper CLOB` : 'paper CLOB') : 'stopped';
+        meta = isSvcRunning ? (pid ? `pid ${pid} · paper CLOB` : 'paper CLOB') : '';
       } else {
         const svc = status?.services?.query;
         isSvcRunning = Boolean(svc?.running);
