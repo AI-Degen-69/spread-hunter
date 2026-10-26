@@ -876,6 +876,17 @@ def _tweak_text(env: Any) -> str:
     return " \u00b7 ".join(lines)
 
 
+def _note_text(value: Any) -> str:
+    """An analyst note as page text: trimmed, and empty unless it is a string.
+
+    `None`, a number and a whitespace-only string all mean "no note". Guessed
+    prose would read as an analyst finding the arms file never made.
+    """
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
 def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
     """The arms a plan actually launched, shaped like the static preset rows."""
     try:
@@ -887,7 +898,9 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
     arms = []
     for i, record_arm in enumerate(record_arms):
         name = record_arm["name"]
-        entry = source.get(name) or {}
+        # A numbered run records `<name>-<n>` while the arms file names the base
+        # arm; without the strip this row would lose its label, desc and notes.
+        entry = source.get(name) or source.get(_strip_round_suffix(name)) or {}
         arms.append({
             "issue": issue if issue is not None else 0,
             "name": name,
@@ -897,10 +910,15 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
             "run_id": record_arm.get("run_id", ""),
             "color": entry.get("color") or _PLAN_ARM_COLORS[i % len(_PLAN_ARM_COLORS)],
             "desc": entry.get("desc") or entry.get("profile") or "",
-            "worst_catalyst": "",
-            "worst_catalyst_desc": "",
-            "hypothesized_tweak": _tweak_text(entry.get("env") or record_arm.get("env")),
-            "tweak_rationale": entry.get("thesis") or "",
+            "worst_catalyst": _note_text(entry.get("worst_catalyst")),
+            "worst_catalyst_desc": _note_text(entry.get("worst_catalyst_desc")),
+            "hypothesized_tweak": (
+                _note_text(entry.get("hypothesized_tweak"))
+                or _tweak_text(entry.get("env") or record_arm.get("env"))
+            ),
+            "tweak_rationale": (
+                _note_text(entry.get("tweak_rationale")) or _note_text(entry.get("thesis"))
+            ),
         })
     return arms
 
@@ -960,7 +978,7 @@ def resolve_tournament_meta(
         "description": (
             f"Following the newest tournament record on disk: issue #{issue}, {arms_label.lower()} "
             "launched from its own arms file. Comparative reading happens after the planned run "
-            "length; catalyst columns stay empty until this run reports."
+            "length; the catalyst column is this run's own arms file, quoted as written."
         ),
         "issue_primary": issue,
         "issue_secondary": issue,

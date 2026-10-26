@@ -511,11 +511,15 @@ def test_newest_run_of_another_issue_owns_the_arm_table(tmp_path, monkeypatch):
     assert loose["label"] == "Loose Baseline"
     assert loose["db"] == "data/tournaments/i799/tournament-test/loose-baseline.db"
     assert loose["port"] == 8810
-    assert loose["tweak_rationale"] == spec["loose-baseline"]["thesis"]
-    # The control moves no knob, so it must not borrow one from another arm.
-    assert loose["hypothesized_tweak"] == ""
+    # The #799 arms file carries analyst notes now, and an explicit note wins over
+    # the text this module generates from env/thesis.
+    assert loose["worst_catalyst"] == spec["loose-baseline"]["worst_catalyst"]
+    assert loose["tweak_rationale"] == spec["loose-baseline"]["tweak_rationale"]
+    # The control moves no knob, so it must not borrow one from another arm; the
+    # note names the lever the analyst would try next, not a setting it ran.
+    assert loose["hypothesized_tweak"] == "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06"
     tight = {a["name"]: a for a in arms}["tight-touch"]
-    assert tight["hypothesized_tweak"] == "quote_tournament_preset = aggressive"
+    assert tight["hypothesized_tweak"] == "BOT_QUOTE_TOURNAMENT_PRESET=balanced"
     assert tight["desc"] == spec["tight-touch"]["desc"]
 
 
@@ -899,3 +903,133 @@ def test_embedded_state_cannot_close_its_own_script_tag():
 
     assert "</script><b>" not in html
     assert "</script" in html
+
+
+def test_plan_arms_read_the_four_notes_from_the_launched_arms_config(tmp_path, monkeypatch):
+    """The catalyst column is the arms file's, and only what it actually says.
+
+    `worst_catalyst` was hardcoded blank here, so a plan-launched table could
+    never carry an analyst note. The note is explicit config text: it wins when
+    present, whitespace is not presence, and a non-string is a config mistake
+    that must not reach the page as text.
+    """
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    empty_notes = {
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    }
+    source = [
+        {"name": "a-full", "thesis": "Th", "env": {"BOT_X": "1"},
+         "worst_catalyst": "H", "worst_catalyst_desc": "D",
+         "hypothesized_tweak": "T", "tweak_rationale": "R"},
+        {"name": "b-blank", "thesis": "Th", "env": {"BOT_X": "1"}, **empty_notes},
+        {"name": "c-null", "thesis": "Th", "env": {"BOT_X": "1"},
+         "worst_catalyst": None, "worst_catalyst_desc": None,
+         "hypothesized_tweak": None, "tweak_rationale": None},
+        {"name": "d-space", "thesis": "Th", "env": {"BOT_X": "1"},
+         "worst_catalyst": "   ", "worst_catalyst_desc": "   ",
+         "hypothesized_tweak": "   ", "tweak_rationale": "   "},
+        {"name": "e-padded", "thesis": "Th", "env": {"BOT_X": "1"},
+         "worst_catalyst": "  H  ", "worst_catalyst_desc": "  D  ",
+         "hypothesized_tweak": "  T  ", "tweak_rationale": "  R  "},
+        {"name": "f-nonstring", "thesis": "Th", "env": {"BOT_X": "1"},
+         "worst_catalyst": 5, "worst_catalyst_desc": 5,
+         "hypothesized_tweak": 5, "tweak_rationale": 5},
+        {"name": "g-no-notes", "thesis": "Th", "env": {"BOT_X": "1"}},
+    ]
+    records = [
+        {"name": arm["name"], "db_path": f"data/{arm['name']}.db",
+         "run_id": f"shadow-{arm['name']}", "dash_port": 8801 + i}
+        for i, arm in enumerate(source)
+    ]
+    # A numbered run records `a-full-1`; the arms file names the arm `a-full`.
+    records.append({"name": "a-full-1", "db_path": "data/a-full-1.db",
+                    "run_id": "shadow-a-full-1", "dash_port": 8899})
+    path = _plan(tmp_path, "i799-notes_2026-10-26T10-00", records, source=source, minutes=1440)
+
+    arms = {a["name"]: a for a in cockpit.build_plan_arms(path)}
+
+    def notes(name):
+        arm = arms[name]
+        return (arm["worst_catalyst"], arm["worst_catalyst_desc"],
+                arm["hypothesized_tweak"], arm["tweak_rationale"])
+
+    assert notes("a-full") == ("H", "D", "T", "R")
+    assert notes("b-blank") == ("", "", "x = 1", "Th")
+    assert notes("c-null") == ("", "", "x = 1", "Th")
+    assert notes("d-space") == ("", "", "x = 1", "Th")
+    assert notes("e-padded") == ("H", "D", "T", "R")
+    assert notes("f-nonstring") == ("", "", "x = 1", "Th")
+    assert notes("g-no-notes") == ("", "", "x = 1", "Th")
+    assert notes("a-full-1") == ("H", "D", "T", "R"), "a numbered record still finds its base arm"
+
+
+I799_ARM_NAMES = [
+    "loose-baseline",
+    "tight-touch",
+    "balanced-mid",
+    "wide-shield",
+    "prudent-hybrid",
+    "static-floor-2c",
+    "low-churn-deadband",
+    "hair-trigger-2c",
+    "patient-stop-9c",
+    "queue-clear-5m",
+]
+I799_NOTE_KEYS = (
+    "worst_catalyst",
+    "worst_catalyst_desc",
+    "hypothesized_tweak",
+    "tweak_rationale",
+)
+
+
+def test_i799_arms_file_annotates_every_arm_without_changing_the_launch(tmp_path, monkeypatch):
+    """Two obligations on one file: the notes reach the page, the run stays the same.
+
+    The operator reads this column to decide what to try next, so an arm without
+    a note is a row that cannot answer the question. The same file is the launch
+    input, so the notes must be inert there.
+    """
+    spec = _i799_source()
+
+    assert [arm["name"] for arm in spec] == I799_ARM_NAMES
+    allowed = {"name", "label", "color", "profile", "desc", "thesis", "env", *I799_NOTE_KEYS}
+    for arm in spec:
+        assert set(arm) == allowed, arm["name"]
+        for key in I799_NOTE_KEYS:
+            assert isinstance(arm[key], str) and arm[key].strip(), (arm["name"], key)
+        assert arm["hypothesized_tweak"].startswith("BOT_"), arm["name"]
+        assert arm["tweak_rationale"].startswith("Hypothesis:"), arm["name"]
+
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    path = _plan(
+        tmp_path, "i799-tournament-test_2026-10-26T10-00", _i799_records(),
+        source=spec, minutes=1440,
+    )
+    arms = cockpit.build_plan_arms(path)
+
+    assert [arm["name"] for arm in arms] == I799_ARM_NAMES
+    for arm in arms:
+        for key in I799_NOTE_KEYS:
+            assert arm[key].strip(), (arm["name"], key)
+
+
+def test_i799_notes_do_not_change_the_launch_plan():
+    """A note is prose for the cockpit; it must not move a single trading setting."""
+    from scripts.shadow_tournament import build_tournament_plan
+
+    spec = _i799_source()
+    stripped = [
+        {key: value for key, value in arm.items() if key not in I799_NOTE_KEYS}
+        for arm in spec
+    ]
+
+    annotated = build_tournament_plan(
+        issue=799, arms=spec, base_port=8801, minutes=5, check_ports=False)
+    plain = build_tournament_plan(
+        issue=799, arms=stripped, base_port=8801, minutes=5, check_ports=False)
+
+    assert [arm.to_dict() for arm in annotated.arms] == [arm.to_dict() for arm in plain.arms]

@@ -107,7 +107,7 @@ T1's precedence rule and cannot start before it.
 
 ---
 
-## T1 — Source the four notes from the arms config (size **S**, `[Backend/Logic]`)
+## [x] T1 — Source the four notes from the arms config (size **S**, `[Backend/Logic]`)
 
 Files: `scripts/tournament_cockpit_server.py`, `tests/test_tournament_cockpit_arms.py`.
 Depends on: —
@@ -166,7 +166,7 @@ Depends on: —
   produces HTML with no `</script><b>`.
 - Verify: `python -m pytest -q tests/test_tournament_cockpit_arms.py`.
 
-## T3 — Write the 10 notes, pin the real config, fix the stale copy (size **M**, `[UX/Copy]`)
+## [x] T3 — Write the 10 notes, pin the real config, fix the stale copy (size **M**, `[UX/Copy]`)
 
 Files: `configs/tournaments/i799-tournament-test_arms.json`,
 `tests/test_tournament_cockpit_arms.py`, `scripts/tournament_cockpit_server.py` (one
