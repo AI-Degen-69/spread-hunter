@@ -897,8 +897,8 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
             "run_id": record_arm.get("run_id", ""),
             "color": entry.get("color") or _PLAN_ARM_COLORS[i % len(_PLAN_ARM_COLORS)],
             "desc": entry.get("desc") or entry.get("profile") or "",
-            "worst_catalyst": "",
-            "worst_catalyst_desc": "",
+            "worst_catalyst": entry.get("worst_catalyst") or "",
+            "worst_catalyst_desc": entry.get("worst_catalyst_desc") or "",
             "hypothesized_tweak": _tweak_text(entry.get("env") or record_arm.get("env")),
             "tweak_rationale": entry.get("thesis") or "",
         })
@@ -1855,18 +1855,23 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 
 <!-- TAB: HYBRID CONFIGURATION BLUEPRINT -->
 <div id="tab-hybrid-config" class="tab-pane">
-  <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.08), rgba(0, 176, 255, 0.08)); border: 1px solid rgba(0, 230, 118, 0.3); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
+  <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.12), rgba(0, 176, 255, 0.12)); border: 1px solid rgba(0, 230, 118, 0.4); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
       <div>
-        <span class="badge badge-green" style="font-size: 12px; padding: 4px 10px; margin-bottom: 6px;">🌟 BENCHMARK SYNTHESIS</span>
-        <h2 style="font-size: 18px; font-weight: 700; color: #f0f4fc;">Production HYBRID Configuration Blueprint</h2>
+        <span class="badge badge-green" style="font-size: 12px; padding: 4px 10px; margin-bottom: 6px;">🌟 #799 LEADER RECIPE — INTERIM</span>
+        <h2 style="font-size: 18px; font-weight: 700; color: #f0f4fc;">HYBRID Blueprint — Built From the #799 Leader Arm</h2>
         <p style="color: var(--text-muted); font-size: 12.5px; margin-top: 4px;">
-          Note: Static benchmark synthesis combining disciplined requote defense with automated orphan risk management.
+          Row 1 is the leader arm's recipe, copied from the env it launched with. Every row after it is labeled with what
+          sets the value, because #799 varies exactly one knob per arm and did not test the deployment layer. Read against the run so far:
+          <strong id="hb-quotes" class="tabular">—</strong> quotes and
+          <strong id="hb-trades" class="tabular">—</strong> trades across
+          <strong id="hb-arms" class="tabular">—</strong> arms, still in flight.
         </p>
       </div>
       <div style="text-align: right;">
-        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Status in Codebase</div>
-        <div class="tabular" style="color: var(--green); font-size: 15px; font-weight: 700;">core_brain.config.TOURNAMENT_PRESETS["hybrid"]</div>
+        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Pricing Profile — the leader's own</div>
+        <div class="tabular" style="color: var(--green); font-size: 15px; font-weight: 700;">core_brain.config.TOURNAMENT_PRESETS["balanced"]</div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">A shipped preset, and the leader arm's single env override. Its live standing is in the card below.</div>
       </div>
     </div>
   </div>
@@ -1878,78 +1883,132 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
           <th>Parameter</th>
           <th>Config Value</th>
           <th>CLI / Env Key</th>
-          <th>Source Champion</th>
+          <th>Set By</th>
           <th>Live Function &amp; Mathematical Rationale</th>
         </tr>
       </thead>
       <tbody>
         <tr>
+          <td><strong>Volatility Pricing Preset</strong></td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>Dynamic 0.50x, 2-4¢</strong></td>
+          <td><code>BOT_QUOTE_TOURNAMENT_PRESET=balanced</code></td>
+          <td><span class="badge badge-green">#799 balanced-mid — the leader's only env key</span></td>
+          <td><strong>Measured Recipe:</strong> The leader arm ran the shipped baseline with exactly one override, the <code>balanced</code> preset: book-spread tracking at 0.50x inside a 2¢ floor and a 4¢ ceiling. Reproducing that arm's pricing takes this one variable.</td>
+        </tr>
+        <tr>
+          <td><strong>Spread Offset Ceiling</strong></td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>4.0¢</strong></td>
+          <td><code>BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS</code> — preset default, no line needed</td>
+          <td><span class="badge badge-green">balanced preset</span></td>
+          <td><strong>Reach Anchor:</strong> The ceiling is 4¢ because that is what the preset ships; the leader sets no override here, so no <code>BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS</code> line belongs in the deployment file. An earlier version of this tab lifted it to 6¢ — a value no #799 arm ran.</td>
+        </tr>
+        <tr>
           <td><strong>Requote Deadband</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>0.060 (6.0¢)</strong></td>
-          <td><code>BOT_ORDER_REQUOTE_DEAD_BAND_CENTS</code></td>
-          <td><span class="badge badge-green">#485 deadband-wide</span></td>
-          <td><strong>Queue Priority Defender:</strong> Suppresses cancellation &amp; requote when book shifts ≤ 6¢. Eliminates excessive requoting churn seen in tighter deadbands, ensuring our order stays in front of the venue queue.</td>
+          <td><code>BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06</code></td>
+          <td><span class="badge badge-amber">Override — 3¢ ships; #799 did not settle it</span></td>
+          <td><strong>Queue Priority Defender:</strong> Suppresses cancellation &amp; requote while the book shifts ≤ 6¢, protecting queue position. Named honestly: the shipped default is 3¢, and the only arm to vary this knob ran 10¢ <em>and</em> switched the dynamic offset off, finishing 9th of 10. 6¢ is a deliberate middle, not a measured win.</td>
         </tr>
         <tr>
           <td><strong>Single-Buy Stop Drop</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>$0.045 (4.5¢)</strong></td>
           <td><code>BOT_RISK_STOP_MODE=ABSOLUTE_DROP</code><br><code>BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045</code></td>
-          <td><span class="badge badge-green">Risk Guardian</span></td>
-          <td>Hard loss stop on orphan legs under absolute drop mode. Trigger is entry price minus 0.045, rounded up to a whole cent; emergency floor can set a higher trigger.</td>
+          <td><span class="badge badge-amber">Override — no stop ships</span></td>
+          <td><strong>Tail Risk Limiter:</strong> A hard loss stop under absolute drop mode, firing 0.045 below entry, so an orphan leg cannot become an unchosen directional bet. The shipped default is mode <code>NONE</code>, so this is a deployment decision rather than a tournament result: #799's stop arms ran 2¢, 8¢ and 9¢ and finished 7th, 8th and 10th, while the no-stop control finished 2nd. Watched live on the leader arm: <span id="hb-stops" class="tabular">—</span> stop exits, <span id="hb-stoprate" class="tabular">—</span>% of its closed trades.</td>
+        </tr>
+        <tr>
+          <td><strong>Queue-Clear Gate</strong></td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>5 min</strong></td>
+          <td><code>BOT_ORDER_GATE_QUEUE_CLEAR_ON=1</code><br><code>BOT_ORDER_QUEUE_MAX_CLEAR_MIN=5</code></td>
+          <td><span class="badge badge-green">#799 queue-clear-5m — leads on Sharpe, PF, drawdown</span></td>
+          <td><strong>Stale Book Filter:</strong> Refuses books whose queue is unlikely to clear, so the second leg can fill before the market's regime changes. 5 minutes is the value the arm actually ran, and the clearest single-knob result in #799: it leads the field on Sharpe, profit factor, max drawdown and Monte Carlo P5, on an edge per trade indistinguishable from the leader's, with the best win and merge rates. It ranks 6th on realized PnL only because it trades least — last of the ten on volume — which is the bargain this gate makes: fewer, better fills for a third of the drawdown. Its Sharpe right now is <span id="hb-qcsharpe" class="tabular">—</span>; if that has stopped leading the field, the standing card above names the current leader. The 3 minutes in the previous revision was a window no arm ran.</td>
         </tr>
         <tr>
           <td><strong>Aged-Out Rescue Lead</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>45.0s</strong></td>
-          <td><code>BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC</code></td>
-          <td><span class="badge badge-green">Rescue Lead</span></td>
-          <td>Lead time before market resolution to trigger emergency unwinding of orphan legs. Prioritizes position liquidation before resolution freeze.</td>
-        </tr>
-        <tr>
-          <td><strong>Dynamic Offset</strong></td>
-          <td class="tabular" style="font-size: 14px; color: #8b9bb4;"><strong>False (Disabled)</strong></td>
-          <td><code>BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0</code></td>
-          <td><span class="badge badge-green">Static Base</span></td>
-          <td>Static offset avoids widening quotes during volatile yet profitable flow, keeping fill velocity predictable.</td>
+          <td><code>BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0</code></td>
+          <td><span class="badge badge-amber">Override — 900s ships</span></td>
+          <td><strong>Resolution Unwind:</strong> Begins emergency liquidation of single legs 45s before the market's resolution freeze. The shipped lead is 900s, so this is fifteen times earlier — a deployment choice, untouched by #799.</td>
         </tr>
         <tr>
           <td><strong>Absolute Pair Cap</strong></td>
           <td class="tabular" style="font-size: 14px; color: var(--amber);"><strong>$0.990</strong></td>
           <td><code>BOT_POS_PRICE_MAX_PAIR_COST_USD</code></td>
           <td><span class="badge badge-amber">Core Safety Law</span></td>
-          <td>Shipped default: under no circumstances can UP + DOWN cost combined exceed $0.99 (overrides are rehearsal-only). Targets a minimum $0.01 gross margin per pair before fees and gas ($1.00 payout).</td>
+          <td><strong>Arbitrage Floor:</strong> Shipped default guaranteeing minimum $0.01 gross margin per pair before $1.00 USDC resolution payout.</td>
         </tr>
       </tbody>
     </table>
   </div>
 
   <div class="decision-grid" style="margin-bottom: 24px;">
+    <div class="decision-box" style="border-left: 4px solid var(--green);">
+      <h3 style="color: var(--green);">📊 Leader Arm — Live Standing in #799 (Interim)</h3>
+      <p style="color: var(--text-muted); font-size: 11.5px; margin: 0 0 10px 0; line-height: 1.45;">
+        Recomputed from <code>balanced-mid</code>, the arm this blueprint is built from, on the same 5s poll as the rest of this page.
+        Not a forecast, and not a verdict: the run is <strong id="hb-progress" class="tabular">—</strong> complete, and this run's
+        <code>results.json</code> carries the note “Shadow results are modeled… The stat gate decides.” The standing row below says whether that arm is still ahead.
+      </p>
+      <ul style="list-style-type: none; padding-left: 0; line-height: 1.8;">
+        <li>🎯 <strong>Observed Win Rate:</strong> <span id="hb-win" class="tabular positive">—</span> <span style="color: var(--text-muted);">vs league <span id="hb-aggwin" class="tabular">—</span></span></li>
+        <li>🔗 <strong>Merge-to-Close:</strong> <span id="hb-merge" class="tabular positive">—</span> <span style="color: var(--text-muted);">vs league <span id="hb-aggmerge" class="tabular">—</span></span></li>
+        <li>⚡ <strong>Sharpe Proxy:</strong> <span id="hb-sharpe" class="tabular positive">—</span> <span style="color: var(--text-muted);">league best <span id="hb-bestsharpe" class="tabular">—</span> (<span id="hb-bestsharpearm">—</span>)</span></li>
+        <li>💰 <strong>Realized EV / Trade:</strong> <span id="hb-ev" class="tabular positive">—</span> per closed position</li>
+        <li>⚖️ <strong>Profit Factor:</strong> <span id="hb-pf" class="tabular positive">—</span></li>
+        <li>🎲 <strong>Monte Carlo P5 (100-Trade Draw):</strong> <span id="hb-mcp5" class="tabular positive">—</span></li>
+        <li>📉 <strong>Max Drawdown:</strong> <span id="hb-mdd" class="tabular negative">—</span></li>
+        <li>🏁 <strong>Standing Among the Arms:</strong> <span id="hb-rank" class="tabular">—</span>, at <span id="hb-pnl" class="tabular positive">—</span> realized — leader <span id="hb-leader">—</span> (<span id="hb-leaderpnl" class="tabular positive">—</span>)</li>
+      </ul>
+    </div>
+
+    <div class="decision-box" style="border-left: 4px solid var(--red);">
+      <h3 style="color: var(--red);">⚠️ Stress Scenarios &amp; Failure Mode Defenses</h3>
+      <ul style="list-style-type: none; padding-left: 0; line-height: 1.8;">
+        <li>💥 <strong>1. Flash Directional Breakout:</strong> Leg 1 fills immediately prior to a sharp >15¢ event before Leg 2 posts.
+          <div style="font-size: 11px; color: var(--text-muted); margin-left: 14px;"><strong>Defense:</strong> the 4.5¢ absolute-drop stop cuts the orphan at -$0.045 instead of letting it run. Observed on this arm: <span id="hb-stops2" class="tabular">—</span> stop-loss exits.</div>
+        </li>
+        <li>🧊 <strong>2. Liquidity Vacuum / Stalled Book:</strong> Taker volume halts right after Leg 1 fill, leaving second leg stranded.
+          <div style="font-size: 11px; color: var(--text-muted); margin-left: 14px;">            <strong>Defense:</strong> the 5m queue-clear filter avoids stagnant books; the 45s rescue unwinds the leg into settlement.</div>
+        </li>
+        <li>🏓 <strong>3. High-Frequency Ping-Pong Jitter:</strong> Micro-tick flutter triggers repeated cancellations.
+          <div style="font-size: 11px; color: var(--text-muted); margin-left: 14px;"><strong>Defense:</strong> 6.0¢ deadband suppresses cancel/re-quote order churn, maintaining book priority.</div>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="decision-grid" style="margin-bottom: 24px;">
     <div class="decision-box">
       <h3 style="color: var(--blue);">💻 Ready-to-Run PowerShell &amp; CLI Commands</h3>
-      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Execute rehearsal or inspect the hybrid preset:</p>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Rehearse the spec, then serve this page. Live trading is a separate, operator-run step:</p>
       <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #a5d6a7; overflow-x: auto;">
-# 1. Interactive Menu - Select Preset "hybrid":
-.\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset hybrid -Minutes 60
+# 1. Interactive Menu - rehearse the leader's preset:
+.\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset balanced -Minutes 60
 
-# 2. Or Multi-Arm Tournament Rehearsal (Default Arms):
-python -m scripts.shadow_tournament --minutes 60.0 --interval 1.0
+# 2. Or run it directly, with the leader's preset in the environment:
+$env:BOT_QUOTE_TOURNAMENT_PRESET = "balanced"
+python -m core_brain.shadow_run --minutes 60 --interval 1.0 --db data/leader_balanced_shadow_01.db --run-id shadow-leader-balanced-01 --starting-bankroll-usd 100
 
-# 3. Tournament Analytics Cockpit:
+# 3. Launch Tournament Cockpit Server:
 python -m scripts.tournament_cockpit_server --port 8800
       </pre>
     </div>
 
     <div class="decision-box">
       <h3 style="color: var(--green);">🛡️ Live Production Environment Variables (.env)</h3>
-      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Exact settings injected for live execution:</p>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Exact configuration for live deployment:</p>
       <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #81d4fa; overflow-x: auto;">
-# --- Spread Hunter HYBRID Champion Config ---
-BOT_QUOTE_TOURNAMENT_PRESET=hybrid
-BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0
+# --- Built from the #799 leader arm (`balanced-mid`) ---
+# The first line is that arm's own env. Every line after it is a
+# deliberate override of a shipped default, which #799 did not vary.
+BOT_QUOTE_TOURNAMENT_PRESET=balanced
 BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06
 BOT_RISK_STOP_MODE=ABSOLUTE_DROP
 BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045
+BOT_ORDER_GATE_QUEUE_CLEAR_ON=1
+BOT_ORDER_QUEUE_MAX_CLEAR_MIN=5
 BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
-# BOT_POS_PRICE_MAX_PAIR_COST_USD=0.99  # Shipped default (0.99); do not set outside rehearsal
+# BOT_POS_PRICE_MAX_PAIR_COST_USD=0.99  # Shipped default (0.99); do not alter
       </pre>
     </div>
   </div>
@@ -2087,6 +2146,56 @@ function renderAll() {{
   if (aggMerge) aggMerge.innerText = state.agg_has_data ? Number(state.agg_merge_rate).toFixed(1) + '%' : 'NO_DATA';
   const aggSpread = document.getElementById('agg-spread');
   if (aggSpread) aggSpread.innerText = state.agg_has_data ? '$' + Number(state.agg_spread).toFixed(2) : 'NO_DATA';
+
+  // HYBRID blueprint tab: the leader arm's standing, read from the same poll as
+  // the rest of the page. The blueprint is a specification and may be static, but
+  // its *numbers* must come from the run they cite -- that is what made the
+  // previous hardcoded forecast wrong the moment the run moved past it.
+  const hbSet = (id, text) => {{
+    const el = document.getElementById(id);
+    if (el) el.innerText = text;
+  }};
+  const hbArms = state.arms || [];
+  const hbArm = hbArms.find(a => a.name === 'balanced-mid');
+  if (hbArm) {{
+    const hbPct = (v) => (v == null ? '\u2014' : Number(v).toFixed(1) + '%');
+    const hbUsd = (v) => ((v >= 0 ? '+$' : '-$') + Math.abs(Number(v) || 0).toFixed(2));
+    hbSet('hb-quotes', (state.total_quoted || 0).toLocaleString());
+    hbSet('hb-trades', (state.total_trades || 0).toLocaleString());
+    hbSet('hb-arms', String(hbArms.length));
+    hbSet('hb-progress', Number(state.progress_pct || 0).toFixed(1) + '%');
+    hbSet('hb-win', hbPct(hbArm.win_rate));
+    hbSet('hb-aggwin', hbPct(state.agg_win_rate));
+    hbSet('hb-merge', hbPct(hbArm.merge_rate));
+    hbSet('hb-aggmerge', hbPct(state.agg_merge_rate));
+    hbSet('hb-sharpe', Number(hbArm.sharpe_proxy || 0).toFixed(2));
+    const hbBest = [...hbArms].sort((a, b) => (b.sharpe_proxy || 0) - (a.sharpe_proxy || 0))[0];
+    if (hbBest) {{
+      hbSet('hb-bestsharpe', Number(hbBest.sharpe_proxy || 0).toFixed(2));
+      hbSet('hb-bestsharpearm', hbBest.label || hbBest.name);
+    }}
+    // The queue-gate row cites the arm that ran it. Binding its Sharpe keeps that
+    // row honest if the arm stops leading the field.
+    const hbQc = hbArms.find(a => a.name === 'queue-clear-5m');
+    if (hbQc) hbSet('hb-qcsharpe', Number(hbQc.sharpe_proxy || 0).toFixed(2));
+    // 3 decimals: the leaderboard's EV / TRADE column is the value to match.
+    hbSet('hb-ev', (hbArm.mean_pnl >= 0 ? '+$' : '-$') + Math.abs(Number(hbArm.mean_pnl) || 0).toFixed(3));
+    hbSet('hb-pf', Number(hbArm.profit_factor || 0).toFixed(2));
+    hbSet('hb-mcp5', hbUsd(hbArm.mc_p5));
+    hbSet('hb-mdd', '$' + Number(hbArm.max_drawdown || 0).toFixed(2));
+    const hbRanked = [...hbArms].sort((a, b) => (b.total_pnl || 0) - (a.total_pnl || 0));
+    hbSet('hb-rank', '#' + (hbRanked.findIndex(a => a.name === hbArm.name) + 1) + ' of ' + hbRanked.length);
+    hbSet('hb-pnl', hbUsd(hbArm.total_pnl));
+    if (hbRanked[0]) {{
+      hbSet('hb-leader', hbRanked[0].label || hbRanked[0].name);
+      hbSet('hb-leaderpnl', hbUsd(hbRanked[0].total_pnl));
+    }}
+    const hbStops = Number(hbArm.stop_loss_exits_count || 0);
+    const hbTrades = Number(hbArm.trades_count || 0);
+    hbSet('hb-stops', String(hbStops));
+    hbSet('hb-stops2', String(hbStops));
+    hbSet('hb-stoprate', hbTrades > 0 ? (100.0 * hbStops / hbTrades).toFixed(1) : '0.0');
+  }}
 
   // Table
   const tbody = document.getElementById('leaderboard-tbody');

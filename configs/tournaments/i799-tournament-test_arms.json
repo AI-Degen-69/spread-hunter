@@ -6,6 +6,8 @@
     "profile": "shipped baseline: dynamic 0.50x, 1-20c, 15c window, no widen snap-back",
     "desc": "Control. The shipped loose baseline with nothing changed; every other arm is read against it.",
     "thesis": "The shipped defaults are the reference: any arm must beat this to earn a change.",
+    "worst_catalyst": "stop_loss_trigger (4.5¢ noise)",
+    "worst_catalyst_desc": "11 stops on 40 trades (27.5% stop rate); 4.5¢ drop triggers prematurely on normal spread bounce.",
     "env": {}
   },
   {
@@ -15,6 +17,8 @@
     "profile": "aggressive preset: dynamic 0.25x, 2-3c",
     "desc": "Quotes hug the mid with the tightest dynamic offset the presets ship.",
     "thesis": "A tight offset fills both legs sooner; volume and merge rate beat per-pair edge.",
+    "worst_catalyst": "dynamic_multiplier (0.25x starved fills)",
+    "worst_catalyst_desc": "Severe quote starvation: only 6 completed trades in 6.4h (14 fills / 30 quotes = 46.7% fill rate).",
     "env": {
       "BOT_QUOTE_TOURNAMENT_PRESET": "aggressive"
     }
@@ -26,6 +30,8 @@
     "profile": "balanced preset: dynamic 0.50x, 2-4c",
     "desc": "The middle preset: proportional volatility tracking without the aggressive clamp.",
     "thesis": "A 2-4c band trades some edge for reach, which should merge more pairs than the wide arms.",
+    "worst_catalyst": "offset_mid_cushion (2-4¢ insufficient)",
+    "worst_catalyst_desc": "8 stops on 33 trades (24.2%); 2-4¢ dynamic band leaves orphan legs vulnerable to fast runs.",
     "env": {
       "BOT_QUOTE_TOURNAMENT_PRESET": "balanced"
     }
@@ -37,6 +43,8 @@
     "profile": "conservative preset 0.75x / 2-5c + 8c absolute stop",
     "desc": "Widest preset offset with a loose loss stop, sized to survive volatile books.",
     "thesis": "In volatility the cushion matters more than the fill: wide offset plus an 8c stop keeps naked legs from bleeding.",
+    "worst_catalyst": "stop_adverse_drop (8.0¢ bleed)",
+    "worst_catalyst_desc": "9 stops on 34 trades (26.5%); 8¢ stop lets toxic orphan legs bleed deeply (-$0.37 avg loss).",
     "env": {
       "BOT_QUOTE_TOURNAMENT_PRESET": "conservative",
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
@@ -50,6 +58,8 @@
     "profile": "prudent preset: dynamic 0.60x, 2-6c",
     "desc": "The hybrid preset between conservative and balanced, with the preset's 4c clamp lifted to 6c so it is not the same arm as balanced.",
     "thesis": "A 0.60x multiplier is the compromise: enough cushion for swings, close enough to fill.",
+    "worst_catalyst": "volatile_cluster_gap (min 193-205)",
+    "worst_catalyst_desc": "7 stops; $0.70 drawdown at min 193.8 during market-wide spread blowout.",
     "env": {
       "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
       "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "6"
@@ -62,6 +72,8 @@
     "profile": "dynamic offset off, fixed 2c offset",
     "desc": "Volatility tracking switched off; every quote rests a flat 2c under the mid.",
     "thesis": "The dynamic offset is mostly noise; a fixed 2c floor should quote more consistently for less machinery.",
+    "worst_catalyst": "static_offset (no vol adaptation)",
+    "worst_catalyst_desc": "Catastrophic -$2.28 single loss at min 304.8; static 2¢ failed to widen during vol spike.",
     "env": {
       "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0"
     }
@@ -73,6 +85,8 @@
     "profile": "static 2c + 10c requote dead band",
     "desc": "Static offset with the widest dead band config allows: almost no requoting.",
     "thesis": "Churn is the cost: holding a resting quote through small moves keeps queue position and cuts cancel/repost fees.",
+    "worst_catalyst": "requote_dead_band (10¢ too sticky)",
+    "worst_catalyst_desc": "10 stops on 37 trades; 10¢ deadband holds stale quotes too long into adverse price shifts.",
     "env": {
       "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0",
       "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.10"
@@ -85,6 +99,8 @@
     "profile": "2c absolute stop on a naked leg",
     "desc": "Single-leg stop armed at 2c: the earliest exit the shipped risk modes allow.",
     "thesis": "A naked leg is an unchosen bet; cutting it at 2c caps the downside before it becomes a directional loss.",
+    "worst_catalyst": "stop_adverse_drop (2.0¢ hair-trigger)",
+    "worst_catalyst_desc": "15 stops on 34 trades (44.1% stop rate); premature liquidation destroys pairs on 1-tick flicker.",
     "env": {
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
       "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.020"
@@ -97,6 +113,8 @@
     "profile": "9c absolute stop on a naked leg",
     "desc": "Single-leg stop armed at 9c: the widest leash the tournament runs.",
     "thesis": "Most 2-5c drops are noise a hedge can still recover; a 9c stop only cuts legs that truly broke.",
+    "worst_catalyst": "stop_adverse_drop (9.0¢ max loss -$2.10)",
+    "worst_catalyst_desc": "Starvation + severe tail loss: only 6 trades, -$2.10 loss at min 360.6 degraded Sharpe to 3.38.",
     "env": {
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
       "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.090"
@@ -109,6 +127,8 @@
     "profile": "queue-clear gate on, 5-minute max clear",
     "desc": "Only quotes books whose queue is likely to clear inside five minutes.",
     "thesis": "A quote stuck behind a slow queue is dead capital; refusing those books should lift fill quality per order.",
+    "worst_catalyst": "queue_max_clear (5m stale fills)",
+    "worst_catalyst_desc": "8 stops; 5m clear window permits fills into illiquid books right before drift (-$0.80 loss).",
     "env": {
       "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
       "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"
