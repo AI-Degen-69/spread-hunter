@@ -65,17 +65,18 @@
         <div class="brand-sub" id="wallet-addr">0xeE3B...1624</div>
       </div>
     </div>
-    <!-- Dedicated Code Revision / Version Status Section -->
-    <div id="code-version-section" class="code-version-section" style="display: flex; align-items: center; gap: 8px; margin-left: 8px;">
-      <span id="code-version-badge" class="pill state-unknown mono" title="Repository Code Status">
-        <span class="pill-label">#CODE</span>
-        <span id="code-version-value" class="pill-value">--</span>
-      </span>
-      <button id="btn-reserve-dash" class="ctrl-btn ctrl-btn-secondary" type="button" style="display: none; padding: 2px 8px; font-size: 11px; height: 26px;" title="Restart and re-serve this dashboard to load latest code">
-        ↻ Re-serve
-      </button>
-    </div>
     <div class="top-meta" tabindex="0">
+      <!-- Block 0: which code this process is holding. Lives inside the strip
+           so the header keeps its brand-then-strip order (test_ui_top_nav_groups). -->
+      <div id="code-version-section" class="code-version-section" style="display: flex; align-items: center; gap: 8px; margin-left: 8px;">
+        <span id="code-version-badge" class="pill state-unknown mono" title="Repository Code Status">
+          <span class="pill-label">#CODE</span>
+          <span id="code-version-value" class="pill-value">--</span>
+        </span>
+        <button id="btn-reserve-dash" class="ctrl-btn ctrl-btn-secondary" type="button" style="display: none; padding: 2px 8px; font-size: 11px; height: 26px;" title="Restart and re-serve this dashboard to load latest code">
+          ↻ Re-serve
+        </button>
+      </div>
       <!-- All at-a-glance operational state lives in this single bar. Keep the
            IDs stable: app.js updates these pills and the existing controls. -->
       <div class="top-group top-group-source" role="group" aria-label="Data source">

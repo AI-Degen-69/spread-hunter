@@ -1,7 +1,8 @@
 """Tournament Stack Reconciler & Self-Healing Alignment.
 
 Idempotent desired-state reconciler for Spread Hunter tournaments:
-1. Sweeps any stale/corrupt orders on closed markets from the arm databases.
+1. Optionally sweeps orders for a market the operator names (--sweep-slug) from
+   the arm databases. Nothing is deleted without that flag.
 2. Ensures the Market Filter loop is running and publishing fresh snapshots.
 3. Ensures Tournament Cockpit (:8800) and Tournament Hub (:8798) are alive.
 4. Checks all 10 arm dashboards (:8801-:8810), restarting any that are down or
@@ -25,7 +26,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -118,9 +119,14 @@ def kill_process_on_port(port: int) -> bool:
     return False
 
 
-def sweep_stale_orders(db_path: Path) -> int:
-    """Purge stale orders/settlements on markets that were closed before the run started."""
-    if not db_path.exists():
+def sweep_stale_orders(db_path: Path, slugs: Sequence[str]) -> int:
+    """Purge orders for the market slugs the operator named, plus their fills and closes.
+
+    Opt-in on purpose: this deletes rows from a live arm store, so the only
+    caller that supplies slugs is the operator's --sweep-slug flag. No market
+    is hardcoded here; a delisted market is a decision made at run time.
+    """
+    if not slugs or not db_path.exists():
         return 0
     removed = 0
     try:
@@ -132,8 +138,7 @@ def sweep_stale_orders(db_path: Path) -> int:
             con.close()
             return 0
 
-        stale_slug_patterns = ["bra-san-bah-2026-10-24%"]
-        for pat in stale_slug_patterns:
+        for pat in slugs:
             cur.execute("SELECT order_id FROM orders WHERE condition_id LIKE ? OR order_id LIKE ?", (pat, pat))
             order_ids = [r[0] for r in cur.fetchall()]
             if order_ids:
@@ -353,18 +358,19 @@ def verify_and_report(arms: List[Dict[str, Any]], tourney_id: str) -> bool:
         run_id = arm.get("run_id")
         full_db = Path(db_path) if Path(db_path).is_absolute() else (ROOT / db_path)
 
-        orders_cnt, fills_cnt = 0, 0
+        orders_cnt, filled_cnt = 0, 0
         if full_db.exists():
             try:
                 con = sqlite3.connect(str(full_db), timeout=2.0)
                 cur = con.cursor()
                 orders_cnt = cur.execute("SELECT count(*) FROM orders").fetchone()[0]
-                fills_cnt = cur.execute("SELECT count(*) FROM orders WHERE status='FILLED'").fetchone()[0]
+                # The registry writes lowercase statuses ('filled', 'open', ...).
+                filled_cnt = cur.execute("SELECT count(*) FROM orders WHERE status='filled'").fetchone()[0]
                 con.close()
             except Exception:
                 pass
 
-        dash_ok = False
+        engine_ok = False
         code_stale = True
         market_filter_state = "UNKNOWN"
 
@@ -374,7 +380,7 @@ def verify_and_report(arms: List[Dict[str, Any]], tourney_id: str) -> bool:
                 hb = json.loads(hb_file.read_text(encoding="utf-8"))
                 pid = hb.get("pid", 0)
                 if not hb.get("finished", False) and _is_pid_alive(pid):
-                    dash_ok = True
+                    engine_ok = True
                 code_stale = code_predates_tree(hb)
             except Exception:
                 pass
@@ -392,18 +398,18 @@ def verify_and_report(arms: List[Dict[str, Any]], tourney_id: str) -> bool:
             except Exception:
                 pass
 
-        if not dash_ok or code_stale or market_filter_state != "RUNNING":
+        if not engine_ok or code_stale or market_filter_state != "RUNNING":
             all_green = False
 
-        status_str = "RUNNING (OK)" if dash_ok and not code_stale else "STALE / DOWN"
-        rows.append((idx, name, port, status_str, market_filter_state, orders_cnt, fills_cnt))
+        status_str = "RUNNING (OK)" if engine_ok and not code_stale else "STALE / DOWN"
+        rows.append((idx, name, port, status_str, market_filter_state, orders_cnt, filled_cnt))
 
-    header = f"{'#':<3} {'Arm Name':<24} {'Port':<6} {'Engine Status':<16} {'Filter':<10} {'Orders':<8} {'Fills':<6} {'URL'}"
+    header = f"{'#':<3} {'Arm Name':<24} {'Port':<6} {'Engine Status':<16} {'Filter':<10} {'Orders':<8} {'Filled':<6} {'URL'}"
     log.info(header)
     log.info("-" * len(header) + "-" * 25)
-    for idx, name, port, status_str, filter_st, orders_cnt, fills_cnt in rows:
+    for idx, name, port, status_str, filter_st, orders_cnt, filled_cnt in rows:
         url = f"http://127.0.0.1:{port}"
-        log.info(f"{idx:<3} {name:<24} {port:<6} {status_str:<16} {filter_st:<10} {orders_cnt:<8} {fills_cnt:<6} {url}")
+        log.info(f"{idx:<3} {name:<24} {port:<6} {status_str:<16} {filter_st:<10} {orders_cnt:<8} {filled_cnt:<6} {url}")
 
     log.info("-" * len(header) + "-" * 25)
     log.info("Tournament Cockpit: http://127.0.0.1:8800")
@@ -417,7 +423,8 @@ def verify_and_report(arms: List[Dict[str, Any]], tourney_id: str) -> bool:
     return all_green
 
 
-def reconcile(tourney_id: str = "799", max_markets: int = 3, minutes: float = 1440.0) -> int:
+def reconcile(tourney_id: str = "799", max_markets: int = 3, minutes: float = 1440.0,
+              sweep_slugs: Sequence[str] = ()) -> int:
     """Full idempotent alignment pass for the specified tournament."""
     log.info("Starting tournament #%s reconciliation pass...", tourney_id)
     plan_path = latest_tournament_record(tourney_id, ROOT / "data" / "tournaments")
@@ -460,15 +467,18 @@ def reconcile(tourney_id: str = "799", max_markets: int = 3, minutes: float = 14
     logs_dir = run_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Sweep stale orders across all 10 databases
-    log.info("1. Sweeping stale/corrupt orders across %d tournament databases...", len(arms))
-    total_swept = 0
-    for arm in arms:
-        db_path = arm.get("db_path")
-        if db_path:
-            full_db = Path(db_path) if Path(db_path).is_absolute() else (ROOT / db_path)
-            total_swept += sweep_stale_orders(full_db)
-    log.info("Stale order sweep complete (%d total orders purged).", total_swept)
+    # 1. Optional sweep of markets the operator named
+    if sweep_slugs:
+        log.info("1. Sweeping %d named market(s) across %d tournament databases...", len(sweep_slugs), len(arms))
+        total_swept = 0
+        for arm in arms:
+            db_path = arm.get("db_path")
+            if db_path:
+                full_db = Path(db_path) if Path(db_path).is_absolute() else (ROOT / db_path)
+                total_swept += sweep_stale_orders(full_db, sweep_slugs)
+        log.info("Stale order sweep complete (%d total orders purged).", total_swept)
+    else:
+        log.info("1. No --sweep-slug given: arm databases left untouched.")
 
     # 2. Ensure filter loop is running
     log.info("2. Ensuring Market Filter loop is running...")
@@ -503,9 +513,12 @@ def main() -> int:
     parser.add_argument("--tourney", default="799", help="Tournament issue ID (default: 799)")
     parser.add_argument("--max-markets", type=int, default=3, help="Max markets per arm (default: 3)")
     parser.add_argument("--minutes", type=float, default=1440.0, help="Run duration in minutes (default: 1440.0)")
+    parser.add_argument("--sweep-slug", action="append", default=[], metavar="SLUG",
+                        help="Purge orders for this market slug from every arm database (repeatable; default: none)")
     args = parser.parse_args()
 
-    return reconcile(tourney_id=args.tourney, max_markets=args.max_markets, minutes=args.minutes)
+    return reconcile(tourney_id=args.tourney, max_markets=args.max_markets,
+                     minutes=args.minutes, sweep_slugs=args.sweep_slug)
 
 
 if __name__ == "__main__":

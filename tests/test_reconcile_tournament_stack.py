@@ -37,7 +37,7 @@ def test_sweep_stale_orders_purges_matching_orders(tmp_path):
     con.commit()
     con.close()
 
-    removed = sweep_stale_orders(db_file)
+    removed = sweep_stale_orders(db_file, ["bra-san-bah-2026-10-24%"])
     assert removed == 1
 
     con2 = sqlite3.connect(str(db_file))
@@ -60,5 +60,22 @@ def test_sweep_stale_orders_on_clean_db(tmp_path):
     con.commit()
     con.close()
 
-    removed = sweep_stale_orders(db_file)
+    removed = sweep_stale_orders(db_file, ["bra-san-bah-2026-10-24%"])
     assert removed == 0
+
+
+def test_sweep_without_a_named_slug_deletes_nothing(tmp_path):
+    """The reconciler must never purge a market the operator did not name."""
+    db_file = tmp_path / "arm.db"
+    con = sqlite3.connect(str(db_file))
+    con.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, order_id TEXT, condition_id TEXT)")
+    con.execute("INSERT INTO orders (order_id, condition_id) VALUES ('ord-1', 'bra-san-bah-2026-10-24-bah')")
+    con.commit()
+    con.close()
+
+    assert sweep_stale_orders(db_file, []) == 0
+    assert sweep_stale_orders(db_file, ["some-other-market%"]) == 0
+
+    con = sqlite3.connect(str(db_file))
+    assert con.execute("SELECT count(*) FROM orders").fetchone()[0] == 1
+    con.close()

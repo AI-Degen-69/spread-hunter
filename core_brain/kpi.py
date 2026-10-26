@@ -1154,7 +1154,6 @@ def _is_pipeline_shadow_db(db_path: Path | str) -> bool:
         or "_shadow-" in name
         or "_tournament_" in name
         or "/tournaments/" in posix_path
-        or "tournaments/" in posix_path
     )
 
 

@@ -2419,6 +2419,28 @@ def get_cached_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
 
 
 
+def open_dash_target(query: str) -> tuple[int, Path] | None:
+    """Parse `/open-dash`'s query into (arm port, db file), or None when out of bounds.
+
+    A GET that kills a listening process must not be aimable at whatever the
+    caller likes -- any page the operator has open can navigate to it. Only an
+    arm port is accepted, and only a store inside `data/tournaments`.
+    """
+    import urllib.parse
+    params = urllib.parse.parse_qs(query, keep_blank_values=True)
+    try:
+        port = int(params.get("port", ["0"])[0])
+    except ValueError:
+        return None
+    if not 8801 <= port <= 8810:
+        return None
+    db_path = params.get("db", [""])[0]
+    db_file = (ROOT / db_path if db_path else ROOT).resolve()
+    if (ROOT / "data" / "tournaments").resolve() not in db_file.parents:
+        return None
+    return port, db_file
+
+
 def _ensure_arm_dashboard(port: int, db_path: str) -> None:
     from scripts.reconcile_tournament_stack import (
         is_port_listening, kill_process_on_port, _detached_kwargs, ROOT
@@ -2488,19 +2510,12 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
         # A retired key serves the page's own tournament instead of resurrecting
         # a purged one.
         elif clean_path == "/open-dash":
-            import urllib.parse
-            port = 8801
-            db_path = ""
-            for param in query.split("&"):
-                if param.startswith("port="):
-                    try:
-                        port = int(param.split("=")[1])
-                    except Exception:
-                        pass
-                elif param.startswith("db="):
-                    db_path = urllib.parse.unquote(param.split("=")[1])
-
-            _ensure_arm_dashboard(port, db_path)
+            target = open_dash_target(query)
+            if target is None:
+                self.send_error(400, "open-dash needs port=8801..8810 and a db= inside data/tournaments")
+                return
+            port, db_file = target
+            _ensure_arm_dashboard(port, str(db_file))
             self.send_response(302)
             self.send_header("Location", f"http://127.0.0.1:{port}")
             self.end_headers()

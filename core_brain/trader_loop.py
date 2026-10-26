@@ -2476,8 +2476,10 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
                 if o.condition_id and getattr(o, "status", "") in ("open", "partial", "pending")
             }
             if active_cids:
-                active_gms = [gm for gm in gms if gm.cid in active_cids]
-                remaining_slots = max(0, max_markets - len(active_cids))
+                # Count the feed's own entries, not the order rows: several orders
+                # can share a cid, and an active cid can be missing from the feed.
+                active_gms = [gm for gm in gms if gm.cid in active_cids][:max_markets]
+                remaining_slots = max(0, max_markets - len(active_gms))
                 inactive_gms = [gm for gm in gms if gm.cid not in active_cids][:remaining_slots]
                 gms = active_gms + inactive_gms
             else:

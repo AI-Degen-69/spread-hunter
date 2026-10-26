@@ -2293,7 +2293,7 @@ function Test-OrphanStackProcess {
         "scripts.global_stop_loss",
         "dashboard.server"
     )
-    $markerPattern = 'core_brain|dashboard\.server|tournament|filter_loop|statistical_validation|reconcile|resume_tournament|global_stop_loss'
+    $markerPattern = '-m\s+(core_brain\.|dashboard\.server|scripts\.(filter_loop|tournament_|shadow_tournament|statistical_validation|global_stop_loss|reconcile_tournament_stack|resume_tournament_arms))'
     try {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
             Where-Object {
@@ -2576,7 +2576,7 @@ function Stop-AllSpreadHunterProcesses {
 
     # 2 · Orphan & tournament processes
     Lsh-Phase -Text "PHASE 2 · SCANNING FOR LINGERING PROCESSES"
-    $shPattern = 'core_brain|dashboard\.server|tournament|filter_loop|statistical_validation|reconcile|resume_tournament|global_stop_loss|observer'
+    $shPattern = '-m\s+(core_brain\.|dashboard\.server|scripts\.(filter_loop|tournament_|shadow_tournament|statistical_validation|global_stop_loss|reconcile_tournament_stack|resume_tournament_arms))'
     try {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object {

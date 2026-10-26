@@ -164,3 +164,32 @@ def test_kpi_feed_read_budget_across_many_condition_ids(tmp_path, monkeypatch):
 
     # Feed must be read once for markets.json, not 30+ times
     assert read_count == 1, f"Expected 1 feed read across 30 condition IDs, got {read_count}"
+
+
+def test_status_poll_does_not_re_read_git(monkeypatch):
+    """/api/system/status is polled continuously by every open dashboard.
+
+    `read_code_revision` shells out to git twice; it is captured once at process
+    start, so a poll must not call it. The tree walk is allowed once for the
+    heartbeat verdict and once for the dashboard's own staleness -- no more.
+    """
+    def boom(*args, **kwargs):
+        raise AssertionError("get_system_status re-read git for a poll")
+
+    monkeypatch.setattr(srv.code_revision, "read_code_revision", boom)
+
+    walks = []
+    real_walk = srv.code_revision.decision_code_mtime
+    monkeypatch.setattr(
+        srv.code_revision, "decision_code_mtime",
+        lambda *args, **kwargs: (walks.append(1), real_walk(*args, **kwargs))[1],
+    )
+
+    first = srv.get_system_status()
+    second = srv.get_system_status()
+
+    assert first["repo_revision"] == srv._DASH_CODE
+    assert second["dash_revision"]["commit"] == srv._DASH_CODE["commit"]
+    assert second["dash_revision"]["started_at"] == first["dash_revision"]["started_at"]
+    # Two walks per poll: the heartbeat verdict and the dashboard's own clock.
+    assert len(walks) <= 4, f"expected at most 2 tree walks per poll, got {len(walks)} over two polls"

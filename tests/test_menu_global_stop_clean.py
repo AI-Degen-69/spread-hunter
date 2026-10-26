@@ -55,6 +55,15 @@ def test_option_7_dispatch_branches():
     assert 'Reset-Environment -Mode "none"' in branch_7
 
 
+def test_process_sweep_matches_only_spread_hunter_modules():
+    """A kill sweep may not fire on a bare word like "tournament" or "observer":
+    that matches any Python process on the host, outside this checkout."""
+    src = _menu_source()
+    assert "|tournament|" not in src
+    assert "|observer'" not in src
+    assert r"-m\s+(core_brain\.|dashboard\.server|scripts\.(" in src
+
+
 def test_clear_runtime_state_preserves_presets_and_configs():
     src = _menu_source()
     clear_func = src.split('function Clear-RuntimeState {', 1)[1].split('\nfunction ', 1)[0]

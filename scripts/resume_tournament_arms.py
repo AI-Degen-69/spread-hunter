@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core_brain.shadow_run import latest_tournament_record  # noqa: E402
-from scripts.reconcile_tournament_stack import clear_instance_lock, sweep_stale_orders  # noqa: E402
+from scripts.reconcile_tournament_stack import clear_instance_lock  # noqa: E402
 
 log = logging.getLogger("tournament_resume")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -104,7 +104,6 @@ def main() -> int:
                 continue
 
             full_db = Path(db_path) if Path(db_path).is_absolute() else (ROOT / db_path)
-            sweep_stale_orders(full_db)
             clear_instance_lock(full_db)
             log_file = logs_dir / f"arm-{idx:02d}-{name}.log"
             lf = open(log_file, "a", encoding="utf-8")
