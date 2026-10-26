@@ -1628,6 +1628,18 @@ def get_system_status() -> dict:
         # is down" while a healthy trial writes to a file nobody is watching.
         "shadow_runs": _recent_shadow_runs(db_identity["path"]),
         "starting_capital": get_starting_capital(),
+        "repo_revision": code_revision.read_code_revision(),
+        "dash_revision": {
+            "commit": (code_revision.read_code_revision() or {}).get("commit"),
+            "dirty": (code_revision.read_code_revision() or {}).get("dirty"),
+            "started_at": dash_started_at,
+            "code_mtime": code_revision.decision_code_mtime(),
+            "code_stale": bool(
+                dash_started_at is not None
+                and code_revision.decision_code_mtime() is not None
+                and dash_started_at < code_revision.decision_code_mtime()
+            ),
+        },
         "timestamp": time.time(),
     }
 
@@ -2892,7 +2904,10 @@ def api_system_restart_dash(request: Request):
     def _do_restart():
         time.sleep(0.8)
         # Launch detached replacement dashboard process.
-        subprocess.Popen(relaunch_argv(), cwd=str(LIVE_ROOT))
+        kwargs = {"cwd": str(LIVE_ROOT), "stdin": subprocess.DEVNULL}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(relaunch_argv(), **kwargs)
         # Exit current instance to immediately release port 8799. Engine and
         # screener are separate processes and keep running; they are only
         # orphaned, never signalled.

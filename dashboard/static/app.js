@@ -1774,14 +1774,11 @@ function renderShadowClock() {
     ? (Date.now() - shadowRunAnchor.receivedAtMs) / 1000
     : 0;
   const elapsed = fmtStopwatch(shadowRunAnchor.elapsedSec + drift);
-  const code = shadowCodeNote(shadowRunAnchor);
   const headline = shadowRunAnchor.running
     ? `Shadow rehearsal ${shadowRunAnchor.runId || ''} running, ${shadowRunAnchor.minutes < 0 ? 'no time box (runs until stopped)' : `time box ${shadowRunAnchor.minutes ?? '--'} min`}`
     : 'This shadow rehearsal is no longer running.';
-  el.textContent = (shadowRunAnchor.running ? '· ' + elapsed : '· ' + elapsed + ' ended') + code.text;
-  // The code sentence is appended only when there is one, so a run that
-  // recorded nothing keeps the exact title it had before this existed.
-  el.title = code.title ? headline.replace(/\.$/, '') + '.' + code.title : headline;
+  el.textContent = shadowRunAnchor.running ? '· ' + elapsed : '· ' + elapsed + ' ended';
+  el.title = headline;
 }
 
 /* The code stamp on the stopwatch: which revision this rehearsal loaded, and
@@ -2083,8 +2080,98 @@ async function renderRunSwitcher() {
   });
 }
 
+
+function renderCodeVersion(status) {
+  const badge = document.getElementById('code-version-badge');
+  const valEl = document.getElementById('code-version-value');
+  const btn = document.getElementById('btn-reserve-dash');
+  if (!badge || !valEl) return;
+
+  const repoRev = status?.repo_revision || {};
+  const dashRev = status?.dash_revision || {};
+  const shadowRun = status?.shadow_run || {};
+
+  const commit = repoRev.commit || dashRev.commit || shadowRun.code_revision?.commit || 'unknown';
+  const shortCommit = commit.slice(0, 8);
+  const isStale = Boolean(shadowRun.code_stale || dashRev.code_stale);
+  const isDevTree = Boolean(repoRev.dirty || dashRev.dirty);
+
+  badge.classList.remove('state-unknown', 'state-running', 'state-degraded', 'state-stopped');
+
+  if (commit === 'unknown') {
+    valEl.textContent = 'unknown';
+    badge.classList.add('state-unknown');
+    badge.title = 'Code revision unknown';
+    if (btn) btn.style.display = 'none';
+    return;
+  }
+
+  if (isStale) {
+    badge.classList.add('state-degraded');
+    const availText = repoRev.commit && repoRev.commit !== commit ? ` (Available: #${repoRev.commit.slice(0, 8)})` : '';
+    valEl.textContent = `#${shortCommit}: ⚠ Out-of-Date${availText}`;
+    badge.title = `Process is running code #${shortCommit}, but files on disk have been updated since it started. Click Re-serve to restart.`;
+    if (btn) {
+      btn.style.display = 'inline-flex';
+      btn.classList.add('ctrl-btn-primary');
+      btn.classList.remove('ctrl-btn-secondary');
+    }
+  } else {
+    badge.classList.add('state-running');
+    valEl.textContent = `#${shortCommit}: ✓ Up-to-Date`;
+    const devNote = isDevTree ? ' (active workspace tree)' : '';
+    badge.title = `Running #${shortCommit}${devNote}. In-memory code matches files on disk.`;
+    if (btn) {
+      // User directive: when up-to-date, no need for the reserve button
+      btn.style.display = 'none';
+    }
+  }
+}
+
+// Global hook for Re-serve button click
+if (typeof window !== 'undefined' && !window.__reserveBtnBound) {
+  window.__reserveBtnBound = true;
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('btn-reserve-dash');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Re-serving...';
+      try {
+        await controlFetch('/api/system/restart-dash');
+        if (typeof showToast === 'function') {
+          showToast('Dashboard restarting with latest code...', { tone: 'ok' });
+        }
+      } catch (err) {
+        // server exit expected
+      }
+      let attempts = 0;
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        try {
+          const res = await fetch('/api/system/status');
+          if (res.ok) {
+            clearInterval(pollInterval);
+            window.location.reload();
+          }
+        } catch (e) {
+          if (attempts > 35) {
+            clearInterval(pollInterval);
+            btn.disabled = false;
+            btn.textContent = '↻ Re-serve';
+            if (typeof showToast === 'function') {
+              showToast('Dashboard restart timed out.', { tone: 'down' });
+            }
+          }
+        }
+      }, 500);
+    });
+  });
+}
+
 function renderDbMode(status) {
   setShadowRun(status);
+  renderCodeVersion(status);
   lastStatusForRuns = status;
   const el = document.getElementById('db-mode-badge');
   if (!el) return;
@@ -2216,54 +2303,69 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
   const telemetryDefs = SERVICE_DEFS.filter(def => def.key === 'guardrail' || def.key === 'filter' || def.key === 'query');
 
   const rows = telemetryDefs.map(def => {
-    let state, meta, pid, pillId = '';
+    let state = 'stopped', meta = '', pid = null, pillId = '';
+    let isSvcRunning = false;
     if (def.key === 'guardrail') {
       pillId = ' id="hud-guardrail-pill"';
-      const running = guardrailHealth?.running || false;
+      isSvcRunning = Boolean(guardrailHealth?.running);
       pid = guardrailHealth?.pid;
       const telemetryError = guardrailHealth?.telemetry_error;
       const healthKnown = guardrailHealth !== null && guardrailHealth !== undefined && !telemetryError;
       const age = typeof guardrailHealth?.age_s === 'number' ? guardrailHealth.age_s : null;
-      // One alert count shared with the header (#598): the header falls back to
-      // guardrailHealth.alerts_total when the alert payload is empty, so the
-      // dropdown must read the same count or it can show RUNNING while the
-      // header paints state-degraded.
       const alertsTotal = guardrailAlertCount(guardrailHealth, guardrailAlerts);
       const hasAlert = alertsTotal > 0;
-      state = !healthKnown ? 'unknown'
-        : hasAlert ? 'degraded'
-        : (running ? stateKey(true, age, cadenceThresholds(5)) : stateKey(false, age));
-      meta = telemetryError ? 'telemetry down'
-        : (hasAlert ? `${alertsTotal} alert${alertsTotal === 1 ? '' : 's'}` : 'auto-watch');
-    } else {
-      if (def.key === 'filter') pillId = ' id="market-scan-pill"';
-      else if (def.key === 'query') pillId = ' id="scan-state-pill"';
-      const svc = status?.services?.[def.key];
-      const running = svc?.running || false;
-      pid = svc?.pid;
-      state = running ? 'running' : 'stopped';
-      const uptime = typeof svc?.uptime_sec === 'number' ? `${Math.round(svc.uptime_sec)}s up` : '';
-      // Meta is genuine detail only (#602): pid/uptime when running, empty when
-      // not. It never echoes the pill's state word.
-      if (def.liveOnly && isShadow) {
-        meta = '';
-      } else if (running) {
-        meta = uptime ? (pid ? `pid ${pid} · ${uptime}` : uptime) : (pid ? `pid ${pid}` : '');
+      if (isShadow) {
+        state = 'running';
+        meta = 'in-process';
       } else {
-        meta = '';
+        state = !healthKnown ? 'unknown'
+          : hasAlert ? 'degraded'
+          : (isSvcRunning ? stateKey(true, age, cadenceThresholds(5)) : stateKey(false, age));
+        meta = telemetryError ? 'telemetry down'
+          : (hasAlert ? `${alertsTotal} alert${alertsTotal === 1 ? '' : 's'}` : 'auto-watch');
+      }
+    } else if (def.key === 'filter') {
+      pillId = ' id="market-scan-pill"';
+      const svc = status?.services?.filter;
+      isSvcRunning = Boolean(svc?.running || svc?.observed_running);
+      pid = svc?.pid;
+      state = isSvcRunning ? 'running' : 'stopped';
+      const uptime = typeof svc?.uptime_sec === 'number' ? `${Math.round(svc.uptime_sec)}s up` : '';
+      meta = isSvcRunning ? (pid ? `pid ${pid} · ${uptime}` : (uptime || 'scanning')) : '';
+    } else if (def.key === 'query') {
+      pillId = ' id="scan-state-pill"';
+      if (isShadow) {
+        isSvcRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
+        pid = status?.shadow_run?.pid;
+        state = isSvcRunning ? 'running' : 'stopped';
+        meta = isSvcRunning ? (pid ? `pid ${pid} · paper CLOB` : 'paper CLOB') : 'stopped';
+      } else {
+        const svc = status?.services?.query;
+        isSvcRunning = Boolean(svc?.running);
+        pid = svc?.pid;
+        state = isSvcRunning ? 'running' : 'stopped';
+        const uptime = typeof svc?.uptime_sec === 'number' ? `${Math.round(svc.uptime_sec)}s up` : '';
+        meta = isSvcRunning ? (pid ? `pid ${pid} · ${uptime}` : uptime) : '';
       }
     }
-    // Live-only/shadow-only context rides on the row tooltip, not the visible
-    // meta slot: full sentences wrap and squeeze the name column (#586).
+
     let rowTitle = def.name;
-    if (def.liveOnly && isShadow) rowTitle += ' — live only (shadow uses in-process client)';
-    else if (def.key === 'shadow' && !isShadow) rowTitle += ' — shadow only (live uses venue engine)';
-    // Status only (#602): the name column identifies the service, so the pill
-    // carries just the colored dot + state — no short-name label.
+    let displayName = def.name;
+    if (def.key === 'guardrail' && isShadow) {
+      rowTitle = 'Guardrail Risk Watchdog — in shadow mode, risk exposure and single-leg unwind limits are enforced in-process by the Shadow Guardian Sentry';
+    } else if (def.key === 'query' && isShadow) {
+      displayName = 'Shadow Quoter & Book Poller';
+      rowTitle = 'Shadow Quoter & Book Poller — paper rehearsal simulation loop on live CLOB';
+    } else if (def.liveOnly && isShadow) {
+      rowTitle += ' — live only (shadow uses in-process client)';
+    } else if (def.key === 'shadow' && !isShadow) {
+      rowTitle += ' — shadow only (live uses venue engine)';
+    }
+
     const pillInner = renderPillHtml({ value: state.toUpperCase(), dotState: state });
     return `<div class="services-dropdown-row" title="${esc(rowTitle)}">
       <span class="pill state-${state}"${pillId}>${pillInner}</span>
-      <span class="services-dropdown-name" title="${esc(def.name)}">${esc(def.name)}</span>
+      <span class="services-dropdown-name" title="${esc(rowTitle)}">${esc(displayName)}</span>
       <span class="services-dropdown-meta">${esc(meta)}</span>
     </div>`;
   }).join('');
@@ -2398,18 +2500,26 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
 
   // Aggregate status across telemetry services (#504 Consolidated #479)
   const subStates = [];
-  subStates.push(guardrailState);
-  for (const def of SERVICE_DEFS) {
-    if (def.key !== 'filter' && def.key !== 'query') continue;
-    const active = def.key === 'filter' ? filterActive : engineActive;
-    if (status?.registry_unreadable) {
-      subStates.push('unknown');
-    } else if (active) {
-      subStates.push('running');
-    } else if (isRunning) {
-      subStates.push('down');
-    } else {
-      subStates.push('stopped');
+  if (isShadow) {
+    // In shadow rehearsal mode, guardrail is enforced in-process, filter loop scans universe,
+    // and shadow_run acts as the quoter engine.
+    subStates.push('running');
+    subStates.push(filterActive ? 'running' : 'stopped');
+    subStates.push(status?.shadow_run?.running ? 'running' : 'stopped');
+  } else {
+    subStates.push(guardrailState);
+    for (const def of SERVICE_DEFS) {
+      if (def.key !== 'filter' && def.key !== 'query') continue;
+      const active = def.key === 'filter' ? filterActive : engineActive;
+      if (status?.registry_unreadable) {
+        subStates.push('unknown');
+      } else if (active) {
+        subStates.push('running');
+      } else if (isRunning) {
+        subStates.push('down');
+      } else {
+        subStates.push('stopped');
+      }
     }
   }
 
