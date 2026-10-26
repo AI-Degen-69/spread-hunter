@@ -8951,15 +8951,17 @@ function stitchClosedTradesHeadHtml(sort) {
  * object map, never a string list: this is display vocabulary, and the
  * close-method taxonomy guard forbids a second method-name list in this file
  * (#520 / #558). */
-const EXEC_TYPE_CLASSES = {
+const EXEC_TYPE_CLASSES = Object.freeze({
   'Merge': 'is-merge',
   'Sale': 'is-sale',
   'Stop Loss': 'is-stop-loss',
   'Grace Expired': 'is-grace-expired',
   'Resolved': 'is-resolved',
-};
+});
 
-function execTypeClass(execType) {
+/* Returns the class SUFFIX, leading space included, so the caller can append it
+ * straight into the attribute and an unmapped label renders as no modifier. */
+function execTypeClassSuffix(execType) {
   const cls = EXEC_TYPE_CLASSES[execType];
   return cls ? ` ${cls}` : '';
 }
@@ -8972,7 +8974,7 @@ function stitchLedgerChildRow(tsDisp, execType, legsHtml, entryPrice, entryCost,
   const cls = pnl > 0 ? 'pos' : (pnl < 0 ? 'neg' : 'flat');
   return `<tr class="stitch-ledger-row">`
     + `<td class="mono font-tabular"><div class="stitch-age-stopwatch">${tsDisp}</div></td>`
-    + `<td><span class="stitch-exec-type${execTypeClass(execType)}">${execType}</span></td>`
+    + `<td><span class="stitch-exec-type${execTypeClassSuffix(execType)}">${execType}</span></td>`
     + `<td>${legsHtml}</td>`
     + `<td class="mono font-tabular"><div class="stitch-price-val">${entryPrice !== null ? fmtPrice(entryPrice) : '--'}</div>`
     + `<div class="stitch-mid-sub">cost ${fmtUSD(entryCost)}</div></td>`
@@ -9029,9 +9031,16 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
       // EXEC TYPE replaces the STATUS badge: the outcome IS the type. The words
       // are the operator's, not the backend's: a merged pair reads Merge, and a
       // settlement reads Resolved — the position was held until the market ended.
-      const execType = isMerge ? 'Merge'
-        : (isStopLoss ? 'Stop Loss'
-        : (isGraceExpired ? 'Grace Expired' : (isSettlement ? 'Resolved' : 'Sale')));
+      // First match wins, top to bottom: a merged pair is Merge, a stopped one
+      // Stop Loss, an aged-out one Grace Expired, a settlement Resolved, and
+      // anything else was sold on the book.
+      const execTypeRule = [
+        [isMerge, 'Merge'],
+        [isStopLoss, 'Stop Loss'],
+        [isGraceExpired, 'Grace Expired'],
+        [isSettlement, 'Resolved'],
+      ].find(([matches]) => matches);
+      const execType = execTypeRule ? execTypeRule[1] : 'Sale';
 
       const upCostRem = Number(s.up_cost_removed || 0);
       const dnCostRem = Number(s.dn_cost_removed || 0);
