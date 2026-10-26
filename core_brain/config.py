@@ -237,6 +237,10 @@ class MakerConfig:
     bot_risk_hard_stop_entry_lockout_sec: float = DEFAULT_HARD_STOP_LOCKOUT_SEC
     bot_risk_gate_aged_out_rescue_on: bool = True
     bot_risk_aged_out_rescue_lead_sec: float = 900.0
+    bot_risk_gate_orphan_profit_close_on: bool = False
+    bot_risk_orphan_profit_min_age_sec: float = 3600.0
+    # Minimum gross profit fraction over cost basis (0.05 = 5%).
+    bot_risk_orphan_min_profit_pct: float = 0.05
     bot_risk_pairs_complete_gain_cents: float = 3.68
     bot_risk_pairs_exit_cost_cents: float = 3.67
     bot_risk_stop_mode: str = "NONE"
@@ -482,6 +486,20 @@ class MakerConfig:
                     "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC must be finite and "
                     f"non-negative, got: {val}")
             kw["bot_risk_aged_out_rescue_lead_sec"] = val
+
+        orph_gate = _env("BOT_RISK_GATE_ORPHAN_PROFIT_CLOSE_ON")
+        if orph_gate:
+            kw["bot_risk_gate_orphan_profit_close_on"] = orph_gate.strip().lower() in ("1", "true", "yes", "on")
+
+        orph_age = _env("BOT_RISK_ORPHAN_PROFIT_MIN_AGE_SEC")
+        if orph_age:
+            kw["bot_risk_orphan_profit_min_age_sec"] = _bounded_float(
+                "BOT_RISK_ORPHAN_PROFIT_MIN_AGE_SEC", orph_age, 1.0, 86400.0)
+
+        orph_pct = _env("BOT_RISK_ORPHAN_MIN_PROFIT_PCT")
+        if orph_pct:
+            kw["bot_risk_orphan_min_profit_pct"] = _bounded_float(
+                "BOT_RISK_ORPHAN_MIN_PROFIT_PCT", orph_pct, 0.0, 1.0)
 
         mqs = _env("BOT_QUOTE_SIZE_MAX_SHARES")
         if mqs:

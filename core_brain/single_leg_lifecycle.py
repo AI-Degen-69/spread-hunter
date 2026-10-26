@@ -749,3 +749,104 @@ def _refused(
         naked_size=naked_size,
         reason=reason,
     )
+
+@dataclass(frozen=True)
+class OrphanProfitVerdict:
+    eligible: bool
+    reason: str
+    held_token_id: str | None = None
+    held_size: float = 0.0
+    average_cost: float = 0.0
+    profit_floor: float = 0.0
+    observed_bid: float | None = None
+
+
+def orphan_profit_floor(average_cost: float, min_profit_pct: float, tick_size: float = 0.01) -> float:
+    """Calculate the lowest tick price >= average_cost * (1 + min_profit_pct) and > average_cost."""
+    if average_cost <= 0:
+        return 0.0
+    cost_dec = Decimal(str(average_cost))
+    pct_dec = Decimal(str(max(0.0, float(min_profit_pct))))
+    tick_dec = Decimal(str(tick_size if tick_size > 0 else 0.01))
+    raw_target = cost_dec * (Decimal("1") + pct_dec)
+    ticks = math.ceil(float(raw_target / tick_dec - Decimal("1e-9")))
+    floor_dec = Decimal(ticks) * tick_dec
+    if floor_dec <= cost_dec:
+        floor_dec += tick_dec
+    return float(floor_dec)
+
+
+def evaluate_orphan_profit(
+    position: SingleLegPosition,
+    age_s: float | None,
+    min_age_sec: float,
+    min_profit_pct: float,
+    tick_size: float = 0.01,
+) -> OrphanProfitVerdict:
+    """Determine whether an orphaned single-leg position is eligible to close for profit.
+
+    Pure: no registry, no clock, no network.
+    """
+    up_held = position.up_size > SIZE_EPS
+    dn_held = position.down_size > SIZE_EPS
+
+    if up_held and dn_held:
+        return OrphanProfitVerdict(eligible=False, reason="opposite_leg_filled")
+    if not up_held and not dn_held:
+        return OrphanProfitVerdict(eligible=False, reason="flat")
+
+    if up_held:
+        held_token_id = position.up_token_id
+        held_size = position.up_size
+        average_cost = position.up_avg_price
+        observed_bid = position.up_best_bid
+    else:
+        held_token_id = position.down_token_id
+        held_size = position.down_size
+        average_cost = position.down_avg_price
+        observed_bid = position.down_best_bid
+
+    if average_cost <= 0.0:
+        return OrphanProfitVerdict(
+            eligible=False, reason="no_cost",
+            held_token_id=held_token_id, held_size=held_size,
+            average_cost=average_cost, observed_bid=observed_bid,
+        )
+
+    if observed_bid is None or observed_bid <= 0.0:
+        return OrphanProfitVerdict(
+            eligible=False, reason="no_bid",
+            held_token_id=held_token_id, held_size=held_size,
+            average_cost=average_cost, observed_bid=observed_bid,
+        )
+
+    if age_s is None:
+        return OrphanProfitVerdict(
+            eligible=False, reason="age_unknown",
+            held_token_id=held_token_id, held_size=held_size,
+            average_cost=average_cost, observed_bid=observed_bid,
+        )
+
+    if age_s <= min_age_sec:
+        return OrphanProfitVerdict(
+            eligible=False, reason="too_young",
+            held_token_id=held_token_id, held_size=held_size,
+            average_cost=average_cost, observed_bid=observed_bid,
+        )
+
+    floor = orphan_profit_floor(average_cost, min_profit_pct, tick_size)
+    if observed_bid < floor - 1e-9:
+        return OrphanProfitVerdict(
+            eligible=False, reason="below_floor",
+            held_token_id=held_token_id, held_size=held_size,
+            average_cost=average_cost, profit_floor=floor,
+            observed_bid=observed_bid,
+        )
+
+    return OrphanProfitVerdict(
+        eligible=True, reason="eligible",
+        held_token_id=held_token_id, held_size=held_size,
+        average_cost=average_cost, profit_floor=floor,
+        observed_bid=observed_bid,
+    )
+

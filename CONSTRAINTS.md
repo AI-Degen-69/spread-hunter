@@ -1,69 +1,50 @@
-# CONSTRAINTS.md — Issue #837: Cockpit catalyst & tweak column
+# CONSTRAINTS.md — Issue #842: Auto-close profitable orphaned positions after duration threshold
 
-Branch: `i837/populate-worst-catalyst-tweak-columns` | Issue: #837
+Branch: `plan_issue_842` | Issue: #842
 
-Locked during Station II planning. Stations III–V hold every line below.
+Locked during Station II planning. Stations III–V must hold every line below.
 Tighten only with operator approval; never loosen silently.
 
 ## Zero regressions
 
-- Focused suites for the touched module, green before and after review fixes:
-  `tests/test_tournament_cockpit_arms.py`. Regression neighbours that must pass:
-  `tests/test_tournament_cockpit_funnel.py tests/test_shadow_tournament.py
-  tests/test_tournament_run_number_naming.py`. The full `python -m pytest -q` suite is
-  the GitHub CI merge gate; it is not re-run locally during review stations.
-- Pinned and unchanged: the #487 static table contract
-  (`test_i487_arm_table_names_the_ten_spec_arms_with_their_hypotheses` — its
-  `worst_catalyst == ""` assertions describe a forensic run that does not exist, so they
-  stay `""`), the #492/#608 frozen archive resolver, `analyze_arm_database`'s metric
-  outputs, and the funnel counts.
-- Every new behaviour needs a test that fails without it: note sourcing precedence and
-  trimming, the round-suffix arm lookup, the two-`N/A`-only rule, markup escaping, the
-  embedded-state `</script>` guard, and the launcher-equivalence of an annotated arms file.
+- Focused test suites covering touched modules must pass locally:
+  `python -m pytest tests/test_single_leg_lifecycle.py tests/test_single_buy_saver.py tests/test_close_method_taxonomy.py tests/test_config_single_source.py tests/test_config_divergence_guard.py -q`
+- The full `python -m pytest -q` regression suite runs in GitHub CI and is the merge gate.
+- Existing hard-stop protection, aged-out settlement rescue, and paired-merge resolution must remain 100% behavior-preserving.
+- Hard stop precedence is preserved: a hard stop takes precedence over taking profit; taking profit takes precedence over aged-out rescue.
 
 ## Scope fences (hard)
 
-- **Only these files change:** `configs/tournaments/i799-tournament-test_arms.json`,
-  `scripts/tournament_cockpit_server.py`, `tests/test_tournament_cockpit_arms.py`,
-  and the new `tests/js/cockpit_annotation_harness.cjs`.
-- **No `core_brain/` edit.** The note keys live at the top level of an arm entry, never
-  inside `env`: the launcher rejects any env key that is not `BOT_*`/`FILTER_*`
-  (`scripts/shadow_tournament.py:369-374`).
-- **No trading setting changes.** Regenerating a plan from the annotated arms file must
-  produce identical `env`, ports, run ids and db paths.
-- **No metric math.** `analyze_arm_database`, the funnel, sorting, scoring and readiness
-  verdicts are untouched; the four fields ride along inside the `{**cfg, ...}` spread.
-- **The #487 / #484 static annotation strings stay byte-identical** — no retro-editing a
-  finished tournament's analyst prose.
-- **No new dependency, no new grid/column, no layout change.** One cell, same width.
-- **No writes to any `.db`, no venue-reaching command** (`quote`, `complete`, Trader loop,
-  dashboard START). The cockpit opens databases read-only.
+- **Permitted file changes:**
+  - `core_brain/config.py`: configuration fields, parsing in `load_config`, bounds validation
+  - `.env.example`: documentation of the three new knobs
+  - `core_brain/close_methods.py`: canonical `ORPHAN_PROFIT_EXIT = "orphan_profit_exit"` constant and entry in `RESCUE_METHODS`
+  - `dashboard/static/app.js`: update pinned `EXIT_METHODS` Set to include `"orphan_profit_exit"`
+  - `core_brain/single_leg_lifecycle.py`: pure `OrphanProfitVerdict`, floor calculator, and `evaluate_orphan_profit` pure verdict function
+  - `core_brain/single_buy_saver.py`: `min_profit_pct` handling and post-cancel guards in `exit_single_buy`, and orphan profit evaluation branch in `_manage_single_leg_positions_locked`
+  - Unit tests in `tests/test_single_leg_lifecycle.py`, `tests/test_single_buy_saver.py`, `tests/test_close_method_taxonomy.py`, and `tests/test_config_single_source.py`.
+- **Files explicitly frozen / not to modify:**
+  - `scoring/config.py`: must stay unmodified; it inherits all fields from `core_brain.config.MakerConfig`.
+  - `core_brain/market_resolution.py` and paired shadow/merge resolution.
+  - `core_brain/pair_scanner.py`, `core_brain/trader_loop.py`, `core_brain/order_manager.py`.
+  - `core_brain/lifecycle_reset.py`: `reset_condition` logic stays untouched.
+- **Never call `mark_hard_stop_block` on orphan profit exits:**
+  - An orphan taking profit is a winning or capital-freeing exit, not an adverse stop-out; do not penalize the market with a hard-stop lockout.
+- **No writes to any production `.db`:**
+  - Tests must use `tmp_path`. Production `data/orders.db` is strictly untouched.
+  - No live venue-reaching commands (`quote`, `complete`, Trader loop, or dashboard START).
 
 ## Anti-cheat
 
-- Never skip, xfail, or delete a test to get green; never weaken an assertion.
-- `N/A` keeps exactly one meaning: no data. Do not repurpose it, and do not invent a
-  second placeholder ("no note", "—") to make a blank look intentional.
-- Do not satisfy a substring assertion by editing the template copy instead of the
-  behaviour (e.g. hardcoding an escape sequence in the CSS or a note in the HTML).
-- Analyst numbers are the analyst's 6.4-hour snapshot. A claim that cannot be reproduced
-  in this worktree (no `data/tournaments/` run record exists here) stays attributed
-  ("6.4 h snapshot"), never silently upgraded to a measured fact.
-- Units are read from the code, not from the issue: `BOT_ORDER_REQUOTE_DEAD_BAND_CENTS`
-  and `BOT_RISK_STOP_ADVERSE_DROP_CENTS` are dollar fractions (`0.06` = 6¢), while
-  `BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS` is integer cents.
+- Never skip, xfail, or delete existing tests to get green.
+- Never weaken assertions or mock around broken contracts.
+- Gross price profitability check: lowest tick price at least `average_cost * (1 + pct)` and strictly greater than `average_cost`.
+- Double-sided positions must be strictly rejected (`opposite_leg_filled`).
+- Re-check after cancellation: if cancellation reveals an opposite fill (`venue_light_matched > 0` or opposite shares present in registry), hold without selling (`opposite_filled`). If the bid dropped below floor after cancel, hold without selling (`profit_gone`).
 
-## Performance / architecture ceilings
+## Architecture & Simplicity
 
-- One source, one code path: notes are read once in `build_plan_arms`; the cell markup is
-  produced by one `annotationCellHtml(arm)` used by both the first and the 5s polled
-  render. No second render pass, no client-side re-fetch, no extra `/api/stats` field set.
-- No extra per-render DOM reads; the helper is pure (string in, string out).
-- `/api/stats` response shape is unchanged apart from values that were already there.
-
-## Safety (repo rules)
-
-- `data/*.db` and `reports/` are gitignored and must never be committed;
-  `reports/tournament_cockpit.html` is a runtime snapshot rewritten on server start.
-- Verification for the operator is the running cockpit page, never `pytest`, `gh`, or
-  `git`.
+- Minimal, boring implementation: no new classes or complex state machines.
+- Pure decision logic in `core_brain/single_leg_lifecycle.py` decoupled from venue execution.
+- Execution safely delegated through existing atomic `exit_single_buy` primitive.
+- Condition reset uses existing `reset_condition` with reason `"orphan_profit_exited"`.

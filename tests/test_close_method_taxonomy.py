@@ -294,13 +294,13 @@ def test_every_declared_name_is_in_all_method_names():
 def test_the_derived_lists_match_todays_consumer_tuples():
     """The order #559/#560 will inherit — behaviour-preserving by contract."""
     assert cm.MERGE_METHODS == ("merge", "shadow_merge")
-    assert cm.RESCUE_METHODS == ("single_buy_exit", "naked_exit", "ladder_exit")
+    assert cm.RESCUE_METHODS == ("single_buy_exit", "orphan_profit_exit", "naked_exit", "ladder_exit")
     assert cm.BOOKKEEPING_METHODS == ("venue_sync",)
     assert cm.DASHBOARD_FORCED_EXIT_METHODS == (
-        "single_buy_exit", "naked_exit", "ladder_exit",
+        "single_buy_exit", "orphan_profit_exit", "naked_exit", "ladder_exit",
         "aged_out_exit", "stop_loss_exit")
     assert cm.TAKER_RESOLVED_METHODS == (
-        "shadow_merge", "single_buy_exit", "naked_exit", "ladder_exit")
+        "shadow_merge", "single_buy_exit", "orphan_profit_exit", "naked_exit", "ladder_exit")
 
 
 def test_app_js_exit_methods_is_pinned_to_the_leaf():
