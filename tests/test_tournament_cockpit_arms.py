@@ -10,6 +10,8 @@ from __future__ import annotations
 import io
 import json
 import logging
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -509,11 +511,15 @@ def test_newest_run_of_another_issue_owns_the_arm_table(tmp_path, monkeypatch):
     assert loose["label"] == "Loose Baseline"
     assert loose["db"] == "data/tournaments/i799/tournament-test/loose-baseline.db"
     assert loose["port"] == 8810
-    assert loose["tweak_rationale"] == spec["loose-baseline"]["thesis"]
-    # The control moves no knob, so it must not borrow one from another arm.
-    assert loose["hypothesized_tweak"] == ""
+    # The #799 arms file carries analyst notes now, and an explicit note wins over
+    # the text this module generates from env/thesis.
+    assert loose["worst_catalyst"] == spec["loose-baseline"]["worst_catalyst"]
+    assert loose["tweak_rationale"] == spec["loose-baseline"]["tweak_rationale"]
+    # The control moves no knob, so it must not borrow one from another arm; the
+    # note names the lever the analyst would try next, not a setting it ran.
+    assert loose["hypothesized_tweak"] == "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06"
     tight = {a["name"]: a for a in arms}["tight-touch"]
-    assert tight["hypothesized_tweak"] == "quote_tournament_preset = aggressive"
+    assert tight["hypothesized_tweak"] == "BOT_QUOTE_TOURNAMENT_PRESET=balanced"
     assert tight["desc"] == spec["tight-touch"]["desc"]
 
 
@@ -733,3 +739,300 @@ def test_open_dash_accepts_only_an_arm_port_and_a_tournament_store():
     assert cockpit.open_dash_target("port=8801") is None, "no store"
     assert cockpit.open_dash_target("port=8801&db=C:/Windows/System32/config") is None
     assert cockpit.open_dash_target(f"port=abc&db={quote(str(db))}") is None
+
+COCKPIT_HARNESS = Path(__file__).resolve().parent / "js" / "cockpit_annotation_harness.cjs"
+
+NODE_REQUIRED = pytest.mark.skipif(
+    shutil.which("node") is None, reason="node is not installed on this host"
+)
+
+
+def _annotation_arm(**overrides) -> dict:
+    """One arm as the page receives it, with only the cell's fields populated."""
+    arm = {
+        "name": "arm-a",
+        "label": "Arm A",
+        "color": "#00e676",
+        "desc": "",
+        "port": 8801,
+        "db": "data/tournaments/i837/arm-a.db",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    }
+    arm.update(overrides)
+    return arm
+
+
+def _run_annotation_cases(cells: dict, rows: dict | None = None) -> dict:
+    """Drive the generated page's own inline script under Node.
+
+    The unit under test is the shipped page script, not a re-implementation: the
+    harness extracts it from `generate_cockpit_html()`'s output and runs it with
+    a stub DOM, so these assertions describe what the operator's browser renders.
+    """
+    state = {
+        # The page always renders ten arms; one arm keeps the chart pass (which
+        # is not under test here) from reaching an undefined control/rival pair.
+        "arms": [_annotation_arm(name="control", label="Control")],
+        "tourney_key": "487",
+        "elapsed_hours": 0.0,
+        "rem_hours": 24.0,
+        "target_hours": 24.0,
+        "progress_pct": 0.0,
+        "total_merges": 0,
+        "total_quoted": 0,
+    }
+    payload = {
+        "html": cockpit.generate_cockpit_html(state),
+        "cells": cells,
+        "rows": rows or {},
+    }
+    out = subprocess.run(
+        [shutil.which("node"), str(COCKPIT_HARNESS)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=True,
+        encoding="utf-8",
+    )
+    return json.loads(out.stdout)
+
+
+@NODE_REQUIRED
+def test_annotation_cell_renders_every_populated_field():
+    """A filled arm shows cause, facts, tweak and rationale -- and no `N/A`."""
+    filled = _annotation_arm(
+        worst_catalyst="Stop-out rate 44.1% (15/34)",
+        worst_catalyst_desc="6.4 h snapshot: 15 stops on 34 trades, 19 merges",
+        hypothesized_tweak="BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
+        tweak_rationale="Hypothesis: 2c fires on normal spread noise.",
+    )
+
+    out = _run_annotation_cases({"filled": filled})
+
+    assert out["errors"] == []
+    cell = out["cells"]["filled"]
+    positions = [
+        cell.find("Stop-out rate 44.1% (15/34)"),
+        cell.find("6.4 h snapshot: 15 stops"),
+        cell.find("BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045"),
+        cell.find("Hypothesis: 2c fires"),
+    ]
+    assert all(pos >= 0 for pos in positions), cell
+    assert positions == sorted(positions), "cause, facts, tweak, rationale -- in that order"
+    assert "N/A" not in cell, cell
+
+
+@NODE_REQUIRED
+def test_annotation_cell_says_na_only_for_a_missing_catalyst_or_tweak():
+    """`N/A` keeps one meaning -- no data -- and an absent line is not a blank line."""
+    absent = _annotation_arm()
+    for key in ("worst_catalyst", "worst_catalyst_desc", "hypothesized_tweak", "tweak_rationale"):
+        absent.pop(key)
+    empty_values = {
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    }
+    out = _run_annotation_cases({
+        "blank": _annotation_arm(**empty_values),
+        "null": _annotation_arm(**{key: None for key in empty_values}),
+        "absent": absent,
+        "spaces": _annotation_arm(**{key: "   " for key in empty_values}),
+        "partial": _annotation_arm(hypothesized_tweak="BOT_X=1"),
+    })
+
+    assert out["errors"] == []
+    for name in ("blank", "null", "absent", "spaces"):
+        cell = out["cells"][name]
+        assert cell.count("N/A") == 2, (name, cell)
+        # headline + tweak wrapper only: no empty description or rationale line
+        assert cell.count("<div") == 2, (name, cell)
+    partial = out["cells"]["partial"]
+    assert partial.count("N/A") == 1, partial
+    assert "BOT_X=1" in partial
+    assert partial.count("<div") == 2, partial
+
+
+@NODE_REQUIRED
+def test_annotation_cell_escapes_config_text_instead_of_rendering_it():
+    """An analyst note is free-form config text, so it is text -- never markup."""
+    out = _run_annotation_cases({"hostile": _annotation_arm(
+        worst_catalyst="<img src=x onerror=1>",
+        worst_catalyst_desc="<b>desc</b>",
+        hypothesized_tweak="BOT_X=1 & 2",
+        tweak_rationale="<script>alert(1)</script>",
+    )})
+
+    assert out["errors"] == []
+    cell = out["cells"]["hostile"]
+    assert "&lt;img" in cell and "<img" not in cell
+    assert "&lt;b&gt;" in cell and "<b>" not in cell
+    assert "&lt;script&gt;" in cell and "<script" not in cell
+    assert "BOT_X=1 &amp; 2" in cell
+
+
+@NODE_REQUIRED
+def test_render_all_renders_the_row_through_the_same_cell():
+    """The first render and every 5s poll go through one code path."""
+    filled = _annotation_arm(
+        worst_catalyst="Stop-out rate 44.1% (15/34)",
+        hypothesized_tweak="BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
+        tweak_rationale="Hypothesis: 2c is tighter than normal spread noise.",
+    )
+
+    refilled = _run_annotation_cases({}, rows={"one": filled, "bare": _annotation_arm()})
+
+    assert refilled["errors"] == []
+    assert "Stop-out rate 44.1% (15/34)" in refilled["rows"]["one"]
+    assert "Hypothesis: 2c is tighter" in refilled["rows"]["one"]
+    # An arm with no notes still renders through the same helper: two `N/A`, no
+    # empty description or rationale line, and no throw.
+    assert refilled["rows"]["bare"].count("N/A") == 2, refilled["rows"]["bare"]
+
+
+def test_embedded_state_cannot_close_its_own_script_tag():
+    """A note holding `</script>` would end the page's script block early."""
+    html = cockpit.generate_cockpit_html({
+        "arms": [_annotation_arm(worst_catalyst="</script><b>x</b>")],
+        "total_merges": 0,
+    })
+
+    assert "</script><b>" not in html
+    assert "</script" in html
+
+
+def test_plan_arms_read_the_four_notes_from_the_launched_arms_config(tmp_path, monkeypatch):
+    """The catalyst column is the arms file's, and only what it actually says.
+
+    `worst_catalyst` was hardcoded blank here, so a plan-launched table could
+    never carry an analyst note. The note is explicit config text: it wins when
+    present, whitespace is not presence, and a non-string is a config mistake
+    that must not reach the page as text.
+    """
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    empty_notes = {
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    }
+    source = [
+        {"name": "a-full", "thesis": "Th", "env": {"BOT_X": "1"},
+         "worst_catalyst": "H", "worst_catalyst_desc": "D",
+         "hypothesized_tweak": "T", "tweak_rationale": "R"},
+        {"name": "b-blank", "thesis": "Th", "env": {"BOT_X": "1"}, **empty_notes},
+        {"name": "c-null", "thesis": "Th", "env": {"BOT_X": "1"},
+         "worst_catalyst": None, "worst_catalyst_desc": None,
+         "hypothesized_tweak": None, "tweak_rationale": None},
+        {"name": "d-space", "thesis": "Th", "env": {"BOT_X": "1"},
+         "worst_catalyst": "   ", "worst_catalyst_desc": "   ",
+         "hypothesized_tweak": "   ", "tweak_rationale": "   "},
+        {"name": "e-padded", "thesis": "Th", "env": {"BOT_X": "1"},
+         "worst_catalyst": "  H  ", "worst_catalyst_desc": "  D  ",
+         "hypothesized_tweak": "  T  ", "tweak_rationale": "  R  "},
+        {"name": "f-nonstring", "thesis": "Th", "env": {"BOT_X": "1"},
+         "worst_catalyst": 5, "worst_catalyst_desc": 5,
+         "hypothesized_tweak": 5, "tweak_rationale": 5},
+        {"name": "g-no-notes", "thesis": "Th", "env": {"BOT_X": "1"}},
+    ]
+    records = [
+        {"name": arm["name"], "db_path": f"data/{arm['name']}.db",
+         "run_id": f"shadow-{arm['name']}", "dash_port": 8801 + i}
+        for i, arm in enumerate(source)
+    ]
+    # A numbered run records `a-full-1`; the arms file names the arm `a-full`.
+    records.append({"name": "a-full-1", "db_path": "data/a-full-1.db",
+                    "run_id": "shadow-a-full-1", "dash_port": 8899})
+    path = _plan(tmp_path, "i799-notes_2026-10-26T10-00", records, source=source, minutes=1440)
+
+    arms = {a["name"]: a for a in cockpit.build_plan_arms(path)}
+
+    def notes(name):
+        arm = arms[name]
+        return (arm["worst_catalyst"], arm["worst_catalyst_desc"],
+                arm["hypothesized_tweak"], arm["tweak_rationale"])
+
+    assert notes("a-full") == ("H", "D", "T", "R")
+    assert notes("b-blank") == ("", "", "x = 1", "Th")
+    assert notes("c-null") == ("", "", "x = 1", "Th")
+    assert notes("d-space") == ("", "", "x = 1", "Th")
+    assert notes("e-padded") == ("H", "D", "T", "R")
+    assert notes("f-nonstring") == ("", "", "x = 1", "Th")
+    assert notes("g-no-notes") == ("", "", "x = 1", "Th")
+    assert notes("a-full-1") == ("H", "D", "T", "R"), "a numbered record still finds its base arm"
+
+
+I799_ARM_NAMES = [
+    "loose-baseline",
+    "tight-touch",
+    "balanced-mid",
+    "wide-shield",
+    "prudent-hybrid",
+    "static-floor-2c",
+    "low-churn-deadband",
+    "hair-trigger-2c",
+    "patient-stop-9c",
+    "queue-clear-5m",
+]
+I799_NOTE_KEYS = (
+    "worst_catalyst",
+    "worst_catalyst_desc",
+    "hypothesized_tweak",
+    "tweak_rationale",
+)
+
+
+def test_i799_arms_file_annotates_every_arm_without_changing_the_launch(tmp_path, monkeypatch):
+    """Two obligations on one file: the notes reach the page, the run stays the same.
+
+    The operator reads this column to decide what to try next, so an arm without
+    a note is a row that cannot answer the question. The same file is the launch
+    input, so the notes must be inert there.
+    """
+    spec = _i799_source()
+
+    assert [arm["name"] for arm in spec] == I799_ARM_NAMES
+    allowed = {"name", "label", "color", "profile", "desc", "thesis", "env", *I799_NOTE_KEYS}
+    for arm in spec:
+        assert set(arm) == allowed, arm["name"]
+        for key in I799_NOTE_KEYS:
+            assert isinstance(arm[key], str) and arm[key].strip(), (arm["name"], key)
+        assert arm["hypothesized_tweak"].startswith("BOT_"), arm["name"]
+        assert arm["tweak_rationale"].startswith("Hypothesis:"), arm["name"]
+
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    path = _plan(
+        tmp_path, "i799-tournament-test_2026-10-26T10-00", _i799_records(),
+        source=spec, minutes=1440,
+    )
+    arms = cockpit.build_plan_arms(path)
+
+    assert [arm["name"] for arm in arms] == I799_ARM_NAMES
+    for arm in arms:
+        for key in I799_NOTE_KEYS:
+            assert arm[key].strip(), (arm["name"], key)
+
+
+def test_i799_notes_do_not_change_the_launch_plan():
+    """A note is prose for the cockpit; it must not move a single trading setting."""
+    from scripts.shadow_tournament import build_tournament_plan
+
+    spec = _i799_source()
+    stripped = [
+        {key: value for key, value in arm.items() if key not in I799_NOTE_KEYS}
+        for arm in spec
+    ]
+
+    fixed_stamp = "2026-10-26T10-00"
+    annotated = build_tournament_plan(
+        issue=799, arms=spec, base_port=8801, minutes=5, check_ports=False,
+        stamp=fixed_stamp)
+    plain = build_tournament_plan(
+        issue=799, arms=stripped, base_port=8801, minutes=5, check_ports=False,
+        stamp=fixed_stamp)
+
+    assert [arm.to_dict() for arm in annotated.arms] == [arm.to_dict() for arm in plain.arms]
