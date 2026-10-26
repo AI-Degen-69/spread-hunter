@@ -1,53 +1,101 @@
-# SPEC.md — Issue #837: Cockpit "Worst Catalyst & Hypothesized Tweak" column
+# SPEC.md — Issue #838: HYBRID Configuration Blueprint, multi-arm champion spec
 
-Branch: `i837/populate-worst-catalyst-tweak-columns` | Tier: **Standard** | Types: **Code (Backend/Logic + Design/UI) + UX/Copy**
+Branch: `i838/cockpit-hybrid-blueprint-champion-spec` | Issue: #838
 
 ## Goal
 
-An operator reading the Tournament #799 cockpit (`http://127.0.0.1:8800/`) can answer
-"why is this arm losing trades, and what single lever would move the needle?" from the
-leaderboard itself: all 10 arm rows show a catalyst headline, a measured description, a
-tweak line, and a rationale line. The text lives in the arms config, never in the HTML
-template, so a future tournament is annotated by editing its own JSON.
+The Tournament Cockpit's **HYBRID Configuration Blueprint** tab is a static
+5-parameter prototype that advertises `core_brain.config.TOURNAMENT_PRESETS["hybrid"]`.
+That preset is `bot_quote_gate_dynamic_offset_on=False` plus a 6¢ deadband — it is
+not the configuration the multi-arm tournament evidence points at. An operator who
+opens the tab and copies what it prints gets a different bot than the one the tab
+claims to describe.
+
+This change replaces the pane's contents with the synthesised champion
+specification: six parameters with their grounded sources, a performance forecast
+card, a failure-mode card, and copyable commands that actually produce the champion.
+
+## Champion specification (locked)
+
+Nine environment keys, and the pane must show these exact values in all three
+places (parameter table, PowerShell block, `.env` block):
+
+| Key | Value |
+| --- | --- |
+| `BOT_QUOTE_TOURNAMENT_PRESET` | `prudent` |
+| `BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON` | `1` |
+| `BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS` | `6` |
+| `BOT_ORDER_REQUOTE_DEAD_BAND_CENTS` | `0.06` |
+| `BOT_RISK_STOP_MODE` | `ABSOLUTE_DROP` |
+| `BOT_RISK_STOP_ADVERSE_DROP_CENTS` | `0.045` |
+| `BOT_ORDER_GATE_QUEUE_CLEAR_ON` | `1` |
+| `BOT_ORDER_QUEUE_MAX_CLEAR_MIN` | `3.0` |
+| `BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC` | `45.0` |
+
+Six parameter rows, in this order: Requote Deadband, Volatility Pricing Offset,
+Single-Buy Loss Stop, Queue-Clear Gate, Aged-Out Rescue Lead, Absolute Pair Cap.
+Five columns, unchanged: Parameter | Config Value | CLI / Env Key | Source Champion |
+Live Function & Mathematical Rationale.
+
+Six forecast figures: `80% - 84%`, `82% - 86%`, `> 10.5`, `+$0.38 - +$0.46`,
+`> 8.0`, `> +$30.00`.
+
+Three failure scenarios: Flash Directional Breakout, Liquidity Vacuum / Book
+Desertion, High-Frequency Ping-Pong Jitter.
 
 ## Acceptance criteria
 
-1. `build_plan_arms()` fills `worst_catalyst`, `worst_catalyst_desc`, `hypothesized_tweak`
-   and `tweak_rationale` from the launched arms config (`plan["arms_source"]`), trimmed.
-   An explicit config note wins; an absent/blank/non-string one falls back to today's
-   behaviour (`""` / `""` / `_tweak_text(env)` / `thesis`). Older arms files with no notes
-   render exactly as they do today.
-2. A run-numbered record (`loose-baseline-1`) still finds its base arm entry, so a numbered
-   run does not silently show `N/A` over an annotated arms file.
-3. The leaderboard cell shows a filled value whenever data is present, and `N/A` only when
-   the catalyst or the tweak is genuinely empty after trimming. An empty description or
-   rationale omits its line entirely instead of printing an empty row.
-4. Analyst text coming from a config file cannot inject markup into the page: cell values
-   are HTML-escaped, and the embedded starting `state` JSON cannot close its own
-   `<script>` tag.
-5. `configs/tournaments/i799-tournament-test_arms.json` carries all four notes for all 10
-   arms, and a plan built from that file is byte-identical to one built with the note keys
-   removed — annotations never change trading settings.
-6. `scripts/tournament_cockpit_server.py`'s newest-run page description no longer claims
-   the catalyst columns stay empty.
+1. `tab-hybrid-config` in `scripts/tournament_cockpit_server.py` renders the full
+   champion parameter suite with explicit configuration values, CLI/Env keys,
+   source arms, and mathematical grounding.
+2. A dedicated Performance Forecast card displays projected Win Rate, Merge Ratio,
+   Sharpe Proxy, EV/Trade, Profit Factor, and the Monte Carlo floor.
+3. A dedicated Failure Modes & Stress Scenarios card documents Flash Breakout,
+   Liquidity Vacuum, and Ping-Pong Jitter alongside their built-in mitigations.
+4. Ready-to-run PowerShell / CLI commands and `.env` variables match the champion
+   parameters exactly — **with one deliberate deviation on the pair cap** (below).
+5. `reports/tournament_cockpit.html` shows the matching markup. It is gitignored
+   generated output, so this is satisfied by regenerating it from the template,
+   not by hand-editing it.
+6. `python -m pytest -q tests/test_tournament_cockpit_arms.py tests/test_tournament_cockpit_funnel.py`
+   passes.
 
-## Edge cases
+## Edge cases and honesty rules
 
-| Input | Expected |
-|---|---|
-| note missing / `None` / `5` (non-string) / `"   "` | treated as absent → fallback |
-| note `"  H  "` | `"H"` |
-| config note `"Src"` while the plan record also has `"Rec"` | config wins (records never carry notes) |
-| catalyst present, tweak absent | headline shown, tweak `N/A` |
-| catalyst `<img src=x onerror=1>` | escaped as `&lt;img …`, never injected |
-| note `</script><b>x</b>` in the embedded state | cannot break out of the script tag |
-| arms file with no note keys (older tournaments) | identical output to today |
-| `state.arms` empty after a poll | rows cleared, no exception |
+- **Pair cap.** The issue specifies `BOT_POS_PRICE_MAX_PAIR_COST_USD=0.990` and
+  criterion 4 says the `.env` block must match exactly. Putting that assignment in
+  a `.env` blocks the live engine: `resolve_pair_cost_trial` raises `ValueError`
+  for any non-blank value outside a rehearsal, and `core_brain/venue.py:24` calls
+  `load()` at import time. `$0.990` is already the shipped default
+  (`core_brain/config.py:56`). The blueprint therefore shows `$0.990` as the
+  shipped default, says to leave the variable unset, and prints no assignment —
+  not even a commented one, so an operator cannot paste it back.
+- **Stop distance is a trigger, not a loss cap.** A gap or a thin book can make the
+  realised single-leg loss larger than the trigger distance. The card says so.
+- **Queue-clear is an estimate, not a fill deadline.** It is an upper-bound
+  estimate from size ahead ÷ recent traded rate, and no recent flow makes it
+  infinite (entry refused).
+- **Aged-out rescue lead was not varied by the tournament.** Every arm inherited
+  the shipped value; `45.0` is a new, untested operating point.
+- **`prudent` alone gives 2–4¢.** The `2-6¢` band needs
+  `BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6`, which is what the `prudent-hybrid` arm
+  ran and what the pane must say.
+- **The forecast figures are projections, not measurements.** `data/tournaments/`
+  holds no #799 run record in a fresh checkout, so `289 trades / 210 merges /
+  74 stops / Sharpe 9.52 / $0.70 drawdown / -$2.28 / 44.1%` cannot be reproduced
+  from the repository. They stay in the pane as **attributed** evidence, clearly
+  labelled, never as a locally verified result, and the forecast card is labelled
+  as a projection for an untested combination.
+- **Shadow runs read the shell environment, not `.env`.** `core_brain.shadow_run`
+  reads `os.environ` and never loads a dotenv file, so the `.env` block applies to
+  the live trader while the `$env:` lines drive a rehearsal. The pane says so.
 
-## Out of scope
+## Explicitly out of scope
 
-- Any change under `core_brain/` (risk engine, quoting, config parsing).
-- The installed static #487/#484 annotation strings in `ARMS_CONFIG_487` / `ARMS_CONFIG_484`.
-- `scripts/tournament_hub.py`, the second surface that renders the same four fields.
-- Metric math (EV, σ, Sharpe, VaR, drawdown) and the funnel.
-- Statistical GO gate (#471).
+- Any change under `core_brain/` — no execution, risk, or quoting behaviour moves.
+- Every other cockpit pane, the CSS, the tab bar and the `switchTab` script.
+- `.env.example`. Its stop-mode names are stale, but fixing them is a separate
+  issue with its own blast radius.
+- Making `reports/tournament_cockpit.html` tracked, or any `.gitignore` change.
+- Populating the leaderboard's worst-catalyst / hypothesised-tweak columns for the
+  #799 arms — that is issue #837's job, not this one's.

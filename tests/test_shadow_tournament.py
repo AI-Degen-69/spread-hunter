@@ -1297,7 +1297,13 @@ def test_explicit_interval_retention_and_clamping(tmp_path: Path, caplog):
     assert "5.0" in warnings[0].message and "1.0" in warnings[0].message
 
 
-def test_cockpit_hybrid_blueprint_tab_purged():
+def test_cockpit_blueprint_tab_pins_the_champion():
+    """#838 re-pinned this test onto the champion pane.
+
+    Written in #782 it pinned the retired static prototype (preset `hybrid`,
+    offset gate off, `--interval 1.0`); the pane now synthesises the champion
+    spec, so the pins carry the champion's values instead.
+    """
     from scripts.tournament_cockpit_server import generate_cockpit_html
 
     html = generate_cockpit_html({"arms": [], "tourney_key": "492"})
@@ -1309,8 +1315,8 @@ def test_cockpit_hybrid_blueprint_tab_purged():
     blueprint = html[start_idx:end_idx]
 
     canonical_keys = [
-        "BOT_QUOTE_TOURNAMENT_PRESET=hybrid",
-        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0",
+        "BOT_QUOTE_TOURNAMENT_PRESET=prudent",
+        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1",
         "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS",
         "BOT_RISK_STOP_MODE=ABSOLUTE_DROP",
         "BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
@@ -1325,12 +1331,14 @@ def test_cockpit_hybrid_blueprint_tab_purged():
     assert "Queue Hold" not in blueprint
     assert "Hold Deviation" not in blueprint
 
-    # Preserved benchmark and preset references
+    # Preserved benchmark label; the champion preset is named, the retired one is not.
     assert "Static benchmark synthesis" in blueprint
-    assert 'TOURNAMENT_PRESETS["hybrid"]' in blueprint
+    assert 'TOURNAMENT_PRESETS["prudent"]' in blueprint
+    assert 'TOURNAMENT_PRESETS["hybrid"]' not in blueprint
+    assert "-Preset hybrid" not in blueprint
 
-    # Interval 1.0 vs 5.0
-    assert "--interval 1.0" in blueprint
+    # The recipe's interval is the shipped 1s rehearsal step, never the clamp case.
+    assert "--interval 1 " in blueprint
     assert "--interval 5.0" not in blueprint
 
     # Purged / dead knobs & misleading labels absent
@@ -1338,6 +1346,8 @@ def test_cockpit_hybrid_blueprint_tab_purged():
     assert "max_pair_cost_cap" not in blueprint
     assert "0.08 (8%)" not in blueprint
 
+    # Pair cap: shipped default, so the pane clears any inherited value instead.
+    assert "Remove-Item Env:BOT_POS_PRICE_MAX_PAIR_COST_USD" in blueprint
     # Pair cap comment-only guard in .env block
     for line in blueprint.splitlines():
         if "BOT_POS_PRICE_MAX_PAIR_COST_USD=" in line:
