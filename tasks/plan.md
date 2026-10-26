@@ -214,7 +214,7 @@ included.
 test 2 fails on `-Preset hybrid`, `scripts.shadow_tournament` and
 `TOURNAMENT_PRESETS["hybrid"]`.
 
-### [ ] T2 — Rewrite the banner, parameter table, commands and `.env` block (size M, `[UX / Copy]`)
+### [x] T2 — Rewrite the banner, parameter table, commands and `.env` block (size M, `[UX / Copy]`)
 
 **Target file:** `scripts/tournament_cockpit_server.py`, `tab-hybrid-config` only.
 **Depends on:** T1. **Verification:** focused suite green for the T2 slice of test 1 and

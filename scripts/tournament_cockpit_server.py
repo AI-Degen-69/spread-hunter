@@ -1860,13 +1860,15 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
       <div>
         <span class="badge badge-green" style="font-size: 12px; padding: 4px 10px; margin-bottom: 6px;">🌟 BENCHMARK SYNTHESIS</span>
         <h2 style="font-size: 18px; font-weight: 700; color: #f0f4fc;">Production HYBRID Configuration Blueprint</h2>
-        <p style="color: var(--text-muted); font-size: 12.5px; margin-top: 4px;">
-          Note: Static benchmark synthesis combining disciplined requote defense with automated orphan risk management.
+        <p style="color: var(--text-muted); font-size: 12.5px; margin-top: 4px; max-width: 760px;">
+          Static benchmark synthesis of the multi-arm champion. Tournament #799 ran 10 arms on ports 8801&ndash;8810 over 24 hours;
+          289 trades, 210 merges and 74 stop exits are attributed to the #799 tournament review, not re-derived here.
         </p>
       </div>
-      <div style="text-align: right;">
+      <div style="text-align: right; max-width: 340px;">
         <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Status in Codebase</div>
-        <div class="tabular" style="color: var(--green); font-size: 15px; font-weight: 700;">core_brain.config.TOURNAMENT_PRESETS["hybrid"]</div>
+        <div class="tabular" style="color: var(--green); font-size: 14px; font-weight: 700;">core_brain.config.TOURNAMENT_PRESETS["prudent"] + explicit overrides</div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">No single shipped preset holds this configuration.</div>
       </div>
     </div>
   </div>
@@ -1886,37 +1888,44 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         <tr>
           <td><strong>Requote Deadband</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>0.060 (6.0¢)</strong></td>
-          <td><code>BOT_ORDER_REQUOTE_DEAD_BAND_CENTS</code></td>
-          <td><span class="badge badge-green">#485 deadband-wide</span></td>
-          <td><strong>Queue Priority Defender:</strong> Suppresses cancellation &amp; requote when book shifts ≤ 6¢. Eliminates excessive requoting churn seen in tighter deadbands, ensuring our order stays in front of the venue queue.</td>
+          <td><code>BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06</code></td>
+          <td><span class="badge badge-amber">not tested at 6¢ in #799</span></td>
+          <td><strong>Queue priority defender.</strong> The deadband is the price move the bot ignores before it re-quotes: wide enough that 1¢ jitter cannot demote the order, tight enough that the quote is not resting on a stale price. 6¢ sits between <code>static-floor-2c</code> (3¢ at the time) and <code>low-churn-deadband</code> (10¢), and carries the #485 <code>deadband-wide</code> lesson. No #799 arm ran a 6¢ deadband, so this value is reasoned rather than measured.</td>
         </tr>
         <tr>
-          <td><strong>Single-Buy Stop Drop</strong></td>
+          <td><strong>Volatility Pricing Offset</strong></td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>Dynamic 0.60x, 2-6¢ clamp</strong></td>
+          <td><code>BOT_QUOTE_TOURNAMENT_PRESET=prudent</code><br><code>BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1</code><br><code>BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6</code></td>
+          <td><span class="badge badge-green">#799 prudent-hybrid</span></td>
+          <td><strong>Volatility tracker.</strong> offset = round(0.60 × the recent range in cents), held between 2 and 6. A clamp is the allowed floor and ceiling: the <code>prudent</code> preset alone stops at 4¢, so <code>=6</code> is what lifts it to this band. Stale or missing range data falls back to the static base offset. The #799 review credits this arm with the best Sharpe (9.52) and the smallest drawdown ($0.70), against -$2.28 for <code>static-floor-2c</code>.</td>
+        </tr>
+        <tr>
+          <td><strong>Single-Buy Loss Stop</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>$0.045 (4.5¢)</strong></td>
           <td><code>BOT_RISK_STOP_MODE=ABSOLUTE_DROP</code><br><code>BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045</code></td>
-          <td><span class="badge badge-green">Risk Guardian</span></td>
-          <td>Hard loss stop on orphan legs under absolute drop mode. Trigger is entry price minus 0.045, rounded up to a whole cent; emergency floor can set a higher trigger.</td>
+          <td><span class="badge badge-amber">between #799 hair-trigger-2c and patient-stop-9c</span></td>
+          <td><strong>A trigger, not a loss cap.</strong> In <code>ABSOLUTE_DROP</code> mode the trigger is the entry price minus 0.045, <strong>rounded up to a whole cent</strong>; the emergency floor can set a higher trigger. A 2¢ stop fired on 44.1% of legs in the #799 review (<code>hair-trigger-2c</code>), while 9¢ and 8¢ (<code>patient-stop-9c</code>, <code>wide-shield</code>) let the tail bleed. 4.5¢ was not tested in #799.</td>
+        </tr>
+        <tr>
+          <td><strong>Queue-Clear Gate</strong></td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>3.0 minutes</strong></td>
+          <td><code>BOT_ORDER_GATE_QUEUE_CLEAR_ON=1</code><br><code>BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3.0</code></td>
+          <td><span class="badge badge-amber">tightened from #799 queue-clear-5m</span></td>
+          <td><strong>Illiquid-book filter.</strong> Estimated clear time = size ahead ÷ the recent traded rate &mdash; an upper-bound estimate, not a fill deadline. A book with no recent flow makes the estimate infinite, so the entry is refused rather than left resting behind a queue that never clears. #799 tested 5 minutes, not 3.</td>
         </tr>
         <tr>
           <td><strong>Aged-Out Rescue Lead</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>45.0s</strong></td>
-          <td><code>BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC</code></td>
-          <td><span class="badge badge-green">Rescue Lead</span></td>
-          <td>Lead time before market resolution to trigger emergency unwinding of orphan legs. Prioritizes position liquidation before resolution freeze.</td>
-        </tr>
-        <tr>
-          <td><strong>Dynamic Offset</strong></td>
-          <td class="tabular" style="font-size: 14px; color: #8b9bb4;"><strong>False (Disabled)</strong></td>
-          <td><code>BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0</code></td>
-          <td><span class="badge badge-green">Static Base</span></td>
-          <td>Static offset avoids widening quotes during volatile yet profitable flow, keeping fill velocity predictable.</td>
+          <td><code>BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0</code></td>
+          <td><span class="badge badge-amber">not varied in #799</span></td>
+          <td><strong>Settlement-squeeze defence.</strong> How long before resolution the bot unwinds a stranded orphan leg, so the position is liquidated rather than settled directionally. Every #799 arm inherited the shipped 900s, so 45.0s is a new operating point &mdash; which is why the failure card below carries its estimate caveat.</td>
         </tr>
         <tr>
           <td><strong>Absolute Pair Cap</strong></td>
           <td class="tabular" style="font-size: 14px; color: var(--amber);"><strong>$0.990</strong></td>
-          <td><code>BOT_POS_PRICE_MAX_PAIR_COST_USD</code></td>
-          <td><span class="badge badge-amber">Core Safety Law</span></td>
-          <td>Shipped default: under no circumstances can UP + DOWN cost combined exceed $0.99 (overrides are rehearsal-only). Targets a minimum $0.01 gross margin per pair before fees and gas ($1.00 payout).</td>
+          <td><code>BOT_POS_PRICE_MAX_PAIR_COST_USD</code> (shipped default, leave unset)</td>
+          <td><span class="badge badge-amber">shared safety default</span></td>
+          <td><strong>Core safety law, and a gross margin only.</strong> The bot refuses a two-leg quote sum above $0.99, which leaves at least a $0.01 gross spread before fees and gas against the $1.00 the pair merges into. $0.990 is already the value the engine ships, so the block below names it as a comment and leaves the variable unset: setting it explicitly raises outside a rehearsal.</td>
         </tr>
       </tbody>
     </table>
@@ -1925,31 +1934,48 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <div class="decision-grid" style="margin-bottom: 24px;">
     <div class="decision-box">
       <h3 style="color: var(--blue);">💻 Ready-to-Run PowerShell &amp; CLI Commands</h3>
-      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Execute rehearsal or inspect the hybrid preset:</p>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">A rehearsal reads these from the shell environment, not from <code>.env</code>. Set all nine, then run one command:</p>
       <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #a5d6a7; overflow-x: auto;">
-# 1. Interactive Menu - Select Preset "hybrid":
-.\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset hybrid -Minutes 60
+# --- Champion environment (Windows PowerShell 7) ---
+$env:BOT_QUOTE_TOURNAMENT_PRESET = "prudent"
+$env:BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON = "1"
+$env:BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS = "6"
+$env:BOT_ORDER_REQUOTE_DEAD_BAND_CENTS = "0.06"
+$env:BOT_RISK_STOP_MODE = "ABSOLUTE_DROP"
+$env:BOT_RISK_STOP_ADVERSE_DROP_CENTS = "0.045"
+$env:BOT_ORDER_GATE_QUEUE_CLEAR_ON = "1"
+$env:BOT_ORDER_QUEUE_MAX_CLEAR_MIN = "3.0"
+$env:BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC = "45.0"
 
-# 2. Or Multi-Arm Tournament Rehearsal (Default Arms):
-python -m scripts.shadow_tournament --minutes 60.0 --interval 1.0
+# The pair cap stays at its shipped $0.990 default - clear any inherited value:
+Remove-Item Env:BOT_POS_PRICE_MAX_PAIR_COST_USD -ErrorAction SilentlyContinue
 
-# 3. Tournament Analytics Cockpit:
+# 1. Interactive menu - the prudent preset, 60-minute rehearsal (needs PowerShell 7):
+.\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset prudent -Minutes 60
+
+# 2. Or run the same rehearsal directly:
+python -m core_brain.shadow_run --minutes 60 --interval 1 --db data/champion_prudent_shadow_01.db --run-id shadow-champion-prudent-01 --starting-bankroll-usd 100
+
+# 3. Then read the result here:
 python -m scripts.tournament_cockpit_server --port 8800
       </pre>
     </div>
 
     <div class="decision-box">
       <h3 style="color: var(--green);">🛡️ Live Production Environment Variables (.env)</h3>
-      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Exact settings injected for live execution:</p>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">The same nine values for the live trader, which does read <code>.env</code>:</p>
       <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #81d4fa; overflow-x: auto;">
 # --- Spread Hunter HYBRID Champion Config ---
-BOT_QUOTE_TOURNAMENT_PRESET=hybrid
-BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0
+BOT_QUOTE_TOURNAMENT_PRESET=prudent
+BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1
+BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6
 BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06
 BOT_RISK_STOP_MODE=ABSOLUTE_DROP
 BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045
+BOT_ORDER_GATE_QUEUE_CLEAR_ON=1
+BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3.0
 BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
-# BOT_POS_PRICE_MAX_PAIR_COST_USD=0.99  # Shipped default (0.99); do not set outside rehearsal
+# Pair cap: $0.990 shipped default. Leave the pair-cap variable unset.
       </pre>
     </div>
   </div>
