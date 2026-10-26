@@ -18,6 +18,7 @@
 #   .\scripts\spread-hunter-menu.ps1 audit         # A · MAINTENANCE: storage audit (read-only disk usage)
 #   .\scripts\spread-hunter-menu.ps1 prune         # P · MAINTENANCE: storage prune (deletes stale stores/reports)
 #   .\scripts\spread-hunter-menu.ps1 cockpit       # C · MAINTENANCE: tournament cockpit (opens :8800)
+#   .\scripts\spread-hunter-menu.ps1 tournament    # T · TOURNAMENT: align 10 arms, loop, dashboards & cockpit
 # the same code path as the dashboard's START/STOP buttons (interprocess lock,
 # starting-capital snapshot, shared run_id). The dashboard process itself is
 # owned by this script via runtime/live-dash.pids.json.
@@ -927,7 +928,7 @@ function Stop-ShadowRun {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
-                ($_.CommandLine -like "*$ProjectPath*") -and `
+                (($_.CommandLine -like "*$ProjectPath*") -or ($_.CommandLine -match 'core_brain\.shadow_run|statistics_observer|scripts\.global_stop_loss')) -and `
                 ((($_.CommandLine -like "*core_brain.shadow_run*") -or ($_.CommandLine -like "*statistics_observer*")) -and ((-not $RunId) -or ($_.CommandLine -like "*--run-id $RunId*")) -or `
                  (($_.CommandLine -like "*scripts.global_stop_loss*") -and ($_.CommandLine -like "*shadow_*.db*" -or $_.CommandLine -like "*shadow.db*") -and ((-not $RunId) -or ($_.CommandLine -like "*$RunId*"))))
             })
@@ -2282,10 +2283,6 @@ function Test-OrphanStackProcess {
     supervisor. Reset refuses to wipe beside it. $null (unknown) when the
     process table cannot be read, which callers treat as live. Scoped to
     $ProjectPath so an unrelated checkout or tool never blocks a reset. #>
-    try {
-        $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
-            Where-Object { $_.Name -match '^python' -and $_.CommandLine -and ($_.CommandLine -like "*$ProjectPath*") })
-    } catch { return $null }
     $markers = @(
         "core_brain.trader_loop",
         "core_brain.shadow_run",
@@ -2296,6 +2293,15 @@ function Test-OrphanStackProcess {
         "scripts.global_stop_loss",
         "dashboard.server"
     )
+    $markerPattern = 'core_brain|dashboard\.server|tournament|filter_loop|statistical_validation|reconcile|resume_tournament|global_stop_loss'
+    try {
+        $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
+            Where-Object {
+                $_.Name -match '^python' -and $_.CommandLine -and `
+                (($_.CommandLine -like "*$ProjectPath*") -or ($_.CommandLine -match $markerPattern)) -and `
+                ($_.CommandLine -notmatch 'polymarket_docs_mcp')
+            })
+    } catch { return $null }
     foreach ($p in $procs) {
         foreach ($m in $markers) {
             if ($p.CommandLine -like "*$m*") { return $true }
@@ -2401,6 +2407,13 @@ function Clear-RuntimeState {
     Get-ChildItem (Join-Path $ProjectPath "data") -Directory -Filter "shadow_stat_*" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     Get-ChildItem (Join-Path $ProjectPath "data") -File -Filter "stats_*.db*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Get-ChildItem (Join-Path $ProjectPath "data") -File -Filter "*.db*" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(overnight_validation_|\d{2}-\d{2}_\d{2}-\d{2}_shadow-\d+|\d{1,2}_shadow_|shadow_\d{8}_\d{6}_shadow-)' } | Remove-Item -Force -ErrorAction SilentlyContinue
+    # Clean running written tournament data and connected execution logs
+    # (leave all presets, configs, and .env files alone!)
+    $tournamentsDir = Join-Path $ProjectPath "data/tournaments"
+    if (Test-Path $tournamentsDir) {
+        Remove-Item (Join-Path $tournamentsDir "*") -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Get-ChildItem (Join-Path $ProjectPath "runtime/logs") -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Get-ChildItem $ProjectPath -File -Filter "stats_*.db*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     Get-ChildItem (Join-Path $ProjectPath "reports") -File -Filter "*_statistics_report*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
@@ -2545,8 +2558,77 @@ function Stop-ShadowSession {
     return $killedAny
 }
 
-function Reset-Environment {
-    <# Full fresh-start reset: verify -> stop -> wipe -> verify clean ->
+function Stop-AllSpreadHunterProcesses {
+    <# Stop all spread-hunter processes: bot stacks, dashboards, shadow runs,
+       watchers, observers, tournament cockpit, filter loop, arm dashboards,
+       and any orphaned spread-hunter python processes.
+       Leaves all databases and data files strictly intact. #>
+    Lsh-Banner -Title "STOPPING ALL PROCESSES" -Subtitle "scripts, dashboards & background workers (data preserved)"
+
+    # 1 · Recorded services
+    Lsh-Phase -Text "PHASE 1 · STOPPING RECORDED SERVICES"
+    Stop-BotStack
+    $null = Stop-ShadowSession   # screener, loop, watcher, observer, ts-bridge, shadow dashboards
+    $null = Stop-ShadowRun       # unrecorded rehearsal loops / observers
+    Stop-Guardrail
+    $null = Stop-Dashboard
+    $null = Stop-ShadowDashboard
+
+    # 2 · Orphan & tournament processes
+    Lsh-Phase -Text "PHASE 2 · SCANNING FOR LINGERING PROCESSES"
+    $shPattern = 'core_brain|dashboard\.server|tournament|filter_loop|statistical_validation|reconcile|resume_tournament|global_stop_loss|observer'
+    try {
+        $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -match '^python' -and $_.CommandLine -and `
+                (($_.CommandLine -like "*$ProjectPath*") -or ($_.CommandLine -match $shPattern)) -and `
+                ($_.CommandLine -notmatch 'polymarket_docs_mcp')
+            })
+        foreach ($p in $procs) {
+            Lsh-Step "Stopping process PID $($p.ProcessId) ($($p.CommandLine))..."
+            taskkill /F /T /PID $p.ProcessId 2>$null | Out-Null
+            Wait-ProcessGone -ProcessId $p.ProcessId | Out-Null
+        }
+    } catch {
+        Lsh-Warn "Process table scan encountered an issue."
+    }
+
+    # Free known dashboard and cockpit ports if any are still occupied
+    $portsToCheck = @(8798, 8799, 8800) + @(8801..8810)
+    foreach ($port in $portsToCheck) {
+        $pidOnPort = Get-PortPid -PortNumber $port
+        if ($pidOnPort) {
+            Lsh-Step "Freeing port :$port (PID $pidOnPort)..."
+            taskkill /F /T /PID $pidOnPort 2>$null | Out-Null
+            Wait-ProcessGone -ProcessId $pidOnPort | Out-Null
+        }
+    }
+
+    # Clean up stale process tracking artifacts in runtime/ (pid files, sockets, locks)
+    # Never touches any data files or databases!
+    if (Test-Path $RunDir) {
+        Get-ChildItem $RunDir -File -Filter "*.pid*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem $RunDir -File -Filter "*.sock" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem $RunDir -File -Filter "*.lock" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem $RunDir -File -Filter "shadow-session-*.json" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+
+    # 3 · Verification
+    Lsh-Phase -Text "PHASE 3 · VERIFY STOPPED"
+    $lingering = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -match '^python' -and $_.CommandLine -and `
+            (($_.CommandLine -like "*$ProjectPath*") -or ($_.CommandLine -match $shPattern)) -and `
+            ($_.CommandLine -notmatch 'polymarket_docs_mcp')
+        })
+    if ((Test-StackAlive) -or ($lingering.Count -gt 0)) {
+        Lsh-Warn "Some processes may still be lingering ($($lingering.Count) process(es))."
+    } else {
+        Lsh-Ok "All spread-hunter processes, dashboards, and background workers are stopped."
+    }
+}
+
+function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wipe -> verify clean ->
     start the requested mode. Mode "none" stops after the clean proof;
     "shadow" also brings up the shadow dashboard (and a rehearsal run when
     -Minutes > 0); "live" starts the live stack and REQUIRES $Force because
@@ -2583,16 +2665,7 @@ function Reset-Environment {
 
     # 2 · STOP (API stop when a dashboard answers; recorded PIDs otherwise)
     Lsh-Phase -Text "PHASE 2 · STOP"
-    if (Test-StackAlive) {
-        Stop-BotStack
-        $null = Stop-ShadowSession   # recorded rehearsal loop + watcher + viewer
-        $null = Stop-ShadowRun       # any unrecorded rehearsal loop still running
-        Stop-Guardrail
-        $null = Stop-Dashboard
-        $null = Stop-ShadowDashboard
-    } else {
-        Stop-Guardrail  # clears a stale heartbeat record even when nothing is alive
-    }
+    Stop-AllSpreadHunterProcesses
 
     # 3 · VERIFY STOPPED before wiping (never wipe beside a live stack)
     Lsh-Phase -Text "PHASE 3 · VERIFY STOPPED"
@@ -2859,7 +2932,7 @@ function Reset-Environment {
 # One ordered key list is the single source of truth for the menu: the grid,
 # the prompt, the invalid-selection message and the command-line allow-list
 # all derive from it, so a new key only has to be added in one place (#475).
-$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'c', 'q')
+$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'c', 't', 'q')
 
 function Format-MenuHint {
     <# Render the key list as the operator-facing hint, e.g. "1-9, r, a, p, q".
@@ -2896,10 +2969,11 @@ function Show-MenuGrid {
             @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Open Shadow Dashboard";     D = "Hosts unified dashboard on :8799 (shadow DB) & opens browser" }
             @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run(s)";  D = "Resume a shadow rehearsal in place (no wipe): pick 01 / 02 / all / Prudent" }
         ) }
-        @{ Header = "MAINTENANCE & STATUS"; Items = @(
-            @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop & Clean";       D = "Kills all bot processes/dashboards, wipes data, verifies" }
+        @{ Header = "MAINTENANCE & TOURNAMENT"; Items = @(
+            @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop &| Clean";       D = "1. Stop All (default) | 2. Stop & CLEAN Data" }
             @{ K = "8"; Icon = "≡"; IconColor = "Info";    V = "Check System Status";        D = "Static Status page" }
-            @{ K = "c"; Icon = "⌖"; IconColor = "Success"; V = "Tournament Cockpit";         D = "Open Advanced Analytics & Decision Cockpit on :8800" }
+            @{ K = "t"; Icon = "⚖"; IconColor = "Success"; V = "Tournament Reconcile";       D = "Align & sync 10 arms, filter loop, 10 dashboards & Cockpit" }
+            @{ K = "c"; Icon = "⌖"; IconColor = "Info";    V = "Tournament Cockpit";         D = "Open Advanced Analytics & Decision Cockpit on :8800" }
             @{ K = "9"; Icon = "▣"; IconColor = "Info";    V = "Overnight Statistics";         D = "Run shadow + statistics + dashboard for hours" }
             @{ K = "a"; Icon = "◫"; IconColor = "Neutral"; V = "Storage Audit";             D = "Report disk usage of every store and report (read-only)" }
             @{ K = "p"; Icon = "⨯"; IconColor = "Error";   V = "Storage Prune";             D = "Delete stale stores/reports per retention (prunes data)" }
@@ -2996,11 +3070,41 @@ function Invoke-LiveAction {
             $null = Open-Dashboard -Mode "shadow"
         }
         "7" {
-            if ($Action -eq "") {
-                $confirm = Read-Host "  GLOBAL STOP & CLEAN: kill all bot processes/dashboards and wipe data? data/orders.db is kept. [y/N]"
-                if ($confirm -notmatch '^[yY]') { Lsh-Warn "Clean cancelled."; return }
+            $subChoice = "1"
+            if ($Action -eq "clean") {
+                $subChoice = "2"
+            } elseif ($Action -eq "stop-all" -or $Action -eq "stop" -or $Action -eq "stopall") {
+                $subChoice = "1"
+            } elseif ($Action -eq "") {
+                Write-Host ""
+                Write-Host "  GLOBAL STOP &| CLEAN" -ForegroundColor (Get-ProfileColor -Name Warning)
+                Write-Host "  ─────────────────────────────────────────────────────────────" -ForegroundColor (Get-ProfileColor -Name Border)
+                Write-Host "   [1] Stop All (scripts, dashboards, all processes related to spread-hunter) [DEFAULT]" -ForegroundColor (Get-ProfileColor -Name Info)
+                Write-Host "   [2] Stop & CLEAN Data - stops like 1 but also purges runtime & dashboard data" -ForegroundColor Red
+                Write-Host ""
+                $inputChoice = Read-Host "  Select option [1/2, default 1]"
+                if ($inputChoice -match '^[2]') {
+                    $subChoice = "2"
+                } else {
+                    $subChoice = "1"
+                }
             }
-            $null = Reset-Environment -Mode "none"
+
+            if ($subChoice -eq "1") {
+                Stop-AllSpreadHunterProcesses
+                Lsh-Ok "Stop All completed. All spread-hunter processes stopped; data preserved."
+            } elseif ($subChoice -eq "2") {
+                Write-Host ""
+                Write-Host "  WARNING: STOP & CLEAN DATA will purge all shadow, tournament, and stats runs!" -ForegroundColor Red
+                if (-not $Yes) {
+                    $confirm = Read-Host "  Are you sure you want to STOP ALL and PURGE runtime & dashboard data? data/orders.db is kept. [y/N]"
+                    if ($confirm -notmatch '^[yY]') {
+                        Lsh-Warn "Stop & Clean Data cancelled."
+                        return
+                    }
+                }
+                $null = Reset-Environment -Mode "none"
+            }
         }
         "8" { Show-Status }
         "r" {
@@ -3102,6 +3206,15 @@ function Invoke-LiveAction {
         }
         "p" {
             Invoke-StoragePrune -Force:$Yes
+        }
+        "t" {
+            Lsh-Step "Aligning and reconciling tournament stack..."
+            & python -m scripts.reconcile_tournament_stack --tourney 799 --max-markets 3 --minutes 1440
+            if ($LASTEXITCODE -eq 0) {
+                Lsh-Ok "Tournament stack aligned: 10 arms running, dashboards fresh, Cockpit active on :8800."
+            } else {
+                Lsh-Warn "Tournament reconciliation completed with settling notices."
+            }
         }
         "c" {
             Start-Process "http://127.0.0.1:8800"
@@ -3224,6 +3337,8 @@ if ($Action -ne "") {
         "reset"        = "7"
         "clean"        = "7"
         "get"          = "7"
+        "stop-all"     = "7"
+        "stopall"      = "7"
         "status"       = "8"
         "statistical"  = "9"
         "stats"        = "9"
@@ -3236,6 +3351,13 @@ if ($Action -ne "") {
         "storage-prune"= "p"
         "cockpit"      = "c"
         "tournament-cockpit" = "c"
+        "t"            = "t"
+        "tourney"      = "t"
+        "tournament"   = "t"
+        "align"        = "t"
+        "reconcile"    = "t"
+        "align-tournament" = "t"
+        "reconcile-tournament" = "t"
     }
     if ($ExtraArgs.Count -gt 0) {
         Write-Host ("ERROR: Too many words: '{0} {1}'. Run one action at a time (e.g. .\scripts\spread-hunter-menu.ps1 audit) — '-and' is not a menu word; call the menu twice to run two actions." -f $Action, ($ExtraArgs -join ' ')) -ForegroundColor Red
