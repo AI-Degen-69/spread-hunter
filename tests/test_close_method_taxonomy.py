@@ -167,7 +167,7 @@ RETIRED_REASON = "adverse_drift"
 
 
 def test_a_retired_reason_is_written_and_labelled_nowhere():
-    """`adverse_drift` is retired (#835): no writer emits it, so the demo
+    """`adverse_drift` is retired (#835, finished in #836): no writer emits it, so the demo
     builder must not seed it and the dashboard must keep no label for it. A row
     already in a store still renders -- that is the reader test in
     tests/test_stitch_closed_trades.py -- but nothing new may produce the
