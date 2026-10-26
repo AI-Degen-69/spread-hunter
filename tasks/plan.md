@@ -289,7 +289,7 @@ the browser.
     Mitigation: the 6.0¢ deadband suppresses cancel / re-quote churn and keeps queue
     priority.
 
-### [ ] T4 — Verify, regenerate the report, record out-of-scope discoveries (size XS, `[Docs]`)
+### [x] T4 — Verify, regenerate the report, record out-of-scope discoveries (size XS, `[Docs]`)
 
 **Depends on:** T2, T3. **Verification:** the focused suite green with zero failures and
 zero errors; the regenerated report read back from disk.
