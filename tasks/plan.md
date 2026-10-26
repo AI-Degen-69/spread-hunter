@@ -68,7 +68,7 @@ This work creates `configs/tournaments/i843-pair-test_arms.json` with 4 isolated
     5. Subprocess `--dry-run` invocation test (`python -m scripts.shadow_tournament --issue 843 --arms-file configs/tournaments/i843-pair-test_arms.json --dry-run`) returns code 0 and valid JSON.
 - **Verification:** `python -m pytest -q tests/test_tournament_arms_i843.py`
 
-### Task 3: [Docs/Research] Write Pre-Registered Decision Rule and Run Document
+### Task 3: [Docs/Research] Write Pre-Registered Decision Rule and Run Document [x]
 - **Size:** S
 - **Target Files:** `docs/runs/2026-10-26-843-balanced-queue5-pair.md`
 - **Helper Skill:** `documentation-and-adrs`
