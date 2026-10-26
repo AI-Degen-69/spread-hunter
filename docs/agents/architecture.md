@@ -53,7 +53,7 @@ spread-hunter/
                           (naming.md holds the filename + path contract for every artifact)
     runs/                 Dated run and experiment records, YYYY-MM-DD-<slug>.md (evidence, not output)
     issues/               Issue showcases: <id>-presentation-<slug>.html (nowhere else under docs/)
-    superpowers/specs/    Design specs an agent must read before coding (e.g. the shadow fill model)
+    specs/                Design specs an agent must read before coding (e.g. the shadow fill model)
     ideas/                Unshaped ideas that are not yet an issue
     audits/               Analyses of committed evidence
     reference/            External facts we had to look up (API endpoints, enum values)
