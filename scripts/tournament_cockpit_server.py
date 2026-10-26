@@ -1002,6 +1002,25 @@ def _arms_from_newest_plan(meta: dict[str, Any]) -> Optional[list[dict[str, Any]
     return build_plan_arms(newest) or None
 
 
+def _resolve_plan_for_tourney_key(
+    tourney_key: str,
+    meta: dict[str, Any],
+) -> Optional[Path]:
+    """Select the plan record for a given tournament key consistently.
+
+    A newer run of the page's own issue outranks the highest-numbered one:
+    run number is not launch order, so a named run started today would
+    otherwise merge last week's r1 db/port into today's rows.
+    """
+    latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
+    if tourney_key in (CURRENT_SETUP_KEY, "843", "799"):
+        newest = _newest_plan_record()
+        newest_issue = _plan_identity(newest)[0] if newest is not None else None
+        if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
+            latest_plan = newest
+    return latest_plan
+
+
 def resolve_tournament_meta(
     tourney_key: str = CURRENT_SETUP_KEY,
 ) -> tuple[dict[str, Any], float]:
@@ -1014,6 +1033,11 @@ def resolve_tournament_meta(
     """
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     if tourney_key != CURRENT_SETUP_KEY:
+        plan = _resolve_plan_for_tourney_key(tourney_key, meta)
+        if plan is not None:
+            _, minutes = _plan_identity(plan)
+            if minutes:
+                return meta, minutes
         return meta, DEFAULT_TOURNAMENT_MINUTES
     newest = _newest_plan_record()
     if newest is None:
@@ -1065,7 +1089,7 @@ def resolve_tournament_arms_with_status(
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
     # #484 stays fully static (archive); live keys resolve their plan file.
-    if tourney_key not in ("487", "492", "608"):
+    if tourney_key not in ("487", "492", "608", "843", "799"):
         return default_arms, None
 
     # The served page follows the newest run on disk, whatever issue launched it:
@@ -1082,15 +1106,7 @@ def resolve_tournament_arms_with_status(
     # One resolver for every key: `latest_tournament_record` ranks by parsed
     # (run number, stamp), so a named run (#487's `--stamp current_setup_10arm`)
     # no longer wins or loses on the accident of `c` sorting after a digit.
-    latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
-    if tourney_key == CURRENT_SETUP_KEY:
-        # A newer run of the page's own issue outranks the highest-numbered one:
-        # run number is not launch order, so a named run started today would
-        # otherwise merge last week's r1 db/port into today's rows.
-        newest = _newest_plan_record()
-        newest_issue = _plan_identity(newest)[0] if newest is not None else None
-        if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
-            latest_plan = newest
+    latest_plan = _resolve_plan_for_tourney_key(tourney_key, meta)
     if latest_plan is None:
         return default_arms, None
     try:
@@ -1689,6 +1705,17 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         merge_pct = a.get("merge_rate", 0.0)
         stops = a.get("stop_loss_exits_count", 0)
         status = a.get("status", "pending")
+        quoted = int((a.get("funnel") or {}).get("quoted", 0) or a.get("quoted_cnt", 0) or 0)
+        is_quoting = quoted > 0
+        if status == "ok":
+            status_label = "ACTIVE"
+            status_badge_cls = "badge-green"
+        elif status == "no_trades" and is_quoting:
+            status_label = f"QUOTING ({quoted})"
+            status_badge_cls = "badge-green"
+        else:
+            status_label = status.upper()
+            status_badge_cls = "badge-amber"
         arm_cards.append(f"""
         <div class="m-card" style="{card_border}">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
@@ -1696,15 +1723,15 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
               <div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">{html.escape(a.get('label', a.get('name', '')))}{test_badge}</div>
               <div style="font-size: 11px; color: var(--text-muted); font-family: monospace;">{html.escape(a.get('name', ''))} | Port {a.get('port', 0)}</div>
             </div>
-            <span class="badge {'badge-green' if status == 'ok' else 'badge-amber'}">{html.escape(status.upper())}</span>
+            <span class="badge {status_badge_cls}">{html.escape(status_label)}</span>
           </div>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; padding: 8px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font-size: 12px;">
             <div>PnL: <strong class="tabular {pnl_cls}">{pnl_str}</strong></div>
+            <div>Quoted: <strong class="tabular">{quoted:,}</strong></div>
             <div>Trades: <strong class="tabular">{trades_cnt:,}</strong></div>
             <div>Sharpe: <strong class="tabular">{sharpe:.2f}</strong></div>
             <div>Max DD: <strong class="tabular">${mdd:.2f}</strong></div>
             <div>Merge Rate: <strong class="tabular">{merge_pct:.1f}%</strong></div>
-            <div>Stop Exits: <strong class="tabular">{stops}</strong></div>
           </div>
           <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4;">
             {html.escape(a.get('desc', ''))}
@@ -3173,22 +3200,32 @@ function renderDgArmCards(arms) {{
     const pnl = a.total_pnl || 0.0;
     const pnlStr = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
     const pnlCls = pnl >= 0 ? 'positive' : 'negative';
-    const statusCls = a.status === 'ok' ? 'badge-green' : 'badge-amber';
+    const quoted = (a.funnel && a.funnel.quoted) || a.quoted_cnt || 0;
+    const isQuoting = quoted > 0;
+    let statusLabel = (a.status || 'pending').toUpperCase();
+    let statusCls = a.status === 'ok' ? 'badge-green' : 'badge-amber';
+    if (a.status === 'ok') {{
+      statusLabel = 'ACTIVE';
+      statusCls = 'badge-green';
+    }} else if (a.status === 'no_trades' && isQuoting) {{
+      statusLabel = 'QUOTING (' + quoted + ')';
+      statusCls = 'badge-green';
+    }}
     html += '<div class="m-card" style="' + border + '">' +
       '<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">' +
         '<div>' +
           '<div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">' + escHtml(a.label || a.name) + badge + '</div>' +
           '<div style="font-size: 11px; color: var(--text-muted); font-family: monospace;">' + escHtml(a.name) + ' | Port ' + (a.port || 0) + '</div>' +
         '</div>' +
-        '<span class="badge ' + statusCls + '">' + escHtml((a.status || 'pending').toUpperCase()) + '</span>' +
+        '<span class="badge ' + statusCls + '">' + escHtml(statusLabel) + '</span>' +
       '</div>' +
       '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; padding: 8px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font-size: 12px;">' +
         '<div>PnL: <strong class="tabular ' + pnlCls + '">' + pnlStr + '</strong></div>' +
+        '<div>Quoted: <strong class="tabular">' + quoted.toLocaleString() + '</strong></div>' +
         '<div>Trades: <strong class="tabular">' + (a.trades_count || 0).toLocaleString() + '</strong></div>' +
         '<div>Sharpe: <strong class="tabular">' + (a.sharpe_proxy || 0).toFixed(2) + '</strong></div>' +
         '<div>Max DD: <strong class="tabular">$' + (a.max_drawdown || 0).toFixed(2) + '</strong></div>' +
         '<div>Merge Rate: <strong class="tabular">' + (a.merge_rate || 0).toFixed(1) + '%</strong></div>' +
-        '<div>Stop Exits: <strong class="tabular">' + (a.stop_loss_exits_count || 0) + '</strong></div>' +
       '</div>' +
       '<div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4;">' + escHtml(a.desc || '') + '</div>' +
     '</div>';
@@ -3198,6 +3235,9 @@ function renderDgArmCards(arms) {{
 
 function updateDecisionGatesUI() {{
   if (!state || !state.decision_gates) return;
+  if (state.arms) {{
+    renderDgArmCards(state.arms);
+  }}
   const dg = state.decision_gates;
   const vBadge = document.getElementById('dg-verdict-badge');
   if (vBadge) {{
