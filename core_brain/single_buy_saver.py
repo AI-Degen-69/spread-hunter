@@ -52,7 +52,9 @@ from core_brain.book_math import (
     floor_to_tick,
     tick_size,
 )
+from core_brain.close_methods import ORPHAN_PROFIT_EXIT, SINGLE_BUY_EXIT
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
+from core_brain.single_leg_lifecycle import orphan_profit_floor
 
 log = logging.getLogger("single_buy_saver")
 
@@ -1015,10 +1017,11 @@ def exit_single_buy(
     live: bool = True,
     venue_positions: Optional[dict[str, float]] = None,
     reason: Optional[str] = None,
-    method: str = "single_buy_exit",
+    method: str = SINGLE_BUY_EXIT,
     *,
     force: bool = False,
     trigger_bid: Optional[float] = None,
+    min_profit_pct: Optional[float] = None,
 ) -> dict:
     """Close a single-sided fill: cancel resting opposite leg, then sell filled inventory.
 
@@ -1184,6 +1187,20 @@ def exit_single_buy(
             f"poll loop reconcile it, then re-run."
         )
 
+    # When min_profit_pct is set, ensure opposite leg was not filled and remains zero
+    light_matched = float((after.get("legs") or {}).get(light_token, {}).get("matched", 0.0)) if light_token else 0.0
+    if min_profit_pct is not None and (light_matched > SIZE_EPS or venue_light_matched > SIZE_EPS):
+        return {
+            "action": "orphan_profit_hold",
+            "reason": "opposite_filled",
+            "pair_id": pair_id,
+            "condition_id": after["condition_id"],
+            "cancelled": cancelled,
+            "size": 0.0,
+            "venue_light_matched": venue_light_matched,
+            "positions_checked": positions_checked,
+        }
+
     # 3. Sell, sized by the registry and bounded by a price we will accept.
     heavy_book = client.get_order_book(heavy_token)
     bid = best_bid(heavy_book)
@@ -1198,7 +1215,31 @@ def exit_single_buy(
     # will walk the ladder down to whatever clears it. Depth is counted only at
     # levels we would actually accept, so size and price agree.
     tick = tick_size(heavy_book)
-    min_price = floor_to_tick(max(bid - MAX_SELL_SLIPPAGE, tick), tick)
+    slippage_floor = floor_to_tick(max(bid - MAX_SELL_SLIPPAGE, tick), tick)
+    profit_floor = None
+    if min_profit_pct is not None:
+        heavy_leg = (after.get("legs") or {}).get(heavy_token, {})
+        heavy_matched = float(heavy_leg.get("matched") or 0.0)
+        heavy_notional = float(heavy_leg.get("notional") or 0.0)
+        held_cost = (heavy_notional / heavy_matched) if heavy_matched > 0.0 else 0.0
+        profit_floor = orphan_profit_floor(held_cost, float(min_profit_pct), tick)
+        if bid < profit_floor - 1e-9:
+            return {
+                "action": "orphan_profit_hold",
+                "reason": "profit_gone",
+                "pair_id": pair_id,
+                "condition_id": after["condition_id"],
+                "cancelled": cancelled,
+                "size": 0.0,
+                "venue_light_matched": venue_light_matched,
+                "positions_checked": positions_checked,
+                "bid": bid,
+                "profit_floor": profit_floor,
+            }
+        min_price = max(slippage_floor, profit_floor)
+    else:
+        min_price = slippage_floor
+
     depth = depth_at_or_above(heavy_book, min_price)
 
     size = min(naked, depth)
@@ -1258,7 +1299,7 @@ def exit_single_buy(
                        submitted_floor=min_price,
                        fill_source=fill_source)
 
-    return {
+    res = {
         "action": "exited",
         "pair_id": pair_id,
         "condition_id": after["condition_id"],
@@ -1278,6 +1319,9 @@ def exit_single_buy(
         "positions_checked": positions_checked,
         "response": resp,
     }
+    if profit_floor is not None:
+        res["profit_floor"] = profit_floor
+    return res
 
 
 def _venue_id_from_submit_error(exc: BaseException) -> str:
@@ -1638,6 +1682,7 @@ AGED_OUT_QUIET_ACTIONS = (
 SINGLE_LEG_QUIET_ACTIONS = frozenset({
     "patient_wait", "escalated_wait", "pair_locked", "dual_resting",
     "awaiting_lead", "would_exit", "would_complete",
+    "orphan_profit_hold",
     STRANDED_MISSING_SIDE_ACTION,
 })
 
@@ -1651,6 +1696,7 @@ _SAVER_ACTION_BY_DECISION = {
     "locked": "pair_locked",
     "rest": "dual_resting",
     "refused": "refused",
+    "orphan_profit_hold": "orphan_profit_hold",
 }
 
 

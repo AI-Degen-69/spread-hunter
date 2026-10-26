@@ -91,7 +91,7 @@ def exit_single_buy(
 
 ## Tasks
 
-### Task 1: Configuration, Close Method Taxonomy & Pure Verdict [Backend/Logic]
+### Task 1: Configuration, Close Method Taxonomy & Pure Verdict [Backend/Logic] [x]
 - **Size:** M
 - **Target files:**
   - `core_brain/config.py`

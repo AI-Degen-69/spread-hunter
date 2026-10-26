@@ -3162,3 +3162,134 @@ def test_cap_bailout_does_not_fire_without_an_opposing_ask(
 
     assert routed["action"] != "exited"
     assert not any(c.startswith("sell:") for c in venue.calls)
+
+
+# ---------------------------------------------------------------------------
+# Issue #842: Guarded Execution in exit_single_buy for orphan profit exits
+# ---------------------------------------------------------------------------
+
+
+def test_orphan_exit_rechecks_profit_after_cancel(registry: OrderRegistry):
+    """When bid drops below profit floor after cancel, exit holds with profit_gone."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50)
+    # Floor for 0.50 with min_profit_pct=0.05 is 0.53.
+    # Set best_bid to 0.51 (below 0.53).
+    client = FakeClient(best_bid=0.51)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, MAX_PAIR_COST,
+        live=True, force=True, min_profit_pct=0.05,
+        method=lp.ORPHAN_PROFIT_EXIT, reason="orphan_profit_exit",
+    )
+
+    assert result["action"] == "orphan_profit_hold"
+    assert result["reason"] == "profit_gone"
+    assert any(c.startswith("cancel:") for c in client.calls)
+    assert not any(c.startswith("sell:") for c in client.calls)
+
+
+def test_orphan_exit_holds_when_cancel_reveals_opposite_fill(registry: OrderRegistry):
+    """When venue reports opposite leg filled during cancel, exit holds with opposite_filled."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50)
+    client = FakeClient(best_bid=0.60, venue_matched={"venue-light": 3.0})
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, MAX_PAIR_COST,
+        live=True, force=True, min_profit_pct=0.05,
+        method=lp.ORPHAN_PROFIT_EXIT, reason="orphan_profit_exit",
+    )
+
+    assert result["action"] == "orphan_profit_hold"
+    assert result["reason"] == "opposite_filled"
+    assert not any(c.startswith("sell:") for c in client.calls)
+
+
+def test_orphan_exit_sells_only_depth_at_or_above_floor(registry: OrderRegistry):
+    """Only depth at or above the profit floor is sold; bids below are excluded."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50)
+    # Cost 0.50, min_profit_pct 0.05 -> floor 0.53.
+    # Best bid 0.54 -> slippage floor 0.52 -> min_price is profit_floor 0.53.
+    # 4 shares @ 0.54, 3 shares @ 0.53, 10 shares @ 0.51.
+    client = FakeClient(
+        best_bid=0.54,
+        bid_levels=[
+            {"price": "0.54", "size": "4.0"},
+            {"price": "0.53", "size": "3.0"},
+            {"price": "0.51", "size": "10.0"},
+        ],
+    )
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, MAX_PAIR_COST,
+        live=True, force=True, min_profit_pct=0.05,
+        method=lp.ORPHAN_PROFIT_EXIT, reason="orphan_profit_exit",
+    )
+
+    assert result["action"] == "exited"
+    assert result["size"] == 7.0
+    assert result["requested_size"] == 7.0
+    assert result["min_price"] == 0.53
+
+
+def test_orphan_exit_limit_is_higher_of_two_floors(tmp_path: Path):
+    """The submitted limit floor is max(slippage_floor, profit_floor)."""
+    reg_a = OrderRegistry(db_path=tmp_path / "a.db")
+    pair_id_a = _one_sided_pair(reg_a, filled_size=10.0, fill_price=0.50)
+    # Case A: best_bid = 0.54 -> slippage_floor = 0.52 -> min_price = 0.53 (profit_floor wins)
+    client_a = FakeClient(best_bid=0.54, bid_depth=10.0)
+    result_a = lp.exit_single_buy(
+        client_a, reg_a, pair_id_a, MAX_PAIR_COST,
+        live=True, force=True, min_profit_pct=0.05,
+        method=lp.ORPHAN_PROFIT_EXIT, reason="orphan_profit_exit",
+    )
+    assert result_a["action"] == "exited"
+    assert result_a["min_price"] == 0.53
+
+    reg_b = OrderRegistry(db_path=tmp_path / "b.db")
+    pair_id_b = _one_sided_pair(reg_b, filled_size=10.0, fill_price=0.50)
+    # Case B: best_bid = 0.60 -> slippage_floor = 0.58 -> min_price = 0.58 (slippage_floor wins)
+    client_b = FakeClient(best_bid=0.60, bid_depth=10.0)
+    result_b = lp.exit_single_buy(
+        client_b, reg_b, pair_id_b, MAX_PAIR_COST,
+        live=True, force=True, min_profit_pct=0.05,
+        method=lp.ORPHAN_PROFIT_EXIT, reason="orphan_profit_exit",
+    )
+    assert result_b["action"] == "exited"
+    assert result_b["min_price"] == 0.58
+
+
+def test_orphan_exit_records_orphan_method(registry: OrderRegistry):
+    """Close is logged in registry with method=ORPHAN_PROFIT_EXIT and reason=orphan_profit_exit."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50)
+    client = FakeClient(best_bid=0.55, bid_depth=10.0)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, MAX_PAIR_COST,
+        live=True, force=True, min_profit_pct=0.05,
+        method=lp.ORPHAN_PROFIT_EXIT, reason="orphan_profit_exit",
+    )
+
+    assert result["action"] == "exited"
+    closes = registry.get_all_closes()
+    assert len(closes) >= 1
+    close = closes[-1]
+    assert close["method"] == lp.ORPHAN_PROFIT_EXIT
+    assert close["reason"] == "orphan_profit_exit"
+    assert close["submitted_floor"] == 0.53
+
+
+def test_orphan_profit_close_nets_inventory(registry: OrderRegistry):
+    """An orphan profit exit close nets inventory so the pair is no longer counted as naked."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.50)
+    before_naked = registry_naked_usd(registry)
+    assert before_naked > 0.0
+
+    client = FakeClient(best_bid=0.55, bid_depth=10.0)
+    lp.exit_single_buy(
+        client, registry, pair_id, MAX_PAIR_COST,
+        live=True, force=True, min_profit_pct=0.05,
+        method=lp.ORPHAN_PROFIT_EXIT, reason="orphan_profit_exit",
+    )
+
+    after_naked = registry_naked_usd(registry)
+    assert after_naked == 0.0
