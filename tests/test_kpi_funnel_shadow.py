@@ -27,6 +27,9 @@ def test_recognizes_tournament_shadow_db():
     # Multi-arm tournament run databases (issue-based naming).
     assert _is_pipeline_shadow_db("data/371_tournament_04_aggressive_20261005-043814.db")
     assert _is_pipeline_shadow_db("data/371_tournament_01_control_20261005-043814.db")
+    # Issue #799 tournament folder layout with arm-named databases
+    assert _is_pipeline_shadow_db("data/tournaments/i799-tournament-1m_2026-10-25T00-22/loose-baseline.db")
+    assert _is_pipeline_shadow_db("data/tournaments/i799-tournament-1m_2026-10-25T00-22/tight-touch.db")
 
 
 def test_rejects_live_and_non_shadow_dbs():
