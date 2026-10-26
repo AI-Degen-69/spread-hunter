@@ -9563,9 +9563,6 @@ function initOrdersTradesTabs() {
  * be the one the page hides. */
 const CLOSE_REASON_LABELS = {
   aged_out_rescue: 'Aged-out rescue',
-  // Retired trigger: nothing emits it any more, but stored and demo rows still
-  // carry the token, so the reader keeps a readable label rather than raw text.
-  adverse_drift: 'Adverse drift',
   grace_expired: 'Grace expired',
   ladder_exit: 'Ladder exit',
   lifecycle_hard_stop: 'Stop-loss',

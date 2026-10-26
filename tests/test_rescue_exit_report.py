@@ -459,11 +459,12 @@ class TestReasonPrecedenceWithoutMarkStore:
         reg = build_registry(tmp_path / "reg.db")
         e = add_pair_orders(reg, pair_id="p1", cid="c1", up_token="u1", dn_token="d1")
         add_exit_close(reg, cid="c1", shares=10.0, sell_price=0.30,
-                       heavy_avg=e["heavy_price"], ts=2000.0, reason="adverse_drift")
+                       heavy_avg=e["heavy_price"], ts=2000.0,
+                       reason="stranded_unhedged_exit")
         # No ensure_shadow_tables / add_queue_marks call here on purpose.
         out = run_report(tmp_path / "reg.db")
-        assert "adverse_drift" in out
-        assert "classifier=adverse_drift" in out
+        assert "stranded_unhedged_exit" in out
+        assert "classifier=stranded_unhedged_exit" in out
 
     def test_plain_store_without_reason_stays_unresolved(self, tmp_path):
         reg = build_registry(tmp_path / "reg.db")
