@@ -53,7 +53,9 @@ def test_a_merge_payload_still_reaches_the_policy_and_allows(monkeypatch):
     }
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     monkeypatch.setattr(guard, "_open_pr_for_head", lambda: "104")
-    monkeypatch.setattr(guard, "dismiss_stale_reviews", lambda pr: ([], []))
+    monkeypatch.setattr(guard, "dismiss_stale_reviews",
+                        lambda pr, repo=None: {"dismissed": [], "failed": [],
+                                               "note": ""})
 
     # Act
     code = guard.main([])
@@ -61,6 +63,29 @@ def test_a_merge_payload_still_reaches_the_policy_and_allows(monkeypatch):
     # Assert — a merge is never blocked, for any path, and the reminder is the
     # merge one rather than a stray fall-through.
     assert code == 0
+
+
+def test_the_merge_payload_carries_its_repository_through_to_the_check(monkeypatch):
+    """`-R other/repo` must be read and acted on as that repository."""
+    # Arrange
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "gh pr merge 104 -R other/repo --squash"},
+    }
+    seen: list[tuple] = []
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(guard, "_open_pr_for_head", lambda: "104")
+    monkeypatch.setattr(
+        guard, "dismiss_stale_reviews",
+        lambda pr, repo=None: seen.append((pr, repo)) or {
+            "dismissed": [], "failed": [], "note": ""},
+    )
+
+    # Act
+    guard.main([])
+
+    # Assert — the dismissal would otherwise run against the wrong repository.
+    assert seen == [("104", "other/repo")]
 
 
 def test_a_push_payload_still_reaches_the_policy(monkeypatch):

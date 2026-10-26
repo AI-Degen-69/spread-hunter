@@ -203,8 +203,13 @@ when that review was dismissed by hand.
 
 The guard ends this. On `gh pr merge` it reads the reviews, and dismisses any CodeRabbit
 review that is `CHANGES_REQUESTED` **against a commit the branch has since left**, recording
-why in the dismissal message. Then the merge proceeds. Those reviews were never going to
-be re-reviewed, so nothing is being waived.
+why in the dismissal message.
+
+A commit is not an answer, so the guard also requires that **no review thread on the pull
+request is still open** before it dismisses anything. An open thread is a finding nobody has
+replied to or resolved; dismissing the review over it would make the merge look clean while
+the reviewer's question still sat unanswered. With one open, nothing is dismissed, the merge
+message says how many are open, and resolving them comes first.
 
 What it will not touch:
 
@@ -212,10 +217,16 @@ What it will not touch:
 | --- | --- |
 | A person's `CHANGES_REQUESTED`, on any commit | A human decision is not the agent's to dismiss |
 | CodeRabbit's `CHANGES_REQUESTED` on the current head | A live blocker. Fix it, or decline it on the thread |
+| Any review, while a review thread is open | The findings are not answered yet |
 | Anything missing an id or a commit | Staleness is unproven, so nothing is dismissed |
 
-If the dismissal cannot run (expired token, no network), the merge still goes ahead and the
-message names the command to finish the job by hand:
+The lookup is scoped to the pull request the command names: `gh pr merge -R other/repo`
+reads and dismisses in `other/repo`, not in the working tree's repository.
+
+If the head, the review threads or the dismissal itself cannot be read (expired token, no
+network), nothing is dismissed. The guard does not block the merge — CI and GitHub's own
+branch protection remain the gate — but GitHub may still refuse it until that review is gone,
+and the message names the command to finish the job by hand:
 
 ```bash
 gh api -X PUT repos/{owner}/{repo}/pulls/<n>/reviews/<id>/dismissals \
