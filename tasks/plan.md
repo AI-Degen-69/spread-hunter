@@ -54,7 +54,7 @@ This work creates `configs/tournaments/i843-pair-test_arms.json` with 4 isolated
   - Include descriptive fields (`desc`, `thesis`, `profile`) consistent with `i799-tournament-test_arms.json`.
 - **Verification:** `python -c "import json; json.loads(open('configs/tournaments/i843-pair-test_arms.json').read())"`
 
-### Task 2: [Testing/TDD] Create Unit Test Suite for Arms Configuration & Plan Resolution
+### Task 2: [Testing/TDD] Create Unit Test Suite for Arms Configuration & Plan Resolution [x]
 - **Size:** S
 - **Target Files:** `tests/test_tournament_arms_i843.py`
 - **Helper Skill:** `test-driven-development`
