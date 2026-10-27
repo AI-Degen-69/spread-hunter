@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from core_brain.order_registry import SCHEMA
+from core_brain.order_registry import DEFAULT_DB_PATH, SCHEMA
 from dashboard.server import (
     PAGE_HTML,
     _PAGE_HTML_FILE,
@@ -3761,8 +3761,14 @@ def test_status_shadow_record_beats_the_live_record(
 def _stage(client, monkeypatch, tmp_path, kind, name):
     import dashboard.server as dash_mod
     monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
-    return client.post(f"/api/profile/stage?kind={kind}&name={name}",
-                       headers=_control(client))
+    # Staging shares the production gate with every stack-changing op: the
+    # page must read the production registry, which is never written here.
+    set_db_override(str(DEFAULT_DB_PATH))
+    try:
+        return client.post(f"/api/profile/stage?kind={kind}&name={name}",
+                           headers=_control(client))
+    finally:
+        set_db_override(None)
 
 
 def test_profile_options_lists_presets_and_arms(client):
@@ -3782,14 +3788,28 @@ def test_profile_stage_preset_stops_nothing_and_records_pending(
     assert body["ok"] is True, body.get("message")
     assert "START" in body["message"]
     pending = (tmp_path / "runtime" / "pending_profile.json")
-    assert json.loads(pending.read_text(encoding="utf-8"))["env"] == {
-        "BOT_QUOTE_TOURNAMENT_PRESET": "balanced"}
+    # Identity only: START re-resolves the env, so the file carries no env.
+    assert json.loads(pending.read_text(encoding="utf-8")) == {
+        "kind": "preset", "name": "balanced",
+        "staged_at": json.loads(pending.read_text(encoding="utf-8"))["staged_at"]}
     assert body["status"]["pending_profile"]["name"] == "balanced"
 
 
 def test_profile_stage_unknown_name_refuses(client, monkeypatch, tmp_path):
     body = _stage(client, monkeypatch, tmp_path, "preset", "nope").json()
     assert body["ok"] is False
+
+
+def test_profile_stage_from_shadow_view_refuses(client, monkeypatch, tmp_path):
+    """Staging from a non-production page would stop a stack this page cannot
+    restart, so it shares the production gate with the other stack controls."""
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    body = client.post("/api/profile/stage?kind=preset&name=balanced",
+                       headers=_control(client)).json()
+    assert body["ok"] is False
+    assert "production" in body["message"]
+    assert not (tmp_path / "runtime" / "pending_profile.json").exists()
 
 
 def test_profile_clear_drops_the_staged_profile(client, monkeypatch, tmp_path):
@@ -3839,7 +3859,6 @@ def test_start_consumes_staged_profile_into_child_env(monkeypatch, tmp_path):
     runtime.mkdir()
     (runtime / "pending_profile.json").write_text(json.dumps({
         "kind": "preset", "name": "balanced",
-        "env": {"BOT_QUOTE_TOURNAMENT_PRESET": "balanced"},
         "staged_at": time.time()}), encoding="utf-8")
 
     spawned = []
@@ -3856,3 +3875,35 @@ def test_start_consumes_staged_profile_into_child_env(monkeypatch, tmp_path):
     assert any(env.get("BOT_QUOTE_TOURNAMENT_PRESET") == "balanced"
                for _, env in spawned), "staged env must reach the child"
     assert not (runtime / "pending_profile.json").exists()
+
+
+def test_start_ignores_stale_and_foreign_staged_keys(monkeypatch, tmp_path):
+    """A stale or hand-edited pending file cannot inject overrides: START
+    re-resolves identity against current options and keeps its own run id."""
+    import subprocess
+
+    import dashboard.server as dash_mod
+    from core_brain.order_registry import get_run_id
+
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "get_system_status", lambda: {"bot_state": "STOPPED"})
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "pending_profile.json").write_text(json.dumps({
+        "kind": "preset", "name": "no-such-preset",
+        "env": {"SH_RUN_ID": "hijacked", "BOT_QUOTE_TOURNAMENT_PRESET": "x"},
+        "staged_at": time.time()}), encoding="utf-8")
+
+    spawned = []
+
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append((args, kwargs.get("env", {})))
+            self.pid = 12345
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    result = dash_mod.start_bot()
+    assert result["ok"] is True
+    assert "staged profile" not in result["message"]
+    assert all(env.get("SH_RUN_ID") == get_run_id() for _, env in spawned)
+    assert all("BOT_QUOTE_TOURNAMENT_PRESET" not in env for _, env in spawned)

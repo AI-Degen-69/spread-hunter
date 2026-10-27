@@ -171,9 +171,11 @@ pytest (agent-run).
 
 - Constant for `trader_profile.json` beside the other runtime names (no legacy
   entry). `write_trader_profile(cfg, db_path)` in `trader_loop.py`, called
-  from `main()` after `cfg = load()` + resolved `db_path`; writes `pid`,
-  `started_at`, resolved `db_path`, helper fields via `runtime_file(...)`
-  temp-then-replace; `OSError`/`ValueError` → warning log, trader continues.
+  from `run()` once the fleet lock is held (`record_profile=True` from
+  `main()`; tests drive `run()` without it so no test writes the live
+  runtime dir); writes `pid`, `started_at`, resolved `db_path`, helper
+  fields via `runtime_file(...)` temp-then-replace; `OSError`/`ValueError`/
+  `TypeError` → warning log, trader continues.
 - Reader via `resolve_runtime_file(...)` per contract §4; fallback in
   `get_system_status()` only when no shadow profile, with `source: "live"`,
   `running: true`; shadow priority preserved; existing `try/except` guard kept.

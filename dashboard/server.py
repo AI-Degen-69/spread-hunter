@@ -1675,13 +1675,11 @@ def _read_pending_profile() -> dict | None:
         return None
     if not isinstance(raw, dict):
         return None
-    env = raw.get("env")
-    if not isinstance(raw.get("name"), str) or not isinstance(env, dict):
+    if not isinstance(raw.get("kind"), str) or not isinstance(raw.get("name"), str):
         return None
     return {
-        "kind": raw.get("kind"),
+        "kind": raw["kind"],
         "name": raw["name"],
-        "env": {str(k): str(v) for k, v in env.items()},
         "staged_at": raw.get("staged_at"),
     }
 
@@ -2044,20 +2042,31 @@ def start_bot() -> dict:
         from core_brain.order_registry import get_run_id
         child_env = {**os.environ, "SH_RUN_ID": get_run_id()}
 
-        # A staged profile from POST /api/profile/stage (#856 IIIB): overlay
-        # its env onto the spawned stack only. This process's own environment
-        # stays untouched, so the badge keeps reading engine records.
+        # A staged profile from POST /api/profile/stage (#856 IIIB): the file
+        # carries identity only (kind + name); the env is re-resolved from
+        # the current options, so a stale or hand-edited file can never
+        # smuggle SH_RUN_ID, CLOB_HOST, or rehearsal-only keys into the
+        # stack. This process's own environment stays untouched, so the
+        # badge keeps reading engine records.
         pending_path = None
         staged_profile_name = None
         try:
             pending_path = resolve_runtime_file(PENDING_PROFILE_FILE, root=LIVE_ROOT)
             if pending_path.exists():
                 pending = json.loads(pending_path.read_text(encoding="utf-8"))
-                if isinstance(pending, dict) and isinstance(pending.get("env"), dict):
-                    child_env.update({str(k): str(v)
-                                      for k, v in pending["env"].items()})
-                    if isinstance(pending.get("name"), str):
-                        staged_profile_name = pending["name"]
+                if isinstance(pending, dict):
+                    options = _profile_options()
+                    match = next((o for o in options["presets"] + options["arms"]
+                                  if o["kind"] == pending.get("kind")
+                                  and o["name"] == pending.get("name")), None)
+                    if match is not None:
+                        child_env.update(match["env"])
+                        child_env["SH_RUN_ID"] = get_run_id()
+                        staged_profile_name = match["name"]
+                    else:
+                        logger.warning("staged profile %r no longer matches a known "
+                                     "profile, starting unstaged",
+                                     {k: pending.get(k) for k in ("kind", "name")})
         except (OSError, ValueError) as e:
             logger.warning("staged profile unreadable, starting unstaged: %s", e)
             pending_path, staged_profile_name = None, None
@@ -2747,6 +2756,12 @@ def api_profile_stage(request: Request, kind: str | None = None, name: str | Non
     staged run then records itself in trader_profile.json like any other.
     """
     _authorize_control(request)
+    # Staging stops the live stack, so it shares the production gate with
+    # every other stack-changing op: from a shadow-view page START would be
+    # refused afterwards, leaving resting orders unmanaged.
+    refusal = _refuse_unless_live_writable()
+    if refusal is not None:
+        return JSONResponse(refusal)
     options = _profile_options()
     match = next((o for o in options["presets"] + options["arms"]
                   if o["kind"] == kind and o["name"] == name), None)
@@ -2764,10 +2779,11 @@ def api_profile_stage(request: Request, kind: str | None = None, name: str | Non
                           f"{match['label']}: stop failed ({stopped.get('message')})."),
             "status": get_system_status(),
         })
+    # Identity only: start_bot re-resolves the env from the current
+    # options, so this file can never inject overrides into the stack.
     record = {
         "kind": kind,
         "name": name,
-        "env": match["env"],
         "staged_at": time.time(),
     }
     try:

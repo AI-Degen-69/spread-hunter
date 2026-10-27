@@ -544,6 +544,7 @@ def run(
     clock_fn: Optional[Callable[[], float]] = None,
     guardian_wake: Optional[threading.Event] = None,
     trigger_board: Optional[Any] = None,
+    record_profile: bool = False,
 ) -> list[LiveFleetResult]:
     """Rotate over `markets`: reconcile, then decide+submit per market, then sweep.
 
@@ -617,6 +618,14 @@ def run(
     stop_workers = threading.Event()
     guardian_thread = None
     with lock_cm as holder:
+        # The engine configuration this process loaded, for the dashboard's
+        # PROFILE badge (#856). Opt-in like telemetry: main() passes True so
+        # tests driving the loop never write into the live runtime dir.
+        # Recorded only once the fleet lock is held: a second trader that
+        # loses the race must not clobber the winner's record on its way
+        # out with InstanceInUse. A write failure only warns.
+        if record_profile and isinstance(registry, OrderRegistry):
+            write_trader_profile(seam.base_cfg, getattr(registry, "db_path", None))
         if spawn_guardian and registry is not None:
             from core_brain.order_manager import merge as live_merge
             start_settlement_sweeper(
@@ -3419,7 +3428,7 @@ def write_trader_profile(cfg, db_path) -> Optional[Path]:
         tmp.write_text(json.dumps(payload), encoding="utf-8")
         tmp.replace(target)
         return target
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, TypeError) as e:
         log.warning("trader profile write failed: %s", e)
         return None
 
@@ -3481,9 +3490,6 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     db_path = Path(a.db) if a.db else DEFAULT_DB_PATH
     registry = OrderRegistry(db_path=db_path)
-    # The engine configuration this process loaded, for the dashboard's
-    # PROFILE badge (#856). Recorded once here; a write failure only warns.
-    write_trader_profile(cfg, db_path)
     maker = a.funder or os.environ.get("POLY_FUNDER")
 
     if a.live:
@@ -3620,6 +3626,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             spawn_guardian=not a.once,
             guardian_wake=guardian_wake,
             trigger_board=trigger_board,
+            record_profile=True,
         )
     except InstanceInUse as exc:
         print(f"fleet refused: {exc}", file=sys.stderr)

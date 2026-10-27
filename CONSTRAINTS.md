@@ -18,8 +18,14 @@
   `get_parameters()` and the Strategy tab, `MakerConfig` fields,
   `dashboard/static/styles.css` (only if the narrow-viewport test fails),
   `.gitignore` (no rule to hide runtime files).
-- **Zero live capital.** No signer, no `quote`, no `complete`, no Trader loop
-  start, no dashboard START. `data/orders.db` is read-only as ever — never
+- **Zero live capital.** The agent runs no opening command: no signer, no
+  `quote`, no `complete`, no Trader loop start, and never presses the
+  dashboard's START itself. (The shipped dashboard does have a START path —
+  the operator's control. IIIB adds view-only arm navigation plus
+  Load-to-stage: Load stops the stack via `stop_bot`, writes only
+  identity `{kind, name}` to `runtime/pending_profile.json`, and arms the
+  next operator START. START re-resolves the env from current options and
+  consumes the file.) `data/orders.db` is read-only as ever — never
   rewritten or deleted.
 
 ## Data truthfulness

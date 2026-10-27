@@ -23,7 +23,7 @@ Branch: `i856/feat-display-active-strategy-profile-name-in-dashb` | Plan: `tasks
 ## T3 — Live writer + fallback [Backend/Logic] (M)
 
 - [x] `trader_profile.json` constant (`runtime_paths.py`, no legacy entry)
-- [x] `write_trader_profile(cfg, db_path)` + call in `trader_loop.main()` (nonfatal write)
+- [x] `write_trader_profile(cfg, db_path)` + call in `trader_loop.run()` after the fleet lock (`record_profile=True` from `main()`; review fix: a losing second trader no longer clobbers the winner's record)
 - [x] Live reader + fallback in `get_system_status()` (trust checks, shadow priority)
 - [x] Writer + server-matrix tests; runtime files under `tmp_path` only
 - [x] Checkpoint 3: full targeted matrix green

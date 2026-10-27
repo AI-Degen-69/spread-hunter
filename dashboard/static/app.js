@@ -2272,8 +2272,10 @@ function profileOptionsHtml(options, pending) {
       <button class="db-run-switch" data-profile-action="clear" title="Drop the staged profile; START uses the current env.">Clear</button>
     </div>`;
   }
-  out += '<div class="services-dropdown-head"><span>Tournaments Arms — view a store, or load one for START</span></div>';
+  let listed = 0;
+  out += '<div class="services-dropdown-head"><span>Tournament arms — view a store, or load one for START.</span></div>';
   for (const arm of (options?.arms || [])) {
+    listed += 1;
     const key = `arm:${arm.name}`;
     const tag = key === stagedName ? ' <span class="pill-detail">STAGED</span>' : '';
     const viewBtn = arm.has_store
@@ -2286,8 +2288,9 @@ function profileOptionsHtml(options, pending) {
       <button class="db-run-switch" data-profile-action="load" data-kind="arm" data-name="${esc(arm.name)}" title="Stop the stack and stage ${esc(arm.name)} for the next START.">Load</button>
     </div>`;
   }
-  out += '<div class="services-dropdown-head"><span>Presets — load one for START</span></div>';
+  out += '<div class="services-dropdown-head"><span>Presets — load one for START.</span></div>';
   for (const preset of (options?.presets || [])) {
+    listed += 1;
     const key = `preset:${preset.name}`;
     const tag = key === stagedName ? ' <span class="pill-detail">STAGED</span>' : '';
     out += `<div class="db-run-row" title="${esc(preset.detail || preset.name)}">
@@ -2296,6 +2299,7 @@ function profileOptionsHtml(options, pending) {
       <button class="db-run-switch" data-profile-action="load" data-kind="preset" data-name="${esc(preset.name)}" title="Stop the stack and stage preset ${esc(preset.name)} for the next START.">Load</button>
     </div>`;
   }
+  if (!listed) return '';
   return out;
 }
 
@@ -2316,6 +2320,9 @@ async function renderProfileOptions() {
       const action = b.getAttribute('data-profile-action');
       const kind = b.getAttribute('data-kind');
       const name = b.getAttribute('data-name');
+      if (action === 'stage' && !confirm(`Stop the running stack and stage ${name || 'this profile'} for the next START?`)) {
+        return;
+      }
       b.disabled = true;
       try {
         const endpoint = action === 'view'
@@ -2404,6 +2411,7 @@ function renderDbMode(status) {
       if (!sw) return;
       if (sw.style.display === 'block') { closeRunSwitcher(); return; }
       closeServicesDropdown();
+      closeProfileDropdown();
       renderRunSwitcher();
     });
     document.addEventListener('click', (e) => {
@@ -2589,6 +2597,7 @@ function bindServicesDropdown() {
       closeServicesDropdown();
     } else {
       closeRunSwitcher();
+      closeProfileDropdown();
       panel.style.display = 'block';
       trigger.setAttribute('aria-expanded', 'true');
       placePanel(trigger, panel);
@@ -10978,6 +10987,11 @@ function repositionHeaderPanels() {
   const badge = document.getElementById('db-mode-badge');
   if (runSwitcher && runSwitcher.style.display === 'block' && badge) {
     placePanel(badge, runSwitcher);
+  }
+  const profilePanel = document.getElementById('profile-dropdown');
+  const profileTrigger = document.getElementById('profile-badge');
+  if (profilePanel && profilePanel.style.display === 'block' && profileTrigger) {
+    placePanel(profileTrigger, profilePanel);
   }
 }
 
