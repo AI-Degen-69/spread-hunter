@@ -10,13 +10,13 @@ Branch: `i839/live-migration-approval-audit` | Plan: `tasks/plan.md` | Spec: `SP
 - [x] Print the ten-arm table for the real run folder (checkpoint 1)
 
 ## T2 — Audit document `[Docs]` (M)
-- [ ] `docs/audits/live-migration-799.md`: verdict up front, commands behind every table
-- [ ] Ten-arm measured table + issue-claim vs measured discrepancy table
-- [ ] Risk-shape ruling with the half-split and concentration evidence
-- [ ] Queue mechanism evidence from `python -m scripts.queue_report --db <arm>.db`
-- [ ] Two-layer payload documentation, both labelled unapproved
-- [ ] Reopen conditions; "How to verify" written for the operator
-- [ ] Re-run each table's command and match it against the doc (checkpoint 2)
+- [x] `docs/audits/live-migration-799.md`: verdict up front, commands behind every table
+- [x] Ten-arm measured table + issue-claim vs measured discrepancy table
+- [x] Risk-shape ruling with the half-split and concentration evidence
+- [x] Queue mechanism evidence from `python -m scripts.queue_report --db <arm>.db`
+- [x] Two-layer payload documentation, both labelled unapproved
+- [x] Reopen conditions; "How to verify" written for the operator
+- [x] Re-run each table's command and match it against the doc (checkpoint 2)
 
 ## T3 — Backlog cross-reference `[Docs]` (XS)
 - [ ] `docs/backlog/i837-cockpit-catalyst-columns.md` row N4 → points at the audit

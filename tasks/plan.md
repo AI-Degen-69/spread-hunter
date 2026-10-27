@@ -116,7 +116,7 @@ T1 (measurement + verdict CLI)  ──►  T2 (audit doc)
   `--verdict` path is asserted against a stubbed `write_statistics_report`. Plus the live read
   of the real run folder as the acceptance evidence.
 
-### T2 — The audit document and its verdict
+### T2 — The audit document and its verdict [x]
 - **Size:** M  **Domain:** `[Docs]` + `[Research]`  **Depends on:** T1
 - **Files:** `docs/audits/live-migration-799.md` (new).
 - **What it does:** records the run's identity and coverage; the ten-arm measured table with the
