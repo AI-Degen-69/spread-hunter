@@ -3390,6 +3390,40 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return a
 
 
+def write_trader_profile(cfg, db_path) -> Optional[Path]:
+    """Record the live trader's engine profile for the dashboard badge (#856).
+
+    Best-effort by design: a write failure degrades to a warning and None,
+    never to a dead trader. Read back by `dashboard.server` only when the
+    recording pid is alive, registered as `decide`, and writing the active
+    store -- otherwise a stale file would label the wrong process.
+    """
+    import json
+
+    from core_brain import runtime_paths
+    from core_brain.config import describe_active_profile, resolve_tournament_preset_name
+    try:
+        try:
+            preset_name = resolve_tournament_preset_name()
+        except ValueError:
+            preset_name = None
+        payload = {
+            "pid": os.getpid(),
+            "started_at": time.time(),
+            "db_path": str(Path(db_path).resolve()),
+            "profile": describe_active_profile(cfg, preset_name),
+        }
+        target = runtime_paths.runtime_file(runtime_paths.TRADER_PROFILE_FILE)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(target)
+        return target
+    except (OSError, ValueError) as e:
+        log.warning("trader profile write failed: %s", e)
+        return None
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """The Trader loop entry point.
 
@@ -3447,6 +3481,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     db_path = Path(a.db) if a.db else DEFAULT_DB_PATH
     registry = OrderRegistry(db_path=db_path)
+    # The engine configuration this process loaded, for the dashboard's
+    # PROFILE badge (#856). Recorded once here; a write failure only warns.
+    write_trader_profile(cfg, db_path)
     maker = a.funder or os.environ.get("POLY_FUNDER")
 
     if a.live:

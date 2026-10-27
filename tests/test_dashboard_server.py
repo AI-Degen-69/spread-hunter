@@ -3570,8 +3570,6 @@ _PROFILE_MISSING = object()
 
 
 def _write_profile_heartbeat(tmp_path, db, profile=_PROFILE_MISSING, **overrides):
-    import dashboard.server as dash_mod  # noqa: F401  (fixture wiring below needs it patched)
-
     runtime = tmp_path / "runtime"
     runtime.mkdir(exist_ok=True)
     payload = {
@@ -3675,3 +3673,79 @@ def test_resolve_active_profile_carries_the_tournament_arm():
     resolved = dash_mod._resolve_active_profile(run_no_arm)
     assert resolved["running"] is False
     assert "tournament_arm" not in resolved
+
+
+# ── The live fallback (T3) ──────────────────────────────────────────────────
+#
+# With no shadow record for the selected store, the badge falls back to the
+# live trader's runtime/trader_profile.json. The file is trusted only when its
+# pid is alive, registered as `decide`, and writing the active store; shadow
+# keeps priority when both records exist.
+
+
+def _write_live_profile(tmp_path, db, pid, profile, decide_pid=None):
+    import dashboard.server as dash_mod
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(exist_ok=True)
+    started = dash_mod._process_start_time(pid)
+    if started is None:
+        started = time.time()
+    (runtime / "trader_profile.json").write_text(json.dumps({
+        "pid": pid,
+        "started_at": started,
+        "db_path": str(db),
+        "profile": profile,
+    }), encoding="utf-8")
+    (runtime / "processes.json").write_text(json.dumps(
+        {"decide": {"pid": decide_pid, "started_at": started}}
+        if decide_pid is not None else {}), encoding="utf-8")
+
+
+_LIVE_PROFILE = {"name": "balanced", "preset": "balanced",
+                 "queue_clear_on": False, "queue_max_clear_min": 60.0}
+
+
+def test_status_active_profile_falls_back_to_live(client, monkeypatch, tmp_path, temp_db):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    _write_live_profile(tmp_path, temp_db, os.getpid(), _LIVE_PROFILE, decide_pid=os.getpid())
+    data = client.get("/api/system/status").json()
+    assert data["active_profile"]["source"] == "live"
+    assert data["active_profile"]["name"] == "balanced"
+    assert data["active_profile"]["running"] is True
+
+
+def test_status_active_profile_rejects_a_dead_live_pid(client, monkeypatch, tmp_path, temp_db):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    _write_live_profile(tmp_path, temp_db, 99999999, _LIVE_PROFILE, decide_pid=99999999)
+    assert client.get("/api/system/status").json()["active_profile"] is None
+
+
+def test_status_active_profile_rejects_a_pid_missing_from_the_registry(
+        client, monkeypatch, tmp_path, temp_db):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    _write_live_profile(tmp_path, temp_db, os.getpid(), _LIVE_PROFILE)
+    assert client.get("/api/system/status").json()["active_profile"] is None
+
+
+def test_status_active_profile_rejects_a_live_file_for_another_store(
+        client, monkeypatch, tmp_path, temp_db):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    _write_live_profile(tmp_path, tmp_path / "other.db", os.getpid(),
+                        _LIVE_PROFILE, decide_pid=os.getpid())
+    assert client.get("/api/system/status").json()["active_profile"] is None
+
+
+def test_status_shadow_record_beats_the_live_record(
+        client, monkeypatch, tmp_path, temp_db):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    _write_profile_heartbeat(tmp_path, temp_db, {
+        "name": "balanced+queue-clear-5m", "preset": "balanced",
+        "queue_clear_on": True, "queue_max_clear_min": 5.0})
+    _write_live_profile(tmp_path, temp_db, os.getpid(), _LIVE_PROFILE, decide_pid=os.getpid())
+    assert client.get("/api/system/status").json()["active_profile"]["source"] == "shadow"

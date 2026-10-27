@@ -77,3 +77,45 @@ def test_no_preset_and_no_gate_is_default_not_baseline(monkeypatch):
     assert profile["name"] != "baseline"
     assert profile["preset"] is None
     assert profile["queue_clear_on"] is False
+
+
+# ── Live trader record (T3) ──────────────────────────────────────────────────
+
+def test_write_trader_profile_records_pid_db_and_name(tmp_path, monkeypatch):
+    import json as _json
+    import os as _os
+
+    import core_brain.runtime_paths as runtime_paths
+    from core_brain.trader_loop import write_trader_profile
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    monkeypatch.setattr(runtime_paths, "runtime_file",
+                        lambda name, **kw: runtime / name)
+    monkeypatch.setenv(PRESET_VAR, "balanced")
+    monkeypatch.delenv(GATE_VAR, raising=False)
+    monkeypatch.delenv(MIN_VAR, raising=False)
+    db = tmp_path / "live.db"
+    db.write_bytes(b"")
+
+    target = write_trader_profile(load(), db)
+
+    payload = _json.loads(target.read_text(encoding="utf-8"))
+    assert payload["pid"] == _os.getpid()
+    assert payload["db_path"] == str(db.resolve())
+    assert payload["profile"]["name"] == "balanced"
+
+
+def test_write_trader_profile_never_raises(tmp_path, monkeypatch):
+    import core_brain.runtime_paths as runtime_paths
+    from core_brain.trader_loop import write_trader_profile
+
+    blocker = tmp_path / "runtime"
+    blocker.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setattr(runtime_paths, "runtime_file",
+                        lambda name, **kw: blocker / name)
+    monkeypatch.delenv(PRESET_VAR, raising=False)
+    monkeypatch.delenv(GATE_VAR, raising=False)
+    monkeypatch.delenv(MIN_VAR, raising=False)
+
+    assert write_trader_profile(load(), tmp_path / "live.db") is None

@@ -83,6 +83,7 @@ if str(LIVE_ROOT) not in sys.path:
 # path while only the old file exists. See core_brain/runtime_paths.py.
 from core_brain import code_revision  # noqa: E402
 from core_brain.runtime_paths import (  # noqa: E402
+    TRADER_PROFILE_FILE,
     legacy_runtime_file,
     resolve_runtime_file,
     runtime_file,
@@ -1510,6 +1511,55 @@ def _runtime_file_age_sec(name: str) -> float | None:
         return None
 
 
+def _read_trader_profile(active_db_path: str | None, decide_pid=None) -> dict | None:
+    """The live trader's recorded profile (#856), or None.
+
+    Trusted only when the recording process is alive, registered as the
+    `decide` entry in the process registry, and writing the active store --
+    otherwise a stale file would label the wrong process. Any failure reads
+    as missing, never as a wrong name.
+    """
+    try:
+        raw = json.loads(resolve_runtime_file(
+            TRADER_PROFILE_FILE, root=LIVE_ROOT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    profile = raw.get("profile")
+    if not isinstance(profile, dict) or not isinstance(profile.get("name"), str):
+        return None
+    try:
+        pid_int = int(raw.get("pid"))
+    except (TypeError, ValueError):
+        return None
+    if isinstance(raw.get("pid"), bool) or pid_int <= 0:
+        return None
+    if not _is_pid_alive(pid_int, raw.get("started_at")):
+        return None
+    try:
+        if decide_pid is None or int(decide_pid) != pid_int:
+            return None
+    except (TypeError, ValueError):
+        return None
+    if not _same_path(raw.get("db_path"), active_db_path):
+        return None
+    preset = profile.get("preset")
+    try:
+        queue_min = profile.get("queue_max_clear_min")
+        queue_min = float(queue_min) if queue_min is not None else None
+    except (TypeError, ValueError):
+        queue_min = None
+    return {
+        "name": profile["name"],
+        "preset": preset if isinstance(preset, str) else None,
+        "queue_clear_on": bool(profile.get("queue_clear_on")),
+        "queue_max_clear_min": queue_min,
+        "source": "live",
+        "running": True,
+    }
+
+
 def _resolve_active_profile(shadow_run: dict | None) -> dict | None:
     """The engine-recorded profile for the selected store (#856), or None.
 
@@ -1630,6 +1680,10 @@ def get_system_status() -> dict:
     selected_shadow_run = _recent_shadow_run(db_identity["path"])
     try:
         active_profile = _resolve_active_profile(selected_shadow_run)
+        if active_profile is None:
+            # No shadow record for this store: fall back to the live
+            # trader's record. Shadow keeps priority when both exist.
+            active_profile = _read_trader_profile(db_identity["path"], decide_pid)
     except (ValueError, OSError):
         active_profile = None
 

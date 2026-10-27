@@ -48,6 +48,10 @@ LEGACY_SERVICE_KEYS = {
     "decide": "fleet",
 }
 
+#: The live trader's recorded engine profile (#856). A new file: it kept no
+#: pre-rename name, so it stays out of LEGACY_FILE_NAMES.
+TRADER_PROFILE_FILE = "trader_profile.json"
+
 
 def _runtime_dir(
     root: Path | str | None,
