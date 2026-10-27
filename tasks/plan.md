@@ -112,7 +112,7 @@ folded into T2 below.
 Sizes: T1 M, T2 S, T3 M. Checkpoints: after T1 (field observable in JSON),
 after T2 (badge visible), after T3 (full matrix green).
 
-### T1 — Shadow engine records its profile; status endpoint returns it [Backend/Logic] (M)
+### T1 — Shadow engine records its profile; status endpoint returns it [Backend/Logic] (M) [x]
 
 Target files: `core_brain/config.py`, `core_brain/shadow_run.py`,
 `dashboard/server.py`, `tests/test_active_profile.py` (new),
@@ -139,7 +139,7 @@ focused pytest (agent-run).
   dashboard-env typo → still null + 200). Keep existing status + db-identity
   assertions untouched (locate current anchors; cited line numbers unverified).
 
-### T2 — PROFILE pill in the top nav [Design/UI] (S)
+### T2 — PROFILE pill in the top nav [Design/UI] (S) [x]
 
 Target files: `dashboard/static/index.html`, `dashboard/static/app.js`,
 `tests/test_ui_top_nav_consistency.py`, `tests/test_ui_top_nav_groups.py`,
@@ -162,7 +162,7 @@ failure).
   `profile` scenario (missing→unknown; running shadow name; ended shadow
   retained; running live; `<b>x</b>` escaping; running→missing class reset).
 
-### T3 — Live trader records its profile; endpoint falls back to it [Backend/Logic] (M)
+### T3 — Live trader records its profile; endpoint falls back to it [Backend/Logic] (M) [x]
 
 Target files: `core_brain/runtime_paths.py`, `core_brain/trader_loop.py`,
 `dashboard/server.py`, `tests/test_active_profile.py`,
