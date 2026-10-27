@@ -36,7 +36,7 @@ def _html() -> str:
 
 def test_header_pills_carry_label_and_value_spans():
     html = _html()
-    for pill_id in ("master-status-indicator", "db-mode-badge", "hud-services-pill"):
+    for pill_id in ("master-status-indicator", "db-mode-badge", "profile-badge", "hud-services-pill"):
         m = re.search(
             rf'id="{pill_id}"[^>]*>.*?<span class="pill-label">.*?</span>'
             rf'\s*<span[^>]*class="[^"]*pill-value[^"]*"[^>]*>',

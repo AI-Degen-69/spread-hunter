@@ -157,7 +157,7 @@ def test_live_state_group_items(dom: DOMNode):
 def test_source_group_items(dom: DOMNode):
     top_meta = dom.find_one(cls="top-meta")
     source_group = [c for c in top_meta.children if "top-group-source" in c.classes][0]
-    expected_ids = ["master-status-indicator", "db-mode-badge", "shadow-run-clock", "scan-engine-elsewhere"]
+    expected_ids = ["master-status-indicator", "db-mode-badge", "profile-badge", "shadow-run-clock", "scan-engine-elsewhere"]
     for eid in expected_ids:
         assert source_group.find_one(id=eid) is not None, f"Expected #{eid} in Data source group"
     assert source_group.find_one(id="exposure-bar") is None, "#exposure-bar must be removed from Data source group"
@@ -204,6 +204,7 @@ def test_header_status_pills_share_markup(dom: DOMNode):
         "master-status-indicator",
         "hud-services-pill",
         "db-mode-badge",
+        "profile-badge",
     ]
     for pid in pills:
         el = dom.find_one(id=pid)
@@ -485,3 +486,32 @@ def test_services_pill_reflects_worst_state_wins():
     assert down["subText"] == "fault detected"
 
 
+
+
+@requires_node
+def test_profile_badge_renders_states():
+    p = _harness("profile")
+    missing = p["missing"]
+    assert missing["className"] == "pill state-unknown mono"
+    assert "PROFILE" in missing["text"] and "unknown" in missing["text"]
+
+    running = p["runningShadow"]
+    assert running["className"] == "pill state-running mono"
+    assert "balanced+queue-clear-5m" in running["text"]
+    assert "Shadow" in running["title"] and "balanced" in running["title"]
+
+    ended = p["endedShadow"]
+    assert ended["className"] == "pill state-stopped mono"
+    assert "balanced+queue-clear-5m" in ended["text"]
+
+    live = p["runningLive"]
+    assert live["className"] == "pill state-running mono"
+    assert "Live" in live["title"] and "no named preset" in live["title"]
+
+    esc = p["escaped"]
+    assert "&lt;b&gt;" in esc["innerHTML"]
+    assert "<b>" not in esc["innerHTML"]
+
+    reset = p["reset"]
+    assert reset["className"] == "pill state-unknown mono"
+    assert "state-running" not in reset["className"]

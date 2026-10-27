@@ -2186,9 +2186,40 @@ if (typeof window !== 'undefined' && !window.__reserveBtnBound) {
   });
 }
 
+/* ── Render: active engine profile badge (#856) ── */
+function renderProfileBadge(status) {
+  const el = document.getElementById('profile-badge');
+  if (!el) return;
+  const profile = status?.active_profile || null;
+  if (!profile || typeof profile.name !== 'string') {
+    el.className = 'pill state-unknown mono';
+    el.innerHTML = renderPillHtml('PROFILE', 'unknown');
+    el.title = 'Active profile unknown: no engine has recorded its configuration for this store.';
+    return;
+  }
+  const name = profile.name;
+  const running = profile.running === true;
+  const source = profile.source === 'live' ? 'live' : 'shadow';
+  el.className = 'pill ' + (running ? 'state-running' : 'state-stopped') + ' mono';
+  el.innerHTML = renderPillHtml('PROFILE', name);
+  const sourceWord = source === 'live' ? 'Live' : 'Shadow';
+  const parts = [];
+  parts.push(profile.preset ? `preset ${profile.preset}` : 'no named preset');
+  if (profile.queue_clear_on) {
+    const mins = profile.queue_max_clear_min;
+    parts.push(typeof mins === 'number' ? `queue gate on (${mins} min)` : 'queue gate on');
+  } else {
+    parts.push('queue gate off');
+  }
+  el.title = `${sourceWord} profile ${name}: ${parts.join(', ')}.`
+    + (typeof profile.tournament_arm === 'string' && profile.tournament_arm
+      ? ` Tournament arm ${profile.tournament_arm}.` : '');
+}
+
 function renderDbMode(status) {
   setShadowRun(status);
   renderCodeVersion(status);
+  renderProfileBadge(status);
   lastStatusForRuns = status;
   const el = document.getElementById('db-mode-badge');
   if (!el) return;
@@ -11023,7 +11054,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, renderProfileBadge, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,
@@ -11063,7 +11094,7 @@ if (typeof module !== 'undefined' && module.exports) {
     get pnlCiMetric() { return pnlCiMetric; },
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState, resolveHeldRead,
     engineReasonText, engineProvenanceText, renderScanStatePill,
-    renderMarketScanPill, renderPillHtml, renderDbMode, renderServiceHeader,
+    renderMarketScanPill, renderPillHtml, renderDbMode, renderProfileBadge, renderServiceHeader,
     getMasterToggleClasses,
     aggregateServiceState,
     placePanel, closeServicesDropdown, closeRunSwitcher, bindServicesDropdown, repositionHeaderPanels,
