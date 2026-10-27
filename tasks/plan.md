@@ -1,207 +1,171 @@
-# Implementation Plan — Issue #839: Live migration approval audit and deployment verdict
+# Plan — Issue #840: Live execution lane audit and reachability verification
 
-Branch: `i839/live-migration-approval-audit` | Issue: #839
+Branch: `i840/live-execution-lane-audit` | Issue: #840
 
-> Supersedes the #850 plan this file previously carried (that work merged in PR #851; its
-> plan, spec and constraints remain in git history at `fb2949aa`).
+Size: **Standard** — 3 new files + 3 surgical edits, one architectural decision
+(single-order exact-ID probe); no public API or schema change.
+Task type: **Code + Security + Testing + Docs**.
 
-## Summary
+## 0. CodeRabbit intake (read once, costed once)
 
-Produce one audit — `docs/audits/live-migration-799.md` — that decides whether any arm of
-Tournament #799 is approved for live real-money execution, using the tournament's own stores
-and the repository's own gate machinery, and driven by a single repeatable command.
+- **Adopted:** two-phase shape (audit+parity first, probe second); champion =
+  `prudent` + five per-field env overrides; exact-ID cancel instead of
+  `cancel-all`; hold 2–4s (default 3s) so the 5s cancel limit is reachable;
+  scratch `--db` for `decide`; rank-by-fresh-bid-depth market selection;
+  exit-nonzero-on-venue-read-failure for `status`/`balance`.
+- **Rejected:** new `champion` tournament preset (unneeded — loader order
+  preset-then-override already expresses it); `cancel-all`/`cancel-market` as
+  the cancel path (unsafe to unrelated orders); 5s hold (leaves no time for
+  the cancel receipt); opt-in `--strict` flag (reachability must fail loud by
+  default); fixing the unexplained divergences here (out of scope).
+- **[UNVERIFIED] (verify from code before use):** exact
+  `risk.queue_clear_block` call signature (follow
+  `tests/test_queue_clear_gate.py`); `BookProvider` construction + `_rest_reader`
+  error behavior; CLOB market-response field name for venue minimum size;
+  Python key name for `not_canceled` in the cancel receipt; helper name of the
+  matched-size alias reader in `single_buy_saver.py` (~lines 514–565);
+  existence of a read-only `is_approved_for_all` command; existing markets test
+  module for the two `fetch_pinned_market` tests.
 
-Right-sizing: **Standard** (three files: one CLI, its test, one audit doc; one decision — that
-the verdict comes from the repo's gate, not from the issue's draft). Task type: **Docs**
-(primary) + **Research** (evidence gathering), with a small **Code** seam.
+## 1. Improvement proposal (evidence-based, adopted)
 
-The plan is re-grounded because the issue was written mid-run. Measured, the issue's two
-load-bearing premises do not hold: `balanced-mid` is **not** the top-PnL arm (`loose-baseline`
-leads, +$23.97 vs +$23.46 — a gap this sample cannot resolve), and it is **not** the
-risk-shape leader (it fails all three pre-registered gates; `queue-clear-5m` is the only arm
-that clears them). The repo's own gate returns **NO-GO for every arm measured so far**,
-because the primary gate is the 90% CI lower bound on inclusive mean return strictly > 1.0% — not the
-60-close count the issue treats as the cleared gate. `core_brain/config.py:268`
-(`bot_eval_stat_gate_target_closes = 60`) is a precondition for a verdict;
-`core_brain/config.py:266` (`bot_eval_stat_gate_threshold_pct = 1.0`) is the gate.
+> **Cancel by exact order ID, never `cancel-all`.**
+> Evidence — the ticket suggests *"immediately cancelled via `cancel-all` /
+> `cancel-market`"*, but `order_manager.py` already cancels survivors by exact
+> ID (`client.cancel_order(OrderPayload(orderID=...))`), and broad cancels
+> would sweep unrelated operator orders. Classification: simplification /
+> edge-case hardening → **adopted by default**, folded into Tasks 3–4. Rejection
+> recorded: none — the broad-cancel path is rejected.
 
-## Code-review intake (CodeRabbit plan comment on #839)
+## 2. Dependency graph
 
-One reading. **Adopted:** the audit lives in `docs/audits/`; default verdict "not approved —
-inconclusive" until the operator decides; payload documented in two layers (measured arm vs
-untested synthesis); no live-capital command; no cockpit or risk-engine change; a strict-loader
-test for the payload; tie GO to the real gate. **Rejected:** its Phase 1 file
-(`tests/test_prudent_hybrid_payload.py`) as the prerequisite — the payload under audit is no
-longer the prudent-hybrid synthesis, because the arm the measured record supports runs no
-preset at all (only the two queue-gate keys), so a nine-value payload test would prove the
-wrong configuration. Also rejected: its two factual premises — "no run folder exists in the
-checkout" (the run finished 2026-10-26 ~22:01 and its stores are readable) and "the ticket's
-own 33 closes" (the stores hold 87–172 closes per arm). **[UNVERIFIED] resolved:** the config
-field names it flagged for the risk ratios and pair cap (it cited `core_brain/config.py`
-lines 43–56, 188–192, 442–455 and 741–793) — not needed: this audit cites only constants it
-read directly (`:266`, `:268`, `:574`/`:582`).
+- Task 1 (audit doc + parity tests) → Task 2 (exit codes reuses parity env
+  helpers; both land before any order-sending code) → Task 3 (pre-flight +
+  dry-run; no signing) → Task 4 (post/hold/cancel/evidence; needs Task 3's
+  pre-flight + price/size gates).
+- Checkpoints after Task 2 (read-only lane provably loud) and after Task 4
+  (full probe proven with fakes + evidence redaction test).
 
-## Line numbers the issue cites, verified against the live code
+## 3. Tasks (atomic vertical slices)
 
-| Cited | Actual |
-|---|---|
-| `core_brain/config.py` lines 564–570 (`TOURNAMENT_PRESETS["balanced"]`) | dict at `:574`, `"balanced"` at `:582` |
-| `core_brain/config.py:1060` (from #471, `stat_gate_target_closes`) | `:268` (`bot_eval_stat_gate_target_closes`) |
-| `configs/tournaments/i799-tournament-test_arms.json` lines 22–32 (`balanced-mid`) | `"name": "balanced-mid"` at `:33` |
-| `scripts/tournament_cockpit_server.py` lines ~1856–2180 (blueprint tab) | `id="tab-hybrid-config"` at `:2293`; `.env` block `:2453`; champion synthesis `:2612` |
-| `reports/tournament_cockpit.html` lines ~420–550 | generated artifact; `reports/` is gitignored and absent in a clean checkout — never a source seam |
+### Task 1 — Audit report + champion parity tests [Docs/Backend] — M
 
-## Resolved open questions (from code + measurements, not from opinion)
+- **Target files:** `docs/live-lane-audit.md` (new),
+  `tests/test_champion_lane_parity.py` (new).
+- **Build:** write the audit per SPEC §3–§4: planned simulation choices vs
+  unexplained differences (rollback, cancel-response, readback, pair IDs,
+  launcher preset loss, `BOT_*` inheritance, dropped telemetry, 0.99 live cap,
+  reconciliation gaps, no client timeouts); what an accepted order proves /
+  does not prove; `is_approved_for_all` command-or-gap; dry-run signed-client
+  caveat; pre-flight command list with the `decide`-needs-scratch-DB and
+  `fetch_live_balance`-hides-errors notes; file unexplained items as follow-up
+  tickets, fix nothing. Parity tests (fail-without-change):
+  `test_live_and_shadow_load_identical_champion_settings`
+  (`config.load()` vs `shadow_run.shadow_cfg()`),
+  `test_champion_values_are_effective` (offset on, 0.60, 2¢–4¢, deadband 0.06,
+  `ABSOLUTE_DROP` + 0.045, gate on + 3 min),
+  `test_field_override_beats_preset`, `test_shadow_bankroll_is_the_only_difference`,
+  `test_queue_gate_blocks_four_minutes_allows_two`.
+- **Depends on:** — (first).
+- **Verify:** new parity file green; `git status` shows only the two new files.
+- **Helper skill:** `test-driven-development`.
 
-1. **Which gate is the GO?** `statistical_validation_run/artifacts.py:257 resolve_verdict`:
-   underpowered (< 60 closes) → `INCONCLUSIVE`; primary gate strictly above
-   `bot_eval_stat_gate_threshold_pct` → `GO`; else `NO-GO`. `#471` names the same gate,
-   inclusive of every close method.
-2. **Which arm is the champion?** Measured, not asserted — see the appendix. Risk-shape rule:
-   gates cleared, then Sharpe, then PnL.
-3. **Where is the run?** `data/tournaments/i799-tournament-1m_2026-10-26T00-12` in the operator's
-   main checkout, ignored by `.gitignore:60`. Ten arm stores (one per arm), `plan.json`,
-   `logs/`, and a launch-time `results.json` that is **not** a result.
-4. **Is the run complete?** No: closes span 00:14 → 21:57 on 2026-10-26, 1308.5 measured minutes
-   of a 1440-minute plan, and the arms stopped ~22:01. Coverage is reported, never rounded up.
+### Task 2 — `status` / `balance` fail loudly [Backend/Logic] — S
 
-## Interface contracts (frozen before the build)
+- **Target files:** `core_brain/order_manager.py`, `tests/test_order_manager.py`.
+- **Build:** in `status()`, keep the `ERROR` print, then exit non-zero when
+  `get_open_orders` raises or `open_notional` fails/returns `None`. In
+  `balance()`, keep the `ERROR` print, then exit non-zero when
+  `get_balance_allowance` raises. Zero balance stays a warning, not a failure.
+  Normal stdout byte-identical; `decide` untouched. New tests
+  (fail-without-change): `test_status_exits_nonzero_when_open_orders_read_fails`,
+  `test_status_exits_nonzero_when_open_notional_is_none`,
+  `test_balance_exits_nonzero_when_venue_read_fails`,
+  `test_balance_zero_is_a_warning_not_a_failure`.
+- **Depends on:** Task 1.
+- **Verify:** `python -m pytest -q tests/test_order_manager.py` green with old
+  stdout tests unchanged.
+- **Helper skill:** `test-driven-development`.
 
-1. **Measurement CLI** — extends the tool already drafted this session
-   (`scripts/reevaluate_tournament_run.py`, currently untracked in this worktree; green tests
-   beside it):
-   ```
-   python -m scripts.reevaluate_tournament_run --run-dir <run dir> [--json] [--verdict]
-   ```
-   `--verdict` calls `core_brain.statistics_report.write_statistics_report(db, run_id, "shadow")`
-   per arm and adds `{"verdict": ..., "primary_gate_value": ...}` to each arm record.
-   Read-only: every store opens with `mode=ro`. Exit `1` when no plan record or no arms.
-2. **Existing seam, not modified** —
-   `core_brain.statistics_report.write_statistics_report(db_path, run_id, mode, out_dir=None) -> dict`
-   returning `verdict` ∈ {`GO`, `NO-GO`, `INCONCLUSIVE`} and `gate_rows` (each
-   `{gate, value, passed}`), with the primary row named `Primary — total PnL (inclusive)`.
-3. **Audit doc** — `docs/audits/live-migration-799.md`, shaped like
-   `docs/audits/edge-floor-decision.md`: verdict up front, "What was asked", "Where the data
-   came from (and what it is not)", the measured tables, the discrepancy table, the locked
-   rule, reopen conditions, and a "How to verify" block written for the operator.
-4. **Files that must not change**: `scripts/tournament_cockpit_server.py` (its blueprint pane is
-   pinned by `tests/test_tournament_cockpit_arms.py`, `CHAMPION_ENV` — nine values asserted
-   across three places), `configs/tournaments/i799-tournament-test_arms.json`,
-   `core_brain/config.py`.
+### Task 3 — `reach-probe` pre-flight + dry run [Backend/Logic] — M
 
-## Dependency graph
+- **Target files:** `core_brain/reach_probe.py` (new, injectable client fn +
+  `live` param per `order_execution.py` style), `core_brain/markets.py`
+  (optional venue-min-size field, default `None`), `core_brain/order_manager.py`
+  (`reach-probe` subcommand, `--live` with `default=SUPPRESS`; legacy `probe`
+  + module docstring untouched), `tests/test_order_manager.py` (+ markets
+  module if one exists).
+- **Build:** inputs — optional condition ID, `--discount` 0.15, `--hold-sec`
+  2–4 (default 3), `--db` default `order_registry.DEFAULT_DB_PATH`,
+  `--live/--no-live`. Auto-select market by fresh top-3 bid-level dollar depth.
+  Fail-closed pre-flight (all must pass): client builds, `get_open_orders`
+  readable, zero account orders on the market, pinned market open+accepting,
+  token is one of the two market tokens, fresh `get_fresh_book` best bid,
+  `open_notional` not `None`. Price = best-bid − discount rounded down to tick
+  (refuse below one tick). Size = max(venue-min or local 5-share default,
+  `VENUE_MIN_NOTIONAL_USD` size); enforce `order_caps()` + fixed $2 ceiling
+  (size × price; no CLI raise). `--no-live` prints plan + worst case, never
+  signs. New tests (fail-without-change): the 8 `refuses_*` cases + dry-run-
+  never-signs + deepest-bid selection + size/notional + the two pinned-min-size
+  parse tests.
+- **Depends on:** Task 2.
+- **Verify:** `python -m pytest -q tests/test_order_manager.py tests/test_book_provider.py`
+  green; manual `reach-probe --no-live` print reviewed (operator runs it).
+- **Helper skill:** `test-driven-development`.
 
-```
-T1 (measurement + verdict CLI)  ──►  T2 (audit doc)
-                                        │
-                                        └──►  T3 (backlog cross-reference)
-```
+### Task 4 — Post, exact-ID cancel, verify, evidence [Backend/Security] — M
 
-## Tasks
+- **Target files:** `core_brain/reach_probe.py`, `core_brain/order_manager.py`,
+  `docs/agents/safety.md`, `tests/test_order_manager.py`.
+- **Build:** pending row first (quote helper, new pair ID) → one GTC post-only
+  buy via `post_orders` batch-of-one → `venue_order_id` + `get_order` token
+  readback. No-ID/error → row stays pending, guarded `cancel-market` fallback
+  (safe: pre-flight proved zero other orders), result `uncertain`. Hold, then
+  `cancel_order(OrderPayload(orderID=...))` exact-ID only (never `cancel_all`);
+  require ID in `canceled`, fail with reason if in `not_canceled`; measure
+  accept-to-receipt. Read status + matched size via imported
+  `single_buy_saver` helper (no copy); confirm absent from `get_open_orders`;
+  unreadable matched size → `unverified`, never 0. PASS = accepted + in
+  `canceled` + matched 0 + absent + ≤5s. Non-PASS prints exposure + undo
+  (`cancel <id>` if resting, `exit` for filled shares, `poll --once`). Mark
+  row cancelled only after verified cancel. Redacted JSON evidence under
+  `runtime/` (git-ignored; confirm ignore): timestamps, IDs, price/size/tick,
+  venue-min-or-unknown, worst-case $, order ID, canceled/not_canceled lists,
+  status, matched size, timings, result; shortened wallet. Safety.md entry:
+  `reach-probe --live` = opening-exposure, session approval + undo. New tests
+  (fail-without-change): the 10 cases named in the CodeRabbit plan (pending-
+  row-first, exactly-one-post-only-GTC, exact-ID-never-cancel-all,
+  pass-requires-canceled, not_canceled-fails, matched>0-fails-with-undo,
+  unreadable-is-unverified, >5s-fails, no-ID-pending+fallback,
+  evidence-has-no-secrets).
+- **Depends on:** Task 3.
+- **Verify:** `python -m pytest -q tests/test_order_manager.py tests/test_order_manager_decide.py
+  tests/test_shadow_guard.py` green; evidence redaction test asserts no secret
+  fields. Live `--live` run is operator-only, never agent-run.
+- **Helper skill:** `test-driven-development` + `security-and-hardening`.
 
-### T1 — One command that reads the run and reports each arm's shape and the repo's verdict [x]
-- **Size:** M  **Domain:** `[Backend/Logic]`  **Depends on:** —
-- **Files:** `scripts/reevaluate_tournament_run.py` (bring onto this branch, add `--verdict`),
-  `tests/test_reevaluate_tournament_run.py` (already written; extend for the verdict wiring).
-- **What it does:** loads a run's `plan.json`, calls
-  `scripts/tournament_cockpit_server.analyze_arm_database(cfg, target_minutes)` per arm for
-  shape (closes, merges, rescue exits, merge rate, PnL, σ, Sharpe proxy, profit factor, max
-  drawdown, VaR95, MC P5, score), computes the required N for a $0.02 effect with
-  `core_brain.kpi.required_sample_size`, evaluates the three pre-registered risk-shape gates
-  and the power flag, ranks by (gates cleared, Sharpe, PnL), and — with `--verdict` — attaches
-  the repo's verdict per arm. Text and `--json` output.
-- **Verification:** `python -m pytest -q tests/test_reevaluate_tournament_run.py` — a synthetic
-  two-arm run directory where only the gated arm clears the risk-shape gates, the settlement
-  counting convention is pinned, an unpowered arm is flagged, a missing plan exits `1`, and the
-  `--verdict` path is asserted against a stubbed `write_statistics_report`. Plus the live read
-  of the real run folder as the acceptance evidence.
+## 4. Interface contracts
 
-### T2 — The audit document and its verdict [x]
-- **Size:** M  **Domain:** `[Docs]` + `[Research]`  **Depends on:** T1
-- **Files:** `docs/audits/live-migration-799.md` (new).
-- **What it does:** records the run's identity and coverage; the ten-arm measured table with the
-  command behind it; the issue-claim vs measured discrepancy table with the interim-snapshot
-  explanation; the risk-shape ruling that makes `queue-clear-5m` the candidate and the
-  half-split evidence (first half +$0.2356/trade Sharpe 6.00 → second half +$0.1569 Sharpe
-  3.33, against `balanced-mid` +$0.1993 Sharpe 4.46 → **+$0.0923** Sharpe 0.86) plus
-  concentration (38 markets, largest 15.1% of PnL, vs 29.3% for `prudent-hybrid`); the queue
-  mechanism evidence (`python -m scripts.queue_report --db <queue-clear-5m>.db`: 15,884 deltas,
-  182 levels, 45 markets, 89% of queue movement is cancels, most trade-based clear times
-  infinite — the books the gate refuses); the per-arm verdicts; and the reopen conditions.
-- **Verification:** every table's command is re-run and its output matches the doc; the two
-  named suites stay green. The audit is read by the operator, so the "How to verify" block
-  points at the run table, the cockpit, and the report file — not at the test suite.
+- `reach-probe [--condition-id CID] [--discount 0.15] [--hold-sec 3 (2–4)]
+  [--db PATH] [--live | --no-live]` → exit 0 + `PASS` JSON summary only on the
+  five-way conjunction; any other outcome exits non-zero with exposure + undo.
+- Evidence JSON schema: `{ts_accept, ts_cancel_receipt, condition_id,
+  token_id, price, size, tick_size, venue_min_size | "unknown",
+  worst_case_usd, order_id, canceled[], not_canceled[], status, matched_size,
+  hold_sec, accept_to_receipt_sec, result}` — no secret keys ever.
+- `status`/`balance` contract change: stdout identical; exit code now 0 ⟺ venue
+  read succeeded.
 
-### T3 — Cross-reference the two backlog rows this run closes out [x]
-- **Size:** XS  **Domain:** `[Docs]`  **Depends on:** T2
-- **Files:** `docs/backlog/i837-cockpit-catalyst-columns.md` (row N4),
-  `docs/backlog/i838-cockpit-hybrid-blueprint.md` (row N3).
-- **What it does:** both rows say the #799 figures "cannot be recomputed from this worktree" and
-  are owed "after the run's 24 h window closes". The window has closed. Each row gains a
-  pointer to the audit, the measured figures, and the note that the 6.4 h snapshot values in
-  `configs/tournaments/i799-tournament-test_arms.json` are superseded. Ownership of those
-  issues does not change.
-- **Verification:** markdown-only; the two rows read correctly and name the audit path. Drop
-  this task without a ripple if the operator prefers the backlog untouched.
+## 5. How to verify (operator, hands-on — no pytest/gh/git steps)
 
-## Checkpoints
-
-- **After T1:** the tool prints the ten-arm table for the real run folder and its tests pass —
-  show the table.
-- **After T2:** the audit is on disk with its verdict; show the verdict line and the reopen
-  conditions.
-- **After T3:** plan complete, targeted suites green, branch ready for Station IV.
-
-## Sub-issues
-
-Deliberately **not** created, recorded here rather than silently skipped: this is a
-single-session, three-task change (two of them documentation) landing as one PR, so three
-tracker sub-issues with `blocked-by` edges would mirror a plan that never spans sessions. If
-the operator wants tracker mirroring anyway, create them from T1–T3 in one batch.
-
-## One improvement proposal (adopted by default)
-
-**Evidence, verbatim from the issue:** *"Balanced Mid strikes the empirical sweet spot… This
-configuration maximizes timely two-sided fills while preventing catastrophic adverse single-leg
-runs"*, and acceptance criterion 1: *"Audit report documents Balanced Mid's superiority across
-PnL (+$28.37), Sharpe (2.72), Profit Factor (2.85), and Drawdown ($3.37) against all 9 competing
-arms."* The stores hold `+$23.46 / 1.66 / 1.80 / $9.64` for that arm, so the criterion as
-written can only be satisfied by restating a claim the data contradicts.
-
-**Proposal (simplification, adopted):** make the audit's verdict **and** its candidate follow
-the pre-registered ranking (gates → Sharpe → PnL) and the repo's own gate, so the doc cannot be
-written backwards from a named winner. The audit still reports `balanced-mid` in full — it
-simply stops being the conclusion.
-
-**Rejected proposal (recorded so it does not resurface):** relabelling the cockpit's
-"Live Production" blueprint and its `READY FOR LIVE` badge in this issue. It is a separate code
-change with its own pinned tests; the audit records it as a follow-up instead. (This matches
-CodeRabbit's Design Choice 4.)
-
-## Appendix — measured record (commands behind it, run 2026-10-26 ~23:5x)
-
-`python -m scripts.reevaluate_tournament_run --run-dir data/tournaments/i799-tournament-1m_2026-10-26T00-12`
-plus `write_statistics_report(<arm>.db, <run_id>, "shadow")` for the arms marked with a verdict.
-"Closes" follows the cockpit's convention (every non-bookkeeping close, `shadow_settlement`
-included). Nreq = closes required for a $0.02 effect at that arm's σ.
-
-| Arm | Env keys | Closes | Merges | Rescue exits | Merge % | PnL | Sharpe | PF | MDD | σ | Nreq | Gates | Repo verdict |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| loose-baseline | (shipped) | 171 | 99 | 66 | 57.9 | +$23.97 | 1.59 | 1.74 | $7.51 | 0.880 | 11,977 | 0/3 | NO-GO (−4.219%) |
-| tight-touch | `preset=aggressive` | 144 | 81 | 57 | 56.2 | +$16.95 | 1.24 | 1.56 | $9.25 | 0.948 | 13,898 | 0/3 | — |
-| balanced-mid | `preset=balanced` | 166 | 99 | 63 | 59.6 | +$23.46 | 1.66 | 1.80 | $9.64 | 0.849 | 11,148 | 0/3 | NO-GO (−4.740%) |
-| wide-shield | `preset=conservative` + 8¢ stop | 151 | 68 | 78 | 45.0 | +$6.27 | 0.44 | 1.15 | $11.87 | 0.947 | 13,860 | 0/3 | — |
-| prudent-hybrid | `preset=prudent` + max 6¢ | 170 | 98 | 64 | 57.6 | +$19.66 | 1.49 | 1.60 | $11.29 | 0.774 | 9,261 | 0/3 | NO-GO (−5.318%) |
-| static-floor-2c | dynamic offset off | 169 | 100 | 66 | 59.2 | +$17.69 | 1.25 | 1.57 | $7.33 | 0.835 | 10,778 | 0/3 | — |
-| low-churn-deadband | offset off + 0.10 deadband | 172 | 99 | 68 | 57.6 | +$10.33 | 0.92 | 1.30 | $10.77 | 0.652 | 6,566 | 0/3 | — |
-| hair-trigger-2c | 2¢ absolute stop | 141 | 58 | 81 | 41.1 | +$8.51 | 1.07 | 1.33 | $9.29 | 0.562 | 4,885 | 0/3 | — |
-| patient-stop-9c | 9¢ absolute stop | 129 | 63 | 59 | 48.8 | +$5.73 | 0.46 | 1.17 | $11.09 | 0.969 | 14,521 | 0/3 | — |
-| **queue-clear-5m** | **gate on, 5 min** | **87** | **56** | **29** | **64.4** | **+$17.74** | **4.74** | **3.28** | **$2.60** | **0.431** | **2,865** | **3/3** | **NO-GO (−2.501%)** |
-
-Gates = pre-registered Sharpe ≥ 2.70 / PF ≥ 2.50 / MDD < $4.00. No arm clears the power gate:
-`queue-clear-5m` would need 2,865 closes and has 87 (3% of the required sample), so nominal PnL
-is not a winner signal here and the ranking is risk shape.
-
-Report files produced by `_repo_verdict` are written through `write_statistics_report`
-to a temporary directory that is cleaned up after derivation, rather than persisting
-in the audit evidence folder.
+1. Precondition: no Trader loop or dashboard START running.
+2. Run `status` and `balance` — funded address shown, exit 0; any venue-read
+   ERROR now exits non-zero.
+3. Run `decide --all --db <scratch-path>` — books + tick sizes print for
+   graduated markets (scratch DB because `decide` writes rows).
+4. Run `reach-probe --no-live` — printed price ≥15¢ below best bid,
+   worst case ≤ $2, nothing signed.
+5. With in-session approval only, run `reach-probe --live` — `PASS`, cancel
+   receipt ≤ 5s, matched size 0; open the evidence file and confirm the order
+   ID is in `canceled`. Undo if not PASS: `cancel <id>` if resting, `exit` for
+   filled shares, then `poll --once`.

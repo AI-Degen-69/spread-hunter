@@ -1,47 +1,85 @@
-# CONSTRAINTS.md — Issue #839: Live migration approval audit for the #799 champion arm
+# CONSTRAINTS.md — Issue #840: Live execution lane audit and reachability verification
 
-## Scope & blast radius
+Branch: `i840/live-execution-lane-audit` | Issue: #840
 
-- **Docs-first.** The deliverable is `docs/audits/live-migration-799.md`. Code changes are
-  limited to one read-only measurement CLI (`scripts/reevaluate_tournament_run.py`) and its
-  test.
-- **No change** to `scripts/tournament_cockpit_server.py`, `configs/tournaments/*_arms.json`,
-  `core_brain/config.py`, `core_brain/order_manager.py`, or any risk formula or cap.
-  `tests/test_tournament_cockpit_arms.py` pins nine champion env values across three places;
-  it must pass untouched.
-- **Read-only on every store.** Arm databases open with `mode=ro`. `data/orders.db` (the
-  production registry) is never opened, rewritten, or deleted; `/data/tournaments/` stays
-  untracked.
-- **Zero live capital.** No signer, no `quote`, no `complete`, no Trader loop, no dashboard
-  START. No command that could reach the venue.
+Locked during Station II planning. Stations III–V must hold every line below.
+Tighten only with operator approval; never loosen silently.
 
-## Data truthfulness
+## Zero regressions
 
-- **Every figure is traceable to a command run in this session.** The audit records the
-  command beside each table. A number with no command behind it does not ship.
-- **No fabricated states.** A missing store, a missing `σ`, or an uncomputable N reports as
-  "not computable" / `NO_DATA`, never as a zero or an invented value.
-- **The verdict comes from the repo's gate**, not from a bespoke rule:
-  `write_statistics_report` / `resolve_verdict` with
-  `bot_eval_stat_gate_threshold_pct = 1.0` and `bot_eval_stat_gate_target_closes = 60`.
-- **Provenance is labelled**: shadow/modelled fills are named as such; attributed figures are
-  never presented as locally measured.
-- **Coverage is reported honestly** (1308.5 measured minutes of a 1440-minute plan), and the
-  audit states that a gitignored run folder is not re-derivable in CI.
+- Focused suites for the touched modules must be green after the change:
+  `tests/test_shadow_guard.py tests/test_order_manager.py tests/test_order_manager_decide.py`
+  plus the new `tests/test_champion_lane_parity.py` and the regression files the
+  plan touches: `tests/test_production_registry_guard.py`,
+  `tests/test_config_single_source.py`, `tests/test_dynamic_offset.py`,
+  `tests/test_stop_loss_config.py`, `tests/test_queue_clear_gate.py`,
+  `tests/test_book_provider.py`, `tests/test_live_venue_order_caps.py`.
+  The full `python -m pytest -q` regression suite is the GitHub CI merge gate;
+  it is not re-run locally during review.
+- Every new behaviour needs a test that fails without it: all five parity
+  tests, all four status/balance exit-code tests, and every `reach-probe`
+  pre-flight/post/cancel/evidence test named in `tasks/plan.md`.
+- Existing `status`/`balance` stdout assertions stay valid unchanged — only the
+  exit code changes on the failure paths.
 
-## Verification bar
+## Scope fences (hard)
 
-- New behaviour ships with a test that fails without it:
-  `tests/test_reevaluate_tournament_run.py`.
-- Targeted suites green after every change:
-  `python -m pytest -q tests/test_reevaluate_tournament_run.py tests/test_tournament_cockpit_arms.py tests/test_tournament_cockpit_funnel.py`.
-- **"How to verify" is hands-on only** — the operator opens the run table, the cockpit, or the
-  report; it never asks the operator to run the suite.
+- **Only these files change:** `docs/live-lane-audit.md` (new),
+  `tests/test_champion_lane_parity.py` (new), `core_brain/reach_probe.py`
+  (new), `core_brain/order_manager.py` (status/balance exit codes + `reach-probe`
+  subcommand only), `core_brain/markets.py` (`fetch_pinned_market` optional venue
+  minimum-size field only), `docs/agents/safety.md` (one `reach-probe --live`
+  entry), `tests/test_order_manager.py` (new cases only),
+  `docs/backlog/i840-live-reachability.md` (out-of-scope log).
+- **Must NOT be modified:** `data/orders.db` (read-only; never rewrite or
+  delete), `.env`, `.env.example`, `core_brain/trader_loop.py`,
+  `core_brain/config.py`, `core_brain/venue.py`, `core_brain/order_registry.py`,
+  `core_brain/order_execution.py`, `core_brain/single_buy_saver.py`,
+  `core_brain/shadow_run.py`, `core_brain/shadow_exec.py`,
+  `core_brain/shadow_guard.py`, `scripts/spread-hunter-menu.ps1`,
+  `scripts/shadow_tournament.py`, `configs/tournaments/*`, `dashboard/*`,
+  `tests/test_shadow_guard.py`, the legacy `probe` command and the
+  `order_manager.py` module docstring.
+- **Document, don't fix:** trader-loop rollback marking survivors cancelled on
+  failed cancel (and dropping venue IDs), lenient cancel-response handling,
+  missing order readback in `_submit_intents`, pair-ID handling differences,
+  menu launcher dropping `BOT_QUOTE_TOURNAMENT_PRESET` for live Trader, dropped
+  dynamic-offset telemetry in production `_market_specs`. File as follow-ups.
+- **Plan only in this station:** no venue orders, no live commands, no
+  `reach-probe --live` / `quote` / Trader START during planning or build
+  without operator session approval.
 
 ## Anti-cheat
 
-- No skipped or deleted tests, no removed assertions, no `xfail`/`skip` markers, no lint or
-  type suppressions added to reach green.
-- No gate threshold edited to make a verdict pass; no arm dropped from the table to improve
-  the ranking.
-- Nothing in this work may be described as "production approved".
+- Never skip, xfail, or delete a test to get green; never weaken an assertion,
+  and never edit output text just to satisfy a stdout assertion.
+- An unreadable matched size is `unverified`, never zero. A missing venue ID
+  after post leaves the row pending and reports `uncertain`, never PASS.
+- Never treat a cancel receipt alone as proof — PASS requires venue order
+  status + matched size 0 + absence from open orders.
+- Never log, print, or persist keys, API credentials, signatures, or full raw
+  venue responses (evidence file included).
+
+## Performance / architecture ceilings
+
+- Reachability check bounds (hard, not configurable upward): exactly one
+  post-only GTC order, discount default 0.15, hold 2–4s (default 3s),
+  worst-case exposure (size × price) ≤ $2.00 fixed ceiling, accept-to-cancel-
+  receipt ≤ 5s. No CLI flag may raise the $2 ceiling.
+- `status`/`balance` change is exit-code only — no new output format, no new
+  dependencies.
+- `fetch_pinned_market` addition is one optional field defaulting to `None` —
+  existing callers unchanged. Never use `rewards.min_size` as the venue minimum.
+- Reuse, don't copy: pending-row helper from `quote`, `venue_order_id` from
+  `core_brain/venue.py`, matched-size reader imported from
+  `core_brain/single_buy_saver.py` (do not duplicate it).
+
+## Safety (repo rules)
+
+- LIVE is the default: every `order_manager` subcommand reaches the venue.
+  `--no-live` is the dry run. Opening commands (`quote`, `complete`, Trader
+  loop, dashboard START, and now `reach-probe --live`) need operator approval
+  in that session — propose, don't run.
+- `data/*.db` and `runtime/*` state are gitignored and must never be committed.
+- Verification for the operator is hands-on surface behavior (shadow rehearsal,
+  dashboard, evidence file) — never `pytest`, `gh`, or `git` steps.

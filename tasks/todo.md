@@ -1,29 +1,8 @@
-# Todo — Issue #839: Live migration approval audit (#799 champion arm)
+# Todo — Issue #840
 
-Branch: `i839/live-migration-approval-audit` | Plan: `tasks/plan.md` | Spec: `SPEC.md`
-
-## T1 — Measurement + verdict CLI `[Backend/Logic]` (M)
-- [x] Bring `scripts/reevaluate_tournament_run.py` onto this branch and add `--verdict`
-- [x] Extend `tests/test_reevaluate_tournament_run.py` to pin the verdict wiring
-- [x] Confirm every store opens read-only; missing plan → exit 1
-- [x] `python -m pytest -q tests/test_reevaluate_tournament_run.py` (7 passed)
-- [x] Print the ten-arm table for the real run folder (checkpoint 1)
-
-## T2 — Audit document `[Docs]` (M)
-- [x] `docs/audits/live-migration-799.md`: verdict up front, commands behind every table
-- [x] Ten-arm measured table + issue-claim vs measured discrepancy table
-- [x] Risk-shape ruling with the half-split and concentration evidence
-- [x] Queue mechanism evidence from `python -m scripts.queue_report --db <arm>.db`
-- [x] Two-layer payload documentation, both labelled unapproved
-- [x] Reopen conditions; "How to verify" written for the operator
-- [x] Re-run each table's command and match it against the doc (checkpoint 2)
-
-## T3 — Backlog cross-reference `[Docs]` (XS)
-- [x] `docs/backlog/i837-cockpit-catalyst-columns.md` row N4 → points at the audit
-- [x] `docs/backlog/i838-cockpit-hybrid-blueprint.md` row N3 → points at the audit
-- [x] Note that the 6.4 h snapshot values are superseded
-
-## Close-out
-- [x] `python -m pytest -q tests/test_reevaluate_tournament_run.py tests/test_tournament_cockpit_arms.py tests/test_tournament_cockpit_funnel.py` (59 passed)
-- [x] Confirm no cockpit, arms-JSON, config, or risk-formula change in the diff
-- [x] Confirm no opening command was run and no store was written
+- [ ] Task 1: `docs/live-lane-audit.md` + `tests/test_champion_lane_parity.py` (5 tests)
+- [ ] Task 2: `status`/`balance` non-zero exit on venue-read failure (4 tests)
+- [ ] Task 3: `core_brain/reach_probe.py` pre-flight + dry run + `reach-probe --no-live` (10 tests)
+- [ ] Task 4: post / exact-ID cancel / verify / redacted evidence + safety.md entry (10 tests)
+- [ ] Focused suites green: `test_shadow_guard` + `test_order_manager` + `test_order_manager_decide` + new parity file + touched-area regressions
+- [ ] Operator hands-on check (§5 of plan): status → balance → decide (scratch DB) → reach-probe --no-live → reach-probe --live (approved) → evidence file
