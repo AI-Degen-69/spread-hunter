@@ -3622,7 +3622,7 @@ def main() -> None:
                default=argparse.SUPPRESS,
                help="send to venue (default: True). --no-live works before or after the subcommand.")
     rp = sub.add_parser("reach-probe", help="Controlled venue reachability check: one small post-only GTC buy, held briefly, cancelled by exact ID.")
-    rp.add_argument("condition_id", nargs="?", default=None, help="Condition ID to probe. Default: deepest fresh-bid graduated market.")
+    rp.add_argument("condition_id", nargs="?", default=None, help="Condition ID, slug, or Polymarket URL to probe. Default: deepest fresh-bid graduated market.")
     rp.add_argument("--discount", type=float, default=0.15, help="Discount below best bid (default: 0.15)")
     rp.add_argument("--hold-sec", type=float, default=3, help="Seconds to rest before cancel, 2-4 (default: 3)")
     rp.add_argument("--db", default=None, help="Custom database path (default: data/orders.db)")

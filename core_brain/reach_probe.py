@@ -13,8 +13,9 @@ module with fakes and no test ever touches the venue.
 """
 from __future__ import annotations
 
+import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -55,6 +56,7 @@ class ProbePlan:
     depth_usd: float
     discount: float
     hold_sec: float
+    market_slug: str = ""
 
 
 _ORDER_TOKEN_KEYS = ("asset_id", "token_id", "tokenId", "assetId", "asset")
@@ -210,6 +212,9 @@ def build_plan(market, token_id: str, best_bid: float, depth_usd: float, *,
             f"open ${float(open_notional_usd):.2f} + probe ${worst:.2f} exceeds "
             f"venue total cap ${max_total:.2f}")
     side = "UP" if str(token_id) == str(market.up_token) else "DOWN"
+    slug = str(getattr(market, "market_slug", "") or "")
+    if slug.startswith("0x") and len(slug) >= 42:
+        slug = ""
     return ProbePlan(
         condition_id=str(market.condition_id), token_id=str(token_id), side=side,
         price=price, size=size, tick_size=float(market.tick_size),
@@ -217,6 +222,7 @@ def build_plan(market, token_id: str, best_bid: float, depth_usd: float, *,
                         if market.venue_min_size is not None else None),
         worst_case_usd=worst, best_bid=best_bid, depth_usd=depth_usd,
         discount=discount, hold_sec=float(hold_sec),
+        market_slug=slug,
     )
 
 
@@ -224,7 +230,8 @@ def print_plan(plan: ProbePlan, *, live: bool) -> None:
     """The full check on stdout, including the worst case, before signing."""
     venue_min = (f"{plan.venue_min_size:g}sh" if plan.venue_min_size is not None
                  else "unknown (local default)")
-    print(f"market   {plan.condition_id[:16]}...  token {plan.side} {plan.token_id[:14]}...")
+    slug_label = plan.market_slug or f"{plan.condition_id[:16]}..."
+    print(f"market   {slug_label}  token {plan.side} {plan.token_id[:14]}...")
     print(f"book     best bid {plan.best_bid:.3f}  top-3 depth ${plan.depth_usd:,.2f}")
     print(f"probe    BUY {plan.size:.0f} @ {plan.price:.3f}  (tick {plan.tick_size}, "
           f"venue min {venue_min}, discount {plan.discount:.2f})")
@@ -233,17 +240,120 @@ def print_plan(plan: ProbePlan, *, live: bool) -> None:
         print("\nDRY RUN -- nothing sent. Re-run with --live to place.")
 
 
+def resolve_market_identifier(identifier: str | None) -> tuple[str | None, str | None]:
+    """Resolve a condition ID, slug, path, or Polymarket URL to (condition_id, slug).
+
+    Supports:
+    - Raw condition ID: '0xdda9d...'
+    - Plain slug: 'cs2-ts7-mouz-2026-10-27'
+    - Event path: 'esports/cs2/pgl-masters/cs2-ts7-mouz-2026-10-27'
+    - Full URL: 'https://polymarket.com/event/cs2-ts7-mouz-2026-10-27'
+    """
+    if not identifier:
+        return None, None
+    s = str(identifier).strip()
+    if "?" in s:
+        s = s.split("?")[0]
+    if "#" in s:
+        s = s.split("#")[0]
+    s = s.rstrip("/")
+    slug_candidate = s.split("/")[-1]
+
+    # If already a hex condition ID
+    if s.startswith("0x"):
+        cid = s
+        resolved_slug = None
+        try:
+            p = runtime_file("markets.json")
+            if p.is_file():
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    for m in data:
+                        if isinstance(m, dict) and m.get("cid") == cid:
+                            resolved_slug = m.get("slug") or m.get("market_slug")
+                            break
+        except Exception:
+            pass
+        return cid, resolved_slug
+
+    # 1. Match local runtime/markets.json
+    try:
+        p = runtime_file("markets.json")
+        if p.is_file():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                for m in data:
+                    if not isinstance(m, dict):
+                        continue
+                    if m.get("slug") == slug_candidate or m.get("event_slug") == slug_candidate:
+                        return m.get("cid"), m.get("slug") or slug_candidate
+    except Exception:
+        pass
+
+    # 2. Query Gamma API /markets?slug=
+    try:
+        import requests
+        r = requests.get(
+            f"https://gamma-api.polymarket.com/markets?slug={slug_candidate}",
+            timeout=5, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and data:
+                for m in data:
+                    if isinstance(m, dict) and m.get("slug") == slug_candidate and m.get("conditionId"):
+                        return m.get("conditionId"), m.get("slug")
+                if isinstance(data[0], dict) and data[0].get("conditionId"):
+                    return data[0].get("conditionId"), data[0].get("slug")
+    except Exception:
+        pass
+
+    # 3. Query Gamma API /events?slug=
+    try:
+        import requests
+        r = requests.get(
+            f"https://gamma-api.polymarket.com/events?slug={slug_candidate}",
+            timeout=5, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and data:
+                ev = data[0] if isinstance(data[0], dict) else {}
+                markets = ev.get("markets") or []
+                for m in markets:
+                    if isinstance(m, dict) and m.get("slug") == slug_candidate and m.get("conditionId"):
+                        return m.get("conditionId"), m.get("slug")
+                if markets and isinstance(markets[0], dict) and markets[0].get("conditionId"):
+                    return markets[0].get("conditionId"), markets[0].get("slug")
+    except Exception:
+        pass
+
+    raise ProbeRefused(
+        f"cannot resolve market identifier {identifier!r} (slug {slug_candidate!r}) to a Polymarket condition ID")
+
+
 def resolve_market(condition_id: str | None, *, fetch_pinned_fn,
                    graduated_markets_fn, client, book_fn,
                    open_notional_fn):
-    """One pinned market: explicit ID, or the deepest fresh-bid graduated market."""
+    """One pinned market: explicit ID/slug/URL, or the deepest fresh-bid graduated market."""
     if condition_id:
-        market = fetch_pinned_fn(condition_id)
+        cid, resolved_slug = resolve_market_identifier(condition_id)
+        cid = cid or condition_id
+        market = fetch_pinned_fn(cid)
         if market is None:
             raise ProbeRefused(
-                f"no tradeable market at condition_id {condition_id[:12]}... -- it "
+                f"no tradeable market at condition_id {cid[:12]}... -- it "
                 "is missing, closed, not accepting orders, or does not carry "
                 "exactly two tokens. Check the id.")
+        curr_slug = getattr(market, "market_slug", "") or ""
+        if resolved_slug:
+            if hasattr(market, "__dataclass_fields__"):
+                market = replace(market, market_slug=resolved_slug)
+            else:
+                try:
+                    market.market_slug = resolved_slug
+                except Exception:
+                    pass
         preflight_market(client, market, book_fn=book_fn,
                          open_notional_fn=open_notional_fn)
         return market
@@ -261,6 +371,16 @@ def resolve_market(condition_id: str | None, *, fetch_pinned_fn,
             continue
         if market is None:
             continue
+        gm_slug = getattr(gm, "slug", None) or (gm.get("slug") if isinstance(gm, dict) else None)
+        curr_slug = getattr(market, "market_slug", "") or ""
+        if gm_slug and (not curr_slug or curr_slug == cid[:10] or curr_slug.startswith("0x")):
+            if hasattr(market, "__dataclass_fields__"):
+                market = replace(market, market_slug=gm_slug)
+            else:
+                try:
+                    market.market_slug = gm_slug
+                except Exception:
+                    pass
         try:
             token_id, best_bid, depth = preflight_market(
                 client, market, book_fn=book_fn, open_notional_fn=open_notional_fn)
@@ -338,6 +458,7 @@ def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
 
     evidence: dict = {
         "condition_id": plan.condition_id,
+        "market_slug": plan.market_slug,
         "token_id": plan.token_id,
         "price": plan.price,
         "size": plan.size,

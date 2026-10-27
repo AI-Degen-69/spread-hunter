@@ -1424,6 +1424,99 @@ def test_reach_probe_picks_deepest_bid_market_without_id(capsys):
     assert result["plan"]["condition_id"] == "0xdeep"
     capsys.readouterr()
 
+def test_resolve_market_identifier_slug_and_urls(tmp_path, monkeypatch):
+    """Probe accepts condition ID, slug, esports path, or full Polymarket URL."""
+    from core_brain.reach_probe import resolve_market_identifier, ProbeRefused
+
+    # 1. Direct hex condition ID
+    cid_hex = "0x" + "a" * 40
+    cid, slug = resolve_market_identifier(cid_hex)
+    assert cid == cid_hex
+
+    # 2. Match via markets.json
+    fake_markets = [
+        {"cid": "0xmatch1234567890123456789012345678901234",
+         "slug": "cs2-ts7-mouz-2026-10-27",
+         "event_slug": "cs2-ts7-mouz-2026-10-27"}
+    ]
+    markets_file = tmp_path / "markets.json"
+    markets_file.write_text(json.dumps(fake_markets), encoding="utf-8")
+    monkeypatch.setattr("core_brain.reach_probe.runtime_file", lambda name: markets_file)
+
+    # Bare slug
+    c1, s1 = resolve_market_identifier("cs2-ts7-mouz-2026-10-27")
+    assert c1 == "0xmatch1234567890123456789012345678901234"
+    assert s1 == "cs2-ts7-mouz-2026-10-27"
+
+    # Esports path
+    c2, s2 = resolve_market_identifier("esports/cs2/pgl-masters/cs2-ts7-mouz-2026-10-27")
+    assert c2 == "0xmatch1234567890123456789012345678901234"
+    assert s2 == "cs2-ts7-mouz-2026-10-27"
+
+    # Full Polymarket URL
+    c3, s3 = resolve_market_identifier("https://polymarket.com/event/cs2-ts7-mouz-2026-10-27")
+    assert c3 == "0xmatch1234567890123456789012345678901234"
+    assert s3 == "cs2-ts7-mouz-2026-10-27"
+
+    # Unresolvable raises ProbeRefused
+    with pytest.raises(ProbeRefused):
+        resolve_market_identifier("unknown-slug-not-in-feed")
+
+
+def test_print_plan_prints_slug_name_instead_of_address(capsys):
+    """Output shows the readable market slug on the market line when available."""
+    from core_brain.reach_probe import print_plan, ProbePlan
+
+    # Plan with slug
+    plan_with_slug = ProbePlan(
+        condition_id="0xdda9d2ef99f17e2c4b16dc686088f8309d624a54716113c17ea4e5cfd23fda34",
+        token_id="tok-up-840", side="UP", price=0.35, size=5.0, tick_size=0.01,
+        venue_min_size=None, worst_case_usd=1.75, best_bid=0.50, depth_usd=60.0,
+        discount=0.15, hold_sec=3.0, market_slug="cs2-ts7-mouz-2026-10-27"
+    )
+    print_plan(plan_with_slug, live=False)
+    out = capsys.readouterr().out
+    assert "market   cs2-ts7-mouz-2026-10-27  token UP tok-up-840" in out
+    assert "0xdda9" not in out
+
+    # Plan without slug falls back to condition_id[:16]
+    plan_no_slug = ProbePlan(
+        condition_id="0xdda9d2ef99f17e2c4b16dc686088f8309d624a54716113c17ea4e5cfd23fda34",
+        token_id="tok-up-840", side="UP", price=0.35, size=5.0, tick_size=0.01,
+        venue_min_size=None, worst_case_usd=1.75, best_bid=0.50, depth_usd=60.0,
+        discount=0.15, hold_sec=3.0, market_slug=""
+    )
+    print_plan(plan_no_slug, live=False)
+    out_fallback = capsys.readouterr().out
+    assert "market   0xdda9d2ef99f17e...  token UP tok-up-840" in out_fallback
+
+
+def test_reach_probe_resolves_slug_and_prints_slug_in_plan(capsys, monkeypatch, tmp_path):
+    """Running reach-probe with a slug dry-runs cleanly and prints the slug."""
+    from core_brain.reach_probe import reach_probe_cmd
+
+    fake_markets = [
+        {"cid": "0xmatch1234567890123456789012345678901234",
+         "slug": "cs2-ts7-mouz-2026-10-27",
+         "event_slug": "cs2-ts7-mouz-2026-10-27"}
+    ]
+    markets_file = tmp_path / "markets.json"
+    markets_file.write_text(json.dumps(fake_markets), encoding="utf-8")
+    monkeypatch.setattr("core_brain.reach_probe.runtime_file", lambda name: markets_file)
+
+    client = _probe_client()
+    kwargs = _probe_kwargs(
+        condition_id="esports/cs2/pgl-masters/cs2-ts7-mouz-2026-10-27",
+        client_fn=lambda: client,
+        fetch_pinned_fn=lambda cid: _probe_market(cid=cid),
+    )
+    result = reach_probe_cmd(**kwargs)
+    assert result["result"] == "DRY_RUN"
+    assert result["plan"]["condition_id"] == "0xmatch1234567890123456789012345678901234"
+    assert result["plan"]["market_slug"] == "cs2-ts7-mouz-2026-10-27"
+    out = capsys.readouterr().out
+    assert "market   cs2-ts7-mouz-2026-10-27" in out
+
 
 # --- reach-probe post / cancel / verify / evidence (#840 Task 4) ------------
 
