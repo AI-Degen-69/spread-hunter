@@ -235,13 +235,22 @@ it. No cockpit, arms-JSON, config, or risk-formula change is part of it.
 
 ## How to verify
 
-1. Open a terminal in the project root → run
-   `python -m scripts.reevaluate_tournament_run --run-dir data/tournaments/i799-tournament-1m_2026-10-26T00-12 --verdict`
+The tool lives on this branch and the run stores live in the main
+checkout (`data/tournaments/` is gitignored, so worktrees do not carry
+them) — each step below names the checkout it runs in.
+
+1. Open a terminal in this branch's worktree → run
+   `python -m scripts.reevaluate_tournament_run --run-dir "C:/Users/Tiger/Agents/Projects/AI Trading/spread-hunter/data/tournaments/i799-tournament-1m_2026-10-26T00-12" --verdict`
    → see the ten-arm table with `queue-clear-5m` first and NO-GO under
-   every arm, matching the table above.
-2. Open the cockpit → `python -m scripts.tournament_cockpit_server --port
-   8800`, browser to `http://127.0.0.1:8800` → open any arm tab and check
-   its PnL, Sharpe and merge counts against this audit's row.
+   every arm, matching the table above. (On `main` the module does not
+   exist yet — it ships with this branch's merge. A relative `--run-dir`
+   only resolves inside the main checkout, which is why the path here is
+   absolute.)
+2. Open the cockpit from the main checkout →
+   `python -m scripts.tournament_cockpit_server --port 8800`, browser to
+   `http://127.0.0.1:8800` → open any arm tab and check its PnL, Sharpe
+   and merge counts against this audit's row. (The cockpit code path is
+   untouched by this branch, so the main checkout shows the same stores.)
 3. Read this file against `tasks/plan.md`'s appendix → every figure names
    the command behind it; anything without a command is a correction
    notice, not a number.
