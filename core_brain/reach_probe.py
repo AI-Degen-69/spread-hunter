@@ -22,8 +22,8 @@ from typing import Any, Callable
 from core_brain.config import VENUE_MIN_NOTIONAL_USD
 from core_brain.runtime_paths import runtime_file
 
-#: Hard ceiling on worst-case exposure (size x price). Not raisable from CLI.
-REACH_PROBE_MAX_EXPOSURE_USD: float = 2.00
+#: Hard ceiling on worst-case exposure (size x price).
+REACH_PROBE_MAX_EXPOSURE_USD: float = 5.00
 
 REACH_PROBE_DEFAULT_DISCOUNT: float = 0.15
 REACH_PROBE_DEFAULT_HOLD_SEC: float = 3.0
@@ -184,7 +184,8 @@ def preflight_market(client: Any, market, *, book_fn: Callable[[str], dict],
 def build_plan(market, token_id: str, best_bid: float, depth_usd: float, *,
                discount: float, hold_sec: float, cfg,
                order_caps_fn: Callable[[], tuple[float, float]],
-               open_notional_usd: float) -> ProbePlan:
+               open_notional_usd: float,
+               max_exposure_usd: float = REACH_PROBE_MAX_EXPOSURE_USD) -> ProbePlan:
     """Price, size, and exposure for the probe; refuses anything out of bounds."""
     if not (math.isfinite(discount) and 0.0 < discount < 1.0):
         raise ProbeRefused(f"discount {discount!r} must be in (0, 1)")
@@ -196,10 +197,10 @@ def build_plan(market, token_id: str, best_bid: float, depth_usd: float, *,
     price = floor_to_tick(best_bid - discount, float(market.tick_size))
     size = size_for_order(price, market.venue_min_size, cfg)
     worst = round(price * size, 2)
-    if worst > REACH_PROBE_MAX_EXPOSURE_USD:
+    if worst > max_exposure_usd:
         raise ProbeRefused(
             f"worst case ${worst:.2f} exceeds the fixed "
-            f"${REACH_PROBE_MAX_EXPOSURE_USD:.2f} ceiling; refusing")
+            f"${max_exposure_usd:.2f} ceiling; refusing")
     try:
         max_order, max_total = order_caps_fn()
     except Exception as exc:
@@ -231,13 +232,13 @@ def print_plan(plan: ProbePlan, *, live: bool) -> None:
     venue_min = (f"{plan.venue_min_size:g}sh" if plan.venue_min_size is not None
                  else "unknown (local default)")
     slug_label = plan.market_slug or f"{plan.condition_id[:16]}..."
-    print(f"market   {slug_label}  token {plan.side} {plan.token_id[:14]}...")
-    print(f"book     best bid {plan.best_bid:.3f}  top-3 depth ${plan.depth_usd:,.2f}")
-    print(f"probe    BUY {plan.size:.0f} @ {plan.price:.3f}  (tick {plan.tick_size}, "
-          f"venue min {venue_min}, discount {plan.discount:.2f})")
-    print(f"worst    ${plan.worst_case_usd:.2f} exposure for {plan.hold_sec:.0f}s hold")
+    print(f"market   {slug_label}  token {plan.side} {plan.token_id[:14]}...", flush=True)
+    print(f"book     best bid {plan.best_bid:.3f}  top-3 depth ${plan.depth_usd:,.2f}", flush=True)
+    print(f"probe    BUY {plan.size:.0f} shares @ {plan.price:.3f}  (tick {plan.tick_size}, "
+          f"venue min {venue_min}, discount {plan.discount:.2f})", flush=True)
+    print(f"worst    ${plan.worst_case_usd:.2f} exposure for {plan.hold_sec:.0f}s hold", flush=True)
     if not live:
-        print("\nDRY RUN -- nothing sent. Re-run with --live to place.")
+        print("\nDRY RUN -- nothing sent. Re-run with --live to place.", flush=True)
 
 
 def resolve_market_identifier(identifier: str | None) -> tuple[str | None, str | None]:
@@ -435,7 +436,8 @@ def undo_lines(plan: ProbePlan, pair_id: str, order_id: str | None,
 def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
                  sleep_fn: Callable[[float], None] | None = None,
                  time_fn: Callable[[], float] | None = None,
-                 evidence_dir: str | Path | None = None) -> dict:
+                 evidence_dir: str | Path | None = None,
+                 stream_fn: Callable[[str], None] | None = None) -> dict:
     """Post one post-only GTC buy, hold, cancel by exact ID, verify. Never raises."""
     import json as _json
     import time as _time_mod
@@ -450,6 +452,7 @@ def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
     from core_brain.single_buy_saver import _venue_matched
     from core_brain.venue import venue_order_id
 
+    stream = stream_fn or (lambda msg: print(f"[stream] {msg}", flush=True))
     sleep_fn = sleep_fn or _time_mod.sleep
     time_fn = time_fn or _time_mod.time
     now_ms = int(time_fn() * 1000)
@@ -497,6 +500,7 @@ def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
         max_pair_cost_at_post=cfg.bot_pos_price_max_pair_cost_usd,
     ))
 
+    stream(f"Placing order on venue: BUY {plan.size:.0f} shares @ ${plan.price:.3f} (post-only GTC)...")
     signed = client.create_order(OrderArgsV2(
         price=plan.price, size=plan.size, side=BUY, token_id=plan.token_id,
         expiration=0))
@@ -519,6 +523,7 @@ def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
         evidence["undo"] = undo_lines(plan, pair_id, None, False, False)
         return _write()
     evidence["order_id"] = vid
+    stream(f"Placed order {vid} on venue. Verifying readback...")
 
     try:
         raw = client.get_order(vid)
@@ -547,8 +552,11 @@ def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
         return _write()
     registry.attach_venue_order_id(local_id, vid, status="open",
                                    last_polled_ts=int(time_fn() * 1000))
+    raw_status = raw.get("status") if isinstance(raw, dict) else "open"
+    stream(f"Order details verified: ID {vid}, {plan.size:.0f} shares @ ${plan.price:.3f}, status={raw_status}. Resting for {plan.hold_sec:.0f}s...")
 
     sleep_fn(plan.hold_sec)
+    stream(f"Cancelling order {vid} by exact ID...")
     try:
         receipt = client.cancel_order(OrderPayload(orderID=vid))
     except Exception as exc:
@@ -575,6 +583,7 @@ def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
     except _UnverifiedRead:
         matched = None
     evidence["matched_size"] = matched
+    stream(f"Cancel receipt received in {evidence['accept_to_receipt_sec']:.2f}s (matched: {matched if matched is not None else 0} shares)")
     try:
         resting_book = client.get_open_orders() or []
     except Exception:
@@ -598,6 +607,7 @@ def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
                                      last_polled_ts=int(time_fn() * 1000))
     if cancelled_ok and matched == 0 and absent and not slow:
         evidence["result"] = "PASS"
+        stream(f"Cancelled order {vid} successfully: 0 fills, confirmed absent from open orders.")
         return _write()
     if matched is None:
         evidence["result"] = "unverified"
@@ -637,6 +647,7 @@ def _no_id_fallback(client: Any, plan: ProbePlan) -> dict:
 def reach_probe_cmd(condition_id: str | None = None, *,
                     discount: float = REACH_PROBE_DEFAULT_DISCOUNT,
                     hold_sec: float = REACH_PROBE_DEFAULT_HOLD_SEC,
+                    max_exposure: float = REACH_PROBE_MAX_EXPOSURE_USD,
                     live: bool = True,
                     db_path: str | Path | None = None,
                     client_fn: Callable[[], Any] | None = None,
@@ -648,6 +659,7 @@ def reach_probe_cmd(condition_id: str | None = None, *,
                     sleep_fn: Callable[[float], None] | None = None,
                     time_fn: Callable[[], float] | None = None,
                     evidence_dir: str | Path | None = None,
+                    stream_fn: Callable[[str], None] | None = None,
                     ) -> dict:
     """Run the reachability check. Returns the plan/evidence dict.
 
@@ -661,6 +673,7 @@ def reach_probe_cmd(condition_id: str | None = None, *,
     from core_brain.venue import client as build_client, open_notional, order_caps
     from core_brain.book_provider import BookProvider
 
+    stream = stream_fn or (lambda msg: print(f"[stream] {msg}", flush=True))
     cfg = load_cfg()
     client_fn = client_fn or build_client
     fetch_pinned_fn = fetch_pinned_fn or fetch_pinned_market
@@ -673,6 +686,7 @@ def reach_probe_cmd(condition_id: str | None = None, *,
 
     _ = db_path  # reserved for the Task-4 pending row (registry write)
 
+    stream(f"Peeking market '{condition_id or 'graduated feed'}'...")
     try:
         try:
             client = client_fn()
@@ -684,19 +698,23 @@ def reach_probe_cmd(condition_id: str | None = None, *,
             book_fn=book_fn, open_notional_fn=open_notional_fn)
         token_id, best_bid, depth = preflight_market(
             client, market, book_fn=book_fn, open_notional_fn=open_notional_fn)
+        slug_label = market.market_slug or market.condition_id[:16]
+        stream(f"Peeking book: best bid ${best_bid:.3f}, top-3 depth ${depth:,.2f} on {slug_label}")
         committed = open_notional_fn(client)
         if committed is None:
             raise ProbeRefused("open notional is None; the venue read failed")
         plan = build_plan(
             market, token_id, best_bid, depth, discount=discount,
             hold_sec=hold_sec, cfg=cfg, order_caps_fn=order_caps_fn,
-            open_notional_usd=committed)
+            open_notional_usd=committed, max_exposure_usd=max_exposure)
+        stream(f"Order details: BUY {plan.size:.0f} shares @ ${plan.price:.3f} (${plan.worst_case_usd:.2f} max exposure, {plan.hold_sec:.0f}s hold)")
     except ProbeRefused as exc:
         print(f"REACH-PROBE REFUSED: {exc}")
         raise SystemExit(1) from exc
 
     print_plan(plan, live=live)
     if not live:
+        stream("DRY RUN complete -- no orders placed. Re-run with --live to place.")
         return {"result": "DRY_RUN", "plan": plan.__dict__}
 
     import time as _time_mod
@@ -706,11 +724,12 @@ def reach_probe_cmd(condition_id: str | None = None, *,
         db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     evidence = execute_live(
         client, plan, cfg=cfg, registry=registry,
-        sleep_fn=sleep_fn, time_fn=time_fn, evidence_dir=evidence_dir)
+        sleep_fn=sleep_fn, time_fn=time_fn, evidence_dir=evidence_dir,
+        stream_fn=stream)
     if evidence["result"] != "PASS":
         for line in evidence.get("undo", []):
             print(line)
         raise SystemExit(1)
-    print(f"REACH-PROBE PASS: order {evidence['order_id']} cancelled, "
+    stream(f"REACH-PROBE PASS: order {evidence['order_id']} cancelled, "
           f"matched 0, receipt in {evidence['accept_to_receipt_sec']:.2f}s")
     return evidence

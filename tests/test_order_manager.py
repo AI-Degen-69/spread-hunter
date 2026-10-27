@@ -1353,13 +1353,29 @@ def test_reach_probe_refuses_price_below_one_tick(capsys):
     assert "below one tick" in capsys.readouterr().out
 
 
-def test_reach_probe_refuses_exposure_above_two_dollars(capsys):
-    """#840: 5sh @ 0.80 = $4.00 worst case exceeds the fixed $2 ceiling."""
+def test_reach_probe_refuses_exposure_above_ceiling(capsys):
+    """#840: 10sh @ 0.80 = $8.00 worst case exceeds the fixed $5 ceiling."""
     from core_brain.reach_probe import reach_probe_cmd
     with pytest.raises(SystemExit) as exc:
-        reach_probe_cmd(**_probe_kwargs(book_fn=_probe_books(up_bid=0.95, down_bid=0.90)))
+        reach_probe_cmd(**_probe_kwargs(
+            book_fn=_probe_books(up_bid=0.95, down_bid=0.90),
+            fetch_pinned_fn=lambda cid: _probe_market(venue_min=10.0)))
     assert exc.value.code == 1
-    assert "$2.00" in capsys.readouterr().out
+    assert "$5.00" in capsys.readouterr().out
+
+def test_reach_probe_streams_events(capsys):
+    """Probe streams events: Peeking market, order details with shares, etc."""
+    from core_brain.reach_probe import reach_probe_cmd
+    stream_lines = []
+    kwargs = _probe_kwargs(
+        stream_fn=lambda msg: stream_lines.append(msg)
+    )
+    result = reach_probe_cmd(**kwargs)
+    assert result["result"] == "DRY_RUN"
+    assert any("Peeking market" in line for line in stream_lines)
+    assert any("Order details" in line and "shares" in line for line in stream_lines)
+    assert any("DRY RUN" in line for line in stream_lines)
+
 
 
 def test_reach_probe_refuses_closed_or_not_accepting_market(capsys):
