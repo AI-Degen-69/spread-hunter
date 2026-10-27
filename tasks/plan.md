@@ -20,7 +20,7 @@ load-bearing premises do not hold: `balanced-mid` is **not** the top-PnL arm (`l
 leads, +$23.97 vs +$23.46 — a gap this sample cannot resolve), and it is **not** the
 risk-shape leader (it fails all three pre-registered gates; `queue-clear-5m` is the only arm
 that clears them). The repo's own gate returns **NO-GO for every arm measured so far**,
-because the primary gate is the 90% CI lower bound on inclusive mean return ≥ 1.0% — not the
+because the primary gate is the 90% CI lower bound on inclusive mean return strictly > 1.0% — not the
 60-close count the issue treats as the cleared gate. `core_brain/config.py:268`
 (`bot_eval_stat_gate_target_closes = 60`) is a precondition for a verdict;
 `core_brain/config.py:266` (`bot_eval_stat_gate_threshold_pct = 1.0`) is the gate.
@@ -122,9 +122,9 @@ T1 (measurement + verdict CLI)  ──►  T2 (audit doc)
 - **What it does:** records the run's identity and coverage; the ten-arm measured table with the
   command behind it; the issue-claim vs measured discrepancy table with the interim-snapshot
   explanation; the risk-shape ruling that makes `queue-clear-5m` the candidate and the
-  half-split evidence (first half +$0.2356/trade Sharpe 5.94 → second half +$0.1588 Sharpe
-  4.85, against `balanced-mid` +$0.1993 Sharpe 4.43 → **−$0.0087** Sharpe −0.16) plus
-  concentration (37 markets, largest 15.3% of PnL, vs 74.5% for `prudent-hybrid`); the queue
+  half-split evidence (first half +$0.2356/trade Sharpe 6.00 → second half +$0.1569 Sharpe
+  3.33, against `balanced-mid` +$0.1993 Sharpe 4.46 → **+$0.0923** Sharpe 0.86) plus
+  concentration (38 markets, largest 15.1% of PnL, vs 29.3% for `prudent-hybrid`); the queue
   mechanism evidence (`python -m scripts.queue_report --db <queue-clear-5m>.db`: 15,884 deltas,
   182 levels, 45 markets, 89% of queue movement is cancels, most trade-based clear times
   infinite — the books the gate refuses); the per-arm verdicts; and the reopen conditions.
@@ -202,5 +202,6 @@ Gates = pre-registered Sharpe ≥ 2.70 / PF ≥ 2.50 / MDD < $4.00. No arm clear
 `queue-clear-5m` would need 2,865 closes and has 87 (3% of the required sample), so nominal PnL
 is not a winner signal here and the ranking is risk shape.
 
-Report files produced by the verdict run land in the audit's evidence folder, never in the
-repository's `reports/` (gitignored) and never committed.
+Report files produced by `_repo_verdict` are written through `write_statistics_report`
+to a temporary directory that is cleaned up after derivation, rather than persisting
+in the audit evidence folder.

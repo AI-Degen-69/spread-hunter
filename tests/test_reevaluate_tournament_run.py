@@ -196,17 +196,67 @@ def test_verdict_path_uses_the_repo_gate_and_reports_no_data(tmp_path, monkeypat
 
 def test_verdict_copy_carries_the_store_data(tmp_path, monkeypatch):
     """The scratch copy the gate reads holds the store's rows (WAL-safe)."""
+    import shutil
     import scripts.reevaluate_tournament_run as tool
 
-    def fake_write(db_path, run_id, mode, out_dir=None):
-        conn = sqlite3.connect(db_path)
+    db_path = tmp_path / "wal_source.db"
+    src_conn = sqlite3.connect(db_path)
+    try:
+        src_conn.executescript(SCHEMA)
+        src_conn.commit()
+        src_conn.execute("PRAGMA journal_mode=WAL")
+        src_conn.executemany(
+            "INSERT INTO closes (ts, method, realized_pnl, run_id) VALUES (?, ?, ?, ?)",
+            [(1000.0 + i, "shadow_merge", 0.10, GATED_RUN_ID) for i in range(10)],
+        )
+        src_conn.commit()
+
+        # A plain file copy misses uncheckpointed WAL frames
+        plain_copy = tmp_path / "plain_copy.db"
+        shutil.copyfile(db_path, plain_copy)
+        plain_conn = sqlite3.connect(plain_copy)
         try:
-            n = conn.execute(
-                "SELECT count(*) FROM closes WHERE run_id = ?", (run_id,)
+            plain_count = plain_conn.execute(
+                "SELECT count(*) FROM closes WHERE run_id = ?", (GATED_RUN_ID,)
             ).fetchone()[0]
         finally:
-            conn.close()
-        assert n == 24
+            plain_conn.close()
+        assert plain_count == 0
+
+        def fake_write(scratch_path, run_id, mode, out_dir=None):
+            conn = sqlite3.connect(scratch_path)
+            try:
+                n = conn.execute(
+                    "SELECT count(*) FROM closes WHERE run_id = ?", (run_id,)
+                ).fetchone()[0]
+            finally:
+                conn.close()
+            assert n == 10
+            return {
+                "verdict": "NO-GO",
+                "gate_rows": [{"gate": tool.PRIMARY_GATE_NAME, "value": -1.0, "passed": False}],
+            }
+
+        monkeypatch.setattr(tool, "write_statistics_report", fake_write)
+        repo = tool._repo_verdict(db_path, GATED_RUN_ID)
+        assert repo == {"verdict": "NO-GO", "primary_gate_value": -1.0}
+    finally:
+        src_conn.close()
+
+
+def test_verdict_neutralizes_ambient_environment_overrides(tmp_path, monkeypatch):
+    """Ambient gate overrides must not contaminate the tournament audit."""
+    import os
+    import scripts.reevaluate_tournament_run as tool
+
+    monkeypatch.setenv("BOT_EVAL_STAT_GATE_THRESHOLD_PCT", "-50.0")
+    monkeypatch.setenv("BOT_EVAL_STAT_GATE_TARGET_CLOSES", "5")
+
+    captured_env = {}
+
+    def fake_write(scratch_path, run_id, mode, out_dir=None):
+        captured_env["threshold"] = os.environ.get("BOT_EVAL_STAT_GATE_THRESHOLD_PCT")
+        captured_env["closes"] = os.environ.get("BOT_EVAL_STAT_GATE_TARGET_CLOSES")
         return {
             "verdict": "NO-GO",
             "gate_rows": [{"gate": tool.PRIMARY_GATE_NAME, "value": -1.0, "passed": False}],
@@ -214,8 +264,102 @@ def test_verdict_copy_carries_the_store_data(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tool, "write_statistics_report", fake_write)
     run_dir = _run_dir(tmp_path)
-    repo = tool._repo_verdict(run_dir / "queue-clear-5m.db", GATED_RUN_ID)
-    assert repo == {"verdict": "NO-GO", "primary_gate_value": -1.0}
+    tool._repo_verdict(run_dir / "queue-clear-5m.db", GATED_RUN_ID)
+    assert captured_env["threshold"] == "1.0"
+    assert captured_env["closes"] == "60"
+    assert os.environ.get("BOT_EVAL_STAT_GATE_THRESHOLD_PCT") == "-50.0"
+    assert os.environ.get("BOT_EVAL_STAT_GATE_TARGET_CLOSES") == "5"
+
+
+def test_unreadable_arm_db_fails_the_run(tmp_path, capsys):
+    """Missing or corrupted arm databases are reported as unreadable and exit non-zero."""
+    run_dir = tmp_path / "broken_run"
+    run_dir.mkdir()
+    plan = {
+        "issue": 799,
+        "stamp": "2026-10-26T00-12",
+        "minutes": 1440.0,
+        "arms": [
+            {
+                "name": "missing-arm",
+                "db_path": str(run_dir / "missing.db"),
+                "run_id": "r1",
+                "dash_port": 8801,
+            }
+        ],
+    }
+    (run_dir / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    ev = evaluate_run(run_dir / "plan.json")
+    assert len(ev["unreadable"]) == 1
+    assert ev["unreadable"][0]["name"] == "missing-arm"
+    assert ev["unreadable"][0]["status"] == "missing_db"
+    assert ev["arms"] == []
+
+    assert main(["--run-dir", str(run_dir)]) == 1
+    err = capsys.readouterr().err
+    assert "Unreadable arm missing-arm (missing_db)" in err
+
+
+def test_ranking_and_caveat_when_arm_earns_go(tmp_path, monkeypatch):
+    """When an arm earns GO, it leads the ranking and the caveat reflects the approval."""
+    import scripts.reevaluate_tournament_run as tool
+
+    def fake_write(scratch_path, run_id, mode, out_dir=None):
+        if run_id == GATED_RUN_ID:
+            return {
+                "verdict": "GO",
+                "gate_rows": [{"gate": tool.PRIMARY_GATE_NAME, "value": 2.5, "passed": True}],
+            }
+        return {
+            "verdict": "NO-GO",
+            "gate_rows": [{"gate": tool.PRIMARY_GATE_NAME, "value": -1.0, "passed": False}],
+        }
+
+    monkeypatch.setattr(tool, "write_statistics_report", fake_write)
+    run_dir = _run_dir(tmp_path)
+    ev = evaluate_run(run_dir / "plan.json", with_verdict=True)
+    assert ev["leader"] == "queue-clear-5m"
+    assert "Leader approved by statistical GO gate" in ev["caveat"]
+    text = render_text(ev)
+    assert "Ranked (statistical GO):" in text
+    assert "Approved arm by statistical GO: queue-clear-5m" in text
+
+
+def test_uncomputable_sample_size_renders_not_computable():
+    """An arm with no closes has no computable Nreq; the renderer prints 'not computable'."""
+    ev = {
+        "issue": 799,
+        "stamp": "2026-10-26T00-12",
+        "minutes_planned": 1440.0,
+        "run_dir": "/tmp",
+        "arms": [
+            {
+                "name": "zero-close-arm",
+                "elapsed_min": 60.0,
+                "trades": 0,
+                "merges": 0,
+                "stop_exits": 0,
+                "merge_rate_pct": 0.0,
+                "total_pnl": 0.0,
+                "sharpe_proxy": 0.0,
+                "profit_factor": 0.0,
+                "max_drawdown": 0.0,
+                "n_required_002": None,
+                "gates": {
+                    "sharpe": False,
+                    "profit_factor": False,
+                    "max_drawdown": True,
+                    "powered": False,
+                },
+                "verdict": None,
+            }
+        ],
+        "ranked": ["zero-close-arm"],
+        "leader": "zero-close-arm",
+        "caveat": "caveat text",
+    }
+    rendered = render_text(ev)
+    assert "not computable" in rendered
 
 
 def test_verdict_reports_no_data_for_a_missing_store(tmp_path, monkeypatch):

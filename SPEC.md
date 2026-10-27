@@ -49,8 +49,8 @@ Two consequences the audit must state plainly:
    resolve. The issue's "+$28.37, #1 rank" does not reproduce.
 2. **`balanced-mid` is not the risk-shape leader.** By the pre-registered risk-shape
    gates (Sharpe ≥ 2.70, profit factor ≥ 2.50, max drawdown < $4.00) it fails all three,
-   and it fails the half-split: first half mean +$0.1993/trade (Sharpe 4.43), second half
-   **−$0.0087** (Sharpe −0.16). The only arm clearing all three gates in both halves is
+   and it fails the half-split: first half mean +$0.1993/trade (Sharpe 4.46), second half
+   **+$0.0923** (Sharpe 0.86). The only arm clearing all three gates in both halves is
    `queue-clear-5m`.
 
 ## Locked verdict rule
