@@ -1077,6 +1077,13 @@ def _read_shadow_heartbeat_file(
         # be a claim about a run that never made one.
         "book_source_mix": raw.get("book_source_mix") if isinstance(
             raw.get("book_source_mix"), dict) else None,
+        # The engine configuration this run loaded (#856), exactly as the run
+        # recorded it. None for a heartbeat written before the field existed:
+        # an old heartbeat says nothing about its profile, and a missing name
+        # is "unknown", never a guess from this process's environment.
+        "profile": raw.get("profile") if isinstance(
+            raw.get("profile"), dict) and isinstance(
+            raw.get("profile").get("name"), str) else None,
     }
 
 
@@ -1503,6 +1510,43 @@ def _runtime_file_age_sec(name: str) -> float | None:
         return None
 
 
+def _resolve_active_profile(shadow_run: dict | None) -> dict | None:
+    """The engine-recorded profile for the selected store (#856), or None.
+
+    Only an engine record counts: the dashboard never derives the profile
+    from its own environment, whose variables the launcher does not set.
+    A heartbeat without a well-formed `profile` (older code, malformed
+    record) reports as missing, never as a wrong name.
+    """
+    try:
+        if not isinstance(shadow_run, dict):
+            return None
+        profile = shadow_run.get("profile")
+        if not isinstance(profile, dict) or not isinstance(profile.get("name"), str):
+            return None
+        preset = profile.get("preset")
+        try:
+            queue_min = profile.get("queue_max_clear_min")
+            queue_min = float(queue_min) if queue_min is not None else None
+        except (TypeError, ValueError):
+            queue_min = None
+        tournament = shadow_run.get("tournament")
+        arm = tournament.get("arm") if isinstance(tournament, dict) else None
+        resolved = {
+            "name": profile["name"],
+            "preset": preset if isinstance(preset, str) else None,
+            "queue_clear_on": bool(profile.get("queue_clear_on")),
+            "queue_max_clear_min": queue_min,
+            "source": "shadow",
+            "running": bool(shadow_run.get("running")),
+        }
+        if isinstance(arm, str) and arm:
+            resolved["tournament_arm"] = arm
+        return resolved
+    except (ValueError, OSError):
+        return None
+
+
 def get_system_status() -> dict:
     """Return live running status for 3 sub-services (Market Filter, Query Polymarket, Decide & Execute) and Telemetry."""
     procs_file = resolve_runtime_file("processes.json", root=LIVE_ROOT)
@@ -1580,6 +1624,15 @@ def get_system_status() -> dict:
         else ("RUNNING" if bot_running else "STOPPED")
     )
 
+    # The selected store's rehearsal, read once for the stopwatch and the
+    # PROFILE badge alike. The profile below comes only from this record --
+    # never from this process's environment (#856).
+    selected_shadow_run = _recent_shadow_run(db_identity["path"])
+    try:
+        active_profile = _resolve_active_profile(selected_shadow_run)
+    except (ValueError, OSError):
+        active_profile = None
+
     return {
         "services": {
             "filter": {
@@ -1633,7 +1686,11 @@ def get_system_status() -> dict:
         "db_is_production": db_identity["is_production"],
         # The rehearsal writing this store, when there is one. None otherwise:
         # the header shows no stopwatch rather than another run's clock.
-        "shadow_run": _recent_shadow_run(db_identity["path"]),
+        "shadow_run": selected_shadow_run,
+        # The active engine profile for the PROFILE badge (#856): the shadow
+        # record when the selected store has one, else null (T3 adds the
+        # live fallback). Never derived from this process's environment.
+        "active_profile": active_profile,
         # The OTHER rehearsals on this machine, including live ones writing a
         # store this page is not pointed at. Named, never read into the numbers
         # above: without them a dead run on a stale store reads as "the engine

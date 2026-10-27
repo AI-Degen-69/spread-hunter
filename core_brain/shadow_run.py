@@ -461,6 +461,7 @@ def write_shadow_heartbeat(
     code_revision: Optional[dict] = None,
     shutdown_reason: str = "",
     book_sources: Optional[dict] = None,
+    profile: Optional[dict] = None,
     path: Optional[Path] = None,
 ) -> Optional[Path]:
     """Publish (or refresh) the rehearsal's heartbeat file.
@@ -511,6 +512,12 @@ def write_shadow_heartbeat(
     # so a stream run is comparable to the older REST-only corpus.
     if book_sources is not None:
         payload["book_source_mix"] = dict(book_sources)
+    # The engine configuration this run loaded, recorded once at startup and
+    # repeated on every write (#856). The dashboard reads it to name the
+    # active profile; a rehearsal from older code simply has no field, which
+    # the reader reports as unknown rather than a wrong name.
+    if profile is not None:
+        payload["profile"] = dict(profile)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".tmp")
@@ -1318,6 +1325,26 @@ def run_shadow(
         bankroll_source = "environment"
     log.info("starting bankroll $%.2f (%s)", cfg.bot_quote_bank_baseline_usd, bankroll_source)
 
+    # The profile this rehearsal loaded, recorded once for the dashboard's
+    # PROFILE badge (#856). The preset name is only resolved when the run
+    # loaded its own configuration: a caller that supplied `cfg` never went
+    # through `config.load()`, so the environment preset is not this run's
+    # preset. Any failure here omits the field -- a heartbeat problem must
+    # never stop the rehearsal.
+    if cfg_supplied:
+        active_preset_name = None
+    else:
+        try:
+            from core_brain.config import resolve_tournament_preset_name
+            active_preset_name = resolve_tournament_preset_name()
+        except ValueError:
+            active_preset_name = None
+    try:
+        from core_brain.config import describe_active_profile
+        active_profile = describe_active_profile(cfg, active_preset_name)
+    except (ValueError, OSError):
+        active_profile = None
+
     # One line that retires "what did this rehearsal actually run under?".
     # The two offset knobs are env-overridable per run, and recovering what a
     # finished rehearsal had used cost a full verification pass over the
@@ -1657,7 +1684,8 @@ def run_shadow(
 
     heartbeat_kwargs = dict(db_path=db_path, run_id=run_id, minutes=minutes,
                             interval=interval, started_at=started_at,
-                            dash_port=dash_port, code_revision=code_revision)
+                            dash_port=dash_port, code_revision=code_revision,
+                            profile=active_profile)
 
     def _heartbeat(cycle: int, *, finished: bool = False,
                    shutdown_reason: str = "") -> None:

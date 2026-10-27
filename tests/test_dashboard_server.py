@@ -3557,3 +3557,121 @@ def test_kpi_funnel_keeps_the_full_spread_rejection_reason(client, monkeypatch, 
     assert payload.get("funnel") is not None
     assert payload["funnel"]["filters"][0]["cause"] == "YES spread"
     assert payload["funnel"]["filters"][0]["examples"][0]["reason"] == reason
+
+
+# ── The active profile (#856) ────────────────────────────────────────────────
+#
+# The PROFILE badge reads `active_profile` from /api/system/status. The name
+# comes only from the selected store's engine record -- never from this
+# process's environment, whose variables the launcher does not set.
+
+
+_PROFILE_MISSING = object()
+
+
+def _write_profile_heartbeat(tmp_path, db, profile=_PROFILE_MISSING, **overrides):
+    import dashboard.server as dash_mod  # noqa: F401  (fixture wiring below needs it patched)
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(exist_ok=True)
+    payload = {
+        "pid": os.getpid(),
+        "run_id": "shadow-profile-01",
+        "started_at": time.time() - 60.0,
+        "minutes": 60.0,
+        "interval": 5.0,
+        "cycle": 3,
+        "db_path": str(db),
+        "heartbeat_ts": time.time(),
+        "finished": False,
+    }
+    if profile is not _PROFILE_MISSING:
+        payload["profile"] = profile
+    payload.update(overrides)
+    (runtime / "shadow_run_shadow-profile-01.json").write_text(
+        json.dumps(payload), encoding="utf-8")
+
+
+def _profile_status(client, monkeypatch, tmp_path):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    res = client.get("/api/system/status")
+    assert res.status_code == 200
+    return res.json()
+
+
+def test_status_active_profile_is_null_with_no_heartbeat(client, monkeypatch, tmp_path):
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_names_the_shadow_record(client, monkeypatch, tmp_path, temp_db):
+    _write_profile_heartbeat(tmp_path, temp_db, {
+        "name": "balanced+queue-clear-5m", "preset": "balanced",
+        "queue_clear_on": True, "queue_max_clear_min": 5.0})
+    data = _profile_status(client, monkeypatch, tmp_path)
+    profile = data["active_profile"]
+    assert profile["name"] == "balanced+queue-clear-5m"
+    assert profile["source"] == "shadow"
+    assert profile["running"] is True
+    assert profile["preset"] == "balanced"
+
+
+def test_status_active_profile_is_null_for_a_heartbeat_before_the_field(
+        client, monkeypatch, tmp_path, temp_db):
+    _write_profile_heartbeat(tmp_path, temp_db)
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_rejects_a_list_profile(
+        client, monkeypatch, tmp_path, temp_db):
+    _write_profile_heartbeat(tmp_path, temp_db, ["balanced"])
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_rejects_a_numeric_name(
+        client, monkeypatch, tmp_path, temp_db):
+    _write_profile_heartbeat(tmp_path, temp_db, {"name": 42})
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_ignores_a_heartbeat_for_another_store(
+        client, monkeypatch, tmp_path, temp_db):
+    _write_profile_heartbeat(tmp_path, tmp_path / "other.db", {
+        "name": "balanced", "preset": "balanced",
+        "queue_clear_on": False, "queue_max_clear_min": 60.0})
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_ignores_the_dashboard_environment(
+        client, monkeypatch, tmp_path):
+    monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "balanced")
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_survives_an_unknown_dashboard_preset(
+        client, monkeypatch, tmp_path):
+    monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "not-a-preset")
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_resolve_active_profile_carries_the_tournament_arm():
+    import dashboard.server as dash_mod
+    run = {"running": True,
+           "profile": {"name": "balanced", "preset": "balanced",
+                       "queue_clear_on": False, "queue_max_clear_min": 60.0},
+           "tournament": {"issue": 799, "arm": "balanced-mid", "stamp": "x"}}
+    assert dash_mod._resolve_active_profile(run)["tournament_arm"] == "balanced-mid"
+    run_no_arm = {"running": False, "profile": {"name": "default", "preset": None,
+                                                "queue_clear_on": False,
+                                                "queue_max_clear_min": 60.0},
+                  "tournament": None}
+    resolved = dash_mod._resolve_active_profile(run_no_arm)
+    assert resolved["running"] is False
+    assert "tournament_arm" not in resolved
