@@ -513,7 +513,7 @@ def _no_id_fallback(client: Any, plan: ProbePlan) -> dict:
         return {"fallback": f"cancel-market failed: {type(exc).__name__}"}
 
 
-def reach_probe_cmd(*, condition_id: str | None = None,
+def reach_probe_cmd(condition_id: str | None = None, *,
                     discount: float = REACH_PROBE_DEFAULT_DISCOUNT,
                     hold_sec: float = REACH_PROBE_DEFAULT_HOLD_SEC,
                     live: bool = True,
