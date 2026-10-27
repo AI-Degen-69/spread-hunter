@@ -1,110 +1,91 @@
-# SPEC.md — Issue #839: Live migration approval audit for the #799 champion arm
+# SPEC.md — Issue #840: Live execution lane audit and reachability verification
 
-Branch: `i839/live-migration-approval-audit` | Issue: #839
+Branch: `i840/live-execution-lane-audit` | Issue: #840
 
-## Goal
+## 1. Goal
 
-Deliver one official audit — `docs/audits/live-migration-799.md` — that answers a single
-operator question: **is any arm of Tournament #799 approved for live real-money
-execution?** The answer must be derived from the tournament's own stores with the
-repository's own gate machinery, and it must separate three things the issue's draft
-verdict runs together: what was measured, what is recommended, and what is authorized.
+Prove, in writing plus tests plus one bounded venue check, that the live
+execution lane behaves identically to the shadow loop wherever it should, and
+that CLOB signing, order acceptance, and cancellation work — before any live
+capital deployment. No unconstrained live trading loop is part of this issue.
 
-This spec re-grounds the issue in the measured record, because the issue was written
-while the run was still in progress and its figures no longer describe the finished run.
+## 2. Non-goals (explicit out of scope)
 
-## What the run actually is
+- Running unsupervised / unconstrained live trading loops.
+- Re-architecting the CLOB client or changing dynamic capital caps.
+- Fixing the unexplained divergences found by the audit (trader-loop rollback,
+  cancel-response handling, launcher preset gap, telemetry gap). Those are
+  recorded as follow-up tickets only.
+- Rewriting or deleting `data/orders.db` (production registry — read-only).
 
-| Item | Value |
-|---|---|
-| Run directory | `data/tournaments/i799-tournament-1m_2026-10-26T00-12` (gitignored — `.gitignore:60` `/data/tournaments/`) |
-| Arms | 10, ports 8801–8810, one store per arm (`<arm>.db`) |
-| Planned window | 1440 min (`plan.json`) |
-| Measured window | 1308.5 min (`scripts/queue_report.py`); closes run 2026-10-26 00:14 → 21:57 |
-| Process state | arms stopped 2026-10-26 ~22:01; not running now |
-| `results.json` in that folder | a launch-time artifact (all arms `exit_code: 1`, 0 merges) — **not** a result |
+## 3. Ticket corrections (verified against the codebase)
 
-## What the issue claims vs what the stores hold
+1. The venue adapter is `core_brain/venue.py`. `core_brain/polymarket_client.py`
+   does not exist.
+2. Shadow stores are explicit, separate database files (never the production
+   registry) — not "ephemeral" stores.
+3. A resting post-only bid placed 15¢ below the best bid can still fill if the
+   market moves. Fill probability is **not** 0.0% — it is small but non-zero,
+   which is why the check carries a $2 exposure ceiling and undo steps.
+4. `cancel-all` / `cancel-market` cancel unrelated orders. The check must
+   cancel by exact order ID; `cancel-market` is only a fallback when no ID was
+   returned (pre-flight already proved zero other account orders on the market).
+5. `balance` shows the CLOB collateral balance + allowance only. It does not
+   prove on-chain conditional-token approval (`is_approved_for_all`), which
+   selling/merging need.
 
-Measured with `python -m scripts.reevaluate_tournament_run --run-dir <run dir>` for shape
-and `core_brain.statistics_report.write_statistics_report(db, run_id, "shadow")` for the
-verdict. All ten arms are in `tasks/plan.md`; the three the issue names:
+## 4. Champion profile (authoritative definition)
 
-| Metric | `balanced-mid` claimed | `balanced-mid` measured | `loose-baseline` claimed | `loose-baseline` measured | `prudent-hybrid` claimed | `prudent-hybrid` measured |
-|---|---|---|---|---|---|---|
-| Closes | 121 | **166** | 131 | **171** | 125 | **170** |
-| Realized PnL | +$28.37 | **+$23.46** | +$27.50 | **+$23.97** | +$24.24 | **+$19.66** |
-| Sharpe proxy | 2.72 | **1.66** | 2.22 | **1.59** | 2.54 | **1.49** |
-| Profit factor | 2.85 | **1.80** | 2.19 | **1.74** | 2.31 | **1.60** |
-| Max drawdown | $3.37 | **$9.64** | $7.51 | **$7.51** | $4.95 | **$11.29** |
-| Merge rate | 65.3% | **59.6%** | — | 57.9% | — | 57.6% |
-| MC P5 (100 trades) | +$11.56 | **+$0.81** | — | +$1.54 | — | −$0.35 |
-| EV / trade | +$0.235 | **+$0.141** | — | +$0.140 | — | +$0.116 |
-| Progress | 935.6 min (65%) | **1308.5 min** | — | — | — | — |
+The champion is the `prudent` tournament preset plus five per-field
+environment overrides (loader order: preset first, per-field env wins):
 
-Two consequences the audit must state plainly:
+```bash
+BOT_QUOTE_TOURNAMENT_PRESET=prudent
+BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06
+BOT_RISK_STOP_MODE=ABSOLUTE_DROP
+BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045
+BOT_ORDER_GATE_QUEUE_CLEAR_ON=1
+BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3
+```
 
-1. **`balanced-mid` is not the top-PnL arm.** Measured PnL ranks `loose-baseline` first
-   (+$23.97) with `balanced-mid` second (+$23.46) — a $0.51 gap that this sample cannot
-   resolve. The issue's "+$28.37, #1 rank" does not reproduce.
-2. **`balanced-mid` is not the risk-shape leader.** By the pre-registered risk-shape
-   gates (Sharpe ≥ 2.70, profit factor ≥ 2.50, max drawdown < $4.00) it fails all three,
-   and it fails the half-split: first half mean +$0.1993/trade (Sharpe 4.46), second half
-   **+$0.0923** (Sharpe 0.86). The only arm clearing all three gates in both halves is
-   `queue-clear-5m`.
+Semantics (verified in `core_brain/config.py`):
 
-## Locked verdict rule
+- `prudent` = dynamic offset ON, multiplier 0.60, clamp 2¢–4¢. It carries **no**
+  deadband, no stop, no queue gate of its own — those come from the overrides.
+- The `_cents` fields hold **dollar** values (no division by 100).
+- The stop drop is inert unless stop mode is `ABSOLUTE_DROP` (shipped default
+  mode is `NONE`).
+- The queue gate only records unless `BOT_ORDER_GATE_QUEUE_CLEAR_ON=1`.
+- The 6¢ requote deadband and the 6¢ offset ceiling (tournament arm) are
+  different settings — do not conflate them.
+- Retired settings nobody may use: `stop_loss_trigger_usd_cents`,
+  `single_buy_grace_sec`, the old `usd`/`pct` stop settings, `HUNTER_*` aliases.
 
-Not invented for this audit: taken from the repository's own gate machinery, so it cannot
-be shaped to fit these figures.
+## 5. Acceptance criteria
 
-1. **Verdict** (`statistical_validation_run/artifacts.py:257 resolve_verdict`, driven by
-   `core_brain/statistics_report.py:208 write_statistics_report`): `INCONCLUSIVE` when the
-   sample is underpowered (closes < `bot_eval_stat_gate_target_closes`, `core_brain/config.py:268`
-   = 60) or no confidence interval can be computed; `GO` when the primary gate passes
-   strictly above `bot_eval_stat_gate_threshold_pct` (`core_brain/config.py:266` = 1.0);
-   otherwise `NO-GO`. The 60-close threshold is a **precondition for a verdict**, never
-   the GO itself. `#471` names the same gate, inclusive of every close method.
-2. **Candidate ranking**, only if no arm earns a GO: cleared risk-shape gates first, then
-   Sharpe, then realized PnL. Underpowered samples are judged on risk shape, not nominal
-   PnL (`docs/runs/2026-10-26-843-balanced-queue5-pair.md` §1b).
-3. **Authorization** is the operator's, not the audit's. The audit records a
-   recommendation; it never runs an opening command.
+- [ ] `docs/live-lane-audit.md` exists: every live/shadow divergence split into
+      "planned simulation choice" vs "unexplained (follow-up ticket)".
+- [ ] `tests/test_champion_lane_parity.py` proves `config.load()` (live) and
+      `shadow_run.shadow_cfg()` (shadow) load identical champion settings.
+- [ ] `status` and `balance` exit non-zero on any failed venue read; exit 0
+      means the venue was reached. Normal stdout unchanged; `decide` untouched.
+- [ ] New `reach-probe` command: one small post-only GTC buy ≥15¢ below best
+      bid, hold 2–4s (default 3s), cancel by exact ID, PASS only on
+      accepted + ID in `canceled` + matched size 0 + absent from open orders +
+      accept-to-receipt ≤ 5s. Fixed $2 exposure ceiling, not raisable from CLI.
+- [ ] `reach-probe --no-live` prints the full plan + worst-case exposure and
+      never signs.
+- [ ] JSON evidence file under the `runtime/` directory (git-ignored): no keys,
+      credentials, signatures, or raw responses; shortened wallet address.
+- [ ] `docs/agents/safety.md` lists `reach-probe --live` as an
+      opening-exposure command (session approval + undo steps).
+- [ ] Regression suites green:
+      `tests/test_shadow_guard.py tests/test_order_manager.py tests/test_order_manager_decide.py`
+      plus the new parity file and the suites listed in `tasks/plan.md`.
 
-## Acceptance criteria
+## 6. Open question (resolved into the plan)
 
-The issue's criteria, re-grounded:
-
-- [ ] The audit documents every one of the ten arms of #799 — closes, merges, rescue exits,
-      merge rate, PnL, Sharpe proxy, profit factor, max drawdown, VaR95, MC P5, and
-      required N for a $0.02 effect — each figure produced by a recorded command.
-- [ ] The audit records the measured verdict for each arm from the repo's own gate, and
-      states why the 60-close threshold the issue leans on is not the GO.
-- [ ] The discrepancy between the issue's figures and the stores is tabulated, with the
-      interim-snapshot explanation, and the two named false premises corrected.
-- [ ] The deployment payload is documented in two layers: the **measured** arm payload, and
-      any **untested** synthesis, each labelled as such. No payload is presented as approved.
-- [ ] Reopen conditions are listed: exactly what measurement would move the verdict to GO.
-- [ ] No live-capital command is run and no risk-engine, cockpit, or arms-JSON file changes
-      (`tests/test_tournament_cockpit_arms.py` pins nine champion env values across three
-      places and must pass unchanged).
-- [ ] Targeted suites pass: the new tool's tests plus
-      `tests/test_tournament_cockpit_arms.py` and `tests/test_tournament_cockpit_funnel.py`.
-
-## Edge cases the audit must handle
-
-- A store whose `σ` is 0 (no closes) — `required_sample_size` returns `None`; the table must
-  print "not computable", never a fabricated N.
-- `shadow_settlement` rows: the cockpit's analyzer counts them as trades; plain `settlement`
-  rows it does not. The audit states which convention each table uses.
-- A run folder that does not exist in a fresh checkout (gitignored): the audit says the
-  figures are not re-derivable in CI, rather than implying a green reproducible test.
-- The arms stopped 131 minutes short of the plan: coverage is reported, not rounded up to 24 h.
-
-## Out of scope
-
-- Running `quote`, `complete`, the Trader loop, or the dashboard START button.
-- Changing the cockpit's blueprint pane, its `READY FOR LIVE` labels, or the arm notes in
-  `configs/tournaments/i799-tournament-test_arms.json`.
-- Changing any risk-engine formula or cap in `core_brain/config.py`.
-- Committing the run stores (gitignored) or a 771 MB artifact tree.
+- *Test market for the reachability probe?* → Operator may pass a condition ID;
+  without one the probe auto-selects: graduated markets passing pre-flight,
+  ranked by dollar value of the top three fresh bid levels from a book read at
+  check time. File order in `runtime/markets.json` is NOT liquidity order.

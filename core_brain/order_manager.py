@@ -306,13 +306,17 @@ def status(registry=None) -> None:
     print(f"signature type {os.environ.get('POLY_SIG_TYPE', '3')}")
     try:
         orders = c.get_open_orders() or []
+        notional = open_notional(c)
+        if notional is None:
+            raise ValueError("open_notional returned None")
         print(f"open orders    {len(orders)} "
-              f"(${open_notional(c):.2f} notional)")
+              f"(${notional:.2f} notional)")
         for o in orders[:10]:
             print(f"  {str(o.get('side')):4} {o.get('original_size')} @ "
                   f"{o.get('price')}  id={str(o.get('id') or o.get('order_hash'))[:16]}")
     except Exception as e:
         print(f"open orders    ERROR {type(e).__name__}: {e}")
+        raise SystemExit(1)
     print("\nConfirm the address above is the account holding your USDC "
           "BEFORE sending anything.")
     _print_requalification_section(registry)
@@ -386,7 +390,7 @@ def balance(funder: str | None) -> None:
                                    signature_type=sig_type))
     except Exception as e:
         print(f"           ERROR {type(e).__name__}: {e}")
-        return
+        raise SystemExit(1)
     print(f"raw        {r}")
 
     # USDC on Polygon is 6dp and the API returns integer base units as strings.
@@ -3617,6 +3621,14 @@ def main() -> None:
     p.add_argument("--live", action=argparse.BooleanOptionalAction,
                default=argparse.SUPPRESS,
                help="send to venue (default: True). --no-live works before or after the subcommand.")
+    rp = sub.add_parser("reach-probe", help="Controlled venue reachability check: one small post-only GTC buy, held briefly, cancelled by exact ID.")
+    rp.add_argument("condition_id", nargs="?", default=None, help="Condition ID, slug, or Polymarket URL to probe. Default: deepest fresh-bid graduated market.")
+    rp.add_argument("--discount", type=float, default=0.15, help="Discount below best bid (default: 0.15)")
+    rp.add_argument("--hold-sec", type=float, default=3, help="Seconds to rest before cancel, 2-4 (default: 3)")
+    rp.add_argument("--db", default=None, help="Custom database path (default: data/orders.db)")
+    rp.add_argument("--live", action=argparse.BooleanOptionalAction,
+                default=argparse.SUPPRESS,
+                help="send to venue (default: True). --no-live works before or after the subcommand.")
     pl = sub.add_parser("poll", help="Poll CLOB and reconcile orders and fills.")
     pl.add_argument("--interval", type=float, default=0.5, help="Cadence in seconds (default: 0.5)")
     pl.add_argument("--once", action="store_true", help="Reconcile once and exit")
@@ -3748,6 +3760,10 @@ def main() -> None:
             max_fills=a.max_fills,
             live=is_live,
         )
+    elif a.cmd == "reach-probe":
+        from core_brain.reach_probe import reach_probe_cmd
+        reach_probe_cmd(a.condition_id, discount=a.discount, hold_sec=a.hold_sec,
+                        live=is_live, db_path=a.db)
     elif a.cmd == "poll":
         poll(interval=a.interval, once=a.once, db_path=a.db,
              sweep_every=a.sweep_every, sweep_interval=a.sweep_interval,

@@ -1210,6 +1210,603 @@ def test_balance_cmd_queries_funder_and_collateral(capsys):
     assert "$100.00" in out
 
 
+def test_status_exits_nonzero_when_open_orders_read_fails(capsys, tmp_path):
+    """#840: an unreadable venue book is a loud failure, not a blank report."""
+    from core_brain.order_registry import OrderRegistry
+    mock_client = MagicMock()
+    mock_client.get_address.return_value = "0x1111222233334444555566667777888899990000"
+    mock_client.get_open_orders.side_effect = RuntimeError("venue down")
+
+    with patch.object(le, "client", return_value=mock_client):
+        with pytest.raises(SystemExit) as exc:
+            le.status(registry=OrderRegistry(db_path=tmp_path / "status_fail.db"))
+    assert exc.value.code == 1
+    assert "open orders    ERROR" in capsys.readouterr().out
+
+
+def test_status_exits_nonzero_when_open_notional_is_none(capsys, tmp_path):
+    """#840: a None notional (failed second read) fails loudly too."""
+    from core_brain.order_registry import OrderRegistry
+    mock_client = MagicMock()
+    mock_client.get_address.return_value = "0x1111222233334444555566667777888899990000"
+    mock_client.get_open_orders.return_value = []
+
+    with patch.object(le, "client", return_value=mock_client), \
+         patch.object(le, "open_notional", return_value=None):
+        with pytest.raises(SystemExit) as exc:
+            le.status(registry=OrderRegistry(db_path=tmp_path / "status_none.db"))
+    assert exc.value.code == 1
+    assert "open orders    ERROR" in capsys.readouterr().out
+
+
+def test_balance_exits_nonzero_when_venue_read_fails(capsys):
+    """#840: an unreadable balance fails loudly; exit 0 means reached."""
+    mock_client = MagicMock()
+    mock_client.get_balance_allowance.side_effect = RuntimeError("venue down")
+
+    with patch.object(le, "client", return_value=mock_client):
+        with pytest.raises(SystemExit) as exc:
+            le.balance("0xfunder_addr")
+    assert exc.value.code == 1
+    assert "ERROR" in capsys.readouterr().out
+
+
+def test_balance_zero_is_a_warning_not_a_failure(capsys):
+    """#840: $0.00 is an operator warning, not a venue read failure."""
+    mock_client = MagicMock()
+    mock_client.get_balance_allowance.return_value = {
+        "balance": "0",
+        "allowance": "0",
+    }
+
+    with patch.object(le, "client", return_value=mock_client):
+        le.balance("0xfunder_addr")  # must not raise
+
+    out = capsys.readouterr().out
+    assert "$0.00 USDC" in out
+    assert "Zero." in out
+
+
+# --- reach-probe pre-flight + dry run (#840 Task 3) -------------------------
+
+def _probe_market(cid="0xprobe", up="tok-up-840", down="tok-dn-840",
+                  tick=0.01, venue_min=None):
+    import time as _time
+    from core_brain.markets import LiveMarket
+    return LiveMarket(
+        condition_id=cid, market_slug="probe-mkt", up_token=up,
+        down_token=down, start_ts=_time.time() - 1.0,
+        end_ts=_time.time() + 86400.0, tick_size=tick, neg_risk=False,
+        venue_min_size=venue_min)
+
+
+def _probe_books(up_bid=0.50, down_bid=0.40, up_depth=None, down_depth=None):
+    def _levels(bid, depth):
+        depth = depth if depth is not None else [(bid, 100.0), (bid - 0.01, 50.0), (bid - 0.02, 25.0)]
+        return {"bids": dict(depth), "best_bid": bid, "best_ask": bid + 0.02}
+    books = {"tok-up-840": _levels(up_bid, up_depth), "tok-dn-840": _levels(down_bid, down_depth)}
+    return lambda token: dict(books[str(token)])
+
+
+def _probe_client(open_orders=None):
+    mock_client = MagicMock()
+    mock_client.get_open_orders.return_value = open_orders or []
+    mock_client.post_orders.side_effect = AssertionError("dry run must never post")
+    mock_client.cancel_order.side_effect = AssertionError("dry run must never cancel")
+    return mock_client
+
+
+def _probe_kwargs(**kw):
+    from core_brain.config import load as _load
+    args = dict(condition_id="0xprobe", discount=0.15, hold_sec=3.0,
+                live=False, client_fn=lambda: _probe_client(),
+                fetch_pinned_fn=lambda cid: _probe_market(),
+                book_fn=_probe_books(),
+                open_notional_fn=lambda c: 0.0,
+                order_caps_fn=lambda: (25.0, 90.0))
+    args.update(kw)
+    return args
+
+
+def test_reach_probe_dry_run_never_signs(capsys):
+    """#840: --no-live prints the plan and returns before signing."""
+    from core_brain.reach_probe import reach_probe_cmd
+    client = _probe_client()
+    kwargs = _probe_kwargs(client_fn=lambda: client)
+    result = reach_probe_cmd(**kwargs)
+
+    assert result["result"] == "DRY_RUN"
+    assert client.post_orders.call_count == 0
+    assert client.cancel_order.call_count == 0
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out
+    assert "$1.75" in out  # 5sh @ 0.35 worst case
+
+
+def test_reach_probe_refuses_when_market_has_other_account_orders(capsys):
+    """#840: resting exposure on the market refuses the check."""
+    from core_brain.reach_probe import reach_probe_cmd
+    client = _probe_client(open_orders=[{"asset_id": "tok-up-840", "price": "0.5"}])
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(**_probe_kwargs(client_fn=lambda: client))
+    assert exc.value.code == 1
+    assert "REACH-PROBE REFUSED" in capsys.readouterr().out
+
+
+def test_reach_probe_refuses_when_open_orders_unreadable(capsys):
+    """#840: an unreadable order book state refuses before signing."""
+    from core_brain.reach_probe import reach_probe_cmd
+    client = MagicMock()
+    client.get_open_orders.side_effect = RuntimeError("venue down")
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(**_probe_kwargs(client_fn=lambda: client))
+    assert exc.value.code == 1
+    assert "REACH-PROBE REFUSED" in capsys.readouterr().out
+
+
+def test_reach_probe_refuses_price_below_one_tick(capsys):
+    """#840: best bid 0.10 minus 0.15 discount cannot rest on a 1c grid."""
+    from core_brain.reach_probe import reach_probe_cmd
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(**_probe_kwargs(book_fn=_probe_books(up_bid=0.10, down_bid=0.09)))
+    assert exc.value.code == 1
+    assert "below one tick" in capsys.readouterr().out
+
+
+def test_reach_probe_refuses_exposure_above_ceiling(capsys):
+    """#840: 5sh @ 0.50 = $2.50 worst case exceeds the fixed $2.00 ceiling."""
+    from core_brain.reach_probe import reach_probe_cmd
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(**_probe_kwargs(
+            book_fn=_probe_books(up_bid=0.65, down_bid=0.60),
+            fetch_pinned_fn=lambda _cid: _probe_market(venue_min=5.0)))
+    assert exc.value.code == 1
+    assert "$2.00" in capsys.readouterr().out
+
+def test_reach_probe_streams_events(capsys):
+    """Probe streams events: Peeking market, order details with shares, etc."""
+    from core_brain.reach_probe import reach_probe_cmd
+    stream_lines = []
+    kwargs = _probe_kwargs(
+        stream_fn=lambda msg: stream_lines.append(msg)
+    )
+    result = reach_probe_cmd(**kwargs)
+    assert result["result"] == "DRY_RUN"
+    assert any("Peeking market" in line for line in stream_lines)
+    assert any("Order details" in line and "shares" in line for line in stream_lines)
+    assert any("DRY RUN" in line for line in stream_lines)
+
+
+
+def test_reach_probe_refuses_closed_or_not_accepting_market(capsys):
+    """#840: a pinned market that will not take orders refuses the check."""
+    from core_brain.reach_probe import reach_probe_cmd
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(**_probe_kwargs(fetch_pinned_fn=lambda cid: None))
+    assert exc.value.code == 1
+    assert "no tradeable market" in capsys.readouterr().out
+
+
+def test_reach_probe_size_meets_minimum_size_and_notional(capsys):
+    """#840: size honors the venue floor and the $1 notional, capped at $2."""
+    from core_brain.reach_probe import reach_probe_cmd
+    # best bid 0.30 - 0.15 = 0.15; ceil(1/0.15) = 7; venue floor 10 wins.
+    result = reach_probe_cmd(**_probe_kwargs(
+        book_fn=_probe_books(up_bid=0.30, down_bid=0.20),
+        fetch_pinned_fn=lambda cid: _probe_market(venue_min=10.0)))
+    assert result["plan"]["size"] == pytest.approx(10.0)
+    assert result["plan"]["worst_case_usd"] == pytest.approx(1.50)
+    capsys.readouterr()
+    # Unknown venue minimum falls back to the local 5-share default.
+    result2 = reach_probe_cmd(**_probe_kwargs(
+        book_fn=_probe_books(up_bid=0.30, down_bid=0.20)))
+    assert result2["plan"]["size"] == pytest.approx(7.0)
+    capsys.readouterr()
+
+
+def test_reach_probe_picks_deepest_bid_market_without_id(capsys):
+    """#840: auto-select ranks graduated markets by fresh top-3 bid depth."""
+    from types import SimpleNamespace
+    from core_brain.reach_probe import reach_probe_cmd
+    markets = {"0xshallow": _probe_market(cid="0xshallow"),
+               "0xdeep": _probe_market(cid="0xdeep")}
+    # Per-market books: shallow $5 resting, deep $500 resting.
+    per_market_books = {
+        "0xshallow": {"tok-up-840": {"bids": {0.50: 10.0}, "best_bid": 0.50, "best_ask": 0.52},
+                        "tok-dn-840": {"bids": {0.40: 10.0}, "best_bid": 0.40, "best_ask": 0.42}},
+        "0xdeep": {"tok-up-840": {"bids": {0.50: 1000.0}, "best_bid": 0.50, "best_ask": 0.52},
+                     "tok-dn-840": {"bids": {0.40: 1000.0}, "best_bid": 0.40, "best_ask": 0.42}},
+    }
+    fetch_history = []
+
+    def _fetch_hist(cid):
+        fetch_history.append(cid)
+        return markets[cid]
+
+    def _book_by_market(token):
+        # The resolver pre-flights markets in graduated order; attribute each
+        # book read to the market whose pinned row was fetched last.
+        cid = fetch_history[-1]
+        return dict(per_market_books[cid][str(token)])
+
+    gms = [SimpleNamespace(cid="0xshallow"), SimpleNamespace(cid="0xdeep")]
+    result = reach_probe_cmd(
+        condition_id=None, live=False, client_fn=lambda: _probe_client(),
+        fetch_pinned_fn=_fetch_hist,
+        graduated_markets_fn=lambda: gms,
+        book_fn=_book_by_market,
+        open_notional_fn=lambda c: 0.0,
+        order_caps_fn=lambda: (25.0, 90.0))
+    assert result["plan"]["condition_id"] == "0xdeep"
+    capsys.readouterr()
+
+def test_resolve_market_identifier_slug_and_urls(tmp_path, monkeypatch):
+    """Probe accepts condition ID, slug, esports path, or full Polymarket URL."""
+    from core_brain.reach_probe import resolve_market_identifier, ProbeRefused
+
+    # 1. Direct hex condition ID
+    cid_hex = "0x" + "a" * 40
+    cid, slug = resolve_market_identifier(cid_hex)
+    assert cid == cid_hex
+
+    # 2. Match via markets.json
+    fake_markets = [
+        {"cid": "0xmatch1234567890123456789012345678901234",
+         "slug": "cs2-ts7-mouz-2026-10-27",
+         "event_slug": "cs2-ts7-mouz-2026-10-27"}
+    ]
+    markets_file = tmp_path / "markets.json"
+    markets_file.write_text(json.dumps(fake_markets), encoding="utf-8")
+    monkeypatch.setattr("core_brain.reach_probe.runtime_file", lambda name: markets_file)
+
+    # Bare slug
+    c1, s1 = resolve_market_identifier("cs2-ts7-mouz-2026-10-27")
+    assert c1 == "0xmatch1234567890123456789012345678901234"
+    assert s1 == "cs2-ts7-mouz-2026-10-27"
+
+    # Esports path
+    c2, s2 = resolve_market_identifier("esports/cs2/pgl-masters/cs2-ts7-mouz-2026-10-27")
+    assert c2 == "0xmatch1234567890123456789012345678901234"
+    assert s2 == "cs2-ts7-mouz-2026-10-27"
+
+    # Full Polymarket URL
+    c3, s3 = resolve_market_identifier("https://polymarket.com/event/cs2-ts7-mouz-2026-10-27")
+    assert c3 == "0xmatch1234567890123456789012345678901234"
+    assert s3 == "cs2-ts7-mouz-2026-10-27"
+
+    # Unresolvable raises ProbeRefused
+    with pytest.raises(ProbeRefused):
+        resolve_market_identifier("unknown-slug-not-in-feed")
+
+
+def test_print_plan_prints_slug_name_instead_of_address(capsys):
+    """Output shows the readable market slug on the market line when available."""
+    from core_brain.reach_probe import print_plan, ProbePlan
+
+    # Plan with slug
+    plan_with_slug = ProbePlan(
+        condition_id="0xdda9d2ef99f17e2c4b16dc686088f8309d624a54716113c17ea4e5cfd23fda34",
+        token_id="tok-up-840", side="UP", price=0.35, size=5.0, tick_size=0.01,
+        venue_min_size=None, worst_case_usd=1.75, best_bid=0.50, depth_usd=60.0,
+        discount=0.15, hold_sec=3.0, market_slug="cs2-ts7-mouz-2026-10-27"
+    )
+    print_plan(plan_with_slug, live=False)
+    out = capsys.readouterr().out
+    assert "market   cs2-ts7-mouz-2026-10-27  token UP tok-up-840" in out
+    assert "0xdda9" not in out
+
+    # Plan without slug falls back to condition_id[:16]
+    plan_no_slug = ProbePlan(
+        condition_id="0xdda9d2ef99f17e2c4b16dc686088f8309d624a54716113c17ea4e5cfd23fda34",
+        token_id="tok-up-840", side="UP", price=0.35, size=5.0, tick_size=0.01,
+        venue_min_size=None, worst_case_usd=1.75, best_bid=0.50, depth_usd=60.0,
+        discount=0.15, hold_sec=3.0, market_slug=""
+    )
+    print_plan(plan_no_slug, live=False)
+    out_fallback = capsys.readouterr().out
+    assert "market   0xdda9d2ef99f17e...  token UP tok-up-840" in out_fallback
+
+
+def test_reach_probe_resolves_slug_and_prints_slug_in_plan(capsys, monkeypatch, tmp_path):
+    """Running reach-probe with a slug dry-runs cleanly and prints the slug."""
+    from core_brain.reach_probe import reach_probe_cmd
+
+    fake_markets = [
+        {"cid": "0xmatch1234567890123456789012345678901234",
+         "slug": "cs2-ts7-mouz-2026-10-27",
+         "event_slug": "cs2-ts7-mouz-2026-10-27"}
+    ]
+    markets_file = tmp_path / "markets.json"
+    markets_file.write_text(json.dumps(fake_markets), encoding="utf-8")
+    monkeypatch.setattr("core_brain.reach_probe.runtime_file", lambda name: markets_file)
+
+    client = _probe_client()
+    kwargs = _probe_kwargs(
+        condition_id="esports/cs2/pgl-masters/cs2-ts7-mouz-2026-10-27",
+        client_fn=lambda: client,
+        fetch_pinned_fn=lambda cid: _probe_market(cid=cid),
+    )
+    result = reach_probe_cmd(**kwargs)
+    assert result["result"] == "DRY_RUN"
+    assert result["plan"]["condition_id"] == "0xmatch1234567890123456789012345678901234"
+    assert result["plan"]["market_slug"] == "cs2-ts7-mouz-2026-10-27"
+    out = capsys.readouterr().out
+    assert "market   cs2-ts7-mouz-2026-10-27" in out
+
+
+# --- reach-probe post / cancel / verify / evidence (#840 Task 4) ------------
+
+def _live_plan(**kw):
+    from core_brain.reach_probe import ProbePlan
+    args = dict(condition_id="0xprobe", token_id="tok-up-840", side="UP",
+                price=0.35, size=5.0, tick_size=0.01, venue_min_size=None,
+                worst_case_usd=1.75, best_bid=0.50, depth_usd=60.0,
+                discount=0.15, hold_sec=3.0)
+    args.update(kw)
+    return ProbePlan(**args)
+
+
+class _FakeVenue:
+    """A venue client double for the live leg: records, never signs."""
+
+    def __init__(self, *, post_resp=None, order_raw=None, cancel_resp=None,
+                 open_orders=None, post_hook=None):
+        self.calls = []
+        self.post_resp = post_resp if post_resp is not None else [{"orderID": "vid-1"}]
+        self.order_raw = order_raw if order_raw is not None else {
+            "asset_id": "tok-up-840", "status": "open", "size_matched": "0"}
+        self.cancel_resp = cancel_resp if cancel_resp is not None else {"canceled": ["vid-1"]}
+        self.open_orders = open_orders if open_orders is not None else []
+        self.post_hook = post_hook
+        self.batches = []
+
+    def get_address(self):
+        return "0xABCDEF1234567890abcdef1234567890ABCDEF12"
+
+    def get_open_orders(self):
+        self.calls.append("get_open_orders")
+        return list(self.open_orders)
+
+    def create_order(self, args):
+        self.calls.append("create_order")
+        return {"signed": True}
+
+    def post_orders(self, batch, post_only=True):
+        self.calls.append("post_orders")
+        self.batches.append((list(batch), post_only))
+        if self.post_hook is not None:
+            self.post_hook()
+        return self.post_resp
+
+    def get_order(self, order_id):
+        self.calls.append(("get_order", order_id))
+        if isinstance(self.order_raw, Exception):
+            raise self.order_raw
+        return dict(self.order_raw)
+
+    def cancel_order(self, payload):
+        self.calls.append(("cancel_order", payload.orderID))
+        return dict(self.cancel_resp)
+
+    def cancel_all(self):
+        raise AssertionError("probe must never call cancel_all")
+
+    def cancel_market_orders(self, params):
+        self.calls.append(("cancel_market_orders", params.market))
+        return {"canceled": []}
+
+
+class _Clock:
+    def __init__(self, vals):
+        self.vals = list(vals)
+        self.i = 0
+
+    def __call__(self):
+        v = self.vals[min(self.i, len(self.vals) - 1)]
+        self.i += 1
+        return v
+
+
+def _live_run(client, tmp_path, **kw):
+    import tempfile
+    from core_brain.config import MakerConfig
+    from core_brain.order_registry import OrderRegistry
+    from core_brain.reach_probe import execute_live
+    ev_dir = tmp_path / "ev"
+    args = dict(client=client, plan=_live_plan(), cfg=MakerConfig(),
+                registry=OrderRegistry(db_path=tmp_path / "probe_live.db"),
+                sleep_fn=lambda s: None, time_fn=_Clock([1000.0] * 20),
+                evidence_dir=ev_dir)
+    args.update(kw)
+    registry = args["registry"]
+    evidence = execute_live(**args)
+    return evidence, registry
+
+
+def test_reach_probe_writes_pending_row_before_post(tmp_path):
+    """#840: row-first -- the pending row exists before the post is sent."""
+    from core_brain.order_registry import OrderRegistry
+    seen = {}
+    registry = OrderRegistry(db_path=tmp_path / "probe_row.db")
+    client = _FakeVenue()
+
+    def _hook():
+        rows = [r for r in registry.get_active_orders()
+                if r.status == "pending" and r.order_id is None]
+        seen["pending_before_post"] = len(rows) == 1
+
+    client.post_hook = _hook
+    from core_brain.config import MakerConfig
+    from core_brain.reach_probe import execute_live
+    evidence = execute_live(
+        client, _live_plan(), cfg=MakerConfig(), registry=registry,
+        sleep_fn=lambda s: None, time_fn=_Clock([1000.0] * 20),
+        evidence_dir=tmp_path / "ev")
+    assert seen.get("pending_before_post") is True
+    assert evidence["result"] == "PASS"
+    assert evidence["order_id"] == "vid-1"
+
+
+def test_reach_probe_posts_exactly_one_post_only_gtc_order(tmp_path):
+    """#840: one GTC post-only buy, never a sweeping order."""
+    from py_clob_client_v2.clob_types import OrderType
+    client = _FakeVenue()
+    evidence, _ = _live_run(client, tmp_path)
+    assert evidence["result"] == "PASS"
+    assert len(client.batches) == 1
+    batch, post_only = client.batches[0]
+    assert len(batch) == 1
+    assert post_only is True
+    assert batch[0].orderType == OrderType.GTC
+
+
+def test_reach_probe_cancels_by_exact_id_and_never_calls_cancel_all(tmp_path, capsys):
+    """#840: cancel hits the exact ID; broad cancels stay untouched."""
+    from core_brain.config import MakerConfig
+    from core_brain.order_registry import OrderRegistry
+    from core_brain.reach_probe import reach_probe_cmd
+    client = _FakeVenue()
+    evidence = reach_probe_cmd(
+        condition_id="0xprobe", live=True, db_path=tmp_path / "probe_cmd.db",
+        client_fn=lambda: client,
+        fetch_pinned_fn=lambda cid: _probe_market(),
+        book_fn=_probe_books(),
+        open_notional_fn=lambda c: 0.0,
+        order_caps_fn=lambda: (25.0, 90.0),
+        sleep_fn=lambda s: None, time_fn=_Clock([1000.0] * 20),
+        evidence_dir=tmp_path / "ev")
+    assert evidence["result"] == "PASS"
+    assert ("cancel_order", "vid-1") in client.calls
+    assert "cancel_all" not in client.calls
+    capsys.readouterr()
+
+
+def test_reach_probe_pass_requires_id_in_canceled(tmp_path, capsys):
+    """#840: an empty cancel receipt is a failure with a non-zero exit."""
+    from core_brain.reach_probe import reach_probe_cmd
+    client = _FakeVenue(cancel_resp={"canceled": [], "not_canceled": []})
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(
+            condition_id="0xprobe", live=True, db_path=tmp_path / "probe_nocancel.db",
+            client_fn=lambda: client,
+            fetch_pinned_fn=lambda cid: _probe_market(),
+            book_fn=_probe_books(),
+            open_notional_fn=lambda c: 0.0,
+            order_caps_fn=lambda: (25.0, 90.0),
+            sleep_fn=lambda s: None, time_fn=_Clock([1000.0] * 20),
+            evidence_dir=tmp_path / "ev")
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "poll --once" in out
+
+
+def test_reach_probe_fails_when_id_in_not_canceled(tmp_path):
+    """#840: an explicit not-canceled verdict fails with its reason."""
+    client = _FakeVenue(cancel_resp={"canceled": [], "not_canceled": ["vid-1"]})
+    evidence, _ = _live_run(client, tmp_path)
+    assert evidence["result"] == "FAIL_not_canceled"
+    assert evidence["not_canceled"] == ["vid-1"]
+
+
+def test_reach_probe_fails_with_undo_text_when_matched_size_positive(tmp_path, capsys):
+    """#840: a partial fill fails and prints the exit + reconcile path."""
+    from core_brain.reach_probe import reach_probe_cmd
+    raw = {"asset_id": "tok-up-840", "status": "open", "size_matched": "3"}
+    client = _FakeVenue(order_raw=raw)
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(
+            condition_id="0xprobe", live=True, db_path=tmp_path / "probe_fill.db",
+            client_fn=lambda: client,
+            fetch_pinned_fn=lambda cid: _probe_market(),
+            book_fn=_probe_books(),
+            open_notional_fn=lambda c: 0.0,
+            order_caps_fn=lambda: (25.0, 90.0),
+            sleep_fn=lambda s: None, time_fn=_Clock([1000.0] * 20),
+            evidence_dir=tmp_path / "ev")
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "exit" in out
+    assert "poll --once" in out
+
+
+def test_reach_probe_unreadable_matched_size_is_unverified(tmp_path):
+    """#840: no matched-size field is `unverified`, never zero."""
+    raw = {"asset_id": "tok-up-840", "status": "open"}
+    client = _FakeVenue(order_raw=raw)
+    evidence, _ = _live_run(client, tmp_path)
+    assert evidence["result"] == "unverified"
+    assert evidence["matched_size"] is None
+
+
+def test_reach_probe_fails_when_cancel_takes_longer_than_five_seconds(tmp_path):
+    """#840: accept-to-receipt over 5s fails even with matched 0."""
+    client = _FakeVenue()
+    evidence, _ = _live_run(
+        client, tmp_path, time_fn=_Clock([1000.0, 1000.0, 1000.0, 1006.5, 1006.5, 1006.5]))
+    assert evidence["result"] == "FAIL_slow_cancel"
+    assert evidence["matched_size"] == pytest.approx(0.0)
+    assert evidence["accept_to_receipt_sec"] == pytest.approx(6.5)
+
+
+def test_reach_probe_no_id_leaves_row_pending_and_uses_market_fallback(tmp_path):
+    """#840: no venue ID keeps the row pending and uses the guarded fallback."""
+    client = _FakeVenue(post_resp=[{}])
+    evidence, registry = _live_run(client, tmp_path)
+    assert evidence["result"] == "uncertain"
+    assert evidence["order_id"] is None
+    assert any(c[0] == "cancel_market_orders" for c in client.calls
+               if isinstance(c, tuple))
+    row = registry.get_order(evidence["local_id"])
+    assert row is not None
+    assert row.status == "pending"
+    assert row.order_id is None
+
+
+def test_reach_probe_sign_error_cancels_row_and_returns_failure(tmp_path):
+    """Sign failure catches exception, cancels local row, and writes evidence."""
+    client = _FakeVenue()
+    def _fail_create(args):
+        raise RuntimeError("simulated sign failure")
+    client.create_order = _fail_create
+    evidence, registry = _live_run(client, tmp_path)
+    assert evidence["result"] == "FAIL_sign_error"
+    assert evidence["sign_error"] == "RuntimeError"
+    row = registry.get_order(evidence["local_id"])
+    assert row is not None
+    assert row.status == "cancelled"
+
+
+def test_reach_probe_still_resting_does_not_mark_row_cancelled(tmp_path):
+    """When order is still resting on venue, row must NOT be marked cancelled."""
+    client = _FakeVenue(open_orders=[{"id": "vid-1"}])
+    evidence, registry = _live_run(client, tmp_path)
+    assert evidence["result"] == "FAIL_still_resting"
+    row = registry.get_order(evidence["local_id"])
+    assert row is not None
+    assert row.status == "open"
+    assert row.status != "cancelled"
+
+
+def test_reach_probe_evidence_file_has_no_secret_fields(tmp_path):
+    """#840: the evidence JSON carries proof, never credentials."""
+    import json
+    client = _FakeVenue()
+    evidence, _ = _live_run(client, tmp_path)
+    assert evidence["result"] == "PASS"
+    path = tmp_path / "ev" / [p for p in __import__("os").listdir(tmp_path / "ev")][0]
+    blob = json.loads(path.read_text())
+    for key in ("ts_accept", "ts_cancel_receipt", "condition_id", "token_id",
+                "price", "size", "tick_size", "venue_min_size",
+                "worst_case_usd", "order_id", "canceled", "not_canceled",
+                "status", "matched_size", "hold_sec",
+                "accept_to_receipt_sec", "result"):
+        assert key in blob, f"missing evidence field {key}"
+    lowered = json.dumps(blob).lower()
+    for banned in ("secret", "private", "signature", "passphrase",
+                   "api_key", "api-key", "mnemonic", "seed phrase"):
+        assert banned not in lowered, f"evidence leaks {banned!r}"
+
+
 def test_pairs_cmd_lists_registry_records(tmp_path, capsys):
     """pairs() outputs table of all registered pairs and held sizes."""
     from core_brain.order_registry import OrderRegistry, OrderRecord

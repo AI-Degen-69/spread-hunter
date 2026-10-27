@@ -63,6 +63,11 @@ class LiveMarket:
     end_ts: float    # unix seconds, market closes (the VENUE's date)
     tick_size: float
     neg_risk: bool
+    # Venue minimum order size from the CLOB `/markets` response
+    # (`minimum_order_size`). None when the response carries no parseable
+    # value -- callers fall back to the local share default, never to
+    # `rewards.min_size` (reward eligibility, not an order limit).
+    venue_min_size: float | None = None
 
     def t_remaining(self, now: Optional[float] = None) -> float:
         return self.end_ts - (now if now is not None else time.time())
@@ -265,6 +270,13 @@ def fetch_pinned_market(condition_id: str) -> Optional[LiveMarket]:
     if len(toks) != 2:
         return None
 
+    try:
+        venue_min_size = float(m.get("minimum_order_size"))
+        if not math.isfinite(venue_min_size) or venue_min_size <= 0:
+            venue_min_size = None
+    except (TypeError, ValueError):
+        venue_min_size = None
+
     end_iso = m.get("end_date_iso")
     end_ts = _iso_to_unix_end(end_iso) if end_iso else None
     if end_ts is None:
@@ -283,6 +295,7 @@ def fetch_pinned_market(condition_id: str) -> Optional[LiveMarket]:
         end_ts=end_ts,
         tick_size=float(m.get("minimum_tick_size") or 0.01),
         neg_risk=bool(m.get("neg_risk", False)),
+        venue_min_size=venue_min_size,
     )
 
 
