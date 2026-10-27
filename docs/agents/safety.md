@@ -24,6 +24,10 @@ Four things spend money:
 - `quote` — rests new bids.
 - `complete` — buys the missing side of a single buy. It removes risk, but it does so by
   spending, so it belongs here and not with the closing commands.
+- `reach-probe --live` — posts one small post-only GTC buy (worst case $2.00),
+  holds 2–4s, cancels by exact order ID. Operator approval in that session is
+  required, exactly like the commands above. Undo when the result is not PASS:
+  `cancel <id>` if still resting, `exit` for filled shares, then `poll --once`.
 - The Trader loop (`core_brain.trader_loop --live`).
 - The dashboard's **START** button, which calls `start_bot()` and launches the Trader. A
   click on the dashboard is a live order path exactly like a typed command.

@@ -7,6 +7,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from core_brain import markets
 from core_brain.markets import _iso_to_unix, _iso_to_unix_end
 
@@ -180,3 +182,43 @@ def test_iso_to_unix_treats_a_naive_timestamp_as_utc_on_a_non_utc_host():
 
     # Act / Assert
     assert json.loads(result.stdout) == NAIVE_UTC_EPOCH
+
+
+# --- venue minimum order size (#840) --------------------------------------
+
+def _pinned_payload(**kw):
+    payload = {
+        "tokens": [{"token_id": "111"}, {"token_id": "222"}],
+        "end_date_iso": MIDNIGHT_UTC,
+        "closed": False,
+        "accepting_orders": True,
+        "market_slug": "cs2-lgc-furia-2026-10-15",
+        "minimum_tick_size": 0.01,
+        "neg_risk": False,
+    }
+    payload.update(kw)
+    return payload
+
+
+def test_pinned_market_keeps_min_size_when_present(monkeypatch):
+    # Arrange -- the CLOB `/markets` response carries `minimum_order_size`.
+    monkeypatch.setattr(markets, "_SESSION", _FakeSession(_pinned_payload(minimum_order_size=5.0)))
+
+    # Act
+    lm = markets.fetch_pinned_market("0x" + "cd" * 32)
+
+    # Assert
+    assert lm is not None
+    assert lm.venue_min_size == pytest.approx(5.0)
+
+
+def test_pinned_market_min_size_is_none_when_missing(monkeypatch):
+    # Arrange -- no `minimum_order_size` key: unknown, not zero, not rewards.
+    monkeypatch.setattr(markets, "_SESSION", _FakeSession(_pinned_payload()))
+
+    # Act
+    lm = markets.fetch_pinned_market("0x" + "cd" * 32)
+
+    # Assert
+    assert lm is not None
+    assert lm.venue_min_size is None
