@@ -157,7 +157,7 @@ def test_live_state_group_items(dom: DOMNode):
 def test_source_group_items(dom: DOMNode):
     top_meta = dom.find_one(cls="top-meta")
     source_group = [c for c in top_meta.children if "top-group-source" in c.classes][0]
-    expected_ids = ["master-status-indicator", "db-mode-badge", "shadow-run-clock", "scan-engine-elsewhere"]
+    expected_ids = ["master-status-indicator", "db-mode-badge", "profile-badge", "shadow-run-clock", "scan-engine-elsewhere"]
     for eid in expected_ids:
         assert source_group.find_one(id=eid) is not None, f"Expected #{eid} in Data source group"
     assert source_group.find_one(id="exposure-bar") is None, "#exposure-bar must be removed from Data source group"
@@ -204,6 +204,7 @@ def test_header_status_pills_share_markup(dom: DOMNode):
         "master-status-indicator",
         "hud-services-pill",
         "db-mode-badge",
+        "profile-badge",
     ]
     for pid in pills:
         el = dom.find_one(id=pid)
@@ -485,3 +486,70 @@ def test_services_pill_reflects_worst_state_wins():
     assert down["subText"] == "fault detected"
 
 
+
+
+@requires_node
+def test_profile_badge_renders_states():
+    p = _harness("profile")
+    missing = p["missing"]
+    assert missing["className"] == "pill state-unknown mono"
+    assert "PROFILE" in missing["text"] and "unknown" in missing["text"]
+
+    running = p["runningShadow"]
+    assert running["className"] == "pill state-running mono"
+    assert "balanced+queue-clear-5m" in running["text"]
+    assert "Shadow" in running["title"] and "balanced" in running["title"]
+
+    ended = p["endedShadow"]
+    assert ended["className"] == "pill state-stopped mono"
+    assert "balanced+queue-clear-5m" in ended["text"]
+
+    live = p["runningLive"]
+    assert live["className"] == "pill state-running mono"
+    assert "Live" in live["title"] and "no named preset" in live["title"]
+
+    esc = p["escaped"]
+    assert "&lt;b&gt;" in esc["innerHTML"]
+    assert "<b>" not in esc["innerHTML"]
+
+    reset = p["reset"]
+    assert reset["className"] == "pill state-unknown mono"
+    assert "state-running" not in reset["className"]
+
+
+@requires_node
+def test_profile_picker_lists_view_and_load():
+    p = _harness("profilepicker")
+    html = p["html"]
+    assert 'class="pill-label"' in html and 'class="pill-value"' in html
+    assert 'data-profile-action="view"' in html
+    assert html.count('data-profile-action="load"') == 3
+    assert 'data-profile-action="clear"' in html
+    assert "STAGED" in html
+    assert "&lt;b&gt;Clear" in html
+    assert "<b>Clear" not in html
+    # The arm without a store offers Load but no View.
+    assert html.count('data-profile-action="view"') == 1
+    assert 'data-profile-action' not in p["empty"]
+    assert 'db-run-row' not in p["empty"]
+
+
+def test_profile_badge_is_a_button_with_a_dropdown(dom: DOMNode):
+    badge = dom.find_one(id="profile-badge")
+    assert badge is not None, "Expected #profile-badge in DOM"
+    assert badge.tag == "button", "#profile-badge must be a button (keyboard accessible)"
+    assert badge.get_attr("aria-haspopup") == "true"
+    assert badge.get_attr("aria-controls") == "profile-dropdown"
+    panel = dom.find_one(id="profile-dropdown")
+    assert panel is not None, "Expected #profile-dropdown in DOM"
+    assert "header-panel" in panel.classes
+    assert panel.parent is not None and panel.parent.tag == "header", \
+        "#profile-dropdown must be a direct child of <header>"
+
+
+@requires_node
+def test_start_button_title_names_the_staged_profile():
+    t = _harness("stagedtitle")
+    assert t["staged"] == "Start bot execution stack with staged profile balanced."
+    assert t["none"] == ""
+    assert t["nullPending"] == ""

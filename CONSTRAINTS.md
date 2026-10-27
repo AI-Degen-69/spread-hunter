@@ -1,85 +1,66 @@
-# CONSTRAINTS.md — Issue #840: Live execution lane audit and reachability verification
+# CONSTRAINTS.md — Issue #856: Active strategy profile badge
 
-Branch: `i840/live-execution-lane-audit` | Issue: #840
+## Scope & blast radius
 
-Locked during Station II planning. Stations III–V must hold every line below.
-Tighten only with operator approval; never loosen silently.
+- **Display-only.** The deliverable is a badge plus the engine records behind it.
+  No quoting, sizing, market-selection, or risk-formula change. No new external
+  dependency. No database schema change.
+- **Writable seams (only these):** `core_brain/config.py` (one pure helper, no
+  `MakerConfig` field change), `core_brain/shadow_run.py` (heartbeat `profile`
+  field + startup computation), `core_brain/trader_loop.py` (one writer
+  function + one call), `core_brain/runtime_paths.py` (one filename constant, no
+  `LEGACY_FILE_NAMES` entry), `dashboard/server.py` (shadow/live readers +
+  `active_profile` in `get_system_status()`), `dashboard/static/index.html` (one
+  pill), `dashboard/static/app.js` (one renderer + call), plus tests.
+- **Frozen:** `scripts/shadow_tournament.py`, `scripts/resume_tournament_arms.py`,
+  `scripts/tournament_cockpit_server.py`, `scripts/tournament_dashboard_hub.py`,
+  `configs/tournaments/*.json`, `core_brain/risk.py`, `core_brain/env_file.py`,
+  `get_parameters()` and the Strategy tab, `MakerConfig` fields,
+  `dashboard/static/styles.css` (only if the narrow-viewport test fails),
+  `.gitignore` (no rule to hide runtime files).
+- **Zero live capital.** The agent runs no opening command: no signer, no
+  `quote`, no `complete`, no Trader loop start, and never presses the
+  dashboard's START itself. (The shipped dashboard does have a START path —
+  the operator's control. IIIB adds view-only arm navigation plus
+  Load-to-stage: Load stops the stack via `stop_bot`, writes only
+  identity `{kind, name}` to `runtime/pending_profile.json`, and arms the
+  next operator START. START re-resolves the env from current options and
+  consumes the file.) `data/orders.db` is read-only as ever — never
+  rewritten or deleted.
 
-## Zero regressions
+## Data truthfulness
 
-- Focused suites for the touched modules must be green after the change:
-  `tests/test_shadow_guard.py tests/test_order_manager.py tests/test_order_manager_decide.py`
-  plus the new `tests/test_champion_lane_parity.py` and the regression files the
-  plan touches: `tests/test_production_registry_guard.py`,
-  `tests/test_config_single_source.py`, `tests/test_dynamic_offset.py`,
-  `tests/test_stop_loss_config.py`, `tests/test_queue_clear_gate.py`,
-  `tests/test_book_provider.py`, `tests/test_live_venue_order_caps.py`.
-  The full `python -m pytest -q` regression suite is the GitHub CI merge gate;
-  it is not re-run locally during review.
-- Every new behaviour needs a test that fails without it: all five parity
-  tests, all four status/balance exit-code tests, and every `reach-probe`
-  pre-flight/post/cancel/evidence test named in `tasks/plan.md`.
-- Existing `status`/`balance` stdout assertions stay valid unchanged — only the
-  exit code changes on the failure paths.
+- **Engine-record rule:** the badge shows only what an engine recorded about
+  itself. The dashboard never calls `load_cfg` or
+  `resolve_tournament_preset_name()` in its own process.
+- **Missing evidence stays missing:** no record → `active_profile: null` →
+  pill shows `unknown` in `state-unknown`. Never fall back to the dashboard env,
+  never render `baseline` for "no preset".
+- **Fail soft:** a `ValueError`/`OSError` in profile construction, heartbeat
+  parsing, or the live-file reader omits the field; it never crashes a
+  rehearsal, the trader, or the endpoint.
 
-## Scope fences (hard)
+## Verification bar
 
-- **Only these files change:** `docs/live-lane-audit.md` (new),
-  `tests/test_champion_lane_parity.py` (new), `core_brain/reach_probe.py`
-  (new), `core_brain/order_manager.py` (status/balance exit codes + `reach-probe`
-  subcommand only), `core_brain/markets.py` (`fetch_pinned_market` optional venue
-  minimum-size field only), `docs/agents/safety.md` (one `reach-probe --live`
-  entry), `tests/test_order_manager.py` (new cases only),
-  `docs/backlog/i840-live-reachability.md` (out-of-scope log).
-- **Must NOT be modified:** `data/orders.db` (read-only; never rewrite or
-  delete), `.env`, `.env.example`, `core_brain/trader_loop.py`,
-  `core_brain/config.py`, `core_brain/venue.py`, `core_brain/order_registry.py`,
-  `core_brain/order_execution.py`, `core_brain/single_buy_saver.py`,
-  `core_brain/shadow_run.py`, `core_brain/shadow_exec.py`,
-  `core_brain/shadow_guard.py`, `scripts/spread-hunter-menu.ps1`,
-  `scripts/shadow_tournament.py`, `configs/tournaments/*`, `dashboard/*`,
-  `tests/test_shadow_guard.py`, the legacy `probe` command and the
-  `order_manager.py` module docstring.
-- **Document, don't fix:** trader-loop rollback marking survivors cancelled on
-  failed cancel (and dropping venue IDs), lenient cancel-response handling,
-  missing order readback in `_submit_intents`, pair-ID handling differences,
-  menu launcher dropping `BOT_QUOTE_TOURNAMENT_PRESET` for live Trader, dropped
-  dynamic-offset telemetry in production `_market_specs`. File as follow-ups.
-- **Plan only in this station:** no venue orders, no live commands, no
-  `reach-probe --live` / `quote` / Trader START during planning or build
-  without operator session approval.
+- Every new behavior ships with a test that fails without it:
+  `tests/test_active_profile.py` (new), plus extensions to
+  `tests/test_shadow_run_stopwatch.py`, `tests/test_dashboard_server.py`,
+  `tests/test_ui_top_nav_consistency.py`, `tests/test_ui_top_nav_groups.py`,
+  and the `profile` scenario in `tests/js/live_state_harness.cjs`.
+- Targeted suites green after every change (agent-run, never operator-run):
+  `tests/test_active_profile.py`, `tests/test_shadow_run_stopwatch.py`,
+  `tests/test_per_run_shadow_heartbeat.py`, `tests/test_dashboard_server.py`,
+  `tests/test_ui_top_nav_consistency.py`, `tests/test_ui_top_nav_groups.py`,
+  `tests/test_live_state_language.py`, `tests/test_dashboard_narrow_viewport.py`.
+  Existing assertions (`test_system_status_endpoint`, the database identity
+  test, the three-group nav check) must pass untouched.
+- **"How to verify" is hands-on only** — the operator opens the dashboard,
+  hovers the badge, switches stores, reads a heartbeat file; it never asks the
+  operator to run pytest, git, or gh.
 
 ## Anti-cheat
 
-- Never skip, xfail, or delete a test to get green; never weaken an assertion,
-  and never edit output text just to satisfy a stdout assertion.
-- An unreadable matched size is `unverified`, never zero. A missing venue ID
-  after post leaves the row pending and reports `uncertain`, never PASS.
-- Never treat a cancel receipt alone as proof — PASS requires venue order
-  status + matched size 0 + absence from open orders.
-- Never log, print, or persist keys, API credentials, signatures, or full raw
-  venue responses (evidence file included).
-
-## Performance / architecture ceilings
-
-- Reachability check bounds (hard, not configurable upward): exactly one
-  post-only GTC order, discount default 0.15, hold 2–4s (default 3s),
-  worst-case exposure (size × price) ≤ $2.00 fixed ceiling, accept-to-cancel-
-  receipt ≤ 5s. No CLI flag may raise the $2 ceiling.
-- `status`/`balance` change is exit-code only — no new output format, no new
-  dependencies.
-- `fetch_pinned_market` addition is one optional field defaulting to `None` —
-  existing callers unchanged. Never use `rewards.min_size` as the venue minimum.
-- Reuse, don't copy: pending-row helper from `quote`, `venue_order_id` from
-  `core_brain/venue.py`, matched-size reader imported from
-  `core_brain/single_buy_saver.py` (do not duplicate it).
-
-## Safety (repo rules)
-
-- LIVE is the default: every `order_manager` subcommand reaches the venue.
-  `--no-live` is the dry run. Opening commands (`quote`, `complete`, Trader
-  loop, dashboard START, and now `reach-probe --live`) need operator approval
-  in that session — propose, don't run.
-- `data/*.db` and `runtime/*` state are gitignored and must never be committed.
-- Verification for the operator is hands-on surface behavior (shadow rehearsal,
-  dashboard, evidence file) — never `pytest`, `gh`, or `git` steps.
+- No skipped or deleted tests, no removed assertions, no `xfail`/`skip`
+  markers, no lint or type suppressions added to reach green.
+- No gate threshold, cap, or arm definition edited to make a check pass.
+- `styles.css` changes require a failing narrow-viewport test as the reason.

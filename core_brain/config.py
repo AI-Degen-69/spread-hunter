@@ -636,6 +636,34 @@ def resolve_tournament_preset_name() -> str | None:
     return preset_name
 
 
+def describe_active_profile(cfg, preset_name: str | None) -> dict:
+    """The badge name for the engine configuration in use (#856).
+
+    Pure: reads only its inputs, changes nothing. The name is the selected
+    preset, plus `queue-clear-<N>m` when the queue gate is on, joined with
+    `+`; `default` when neither applies. Minutes print without trailing
+    zeros (`5.0` -> `5m`, `2.5` -> `2.5m`). `None` means "no named preset
+    selected" -- it is never rendered as `baseline`, which is a real preset.
+    No preset is ever inferred from matching numbers.
+    """
+    queue_on = bool(getattr(cfg, "bot_order_gate_queue_clear_on", False))
+    try:
+        queue_min = float(getattr(cfg, "bot_order_queue_max_clear_min", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        queue_min = 0.0
+    parts: list[str] = []
+    if preset_name:
+        parts.append(str(preset_name))
+    if queue_on:
+        parts.append(f"queue-clear-{queue_min:g}m")
+    return {
+        "name": "+".join(parts) if parts else "default",
+        "preset": preset_name,
+        "queue_clear_on": queue_on,
+        "queue_max_clear_min": queue_min,
+    }
+
+
 # The ranker's own preset bars (#687). Same six names as TOURNAMENT_PRESETS so
 # one selector drives the engine and the ranker together; scoring-only field
 # overrides, never engine quoting fields and never the five PICKER_PROFILE

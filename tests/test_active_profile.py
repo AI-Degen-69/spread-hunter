@@ -1,0 +1,121 @@
+"""Active engine profile naming (#856).
+
+`describe_active_profile` builds the badge name from the selected tournament
+preset and the queue-gate settings of the config in use: `balanced`,
+`queue-clear-5m`, `balanced+queue-clear-5m`, or `default`. `None` means "no
+named preset selected" -- it is never rendered as `baseline`, which is a real
+preset.
+"""
+from __future__ import annotations
+
+from core_brain.config import describe_active_profile, load, resolve_tournament_preset_name
+
+PRESET_VAR = "BOT_QUOTE_TOURNAMENT_PRESET"
+GATE_VAR = "BOT_ORDER_GATE_QUEUE_CLEAR_ON"
+MIN_VAR = "BOT_ORDER_QUEUE_MAX_CLEAR_MIN"
+
+
+def _load_with(monkeypatch, preset=None, gate_on=False, minutes=None):
+    if preset is None:
+        monkeypatch.delenv(PRESET_VAR, raising=False)
+    else:
+        monkeypatch.setenv(PRESET_VAR, preset)
+    if gate_on:
+        monkeypatch.setenv(GATE_VAR, "1")
+    else:
+        monkeypatch.delenv(GATE_VAR, raising=False)
+    if minutes is None:
+        monkeypatch.delenv(MIN_VAR, raising=False)
+    else:
+        monkeypatch.setenv(MIN_VAR, str(minutes))
+    cfg = load()
+    return cfg, resolve_tournament_preset_name()
+
+
+def test_preset_alone_names_the_preset(monkeypatch):
+    cfg, preset = _load_with(monkeypatch, preset="balanced")
+    profile = describe_active_profile(cfg, preset)
+    assert profile["name"] == "balanced"
+    assert profile["preset"] == "balanced"
+    assert profile["queue_clear_on"] is False
+
+
+def test_explicit_baseline_is_not_the_fallback(monkeypatch):
+    cfg, preset = _load_with(monkeypatch, preset="baseline")
+    profile = describe_active_profile(cfg, preset)
+    assert profile["name"] == "baseline"
+    assert profile["preset"] == "baseline"
+
+
+def test_queue_gate_alone_names_the_minutes(monkeypatch):
+    cfg, preset = _load_with(monkeypatch, gate_on=True, minutes=5)
+    profile = describe_active_profile(cfg, preset)
+    assert profile["name"] == "queue-clear-5m"
+    assert profile["preset"] is None
+    assert profile["queue_clear_on"] is True
+    assert profile["queue_max_clear_min"] == 5.0
+
+
+def test_preset_and_queue_gate_join_with_plus(monkeypatch):
+    cfg, preset = _load_with(monkeypatch, preset="balanced", gate_on=True, minutes=5)
+    profile = describe_active_profile(cfg, preset)
+    assert profile["name"] == "balanced+queue-clear-5m"
+    assert profile["preset"] == "balanced"
+
+
+def test_fractional_minutes_keep_the_fraction(monkeypatch):
+    cfg, preset = _load_with(monkeypatch, gate_on=True, minutes=2.5)
+    profile = describe_active_profile(cfg, preset)
+    assert profile["name"] == "queue-clear-2.5m"
+    assert profile["queue_max_clear_min"] == 2.5
+
+
+def test_no_preset_and_no_gate_is_default_not_baseline(monkeypatch):
+    cfg, preset = _load_with(monkeypatch)
+    profile = describe_active_profile(cfg, preset)
+    assert profile["name"] == "default"
+    assert profile["name"] != "baseline"
+    assert profile["preset"] is None
+    assert profile["queue_clear_on"] is False
+
+
+# ── Live trader record (T3) ──────────────────────────────────────────────────
+
+def test_write_trader_profile_records_pid_db_and_name(tmp_path, monkeypatch):
+    import json as _json
+    import os as _os
+
+    import core_brain.runtime_paths as runtime_paths
+    from core_brain.trader_loop import write_trader_profile
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    monkeypatch.setattr(runtime_paths, "runtime_file",
+                        lambda name, **kw: runtime / name)
+    monkeypatch.setenv(PRESET_VAR, "balanced")
+    monkeypatch.delenv(GATE_VAR, raising=False)
+    monkeypatch.delenv(MIN_VAR, raising=False)
+    db = tmp_path / "live.db"
+    db.write_bytes(b"")
+
+    target = write_trader_profile(load(), db)
+
+    payload = _json.loads(target.read_text(encoding="utf-8"))
+    assert payload["pid"] == _os.getpid()
+    assert payload["db_path"] == str(db.resolve())
+    assert payload["profile"]["name"] == "balanced"
+
+
+def test_write_trader_profile_never_raises(tmp_path, monkeypatch):
+    import core_brain.runtime_paths as runtime_paths
+    from core_brain.trader_loop import write_trader_profile
+
+    blocker = tmp_path / "runtime"
+    blocker.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setattr(runtime_paths, "runtime_file",
+                        lambda name, **kw: blocker / name)
+    monkeypatch.delenv(PRESET_VAR, raising=False)
+    monkeypatch.delenv(GATE_VAR, raising=False)
+    monkeypatch.delenv(MIN_VAR, raising=False)
+
+    assert write_trader_profile(load(), tmp_path / "live.db") is None

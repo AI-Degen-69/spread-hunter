@@ -25,6 +25,19 @@ def _test_cfg():
     from core_brain.config import MakerConfig
     return MakerConfig()
 
+
+@pytest.fixture(autouse=True)
+def _clean_rehearsal_flag():
+    # `test_main_...` runs `sr.main()`, which declares the process a
+    # rehearsal and never undoes it. Without a reset the flag leaks into
+    # later tests in the same process (e.g. the scoring-config refusal
+    # in test_dashboard_server.py). Same pattern as
+    # tests/test_config_for_display.py.
+    from core_brain import rehearsal
+    rehearsal.reset_for_test()
+    yield
+    rehearsal.reset_for_test()
+
 _STATIC = Path(__file__).resolve().parent.parent / "dashboard" / "static"
 _CLOCK_HARNESS = Path(__file__).resolve().parent / "js" / "filter_uptime_harness.cjs"
 
@@ -414,3 +427,53 @@ def test_dashboard_labels_unlimited_shadow_runs_without_a_time_box():
     assert json.loads(result.stdout)["shadow_titles"] == [
         "Shadow rehearsal shadow-unlimited running, no time box (runs until stopped)"
     ]
+
+
+# ── The active profile (#856) ────────────────────────────────────────────────
+#
+# The dashboard's PROFILE badge names the configuration the rehearsal loaded.
+# The run records it once at startup into every heartbeat write; a caller
+# that supplied its own cfg never went through `config.load()`, so the
+# environment preset is not that run's preset and must not be claimed.
+
+
+def _stubbed_run(monkeypatch, **kwargs):
+    from core_brain import shadow_run as sr
+    from core_brain import trader_loop
+    monkeypatch.setattr(trader_loop, "run", lambda seam, **kw: [])
+    monkeypatch.setattr(sr, "build_shadow_seam", lambda **kw: type("Seam", (), {})())
+    return sr.run_shadow(minutes=0.0, db_path=kwargs.pop("db_path"),
+                         markets_fn=lambda: [], client_fn=lambda: None,
+                         decide_fn=lambda *a, **k: [], fetch_books=lambda *a, **k: {},
+                         sleep_fn=lambda s: None, **kwargs)
+
+
+def test_run_shadow_records_env_preset_and_queue_gate_in_heartbeat(tmp_path, monkeypatch):
+    from core_brain import shadow_run as sr
+    target = tmp_path / "runtime" / "shadow_run.json"
+    monkeypatch.setattr(sr, "shadow_heartbeat_path", lambda root=None, run_id="": target)
+    monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "balanced")
+    monkeypatch.setenv("BOT_ORDER_GATE_QUEUE_CLEAR_ON", "1")
+    monkeypatch.setenv("BOT_ORDER_QUEUE_MAX_CLEAR_MIN", "5")
+
+    _stubbed_run(monkeypatch, db_path=tmp_path / "shadow.db", run_id="shadow-prof-01")
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["finished"] is True
+    assert payload["profile"]["name"] == "balanced+queue-clear-5m"
+    assert payload["profile"]["preset"] == "balanced"
+    assert payload["profile"]["queue_clear_on"] is True
+
+
+def test_run_shadow_with_supplied_cfg_claims_no_env_preset(tmp_path, monkeypatch):
+    from core_brain import shadow_run as sr
+    target = tmp_path / "runtime" / "shadow_run.json"
+    monkeypatch.setattr(sr, "shadow_heartbeat_path", lambda root=None, run_id="": target)
+    monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "balanced")
+
+    _stubbed_run(monkeypatch, db_path=tmp_path / "shadow.db", run_id="shadow-prof-02",
+                 cfg=_test_cfg())
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["profile"]["preset"] is None
+    assert payload["profile"]["name"] == "default"

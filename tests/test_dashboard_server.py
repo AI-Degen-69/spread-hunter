@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from core_brain.order_registry import SCHEMA
+from core_brain.order_registry import DEFAULT_DB_PATH, SCHEMA
 from dashboard.server import (
     PAGE_HTML,
     _PAGE_HTML_FILE,
@@ -3557,3 +3557,353 @@ def test_kpi_funnel_keeps_the_full_spread_rejection_reason(client, monkeypatch, 
     assert payload.get("funnel") is not None
     assert payload["funnel"]["filters"][0]["cause"] == "YES spread"
     assert payload["funnel"]["filters"][0]["examples"][0]["reason"] == reason
+
+
+# ── The active profile (#856) ────────────────────────────────────────────────
+#
+# The PROFILE badge reads `active_profile` from /api/system/status. The name
+# comes only from the selected store's engine record -- never from this
+# process's environment, whose variables the launcher does not set.
+
+
+_PROFILE_MISSING = object()
+
+
+def _write_profile_heartbeat(tmp_path, db, profile=_PROFILE_MISSING, **overrides):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(exist_ok=True)
+    payload = {
+        "pid": os.getpid(),
+        "run_id": "shadow-profile-01",
+        "started_at": time.time() - 60.0,
+        "minutes": 60.0,
+        "interval": 5.0,
+        "cycle": 3,
+        "db_path": str(db),
+        "heartbeat_ts": time.time(),
+        "finished": False,
+    }
+    if profile is not _PROFILE_MISSING:
+        payload["profile"] = profile
+    payload.update(overrides)
+    (runtime / "shadow_run_shadow-profile-01.json").write_text(
+        json.dumps(payload), encoding="utf-8")
+
+
+def _profile_status(client, monkeypatch, tmp_path):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    res = client.get("/api/system/status")
+    assert res.status_code == 200
+    return res.json()
+
+
+def test_status_active_profile_is_null_with_no_heartbeat(client, monkeypatch, tmp_path):
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_names_the_shadow_record(client, monkeypatch, tmp_path, temp_db):
+    _write_profile_heartbeat(tmp_path, temp_db, {
+        "name": "balanced+queue-clear-5m", "preset": "balanced",
+        "queue_clear_on": True, "queue_max_clear_min": 5.0})
+    data = _profile_status(client, monkeypatch, tmp_path)
+    profile = data["active_profile"]
+    assert profile["name"] == "balanced+queue-clear-5m"
+    assert profile["source"] == "shadow"
+    assert profile["running"] is True
+    assert profile["preset"] == "balanced"
+
+
+def test_status_active_profile_is_null_for_a_heartbeat_before_the_field(
+        client, monkeypatch, tmp_path, temp_db):
+    _write_profile_heartbeat(tmp_path, temp_db)
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_rejects_a_list_profile(
+        client, monkeypatch, tmp_path, temp_db):
+    _write_profile_heartbeat(tmp_path, temp_db, ["balanced"])
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_rejects_a_numeric_name(
+        client, monkeypatch, tmp_path, temp_db):
+    _write_profile_heartbeat(tmp_path, temp_db, {"name": 42})
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_ignores_a_heartbeat_for_another_store(
+        client, monkeypatch, tmp_path, temp_db):
+    _write_profile_heartbeat(tmp_path, tmp_path / "other.db", {
+        "name": "balanced", "preset": "balanced",
+        "queue_clear_on": False, "queue_max_clear_min": 60.0})
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_ignores_the_dashboard_environment(
+        client, monkeypatch, tmp_path):
+    monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "balanced")
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_status_active_profile_survives_an_unknown_dashboard_preset(
+        client, monkeypatch, tmp_path):
+    monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "not-a-preset")
+    data = _profile_status(client, monkeypatch, tmp_path)
+    assert data["active_profile"] is None
+
+
+def test_resolve_active_profile_carries_the_tournament_arm():
+    import dashboard.server as dash_mod
+    run = {"running": True,
+           "profile": {"name": "balanced", "preset": "balanced",
+                       "queue_clear_on": False, "queue_max_clear_min": 60.0},
+           "tournament": {"issue": 799, "arm": "balanced-mid", "stamp": "x"}}
+    assert dash_mod._resolve_active_profile(run)["tournament_arm"] == "balanced-mid"
+    run_no_arm = {"running": False, "profile": {"name": "default", "preset": None,
+                                                "queue_clear_on": False,
+                                                "queue_max_clear_min": 60.0},
+                  "tournament": None}
+    resolved = dash_mod._resolve_active_profile(run_no_arm)
+    assert resolved["running"] is False
+    assert "tournament_arm" not in resolved
+
+
+# ── The live fallback (T3) ──────────────────────────────────────────────────
+#
+# With no shadow record for the selected store, the badge falls back to the
+# live trader's runtime/trader_profile.json. The file is trusted only when its
+# pid is alive, registered as `decide`, and writing the active store; shadow
+# keeps priority when both records exist.
+
+
+def _write_live_profile(tmp_path, db, pid, profile, decide_pid=None):
+    import dashboard.server as dash_mod
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(exist_ok=True)
+    started = dash_mod._process_start_time(pid)
+    if started is None:
+        started = time.time()
+    (runtime / "trader_profile.json").write_text(json.dumps({
+        "pid": pid,
+        "started_at": started,
+        "db_path": str(db),
+        "profile": profile,
+    }), encoding="utf-8")
+    (runtime / "processes.json").write_text(json.dumps(
+        {"decide": {"pid": decide_pid, "started_at": started}}
+        if decide_pid is not None else {}), encoding="utf-8")
+
+
+_LIVE_PROFILE = {"name": "balanced", "preset": "balanced",
+                 "queue_clear_on": False, "queue_max_clear_min": 60.0}
+
+
+def test_status_active_profile_falls_back_to_live(client, monkeypatch, tmp_path, temp_db):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    _write_live_profile(tmp_path, temp_db, os.getpid(), _LIVE_PROFILE, decide_pid=os.getpid())
+    data = client.get("/api/system/status").json()
+    assert data["active_profile"]["source"] == "live"
+    assert data["active_profile"]["name"] == "balanced"
+    assert data["active_profile"]["running"] is True
+
+
+def test_status_active_profile_rejects_a_dead_live_pid(client, monkeypatch, tmp_path, temp_db):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    _write_live_profile(tmp_path, temp_db, 99999999, _LIVE_PROFILE, decide_pid=99999999)
+    assert client.get("/api/system/status").json()["active_profile"] is None
+
+
+def test_status_active_profile_rejects_a_pid_missing_from_the_registry(
+        client, monkeypatch, tmp_path, temp_db):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    _write_live_profile(tmp_path, temp_db, os.getpid(), _LIVE_PROFILE)
+    assert client.get("/api/system/status").json()["active_profile"] is None
+
+
+def test_status_active_profile_rejects_a_live_file_for_another_store(
+        client, monkeypatch, tmp_path, temp_db):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    _write_live_profile(tmp_path, tmp_path / "other.db", os.getpid(),
+                        _LIVE_PROFILE, decide_pid=os.getpid())
+    assert client.get("/api/system/status").json()["active_profile"] is None
+
+
+def test_status_shadow_record_beats_the_live_record(
+        client, monkeypatch, tmp_path, temp_db):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    _write_profile_heartbeat(tmp_path, temp_db, {
+        "name": "balanced+queue-clear-5m", "preset": "balanced",
+        "queue_clear_on": True, "queue_max_clear_min": 5.0})
+    _write_live_profile(tmp_path, temp_db, os.getpid(), _LIVE_PROFILE, decide_pid=os.getpid())
+    assert client.get("/api/system/status").json()["active_profile"]["source"] == "shadow"
+
+
+# ── Profile picker: view + stage (IIIB on #856) ─────────────────────────────
+#
+# The PROFILE badge opens a picker. View re-points the page at the arm's
+# store (read-only, like the run switcher). Stage stops the stack and records
+# runtime/pending_profile.json for the next START; nothing starts here.
+
+
+def _stage(client, monkeypatch, tmp_path, kind, name):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    # Staging shares the production gate with every stack-changing op: the
+    # page must read the production registry, which is never written here.
+    set_db_override(str(DEFAULT_DB_PATH))
+    try:
+        return client.post(f"/api/profile/stage?kind={kind}&name={name}",
+                           headers=_control(client))
+    finally:
+        set_db_override(None)
+
+
+def test_profile_options_lists_presets_and_arms(client):
+    data = client.get("/api/profile/options").json()
+    assert {p["name"] for p in data["presets"]} == {
+        "conservative", "balanced", "aggressive", "prudent", "hybrid", "baseline"}
+    assert all(p["env"].get("BOT_QUOTE_TOURNAMENT_PRESET") == p["name"]
+               for p in data["presets"])
+    assert len(data["arms"]) > 0
+    assert all(a["name"] and isinstance(a["env"], dict) for a in data["arms"])
+
+
+def test_profile_stage_preset_stops_nothing_and_records_pending(
+        client, monkeypatch, tmp_path):
+    res = _stage(client, monkeypatch, tmp_path, "preset", "balanced")
+    body = res.json()
+    assert body["ok"] is True, body.get("message")
+    assert "START" in body["message"]
+    pending = (tmp_path / "runtime" / "pending_profile.json")
+    # Identity only: START re-resolves the env, so the file carries no env.
+    assert json.loads(pending.read_text(encoding="utf-8")) == {
+        "kind": "preset", "name": "balanced",
+        "staged_at": json.loads(pending.read_text(encoding="utf-8"))["staged_at"]}
+    assert body["status"]["pending_profile"]["name"] == "balanced"
+
+
+def test_profile_stage_unknown_name_refuses(client, monkeypatch, tmp_path):
+    body = _stage(client, monkeypatch, tmp_path, "preset", "nope").json()
+    assert body["ok"] is False
+
+
+def test_profile_stage_from_shadow_view_refuses(client, monkeypatch, tmp_path):
+    """Staging from a non-production page would stop a stack this page cannot
+    restart, so it shares the production gate with the other stack controls."""
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    body = client.post("/api/profile/stage?kind=preset&name=balanced",
+                       headers=_control(client)).json()
+    assert body["ok"] is False
+    assert "production" in body["message"]
+    assert not (tmp_path / "runtime" / "pending_profile.json").exists()
+
+
+def test_profile_clear_drops_the_staged_profile(client, monkeypatch, tmp_path):
+    import dashboard.server as dash_mod
+    _stage(client, monkeypatch, tmp_path, "preset", "balanced")
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    res = client.post("/api/profile/clear", headers=_control(client))
+    assert res.json()["ok"] is True
+    assert res.json()["status"]["pending_profile"] is None
+
+
+def test_profile_view_unknown_arm_refuses(client, monkeypatch, tmp_path):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    res = client.post("/api/profile/view?name=no-such-arm", headers=_control(client))
+    assert res.json()["ok"] is False
+
+
+def test_resolve_arm_store_picks_the_freshest_heartbeat(tmp_path, monkeypatch):
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    old_db = tmp_path / "856_tournament_01_balanced_20260101-000000.db"
+    new_db = tmp_path / "856_tournament_02_balanced_20260102-000000.db"
+    old_db.write_bytes(b"")
+    new_db.write_bytes(b"")
+    now = time.time()
+    for fname, db, ts in (("shadow_run_old.json", old_db, now - 60.0),
+                          ("shadow_run_new.json", new_db, now)):
+        (runtime / fname).write_text(json.dumps({
+            "pid": 4242, "run_id": fname, "started_at": now - 120.0,
+            "minutes": 60.0, "interval": 5.0, "db_path": str(db),
+            "heartbeat_ts": ts, "finished": False}), encoding="utf-8")
+    assert dash_mod._resolve_arm_store("balanced", now=now) == str(new_db)
+    assert dash_mod._resolve_arm_store("no-such-arm", now=now) is None
+
+
+def test_start_consumes_staged_profile_into_child_env(monkeypatch, tmp_path):
+    import subprocess
+
+    import dashboard.server as dash_mod
+
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "get_system_status", lambda: {"bot_state": "STOPPED"})
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "pending_profile.json").write_text(json.dumps({
+        "kind": "preset", "name": "balanced",
+        "staged_at": time.time()}), encoding="utf-8")
+
+    spawned = []
+
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append((args, kwargs.get("env", {})))
+            self.pid = 12345
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    result = dash_mod.start_bot()
+    assert result["ok"] is True
+    assert "balanced" in result["message"]
+    assert any(env.get("BOT_QUOTE_TOURNAMENT_PRESET") == "balanced"
+               for _, env in spawned), "staged env must reach the child"
+    assert not (runtime / "pending_profile.json").exists()
+
+
+def test_start_ignores_stale_and_foreign_staged_keys(monkeypatch, tmp_path):
+    """A stale or hand-edited pending file cannot inject overrides: START
+    re-resolves identity against current options and keeps its own run id."""
+    import subprocess
+
+    import dashboard.server as dash_mod
+    from core_brain.order_registry import get_run_id
+
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "get_system_status", lambda: {"bot_state": "STOPPED"})
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "pending_profile.json").write_text(json.dumps({
+        "kind": "preset", "name": "no-such-preset",
+        "env": {"SH_RUN_ID": "hijacked", "BOT_QUOTE_TOURNAMENT_PRESET": "x"},
+        "staged_at": time.time()}), encoding="utf-8")
+
+    spawned = []
+
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append((args, kwargs.get("env", {})))
+            self.pid = 12345
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    result = dash_mod.start_bot()
+    assert result["ok"] is True
+    assert "staged profile" not in result["message"]
+    assert all(env.get("SH_RUN_ID") == get_run_id() for _, env in spawned)
+    assert all("BOT_QUOTE_TOURNAMENT_PRESET" not in env for _, env in spawned)

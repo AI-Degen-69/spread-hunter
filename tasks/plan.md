@@ -1,171 +1,200 @@
-# Plan — Issue #840: Live execution lane audit and reachability verification
+# Implementation Plan — Issue #856: Active strategy profile badge in Dashboard top nav
 
-Branch: `i840/live-execution-lane-audit` | Issue: #840
+Branch: `i856/feat-display-active-strategy-profile-name-in-dashb` | Issue: #856
 
-Size: **Standard** — 3 new files + 3 surgical edits, one architectural decision
-(single-order exact-ID probe); no public API or schema change.
-Task type: **Code + Security + Testing + Docs**.
+## Summary
 
-## 0. CodeRabbit intake (read once, costed once)
+Show the active engine profile (`balanced`, `queue-clear-5m`,
+`balanced+queue-clear-5m`, `baseline`, `default`) as a `PROFILE` pill in the
+top nav, fed by a new top-level `active_profile` field on
+`GET /api/system/status`, refreshed every poll.
 
-- **Adopted:** two-phase shape (audit+parity first, probe second); champion =
-  `prudent` + five per-field env overrides; exact-ID cancel instead of
-  `cancel-all`; hold 2–4s (default 3s) so the 5s cancel limit is reachable;
-  scratch `--db` for `decide`; rank-by-fresh-bid-depth market selection;
-  exit-nonzero-on-venue-read-failure for `status`/`balance`.
-- **Rejected:** new `champion` tournament preset (unneeded — loader order
-  preset-then-override already expresses it); `cancel-all`/`cancel-market` as
-  the cancel path (unsafe to unrelated orders); 5s hold (leaves no time for
-  the cancel receipt); opt-in `--strict` flag (reachability must fail loud by
-  default); fixing the unexplained divergences here (out of scope).
-- **[UNVERIFIED] (verify from code before use):** exact
-  `risk.queue_clear_block` call signature (follow
-  `tests/test_queue_clear_gate.py`); `BookProvider` construction + `_rest_reader`
-  error behavior; CLOB market-response field name for venue minimum size;
-  Python key name for `not_canceled` in the cancel receipt; helper name of the
-  matched-size alias reader in `single_buy_saver.py` (~lines 514–565);
-  existence of a read-only `is_approved_for_all` command; existing markets test
-  module for the two `fetch_pinned_market` tests.
+Right-sizing: **Standard** — one architectural decision (the engine records its
+own profile; the dashboard only reads records), ~6 source files plus tests, no
+new external dependency, no DB schema change. Task type: **Code** +
+**Design/UI**. No `quick-fix` label on the issue → normal lane, no gate text.
 
-## 1. Improvement proposal (evidence-based, adopted)
+## Code-review intake (CodeRabbit plan comment on #856)
 
-> **Cancel by exact order ID, never `cancel-all`.**
-> Evidence — the ticket suggests *"immediately cancelled via `cancel-all` /
-> `cancel-market`"*, but `order_manager.py` already cancels survivors by exact
-> ID (`client.cancel_order(OrderPayload(orderID=...))`), and broad cancels
-> would sweep unrelated operator orders. Classification: simplification /
-> edge-case hardening → **adopted by default**, folded into Tasks 3–4. Rejection
-> recorded: none — the broad-cancel path is rejected.
+One reading; the HTML-echo copy ignored. **Adopted:** engine-recorded profile
+(heartbeat `profile` + `runtime/trader_profile.json`), shared
+`describe_active_profile` helper, `active_profile` status field, `unknown`
+fallback, live support ordered last, the listed test matrices. **Rejected:**
+nothing — the plan is minimal and grounded; its 3-task split is kept as-is.
+**[UNVERIFIED] resolved by spot-check:** every cited file path, function, and
+line range below was read in the live tree; test-file line numbers it cites
+(`test_shadow_run_stopwatch.py:166-365`, `test_dashboard_server.py:596-610` /
+`1948-1959`, `test_ui_top_nav_consistency.py:37-45`,
+`test_ui_top_nav_groups.py:126-138` / `198-216`,
+`test_per_run_shadow_heartbeat.py:49-193`) were NOT re-read — the build must
+locate the current anchors on read instead of trusting them.
 
-## 2. Dependency graph
+## Seam verification (live tree, this session)
 
-- Task 1 (audit doc + parity tests) → Task 2 (exit codes reuses parity env
-  helpers; both land before any order-sending code) → Task 3 (pre-flight +
-  dry-run; no signing) → Task 4 (post/hold/cancel/evidence; needs Task 3's
-  pre-flight + price/size gates).
-- Checkpoints after Task 2 (read-only lane provably loud) and after Task 4
-  (full probe proven with fakes + evidence redaction test).
+| Cited | Actual |
+|---|---|
+| `resolve_tournament_preset_name()` | `core_brain/config.py:620` ✓ raises `ValueError` on unknown |
+| `TOURNAMENT_PRESETS["balanced"]` | dict at `config.py:574`, `"balanced"` at `:582` ✓ |
+| queue gate flags | `bot_order_gate_queue_clear_on`, `bot_order_queue_max_clear_min` at `config.py:210-211` ✓ |
+| heartbeat writer | `write_shadow_heartbeat` at `shadow_run.py:451`, `book_source_mix` pattern at `:513` ✓ |
+| shadow startup cfg block | `shadow_run.py:1297-1331` region ✓ (`cfg_supplied`, `shadow_cfg()`) |
+| heartbeat `_heartbeat` | `shadow_run.py:1662` ✓ |
+| shadow reader | `_read_shadow_heartbeat_file` at `server.py:965`, `book_source_mix` passthrough at `:1078` ✓ |
+| `get_system_status()` | `server.py:1506` ✓, payload through `timestamp` at `:~1652` |
+| `/api/parameters` + `get_parameters` | `server.py:4212` ✓ (stays read-only) |
+| top nav markup | `.top-group-source` at `index.html:82`, `#db-mode-badge` at `:85` ✓ |
+| renderers | `renderCodeVersion` at `app.js:2087`, `renderDbMode` at `:2189`, `renderPillHtml` at `:301`, `esc` at `:445`, `pollStatus` at `:10853` ✓ |
+| runtime paths | `resolve_runtime_file` at `runtime_paths.py:91`, `runtime_file` at `:113` ✓ |
+| trader entry | `main()` at `trader_loop.py:3393`, `cfg = load()` + `db_path` in `:3424-3445` ✓ |
+| harness | `tests/js/live_state_harness.cjs` exists ✓; `tests/test_active_profile.py` does NOT exist yet (greenfield, no collision) ✓ |
 
-## 3. Tasks (atomic vertical slices)
+Drift corrected: the issue cites `app.js:2294-2330` and `/api/status` — the
+renderers live at `app.js:2087-2236` and the endpoint is `/api/system/status`
+(`app.js` re-serve fetch confirms). The dashboard must NOT call
+`resolve_tournament_preset_name()` in its own process (env differs per
+launcher); the issue's suggestion to do so is the one point overruled, with
+reason recorded here.
 
-### Task 1 — Audit report + champion parity tests [Docs/Backend] — M [x]
+## Resolved open questions
 
-- **Target files:** `docs/live-lane-audit.md` (new),
-  `tests/test_champion_lane_parity.py` (new).
-- **Build:** write the audit per SPEC §3–§4: planned simulation choices vs
-  unexplained differences (rollback, cancel-response, readback, pair IDs,
-  launcher preset loss, `BOT_*` inheritance, dropped telemetry, 0.99 live cap,
-  reconciliation gaps, no client timeouts); what an accepted order proves /
-  does not prove; `is_approved_for_all` command-or-gap; dry-run signed-client
-  caveat; pre-flight command list with the `decide`-needs-scratch-DB and
-  `fetch_live_balance`-hides-errors notes; file unexplained items as follow-up
-  tickets, fix nothing. Parity tests (fail-without-change):
-  `test_live_and_shadow_load_identical_champion_settings`
-  (`config.load()` vs `shadow_run.shadow_cfg()`),
-  `test_champion_values_are_effective` (offset on, 0.60, 2¢–4¢, deadband 0.06,
-  `ABSOLUTE_DROP` + 0.045, gate on + 3 min),
-  `test_field_override_beats_preset`, `test_shadow_bankroll_is_the_only_difference`,
-  `test_queue_gate_blocks_four_minutes_allows_two`.
-- **Depends on:** — (first).
-- **Verify:** new parity file green; `git status` shows only the two new files.
-- **Helper skill:** `test-driven-development`.
+No `needs-answers` label and no Open-questions section on the issue. The one
+genuine ambiguity — *where does the dashboard get the name?* — resolves from
+code: `MakerConfig.from_env` (`config.py:311`) discards the preset name, and
+the launcher strips `BOT_*` from dashboard processes, so the name cannot be
+re-derived dashboardside. Hence the engine-record rule in SPEC.md.
 
-### Task 2 — `status` / `balance` fail loudly [Backend/Logic] — S [x]
+## Interface contracts (frozen before build)
 
-- **Target files:** `core_brain/order_manager.py`, `tests/test_order_manager.py`.
-- **Build:** in `status()`, keep the `ERROR` print, then exit non-zero when
-  `get_open_orders` raises or `open_notional` fails/returns `None`. In
-  `balance()`, keep the `ERROR` print, then exit non-zero when
-  `get_balance_allowance` raises. Zero balance stays a warning, not a failure.
-  Normal stdout byte-identical; `decide` untouched. New tests
-  (fail-without-change): `test_status_exits_nonzero_when_open_orders_read_fails`,
-  `test_status_exits_nonzero_when_open_notional_is_none`,
-  `test_balance_exits_nonzero_when_venue_read_fails`,
-  `test_balance_zero_is_a_warning_not_a_failure`.
-- **Depends on:** Task 1.
-- **Verify:** `python -m pytest -q tests/test_order_manager.py` green with old
-  stdout tests unchanged.
-- **Helper skill:** `test-driven-development`.
+1. `describe_active_profile(cfg, preset_name) -> dict` in
+   `core_brain/config.py` (pure): `{name, preset, queue_clear_on,
+   queue_max_clear_min}`. `name` = `preset` + (`queue-clear-<N>m` if gate on),
+   joined with `+`; `default` if empty. `N` trims trailing zeros. No preset
+   inference, no `MakerConfig` change. Unknown preset → caller catches
+   `ValueError`, field omitted.
+2. Heartbeat: optional `profile` dict on `runtime/shadow_run_<run_id>.json`
+   (same optional-field pattern as `book_source_mix`). Dashboard accepts it
+   only if `isinstance(profile, dict)` and `isinstance(profile["name"], str)`.
+3. `GET /api/system/status` gains top-level `active_profile: {name, preset,
+   queue_clear_on, queue_max_clear_min, source: "shadow"|"live", running: bool,
+   tournament_arm?} | null`. Lookup wrapped in narrow
+   `try/except (ValueError, OSError)` → `null`. Shadow wins over live.
+4. Live record `runtime/trader_profile.json` (new constant in
+   `runtime_paths.py`, no legacy entry): `{pid, started_at, db_path, profile…
+   }`. Trusted only if pid alive AND matches the `decide` registry entry AND
+   `db_path` resolves to the active store.
+5. DOM: `#profile-badge.pill > .pill-label(PROFILE) + .pill-value` inside
+   `.top-group-source` after `#db-mode-badge`; renderer `renderProfileBadge`
+   exported like `renderDbMode`, full `className` replace per call
+   (`state-unknown` / `state-running` / `state-stopped`), all text via
+   `renderPillHtml` + `esc()`, sentence-case `title` (source, preset-or-none,
+   queue state + minutes, tournament arm).
 
-### Task 3 — `reach-probe` pre-flight + dry run [Backend/Logic] — M [x]
+## Improvement proposal (adopted)
 
-- **Target files:** `core_brain/reach_probe.py` (new, injectable client fn +
-  `live` param per `order_execution.py` style), `core_brain/markets.py`
-  (optional venue-min-size field, default `None`), `core_brain/order_manager.py`
-  (`reach-probe` subcommand, `--live` with `default=SUPPRESS`; legacy `probe`
-  + module docstring untouched), `tests/test_order_manager.py` (+ markets
-  module if one exists).
-- **Build:** inputs — optional condition ID, `--discount` 0.15, `--hold-sec`
-  2–4 (default 3), `--db` default `order_registry.DEFAULT_DB_PATH`,
-  `--live/--no-live`. Auto-select market by fresh top-3 bid-level dollar depth.
-  Fail-closed pre-flight (all must pass): client builds, `get_open_orders`
-  readable, zero account orders on the market, pinned market open+accepting,
-  token is one of the two market tokens, fresh `get_fresh_book` best bid,
-  `open_notional` not `None`. Price = best-bid − discount rounded down to tick
-  (refuse below one tick). Size = max(venue-min or local 5-share default,
-  `VENUE_MIN_NOTIONAL_USD` size); enforce `order_caps()` + fixed $2 ceiling
-  (size × price; no CLI raise). `--no-live` prints plan + worst case, never
-  signs. New tests (fail-without-change): the 8 `refuses_*` cases + dry-run-
-  never-signs + deepest-bid selection + size/notional + the two pinned-min-size
-  parse tests.
-- **Depends on:** Task 2.
-- **Verify:** `python -m pytest -q tests/test_order_manager.py tests/test_book_provider.py`
-  green; manual `reach-probe --no-live` print reviewed (operator runs it).
-- **Helper skill:** `test-driven-development`.
+> Show `PROFILE balanced` (label/value spans, no colon), not the issue's
+> `PROFILE: balanced` sketch.
 
-### Task 4 — Post, exact-ID cancel, verify, evidence [Backend/Security] — M [x]
+Evidence, verbatim — the issue's acceptance criterion: "`PROFILE: balanced`,
+`PROFILE: queue-clear-5m`, or `PROFILE: baseline`"; against the live markup at
+`dashboard/static/index.html:85`: `<span id="db-mode-badge" …><span
+class="pill-label">DB</span> <span class="pill-value">UNKNOWN</span></span>`.
+Existing pills never use a colon; a colon would make this the one inconsistent
+pill. Classification: simplification / repo-pattern fit → adopt-by-default,
+folded into T2 below.
 
-- **Target files:** `core_brain/reach_probe.py`, `core_brain/order_manager.py`,
-  `docs/agents/safety.md`, `tests/test_order_manager.py`.
-- **Build:** pending row first (quote helper, new pair ID) → one GTC post-only
-  buy via `post_orders` batch-of-one → `venue_order_id` + `get_order` token
-  readback. No-ID/error → row stays pending, guarded `cancel-market` fallback
-  (safe: pre-flight proved zero other orders), result `uncertain`. Hold, then
-  `cancel_order(OrderPayload(orderID=...))` exact-ID only (never `cancel_all`);
-  require ID in `canceled`, fail with reason if in `not_canceled`; measure
-  accept-to-receipt. Read status + matched size via imported
-  `single_buy_saver` helper (no copy); confirm absent from `get_open_orders`;
-  unreadable matched size → `unverified`, never 0. PASS = accepted + in
-  `canceled` + matched 0 + absent + ≤5s. Non-PASS prints exposure + undo
-  (`cancel <id>` if resting, `exit` for filled shares, `poll --once`). Mark
-  row cancelled only after verified cancel. Redacted JSON evidence under
-  `runtime/` (git-ignored; confirm ignore): timestamps, IDs, price/size/tick,
-  venue-min-or-unknown, worst-case $, order ID, canceled/not_canceled lists,
-  status, matched size, timings, result; shortened wallet. Safety.md entry:
-  `reach-probe --live` = opening-exposure, session approval + undo. New tests
-  (fail-without-change): the 10 cases named in the CodeRabbit plan (pending-
-  row-first, exactly-one-post-only-GTC, exact-ID-never-cancel-all,
-  pass-requires-canceled, not_canceled-fails, matched>0-fails-with-undo,
-  unreadable-is-unverified, >5s-fails, no-ID-pending+fallback,
-  evidence-has-no-secrets).
-- **Depends on:** Task 3.
-- **Verify:** `python -m pytest -q tests/test_order_manager.py tests/test_order_manager_decide.py
-  tests/test_shadow_guard.py` green; evidence redaction test asserts no secret
-  fields. Live `--live` run is operator-only, never agent-run.
-- **Helper skill:** `test-driven-development` + `security-and-hardening`.
+## Task graph (risk-first; each slice shippable)
 
-## 4. Interface contracts
+- **T1** — shadow profile → status field. No deps. Riskiest (startup +
+  endpoint contract) → runs first.
+- **T2** — badge markup + renderer. Depends on: T1 (needs `active_profile`).
+- **T3** — live writer + fallback. Depends on: T1. Independent of T2.
 
-- `reach-probe [--condition-id CID] [--discount 0.15] [--hold-sec 3 (2–4)]
-  [--db PATH] [--live | --no-live]` → exit 0 + `PASS` JSON summary only on the
-  five-way conjunction; any other outcome exits non-zero with exposure + undo.
-- Evidence JSON schema: `{ts_accept, ts_cancel_receipt, condition_id,
-  token_id, price, size, tick_size, venue_min_size | "unknown",
-  worst_case_usd, order_id, canceled[], not_canceled[], status, matched_size,
-  hold_sec, accept_to_receipt_sec, result}` — no secret keys ever.
-- `status`/`balance` contract change: stdout identical; exit code now 0 ⟺ venue
-  read succeeded.
+Sizes: T1 M, T2 S, T3 M. Checkpoints: after T1 (field observable in JSON),
+after T2 (badge visible), after T3 (full matrix green).
 
-## 5. How to verify (operator, hands-on — no pytest/gh/git steps)
+### T1 — Shadow engine records its profile; status endpoint returns it [Backend/Logic] (M) [x]
 
-1. Precondition: no Trader loop or dashboard START running.
-2. Run `status` and `balance` — funded address shown, exit 0; any venue-read
-   ERROR now exits non-zero.
-3. Run `decide --all --db <scratch-path>` — books + tick sizes print for
-   graduated markets (scratch DB because `decide` writes rows).
-4. Run `reach-probe --no-live` — printed price ≥15¢ below best bid,
-   worst case ≤ $2, nothing signed.
-5. With in-session approval only, run `reach-probe --live` — `PASS`, cancel
-   receipt ≤ 5s, matched size 0; open the evidence file and confirm the order
-   ID is in `canceled`. Undo if not PASS: `cancel <id>` if resting, `exit` for
-   filled shares, then `poll --once`.
+Target files: `core_brain/config.py`, `core_brain/shadow_run.py`,
+`dashboard/server.py`, `tests/test_active_profile.py` (new),
+`tests/test_shadow_run_stopwatch.py`, `tests/test_dashboard_server.py`.
+Helper skill: `api-and-interface-design` (field contract). Verification:
+focused pytest (agent-run).
+
+- Add `describe_active_profile(cfg, preset_name)` per contract §1.
+- `shadow_run.py`: compute once near the `shadow_cfg()`/`load()` block; resolve
+  preset only when the run loaded its own config (caller-supplied `cfg` →
+  `preset=None`); read queue flags from the config in use; thread through
+  `_heartbeat` into `write_shadow_heartbeat(..., profile=...)`; construction
+  failure omits the field; write failure stays best-effort (`None`, debug log).
+- `server.py` reader: copy heartbeat `profile` into the run dict per contract
+  §2 (follow the `book_source_mix` pattern directly above it).
+- `get_system_status()`: top-level `active_profile` per contract §3 with
+  `source: "shadow"`, run `running`, `tournament.arm` when present; else
+  `null`. Never call `load_cfg`/`resolve_tournament_preset_name()` here.
+- Tests: six helper cases (balanced/off, baseline/off, none+5m, balanced+5m,
+  none+2.5m fractional, none/off→`default`-not-`baseline`); heartbeat cases
+  (env preset+gate → `balanced+queue-clear-5m`; supplied cfg → `preset None`);
+  server cases (no heartbeat→null; matching heartbeat; old heartbeat; malformed
+  list/numeric-name; other-store heartbeat; dashboard-env preset set and
+  dashboard-env typo → still null + 200). Keep existing status + db-identity
+  assertions untouched (locate current anchors; cited line numbers unverified).
+
+### T2 — PROFILE pill in the top nav [Design/UI] (S) [x]
+
+Target files: `dashboard/static/index.html`, `dashboard/static/app.js`,
+`tests/test_ui_top_nav_consistency.py`, `tests/test_ui_top_nav_groups.py`,
+`tests/js/live_state_harness.cjs` (+ `@requires_node` wrapper).
+Depends on: T1. Helper skills: `frontend-ui-engineering`,
+`frontend-design`. Verification: focused pytest + node harness (agent-run);
+`test_dashboard_narrow_viewport.py` guards width (touch `styles.css` only on
+failure).
+
+- Markup: pill directly after `#db-mode-badge` in `.top-group-source`,
+  `id="profile-badge"`, `class="pill state-unknown mono"`, label `PROFILE`,
+  value `--`. No fourth `.top-group`; group order, ARIA, scroll area,
+  dropdown placement unchanged.
+- Renderer `renderProfileBadge(status)` per contract §5; called from
+  `renderDbMode` next to `renderCodeVersion`; early return when absent;
+  `unknown` / `state-running` / `state-stopped`-with-name-retained;
+  sentence-case tooltip; same export pattern as `renderDbMode`.
+- Tests: `profile-badge` in the named-pill list + Data-source group asserts +
+  header grammar id list (keep the three-group check green); harness
+  `profile` scenario (missing→unknown; running shadow name; ended shadow
+  retained; running live; `<b>x</b>` escaping; running→missing class reset).
+
+### T3 — Live trader records its profile; endpoint falls back to it [Backend/Logic] (M) [x]
+
+Target files: `core_brain/runtime_paths.py`, `core_brain/trader_loop.py`,
+`dashboard/server.py`, `tests/test_active_profile.py`,
+`tests/test_dashboard_server.py`. Depends on: T1. Verification: focused
+pytest (agent-run).
+
+- Constant for `trader_profile.json` beside the other runtime names (no legacy
+  entry). `write_trader_profile(cfg, db_path)` in `trader_loop.py`, called
+  from `run()` once the fleet lock is held (`record_profile=True` from
+  `main()`; tests drive `run()` without it so no test writes the live
+  runtime dir); writes `pid`, `started_at`, resolved `db_path`, helper
+  fields via `runtime_file(...)` temp-then-replace; `OSError`/`ValueError`/
+  `TypeError` → warning log, trader continues.
+- Reader via `resolve_runtime_file(...)` per contract §4; fallback in
+  `get_system_status()` only when no shadow profile, with `source: "live"`,
+  `running: true`; shadow priority preserved; existing `try/except` guard kept.
+- Tests: writer holds `pid == os.getpid()` + db + name; unwritable runtime dir
+  → no raise; server matrix (valid live; dead pid; pid absent from registry;
+  other-store db; shadow+live → shadow wins). Runtime files only under
+  `tmp_path`.
+
+## Files NOT to modify
+
+`scripts/shadow_tournament.py`, `scripts/resume_tournament_arms.py`,
+`scripts/tournament_cockpit_server.py`, `scripts/tournament_dashboard_hub.py`,
+`configs/tournaments/*.json`, `core_brain/risk.py`, `core_brain/env_file.py`,
+`get_parameters()` + Strategy tab, `MakerConfig` fields,
+`dashboard/static/styles.css` (conditional), `.gitignore`.
+
+## Verification (agent-run while building; operator block hands-on only)
+
+- `python -m pytest -q tests/test_dashboard_server.py` (ticket acceptance)
+- `python -m pytest -q tests/test_active_profile.py tests/test_shadow_run_stopwatch.py tests/test_per_run_shadow_heartbeat.py`
+- `python -m pytest -q tests/test_ui_top_nav_consistency.py tests/test_ui_top_nav_groups.py tests/test_live_state_language.py tests/test_dashboard_narrow_viewport.py`
+- Full suite stays the CI merge gate, not a local loop.

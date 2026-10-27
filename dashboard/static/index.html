@@ -83,6 +83,7 @@
         <!-- Mode & execution state indicator superseded by LIVE/SHADOW IMPLEMENTED pills; hidden from layout to eliminate duplication while preserved in DOM for test harnesses -->
         <span id="master-status-indicator" class="pill state-unknown mono" style="display:none"><span class="pill-label">STACK</span> <span class="pill-value">UNKNOWN</span></span>
         <span id="db-mode-badge" class="pill state-unknown mono" title="Active registry"><span class="pill-label">DB</span> <span class="pill-value">UNKNOWN</span></span>
+        <button id="profile-badge" class="pill state-unknown mono" type="button" title="Active profile" aria-haspopup="true" aria-expanded="false" aria-controls="profile-dropdown"><span class="pill-label">PROFILE</span> <span class="pill-value">--</span></button>
         <span id="shadow-run-clock" class="mono top-status-clock" style="display:none"></span>
         <span id="scan-engine-elsewhere" class="pill engine-elsewhere-pill mono" style="display:none"></span>
       </div>
@@ -130,6 +131,7 @@
       <div class="services-dropdown-foot">Full controls on the Live Operations tab</div>
     </div>
     <div id="db-run-switcher" class="db-run-switcher header-panel" role="menu" aria-label="Shadow run switcher" style="display:none"></div>
+    <div id="profile-dropdown" class="db-run-switcher header-panel" aria-label="Profile picker" style="display:none"></div>
   </header>
 
   <!-- ── Backend-contact watchdog (DESIGN.md): shown when the poll loop
