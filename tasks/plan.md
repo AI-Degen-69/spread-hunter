@@ -99,7 +99,7 @@ T1 (measurement + verdict CLI)  ──►  T2 (audit doc)
 
 ## Tasks
 
-### T1 — One command that reads the run and reports each arm's shape and the repo's verdict
+### T1 — One command that reads the run and reports each arm's shape and the repo's verdict [x]
 - **Size:** M  **Domain:** `[Backend/Logic]`  **Depends on:** —
 - **Files:** `scripts/reevaluate_tournament_run.py` (bring onto this branch, add `--verdict`),
   `tests/test_reevaluate_tournament_run.py` (already written; extend for the verdict wiring).

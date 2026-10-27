@@ -3,11 +3,11 @@
 Branch: `i839/live-migration-approval-audit` | Plan: `tasks/plan.md` | Spec: `SPEC.md`
 
 ## T1 — Measurement + verdict CLI `[Backend/Logic]` (M)
-- [ ] Bring `scripts/reevaluate_tournament_run.py` onto this branch and add `--verdict`
-- [ ] Extend `tests/test_reevaluate_tournament_run.py` to pin the verdict wiring
-- [ ] Confirm every store opens read-only; missing plan → exit 1
-- [ ] `python -m pytest -q tests/test_reevaluate_tournament_run.py`
-- [ ] Print the ten-arm table for the real run folder (checkpoint 1)
+- [x] Bring `scripts/reevaluate_tournament_run.py` onto this branch and add `--verdict`
+- [x] Extend `tests/test_reevaluate_tournament_run.py` to pin the verdict wiring
+- [x] Confirm every store opens read-only; missing plan → exit 1
+- [x] `python -m pytest -q tests/test_reevaluate_tournament_run.py` (7 passed)
+- [x] Print the ten-arm table for the real run folder (checkpoint 1)
 
 ## T2 — Audit document `[Docs]` (M)
 - [ ] `docs/audits/live-migration-799.md`: verdict up front, commands behind every table
