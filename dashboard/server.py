@@ -83,6 +83,7 @@ if str(LIVE_ROOT) not in sys.path:
 # path while only the old file exists. See core_brain/runtime_paths.py.
 from core_brain import code_revision  # noqa: E402
 from core_brain.runtime_paths import (  # noqa: E402
+    PENDING_PROFILE_FILE,
     TRADER_PROFILE_FILE,
     legacy_runtime_file,
     resolve_runtime_file,
@@ -1560,6 +1561,131 @@ def _read_trader_profile(active_db_path: str | None, decide_pid=None) -> dict | 
     }
 
 
+def _tournament_arms_configs() -> list[dict]:
+    """Arm definitions from configs/tournaments/*_arms.json (#856 IIIB).
+
+    Each arm carries the env block that reproduces it, so staging an arm is
+    replaying recorded settings, not inventing new ones. Unreadable files are
+    skipped: a broken arms file must not hide the healthy ones.
+    """
+    arms: list[dict] = []
+    try:
+        cfg_dir = REPO_ROOT / "configs" / "tournaments"
+        paths = sorted(cfg_dir.glob("*_arms.json"))
+    except OSError:
+        return []
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, list):
+            continue
+        for entry in data:
+            if not isinstance(entry, dict) or not entry.get("name"):
+                continue
+            raw_env = entry.get("env") or {}
+            env = {str(k): str(v) for k, v in raw_env.items()
+                   if isinstance(k, str)} if isinstance(raw_env, dict) else {}
+            arms.append({
+                "kind": "arm",
+                "name": str(entry["name"]),
+                "label": str(entry.get("label") or entry["name"]),
+                "profile": str(entry.get("profile") or ""),
+                "env": env,
+                "source": path.name,
+            })
+    return arms
+
+
+def _arm_stores(now: float | None = None) -> dict[str, str]:
+    """Freshest on-disk heartbeat store per tournament arm (#856 IIIB).
+
+    One scan shared by the options listing and the view lookup, so N arms do
+    not pay N directory walks. Temporary/test stores are never offered.
+    """
+    from core_brain.shadow_run import parse_tournament_db_path
+    now = time.time() if now is None else now
+    best: dict[str, tuple[float, str]] = {}
+    for path in _shadow_heartbeat_candidates():
+        try:
+            if now - path.stat().st_mtime > SHADOW_RUN_LIST_WINDOW_S:
+                continue
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        tournament = parse_tournament_db_path(raw.get("db_path"))
+        if not isinstance(tournament, dict) or not tournament.get("arm"):
+            continue
+        try:
+            ts = float(raw.get("heartbeat_ts", 0.0))
+        except (TypeError, ValueError):
+            continue
+        db_path = raw.get("db_path")
+        if not db_path or _is_temp_or_test_db(db_path):
+            continue
+        try:
+            if not Path(db_path).is_file():
+                continue
+        except (OSError, ValueError, TypeError):
+            continue
+        arm = str(tournament["arm"])
+        if ts > best.get(arm, (-1.0, ""))[0]:
+            best[arm] = (ts, str(db_path))
+    return {arm: db for arm, (_, db) in best.items()}
+
+
+def _profile_options() -> dict:
+    """Every loadable profile: code presets plus tournament arms (#856 IIIB)."""
+    from core_brain.config import TOURNAMENT_PRESETS
+    presets = [{
+        "kind": "preset",
+        "name": name,
+        "label": name,
+        "detail": str(preset.get("description", "")),
+        "env": {"BOT_QUOTE_TOURNAMENT_PRESET": name},
+    } for name, preset in TOURNAMENT_PRESETS.items()]
+    stores = _arm_stores()
+    arms = []
+    for arm in _tournament_arms_configs():
+        arm["has_store"] = arm["name"] in stores
+        arms.append(arm)
+    return {"presets": presets, "arms": arms}
+
+
+def _resolve_arm_store(arm_name: str | None, now: float | None = None) -> str | None:
+    """The freshest heartbeat store recorded for a tournament arm (#856 IIIB).
+
+    View-only navigation evidence: the page re-points at the store the arm is
+    actually writing. A name with no heartbeat has no store to show.
+    """
+    if not arm_name:
+        return None
+    return _arm_stores(now=now).get(str(arm_name))
+
+
+def _read_pending_profile() -> dict | None:
+    """The staged profile for the next START, or None (#856 IIIB)."""
+    try:
+        raw = json.loads(resolve_runtime_file(
+            PENDING_PROFILE_FILE, root=LIVE_ROOT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    env = raw.get("env")
+    if not isinstance(raw.get("name"), str) or not isinstance(env, dict):
+        return None
+    return {
+        "kind": raw.get("kind"),
+        "name": raw["name"],
+        "env": {str(k): str(v) for k, v in env.items()},
+        "staged_at": raw.get("staged_at"),
+    }
+
+
 def _resolve_active_profile(shadow_run: dict | None) -> dict | None:
     """The engine-recorded profile for the selected store (#856), or None.
 
@@ -1745,6 +1871,8 @@ def get_system_status() -> dict:
         # record when the selected store has one, else null (T3 adds the
         # live fallback). Never derived from this process's environment.
         "active_profile": active_profile,
+        # The staged profile for the next START, if any (#856 IIIB).
+        "pending_profile": _read_pending_profile(),
         # The OTHER rehearsals on this machine, including live ones writing a
         # store this page is not pointed at. Named, never read into the numbers
         # above: without them a dead run on a stale store reads as "the engine
@@ -1916,6 +2044,23 @@ def start_bot() -> dict:
         from core_brain.order_registry import get_run_id
         child_env = {**os.environ, "SH_RUN_ID": get_run_id()}
 
+        # A staged profile from POST /api/profile/stage (#856 IIIB): overlay
+        # its env onto the spawned stack only. This process's own environment
+        # stays untouched, so the badge keeps reading engine records.
+        pending_path = None
+        staged_profile_name = None
+        try:
+            pending_path = resolve_runtime_file(PENDING_PROFILE_FILE, root=LIVE_ROOT)
+            if pending_path.exists():
+                pending = json.loads(pending_path.read_text(encoding="utf-8"))
+                if isinstance(pending, dict) and isinstance(pending.get("env"), dict):
+                    child_env.update({str(k): str(v)
+                                      for k, v in pending["env"].items()})
+                    if isinstance(pending.get("name"), str):
+                        staged_profile_name = pending["name"]
+        except (OSError, ValueError):
+            pending_path, staged_profile_name = None, None
+
         # POSIX only: a new session makes each launched service a process-group
         # leader, so STOP can signal the whole tree (ranker/watcher children
         # included) instead of just the root.
@@ -2006,11 +2151,19 @@ def start_bot() -> dict:
         procs_file.write_text(json.dumps(new_procs, indent=2), encoding="utf-8")
 
         reused = [n for n, alive in
-                  (("filter", filter_alive), ("query", query_alive), ("decide", decide_alive))
+                  (("filter", filter_alive), ("query", query_alive),
+                   ("decide", decide_alive))
                   if alive]
+        staged_msg = ""
+        if staged_profile_name and pending_path is not None:
+            try:
+                pending_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            staged_msg = f" with staged profile {staged_profile_name}"
         return {
             "ok": True,
-            "message": "Bot stack started",
+            "message": f"Bot stack started{staged_msg}",
             "launched": [n for n, alive in
                          (("filter", not filter_alive), ("query", not query_alive),
                           ("decide", not decide_alive)) if alive],
@@ -2554,6 +2707,98 @@ def switch_active_db(path: str | None) -> dict:
     return {"ok": True,
             "message": f"Now reading {target}.",
             "status": get_system_status()}
+
+
+@app.get("/api/profile/options")
+def api_profile_options():
+    """Every loadable profile: code presets plus tournament arms (#856 IIIB).
+
+    Read-only listing. Presets come from TOURNAMENT_PRESETS, arms from
+    configs/tournaments/*_arms.json with the env block that reproduces them.
+    """
+    return JSONResponse(_profile_options())
+
+
+@app.post("/api/profile/view")
+def api_profile_view(request: Request, name: str | None = None):
+    """Point the page at an arm's store: view-only navigation (#856 IIIB).
+
+    The same read-only re-point as the run switcher; the stack, its
+    processes and the production registry are untouched.
+    """
+    _authorize_control(request)
+    store = _resolve_arm_store(name)
+    if not store:
+        return JSONResponse({
+            "ok": False,
+            "message": f"No store on disk for arm {name!r}: nothing is writing it.",
+            "status": get_system_status(),
+        })
+    return JSONResponse(switch_active_db(store))
+
+
+@app.post("/api/profile/stage")
+def api_profile_stage(request: Request, kind: str | None = None, name: str | None = None):
+    """Stop the stack and stage a profile for the next START (#856 IIIB).
+
+    Staging writes runtime/pending_profile.json; it never starts anything.
+    The operator's next START press consumes it (child env overlay) and the
+    staged run then records itself in trader_profile.json like any other.
+    """
+    _authorize_control(request)
+    options = _profile_options()
+    match = next((o for o in options["presets"] + options["arms"]
+                  if o["kind"] == kind and o["name"] == name), None)
+    if match is None:
+        return JSONResponse({
+            "ok": False,
+            "message": f"Unknown profile {kind}:{name}.",
+            "status": get_system_status(),
+        })
+    stopped = stop_bot()
+    if not stopped.get("ok"):
+        return JSONResponse({
+            "ok": False,
+            "message": ("Refusing to stage "
+                          f"{match['label']}: stop failed ({stopped.get('message')})."),
+            "status": get_system_status(),
+        })
+    record = {
+        "kind": kind,
+        "name": name,
+        "env": match["env"],
+        "staged_at": time.time(),
+    }
+    try:
+        target = runtime_file(PENDING_PROFILE_FILE, root=LIVE_ROOT)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_text(json.dumps(record), encoding="utf-8")
+        tmp.replace(target)
+    except OSError as e:
+        return JSONResponse({
+            "ok": False,
+            "message": f"Stop succeeded but staging failed: {e}.",
+            "status": get_system_status(),
+        })
+    return JSONResponse({
+        "ok": True,
+        "message": (f"Stack stopped; {match['label']} staged. "
+                      "Press START to run it."),
+        "status": get_system_status(),
+    })
+
+
+@app.post("/api/profile/clear")
+def api_profile_clear(request: Request):
+    """Drop the staged profile: the next START uses the current env (#856 IIIB)."""
+    _authorize_control(request)
+    try:
+        resolve_runtime_file(
+            PENDING_PROFILE_FILE, root=LIVE_ROOT).unlink(missing_ok=True)
+    except OSError:
+        pass
+    return JSONResponse({"ok": True, "status": get_system_status()})
 
 
 @app.post("/api/system/db")

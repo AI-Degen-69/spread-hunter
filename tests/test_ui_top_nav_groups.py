@@ -515,3 +515,41 @@ def test_profile_badge_renders_states():
     reset = p["reset"]
     assert reset["className"] == "pill state-unknown mono"
     assert "state-running" not in reset["className"]
+
+
+@requires_node
+def test_profile_picker_lists_view_and_load():
+    p = _harness("profilepicker")
+    html = p["html"]
+    assert 'class="pill-label"' in html and 'class="pill-value"' in html
+    assert 'data-profile-action="view"' in html
+    assert html.count('data-profile-action="load"') == 3
+    assert 'data-profile-action="clear"' in html
+    assert "STAGED" in html
+    assert "&lt;b&gt;Clear" in html
+    assert "<b>Clear" not in html
+    # The arm without a store offers Load but no View.
+    assert html.count('data-profile-action="view"') == 1
+    assert 'data-profile-action' not in p["empty"]
+    assert 'db-run-row' not in p["empty"]
+
+
+def test_profile_badge_is_a_button_with_a_dropdown(dom: DOMNode):
+    badge = dom.find_one(id="profile-badge")
+    assert badge is not None, "Expected #profile-badge in DOM"
+    assert badge.tag == "button", "#profile-badge must be a button (keyboard accessible)"
+    assert badge.get_attr("aria-haspopup") == "true"
+    assert badge.get_attr("aria-controls") == "profile-dropdown"
+    panel = dom.find_one(id="profile-dropdown")
+    assert panel is not None, "Expected #profile-dropdown in DOM"
+    assert "header-panel" in panel.classes
+    assert panel.parent is not None and panel.parent.tag == "header", \
+        "#profile-dropdown must be a direct child of <header>"
+
+
+@requires_node
+def test_start_button_title_names_the_staged_profile():
+    t = _harness("stagedtitle")
+    assert t["staged"] == "Start bot execution stack with staged profile balanced."
+    assert t["none"] == ""
+    assert t["nullPending"] == ""

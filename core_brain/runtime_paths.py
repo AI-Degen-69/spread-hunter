@@ -52,6 +52,11 @@ LEGACY_SERVICE_KEYS = {
 #: pre-rename name, so it stays out of LEGACY_FILE_NAMES.
 TRADER_PROFILE_FILE = "trader_profile.json"
 
+#: The operator-staged profile for the next START (#856 IIIB). Written by
+#: POST /api/profile/stage, consumed once by start_bot. New file: no legacy
+#: entry.
+PENDING_PROFILE_FILE = "pending_profile.json"
+
 
 def _runtime_dir(
     root: Path | str | None,

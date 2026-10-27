@@ -826,9 +826,33 @@ function profileVerdicts() {
   return { missing, runningShadow, endedShadow, runningLive, escaped, reset };
 }
 
+function stagedTitleVerdicts() {
+  return {
+    staged: app.startButtonTitle({ pending_profile: { name: 'balanced' } }),
+    none: app.startButtonTitle({}),
+    nullPending: app.startButtonTitle({ pending_profile: null }),
+  };
+}
+
+function profilePickerVerdicts() {
+  const html = app.profileOptionsHtml(
+    {
+      presets: [{ kind: 'preset', name: 'balanced', detail: 'Proportional tracking' }],
+      arms: [{ kind: 'arm', name: 'queue-clear-5m', label: 'Queue <b>Clear</b>',
+               profile: 'arms profile', env: {}, has_store: true },
+             { kind: 'arm', name: 'loose-baseline', label: 'Loose',
+               profile: '', env: {}, has_store: false }],
+    },
+    { kind: 'arm', name: 'queue-clear-5m' });
+  const empty = app.profileOptionsHtml({ presets: [], arms: [] }, null);
+  return { html, empty };
+}
+
 let out;
 if (script === 'dbmode') out = dbModeVerdicts();
 else if (script === 'profile') out = profileVerdicts();
+else if (script === 'profilepicker') out = profilePickerVerdicts();
+else if (script === 'stagedtitle') out = stagedTitleVerdicts();
 else if (script === 'runswitcher') out = runSwitcherVerdicts();
 else if (script === 'trialbanner') out = trialBannerVerdicts();
 else if (script === 'marketscan') out = marketScanVerdicts();

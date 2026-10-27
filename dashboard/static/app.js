@@ -2190,11 +2190,31 @@ if (typeof window !== 'undefined' && !window.__reserveBtnBound) {
 function renderProfileBadge(status) {
   const el = document.getElementById('profile-badge');
   if (!el) return;
+
+  // Wired once, before any early return: an unwired button is a dead button,
+  // and the unknown state is exactly when the picker matters most.
+  if (!el.dataset.wired) {
+    el.dataset.wired = 'true';
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleProfileDropdown();
+    });
+    document.addEventListener('click', (e) => {
+      const panel = document.getElementById('profile-dropdown');
+      if (!panel || panel.style.display !== 'block') return;
+      if (panel.contains(e.target) || el.contains(e.target)) return;
+      closeProfileDropdown();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeProfileDropdown();
+    });
+  }
+
   const profile = status?.active_profile || null;
   if (!profile || typeof profile.name !== 'string') {
     el.className = 'pill state-unknown mono';
     el.innerHTML = renderPillHtml('PROFILE', 'unknown');
-    el.title = 'Active profile unknown: no engine has recorded its configuration for this store.';
+    el.title = 'Active profile unknown: no engine has recorded its configuration for this store. Click to view or load a profile.';
     return;
   }
   const name = profile.name;
@@ -2214,6 +2234,114 @@ function renderProfileBadge(status) {
   el.title = `${sourceWord} profile ${name}: ${parts.join(', ')}.`
     + (typeof profile.tournament_arm === 'string' && profile.tournament_arm
       ? ` Tournament arm ${profile.tournament_arm}.` : '');
+  el.title += ' Click to view or load a profile.';
+}
+
+/* ── Profile picker: view an arm's store, or stage a profile for START ── */
+function closeProfileDropdown() {
+  const panel = document.getElementById('profile-dropdown');
+  const trigger = document.getElementById('profile-badge');
+  if (panel) panel.style.display = 'none';
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+}
+
+function toggleProfileDropdown() {
+  const panel = document.getElementById('profile-dropdown');
+  const trigger = document.getElementById('profile-badge');
+  if (!panel || !trigger) return;
+  if (panel.style.display === 'block') {
+    closeProfileDropdown();
+    return;
+  }
+  closeServicesDropdown();
+  closeRunSwitcher();
+  panel.style.display = 'block';
+  trigger.setAttribute('aria-expanded', 'true');
+  placePanel(trigger, panel);
+  renderProfileOptions();
+}
+
+function profileOptionsHtml(options, pending) {
+  const staged = pending && typeof pending.name === 'string' ? pending : null;
+  const stagedName = staged ? `${staged.kind}:${staged.name}` : '';
+  let out = '';
+  if (staged) {
+    out += `<div class="db-run-row" title="The next START launches the stack with this profile.">
+      <span class="pill state-running mono"><span class="pill-label">STAGED</span> <span class="pill-value">${esc(staged.name)}</span></span>
+      <span class="db-run-name">For the next START</span>
+      <button class="db-run-switch" data-profile-action="clear" title="Drop the staged profile; START uses the current env.">Clear</button>
+    </div>`;
+  }
+  out += '<div class="services-dropdown-head"><span>Tournaments Arms — view a store, or load one for START</span></div>';
+  for (const arm of (options?.arms || [])) {
+    const key = `arm:${arm.name}`;
+    const tag = key === stagedName ? ' <span class="pill-detail">STAGED</span>' : '';
+    const viewBtn = arm.has_store
+      ? `<button class="db-run-switch" data-profile-action="view" data-kind="arm" data-name="${esc(arm.name)}" title="Point this page at the store ${esc(arm.name)} is writing (read-only).">View</button>`
+      : '';
+    out += `<div class="db-run-row" title="${esc(arm.profile || arm.label || arm.name)}">
+      <span class="pill state-unknown mono"><span class="pill-label">ARM</span> <span class="pill-value">${esc(arm.name)}</span></span>
+      <span class="db-run-name">${esc(arm.label || arm.name)}${tag}</span>
+      ${viewBtn}
+      <button class="db-run-switch" data-profile-action="load" data-kind="arm" data-name="${esc(arm.name)}" title="Stop the stack and stage ${esc(arm.name)} for the next START.">Load</button>
+    </div>`;
+  }
+  out += '<div class="services-dropdown-head"><span>Presets — load one for START</span></div>';
+  for (const preset of (options?.presets || [])) {
+    const key = `preset:${preset.name}`;
+    const tag = key === stagedName ? ' <span class="pill-detail">STAGED</span>' : '';
+    out += `<div class="db-run-row" title="${esc(preset.detail || preset.name)}">
+      <span class="pill state-unknown mono"><span class="pill-label">PRESET</span> <span class="pill-value">${esc(preset.name)}</span></span>
+      <span class="db-run-name">${esc(preset.name)}${tag}</span>
+      <button class="db-run-switch" data-profile-action="load" data-kind="preset" data-name="${esc(preset.name)}" title="Stop the stack and stage preset ${esc(preset.name)} for the next START.">Load</button>
+    </div>`;
+  }
+  return out;
+}
+
+async function renderProfileOptions() {
+  const panel = document.getElementById('profile-dropdown');
+  if (!panel) return;
+  let options = { presets: [], arms: [] };
+  try {
+    const res = await fetch('/api/profile/options');
+    if (res.ok) options = await res.json();
+  } catch {
+    // A picker that cannot list profiles says so instead of going blank.
+  }
+  panel.innerHTML = profileOptionsHtml(options, lastStatus?.pending_profile || null)
+    || '<div class="db-run-row"><span class="db-run-name">No profiles available.</span></div>';
+  panel.querySelectorAll('[data-profile-action]').forEach(b => {
+    b.addEventListener('click', async () => {
+      const action = b.getAttribute('data-profile-action');
+      const kind = b.getAttribute('data-kind');
+      const name = b.getAttribute('data-name');
+      b.disabled = true;
+      try {
+        const endpoint = action === 'view'
+          ? `/api/profile/view?name=${encodeURIComponent(name || '')}`
+          : action === 'clear'
+            ? '/api/profile/clear'
+            : `/api/profile/stage?kind=${encodeURIComponent(kind || '')}&name=${encodeURIComponent(name || '')}`;
+        const res = await controlFetch(endpoint);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          alert(data.message || data.detail || `Profile ${action} failed (HTTP ${res.status}).`);
+          renderProfileOptions();
+          return;
+        }
+        if (typeof showToast === 'function' && data.message) {
+          showToast(data.message, { tone: 'ok' });
+        }
+        clearPollSnapshots();
+        closeProfileDropdown();
+        pollStatus();
+      } catch {
+        alert(`Could not reach the dashboard to ${action} the profile.`);
+        renderProfileOptions();
+      }
+    });
+  });
 }
 
 function renderDbMode(status) {
@@ -2477,6 +2605,14 @@ function bindServicesDropdown() {
       closeRunSwitcher();
     }
   });
+}
+
+/* START RUN tooltip: names the staged profile (#856 IIIB), else empty. */
+function startButtonTitle(status) {
+  const stagedName = status?.pending_profile?.name;
+  return (typeof stagedName === 'string' && stagedName)
+    ? `Start bot execution stack with staged profile ${stagedName}.`
+    : '';
 }
 
 function getMasterToggleClasses(action, isShadow) {
@@ -2754,7 +2890,10 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
         masterToggle.disabled = false;
         masterToggle.style.opacity = '1';
         masterToggle.style.cursor = 'pointer';
-        masterToggle.title = '';
+        // The staged profile arms this button: say so on the control itself,
+        // next to the STAGED marker in the picker. renderServiceHeader owns
+        // this button's title; nothing else writes it.
+        masterToggle.title = startButtonTitle(status);
       }
     }
   }
@@ -11094,7 +11233,7 @@ if (typeof module !== 'undefined' && module.exports) {
     get pnlCiMetric() { return pnlCiMetric; },
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState, resolveHeldRead,
     engineReasonText, engineProvenanceText, renderScanStatePill,
-    renderMarketScanPill, renderPillHtml, renderDbMode, renderProfileBadge, renderServiceHeader,
+    renderMarketScanPill, renderPillHtml, renderDbMode, renderProfileBadge, profileOptionsHtml, startButtonTitle, renderServiceHeader,
     getMasterToggleClasses,
     aggregateServiceState,
     placePanel, closeServicesDropdown, closeRunSwitcher, bindServicesDropdown, repositionHeaderPanels,
