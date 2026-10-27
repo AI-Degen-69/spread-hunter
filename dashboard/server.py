@@ -2058,7 +2058,8 @@ def start_bot() -> dict:
                                       for k, v in pending["env"].items()})
                     if isinstance(pending.get("name"), str):
                         staged_profile_name = pending["name"]
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            logger.warning("staged profile unreadable, starting unstaged: %s", e)
             pending_path, staged_profile_name = None, None
 
         # POSIX only: a new session makes each launched service a process-group

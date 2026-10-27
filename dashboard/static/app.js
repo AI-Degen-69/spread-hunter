@@ -2279,7 +2279,7 @@ function profileOptionsHtml(options, pending) {
     const viewBtn = arm.has_store
       ? `<button class="db-run-switch" data-profile-action="view" data-kind="arm" data-name="${esc(arm.name)}" title="Point this page at the store ${esc(arm.name)} is writing (read-only).">View</button>`
       : '';
-    out += `<div class="db-run-row" title="${esc(arm.profile || arm.label || arm.name)}">
+    out += `<div class="db-run-row" title="${esc(arm.profile || arm.label || arm.name)}${arm.source ? ` · ${esc(arm.source)}` : ''}">
       <span class="pill state-unknown mono"><span class="pill-label">ARM</span> <span class="pill-value">${esc(arm.name)}</span></span>
       <span class="db-run-name">${esc(arm.label || arm.name)}${tag}</span>
       ${viewBtn}
