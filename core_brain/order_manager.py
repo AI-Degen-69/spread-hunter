@@ -3625,7 +3625,6 @@ def main() -> None:
     rp.add_argument("condition_id", nargs="?", default=None, help="Condition ID, slug, or Polymarket URL to probe. Default: deepest fresh-bid graduated market.")
     rp.add_argument("--discount", type=float, default=0.15, help="Discount below best bid (default: 0.15)")
     rp.add_argument("--hold-sec", type=float, default=3, help="Seconds to rest before cancel, 2-4 (default: 3)")
-    rp.add_argument("--max-exposure", type=float, default=5.00, help="Max worst-case exposure ceiling in USD (default: 5.00)")
     rp.add_argument("--db", default=None, help="Custom database path (default: data/orders.db)")
     rp.add_argument("--live", action=argparse.BooleanOptionalAction,
                 default=argparse.SUPPRESS,
@@ -3764,7 +3763,7 @@ def main() -> None:
     elif a.cmd == "reach-probe":
         from core_brain.reach_probe import reach_probe_cmd
         reach_probe_cmd(a.condition_id, discount=a.discount, hold_sec=a.hold_sec,
-                        max_exposure=a.max_exposure, live=is_live, db_path=a.db)
+                        live=is_live, db_path=a.db)
     elif a.cmd == "poll":
         poll(interval=a.interval, once=a.once, db_path=a.db,
              sweep_every=a.sweep_every, sweep_interval=a.sweep_interval,

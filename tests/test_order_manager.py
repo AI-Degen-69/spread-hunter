@@ -1354,14 +1354,14 @@ def test_reach_probe_refuses_price_below_one_tick(capsys):
 
 
 def test_reach_probe_refuses_exposure_above_ceiling(capsys):
-    """#840: 10sh @ 0.80 = $8.00 worst case exceeds the fixed $5 ceiling."""
+    """#840: 5sh @ 0.50 = $2.50 worst case exceeds the fixed $2.00 ceiling."""
     from core_brain.reach_probe import reach_probe_cmd
     with pytest.raises(SystemExit) as exc:
         reach_probe_cmd(**_probe_kwargs(
-            book_fn=_probe_books(up_bid=0.95, down_bid=0.90),
-            fetch_pinned_fn=lambda cid: _probe_market(venue_min=10.0)))
+            book_fn=_probe_books(up_bid=0.65, down_bid=0.60),
+            fetch_pinned_fn=lambda _cid: _probe_market(venue_min=5.0)))
     assert exc.value.code == 1
-    assert "$5.00" in capsys.readouterr().out
+    assert "$2.00" in capsys.readouterr().out
 
 def test_reach_probe_streams_events(capsys):
     """Probe streams events: Peeking market, order details with shares, etc."""
@@ -1760,6 +1760,31 @@ def test_reach_probe_no_id_leaves_row_pending_and_uses_market_fallback(tmp_path)
     assert row is not None
     assert row.status == "pending"
     assert row.order_id is None
+
+
+def test_reach_probe_sign_error_cancels_row_and_returns_failure(tmp_path):
+    """Sign failure catches exception, cancels local row, and writes evidence."""
+    client = _FakeVenue()
+    def _fail_create(args):
+        raise RuntimeError("simulated sign failure")
+    client.create_order = _fail_create
+    evidence, registry = _live_run(client, tmp_path)
+    assert evidence["result"] == "FAIL_sign_error"
+    assert evidence["sign_error"] == "RuntimeError"
+    row = registry.get_order(evidence["local_id"])
+    assert row is not None
+    assert row.status == "cancelled"
+
+
+def test_reach_probe_still_resting_does_not_mark_row_cancelled(tmp_path):
+    """When order is still resting on venue, row must NOT be marked cancelled."""
+    client = _FakeVenue(open_orders=[{"id": "vid-1"}])
+    evidence, registry = _live_run(client, tmp_path)
+    assert evidence["result"] == "FAIL_still_resting"
+    row = registry.get_order(evidence["local_id"])
+    assert row is not None
+    assert row.status == "open"
+    assert row.status != "cancelled"
 
 
 def test_reach_probe_evidence_file_has_no_secret_fields(tmp_path):

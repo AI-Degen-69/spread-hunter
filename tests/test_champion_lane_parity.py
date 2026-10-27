@@ -77,16 +77,18 @@ def test_field_override_beats_preset(champion_env, monkeypatch):
     assert load().bot_quote_spread_offset_multiplier == pytest.approx(0.99)
 
 
-def test_shadow_bankroll_is_the_only_difference(champion_env):
+def test_shadow_bankroll_is_the_only_difference(champion_env, monkeypatch):
     """The rehearsal bankroll override touches one field and nothing else."""
-    cfg = load()
-    pinned = dataclasses.replace(cfg, bot_quote_bank_baseline_usd=1000.0)
-    rest_live = {f.name: getattr(cfg, f.name) for f in dataclasses.fields(cfg)
+    live = load()
+    monkeypatch.setenv("BOT_QUOTE_BANK_BASELINE_USD", "1000.0")
+    shadow = shadow_cfg()
+    rest_live = {f.name: getattr(live, f.name) for f in dataclasses.fields(live)
                  if f.name != "bot_quote_bank_baseline_usd"}
-    rest_pinned = {f.name: getattr(pinned, f.name) for f in dataclasses.fields(pinned)
+    rest_shadow = {f.name: getattr(shadow, f.name) for f in dataclasses.fields(shadow)
                    if f.name != "bot_quote_bank_baseline_usd"}
-    assert rest_live == rest_pinned
-    assert pinned.bot_quote_bank_baseline_usd == pytest.approx(1000.0)
+    assert rest_live == rest_shadow
+    assert live.bot_quote_bank_baseline_usd == pytest.approx(100.0)
+    assert shadow.bot_quote_bank_baseline_usd == pytest.approx(1000.0)
 
 
 def test_queue_gate_blocks_four_minutes_allows_two(champion_env):

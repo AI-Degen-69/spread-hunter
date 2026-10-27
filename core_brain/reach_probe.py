@@ -23,7 +23,7 @@ from core_brain.config import VENUE_MIN_NOTIONAL_USD
 from core_brain.runtime_paths import runtime_file
 
 #: Hard ceiling on worst-case exposure (size x price).
-REACH_PROBE_MAX_EXPOSURE_USD: float = 5.00
+REACH_PROBE_MAX_EXPOSURE_USD: float = 2.00
 
 REACH_PROBE_DEFAULT_DISCOUNT: float = 0.15
 REACH_PROBE_DEFAULT_HOLD_SEC: float = 3.0
@@ -483,6 +483,7 @@ def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
         if dest_dir is None:
             path = runtime_file(
                 f"reach_probe_{int(time_fn())}_{local_id[:8]}.json")
+            path.parent.mkdir(parents=True, exist_ok=True)
         else:
             dest_dir.mkdir(parents=True, exist_ok=True)
             path = dest_dir / f"reach_probe_{int(time_fn())}_{local_id[:8]}.json"
@@ -501,9 +502,17 @@ def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
     ))
 
     stream(f"Placing order on venue: BUY {plan.size:.0f} shares @ ${plan.price:.3f} (post-only GTC)...")
-    signed = client.create_order(OrderArgsV2(
-        price=plan.price, size=plan.size, side=BUY, token_id=plan.token_id,
-        expiration=0))
+    try:
+        signed = client.create_order(OrderArgsV2(
+            price=plan.price, size=plan.size, side=BUY, token_id=plan.token_id,
+            expiration=0))
+    except Exception as exc:
+        evidence["sign_error"] = type(exc).__name__
+        registry.update_order_status(local_id, status="cancelled",
+                                     last_polled_ts=int(time_fn() * 1000))
+        evidence["result"] = "FAIL_sign_error"
+        evidence["undo"] = undo_lines(plan, pair_id, None, False, False)
+        return _write()
     batch = [PostOrdersV2Args(order=signed, orderType=OrderType.GTC)]
     try:
         resp = client.post_orders(batch, post_only=True)
@@ -602,7 +611,7 @@ def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
 
     filled = matched is not None and matched > 0
     slow = evidence["accept_to_receipt_sec"] > REACH_PROBE_CANCEL_DEADLINE_SEC
-    if cancelled_ok and matched == 0:
+    if cancelled_ok and matched == 0 and absent:
         registry.update_order_status(local_id, status="cancelled",
                                      last_polled_ts=int(time_fn() * 1000))
     if cancelled_ok and matched == 0 and absent and not slow:
@@ -706,7 +715,8 @@ def reach_probe_cmd(condition_id: str | None = None, *,
         plan = build_plan(
             market, token_id, best_bid, depth, discount=discount,
             hold_sec=hold_sec, cfg=cfg, order_caps_fn=order_caps_fn,
-            open_notional_usd=committed, max_exposure_usd=max_exposure)
+            open_notional_usd=committed,
+            max_exposure_usd=min(float(max_exposure), REACH_PROBE_MAX_EXPOSURE_USD))
         stream(f"Order details: BUY {plan.size:.0f} shares @ ${plan.price:.3f} (${plan.worst_case_usd:.2f} max exposure, {plan.hold_sec:.0f}s hold)")
     except ProbeRefused as exc:
         print(f"REACH-PROBE REFUSED: {exc}")
