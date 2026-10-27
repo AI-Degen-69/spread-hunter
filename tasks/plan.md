@@ -48,7 +48,7 @@ Task type: **Code + Security + Testing + Docs**.
 
 ## 3. Tasks (atomic vertical slices)
 
-### Task 1 — Audit report + champion parity tests [Docs/Backend] — M
+### Task 1 — Audit report + champion parity tests [Docs/Backend] — M [x]
 
 - **Target files:** `docs/live-lane-audit.md` (new),
   `tests/test_champion_lane_parity.py` (new).
@@ -70,7 +70,7 @@ Task type: **Code + Security + Testing + Docs**.
 - **Verify:** new parity file green; `git status` shows only the two new files.
 - **Helper skill:** `test-driven-development`.
 
-### Task 2 — `status` / `balance` fail loudly [Backend/Logic] — S
+### Task 2 — `status` / `balance` fail loudly [Backend/Logic] — S [x]
 
 - **Target files:** `core_brain/order_manager.py`, `tests/test_order_manager.py`.
 - **Build:** in `status()`, keep the `ERROR` print, then exit non-zero when
@@ -87,7 +87,7 @@ Task type: **Code + Security + Testing + Docs**.
   stdout tests unchanged.
 - **Helper skill:** `test-driven-development`.
 
-### Task 3 — `reach-probe` pre-flight + dry run [Backend/Logic] — M
+### Task 3 — `reach-probe` pre-flight + dry run [Backend/Logic] — M [x]
 
 - **Target files:** `core_brain/reach_probe.py` (new, injectable client fn +
   `live` param per `order_execution.py` style), `core_brain/markets.py`
@@ -113,7 +113,7 @@ Task type: **Code + Security + Testing + Docs**.
   green; manual `reach-probe --no-live` print reviewed (operator runs it).
 - **Helper skill:** `test-driven-development`.
 
-### Task 4 — Post, exact-ID cancel, verify, evidence [Backend/Security] — M
+### Task 4 — Post, exact-ID cancel, verify, evidence [Backend/Security] — M [x]
 
 - **Target files:** `core_brain/reach_probe.py`, `core_brain/order_manager.py`,
   `docs/agents/safety.md`, `tests/test_order_manager.py`.
