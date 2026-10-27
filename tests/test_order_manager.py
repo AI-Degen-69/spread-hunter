@@ -1267,6 +1267,164 @@ def test_balance_zero_is_a_warning_not_a_failure(capsys):
     assert "Zero." in out
 
 
+# --- reach-probe pre-flight + dry run (#840 Task 3) -------------------------
+
+def _probe_market(cid="0xprobe", up="tok-up-840", down="tok-dn-840",
+                  tick=0.01, venue_min=None):
+    import time as _time
+    from core_brain.markets import LiveMarket
+    return LiveMarket(
+        condition_id=cid, market_slug="probe-mkt", up_token=up,
+        down_token=down, start_ts=_time.time() - 1.0,
+        end_ts=_time.time() + 86400.0, tick_size=tick, neg_risk=False,
+        venue_min_size=venue_min)
+
+
+def _probe_books(up_bid=0.50, down_bid=0.40, up_depth=None, down_depth=None):
+    def _levels(bid, depth):
+        depth = depth if depth is not None else [(bid, 100.0), (bid - 0.01, 50.0), (bid - 0.02, 25.0)]
+        return {"bids": dict(depth), "best_bid": bid, "best_ask": bid + 0.02}
+    books = {"tok-up-840": _levels(up_bid, up_depth), "tok-dn-840": _levels(down_bid, down_depth)}
+    return lambda token: dict(books[str(token)])
+
+
+def _probe_client(open_orders=None):
+    mock_client = MagicMock()
+    mock_client.get_open_orders.return_value = open_orders or []
+    mock_client.post_orders.side_effect = AssertionError("dry run must never post")
+    mock_client.cancel_order.side_effect = AssertionError("dry run must never cancel")
+    return mock_client
+
+
+def _probe_kwargs(**kw):
+    from core_brain.config import load as _load
+    args = dict(condition_id="0xprobe", discount=0.15, hold_sec=3.0,
+                live=False, client_fn=lambda: _probe_client(),
+                fetch_pinned_fn=lambda cid: _probe_market(),
+                book_fn=_probe_books(),
+                open_notional_fn=lambda c: 0.0,
+                order_caps_fn=lambda: (25.0, 90.0))
+    args.update(kw)
+    return args
+
+
+def test_reach_probe_dry_run_never_signs(capsys):
+    """#840: --no-live prints the plan and returns before signing."""
+    from core_brain.reach_probe import reach_probe_cmd
+    client = _probe_client()
+    kwargs = _probe_kwargs(client_fn=lambda: client)
+    result = reach_probe_cmd(**kwargs)
+
+    assert result["result"] == "DRY_RUN"
+    assert client.post_orders.call_count == 0
+    assert client.cancel_order.call_count == 0
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out
+    assert "$1.75" in out  # 5sh @ 0.35 worst case
+
+
+def test_reach_probe_refuses_when_market_has_other_account_orders(capsys):
+    """#840: resting exposure on the market refuses the check."""
+    from core_brain.reach_probe import reach_probe_cmd
+    client = _probe_client(open_orders=[{"asset_id": "tok-up-840", "price": "0.5"}])
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(**_probe_kwargs(client_fn=lambda: client))
+    assert exc.value.code == 1
+    assert "REACH-PROBE REFUSED" in capsys.readouterr().out
+
+
+def test_reach_probe_refuses_when_open_orders_unreadable(capsys):
+    """#840: an unreadable order book state refuses before signing."""
+    from core_brain.reach_probe import reach_probe_cmd
+    client = MagicMock()
+    client.get_open_orders.side_effect = RuntimeError("venue down")
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(**_probe_kwargs(client_fn=lambda: client))
+    assert exc.value.code == 1
+    assert "REACH-PROBE REFUSED" in capsys.readouterr().out
+
+
+def test_reach_probe_refuses_price_below_one_tick(capsys):
+    """#840: best bid 0.10 minus 0.15 discount cannot rest on a 1c grid."""
+    from core_brain.reach_probe import reach_probe_cmd
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(**_probe_kwargs(book_fn=_probe_books(up_bid=0.10, down_bid=0.09)))
+    assert exc.value.code == 1
+    assert "below one tick" in capsys.readouterr().out
+
+
+def test_reach_probe_refuses_exposure_above_two_dollars(capsys):
+    """#840: 5sh @ 0.80 = $4.00 worst case exceeds the fixed $2 ceiling."""
+    from core_brain.reach_probe import reach_probe_cmd
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(**_probe_kwargs(book_fn=_probe_books(up_bid=0.95, down_bid=0.90)))
+    assert exc.value.code == 1
+    assert "$2.00" in capsys.readouterr().out
+
+
+def test_reach_probe_refuses_closed_or_not_accepting_market(capsys):
+    """#840: a pinned market that will not take orders refuses the check."""
+    from core_brain.reach_probe import reach_probe_cmd
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(**_probe_kwargs(fetch_pinned_fn=lambda cid: None))
+    assert exc.value.code == 1
+    assert "no tradeable market" in capsys.readouterr().out
+
+
+def test_reach_probe_size_meets_minimum_size_and_notional(capsys):
+    """#840: size honors the venue floor and the $1 notional, capped at $2."""
+    from core_brain.reach_probe import reach_probe_cmd
+    # best bid 0.30 - 0.15 = 0.15; ceil(1/0.15) = 7; venue floor 10 wins.
+    result = reach_probe_cmd(**_probe_kwargs(
+        book_fn=_probe_books(up_bid=0.30, down_bid=0.20),
+        fetch_pinned_fn=lambda cid: _probe_market(venue_min=10.0)))
+    assert result["plan"]["size"] == pytest.approx(10.0)
+    assert result["plan"]["worst_case_usd"] == pytest.approx(1.50)
+    capsys.readouterr()
+    # Unknown venue minimum falls back to the local 5-share default.
+    result2 = reach_probe_cmd(**_probe_kwargs(
+        book_fn=_probe_books(up_bid=0.30, down_bid=0.20)))
+    assert result2["plan"]["size"] == pytest.approx(7.0)
+    capsys.readouterr()
+
+
+def test_reach_probe_picks_deepest_bid_market_without_id(capsys):
+    """#840: auto-select ranks graduated markets by fresh top-3 bid depth."""
+    from types import SimpleNamespace
+    from core_brain.reach_probe import reach_probe_cmd
+    markets = {"0xshallow": _probe_market(cid="0xshallow"),
+               "0xdeep": _probe_market(cid="0xdeep")}
+    # Per-market books: shallow $5 resting, deep $500 resting.
+    per_market_books = {
+        "0xshallow": {"tok-up-840": {"bids": {0.50: 10.0}, "best_bid": 0.50, "best_ask": 0.52},
+                        "tok-dn-840": {"bids": {0.40: 10.0}, "best_bid": 0.40, "best_ask": 0.42}},
+        "0xdeep": {"tok-up-840": {"bids": {0.50: 1000.0}, "best_bid": 0.50, "best_ask": 0.52},
+                     "tok-dn-840": {"bids": {0.40: 1000.0}, "best_bid": 0.40, "best_ask": 0.42}},
+    }
+    fetch_history = []
+
+    def _fetch_hist(cid):
+        fetch_history.append(cid)
+        return markets[cid]
+
+    def _book_by_market(token):
+        # The resolver pre-flights markets in graduated order; attribute each
+        # book read to the market whose pinned row was fetched last.
+        cid = fetch_history[-1]
+        return dict(per_market_books[cid][str(token)])
+
+    gms = [SimpleNamespace(cid="0xshallow"), SimpleNamespace(cid="0xdeep")]
+    result = reach_probe_cmd(
+        condition_id=None, live=False, client_fn=lambda: _probe_client(),
+        fetch_pinned_fn=_fetch_hist,
+        graduated_markets_fn=lambda: gms,
+        book_fn=_book_by_market,
+        open_notional_fn=lambda c: 0.0,
+        order_caps_fn=lambda: (25.0, 90.0))
+    assert result["plan"]["condition_id"] == "0xdeep"
+    capsys.readouterr()
+
+
 def test_pairs_cmd_lists_registry_records(tmp_path, capsys):
     """pairs() outputs table of all registered pairs and held sizes."""
     from core_brain.order_registry import OrderRegistry, OrderRecord
