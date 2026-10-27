@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from core_brain.config import VENUE_MIN_NOTIONAL_USD
+from core_brain.runtime_paths import runtime_file
 
 #: Hard ceiling on worst-case exposure (size x price). Not raisable from CLI.
 REACH_PROBE_MAX_EXPOSURE_USD: float = 2.00
@@ -34,6 +35,10 @@ REACH_PROBE_CANCEL_DEADLINE_SEC: float = 5.0
 
 class ProbeRefused(Exception):
     """A pre-flight gate or plan bound refused the check. Fail closed."""
+
+
+class _UnverifiedRead(Exception):
+    """The venue would not say whether the probe order filled."""
 
 
 @dataclass
@@ -268,6 +273,246 @@ def resolve_market(condition_id: str | None, *, fetch_pinned_fn,
     return ranked[0][1]
 
 
+def _id_list(values) -> list:
+    """Normalize cancel-receipt ID lists (str or dict rows, both spellings)."""
+    out: list = []
+    for v in values or []:
+        if isinstance(v, str):
+            out.append(v)
+        elif isinstance(v, dict):
+            for key in ("orderID", "orderId", "order_id", "id"):
+                if v.get(key):
+                    out.append(str(v.get(key)))
+                    break
+        elif v is not None:
+            out.append(str(v))
+    return out
+
+
+def _short_address(client: Any) -> str:
+    try:
+        addr = str(client.get_address() or "")
+    except Exception:
+        return "unknown"
+    if not addr:
+        return "unknown"
+    return (addr[:10] + "...") if len(addr) > 13 else addr
+
+
+def undo_lines(plan: ProbePlan, pair_id: str, order_id: str | None,
+               resting: bool, filled: bool) -> list:
+    """What the operator runs next when the result is not PASS."""
+    lines = [f"REACH-PROBE result is not PASS (worst case was "
+             f"${plan.worst_case_usd:.2f})."]
+    if resting and order_id:
+        lines.append(f"IF RESTING: python -m core_brain.order_manager cancel {order_id} --live")
+    if filled:
+        lines.append(f"IF FILLED:  python -m core_brain.order_manager exit {pair_id} --live")
+    lines.append("ALWAYS:     python -m core_brain.order_manager poll --once")
+    return lines
+
+
+def execute_live(client: Any, plan: ProbePlan, *, cfg, registry,
+                 sleep_fn: Callable[[float], None] | None = None,
+                 time_fn: Callable[[], float] | None = None,
+                 evidence_dir: str | Path | None = None) -> dict:
+    """Post one post-only GTC buy, hold, cancel by exact ID, verify. Never raises."""
+    import json as _json
+    import time as _time_mod
+    import uuid as _uuid
+    from types import SimpleNamespace as _NS
+
+    from py_clob_client_v2.clob_types import (
+        OrderArgsV2, OrderType, PostOrdersV2Args, OrderPayload,
+    )
+    from py_clob_client_v2.order_builder.constants import BUY
+    from core_brain.order_registry import OrderRecord
+    from core_brain.single_buy_saver import _venue_matched
+    from core_brain.venue import venue_order_id
+
+    sleep_fn = sleep_fn or _time_mod.sleep
+    time_fn = time_fn or _time_mod.time
+    now_ms = int(time_fn() * 1000)
+    local_id = str(_uuid.uuid4())
+    pair_id = f"pair-{_uuid.uuid4().hex[:12]}"
+
+    evidence: dict = {
+        "condition_id": plan.condition_id,
+        "token_id": plan.token_id,
+        "price": plan.price,
+        "size": plan.size,
+        "tick_size": plan.tick_size,
+        "venue_min_size": (plan.venue_min_size
+                             if plan.venue_min_size is not None else "unknown"),
+        "worst_case_usd": plan.worst_case_usd,
+        "hold_sec": plan.hold_sec,
+        "pair_id": pair_id,
+        "local_id": local_id,
+        "funder": _short_address(client),
+        "order_id": None,
+        "canceled": [],
+        "not_canceled": [],
+    }
+
+    def _write() -> dict:
+        dest_dir = Path(evidence_dir) if evidence_dir else None
+        if dest_dir is None:
+            path = runtime_file(
+                f"reach_probe_{int(time_fn())}_{local_id[:8]}.json")
+        else:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            path = dest_dir / f"reach_probe_{int(time_fn())}_{local_id[:8]}.json"
+        path.write_text(_json.dumps(evidence, indent=2, default=str))
+        evidence["evidence_file"] = str(path)
+        return evidence
+
+    # Row first, then send -- a crash between send and write must never leave
+    # a live order untracked (same rule as `quote`).
+    registry.create_order(OrderRecord(
+        id=local_id, order_id=None, condition_id=plan.condition_id,
+        token_id=plan.token_id, side="BUY", price=plan.price,
+        original_size=plan.size, status="pending", posted_ts=now_ms,
+        last_polled_ts=now_ms, pair_id=pair_id,
+        max_pair_cost_at_post=cfg.bot_pos_price_max_pair_cost_usd,
+    ))
+
+    signed = client.create_order(OrderArgsV2(
+        price=plan.price, size=plan.size, side=BUY, token_id=plan.token_id,
+        expiration=0))
+    batch = [PostOrdersV2Args(order=signed, orderType=OrderType.GTC)]
+    try:
+        resp = client.post_orders(batch, post_only=True)
+    except Exception as exc:
+        evidence["post_error"] = f"{type(exc).__name__}"
+        evidence.update(_no_id_fallback(client, plan))
+        evidence["result"] = "uncertain"
+        evidence["undo"] = undo_lines(plan, pair_id, None, False, False)
+        return _write()
+    t_accept = time_fn()
+    evidence["ts_accept"] = t_accept
+    items = resp if isinstance(resp, list) else [resp]
+    vid = venue_order_id(items[0]) if items else None
+    if not vid:
+        evidence.update(_no_id_fallback(client, plan))
+        evidence["result"] = "uncertain"
+        evidence["undo"] = undo_lines(plan, pair_id, None, False, False)
+        return _write()
+    evidence["order_id"] = vid
+
+    try:
+        raw = client.get_order(vid)
+    except Exception as exc:
+        evidence["readback_error"] = f"{type(exc).__name__}"
+        _try_exact_cancel(client, vid)
+        evidence["result"] = "uncertain"
+        evidence["undo"] = undo_lines(plan, pair_id, vid, True, False)
+        return _write()
+    venue_token = None
+    if isinstance(raw, dict):
+        for key in ("asset_id", "token_id", "tokenId", "assetId"):
+            if raw.get(key):
+                venue_token = str(raw.get(key))
+                break
+    else:
+        for key in ("asset_id", "token_id", "tokenId", "assetId"):
+            if getattr(raw, key, None):
+                venue_token = str(getattr(raw, key))
+                break
+    if venue_token != plan.token_id:
+        evidence["token_mismatch"] = str(venue_token)
+        _try_exact_cancel(client, vid)
+        evidence["result"] = "FAIL_token_mismatch"
+        evidence["undo"] = undo_lines(plan, pair_id, vid, True, False)
+        return _write()
+    registry.attach_venue_order_id(local_id, vid, status="open",
+                                   last_polled_ts=int(time_fn() * 1000))
+
+    sleep_fn(plan.hold_sec)
+    try:
+        receipt = client.cancel_order(OrderPayload(orderID=vid))
+    except Exception as exc:
+        evidence["cancel_error"] = f"{type(exc).__name__}: {exc}"
+        evidence["result"] = "FAIL_cancel_error"
+        evidence["undo"] = undo_lines(plan, pair_id, vid, True, False)
+        return _write()
+    t_receipt = time_fn()
+    evidence["ts_cancel_receipt"] = t_receipt
+    evidence["accept_to_receipt_sec"] = round(t_receipt - t_accept, 3)
+    canceled = _id_list((receipt or {}).get("canceled")
+                         if isinstance(receipt, dict) else [])
+    raw_nc = (receipt or {}).get("not_canceled") if isinstance(receipt, dict) else None
+    if raw_nc is None and isinstance(receipt, dict):
+        raw_nc = receipt.get("notCanceled")
+    not_canceled = _id_list(raw_nc)
+    evidence["canceled"] = canceled
+    evidence["not_canceled"] = not_canceled
+    cancelled_ok = vid in canceled and vid not in not_canceled
+
+    try:
+        matched = _venue_matched(client, [_NS(order_id=vid)],
+                                 refusal=_UnverifiedRead)
+    except _UnverifiedRead:
+        matched = None
+    evidence["matched_size"] = matched
+    try:
+        resting_book = client.get_open_orders() or []
+    except Exception:
+        resting_book = None
+    if resting_book is None:
+        evidence["result"] = "FAIL_open_orders_unreadable"
+        evidence["undo"] = undo_lines(plan, pair_id, vid, True,
+                                       filled=matched is not None and matched > 0)
+        return _write()
+    absent = not any(str(o.get("id") or o.get("order_hash")
+                         or o.get("orderID") or "") == vid
+                     for o in resting_book if isinstance(o, dict))
+    evidence["status"] = None
+    if isinstance(raw, dict):
+        evidence["status"] = raw.get("status")
+
+    filled = matched is not None and matched > 0
+    slow = evidence["accept_to_receipt_sec"] > REACH_PROBE_CANCEL_DEADLINE_SEC
+    if cancelled_ok and matched == 0:
+        registry.update_order_status(local_id, status="cancelled",
+                                     last_polled_ts=int(time_fn() * 1000))
+    if cancelled_ok and matched == 0 and absent and not slow:
+        evidence["result"] = "PASS"
+        return _write()
+    if matched is None:
+        evidence["result"] = "unverified"
+    elif filled:
+        evidence["result"] = "FAIL_filled"
+    elif not cancelled_ok:
+        evidence["result"] = "FAIL_not_canceled"
+    elif not absent:
+        evidence["result"] = "FAIL_still_resting"
+    else:
+        evidence["result"] = "FAIL_slow_cancel"
+    evidence["undo"] = undo_lines(plan, pair_id, vid, resting=not absent,
+                                   filled=filled)
+    return _write()
+
+
+def _try_exact_cancel(client: Any, venue_id: str) -> None:
+    """Best-effort exact-ID cancel; never raises, never touches other orders."""
+    try:
+        from py_clob_client_v2.clob_types import OrderPayload as _Payload
+        client.cancel_order(_Payload(orderID=venue_id))
+    except Exception:
+        pass
+
+
+def _no_id_fallback(client: Any, plan: ProbePlan) -> dict:
+    """No venue ID came back: guarded market fallback, row stays pending."""
+    try:
+        from py_clob_client_v2.clob_types import OrderMarketCancelParams
+        client.cancel_market_orders(OrderMarketCancelParams(market=plan.condition_id))
+        return {"fallback": "cancel-market attempted (pre-flight proved zero "
+                             "other account orders on this market)"}
+    except Exception as exc:
+        return {"fallback": f"cancel-market failed: {type(exc).__name__}"}
+
+
 def reach_probe_cmd(*, condition_id: str | None = None,
                     discount: float = REACH_PROBE_DEFAULT_DISCOUNT,
                     hold_sec: float = REACH_PROBE_DEFAULT_HOLD_SEC,
@@ -279,6 +524,9 @@ def reach_probe_cmd(*, condition_id: str | None = None,
                     open_notional_fn: Callable[[Any], float | None] | None = None,
                     graduated_markets_fn: Callable[[], list] | None = None,
                     order_caps_fn: Callable[[], tuple[float, float]] | None = None,
+                    sleep_fn: Callable[[float], None] | None = None,
+                    time_fn: Callable[[], float] | None = None,
+                    evidence_dir: str | Path | None = None,
                     ) -> dict:
     """Run the reachability check. Returns the plan/evidence dict.
 
@@ -329,5 +577,19 @@ def reach_probe_cmd(*, condition_id: str | None = None,
     print_plan(plan, live=live)
     if not live:
         return {"result": "DRY_RUN", "plan": plan.__dict__}
-    print("LIVE execution lands in Task 4; nothing was sent.")
-    raise SystemExit(2)
+
+    import time as _time_mod
+    from core_brain.order_registry import OrderRegistry, DEFAULT_DB_PATH
+
+    registry = OrderRegistry(
+        db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
+    evidence = execute_live(
+        client, plan, cfg=cfg, registry=registry,
+        sleep_fn=sleep_fn, time_fn=time_fn, evidence_dir=evidence_dir)
+    if evidence["result"] != "PASS":
+        for line in evidence.get("undo", []):
+            print(line)
+        raise SystemExit(1)
+    print(f"REACH-PROBE PASS: order {evidence['order_id']} cancelled, "
+          f"matched 0, receipt in {evidence['accept_to_receipt_sec']:.2f}s")
+    return evidence

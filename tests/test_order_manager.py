@@ -1425,6 +1425,254 @@ def test_reach_probe_picks_deepest_bid_market_without_id(capsys):
     capsys.readouterr()
 
 
+# --- reach-probe post / cancel / verify / evidence (#840 Task 4) ------------
+
+def _live_plan(**kw):
+    from core_brain.reach_probe import ProbePlan
+    args = dict(condition_id="0xprobe", token_id="tok-up-840", side="UP",
+                price=0.35, size=5.0, tick_size=0.01, venue_min_size=None,
+                worst_case_usd=1.75, best_bid=0.50, depth_usd=60.0,
+                discount=0.15, hold_sec=3.0)
+    args.update(kw)
+    return ProbePlan(**args)
+
+
+class _FakeVenue:
+    """A venue client double for the live leg: records, never signs."""
+
+    def __init__(self, *, post_resp=None, order_raw=None, cancel_resp=None,
+                 open_orders=None, post_hook=None):
+        self.calls = []
+        self.post_resp = post_resp if post_resp is not None else [{"orderID": "vid-1"}]
+        self.order_raw = order_raw if order_raw is not None else {
+            "asset_id": "tok-up-840", "status": "open", "size_matched": "0"}
+        self.cancel_resp = cancel_resp if cancel_resp is not None else {"canceled": ["vid-1"]}
+        self.open_orders = open_orders if open_orders is not None else []
+        self.post_hook = post_hook
+        self.batches = []
+
+    def get_address(self):
+        return "0xABCDEF1234567890abcdef1234567890ABCDEF12"
+
+    def get_open_orders(self):
+        self.calls.append("get_open_orders")
+        return list(self.open_orders)
+
+    def create_order(self, args):
+        self.calls.append("create_order")
+        return {"signed": True}
+
+    def post_orders(self, batch, post_only=True):
+        self.calls.append("post_orders")
+        self.batches.append((list(batch), post_only))
+        if self.post_hook is not None:
+            self.post_hook()
+        return self.post_resp
+
+    def get_order(self, order_id):
+        self.calls.append(("get_order", order_id))
+        if isinstance(self.order_raw, Exception):
+            raise self.order_raw
+        return dict(self.order_raw)
+
+    def cancel_order(self, payload):
+        self.calls.append(("cancel_order", payload.orderID))
+        return dict(self.cancel_resp)
+
+    def cancel_all(self):
+        raise AssertionError("probe must never call cancel_all")
+
+    def cancel_market_orders(self, params):
+        self.calls.append(("cancel_market_orders", params.market))
+        return {"canceled": []}
+
+
+class _Clock:
+    def __init__(self, vals):
+        self.vals = list(vals)
+        self.i = 0
+
+    def __call__(self):
+        v = self.vals[min(self.i, len(self.vals) - 1)]
+        self.i += 1
+        return v
+
+
+def _live_run(client, tmp_path, **kw):
+    import tempfile
+    from core_brain.config import MakerConfig
+    from core_brain.order_registry import OrderRegistry
+    from core_brain.reach_probe import execute_live
+    ev_dir = tmp_path / "ev"
+    args = dict(client=client, plan=_live_plan(), cfg=MakerConfig(),
+                registry=OrderRegistry(db_path=tmp_path / "probe_live.db"),
+                sleep_fn=lambda s: None, time_fn=_Clock([1000.0] * 20),
+                evidence_dir=ev_dir)
+    args.update(kw)
+    registry = args["registry"]
+    evidence = execute_live(**args)
+    return evidence, registry
+
+
+def test_reach_probe_writes_pending_row_before_post(tmp_path):
+    """#840: row-first -- the pending row exists before the post is sent."""
+    from core_brain.order_registry import OrderRegistry
+    seen = {}
+    registry = OrderRegistry(db_path=tmp_path / "probe_row.db")
+    client = _FakeVenue()
+
+    def _hook():
+        rows = [r for r in registry.get_active_orders()
+                if r.status == "pending" and r.order_id is None]
+        seen["pending_before_post"] = len(rows) == 1
+
+    client.post_hook = _hook
+    from core_brain.config import MakerConfig
+    from core_brain.reach_probe import execute_live
+    evidence = execute_live(
+        client, _live_plan(), cfg=MakerConfig(), registry=registry,
+        sleep_fn=lambda s: None, time_fn=_Clock([1000.0] * 20),
+        evidence_dir=tmp_path / "ev")
+    assert seen.get("pending_before_post") is True
+    assert evidence["result"] == "PASS"
+    assert evidence["order_id"] == "vid-1"
+
+
+def test_reach_probe_posts_exactly_one_post_only_gtc_order(tmp_path):
+    """#840: one GTC post-only buy, never a sweeping order."""
+    from py_clob_client_v2.clob_types import OrderType
+    client = _FakeVenue()
+    evidence, _ = _live_run(client, tmp_path)
+    assert evidence["result"] == "PASS"
+    assert len(client.batches) == 1
+    batch, post_only = client.batches[0]
+    assert len(batch) == 1
+    assert post_only is True
+    assert batch[0].orderType == OrderType.GTC
+
+
+def test_reach_probe_cancels_by_exact_id_and_never_calls_cancel_all(tmp_path, capsys):
+    """#840: cancel hits the exact ID; broad cancels stay untouched."""
+    from core_brain.config import MakerConfig
+    from core_brain.order_registry import OrderRegistry
+    from core_brain.reach_probe import reach_probe_cmd
+    client = _FakeVenue()
+    evidence = reach_probe_cmd(
+        condition_id="0xprobe", live=True, db_path=tmp_path / "probe_cmd.db",
+        client_fn=lambda: client,
+        fetch_pinned_fn=lambda cid: _probe_market(),
+        book_fn=_probe_books(),
+        open_notional_fn=lambda c: 0.0,
+        order_caps_fn=lambda: (25.0, 90.0),
+        sleep_fn=lambda s: None, time_fn=_Clock([1000.0] * 20),
+        evidence_dir=tmp_path / "ev")
+    assert evidence["result"] == "PASS"
+    assert ("cancel_order", "vid-1") in client.calls
+    assert "cancel_all" not in client.calls
+    capsys.readouterr()
+
+
+def test_reach_probe_pass_requires_id_in_canceled(tmp_path, capsys):
+    """#840: an empty cancel receipt is a failure with a non-zero exit."""
+    from core_brain.reach_probe import reach_probe_cmd
+    client = _FakeVenue(cancel_resp={"canceled": [], "not_canceled": []})
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(
+            condition_id="0xprobe", live=True, db_path=tmp_path / "probe_nocancel.db",
+            client_fn=lambda: client,
+            fetch_pinned_fn=lambda cid: _probe_market(),
+            book_fn=_probe_books(),
+            open_notional_fn=lambda c: 0.0,
+            order_caps_fn=lambda: (25.0, 90.0),
+            sleep_fn=lambda s: None, time_fn=_Clock([1000.0] * 20),
+            evidence_dir=tmp_path / "ev")
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "poll --once" in out
+
+
+def test_reach_probe_fails_when_id_in_not_canceled(tmp_path):
+    """#840: an explicit not-canceled verdict fails with its reason."""
+    client = _FakeVenue(cancel_resp={"canceled": [], "not_canceled": ["vid-1"]})
+    evidence, _ = _live_run(client, tmp_path)
+    assert evidence["result"] == "FAIL_not_canceled"
+    assert evidence["not_canceled"] == ["vid-1"]
+
+
+def test_reach_probe_fails_with_undo_text_when_matched_size_positive(tmp_path, capsys):
+    """#840: a partial fill fails and prints the exit + reconcile path."""
+    from core_brain.reach_probe import reach_probe_cmd
+    raw = {"asset_id": "tok-up-840", "status": "open", "size_matched": "3"}
+    client = _FakeVenue(order_raw=raw)
+    with pytest.raises(SystemExit) as exc:
+        reach_probe_cmd(
+            condition_id="0xprobe", live=True, db_path=tmp_path / "probe_fill.db",
+            client_fn=lambda: client,
+            fetch_pinned_fn=lambda cid: _probe_market(),
+            book_fn=_probe_books(),
+            open_notional_fn=lambda c: 0.0,
+            order_caps_fn=lambda: (25.0, 90.0),
+            sleep_fn=lambda s: None, time_fn=_Clock([1000.0] * 20),
+            evidence_dir=tmp_path / "ev")
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "exit" in out
+    assert "poll --once" in out
+
+
+def test_reach_probe_unreadable_matched_size_is_unverified(tmp_path):
+    """#840: no matched-size field is `unverified`, never zero."""
+    raw = {"asset_id": "tok-up-840", "status": "open"}
+    client = _FakeVenue(order_raw=raw)
+    evidence, _ = _live_run(client, tmp_path)
+    assert evidence["result"] == "unverified"
+    assert evidence["matched_size"] is None
+
+
+def test_reach_probe_fails_when_cancel_takes_longer_than_five_seconds(tmp_path):
+    """#840: accept-to-receipt over 5s fails even with matched 0."""
+    client = _FakeVenue()
+    evidence, _ = _live_run(
+        client, tmp_path, time_fn=_Clock([1000.0, 1000.0, 1000.0, 1006.5, 1006.5, 1006.5]))
+    assert evidence["result"] == "FAIL_slow_cancel"
+    assert evidence["matched_size"] == pytest.approx(0.0)
+    assert evidence["accept_to_receipt_sec"] == pytest.approx(6.5)
+
+
+def test_reach_probe_no_id_leaves_row_pending_and_uses_market_fallback(tmp_path):
+    """#840: no venue ID keeps the row pending and uses the guarded fallback."""
+    client = _FakeVenue(post_resp=[{}])
+    evidence, registry = _live_run(client, tmp_path)
+    assert evidence["result"] == "uncertain"
+    assert evidence["order_id"] is None
+    assert any(c[0] == "cancel_market_orders" for c in client.calls
+               if isinstance(c, tuple))
+    row = registry.get_order(evidence["local_id"])
+    assert row is not None
+    assert row.status == "pending"
+    assert row.order_id is None
+
+
+def test_reach_probe_evidence_file_has_no_secret_fields(tmp_path):
+    """#840: the evidence JSON carries proof, never credentials."""
+    import json
+    client = _FakeVenue()
+    evidence, _ = _live_run(client, tmp_path)
+    assert evidence["result"] == "PASS"
+    path = tmp_path / "ev" / [p for p in __import__("os").listdir(tmp_path / "ev")][0]
+    blob = json.loads(path.read_text())
+    for key in ("ts_accept", "ts_cancel_receipt", "condition_id", "token_id",
+                "price", "size", "tick_size", "venue_min_size",
+                "worst_case_usd", "order_id", "canceled", "not_canceled",
+                "status", "matched_size", "hold_sec",
+                "accept_to_receipt_sec", "result"):
+        assert key in blob, f"missing evidence field {key}"
+    lowered = json.dumps(blob).lower()
+    for banned in ("secret", "private", "signature", "passphrase",
+                   "api_key", "api-key", "mnemonic", "seed phrase"):
+        assert banned not in lowered, f"evidence leaks {banned!r}"
+
+
 def test_pairs_cmd_lists_registry_records(tmp_path, capsys):
     """pairs() outputs table of all registered pairs and held sizes."""
     from core_brain.order_registry import OrderRegistry, OrderRecord
