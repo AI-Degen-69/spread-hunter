@@ -1210,6 +1210,63 @@ def test_balance_cmd_queries_funder_and_collateral(capsys):
     assert "$100.00" in out
 
 
+def test_status_exits_nonzero_when_open_orders_read_fails(capsys, tmp_path):
+    """#840: an unreadable venue book is a loud failure, not a blank report."""
+    from core_brain.order_registry import OrderRegistry
+    mock_client = MagicMock()
+    mock_client.get_address.return_value = "0x1111222233334444555566667777888899990000"
+    mock_client.get_open_orders.side_effect = RuntimeError("venue down")
+
+    with patch.object(le, "client", return_value=mock_client):
+        with pytest.raises(SystemExit) as exc:
+            le.status(registry=OrderRegistry(db_path=tmp_path / "status_fail.db"))
+    assert exc.value.code == 1
+    assert "open orders    ERROR" in capsys.readouterr().out
+
+
+def test_status_exits_nonzero_when_open_notional_is_none(capsys, tmp_path):
+    """#840: a None notional (failed second read) fails loudly too."""
+    from core_brain.order_registry import OrderRegistry
+    mock_client = MagicMock()
+    mock_client.get_address.return_value = "0x1111222233334444555566667777888899990000"
+    mock_client.get_open_orders.return_value = []
+
+    with patch.object(le, "client", return_value=mock_client), \
+         patch.object(le, "open_notional", return_value=None):
+        with pytest.raises(SystemExit) as exc:
+            le.status(registry=OrderRegistry(db_path=tmp_path / "status_none.db"))
+    assert exc.value.code == 1
+    assert "open orders    ERROR" in capsys.readouterr().out
+
+
+def test_balance_exits_nonzero_when_venue_read_fails(capsys):
+    """#840: an unreadable balance fails loudly; exit 0 means reached."""
+    mock_client = MagicMock()
+    mock_client.get_balance_allowance.side_effect = RuntimeError("venue down")
+
+    with patch.object(le, "client", return_value=mock_client):
+        with pytest.raises(SystemExit) as exc:
+            le.balance("0xfunder_addr")
+    assert exc.value.code == 1
+    assert "ERROR" in capsys.readouterr().out
+
+
+def test_balance_zero_is_a_warning_not_a_failure(capsys):
+    """#840: $0.00 is an operator warning, not a venue read failure."""
+    mock_client = MagicMock()
+    mock_client.get_balance_allowance.return_value = {
+        "balance": "0",
+        "allowance": "0",
+    }
+
+    with patch.object(le, "client", return_value=mock_client):
+        le.balance("0xfunder_addr")  # must not raise
+
+    out = capsys.readouterr().out
+    assert "$0.00 USDC" in out
+    assert "Zero." in out
+
+
 def test_pairs_cmd_lists_registry_records(tmp_path, capsys):
     """pairs() outputs table of all registered pairs and held sizes."""
     from core_brain.order_registry import OrderRegistry, OrderRecord

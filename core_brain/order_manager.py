@@ -306,13 +306,17 @@ def status(registry=None) -> None:
     print(f"signature type {os.environ.get('POLY_SIG_TYPE', '3')}")
     try:
         orders = c.get_open_orders() or []
+        notional = open_notional(c)
+        if notional is None:
+            raise ValueError("open_notional returned None")
         print(f"open orders    {len(orders)} "
-              f"(${open_notional(c):.2f} notional)")
+              f"(${notional:.2f} notional)")
         for o in orders[:10]:
             print(f"  {str(o.get('side')):4} {o.get('original_size')} @ "
                   f"{o.get('price')}  id={str(o.get('id') or o.get('order_hash'))[:16]}")
     except Exception as e:
         print(f"open orders    ERROR {type(e).__name__}: {e}")
+        raise SystemExit(1)
     print("\nConfirm the address above is the account holding your USDC "
           "BEFORE sending anything.")
     _print_requalification_section(registry)
@@ -386,7 +390,7 @@ def balance(funder: str | None) -> None:
                                    signature_type=sig_type))
     except Exception as e:
         print(f"           ERROR {type(e).__name__}: {e}")
-        return
+        raise SystemExit(1)
     print(f"raw        {r}")
 
     # USDC on Polygon is 6dp and the API returns integer base units as strings.
