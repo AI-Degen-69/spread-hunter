@@ -19,11 +19,11 @@ Branch: `i839/live-migration-approval-audit` | Plan: `tasks/plan.md` | Spec: `SP
 - [x] Re-run each table's command and match it against the doc (checkpoint 2)
 
 ## T3 — Backlog cross-reference `[Docs]` (XS)
-- [ ] `docs/backlog/i837-cockpit-catalyst-columns.md` row N4 → points at the audit
-- [ ] `docs/backlog/i838-cockpit-hybrid-blueprint.md` row N3 → points at the audit
-- [ ] Note that the 6.4 h snapshot values are superseded
+- [x] `docs/backlog/i837-cockpit-catalyst-columns.md` row N4 → points at the audit
+- [x] `docs/backlog/i838-cockpit-hybrid-blueprint.md` row N3 → points at the audit
+- [x] Note that the 6.4 h snapshot values are superseded
 
 ## Close-out
-- [ ] `python -m pytest -q tests/test_reevaluate_tournament_run.py tests/test_tournament_cockpit_arms.py tests/test_tournament_cockpit_funnel.py`
-- [ ] Confirm no cockpit, arms-JSON, config, or risk-formula change in the diff
-- [ ] Confirm no opening command was run and no store was written
+- [x] `python -m pytest -q tests/test_reevaluate_tournament_run.py tests/test_tournament_cockpit_arms.py tests/test_tournament_cockpit_funnel.py` (59 passed)
+- [x] Confirm no cockpit, arms-JSON, config, or risk-formula change in the diff
+- [x] Confirm no opening command was run and no store was written

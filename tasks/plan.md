@@ -132,7 +132,7 @@ T1 (measurement + verdict CLI)  ──►  T2 (audit doc)
   named suites stay green. The audit is read by the operator, so the "How to verify" block
   points at the run table, the cockpit, and the report file — not at the test suite.
 
-### T3 — Cross-reference the two backlog rows this run closes out
+### T3 — Cross-reference the two backlog rows this run closes out [x]
 - **Size:** XS  **Domain:** `[Docs]`  **Depends on:** T2
 - **Files:** `docs/backlog/i837-cockpit-catalyst-columns.md` (row N4),
   `docs/backlog/i838-cockpit-hybrid-blueprint.md` (row N3).
