@@ -12,6 +12,7 @@ Read-only. It opens every arm database with ``mode=ro`` and never writes.
 Usage:
     python -m scripts.reevaluate_tournament_run --issue 799
     python -m scripts.reevaluate_tournament_run --run-dir data/tournaments/i799-... --json
+    python -m scripts.reevaluate_tournament_run --run-dir <run dir> --verdict
 
 Exit codes: 0 when the run was read and evaluated, 1 when it could not be
 (no plan record, no arms, unreadable store).
@@ -21,8 +22,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
-import math
-import shutil
 import sqlite3
 import sys
 import tempfile
@@ -109,17 +108,21 @@ def _repo_verdict(db_path: Path, run_id: str) -> dict[str, Any]:
 
     ``write_statistics_report`` opens its store through ``OrderRegistry``
     (read-write DDL) and drops a markdown report beside it, so it never runs
-    against the arm store itself: the store is copied to a temp dir, the
-    report lands in the same temp dir, and both vanish with it. The verdict
-    and gate rows do not depend on where the copy lives, so what comes back
-    is exactly what the repo's gate says about this arm.
+    against the arm store itself: the store's pages are copied to a temp dir
+    with the SQLite backup API — a file copy would miss uncheckpointed WAL
+    frames — the report lands in the same temp dir, and both vanish with it.
+    The verdict and gate rows do not depend on where the copy lives, so what
+    comes back is exactly what the repo's gate says about this arm.
     """
     if not db_path.is_file():
         return {"verdict": "NO_DATA", "primary_gate_value": None}
     try:
         with tempfile.TemporaryDirectory(prefix="reeval-run-") as tmp:
             scratch = Path(tmp) / db_path.name
-            shutil.copyfile(db_path, scratch)
+            with contextlib.closing(
+                sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+            ) as src, contextlib.closing(sqlite3.connect(scratch)) as dst:
+                src.backup(dst)
             rep = write_statistics_report(scratch, run_id, "shadow", out_dir=tmp)
     except Exception as exc:
         return {"verdict": "ERROR", "primary_gate_value": None, "error": str(exc)}

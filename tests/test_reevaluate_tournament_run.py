@@ -194,6 +194,30 @@ def test_verdict_path_uses_the_repo_gate_and_reports_no_data(tmp_path, monkeypat
     assert _arm(ev, "queue-clear-5m")["verdict"] is None
 
 
+def test_verdict_copy_carries_the_store_data(tmp_path, monkeypatch):
+    """The scratch copy the gate reads holds the store's rows (WAL-safe)."""
+    import scripts.reevaluate_tournament_run as tool
+
+    def fake_write(db_path, run_id, mode, out_dir=None):
+        conn = sqlite3.connect(db_path)
+        try:
+            n = conn.execute(
+                "SELECT count(*) FROM closes WHERE run_id = ?", (run_id,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert n == 24
+        return {
+            "verdict": "NO-GO",
+            "gate_rows": [{"gate": tool.PRIMARY_GATE_NAME, "value": -1.0, "passed": False}],
+        }
+
+    monkeypatch.setattr(tool, "write_statistics_report", fake_write)
+    run_dir = _run_dir(tmp_path)
+    repo = tool._repo_verdict(run_dir / "queue-clear-5m.db", GATED_RUN_ID)
+    assert repo == {"verdict": "NO-GO", "primary_gate_value": -1.0}
+
+
 def test_verdict_reports_no_data_for_a_missing_store(tmp_path, monkeypatch):
     """An arm whose store is gone reports NO_DATA, never a fabricated verdict."""
     import scripts.reevaluate_tournament_run as tool
