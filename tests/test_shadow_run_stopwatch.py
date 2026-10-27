@@ -25,6 +25,19 @@ def _test_cfg():
     from core_brain.config import MakerConfig
     return MakerConfig()
 
+
+@pytest.fixture(autouse=True)
+def _clean_rehearsal_flag():
+    # `test_main_...` runs `sr.main()`, which declares the process a
+    # rehearsal and never undoes it. Without a reset the flag leaks into
+    # later tests in the same process (e.g. the scoring-config refusal
+    # in test_dashboard_server.py). Same pattern as
+    # tests/test_config_for_display.py.
+    from core_brain import rehearsal
+    rehearsal.reset_for_test()
+    yield
+    rehearsal.reset_for_test()
+
 _STATIC = Path(__file__).resolve().parent.parent / "dashboard" / "static"
 _CLOCK_HARNESS = Path(__file__).resolve().parent / "js" / "filter_uptime_harness.cjs"
 
