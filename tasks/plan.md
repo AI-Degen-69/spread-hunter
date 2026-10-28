@@ -1,186 +1,185 @@
-# Implementation Plan — Issue #855: Human-readable structured event stream with bracketed tags, colors, and process filtering
+# Plan — Issue #857: Preflight-guided Start Run launcher with mode selection, 24h horizon, and watchdog
 
-Branch: `plan_github_issue_855` | Issue: #855
+Branch: `i857/preflight-guided-start-run-launcher` | Issue: #857
 
-## Summary
+Size: **Standard** — 1 new file (`dashboard/preflight.py`), surgical modifications across dashboard backend/frontend, trader loop, order manager, and tests; no database migration or new third-party dependencies.
+Task type: **Code + Design/UI + Security + Testing**.
 
-Replace raw process log streams and awkward fallback sentences in the dashboard event ticker with a clean, colorized, human-readable notification feed. Features include:
-1. Monospace bracketed alignment tags (`[TIME] [PROCESS] [EVENT] <MESSAGE>`).
-2. Server-side chronological replay aggregation across all active log families with timestamp inference for legacy log lines.
-3. Plain-English translations and sensitive token redaction (wallet `0x...`, secrets, filesystem paths).
-4. Multi-dimensional filtering by process family, component, and event category (`CONNECTIONS`, `TRADES`, `ALERTS`, `MARKET FILTER`).
+---
 
-Right-sizing: **Standard** (touches 4 dashboard core files + tests, internal architectural refinement, no database changes, no external dependencies).
-Task type: **Code** + **Design/UI**.
-Quick-fix lane: **No** (`quick-fix` label absent, Standard tier).
+## 0. CodeRabbit Intake (read once, costed once)
 
-## Code-review intake (CodeRabbit plan comment on #855)
-
-One reading; HTML echo ignored.
 - **Adopted:**
-  - Collect replay from all requested families on the server, sort chronologically by timestamp, and yield after all `source` hello frames.
-  - Inferred timestamp fallback for console lines lacking full ISO date (relative to file mtime / nearest known timestamp).
-  - Additive `ts`, `level`, and `message` fields on text log frames.
-  - Four-part row model (`time`, `processTag`, `eventTag`, `message`, `severity`).
-  - Fixed-width `ch` grid layout for tag columns with responsive narrow-screen wrapping.
-  - Component dropdown beside family tabs and new `CONNECTIONS` category filter.
-  - Expanding `ALERTS` to include warn/bad severity rows and console errors.
+  - 4-step sequential preflight check: `credentials` -> `screener` -> `stream` -> `reach_probe`.
+  - Gated single-use approval token (`preflight_id`) required by `POST /api/system/start`.
+  - Absolute `--deadline-ts` epoch timestamp flag for `core_brain/trader_loop.py` using `make_deadline_sleep`.
+  - Watchdog supervision via `order_manager poll --watch-guardrails` rather than spawning a duplicate dashboard process.
+  - `#start-run-modal` replacing direct start request on `#btn-master-toggle`.
+  - Fresh sequence database naming (`data/NN_shadow_<stamp>.db`) for Shadow runs.
 - **Rejected:**
-  - Over-splitting into 9 granular subtasks; consolidated into 3 atomic vertical slices.
-- **[UNVERIFIED] items resolved by live code spot-check:**
-  - `_parse_event_ts` location verified at `dashboard/server.py:3484`. A tolerant ring timestamp parser will be placed adjacent to it.
-  - `_log_stream_sse` generator verified at `dashboard/server.py:4200`. Current implementation yields family-by-family during replay; will be replaced by in-memory collector and chronological sort.
-  - `buildStreamSentence` verified at `dashboard/static/app.js:1262`. Generic fallback at line 1344 produces `" on a market"` when `market_slug` is absent; will be sanitized.
-  - `event_stream_harness.cjs` and `event_stream_tabs_harness.cjs` verified in `tests/js/`. Note: harnesses require passing `dashboard/static/app.js` as `process.argv[2]`.
+  - Writing an order-placing probe adapter (claimed `core_brain/reach_probe.py` was missing; live codebase inspection confirmed `core_brain/reach_probe.py` exists and is fully implemented).
+  - Gating Decide service card behind preflight (typed `START` confirmation already protects Decide card).
+  - Background dashboard timer process for deadline (process can restart; CLI flag `--deadline-ts` on trader loop is robust and autonomous).
+- **[UNVERIFIED] Resolutions from Live Code:**
+  - `core_brain/reach_probe.py` status: **RESOLVED**. Module is present (32.2KB), provides `reach_probe_cmd()` and `REACH_PROBE_MAX_EXPOSURE_USD`.
+  - `poll` watchdog capability: **RESOLVED**. `core_brain/order_manager.py` already supports `--watch-guardrails` and supervises `scripts.global_stop_loss`.
+  - `trader_loop` deadline handling: **RESOLVED**. `core_brain/trader_loop.py` lines 864-866 already catch `_Deadline` and exit cleanly; only the CLI argument and `make_deadline_sleep` wrapper need to be wired.
+  - Numbered shadow database sequence: **RESOLVED**. `scripts/spread-hunter-menu.ps1` lines 451-471 define `Get-NextShadowSeq`; python implementation matches this exact logic.
 
-## Improvement Proposal (Evidence-based, Adopted by Default)
+---
 
-- **Evidence:**
-  `dashboard/server.py:4238-4331` replays log lines family-by-family without cross-source chronological alignment, causing old filter logs to interleave awkwardly after live events.
-  `dashboard/static/app.js:1344` falls back to `${prefix} on ${market}: ${humanizeAction(action)}${because}.` where `market` defaults to `'a market'` and `because` echoes raw payload parameters, exposing wallet addresses (`auth_ok wallet: 0x...`) in plain text.
-- **Committed Enhancement:**
-  1. **Replay Aggregator & Stabilizer:** SSE replay buffers entries across all families, infers missing timestamps from file mtime and adjacent lines, and performs a stable sort on `(timestamp, family_order, source_order, line_seq)` before streaming.
-  2. **Wallet Redaction & Sentence Polish:** Enforce an allow-list on `extra` parameters for main row messages, redacting wallet addresses and connection URLs to `[SHOW DETAILS]`, and omit `" on a market"` when no market slug exists.
+## 1. Improvement Proposal (Grounded in Codebase Evidence)
 
-## Interface Contracts & Schemas
+- **Proposal:** Unified Watchdog Telemetry & Zero-Duplication Process Architecture.
+- **Evidence:** `dashboard/server.py` lines 1258-1268 notes that `scripts.global_stop_loss` was omitted from `_start_stack_commands()`, yet `core_brain/order_manager.py` poll loop already supports `--watch-guardrails` which safely spawns and supervises `_spawn_global_stop_losser(db_p)`. Furthermore, `_guardrail_health()` is already written in `dashboard/server.py`.
+- **Classification:** **Simplification & Edge-case Hardening (Adopt-by-default)**.
+- **Action:** Instead of introducing a 4th daemon service in `dashboard/server.py` (which risks lock contention or duplicate alerts), pass `--watch-guardrails` to `order_manager poll` and wire its health directly into start responses and UI telemetry.
 
-### 1. SSE Text Log Frame Enrichment (`/api/log-stream`)
-- **Existing schema preserved:**
-  `{"family": "filter", "source": "text", "file": "rerank.log", "text": "..."}`
-- **Additive enrichment:**
-  `{"family": "filter", "source": "text", "file": "rerank.log", "text": "...", "ts": "2026-10-28T02:00:00Z", "level": "INFO", "message": "Scan pass 1 completed"}`
+---
 
-### 2. Browser Row Model (`app.js`)
-- `time`: Local formatted `HH:MM:SS` (e.g. `16:28:00`)
-- `processTag`: Uppercase bracketed tag, max 8 chars (e.g. `FILTER`, `USER_WS`, `MKT_WS`, `TRADER`, `GUARD`, `QUERY`)
-- `eventTag`: Uppercase bracketed tag, max 8 chars (e.g. `AUTH_OK`, `CONNECTED`, `TRADE`, `ORDER`, `BOOK`, `FILL`, `SCAN`, `LOG`, `WARN`, `ERR`)
-- `message`: Plain-English concise string (e.g. `User stream connected`, `Bought UP 3 shares at $0.48 on Brazil election.`)
-- `severity`: CSS class `good` (green), `warn` (amber), `bad` (red), `info` (cyan/blue), `muted` (gray)
-- `rawDetail`: Collapsible raw text line preserved for `[SHOW DETAILS]`
+## 2. Interface Contracts
 
-### 3. CSS Grid Layout (`styles.css`)
-```css
-.ticker-row {
-  display: grid;
-  grid-template-columns: 10ch 11ch 11ch 1fr;
-  gap: 8px;
-  align-items: baseline;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
+### 2.1 Balance Helper (`core_brain/order_manager.py`)
+```python
+def get_balance_allowance(funder: str | None = None, client_instance: Any = None) -> dict[str, Any]:
+    """Return USDC collateral balance and allowance details.
+    
+    Returns:
+        {
+            "balance_usd": float,
+            "allowance_usd": float,
+            "allowances": dict[str, float] | None,
+            "raw": dict[str, Any]
+        }
+    """
+```
+
+### 2.2 CLI Deadline Flag (`core_brain/trader_loop.py`)
+```bash
+python -m core_brain.trader_loop --live --deadline-ts <epoch_seconds>
+```
+Clamps rotations and exits cleanly with `shutdown_reason = "deadline"` upon reaching the horizon.
+
+### 2.3 Preflight API (`POST /api/system/preflight`)
+```json
+// Request
+{
+  "step": "credentials" | "screener" | "stream" | "reach_probe",
+  "preflight_id": "string (optional for first step)",
+  "confirm": true // required only for reach_probe
 }
-@media (max-width: 768px) {
-  .ticker-row {
-    grid-template-columns: 10ch 11ch 1fr;
-  }
-  .ticker-col-msg {
-    grid-column: 1 / -1;
-    margin-top: 2px;
-  }
+
+// Response
+{
+  "ok": true,
+  "step": "credentials",
+  "summary": "Balance $150.00 USDC, allowance verified, 0 open orders",
+  "details": { ... },
+  "preflight_id": "uuid4_string",
+  "next_step": "screener",
+  "approved": false,
+  "expires_in_sec": null
 }
 ```
 
-## Task Decomposition
+### 2.4 Gated Start API (`POST /api/system/start`)
+```json
+// Request
+{
+  "preflight_id": "uuid4_string",
+  "minutes": 1440
+}
 
-### Dependency Graph
-```
-Task 1 (Server chronological replay & text metadata)
-   │
-   ▼
-Task 2 (Structured row model, bracketed tags, colors, and layout)
-   │
-   ▼
-Task 3 (Process/component filtering, category tabs, and harnesses)
+// Response
+{
+  "ok": true,
+  "message": "Stack started with 24h horizon",
+  "run": {
+    "run_id": "live-20261027-1440m",
+    "minutes": 1440,
+    "started_at": "2026-10-27T23:30:00Z",
+    "deadline_at": "2026-10-28T23:30:00Z",
+    "expired": false
+  },
+  "watchdog": { ... },
+  "services": { ... }
+}
 ```
 
 ---
 
-### Task 1: Server Replay Chronological Aggregation & Text Frame Metadata [x]
-- **Size:** M
-- **Domain:** `[Backend/Logic]`
-- **Assigned Helper:** `test-driven-development`
+## 3. Dependency Graph & Task Breakdown
+
+```mermaid
+flowchart TD
+    T1["Task 1: Core Engine Primitives\n(Balance helper & Trader loop deadline)"]
+    T2["Task 2: Preflight Verification Suite\n(dashboard/preflight.py & approval store)"]
+    T3["Task 3: Dashboard Server Gating & Shadow Sequence\n(API endpoints & process metadata)"]
+    T4["Task 4: Frontend Preflight Modal Launcher\n(HTML/CSS/JS modal & checklist)"]
+
+    T1 --> T2
+    T2 --> T3
+    T3 --> T4
+```
+
+### Task 1: Core Engine Primitives [Backend/Logic]
+- **Size:** S (2 files modified)
+- **Domain:** Backend / Logic
+- **Files:** `core_brain/order_manager.py`, `core_brain/trader_loop.py`, `tests/test_order_manager.py`, `tests/test_trader_loop.py`
 - **Depends on:** None
-- **Target Files:**
-  - `dashboard/server.py`
-  - `tests/test_dashboard_server.py`
-- **What gets built:**
-  1. Add `_parse_replay_ts(ts)` accepting ISO-8601 with optional microseconds/offsets, returning Unix float or None.
-  2. Add `_parse_console_line(line, file_mtime, last_known_ts)` parsing Filter loop headers, `HH:MM:SS` shadow lines, Python tracebacks, and extracting `(ts_iso, level, clean_message)`.
-  3. In `_log_stream_sse`:
-     - Emit all `event: source` hellos first for all selected families.
-     - Collect initial replay events across all families into a single buffer.
-     - Calculate timestamps for all collected records (inheriting previous/next in file if missing, falling back to mtime).
-     - Stably sort buffer on `(ts_unix, family_idx, source_idx, line_idx)`.
-     - Yield sorted replay events.
-     - Enrich text frames with additive `ts`, `level`, and `message` (both during replay and follow loop).
-  4. Unit tests in `tests/test_dashboard_server.py` verifying cross-family chronological ordering, source-first hello delivery, and text frame enrichment.
+- **Description:**
+  - Extract `get_balance_allowance(funder=None, client_instance=None)` in `core_brain/order_manager.py`; rewrite `balance()` to delegate to it without altering stdout.
+  - Add `--deadline-ts` to `core_brain/trader_loop.py` argument parser. Wrap `sleep_fn` with `make_deadline_sleep()` from `core_brain/shadow_run.py`. If deadline is already past at launch, log and exit immediately.
 - **Verification:**
-  `python -m pytest -q tests/test_dashboard_server.py -k "log_stream_sse"`
+  - `python -m pytest -q tests/test_order_manager.py tests/test_trader_loop.py`
 
----
-
-### Task 2: Structured Row Model, Bracketed Tags, Colors, and Plain-English Sentences [x]
-- **Size:** M
-- **Domain:** `[Design/UI]` + `[Frontend/Logic]`
-- **Assigned Helper:** `frontend-ui-engineering`
+### Task 2: Preflight Verification Suite & Approval Store [Backend/Security]
+- **Size:** M (1 new file)
+- **Domain:** Security / Core Logic
+- **Files:** `dashboard/preflight.py`, `tests/test_dashboard_server.py`
 - **Depends on:** Task 1
-- **Target Files:**
-  - `dashboard/static/app.js`
-  - `dashboard/static/styles.css`
-- **What gets built:**
-  1. Process and event tag formatters: `streamProcessTag(ev, family)`, `streamEventTag(ev)`.
-  2. Severity classifier: `streamSeverityClass(ev)` returning `good`, `warn`, `bad`, `info`, `muted`.
-  3. Enhanced `buildStreamSentence`:
-     - Plain-English messages for `user_ws_*` lifecycle events (`user_ws_connected`, `user_ws_auth_ok`, `user_ws_reconnecting`, `user_ws_disconnected`, `user_ws_trade`, `user_ws_order`).
-     - Background runner and lifecycle messages (`guardian_reactive_wake`, `rerank_done`, `rerank_error`, `single_leg_transition`, `user_fill_received`).
-     - Grammar corrections (singular/plural shares, omit empty merge collateral string).
-     - Redact wallet addresses and connection secrets from main message.
-     - Sanitize fallback: omit `" on a market"` when market slug is absent.
-  4. Console line translator in `connectLogStream` for text frames: converts Filter headers, worker heartbeats, and ranker status into clean notifications.
-  5. Update `appendTickerEvent` to construct the unified row model and store `rawDetail` for the details drawer.
-  6. In `renderTickerFeed`: render structured spans (`.ticker-col.ticker-time`, `.ticker-col.ticker-process`, `.ticker-col.ticker-event`, `.ticker-col.ticker-msg`) wrapped in square brackets.
-  7. CSS styles in `styles.css`: CSS Grid columns with fixed `ch` widths, severity color variables (`--green-ok`, `--amber-warn`, `--red-alert`, `--open`, `--text-muted`), and responsive wrapping.
+- **Description:**
+  - Create `dashboard/preflight.py` containing:
+    - `check_credentials()`: uses `get_balance_allowance`, validates funder/signer, checks minimum notional.
+    - `check_screener()`: validates `runtime/markets.json` age <= 15 minutes via `load_graduated_snapshot()`.
+    - `check_stream()`: runs fast REST full book and short-lived `MarketStream` connectivity probe.
+    - `check_reach_probe(confirm: bool)`: calls `reach_probe_cmd()`; rejects without `confirm: true`; passes only on confirmed cancellation and zero matched size.
+    - Thread-safe session & single-use approval store with TTL (300s).
 - **Verification:**
-  `node tests/js/event_stream_harness.cjs dashboard/static/app.js`
+  - `python -m pytest -q tests/test_dashboard_server.py -k "preflight"`
 
----
-
-### Task 3: Dual Process/Component & Event Category Filtering, and Regression Suite [x]
-- **Size:** M
-- **Domain:** `[Frontend/Logic]` + `[Testing]`
-- **Assigned Helper:** `test-driven-development`
+### Task 3: Dashboard Server Gating, Shadow Sequence & Run Metadata [Backend/API]
+- **Size:** M (2 files modified)
+- **Domain:** API / Backend
+- **Files:** `dashboard/server.py`, `scripts/spread-hunter-menu.ps1`, `tests/test_dashboard_server.py`
 - **Depends on:** Task 2
-- **Target Files:**
-  - `dashboard/static/index.html`
-  - `dashboard/static/app.js`
-  - `tests/js/event_stream_harness.cjs`
-  - `tests/js/event_stream_tabs_harness.cjs`
-  - `tests/test_dashboard_server.py`
-- **What gets built:**
-  1. In `index.html`:
-     - Add `<select id="ticker-component-select" class="ticker-component-select" aria-label="Filter by component">` next to process tabs.
-     - Add `<button class="ticker-filter-btn" data-filter="connections" type="button">CONNECTIONS</button>` to filter buttons.
-  2. In `app.js`:
-     - Dynamically populate Component dropdown choices from active events in the selected tab (e.g. `ALL`, `USER_WS`, `MKT_WS`, `TRADER`, `GUARD`, `QUERY`, `FILTER`).
-     - Multi-tier filtering in `renderTickerFeed`: Tab (Family) -> Component -> Category.
-     - Category matching:
-       - `CONNECTIONS`: matches websocket and daemon connection/lifecycle actions.
-       - `ALERTS`: matches guardrail alerts, stop-loss, plus any row with `warn` or `bad` severity and console errors.
-       - `TRADES`: fills, exits, completed pairs, merges, redeems.
-       - `MARKET FILTER`: screener/filter scans.
-     - Contextual empty state text mentioning active tab, component, and filter.
-  3. Update Node test harnesses:
-     - `tests/js/event_stream_harness.cjs`: test new tag format, wallet redaction, user ws translations, and severity classes.
-     - `tests/js/event_stream_tabs_harness.cjs`: test component dropdown selection, combined filters, and console line translation.
-  4. Update Python integration tests in `tests/test_dashboard_server.py` to ensure full test suite compatibility.
+- **Description:**
+  - Add `POST /api/system/preflight` endpoint to `dashboard/server.py` enforcing production view check and step ordering.
+  - Update `_start_stack_commands()` to include `--deadline-ts` on Decide and `--watch-guardrails` on poll.
+  - Update `POST /api/system/start` to accept and consume `preflight_id` and `minutes`; record run metadata to `processes.json` atomically.
+  - Implement `_get_next_shadow_seq()` and update `POST /api/system/shadow/start` to accept `fresh: true`, creating timestamped `data/NN_shadow_<stamp>.db`.
+  - Update `GET /api/system/status` to surface `run` and `watchdog` state.
+  - Update `Start-BotStack` in `scripts/spread-hunter-menu.ps1` to display refusal guidance pointing to dashboard launcher.
 - **Verification:**
-  `node tests/js/event_stream_tabs_harness.cjs dashboard/static/app.js`
-  `node tests/js/event_stream_harness.cjs dashboard/static/app.js`
-  `python -m pytest -q tests/test_dashboard_server.py tests/test_cycle_stream.py`
+  - `python -m pytest -q tests/test_dashboard_server.py`
+
+### Task 4: Frontend Preflight Modal Launcher & Checklist UI [Design/UI]
+- **Size:** M (3 files modified)
+- **Domain:** Frontend / UI
+- **Files:** `dashboard/static/index.html`, `dashboard/static/app.js`, `dashboard/static/styles.css`, `tests/js/master_toggle_harness.cjs`
+- **Depends on:** Task 3
+- **Description:**
+  - Add `#start-run-modal` in `dashboard/static/index.html` with mode toggle (Shadow vs Live), duration selector (1h, 6h, 24h), 4-row preflight checklist, reach probe trigger with exposure warning, and action buttons.
+  - Add checklist row status indicators (pending, running, pass, fail) and styling in `dashboard/static/styles.css`.
+  - Wire `#btn-master-toggle` in `dashboard/static/app.js` to open `#start-run-modal` on START click (STOP action remains untouched).
+  - Implement sequential check progression, reach probe operator confirmation flow, disabled-until-pass Live start button, and fresh Shadow start flow with automatic DB view switch.
+- **Verification:**
+  - `node tests/js/master_toggle_harness.cjs dashboard/static/app.js`
+  - `python -m pytest -q tests/test_dashboard_server.py`
 
 ---
 
-## Checkpoints
+## 4. Checkpoints & Regression Plan
 
-- **Checkpoint 1 (after Task 1):** Server tests pass with chronological replay aggregation across families and enriched text frames.
-- **Checkpoint 2 (after Task 2):** Event stream harness passes with aligned bracketed tags, severity colors, and plain-English sentences without wallet leakage.
-- **Checkpoint 3 (after Task 3):** Full integration passes with component dropdown, CONNECTIONS filter, and green local regression suite.
+- **Checkpoint 1 (after Task 2):** Backend preflight checks and approval gating verified with mock fakes.
+- **Checkpoint 2 (after Task 4):** End-to-end integration verified via `test_dashboard_server.py` and `master_toggle_harness.cjs`.
