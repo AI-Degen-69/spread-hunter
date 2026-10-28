@@ -66,7 +66,11 @@ function streamSeverityClass(ev) {
 
   // Warn (amber)
   if (a.includes('reconnecting') || a.includes('reconnect') || a.includes('rescue') ||
-      a.includes('truncated') || a === 'lifecycle_stop' || lvl === 'WARNING' || lvl === 'WARN') {
+      a.includes('truncated') || a === 'lifecycle_stop' ||
+      // A leg moving between pair states is the naked-leg risk the whole
+      // strategy exists to avoid; it belongs in amber, not in the grey feed.
+      a === 'single_leg_transition' ||
+      lvl === 'WARNING' || lvl === 'WARN') {
     return 'warn';
   }
 
@@ -1324,6 +1328,9 @@ function quoteList(quotes) {
 function isTradeEvent(ev) {
   const action = ((ev && ev.action) || '').toLowerCase();
   if (action === 'fill_recorded') return true;
+  // The user stream reports the same fill before the registry records it; both
+  // are a trade, and the shadow rehearsal often only produces this one.
+  if (action === 'user_fill_received') return true;
   if (action === 'lifecycle_exited' || action === 'lifecycle_completed' ||
       action === 'lifecycle_aged_out_rescue') return true;
   if (action.startsWith('merge_') || action.startsWith('redeem_')) return true;
@@ -1580,6 +1587,7 @@ const TICKER_CATEGORY_LABELS = {
   filter: 'market filter',
   guardrail: 'alerts',
   connections: 'connections',
+  quotes: 'quotes',
 };
 // Fixed reading order for the component picker; unknown components follow,
 // alphabetically, so a new service never reshuffles the familiar ones.
@@ -1725,6 +1733,7 @@ function appendTickerEvent(line, translation, ctx, service, action, extra, famil
     message: cleanMsg,
     severity,
     component: o.component || procTag,
+    market: o.market || '',
     rawDetail: o.rawDetail || line,
   };
 
@@ -1799,31 +1808,19 @@ function tickerHandleScroll() {
   if (tickerAutoscroll && (tickerEl.scrollTop || 0) > 8) setTickerAutoscroll(false);
 }
 
-// CONNECTIONS: anything that answers "is the stack actually talking to the
-// venue?" — socket opens, logins, drops, and the background workers waking,
-// starting, stopping, or dying. Socket *traffic* (ticks, snapshots) is data,
-// not connection health, so it stays out; otherwise the chip would be a firehose.
+// CONNECTIONS: socket lifecycle only. Daemon churn (a rerank pass every cycle)
+// and socket *traffic* (ticks, snapshots) are not connection health, and
+// including them made one irrelevant row repeat forever in the chip.
 const TICKER_CONNECTION_ACTIONS = new Set([
   'user_ws_connected', 'user_ws_auth_sent', 'user_ws_auth_ok',
   'user_ws_disconnected', 'user_ws_reconnecting', 'user_ws_error', 'user_ws_stopped',
   'market_stream_connected', 'market_stream_reconnect', 'market_stream_subscribe',
   'market_stream_unsubscribe', 'market_stream_error',
 ]);
-// Background workers announce themselves on start, stop, and wake. Kept as an
-// exact list: a loose /start|stop/ would swallow stop-loss alerts.
-const TICKER_DAEMON_ACTIONS = new Set([
-  'guardian_running', 'guardian_started', 'guardian_stopped', 'guardian_reactive_wake',
-  'sweeper_running', 'sweeper_started', 'sweeper_stopped',
-  'rerank_started', 'rerank_done', 'rerank_error',
-]);
 
 function tickerIsConnectionEvent(ev) {
   if (!ev) return false;
-  const a = (ev.action || '').toLowerCase();
-  if (TICKER_CONNECTION_ACTIONS.has(a) || TICKER_DAEMON_ACTIONS.has(a)) return true;
-  // Console frames name the daemon in their text, not in the derived action.
-  return /guardian running|sweeper running|running in background/.test(
-    String(ev.message || '').toLowerCase());
+  return TICKER_CONNECTION_ACTIONS.has((ev.action || '').toLowerCase());
 }
 
 // ALERTS: the guardrail itself, stop-loss, and every row the classifier marked
@@ -1851,6 +1848,7 @@ function tickerMatches(ev) {
   if (tickerFilter === 'filter') return ev.service.includes('filter') || ev.service.includes('screener');
   if (tickerFilter === 'guardrail') return tickerIsAlertEvent(ev);
   if (tickerFilter === 'connections') return tickerIsConnectionEvent(ev);
+  if (tickerFilter === 'quotes') return ev.action === 'decide';
   return true;
 }
 
@@ -1883,7 +1881,9 @@ function tickerEmptyState() {
   } else if (tickerFilter === 'guardrail') {
     state = { title: 'No alerts right now.', msg: 'Risk notes show up here if a guardrail trips.' };
   } else if (tickerFilter === 'connections') {
-    state = { title: 'No connection events yet.', msg: 'Socket connects, reconnects, auth and worker lifecycle show up here.' };
+    state = { title: 'No connection events yet.', msg: 'Socket connects, reconnects and auth show up here.' };
+  } else if (tickerFilter === 'quotes') {
+    state = { title: 'No quotes yet.', msg: 'Each market the strategy is quoting appears here once, with the legs it wants resting.' };
   } else if (activeTickerTab === 'filter') {
     state = { title: 'No filter loop events yet.', msg: 'Filter scans and rerank.log updates will appear here.' };
   } else if (activeTickerTab === 'shadow') {
@@ -1941,18 +1941,133 @@ function restoreTickerAnchor(anchor) {
   tickerEl.scrollTop = 0;
 }
 
+function settleTickerScroll(prevTop, anchor) {
+  if (tickerAutoscroll) {
+    tickerEl.scrollTop = 0;
+  } else if (anchor) {
+    restoreTickerAnchor(anchor);
+  } else {
+    tickerEl.scrollTop = prevTop;
+  }
+}
+
+function renderTickerEmpty() {
+  const st = tickerEmptyState();
+  tickerEl.innerHTML = `<div class="empty-state"><div class="empty-state-title">${esc(st.title)}</div><div class="empty-state-msg">${esc(st.msg)}</div></div>`;
+  tickerEl.scrollTop = 0;
+}
+
+// QUOTES is a summary, not another row filter: one line per market, built from
+// the decide that describes the wanted legs and the submit that says whether
+// they are already resting. The raw feed spends two rows per market per cycle
+// saying the same thing.
+let tickerOrderSnapshot = [];
+
+// `/api/state` already knows which orders rest; the event ring only knows what
+// was sent. Stamping that on the quote rows is what stops "No orders placed"
+// reading as "nothing is working" while the book is full of our quotes.
+function noteTickerOrders(orders) {
+  tickerOrderSnapshot = Array.isArray(orders) ? orders : [];
+  if (tickerFilter === 'quotes') renderTickerFeed();
+}
+
+function tickerRestingByCondition() {
+  const counts = new Map();
+  for (const o of tickerOrderSnapshot) {
+    const status = String((o && o.status) || '').toLowerCase();
+    if (status !== 'open' && status !== 'partial' && status !== 'pending') continue;
+    const cid = o && o.condition_id;
+    if (!cid) continue;
+    counts.set(cid, (counts.get(cid) || 0) + 1);
+  }
+  return counts;
+}
+
+function buildQuoteSummaries(events) {
+  const restingByCondition = tickerRestingByCondition();
+  const rows = new Map();
+  for (const ev of events) {
+    if (ev.action !== 'decide' && ev.action !== 'submit') continue;
+    const ex = ev.extra || {};
+    const key = ev.market || ex.condition_id || ev.rawDetail;
+    if (!key) continue;
+    let row = rows.get(key);
+    if (!row) {
+      row = { key, market: ev.market || '', title: '', quotes: [], intentCount: 0, conditionId: '',
+              submitted: null, cancelled: 0, decidedAt: '', placed: 0, resting: 0,
+              planned: false, family: ev.family };
+      rows.set(key, row);
+    }
+    if (ev.action === 'decide') {
+      // Newest first: the first decide seen is the current intent.
+      if (!row.planned) {
+        row.planned = true;
+        row.decidedAt = ev.timeTag || '--:--:--';
+        row.quotes = Array.isArray(ex.quotes) ? ex.quotes : [];
+        row.intentCount = Number(ex.intent_count || 0);
+        row.title = ex.bot_market_title || row.title;
+        row.conditionId = ex.condition_id || row.conditionId;
+        row.family = ev.family;
+      }
+    } else {
+      if (row.submitted == null) {
+        row.submitted = Number(ex.submitted || 0);
+        row.cancelled = Number(ex.cancelled || 0);
+      }
+      if (Number(ex.submitted || 0) > 0) row.placed += Number(ex.submitted || 0);
+    }
+  }
+  for (const row of rows.values()) {
+    row.resting = restingByCondition.get(row.conditionId) || 0;
+  }
+  return Array.from(rows.values())
+    .filter((r) => r.title || r.market)
+    .sort((a, b) => String(b.decidedAt).localeCompare(String(a.decidedAt)));
+}
+
+function renderQuoteRow(summary) {
+  const s = summary;
+  const fresh = s.submitted != null && s.submitted > 0;
+  const tag = fresh ? 'PLACED' : (s.resting > 0 || s.placed > 0 ? 'RESTING' : 'PLANNED');
+  const sev = fresh ? 'good' : 'info';
+  const div = document.createElement('div');
+  div.className = `ticker-event ${sev}`;
+  if (div.dataset) div.dataset.seq = `q-${s.key}`;
+  const legs = quoteList(s.quotes).join(' and ');
+  const what = legs || (s.intentCount ? `${s.intentCount} legs` : 'no legs quoted');
+  const name = s.title || s.market;
+  const tail = fresh ? ` · ${s.submitted} new`
+    : (s.resting > 0 ? ` · ${s.resting} resting` : (s.cancelled ? ` · ${s.cancelled} cancelled` : ''));
+  div.innerHTML = `<div class="ticker-row ticker-translation ${sev}">` +
+    `<span class="ticker-col ticker-time">[${esc(s.decidedAt || '--:--:--')}]</span>` +
+    `<span class="ticker-col ticker-process">[QUOTE]</span>` +
+    `<span class="ticker-col ticker-event ticker-event-tag">[${esc(tag)}]</span>` +
+    `<span class="ticker-col ticker-msg">${esc(what)} on ${esc(name)}${esc(tail)}</span>` +
+    `</div>`;
+  tickerEl.appendChild(div);
+}
+
 function renderTickerFeed() {
   const prevTop = tickerEl.scrollTop || 0;
   const anchor = (!tickerAutoscroll && prevTop > 0) ? captureTickerAnchor() : null;
   tickerEl.innerHTML = '';
   updateTickerComponentSelect();
   const currentEvents = getActiveTickerEvents();
-  const filtered = currentEvents.filter(tickerMatches);
 
+  if (tickerFilter === 'quotes') {
+    const summaries = buildQuoteSummaries(currentEvents);
+    if (summaries.length === 0) {
+      renderTickerEmpty();
+      return;
+    }
+    for (const s of summaries) renderQuoteRow(s);
+    settleTickerScroll(prevTop, anchor);
+    return;
+  }
+
+  const filtered = currentEvents.filter(tickerMatches);
   if (filtered.length === 0) {
-    const st = tickerEmptyState();
-    tickerEl.innerHTML = `<div class="empty-state"><div class="empty-state-title">${esc(st.title)}</div><div class="empty-state-msg">${esc(st.msg)}</div></div>`;
-    tickerEl.scrollTop = 0;
+    renderTickerEmpty();
     return;
   }
 
@@ -1976,13 +2091,7 @@ function renderTickerFeed() {
     tickerEl.appendChild(div);
   }
 
-  if (tickerAutoscroll) {
-    tickerEl.scrollTop = 0;
-  } else if (anchor) {
-    restoreTickerAnchor(anchor);
-  } else {
-    tickerEl.scrollTop = prevTop;
-  }
+  settleTickerScroll(prevTop, anchor);
 }
 
 // Wire up ticker family tab buttons
@@ -2119,6 +2228,7 @@ function connectLogStream(runId) {
             message: msgBody,
             severity: severity,
             component: procTag,
+            market: ev.market_slug || (ev.extra && ev.extra.bot_market_title) || '',
           });
         } else if (data.source === 'text') {
           const fileTag = data.file || 'log';
@@ -11523,7 +11633,10 @@ async function pollStatus() {
     setBackendContact([state, status, kpi, scanState, trialReadiness, guardAlerts, guardHealth]
       .some(r => r !== null && r !== undefined));
 
-    if (state) lastState = state;
+    if (state) {
+      lastState = state;
+      noteTickerOrders(state.orders);
+    }
     if (kpi) lastKpi = kpi;
     // Snapshots for switchTab, which repaints the newly shown tab from cache.
     // A failed fetch (null) keeps the last good copy — except readiness: a
@@ -11680,6 +11793,7 @@ if (typeof module !== 'undefined' && module.exports) {
     tickerEventComponent, tickerComponentChoices, updateTickerComponentSelect,
     setTickerComponent, tickerScopeLabel, tickerIsAlertEvent, tickerIsConnectionEvent,
     setTickerAutoscroll, tickerIsAutoscroll, tickerHandleScroll, updateTickerSubtitle,
+    buildQuoteSummaries, noteTickerOrders,
     setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,

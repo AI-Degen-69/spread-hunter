@@ -275,12 +275,12 @@ try {
     && out.connectionRows.every((r) => r.includes('[USER_WS]') || r.includes('[MKT_WS]'));
   out.connectionExclusions = !app.tickerIsConnectionEvent({ service: 'market_stream', action: 'market_stream_tick' })
     && !app.tickerIsConnectionEvent({ service: 'user_stream', action: 'user_ws_trade' })
-    // A stop-loss must never pass as daemon lifecycle.
+    // A stop-loss is an alert; a rerank pass is a filter scan. Neither is a
+    // socket, and both used to repeat forever in this chip.
     && !app.tickerIsConnectionEvent({ service: 'guardrail', action: 'stop_loss_triggered' })
+    && !app.tickerIsConnectionEvent({ service: 'engine', action: 'rerank_done' })
     && app.tickerIsConnectionEvent({ service: 'user_stream', action: 'user_ws_disconnected' })
-    && app.tickerIsConnectionEvent({ service: 'guardrail', action: 'guardian_running' })
-    // Console daemons announce themselves in the message text.
-    && app.tickerIsConnectionEvent({ action: 'sweep', message: 'Settlement sweeper running in background' });
+    && app.tickerIsConnectionEvent({ service: 'market_stream', action: 'market_stream_subscribe' });
 
   // ALERTS: the guardrail row and the console ERROR, not the trade.
   app.setTickerFilter('guardrail');
@@ -340,6 +340,72 @@ try {
   });
   out.scrollPinnedWhenFollowing = tickerBox.scrollTop === 0;
   out.pauseButtonLabel = document.getElementById('btn-pause-ticker').textContent;
+
+  // ── A fill received on the user stream is a trade ──
+  emitLogEvent({ source: 'ring', family: 'live',
+    event: { ts: '2024-01-15T14:34:00Z', service: 'user_stream', action: 'user_fill_received',
+             market_slug: 'brazil-election',
+             extra: { outcome: 'UP', size: 2, market_title: 'Brazil election' } } });
+  app.setTickerTab('live');
+  app.setTickerComponent('all');
+  app.setTickerAutoscroll(true);
+  app.setTickerFilter('trades');
+  out.fillInTrades = rows().some((r) => r.includes('Fill received'));
+
+  // ── A single-leg transition is an alert ──
+  emitLogEvent({ source: 'ring', family: 'live',
+    event: { ts: '2024-01-15T14:34:01Z', service: 'decide', action: 'single_leg_transition',
+             market_slug: 'brazil-election',
+             extra: { prev_state: 'paired', new_state: 'single', market_title: 'Brazil election' } } });
+  app.setTickerFilter('guardrail');
+  out.transitionInAlerts = rows().some((r) => r.includes('ticker-translation warn') && r.includes('Single leg'));
+
+  // ── CONNECTIONS is socket lifecycle only: a rerank pass is not a connection ──
+  emitLogEvent({ source: 'ring', family: 'live',
+    event: { ts: '2024-01-15T14:34:02Z', service: 'engine', action: 'rerank_done',
+             extra: { duration_ms: 42 } } });
+  app.setTickerFilter('connections');
+  out.rerankNotConnection = !rows().some((r) => r.includes('Ranking pass'));
+
+  // ── QUOTES: one distilled row per market, not two rows per cycle ──
+  const decide = (slug, title, cid, up, down, at) => emitLogEvent({ source: 'ring', family: 'live',
+    event: { ts: at, service: 'decide', action: 'decide', market_slug: slug,
+             extra: { intent_count: 2, bot_market_title: title, condition_id: cid,
+                      quotes: [{ side: 'UP', price: up, size: 5 }, { side: 'DOWN', price: down, size: 6 }] } } });
+  const submit = (slug, n, at) => emitLogEvent({ source: 'ring', family: 'live',
+    event: { ts: at, service: 'decide', action: 'submit', market_slug: slug,
+             extra: { submitted: n, cancelled: 0 } } });
+  // Brazil placed once, then re-quoted with nothing new: RESTING from history.
+  decide('brazil-election', 'Brazil election', '0xbrazil', 0.48, 0.49, '2024-01-15T14:35:00Z');
+  submit('brazil-election', 2, '2024-01-15T14:35:01Z');
+  decide('brazil-election', 'Brazil election', '0xbrazil', 0.48, 0.49, '2024-01-15T14:35:02Z');
+  submit('brazil-election', 0, '2024-01-15T14:35:03Z');
+  // Canada just placed: PLACED.
+  decide('canada-election', 'Canada election', '0xcanada', 0.51, 0.47, '2024-01-15T14:35:04Z');
+  submit('canada-election', 2, '2024-01-15T14:35:05Z');
+  // Argentina decided, and /api/state says one leg is resting there.
+  decide('argentina-election', 'Argentina election', '0xarg', 0.3, 0.4, '2024-01-15T14:35:06Z');
+  // Peru decided with nothing resting: PLANNED.
+  decide('peru-election', 'Peru election', '0xperu', 0.2, 0.6, '2024-01-15T14:35:07Z');
+
+  app.noteTickerOrders([
+    { status: 'open', condition_id: '0xarg' },
+    { status: 'cancelled', condition_id: '0xperu' },
+  ]);
+  app.setTickerFilter('quotes');
+  out.quoteRows = rows();
+  out.quoteDistilled = out.quoteRows.length === 4;
+  out.quotePlaced = out.quoteRows.some((r) => r.includes('[PLACED]') && r.includes('Canada election'));
+  out.quoteResting = out.quoteRows.some((r) => r.includes('[RESTING]') && r.includes('Brazil election')
+    && r.includes('UP 5 at $0.48 and DOWN 6 at $0.49'));
+  out.quoteRestingFromState = out.quoteRows.some((r) => r.includes('[RESTING]')
+    && r.includes('Argentina election') && r.includes('1 resting'));
+  out.quotePlanned = out.quoteRows.some((r) => r.includes('[PLANNED]') && r.includes('Peru election'));
+
+  app.setTickerTab('filter');
+  out.emptyQuotes = document.getElementById('event-ticker').innerHTML.includes('No quotes yet.');
+  app.setTickerTab('live');
+  app.setTickerFilter('all');
 
   // ── An unavailable feed explains itself instead of showing a blank tab ──
   activeLogStreamSource.emit('source', {

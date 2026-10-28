@@ -134,7 +134,10 @@ _ACTIVE_PORT = resolve_port(None)
 POLL_INTERVAL_MS = 2000
 
 CYCLE_RING_NAME = "cycle_events.jsonl"
-SSE_REPLAY_LINES = 50
+# The client keeps 200 rows per family, so replaying 50 threw away three quarters
+# of the history it could show -- and with a shadow run emitting ~1,800 events,
+# every fill and alert fell outside that window. Replay what the UI can hold.
+SSE_REPLAY_LINES = 200
 SSE_POLL_SEC = 0.5
 SSE_KEEPALIVE_SEC = 15.0
 

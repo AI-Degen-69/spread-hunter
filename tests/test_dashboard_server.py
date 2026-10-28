@@ -2743,7 +2743,7 @@ def test_event_stream_tabs_harness():
     # Tab -> component -> category compose instead of overwriting each other.
     assert out["combinedFiltered"] is True
     assert out["connectionsFiltered"] is True
-    # Socket traffic (ticks) is data; only socket health belongs in CONNECTIONS.
+    # Only socket health belongs in CONNECTIONS: not ticks, not daemon churn.
     assert out["connectionExclusions"] is True
     assert out["alertsFiltered"] is True
     # An empty feed names the tab and the category it narrowed to.
@@ -2765,6 +2765,22 @@ def test_event_stream_tabs_harness():
 
     # A screener scan on shadow stdout is a MARKET FILTER row with its own tag.
     assert out["shadowScanTagged"] is True
+
+    # A fill received on the user stream is a trade; a leg-state change is an
+    # alert; a rerank pass is neither a trade nor a connection.
+    assert out["fillInTrades"] is True
+    assert out["transitionInAlerts"] is True
+    assert out["rerankNotConnection"] is True
+
+    # QUOTES distils decide+submit into one row per market.
+    assert out["quoteDistilled"] is True
+    assert out["quotePlaced"] is True
+    assert out["quoteResting"] is True
+    # /api/state orders mark a market RESTING even when the ring tail never
+    # contains its original submission.
+    assert out["quoteRestingFromState"] is True
+    assert out["quotePlanned"] is True
+    assert out["emptyQuotes"] is True
 
 
 def test_ticker_component_dropdown_and_category_filters_ship():
