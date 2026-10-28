@@ -3766,7 +3766,9 @@ def test_cockpit_open_dash_explains_retirement():
 def test_cockpit_purged_pages_still_404():
     """Purged past-run pages stay 404 now that the cockpit is a page."""
     from fastapi.testclient import TestClient
-    assert TestClient(app).get("/cockpit/492").status_code == 404
+    res = TestClient(app).get("/cockpit/492")
+    assert res.status_code == 404
+    assert res.json()["detail"] == "Unknown cockpit page"
 
 
 def test_hub_page_served_in_process_with_shared_rail():

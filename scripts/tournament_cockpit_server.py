@@ -1585,7 +1585,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
       <div style="display: flex; gap: 6px;">
         <button class="btn" style="padding: 5px 12px; font-size: 12px; cursor: pointer;" onclick="selectGatesTourney('843', this)">🚦 #843 Pair Test (Balanced + Queue-5m)</button>
         <button class="btn" style="padding: 5px 12px; font-size: 12px; cursor: pointer;" onclick="selectGatesTourney('799', this)">📊 #799 Strategy Presets (10 Arms)</button>
-        <button class="btn" style="padding: 5px 12px; font-size: 12px; cursor: pointer;" onclick="selectGatesTourney('799', this)">🧪 #799 Presets (10 Arms)</button>
+
       </div>
     </div>
     <div style="font-size: 11.5px; color: var(--text-muted);">

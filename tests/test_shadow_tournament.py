@@ -1413,7 +1413,7 @@ def test_i799_arms_file_holds_ten_unique_arms():
     assert len(set(names)) == 10
 
 
-def test_i799_plan_names_ten_fresh_stores_and_ports(tmp_path):
+def test_i799_unnumbered_plan_keeps_stores_in_run_folder(tmp_path):
     from scripts.shadow_tournament import build_tournament_plan
 
     arms = _i799_plan_arms()

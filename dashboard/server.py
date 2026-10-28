@@ -2904,7 +2904,15 @@ def api_system_service_stop(request: Request, service: str | None = None):
 # side-rail links are plain same-tab navigation. Both modules stay runnable
 # standalone (`python -m scripts.tournament_hub|cockpit_server --port ...`)
 # for the menu and the reconcile loop, which manage those processes.
-from scripts import tournament_cockpit_server as _cockpit_mod
+def _load_cockpit():
+    """Tournament cockpit module, imported lazily (like the hub).
+
+    The cockpit is a large research module; a failure importing it must not
+    keep the live control page from starting. Handlers pay the import on
+    first use instead of at dashboard boot.
+    """
+    from scripts import tournament_cockpit_server as cockpit_mod
+    return cockpit_mod
 
 _INPROC_SERVICES = ("hub", "cockpit")
 
@@ -5693,8 +5701,9 @@ def _open_dash_retired_page() -> str:
 @app.get("/cockpit/api/stats")
 def cockpit_stats(tourney: str | None = None):
     """Tournament stats JSON, built in-process by the cockpit’s own builder."""
-    key = tourney if tourney in _cockpit_mod.SERVED_TOURNAMENT_KEYS else _cockpit_mod.CURRENT_SETUP_KEY
-    return JSONResponse(_cockpit_mod.get_cached_stats(key))
+    cockpit_mod = _load_cockpit()
+    key = tourney if tourney in cockpit_mod.SERVED_TOURNAMENT_KEYS else cockpit_mod.CURRENT_SETUP_KEY
+    return JSONResponse(cockpit_mod.get_cached_stats(key))
 
 
 @app.get("/cockpit", response_class=HTMLResponse)
@@ -5707,10 +5716,11 @@ def cockpit_page(subpath: str = ""):
     """
     if subpath == "open-dash":
         return HTMLResponse(_open_dash_retired_page())
-    key = _cockpit_mod.tourney_key_for_path("/" + subpath)
+    cockpit_mod = _load_cockpit()
+    key = cockpit_mod.tourney_key_for_path("/" + subpath)
     if key is None:
         raise HTTPException(status_code=404, detail="Unknown cockpit page")
-    html_text = _cockpit_mod.generate_cockpit_html(_cockpit_mod.get_cached_stats(key))
+    html_text = cockpit_mod.generate_cockpit_html(cockpit_mod.get_cached_stats(key))
     html_text = html_text.replace("fetch('/api/stats", "fetch('/cockpit/api/stats")
     html_text = html_text.replace("http://127.0.0.1:8800", "/cockpit/")
     # Standalone-root links the template emits for :8800 would 404 on :8799.
@@ -5737,6 +5747,7 @@ def hub_page():
     from scripts import tournament_hub as hub_mod
     html_text = hub_mod.PAGE_HTML
     html_text = html_text.replace("http://127.0.0.1:8800", "/cockpit/")
+    html_text = html_text.replace(" (Port 8800)", "")
     return HTMLResponse(_with_shared_rail(html_text, "hub"))
 
 

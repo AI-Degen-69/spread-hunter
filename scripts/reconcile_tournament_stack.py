@@ -345,10 +345,20 @@ def reconcile_arms(
 
 
 def verify_and_report(arms: List[Dict[str, Any]], tourney_id: str) -> bool:
-    """Probe all arm dashboards and display the consolidated alignment verdict."""
+    """Check all shadow arms and the shared Market Filter state, then report."""
     log.info("\n" + "=" * 80)
     log.info("TOURNAMENT #%s STACK ALIGNMENT VERDICT", tourney_id)
     log.info("=" * 80)
+
+    # Per-arm dashboards are retired, so no :8801-:8810 server answers /api/kpi
+    # anymore. The Market Filter publishes one shared snapshot for the whole
+    # stack; its age is every arm row's filter state.
+    stack_filter_state = "UNKNOWN"
+    try:
+        age = time.time() - (ROOT / "runtime" / "pipeline.json").stat().st_mtime
+        stack_filter_state = "RUNNING" if age <= 1200 else "DEGRADED"
+    except OSError:
+        pass
 
     all_green = True
     rows = []
@@ -388,18 +398,7 @@ def verify_and_report(arms: List[Dict[str, Any]], tourney_id: str) -> bool:
             except Exception:
                 pass
 
-        if port and is_port_listening(port):
-            try:
-                kpi_url = f"http://127.0.0.1:{port}/api/kpi"
-                with urllib.request.urlopen(kpi_url, timeout=1.5) as resp:
-                    kpi = json.loads(resp.read().decode("utf-8"))
-                    snap_age = kpi.get("funnel", {}).get("snapshot_age")
-                    if snap_age is not None and snap_age <= 1200:
-                        market_filter_state = "RUNNING"
-                    else:
-                        market_filter_state = "DEGRADED"
-            except Exception:
-                pass
+        market_filter_state = stack_filter_state
 
         if not engine_ok or code_stale or market_filter_state != "RUNNING":
             all_green = False
@@ -415,8 +414,8 @@ def verify_and_report(arms: List[Dict[str, Any]], tourney_id: str) -> bool:
         log.info(f"{idx:<3} {name:<24} {port:<6} {status_str:<16} {filter_st:<10} {orders_cnt:<8} {filled_cnt:<6} {url}")
 
     log.info("-" * len(header) + "-" * 25)
-    log.info("Tournament Cockpit: http://127.0.0.1:8800")
-    log.info("Tournament Hub:     http://127.0.0.1:8798")
+    log.info("Tournament Cockpit: http://127.0.0.1:8799/cockpit/")
+    log.info("Tournament Hub:     http://127.0.0.1:8799/hub/")
 
     if all_green:
         log.info("[OK] ALL 10 ARMS ARE SYNCHRONIZED, RUNNING FRESH CODE, AND MARKET FILTER IS ACTIVE!")

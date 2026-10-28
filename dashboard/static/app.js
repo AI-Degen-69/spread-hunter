@@ -2231,7 +2231,7 @@ function renderProfileBadge(status) {
 
   const staged = status?.pending_profile || null;
   const stagedSuffix = (staged && typeof staged.name === 'string')
-    ? ` STAGED for next START: ${staged.name} — the pill switches after START launches it.`
+    ? ` STAGED for next live START: ${staged.name} — the pill switches after START launches it (START SHADOW does not consume it).`
     : '';
   const profile = status?.active_profile || null;
   if (!profile || typeof profile.name !== 'string') {

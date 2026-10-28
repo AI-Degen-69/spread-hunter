@@ -486,7 +486,7 @@ def test_newest_run_of_another_issue_owns_the_arm_table(tmp_path, monkeypatch):
         "dash_port": 8801,
     }])
     _plan(
-        tmp_path, "i799-tournament-test_2026-10-24T09-05", _i799_records(),
+        tmp_path, "i843-pair-test_2026-10-24T09-05", _i799_records(),
         source=_i799_source(), minutes=1440,
     )
 
