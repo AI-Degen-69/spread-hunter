@@ -3009,7 +3009,9 @@ def test_master_toggle_renders_every_state():
     # first preflight check; a refusal there stays in the modal, not the ticker.
     assert out["refused"]["modalOpen"] is True
     assert "/api/system/start" not in out["refused"]["fetches"]
-    assert any("preflight" in p for p in out["refused"]["fetches"])
+    # Exactly one check was asked for: a refused step stops the sequence
+    # instead of walking straight on to screener and stream.
+    assert out["refused"]["fetches"] == ["/api/system/preflight"]
     # The modal's JSON bodies must arrive as JSON: a text/plain POST is
     # ignored by the server and the run silently falls back to prod (#857).
     assert "application/json" in (out["refused"]["fetchContentTypes"] or [])
