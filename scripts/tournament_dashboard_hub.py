@@ -35,7 +35,7 @@ def is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
         return False
 
 
-def get_latest_plan(tourney_id: str = "487", tourn_dir: Path | None = None) -> dict | None:
+def get_latest_plan(tourney_id: str = "799", tourn_dir: Path | None = None) -> dict | None:
     """Newest plan record for this issue, resolved by the shared ranker.
 
     The ranking (highest run number, then newest stamp) lives in
@@ -54,7 +54,7 @@ def get_latest_plan(tourney_id: str = "487", tourn_dir: Path | None = None) -> d
         return None
 
 
-def run_hub(tourney_id: str = "487", interval_sec: float = 3.0) -> None:
+def run_hub(tourney_id: str = "799", interval_sec: float = 3.0) -> None:
     procs: dict[int, subprocess.Popen] = {}
     python_exe = sys.executable
 
@@ -126,6 +126,6 @@ def run_hub(tourney_id: str = "487", interval_sec: float = 3.0) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tournament Dashboard Hub")
-    parser.add_argument("--tourney", default="487", help="Tournament issue ID (default: 487)")
+    parser.add_argument("--tourney", default="799", help="Tournament issue ID (default: 799)")
     args = parser.parse_args()
     run_hub(args.tourney)

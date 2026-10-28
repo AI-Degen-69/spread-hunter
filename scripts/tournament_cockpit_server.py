@@ -47,602 +47,6 @@ from core_brain.shadow_run import (  # noqa: E402
     parse_tournament_run_dir_name,
 )
 
-ARMS_CONFIG_484 = [
-    # Issue #484: Strategy Profiles
-    {
-        "issue": 484,
-        "name": "control-1",
-        "label": "Control (#1)",
-        "port": 8801,
-        "db": "data/i484_tournament_control-1.db",
-        "run_id": "i484_tournament_control-1",
-        "color": "#00e676",
-        "desc": "Baseline fixed 2c offset, 4.5c single-buy loss stop",
-        "worst_catalyst": "stop_loss_trigger_usd_cents (4.5c static)",
-        "worst_catalyst_desc": "Fixed stop dumped 56 trades on temporary 4.5c noise (-$15.16 in rescue/stop haircuts)",
-        "hypothesized_tweak": "stop_loss_trigger_usd_cents -> 6.0c",
-        "tweak_rationale": "Widen stop from 4.5c to 6.0c to absorb noise and prevent premature panic exits while keeping adverse limit intact",
-    },
-    {
-        "issue": 484,
-        "name": "conservative-1",
-        "label": "Conservative (#1)",
-        "port": 8802,
-        "db": "data/i484_tournament_conservative-1.db",
-        "run_id": "i484_tournament_conservative-1",
-        "color": "#00b0ff",
-        "desc": "Dynamic offset 0.75x (2-5c), tighter 3.0c single-buy stop",
-        "worst_catalyst": "stop_loss_trigger_usd_cents (3.0c tight)",
-        "worst_catalyst_desc": "Hair-trigger 3c stop panic-sold 28 trades via aged_out_rescue (-$15.43, -$0.55/tr)",
-        "hypothesized_tweak": "stop_loss_trigger_usd_cents -> 4.5c",
-        "tweak_rationale": "Relax hair-trigger 3c stop to standard 4.5c so normal maker variance does not force emergency bailouts",
-    },
-    {
-        "issue": 484,
-        "name": "balanced-1",
-        "label": "Balanced (#1)",
-        "port": 8803,
-        "db": "data/i484_tournament_balanced-1.db",
-        "run_id": "i484_tournament_balanced-1",
-        "color": "#e040fb",
-        "desc": "Dynamic offset 0.50x (2-4c), standard 4.5c single-buy stop",
-        "worst_catalyst": "dynamic_offset_multiplier (0.50x / 2-4c)",
-        "worst_catalyst_desc": "No-man's land offset missed tight volume; lowest merge revenue in tournament (+$28.69)",
-        "hypothesized_tweak": "dynamic_offset_multiplier -> 0.25x (2-3c)",
-        "tweak_rationale": "Tighten multiplier from 0.50x to 0.25x to sit closer to market mid and capture high-volume flow",
-    },
-    {
-        "issue": 484,
-        "name": "aggressive-1",
-        "label": "Aggressive (#1)",
-        "port": 8804,
-        "db": "data/i484_tournament_aggressive-1.db",
-        "run_id": "i484_tournament_aggressive-1",
-        "color": "#ffd600",
-        "desc": "Dynamic offset 0.25x (2-3c), wider 6.0c single-buy stop",
-        "worst_catalyst": "stop_loss_trigger_usd_cents (6.5c wide)",
-        "worst_catalyst_desc": "Wide 6.5c leash allowed adverse single buys to bleed deeper (-$0.32 avg loss per stop)",
-        "hypothesized_tweak": "stop_loss_trigger_usd_cents -> 4.5c",
-        "tweak_rationale": "Reign in excessive 6.5c stop to standard 4.5c to cap catastrophic single-leg drawdown",
-    },
-    {
-        "issue": 484,
-        "name": "prudent-1",
-        "label": "Prudent (#1)",
-        "port": 8805,
-        "db": "data/i484_tournament_prudent-1.db",
-        "run_id": "i484_tournament_prudent-1",
-        "color": "#ff6d00",
-        "desc": "Fixed 3c offset, conservative 3.5c single-buy stop",
-        "worst_catalyst": "dynamic_offset_multiplier (0.60x / 2-4c)",
-        "worst_catalyst_desc": "Wide resting distance caused asymmetric fills; leg 2 failed to fill before settlement (-$15.28)",
-        "hypothesized_tweak": "dynamic_offset_multiplier -> 0.30x (2-3c)",
-        "tweak_rationale": "Narrow offset multiplier from 0.60x to 0.30x so leg 2 remains reachable before game close",
-    },
-    # Issue #485: Queue & Execution Mechanics
-    {
-        "issue": 485,
-        "name": "stickhold-1",
-        "label": "Stick-Hold (#1)",
-        "port": 8806,
-        "db": "data/i485_tournament_stickhold-1.db",
-        "run_id": "i485_tournament_stickhold-1",
-        "color": "#69f0ae",
-        "desc": "Dynamic offset 0.25x, 45s single grace, 6.5c loss cap",
-        "worst_catalyst": "requote_hold_queue_shares (0 / no hold)",
-        "worst_catalyst_desc": "Zero queue hold surrendered priority on every tick; forced 57 single-buy exits (-$20.56)",
-        "hypothesized_tweak": "requote_hold_queue_shares -> 500 (retired by #387)",
-        "tweak_rationale": "Enable 500 share queue hold to defend priority against micro-price flicker and avoid queue demotions",
-    },
-    {
-        "issue": 485,
-        "name": "queuehug-1",
-        "label": "Queue-Hug (#1)",
-        "port": 8807,
-        "db": "data/i485_tournament_queuehug-1.db",
-        "run_id": "i485_tournament_queuehug-1",
-        "color": "#ff5252",
-        "desc": "Requote hold below 100 shares, queue hold 150 shares (retired by #387)",
-        "worst_catalyst": "requote_hold_below_target (1.0 / unconstrained)",
-        "worst_catalyst_desc": "Held bids while market collapsed to zero, eating toxic fills into settlement (-$31.65)",
-        "hypothesized_tweak": "requote_hold_below_target -> 0.08 (retired by #387)",
-        "tweak_rationale": "Constrain drop tolerance to 8c so collapsing books trigger immediate bid cancellations instead of toxic fills",
-    },
-    {
-        "issue": 485,
-        "name": "deadband-tight-1",
-        "label": "Deadband-Tight (#1)",
-        "port": 8808,
-        "db": "data/i485_tournament_deadband-tight-1.db",
-        "run_id": "i485_tournament_deadband-tight-1",
-        "color": "#ff4081",
-        "desc": "Strict 1c requote deadband, frequent requoting",
-        "worst_catalyst": "requote_dead_band (0.01 / 1c strict)",
-        "worst_catalyst_desc": "1c tick flutter churned hedging orders to back of queue; leg 2 never filled (-$38.03 settlement)",
-        "hypothesized_tweak": "requote_dead_band -> 0.05 (5c buffer)",
-        "tweak_rationale": "Widen deadband to 5c to prevent 1c jitter from resetting queue rank on complementary hedge legs",
-    },
-    {
-        "issue": 485,
-        "name": "deadband-wide-1",
-        "label": "Deadband-Wide (#1)",
-        "port": 8809,
-        "db": "data/i485_tournament_deadband-wide-1.db",
-        "run_id": "i485_tournament_deadband-wide-1",
-        "color": "#76ff03",
-        "desc": "Wide 2c requote deadband, reduces unnecessary churn",
-        "worst_catalyst": "dynamic_offset_multiplier (0.50x / 2-4c)",
-        "worst_catalyst_desc": "Inherited 0.50x offset backed off on volatility, capping merges to +$35.14 vs control's +$39.91",
-        "hypothesized_tweak": "dynamic_offset_multiplier -> 0.25x (2-3c)",
-        "tweak_rationale": "Lower multiplier to 0.25x so wide-deadband stability pairs with tighter maker pricing to boost merges",
-    },
-    {
-        "issue": 485,
-        "name": "snapstop-1",
-        "label": "Snap-Stop (#1)",
-        "port": 8810,
-        "db": "data/i485_tournament_snapstop-1.db",
-        "run_id": "i485_tournament_snapstop-1",
-        "color": "#b388ff",
-        "desc": "Fast 30s single buy grace, tight 4.0c loss cap",
-        "worst_catalyst": "single_buy_grace_sec (0s / zero patience)",
-        "worst_catalyst_desc": "0s grace gave leg 2 zero time as maker; rushed taker hedge failed, wiping out -$14.82 at settlement",
-        "hypothesized_tweak": "single_buy_grace_sec -> 45s",
-        "tweak_rationale": "Provide 45s of maker patience so leg 2 can fill organically before triggering forced market cross",
-    },
-]
-
-ARMS_CONFIG_487 = [
-    # Issue #487: the current-setup ten-arm tournament. One control running
-    # today's configuration untouched, plus nine arms that each move exactly one
-    # LIVE BOT_* setting. Worst-catalyst columns stay EMPTY: there is no
-    # forensic run behind this set, and inventing numbers is the failure this
-    # issue removes. Static db/run_id values are placeholders -- the launcher
-    # writes data/tournaments/i487-current-setup-10arm_<stamp>/plan.json at
-    # launch and resolve_tournament_arms() reads the real db/run_id/port from it. Before
-    # launch a missing store reports NO_DATA, which is the honest fresh state.
-    {
-        "issue": 487,
-        "name": "control",
-        "label": "Control",
-        "port": 8801,
-        "db": "data/487_tournament_01_control_current_setup_10arm.db",
-        "run_id": "shadow-487-t01-control-current_setup_10arm",
-        "color": "#00e676",
-        "desc": "Today's shipped configuration plus the operator's .env, untouched",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "none - the current setup",
-        "tweak_rationale": "The baseline every variation is measured against; this arm changes nothing on purpose",
-    },
-    {
-        "issue": 487,
-        "name": "offset-mult-025",
-        "label": "Offset Mult 0.25x",
-        "port": 8802,
-        "db": "data/487_tournament_02_offset-mult-025_current_setup_10arm.db",
-        "run_id": "shadow-487-t02-offset-mult-025-current_setup_10arm",
-        "color": "#00b0ff",
-        "desc": "Dynamic offset multiplier halved, 0.50x -> 0.25x (the preset aggressive value)",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "quote_spread_offset_multiplier = 0.25",
-        "tweak_rationale": "A lower multiplier tracks a quiet book more closely and rests nearer mid, which should raise merge volume",
-    },
-    {
-        "issue": 487,
-        "name": "offset-min-2c",
-        "label": "Offset Min 2c",
-        "port": 8803,
-        "db": "data/487_tournament_03_offset-min-2c_current_setup_10arm.db",
-        "run_id": "shadow-487-t03-offset-min-2c-current_setup_10arm",
-        "color": "#e040fb",
-        "desc": "Dynamic offset floor raised 1c -> 2c (the preset conservative value)",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "quote_spread_offset_min_cents = 2",
-        "tweak_rationale": "A 2c floor stops the offset collapsing onto mid in calm markets, where a 1c edge pays for nothing",
-    },
-    {
-        "issue": 487,
-        "name": "offset-max-3c",
-        "label": "Offset Max 3c",
-        "port": 8804,
-        "db": "data/487_tournament_04_offset-max-3c_current_setup_10arm.db",
-        "run_id": "shadow-487-t04-offset-max-3c-current_setup_10arm",
-        "color": "#ffd600",
-        "desc": "Dynamic offset ceiling cut 20c -> 3c (the preset aggressive value)",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "quote_spread_offset_max_cents = 3",
-        "tweak_rationale": "A hard 3c ceiling stops the offset running away in volatile books and keeps both legs reachable before settlement",
-    },
-    {
-        "issue": 487,
-        "name": "offset-static",
-        "label": "Offset Static",
-        "port": 8805,
-        "db": "data/487_tournament_05_offset-static_current_setup_10arm.db",
-        "run_id": "shadow-487-t05-offset-static-current_setup_10arm",
-        "color": "#ff6d00",
-        "desc": "Dynamic offset switched off: the shipped 2c static offset quotes instead",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "quote_gate_dynamic_offset_on = 0",
-        "tweak_rationale": "A fixed 2c offset should beat volatility tracking if the dynamic offset is mostly noise",
-    },
-    {
-        "issue": 487,
-        "name": "deadband-6c",
-        "label": "Deadband 6c",
-        "port": 8806,
-        "db": "data/487_tournament_06_deadband-6c_current_setup_10arm.db",
-        "run_id": "shadow-487-t06-deadband-6c-current_setup_10arm",
-        "color": "#69f0ae",
-        "desc": "Requote dead band widened 0.03 -> 0.06 (the preset hybrid value)",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "order_requote_dead_band_cents = 0.06",
-        "tweak_rationale": "A wider dead band should stop small price jitter from churning orders to the back of the queue",
-    },
-    {
-        "issue": 487,
-        "name": "widen-on",
-        "label": "Widen Gate On",
-        "port": 8807,
-        "db": "data/487_tournament_07_widen-on_current_setup_10arm.db",
-        "run_id": "shadow-487-t07-widen-on-current_setup_10arm",
-        "color": "#ff5252",
-        "desc": "WIDENED-gate snap-back switched on: a market flagged WIDENED quotes the 3.5c widen offset instead of the raw dynamic offset. No preset ships a different value for this knob, so the arm is not preset-sourced.",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "quote_gate_widen_on = 1",
-        "tweak_rationale": "Tests whether the WIDENED-gate snap-back helps or hurts: it can quote TIGHTER than the raw dynamic offset in exactly the markets that are losing",
-    },
-    {
-        "issue": 487,
-        "name": "price-risk-030",
-        "label": "Price Risk 3c",
-        "port": 8808,
-        "db": "data/487_tournament_08_price-risk-030_current_setup_10arm.db",
-        "run_id": "shadow-487-t08-price-risk-030-current_setup_10arm",
-        "color": "#ff4081",
-        "desc": "Price-risk offset weight tripled, 0.010 -> 0.030: every resting quote sits up to ~3c deeper under mid. No preset ships this setting, so the arm is not preset-sourced.",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "quote_price_risk_widen = 0.030",
-        "tweak_rationale": "Demanding more offset where a share costs more should price a naked leg's downside properly; it deepens every quote, not just the risky ones",
-    },
-    {
-        "issue": 487,
-        "name": "stop-adverse-5c",
-        "label": "Stop Adverse 5c",
-        "port": 8809,
-        "db": "data/487_tournament_09_stop-adverse-5c_current_setup_10arm.db",
-        "run_id": "shadow-487-t09-stop-adverse-5c-current_setup_10arm",
-        "color": "#b388ff",
-        "desc": "Single-leg stop switched on, NONE -> ABSOLUTE_DROP, with the shipped 0.05 adverse-drop threshold travelling with the mode: one variable, two behaviours. No preset ships this setting, so the arm is not preset-sourced.",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "risk_stop_mode = ABSOLUTE_DROP",
-        "tweak_rationale": "An entry-relative stop should cap single-leg losses instead of letting a naked leg run to settlement",
-    },
-    {
-        "issue": 487,
-        "name": "book-window-4c",
-        "label": "Book Window 4c",
-        "port": 8810,
-        "db": "data/487_tournament_10_book-window-4c_current_setup_10arm.db",
-        "run_id": "shadow-487-t10-book-window-4c-current_setup_10arm",
-        "color": "#18ffff",
-        "desc": "Per-market quoting window tightened 15c -> 4c. The one arm that changes which markets get quoted at all. The baseline preset ships 15c, the current setup's own value, so the arm is not preset-sourced.",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "quote_book_max_spread_from_mid = 4",
-        "tweak_rationale": "A narrower window refuses the wide, unreadable books and keeps quoting only the tightest ones",
-    },
-]
-
-ARMS_CONFIG_492 = [
-    # Issue #492: fresh Round 1 baseline re-run on fixed code (no #487 tweaks).
-    # Worst-catalyst columns stay EMPTY until this run produces results -- the
-    # old #484/#485 hypotheses described buggy-code artifacts, not real
-    # behavior, and must not anchor the new read. Static db/run_id values are
-    # placeholders (real paths land via data/tournaments/i492-r<run>_<stamp>/plan.json
-    # once the run launches); missing files report as NO_DATA, which is the
-    # honest fresh state.
-    {
-        "issue": 492,
-        "name": "control-1",
-        "label": "Control (#1)",
-        "port": 8801,
-        "db": "data/tournament_i492-r1_control-1.db",
-        "run_id": "shadow-492-tournament-1-control-1",
-        "color": "#00e676",
-        "desc": "Baseline fixed 2c offset, 4.5c single-buy loss stop",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 492,
-        "name": "conservative-1",
-        "label": "Conservative (#1)",
-        "port": 8802,
-        "db": "data/tournament_i492-r1_conservative-1.db",
-        "run_id": "shadow-492-tournament-1-conservative-1",
-        "color": "#00b0ff",
-        "desc": "Dynamic offset 0.75x (2-5c), tighter 3.0c single-buy stop",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 492,
-        "name": "balanced-1",
-        "label": "Balanced (#1)",
-        "port": 8803,
-        "db": "data/tournament_i492-r1_balanced-1.db",
-        "run_id": "shadow-492-tournament-1-balanced-1",
-        "color": "#e040fb",
-        "desc": "Dynamic offset 0.50x (2-4c), standard 4.5c single-buy stop",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 492,
-        "name": "aggressive-1",
-        "label": "Aggressive (#1)",
-        "port": 8804,
-        "db": "data/tournament_i492-r1_aggressive-1.db",
-        "run_id": "shadow-492-tournament-1-aggressive-1",
-        "color": "#ffd600",
-        "desc": "Dynamic offset 0.25x (2-3c), wider 6.0c single-buy stop",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 492,
-        "name": "prudent-1",
-        "label": "Prudent (#1)",
-        "port": 8805,
-        "db": "data/tournament_i492-r1_prudent-1.db",
-        "run_id": "shadow-492-tournament-1-prudent-1",
-        "color": "#ff6d00",
-        "desc": "Fixed 3c offset, conservative 3.5c single-buy stop",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 492,
-        "name": "stickhold-1",
-        "label": "Stick-Hold (#1)",
-        "port": 8806,
-        "db": "data/tournament_i492-r1_stickhold-1.db",
-        "run_id": "shadow-492-tournament-1-stickhold-1",
-        "color": "#69f0ae",
-        "desc": "Dynamic offset 0.25x, 45s single grace, 6.5c loss cap",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 492,
-        "name": "queuehug-1",
-        "label": "Queue-Hug (#1)",
-        "port": 8807,
-        "db": "data/tournament_i492-r1_queuehug-1.db",
-        "run_id": "shadow-492-tournament-1-queuehug-1",
-        "color": "#ff4081",
-        "desc": "Requote hold below 100 shares, queue hold 150 shares (retired by #387)",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 492,
-        "name": "deadband-tight-1",
-        "label": "Deadband-Tight (#1)",
-        "port": 8808,
-        "db": "data/tournament_i492-r1_deadband-tight-1.db",
-        "run_id": "shadow-492-tournament-1-deadband-tight-1",
-        "color": "#ff5252",
-        "desc": "Strict 1c requote deadband, frequent requoting",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 492,
-        "name": "deadband-wide-1",
-        "label": "Deadband-Wide (#1)",
-        "port": 8809,
-        "db": "data/tournament_i492-r1_deadband-wide-1.db",
-        "run_id": "shadow-492-tournament-1-deadband-wide-1",
-        "color": "#76ff03",
-        "desc": "Wide 2c requote deadband, reduces unnecessary churn",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 492,
-        "name": "snapstop-1",
-        "label": "Snap-Stop (#1)",
-        "port": 8810,
-        "db": "data/tournament_i492-r1_snapstop-1.db",
-        "run_id": "shadow-492-tournament-1-snapstop-1",
-        "color": "#b388ff",
-        "desc": "Fast 30s single buy grace, tight 4.0c loss cap",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-]
-
-ARMS_CONFIG_608 = [
-    # Issue #608: 10-character shadow tournament on shipped defaults.
-    # Worst-catalyst columns stay EMPTY until this run produces results --
-    # the run's own verdict fills them, never hardcode (per #492 precedent).
-    {
-        "issue": 608,
-        "name": "the-accountant-1",
-        "label": "The Accountant (#1)",
-        "port": 8801,
-        "db": "data/i608_tournament-1_the-accountant-1.db",
-        "run_id": "shadow-608-tournament-1-the-accountant-1",
-        "color": "#00e676",
-        "desc": "Tight 2.0c stop (half shipped 4.0c): exits orphan legs early",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 608,
-        "name": "the-patient-one-1",
-        "label": "The Patient One (#1)",
-        "port": 8802,
-        "db": "data/i608_tournament-1_the-patient-one-1.db",
-        "run_id": "shadow-608-tournament-1-the-patient-one-1",
-        "color": "#00b0ff",
-        "desc": "Loose 8.0c stop: lets legs breathe through noise",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 608,
-        "name": "the-surgeon-1",
-        "label": "The Surgeon (#1)",
-        "port": 8803,
-        "db": "data/i608_tournament-1_the-surgeon-1.db",
-        "run_id": "shadow-608-tournament-1-the-surgeon-1",
-        "color": "#e040fb",
-        "desc": "Tight 0.25x dynamic offset: quotes close to the book",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 608,
-        "name": "the-daydreamer-1",
-        "label": "The Daydreamer (#1)",
-        "port": 8804,
-        "db": "data/i608_tournament-1_the-daydreamer-1.db",
-        "run_id": "shadow-608-tournament-1-the-daydreamer-1",
-        "color": "#ffd600",
-        "desc": "Wide 1.0x dynamic offset: rests deep for edge",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 608,
-        "name": "the-regular-1",
-        "label": "The Regular (#1)",
-        "port": 8805,
-        "db": "data/i608_tournament-1_the-regular-1.db",
-        "run_id": "shadow-608-tournament-1-the-regular-1",
-        "color": "#ff6d00",
-        "desc": "Offset excursion capped at 3c (down from 20c)",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 608,
-        "name": "the-metronome-1",
-        "label": "The Metronome (#1)",
-        "port": 8806,
-        "db": "data/i608_tournament-1_the-metronome-1.db",
-        "run_id": "shadow-608-tournament-1-the-metronome-1",
-        "color": "#69f0ae",
-        "desc": "Calm 0.06 requote deadband: reprices half as often",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 608,
-        "name": "the-gambler-1",
-        "label": "The Gambler (#1)",
-        "port": 8807,
-        "db": "data/i608_tournament-1_the-gambler-1.db",
-        "run_id": "shadow-608-tournament-1-the-gambler-1",
-        "color": "#ff4081",
-        "desc": "Hold direction (0.0) + 800-queue conviction through wobbles",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 608,
-        "name": "the-chaperone-1",
-        "label": "The Chaperone (#1)",
-        "port": 8808,
-        "db": "data/i608_tournament-1_the-chaperone-1.db",
-        "run_id": "shadow-608-tournament-1-the-chaperone-1",
-        "color": "#ff5252",
-        "desc": "Defends queue position (500) on every tick",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 608,
-        "name": "the-graceful-1",
-        "label": "The Graceful (#1)",
-        "port": 8809,
-        "db": "data/i608_tournament-1_the-graceful-1.db",
-        "run_id": "shadow-608-tournament-1-the-graceful-1",
-        "color": "#76ff03",
-        "desc": "45s maker grace on calm legs the stop did not take",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-    {
-        "issue": 608,
-        "name": "the-strict-parent-1",
-        "label": "The Strict Parent (#1)",
-        "port": 8810,
-        "db": "data/i608_tournament-1_the-strict-parent-1.db",
-        "run_id": "shadow-608-tournament-1-the-strict-parent-1",
-        "color": "#b388ff",
-        "desc": "Downside anchor: 2.0c stop + 0s grace (documents the floor)",
-        "worst_catalyst": "",
-        "worst_catalyst_desc": "",
-        "hypothesized_tweak": "",
-        "tweak_rationale": "",
-    },
-]
-
-# Legacy alias kept for older imports. The tournament the cockpit serves by
-# default is CURRENT_SETUP_KEY (#487); this constant no longer selects a page.
-ARMS_CONFIG = ARMS_CONFIG_492
-
 I843_ARMS_FILE = ROOT / "configs" / "tournaments" / "i843-pair-test_arms.json"
 I799_ARMS_FILE = ROOT / "configs" / "tournaments" / "i799-tournament-test_arms.json"
 
@@ -680,44 +84,11 @@ def _load_arms_from_file(file_path: Path, issue_num: int, start_port: int = 8801
 ARMS_CONFIG_843 = _load_arms_from_file(I843_ARMS_FILE, 843, 8801)
 ARMS_CONFIG_799 = _load_arms_from_file(I799_ARMS_FILE, 799, 8801)
 
+# Legacy alias kept for older imports. The cockpit now serves #799 by
+# default; this constant no longer selects a page.
+ARMS_CONFIG = ARMS_CONFIG_799
+
 TOURNAMENTS = {
-    "492": {
-        "id": "492",
-        "title": "Issue #492 Baseline Re-run (Fixed Code)",
-        "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | Original 10 arms, byte-identical env, no #487 tweaks",
-        "description": "Fresh Round 1 baseline on fixed code. Catalyst columns stay empty until this run reports; the current-setup tournament (#487) is a separate, later run.",
-        "arms": ARMS_CONFIG_492,
-        "issue_primary": 492,
-        "issue_secondary": 492,
-    },
-    "608": {
-        "id": "608",
-        "title": "Issue #608 Character Tournament (Shipped Defaults)",
-        "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | 10 one-knob characters, shared Data Analysis verdict",
-        "description": "Ten characters, one knob each, on loose shipped defaults. Catalyst columns stay empty until this run reports.",
-        "arms": ARMS_CONFIG_608,
-        "issue_primary": 608,
-        "issue_secondary": 608,
-    },
-    "484": {
-        "id": "484",
-        "title": "Issue #484 / #485 Baseline Tournament (Archive)",
-        "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | Issue #484 (Strategy Profiles) & Issue #485 (Execution Mechanics)",
-        "description": "Archived baseline built on buggy code (see #492); kept for history, not for decisions.",
-        "arms": ARMS_CONFIG_484,
-        "issue_primary": 484,
-        "issue_secondary": 485,
-    },
-    "487": {
-        "id": "487",
-        "title": "Issue #487 Current-Setup Tournament",
-        "subtitle": "12-Hour Multi-Arm Shadow Evaluation | One control at today's settings + 9 arms varying a single live parameter",
-        "description": "The first ten-arm run on the post-2026-10-20 code: every arm starts from the configuration that ships today and changes exactly one live setting. Comparative reading happens after the 720-minute run; no arm carries a catalyst score yet.",
-        "arms": ARMS_CONFIG_487,
-        "issue_primary": 487,
-        "issue_secondary": 487,
-        "nav_label": "#487 Current Setup (10 Arms)",
-    },
     "843": {
         "id": "843",
         "title": "Issue #843 Balanced Preset & Queue-5m Gate Rehearsal",
@@ -744,13 +115,10 @@ TOURNAMENTS = {
 # The cockpit serves one page: the current setup. Everything past-run is a
 # launch/compare record only. These paths are the only ones that render, and the
 # current setup is the only tournament key the JSON API will serve.
-CURRENT_SETUP_KEY = "487"
+CURRENT_SETUP_KEY = "799"
 PAGE_PATHS: dict[str, str] = {
     "": CURRENT_SETUP_KEY,
     "/index.html": CURRENT_SETUP_KEY,
-    "/487": "487",
-    "/487.html": "487",
-    "/cockpit_487": "487",
     "/843": "843",
     "/843.html": "843",
     "/cockpit_843": "843",
@@ -766,7 +134,7 @@ SERVED_TOURNAMENT_KEYS = frozenset(PAGE_PATHS.values())
 def tourney_key_for_path(path: str) -> Optional[str]:
     """Return the tournament key whose page serves this path, or None for a 404.
 
-    None is deliberate for `/492`, `/484`, `/484.html`, `/608` and `/608.html`:
+    None is deliberate for `/492`, `/484`, `/484.html`, `/608`, `/608.html`, `/487` and `/487.html`:
     the purged past-run pages. Issue #698 asked for that purge; PR #703 ticked
     the acceptance boxes without delivering the route bullet, so it lands here.
     """
@@ -1088,8 +456,8 @@ def resolve_tournament_arms_with_status(
     global _WARNED_RECORD
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
-    # #484 stays fully static (archive); live keys resolve their plan file.
-    if tourney_key not in ("487", "492", "608", "843", "799"):
+    # Unknown keys fall back to the static table; live keys resolve their plan file.
+    if tourney_key not in ("843", "799"):
         return default_arms, None
 
     # The served page follows the newest run on disk, whatever issue launched it:
@@ -1617,27 +985,13 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
     # Leaders
     leader_1 = None
     leader_2 = None
-    if tourney_key == "484":
-        leader_1 = max(
-            (a for a in arms_data if a.get("issue") == 484),
-            key=lambda x: x.get("total_pnl", -999.0),
-            default=None
-        )
-        leader_2 = max(
-            (a for a in arms_data if a.get("issue") == 485),
-            key=lambda x: x.get("total_pnl", -999.0),
-            default=None
-        )
-        l1_title = "#484 Strategy Leader"
-        l2_title = "#485 Execution Leader"
-    else:
-        # Fresh round (held #487, live #492): top two by PnL.
-        if sorted_arms:
-            leader_1 = sorted_arms[0]
-            leader_2 = sorted_arms[1] if len(sorted_arms) > 1 else sorted_arms[0]
-        _tag = meta.get("issue_primary", tourney_key)
-        l1_title = f"#{_tag} Top Performer"
-        l2_title = f"#{_tag} Runner-Up"
+    # Top two by PnL.
+    if sorted_arms:
+        leader_1 = sorted_arms[0]
+        leader_2 = sorted_arms[1] if len(sorted_arms) > 1 else sorted_arms[0]
+    _tag = meta.get("issue_primary", tourney_key)
+    l1_title = f"#{_tag} Top Performer"
+    l2_title = f"#{_tag} Runner-Up"
 
     top_arm = sorted_arms[0] if sorted_arms else {}
 
@@ -1685,7 +1039,7 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
 
 def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     """Generate the full responsive, interactive HTML dashboard."""
-    tourney_key = str(initial_data.get("tourney_key") or "487")
+    tourney_key = str(initial_data.get("tourney_key") or CURRENT_SETUP_KEY)
     decision_gates = initial_data.get("decision_gates") or compute_decision_gates(
         initial_data.get("arms", []), tourney_key
     )
@@ -2089,9 +1443,9 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
      The past-run pages (#484, #492, #608) were purged; their routes 404. -->
 <div class="tourney-nav">
   <span class="tourney-nav-label">Tournament Evaluation:</span>
-  <a href="/487" class="tourney-pill active">
+  <a href="/799" class="tourney-pill active">
     <span>🧪</span>
-    <span>{initial_data.get('tourney_meta', {}).get('nav_label') or '#487 Current Setup (10 Arms)'}</span>
+    <span>{initial_data.get('tourney_meta', {}).get('nav_label') or '#799 Presets (10 Arms)'}</span>
     <span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">CURRENT SETUP</span>
   </a>
 </div>
@@ -2231,7 +1585,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
       <div style="display: flex; gap: 6px;">
         <button class="btn" style="padding: 5px 12px; font-size: 12px; cursor: pointer;" onclick="selectGatesTourney('843', this)">🚦 #843 Pair Test (Balanced + Queue-5m)</button>
         <button class="btn" style="padding: 5px 12px; font-size: 12px; cursor: pointer;" onclick="selectGatesTourney('799', this)">📊 #799 Strategy Presets (10 Arms)</button>
-        <button class="btn" style="padding: 5px 12px; font-size: 12px; cursor: pointer;" onclick="selectGatesTourney('487', this)">🧪 #487 Current Setup (10 Arms)</button>
+
       </div>
     </div>
     <div style="font-size: 11.5px; color: var(--text-muted);">
@@ -3142,7 +2496,7 @@ let lastUpdateTime = new Date().toLocaleTimeString();
 
 function fetchLiveStats() {{
   const statusEl = document.getElementById('refresh-status');
-  const tourneyKey = (state && state.tourney_key) ? state.tourney_key : '487';
+  const tourneyKey = (state && state.tourney_key) ? state.tourney_key : '799';
   fetch('/api/stats?tourney=' + tourneyKey)
     .then(r => {{
       if (!r.ok) {{

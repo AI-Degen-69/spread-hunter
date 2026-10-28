@@ -516,6 +516,17 @@ def test_profile_badge_renders_states():
     assert reset["className"] == "pill state-unknown mono"
     assert "state-running" not in reset["className"]
 
+    # A staged profile shows on the pill itself (name + next-START hint),
+    # so Load → START never reads as a no-op while the engine record lags.
+    staged = p["stagedOnly"]
+    assert "prudent-hybrid" in staged["text"]
+    assert "STAGED" in staged["text"]
+    assert "next live START" in staged["title"]
+
+    over = p["stagedOverActive"]
+    assert "balanced" in over["text"]
+    assert "prudent-hybrid" in over["title"]
+
 
 @requires_node
 def test_profile_picker_lists_view_and_load():
@@ -532,6 +543,16 @@ def test_profile_picker_lists_view_and_load():
     assert html.count('data-profile-action="view"') == 1
     assert 'data-profile-action' not in p["empty"]
     assert 'db-run-row' not in p["empty"]
+
+
+def test_profile_load_confirm_guard_matches_emitted_action():
+    # The picker emits data-profile-action="load"; the click handler must
+    # confirm on that same action. A guard on a stale name ('stage') never
+    # fires, and Load would stop the live stack with no warning.
+    app_js = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert 'data-profile-action="load"' in app_js
+    assert "action === 'load'" in app_js
+    assert "action === 'stage'" not in app_js
 
 
 def test_profile_badge_is_a_button_with_a_dropdown(dom: DOMNode):

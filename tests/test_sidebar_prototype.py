@@ -638,8 +638,11 @@ def test_rail_links_include_tournament_hub_and_cockpit():
     js = (_STATIC / "prototype.js").read_text(encoding="utf-8")
     assert "Tournament Hub" in js
     assert "Tournament Cockpit" in js
-    assert "http://127.0.0.1:8798" in js
-    assert "http://127.0.0.1:8800" in js
+    # Folded into :8799 as same-tab pages: no direct :8798/:8800 links left.
+    assert "'/hub/'" in js or '"/hub/"' in js
+    assert "'/cockpit/'" in js or '"/cockpit/"' in js
+    assert "http://127.0.0.1:8798" not in js
+    assert "http://127.0.0.1:8800" not in js
     assert "data-launcher" in js
     assert "proto-service-dot" in js
 

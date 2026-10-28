@@ -10,8 +10,9 @@
 
 const appJsPath = process.argv[2];
 
-const log = { fetches: [], prompts: 0, alerts: 0, alertMsg: '' };
+const log = { fetches: [], prompts: 0, alerts: 0, alertMsg: '', confirms: 0, confirmMsg: '', opened: [] };
 let promptReturn = null;
+let confirmReturn = false;
 
 function fakeClassList() {
   const set = new Set();
@@ -91,11 +92,12 @@ global.document = {
   addEventListener() {},
   body: new FakeEl('body'),
 };
-global.window = { addEventListener() {}, matchMedia: () => ({ matches: false }) };
+global.window = { addEventListener() {}, matchMedia: () => ({ matches: false }), location: { hostname: 'harness' }, open: (u) => { log.opened.push(String(u)); return null; } };
 global.CONTROL_TOKEN = 'harness-token';
 global.EventSource = function () { return { addEventListener() {}, close() {} }; };
 global.setInterval = () => 0;
 global.alert = (m) => { log.alerts += 1; log.alertMsg = String(m); };
+global.confirm = (m) => { log.confirms += 1; log.confirmMsg = String(m); return confirmReturn; };
 global.prompt = () => { log.prompts += 1; return promptReturn; };
 global.fetch = async (p, opts) => {
   log.fetches.push({ path: String(p), method: (opts && opts.method) || 'GET' });
@@ -136,6 +138,9 @@ function snapshot() {
     prompts: log.prompts,
     alerts: log.alerts,
     alertMsg: log.alertMsg,
+    confirms: log.confirms,
+    confirmMsg: log.confirmMsg,
+    opened: log.opened.slice(),
     starts: log.fetches.filter(
       (f) => f.method === 'POST' && f.path.indexOf('/api/system/service/start') !== -1).length,
     stops: log.fetches.filter(
@@ -154,6 +159,9 @@ function reset() {
   log.prompts = 0;
   log.alerts = 0;
   log.alertMsg = '';
+  log.confirms = 0;
+  log.confirmMsg = '';
+  log.opened.length = 0;
 }
 
 (async () => {

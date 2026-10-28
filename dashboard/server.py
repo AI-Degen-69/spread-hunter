@@ -1357,8 +1357,9 @@ def _refuse_unless_live_writable() -> dict | None:
                 f"This dashboard is reading {db_identity['path']} "
                 f"({db_identity['mode']}), not the production registry "
                 f"{DEFAULT_DB_PATH}. Service controls act on the live stack, "
-                f"so running them from here would be invisible. Restart the "
-                f"dashboard without --db / LIVE_DB_PATH first."
+                f"so running them from here would be invisible. Use the live "
+                f"dashboard at http://127.0.0.1:8799/ (restart without --db / "
+                f"LIVE_DB_PATH)."
             ),
             "status": get_system_status(),
         }
@@ -1984,8 +1985,8 @@ def start_bot() -> dict:
                 f"({db_identity['mode']}), not the production registry "
                 f"{DEFAULT_DB_PATH}. START launches the live stack against the "
                 f"production registry, so its orders would be invisible here. "
-                f"Restart the dashboard without --db / LIVE_DB_PATH to start "
-                f"the stack."
+                f"Use the live dashboard at http://127.0.0.1:8799/ (restart "
+                f"without --db / LIVE_DB_PATH) to start the stack."
             ),
             "status": get_system_status(),
         }
@@ -2894,230 +2895,105 @@ def api_system_service_stop(request: Request, service: str | None = None):
 
 
 # ---------------------------------------------------------------------------
-# Reporting & Tournament Services (Issue #485)
+# Tournament Hub & Cockpit, served in-process (no ports, no processes)
 # ---------------------------------------------------------------------------
-import socket
-import urllib.error
-import urllib.request
+# The hub and cockpit used to be standalone servers the dashboard
+# reverse-proxied from :8798/:8800. They are pages now: the dashboard imports
+# their data builders and renders the same documents itself, so nothing is
+# spawned, nothing listens on those ports for the dashboard's sake, and the
+# side-rail links are plain same-tab navigation. Both modules stay runnable
+# standalone (`python -m scripts.tournament_hub|cockpit_server --port ...`)
+# for the menu and the reconcile loop, which manage those processes.
+def _load_cockpit():
+    """Tournament cockpit module, imported lazily (like the hub).
 
-_REPORTING_SERVICES: dict[str, dict[str, Any]] = {
-    "hub": {
-        "port": 8798,
-        "module": "scripts.tournament_hub",
-        "probe_path": "/hub/api/state",
-        "timeout": 2.0,
-    },
-    "cockpit": {
-        "port": 8800,
-        "module": "scripts.tournament_cockpit_server",
-        "probe_path": "/api/stats",
-        "timeout": 2.0,
-    },
-}
-_reporting_processes: dict[str, Any] = {}
-_reporting_locks: dict[str, threading.Lock] = {
-    "hub": threading.Lock(),
-    "cockpit": threading.Lock(),
-}
+    The cockpit is a large research module; a failure importing it must not
+    keep the live control page from starting. Handlers pay the import on
+    first use instead of at dashboard boot.
+    """
+    from scripts import tournament_cockpit_server as cockpit_mod
+    return cockpit_mod
+
+_INPROC_SERVICES = ("hub", "cockpit")
+
+_SHARED_RAIL_CSS = """<style>
+.sh-rail{position:fixed;left:0;top:0;bottom:0;width:56px;background:#0b0f19;\
+border-right:1px solid #232b3a;display:flex;flex-direction:column;\
+align-items:center;padding:10px 0;gap:6px;z-index:9999}
+.sh-rail a{display:flex;flex-direction:column;align-items:center;gap:3px;\
+width:44px;padding:7px 0 5px;border-radius:9px;color:#8b94a3;\
+text-decoration:none;font:600 8.5px/1.2 system-ui,-apple-system,"Segoe UI",sans-serif}
+.sh-rail a svg{width:17px;height:17px}
+.sh-rail a:hover{color:#e6ebf2;background:#16202f}
+.sh-rail a.on{color:#6ea8fe;background:#14273f}
+body{padding-left:56px !important}
+</style>"""
+
+# Same destinations as the dashboard's own side rail (prototype.js
+# RAIL_LINKS): the icons are the same 16x16 path data, so the rail reads as
+# one navigation everywhere.
+_SHARED_RAIL_LINKS = (
+    ("/", "Dashboard", "Dash",
+     "M2.4 2.4h4.4v4.4H2.4z M9.2 2.4h4.4v4.4H9.2z M2.4 9.2h4.4v4.4H2.4z M9.2 9.2h4.4v4.4H9.2z"),
+    ("/hub/", "Tournament Hub", "Hub",
+     "M2 4h12v9H2z M5 2h6 M5 15h6"),
+    ("/cockpit/", "Tournament Cockpit", "Cockpit",
+     "M2 13.5h12 M3 11l3-6 4 4 4-7"),
+    ("/explainer", "Strategy Explainer", "Guide",
+     "M2 3h5a2 2 0 0 1 2 2v8a2 2 0 0 0-2-2H2z M14 3H9a2 2 0 0 0-2 2v8a2 2 0 0 1 2-2h5z"),
+)
 
 
-def _reporting_services_reset() -> None:
-    """Test helper to clear tracked processes."""
-    _reporting_processes.clear()
+def _shared_rail(active: str) -> str:
+    """Fixed left rail shared by the folded hub/cockpit pages.
+
+    `active` is "hub" or "cockpit" and only highlights the current page.
+    Scoped `sh-` classes and inline SVG keep it free of the host pages'
+    styles, so the same snippet works in both documents.
+    """
+    items = []
+    for href, title, label, icon in _SHARED_RAIL_LINKS:
+        on = " on" if ((href == "/hub/" and active == "hub")
+                         or (href == "/cockpit/" and active == "cockpit")
+                         or (href == "/" and active == "dashboard")) else ""
+        items.append(
+            f'<a href="{href}" title="{title}" class="sh-link{on}">'
+            f'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" '
+            f'stroke-width="1.4"><path d="{icon}"/></svg>'
+            f"<span>{label}</span></a>")
+    return '<nav class="sh-rail" aria-label="Site">' + "".join(items) + "</nav>"
 
 
-def _reporting_port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.35) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(timeout)
-        try:
-            s.connect((host, port))
-            return True
-        except (OSError, socket.timeout):
-            return False
-
-
-def _reporting_fetch_json(port: int, path: str = "", host: str = "127.0.0.1", timeout: float = 2.0) -> dict | None:
-    try:
-        url = f"http://{host}:{port}{path}"
-        req = urllib.request.Request(url, headers={"User-Agent": "SpreadHunterDashboard/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status == 200:
-                raw = resp.read().decode("utf-8")
-                return json.loads(raw)
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, UnicodeDecodeError):
-        pass
-    return None
+def _with_shared_rail(html_text: str, active: str) -> str:
+    """Inject the shared rail into a folded page's document."""
+    marker = "<body>"
+    if marker not in html_text:
+        return html_text
+    return html_text.replace(marker, marker + _SHARED_RAIL_CSS + _shared_rail(active), 1)
 
 
 def _probe_service_status(name: str) -> dict:
-    if name not in _REPORTING_SERVICES:
+    """Tournament pages are served in-process: always running, no port."""
+    if name not in _INPROC_SERVICES:
         return {"error": f"Unknown service: {name}"}
-    svc = _REPORTING_SERVICES[name]
-    port = svc["port"]
-    url = f"http://127.0.0.1:{port}"
-    proc = _reporting_processes.get(name)
-
-    if proc is not None:
-        poll_res = proc.poll()
-        if poll_res is not None:
-            _reporting_processes.pop(name, None)
-            return {
-                "name": name,
-                "state": "failed" if poll_res != 0 else "stopped",
-                "port": port,
-                "url": url,
-                "data_available": False,
-                "detail": f"Process exited with code {poll_res}",
-            }
-
-    is_open = _reporting_port_open(port)
-    if is_open:
-        payload = _reporting_fetch_json(port, svc.get("probe_path", ""), timeout=svc.get("timeout", 2.0))
-        data_available = False
-        if payload is not None and isinstance(payload, dict):
-            if name == "hub":
-                data_available = bool(payload.get("available", False))
-            elif name == "cockpit":
-                arms = payload.get("arms", [])
-                data_available = (
-                    any(a.get("status") != "missing_db" for a in arms)
-                    if isinstance(arms, list) and arms
-                    else False
-                )
-            return {
-                "name": name,
-                "state": "running",
-                "port": port,
-                "url": url,
-                "data_available": data_available,
-                "detail": "Service is running",
-            }
-        else:
-            if proc is not None and proc.poll() is None:
-                return {
-                    "name": name,
-                    "state": "starting",
-                    "port": port,
-                    "url": url,
-                    "data_available": False,
-                    "detail": "Service is starting",
-                }
-            return {
-                "name": name,
-                "state": "conflict",
-                "port": port,
-                "url": url,
-                "data_available": False,
-                "detail": f"Port {port} is held by another program",
-            }
-    else:
-        if proc is not None and proc.poll() is None:
-            return {
-                "name": name,
-                "state": "starting",
-                "port": port,
-                "url": url,
-                "data_available": False,
-                "detail": "Process starting, waiting for port",
-            }
-        return {
-            "name": name,
-            "state": "stopped",
-            "port": port,
-            "url": url,
-            "data_available": False,
-            "detail": "Service is stopped",
-        }
+    return {
+        "name": name,
+        "state": "running",
+        "port": None,
+        "url": f"/{name}/",
+        "data_available": True,
+        "detail": "Served in-process by the dashboard; no separate backend.",
+    }
 
 
 @app.get("/api/services/hub/status")
 @app.get("/api/services/cockpit/status")
 @app.get("/api/services/{name}/status")
 def api_service_status(name: str = "hub"):
-    """Return live status of Tournament Hub or Tournament Cockpit."""
-    if name not in _REPORTING_SERVICES:
+    """Tournament pages are part of this dashboard: always running."""
+    if name not in _INPROC_SERVICES:
         return JSONResponse({"error": f"Unknown service: {name}"}, status_code=404)
     return JSONResponse(_probe_service_status(name))
-
-
-@app.post("/api/services/hub/start")
-@app.post("/api/services/cockpit/start")
-@app.post("/api/services/{name}/start")
-def api_service_start(request: Request, name: str = "hub"):
-    """Start Tournament Hub or Tournament Cockpit as a detached background service."""
-    _authorize_control(request)
-    if name not in _REPORTING_SERVICES:
-        return JSONResponse({"error": f"Unknown service: {name}"}, status_code=404)
-
-    lock = _reporting_locks[name]
-    with lock:
-        status = _probe_service_status(name)
-        state = status.get("state")
-        port = _REPORTING_SERVICES[name]["port"]
-        url = status.get("url")
-        if state in ("running", "starting"):
-            return JSONResponse({
-                "ok": True,
-                "state": state,
-                "url": url,
-                "message": f"{name} is already {state}.",
-            })
-        if state == "conflict":
-            return JSONResponse({
-                "ok": False,
-                "state": "conflict",
-                "message": f"Port {port} is in use by another program.",
-                "detail": status.get("detail", ""),
-            }, status_code=409)
-
-        import subprocess
-        cmd = [
-            sys.executable,
-            "-m",
-            _REPORTING_SERVICES[name]["module"],
-            "--port",
-            str(port),
-        ]
-        log_dir = REPO_ROOT / "runtime"
-        stdout_path = log_dir / f"{name}_service.log"
-        out_f = None
-
-        try:
-            log_dir.mkdir(parents=True, exist_ok=True)
-            out_f = open(stdout_path, "a", encoding="utf-8")
-            popen_kwargs: dict[str, Any] = {
-                "cwd": str(REPO_ROOT),
-                "stdin": subprocess.DEVNULL,
-                "stdout": out_f,
-                "stderr": subprocess.STDOUT,
-                "env": {k: v for k, v in os.environ.items() if k != "PORT"},
-            }
-            if sys.platform == "win32":
-                popen_kwargs["creationflags"] = (
-                    subprocess.CREATE_NEW_PROCESS_GROUP
-                    | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                )
-            else:
-                popen_kwargs["start_new_session"] = True
-
-            proc = subprocess.Popen(cmd, **popen_kwargs)
-            out_f.close()
-            _reporting_processes[name] = proc
-            return JSONResponse({
-                "ok": True,
-                "state": "starting",
-                "url": url,
-                "message": f"Started {name} on port {port}.",
-                "pid": proc.pid,
-            })
-        except OSError as exc:
-            if out_f is not None and not out_f.closed:
-                out_f.close()
-            return JSONResponse({
-                "error": str(exc),
-                "error_type": type(exc).__name__,
-            }, status_code=500)
-
 
 
 @app.post("/api/system/shadow/start")
@@ -5804,6 +5680,75 @@ def explainer_page() -> HTMLResponse:
             "Expires": "0",
         },
     )
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_alias():
+    """Canonical dashboard path; same single-page app as `/`."""
+    return index()
+
+
+def _open_dash_retired_page() -> str:
+    """Per-arm dashboards were retired: arms are heartbeat-only, read via :8799."""
+    return (
+        "<h1>Per-arm dashboards are retired</h1>"
+        "<p>Arms run heartbeat-only now; there is nothing listening on per-arm ports.</p>"
+        '<p><a href="/">Back to the dashboard</a> — pick an arm’s store in the '
+        "run switcher to read what it is writing.</p>"
+    )
+
+
+@app.get("/cockpit/api/stats")
+def cockpit_stats(tourney: str | None = None):
+    """Tournament stats JSON, built in-process by the cockpit’s own builder."""
+    cockpit_mod = _load_cockpit()
+    key = tourney if tourney in cockpit_mod.SERVED_TOURNAMENT_KEYS else cockpit_mod.CURRENT_SETUP_KEY
+    return JSONResponse(cockpit_mod.get_cached_stats(key))
+
+
+@app.get("/cockpit", response_class=HTMLResponse)
+@app.get("/cockpit/{subpath:path}")
+def cockpit_page(subpath: str = ""):
+    """Tournament cockpit as a dashboard page: the same document, in-process data.
+
+    No port, no process: the HTML is generated here by the cockpit module’s
+    own builder, with its API calls and self-links rewritten to stay on :8799.
+    """
+    if subpath == "open-dash":
+        return HTMLResponse(_open_dash_retired_page())
+    cockpit_mod = _load_cockpit()
+    key = cockpit_mod.tourney_key_for_path("/" + subpath)
+    if key is None:
+        raise HTTPException(status_code=404, detail="Unknown cockpit page")
+    html_text = cockpit_mod.generate_cockpit_html(cockpit_mod.get_cached_stats(key))
+    html_text = html_text.replace("fetch('/api/stats", "fetch('/cockpit/api/stats")
+    html_text = html_text.replace("http://127.0.0.1:8800", "/cockpit/")
+    # Standalone-root links the template emits for :8800 would 404 on :8799.
+    html_text = html_text.replace('href="/open-dash', 'href="/cockpit/open-dash')
+    html_text = html_text.replace('href="/799"', 'href="/cockpit/799"')
+    return HTMLResponse(_with_shared_rail(html_text, "cockpit"))
+
+
+@app.get("/hub/api/state")
+def hub_state():
+    """Tournament hub state JSON, built in-process."""
+    from scripts import tournament_hub as hub_mod
+    return JSONResponse(hub_mod.build_hub_state())
+
+
+@app.get("/hub/api/health")
+def hub_health():
+    return JSONResponse({"ok": True, "service": "hub"})
+
+
+@app.get("/hub", response_class=HTMLResponse)
+def hub_page():
+    """Tournament hub as a dashboard page: the same document, in-process data."""
+    from scripts import tournament_hub as hub_mod
+    html_text = hub_mod.PAGE_HTML
+    html_text = html_text.replace("http://127.0.0.1:8800", "/cockpit/")
+    html_text = html_text.replace(" (Port 8800)", "")
+    return HTMLResponse(_with_shared_rail(html_text, "hub"))
 
 
 @app.get("/", response_class=HTMLResponse)

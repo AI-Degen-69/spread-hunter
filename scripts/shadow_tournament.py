@@ -576,27 +576,16 @@ def launch_tournament(plan: TournamentPlan) -> int:
             log.exception("Market Filter failed to start; arms will run on the "
                           "current runtime/markets.json until it goes stale")
 
-        # 1. Spawn dashboard servers if requested
+        # 1. Per-arm dashboard servers are retired: arms are heartbeat-only.
+        # The single dashboard on :8799 reads every arm via its heartbeat +
+        # store path, so no per-arm server is spawned here even when
+        # plan.dashboards is True (flag kept for backwards compat).
+        # Shadow runs continue in the background unaffected.
         if plan.dashboards:
-            for arm in plan.arms:
-                # Dashboard does not get arm env overrides
-                dash_env = {
-                    k: v for k, v in os.environ.items()
-                    if not (k.startswith("FILTER_") or k.startswith("BOT_"))
-                }
-                dash_env["PORT"] = str(arm.dash_port)
-                dash_env["LIVE_DB_PATH"] = str(arm.db_path)
-                p = subprocess.Popen(
-                    arm.dash_argv, env=dash_env,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    **extra_popen_kwargs,
-                )
-                procs.append((p, f"dashboard-{arm.dash_port}"))
-                log.info(
-                    "Started dashboard server for arm #%02d [%s] on port %d (PID %d)",
-                    arm.index, arm.name, arm.dash_port, p.pid
-                )
+            log.info(
+                "Per-arm dashboards disabled: %d arms run heartbeat-only; use :8799 run switcher",
+                len(plan.arms),
+            )
 
         # 2. Spawn shadow rehearsal runs
         shadow_procs: list[subprocess.Popen] = []
