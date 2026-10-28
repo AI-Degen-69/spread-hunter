@@ -515,6 +515,15 @@ try {
   out.shortMarketId = app.shortMarketId('0x7586a9651234567890abcdef1234567890abcdef') ===
     '0x7586a965...abcdef';
 
+  // A thousands separator belongs to its amount. Splitting `$40,869` at the
+  // comma leaves a stray `,869` token, and the price field's reserved width
+  // then renders the number as `$40   ,869`.
+  const commaSegs = app.tickerProseSegs('Will Likud win the most seats · $40,869 $991,211 $4,444');
+  out.commaAmountsIntact = commaSegs.filter((s) => s.k === 'price').map((s) => s.v)
+      .join('|') === '40,869|991,211|4,444'
+    && !commaSegs.some((s) => s.k === 'text' && s.v.includes(','));
+  out.commaAmountsRenderTight = app.renderTickerSegments(commaSegs).includes('>40,869</span>');
+
   // TRADES reads the registry, so the early fill is there even though the ring
   // tail starts long after it; a ring row with the same id is not doubled.
   app.setTickerFilter('trades');

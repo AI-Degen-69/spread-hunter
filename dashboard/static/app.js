@@ -2194,7 +2194,10 @@ function tickerMarketSegs(title, fallbackId) {
 // Prose from the ring keeps its wording but not its anonymity: prices, sizes,
 // cents and addresses are pulled out as their own tokens so the eye can skip
 // the words and read the numbers.
-const TICKER_PROSE_TOKEN = /(\$\d+(?:\.\d+)?)|(\b0x[0-9a-fA-F]{6,}\b)|(\b\d+(?:\.\d+)?(?=\s+(?:shares?|orders?|markets?|legs?)\b))|(\b\d+¢)/g;
+// An amount is one token including its thousands separators: `$40,869` split at
+// the comma lands a stray `,869` in the next token, and the price field's
+// reserved width then reads as a gap inside the number.
+const TICKER_PROSE_TOKEN = /(\$\d+(?:,\d{3})*(?:\.\d+)?)|(\b0x[0-9a-fA-F]{6,}\b)|(\b\d+(?:\.\d+)?(?=\s+(?:shares?|orders?|markets?|legs?)\b))|(\b\d+¢)/g;
 
 function tickerProseSegs(text) {
   const s = String(text == null ? '' : text);
