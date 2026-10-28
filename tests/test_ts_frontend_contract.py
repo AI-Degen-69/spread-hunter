@@ -72,6 +72,7 @@ def test_frontend_control_surface_is_expected() -> None:
     assert control == {
         "/api/system/db",
         "/api/system/demo",
+        "/api/system/preflight",
         "/api/system/reset",
         "/api/system/restart-dash",
         "/api/system/service/start",

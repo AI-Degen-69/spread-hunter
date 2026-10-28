@@ -4116,6 +4116,8 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
           }
           return;
         }
+        openStartRunModal(isShadow ? 'shadow' : 'live');
+        return;
       } else if (masterToggleBtn.disabled) {
         return;
       }
@@ -4246,6 +4248,164 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
     }
   });
 }
+
+/* ── Start Run launcher (preflight modal, #857) ── */
+const START_RUN_STEPS = ['credentials', 'screener', 'stream', 'reach_probe'];
+const startRunModalState = { open: false, mode: 'shadow', minutes: 1440, preflightId: null, checks: {}, approved: false, running: false, probeArmed: false };
+function startRunModalEl(id) { return document.getElementById(id); }
+function setPreflightRow(step, state, text) {
+  const el = startRunModalEl('preflight-status-' + step);
+  if (!el) return;
+  el.textContent = text || state;
+  if (el.dataset) el.dataset.state = state;
+  el.setAttribute('data-state', state);
+}
+function startRunModalMinutes() {
+  const checked = document.querySelector && document.querySelector('input[name="start-run-minutes"]:checked');
+  const v = checked && checked.value ? parseFloat(checked.value) : startRunModalState.minutes;
+  return (v === 60 || v === 360 || v === 1440) ? v : 1440;
+}
+function startRunModalMode() {
+  const checked = document.querySelector && document.querySelector('input[name="start-run-mode"]:checked');
+  const v = checked && checked.value;
+  return (v === 'live' || v === 'shadow') ? v : startRunModalState.mode;
+}
+function updateStartRunButtons() {
+  const liveBtn = startRunModalEl('start-run-live');
+  if (liveBtn) liveBtn.disabled = !(startRunModalState.approved && !startRunModalState.running);
+}
+function openStartRunModal(mode) {
+  const modal = startRunModalEl('start-run-modal');
+  if (!modal) return;
+  startRunModalState.open = true;
+  startRunModalState.mode = (mode === 'live' || mode === 'shadow') ? mode : 'live';
+  startRunModalState.preflightId = null;
+  startRunModalState.checks = {};
+  startRunModalState.approved = false;
+  startRunModalState.running = false;
+  startRunModalState.probeArmed = false;
+  modal.classList.add('show');
+  modal.style.display = 'flex';
+  const summary = startRunModalEl('preflight-summary');
+  if (summary) summary.textContent = '';
+  START_RUN_STEPS.forEach((s) => setPreflightRow(s, 'pending', 'pending'));
+  updateStartRunButtons();
+  if (startRunModalState.mode === 'live') void runPreflightSequence();
+}
+function closeStartRunModal() {
+  const modal = startRunModalEl('start-run-modal');
+  if (!modal) return;
+  startRunModalState.open = false;
+  startRunModalState.running = false;
+  modal.classList.remove('show');
+  modal.style.display = 'none';
+}
+async function runPreflightStep(step, confirm) {
+  setPreflightRow(step, 'running', 'running');
+  const body = { step, confirm: !!confirm };
+  if (startRunModalState.preflightId) body.preflight_id = startRunModalState.preflightId;
+  let data = null;
+  try {
+    const res = await controlFetch('/api/system/preflight', { method: 'POST', body: JSON.stringify(body) });
+    try { data = await res.json(); } catch { data = null; }
+  } catch (e) {
+    setPreflightRow(step, 'fail', 'error');
+    return { ok: false };
+  }
+  if (data && data.preflight_id) startRunModalState.preflightId = data.preflight_id;
+  const ok = !!(data && (data.ok === true || data.approved === true || data.next_step));
+  const passed = ok && data.step === step ? true : (data && data.ok === true);
+  if (data && data.ok === true) {
+    setPreflightRow(step, 'pass', 'pass');
+    startRunModalState.checks[step] = true;
+  } else {
+    setPreflightRow(step, 'fail', 'fail');
+    const summary = startRunModalEl('preflight-summary');
+    if (summary && data && data.summary) summary.textContent = data.summary;
+    else if (summary && data && data.message) summary.textContent = data.message;
+  }
+  if (data && data.approved === true) {
+    startRunModalState.approved = true;
+  }
+  updateStartRunButtons();
+  return { ok: passed, data };
+}
+async function runPreflightSequence() {
+  if (startRunModalState.running) return;
+  startRunModalState.running = true;
+  updateStartRunButtons();
+  for (const step of ['credentials', 'screener', 'stream']) {
+    const r = await runPreflightStep(step, false);
+    if (!r.ok) { startRunModalState.running = false; updateStartRunButtons(); return; }
+  }
+  startRunModalState.running = false;
+  updateStartRunButtons();
+  const summary = startRunModalEl('preflight-summary');
+  if (summary) summary.textContent = 'Reach probe needs one explicit confirmation ($2.00 max exposure).';
+}
+async function armOrRunReachProbe() {
+  if (!startRunModalState.probeArmed) {
+    startRunModalState.probeArmed = true;
+    const summary = startRunModalEl('preflight-summary');
+    if (summary) summary.textContent = 'Reach probe posts a 1-share buy and cancels it ($2.00 max). Press again to confirm.';
+    const btn = startRunModalEl('start-run-probe');
+    if (btn) btn.textContent = 'Confirm reach probe ($2.00 max exposure)';
+    return;
+  }
+  await runPreflightStep('reach_probe', true);
+}
+async function startLiveFromModal() {
+  const minutes = startRunModalMinutes();
+  const pid = startRunModalState.preflightId;
+  if (!pid || !startRunModalState.approved) return;
+  try {
+    const res = await controlFetch('/api/system/start', { method: 'POST', body: JSON.stringify({ preflight_id: pid, minutes }) });
+    let data = null;
+    try { data = await res.json(); } catch { data = null; }
+    if (!res.ok || !data || data.ok !== true) {
+      showToast((data && data.message) || ('Start refused (HTTP ' + res.status + ').'), { tone: 'error' });
+      return;
+    }
+    closeStartRunModal();
+    showToast(data.message || ('Stack started with ' + minutes + 'm horizon.'), { tone: 'ok' });
+    if (data.status) lastStatus = data.status;
+    renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
+    pollStatus();
+  } catch (e) {
+    showToast('Start error: ' + (e.message || String(e)), { tone: 'error' });
+  }
+}
+async function startShadowFromModal() {
+  const minutes = startRunModalMinutes();
+  try {
+    const res = await controlFetch('/api/system/shadow/start', { method: 'POST', body: JSON.stringify({ fresh: true, minutes }) });
+    let data = null;
+    try { data = await res.json(); } catch { data = null; }
+    if (!res.ok || !data || data.ok !== true) {
+      showToast((data && data.message) || ('Shadow start refused (HTTP ' + res.status + ').'), { tone: 'error' });
+      return;
+    }
+    closeStartRunModal();
+    const sr = (data && data.status && data.status.shadow_run) || {};
+    showToast('Shadow rehearsal ' + (data.run_id || sr.run_id || 'launched') + ' on ' + (sr.db_path || 'fresh store') + '.', { tone: 'ok' });
+    if (data.status) lastStatus = data.status;
+    renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
+    pollStatus();
+  } catch (e) {
+    showToast('Shadow start error: ' + (e.message || String(e)), { tone: 'error' });
+  }
+}
+(function wireStartRunModal() {
+  const cancel = document.getElementById('start-run-cancel');
+  if (cancel && !cancel.dataset.wired) { cancel.dataset.wired = 'true'; cancel.addEventListener('click', closeStartRunModal); }
+  const probe = document.getElementById('start-run-probe');
+  if (probe && !probe.dataset.wired) { probe.dataset.wired = 'true'; probe.addEventListener('click', armOrRunReachProbe); }
+  const live = document.getElementById('start-run-live');
+  if (live && !live.dataset.wired) { live.dataset.wired = 'true'; live.addEventListener('click', startLiveFromModal); }
+  const shadow = document.getElementById('start-run-shadow');
+  if (shadow && !shadow.dataset.wired) { shadow.dataset.wired = 'true'; shadow.addEventListener('click', startShadowFromModal); }
+  if (document.addEventListener) document.addEventListener('keydown', (e) => { if (e && e.key === 'Escape' && startRunModalState.open) closeStartRunModal(); });
+})();
 
 /* ── Render: Strategy Parameters (Human-Readable) ── */
 const PARAM_HUMAN_NAMES = {
@@ -12245,7 +12405,7 @@ if (typeof module !== 'undefined' && module.exports) {
     stitchPositionsRows, stitchPositionsHeadHtml, stitchHeldLegMarks,
     stitchActiveMarketsRows, stitchActiveMarketsHeadHtml,
     marketCategory, categoryPill, categoryIconTone,
-    showToast, dismissResetModal,
+    showToast, dismissResetModal, openStartRunModal, closeStartRunModal, startRunModalState,
     noteShadowStartLaunched, clearPendingShadowStart,
     isShadowStartPending, checkPendingShadowStart, SHADOW_START_TIMEOUT_MS,
     bookMixNote, renderRunSwitcher };

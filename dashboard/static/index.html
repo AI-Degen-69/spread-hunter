@@ -846,6 +846,37 @@
   </div>
 </div>
 
+<!-- ── Start Run Launcher (preflight modal, #857) ── -->
+<div id="start-run-modal" class="modal-overlay" role="dialog" aria-labelledby="start-run-title" aria-modal="true">
+  <div class="modal start-run-modal">
+    <div class="modal-title" id="start-run-title">START RUN</div>
+    <div class="modal-body">
+      <div class="start-run-modes" role="radiogroup" aria-label="Run mode">
+        <label><input type="radio" name="start-run-mode" value="shadow" checked> Shadow Rehearsal</label>
+        <label><input type="radio" name="start-run-mode" value="live"> Live Real-Money</label>
+      </div>
+      <div class="start-run-durations" role="radiogroup" aria-label="Run duration">
+        <label><input type="radio" name="start-run-minutes" value="60"> 1h</label>
+        <label><input type="radio" name="start-run-minutes" value="360"> 6h</label>
+        <label><input type="radio" name="start-run-minutes" value="1440" checked> 24h</label>
+      </div>
+      <ol class="preflight-checklist">
+        <li data-step="credentials"><span class="preflight-name">Credentials &amp; collateral</span> <span class="preflight-status" id="preflight-status-credentials">pending</span></li>
+        <li data-step="screener"><span class="preflight-name">Market screener</span> <span class="preflight-status" id="preflight-status-screener">pending</span></li>
+        <li data-step="stream"><span class="preflight-name">Market data &amp; stream</span> <span class="preflight-status" id="preflight-status-stream">pending</span></li>
+        <li data-step="reach_probe"><span class="preflight-name">Reachability probe</span> <span class="preflight-status" id="preflight-status-reach_probe">pending</span></li>
+      </ol>
+      <div class="preflight-summary" id="preflight-summary"></div>
+      <button class="modal-btn cancel" id="start-run-probe" type="button">Run reach probe (max $2.00 exposure, buy-and-cancel)</button>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" id="start-run-cancel" type="button">Cancel</button>
+      <button class="modal-btn" id="start-run-shadow" type="button">Start Shadow</button>
+      <button class="modal-btn danger" id="start-run-live" type="button" disabled>Start Live</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Command Palette (#477): keyboard entry to pages, actions, markets ── -->
 <div id="command-palette" class="modal-overlay palette-overlay" role="dialog" aria-labelledby="palette-title" aria-modal="true" hidden>
   <div class="modal palette-modal">

@@ -2168,8 +2168,10 @@ def test_master_toggle_controls_live_stack_on_live_view():
     assert master["liveNothingRunning"]["mode"] == "live"
     assert "START RUN" in master["liveNothingRunning"]["html"]
 
-    # Live view click: exactly 1 whole-stack start POST, 0 alerts, 0 shadow starts
-    assert master["liveClick"]["wholeStackStarts"] == 1
+    # Live view click opens the preflight modal: 0 immediate whole-stack
+    # starts, 0 alerts, 0 shadow starts. The run launches from the modal
+    # (Start Live / Start Shadow), never from the bare toggle.
+    assert master["liveClick"]["wholeStackStarts"] == 0
     assert master["liveClick"]["shadowStarts"] == 0
     assert master["liveClick"]["alerts"] == 0
 
@@ -2988,18 +2990,21 @@ def test_master_toggle_renders_every_state():
     assert after["disabled"] is False
     assert after["ariaBusy"] is None
 
-    # A refused START puts the backend's reason on screen. The button itself
-    # corrects on the next poll (the click's own poll is deliberately skipped
-    # so it cannot paint over the click's result); what must hold is that the
-    # operator sees WHY, not a silent console warning.
-    assert "unreadable" in out["refused"]["ticker"]
+    # A START click opens the preflight modal and fires no whole-stack POST:
+    # the launcher gates the run, it does not launch it. The modal runs the
+    # first preflight check; a refusal there stays in the modal, not the ticker.
+    assert out["refused"]["modalOpen"] is True
+    assert "/api/system/start" not in out["refused"]["fetches"]
+    assert any("preflight" in p for p in out["refused"]["fetches"])
 
     # A partial STOP names the survivor and its outcome.
     assert "decide" in out["partialStop"]["ticker"]
     assert "still_running" in out["partialStop"]["ticker"]
 
-    # A non-JSON 500 produces an error line, not a crash.
-    assert "500" in out["httpFailure"]["ticker"]
+    # A non-JSON 500 inside preflight is a modal row failure, not a crash:
+    # the modal still opens and no whole-stack start is fired.
+    assert out["httpFailure"]["modalOpen"] is True
+    assert "/api/system/start" not in out["httpFailure"]["fetches"]
 
 
 # ---------------------------------------------------------------------------
@@ -4262,3 +4267,30 @@ def test_status_surfaces_run_and_watchdog(client):
     assert "run" in body
     assert "watchdog" in body
     assert "running" in body["watchdog"]
+
+
+# --- preflight modal launcher (#857 Task 4) ----------------------------------
+
+def test_start_run_modal_markup_and_wiring():
+    """#857: the launcher modal offers Shadow/Live, horizons, and a 4-row checklist."""
+    html = _read_static("index.html")
+    assert 'id="start-run-modal"' in html
+    assert 'role="dialog"' in html
+    assert 'name="start-run-mode"' in html
+    assert 'value="shadow"' in html and 'value="live"' in html
+    for minutes in ('value="60"', 'value="360"', 'value="1440"'):
+        assert minutes in html
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        assert f'data-step="{step}"' in html
+    assert "$2.00" in html
+    live_btn = html.split('id="start-run-live"')[1].split(">")[0]
+    assert "disabled" in live_btn
+
+    css = _read_static("styles.css")
+    for state in ("pending", "running", "pass", "fail"):
+        assert state in css
+
+    app_js = (Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "openStartRunModal" in app_js
+    assert "/api/system/preflight" in app_js
+    assert "fresh" in app_js
