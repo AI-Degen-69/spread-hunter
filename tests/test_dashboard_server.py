@@ -4196,7 +4196,131 @@ def test_preflight_check_credentials_floor():
     assert "150.00" in res2["summary"]
 
 
+def test_check_stream_resolves_condition_id_to_tokens():
+    """#857: graduated rows carry no tokens, so the probe resolves the cid first."""
+    from dashboard import preflight as pf
+    seen = {}
+
+    class _Stream:
+        connected = False
+
+        def ensure_market(self, cid, slug, up_token, down_token):
+            seen["ensure"] = (cid, up_token, down_token)
+
+        def start(self):
+            self.connected = True
+
+        def stop(self):
+            seen["stopped"] = True
+
+    res = pf.check_stream(
+        book_fn=lambda token: {"bids": [["0.4", "2"]]},
+        stream_factory=_Stream,
+        snapshot_fn=lambda: [{"cid": "0xabc"}],
+        resolve_fn=lambda cid: {"up_token": "UP", "down_token": "DOWN",
+                                "market_slug": "slug"},
+        timeout_sec=1.0,
+    )
+    assert res["ok"] is True
+    assert seen["ensure"] == ("0xabc", "UP", "DOWN")
+    assert seen["stopped"] is True
+
+    half = pf.check_stream(
+        book_fn=lambda token: {"bids": []},
+        stream_factory=_Stream,
+        snapshot_fn=lambda: [{"cid": "0xabc"}],
+        resolve_fn=lambda cid: {"up_token": "UP", "down_token": ""},
+        timeout_sec=1.0,
+    )
+    assert half["ok"] is False
+    assert "No market token" in half["summary"]
+
+    def _boom():
+        raise RuntimeError("markets.json unreadable")
+
+    crashed = pf.check_stream(snapshot_fn=_boom, resolve_fn=lambda cid: {})
+    assert crashed["ok"] is False
+    assert "unreadable" in crashed["summary"]
+    assert "markets.json unreadable" in crashed["details"]["error"]
+
+
+def test_preflight_endpoint_refuses_out_of_order_step(client, monkeypatch):
+    """#857: a step is refused before its runner starts, not after.
+
+    The reach probe places a real 1-share order; ordering has to be checked
+    ahead of the runner, or an out-of-order click places the order and only
+    then gets refused.
+    """
+    import dashboard.server as dash_mod
+    from dashboard import preflight as _pf
+    monkeypatch.setattr(dash_mod, "_refuse_unless_live_writable", lambda: None)
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    ran = []
+    monkeypatch.setattr(_pf, "check_reach_probe",
+                        lambda **kw: ran.append("probe") or {"ok": True, "summary": "probe"})
+    res = client.post("/api/system/preflight",
+                      json={"step": "reach_probe", "preflight_id": pid, "confirm": True},
+                      headers=_control(client))
+    body = res.json()
+    assert body["ok"] is False
+    assert "Out of order" in body["message"]
+    assert ran == []
+    _pf.clear_sessions()
+
+
+def test_preflight_endpoint_refuses_a_step_already_running(client, monkeypatch):
+    """#857: one runner per session at a time; the second request waits."""
+    import dashboard.server as dash_mod
+    from dashboard import preflight as _pf
+    monkeypatch.setattr(dash_mod, "_refuse_unless_live_writable", lambda: None)
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    called = []
+    monkeypatch.setattr(_pf, "check_credentials",
+                        lambda **kw: called.append(1) or {"ok": True, "summary": "creds"})
+    assert _pf.try_begin_step(pid, "credentials") is True
+    res = client.post("/api/system/preflight",
+                      json={"step": "credentials", "preflight_id": pid},
+                      headers=_control(client))
+    assert res.json()["ok"] is False
+    assert "already running" in res.json()["message"]
+    assert called == []
+    _pf.end_step(pid)
+    res2 = client.post("/api/system/preflight",
+                       json={"step": "credentials", "preflight_id": pid},
+                       headers=_control(client))
+    assert res2.json()["ok"] is True
+    assert called == [1]
+    _pf.clear_sessions()
+
+
 # --- gated start + shadow sequence (#857 Task 3) ------------------------------
+
+def test_refused_start_keeps_the_preflight_approval(client, monkeypatch):
+    """#857: a refusal must not burn the token and re-charge a $2 probe."""
+    import dashboard.server as dash_mod
+    from dashboard import preflight as _pf
+    monkeypatch.setattr(dash_mod, "start_bot",
+                        lambda **kw: {"ok": False, "message": "Bot stack is already running"})
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        _pf.submit_step(pid, step, True, step, {})
+    assert _pf.try_approve(pid) is True
+    res = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 1440},
+                      headers=_control(client))
+    assert res.json()["ok"] is False
+    assert _pf.get_session(pid)["consumed"] is False
+
+    monkeypatch.setattr(dash_mod, "start_bot",
+                        lambda **kw: {"ok": True, "message": "Stack started"})
+    res2 = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 1440},
+                       headers=_control(client))
+    assert res2.json()["ok"] is True
+    assert _pf.get_session(pid) is None
+    _pf.clear_sessions()
+
 
 def test_start_rejects_missing_preflight_id(client):
     """#857: live start without approval fails closed with launcher guidance."""
