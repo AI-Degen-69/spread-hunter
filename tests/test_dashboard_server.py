@@ -621,11 +621,12 @@ def test_system_start_and_stop_endpoints(client, monkeypatch, tmp_path):
     spawn is stubbed; what is under test is the endpoint contract.
     """
     import dashboard.server as dash_mod
+    from dashboard import preflight as _pf
 
     spawned = []
     monkeypatch.setattr(
         dash_mod, "start_bot",
-        lambda: (spawned.append("start"), {"ok": True, "message": "stubbed"})[1],
+        lambda *a, **k: (spawned.append("start"), {"ok": True, "message": "stubbed"})[1],
     )
     monkeypatch.setattr(
         dash_mod, "stop_bot",
@@ -636,9 +637,18 @@ def test_system_start_and_stop_endpoints(client, monkeypatch, tmp_path):
     assert res_stop.status_code == 200
     assert res_stop.json().get("ok") is True
 
-    res_start = client.post("/api/system/start", headers=_control(client))
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        ok, err = _pf.submit_step(pid, step, True, step, {})
+        assert ok, err
+    assert _pf.try_approve(pid) is True
+    res_start = client.post("/api/system/start",
+                            json={"preflight_id": pid, "minutes": 1440},
+                            headers=_control(client))
     assert res_start.status_code == 200
     assert res_start.json().get("ok") is True
+    _pf.clear_sessions()
 
     assert spawned == ["stop", "start"]
 
@@ -934,11 +944,19 @@ def test_start_refuses_a_second_bot_stack(client, monkeypatch):
         subprocess, "Popen",
         lambda *a, **kw: pytest.fail("a second bot stack was spawned"),
     )
+    from dashboard import preflight as _pf
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        _pf.submit_step(pid, step, True, step, {})
+    _pf.try_approve(pid)
 
-    res = client.post("/api/system/start", headers=_control(client))
+    res = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 1440},
+                      headers=_control(client))
     assert res.status_code == 200
     assert res.json()["ok"] is False
     assert "already running" in res.json()["message"]
+    _pf.clear_sessions()
 
 
 def test_reset_db_refuses_while_the_bot_is_running(monkeypatch, temp_db):
@@ -4149,3 +4167,98 @@ def test_preflight_check_credentials_floor():
     res2 = pf.check_credentials(balance_fn=rich, env=env)
     assert res2["ok"] is True
     assert "150.00" in res2["summary"]
+
+
+# --- gated start + shadow sequence (#857 Task 3) ------------------------------
+
+def test_start_rejects_missing_preflight_id(client):
+    """#857: live start without approval fails closed with launcher guidance."""
+    res = client.post("/api/system/start", json={"minutes": 1440},
+                      headers=_control(client))
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is False
+    assert "preflight" in body["message"].lower()
+
+
+def test_start_rejects_invalid_minutes(client):
+    """#857: only 60/360/1440 minute horizons are accepted."""
+    from dashboard import preflight as _pf
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        _pf.submit_step(pid, step, True, step, {})
+    _pf.try_approve(pid)
+    res = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 30},
+                      headers=_control(client))
+    assert res.json()["ok"] is False
+    assert "60" in res.json()["message"]
+    _pf.clear_sessions()
+
+
+def test_start_consumes_preflight_single_use(client, monkeypatch, tmp_path):
+    """#857: a preflight_id starts once; replay is rejected (atomic)."""
+    import dashboard.server as dash_mod
+    from dashboard import preflight as _pf
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "resolve_db_identity",
+                        lambda path: {"is_production": True, "path": str(path), "mode": "LIVE"})
+    monkeypatch.setattr(dash_mod, "get_system_status", lambda: {"bot_state": "STOPPED"})
+    monkeypatch.setattr(dash_mod, "resolve_sweep_interval", lambda: None)
+    monkeypatch.setattr(dash_mod, "_capture_starting_capital", lambda: None)
+    import subprocess
+    spawned = []
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append(args)
+            self.pid = 12345
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        _pf.submit_step(pid, step, True, step, {})
+    assert _pf.try_approve(pid) is True
+    res = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 1440},
+                      headers=_control(client))
+    assert res.json()["ok"] is True
+    res2 = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 1440},
+                       headers=_control(client))
+    assert res2.json()["ok"] is False
+    assert "expired" in res2.json()["message"].lower() or "used" in res2.json()["message"].lower()
+    _pf.clear_sessions()
+
+
+def test_start_stack_commands_carry_watchdog_and_deadline():
+    """#857: poll supervises guardrail; decide carries the horizon."""
+    from dashboard.server import _start_stack_commands
+    cmds = _start_stack_commands(None, 1780000000.0)
+    poll = next(c for c in cmds if any("poll" in p for p in c))
+    decide = next(c for c in cmds if any("trader_loop" in p for p in c))
+    assert "--watch-guardrails" in poll
+    assert "--deadline-ts" in decide
+    assert decide[decide.index("--deadline-ts") + 1] == str(float(1780000000.0))
+    legacy = _start_stack_commands(None)
+    assert "--watch-guardrails" in next(c for c in legacy if any("poll" in p for p in c))
+
+
+def test_get_next_shadow_seq_wraps_and_skips_nonruns(tmp_path, monkeypatch):
+    """#857: NN_shadow_ numbering: max+1, ignores others, wraps past 99."""
+    import dashboard.server as dash_mod
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "01_shadow_27-10_10-00.db").write_bytes(b"")
+    (data / "02_shadow_27-10_11-00.db").write_bytes(b"")
+    (data / "notes.db").write_bytes(b"")
+    (data / "01_shadow.db").write_bytes(b"")
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    assert dash_mod._get_next_shadow_seq() == "03"
+    (data / "99_shadow_27-10_12-00.db").write_bytes(b"")
+    assert dash_mod._get_next_shadow_seq() == "01"
+
+
+def test_status_surfaces_run_and_watchdog(client):
+    """#857: status carries run metadata and watchdog state."""
+    body = client.get("/api/system/status").json()
+    assert "run" in body
+    assert "watchdog" in body
+    assert "running" in body["watchdog"]

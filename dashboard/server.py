@@ -1267,23 +1267,87 @@ def _uptime_sec(started_at: float | None, now: float | None = None) -> float | N
     return max(0.0, elapsed)
 
 
-def _start_stack_commands(sweep_interval_sec: float | None) -> list[list[str]]:
+def _start_stack_commands(sweep_interval_sec: float | None,
+                          deadline_ts: float | None = None) -> list[list[str]]:
     """Argv (minus the interpreter) for the three START processes.
 
     Single source for `start_bot` and the preflight preview: a flag change
     here moves both, so the preview cannot drift from what START launches.
-    The guardrail watchdog (`scripts.global_stop_loss`) is deliberately
-    absent -- the dashboard never starts it.
+    The guardrail watchdog (`scripts.global_stop_loss`) is supervised by
+    `order_manager poll --watch-guardrails`, never as a standalone process.
     """
-    query = ["-m", "core_brain.order_manager", "poll", "--interval", "0.5"]
+    query = ["-m", "core_brain.order_manager", "poll", "--interval", "0.5",
+             "--watch-guardrails"]
     if sweep_interval_sec is not None:
         query += ["--sweep-interval", f"{sweep_interval_sec:g}"]
+    decide = ["-m", "core_brain.trader_loop", "--live",
+              "--no-reconcile", "--no-sweep", "--interval", "5"]
+    if deadline_ts is not None:
+        decide += ["--deadline-ts", str(float(deadline_ts))]
     return [
         ["-m", "scripts.filter_loop"],
         query,
-        ["-m", "core_brain.trader_loop", "--live",
-         "--no-reconcile", "--no-sweep", "--interval", "5"],
+        decide,
     ]
+
+
+def _atomic_write_json(path, payload: dict) -> None:
+    """Write JSON atomically via sibling tmp file + os.replace."""
+    import tempfile as _tf
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = _tf.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with open(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2))
+            handle.flush()
+            try:
+                handle.fileno()
+                import os as _os
+                _os.fsync(handle.fileno())
+            except Exception:
+                pass
+        import os as _os2
+        _os2.replace(tmp, path)
+    finally:
+        try:
+            Path(tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _get_next_shadow_seq(tag: str = "") -> str:
+    """Next 2-digit shadow run id (01..99), mirroring Get-NextShadowSeq.
+
+    Scans `data/*.db` for `NN_shadow_` (excluding `_shadow_prudent` unless
+    `tag == "prudent"`), takes max + 1, wraps past 99 back to 1.
+    """
+    import re as _re
+
+    data_dir = LIVE_ROOT / "data"
+    seqs: list[int] = []
+    try:
+        names = [p.name for p in data_dir.glob("*.db")]
+    except OSError:
+        names = []
+    for name in names:
+        base = name[:-3] if name.endswith(".db") else name
+        if tag == "prudent":
+            m = _re.match(r"^(\d{1,2})_shadow_prudent", base)
+        else:
+            if _re.match(r"^(\d{1,2})_shadow_prudent", base):
+                continue
+            m = _re.match(r"^(\d{1,2})_shadow_", base)
+        if m:
+            try:
+                seqs.append(int(m.group(1)))
+            except ValueError:
+                continue
+    nxt = (max(seqs) + 1) if seqs else 1
+    if nxt > 99:
+        nxt = 1
+    return f"{nxt:02d}"
 
 
 SERVICE_NAMES = ("filter", "query", "decide")
@@ -1725,6 +1789,22 @@ def _resolve_active_profile(shadow_run: dict | None) -> dict | None:
         return None
 
 
+def _watchdog_summary() -> dict:
+    """Lightweight watchdog state for status payloads; never raises."""
+    try:
+        health = _guardrail_health()
+    except Exception:
+        return {"running": False, "age_s": None, "alerts_total": 0}
+    if not isinstance(health, dict):
+        return {"running": False, "age_s": None, "alerts_total": 0}
+    return {
+        "running": bool(health.get("running")),
+        "age_s": health.get("age_s"),
+        "alerts_total": health.get("alerts_total", 0),
+        "pid": health.get("pid"),
+    }
+
+
 def get_system_status() -> dict:
     """Return live running status for 3 sub-services (Market Filter, Query Polymarket, Decide & Execute) and Telemetry."""
     procs_file = resolve_runtime_file("processes.json", root=LIVE_ROOT)
@@ -1881,6 +1961,8 @@ def get_system_status() -> dict:
         # is down" while a healthy trial writes to a file nobody is watching.
         "shadow_runs": _recent_shadow_runs(db_identity["path"]),
         "starting_capital": get_starting_capital(),
+        "run": saved_procs.get("run") if isinstance(saved_procs, dict) else None,
+        "watchdog": _watchdog_summary(),
         "repo_revision": _DASH_CODE,
         "dash_revision": {
             "commit": _DASH_CODE.get("commit"),
@@ -1969,8 +2051,14 @@ def get_starting_capital() -> float | None:
         return None
 
 
-def start_bot() -> dict:
-    """Launch background Screener and Reconcile loop."""
+def start_bot(preflight_id: str | None = None,
+            minutes: float | None = None) -> dict:
+    """Launch background Screener and Reconcile loop.
+
+    `minutes` sets the horizon: the Decide command carries `--deadline-ts`
+    and the run record lands in `processes.json`. `None` keeps the legacy
+    unbounded stack (service starts, older callers, existing tests).
+    """
     import subprocess
 
     # The stack always writes the production registry, whatever this page is
@@ -2080,7 +2168,16 @@ def start_bot() -> dict:
         # included) instead of just the root.
         popen_group = {"start_new_session": True} if sys.platform != "win32" else {}
 
-        stack_cmds = _start_stack_commands(resolve_sweep_interval())
+        deadline_ts: float | None = None
+        run_minutes: float | None = None
+        if minutes is not None:
+            try:
+                run_minutes = float(minutes)
+            except (TypeError, ValueError):
+                run_minutes = None
+        if run_minutes is not None and run_minutes > 0:
+            deadline_ts = time.time() + run_minutes * 60.0
+        stack_cmds = _start_stack_commands(resolve_sweep_interval(), deadline_ts)
 
         # Launch Market Filter (filter_loop) if not running
         if not filter_alive:
@@ -2162,7 +2259,31 @@ def start_bot() -> dict:
                 new_procs["starting_account_value"] = existing_starting_value
         elif existing_starting_value is not None:
             new_procs["starting_account_value"] = existing_starting_value
-        procs_file.write_text(json.dumps(new_procs, indent=2), encoding="utf-8")
+        run_record: dict | None = None
+        if run_minutes is not None and run_minutes > 0:
+            started_at = time.time()
+            stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(started_at))
+            run_id = f"live-{stamp}-{int(run_minutes)}m"
+            run_record = {
+                "run_id": run_id,
+                "minutes": run_minutes,
+                "started_at": started_at,
+                "deadline_at": started_at + run_minutes * 60.0,
+                "expired": False,
+            }
+            if preflight_id:
+                run_record["preflight_id"] = preflight_id
+            new_procs["run"] = run_record
+        else:
+            existing_run = None
+            try:
+                if procs_file.exists():
+                    existing_run = json.loads(procs_file.read_text(encoding="utf-8")).get("run")
+            except Exception:
+                existing_run = None
+            if isinstance(existing_run, dict):
+                new_procs["run"] = existing_run
+        _atomic_write_json(procs_file, new_procs)
 
         reused = [n for n, alive in
                   (("filter", filter_alive), ("query", query_alive),
@@ -2670,11 +2791,129 @@ def api_system_status():
     return JSONResponse(get_system_status())
 
 
-@app.post("/api/system/start")
-def api_system_start(request: Request):
-    """Start background bot stack."""
+@app.post("/api/system/preflight")
+async def api_system_preflight(request: Request):
+    """Run one sequential preflight check; issue single-use approval when all pass."""
     _authorize_control(request)
-    return JSONResponse(start_bot())
+    refusal = _refuse_unless_live_writable()
+    if refusal is not None:
+        return JSONResponse(refusal)
+    from dashboard import preflight as _pf
+
+    body: dict = {}
+    try:
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    step = body.get("step")
+    preflight_id = body.get("preflight_id")
+    confirm = body.get("confirm", False)
+    if step not in _pf.PREFLIGHT_STEPS:
+        return JSONResponse({
+            "ok": False,
+            "message": f"Unknown preflight step {step!r}.",
+            "status": get_system_status(),
+        })
+    pid = preflight_id
+    if step == _pf.PREFLIGHT_STEPS[0] and not pid:
+        pid = _pf.new_session()
+    sess = _pf.get_session(pid)
+    if sess is None:
+        return JSONResponse({
+            "ok": False,
+            "message": "Unknown or expired preflight_id; restart preflight from step 1.",
+            "status": get_system_status(),
+        })
+    runners = {
+        "credentials": lambda: _pf.check_credentials(),
+        "screener": lambda: _pf.check_screener(),
+        "stream": lambda: _pf.check_stream(),
+        "reach_probe": lambda: _pf.check_reach_probe(confirm=confirm is True),
+    }
+    try:
+        result = runners[step]()
+    except Exception as exc:
+        result = {"ok": False, "summary": f"{step} crashed: {type(exc).__name__}",
+                  "details": {"error": f"{type(exc).__name__}: {exc}"}}
+    if not isinstance(result, dict) or "ok" not in result:
+        result = {"ok": False, "summary": f"{step} returned no verdict", "details": {}}
+    accepted, error = _pf.submit_step(pid, step, bool(result.get("ok")),
+                                      str(result.get("summary", "")),
+                                      dict(result.get("details") or {}))
+    if not accepted:
+        return JSONResponse({
+            "ok": False,
+            "message": error or "Preflight step refused.",
+            "preflight_id": pid,
+            "status": get_system_status(),
+        })
+    approved = _pf.try_approve(pid)
+    sess2 = _pf.get_session(pid) or sess
+    nxt: str | None = None
+    for s in _pf.PREFLIGHT_STEPS:
+        entry = (sess2.get("steps") or {}).get(s)
+        if not (isinstance(entry, dict) and entry.get("ok") is True):
+            nxt = s
+            break
+    return JSONResponse({
+        "ok": bool(result.get("ok")),
+        "step": step,
+        "summary": result.get("summary", ""),
+        "details": result.get("details", {}),
+        "preflight_id": pid,
+        "next_step": nxt,
+        "approved": bool(approved),
+        "expires_in_sec": int(_pf.PREFLIGHT_TTL_SEC),
+    })
+
+
+@app.post("/api/system/start")
+async def api_system_start(request: Request):
+    """Start background bot stack (gated: valid single-use preflight_id)."""
+    _authorize_control(request)
+    body: dict = {}
+    try:
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    preflight_id = body.get("preflight_id")
+    minutes = body.get("minutes", 1440)
+    try:
+        minutes_f = float(minutes)
+    except (TypeError, ValueError):
+        return JSONResponse({
+            "ok": False,
+            "message": "Invalid minutes; choose 60, 360, or 1440.",
+            "status": get_system_status(),
+        })
+    if minutes_f not in (60.0, 360.0, 1440.0):
+        return JSONResponse({
+            "ok": False,
+            "message": "Invalid minutes; choose 60, 360, or 1440.",
+            "status": get_system_status(),
+        })
+    if not preflight_id or not isinstance(preflight_id, str):
+        return JSONResponse({
+            "ok": False,
+            "message": ("Live start needs a fresh preflight approval: open the "
+                        "dashboard Start Run launcher, pass all 4 checks, then start."),
+            "status": get_system_status(),
+        })
+    from dashboard import preflight as _pf
+
+    if not _pf.consume_approval(preflight_id):
+        return JSONResponse({
+            "ok": False,
+            "message": "Invalid, expired, or already-used preflight_id; re-run preflight.",
+            "status": get_system_status(),
+        })
+    return JSONResponse(start_bot(preflight_id=preflight_id, minutes=minutes_f))
 
 
 @app.post("/api/system/stop")
@@ -3017,6 +3256,22 @@ async def api_system_shadow_start(
     target_db = body.get("db") or db
     target_run_id = body.get("run_id") or run_id
     target_minutes = body.get("minutes") if body.get("minutes") is not None else minutes
+    if body.get("fresh") is True and not target_db:
+        seq = _get_next_shadow_seq()
+        stamp = time.strftime("%d-%m_%H-%M", time.localtime())
+        fresh_name = f"{seq}_shadow_{stamp}.db"
+        target_db = str((LIVE_ROOT / "data" / fresh_name).resolve())
+        if not target_run_id:
+            target_run_id = f"shadow-{seq}"
+        try:
+            from core_brain.order_registry import OrderRegistry as _Reg
+            _Reg(db_path=target_db)
+        except Exception:
+            pass
+        try:
+            set_db_override(Path(target_db))
+        except Exception:
+            pass
     return JSONResponse(start_shadow_run(target_db, target_run_id, float(target_minutes)))
 
 

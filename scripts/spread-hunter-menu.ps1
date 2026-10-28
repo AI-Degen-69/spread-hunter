@@ -1823,11 +1823,11 @@ function Start-BotStack {
         return
     }
     Lsh-Step "Requesting bot stack start (Market Filter + Query Polymarket + Decide & Execute)..."
-    Lsh-Warn "Decide & Execute rests REAL maker bids. Verify the dashboard shows a clean state before proceeding."
+    Lsh-Warn "Decide & Execute rests REAL maker bids. Live starts require the dashboard Start Run launcher (preflight modal) at http://127.0.0.1:8799."
     $res = Invoke-Control -Endpoint "/api/system/start"
     if (-not $res) { return }
     if ($res.ok) { Lsh-Ok "Bot stack started: $($res.message)." }
-    else         { Lsh-Fail "Start refused: $($res.message)" }
+    else         { Lsh-Fail "Start refused: $($res.message) Use the dashboard Start Run launcher (preflight modal) at http://127.0.0.1:8799." }
     if ($res.status) { Show-ServiceTable $res.status }
 }
 
