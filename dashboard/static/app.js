@@ -2000,6 +2000,17 @@ function buildTradeRows(events) {
   const titles = tickerTitleByCondition();
   const rows = [];
   const seen = new Set();
+  // Two processes record fills -- the query order manager and the trader's own
+  // reconcile pass -- and the registry stores no service. Take the component
+  // from the ring event carrying the same trade id; when the ring no longer
+  // holds it, say REGISTRY instead of asserting a process nobody observed.
+  const componentByTrade = new Map();
+  for (const ev of events) {
+    const ringId = String((ev && ev.extra && ev.extra.trade_id) || '');
+    if (ringId && !componentByTrade.has(ringId)) {
+      componentByTrade.set(ringId, tickerEventComponent(ev));
+    }
+  }
   for (const f of tickerQuoteState.fills) {
     const id = String((f && f.trade_id) || '');
     if (id) seen.add(id);
@@ -2011,9 +2022,7 @@ function buildTradeRows(events) {
       clock: tickerClockFromMs((f && (f.recorded_ts || f.venue_ts)) || 0),
       tag: 'FILL',
       sev: 'good',
-      // Fills are recorded by the query/fill recorder, so the component picker
-      // and the process column stay truthful for a registry row.
-      component: 'QUERY',
+      component: componentByTrade.get(id) || 'REGISTRY',
       msg: `${String((f && f.side) || 'BUY')} ${Number.isFinite(size) ? size : '?'} @ `
         + `$${Number.isFinite(price) ? price.toFixed(2) : '?'}`
         + (title ? ` on ${title}` : ` · pair ${(f && f.pair_id) || '—'}`),
@@ -2462,7 +2471,11 @@ function connectLogStream(runId) {
           const svc = frameService || (data.family === 'filter' ? 'filter' : '');
           const procTag = frameService
             ? streamProcessTag({ service: frameService, action: evTag.toLowerCase() }, data.family)
-            : (data.family === 'filter' ? 'FILTER' : (fileTag.replace(/\.[^/.]+$/, '').toUpperCase().slice(0, 8)));
+            // A rehearsal's stdout carries no service of its own, so it belongs
+            // in the same bucket as that run's ring rows. Slicing the filename
+            // turned shadow_run-abc.out.log into SHADOW_R and split the picker.
+            : (data.family === 'shadow' ? 'SHADOW'
+              : (data.family === 'filter' ? 'FILTER' : fileTag.replace(/\.[^/.]+$/, '').toUpperCase().slice(0, 8)));
           appendTickerEvent(rawLine, msg, '', svc, evTag.toLowerCase(), {}, data.family, {
             timeTag: ts,
             processTag: procTag,

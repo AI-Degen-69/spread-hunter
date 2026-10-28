@@ -3518,6 +3518,28 @@ def _parse_replay_ts(ts: Any) -> Optional[float]:
     return None
 
 
+_CONSOLE_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "WARN", "ERROR", "CRITICAL"})
+
+
+def _split_console_level(text: str) -> tuple[Optional[str], str]:
+    """(level, message) for a log line, consuming a level only when it is one.
+
+    Any non-empty text that does not open with a level word comes back as the
+    level-less message, unchanged. Reading the first word as a level regardless
+    deleted it from the message: `Starting scan for 40 markets` became
+    `scan for 40 markets`, one word short and with nothing to show for it.
+    """
+    m_br = re.match(r"^\[([A-Za-z]+)\]\s*(.*)$", text)
+    if m_br and m_br.group(1).upper() in _CONSOLE_LEVELS:
+        lvl, msg = m_br.group(1).upper(), m_br.group(2)
+    else:
+        m_word = re.match(r"^([A-Za-z]+):?\s+(.*)$", text)
+        if not (m_word and m_word.group(1).upper() in _CONSOLE_LEVELS):
+            return None, text.strip()
+        lvl, msg = m_word.group(1).upper(), m_word.group(2)
+    return ("WARNING" if lvl == "WARN" else lvl), msg.strip()
+
+
 def _parse_console_line(
     line: str,
     file_mtime: Optional[float] = None,
@@ -3565,19 +3587,18 @@ def _parse_console_line(
             except Exception:
                 pass
 
-    # 3. Full datetime: 2026-10-27 18:00:00 [LEVEL] msg or 2026-10-27T18:00:00Z LEVEL msg
-    m_full = re.match(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?Z?)\s*(?:\[([A-Za-z]+)\]|([A-Za-z]+):?)\s*(.*)$", clean)
+    # 3. Full datetime: 2026-10-27 18:00:00 [LEVEL] msg, ...Z LEVEL msg, or a
+    #    timestamp followed by prose with no level at all.
+    m_full = re.match(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?Z?)\s*(.*)$", clean)
     if m_full:
-        ds, l1, l2, msg = m_full.groups()
-        lvl = (l1 or l2 or "").upper()
-        if lvl == "WARN":
-            lvl = "WARNING"
+        ds, rest = m_full.groups()
         try:
             dt = datetime.datetime.fromisoformat(ds.replace("Z", "+00:00").replace(",", ".")).astimezone(datetime.timezone.utc)
-            norm_lvl = lvl if lvl in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"} else None
-            return dt.strftime("%Y-%m-%dT%H:%M:%SZ"), norm_lvl, (msg or clean).strip(), dt.timestamp()
-        except Exception:
-            pass
+        except (ValueError, TypeError):
+            dt = None
+        if dt is not None:
+            lvl, msg = _split_console_level(rest.strip())
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ"), lvl, msg or clean, dt.timestamp()
 
     # 4. Bracketed level without timestamp: [LEVEL] message
     m_lvl = re.match(r"^\[([A-Za-z]+)\]\s*(.*)$", clean)

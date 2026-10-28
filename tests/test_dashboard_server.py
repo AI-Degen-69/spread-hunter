@@ -39,6 +39,7 @@ from dashboard.server import (
     set_ring_override,
     _cycle_stream_sse,
     _log_stream_sse,
+    _parse_console_line,
 )
 
 NODE = shutil.which("node")
@@ -2792,6 +2793,13 @@ def test_event_stream_tabs_harness():
     # still appears, and a ring row with the same id is not doubled.
     assert out["tradesFromRegistry"] is True
     assert out["tradesDeduped"] is True
+    # A registry fill takes its process from the ring, never a guessed QUERY.
+    assert out["traderFillVisible"] is True
+    assert out["fillNotMisattributed"] is True
+    assert out["orphanFillTagged"] is True
+    # Shadow stdout is SHADOW, not a slice of the log filename.
+    assert out["shadowTextTagged"] is True
+    assert out["shadowTextNotFilenameTag"] is True
     # ALERTS names a naked pair as live risk without waiting for its row.
     assert out["nakedInAlerts"] is True
     assert out["emptyQuotes"] is True
@@ -3256,6 +3264,41 @@ def test_log_stream_sse_timestamp_inference_and_tie_breaking(tmp_path, monkeypat
     assert data2["ts"] == "2026-10-27T10:00:00Z"
     assert data2["message"] == "Second line without timestamp"
     assert data2["level"] == "INFO"
+
+
+def test_console_line_parser_preserves_message_text():
+    """A timestamped line with no level word keeps every word of its message.
+
+    The full-datetime branch used to read the first word after the timestamp as
+    a level token, so `2026-10-27 10:00:00 Starting scan for 40 markets` parsed
+    to `message="scan for 40 markets"` with `level=None` -- a silent one-word
+    loss on any log line whose message does not begin with a level.
+    """
+    ts_iso, lvl, msg, ts_u = _parse_console_line(
+        "2026-10-27 10:00:00 Starting scan for 40 markets",
+        file_mtime=1761600000.0,
+    )
+    assert ts_iso is not None and ts_u is not None
+    assert lvl is None
+    assert msg == "Starting scan for 40 markets"
+
+    # The level forms still parse, so the fix does not cost the level tag.
+    _, lvl, msg, _ = _parse_console_line(
+        "2026-10-27 10:00:00 [INFO] Filter scan 1", file_mtime=1761600000.0)
+    assert lvl == "INFO" and msg == "Filter scan 1"
+
+    _, lvl, msg, _ = _parse_console_line(
+        "2026-10-27 10:00:00 WARN: gate trials disabled", file_mtime=1761600000.0)
+    assert lvl == "WARNING" and msg == "gate trials disabled"
+
+    _, lvl, msg, _ = _parse_console_line(
+        "2026-10-27T10:00:00Z INFO starting scan", file_mtime=1761600000.0)
+    assert lvl == "INFO" and msg == "starting scan"
+
+    # A bare timestamp keeps the line rather than emptying the message.
+    _, lvl, msg, _ = _parse_console_line(
+        "2026-10-27 10:00:00", file_mtime=1761600000.0)
+    assert lvl is None and msg == "2026-10-27 10:00:00"
 
 
 def test_get_parameters_endpoint(client):

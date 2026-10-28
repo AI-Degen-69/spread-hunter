@@ -492,6 +492,34 @@ try {
   out.nakedInAlerts = alertRows.some((r) => r.includes('[NAKED LEG]')
     && r.includes('Tennis final'));
 
+  // ── A registry fill's process comes from the ring, never a guessed QUERY ──
+  // Two processes record fills (query's order manager and the trader's
+  // reconcile pass), so a hard-coded QUERY both lies and hides trader fills
+  // from the TRADER picker. Match on the trade id the ring already carries.
+  emitLogEvent({ source: 'ring', family: 'live',
+    event: { ts: '2024-01-15T14:36:00Z', service: 'decide', action: 'fill_recorded',
+             market_slug: 'chile-election',
+             extra: { trade_id: 'ring-trader-1', outcome: 'UP', size: 2, price: 0.51,
+                      market_title: 'Chile election' } } });
+  app.noteTickerQuoteState({ orders: [], pairs: [], fills: [
+    { trade_id: 'ring-trader-1', side: 'BUY', size: 2, price: 0.51,
+      recorded_ts: Date.UTC(2024, 0, 15, 14, 36, 0), condition_id: '0xchile' },
+    // No ring row survives for this one: nothing may claim it for a process.
+    { trade_id: 'orphan-1', side: 'BUY', size: 1, price: 0.4,
+      recorded_ts: Date.UTC(2024, 0, 15, 14, 0, 0), condition_id: '0xnone' },
+  ] });
+  app.setTickerTab('live');
+  app.setTickerComponent('TRADER');
+  app.setTickerFilter('trades');
+  out.traderFillVisible = rows().some((r) => r.includes('[TRADER]')
+    && r.includes('BUY 2 @ $0.51'));
+  app.setTickerComponent('QUERY');
+  out.fillNotMisattributed = !rows().some((r) => r.includes('BUY 2 @ $0.51'));
+  app.setTickerComponent('all');
+  out.orphanFillTagged = rows().some((r) => r.includes('[REGISTRY]')
+    && r.includes('BUY 1 @ $0.40'))
+    && !rows().some((r) => r.includes('[QUERY]') && r.includes('BUY 1 @ $0.40'));
+
   // An empty registry and an empty ring leave the view empty, not blank.
   app.noteTickerQuoteState({ orders: [], pairs: [], fills: [] });
   app.setTickerFilter('quotes');
@@ -499,6 +527,23 @@ try {
   out.emptyQuotes = document.getElementById('event-ticker').innerHTML.includes('No quotes yet.');
   app.setTickerTab('live');
   app.setTickerFilter('all');
+
+  // ── Shadow stdout is SHADOW, not a slice of the log filename ──
+  // A rehearsal's stdout carries no service of its own, so it must land in the
+  // same component bucket as that run's ring rows; `shadow_run-abc.out.log`
+  // used to become `SHADOW_R`, splitting the picker in two.
+  emitLogEvent({ source: 'text', family: 'shadow', file: 'shadow_run-abc.out.log',
+    text: 'starting rehearsal loop', message: 'starting rehearsal loop' });
+  app.setTickerTab('shadow');
+  app.setTickerComponent('all');
+  app.setTickerFilter('all');
+  const shadowTextRows = rows();
+  out.shadowTextTagged = shadowTextRows.some((r) => r.includes('[SHADOW]')
+    && r.includes('starting rehearsal loop'));
+  out.shadowTextNotFilenameTag = !shadowTextRows.some((r) => r.includes('SHADOW_R'));
+  app.setTickerTab('live');
+  app.setTickerFilter('all');
+  app.setTickerComponent('all');
 
   // ── An unavailable feed explains itself instead of showing a blank tab ──
   activeLogStreamSource.emit('source', {
