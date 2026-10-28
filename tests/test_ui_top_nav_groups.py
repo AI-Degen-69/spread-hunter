@@ -521,7 +521,7 @@ def test_profile_badge_renders_states():
     staged = p["stagedOnly"]
     assert "prudent-hybrid" in staged["text"]
     assert "STAGED" in staged["text"]
-    assert "next START" in staged["title"]
+    assert "next live START" in staged["title"]
 
     over = p["stagedOverActive"]
     assert "balanced" in over["text"]
