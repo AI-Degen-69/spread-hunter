@@ -118,7 +118,7 @@ Task 3 (Process/component filtering, category tabs, and harnesses)
 
 ---
 
-### Task 2: Structured Row Model, Bracketed Tags, Colors, and Plain-English Sentences
+### Task 2: Structured Row Model, Bracketed Tags, Colors, and Plain-English Sentences [x]
 - **Size:** M
 - **Domain:** `[Design/UI]` + `[Frontend/Logic]`
 - **Assigned Helper:** `frontend-ui-engineering`
@@ -144,7 +144,7 @@ Task 3 (Process/component filtering, category tabs, and harnesses)
 
 ---
 
-### Task 3: Dual Process/Component & Event Category Filtering, and Regression Suite
+### Task 3: Dual Process/Component & Event Category Filtering, and Regression Suite [x]
 - **Size:** M
 - **Domain:** `[Frontend/Logic]` + `[Testing]`
 - **Assigned Helper:** `test-driven-development`

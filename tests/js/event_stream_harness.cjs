@@ -91,7 +91,8 @@ const out = { exportsOk: false };
 try {
   out.exportsOk = ['buildStreamSentence', 'isTradeEvent', 'streamMarketName',
     'setTickerFilter', 'setTickerShowDetails', 'connectSSE', 'translateEvent',
-    'noteStreamTitles']
+    'noteStreamTitles', 'streamProcessTag', 'streamEventTag', 'streamSeverityClass',
+    'translateConsoleLine', 'tickerScopeLabel', 'tickerIsAlertEvent', 'tickerIsConnectionEvent']
     .every((k) => typeof app[k] === 'function');
 
   const tickerEl = () => document.getElementById('event-ticker');
@@ -237,6 +238,68 @@ try {
   out.slugWords = app.buildStreamSentence(
     { ts: '2024-01-15T14:28:00Z', service: 'query', action: 'fill_recorded',
       market_slug: 'some-market-name', extra: { size: 1, price: 0.5 } });
+
+  // ── Row vocabulary: bracketed tags, severity, redaction ──
+  out.tags = {
+    userWs: app.streamProcessTag({ service: 'user_stream', action: 'user_ws_connected' }, 'live'),
+    marketWs: app.streamProcessTag({ service: 'market_stream', action: 'market_stream_tick' }, 'live'),
+    filterFamily: app.streamProcessTag({ service: '', action: '' }, 'filter'),
+    trader: app.streamProcessTag({ service: 'decide', action: 'decide' }, 'live'),
+    guard: app.streamProcessTag({ service: 'guardrail', action: 'alert' }, 'live'),
+    query: app.streamProcessTag({ service: 'query', action: 'fill_recorded' }, 'live'),
+    eventConnected: app.streamEventTag({ action: 'user_ws_connected' }),
+    eventDisconnected: app.streamEventTag({ action: 'user_ws_disconnected' }),
+    eventFill: app.streamEventTag({ action: 'fill_recorded' }),
+    eventPair: app.streamEventTag({ action: 'lifecycle_completed' }),
+    eventMerge: app.streamEventTag({ action: 'merge_executed' }),
+    eventLog: app.streamEventTag({ service: 'query', action: '' }),
+  };
+
+  out.severities = {
+    connected: app.streamSeverityClass({ action: 'user_ws_connected' }),
+    fill: app.streamSeverityClass({ action: 'fill_recorded' }),
+    reconnect: app.streamSeverityClass({ action: 'user_ws_reconnecting' }),
+    error: app.streamSeverityClass({ action: 'user_ws_error' }),
+    disconnected: app.streamSeverityClass({ action: 'user_ws_disconnected' }),
+    decide: app.streamSeverityClass({ action: 'decide' }),
+    unsubscribe: app.streamSeverityClass({ action: 'market_stream_unsubscribe' }),
+    unknown: app.streamSeverityClass({ action: 'frob_nicate' }),
+  };
+
+  // A wallet address must never reach the row: the reason and the error text
+  // are redacted to 0x*** before the sentence is built.
+  const wallet = '0x' + 'ab'.repeat(20);
+  out.redaction = {
+    reason: app.buildStreamSentence({ ts: '2024-01-15T14:28:00Z', service: 'query',
+      action: 'merge_failed', market_slug: 'x-y', reason: `wallet ${wallet}`, extra: {} }),
+    error: app.buildStreamSentence({ ts: '2024-01-15T14:28:00Z', service: 'user_stream',
+      action: 'user_ws_error', extra: { error: `auth failed for ${wallet}` } }),
+  };
+
+  const uws = (action, extra) => ({ ts: '2024-01-15T14:28:00Z',
+    service: 'user_stream', action, extra });
+  out.userWsSentences = {
+    connected: app.buildStreamSentence(uws('user_ws_connected', {})),
+    authSent: app.buildStreamSentence(uws('user_ws_auth_sent', { markets_count: 2 })),
+    authOk: app.buildStreamSentence(uws('user_ws_auth_ok', {})),
+    trade: app.buildStreamSentence(uws('user_ws_trade',
+      { side: 'BUY', outcome: 'UP', size: 3, price: 0.48, market_title: 'Brazil election' })),
+    order: app.buildStreamSentence(uws('user_ws_order',
+      { side: 'SELL', price: 0.44, status: 'filled', market_title: 'Brazil election' })),
+    disconnected: app.buildStreamSentence(uws('user_ws_disconnected', { code: 1006 })),
+    reconnecting: app.buildStreamSentence(uws('user_ws_reconnecting', { delay_sec: 2 })),
+    stopped: app.buildStreamSentence(uws('user_ws_stopped', {})),
+  };
+
+  // Console frames: a ranker loop speaks one clean notification per line.
+  out.console = {
+    header: app.translateConsoleLine({ file: 'rerank.log', text: '========== RERANK PASS ==========' }),
+    exitOk: app.translateConsoleLine({ file: 'rerank.log', text: 'EXIT 0' }),
+    exitBad: app.translateConsoleLine({ file: 'rerank.log', text: 'EXIT 2' }),
+    traceback: app.translateConsoleLine({ file: 'rerank.log', text: 'Traceback (most recent call last):' }),
+    errorLine: app.translateConsoleLine({ file: 'rerank.log', text: 'ERROR could not reach venue', level: 'ERROR' }),
+    plain: app.translateConsoleLine({ file: 'rerank.log', text: 'Scan iteration 9 completed in 42ms' }),
+  };
 
   // Details toggle: hidden by default, shown on toggle, survives rebuilds.
   app.setTickerShowDetails(false);

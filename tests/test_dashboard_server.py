@@ -2736,6 +2736,98 @@ def test_event_stream_tabs_harness():
     # Shadow run picker population
     assert out.get("pickerPopulated") is True
 
+    # Component dropdown: ALL first, then one option per component in the tab.
+    assert out["componentChoices"] == ["USER_WS", "MKT_WS", "GUARD", "QUERY"]
+    assert out["componentSelectValues"] == ["all"] + out["componentChoices"]
+    assert out["componentFiltered"] is True
+    # Tab -> component -> category compose instead of overwriting each other.
+    assert out["combinedFiltered"] is True
+    assert out["connectionsFiltered"] is True
+    # Socket traffic (ticks) is data; only socket health belongs in CONNECTIONS.
+    assert out["connectionExclusions"] is True
+    assert out["alertsFiltered"] is True
+    # An empty feed names the tab and the category it narrowed to.
+    assert out["emptyScopedTab"] is True
+    # Switching tabs retires a component the new tab does not carry.
+    assert out["componentReset"] is True
+
+
+def test_ticker_component_dropdown_and_category_filters_ship():
+    """The component picker and CONNECTIONS chip are wired, not just styled."""
+    app_js = _read_static("app.js")
+    index_html = _read_static("index.html")
+    css = _read_static("styles.css")
+
+    assert 'id="ticker-component-select"' in index_html
+    assert 'data-filter="connections"' in index_html
+    assert ".ticker-component-select" in css
+    # Three filter tiers, each with its own matcher.
+    assert "tickerComponentChoices" in app_js
+    assert "tickerEventComponent" in app_js
+    assert "tickerIsConnectionEvent" in app_js
+    assert "tickerIsAlertEvent" in app_js
+    assert "Showing ${scope} only." in app_js
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_event_stream_row_vocabulary_and_redaction():
+    """Tags, severity colours, wallet redaction, and console-line translation."""
+    harness = Path(__file__).resolve().parent / "js" / "event_stream_harness.cjs"
+    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
+
+    res = subprocess.run(
+        [NODE, str(harness), str(app_js)],
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out.get("exportsOk") is True, out.get("error")
+
+    tags = out["tags"]
+    assert tags["userWs"] == "USER_WS" and tags["marketWs"] == "MKT_WS"
+    assert tags["filterFamily"] == "FILTER" and tags["trader"] == "TRADER"
+    assert tags["guard"] == "GUARD" and tags["query"] == "QUERY"
+    # Full words, never a mid-word slice: CONNECTED, not "CONNECTE".
+    assert tags["eventConnected"] == "CONNECTED"
+    assert tags["eventDisconnected"] == "DISCONN"
+    assert tags["eventFill"] == "FILL" and tags["eventPair"] == "PAIR"
+    assert tags["eventMerge"] == "MERGE" and tags["eventLog"] == "LOG"
+
+    sev = out["severities"]
+    assert sev["connected"] == "good" and sev["fill"] == "good"
+    assert sev["reconnect"] == "warn"
+    assert sev["error"] == "bad" and sev["disconnected"] == "bad"
+    assert sev["decide"] == "info"
+    # A routine unsubscribe is housekeeping; it must not flood ALERTS.
+    assert sev["unsubscribe"] == "muted"
+    assert sev["unknown"] == "muted"
+
+    # No wallet address reaches a sentence: both the reason and the error text
+    # are redacted before the row is built.
+    wallet = "0x" + "ab" * 20
+    for key, line in out["redaction"].items():
+        assert wallet not in line, key
+        assert "0x***" in line, key
+
+    sentences = out["userWsSentences"]
+    assert sentences["connected"].endswith("User stream connected.")
+    assert "Sent login for 2 markets." in sentences["authSent"]
+    assert sentences["authOk"].endswith("User stream receiving messages.")
+    assert "User trade: BUY UP 3 shares at $0.48 on Brazil election." in sentences["trade"]
+    assert "User order filled" in sentences["order"]
+    assert "disconnected (code 1006)" in sentences["disconnected"]
+    assert "reconnecting in 2s" in sentences["reconnecting"]
+    assert sentences["stopped"].endswith("User stream stopped.")
+
+    console = out["console"]
+    assert console["header"]["msg"] == "Ranking pass started"
+    assert console["header"]["evTag"] == "SCAN" and console["header"]["severity"] == "good"
+    assert console["exitOk"]["evTag"] == "DONE" and console["exitOk"]["severity"] == "good"
+    assert console["exitBad"]["evTag"] == "EXIT" and console["exitBad"]["severity"] == "bad"
+    assert console["traceback"]["evTag"] == "ERROR" and console["traceback"]["severity"] == "bad"
+    assert console["errorLine"]["severity"] == "bad"
+    assert console["plain"]["evTag"] == "LOG" and console["plain"]["severity"] == "muted"
+
 
 # ── Issue #457: the single master toggle ──────────────────────────────────────
 

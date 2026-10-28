@@ -21,6 +21,9 @@ function streamEventTag(ev) {
     const sub = act.replace('user_ws_', '').toUpperCase();
     if (sub === 'DISCONNECTED') return 'DISCONN';
     if (sub === 'RECONNECTING') return 'RECONN';
+    // CONNECTED is one letter past the usual 8-char slice; cutting it to
+    // "CONNECTE" reads as a rendering bug, and the tag column fits it.
+    if (sub === 'CONNECTED') return 'CONNECTED';
     return sub.slice(0, 8);
   }
   if (act.startsWith('market_stream_')) {
@@ -28,6 +31,7 @@ function streamEventTag(ev) {
     if (STREAM_TAGS[act]) return STREAM_TAGS[act];
     return sub.toUpperCase().slice(0, 8);
   }
+  if (act === 'stop_loss_triggered' || act === 'stop_loss') return 'STOP';
   if (act === 'fill_recorded') return 'FILL';
   if (act === 'lifecycle_exited') return 'EXIT';
   if (act === 'lifecycle_completed') return 'PAIR';
@@ -46,9 +50,10 @@ function streamSeverityClass(ev) {
   const s = ((ev && ev.service) || '').toLowerCase();
   const lvl = String((ev && ev.extra && ev.extra.level) || '').toUpperCase();
 
-  // Bad (red)
+  // Bad (red). A routine unsubscribe is housekeeping, not a failure: counting
+  // it here would pour every socket teardown into the ALERTS filter.
   if (a.includes('error') || a.includes('failed') || a.includes('disconnected') ||
-      a === 'market_stream_unsubscribe' || a === 'merge_failed' || a === 'redeem_failed' ||
+      a === 'merge_failed' || a === 'redeem_failed' ||
       a === 'rerank_error' || lvl === 'ERROR' || lvl === 'CRITICAL') {
     return 'bad';
   }
@@ -1541,6 +1546,7 @@ function translateEvent(ev) {
 
 let activeTickerTab = 'all';
 let tickerFilter = 'all';
+let tickerComponent = 'all';
 let tickerAutoscroll = true;
 let tickerShowDetails = false;
 let tickerSeqCounter = 0;
@@ -1550,6 +1556,23 @@ const tickerBuffers = {
   shadow: [],
   live: [],
 };
+const TICKER_TAB_LABELS = {
+  all: 'all processes',
+  filter: 'filter loop',
+  shadow: 'shadow rehearsal',
+  live: 'live run',
+};
+const TICKER_CATEGORY_LABELS = {
+  all: 'all events',
+  trades: 'trades',
+  filter: 'market filter',
+  guardrail: 'alerts',
+  connections: 'connections',
+};
+// Fixed reading order for the component picker; unknown components follow,
+// alphabetically, so a new service never reshuffles the familiar ones.
+const TICKER_COMPONENT_ORDER = ['USER_WS', 'MKT_WS', 'TRADER', 'GUARD', 'QUERY', 'FILTER', 'SHADOW', 'LIVE'];
+let tickerComponentKey = '';
 const allTickerEvents = [];
 const tickerSourceMetadata = {
   live: { labels: [], available: true, reason: null, run_id: null },
@@ -1696,44 +1719,144 @@ function appendTickerEvent(line, translation, ctx, service, action, extra, famil
   renderTickerFeed();
 }
 
+function tickerEventComponent(ev) {
+  if (!ev) return '';
+  return ev.component || ev.processTag || streamProcessTag(ev, ev.family);
+}
+
+function tickerComponentChoices() {
+  const seen = new Set();
+  for (const ev of getActiveTickerEvents()) {
+    const c = tickerEventComponent(ev);
+    if (c) seen.add(c);
+  }
+  const known = TICKER_COMPONENT_ORDER.filter((c) => seen.has(c));
+  const rest = Array.from(seen).filter((c) => !TICKER_COMPONENT_ORDER.includes(c)).sort();
+  return known.concat(rest);
+}
+
+function updateTickerComponentSelect() {
+  const sel = document.getElementById('ticker-component-select');
+  if (!sel) return;
+  const choices = tickerComponentChoices();
+  // Switching tabs can retire the chosen component; fall back to ALL rather
+  // than render an empty feed the dropdown cannot explain.
+  if (tickerComponent !== 'all' && !choices.includes(tickerComponent)) {
+    tickerComponent = 'all';
+  }
+  const wanted = ['all'].concat(choices);
+  const key = wanted.join('|');
+  if (key !== tickerComponentKey) {
+    tickerComponentKey = key;
+    sel.innerHTML = '';
+    for (const value of wanted) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = value === 'all' ? 'ALL' : value;
+      sel.appendChild(opt);
+    }
+  }
+  sel.value = tickerComponent;
+}
+
+function setTickerComponent(c) {
+  tickerComponent = c || 'all';
+  renderTickerFeed();
+}
+
+// CONNECTIONS: anything that answers "is the stack actually talking to the
+// venue?" — socket opens, logins, drops, and the background workers waking,
+// starting, stopping, or dying. Socket *traffic* (ticks, snapshots) is data,
+// not connection health, so it stays out; otherwise the chip would be a firehose.
+const TICKER_CONNECTION_ACTIONS = new Set([
+  'user_ws_connected', 'user_ws_auth_sent', 'user_ws_auth_ok',
+  'user_ws_disconnected', 'user_ws_reconnecting', 'user_ws_error', 'user_ws_stopped',
+  'market_stream_connected', 'market_stream_reconnect', 'market_stream_subscribe',
+  'market_stream_unsubscribe', 'market_stream_error',
+]);
+// Background workers announce themselves on start, stop, and wake. Kept as an
+// exact list: a loose /start|stop/ would swallow stop-loss alerts.
+const TICKER_DAEMON_ACTIONS = new Set([
+  'guardian_running', 'guardian_started', 'guardian_stopped', 'guardian_reactive_wake',
+  'sweeper_running', 'sweeper_started', 'sweeper_stopped',
+  'rerank_started', 'rerank_done', 'rerank_error',
+]);
+
+function tickerIsConnectionEvent(ev) {
+  if (!ev) return false;
+  const a = (ev.action || '').toLowerCase();
+  if (TICKER_CONNECTION_ACTIONS.has(a) || TICKER_DAEMON_ACTIONS.has(a)) return true;
+  // Console frames name the daemon in their text, not in the derived action.
+  return /guardian running|sweeper running|running in background/.test(
+    String(ev.message || '').toLowerCase());
+}
+
+// ALERTS: the guardrail itself, stop-loss, and every row the classifier marked
+// warn or bad — including console errors, which arrive as severity, not service.
+function tickerIsAlertEvent(ev) {
+  if (!ev) return false;
+  const sev = ev.severity || streamSeverityClass(ev);
+  if (sev === 'warn' || sev === 'bad') return true;
+  const a = (ev.action || '').toLowerCase();
+  const s = (ev.service || '').toLowerCase();
+  return s.includes('guardrail') || s.includes('guardian') ||
+    a.includes('alert') || a.includes('stop_loss') || a.includes('guardrail');
+}
+
 function tickerMatches(ev) {
+  // Tier 1: the family tab, already applied by getActiveTickerEvents().
+  // Tier 2: one component inside that tab.
+  if (tickerComponent !== 'all' && tickerEventComponent(ev) !== tickerComponent) return false;
+  // Tier 3: the event category.
   if (tickerFilter === 'all') return true;
   // The TRADES tab is action-keyed and service-independent: fills, exits,
   // completions, rescues, every merge/redeem outcome, and submits that
   // actually placed orders. `decide` is the pre-rename value of the same tab.
   if (tickerFilter === 'trades' || tickerFilter === 'decide') return isTradeEvent(ev);
   if (tickerFilter === 'filter') return ev.service.includes('filter') || ev.service.includes('screener');
-  if (tickerFilter === 'guardrail') return ev.service.includes('guardrail') || ev.action.includes('alert') || ev.action.includes('stop_loss');
+  if (tickerFilter === 'guardrail') return tickerIsAlertEvent(ev);
+  if (tickerFilter === 'connections') return tickerIsConnectionEvent(ev);
   return true;
 }
 
-function tickerEmptyState() {
-  if (tickerFilter !== 'all') {
-    if (tickerFilter === 'trades' || tickerFilter === 'decide') {
-      return { title: 'No trades yet.', msg: 'Fills, sells, exits, merges and redeems show up here as they happen.' };
-    }
-    if (tickerFilter === 'filter') {
-      return { title: 'No market filter updates yet.', msg: 'Scans show up here as they run.' };
-    }
-    if (tickerFilter === 'guardrail') {
-      return { title: 'No alerts right now.', msg: 'Risk notes show up here if a guardrail trips.' };
-    }
-  }
+// Names the narrowing that produced an empty feed, so an empty ALERTS list on
+// one component never reads as "nothing is wrong anywhere".
+function tickerScopeLabel() {
+  const parts = [];
+  if (activeTickerTab !== 'all') parts.push(TICKER_TAB_LABELS[activeTickerTab] || activeTickerTab);
+  if (tickerComponent !== 'all') parts.push(tickerComponent);
+  if (tickerFilter !== 'all') parts.push(TICKER_CATEGORY_LABELS[tickerFilter] || tickerFilter);
+  return parts.join(' · ');
+}
 
-  if (activeTickerTab === 'filter') {
-    return { title: 'No filter loop events yet.', msg: 'Filter scans and rerank.log updates will appear here.' };
-  }
-  if (activeTickerTab === 'shadow') {
+function tickerEmptyState() {
+  let state;
+  if (tickerFilter === 'trades' || tickerFilter === 'decide') {
+    state = { title: 'No trades yet.', msg: 'Fills, sells, exits, merges and redeems show up here as they happen.' };
+  } else if (tickerFilter === 'filter') {
+    state = { title: 'No market filter updates yet.', msg: 'Scans show up here as they run.' };
+  } else if (tickerFilter === 'guardrail') {
+    state = { title: 'No alerts right now.', msg: 'Risk notes show up here if a guardrail trips.' };
+  } else if (tickerFilter === 'connections') {
+    state = { title: 'No connection events yet.', msg: 'Socket connects, reconnects, auth and worker lifecycle show up here.' };
+  } else if (activeTickerTab === 'filter') {
+    state = { title: 'No filter loop events yet.', msg: 'Filter scans and rerank.log updates will appear here.' };
+  } else if (activeTickerTab === 'shadow') {
     const meta = tickerSourceMetadata.shadow;
     if (meta && !meta.available && meta.reason) {
-      return { title: 'Shadow rehearsal unavailable.', msg: meta.reason };
+      state = { title: 'Shadow rehearsal unavailable.', msg: meta.reason };
+    } else {
+      state = { title: 'No shadow rehearsal events yet.', msg: 'Events from the active shadow rehearsal will appear here.' };
     }
-    return { title: 'No shadow rehearsal events yet.', msg: 'Events from the active shadow rehearsal will appear here.' };
+  } else if (activeTickerTab === 'live') {
+    state = { title: 'No live run events yet.', msg: 'Events from the live trading loop will appear here.' };
+  } else {
+    state = { title: 'No events yet.', msg: 'Events will appear here as the strategy execution loop runs.' };
   }
-  if (activeTickerTab === 'live') {
-    return { title: 'No live run events yet.', msg: 'Events from the live trading loop will appear here.' };
-  }
-  return { title: 'No events yet.', msg: 'Events will appear here as the strategy execution loop runs.' };
+
+  const scope = tickerScopeLabel();
+  if (scope) state.msg += ` Showing ${scope} only.`;
+  return state;
 }
 
 function getActiveTickerEvents() {
@@ -1748,6 +1871,7 @@ function tickerColorClass(ev) {
 
 function renderTickerFeed() {
   tickerEl.innerHTML = '';
+  updateTickerComponentSelect();
   const currentEvents = getActiveTickerEvents();
   const filtered = currentEvents.filter(tickerMatches);
 
@@ -1797,6 +1921,13 @@ document.querySelectorAll('.ticker-filter-btn').forEach(btn => {
     renderTickerFeed();
   });
 });
+
+const tickerComponentSelect = document.getElementById('ticker-component-select');
+if (tickerComponentSelect) {
+  tickerComponentSelect.addEventListener('change', () => {
+    setTickerComponent(tickerComponentSelect.value || 'all');
+  });
+}
 
 const btnTickerDetails = document.getElementById('btn-ticker-details');
 if (btnTickerDetails) {
@@ -11461,6 +11592,8 @@ if (typeof module !== 'undefined' && module.exports) {
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent, streamProcessTag, streamEventTag, streamSeverityClass, translateConsoleLine,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,
+    tickerEventComponent, tickerComponentChoices, updateTickerComponentSelect,
+    setTickerComponent, tickerScopeLabel, tickerIsAlertEvent, tickerIsConnectionEvent,
     setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,

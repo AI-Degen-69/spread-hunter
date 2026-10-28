@@ -3181,7 +3181,8 @@ th[aria-sort] .ot-sort-btn {
   opacity: 0.45;
   cursor: not-allowed;
 }
-.ticker-shadow-picker {
+.ticker-shadow-picker,
+.ticker-component-select {
   background: var(--bg-surface-raised, #1e222d);
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
   border-radius: 6px;

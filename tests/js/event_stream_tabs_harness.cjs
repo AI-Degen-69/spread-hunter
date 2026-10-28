@@ -216,6 +216,93 @@ try {
     out.pickerPopulated = false;
   }
 
+  // ── Component dropdown and combined filters ──
+  app.setTickerTab('live');
+  app.setTickerFilter('all');
+  app.setTickerComponent('all');
+
+  emitLogEvent({
+    source: 'ring', family: 'live',
+    event: { ts: '2024-01-15T14:32:00Z', service: 'user_stream',
+             action: 'user_ws_connected', extra: {} },
+  });
+  emitLogEvent({
+    source: 'ring', family: 'live',
+    event: { ts: '2024-01-15T14:32:01Z', service: 'market_stream',
+             action: 'market_stream_connected', extra: { tokens: ['t1', 't2'] } },
+  });
+  // Socket traffic is data, not connection health: a tick must not appear in
+  // CONNECTIONS, or the chip becomes a firehose.
+  emitLogEvent({
+    source: 'ring', family: 'live',
+    event: { ts: '2024-01-15T14:32:02Z', service: 'market_stream',
+             action: 'market_stream_tick', extra: { books: 4, frames: 53 } },
+  });
+  emitLogEvent({
+    source: 'ring', family: 'live',
+    event: { ts: '2024-01-15T14:32:03Z', service: 'guardrail',
+             action: 'stop_loss_triggered', reason: 'naked leg', extra: {} },
+  });
+  emitLogEvent({
+    source: 'text', family: 'live', file: 'guard.log', level: 'ERROR',
+    text: 'ERROR settlement sweep failed', message: 'Settlement sweep failed',
+  });
+
+  out.componentChoices = app.tickerComponentChoices();
+  const compSel = document.getElementById('ticker-component-select');
+  out.componentSelectValues = compSel.children.map((c) => c.value);
+
+  // One component at a time: USER_WS keeps its connect row and drops the rest.
+  app.setTickerComponent('USER_WS');
+  out.componentRows = rows();
+  out.componentFiltered = out.componentRows.length === 1
+    && out.componentRows[0].includes('[USER_WS]');
+
+  // Component AND category: QUERY plus TRADES is the fill, nothing else.
+  app.setTickerComponent('QUERY');
+  app.setTickerFilter('trades');
+  out.combinedRows = rows();
+  out.combinedFiltered = out.combinedRows.length === 1
+    && out.combinedRows[0].includes('[QUERY]') && out.combinedRows[0].includes('[FILL]');
+
+  // CONNECTIONS: both sockets, neither the trade nor the guardrail row.
+  app.setTickerComponent('all');
+  app.setTickerFilter('connections');
+  out.connectionRows = rows();
+  out.connectionsFiltered = out.connectionRows.length === 2
+    && out.connectionRows.every((r) => r.includes('[USER_WS]') || r.includes('[MKT_WS]'));
+  out.connectionExclusions = !app.tickerIsConnectionEvent({ service: 'market_stream', action: 'market_stream_tick' })
+    && !app.tickerIsConnectionEvent({ service: 'user_stream', action: 'user_ws_trade' })
+    // A stop-loss must never pass as daemon lifecycle.
+    && !app.tickerIsConnectionEvent({ service: 'guardrail', action: 'stop_loss_triggered' })
+    && app.tickerIsConnectionEvent({ service: 'user_stream', action: 'user_ws_disconnected' })
+    && app.tickerIsConnectionEvent({ service: 'guardrail', action: 'guardian_running' })
+    // Console daemons announce themselves in the message text.
+    && app.tickerIsConnectionEvent({ action: 'sweep', message: 'Settlement sweeper running in background' });
+
+  // ALERTS: the guardrail row and the console ERROR, not the trade.
+  app.setTickerFilter('guardrail');
+  out.alertRows = rows();
+  out.alertsFiltered = out.alertRows.length === 2
+    && out.alertRows.every((r) => r.includes('[GUARD]'))
+    && out.alertRows.some((r) => r.includes('Settlement sweep failed'))
+    && out.alertRows.some((r) => r.includes('stop loss triggered'));
+
+  // Empty feeds name the tab, the component, and the category they narrowed to.
+  app.setTickerFilter('connections');
+  app.setTickerTab('filter');
+  const emptyScopedTab = document.getElementById('event-ticker').innerHTML;
+  out.emptyScopedTab = emptyScopedTab.includes('No connection events yet.')
+    && emptyScopedTab.includes('Showing filter loop · connections only.');
+
+  // Switching tabs retires a component the new tab does not carry.
+  app.setTickerTab('live');
+  app.setTickerComponent('USER_WS');
+  app.setTickerTab('filter');
+  out.componentReset = app.tickerComponentChoices().length === 1
+    && app.tickerComponentChoices()[0] === 'FILTER'
+    && document.getElementById('ticker-component-select').value === 'all';
+
 } catch (err) {
   out.error = String(err && err.stack ? err.stack : err);
 }
