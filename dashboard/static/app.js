@@ -765,6 +765,9 @@ function marketLink(m) {
  * hold the caller's chain while the reload happens. */
 function controlFetch(path, options = {}) {
   const headers = { 'X-Control-Token': CONTROL_TOKEN, ...(options.headers || {}) };
+  if (options.body != null && !('Content-Type' in headers) && !('content-type' in headers)) {
+    headers['Content-Type'] = 'application/json';
+  }
   return fetch(path, { method: 'POST', ...options, headers }).then(async (res) => {
     if (res.status === 403) {
       let stale = false;
@@ -4290,7 +4293,41 @@ function openStartRunModal(mode) {
   if (summary) summary.textContent = '';
   START_RUN_STEPS.forEach((s) => setPreflightRow(s, 'pending', 'pending'));
   updateStartRunButtons();
+  void refreshShadowTarget();
   if (startRunModalState.mode === 'live') void runPreflightSequence();
+}
+function fmtMarketsAge(ageSec) {
+  if (ageSec == null || !isFinite(ageSec)) return 'unknown age';
+  if (ageSec < 60) return Math.round(ageSec) + 's old';
+  if (ageSec < 3600) return Math.round(ageSec / 60) + 'm old';
+  return Math.round(ageSec / 3600 * 10) / 10 + 'h old';
+}
+async function refreshShadowTarget() {
+  const targetEl = startRunModalEl('start-run-shadow-target');
+  const marketsEl = startRunModalEl('start-run-markets-line');
+  if (targetEl) targetEl.textContent = 'Shadow store: …';
+  if (marketsEl) marketsEl.textContent = 'Markets file: …';
+  let data = null;
+  try {
+    const res = await fetch('/api/system/shadow/next');
+    try { data = await res.json(); } catch { data = null; }
+  } catch (e) {
+    data = null;
+  }
+  if (!data || data.ok !== true) {
+    if (targetEl) targetEl.textContent = 'Shadow store: unavailable (could not preview).';
+    if (marketsEl) marketsEl.textContent = 'Markets file: unknown — the Market Filter loop refreshes runtime/markets.json.';
+    return;
+  }
+  if (targetEl) targetEl.textContent = 'Shadow store: will create data/' + (data.db_name || '(unknown)') + ' — the page switches to it on start.';
+  if (marketsEl) {
+    const m = data.markets || {};
+    if (!m.exists) {
+      marketsEl.textContent = 'Markets file: MISSING — start the Market Filter first or the rehearsal idles with no markets.';
+    } else {
+      marketsEl.textContent = 'Markets file: runtime/markets.json, ' + fmtMarketsAge(m.age_sec) + ' (refreshed by the Market Filter loop).';
+    }
+  }
 }
 function closeStartRunModal() {
   const modal = startRunModalEl('start-run-modal');
@@ -4404,6 +4441,18 @@ async function startShadowFromModal() {
   if (live && !live.dataset.wired) { live.dataset.wired = 'true'; live.addEventListener('click', startLiveFromModal); }
   const shadow = document.getElementById('start-run-shadow');
   if (shadow && !shadow.dataset.wired) { shadow.dataset.wired = 'true'; shadow.addEventListener('click', startShadowFromModal); }
+  try {
+    const modes = document.querySelectorAll ? document.querySelectorAll('input[name="start-run-mode"]') : [];
+    for (const r of modes) {
+      if (r.dataset && r.dataset.wired) continue;
+      if (r.dataset) r.dataset.wired = 'true';
+      r.addEventListener('change', () => {
+        const v = startRunModalMode();
+        startRunModalState.mode = v;
+        if (v === 'live' && startRunModalState.open && !startRunModalState.preflightId) void runPreflightSequence();
+      });
+    }
+  } catch { /* harness stub has no radios; mode stays as opened */ }
   if (document.addEventListener) document.addEventListener('keydown', (e) => { if (e && e.key === 'Escape' && startRunModalState.open) closeStartRunModal(); });
 })();
 

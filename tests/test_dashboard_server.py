@@ -2996,6 +2996,9 @@ def test_master_toggle_renders_every_state():
     assert out["refused"]["modalOpen"] is True
     assert "/api/system/start" not in out["refused"]["fetches"]
     assert any("preflight" in p for p in out["refused"]["fetches"])
+    # The modal's JSON bodies must arrive as JSON: a text/plain POST is
+    # ignored by the server and the run silently falls back to prod (#857).
+    assert "application/json" in (out["refused"]["fetchContentTypes"] or [])
 
     # A partial STOP names the survivor and its outcome.
     assert "decide" in out["partialStop"]["ticker"]
@@ -4294,3 +4297,50 @@ def test_start_run_modal_markup_and_wiring():
     assert "openStartRunModal" in app_js
     assert "/api/system/preflight" in app_js
     assert "fresh" in app_js
+
+
+# --- shadow next preview + fresh start via JSON (#857 IIIB) ------------------
+
+def test_shadow_next_previews_seq_name_and_markets(tmp_path, monkeypatch):
+    """#857 IIIB: the modal preview names the db before anything is created."""
+    import re
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    (tmp_path / "data").mkdir(exist_ok=True)
+    (tmp_path / "runtime").mkdir(exist_ok=True)
+    from fastapi.testclient import TestClient
+    res = TestClient(dash_mod.app).get("/api/system/shadow/next")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert re.fullmatch(r"\d{2}", body["seq"])
+    assert re.fullmatch(r"\d{2}_shadow_\d{2}-\d{2}_\d{2}-\d{2}\.db", body["db_name"])
+    assert "markets" in body and "exists" in body["markets"]
+    assert list((tmp_path / "data").glob("*.db")) == []
+
+
+def test_shadow_fresh_start_creates_numbered_db_and_switches_view(client, monkeypatch, tmp_path):
+    """#857 IIIB: fresh:true mints NN_shadow_<stamp>.db and repoints the page."""
+    import re
+    import dashboard.server as dash_mod
+    from dashboard.server import set_db_override
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", None)
+    import subprocess
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            self.pid = 4242
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(dash_mod, "read_shadow_run", lambda db: None)
+    try:
+        res = client.post("/api/system/shadow/start", json={"fresh": True, "minutes": 5},
+                          headers=_control(client))
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is True, body.get("message")
+        assert re.fullmatch(r"shadow-\d{2}", body["run_id"])
+        db_base = body["status"]["shadow_run"]["db_path"].replace("\\", "/").split("/")[-1]
+        assert re.fullmatch(r"\d{2}_shadow_\d{2}-\d{2}_\d{2}-\d{2}\.db", db_base)
+        assert "shadow_run" in body["status"]
+    finally:
+        set_db_override(None)

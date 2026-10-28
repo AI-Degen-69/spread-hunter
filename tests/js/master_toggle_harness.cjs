@@ -112,7 +112,8 @@ global.fetch = async (p, opts) => {
   const path = String(p);
   const method = (opts && opts.method) || 'GET';
   if (method === 'POST') {
-    log.fetches.push({ path, method });
+    const headers = (opts && opts.headers) || {};
+    log.fetches.push({ path, method, contentType: headers['Content-Type'] || headers['content-type'] || null });
     return fetchImpl(path, opts);
   }
   // GET /api/* : every status the poll asks for. Return the harness's stack.
@@ -189,6 +190,7 @@ function state() {
     ticker: (global.__tickerWrites || []).join(' | '),
     modalOpen: modalOpen(),
     fetches: log.fetches.map((f) => f.path),
+    fetchContentTypes: log.fetches.map((f) => f.contentType || null),
   };
 }
 

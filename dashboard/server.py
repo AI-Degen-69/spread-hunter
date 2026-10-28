@@ -3238,6 +3238,33 @@ def api_service_status(name: str = "hub"):
     return JSONResponse(_probe_service_status(name))
 
 
+@app.get("/api/system/shadow/next")
+def api_system_shadow_next():
+    """Preview the next fresh shadow store (read-only, no state change)."""
+    seq = _get_next_shadow_seq()
+    stamp = time.strftime("%d-%m_%H-%M", time.localtime())
+    db_name = f"{seq}_shadow_{stamp}.db"
+    markets_info: dict = {"exists": False, "age_sec": None}
+    try:
+        from core_brain.runtime_paths import runtime_file as _rf
+        mp = _rf("markets.json", root=LIVE_ROOT)
+    except Exception:
+        mp = LIVE_ROOT / "runtime" / "markets.json"
+    try:
+        if mp.exists():
+            markets_info = {"exists": True,
+                            "age_sec": max(0.0, time.time() - mp.stat().st_mtime)}
+    except OSError:
+        pass
+    return JSONResponse({
+        "ok": True,
+        "seq": seq,
+        "db_name": db_name,
+        "db_path": str((LIVE_ROOT / "data" / db_name).resolve()),
+        "markets": markets_info,
+    })
+
+
 @app.post("/api/system/shadow/start")
 async def api_system_shadow_start(
     request: Request,
