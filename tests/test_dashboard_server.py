@@ -2817,6 +2817,9 @@ def test_event_stream_tabs_harness():
     assert out["negativeEdgeFlagged"] is True
     assert out["tradeFieldsFixed"] is True
     assert out["shortMarketId"] is True
+    # A comma-formatted amount is one token: `$40,869`, never `$40` + `,869`.
+    assert out["commaAmountsIntact"] is True
+    assert out["commaAmountsRenderTight"] is True
     # ALERTS names a naked pair as live risk without waiting for its row.
     assert out["nakedInAlerts"] is True
     assert out["emptyQuotes"] is True
