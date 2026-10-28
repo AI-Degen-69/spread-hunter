@@ -2580,7 +2580,7 @@ def test_trades_tab_filter_and_sentence_builders_ship():
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_event_stream_trades_tab_shows_only_trade_rows():
-    """A fill and a skip-only decide: TRADES shows just the fill sentence."""
+    """A fill and a skip-only decide: TRADES shows just the fill row."""
     harness = Path(__file__).resolve().parent / "js" / "event_stream_harness.cjs"
     app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
     assert harness.exists()
@@ -2593,9 +2593,13 @@ def test_event_stream_trades_tab_shows_only_trade_rows():
     out = json.loads(res.stdout)
     assert out.get("exportsOk") is True, out.get("error")
 
-    # TRADES shows only the fill; ALL shows both.
+    # TRADES shows only the fill; ALL shows both. A fill renders as its own
+    # columns (side · size · price · market), not as prose, so the numbers line up
+    # with every other fill in the list.
     assert len(out["tradesRows"]) == 1
-    assert "Bought" in out["tradesRows"][0]
+    assert "tk-side" in out["tradesRows"][0] and "BUY" in out["tradesRows"][0]
+    assert "tk-size" in out["tradesRows"][0] and "tk-price" in out["tradesRows"][0]
+    assert "0.48" in out["tradesRows"][0]
     assert "Brazil election" in out["tradesRows"][0]
     assert len(out["allRows"]) == 2
     assert out["scrolledToTop"] is True
@@ -2800,6 +2804,19 @@ def test_event_stream_tabs_harness():
     # Shadow stdout is SHADOW, not a slice of the log filename.
     assert out["shadowTextTagged"] is True
     assert out["shadowTextNotFilenameTag"] is True
+
+    # Every variable field reserves the width of its longest possible value, so
+    # a wider size or price never shifts the tokens after it.
+    assert out["widthsFitCeiling"] is True
+    assert out["fieldWidths"] == {"size": 3, "price": 5, "cents": 5, "leg": 9}
+    assert out["legWidthStable"] is True
+    # The padding lives on the field, not between price and its ×.
+    assert out["legHugsPrice"] is True
+    # Colour follows the kind of token, and the columns stay put in TRADES too.
+    assert out["tokenClasses"] is True
+    assert out["negativeEdgeFlagged"] is True
+    assert out["tradeFieldsFixed"] is True
+    assert out["shortMarketId"] is True
     # ALERTS names a naked pair as live risk without waiting for its row.
     assert out["nakedInAlerts"] is True
     assert out["emptyQuotes"] is True

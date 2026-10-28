@@ -725,6 +725,33 @@ header {
 .ticker-event.muted .ticker-event-tag,
 .ticker-translation.muted { color: var(--text-muted); }
 
+/* ── Token colours ──
+   The message is a sequence of typed fields, coloured like a code editor:
+   prices cyan, sizes gold, the edge green (or red when it is negative), ages
+   secondary, market names primary, and every connector/unit word muted so the
+   numbers are what the eye lands on. Fixed widths are set inline per field; the
+   text inside a field stays tight, so `×` hugs its price while the padding of
+   the field is what keeps the next token in its column. */
+.tk { font-variant-numeric: tabular-nums; }
+.tk-leg { display: inline-block; white-space: nowrap; }
+.tk-price { display: inline-block; color: var(--open); }
+.tk-size { display: inline-block; color: var(--gold); }
+.tk-cents { display: inline-block; color: var(--green-ok); }
+.tk-cents.tk-bad { color: var(--red-alert); font-weight: 600; }
+.tk-over { color: var(--red-alert); font-weight: 600; }
+.tk-age { display: inline-block; color: var(--text-secondary); }
+.tk-market { color: var(--text-primary); font-weight: 600; }
+.tk-side { display: inline-block; color: var(--text-primary); font-weight: 600; }
+.tk-dim { color: var(--text-muted); }
+.tk-text { color: var(--text-primary); }
+
+/* Colour on a field must not erase the row's severity: a naked pair and a
+   failed merge keep an edge marker even though their prices stay cyan. Drawn as
+   an inset shadow, not a border: a border would consume layout width and shift
+   the columns of every warn row by its own thickness. */
+.ticker-event.warn { box-shadow: inset 2px 0 0 var(--amber-warn); }
+.ticker-event.bad { box-shadow: inset 2px 0 0 var(--red-alert); }
+
 .ticker-translation { font-size: 11px; color: var(--text-primary); font-weight: 500; line-height: 1.4; }
 .ticker-translation .ticker-ctx { font-size: 10px; color: var(--open); font-weight: 400; }
 .ticker-raw { font-size: 10px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; line-height: 1.3; margin-top: 2px; opacity: 0.85; padding-left: 31ch; }

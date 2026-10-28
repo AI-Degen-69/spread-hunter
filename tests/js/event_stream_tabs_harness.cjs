@@ -184,6 +184,10 @@ try {
 
   const tickerEl = () => document.getElementById('event-ticker');
   const rows = () => tickerEl().children.map((c) => c.innerHTML);
+  // The message is a list of typed fields, so the words are split across spans.
+  // Read the stripped text for what the row says, and rows() for how it is built.
+  const stripTags = (html) => String(html).replace(/<[^>]*>/g, '');
+  const texts = () => rows().map(stripTags);
 
   // Verify rendering by tab
   app.setTickerTab('live');
@@ -458,38 +462,79 @@ try {
   });
   app.setTickerFilter('quotes');
   out.quoteRows = rows();
+  const quoteTexts = texts();
   out.quoteDistilled = out.quoteRows.length === 7;
-  out.quotePlaced = out.quoteRows.some((r) => r.includes('[PLACED]') && r.includes('Canada election'));
-  out.quoteResting = out.quoteRows.some((r) => r.includes('[RESTING]') && r.includes('Brazil election')
+  out.quotePlaced = quoteTexts.some((r) => r.includes('[PLACED]') && r.includes('Canada election'));
+  out.quoteResting = quoteTexts.some((r) => r.includes('[RESTING]') && r.includes('Brazil election')
     && r.includes('0.45×5 + 0.48×5') && r.includes('= $0.97') && r.includes('+3¢'));
-  out.quoteRestingFromState = out.quoteRows.some((r) => r.includes('[RESTING]')
+  out.quoteRestingFromState = quoteTexts.some((r) => r.includes('[RESTING]')
     && r.includes('Argentina election') && r.includes('0.30×6'));
-  out.quotePlanned = out.quoteRows.some((r) => r.includes('[PLANNED]') && r.includes('Peru election'));
+  out.quotePlanned = quoteTexts.some((r) => r.includes('[PLANNED]') && r.includes('Peru election'));
   // A decide with no legs and no registry pair is churn, not a quote.
-  out.quoteNoiseDropped = !out.quoteRows.some((r) => r.includes('Chile election'))
-    && !out.quoteRows.some((r) => r.includes('no legs quoted'));
+  out.quoteNoiseDropped = !quoteTexts.some((r) => r.includes('Chile election'))
+    && !quoteTexts.some((r) => r.includes('no legs quoted'));
   // A naked leg is amber, says so, and sorts above every hedged pair.
   out.quoteNakedFirst = /ticker-translation warn".*?\[NAKED\]/.test(out.quoteRows[0] || '')
-    && out.quoteRows[0].includes('break-even $0.51');
-  out.quoteOverOneDollar = out.quoteRows.some((r) => r.includes('Hockey overtime')
+    && quoteTexts[0].includes('break-even $0.51');
+  out.quoteOverOneDollar = quoteTexts.some((r) => r.includes('Hockey overtime')
     && r.includes('OVER $1'));
   // A filled leg must show the size that was posted, never `×0`.
-  out.filledLegSize = out.quoteRows.some((r) => r.includes('[MERGED]')
-    && r.includes('0.40×5 + 0.53×5') && !out.quoteRows.some((x) => x.includes('×0')));
+  out.filledLegSize = quoteTexts.some((r) => r.includes('[MERGED]')
+    && r.includes('0.40×5 + 0.53×5') && !quoteTexts.some((x) => x.includes('×0')));
+
+  // ── Every variable field is reserved to its longest possible value ──
+  // `×5` and `×10` must leave the next token on the same column, so each field
+  // is an inline-block as wide as its own upper bound, not the value it holds.
+  const widthOf = (kind) => app.TICKER_FIELD_WIDTH[kind];
+  const legHtml = app.renderTickerSegments([{ k: 'leg', price: '0.45', size: '5' }]);
+  const legHtmlWide = app.renderTickerSegments([{ k: 'leg', price: '0.45', size: '10' }]);
+  out.fieldWidths = {
+    size: widthOf('size'),
+    price: widthOf('price'),
+    cents: widthOf('cents'),
+    leg: widthOf('leg'),
+  };
+  // Widths are derived from the longest legal value, not guessed.
+  out.widthsFitCeiling = widthOf('size') === '999'.length
+    && widthOf('price') === '0.999'.length
+    && widthOf('leg') === '0.999×999'.length
+    && widthOf('cents') === '+100¢'.length;
+  // The leg unit reserves price×size once, so 5 and 10 land the next token on
+  // the same column; the × stays tight against its price.
+  const legWidth = (html) => (html.match(/min-width:(\d+)ch/) || [])[1];
+  out.legWidthStable = legHtml && legHtmlWide && legWidth(legHtml) === legWidth(legHtmlWide);
+  out.legHugsPrice = legHtml.includes('>0.45</span><span class="tk tk-dim">×</span>');
+  out.sizeOnColumns = quoteTexts.filter((r) => r.includes('×')).length >= 5;
+  // Typed tokens carry a class so colour follows the kind, not the row.
+  const quoteHtml = out.quoteRows.join('');
+  out.tokenClasses = ['tk-price', 'tk-size', 'tk-leg', 'tk-dim', 'tk-market', 'tk-cents']
+    .every((c) => quoteHtml.includes(c));
+  out.negativeEdgeFlagged = quoteTexts.some((r) => r.includes('OVER $1'))
+    && quoteHtml.includes('tk-bad');
+  // A long condition id is shortened, never dumped raw into the row.
+  out.shortMarketId = app.shortMarketId('0x7586a9651234567890abcdef1234567890abcdef') ===
+    '0x7586a965...abcdef';
 
   // TRADES reads the registry, so the early fill is there even though the ring
   // tail starts long after it; a ring row with the same id is not doubled.
   app.setTickerFilter('trades');
   const tradeRows = rows();
-  out.tradesFromRegistry = tradeRows.some((r) => r.includes('[FILL]')
+  const tradeTexts = texts();
+  out.tradesFromRegistry = tradeTexts.some((r) => r.includes('[FILL]')
     && r.includes('BUY 5 @ $0.49') && r.includes('Tennis final'));
-  out.tradesDeduped = tradeRows.filter((r) => r.includes('shadow-filled-1')).length === 0
-    && tradeRows.length >= 1;
+  out.tradesDeduped = tradeTexts.filter((r) => r.includes('shadow-filled-1')).length === 0
+    && tradeTexts.length >= 1;
+  // side · size · price are three fields: the price column holds still, whether
+  // the row came from the registry or a ring event still inside the tail.
+  const fillRows = tradeRows.filter((r) => r.includes('[FILL]'));
+  out.tradeFieldsFixed = fillRows.length >= 1
+    && fillRows.every((r) => r.includes('tk-side') && r.includes('tk-size')
+      && /min-width:3ch/.test(r));
 
   // ALERTS names a naked pair as live risk, without waiting for its transition row.
   app.setTickerFilter('guardrail');
   const alertRows = rows();
-  out.nakedInAlerts = alertRows.some((r) => r.includes('[NAKED LEG]')
+  out.nakedInAlerts = texts().some((r) => r.includes('[NAKED LEG]')
     && r.includes('Tennis final'));
 
   // ── A registry fill's process comes from the ring, never a guessed QUERY ──
@@ -511,14 +556,14 @@ try {
   app.setTickerTab('live');
   app.setTickerComponent('TRADER');
   app.setTickerFilter('trades');
-  out.traderFillVisible = rows().some((r) => r.includes('[TRADER]')
+  out.traderFillVisible = texts().some((r) => r.includes('[TRADER]')
     && r.includes('BUY 2 @ $0.51'));
   app.setTickerComponent('QUERY');
-  out.fillNotMisattributed = !rows().some((r) => r.includes('BUY 2 @ $0.51'));
+  out.fillNotMisattributed = !texts().some((r) => r.includes('BUY 2 @ $0.51'));
   app.setTickerComponent('all');
-  out.orphanFillTagged = rows().some((r) => r.includes('[REGISTRY]')
+  out.orphanFillTagged = texts().some((r) => r.includes('[REGISTRY]')
     && r.includes('BUY 1 @ $0.40'))
-    && !rows().some((r) => r.includes('[QUERY]') && r.includes('BUY 1 @ $0.40'));
+    && !texts().some((r) => r.includes('[QUERY]') && r.includes('BUY 1 @ $0.40'));
 
   // An empty registry and an empty ring leave the view empty, not blank.
   app.noteTickerQuoteState({ orders: [], pairs: [], fills: [] });

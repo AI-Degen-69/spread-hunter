@@ -2017,15 +2017,27 @@ function buildTradeRows(events) {
     const size = Number(f && f.size);
     const price = Number(f && f.price);
     const title = titles.get(String((f && f.condition_id) || '')) || '';
+    // side · size @ price are three fields, so the price column lines up down
+    // the whole list instead of following whatever the size width happens to be.
+    const tradeSegs = [
+      tickerSeg('side', String((f && f.side) || 'BUY')),
+      tickerDim(' '),
+      tickerSeg('size', Number.isFinite(size) ? size : '?'),
+      tickerDim(' @ $'),
+      tickerSeg('price', Number.isFinite(price) ? price.toFixed(2) : '?'),
+    ];
+    if (title) {
+      tradeSegs.push(tickerDim(' '), ...tickerMarketSegs(title, f && f.condition_id));
+    } else {
+      tradeSegs.push(tickerDim(' · pair '), tickerSeg('text', (f && f.pair_id) || '—'));
+    }
     rows.push({
       key: id || `fill-${rows.length}`,
       clock: tickerClockFromMs((f && (f.recorded_ts || f.venue_ts)) || 0),
       tag: 'FILL',
       sev: 'good',
       component: componentByTrade.get(id) || 'REGISTRY',
-      msg: `${String((f && f.side) || 'BUY')} ${Number.isFinite(size) ? size : '?'} @ `
-        + `$${Number.isFinite(price) ? price.toFixed(2) : '?'}`
-        + (title ? ` on ${title}` : ` · pair ${(f && f.pair_id) || '—'}`),
+      segs: tradeSegs,
       raw: `fill ${id || '?'} · ${String((f && f.side) || 'BUY')} ${Number.isFinite(size) ? size : '?'}`
         + ` @ ${Number.isFinite(price) ? price.toFixed(2) : '?'}`
         + ` · condition ${(f && f.condition_id) || '—'} · pair ${(f && f.pair_id) || '—'}`,
@@ -2036,13 +2048,32 @@ function buildTradeRows(events) {
     const ex = ev.extra || {};
     const id = String(ex.trade_id || ex.order_id || '');
     if (id && seen.has(id)) continue;
+    // A fill the ring still holds gets the same three columns as a registry
+    // fill, so the list reads as one table no matter which source fed a row.
+    const ringSize = Number(ex.size);
+    const ringPrice = Number(ex.price);
+    let segs;
+    if (Number.isFinite(ringSize) && Number.isFinite(ringPrice)) {
+      const title = ex.market_title || titles.get(String(ex.condition_id || '')) || '';
+      segs = [
+        tickerSeg('side', String(ex.side || 'BUY')),
+        tickerDim(' '),
+        tickerSeg('size', ringSize),
+        tickerDim(' @ $'),
+        tickerSeg('price', ringPrice.toFixed(2)),
+        tickerDim(' '),
+        ...tickerMarketSegs(title || ev.market, ex.condition_id),
+      ];
+    } else {
+      segs = tickerProseSegs(ev.message || ev.line || '');
+    }
     rows.push({
       key: `ring-${ev.seq}`,
       clock: ev.timeTag || '',
       tag: ev.eventTag || 'TRADE',
       sev: ev.severity || 'good',
       component: tickerEventComponent(ev),
-      msg: ev.message || ev.line || '',
+      segs,
       raw: ev.rawDetail || ev.line || '',
     });
   }
@@ -2062,7 +2093,11 @@ function buildAlertRows(events) {
       sev: 'warn',
       // The guardian owns hedge state, so a naked leg is its row.
       component: 'GUARD',
-      msg: `one leg unfilled, the other not hedged · ${title}`,
+      segs: [
+        tickerSeg('text', 'one leg unfilled, the other not hedged'),
+        tickerDim(' · '),
+        tickerSeg('market', title),
+      ],
       raw: `pair ${p.pair_id || '—'} · hedge_state=NAKED · combined=${p.combined_price ?? '—'}`
         + ` · condition ${p.condition_id || '—'}`,
     });
@@ -2075,7 +2110,7 @@ function buildAlertRows(events) {
       tag: ev.eventTag || 'ALERT',
       sev: ev.severity || 'warn',
       component: tickerEventComponent(ev),
-      msg: ev.message || ev.line || '',
+      segs: tickerProseSegs(ev.message || ev.line || ''),
       raw: ev.rawDetail || ev.line || '',
     });
   }
@@ -2088,43 +2123,164 @@ function tickerOrderIsOpen(o) {
   return OPEN_ORDER_STATUSES.has(String((o && o.status) || '').toLowerCase());
 }
 
+/* ── Structured row fields ──
+ * A message is a list of tokens, not a sentence. Every field that varies is
+ * rendered as an inline-block reserved to the width of the longest value it can
+ * hold, so `×5` and `×10` put the next token on the same column instead of
+ * shoving the row right. Widths are character counts in the ticker's monospace
+ * face, and each one is derived from its own upper bound rather than guessed --
+ * raise a size cap and its field widens with it.
+ */
+const TICKER_FIELD_WIDTH = {
+  side: 'SELL'.length,       // BUY / SELL
+  size: '999'.length,        // shares
+  leg: '0.999×999'.length,   // price × size, the whole unit
+  price: '0.999'.length,     // money, without the $
+  cents: '+100¢'.length,     // edge in cents
+  age: '9999h'.length,       // fmtOrderAge ceiling
+};
+
+function tickerSeg(kind, text, mod) {
+  return { k: kind, v: text == null ? '' : String(text), m: mod || '' };
+}
+
+function tickerDim(text) {
+  return tickerSeg('dim', text);
+}
+
+// One leg is price×size as a single fixed unit: the × must hug the price, so
+// the padding belongs to the unit, not to either half.
+function tickerLegSeg(price, size) {
+  return { k: 'leg', price: String(price), size: String(size) };
+}
+
+function tickerFieldStyle(kind) {
+  const width = TICKER_FIELD_WIDTH[kind];
+  return width ? ` style="min-width:${width}ch"` : '';
+}
+
+function renderTickerSegments(segs) {
+  let html = '';
+  for (const seg of (segs || [])) {
+    if (!seg) continue;
+    if (seg.k === 'leg') {
+      html += `<span class="tk tk-leg"${tickerFieldStyle('leg')}>`
+        + `<span class="tk tk-price">${esc(seg.price)}</span>`
+        + `<span class="tk tk-dim">×</span>`
+        + `<span class="tk tk-size"${tickerFieldStyle('size')}>${esc(seg.size)}</span>`
+        + `</span>`;
+      continue;
+    }
+    if (seg.v === '') continue;
+    const mod = seg.m ? ` tk-${seg.m}` : '';
+    html += `<span class="tk tk-${seg.k}${mod}"${tickerFieldStyle(seg.k)}>${esc(seg.v)}</span>`;
+  }
+  return html;
+}
+
+// A condition id is 66 characters of hex and reads as noise in a row: the head
+// and tail identify it, the middle does not.
+function shortMarketId(value) {
+  const s = String(value || '');
+  return /^0x[0-9a-fA-F]{20,}$/.test(s) ? `${s.slice(0, 10)}...${s.slice(-6)}` : s;
+}
+
+function tickerMarketSegs(title, fallbackId) {
+  const name = title || (fallbackId ? `Market ${shortMarketId(fallbackId)}` : 'unknown market');
+  return [tickerDim('on '), tickerSeg('market', name)];
+}
+
+
+// Prose from the ring keeps its wording but not its anonymity: prices, sizes,
+// cents and addresses are pulled out as their own tokens so the eye can skip
+// the words and read the numbers.
+const TICKER_PROSE_TOKEN = /(\$\d+(?:\.\d+)?)|(\b0x[0-9a-fA-F]{6,}\b)|(\b\d+(?:\.\d+)?(?=\s+(?:shares?|orders?|markets?|legs?)\b))|(\b\d+¢)/g;
+
+function tickerProseSegs(text) {
+  const s = String(text == null ? '' : text);
+  const segs = [];
+  let at = 0;
+  TICKER_PROSE_TOKEN.lastIndex = 0;
+  let m;
+  while ((m = TICKER_PROSE_TOKEN.exec(s)) !== null) {
+    if (m.index > at) segs.push(tickerSeg('text', s.slice(at, m.index)));
+    if (m[1]) {
+      segs.push(tickerDim('$'), tickerSeg('price', m[1].slice(1)));
+    } else if (m[2]) {
+      segs.push(tickerDim(shortMarketId(m[2])));
+    } else if (m[3]) {
+      segs.push(tickerSeg('size', m[3]));
+    } else {
+      segs.push(tickerSeg('cents', m[4]));
+    }
+    at = m.index + m[0].length;
+  }
+  if (at < s.length) segs.push(tickerSeg('text', s.slice(at)));
+  return segs;
+}
+
 // `0.45×5 + 0.48×5` — price and size in the order the pair holds its legs.
 // A filled leg reports `size_remaining: 0`, so the remaining size is only the
 // right number when it is positive; otherwise quote what was originally posted.
-function tickerLegsText(legs) {
-  const parts = [];
+function tickerLegPairs(legs) {
+  const pairs = [];
   for (const o of legs) {
     const price = Number(o && o.price);
     if (!Number.isFinite(price)) continue;
     const remaining = Number(o && o.size_remaining);
     const original = Number(o && o.original_size);
-    const size = remaining > 0 ? remaining : (Number.isFinite(original) ? original : 0);
-    parts.push(`${price.toFixed(2)}×${size}`);
+    pairs.push({
+      price: price.toFixed(2),
+      size: String(remaining > 0 ? remaining : (Number.isFinite(original) ? original : 0)),
+    });
   }
-  return parts.join(' + ');
+  return pairs;
 }
 
 // One line the operator can read without cross-referencing: what is quoted,
 // what the pair costs, the edge, the age — and for a naked pair the break-even
-// the resting leg has to beat before the hedge closes.
-function tickerQuoteMessage(row) {
-  const parts = [];
-  const legs = row.legs || (row.quotes.length ? quoteList(row.quotes).join(' and ') : '');
-  parts.push(legs || (row.intentCount ? `${row.intentCount} legs` : 'no legs quoted'));
+// the resting leg has to beat before the hedge closes. Order is fixed so the
+// columns land in the same place on every row.
+function tickerQuoteSegments(row) {
+  const segs = [];
+  const pairs = row.legPairs || [];
+  if (pairs.length) {
+    pairs.forEach((p, i) => {
+      if (i) segs.push(tickerDim(' + '));
+      segs.push(tickerLegSeg(p.price, p.size));
+    });
+  } else if (row.quotes && row.quotes.length) {
+    segs.push(tickerSeg('text', quoteList(row.quotes).join(' and ')));
+  } else if (row.intentCount) {
+    segs.push(tickerSeg('size', row.intentCount), tickerDim(' legs'));
+  } else {
+    segs.push(tickerSeg('text', 'no legs quoted'));
+  }
+
   if (row.combined != null) {
-    parts.push(`= $${row.combined.toFixed(2)}`);
     const cents = Math.round((1 - row.combined) * 100);
+    segs.push(tickerDim(' · = $'), tickerSeg('price', row.combined.toFixed(2)), tickerDim(' · '));
     // A pair over $1.00 is a booked loss, so it is spelled out, not just signed.
-    parts.push(cents >= 0 ? `+${cents}¢` : `${-cents}¢ OVER $1`);
+    if (cents >= 0) {
+      segs.push(tickerSeg('cents', `+${cents}¢`, 'good'));
+    } else {
+      segs.push(tickerSeg('cents', `${-cents}¢`, 'bad'), tickerSeg('over', ' OVER $1', 'bad'));
+    }
   }
+
   if (row.hedge === 'NAKED' && row.filledPrice != null) {
-    parts.push(`filled $${row.filledPrice.toFixed(2)}`);
-    if (row.breakEven != null) parts.push(`break-even $${row.breakEven.toFixed(2)}`);
+    segs.push(tickerDim(' · filled $'), tickerSeg('price', row.filledPrice.toFixed(2)));
+    if (row.breakEven != null) {
+      segs.push(tickerDim(' · break-even $'), tickerSeg('price', row.breakEven.toFixed(2)));
+    }
   } else if (row.ageSec > 0) {
-    parts.push(fmtOrderAge(row.ageSec));
+    segs.push(tickerDim(' · '), tickerSeg('age', fmtOrderAge(row.ageSec)));
   }
-  if (row.submitted != null && row.submitted > 0) parts.push(`${row.submitted} new`);
-  return `${parts.join(' · ')} on ${row.title || row.market || 'unknown market'}`;
+  if (row.submitted != null && row.submitted > 0) {
+    segs.push(tickerDim(' · '), tickerSeg('size', row.submitted), tickerDim(' new'));
+  }
+  segs.push(tickerDim(' '), ...tickerMarketSegs(row.title, row.conditionId));
+  return segs;
 }
 
 function tickerQuoteStatus(row) {
@@ -2165,7 +2321,7 @@ function buildQuoteSummaries(events) {
       market: (pair.market && pair.market.slug) || '',
       title,
       conditionId: pair.condition_id || key,
-      legs: tickerLegsText(open.length ? open : filled),
+      legPairs: tickerLegPairs(open.length ? open : filled),
       quotes: [],
       intentCount: 0,
       combined: Number.isFinite(combinedRaw) ? combinedRaw : null,
@@ -2194,7 +2350,7 @@ function buildQuoteSummaries(events) {
     if (!row) {
       row = {
         key, market: ev.market || '', title: ex.bot_market_title || '',
-        conditionId: key, legs: '', quotes: [], intentCount: 0, combined: null,
+        conditionId: key, legPairs: [], quotes: [], intentCount: 0, combined: null,
         openCount: 0, merged: false, ageSec: 0, hedge: '', filledPrice: null,
         breakEven: null, decidedAt: '', submitted: null, cancelled: 0, placed: 0,
         planned: false, family: ev.family,
@@ -2224,11 +2380,12 @@ function buildQuoteSummaries(events) {
   const rank = (r) => (r.hedge === 'NAKED' ? 0 : r.openCount > 0 ? 1 : r.merged ? 3 : 2);
   const registryAnswered = tickerQuoteState.pairs.length > 0;
   return Array.from(rows.values())
-    .filter((r) => r.title || r.market || r.legs)
+    .filter((r) => r.title || r.market || (r.legPairs && r.legPairs.length))
     // A ring decide the registry never turned into a pair carries no legs, so
     // it would read "no legs quoted" beside the real book. When the registry
     // answered, that market simply is not quoted; drop the empty row.
-    .filter((r) => !(registryAnswered && !r.legs && !r.intentCount && !r.openCount && !r.merged))
+    .filter((r) => !(registryAnswered && !(r.legPairs && r.legPairs.length)
+      && !r.intentCount && !r.openCount && !r.merged))
     .sort((a, b) => rank(a) - rank(b)
       || String(b.decidedAt).localeCompare(String(a.decidedAt))
       || a.ageSec - b.ageSec);
@@ -2245,7 +2402,7 @@ function renderSummaryRow(row) {
     `<span class="ticker-col ticker-time">[${esc(row.clock || '—')}]</span>` +
     `<span class="ticker-col ticker-process">[${esc(row.component || 'REGISTRY')}]</span>` +
     `<span class="ticker-col ticker-event ticker-event-tag">[${esc(row.tag || '')}]</span>` +
-    `<span class="ticker-col ticker-msg">${esc(row.msg || '')}</span>` +
+    `<span class="ticker-col ticker-msg">${renderTickerSegments(row.segs)}</span>` +
     `</div>${raw}`;
   tickerEl.appendChild(div);
 }
@@ -2260,7 +2417,7 @@ function renderQuoteRow(row) {
     `<span class="ticker-col ticker-time">[${esc(when)}]</span>` +
     `<span class="ticker-col ticker-process">[QUOTE]</span>` +
     `<span class="ticker-col ticker-event ticker-event-tag">[${esc(st.tag)}]</span>` +
-    `<span class="ticker-col ticker-msg">${esc(tickerQuoteMessage(row))}</span>` +
+    `<span class="ticker-col ticker-msg">${renderTickerSegments(tickerQuoteSegments(row))}</span>` +
     `</div>`;
   tickerEl.appendChild(div);
 }
@@ -2319,7 +2476,7 @@ function renderTickerFeed() {
       `<span class="ticker-col ticker-time">[${esc(timeDisplay)}]</span>` +
       `<span class="ticker-col ticker-process">[${esc(procDisplay)}]</span>` +
       `<span class="ticker-col ticker-event ticker-event-tag">[${esc(evDisplay)}]</span>` +
-      `<span class="ticker-col ticker-msg">${esc(msgDisplay)}</span>` +
+      `<span class="ticker-col ticker-msg">${renderTickerSegments(tickerProseSegs(msgDisplay))}</span>` +
       `</div>${raw}`;
     tickerEl.appendChild(div);
   }
@@ -12031,6 +12188,8 @@ if (typeof module !== 'undefined' && module.exports) {
     setTickerComponent, tickerScopeLabel, tickerIsAlertEvent, tickerIsConnectionEvent,
     setTickerAutoscroll, tickerIsAutoscroll, tickerHandleScroll, updateTickerSubtitle,
     buildQuoteSummaries, noteTickerQuoteState, buildTradeRows, buildAlertRows,
+    TICKER_FIELD_WIDTH, renderTickerSegments, tickerProseSegs, tickerQuoteSegments,
+    shortMarketId,
     setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,
