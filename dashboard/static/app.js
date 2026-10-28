@@ -4274,14 +4274,20 @@ function startRunModalMode() {
   return (v === 'live' || v === 'shadow') ? v : startRunModalState.mode;
 }
 function updateStartRunButtons() {
+  const busy = !!startRunModalState.running;
   const liveBtn = startRunModalEl('start-run-live');
-  if (liveBtn) liveBtn.disabled = !(startRunModalState.approved && !startRunModalState.running);
+  if (liveBtn) liveBtn.disabled = !(startRunModalState.approved && !busy);
+  const shadowBtn = startRunModalEl('start-run-shadow');
+  if (shadowBtn) shadowBtn.disabled = busy;
 }
 function openStartRunModal(mode) {
   const modal = startRunModalEl('start-run-modal');
   if (!modal) return;
   startRunModalState.open = true;
   startRunModalState.mode = (mode === 'live' || mode === 'shadow') ? mode : 'live';
+  const modeRadio = document.querySelector
+    && document.querySelector('input[name="start-run-mode"][value="' + startRunModalState.mode + '"]');
+  if (modeRadio) modeRadio.checked = true;
   startRunModalState.preflightId = null;
   startRunModalState.checks = {};
   startRunModalState.approved = false;
@@ -4354,8 +4360,7 @@ async function runPreflightStep(step, confirm, mySeq) {
   }
   if (mySeq !== undefined && mySeq !== startRunModalState.seq) return { ok: false, stale: true };
   if (data && data.preflight_id) startRunModalState.preflightId = data.preflight_id;
-  const ok = !!(data && (data.ok === true || data.approved === true || data.next_step));
-  const passed = ok && data.step === step ? true : (data && data.ok === true);
+  const passed = !!(data && data.ok === true);
   if (data && data.ok === true) {
     setPreflightRow(step, 'pass', 'pass');
     startRunModalState.checks[step] = true;
@@ -4393,6 +4398,8 @@ async function runPreflightSequence(mySeq) {
   if (summary) summary.textContent = 'Reach probe needs one explicit confirmation ($2.00 max exposure).';
 }
 async function armOrRunReachProbe() {
+  const s = startRunModalState;
+  if (s.mode !== 'live' || !s.checks.stream || s.running) return;
   if (!startRunModalState.probeArmed) {
     startRunModalState.probeArmed = true;
     const summary = startRunModalEl('preflight-summary');
@@ -4401,12 +4408,25 @@ async function armOrRunReachProbe() {
     if (btn) btn.textContent = 'Confirm reach probe ($2.00 max exposure)';
     return;
   }
-  await runPreflightStep('reach_probe', true, startRunModalState.seq);
+  s.running = true;
+  updateStartRunButtons();
+  try {
+    await runPreflightStep('reach_probe', true, s.seq);
+  } finally {
+    s.probeArmed = false;
+    s.running = false;
+    const btn = startRunModalEl('start-run-probe');
+    if (btn) btn.textContent = 'Run reach probe (max $2.00 exposure, buy-and-cancel)';
+    updateStartRunButtons();
+  }
 }
 async function startLiveFromModal() {
+  if (startRunModalState.running) return;
+  startRunModalState.running = true;
+  updateStartRunButtons();
   const minutes = startRunModalMinutes();
   const pid = startRunModalState.preflightId;
-  if (!pid || !startRunModalState.approved) return;
+  if (!pid || !startRunModalState.approved) { startRunModalState.running = false; updateStartRunButtons(); return; }
   try {
     const res = await controlFetch('/api/system/start', { method: 'POST', body: JSON.stringify({ preflight_id: pid, minutes }) });
     let data = null;
@@ -4422,9 +4442,15 @@ async function startLiveFromModal() {
     pollStatus();
   } catch (e) {
     showToast('Start error: ' + (e.message || String(e)), { tone: 'error' });
+  } finally {
+    startRunModalState.running = false;
+    updateStartRunButtons();
   }
 }
 async function startShadowFromModal() {
+  if (startRunModalState.running) return;
+  startRunModalState.running = true;
+  updateStartRunButtons();
   const minutes = startRunModalMinutes();
   try {
     const res = await controlFetch('/api/system/shadow/start', { method: 'POST', body: JSON.stringify({ fresh: true, minutes }) });
@@ -4442,6 +4468,9 @@ async function startShadowFromModal() {
     pollStatus();
   } catch (e) {
     showToast('Shadow start error: ' + (e.message || String(e)), { tone: 'error' });
+  } finally {
+    startRunModalState.running = false;
+    updateStartRunButtons();
   }
 }
 (function wireStartRunModal() {

@@ -63,12 +63,22 @@ def get_session(preflight_id: str | None) -> dict[str, Any] | None:
                 "consumed": bool(sess.get("consumed"))}
 
 
-def _next_step(sess: dict[str, Any]) -> str | None:
+def next_step(sess: dict[str, Any]) -> str | None:
+    """First step without a passing result, or None when all passed.
+
+    Public so the endpoint can refuse an out-of-order step before running
+    its check: the reach probe places a real order, so the order must be
+    verified before the runner starts, not after it ran.
+    """
     for step in PREFLIGHT_STEPS:
         entry = sess["steps"].get(step)
         if not (isinstance(entry, dict) and entry.get("ok") is True):
             return step
     return None
+
+
+# Back-compat alias for the internal callers.
+_next_step = next_step
 
 
 def submit_step(preflight_id: str, step: str, ok: bool,
@@ -104,6 +114,37 @@ def submit_step(preflight_id: str, step: str, ok: bool,
         ):
             sess["approved"] = True
         return True, None
+
+
+def try_begin_step(preflight_id: str, step: str) -> bool:
+    """Take the session's in-flight flag for one step runner, or refuse.
+
+    Two requests for the same session cannot run the same live probe
+    concurrently: the first takes the flag under the session lock, the
+    second is refused and must retry after the first lands. Always paired
+    with `end_step` in a `finally` (the endpoint owns the pairing).
+    """
+    if step not in PREFLIGHT_STEPS:
+        return False
+    with _lock:
+        _prune_locked()
+        sess = _sessions.get(preflight_id)
+        if sess is None or sess.get("consumed"):
+            return False
+        if sess.get("busy"):
+            return False
+        sess["busy"] = step
+        return True
+
+
+def end_step(preflight_id: str | None) -> None:
+    """Release the in-flight flag taken by `try_begin_step`; always safe."""
+    if not preflight_id or not isinstance(preflight_id, str):
+        return
+    with _lock:
+        sess = _sessions.get(preflight_id)
+        if sess is not None:
+            sess.pop("busy", None)
 
 
 def try_approve(preflight_id: str) -> bool:
@@ -242,8 +283,15 @@ def check_screener(snapshot_fn: Callable[..., Any] | None = None) -> dict[str, A
 def check_stream(book_fn: Callable[[str], dict] | None = None,
                  stream_factory: Callable[[], Any] | None = None,
                  snapshot_fn: Callable[..., Any] | None = None,
+                 resolve_fn: Callable[[str], Any] | None = None,
                  timeout_sec: float = 8.0) -> dict[str, Any]:
-    """Fast REST book read plus a short-lived market-stream connectivity probe."""
+    """Fast REST book read plus a short-lived market-stream connectivity probe.
+
+    Graduated rows carry no outcome tokens, so the first row's condition id
+    is resolved to its venue tokens (injectable via `resolve_fn`) before the
+    REST read. When resolution provides no usable tokens the probe reports
+    "no token" instead of guessing.
+    """
     import os as _os
 
     rows: Any = None
@@ -258,17 +306,48 @@ def check_stream(book_fn: Callable[[str], dict] | None = None,
             rows = snapshot_fn()
         except Exception:
             rows = None
-    token_id: str | None = None
+    cid: str = ""
     try:
         first = rows[0] if rows else None
-        token_id = getattr(first, "up_token", None) or getattr(first, "token_id", None)
-        if token_id is None and isinstance(first, dict):
-            token_id = first.get("up_token") or first.get("token_id")
+        raw_cid = getattr(first, "cid", None) or getattr(first, "condition_id", None)
+        if raw_cid is None and isinstance(first, dict):
+            raw_cid = first.get("cid") or first.get("condition_id")
+        cid = str(raw_cid).strip() if raw_cid is not None else ""
     except (TypeError, IndexError, AttributeError):
-        token_id = None
-    if not token_id:
+        cid = ""
+    if not cid:
         return {"ok": False, "summary": "No market token available for stream probe",
                 "details": {}}
+    resolve = resolve_fn
+    if resolve is None:
+        try:
+            from core_brain.markets import fetch_pinned_market as _resolve
+        except Exception as exc:
+            return {"ok": False,
+                    "summary": f"Market resolve unavailable: {type(exc).__name__}",
+                    "details": {"error": f"{type(exc).__name__}: {exc}"}}
+        resolve = _resolve
+    try:
+        live = resolve(cid)
+    except Exception as exc:
+        return {"ok": False,
+                "summary": f"Market resolve failed: {type(exc).__name__}",
+                "details": {"error": f"{type(exc).__name__}: {exc}"}}
+    up_token: str = ""
+    down_token: str = ""
+    try:
+        if isinstance(live, dict):
+            up_token = str(live.get("up_token") or "").strip()
+            down_token = str(live.get("down_token") or "").strip()
+        elif live is not None:
+            up_token = str(getattr(live, "up_token", "") or "").strip()
+            down_token = str(getattr(live, "down_token", "") or "").strip()
+    except (TypeError, AttributeError):
+        up_token, down_token = "", ""
+    token_id = up_token
+    if not token_id or not down_token:
+        return {"ok": False, "summary": "No market token available for stream probe",
+                "details": {"condition_id": cid}}
 
     if book_fn is None:
         from core_brain.markets import full_book as _full
@@ -296,6 +375,18 @@ def check_stream(book_fn: Callable[[str], dict] | None = None,
     stream = None
     try:
         stream = stream_factory()
+        ensure = getattr(stream, "ensure_market", None)
+        if callable(ensure):
+            slug = ""
+            try:
+                if isinstance(live, dict):
+                    slug = str(live.get("market_slug") or live.get("slug") or "")
+                elif live is not None:
+                    slug = str(getattr(live, "market_slug", "")
+                               or getattr(live, "slug", "") or "")
+            except (TypeError, AttributeError):
+                slug = ""
+            ensure(cid, slug or cid, up_token, down_token)
         start = getattr(stream, "start", None)
         if callable(start):
             start()

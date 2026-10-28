@@ -2186,8 +2186,15 @@ def test_shadow_start_endpoint_refuses_production(client, monkeypatch):
     """POST /api/system/shadow/start refuses to start against production database."""
     import dashboard.server as dash_mod
 
-    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", None)
-    res = client.post("/api/system/shadow/start", headers=_control(client))
+    # Direct set, not monkeypatch: the `client` fixture owns this global and
+    # resets it on teardown, so a monkeypatch restore would put the temp path
+    # back after the fixture already cleared it and leak into the next test.
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(None)
+    try:
+        res = client.post("/api/system/shadow/start", headers=_control(client))
+    finally:
+        dash_mod.set_db_override(prev_override)
     assert res.status_code == 200
     data = res.json()
     assert data["ok"] is False
@@ -2203,50 +2210,54 @@ def test_shadow_start_and_stop_endpoints(client, monkeypatch, tmp_path):
     # The start now writes a per-run child log under the runtime dir; keep
     # it inside tmp so the stray-file guard stays green.
     monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
-    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", shadow_db)
+    # Direct set, not monkeypatch (see test_shadow_start_endpoint_refuses_production).
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(shadow_db)
+    try:
+        # Mock subprocess.Popen
+        class FakeProc:
+            pid = 98765
 
-    # Mock subprocess.Popen
-    class FakeProc:
-        pid = 98765
+        spawned = []
+        def fake_popen(cmd, **kwargs):
+            spawned.append(cmd)
+            return FakeProc()
 
-    spawned = []
-    def fake_popen(cmd, **kwargs):
-        spawned.append(cmd)
-        return FakeProc()
+        import subprocess
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
-    import subprocess
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        res_start = client.post(
+            f"/api/system/shadow/start?minutes=5",
+            headers=_control(client),
+        )
+        assert res_start.status_code == 200
+        data_start = res_start.json()
+        assert data_start["ok"] is True
+        assert data_start["pid"] == 98765
+        assert len(spawned) == 1
+        assert "core_brain.shadow_run" in spawned[0]
+        assert data_start["status"]["shadow_run"]["running"] is True
 
-    res_start = client.post(
-        f"/api/system/shadow/start?minutes=5",
-        headers=_control(client),
-    )
-    assert res_start.status_code == 200
-    data_start = res_start.json()
-    assert data_start["ok"] is True
-    assert data_start["pid"] == 98765
-    assert len(spawned) == 1
-    assert "core_brain.shadow_run" in spawned[0]
-    assert data_start["status"]["shadow_run"]["running"] is True
+        # Test stop endpoint
+        monkeypatch.setattr(
+            dash_mod,
+            "read_shadow_run",
+            lambda *args, **kwargs: {"running": True, "ended": False, "pid": 98765, "process_started_at": 100.0},
+        )
+        monkeypatch.setattr(dash_mod, "_is_pid_alive", lambda *args, **kwargs: True)
+        monkeypatch.setattr(
+            dash_mod,
+            "_stop_services",
+            lambda targets, sp: {"shadow": {"outcome": "stopped"}},
+        )
 
-    # Test stop endpoint
-    monkeypatch.setattr(
-        dash_mod,
-        "read_shadow_run",
-        lambda *args, **kwargs: {"running": True, "ended": False, "pid": 98765, "process_started_at": 100.0},
-    )
-    monkeypatch.setattr(dash_mod, "_is_pid_alive", lambda *args, **kwargs: True)
-    monkeypatch.setattr(
-        dash_mod,
-        "_stop_services",
-        lambda targets, sp: {"shadow": {"outcome": "stopped"}},
-    )
-
-    res_stop = client.post("/api/system/shadow/stop", headers=_control(client))
-    assert res_stop.status_code == 200
-    data_stop = res_stop.json()
-    assert data_stop["ok"] is True
-    assert data_stop["outcome"] == "stopped"
+        res_stop = client.post("/api/system/shadow/stop", headers=_control(client))
+        assert res_stop.status_code == 200
+        data_stop = res_stop.json()
+        assert data_stop["ok"] is True
+        assert data_stop["outcome"] == "stopped"
+    finally:
+        dash_mod.set_db_override(prev_override)
 
 
 def test_page_surfaces_the_active_database_mode():
@@ -4333,7 +4344,9 @@ def test_shadow_fresh_start_creates_numbered_db_and_switches_view(client, monkey
     import dashboard.server as dash_mod
     from dashboard.server import set_db_override
     monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
-    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", None)
+    # Direct set/restore, not monkeypatch (see test_shadow_start_endpoint_refuses_production).
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(None)
     import subprocess
     class _FakePopen:
         def __init__(self, args, **kwargs):
@@ -4351,7 +4364,7 @@ def test_shadow_fresh_start_creates_numbered_db_and_switches_view(client, monkey
         assert re.fullmatch(r"\d{2}_shadow_\d{2}-\d{2}_\d{2}-\d{2}\.db", db_base)
         assert "shadow_run" in body["status"]
     finally:
-        set_db_override(None)
+        set_db_override(prev_override)
 
 
 # --- staged profile in shadow names + filter gap-fill (#857 IIIB follow-up) ---
@@ -4387,7 +4400,9 @@ def test_fresh_shadow_uses_staged_profile_and_starts_filter(client, monkeypatch,
     import dashboard.server as dash_mod
     from dashboard.server import set_db_override
     monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
-    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", None)
+    # Direct set/restore, not monkeypatch (see test_shadow_start_endpoint_refuses_production).
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(None)
     (tmp_path / "runtime").mkdir(exist_ok=True)
     (tmp_path / "runtime" / "pending_profile.json").write_text(
         _json.dumps({"kind": "preset", "name": "Prudent"}), encoding="utf-8")
@@ -4424,7 +4439,7 @@ def test_fresh_shadow_uses_staged_profile_and_starts_filter(client, monkeypatch,
         assert "Market Filter started" in body["message"]
         assert not (tmp_path / "runtime" / "pending_profile.json").exists(), "staged profile not consumed"
     finally:
-        set_db_override(None)
+        set_db_override(prev_override)
 
 
 # --- shadow start reliability + active-markets hedge_state (IIIB follow-up) ---
@@ -4486,7 +4501,9 @@ def test_shadow_start_writes_per_run_child_log(client, monkeypatch, tmp_path):
     import dashboard.server as dash_mod
     from dashboard.server import set_db_override
     monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
-    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", None)
+    # Direct set/restore, not monkeypatch (see test_shadow_start_endpoint_refuses_production).
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(None)
     spawned: list = []
     class _FakePopen:
         def __init__(self, args, **kwargs):
@@ -4509,7 +4526,7 @@ def test_shadow_start_writes_per_run_child_log(client, monkeypatch, tmp_path):
         log = tmp_path / "runtime" / f"shadow_run_{run_id}.out.log"
         assert log.is_file(), f"missing child log {log}"
     finally:
-        set_db_override(None)
+        set_db_override(prev_override)
 
 
 def test_shadow_stop_clears_own_fleet_lock(tmp_path, monkeypatch):

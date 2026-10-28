@@ -14,8 +14,10 @@ Journeys under test:
 5. As the Operator, toasts never steal keyboard focus.
 6. As the Operator, markup in a message reads as text (no HTML injection).
 7. As the Operator, SYNC shows started -> success / warning / error.
-8. As the Operator, the master toggle shows sent -> running / stopped / error,
-   and names a service that needed forcing.
+8. As the Operator, the master toggle opens the run launcher on live START
+   (no direct POST, Start Live gated on preflight approval), shows sent ->
+   running / stopped / error on the paths that still POST, and names a
+   service that needed forcing.
 9. As the Operator, the reset modal shows finished / failed, Escape or Close
    cancels loudly, and Escape mid-reset says the run continues.
 """
@@ -144,10 +146,13 @@ def test_sync_throw_reads_as_an_error_not_silence():
 
 # -- Master toggle -----------------------------------------------------------
 
-def test_master_start_shows_sent_then_running():
-    texts = [(t["cls"], t["text"]) for t in _run()["masterStart"]["toasts"]]
-    assert ("toast toast-neutral", "Start request sent") in texts
-    assert ("toast toast-ok", "Bot is running.") in texts
+def test_master_start_opens_the_run_launcher_not_a_direct_post():
+    # Live START now opens the preflight launcher (#857): the modal is the
+    # feedback, so no whole-stack POST fires and no toast renders.
+    out = _run()["masterStart"]
+    assert out["modalShown"] is True
+    assert out["posts"] == []
+    assert out["toasts"] == []
 
 
 def test_master_stop_shows_sent_then_stopped():
@@ -156,11 +161,14 @@ def test_master_stop_shows_sent_then_stopped():
     assert ("toast toast-ok", "Stack stopped") in texts
 
 
-def test_master_refusal_reads_as_an_error():
-    toasts = _run()["masterError"]["toasts"]
-    errors = [t for t in toasts if t["cls"] == "toast toast-error"]
-    assert len(errors) == 1
-    assert "Refusing to start" in errors[0]["text"]
+def test_live_start_stays_gated_until_preflight_approval():
+    # A refused preflight step keeps Start Live disabled inside the open
+    # launcher (#857): the gate, not an error toast, is the refusal surface.
+    out = _run()["masterError"]
+    assert out["modalShown"] is True
+    assert out["liveDisabled"] is True
+    assert out["posts"] == []
+    assert out["toasts"] == []
 
 
 def test_master_partial_stop_warns_and_names_the_service():

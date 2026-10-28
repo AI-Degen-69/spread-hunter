@@ -37,6 +37,7 @@ from typing import Any, Generator, Optional
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 
 logger = logging.getLogger(__name__)
@@ -3075,6 +3076,23 @@ async def api_system_preflight(request: Request):
             "message": "Unknown or expired preflight_id; restart preflight from step 1.",
             "status": get_system_status(),
         })
+    # Order first: the reach probe places a real order, so an out-of-order
+    # request must be refused before any runner starts, not after it ran.
+    expected = _pf.next_step(sess)
+    if step != expected:
+        return JSONResponse({
+            "ok": False,
+            "message": f"Out of order: expected {expected!r}, got {step!r}.",
+            "preflight_id": pid,
+            "status": get_system_status(),
+        })
+    if not _pf.try_begin_step(pid, step):
+        return JSONResponse({
+            "ok": False,
+            "message": f"Preflight step {step!r} is already running; wait for it to land.",
+            "preflight_id": pid,
+            "status": get_system_status(),
+        })
     runners = {
         "credentials": lambda: _pf.check_credentials(),
         "screener": lambda: _pf.check_screener(),
@@ -3082,10 +3100,14 @@ async def api_system_preflight(request: Request):
         "reach_probe": lambda: _pf.check_reach_probe(confirm=confirm is True),
     }
     try:
-        result = runners[step]()
+        # Blocking venue/socket work stays off the event loop so the page
+        # keeps answering status polls while a check runs.
+        result = await run_in_threadpool(runners[step])
     except Exception as exc:
         result = {"ok": False, "summary": f"{step} crashed: {type(exc).__name__}",
                   "details": {"error": f"{type(exc).__name__}: {exc}"}}
+    finally:
+        _pf.end_step(pid)
     if not isinstance(result, dict) or "ok" not in result:
         result = {"ok": False, "summary": f"{step} returned no verdict", "details": {}}
     accepted, error = _pf.submit_step(pid, step, bool(result.get("ok")),
@@ -3161,7 +3183,10 @@ async def api_system_start(request: Request):
             "message": "Invalid, expired, or already-used preflight_id; re-run preflight.",
             "status": get_system_status(),
         })
-    return JSONResponse(start_bot(preflight_id=preflight_id, minutes=minutes_f))
+    # Process spawns and the starting-capital venue read block; keep them
+    # off the event loop like the preflight runners above.
+    return JSONResponse(await run_in_threadpool(
+        start_bot, preflight_id=preflight_id, minutes=minutes_f))
 
 
 @app.post("/api/system/stop")
