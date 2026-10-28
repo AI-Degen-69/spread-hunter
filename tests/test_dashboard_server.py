@@ -2200,6 +2200,9 @@ def test_shadow_start_and_stop_endpoints(client, monkeypatch, tmp_path):
 
     shadow_db = tmp_path / "shadow_test.db"
     shadow_db.touch()
+    # The start now writes a per-run child log under the runtime dir; keep
+    # it inside tmp so the stray-file guard stays green.
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
     monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", shadow_db)
 
     # Mock subprocess.Popen
@@ -4422,3 +4425,114 @@ def test_fresh_shadow_uses_staged_profile_and_starts_filter(client, monkeypatch,
         assert not (tmp_path / "runtime" / "pending_profile.json").exists(), "staged profile not consumed"
     finally:
         set_db_override(None)
+
+
+# --- shadow start reliability + active-markets hedge_state (IIIB follow-up) ---
+
+def test_active_markets_filters_on_hedge_state_not_status(client, monkeypatch):
+    """Pairs carry hedge_state, never status: the tab must not always read 0."""
+    import core_brain.registry_state as rs_mod
+    pairs = [
+        {"pair_id": "p-rest", "hedge_state": "RESTING"},
+        {"pair_id": "p-naked", "hedge_state": "NAKED"},
+        {"pair_id": "p-closed", "hedge_state": "CLOSED"},
+    ]
+    monkeypatch.setattr(rs_mod, "summarize_state", lambda db: {"pairs": pairs})
+    res = client.get("/api/active-markets")
+    assert res.status_code == 200
+    got = {m["pair_id"] for m in res.json()["markets"]}
+    assert got == {"p-rest", "p-naked"}
+
+
+def test_fresh_shadow_naming_bumps_past_existing_file(tmp_path, monkeypatch):
+    """Two STARTs in the same minute must not share one store file."""
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "_get_next_shadow_seq", lambda tag="": "01")
+    monkeypatch.setattr(dash_mod, "_staged_shadow_profile", lambda: (None, ""))
+    first = dash_mod._fresh_shadow_naming()
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / first["db_name"]).write_bytes(b"")
+    second = dash_mod._fresh_shadow_naming()
+    assert second["db_name"] != first["db_name"]
+    assert second["seq"] == "02"
+    assert second["run_id"] == "shadow-02"
+
+
+def test_shadow_start_refuses_fresh_fleet_lock(tmp_path, monkeypatch):
+    """A previous run's unreleased lock refuses with a wait, not a doomed child."""
+    import subprocess
+    import dashboard.server as dash_mod
+    from core_brain.order_registry import OrderRegistry
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    db = tmp_path / "data" / "09_shadow_28-10_10-00.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    OrderRegistry(db_path=str(db))._write_instance_lock(
+        "fleet", "99991:ab12cd34", int(time.time() * 1000))
+    def _no_spawn(*args, **kwargs):
+        raise AssertionError("must not spawn a child against a locked store")
+    monkeypatch.setattr(subprocess, "Popen", _no_spawn)
+    res = dash_mod.start_shadow_run(custom_db=str(db))
+    assert res["ok"] is False
+    assert "fleet lock" in res["message"]
+    assert "99991:ab12cd34" in res["message"]
+
+
+def test_shadow_start_writes_per_run_child_log(client, monkeypatch, tmp_path):
+    """The rehearsal child logs to a per-run file instead of DEVNULL."""
+    import re
+    import subprocess
+    import dashboard.server as dash_mod
+    from dashboard.server import set_db_override
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", None)
+    spawned: list = []
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append((args, kwargs))
+            self.pid = 4242
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(dash_mod, "read_shadow_run", lambda db: None)
+    try:
+        res = client.post("/api/system/shadow/start", json={"fresh": True, "minutes": 5},
+                          headers=_control(client))
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is True, body.get("message")
+        shadow_kwargs = [kw for cmd, kw in spawned if any("shadow_run" in p for p in cmd)]
+        assert shadow_kwargs, "shadow child was not spawned"
+        assert shadow_kwargs[0].get("stdout") is not None
+        assert shadow_kwargs[0].get("stderr") == subprocess.STDOUT
+        run_id = body["run_id"]
+        assert re.fullmatch(r"shadow-\d{2}", run_id), run_id
+        log = tmp_path / "runtime" / f"shadow_run_{run_id}.out.log"
+        assert log.is_file(), f"missing child log {log}"
+    finally:
+        set_db_override(None)
+
+
+def test_shadow_stop_clears_own_fleet_lock(tmp_path, monkeypatch):
+    """A confirmed stop removes our lock row so the next START is not refused."""
+    import sqlite3
+    import dashboard.server as dash_mod
+    from core_brain.order_registry import OrderRegistry
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    db = tmp_path / "data" / "09_shadow_28-10_10-00.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    OrderRegistry(db_path=str(db))._write_instance_lock(
+        "fleet", "99992:ab12cd34", int(time.time() * 1000))
+    monkeypatch.setattr(dash_mod, "read_shadow_run", lambda db_path: {
+        "running": True, "ended": False, "pid": 99992,
+        "process_started_at": time.time() - 5, "run_id": "shadow-09"})
+    monkeypatch.setattr(dash_mod, "_is_pid_alive", lambda *a, **k: True)
+    monkeypatch.setattr(dash_mod, "_stop_services",
+                        lambda targets, sp: {"shadow": {"outcome": "stopped"}})
+    res = dash_mod.stop_shadow_run(custom_db=str(db))
+    assert res["ok"] is True
+    con = sqlite3.connect(str(db))
+    try:
+        rows = con.execute("SELECT holder FROM instance_lock WHERE role = 'fleet'").fetchall()
+    finally:
+        con.close()
+    assert rows == []

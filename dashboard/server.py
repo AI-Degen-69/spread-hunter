@@ -1376,12 +1376,32 @@ def _staged_shadow_profile() -> tuple[dict | None, str]:
 
 
 def _fresh_shadow_naming() -> dict:
-    """Next fresh shadow store naming: NN_shadow_<stamp>[_<slug>].db + run id."""
-    seq = _get_next_shadow_seq()
+    """Next fresh shadow store naming: NN_shadow_<stamp>[_<slug>].db + run id.
+
+    The name is bumped while its file already exists: two STARTs inside the
+    same minute (or a retry right after a launch) otherwise share one store,
+    and the second run dies on the first run's fleet lock with nothing but a
+    cycle-0 heartbeat to show for it.
+    """
     match, slug = _staged_shadow_profile()
     stamp = time.strftime("%d-%m_%H-%M", time.localtime())
-    db_name = f"{seq}_shadow_{stamp}" + (f"_{slug}" if slug else "") + ".db"
-    run_id = f"shadow-{seq}" + (f"-{slug}" if slug else "")
+    seq = _get_next_shadow_seq()
+    try:
+        seq_int = int(seq)
+    except (TypeError, ValueError):
+        seq_int = 1
+    db_name = ""
+    run_id = ""
+    for _ in range(100):
+        seq = f"{seq_int:02d}" if seq_int <= 99 else str(seq_int)
+        db_name = f"{seq}_shadow_{stamp}" + (f"_{slug}" if slug else "") + ".db"
+        run_id = f"shadow-{seq}" + (f"-{slug}" if slug else "")
+        try:
+            if not (LIVE_ROOT / "data" / db_name).exists():
+                break
+        except OSError:
+            break
+        seq_int = seq_int + 1 if seq_int < 99 else 1
     return {"seq": seq, "slug": slug, "profile": match,
             "db_name": db_name, "run_id": run_id}
 
@@ -1422,6 +1442,91 @@ def _ensure_filter_for_shadow() -> str | None:
         return "Market Filter started for this run."
     except Exception:
         return None
+
+
+def _shadow_fleet_lock_info(db_path: Path) -> dict | None:
+    """A fresh-held fleet lock on a shadow target, or None.
+
+    A second rehearsal against the same store dies at startup on the first
+    run's lock with nothing but a cycle-0 heartbeat to show for it -- and the
+    child used to log to DEVNULL, so the page just flipped back to START.
+    This probe mirrors the registry's own rule (`INSTANCE_LOCK_STALE_MS`): a
+    lock younger than that refuses, whatever the holder's PID looks like now.
+    Best-effort and read-only; any error returns None (fail open) and the
+    per-run log carries the verdict instead.
+    """
+    try:
+        if not db_path.exists() or db_path.stat().st_size == 0:
+            return None
+        from core_brain.order_registry import INSTANCE_LOCK_STALE_MS
+        import sqlite3
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2.0)
+        try:
+            row = con.execute(
+                "SELECT holder, acquired_ts FROM instance_lock WHERE role = 'fleet'"
+            ).fetchone()
+        finally:
+            con.close()
+        if not row:
+            return None
+        holder, acquired_ts = row[0], row[1]
+        try:
+            age_ms = int(time.time() * 1000) - int(acquired_ts)
+        except (TypeError, ValueError):
+            return None
+        age_ms = max(0, age_ms)
+        if age_ms >= INSTANCE_LOCK_STALE_MS:
+            return None
+        return {"holder": holder, "age_ms": age_ms,
+                "stale_ms": int(INSTANCE_LOCK_STALE_MS)}
+    except Exception:
+        return None
+
+
+def _clear_shadow_fleet_lock(target_db: Path, pid: int) -> None:
+    """Drop our own fleet lock row after a confirmed shadow stop.
+
+    A SIGKILLed rehearsal never runs its lock release, so the row stays fresh
+    for a full STALE window and the next START against that store dies on it.
+    Only the row our killed PID wrote is removed (holder is `pid:hex`); a row
+    adopted by another run meanwhile is left alone. Best-effort.
+    """
+    try:
+        if resolve_db_identity(target_db)["is_production"]:
+            return
+        import sqlite3
+        con = sqlite3.connect(str(target_db), timeout=5.0)
+        try:
+            con.execute(
+                "DELETE FROM instance_lock WHERE role = 'fleet' AND holder LIKE ?",
+                (f"{int(pid)}:%",),
+            )
+            con.commit()
+        finally:
+            con.close()
+    except Exception:
+        pass
+
+
+def _invalidate_snapshots_for_db(*db_strs: str) -> None:
+    """Drop cached snapshots keyed to a store that just changed state.
+
+    Without this the next poll (10s TTL on shadow-run keys, longer for ended
+    stores) keeps serving the pre-start record and the master toggle flickers
+    back to START right after a successful launch.
+    """
+    wants = {s for s in db_strs if s}
+    if not wants:
+        return
+    try:
+        for key in list(_snapshots.keys()):
+            try:
+                if any(isinstance(part, str) and part in wants for part in key):
+                    _snapshots.pop(key, None)
+            except Exception:
+                continue
+    except Exception:
+        pass
 
 
 SERVICE_NAMES = ("filter", "query", "decide")
@@ -2656,6 +2761,25 @@ def start_shadow_run(
                 "status": get_system_status(),
             }
 
+    # A fresh-held fleet lock means the previous run never released it (a
+    # killed rehearsal skips its lock release). Spawning anyway dies at
+    # startup on InstanceInUse with only a cycle-0 heartbeat behind -- the
+    # "button flips back to START" report. Refuse with the wait instead.
+    lock = _shadow_fleet_lock_info(target_db)
+    if lock is not None:
+        held_s = lock["age_ms"] / 1000.0
+        clears_in_s = max(0.0, lock["stale_ms"] / 1000.0 - held_s)
+        return {
+            "ok": False,
+            "message": (
+                f"Refusing shadow start on {target_db.name}: the previous run "
+                f"({lock['holder']}) still holds the fleet lock "
+                f"(held {held_s:.0f}s; clears automatically in "
+                f"~{clears_in_s:.0f}s). Wait a minute and start again."
+            ),
+            "status": get_system_status(),
+        }
+
     # Run ID resolution
     if custom_run_id and str(custom_run_id).strip():
         run_id = str(custom_run_id).strip()
@@ -2685,22 +2809,50 @@ def start_shadow_run(
     if env_extra:
         child_env = {**os.environ, **env_extra}
 
+    # The child used to log to DEVNULL, so a startup death (stale import,
+    # venue outage, lock refusal) was invisible and the page just flipped back
+    # to START. Keep one small log per run instead.
+    safe_run_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(run_id))
+    log_path = runtime_file(f"shadow_run_{safe_run_id}.out.log", root=LIVE_ROOT)
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = open(log_path, "ab")
+    except OSError as e:
+        return {
+            "ok": False,
+            "message": f"Failed to start shadow rehearsal: cannot open log {log_path}: {e}",
+            "status": get_system_status(),
+        }
     try:
         proc = subprocess.Popen(
             cmd,
             cwd=str(REPO_ROOT),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
             **({"env": child_env} if child_env is not None else {}),
             **popen_group,
         )
     except Exception as e:
+        try:
+            log_fh.close()
+        except Exception:
+            pass
         return {
             "ok": False,
             "message": f"Failed to start shadow rehearsal: {e}",
             "status": get_system_status(),
         }
+    try:
+        log_fh.close()
+    except Exception:
+        pass
 
+    # The pre-start polls may have cached this store's old (ended) record;
+    # drop it so the next poll reads the new run instead of the dead one.
+    try:
+        _invalidate_snapshots_for_db(str(target_db), str(Path(target_db).resolve()))
+    except Exception:
+        pass
     status = get_system_status()
     if not status.get("shadow_run") or not status["shadow_run"].get("running"):
         status["shadow_run"] = {
@@ -2748,6 +2900,15 @@ def stop_shadow_run(custom_db: str | None = None) -> dict:
 
     outcomes = _stop_services([("shadow", pid, shadow.get("process_started_at"))], subprocess)
     outcome = outcomes.get("shadow", {}).get("outcome", "stopped")
+    if outcome in ("stopped", "forced"):
+        # A killed rehearsal never releases its fleet lock; without this the
+        # next START against the same store dies on it for a full STALE
+        # window. Only our own row is removed (holder is `pid:hex`).
+        _clear_shadow_fleet_lock(target_db, pid)
+        try:
+            _invalidate_snapshots_for_db(str(target_db), str(Path(target_db).resolve()))
+        except Exception:
+            pass
     status = get_system_status()
     if status.get("shadow_run"):
         status["shadow_run"]["running"] = False
@@ -6195,8 +6356,11 @@ def get_active_markets():
     """
     from core_brain.registry_state import summarize_state
     state = summarize_state(resolve_db_path(_ACTIVE_DB_OVERRIDE))
-    # Filter to markets with active orders or fills
-    active = [p for p in state.get("pairs", []) if p.get("status") in ("RESTING", "NAKED", "BALANCED")]
+    # Filter to markets with active orders or fills. Pairs carry
+    # `hedge_state` (RESTING/NAKED/BALANCED/...), never `status`: filtering
+    # on the latter matched nothing and the tab always read 0 beside open
+    # orders.
+    active = [p for p in state.get("pairs", []) if p.get("hedge_state") in ("RESTING", "NAKED", "BALANCED")]
     return JSONResponse({"markets": active})
 
 
