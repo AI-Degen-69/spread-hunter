@@ -1,70 +1,71 @@
-# SPEC.md — Issue #856: Display active strategy profile name in Dashboard top nav bar
+# SPEC.md — Issue #855: Human-Readable Structured Event Stream with Bracketed Tags, Colors, and Process Filtering
 
-Branch: `i856/feat-display-active-strategy-profile-name-in-dashb` | Issue: #856
+Branch: `plan_github_issue_855` | Issue: #855
 
-## Goal
+## 1. Goal
 
-Answer one operator question at a glance: **which configuration is the active bot
-running?** A `PROFILE` pill in the dashboard top navigation bar shows the active
-preset/profile name (`balanced`, `queue-clear-5m`, `balanced+queue-clear-5m`,
-`baseline`, or `default`), refreshed on every status poll from the backend API.
+Transform the dashboard's "Live Execution & Cycle Event Stream" (`/api/log-stream` and `#event-ticker`) into an aligned, color-coded, human-readable notification feed with bracketed structural tags (`[TIME] [PROCESS] [EVENT]`), unified chronological server-side replay across all log families, and fine-grained filtering by originating process/component and event category.
 
-## Core rule (evidence over environment)
+## 2. Core Principles & Non-Negotiables
 
-The dashboard never guesses the profile from its own process environment. The
-tournament launcher strips `BOT_*` variables from dashboard processes and gives arm
-settings only to the engines; the live trader loads a `.env` the dashboard never
-fully loads; `MakerConfig` does not retain the selected preset name after loading
-(`core_brain/config.py:311-313`). So **the engine records the profile it loaded,
-and the dashboard reads that record**. A missing record renders as `unknown` —
-the same "missing evidence stays missing" rule `renderCodeVersion` already follows
-(`dashboard/static/app.js:2087`).
+1. **Human-readable by default, raw on demand:** No raw console output (`[rerank.log] Scan iteration 1...`) or awkward generic fallbacks (`Status update on a market: user ws auth ok (auth_ok wallet: 0x...)`) in the primary row. The main row displays clear, plain English. The raw unformatted string is accessible exclusively via the collapsible `[SHOW DETAILS]` drawer.
+2. **Security & Privacy (Redaction):** Main event stream rows must never display wallet addresses (`0x...`), API keys, URLs, or filesystem paths.
+3. **Structured Visual Alignment:** Columns align vertically using monospace square-bracketed padding tags (`[TIME] [PROCESS] [EVENT] <MESSAGE>`). Tag column widths are fixed in monospace character units (`ch`), preventing jitter across rows.
+4. **Color Hierarchy:** Colors reflect status and severity rather than arbitrary service identity:
+   - `good` (green / `--green-ok`): Successful connections, auth ok, fills recorded, clean rank passes.
+   - `warn` (amber / `--amber-warn`): Reconnecting, retry, timeouts, pause/stop notes.
+   - `bad` (red / `--red-alert`): Disconnections, errors, stream exceptions, rank failures.
+   - `info` (cyan/blue / `--open`): Trades, quotes, order submissions, market snapshots/ticks.
+   - `muted` (gray / `--text-muted`): Normal background scans, timestamps.
+5. **Unified Chronological Aggregation:** Historical replay from `/api/log-stream` must aggregate records from all active log families (Live Ring, Filter text logs, Shadow Ring/logs) into a single chronological stream sorted by event timestamp (`ts`), breaking ties stably.
+6. **No Scope Creep:** Do NOT modify `core_brain/config.py`, trading algorithms, or on-disk NDJSON log schemas (`cycle_events.jsonl`).
 
-## Acceptance criteria
+## 3. Architecture & Data Flow
 
-- [ ] The top navigation bar shows a dedicated `PROFILE` pill (label/value spans, no
-      colon — the same pattern as `DB LIVE`), placed inside `.top-group-source`
-      directly after `#db-mode-badge`.
-- [ ] The pill value comes from `GET /api/system/status` → top-level
-      `active_profile` (`{name, preset, queue_clear_on, queue_max_clear_min,
-      source, running, tournament_arm?}`), refreshed on every poll.
-- [ ] Shadow runs: the engine writes its profile into its heartbeat
-      (`runtime/shadow_run_<run_id>.json` → `profile`); the badge shows it with
-      `source: "shadow"`. A heartbeat written before the field existed shows
-      `unknown`, never a stale or invented name.
-- [ ] Live trader: `write_trader_profile` records `runtime/trader_profile.json`;
-      with no shadow profile for the selected store, the badge falls back to it
-      (`source: "live"`). Shadow takes priority when both exist.
-- [ ] Name grammar: preset name when selected, plus `queue-clear-<N>m` when the
-      queue gate is on (minutes without trailing zeros: `5.0` → `5m`, `2.5` →
-      `2.5m`), joined with `+`; `default` when neither applies. `None` means "no
-      named preset selected" — never rendered as `baseline` (a real preset).
-- [ ] `python -m pytest -q tests/test_dashboard_server.py` passes unchanged in its
-      existing assertions (`test_system_status_endpoint`, the database identity
-      test).
+```
+┌────────────────────────────────────────────────────────┐
+│                   Server (server.py)                   │
+│                                                        │
+│  Live Ring (cycle_events) ──┐                          │
+│  Filter Logs (rerank.log)  ──┼──> Collect & Parse Ts   │
+│  Shadow Ring (shadow.db)   ──┘       │                 │
+│                                      ▼                 │
+│                              Chronological Sort        │
+│                                      │                 │
+│                         Emit SSE Replay Frames         │
+│                         (additive ts, level, msg)      │
+└──────────────────────────────┬─────────────────────────┘
+                               │ SSE /api/log-stream
+                               ▼
+┌────────────────────────────────────────────────────────┐
+│                   Browser (app.js)                     │
+│                                                        │
+│  Receive Event ──> Normalize Row Model                 │
+│                    (time, processTag, eventTag, msg)   │
+│                           │                            │
+│  Filter by Tab (Family) ──┼──> Filter by Component     │
+│                           │           │                │
+│                           ▼           ▼                │
+│                    Filter by Category (TRADES, ALERTS) │
+│                           │                            │
+│                           ▼                            │
+│                    Render CSS Grid (Fixed ch widths)   │
+│                    [TIME] [PROCESS] [EVENT] [MESSAGE]  │
+└────────────────────────────────────────────────────────┘
+```
 
-## Edge cases
+## 4. Acceptance Criteria
 
-- Unknown `BOT_QUOTE_TOURNAMENT_PRESET` makes `resolve_tournament_preset_name()`
-  raise `ValueError` (`core_brain/config.py:620-637`): profile construction must
-  fail soft (omit the field), never crash a rehearsal or the status endpoint.
-- Malformed heartbeat `profile` (list, numeric `name`): treated as absent.
-- Heartbeat for a different store than the selected one: ignored (the existing
-  `match_db` rule in `_read_shadow_heartbeat_file`, `dashboard/server.py:965`).
-- Stale/unsigned live file: rejected unless the recorded pid is alive, matches
-  the `decide` registry entry, and names the active store.
-- Dashboard's own env carries `BOT_QUOTE_TOURNAMENT_PRESET` (or a typo of one):
-  ignored — the badge must still show `unknown`/the engine record, and the
-  endpoint must still return 200.
+- [ ] Replay across families emits all `source` hellos first, followed by historical events strictly sorted in chronological timestamp order.
+- [ ] Text log frames contain additive fields `ts`, `level`, and `message` without breaking existing consumers or changing `cycle_events.jsonl` on disk.
+- [ ] Events render with visually aligned, bracketed tags: `[HH:MM:SS] [PROCESS] [EVENT]` in fixed-width columns.
+- [ ] Row severity applies consistent CSS classes (`good`, `warn`, `bad`, `info`, `muted`).
+- [ ] Plain-English messages for User WS, background processes, fills, quotes, and market streams; no wallet addresses or raw errors in the main row.
+- [ ] UI provides dual filtering: Process Tabs + Component Dropdown + Event Category Buttons (`ALL`, `TRADES`, `CONNECTIONS`, `MARKET FILTER`, `ALERTS`).
+- [ ] Unit & harness tests pass: `python -m pytest -q tests/test_dashboard_server.py tests/test_cycle_stream.py` and Node.js event stream harnesses.
 
-## Out of scope
+## 5. Explicit Out of Scope
 
-- Editing strategy parameters from the UI (`get_parameters()` at
-  `dashboard/server.py:4212` and the Strategy tab stay read-only).
-- Launcher/cockpit behavior (`scripts/shadow_tournament.py`,
-  `scripts/resume_tournament_arms.py`, `scripts/tournament_cockpit_server.py`,
-  `scripts/tournament_dashboard_hub.py`), arm definitions
-  (`configs/tournaments/*.json`), queue-gate behavior (`core_brain/risk.py`),
-  dotenv lookup (`core_brain/env_file.py`), `MakerConfig` fields, and
-  `dashboard/static/styles.css` (changed only if
-  `tests/test_dashboard_narrow_viewport.py` fails).
+- Modifying core trading logic, order sizing, or risk parameters.
+- Changing NDJSON schema on disk or touching `data/orders.db`.
+- Introducing third-party frontend frameworks or npm packages.

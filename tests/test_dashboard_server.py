@@ -3020,6 +3020,99 @@ def test_log_stream_sse_rotation_detected(tmp_path, monkeypatch):
         gen.close()
 
 
+def test_log_stream_sse_chronological_replay_aggregation(tmp_path, monkeypatch):
+    """Replay across multiple families emits source hellos first, then sorts by timestamp."""
+    rt_dir = tmp_path / "runtime"
+    rt_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Live ring event: 2026-10-27T14:00:00Z
+    live_ring = tmp_path / "cycle_events.jsonl"
+    live_ev = {"service": "query", "action": "fill_recorded", "ts": "2026-10-27T14:00:00Z", "extra": {"n": 1}}
+    live_ring.write_text(json.dumps(live_ev) + "\n", encoding="utf-8")
+    monkeypatch.setattr("dashboard.server._ACTIVE_RING_OVERRIDE", live_ring)
+
+    # 2. Filter text log (rerank.log): 2026-10-27T10:00:00Z
+    rerank_log = rt_dir / "rerank.log"
+    rerank_log.write_text("2026-10-27T10:00:00Z [INFO] Filter scan 1\n", encoding="utf-8")
+
+    # 3. Shadow ring event: 2026-10-27T12:00:00Z (shadow-<run_id>.jsonl)
+    shadow_ring = rt_dir / "shadow-test123.jsonl"
+    shadow_ev = {"service": "decide", "action": "decide", "ts": "2026-10-27T12:00:00Z", "extra": {"intent_count": 0}}
+    shadow_ring.write_text(json.dumps(shadow_ev) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr("dashboard.server.LIVE_ROOT", tmp_path)
+    monkeypatch.setattr("dashboard.server.runtime_file", lambda f: rt_dir / f)
+    monkeypatch.setattr("dashboard.server.resolve_runtime_file", lambda f, root=None: (rt_dir / f) if f != "cycle_events.jsonl" else live_ring)
+    monkeypatch.setattr("dashboard.server.list_shadow_runs", lambda: [{"run_id": "test123"}])
+
+    gen = _log_stream_sse(families=["live", "filter", "shadow"], run_id="test123", poll_sec=0.01)
+    frames = []
+    try:
+        # 3 source frames
+        for _ in range(3):
+            frames.append(next(gen))
+        # 3 replayed log frames
+        for _ in range(3):
+            frames.append(next(gen))
+    finally:
+        gen.close()
+
+    assert all("event: source" in f for f in frames[:3])
+    log_frames = frames[3:]
+    assert all("event: log" in f for f in log_frames)
+
+    # Chronological sort: 10:00:00 (filter) -> 12:00:00 (shadow) -> 14:00:00 (live)
+    data0 = json.loads(log_frames[0].split("data: ")[1])
+    data1 = json.loads(log_frames[1].split("data: ")[1])
+    data2 = json.loads(log_frames[2].split("data: ")[1])
+
+    assert data0["family"] == "filter"
+    assert data0["source"] == "text"
+    assert "Filter scan 1" in data0["message"]
+    assert data0["ts"] == "2026-10-27T10:00:00Z"
+    assert data0["level"] == "INFO"
+
+    assert data1["family"] == "shadow"
+    assert data1["source"] == "ring"
+    assert data1["event"]["action"] == "decide"
+
+    assert data2["family"] == "live"
+    assert data2["source"] == "ring"
+    assert data2["event"]["action"] == "fill_recorded"
+
+
+def test_log_stream_sse_timestamp_inference_and_tie_breaking(tmp_path, monkeypatch):
+    """Lines without explicit timestamp inherit from nearest line or mtime, and equal timestamps break ties stably."""
+    rt_dir = tmp_path / "runtime"
+    rt_dir.mkdir(parents=True, exist_ok=True)
+
+    rerank_log = rt_dir / "rerank.log"
+    rerank_log.write_text("2026-10-27T10:00:00Z [INFO] First line\n[INFO] Second line without timestamp\n", encoding="utf-8")
+
+    monkeypatch.setattr("dashboard.server.LIVE_ROOT", tmp_path)
+    monkeypatch.setattr("dashboard.server.runtime_file", lambda f: rt_dir / f)
+    monkeypatch.setattr("dashboard.server.resolve_runtime_file", lambda f, root=None: rt_dir / f)
+
+    gen = _log_stream_sse(families=["filter"], poll_sec=0.01)
+    frames = []
+    try:
+        frames.append(next(gen))  # source
+        frames.append(next(gen))  # line 1
+        frames.append(next(gen))  # line 2
+    finally:
+        gen.close()
+
+    data1 = json.loads(frames[1].split("data: ")[1])
+    data2 = json.loads(frames[2].split("data: ")[1])
+
+    assert data1["ts"] == "2026-10-27T10:00:00Z"
+    assert data1["message"] == "First line"
+    # Second line inherits timestamp from line 1
+    assert data2["ts"] == "2026-10-27T10:00:00Z"
+    assert data2["message"] == "Second line without timestamp"
+    assert data2["level"] == "INFO"
+
+
 def test_get_parameters_endpoint(client):
     """Verify /api/parameters returns 200 and expected parameter catalog structure."""
     response = client.get("/api/parameters")
