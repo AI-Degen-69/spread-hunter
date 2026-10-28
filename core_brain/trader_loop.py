@@ -2523,6 +2523,8 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
             "event_live": getattr(gm, "event_live", False),
             "event_ended": getattr(gm, "event_ended", False),
             "series_ts": getattr(gm, "series_ts", None),
+            "range_cents": getattr(gm, "range_cents", None),
+            "velocity_measured_at": getattr(gm, "velocity_measured_at", None),
         }
         if paired_arm is not None:
             spec.update({

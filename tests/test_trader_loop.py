@@ -1160,7 +1160,26 @@ class TestMarketSpecsPath:
                                  "tick", "daily", "title", "slug",
                                  "sports_market_type", "event_score",
                                  "event_period", "question", "event_live",
-                                 "event_ended", "series_ts"}
+                                 "event_ended", "series_ts",
+                                 "range_cents", "velocity_measured_at"}
+
+    def test_specs_carry_range_telemetry_so_offset_is_dynamic(self, tmp_path):
+        """#862: a dropped range_cents made every rotation quote the static 2c fallback."""
+        from core_brain.quotes import dynamic_offset_for
+        from core_brain.trader_loop import _market_cfg, _market_specs
+
+        feed = tmp_path / "markets.json"
+        feed.write_text(json.dumps([{
+            "cid": "0xtel", "title": "telemetry market",
+            "range_cents": 8.0, "velocity_measured_at": 1_700_000_000.0,
+        }]), encoding="utf-8")
+
+        spec = _market_specs(path=str(feed))[0]
+        cfg = _market_cfg(MakerConfig(bot_quote_gate_dynamic_offset_on=True), spec)
+
+        assert cfg.bot_quote_telemetry_range_cents == 8.0
+        offset, tag = dynamic_offset_for(cfg, now=1_700_000_010.0)
+        assert (offset, tag) == (0.04, "dynamic_4c")
 
     def test_max_markets_still_caps_a_pathed_feed(self, tmp_path):
         from core_brain.trader_loop import _market_specs
