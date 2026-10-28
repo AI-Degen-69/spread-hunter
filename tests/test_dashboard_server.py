@@ -39,6 +39,7 @@ from dashboard.server import (
     set_ring_override,
     _cycle_stream_sse,
     _log_stream_sse,
+    _parse_console_line,
 )
 
 NODE = shutil.which("node")
@@ -2579,7 +2580,7 @@ def test_trades_tab_filter_and_sentence_builders_ship():
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_event_stream_trades_tab_shows_only_trade_rows():
-    """A fill and a skip-only decide: TRADES shows just the fill sentence."""
+    """A fill and a skip-only decide: TRADES shows just the fill row."""
     harness = Path(__file__).resolve().parent / "js" / "event_stream_harness.cjs"
     app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
     assert harness.exists()
@@ -2592,9 +2593,13 @@ def test_event_stream_trades_tab_shows_only_trade_rows():
     out = json.loads(res.stdout)
     assert out.get("exportsOk") is True, out.get("error")
 
-    # TRADES shows only the fill; ALL shows both.
+    # TRADES shows only the fill; ALL shows both. A fill renders as its own
+    # columns (side · size · price · market), not as prose, so the numbers line up
+    # with every other fill in the list.
     assert len(out["tradesRows"]) == 1
-    assert "Bought" in out["tradesRows"][0]
+    assert "tk-side" in out["tradesRows"][0] and "BUY" in out["tradesRows"][0]
+    assert "tk-size" in out["tradesRows"][0] and "tk-price" in out["tradesRows"][0]
+    assert "0.48" in out["tradesRows"][0]
     assert "Brazil election" in out["tradesRows"][0]
     assert len(out["allRows"]) == 2
     assert out["scrolledToTop"] is True
@@ -2735,6 +2740,171 @@ def test_event_stream_tabs_harness():
 
     # Shadow run picker population
     assert out.get("pickerPopulated") is True
+
+    # Component dropdown: ALL first, then one option per component in the tab.
+    assert out["componentChoices"] == ["USER_WS", "MKT_WS", "GUARD", "QUERY"]
+    assert out["componentSelectValues"] == ["all"] + out["componentChoices"]
+    assert out["componentFiltered"] is True
+    # Tab -> component -> category compose instead of overwriting each other.
+    assert out["combinedFiltered"] is True
+    assert out["connectionsFiltered"] is True
+    # Only socket health belongs in CONNECTIONS: not ticks, not daemon churn.
+    assert out["connectionExclusions"] is True
+    assert out["alertsFiltered"] is True
+    # An empty feed names the tab and the category it narrowed to.
+    assert out["emptyScopedTab"] is True
+    # Switching tabs retires a component the new tab does not carry.
+    assert out["componentReset"] is True
+
+    # Reading mode: scrolling away pauses autoscroll, holds the operator's
+    # place, and following again pins the newest row.
+    assert out["autoPausedOnScroll"] is True
+    assert out["scrollHeldWhileReading"] is True
+    assert out["scrollPinnedWhenFollowing"] is True
+    assert out["pauseButtonLabel"] == "AUTOSCROLL: ON"
+
+    # An unavailable feed explains itself instead of showing a blank tab.
+    assert out["liveUnavailableText"] is True
+    assert "Cycle ring not found on disk" in out["liveSubtitle"]
+    assert out["liveUnavailableWithCategory"] is True
+
+    # A screener scan on shadow stdout is a MARKET FILTER row with its own tag.
+    assert out["shadowScanTagged"] is True
+
+    # A fill received on the user stream is a trade; a leg-state change is an
+    # alert; a rerank pass is neither a trade nor a connection.
+    assert out["fillInTrades"] is True
+    assert out["transitionInAlerts"] is True
+    assert out["rerankNotConnection"] is True
+
+    # QUOTES distils the registry's pairs into one row per market, so a resting
+    # book is visible even when the ring tail holds no decide for it.
+    assert out["quoteDistilled"] is True
+    assert out["quotePlaced"] is True
+    assert out["quoteResting"] is True
+    assert out["quoteRestingFromState"] is True
+    assert out["quotePlanned"] is True
+    # A ring decide the registry never quoted carries no legs; it is churn, and
+    # it must not show up as a "no legs quoted" row beside the real book.
+    assert out["quoteNoiseDropped"] is True
+    # A naked pair is amber, names its break-even, and sorts above hedged pairs.
+    assert out["quoteNakedFirst"] is True
+    # A pair over $1.00 is a booked loss, so it says so in words.
+    assert out["quoteOverOneDollar"] is True
+    # A filled leg shows what was posted, not the zero left remaining.
+    assert out["filledLegSize"] is True
+    # TRADES reads the registry, so an early fill the ring tail no longer holds
+    # still appears, and a ring row with the same id is not doubled.
+    assert out["tradesFromRegistry"] is True
+    assert out["tradesDeduped"] is True
+    # A registry fill takes its process from the ring, never a guessed QUERY.
+    assert out["traderFillVisible"] is True
+    assert out["fillNotMisattributed"] is True
+    assert out["orphanFillTagged"] is True
+    # Shadow stdout is SHADOW, not a slice of the log filename.
+    assert out["shadowTextTagged"] is True
+    assert out["shadowTextNotFilenameTag"] is True
+
+    # Every variable field reserves the width of its longest possible value, so
+    # a wider size or price never shifts the tokens after it.
+    assert out["widthsFitCeiling"] is True
+    assert out["fieldWidths"] == {"size": 3, "price": 5, "cents": 5, "leg": 9}
+    assert out["legWidthStable"] is True
+    # The padding lives on the field, not between price and its ×.
+    assert out["legHugsPrice"] is True
+    # Colour follows the kind of token, and the columns stay put in TRADES too.
+    assert out["tokenClasses"] is True
+    assert out["negativeEdgeFlagged"] is True
+    assert out["tradeFieldsFixed"] is True
+    assert out["shortMarketId"] is True
+    # ALERTS names a naked pair as live risk without waiting for its row.
+    assert out["nakedInAlerts"] is True
+    assert out["emptyQuotes"] is True
+
+
+def test_ticker_component_dropdown_and_category_filters_ship():
+    """The component picker and CONNECTIONS chip are wired, not just styled."""
+    app_js = _read_static("app.js")
+    index_html = _read_static("index.html")
+    css = _read_static("styles.css")
+
+    assert 'id="ticker-component-select"' in index_html
+    assert 'data-filter="connections"' in index_html
+    assert ".ticker-component-select" in css
+    # Three filter tiers, each with its own matcher.
+    assert "tickerComponentChoices" in app_js
+    assert "tickerEventComponent" in app_js
+    assert "tickerIsConnectionEvent" in app_js
+    assert "tickerIsAlertEvent" in app_js
+    assert "Showing ${scope} only." in app_js
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_event_stream_row_vocabulary_and_redaction():
+    """Tags, severity colours, wallet redaction, and console-line translation."""
+    harness = Path(__file__).resolve().parent / "js" / "event_stream_harness.cjs"
+    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
+
+    res = subprocess.run(
+        [NODE, str(harness), str(app_js)],
+        capture_output=True, text=True, encoding='utf-8', timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out.get("exportsOk") is True, out.get("error")
+
+    tags = out["tags"]
+    assert tags["userWs"] == "USER_WS" and tags["marketWs"] == "MKT_WS"
+    assert tags["filterFamily"] == "FILTER" and tags["trader"] == "TRADER"
+    assert tags["guard"] == "GUARD" and tags["query"] == "QUERY"
+    # Shadow rows keep their real process; only un-attributable text is SHADOW.
+    assert tags["shadowTrader"] == "TRADER"
+    assert tags["shadowQuery"] == "QUERY"
+    assert tags["shadowText"] == "SHADOW"
+    # Full words, never a mid-word slice: CONNECTED, not "CONNECTE".
+    assert tags["eventConnected"] == "CONNECTED"
+    assert tags["eventDisconnected"] == "DISCONN"
+    assert tags["eventFill"] == "FILL" and tags["eventPair"] == "PAIR"
+    assert tags["eventMerge"] == "MERGE" and tags["eventLog"] == "LOG"
+
+    sev = out["severities"]
+    assert sev["connected"] == "good" and sev["fill"] == "good"
+    assert sev["reconnect"] == "warn"
+    assert sev["error"] == "bad" and sev["disconnected"] == "bad"
+    assert sev["decide"] == "info"
+    # A routine unsubscribe is housekeeping; it must not flood ALERTS.
+    assert sev["unsubscribe"] == "muted"
+    assert sev["unknown"] == "muted"
+
+    # No wallet address reaches a sentence: both the reason and the error text
+    # are redacted before the row is built.
+    wallet = "0x" + "ab" * 20
+    for key, line in out["redaction"].items():
+        assert wallet not in line, key
+        assert "0x***" in line, key
+
+    sentences = out["userWsSentences"]
+    assert sentences["connected"].endswith("User stream connected.")
+    assert "Sent login for 2 markets." in sentences["authSent"]
+    assert sentences["authOk"].endswith("User stream receiving messages.")
+    assert "User trade: BUY UP 3 shares at $0.48 on Brazil election." in sentences["trade"]
+    assert "User order filled" in sentences["order"]
+    assert "disconnected (code 1006)" in sentences["disconnected"]
+    assert "reconnecting in 2s" in sentences["reconnecting"]
+    assert sentences["stopped"].endswith("User stream stopped.")
+
+    console = out["console"]
+    assert console["header"]["msg"] == "Ranking pass started"
+    assert console["header"]["evTag"] == "SCAN" and console["header"]["severity"] == "good"
+    assert console["exitOk"]["evTag"] == "DONE" and console["exitOk"]["severity"] == "good"
+    assert console["exitBad"]["evTag"] == "EXIT" and console["exitBad"]["severity"] == "bad"
+    assert console["traceback"]["evTag"] == "ERROR" and console["traceback"]["severity"] == "bad"
+    assert console["errorLine"]["severity"] == "bad"
+    assert console["plain"]["evTag"] == "LOG" and console["plain"]["severity"] == "muted"
+    # Scan output on shadow/live stdout keeps its MARKET FILTER identity.
+    assert console["tapeRead"]["evTag"] == "SCAN"
+    assert console["tapeRead"]["service"] == "filter"
+    assert console["tapeRead"]["severity"] == "muted"
 
 
 # ── Issue #457: the single master toggle ──────────────────────────────────────
@@ -3018,6 +3188,134 @@ def test_log_stream_sse_rotation_detected(tmp_path, monkeypatch):
         assert saw_rotate
     finally:
         gen.close()
+
+
+def test_log_stream_sse_chronological_replay_aggregation(tmp_path, monkeypatch):
+    """Replay across multiple families emits source hellos first, then sorts by timestamp."""
+    rt_dir = tmp_path / "runtime"
+    rt_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Live ring event: 2026-10-27T14:00:00Z
+    live_ring = tmp_path / "cycle_events.jsonl"
+    live_ev = {"service": "query", "action": "fill_recorded", "ts": "2026-10-27T14:00:00Z", "extra": {"n": 1}}
+    live_ring.write_text(json.dumps(live_ev) + "\n", encoding="utf-8")
+    monkeypatch.setattr("dashboard.server._ACTIVE_RING_OVERRIDE", live_ring)
+
+    # 2. Filter text log (rerank.log): 2026-10-27T10:00:00Z
+    rerank_log = rt_dir / "rerank.log"
+    rerank_log.write_text("2026-10-27T10:00:00Z [INFO] Filter scan 1\n", encoding="utf-8")
+
+    # 3. Shadow ring event: 2026-10-27T12:00:00Z (shadow-<run_id>.jsonl)
+    shadow_ring = rt_dir / "shadow-test123.jsonl"
+    shadow_ev = {"service": "decide", "action": "decide", "ts": "2026-10-27T12:00:00Z", "extra": {"intent_count": 0}}
+    shadow_ring.write_text(json.dumps(shadow_ev) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr("dashboard.server.LIVE_ROOT", tmp_path)
+    monkeypatch.setattr("dashboard.server.runtime_file", lambda f: rt_dir / f)
+    monkeypatch.setattr("dashboard.server.resolve_runtime_file", lambda f, root=None: (rt_dir / f) if f != "cycle_events.jsonl" else live_ring)
+    monkeypatch.setattr("dashboard.server.list_shadow_runs", lambda: [{"run_id": "test123"}])
+
+    gen = _log_stream_sse(families=["live", "filter", "shadow"], run_id="test123", poll_sec=0.01)
+    frames = []
+    try:
+        # 3 source frames
+        for _ in range(3):
+            frames.append(next(gen))
+        # 3 replayed log frames
+        for _ in range(3):
+            frames.append(next(gen))
+    finally:
+        gen.close()
+
+    assert all("event: source" in f for f in frames[:3])
+    log_frames = frames[3:]
+    assert all("event: log" in f for f in log_frames)
+
+    # Chronological sort: 10:00:00 (filter) -> 12:00:00 (shadow) -> 14:00:00 (live)
+    data0 = json.loads(log_frames[0].split("data: ")[1])
+    data1 = json.loads(log_frames[1].split("data: ")[1])
+    data2 = json.loads(log_frames[2].split("data: ")[1])
+
+    assert data0["family"] == "filter"
+    assert data0["source"] == "text"
+    assert "Filter scan 1" in data0["message"]
+    assert data0["ts"] == "2026-10-27T10:00:00Z"
+    assert data0["level"] == "INFO"
+
+    assert data1["family"] == "shadow"
+    assert data1["source"] == "ring"
+    assert data1["event"]["action"] == "decide"
+
+    assert data2["family"] == "live"
+    assert data2["source"] == "ring"
+    assert data2["event"]["action"] == "fill_recorded"
+
+
+def test_log_stream_sse_timestamp_inference_and_tie_breaking(tmp_path, monkeypatch):
+    """Lines without explicit timestamp inherit from nearest line or mtime, and equal timestamps break ties stably."""
+    rt_dir = tmp_path / "runtime"
+    rt_dir.mkdir(parents=True, exist_ok=True)
+
+    rerank_log = rt_dir / "rerank.log"
+    rerank_log.write_text("2026-10-27T10:00:00Z [INFO] First line\n[INFO] Second line without timestamp\n", encoding="utf-8")
+
+    monkeypatch.setattr("dashboard.server.LIVE_ROOT", tmp_path)
+    monkeypatch.setattr("dashboard.server.runtime_file", lambda f: rt_dir / f)
+    monkeypatch.setattr("dashboard.server.resolve_runtime_file", lambda f, root=None: rt_dir / f)
+
+    gen = _log_stream_sse(families=["filter"], poll_sec=0.01)
+    frames = []
+    try:
+        frames.append(next(gen))  # source
+        frames.append(next(gen))  # line 1
+        frames.append(next(gen))  # line 2
+    finally:
+        gen.close()
+
+    data1 = json.loads(frames[1].split("data: ")[1])
+    data2 = json.loads(frames[2].split("data: ")[1])
+
+    assert data1["ts"] == "2026-10-27T10:00:00Z"
+    assert data1["message"] == "First line"
+    # Second line inherits timestamp from line 1
+    assert data2["ts"] == "2026-10-27T10:00:00Z"
+    assert data2["message"] == "Second line without timestamp"
+    assert data2["level"] == "INFO"
+
+
+def test_console_line_parser_preserves_message_text():
+    """A timestamped line with no level word keeps every word of its message.
+
+    The full-datetime branch used to read the first word after the timestamp as
+    a level token, so `2026-10-27 10:00:00 Starting scan for 40 markets` parsed
+    to `message="scan for 40 markets"` with `level=None` -- a silent one-word
+    loss on any log line whose message does not begin with a level.
+    """
+    ts_iso, lvl, msg, ts_u = _parse_console_line(
+        "2026-10-27 10:00:00 Starting scan for 40 markets",
+        file_mtime=1761600000.0,
+    )
+    assert ts_iso is not None and ts_u is not None
+    assert lvl is None
+    assert msg == "Starting scan for 40 markets"
+
+    # The level forms still parse, so the fix does not cost the level tag.
+    _, lvl, msg, _ = _parse_console_line(
+        "2026-10-27 10:00:00 [INFO] Filter scan 1", file_mtime=1761600000.0)
+    assert lvl == "INFO" and msg == "Filter scan 1"
+
+    _, lvl, msg, _ = _parse_console_line(
+        "2026-10-27 10:00:00 WARN: gate trials disabled", file_mtime=1761600000.0)
+    assert lvl == "WARNING" and msg == "gate trials disabled"
+
+    _, lvl, msg, _ = _parse_console_line(
+        "2026-10-27T10:00:00Z INFO starting scan", file_mtime=1761600000.0)
+    assert lvl == "INFO" and msg == "starting scan"
+
+    # A bare timestamp keeps the line rather than emptying the message.
+    _, lvl, msg, _ = _parse_console_line(
+        "2026-10-27 10:00:00", file_mtime=1761600000.0)
+    assert lvl is None and msg == "2026-10-27 10:00:00"
 
 
 def test_get_parameters_endpoint(client):

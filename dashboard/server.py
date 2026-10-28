@@ -134,7 +134,10 @@ _ACTIVE_PORT = resolve_port(None)
 POLL_INTERVAL_MS = 2000
 
 CYCLE_RING_NAME = "cycle_events.jsonl"
-SSE_REPLAY_LINES = 50
+# The client keeps 200 rows per family, so replaying 50 threw away three quarters
+# of the history it could show -- and with a shadow run emitting ~1,800 events,
+# every fill and alert fell outside that window. Replay what the UI can hold.
+SSE_REPLAY_LINES = 200
 SSE_POLL_SEC = 0.5
 SSE_KEEPALIVE_SEC = 15.0
 
@@ -3492,6 +3495,143 @@ def _parse_event_ts(ts: Any) -> Optional[float]:
         return None
 
 
+def _parse_replay_ts(ts: Any) -> Optional[float]:
+    """Parse an ISO-8601 string or numeric timestamp to a Unix float timestamp, or None."""
+    if not ts:
+        return None
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    s = str(ts).strip()
+    try:
+        dt = datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ")
+        return dt.replace(tzinfo=datetime.timezone.utc).timestamp()
+    except (ValueError, TypeError):
+        pass
+    try:
+        clean = s.replace("Z", "+00:00") if s.endswith("Z") else s
+        dt = datetime.datetime.fromisoformat(clean)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+_CONSOLE_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "WARN", "ERROR", "CRITICAL"})
+
+
+def _split_console_level(text: str) -> tuple[Optional[str], str]:
+    """(level, message) for a log line, consuming a level only when it is one.
+
+    Any non-empty text that does not open with a level word comes back as the
+    level-less message, unchanged. Reading the first word as a level regardless
+    deleted it from the message: `Starting scan for 40 markets` became
+    `scan for 40 markets`, one word short and with nothing to show for it.
+    """
+    m_br = re.match(r"^\[([A-Za-z]+)\]\s*(.*)$", text)
+    if m_br and m_br.group(1).upper() in _CONSOLE_LEVELS:
+        lvl, msg = m_br.group(1).upper(), m_br.group(2)
+    else:
+        m_word = re.match(r"^([A-Za-z]+):?\s+(.*)$", text)
+        if not (m_word and m_word.group(1).upper() in _CONSOLE_LEVELS):
+            return None, text.strip()
+        lvl, msg = m_word.group(1).upper(), m_word.group(2)
+    return ("WARNING" if lvl == "WARN" else lvl), msg.strip()
+
+
+def _parse_console_line(
+    line: str,
+    file_mtime: Optional[float] = None,
+    last_known_ts: Optional[float] = None,
+) -> tuple[Optional[str], Optional[str], str, Optional[float]]:
+    """Parse a console text log line into (ts_iso, level, clean_message, ts_unix).
+
+    Recognizes:
+    - Filter Loop header: ===== YYYY-MM-DD HH:MM:SS =====
+    - Full datetime: YYYY-MM-DD HH:MM:SS [LEVEL] message
+    - Shadow/trader time-only: HH:MM:SS LEVEL message (inferred from file_mtime)
+    - Bracketed level: [LEVEL] message
+    - Python Traceback / FAILED lines
+    """
+    clean = line.strip()
+    if not clean:
+        return None, None, "", last_known_ts
+
+    # 1. Filter loop header: ===== 2026-10-27 18:00:00 =====
+    m_hdr = re.match(r"^={3,}\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s*={3,}$", clean)
+    if m_hdr:
+        try:
+            dt = datetime.datetime.fromisoformat(m_hdr.group(1)).astimezone(datetime.timezone.utc)
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ"), "INFO", clean, dt.timestamp()
+        except Exception:
+            pass
+
+    # 2. Time-only line: HH:MM:SS LEVEL message or [HH:MM:SS] LEVEL message
+    m_time = re.match(r"^\[?(\d{2}:\d{2}:\d{2})\]?\s+(?:\[([A-Za-z]+)\]|([A-Za-z]+))\s+(.*)$", clean)
+    if m_time:
+        t_str, lvl1, lvl2, msg = m_time.groups()
+        lvl = (lvl1 or lvl2).upper()
+        if lvl in {"DEBUG", "INFO", "WARNING", "WARN", "ERROR", "CRITICAL"}:
+            if lvl == "WARN":
+                lvl = "WARNING"
+            mtime = file_mtime or time.time()
+            m_dt = datetime.datetime.fromtimestamp(mtime)
+            try:
+                h, mn, s = [int(x) for x in t_str.split(":")]
+                dt = datetime.datetime(m_dt.year, m_dt.month, m_dt.day, h, mn, s)
+                if dt.timestamp() > mtime + 60:
+                    dt -= datetime.timedelta(days=1)
+                dt_utc = dt.astimezone(datetime.timezone.utc)
+                return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), lvl, msg.strip(), dt_utc.timestamp()
+            except Exception:
+                pass
+
+    # 3. Full datetime: 2026-10-27 18:00:00 [LEVEL] msg, ...Z LEVEL msg, or a
+    #    timestamp followed by prose with no level at all.
+    m_full = re.match(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?Z?)\s*(.*)$", clean)
+    if m_full:
+        ds, rest = m_full.groups()
+        try:
+            dt = datetime.datetime.fromisoformat(ds.replace("Z", "+00:00").replace(",", ".")).astimezone(datetime.timezone.utc)
+        except (ValueError, TypeError):
+            dt = None
+        if dt is not None:
+            lvl, msg = _split_console_level(rest.strip())
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ"), lvl, msg or clean, dt.timestamp()
+
+    # 4. Bracketed level without timestamp: [LEVEL] message
+    m_lvl = re.match(r"^\[([A-Za-z]+)\]\s*(.*)$", clean)
+    if m_lvl:
+        lvl = m_lvl.group(1).upper()
+        if lvl in {"DEBUG", "INFO", "WARNING", "WARN", "ERROR", "CRITICAL"}:
+            if lvl == "WARN":
+                lvl = "WARNING"
+            ts_iso = (
+                datetime.datetime.fromtimestamp(last_known_ts, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                if last_known_ts is not None
+                else None
+            )
+            return ts_iso, lvl, m_lvl.group(2).strip(), last_known_ts
+
+    # 5. Traceback or error keyword lines
+    if clean.startswith("Traceback") or clean.startswith("FAILED:") or clean.startswith("ERROR:"):
+        ts_iso = (
+            datetime.datetime.fromtimestamp(last_known_ts, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if last_known_ts is not None
+            else None
+        )
+        return ts_iso, "ERROR", clean, last_known_ts
+
+    # 6. Default fallback line
+    ts_iso = (
+        datetime.datetime.fromtimestamp(last_known_ts, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if last_known_ts is not None
+        else None
+    )
+    return ts_iso, None, clean, last_known_ts
+
+
 def _last_per_service(events: list[dict]) -> dict[str, tuple[str, Optional[float]]]:
     """Latest (phase, unix ts) per service from ring events."""
     out: dict[str, tuple[str, Optional[float]]] = {}
@@ -4228,9 +4368,11 @@ def _log_stream_sse(
             }
             yield f"event: source\ndata: {json.dumps(hello)}\n\n"
 
-    # 2. Setup followers & replay tail
+    # 2. Setup followers & collect replay tail
     followers: list[dict] = []
-    for fam in families:
+    replay_records: list[dict] = []
+
+    for fam_idx, fam in enumerate(families):
         fam_info = families_map.get(fam, {})
         ring_path = fam_info.get("ring_path")
         r_filter = fam_info.get("ring_filter")
@@ -4264,8 +4406,40 @@ def _log_stream_sse(
                             except Exception:
                                 continue
                             matched_evs.append(ev)
+
+                ring_mtime = ring_path.stat().st_mtime if ring_path.exists() else None
+                ring_items = []
                 for ev in matched_evs:
-                    yield f"event: log\ndata: {json.dumps({'family': fam, 'source': 'ring', 'event': ev})}\n\n"
+                    ts_val = _parse_replay_ts(ev.get("ts"))
+                    ring_items.append({"ev": ev, "sort_ts": ts_val})
+
+                # Bidirectional timestamp fill within this ring stream
+                cur_ts = None
+                for it in ring_items:
+                    if it["sort_ts"] is not None:
+                        cur_ts = it["sort_ts"]
+                    elif cur_ts is not None:
+                        it["sort_ts"] = cur_ts
+                cur_ts = None
+                for it in reversed(ring_items):
+                    if it["sort_ts"] is not None:
+                        cur_ts = it["sort_ts"]
+                    elif cur_ts is not None:
+                        it["sort_ts"] = cur_ts
+                for it in ring_items:
+                    if it["sort_ts"] is None:
+                        it["sort_ts"] = ring_mtime or 0.0
+
+                for line_idx, it in enumerate(ring_items):
+                    payload = {"family": fam, "source": "ring", "event": it["ev"]}
+                    replay_records.append({
+                        "sort_ts": it["sort_ts"],
+                        "family_idx": fam_idx,
+                        "source_idx": 0,
+                        "line_idx": line_idx,
+                        "payload": payload,
+                    })
+
                 followers.append({
                     "family": fam,
                     "source": "ring",
@@ -4296,7 +4470,7 @@ def _log_stream_sse(
                 "label": ring_path.name,
             })
 
-        for t_path in fam_info.get("text_logs", []):
+        for src_idx, t_path in enumerate(fam_info.get("text_logs", []), start=1):
             if t_path.exists():
                 text_lines = []
                 try:
@@ -4308,8 +4482,63 @@ def _log_stream_sse(
                             line_str = (raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)).strip()
                             if line_str:
                                 text_lines.append(line_str[:1000])
-                    for t_line in text_lines:
-                        yield f"event: log\ndata: {json.dumps({'family': fam, 'source': 'text', 'file': t_path.name, 'text': t_line})}\n\n"
+
+                    t_mtime = t_path.stat().st_mtime if t_path.exists() else None
+                    text_items = []
+                    last_known_ts = None
+                    for line_str in text_lines:
+                        ts_iso, lvl, msg, ts_u = _parse_console_line(line_str, file_mtime=t_mtime, last_known_ts=last_known_ts)
+                        if ts_u is not None:
+                            last_known_ts = ts_u
+                        text_items.append({
+                            "text": line_str,
+                            "ts_iso": ts_iso,
+                            "level": lvl,
+                            "message": msg[:1000],
+                            "sort_ts": ts_u,
+                        })
+
+                    # Bidirectional timestamp fill within this text stream
+                    cur_ts = None
+                    for it in text_items:
+                        if it["sort_ts"] is not None:
+                            cur_ts = it["sort_ts"]
+                        elif cur_ts is not None:
+                            it["sort_ts"] = cur_ts
+                            if not it["ts_iso"]:
+                                it["ts_iso"] = datetime.datetime.fromtimestamp(cur_ts, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    cur_ts = None
+                    for it in reversed(text_items):
+                        if it["sort_ts"] is not None:
+                            cur_ts = it["sort_ts"]
+                        elif cur_ts is not None:
+                            it["sort_ts"] = cur_ts
+                            if not it["ts_iso"]:
+                                it["ts_iso"] = datetime.datetime.fromtimestamp(cur_ts, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    for it in text_items:
+                        if it["sort_ts"] is None:
+                            it["sort_ts"] = t_mtime or 0.0
+                            if not it["ts_iso"] and t_mtime:
+                                it["ts_iso"] = datetime.datetime.fromtimestamp(t_mtime, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                    for line_idx, it in enumerate(text_items):
+                        payload = {
+                            "family": fam,
+                            "source": "text",
+                            "file": t_path.name,
+                            "text": it["text"],
+                            "ts": it["ts_iso"],
+                            "level": it["level"],
+                            "message": it["message"],
+                        }
+                        replay_records.append({
+                            "sort_ts": it["sort_ts"],
+                            "family_idx": fam_idx,
+                            "source_idx": src_idx,
+                            "line_idx": line_idx,
+                            "payload": payload,
+                        })
+
                     followers.append({
                         "family": fam,
                         "source": "text",
@@ -4318,6 +4547,7 @@ def _log_stream_sse(
                         "file_key": file_key,
                         "filter_fn": None,
                         "label": t_path.name,
+                        "last_known_ts": last_known_ts,
                     })
                 except OSError:
                     followers.append({
@@ -4339,6 +4569,11 @@ def _log_stream_sse(
                     "filter_fn": None,
                     "label": t_path.name,
                 })
+
+    # Sort historical replay chronologically with stable tie-breaking:
+    replay_records.sort(key=lambda r: (r["sort_ts"], r["family_idx"], r["source_idx"], r["line_idx"]))
+    for r in replay_records:
+        yield f"event: log\ndata: {json.dumps(r['payload'])}\n\n"
 
     # 3. Follow loop
     rt_dir = runtime_file("").resolve()
@@ -4398,7 +4633,24 @@ def _log_stream_sse(
                                     if f["filter_fn"] is None or f["filter_fn"](ev):
                                         yield f"event: log\ndata: {json.dumps({'family': f['family'], 'source': 'ring', 'event': ev})}\n\n"
                             else:
-                                yield f"event: log\ndata: {json.dumps({'family': f['family'], 'source': 'text', 'file': f['label'], 'text': clean[:1000]})}\n\n"
+                                t_mtime = None
+                                try:
+                                    t_mtime = path.stat().st_mtime
+                                except OSError:
+                                    pass
+                                ts_iso, lvl, msg, ts_u = _parse_console_line(clean, file_mtime=t_mtime, last_known_ts=f.get("last_known_ts"))
+                                if ts_u is not None:
+                                    f["last_known_ts"] = ts_u
+                                payload = {
+                                    "family": f["family"],
+                                    "source": "text",
+                                    "file": f["label"],
+                                    "text": clean[:1000],
+                                    "ts": ts_iso,
+                                    "level": lvl,
+                                    "message": msg[:1000],
+                                }
+                                yield f"event: log\ndata: {json.dumps(payload)}\n\n"
                             if lines_read >= 500:
                                 break
             except OSError:

@@ -266,6 +266,8 @@
             <button class="ticker-filter-btn" data-filter="trades" type="button">TRADES</button>
             <button class="ticker-filter-btn" data-filter="filter" type="button">MARKET FILTER</button>
             <button class="ticker-filter-btn" data-filter="guardrail" type="button">ALERTS</button>
+            <button class="ticker-filter-btn" data-filter="connections" type="button">CONNECTIONS</button>
+            <button class="ticker-filter-btn" data-filter="quotes" type="button">QUOTES</button>
           </div>
           <button id="btn-clear-ticker" class="toggle-cancelled-btn" type="button" style="padding:4px 8px;font-size:11px">CLEAR FEED</button>
           <button id="btn-ticker-details" class="toggle-cancelled-btn" type="button" style="padding:4px 8px;font-size:11px">SHOW DETAILS</button>
@@ -277,6 +279,7 @@
         <button class="ticker-tab-btn" role="tab" aria-selected="false" aria-controls="event-ticker" data-tab="filter" type="button">FILTER LOOP</button>
         <button class="ticker-tab-btn" role="tab" aria-selected="false" aria-controls="event-ticker" data-tab="shadow" type="button">SHADOW REHEARSAL</button>
         <button class="ticker-tab-btn" role="tab" aria-selected="false" aria-controls="event-ticker" data-tab="live" type="button">LIVE RUN</button>
+        <select id="ticker-component-select" class="ticker-component-select" aria-label="Filter by component"></select>
         <select id="ticker-shadow-picker" class="ticker-shadow-picker" style="display:none;" aria-label="Select shadow run"></select>
       </div>
       <div id="sse-reconnect" class="sse-reconnecting" style="display:none">Connecting to live cycle stream...</div>

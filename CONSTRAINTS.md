@@ -1,66 +1,39 @@
-# CONSTRAINTS.md — Issue #856: Active strategy profile badge
+# CONSTRAINTS.md — Issue #855: Human-Readable Structured Event Stream
 
-## Scope & blast radius
+Branch: `plan_github_issue_855` | Issue: #855
 
-- **Display-only.** The deliverable is a badge plus the engine records behind it.
-  No quoting, sizing, market-selection, or risk-formula change. No new external
-  dependency. No database schema change.
-- **Writable seams (only these):** `core_brain/config.py` (one pure helper, no
-  `MakerConfig` field change), `core_brain/shadow_run.py` (heartbeat `profile`
-  field + startup computation), `core_brain/trader_loop.py` (one writer
-  function + one call), `core_brain/runtime_paths.py` (one filename constant, no
-  `LEGACY_FILE_NAMES` entry), `dashboard/server.py` (shadow/live readers +
-  `active_profile` in `get_system_status()`), `dashboard/static/index.html` (one
-  pill), `dashboard/static/app.js` (one renderer + call), plus tests.
-- **Frozen:** `scripts/shadow_tournament.py`, `scripts/resume_tournament_arms.py`,
-  `scripts/tournament_cockpit_server.py`, `scripts/tournament_dashboard_hub.py`,
-  `configs/tournaments/*.json`, `core_brain/risk.py`, `core_brain/env_file.py`,
-  `get_parameters()` and the Strategy tab, `MakerConfig` fields,
-  `dashboard/static/styles.css` (only if the narrow-viewport test fails),
-  `.gitignore` (no rule to hide runtime files).
-- **Zero live capital.** The agent runs no opening command: no signer, no
-  `quote`, no `complete`, no Trader loop start, and never presses the
-  dashboard's START itself. (The shipped dashboard does have a START path —
-  the operator's control. IIIB adds view-only arm navigation plus
-  Load-to-stage: Load stops the stack via `stop_bot`, writes only
-  identity `{kind, name}` to `runtime/pending_profile.json`, and arms the
-  next operator START. START re-resolves the env from current options and
-  consumes the file.) `data/orders.db` is read-only as ever — never
-  rewritten or deleted.
+## 1. Safety & Production Integrity
 
-## Data truthfulness
+- **LIVE is the default.** Never run opening commands (`quote`, `complete`, Trader loop start, dashboard START button) during development or verification.
+- **`data/orders.db` is strictly read-only.** Never rewrite, modify, or delete `data/orders.db`.
+- **Dynamic Risk Caps:** Do not touch `core_brain/config.py` risk limits or execution parameters.
+- **On-disk Log Schema Preserved:** Do not alter the NDJSON record structure in `cycle_events.jsonl` or other disk log files. Any SSE payload enrichment (`ts`, `level`, `message`) on text frames is purely additive at the API layer.
 
-- **Engine-record rule:** the badge shows only what an engine recorded about
-  itself. The dashboard never calls `load_cfg` or
-  `resolve_tournament_preset_name()` in its own process.
-- **Missing evidence stays missing:** no record → `active_profile: null` →
-  pill shows `unknown` in `state-unknown`. Never fall back to the dashboard env,
-  never render `baseline` for "no preset".
-- **Fail soft:** a `ValueError`/`OSError` in profile construction, heartbeat
-  parsing, or the live-file reader omits the field; it never crashes a
-  rehearsal, the trader, or the endpoint.
+## 2. Writable Seams (Exclusively These)
 
-## Verification bar
+- `dashboard/server.py`: Timestamp parsing helper (`_parse_replay_ts`), console line parser (`_parse_console_line`), replay aggregation and chronological sorting in `_log_stream_sse`, and enrichment of text frames.
+- `dashboard/static/app.js`: Process/component tag mapping, event tag mapping, severity classification, stream sentence translation improvements, redaction of sensitive tokens, row model in `appendTickerEvent`, and multi-tier filtering logic in `renderTickerFeed`.
+- `dashboard/static/index.html`: Component filter dropdown `<select id="ticker-component-select">` and category button `CONNECTIONS`.
+- `dashboard/static/styles.css`: CSS Grid rules for aligned ticker columns, fixed `ch` widths, responsive wrap rules, and severity classes (`good`, `warn`, `bad`, `info`, `muted`).
+- `tests/test_dashboard_server.py`: Server-side SSE chronological replay tests and payload contract tests.
+- `tests/js/event_stream_harness.cjs`: Unit assertions for plain-English translations, tag formatting, and security redaction.
+- `tests/js/event_stream_tabs_harness.cjs`: Multi-process tab and component filter assertions.
 
-- Every new behavior ships with a test that fails without it:
-  `tests/test_active_profile.py` (new), plus extensions to
-  `tests/test_shadow_run_stopwatch.py`, `tests/test_dashboard_server.py`,
-  `tests/test_ui_top_nav_consistency.py`, `tests/test_ui_top_nav_groups.py`,
-  and the `profile` scenario in `tests/js/live_state_harness.cjs`.
-- Targeted suites green after every change (agent-run, never operator-run):
-  `tests/test_active_profile.py`, `tests/test_shadow_run_stopwatch.py`,
-  `tests/test_per_run_shadow_heartbeat.py`, `tests/test_dashboard_server.py`,
-  `tests/test_ui_top_nav_consistency.py`, `tests/test_ui_top_nav_groups.py`,
-  `tests/test_live_state_language.py`, `tests/test_dashboard_narrow_viewport.py`.
-  Existing assertions (`test_system_status_endpoint`, the database identity
-  test, the three-group nav check) must pass untouched.
-- **"How to verify" is hands-on only** — the operator opens the dashboard,
-  hovers the badge, switches stores, reads a heartbeat file; it never asks the
-  operator to run pytest, git, or gh.
+## 3. Frozen Seams (Do Not Modify)
 
-## Anti-cheat
+- `core_brain/cycle_stream.py`
+- `core_brain/order_manager.py`
+- `core_brain/config.py`
+- `core_brain/trader_loop.py`
+- `core_brain/shadow_run.py`
+- `server.ts`
 
-- No skipped or deleted tests, no removed assertions, no `xfail`/`skip`
-  markers, no lint or type suppressions added to reach green.
-- No gate threshold, cap, or arm definition edited to make a check pass.
-- `styles.css` changes require a failing narrow-viewport test as the reason.
+## 4. Anti-Cheat & Quality Gates
+
+- **Zero skips / no deletions:** No existing tests in `tests/test_dashboard_server.py` or `tests/test_cycle_stream.py` may be disabled, deleted, or weakened.
+- **No external dependencies:** No new Python packages in `requirements.txt` / `pyproject.toml`, and no new npm packages.
+- **Node.js Harness Compatibility:** Headless verification via `node tests/js/event_stream_harness.cjs dashboard/static/app.js` and `node tests/js/event_stream_tabs_harness.cjs dashboard/static/app.js` must execute cleanly without browser DOM dependencies.
+- **Merge Gate Target:** Targeted checks must pass locally:
+  `python -m pytest -q tests/test_dashboard_server.py tests/test_cycle_stream.py`
+  `node tests/js/event_stream_harness.cjs dashboard/static/app.js`
+  `node tests/js/event_stream_tabs_harness.cjs dashboard/static/app.js`

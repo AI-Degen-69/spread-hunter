@@ -1,35 +1,26 @@
-# Todo — Issue #856: Active strategy profile badge
+# Todo — Issue #855: Human-Readable Structured Event Stream
 
-Branch: `i856/feat-display-active-strategy-profile-name-in-dashb` | Plan: `tasks/plan.md` | Spec: `SPEC.md`
+Branch: `plan_github_issue_855` | Issue: #855
 
-## T1 — Shadow profile → status field [Backend/Logic] (M)
+- [x] **Task 1: Server Replay Chronological Aggregation & Text Frame Metadata**
+  - [x] Implement `_parse_replay_ts` and `_parse_console_line` in `dashboard/server.py`
+  - [x] Refactor `_log_stream_sse` to emit all `source` hellos first, buffer historical replay, and sort chronologically by timestamp
+  - [x] Add additive `ts`, `level`, and `message` to text log frames during replay and live follow
+  - [x] Add unit tests in `tests/test_dashboard_server.py` for chronological replay across families and text metadata
+  - [x] Verify Task 1: `python -m pytest -q tests/test_dashboard_server.py -k "log_stream_sse"`
 
-- [x] `describe_active_profile(cfg, preset_name)` in `core_brain/config.py` (no `MakerConfig` change)
-- [x] Startup computation + `profile` heartbeat field in `core_brain/shadow_run.py` (fail-soft, best-effort write)
-- [x] Shadow reader + `active_profile` in `get_system_status()` (`dashboard/server.py`, shadow source)
-- [x] `tests/test_active_profile.py` (new): 6 name-grammar cases
-- [x] `tests/test_shadow_run_stopwatch.py`: heartbeat profile cases
-- [x] `tests/test_dashboard_server.py`: 7 server cases; existing status + db-identity asserts untouched
-- [x] Checkpoint 1: `active_profile` observable in status JSON
+- [x] **Task 2: Structured Row Model, Bracketed Tags, Colors, and Plain-English Sentences**
+  - [x] Implement `streamProcessTag`, `streamEventTag`, and `streamSeverityClass` in `dashboard/static/app.js`
+  - [x] Add plain-English translations for user websocket, background lifecycle, and ranker console lines in `buildStreamSentence` and `connectLogStream`
+  - [x] Redact sensitive tokens (wallet addresses, secrets, urls) and sanitize fallback sentences (remove awkward `"on a market"`)
+  - [x] Update `appendTickerEvent` and `renderTickerFeed` to produce aligned column spans with square-bracketed padding tags
+  - [x] Implement CSS Grid rules and severity color styles (`good`, `warn`, `bad`, `info`, `muted`) in `dashboard/static/styles.css`
+  - [x] Verify Task 2: `node tests/js/event_stream_harness.cjs dashboard/static/app.js`
 
-## T2 — PROFILE pill in top nav [Design/UI] (S)
-
-- [x] `#profile-badge` markup in `dashboard/static/index.html` (after `#db-mode-badge`, no 4th group)
-- [x] `renderProfileBadge(status)` in `dashboard/static/app.js` (esc, full className replace, tooltip)
-- [x] HTML structure tests (`test_ui_top_nav_consistency.py`, `test_ui_top_nav_groups.py`)
-- [x] `profile` harness scenario + `@requires_node` wrapper; narrow-viewport test green
-- [x] Checkpoint 2: badge visible, refreshes per poll
-
-## T3 — Live writer + fallback [Backend/Logic] (M)
-
-- [x] `trader_profile.json` constant (`runtime_paths.py`, no legacy entry)
-- [x] `write_trader_profile(cfg, db_path)` + call in `trader_loop.run()` after the fleet lock (`record_profile=True` from `main()`; review fix: a losing second trader no longer clobbers the winner's record)
-- [x] Live reader + fallback in `get_system_status()` (trust checks, shadow priority)
-- [x] Writer + server-matrix tests; runtime files under `tmp_path` only
-- [x] Checkpoint 3: full targeted matrix green
-
-## Close-out
-
-- [x] No frozen file touched (launcher, cockpit, arms JSON, risk, env_file, MakerConfig, styles.css, .gitignore)
-- [x] Targeted suites green; full suite left to CI
-- [x] No opening command run, no store rewritten
+- [x] **Task 3: Dual Process/Component & Event Category Filtering, and Regression Suite**
+  - [x] Add Component dropdown `<select id="ticker-component-select">` and `CONNECTIONS` filter button to `dashboard/static/index.html`
+  - [x] Implement multi-tier filtering (Tab -> Component -> Category) and dynamic component list population in `dashboard/static/app.js`
+  - [x] Expand `ALERTS` category to include warn/bad severity rows and console errors
+  - [x] Update `tests/js/event_stream_harness.cjs` and `tests/js/event_stream_tabs_harness.cjs` to test new row structure, component filtering, and translations
+  - [x] Update assertions in `tests/test_dashboard_server.py`
+  - [x] Verify Task 3: `node tests/js/event_stream_tabs_harness.cjs dashboard/static/app.js` and `python -m pytest -q tests/test_dashboard_server.py tests/test_cycle_stream.py`

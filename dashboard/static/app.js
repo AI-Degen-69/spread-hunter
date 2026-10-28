@@ -1,3 +1,149 @@
+/* ── Structured row tag, severity, and translation helpers ── */
+function streamProcessTag(ev, family) {
+  const fam = (family || (ev && ev.family) || '').toLowerCase();
+  const svc = ((ev && ev.service) || '').toLowerCase();
+  const act = ((ev && ev.action) || '').toLowerCase();
+
+  // The process is what emitted the event, not which stream carried it: a
+  // shadow rehearsal quotes through the same decide/query services as the live
+  // run. Flattening every shadow row to SHADOW hides the very split the
+  // component picker exists to expose.
+  if (svc === 'user_stream' || act.startsWith('user_ws_')) return 'USER_WS';
+  if (svc === 'market_stream' || act.startsWith('market_stream_')) return 'MKT_WS';
+  if (svc === 'guardrail' || svc === 'guardian') return 'GUARD';
+  if (svc === 'decide' || svc === 'trader' || act === 'decide' || act === 'submit') return 'TRADER';
+  if (svc === 'query' || svc === 'engine') return 'QUERY';
+  if (svc === 'filter' || svc === 'screener' || svc.includes('filter') || svc.includes('screener')) return 'FILTER';
+  // Text logs carry no service; the family is all we can attribute them to.
+  if (fam === 'filter') return 'FILTER';
+  if (svc) return svc.toUpperCase().slice(0, 8);
+  if (fam === 'shadow') return 'SHADOW';
+  return fam ? fam.toUpperCase().slice(0, 8) : 'LIVE';
+}
+
+function streamEventTag(ev) {
+  const act = ((ev && ev.action) || '').toLowerCase();
+  if (act.startsWith('user_ws_')) {
+    const sub = act.replace('user_ws_', '').toUpperCase();
+    if (sub === 'DISCONNECTED') return 'DISCONN';
+    if (sub === 'RECONNECTING') return 'RECONN';
+    // CONNECTED is one letter past the usual 8-char slice; cutting it to
+    // "CONNECTE" reads as a rendering bug, and the tag column fits it.
+    if (sub === 'CONNECTED') return 'CONNECTED';
+    return sub.slice(0, 8);
+  }
+  if (act.startsWith('market_stream_')) {
+    const sub = act.replace('market_stream_', '');
+    if (STREAM_TAGS[act]) return STREAM_TAGS[act];
+    return sub.toUpperCase().slice(0, 8);
+  }
+  if (act === 'stop_loss_triggered' || act === 'stop_loss') return 'STOP';
+  if (act === 'fill_recorded') return 'FILL';
+  if (act === 'lifecycle_exited') return 'EXIT';
+  if (act === 'lifecycle_completed') return 'PAIR';
+  if (act === 'lifecycle_aged_out_rescue') return 'RESCUE';
+  if (act === 'decide') return 'DECIDE';
+  if (act === 'submit') return 'SUBMIT';
+  if (act.startsWith('merge_')) return 'MERGE';
+  if (act.startsWith('redeem_')) return 'REDEEM';
+  if (act) return act.toUpperCase().slice(0, 8);
+  return 'LOG';
+}
+
+function streamSeverityClass(ev) {
+  if (!ev) return 'muted';
+  const a = ((ev && ev.action) || '').toLowerCase();
+  const s = ((ev && ev.service) || '').toLowerCase();
+  const lvl = String((ev && ev.extra && ev.extra.level) || '').toUpperCase();
+
+  // Bad (red). A routine unsubscribe is housekeeping, not a failure: counting
+  // it here would pour every socket teardown into the ALERTS filter.
+  if (a.includes('error') || a.includes('failed') || a.includes('disconnected') ||
+      a === 'merge_failed' || a === 'redeem_failed' ||
+      a === 'rerank_error' || lvl === 'ERROR' || lvl === 'CRITICAL') {
+    return 'bad';
+  }
+
+  // Warn (amber)
+  if (a.includes('reconnecting') || a.includes('reconnect') || a.includes('rescue') ||
+      a.includes('truncated') || a === 'lifecycle_stop' ||
+      // A leg moving between pair states is the naked-leg risk the whole
+      // strategy exists to avoid; it belongs in amber, not in the grey feed.
+      a === 'single_leg_transition' ||
+      lvl === 'WARNING' || lvl === 'WARN') {
+    return 'warn';
+  }
+
+  // Good (green)
+  if (a === 'user_ws_connected' || a === 'user_ws_auth_ok' ||
+      a === 'market_stream_connected' || a === 'market_stream_subscribe' ||
+      a === 'fill_recorded' || a === 'lifecycle_completed' ||
+      a === 'merge_executed' || a === 'redeem_executed' || a === 'rerank_done') {
+    return 'good';
+  }
+
+  // Info (cyan/blue)
+  if (a === 'decide' || a === 'submit' || a === 'user_ws_trade' || a === 'user_ws_order' ||
+      a === 'user_fill_received' || a === 'market_stream_snapshot' ||
+      a === 'market_stream_tick' || a === 'guardian_reactive_wake') {
+    return 'info';
+  }
+
+  return 'muted';
+}
+
+function translateConsoleLine(data) {
+  const text = (data.text || '').trim();
+  const file = (data.file || 'log').toLowerCase();
+  const cleanMsg = (data.message || text).trim();
+  const lvl = String(data.level || '').toUpperCase();
+
+  if (/^={3,}\s+.*\s+={3,}$/.test(text)) {
+    return { msg: 'Ranking pass started', evTag: 'SCAN', severity: 'good' };
+  }
+  const mExit = text.match(/\bEXIT\s+(\d+)\b/);
+  if (mExit) {
+    const code = mExit[1];
+    return {
+      msg: `Ranker exited with code ${code}`,
+      evTag: code === '0' ? 'DONE' : 'EXIT',
+      severity: code === '0' ? 'good' : 'bad'
+    };
+  }
+  const mFailed = text.match(/^FAILED:\s*([A-Za-z0-9_]+):?\s*(.*)$/);
+  if (mFailed) {
+    return { msg: `Ranker failed (${mFailed[1]})`, evTag: 'FAILED', severity: 'bad' };
+  }
+  if (text.startsWith('Traceback')) {
+    return { msg: 'Python error trace', evTag: 'ERROR', severity: 'bad' };
+  }
+  if (text.includes('Settlement sweeper running in background') || text.includes('sweeper running')) {
+    return { msg: 'Settlement sweeper running in background', evTag: 'SWEEP', severity: 'muted' };
+  }
+  if (text.includes('Risk guardian running in background') || text.includes('guardian running')) {
+    return { msg: 'Risk guardian running in background', evTag: 'GUARD', severity: 'muted' };
+  }
+  // Screener scan output. It arrives on stdout of the shadow or live run, not
+  // on the filter family, so attribute it here or MARKET FILTER stays empty
+  // while the feed is full of scan lines.
+  if (/\btape-read\b/.test(text) || /\bqual_rows=/.test(text)) {
+    return { msg: cleanMsg, evTag: 'SCAN', severity: 'muted', service: 'filter' };
+  }
+
+  let sev = 'muted';
+  if (lvl === 'ERROR' || lvl === 'CRITICAL' || text.startsWith('ERROR')) sev = 'bad';
+  else if (lvl === 'WARNING' || lvl === 'WARN' || text.startsWith('WARN')) sev = 'warn';
+
+  const evTag = lvl ? (lvl === 'WARNING' ? 'WARN' : lvl.slice(0, 8)) : (file.includes('err') ? 'ERR' : 'LOG');
+  return { msg: cleanMsg, evTag, severity: sev };
+}
+
+function extractTimeFromLine(line) {
+  if (!line) return '';
+  const m = String(line).match(/\[?(\d{1,2}:\d{2}:\d{2})\]?/);
+  return m ? m[1] : '';
+}
+
 /* Spread Hunter — Dashboard Application Logic
  *
  * Consumes existing API endpoints:
@@ -1182,6 +1328,9 @@ function quoteList(quotes) {
 function isTradeEvent(ev) {
   const action = ((ev && ev.action) || '').toLowerCase();
   if (action === 'fill_recorded') return true;
+  // The user stream reports the same fill before the registry records it; both
+  // are a trade, and the shadow rehearsal often only produces this one.
+  if (action === 'user_fill_received') return true;
   if (action === 'lifecycle_exited' || action === 'lifecycle_completed' ||
       action === 'lifecycle_aged_out_rescue') return true;
   if (action.startsWith('merge_') || action.startsWith('redeem_')) return true;
@@ -1266,7 +1415,72 @@ function buildStreamSentence(ev, lookup) {
   const market = streamMarketName(ev, lookup);
   const clock = streamTime(ev);
   const when = clock ? `${clock} — ` : '';
-  const because = reason ? ` (${plainReason(reason)})` : '';
+  const rawBecause = reason ? ` (${plainReason(reason)})` : '';
+  const because = rawBecause.replace(/0x[a-fA-F0-9]{40}/g, '0x***');
+
+  // User websocket lifecycle events
+  if (action === 'user_ws_connected') {
+    return `${when}User stream connected.`;
+  }
+  if (action === 'user_ws_auth_sent') {
+    const mkts = ex.markets_count || (Array.isArray(ex.markets) ? ex.markets.length : 0);
+    return `${when}Sent login${mkts ? ` for ${mkts} ${mkts === 1 ? 'market' : 'markets'}` : ''}.`;
+  }
+  if (action === 'user_ws_auth_ok') {
+    return `${when}User stream receiving messages.`;
+  }
+  if (action === 'user_ws_trade') {
+    const out = ex.outcome === 'UP' || ex.outcome === 'DOWN' ? ` ${ex.outcome}` : '';
+    const px = streamPrice(ex.price);
+    const sz = ex.size ? ` ${streamShares(ex.size)} ${shareWord(ex.size)}` : '';
+    return `${when}User trade: ${ex.side || 'FILL'}${out}${sz}${px ? ' at ' + px : ''} on ${market}.`;
+  }
+  if (action === 'user_ws_order') {
+    const px = streamPrice(ex.price);
+    const st = humanizeAction(ex.status || 'updated');
+    return `${when}User order ${st}: ${ex.side || ''}${px ? ' at ' + px : ''} on ${market}.`;
+  }
+  if (action === 'user_ws_disconnected') {
+    const cd = ex.code ? ` (code ${ex.code})` : '';
+    return `${when}User stream disconnected${cd}.`;
+  }
+  if (action === 'user_ws_reconnecting') {
+    const d = ex.delay_sec || ex.delay || 1;
+    return `${when}User stream reconnecting in ${d}s.`;
+  }
+  if (action === 'user_ws_error') {
+    const err = ex.error ? ` (${String(ex.error).replace(/0x[a-fA-F0-9]{40}/g, '0x***')})` : '';
+    return `${when}User stream error${err}.`;
+  }
+  if (action === 'user_ws_stopped') {
+    return `${when}User stream stopped.`;
+  }
+
+  // Background workers & lifecycle
+  if (action === 'guardian_reactive_wake') {
+    return `${when}Risk guardian reactive wake${because}.`;
+  }
+  if (action === 'rerank_done') {
+    const dur = ex.duration_ms ? ` in ${ex.duration_ms}ms` : '';
+    return `${when}Ranking pass completed${dur}.`;
+  }
+  if (action === 'rerank_error') {
+    return `${when}Ranking pass failed${because}.`;
+  }
+  if (action === 'paired_universe_truncated') {
+    const cap = ex.count || ex.limit || 'cap';
+    return `${when}Paired universe truncated to ${cap} markets.`;
+  }
+  if (action === 'single_leg_transition') {
+    const fromSt = ex.prev_state || 'old';
+    const toSt = ex.new_state || 'new';
+    return `${when}Single leg transition: ${fromSt} → ${toSt} on ${market}.`;
+  }
+  if (action === 'user_fill_received') {
+    const out = ex.outcome === 'UP' || ex.outcome === 'DOWN' ? ` ${ex.outcome}` : '';
+    const sz = ex.size ? ` ${streamShares(ex.size)} ${shareWord(ex.size)}` : '';
+    return `${when}Fill received:${out}${sz} on ${market}.`;
+  }
 
   if (action === 'fill_recorded') {
     const out = ex.outcome === 'UP' || ex.outcome === 'DOWN' ? ` ${ex.outcome}` : '';
@@ -1286,8 +1500,8 @@ function buildStreamSentence(ev, lookup) {
     return `${when}Rescued an aged-out position on ${market}${because}.`;
   }
   if (action.startsWith('merge_')) {
-    const n = ex.size != null ? `${streamShares(ex.size)} ${shareWord(ex.size)}` : '';
-    if (action === 'merge_executed') return `${when}Merge completed on ${market} (${n} now collateral).`;
+    const n = ex.size != null && Number(ex.size) > 0 ? `${streamShares(ex.size)} ${shareWord(ex.size)}` : '';
+    if (action === 'merge_executed') return n ? `${when}Merge completed on ${market} (${n} now collateral).` : `${when}Merge completed on ${market}.`;
     if (action === 'merge_failed') return `${when}Merge on ${market} failed${because}.`;
     if (action === 'merge_submitted') return n ? `${when}Sent ${n} on ${market} to the relayer for merging.` : `${when}Sent a merge on ${market} to the relayer.`;
     if (action === 'merge_interrupted') return `${when}Merge on ${market} was interrupted before confirmation.`;
@@ -1313,7 +1527,7 @@ function buildStreamSentence(ev, lookup) {
   }
   if (action === 'submit') {
     const n = Number(ex.submitted || 0);
-    if (n > 0) return `${when}Placed ${n} maker orders on ${market}.`;
+    if (n > 0) return `${when}Placed ${n} maker ${n === 1 ? 'order' : 'orders'} on ${market}.`;
     return `${when}No orders placed on ${market}${because}.`;
   }
 
@@ -1341,7 +1555,8 @@ function buildStreamSentence(ev, lookup) {
     : (svc === 'filter' || svc === 'screener') ? 'Market scan'
     : svc === 'guardrail' ? 'Risk note'
     : 'Status update';
-  return `${when}${prefix} on ${market}: ${humanizeAction(action)}${because}.`;
+  const onClause = market && market !== 'a market' ? ` on ${market}` : '';
+  return `${when}${prefix}${onClause}: ${humanizeAction(action)}${because}.`;
 }
 
 function translateEvent(ev) {
@@ -1350,6 +1565,7 @@ function translateEvent(ev) {
 
 let activeTickerTab = 'all';
 let tickerFilter = 'all';
+let tickerComponent = 'all';
 let tickerAutoscroll = true;
 let tickerShowDetails = false;
 let tickerSeqCounter = 0;
@@ -1359,6 +1575,24 @@ const tickerBuffers = {
   shadow: [],
   live: [],
 };
+const TICKER_TAB_LABELS = {
+  all: 'all processes',
+  filter: 'filter loop',
+  shadow: 'shadow rehearsal',
+  live: 'live run',
+};
+const TICKER_CATEGORY_LABELS = {
+  all: 'all events',
+  trades: 'trades',
+  filter: 'market filter',
+  guardrail: 'alerts',
+  connections: 'connections',
+  quotes: 'quotes',
+};
+// Fixed reading order for the component picker; unknown components follow,
+// alphabetically, so a new service never reshuffles the familiar ones.
+const TICKER_COMPONENT_ORDER = ['USER_WS', 'MKT_WS', 'TRADER', 'GUARD', 'QUERY', 'FILTER', 'SHADOW', 'LIVE'];
+let tickerComponentKey = '';
 const allTickerEvents = [];
 const tickerSourceMetadata = {
   live: { labels: [], available: true, reason: null, run_id: null },
@@ -1433,6 +1667,11 @@ function setTickerTab(tab) {
 function updateTickerSubtitle() {
   const subEl = document.getElementById('ticker-source-subtitle');
   if (!subEl) return;
+  const meta = activeTickerTab === 'all' ? null : tickerSourceMetadata[activeTickerTab];
+  if (meta && meta.available === false && meta.reason) {
+    subEl.textContent = meta.reason;
+    return;
+  }
   if (activeTickerTab === 'filter') {
     const labels = (tickerSourceMetadata.filter && tickerSourceMetadata.filter.labels.length)
       ? tickerSourceMetadata.filter.labels.join(' + ')
@@ -1464,21 +1703,38 @@ function tickerTabCounts() {
   };
 }
 
-function appendTickerEvent(line, translation, ctx, service, action, extra, family) {
+function appendTickerEvent(line, translation, ctx, service, action, extra, family, opts) {
   const empty = tickerEl.querySelector('.empty-state');
   if (empty) empty.remove();
 
   const fam = (family || (service && (service.includes('filter') || service.includes('screener')) ? 'filter' : 'live')).toLowerCase();
   const seq = ++tickerSeqCounter;
+  const o = opts || {};
+
+  const evDummy = { service, action, extra, family: fam };
+  const procTag = o.processTag || streamProcessTag(evDummy, fam);
+  const evTag = o.eventTag || streamEventTag(evDummy);
+  const severity = o.severity || streamSeverityClass(evDummy);
+  const timeTag = o.timeTag || extractTimeFromLine(line) || '--:--:--';
+  const cleanMsg = o.message || (translation ? translation.replace(/^\d{2}:\d{2}:\d{2}\s*—\s*/, '') : line);
+
   const evObj = {
     seq,
     family: fam,
     line,
-    translation,
-    ctx,
+    translation: translation || cleanMsg,
+    ctx: ctx || '',
     service: (service || '').toLowerCase(),
     action: (action || '').toLowerCase(),
-    extra: extra || {}
+    extra: extra || {},
+    timeTag,
+    processTag: procTag,
+    eventTag: evTag,
+    message: cleanMsg,
+    severity,
+    component: o.component || procTag,
+    market: o.market || '',
+    rawDetail: o.rawDetail || line,
   };
 
   const targetBuf = tickerBuffers[fam] || tickerBuffers.live;
@@ -1489,44 +1745,158 @@ function appendTickerEvent(line, translation, ctx, service, action, extra, famil
   renderTickerFeed();
 }
 
+function tickerEventComponent(ev) {
+  if (!ev) return '';
+  return ev.component || ev.processTag || streamProcessTag(ev, ev.family);
+}
+
+function tickerComponentChoices() {
+  const seen = new Set();
+  for (const ev of getActiveTickerEvents()) {
+    const c = tickerEventComponent(ev);
+    if (c) seen.add(c);
+  }
+  const known = TICKER_COMPONENT_ORDER.filter((c) => seen.has(c));
+  const rest = Array.from(seen).filter((c) => !TICKER_COMPONENT_ORDER.includes(c)).sort();
+  return known.concat(rest);
+}
+
+function updateTickerComponentSelect() {
+  const sel = document.getElementById('ticker-component-select');
+  if (!sel) return;
+  const choices = tickerComponentChoices();
+  // Switching tabs can retire the chosen component; fall back to ALL rather
+  // than render an empty feed the dropdown cannot explain.
+  if (tickerComponent !== 'all' && !choices.includes(tickerComponent)) {
+    tickerComponent = 'all';
+  }
+  const wanted = ['all'].concat(choices);
+  const key = wanted.join('|');
+  if (key !== tickerComponentKey) {
+    tickerComponentKey = key;
+    sel.innerHTML = '';
+    for (const value of wanted) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = value === 'all' ? 'ALL' : value;
+      sel.appendChild(opt);
+    }
+  }
+  sel.value = tickerComponent;
+}
+
+function setTickerComponent(c) {
+  tickerComponent = c || 'all';
+  renderTickerFeed();
+}
+
+function setTickerAutoscroll(on) {
+  tickerAutoscroll = !!on;
+  const btn = document.getElementById('btn-pause-ticker');
+  if (!btn) return;
+  btn.textContent = tickerAutoscroll ? 'AUTOSCROLL: ON' : 'AUTOSCROLL: PAUSED';
+  btn.style.color = tickerAutoscroll ? 'var(--text-secondary)' : '#fbbf24';
+}
+
+function tickerIsAutoscroll() {
+  return tickerAutoscroll;
+}
+
+// Reading mode: the moment the operator scrolls away from the newest row we
+// stop jumping the feed to the top and hold their place while events arrive.
+function tickerHandleScroll() {
+  if (tickerAutoscroll && (tickerEl.scrollTop || 0) > 8) setTickerAutoscroll(false);
+}
+
+// CONNECTIONS: socket lifecycle only. Daemon churn (a rerank pass every cycle)
+// and socket *traffic* (ticks, snapshots) are not connection health, and
+// including them made one irrelevant row repeat forever in the chip.
+const TICKER_CONNECTION_ACTIONS = new Set([
+  'user_ws_connected', 'user_ws_auth_sent', 'user_ws_auth_ok',
+  'user_ws_disconnected', 'user_ws_reconnecting', 'user_ws_error', 'user_ws_stopped',
+  'market_stream_connected', 'market_stream_reconnect', 'market_stream_subscribe',
+  'market_stream_unsubscribe', 'market_stream_error',
+]);
+
+function tickerIsConnectionEvent(ev) {
+  if (!ev) return false;
+  return TICKER_CONNECTION_ACTIONS.has((ev.action || '').toLowerCase());
+}
+
+// ALERTS: the guardrail itself, stop-loss, and every row the classifier marked
+// warn or bad — including console errors, which arrive as severity, not service.
+function tickerIsAlertEvent(ev) {
+  if (!ev) return false;
+  const sev = ev.severity || streamSeverityClass(ev);
+  if (sev === 'warn' || sev === 'bad') return true;
+  const a = (ev.action || '').toLowerCase();
+  const s = (ev.service || '').toLowerCase();
+  return s.includes('guardrail') || s.includes('guardian') ||
+    a.includes('alert') || a.includes('stop_loss') || a.includes('guardrail');
+}
+
 function tickerMatches(ev) {
+  // Tier 1: the family tab, already applied by getActiveTickerEvents().
+  // Tier 2: one component inside that tab.
+  if (tickerComponent !== 'all' && tickerEventComponent(ev) !== tickerComponent) return false;
+  // Tier 3: the event category.
   if (tickerFilter === 'all') return true;
   // The TRADES tab is action-keyed and service-independent: fills, exits,
   // completions, rescues, every merge/redeem outcome, and submits that
   // actually placed orders. `decide` is the pre-rename value of the same tab.
   if (tickerFilter === 'trades' || tickerFilter === 'decide') return isTradeEvent(ev);
   if (tickerFilter === 'filter') return ev.service.includes('filter') || ev.service.includes('screener');
-  if (tickerFilter === 'guardrail') return ev.service.includes('guardrail') || ev.action.includes('alert') || ev.action.includes('stop_loss');
+  if (tickerFilter === 'guardrail') return tickerIsAlertEvent(ev);
+  if (tickerFilter === 'connections') return tickerIsConnectionEvent(ev);
+  if (tickerFilter === 'quotes') return ev.action === 'decide';
   return true;
 }
 
+// Names the narrowing that produced an empty feed, so an empty ALERTS list on
+// one component never reads as "nothing is wrong anywhere".
+function tickerScopeLabel() {
+  const parts = [];
+  if (activeTickerTab !== 'all') parts.push(TICKER_TAB_LABELS[activeTickerTab] || activeTickerTab);
+  if (tickerComponent !== 'all') parts.push(tickerComponent);
+  if (tickerFilter !== 'all') parts.push(TICKER_CATEGORY_LABELS[tickerFilter] || tickerFilter);
+  return parts.join(' · ');
+}
+
 function tickerEmptyState() {
-  if (tickerFilter !== 'all') {
-    if (tickerFilter === 'trades' || tickerFilter === 'decide') {
-      return { title: 'No trades yet.', msg: 'Fills, sells, exits, merges and redeems show up here as they happen.' };
-    }
-    if (tickerFilter === 'filter') {
-      return { title: 'No market filter updates yet.', msg: 'Scans show up here as they run.' };
-    }
-    if (tickerFilter === 'guardrail') {
-      return { title: 'No alerts right now.', msg: 'Risk notes show up here if a guardrail trips.' };
-    }
+  const tabMeta = activeTickerTab === 'all' ? null : tickerSourceMetadata[activeTickerTab];
+  let state;
+  // A missing feed outranks the category: "no trades yet" would imply the
+  // stream is healthy and merely quiet.
+  if (tabMeta && tabMeta.available === false && tabMeta.reason) {
+    const titles = {
+      filter: 'Filter loop feed unavailable.',
+      shadow: 'Shadow rehearsal unavailable.',
+      live: 'Live run feed unavailable.',
+    };
+    state = { title: titles[activeTickerTab] || 'Feed unavailable.', msg: tabMeta.reason };
+  } else if (tickerFilter === 'trades' || tickerFilter === 'decide') {
+    state = { title: 'No trades yet.', msg: 'Fills, sells, exits, merges and redeems show up here as they happen.' };
+  } else if (tickerFilter === 'filter') {
+    state = { title: 'No market filter updates yet.', msg: 'Scans show up here as they run.' };
+  } else if (tickerFilter === 'guardrail') {
+    state = { title: 'No alerts right now.', msg: 'Risk notes show up here if a guardrail trips.' };
+  } else if (tickerFilter === 'connections') {
+    state = { title: 'No connection events yet.', msg: 'Socket connects, reconnects and auth show up here.' };
+  } else if (tickerFilter === 'quotes') {
+    state = { title: 'No quotes yet.', msg: 'Each market the strategy is quoting appears here once, with the legs it wants resting.' };
+  } else if (activeTickerTab === 'filter') {
+    state = { title: 'No filter loop events yet.', msg: 'Filter scans and rerank.log updates will appear here.' };
+  } else if (activeTickerTab === 'shadow') {
+    state = { title: 'No shadow rehearsal events yet.', msg: 'Events from the active shadow rehearsal will appear here.' };
+  } else if (activeTickerTab === 'live') {
+    state = { title: 'No live run events yet.', msg: 'Events from the live trading loop will appear here.' };
+  } else {
+    state = { title: 'No events yet.', msg: 'Events will appear here as the strategy execution loop runs.' };
   }
 
-  if (activeTickerTab === 'filter') {
-    return { title: 'No filter loop events yet.', msg: 'Filter scans and rerank.log updates will appear here.' };
-  }
-  if (activeTickerTab === 'shadow') {
-    const meta = tickerSourceMetadata.shadow;
-    if (meta && !meta.available && meta.reason) {
-      return { title: 'Shadow rehearsal unavailable.', msg: meta.reason };
-    }
-    return { title: 'No shadow rehearsal events yet.', msg: 'Events from the active shadow rehearsal will appear here.' };
-  }
-  if (activeTickerTab === 'live') {
-    return { title: 'No live run events yet.', msg: 'Events from the live trading loop will appear here.' };
-  }
-  return { title: 'No events yet.', msg: 'Events will appear here as the strategy execution loop runs.' };
+  const scope = tickerScopeLabel();
+  if (scope) state.msg = state.msg.replace(/\.?\s*$/, '.') + ` Showing ${scope} only.`;
+  return state;
 }
 
 function getActiveTickerEvents() {
@@ -1536,42 +1906,582 @@ function getActiveTickerEvents() {
 
 /* ── Ticker color coding: tag -> color, neutral stays primary (white) ── */
 function tickerColorClass(ev) {
-  if (!ev || (ev.service || '').toLowerCase() !== 'market_stream') return '';
-  const a = (ev.action || '').toLowerCase();
-  if (a === 'market_stream_connected' || a === 'market_stream_subscribe') return 'ms-good';
-  if (a === 'market_stream_unsubscribe' || a === 'market_stream_error') return 'ms-bad';
-  if (a === 'market_stream_reconnect') return 'ms-warn';
-  if (a === 'market_stream_snapshot') return 'ms-info';
-  return '';   // tick and unknown stay neutral (white)
+  return streamSeverityClass(ev);
+}
+
+// The row at the top of the viewport, remembered by sequence number so a
+// rebuild can put the operator back on the same line. Heights are read only
+// while reading mode is active, never on the hot path.
+function captureTickerAnchor() {
+  const top = tickerEl.scrollTop || 0;
+  let acc = 0;
+  for (const row of tickerEl.children) {
+    const h = row.offsetHeight || 0;
+    if (acc + h > top) {
+      return { seq: row.dataset ? row.dataset.seq : null, offset: top - acc };
+    }
+    acc += h;
+  }
+  return null;
+}
+
+function restoreTickerAnchor(anchor) {
+  if (!anchor || !anchor.seq) {
+    tickerEl.scrollTop = 0;
+    return;
+  }
+  let acc = 0;
+  for (const row of tickerEl.children) {
+    if (row.dataset && row.dataset.seq === anchor.seq) {
+      tickerEl.scrollTop = acc + (anchor.offset || 0);
+      return;
+    }
+    acc += row.offsetHeight || 0;
+  }
+  tickerEl.scrollTop = 0;
+}
+
+function settleTickerScroll(prevTop, anchor) {
+  if (tickerAutoscroll) {
+    tickerEl.scrollTop = 0;
+  } else if (anchor) {
+    restoreTickerAnchor(anchor);
+  } else {
+    tickerEl.scrollTop = prevTop;
+  }
+}
+
+function renderTickerEmpty() {
+  const st = tickerEmptyState();
+  tickerEl.innerHTML = `<div class="empty-state"><div class="empty-state-title">${esc(st.title)}</div><div class="empty-state-msg">${esc(st.msg)}</div></div>`;
+  tickerEl.scrollTop = 0;
+}
+
+// QUOTES is a summary, not another row filter: one line per market pair. The
+// registry (`/api/state` pairs) is the source, not the ring. The ring only knows
+// what was *sent*, so a resting order is invisible there — which is exactly how
+// a feed full of "No orders placed" coexists with a book full of quotes. The
+// pairs payload also carries the market title, the combined cost, and whether
+// the pair is hedged.
+let tickerQuoteState = { orders: [], pairs: [], fills: [] };
+
+function noteTickerQuoteState(state) {
+  const st = state || {};
+  tickerQuoteState = {
+    orders: Array.isArray(st.orders) ? st.orders : [],
+    pairs: Array.isArray(st.pairs) ? st.pairs : [],
+    fills: Array.isArray(st.fills) ? st.fills : [],
+  };
+  if (tickerFilter === 'quotes' || tickerFilter === 'trades' || tickerFilter === 'guardrail') {
+    renderTickerFeed();
+  }
+}
+
+function tickerClockFromMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return new Date(n).toLocaleTimeString([], { hour12: false });
+}
+
+function tickerTitleByCondition() {
+  const titles = new Map();
+  for (const p of tickerQuoteState.pairs) {
+    const key = (p && (p.condition_id || (p.market && p.market.condition_id))) || '';
+    if (key) titles.set(String(key), (p.market && (p.market.title || p.market.slug)) || '');
+  }
+  return titles;
+}
+
+// TRADES and ALERTS are facts, not a tail. The ring is a rolling window over a
+// run that can emit thousands of rows, so a fill from the first minute is gone
+// from it long before the run ends. Read them from the registry, and add ring
+// rows for anything the registry has not recorded yet (deduped by trade id).
+function buildTradeRows(events) {
+  const titles = tickerTitleByCondition();
+  const rows = [];
+  const seen = new Set();
+  // Two processes record fills -- the query order manager and the trader's own
+  // reconcile pass -- and the registry stores no service. Take the component
+  // from the ring event carrying the same trade id; when the ring no longer
+  // holds it, say REGISTRY instead of asserting a process nobody observed.
+  const componentByTrade = new Map();
+  for (const ev of events) {
+    const ringId = String((ev && ev.extra && ev.extra.trade_id) || '');
+    if (ringId && !componentByTrade.has(ringId)) {
+      componentByTrade.set(ringId, tickerEventComponent(ev));
+    }
+  }
+  for (const f of tickerQuoteState.fills) {
+    const id = String((f && f.trade_id) || '');
+    if (id) seen.add(id);
+    const size = Number(f && f.size);
+    const price = Number(f && f.price);
+    const title = titles.get(String((f && f.condition_id) || '')) || '';
+    // side · size @ price are three fields, so the price column lines up down
+    // the whole list instead of following whatever the size width happens to be.
+    const tradeSegs = [
+      tickerSeg('side', String((f && f.side) || 'BUY')),
+      tickerDim(' '),
+      tickerSeg('size', Number.isFinite(size) ? size : '?'),
+      tickerDim(' @ $'),
+      tickerSeg('price', Number.isFinite(price) ? price.toFixed(2) : '?'),
+    ];
+    if (title) {
+      tradeSegs.push(tickerDim(' '), ...tickerMarketSegs(title, f && f.condition_id));
+    } else {
+      tradeSegs.push(tickerDim(' · pair '), tickerSeg('text', (f && f.pair_id) || '—'));
+    }
+    rows.push({
+      key: id || `fill-${rows.length}`,
+      clock: tickerClockFromMs((f && (f.recorded_ts || f.venue_ts)) || 0),
+      tag: 'FILL',
+      sev: 'good',
+      component: componentByTrade.get(id) || 'REGISTRY',
+      segs: tradeSegs,
+      raw: `fill ${id || '?'} · ${String((f && f.side) || 'BUY')} ${Number.isFinite(size) ? size : '?'}`
+        + ` @ ${Number.isFinite(price) ? price.toFixed(2) : '?'}`
+        + ` · condition ${(f && f.condition_id) || '—'} · pair ${(f && f.pair_id) || '—'}`,
+    });
+  }
+  for (const ev of events) {
+    if (!isTradeEvent(ev)) continue;
+    const ex = ev.extra || {};
+    const id = String(ex.trade_id || ex.order_id || '');
+    if (id && seen.has(id)) continue;
+    // A fill the ring still holds gets the same three columns as a registry
+    // fill, so the list reads as one table no matter which source fed a row.
+    const ringSize = Number(ex.size);
+    const ringPrice = Number(ex.price);
+    let segs;
+    if (Number.isFinite(ringSize) && Number.isFinite(ringPrice)) {
+      const title = ex.market_title || titles.get(String(ex.condition_id || '')) || '';
+      segs = [
+        tickerSeg('side', String(ex.side || 'BUY')),
+        tickerDim(' '),
+        tickerSeg('size', ringSize),
+        tickerDim(' @ $'),
+        tickerSeg('price', ringPrice.toFixed(2)),
+        tickerDim(' '),
+        ...tickerMarketSegs(title || ev.market, ex.condition_id),
+      ];
+    } else {
+      segs = tickerProseSegs(ev.message || ev.line || '');
+    }
+    rows.push({
+      key: `ring-${ev.seq}`,
+      clock: ev.timeTag || '',
+      tag: ev.eventTag || 'TRADE',
+      sev: ev.severity || 'good',
+      component: tickerEventComponent(ev),
+      segs,
+      raw: ev.rawDetail || ev.line || '',
+    });
+  }
+  return rows;
+}
+
+function buildAlertRows(events) {
+  const rows = [];
+  // A naked leg is live risk even when its transition scrolled out of the ring.
+  for (const p of tickerQuoteState.pairs) {
+    if (String((p && p.hedge_state) || '').toUpperCase() !== 'NAKED') continue;
+    const title = (p.market && (p.market.title || p.market.slug)) || p.condition_id || 'unknown';
+    rows.push({
+      key: `naked-${p.pair_id || title}`,
+      clock: '',
+      tag: 'NAKED LEG',
+      sev: 'warn',
+      // The guardian owns hedge state, so a naked leg is its row.
+      component: 'GUARD',
+      segs: [
+        tickerSeg('text', 'one leg unfilled, the other not hedged'),
+        tickerDim(' · '),
+        tickerSeg('market', title),
+      ],
+      raw: `pair ${p.pair_id || '—'} · hedge_state=NAKED · combined=${p.combined_price ?? '—'}`
+        + ` · condition ${p.condition_id || '—'}`,
+    });
+  }
+  for (const ev of events) {
+    if (!tickerIsAlertEvent(ev)) continue;
+    rows.push({
+      key: `ring-${ev.seq}`,
+      clock: ev.timeTag || '',
+      tag: ev.eventTag || 'ALERT',
+      sev: ev.severity || 'warn',
+      component: tickerEventComponent(ev),
+      segs: tickerProseSegs(ev.message || ev.line || ''),
+      raw: ev.rawDetail || ev.line || '',
+    });
+  }
+  return rows;
+}
+
+const OPEN_ORDER_STATUSES = new Set(['open', 'partial', 'pending']);
+
+function tickerOrderIsOpen(o) {
+  return OPEN_ORDER_STATUSES.has(String((o && o.status) || '').toLowerCase());
+}
+
+/* ── Structured row fields ──
+ * A message is a list of tokens, not a sentence. Every field that varies is
+ * rendered as an inline-block reserved to the width of the longest value it can
+ * hold, so `×5` and `×10` put the next token on the same column instead of
+ * shoving the row right. Widths are character counts in the ticker's monospace
+ * face, and each one is derived from its own upper bound rather than guessed --
+ * raise a size cap and its field widens with it.
+ */
+const TICKER_FIELD_WIDTH = {
+  side: 'SELL'.length,       // BUY / SELL
+  size: '999'.length,        // shares
+  leg: '0.999×999'.length,   // price × size, the whole unit
+  price: '0.999'.length,     // money, without the $
+  cents: '+100¢'.length,     // edge in cents
+  age: '9999h'.length,       // fmtOrderAge ceiling
+};
+
+function tickerSeg(kind, text, mod) {
+  return { k: kind, v: text == null ? '' : String(text), m: mod || '' };
+}
+
+function tickerDim(text) {
+  return tickerSeg('dim', text);
+}
+
+// One leg is price×size as a single fixed unit: the × must hug the price, so
+// the padding belongs to the unit, not to either half.
+function tickerLegSeg(price, size) {
+  return { k: 'leg', price: String(price), size: String(size) };
+}
+
+function tickerFieldStyle(kind) {
+  const width = TICKER_FIELD_WIDTH[kind];
+  return width ? ` style="min-width:${width}ch"` : '';
+}
+
+function renderTickerSegments(segs) {
+  let html = '';
+  for (const seg of (segs || [])) {
+    if (!seg) continue;
+    if (seg.k === 'leg') {
+      html += `<span class="tk tk-leg"${tickerFieldStyle('leg')}>`
+        + `<span class="tk tk-price">${esc(seg.price)}</span>`
+        + `<span class="tk tk-dim">×</span>`
+        + `<span class="tk tk-size"${tickerFieldStyle('size')}>${esc(seg.size)}</span>`
+        + `</span>`;
+      continue;
+    }
+    if (seg.v === '') continue;
+    const mod = seg.m ? ` tk-${seg.m}` : '';
+    html += `<span class="tk tk-${seg.k}${mod}"${tickerFieldStyle(seg.k)}>${esc(seg.v)}</span>`;
+  }
+  return html;
+}
+
+// A condition id is 66 characters of hex and reads as noise in a row: the head
+// and tail identify it, the middle does not.
+function shortMarketId(value) {
+  const s = String(value || '');
+  return /^0x[0-9a-fA-F]{20,}$/.test(s) ? `${s.slice(0, 10)}...${s.slice(-6)}` : s;
+}
+
+function tickerMarketSegs(title, fallbackId) {
+  const name = title || (fallbackId ? `Market ${shortMarketId(fallbackId)}` : 'unknown market');
+  return [tickerDim('on '), tickerSeg('market', name)];
+}
+
+
+// Prose from the ring keeps its wording but not its anonymity: prices, sizes,
+// cents and addresses are pulled out as their own tokens so the eye can skip
+// the words and read the numbers.
+const TICKER_PROSE_TOKEN = /(\$\d+(?:\.\d+)?)|(\b0x[0-9a-fA-F]{6,}\b)|(\b\d+(?:\.\d+)?(?=\s+(?:shares?|orders?|markets?|legs?)\b))|(\b\d+¢)/g;
+
+function tickerProseSegs(text) {
+  const s = String(text == null ? '' : text);
+  const segs = [];
+  let at = 0;
+  TICKER_PROSE_TOKEN.lastIndex = 0;
+  let m;
+  while ((m = TICKER_PROSE_TOKEN.exec(s)) !== null) {
+    if (m.index > at) segs.push(tickerSeg('text', s.slice(at, m.index)));
+    if (m[1]) {
+      segs.push(tickerDim('$'), tickerSeg('price', m[1].slice(1)));
+    } else if (m[2]) {
+      segs.push(tickerDim(shortMarketId(m[2])));
+    } else if (m[3]) {
+      segs.push(tickerSeg('size', m[3]));
+    } else {
+      segs.push(tickerSeg('cents', m[4]));
+    }
+    at = m.index + m[0].length;
+  }
+  if (at < s.length) segs.push(tickerSeg('text', s.slice(at)));
+  return segs;
+}
+
+// `0.45×5 + 0.48×5` — price and size in the order the pair holds its legs.
+// A filled leg reports `size_remaining: 0`, so the remaining size is only the
+// right number when it is positive; otherwise quote what was originally posted.
+function tickerLegPairs(legs) {
+  const pairs = [];
+  for (const o of legs) {
+    const price = Number(o && o.price);
+    if (!Number.isFinite(price)) continue;
+    const remaining = Number(o && o.size_remaining);
+    const original = Number(o && o.original_size);
+    pairs.push({
+      price: price.toFixed(2),
+      size: String(remaining > 0 ? remaining : (Number.isFinite(original) ? original : 0)),
+    });
+  }
+  return pairs;
+}
+
+// One line the operator can read without cross-referencing: what is quoted,
+// what the pair costs, the edge, the age — and for a naked pair the break-even
+// the resting leg has to beat before the hedge closes. Order is fixed so the
+// columns land in the same place on every row.
+function tickerQuoteSegments(row) {
+  const segs = [];
+  const pairs = row.legPairs || [];
+  if (pairs.length) {
+    pairs.forEach((p, i) => {
+      if (i) segs.push(tickerDim(' + '));
+      segs.push(tickerLegSeg(p.price, p.size));
+    });
+  } else if (row.quotes && row.quotes.length) {
+    segs.push(tickerSeg('text', quoteList(row.quotes).join(' and ')));
+  } else if (row.intentCount) {
+    segs.push(tickerSeg('size', row.intentCount), tickerDim(' legs'));
+  } else {
+    segs.push(tickerSeg('text', 'no legs quoted'));
+  }
+
+  if (row.combined != null) {
+    const cents = Math.round((1 - row.combined) * 100);
+    segs.push(tickerDim(' · = $'), tickerSeg('price', row.combined.toFixed(2)), tickerDim(' · '));
+    // A pair over $1.00 is a booked loss, so it is spelled out, not just signed.
+    if (cents >= 0) {
+      segs.push(tickerSeg('cents', `+${cents}¢`, 'good'));
+    } else {
+      segs.push(tickerSeg('cents', `${-cents}¢`, 'bad'), tickerSeg('over', ' OVER $1', 'bad'));
+    }
+  }
+
+  if (row.hedge === 'NAKED' && row.filledPrice != null) {
+    segs.push(tickerDim(' · filled $'), tickerSeg('price', row.filledPrice.toFixed(2)));
+    if (row.breakEven != null) {
+      segs.push(tickerDim(' · break-even $'), tickerSeg('price', row.breakEven.toFixed(2)));
+    }
+  } else if (row.ageSec > 0) {
+    segs.push(tickerDim(' · '), tickerSeg('age', fmtOrderAge(row.ageSec)));
+  }
+  if (row.submitted != null && row.submitted > 0) {
+    segs.push(tickerDim(' · '), tickerSeg('size', row.submitted), tickerDim(' new'));
+  }
+  segs.push(tickerDim(' '), ...tickerMarketSegs(row.title, row.conditionId));
+  return segs;
+}
+
+function tickerQuoteStatus(row) {
+  if (row.hedge === 'NAKED') return { tag: 'NAKED', sev: 'warn' };
+  if (row.submitted != null && row.submitted > 0) return { tag: 'PLACED', sev: 'good' };
+  if (row.openCount > 0) return { tag: 'RESTING', sev: 'info' };
+  if (row.merged) return { tag: 'MERGED', sev: 'good' };
+  return { tag: 'PLANNED', sev: 'info' };
+}
+
+function tickerQuoteKey(part) {
+  const m = (part && part.market) || {};
+  return String((part && part.condition_id) || m.condition_id || m.slug
+    || (part && part.pair_id) || '');
+}
+
+function buildQuoteSummaries(events) {
+  const rows = new Map();
+  // A submit row names its market by slug, not by condition id, so the two
+  // sources need a shared key or every market lands twice.
+  const keyBySlug = new Map();
+
+  // 1) Everything the registry says is quoted or filled right now.
+  for (const pair of tickerQuoteState.pairs) {
+    const key = tickerQuoteKey(pair);
+    if (!key) continue;
+    if (pair.market && pair.market.slug) keyBySlug.set(String(pair.market.slug), key);
+    const orders = Array.isArray(pair.orders) ? pair.orders : [];
+    const open = orders.filter(tickerOrderIsOpen);
+    const filled = orders.filter((o) => String((o && o.status) || '').toLowerCase() === 'filled');
+    const merged = orders.some((o) => String((o && o.display_status) || '').toLowerCase() === 'merged');
+    const title = (pair.market && (pair.market.title || pair.market.slug)) || '';
+    if (!open.length && !filled.length && !title) continue;
+    const combinedRaw = Number(pair.combined_price);
+    const breakEvenRaw = pair.break_even && Number(pair.break_even.break_even_price);
+    rows.set(key, {
+      key,
+      market: (pair.market && pair.market.slug) || '',
+      title,
+      conditionId: pair.condition_id || key,
+      legPairs: tickerLegPairs(open.length ? open : filled),
+      quotes: [],
+      intentCount: 0,
+      combined: Number.isFinite(combinedRaw) ? combinedRaw : null,
+      openCount: open.length,
+      merged,
+      ageSec: open.reduce((m, o) => Math.max(m, Number((o && o.age_sec) || 0)), 0),
+      hedge: String(pair.hedge_state || '').toUpperCase(),
+      filledPrice: filled.length ? Number(filled[0].price) : null,
+      breakEven: Number.isFinite(breakEvenRaw) ? breakEvenRaw : null,
+      decidedAt: '',
+      submitted: null,
+      cancelled: 0,
+      placed: 0,
+      planned: false,
+      family: '',
+    });
+  }
+
+  // 2) Plans the ring saw that the registry has not turned into an order yet.
+  for (const ev of events) {
+    if (ev.action !== 'decide' && ev.action !== 'submit') continue;
+    const ex = ev.extra || {};
+    const key = String(ex.condition_id || keyBySlug.get(String(ev.market || '')) || ev.market || '');
+    if (!key) continue;
+    let row = rows.get(key);
+    if (!row) {
+      row = {
+        key, market: ev.market || '', title: ex.bot_market_title || '',
+        conditionId: key, legPairs: [], quotes: [], intentCount: 0, combined: null,
+        openCount: 0, merged: false, ageSec: 0, hedge: '', filledPrice: null,
+        breakEven: null, decidedAt: '', submitted: null, cancelled: 0, placed: 0,
+        planned: false, family: ev.family,
+      };
+      rows.set(key, row);
+    }
+    if (ev.action === 'decide') {
+      // Newest first: the first decide seen is the current intent.
+      if (!row.planned) {
+        row.planned = true;
+        row.decidedAt = ev.timeTag || '';
+        row.quotes = Array.isArray(ex.quotes) ? ex.quotes : [];
+        row.intentCount = Number(ex.intent_count || 0);
+        row.title = row.title || ex.bot_market_title || '';
+        row.family = ev.family;
+      }
+    } else {
+      if (row.submitted == null) {
+        row.submitted = Number(ex.submitted || 0);
+        row.cancelled = Number(ex.cancelled || 0);
+      }
+      row.placed += Number(ex.submitted || 0);
+    }
+  }
+
+  // Risk first: a naked leg is the failure mode, then live quotes, then plans.
+  const rank = (r) => (r.hedge === 'NAKED' ? 0 : r.openCount > 0 ? 1 : r.merged ? 3 : 2);
+  const registryAnswered = tickerQuoteState.pairs.length > 0;
+  return Array.from(rows.values())
+    .filter((r) => r.title || r.market || (r.legPairs && r.legPairs.length))
+    // A ring decide the registry never turned into a pair carries no legs, so
+    // it would read "no legs quoted" beside the real book. When the registry
+    // answered, that market simply is not quoted; drop the empty row.
+    .filter((r) => !(registryAnswered && !(r.legPairs && r.legPairs.length)
+      && !r.intentCount && !r.openCount && !r.merged))
+    .sort((a, b) => rank(a) - rank(b)
+      || String(b.decidedAt).localeCompare(String(a.decidedAt))
+      || a.ageSec - b.ageSec);
+}
+
+function renderSummaryRow(row) {
+  const sev = row.sev || 'info';
+  const div = document.createElement('div');
+  div.className = `ticker-event ${sev}`;
+  if (div.dataset) div.dataset.seq = `s-${row.key}`;
+  const raw = (tickerShowDetails && row.raw)
+    ? `<div class="ticker-raw">${esc(row.raw)}</div>` : '';
+  div.innerHTML = `<div class="ticker-row ticker-translation ${sev}">` +
+    `<span class="ticker-col ticker-time">[${esc(row.clock || '—')}]</span>` +
+    `<span class="ticker-col ticker-process">[${esc(row.component || 'REGISTRY')}]</span>` +
+    `<span class="ticker-col ticker-event ticker-event-tag">[${esc(row.tag || '')}]</span>` +
+    `<span class="ticker-col ticker-msg">${renderTickerSegments(row.segs)}</span>` +
+    `</div>${raw}`;
+  tickerEl.appendChild(div);
+}
+
+function renderQuoteRow(row) {
+  const st = tickerQuoteStatus(row);
+  const div = document.createElement('div');
+  div.className = `ticker-event ${st.sev}`;
+  if (div.dataset) div.dataset.seq = `q-${row.key}`;
+  const when = row.decidedAt || (row.ageSec > 0 ? fmtOrderAge(row.ageSec) : '—');
+  div.innerHTML = `<div class="ticker-row ticker-translation ${st.sev}">` +
+    `<span class="ticker-col ticker-time">[${esc(when)}]</span>` +
+    `<span class="ticker-col ticker-process">[QUOTE]</span>` +
+    `<span class="ticker-col ticker-event ticker-event-tag">[${esc(st.tag)}]</span>` +
+    `<span class="ticker-col ticker-msg">${renderTickerSegments(tickerQuoteSegments(row))}</span>` +
+    `</div>`;
+  tickerEl.appendChild(div);
 }
 
 function renderTickerFeed() {
+  const prevTop = tickerEl.scrollTop || 0;
+  const anchor = (!tickerAutoscroll && prevTop > 0) ? captureTickerAnchor() : null;
   tickerEl.innerHTML = '';
+  updateTickerComponentSelect();
   const currentEvents = getActiveTickerEvents();
-  const filtered = currentEvents.filter(tickerMatches);
 
+  if (tickerFilter === 'quotes') {
+    const summaries = buildQuoteSummaries(currentEvents);
+    if (summaries.length === 0) {
+      renderTickerEmpty();
+      return;
+    }
+    for (const s of summaries) renderQuoteRow(s);
+    settleTickerScroll(prevTop, anchor);
+    return;
+  }
+
+  if (tickerFilter === 'trades' || tickerFilter === 'guardrail') {
+    let rows = tickerFilter === 'trades'
+      ? buildTradeRows(currentEvents)
+      : buildAlertRows(currentEvents);
+    // The component picker keeps working inside a category.
+    if (tickerComponent !== 'all') rows = rows.filter((r) => r.component === tickerComponent);
+    if (rows.length === 0) {
+      renderTickerEmpty();
+      return;
+    }
+    for (const r of rows) renderSummaryRow(r);
+    settleTickerScroll(prevTop, anchor);
+    return;
+  }
+
+  const filtered = currentEvents.filter(tickerMatches);
   if (filtered.length === 0) {
-    const st = tickerEmptyState();
-    tickerEl.innerHTML = `<div class="empty-state"><div class="empty-state-title">${esc(st.title)}</div><div class="empty-state-msg">${esc(st.msg)}</div></div>`;
+    renderTickerEmpty();
     return;
   }
 
   for (const ev of filtered) {
     const div = document.createElement('div');
-    div.className = 'ticker-event';
-    if (ev.translation) {
-      const colorCls = tickerColorClass(ev);
-      const raw = tickerShowDetails ? `<div class="ticker-raw">${esc(ev.line)}</div>` : '';
-      div.innerHTML = `<div class="ticker-translation ${colorCls}">${esc(ev.translation)}</div>${raw}`;
-    } else {
-      div.innerHTML = `<div class="ticker-raw">${esc(ev.line)}</div>`;
-    }
+    const sev = ev.severity || tickerColorClass(ev) || 'muted';
+    div.className = `ticker-event ${sev}`;
+    if (div.dataset) div.dataset.seq = String(ev.seq);
+    const raw = tickerShowDetails ? `<div class="ticker-raw">${esc(ev.rawDetail || ev.line)}</div>` : '';
+    const timeDisplay = ev.timeTag || extractTimeFromLine(ev.line) || '--:--:--';
+    const procDisplay = ev.processTag || streamProcessTag(ev, ev.family);
+    const evDisplay = ev.eventTag || streamEventTag(ev);
+    const msgDisplay = ev.message || (ev.translation ? ev.translation.replace(/^\d{2}:\d{2}:\d{2}\s*—\s*/, '') : ev.line);
+
+    div.innerHTML = `<div class="ticker-row ticker-translation ${sev}">` +
+      `<span class="ticker-col ticker-time">[${esc(timeDisplay)}]</span>` +
+      `<span class="ticker-col ticker-process">[${esc(procDisplay)}]</span>` +
+      `<span class="ticker-col ticker-event ticker-event-tag">[${esc(evDisplay)}]</span>` +
+      `<span class="ticker-col ticker-msg">${renderTickerSegments(tickerProseSegs(msgDisplay))}</span>` +
+      `</div>${raw}`;
     tickerEl.appendChild(div);
   }
 
-  if (tickerAutoscroll) {
-    tickerEl.scrollTop = 0;
-  }
+  settleTickerScroll(prevTop, anchor);
 }
 
 // Wire up ticker family tab buttons
@@ -1590,6 +2500,13 @@ document.querySelectorAll('.ticker-filter-btn').forEach(btn => {
     renderTickerFeed();
   });
 });
+
+const tickerComponentSelect = document.getElementById('ticker-component-select');
+if (tickerComponentSelect) {
+  tickerComponentSelect.addEventListener('change', () => {
+    setTickerComponent(tickerComponentSelect.value || 'all');
+  });
+}
 
 const btnTickerDetails = document.getElementById('btn-ticker-details');
 if (btnTickerDetails) {
@@ -1620,10 +2537,13 @@ if (btnClearTicker) {
 const btnPauseTicker = document.getElementById('btn-pause-ticker');
 if (btnPauseTicker) {
   btnPauseTicker.addEventListener('click', () => {
-    tickerAutoscroll = !tickerAutoscroll;
-    btnPauseTicker.textContent = tickerAutoscroll ? 'AUTOSCROLL: ON' : 'AUTOSCROLL: PAUSED';
-    btnPauseTicker.style.color = tickerAutoscroll ? 'var(--text-secondary)' : '#fbbf24';
+    setTickerAutoscroll(!tickerAutoscroll);
+    if (tickerAutoscroll) tickerEl.scrollTop = 0;
   });
+}
+
+if (tickerEl && typeof tickerEl.addEventListener === 'function') {
+  tickerEl.addEventListener('scroll', tickerHandleScroll);
 }
 
 const tickerShadowPicker = document.getElementById('ticker-shadow-picker');
@@ -1657,12 +2577,12 @@ function connectLogStream(runId) {
         const data = JSON.parse(e.data);
         if (data && data.family) {
           tickerSourceMetadata[data.family] = data;
-          if (data.family === 'shadow') {
-            const shadowBtn = document.querySelector('.ticker-tab-btn[data-tab="shadow"]');
-            if (shadowBtn) {
-              shadowBtn.classList.toggle('unavailable', !data.available);
-              shadowBtn.title = data.available ? (data.labels || []).join(' ') : (data.reason || 'Unavailable');
-            }
+          // An unavailable feed must look unavailable on its own tab: an
+          // empty LIVE RUN that never explains itself reads as broken filters.
+          const tabBtn = document.querySelector(`.ticker-tab-btn[data-tab="${data.family}"]`);
+          if (tabBtn) {
+            tabBtn.classList.toggle('unavailable', !data.available);
+            tabBtn.title = data.available ? (data.labels || []).join(' ') : (data.reason || 'Unavailable');
           }
           if (tickerBuffers[data.family]) {
             tickerBuffers[data.family].length = 0;
@@ -1682,19 +2602,45 @@ function connectLogStream(runId) {
         if (!data || !data.family) return;
         if (data.source === 'ring' && data.event) {
           const ev = data.event;
-          const ts = fmtLocalTime(ev.ts);
-          const svc = (ev.service || '').toUpperCase().slice(0, 6);
-          const action = ev.action || '';
+          const ts = fmtLocalTime(ev.ts) || '--:--:--';
+          const procTag = streamProcessTag(ev, data.family);
+          const evTag = streamEventTag(ev);
+          const severity = streamSeverityClass(ev);
           const slug = ev.market_slug || '';
           const reason = ev.reason ? ` — ${ev.reason}` : '';
-          const rawLine = `[${ts}] [${svc}] ${action} ${slug}${reason}`;
-          const { translation, ctx } = translateEvent(ev);
-          appendTickerEvent(rawLine, translation, ctx, ev.service, ev.action, ev.extra, data.family);
+          const rawLine = `[${ts}] [${procTag}] ${ev.action || ''} ${slug}${reason}`;
+          const sentence = buildStreamSentence(ev);
+          const msgBody = sentence ? sentence.replace(/^\d{2}:\d{2}:\d{2}\s*—\s*/, '') : '';
+          appendTickerEvent(rawLine, sentence, '', ev.service, ev.action, ev.extra, data.family, {
+            timeTag: ts,
+            processTag: procTag,
+            eventTag: evTag,
+            message: msgBody,
+            severity: severity,
+            component: procTag,
+            market: ev.market_slug || (ev.extra && ev.extra.bot_market_title) || '',
+          });
         } else if (data.source === 'text') {
           const fileTag = data.file || 'log';
           const rawLine = `[${fileTag}] ${data.text}`;
-          const svc = data.family === 'filter' ? 'filter' : '';
-          appendTickerEvent(rawLine, null, null, svc, '', {}, data.family);
+          const ts = data.ts ? fmtLocalTime(data.ts) : '--:--:--';
+          const { msg, evTag, severity, service: frameService } = translateConsoleLine(data);
+          const svc = frameService || (data.family === 'filter' ? 'filter' : '');
+          const procTag = frameService
+            ? streamProcessTag({ service: frameService, action: evTag.toLowerCase() }, data.family)
+            // A rehearsal's stdout carries no service of its own, so it belongs
+            // in the same bucket as that run's ring rows. Slicing the filename
+            // turned shadow_run-abc.out.log into SHADOW_R and split the picker.
+            : (data.family === 'shadow' ? 'SHADOW'
+              : (data.family === 'filter' ? 'FILTER' : fileTag.replace(/\.[^/.]+$/, '').toUpperCase().slice(0, 8)));
+          appendTickerEvent(rawLine, msg, '', svc, evTag.toLowerCase(), {}, data.family, {
+            timeTag: ts,
+            processTag: procTag,
+            eventTag: evTag,
+            message: msg,
+            severity: severity,
+            component: procTag,
+          });
         }
       } catch {}
     });
@@ -11081,7 +12027,10 @@ async function pollStatus() {
     setBackendContact([state, status, kpi, scanState, trialReadiness, guardAlerts, guardHealth]
       .some(r => r !== null && r !== undefined));
 
-    if (state) lastState = state;
+    if (state) {
+      lastState = state;
+      noteTickerQuoteState(state);
+    }
     if (kpi) lastKpi = kpi;
     // Snapshots for switchTab, which repaints the newly shown tab from cache.
     // A failed fetch (null) keeps the last good copy — except readiness: a
@@ -11232,9 +12181,15 @@ if (typeof module === 'undefined' || !module.exports) {
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, renderProfileBadge, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
-    EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
+    EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent, streamProcessTag, streamEventTag, streamSeverityClass, translateConsoleLine,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,
+    tickerEventComponent, tickerComponentChoices, updateTickerComponentSelect,
+    setTickerComponent, tickerScopeLabel, tickerIsAlertEvent, tickerIsConnectionEvent,
+    setTickerAutoscroll, tickerIsAutoscroll, tickerHandleScroll, updateTickerSubtitle,
+    buildQuoteSummaries, noteTickerQuoteState, buildTradeRows, buildAlertRows,
+    TICKER_FIELD_WIDTH, renderTickerSegments, tickerProseSegs, tickerQuoteSegments,
+    shortMarketId,
     setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,
