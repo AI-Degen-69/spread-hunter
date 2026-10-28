@@ -2772,14 +2772,28 @@ def test_event_stream_tabs_harness():
     assert out["transitionInAlerts"] is True
     assert out["rerankNotConnection"] is True
 
-    # QUOTES distils decide+submit into one row per market.
+    # QUOTES distils the registry's pairs into one row per market, so a resting
+    # book is visible even when the ring tail holds no decide for it.
     assert out["quoteDistilled"] is True
     assert out["quotePlaced"] is True
     assert out["quoteResting"] is True
-    # /api/state orders mark a market RESTING even when the ring tail never
-    # contains its original submission.
     assert out["quoteRestingFromState"] is True
     assert out["quotePlanned"] is True
+    # A ring decide the registry never quoted carries no legs; it is churn, and
+    # it must not show up as a "no legs quoted" row beside the real book.
+    assert out["quoteNoiseDropped"] is True
+    # A naked pair is amber, names its break-even, and sorts above hedged pairs.
+    assert out["quoteNakedFirst"] is True
+    # A pair over $1.00 is a booked loss, so it says so in words.
+    assert out["quoteOverOneDollar"] is True
+    # A filled leg shows what was posted, not the zero left remaining.
+    assert out["filledLegSize"] is True
+    # TRADES reads the registry, so an early fill the ring tail no longer holds
+    # still appears, and a ring row with the same id is not doubled.
+    assert out["tradesFromRegistry"] is True
+    assert out["tradesDeduped"] is True
+    # ALERTS names a naked pair as live risk without waiting for its row.
+    assert out["nakedInAlerts"] is True
     assert out["emptyQuotes"] is True
 
 

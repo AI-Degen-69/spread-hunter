@@ -1957,56 +1957,249 @@ function renderTickerEmpty() {
   tickerEl.scrollTop = 0;
 }
 
-// QUOTES is a summary, not another row filter: one line per market, built from
-// the decide that describes the wanted legs and the submit that says whether
-// they are already resting. The raw feed spends two rows per market per cycle
-// saying the same thing.
-let tickerOrderSnapshot = [];
+// QUOTES is a summary, not another row filter: one line per market pair. The
+// registry (`/api/state` pairs) is the source, not the ring. The ring only knows
+// what was *sent*, so a resting order is invisible there — which is exactly how
+// a feed full of "No orders placed" coexists with a book full of quotes. The
+// pairs payload also carries the market title, the combined cost, and whether
+// the pair is hedged.
+let tickerQuoteState = { orders: [], pairs: [], fills: [] };
 
-// `/api/state` already knows which orders rest; the event ring only knows what
-// was sent. Stamping that on the quote rows is what stops "No orders placed"
-// reading as "nothing is working" while the book is full of our quotes.
-function noteTickerOrders(orders) {
-  tickerOrderSnapshot = Array.isArray(orders) ? orders : [];
-  if (tickerFilter === 'quotes') renderTickerFeed();
+function noteTickerQuoteState(state) {
+  const st = state || {};
+  tickerQuoteState = {
+    orders: Array.isArray(st.orders) ? st.orders : [],
+    pairs: Array.isArray(st.pairs) ? st.pairs : [],
+    fills: Array.isArray(st.fills) ? st.fills : [],
+  };
+  if (tickerFilter === 'quotes' || tickerFilter === 'trades' || tickerFilter === 'guardrail') {
+    renderTickerFeed();
+  }
 }
 
-function tickerRestingByCondition() {
-  const counts = new Map();
-  for (const o of tickerOrderSnapshot) {
-    const status = String((o && o.status) || '').toLowerCase();
-    if (status !== 'open' && status !== 'partial' && status !== 'pending') continue;
-    const cid = o && o.condition_id;
-    if (!cid) continue;
-    counts.set(cid, (counts.get(cid) || 0) + 1);
+function tickerClockFromMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return new Date(n).toLocaleTimeString([], { hour12: false });
+}
+
+function tickerTitleByCondition() {
+  const titles = new Map();
+  for (const p of tickerQuoteState.pairs) {
+    const key = (p && (p.condition_id || (p.market && p.market.condition_id))) || '';
+    if (key) titles.set(String(key), (p.market && (p.market.title || p.market.slug)) || '');
   }
-  return counts;
+  return titles;
+}
+
+// TRADES and ALERTS are facts, not a tail. The ring is a rolling window over a
+// run that can emit thousands of rows, so a fill from the first minute is gone
+// from it long before the run ends. Read them from the registry, and add ring
+// rows for anything the registry has not recorded yet (deduped by trade id).
+function buildTradeRows(events) {
+  const titles = tickerTitleByCondition();
+  const rows = [];
+  const seen = new Set();
+  for (const f of tickerQuoteState.fills) {
+    const id = String((f && f.trade_id) || '');
+    if (id) seen.add(id);
+    const size = Number(f && f.size);
+    const price = Number(f && f.price);
+    const title = titles.get(String((f && f.condition_id) || '')) || '';
+    rows.push({
+      key: id || `fill-${rows.length}`,
+      clock: tickerClockFromMs((f && (f.recorded_ts || f.venue_ts)) || 0),
+      tag: 'FILL',
+      sev: 'good',
+      // Fills are recorded by the query/fill recorder, so the component picker
+      // and the process column stay truthful for a registry row.
+      component: 'QUERY',
+      msg: `${String((f && f.side) || 'BUY')} ${Number.isFinite(size) ? size : '?'} @ `
+        + `$${Number.isFinite(price) ? price.toFixed(2) : '?'}`
+        + (title ? ` on ${title}` : ` · pair ${(f && f.pair_id) || '—'}`),
+      raw: `fill ${id || '?'} · ${String((f && f.side) || 'BUY')} ${Number.isFinite(size) ? size : '?'}`
+        + ` @ ${Number.isFinite(price) ? price.toFixed(2) : '?'}`
+        + ` · condition ${(f && f.condition_id) || '—'} · pair ${(f && f.pair_id) || '—'}`,
+    });
+  }
+  for (const ev of events) {
+    if (!isTradeEvent(ev)) continue;
+    const ex = ev.extra || {};
+    const id = String(ex.trade_id || ex.order_id || '');
+    if (id && seen.has(id)) continue;
+    rows.push({
+      key: `ring-${ev.seq}`,
+      clock: ev.timeTag || '',
+      tag: ev.eventTag || 'TRADE',
+      sev: ev.severity || 'good',
+      component: tickerEventComponent(ev),
+      msg: ev.message || ev.line || '',
+      raw: ev.rawDetail || ev.line || '',
+    });
+  }
+  return rows;
+}
+
+function buildAlertRows(events) {
+  const rows = [];
+  // A naked leg is live risk even when its transition scrolled out of the ring.
+  for (const p of tickerQuoteState.pairs) {
+    if (String((p && p.hedge_state) || '').toUpperCase() !== 'NAKED') continue;
+    const title = (p.market && (p.market.title || p.market.slug)) || p.condition_id || 'unknown';
+    rows.push({
+      key: `naked-${p.pair_id || title}`,
+      clock: '',
+      tag: 'NAKED LEG',
+      sev: 'warn',
+      // The guardian owns hedge state, so a naked leg is its row.
+      component: 'GUARD',
+      msg: `one leg unfilled, the other not hedged · ${title}`,
+      raw: `pair ${p.pair_id || '—'} · hedge_state=NAKED · combined=${p.combined_price ?? '—'}`
+        + ` · condition ${p.condition_id || '—'}`,
+    });
+  }
+  for (const ev of events) {
+    if (!tickerIsAlertEvent(ev)) continue;
+    rows.push({
+      key: `ring-${ev.seq}`,
+      clock: ev.timeTag || '',
+      tag: ev.eventTag || 'ALERT',
+      sev: ev.severity || 'warn',
+      component: tickerEventComponent(ev),
+      msg: ev.message || ev.line || '',
+      raw: ev.rawDetail || ev.line || '',
+    });
+  }
+  return rows;
+}
+
+const OPEN_ORDER_STATUSES = new Set(['open', 'partial', 'pending']);
+
+function tickerOrderIsOpen(o) {
+  return OPEN_ORDER_STATUSES.has(String((o && o.status) || '').toLowerCase());
+}
+
+// `0.45×5 + 0.48×5` — price and size in the order the pair holds its legs.
+// A filled leg reports `size_remaining: 0`, so the remaining size is only the
+// right number when it is positive; otherwise quote what was originally posted.
+function tickerLegsText(legs) {
+  const parts = [];
+  for (const o of legs) {
+    const price = Number(o && o.price);
+    if (!Number.isFinite(price)) continue;
+    const remaining = Number(o && o.size_remaining);
+    const original = Number(o && o.original_size);
+    const size = remaining > 0 ? remaining : (Number.isFinite(original) ? original : 0);
+    parts.push(`${price.toFixed(2)}×${size}`);
+  }
+  return parts.join(' + ');
+}
+
+// One line the operator can read without cross-referencing: what is quoted,
+// what the pair costs, the edge, the age — and for a naked pair the break-even
+// the resting leg has to beat before the hedge closes.
+function tickerQuoteMessage(row) {
+  const parts = [];
+  const legs = row.legs || (row.quotes.length ? quoteList(row.quotes).join(' and ') : '');
+  parts.push(legs || (row.intentCount ? `${row.intentCount} legs` : 'no legs quoted'));
+  if (row.combined != null) {
+    parts.push(`= $${row.combined.toFixed(2)}`);
+    const cents = Math.round((1 - row.combined) * 100);
+    // A pair over $1.00 is a booked loss, so it is spelled out, not just signed.
+    parts.push(cents >= 0 ? `+${cents}¢` : `${-cents}¢ OVER $1`);
+  }
+  if (row.hedge === 'NAKED' && row.filledPrice != null) {
+    parts.push(`filled $${row.filledPrice.toFixed(2)}`);
+    if (row.breakEven != null) parts.push(`break-even $${row.breakEven.toFixed(2)}`);
+  } else if (row.ageSec > 0) {
+    parts.push(fmtOrderAge(row.ageSec));
+  }
+  if (row.submitted != null && row.submitted > 0) parts.push(`${row.submitted} new`);
+  return `${parts.join(' · ')} on ${row.title || row.market || 'unknown market'}`;
+}
+
+function tickerQuoteStatus(row) {
+  if (row.hedge === 'NAKED') return { tag: 'NAKED', sev: 'warn' };
+  if (row.submitted != null && row.submitted > 0) return { tag: 'PLACED', sev: 'good' };
+  if (row.openCount > 0) return { tag: 'RESTING', sev: 'info' };
+  if (row.merged) return { tag: 'MERGED', sev: 'good' };
+  return { tag: 'PLANNED', sev: 'info' };
+}
+
+function tickerQuoteKey(part) {
+  const m = (part && part.market) || {};
+  return String((part && part.condition_id) || m.condition_id || m.slug
+    || (part && part.pair_id) || '');
 }
 
 function buildQuoteSummaries(events) {
-  const restingByCondition = tickerRestingByCondition();
   const rows = new Map();
+  // A submit row names its market by slug, not by condition id, so the two
+  // sources need a shared key or every market lands twice.
+  const keyBySlug = new Map();
+
+  // 1) Everything the registry says is quoted or filled right now.
+  for (const pair of tickerQuoteState.pairs) {
+    const key = tickerQuoteKey(pair);
+    if (!key) continue;
+    if (pair.market && pair.market.slug) keyBySlug.set(String(pair.market.slug), key);
+    const orders = Array.isArray(pair.orders) ? pair.orders : [];
+    const open = orders.filter(tickerOrderIsOpen);
+    const filled = orders.filter((o) => String((o && o.status) || '').toLowerCase() === 'filled');
+    const merged = orders.some((o) => String((o && o.display_status) || '').toLowerCase() === 'merged');
+    const title = (pair.market && (pair.market.title || pair.market.slug)) || '';
+    if (!open.length && !filled.length && !title) continue;
+    const combinedRaw = Number(pair.combined_price);
+    const breakEvenRaw = pair.break_even && Number(pair.break_even.break_even_price);
+    rows.set(key, {
+      key,
+      market: (pair.market && pair.market.slug) || '',
+      title,
+      conditionId: pair.condition_id || key,
+      legs: tickerLegsText(open.length ? open : filled),
+      quotes: [],
+      intentCount: 0,
+      combined: Number.isFinite(combinedRaw) ? combinedRaw : null,
+      openCount: open.length,
+      merged,
+      ageSec: open.reduce((m, o) => Math.max(m, Number((o && o.age_sec) || 0)), 0),
+      hedge: String(pair.hedge_state || '').toUpperCase(),
+      filledPrice: filled.length ? Number(filled[0].price) : null,
+      breakEven: Number.isFinite(breakEvenRaw) ? breakEvenRaw : null,
+      decidedAt: '',
+      submitted: null,
+      cancelled: 0,
+      placed: 0,
+      planned: false,
+      family: '',
+    });
+  }
+
+  // 2) Plans the ring saw that the registry has not turned into an order yet.
   for (const ev of events) {
     if (ev.action !== 'decide' && ev.action !== 'submit') continue;
     const ex = ev.extra || {};
-    const key = ev.market || ex.condition_id || ev.rawDetail;
+    const key = String(ex.condition_id || keyBySlug.get(String(ev.market || '')) || ev.market || '');
     if (!key) continue;
     let row = rows.get(key);
     if (!row) {
-      row = { key, market: ev.market || '', title: '', quotes: [], intentCount: 0, conditionId: '',
-              submitted: null, cancelled: 0, decidedAt: '', placed: 0, resting: 0,
-              planned: false, family: ev.family };
+      row = {
+        key, market: ev.market || '', title: ex.bot_market_title || '',
+        conditionId: key, legs: '', quotes: [], intentCount: 0, combined: null,
+        openCount: 0, merged: false, ageSec: 0, hedge: '', filledPrice: null,
+        breakEven: null, decidedAt: '', submitted: null, cancelled: 0, placed: 0,
+        planned: false, family: ev.family,
+      };
       rows.set(key, row);
     }
     if (ev.action === 'decide') {
       // Newest first: the first decide seen is the current intent.
       if (!row.planned) {
         row.planned = true;
-        row.decidedAt = ev.timeTag || '--:--:--';
+        row.decidedAt = ev.timeTag || '';
         row.quotes = Array.isArray(ex.quotes) ? ex.quotes : [];
         row.intentCount = Number(ex.intent_count || 0);
-        row.title = ex.bot_market_title || row.title;
-        row.conditionId = ex.condition_id || row.conditionId;
+        row.title = row.title || ex.bot_market_title || '';
         row.family = ev.family;
       }
     } else {
@@ -2014,35 +2207,51 @@ function buildQuoteSummaries(events) {
         row.submitted = Number(ex.submitted || 0);
         row.cancelled = Number(ex.cancelled || 0);
       }
-      if (Number(ex.submitted || 0) > 0) row.placed += Number(ex.submitted || 0);
+      row.placed += Number(ex.submitted || 0);
     }
   }
-  for (const row of rows.values()) {
-    row.resting = restingByCondition.get(row.conditionId) || 0;
-  }
+
+  // Risk first: a naked leg is the failure mode, then live quotes, then plans.
+  const rank = (r) => (r.hedge === 'NAKED' ? 0 : r.openCount > 0 ? 1 : r.merged ? 3 : 2);
+  const registryAnswered = tickerQuoteState.pairs.length > 0;
   return Array.from(rows.values())
-    .filter((r) => r.title || r.market)
-    .sort((a, b) => String(b.decidedAt).localeCompare(String(a.decidedAt)));
+    .filter((r) => r.title || r.market || r.legs)
+    // A ring decide the registry never turned into a pair carries no legs, so
+    // it would read "no legs quoted" beside the real book. When the registry
+    // answered, that market simply is not quoted; drop the empty row.
+    .filter((r) => !(registryAnswered && !r.legs && !r.intentCount && !r.openCount && !r.merged))
+    .sort((a, b) => rank(a) - rank(b)
+      || String(b.decidedAt).localeCompare(String(a.decidedAt))
+      || a.ageSec - b.ageSec);
 }
 
-function renderQuoteRow(summary) {
-  const s = summary;
-  const fresh = s.submitted != null && s.submitted > 0;
-  const tag = fresh ? 'PLACED' : (s.resting > 0 || s.placed > 0 ? 'RESTING' : 'PLANNED');
-  const sev = fresh ? 'good' : 'info';
+function renderSummaryRow(row) {
+  const sev = row.sev || 'info';
   const div = document.createElement('div');
   div.className = `ticker-event ${sev}`;
-  if (div.dataset) div.dataset.seq = `q-${s.key}`;
-  const legs = quoteList(s.quotes).join(' and ');
-  const what = legs || (s.intentCount ? `${s.intentCount} legs` : 'no legs quoted');
-  const name = s.title || s.market;
-  const tail = fresh ? ` · ${s.submitted} new`
-    : (s.resting > 0 ? ` · ${s.resting} resting` : (s.cancelled ? ` · ${s.cancelled} cancelled` : ''));
+  if (div.dataset) div.dataset.seq = `s-${row.key}`;
+  const raw = (tickerShowDetails && row.raw)
+    ? `<div class="ticker-raw">${esc(row.raw)}</div>` : '';
   div.innerHTML = `<div class="ticker-row ticker-translation ${sev}">` +
-    `<span class="ticker-col ticker-time">[${esc(s.decidedAt || '--:--:--')}]</span>` +
+    `<span class="ticker-col ticker-time">[${esc(row.clock || '—')}]</span>` +
+    `<span class="ticker-col ticker-process">[${esc(row.component || 'REGISTRY')}]</span>` +
+    `<span class="ticker-col ticker-event ticker-event-tag">[${esc(row.tag || '')}]</span>` +
+    `<span class="ticker-col ticker-msg">${esc(row.msg || '')}</span>` +
+    `</div>${raw}`;
+  tickerEl.appendChild(div);
+}
+
+function renderQuoteRow(row) {
+  const st = tickerQuoteStatus(row);
+  const div = document.createElement('div');
+  div.className = `ticker-event ${st.sev}`;
+  if (div.dataset) div.dataset.seq = `q-${row.key}`;
+  const when = row.decidedAt || (row.ageSec > 0 ? fmtOrderAge(row.ageSec) : '—');
+  div.innerHTML = `<div class="ticker-row ticker-translation ${st.sev}">` +
+    `<span class="ticker-col ticker-time">[${esc(when)}]</span>` +
     `<span class="ticker-col ticker-process">[QUOTE]</span>` +
-    `<span class="ticker-col ticker-event ticker-event-tag">[${esc(tag)}]</span>` +
-    `<span class="ticker-col ticker-msg">${esc(what)} on ${esc(name)}${esc(tail)}</span>` +
+    `<span class="ticker-col ticker-event ticker-event-tag">[${esc(st.tag)}]</span>` +
+    `<span class="ticker-col ticker-msg">${esc(tickerQuoteMessage(row))}</span>` +
     `</div>`;
   tickerEl.appendChild(div);
 }
@@ -2061,6 +2270,21 @@ function renderTickerFeed() {
       return;
     }
     for (const s of summaries) renderQuoteRow(s);
+    settleTickerScroll(prevTop, anchor);
+    return;
+  }
+
+  if (tickerFilter === 'trades' || tickerFilter === 'guardrail') {
+    let rows = tickerFilter === 'trades'
+      ? buildTradeRows(currentEvents)
+      : buildAlertRows(currentEvents);
+    // The component picker keeps working inside a category.
+    if (tickerComponent !== 'all') rows = rows.filter((r) => r.component === tickerComponent);
+    if (rows.length === 0) {
+      renderTickerEmpty();
+      return;
+    }
+    for (const r of rows) renderSummaryRow(r);
     settleTickerScroll(prevTop, anchor);
     return;
   }
@@ -11635,7 +11859,7 @@ async function pollStatus() {
 
     if (state) {
       lastState = state;
-      noteTickerOrders(state.orders);
+      noteTickerQuoteState(state);
     }
     if (kpi) lastKpi = kpi;
     // Snapshots for switchTab, which repaints the newly shown tab from cache.
@@ -11793,7 +12017,7 @@ if (typeof module !== 'undefined' && module.exports) {
     tickerEventComponent, tickerComponentChoices, updateTickerComponentSelect,
     setTickerComponent, tickerScopeLabel, tickerIsAlertEvent, tickerIsConnectionEvent,
     setTickerAutoscroll, tickerIsAutoscroll, tickerHandleScroll, updateTickerSubtitle,
-    buildQuoteSummaries, noteTickerOrders,
+    buildQuoteSummaries, noteTickerQuoteState, buildTradeRows, buildAlertRows,
     setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,

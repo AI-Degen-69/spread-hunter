@@ -387,21 +387,114 @@ try {
   decide('argentina-election', 'Argentina election', '0xarg', 0.3, 0.4, '2024-01-15T14:35:06Z');
   // Peru decided with nothing resting: PLANNED.
   decide('peru-election', 'Peru election', '0xperu', 0.2, 0.6, '2024-01-15T14:35:07Z');
+  // The ring also re-decides markets the registry never quoted. Those carry no
+  // legs, so they must not turn into "no legs quoted" rows beside the real book.
+  emitLogEvent({ source: 'ring', family: 'live',
+    event: { ts: '2024-01-15T14:35:08Z', service: 'decide', action: 'decide',
+             market_slug: 'chile-election',
+             extra: { intent_count: 0, bot_market_title: 'Chile election',
+                      condition_id: '0xchile' } } });
 
-  app.noteTickerOrders([
-    { status: 'open', condition_id: '0xarg' },
-    { status: 'cancelled', condition_id: '0xperu' },
-  ]);
+  app.noteTickerQuoteState({
+    orders: [
+      { status: 'open', condition_id: '0xbrazil' },
+      { status: 'open', condition_id: '0xbrazil' },
+    ],
+    // A fill the ring tail no longer reaches still belongs in TRADES.
+    fills: [
+      { trade_id: 'shadow-filled-1', side: 'BUY', size: 5, price: 0.49,
+        recorded_ts: Date.UTC(2024, 0, 15, 14, 30, 0), condition_id: '0xnaked',
+        pair_id: 'pair-naked' },
+    ],
+    pairs: [
+      // Both legs resting, combined under a dollar.
+      { pair_id: 'pair-brazil', condition_id: '0xbrazil', hedge_state: 'RESTING',
+        combined_price: 0.97,
+        market: { condition_id: '0xbrazil', title: 'Brazil election', slug: 'brazil-election' },
+        orders: [
+          { price: 0.45, original_size: 5, size_remaining: 5, status: 'open', age_sec: 240 },
+          { price: 0.48, original_size: 5, size_remaining: 5, status: 'open', age_sec: 240 },
+        ] },
+      // Argentina: one leg resting on a pair that is still paired.
+      { pair_id: 'pair-arg', condition_id: '0xarg', hedge_state: 'RESTING',
+        combined_price: 0.70,
+        market: { condition_id: '0xarg', title: 'Argentina election', slug: 'argentina-election' },
+        orders: [{ price: 0.30, original_size: 6, status: 'open', age_sec: 60 }] },
+      // Canada: the submit in the ring says two new orders went out.
+      { pair_id: 'pair-canada', condition_id: '0xcanada', hedge_state: 'RESTING',
+        combined_price: 0.98,
+        market: { condition_id: '0xcanada', title: 'Canada election', slug: 'canada-election' },
+        orders: [
+          { price: 0.51, original_size: 5, status: 'open', age_sec: 30 },
+          { price: 0.47, original_size: 5, status: 'open', age_sec: 30 },
+        ] },
+      // A naked pair: the failure mode, and it must outrank everything.
+      { pair_id: 'pair-naked', condition_id: '0xnaked', hedge_state: 'NAKED',
+        combined_price: 0.93,
+        break_even: { break_even_price: 0.51, first_fill_price: 0.49 },
+        market: { condition_id: '0xnaked', title: 'Tennis final', slug: 'tennis-final' },
+        orders: [
+          { price: 0.44, original_size: 5, size_remaining: 5, status: 'open', age_sec: 120 },
+          // A filled leg keeps original_size but reports nothing remaining.
+          { price: 0.49, original_size: 5, size_remaining: 0, status: 'filled', display_status: 'merged' },
+        ] },
+      // A fully merged pair is history, but its posted sizes still read right.
+      { pair_id: 'pair-merged', condition_id: '0xmerged', hedge_state: 'MERGED',
+        combined_price: 0.93,
+        market: { condition_id: '0xmerged', title: 'Merged pair', slug: 'merged-pair' },
+        orders: [
+          { price: 0.40, original_size: 5, size_remaining: 0, status: 'filled', display_status: 'merged' },
+          { price: 0.53, original_size: 5, size_remaining: 0, status: 'filled', display_status: 'merged' },
+        ] },
+      // Over a dollar: a booked loss has to say so in words.
+      { pair_id: 'pair-over', condition_id: '0xover', hedge_state: 'RESTING',
+        combined_price: 1.02,
+        market: { condition_id: '0xover', title: 'Hockey overtime', slug: 'hockey-ot' },
+        orders: [
+          { price: 0.55, original_size: 5, status: 'open', age_sec: 900 },
+          { price: 0.47, original_size: 5, status: 'open', age_sec: 900 },
+        ] },
+    ],
+  });
   app.setTickerFilter('quotes');
   out.quoteRows = rows();
-  out.quoteDistilled = out.quoteRows.length === 4;
+  out.quoteDistilled = out.quoteRows.length === 7;
   out.quotePlaced = out.quoteRows.some((r) => r.includes('[PLACED]') && r.includes('Canada election'));
   out.quoteResting = out.quoteRows.some((r) => r.includes('[RESTING]') && r.includes('Brazil election')
-    && r.includes('UP 5 at $0.48 and DOWN 6 at $0.49'));
+    && r.includes('0.45×5 + 0.48×5') && r.includes('= $0.97') && r.includes('+3¢'));
   out.quoteRestingFromState = out.quoteRows.some((r) => r.includes('[RESTING]')
-    && r.includes('Argentina election') && r.includes('1 resting'));
+    && r.includes('Argentina election') && r.includes('0.30×6'));
   out.quotePlanned = out.quoteRows.some((r) => r.includes('[PLANNED]') && r.includes('Peru election'));
+  // A decide with no legs and no registry pair is churn, not a quote.
+  out.quoteNoiseDropped = !out.quoteRows.some((r) => r.includes('Chile election'))
+    && !out.quoteRows.some((r) => r.includes('no legs quoted'));
+  // A naked leg is amber, says so, and sorts above every hedged pair.
+  out.quoteNakedFirst = /ticker-translation warn".*?\[NAKED\]/.test(out.quoteRows[0] || '')
+    && out.quoteRows[0].includes('break-even $0.51');
+  out.quoteOverOneDollar = out.quoteRows.some((r) => r.includes('Hockey overtime')
+    && r.includes('OVER $1'));
+  // A filled leg must show the size that was posted, never `×0`.
+  out.filledLegSize = out.quoteRows.some((r) => r.includes('[MERGED]')
+    && r.includes('0.40×5 + 0.53×5') && !out.quoteRows.some((x) => x.includes('×0')));
 
+  // TRADES reads the registry, so the early fill is there even though the ring
+  // tail starts long after it; a ring row with the same id is not doubled.
+  app.setTickerFilter('trades');
+  const tradeRows = rows();
+  out.tradesFromRegistry = tradeRows.some((r) => r.includes('[FILL]')
+    && r.includes('BUY 5 @ $0.49') && r.includes('Tennis final'));
+  out.tradesDeduped = tradeRows.filter((r) => r.includes('shadow-filled-1')).length === 0
+    && tradeRows.length >= 1;
+
+  // ALERTS names a naked pair as live risk, without waiting for its transition row.
+  app.setTickerFilter('guardrail');
+  const alertRows = rows();
+  out.nakedInAlerts = alertRows.some((r) => r.includes('[NAKED LEG]')
+    && r.includes('Tennis final'));
+
+  // An empty registry and an empty ring leave the view empty, not blank.
+  app.noteTickerQuoteState({ orders: [], pairs: [], fills: [] });
+  app.setTickerFilter('quotes');
   app.setTickerTab('filter');
   out.emptyQuotes = document.getElementById('event-ticker').innerHTML.includes('No quotes yet.');
   app.setTickerTab('live');
