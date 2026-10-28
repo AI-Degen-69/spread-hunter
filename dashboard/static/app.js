@@ -1,3 +1,128 @@
+/* ── Structured row tag, severity, and translation helpers ── */
+function streamProcessTag(ev, family) {
+  const fam = (family || (ev && ev.family) || '').toLowerCase();
+  const svc = ((ev && ev.service) || '').toLowerCase();
+  const act = ((ev && ev.action) || '').toLowerCase();
+
+  if (fam === 'filter' || svc.includes('filter') || svc.includes('screener')) return 'FILTER';
+  if (fam === 'shadow') return 'SHADOW';
+  if (svc === 'user_stream' || act.startsWith('user_ws_')) return 'USER_WS';
+  if (svc === 'market_stream' || act.startsWith('market_stream_')) return 'MKT_WS';
+  if (svc === 'decide' || svc === 'trader' || act === 'decide' || act === 'submit') return 'TRADER';
+  if (svc === 'guardrail' || svc === 'guardian') return 'GUARD';
+  if (svc === 'query' || svc === 'engine') return 'QUERY';
+  if (svc) return svc.toUpperCase().slice(0, 8);
+  return fam ? fam.toUpperCase().slice(0, 8) : 'LIVE';
+}
+
+function streamEventTag(ev) {
+  const act = ((ev && ev.action) || '').toLowerCase();
+  if (act.startsWith('user_ws_')) {
+    const sub = act.replace('user_ws_', '').toUpperCase();
+    if (sub === 'DISCONNECTED') return 'DISCONN';
+    if (sub === 'RECONNECTING') return 'RECONN';
+    return sub.slice(0, 8);
+  }
+  if (act.startsWith('market_stream_')) {
+    const sub = act.replace('market_stream_', '');
+    if (STREAM_TAGS[act]) return STREAM_TAGS[act];
+    return sub.toUpperCase().slice(0, 8);
+  }
+  if (act === 'fill_recorded') return 'FILL';
+  if (act === 'lifecycle_exited') return 'EXIT';
+  if (act === 'lifecycle_completed') return 'PAIR';
+  if (act === 'lifecycle_aged_out_rescue') return 'RESCUE';
+  if (act === 'decide') return 'DECIDE';
+  if (act === 'submit') return 'SUBMIT';
+  if (act.startsWith('merge_')) return 'MERGE';
+  if (act.startsWith('redeem_')) return 'REDEEM';
+  if (act) return act.toUpperCase().slice(0, 8);
+  return 'LOG';
+}
+
+function streamSeverityClass(ev) {
+  if (!ev) return 'muted';
+  const a = ((ev && ev.action) || '').toLowerCase();
+  const s = ((ev && ev.service) || '').toLowerCase();
+  const lvl = String((ev && ev.extra && ev.extra.level) || '').toUpperCase();
+
+  // Bad (red)
+  if (a.includes('error') || a.includes('failed') || a.includes('disconnected') ||
+      a === 'market_stream_unsubscribe' || a === 'merge_failed' || a === 'redeem_failed' ||
+      a === 'rerank_error' || lvl === 'ERROR' || lvl === 'CRITICAL') {
+    return 'bad';
+  }
+
+  // Warn (amber)
+  if (a.includes('reconnecting') || a.includes('reconnect') || a.includes('rescue') ||
+      a.includes('truncated') || a === 'lifecycle_stop' || lvl === 'WARNING' || lvl === 'WARN') {
+    return 'warn';
+  }
+
+  // Good (green)
+  if (a === 'user_ws_connected' || a === 'user_ws_auth_ok' ||
+      a === 'market_stream_connected' || a === 'market_stream_subscribe' ||
+      a === 'fill_recorded' || a === 'lifecycle_completed' ||
+      a === 'merge_executed' || a === 'redeem_executed' || a === 'rerank_done') {
+    return 'good';
+  }
+
+  // Info (cyan/blue)
+  if (a === 'decide' || a === 'submit' || a === 'user_ws_trade' || a === 'user_ws_order' ||
+      a === 'user_fill_received' || a === 'market_stream_snapshot' ||
+      a === 'market_stream_tick' || a === 'guardian_reactive_wake') {
+    return 'info';
+  }
+
+  return 'muted';
+}
+
+function translateConsoleLine(data) {
+  const text = (data.text || '').trim();
+  const file = (data.file || 'log').toLowerCase();
+  const cleanMsg = (data.message || text).trim();
+  const lvl = String(data.level || '').toUpperCase();
+
+  if (/^={3,}\s+.*\s+={3,}$/.test(text)) {
+    return { msg: 'Ranking pass started', evTag: 'SCAN', severity: 'good' };
+  }
+  const mExit = text.match(/\bEXIT\s+(\d+)\b/);
+  if (mExit) {
+    const code = mExit[1];
+    return {
+      msg: `Ranker exited with code ${code}`,
+      evTag: code === '0' ? 'DONE' : 'EXIT',
+      severity: code === '0' ? 'good' : 'bad'
+    };
+  }
+  const mFailed = text.match(/^FAILED:\s*([A-Za-z0-9_]+):?\s*(.*)$/);
+  if (mFailed) {
+    return { msg: `Ranker failed (${mFailed[1]})`, evTag: 'FAILED', severity: 'bad' };
+  }
+  if (text.startsWith('Traceback')) {
+    return { msg: 'Python error trace', evTag: 'ERROR', severity: 'bad' };
+  }
+  if (text.includes('Settlement sweeper running in background') || text.includes('sweeper running')) {
+    return { msg: 'Settlement sweeper running in background', evTag: 'SWEEP', severity: 'muted' };
+  }
+  if (text.includes('Risk guardian running in background') || text.includes('guardian running')) {
+    return { msg: 'Risk guardian running in background', evTag: 'GUARD', severity: 'muted' };
+  }
+
+  let sev = 'muted';
+  if (lvl === 'ERROR' || lvl === 'CRITICAL' || text.startsWith('ERROR')) sev = 'bad';
+  else if (lvl === 'WARNING' || lvl === 'WARN' || text.startsWith('WARN')) sev = 'warn';
+
+  const evTag = lvl ? (lvl === 'WARNING' ? 'WARN' : lvl.slice(0, 8)) : (file.includes('err') ? 'ERR' : 'LOG');
+  return { msg: cleanMsg, evTag, severity: sev };
+}
+
+function extractTimeFromLine(line) {
+  if (!line) return '';
+  const m = String(line).match(/\[?(\d{1,2}:\d{2}:\d{2})\]?/);
+  return m ? m[1] : '';
+}
+
 /* Spread Hunter — Dashboard Application Logic
  *
  * Consumes existing API endpoints:
@@ -1266,7 +1391,72 @@ function buildStreamSentence(ev, lookup) {
   const market = streamMarketName(ev, lookup);
   const clock = streamTime(ev);
   const when = clock ? `${clock} — ` : '';
-  const because = reason ? ` (${plainReason(reason)})` : '';
+  const rawBecause = reason ? ` (${plainReason(reason)})` : '';
+  const because = rawBecause.replace(/0x[a-fA-F0-9]{40}/g, '0x***');
+
+  // User websocket lifecycle events
+  if (action === 'user_ws_connected') {
+    return `${when}User stream connected.`;
+  }
+  if (action === 'user_ws_auth_sent') {
+    const mkts = ex.markets_count || (Array.isArray(ex.markets) ? ex.markets.length : 0);
+    return `${when}Sent login${mkts ? ` for ${mkts} ${mkts === 1 ? 'market' : 'markets'}` : ''}.`;
+  }
+  if (action === 'user_ws_auth_ok') {
+    return `${when}User stream receiving messages.`;
+  }
+  if (action === 'user_ws_trade') {
+    const out = ex.outcome === 'UP' || ex.outcome === 'DOWN' ? ` ${ex.outcome}` : '';
+    const px = streamPrice(ex.price);
+    const sz = ex.size ? ` ${streamShares(ex.size)} ${shareWord(ex.size)}` : '';
+    return `${when}User trade: ${ex.side || 'FILL'}${out}${sz}${px ? ' at ' + px : ''} on ${market}.`;
+  }
+  if (action === 'user_ws_order') {
+    const px = streamPrice(ex.price);
+    const st = humanizeAction(ex.status || 'updated');
+    return `${when}User order ${st}: ${ex.side || ''}${px ? ' at ' + px : ''} on ${market}.`;
+  }
+  if (action === 'user_ws_disconnected') {
+    const cd = ex.code ? ` (code ${ex.code})` : '';
+    return `${when}User stream disconnected${cd}.`;
+  }
+  if (action === 'user_ws_reconnecting') {
+    const d = ex.delay_sec || ex.delay || 1;
+    return `${when}User stream reconnecting in ${d}s.`;
+  }
+  if (action === 'user_ws_error') {
+    const err = ex.error ? ` (${String(ex.error).replace(/0x[a-fA-F0-9]{40}/g, '0x***')})` : '';
+    return `${when}User stream error${err}.`;
+  }
+  if (action === 'user_ws_stopped') {
+    return `${when}User stream stopped.`;
+  }
+
+  // Background workers & lifecycle
+  if (action === 'guardian_reactive_wake') {
+    return `${when}Risk guardian reactive wake${because}.`;
+  }
+  if (action === 'rerank_done') {
+    const dur = ex.duration_ms ? ` in ${ex.duration_ms}ms` : '';
+    return `${when}Ranking pass completed${dur}.`;
+  }
+  if (action === 'rerank_error') {
+    return `${when}Ranking pass failed${because}.`;
+  }
+  if (action === 'paired_universe_truncated') {
+    const cap = ex.count || ex.limit || 'cap';
+    return `${when}Paired universe truncated to ${cap} markets.`;
+  }
+  if (action === 'single_leg_transition') {
+    const fromSt = ex.prev_state || 'old';
+    const toSt = ex.new_state || 'new';
+    return `${when}Single leg transition: ${fromSt} → ${toSt} on ${market}.`;
+  }
+  if (action === 'user_fill_received') {
+    const out = ex.outcome === 'UP' || ex.outcome === 'DOWN' ? ` ${ex.outcome}` : '';
+    const sz = ex.size ? ` ${streamShares(ex.size)} ${shareWord(ex.size)}` : '';
+    return `${when}Fill received:${out}${sz} on ${market}.`;
+  }
 
   if (action === 'fill_recorded') {
     const out = ex.outcome === 'UP' || ex.outcome === 'DOWN' ? ` ${ex.outcome}` : '';
@@ -1286,8 +1476,8 @@ function buildStreamSentence(ev, lookup) {
     return `${when}Rescued an aged-out position on ${market}${because}.`;
   }
   if (action.startsWith('merge_')) {
-    const n = ex.size != null ? `${streamShares(ex.size)} ${shareWord(ex.size)}` : '';
-    if (action === 'merge_executed') return `${when}Merge completed on ${market} (${n} now collateral).`;
+    const n = ex.size != null && Number(ex.size) > 0 ? `${streamShares(ex.size)} ${shareWord(ex.size)}` : '';
+    if (action === 'merge_executed') return n ? `${when}Merge completed on ${market} (${n} now collateral).` : `${when}Merge completed on ${market}.`;
     if (action === 'merge_failed') return `${when}Merge on ${market} failed${because}.`;
     if (action === 'merge_submitted') return n ? `${when}Sent ${n} on ${market} to the relayer for merging.` : `${when}Sent a merge on ${market} to the relayer.`;
     if (action === 'merge_interrupted') return `${when}Merge on ${market} was interrupted before confirmation.`;
@@ -1313,7 +1503,7 @@ function buildStreamSentence(ev, lookup) {
   }
   if (action === 'submit') {
     const n = Number(ex.submitted || 0);
-    if (n > 0) return `${when}Placed ${n} maker orders on ${market}.`;
+    if (n > 0) return `${when}Placed ${n} maker ${n === 1 ? 'order' : 'orders'} on ${market}.`;
     return `${when}No orders placed on ${market}${because}.`;
   }
 
@@ -1341,7 +1531,8 @@ function buildStreamSentence(ev, lookup) {
     : (svc === 'filter' || svc === 'screener') ? 'Market scan'
     : svc === 'guardrail' ? 'Risk note'
     : 'Status update';
-  return `${when}${prefix} on ${market}: ${humanizeAction(action)}${because}.`;
+  const onClause = market && market !== 'a market' ? ` on ${market}` : '';
+  return `${when}${prefix}${onClause}: ${humanizeAction(action)}${because}.`;
 }
 
 function translateEvent(ev) {
@@ -1464,21 +1655,37 @@ function tickerTabCounts() {
   };
 }
 
-function appendTickerEvent(line, translation, ctx, service, action, extra, family) {
+function appendTickerEvent(line, translation, ctx, service, action, extra, family, opts) {
   const empty = tickerEl.querySelector('.empty-state');
   if (empty) empty.remove();
 
   const fam = (family || (service && (service.includes('filter') || service.includes('screener')) ? 'filter' : 'live')).toLowerCase();
   const seq = ++tickerSeqCounter;
+  const o = opts || {};
+
+  const evDummy = { service, action, extra, family: fam };
+  const procTag = o.processTag || streamProcessTag(evDummy, fam);
+  const evTag = o.eventTag || streamEventTag(evDummy);
+  const severity = o.severity || streamSeverityClass(evDummy);
+  const timeTag = o.timeTag || extractTimeFromLine(line) || '--:--:--';
+  const cleanMsg = o.message || (translation ? translation.replace(/^\d{2}:\d{2}:\d{2}\s*—\s*/, '') : line);
+
   const evObj = {
     seq,
     family: fam,
     line,
-    translation,
-    ctx,
+    translation: translation || cleanMsg,
+    ctx: ctx || '',
     service: (service || '').toLowerCase(),
     action: (action || '').toLowerCase(),
-    extra: extra || {}
+    extra: extra || {},
+    timeTag,
+    processTag: procTag,
+    eventTag: evTag,
+    message: cleanMsg,
+    severity,
+    component: o.component || procTag,
+    rawDetail: o.rawDetail || line,
   };
 
   const targetBuf = tickerBuffers[fam] || tickerBuffers.live;
@@ -1536,13 +1743,7 @@ function getActiveTickerEvents() {
 
 /* ── Ticker color coding: tag -> color, neutral stays primary (white) ── */
 function tickerColorClass(ev) {
-  if (!ev || (ev.service || '').toLowerCase() !== 'market_stream') return '';
-  const a = (ev.action || '').toLowerCase();
-  if (a === 'market_stream_connected' || a === 'market_stream_subscribe') return 'ms-good';
-  if (a === 'market_stream_unsubscribe' || a === 'market_stream_error') return 'ms-bad';
-  if (a === 'market_stream_reconnect') return 'ms-warn';
-  if (a === 'market_stream_snapshot') return 'ms-info';
-  return '';   // tick and unknown stay neutral (white)
+  return streamSeverityClass(ev);
 }
 
 function renderTickerFeed() {
@@ -1558,14 +1759,20 @@ function renderTickerFeed() {
 
   for (const ev of filtered) {
     const div = document.createElement('div');
-    div.className = 'ticker-event';
-    if (ev.translation) {
-      const colorCls = tickerColorClass(ev);
-      const raw = tickerShowDetails ? `<div class="ticker-raw">${esc(ev.line)}</div>` : '';
-      div.innerHTML = `<div class="ticker-translation ${colorCls}">${esc(ev.translation)}</div>${raw}`;
-    } else {
-      div.innerHTML = `<div class="ticker-raw">${esc(ev.line)}</div>`;
-    }
+    const sev = ev.severity || tickerColorClass(ev) || 'muted';
+    div.className = `ticker-event ${sev}`;
+    const raw = tickerShowDetails ? `<div class="ticker-raw">${esc(ev.rawDetail || ev.line)}</div>` : '';
+    const timeDisplay = ev.timeTag || extractTimeFromLine(ev.line) || '--:--:--';
+    const procDisplay = ev.processTag || streamProcessTag(ev, ev.family);
+    const evDisplay = ev.eventTag || streamEventTag(ev);
+    const msgDisplay = ev.message || (ev.translation ? ev.translation.replace(/^\d{2}:\d{2}:\d{2}\s*—\s*/, '') : ev.line);
+
+    div.innerHTML = `<div class="ticker-row ticker-translation ${sev}">` +
+      `<span class="ticker-col ticker-time">[${esc(timeDisplay)}]</span>` +
+      `<span class="ticker-col ticker-process">[${esc(procDisplay)}]</span>` +
+      `<span class="ticker-col ticker-event ticker-event-tag">[${esc(evDisplay)}]</span>` +
+      `<span class="ticker-col ticker-msg">${esc(msgDisplay)}</span>` +
+      `</div>${raw}`;
     tickerEl.appendChild(div);
   }
 
@@ -1682,19 +1889,38 @@ function connectLogStream(runId) {
         if (!data || !data.family) return;
         if (data.source === 'ring' && data.event) {
           const ev = data.event;
-          const ts = fmtLocalTime(ev.ts);
-          const svc = (ev.service || '').toUpperCase().slice(0, 6);
-          const action = ev.action || '';
+          const ts = fmtLocalTime(ev.ts) || '--:--:--';
+          const procTag = streamProcessTag(ev, data.family);
+          const evTag = streamEventTag(ev);
+          const severity = streamSeverityClass(ev);
           const slug = ev.market_slug || '';
           const reason = ev.reason ? ` — ${ev.reason}` : '';
-          const rawLine = `[${ts}] [${svc}] ${action} ${slug}${reason}`;
-          const { translation, ctx } = translateEvent(ev);
-          appendTickerEvent(rawLine, translation, ctx, ev.service, ev.action, ev.extra, data.family);
+          const rawLine = `[${ts}] [${procTag}] ${ev.action || ''} ${slug}${reason}`;
+          const sentence = buildStreamSentence(ev);
+          const msgBody = sentence ? sentence.replace(/^\d{2}:\d{2}:\d{2}\s*—\s*/, '') : '';
+          appendTickerEvent(rawLine, sentence, '', ev.service, ev.action, ev.extra, data.family, {
+            timeTag: ts,
+            processTag: procTag,
+            eventTag: evTag,
+            message: msgBody,
+            severity: severity,
+            component: procTag,
+          });
         } else if (data.source === 'text') {
           const fileTag = data.file || 'log';
           const rawLine = `[${fileTag}] ${data.text}`;
           const svc = data.family === 'filter' ? 'filter' : '';
-          appendTickerEvent(rawLine, null, null, svc, '', {}, data.family);
+          const ts = data.ts ? fmtLocalTime(data.ts) : '--:--:--';
+          const procTag = data.family === 'filter' ? 'FILTER' : (fileTag.replace(/\.[^/.]+$/, '').toUpperCase().slice(0, 8));
+          const { msg, evTag, severity } = translateConsoleLine(data);
+          appendTickerEvent(rawLine, msg, '', svc, evTag.toLowerCase(), {}, data.family, {
+            timeTag: ts,
+            processTag: procTag,
+            eventTag: evTag,
+            message: msg,
+            severity: severity,
+            component: procTag,
+          });
         }
       } catch {}
     });
@@ -11232,7 +11458,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, renderProfileBadge, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
-    EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
+    EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent, streamProcessTag, streamEventTag, streamSeverityClass, translateConsoleLine,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,
     setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
