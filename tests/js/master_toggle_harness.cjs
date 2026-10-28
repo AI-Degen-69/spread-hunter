@@ -299,9 +299,37 @@ function reset() {
   await new Promise((r) => setTimeout(r, 0));
   const httpFailure = state();
 
+  // ── Overlapping modal opens: the stale sequence cannot poison the new one ──
+  reset();
+  setStatus(stoppedStack());
+  const overlapSteps = [];
+  let overlapCredCalls = 0;
+  fetchImpl = async (path, opts) => {
+    const body = JSON.parse(opts.body);
+    overlapSteps.push(body.step + ':' + (body.preflight_id || 'none'));
+    if (body.step === 'credentials') {
+      overlapCredCalls++;
+      if (overlapCredCalls === 1) {
+        await new Promise((r) => setTimeout(r, 30));
+        return { ok: true, status: 200, json: async () => ({ ok: true, step: 'credentials', summary: 'c1', preflight_id: 'p-slow', next_step: 'screener', approved: false }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, step: 'credentials', summary: 'c2', preflight_id: 'p-fresh', next_step: 'screener', approved: false }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true, step: body.step, summary: 's', preflight_id: body.preflight_id, next_step: body.step === 'stream' ? 'reach_probe' : body.step, approved: false }) };
+  };
+  app.openStartRunModal('live');
+  await new Promise((r) => setTimeout(r, 5));
+  app.openStartRunModal('live');
+  await new Promise((r) => setTimeout(r, 100));
+  const overlap = {
+    steps: overlapSteps,
+    screenerPosts: overlapSteps.filter((s) => s.indexOf('screener:') === 0).length,
+    screenerPids: overlapSteps.filter((s) => s.indexOf('screener:') === 0),
+  };
+
   process.stdout.write(JSON.stringify({
     running, partial, stopped, unknown, nullEntry,
     doubleClick: { posts: stopPosts, busyMidFlight, afterStop },
-    refused, partialStop, httpFailure,
+    refused, partialStop, httpFailure, overlap,
   }));
 })();

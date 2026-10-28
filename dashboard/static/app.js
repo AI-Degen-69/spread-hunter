@@ -4254,7 +4254,7 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
 
 /* ── Start Run launcher (preflight modal, #857) ── */
 const START_RUN_STEPS = ['credentials', 'screener', 'stream', 'reach_probe'];
-const startRunModalState = { open: false, mode: 'shadow', minutes: 1440, preflightId: null, checks: {}, approved: false, running: false, probeArmed: false };
+const startRunModalState = { open: false, mode: 'shadow', minutes: 1440, preflightId: null, checks: {}, approved: false, running: false, probeArmed: false, seq: 0 };
 function startRunModalEl(id) { return document.getElementById(id); }
 function setPreflightRow(step, state, text) {
   const el = startRunModalEl('preflight-status-' + step);
@@ -4294,7 +4294,8 @@ function openStartRunModal(mode) {
   START_RUN_STEPS.forEach((s) => setPreflightRow(s, 'pending', 'pending'));
   updateStartRunButtons();
   void refreshShadowTarget();
-  if (startRunModalState.mode === 'live') void runPreflightSequence();
+  startRunModalState.seq += 1;
+  if (startRunModalState.mode === 'live') void runPreflightSequence(startRunModalState.seq);
 }
 function fmtMarketsAge(ageSec) {
   if (ageSec == null || !isFinite(ageSec)) return 'unknown age';
@@ -4337,18 +4338,21 @@ function closeStartRunModal() {
   modal.classList.remove('show');
   modal.style.display = 'none';
 }
-async function runPreflightStep(step, confirm) {
+async function runPreflightStep(step, confirm, mySeq) {
   setPreflightRow(step, 'running', 'running');
   const body = { step, confirm: !!confirm };
-  if (startRunModalState.preflightId) body.preflight_id = startRunModalState.preflightId;
+  const pid = startRunModalState.preflightId;
+  if (pid) body.preflight_id = pid;
   let data = null;
   try {
     const res = await controlFetch('/api/system/preflight', { method: 'POST', body: JSON.stringify(body) });
     try { data = await res.json(); } catch { data = null; }
   } catch (e) {
+    if (mySeq !== undefined && mySeq !== startRunModalState.seq) return { ok: false, stale: true };
     setPreflightRow(step, 'fail', 'error');
     return { ok: false };
   }
+  if (mySeq !== undefined && mySeq !== startRunModalState.seq) return { ok: false, stale: true };
   if (data && data.preflight_id) startRunModalState.preflightId = data.preflight_id;
   const ok = !!(data && (data.ok === true || data.approved === true || data.next_step));
   const passed = ok && data.step === step ? true : (data && data.ok === true);
@@ -4367,14 +4371,22 @@ async function runPreflightStep(step, confirm) {
   updateStartRunButtons();
   return { ok: passed, data };
 }
-async function runPreflightSequence() {
+async function runPreflightSequence(mySeq) {
+  if (mySeq !== undefined && mySeq !== startRunModalState.seq) return;
   if (startRunModalState.running) return;
   startRunModalState.running = true;
   updateStartRunButtons();
   for (const step of ['credentials', 'screener', 'stream']) {
-    const r = await runPreflightStep(step, false);
-    if (!r.ok) { startRunModalState.running = false; updateStartRunButtons(); return; }
+    const r = await runPreflightStep(step, false, mySeq);
+    if (!r.ok || (mySeq !== undefined && mySeq !== startRunModalState.seq)) {
+      if (mySeq === undefined || mySeq === startRunModalState.seq) {
+        startRunModalState.running = false;
+        updateStartRunButtons();
+      }
+      return;
+    }
   }
+  if (mySeq !== undefined && mySeq !== startRunModalState.seq) return;
   startRunModalState.running = false;
   updateStartRunButtons();
   const summary = startRunModalEl('preflight-summary');
@@ -4389,7 +4401,7 @@ async function armOrRunReachProbe() {
     if (btn) btn.textContent = 'Confirm reach probe ($2.00 max exposure)';
     return;
   }
-  await runPreflightStep('reach_probe', true);
+  await runPreflightStep('reach_probe', true, startRunModalState.seq);
 }
 async function startLiveFromModal() {
   const minutes = startRunModalMinutes();
@@ -4449,7 +4461,7 @@ async function startShadowFromModal() {
       r.addEventListener('change', () => {
         const v = startRunModalMode();
         startRunModalState.mode = v;
-        if (v === 'live' && startRunModalState.open && !startRunModalState.preflightId) void runPreflightSequence();
+        if (v === 'live' && startRunModalState.open && !startRunModalState.running && !startRunModalState.preflightId) void runPreflightSequence(startRunModalState.seq);
       });
     }
   } catch { /* harness stub has no radios; mode stays as opened */ }

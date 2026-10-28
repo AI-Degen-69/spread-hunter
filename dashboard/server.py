@@ -1350,6 +1350,80 @@ def _get_next_shadow_seq(tag: str = "") -> str:
     return f"{nxt:02d}"
 
 
+def _slugify_profile_name(name: str | None) -> str:
+    """Filesystem-safe profile slug for shadow db names ("", never "prudent*")."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name or "").lower()).strip("-")[:24]
+    if slug.startswith("prudent"):
+        slug = ("run-" + slug)[:24]
+    return slug.strip("-")
+
+
+def _staged_shadow_profile() -> tuple[dict | None, str]:
+    """Matched staged profile (option, slug) for the next fresh shadow, or (None, "")."""
+    pending = _read_pending_profile()
+    if not pending:
+        return None, ""
+    try:
+        options = _profile_options()
+        match = next((o for o in options["presets"] + options["arms"]
+                      if o["kind"] == pending.get("kind")
+                      and o["name"] == pending.get("name")), None)
+    except Exception:
+        match = None
+    if match is None:
+        return None, ""
+    return match, _slugify_profile_name(pending.get("name"))
+
+
+def _fresh_shadow_naming() -> dict:
+    """Next fresh shadow store naming: NN_shadow_<stamp>[_<slug>].db + run id."""
+    seq = _get_next_shadow_seq()
+    match, slug = _staged_shadow_profile()
+    stamp = time.strftime("%d-%m_%H-%M", time.localtime())
+    db_name = f"{seq}_shadow_{stamp}" + (f"_{slug}" if slug else "") + ".db"
+    run_id = f"shadow-{seq}" + (f"-{slug}" if slug else "")
+    return {"seq": seq, "slug": slug, "profile": match,
+            "db_name": db_name, "run_id": run_id}
+
+
+def _ensure_filter_for_shadow() -> str | None:
+    """Gap-fill the Market Filter so a fresh rehearsal has a markets file.
+
+    Read-only ranking; shared with the live stack exactly like `start_bot`'s
+    gap-fill. Returns a note when it launched the filter, else None. Never
+    raises: a filter problem must not block the rehearsal itself. Skips when
+    the process registry is unreadable (fail closed: cannot rule out a
+    running filter) or a filter is already observed.
+    """
+    import subprocess
+
+    try:
+        status = get_system_status()
+        fsvc = (status.get("services") or {}).get("filter", {})
+        if fsvc.get("running") or fsvc.get("observed_running"):
+            return None
+        saved, _err = _read_saved_procs()
+        if saved is None:
+            return None
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "scripts.filter_loop"],
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **({"start_new_session": True} if sys.platform != "win32" else {}),
+        )
+        entry = {"pid": proc.pid, "started_at": time.time()}
+        merged = dict(saved)
+        merged["filter"] = entry
+        legacy = {"screener"}
+        for key in legacy:
+            merged.pop(key, None)
+        _atomic_write_json(runtime_file("processes.json", root=LIVE_ROOT), merged)
+        return "Market Filter started for this run."
+    except Exception:
+        return None
+
+
 SERVICE_NAMES = ("filter", "query", "decide")
 _SERVICE_CWDS = {"filter": "repo", "query": "live", "decide": "live"}
 
@@ -2556,6 +2630,8 @@ def start_shadow_run(
     custom_db: str | None = None,
     custom_run_id: str | None = None,
     minutes: float = 10.0,
+    ensure_filter: bool = False,
+    env_extra: dict | None = None,
 ) -> dict:
     """Launch background shadow rehearsal without signer."""
     import subprocess
@@ -2589,6 +2665,10 @@ def start_shadow_run(
         stem = target_db.stem.replace("_", "-")
         run_id = stem if stem and stem != "orders" else f"shadow-{int(time.time())}"
 
+    filter_note: str | None = None
+    if ensure_filter:
+        filter_note = _ensure_filter_for_shadow()
+
     popen_group = {"start_new_session": True} if sys.platform != "win32" else {}
     cmd = [
         sys.executable,
@@ -2601,6 +2681,9 @@ def start_shadow_run(
         "--run-id",
         str(run_id),
     ]
+    child_env = None
+    if env_extra:
+        child_env = {**os.environ, **env_extra}
 
     try:
         proc = subprocess.Popen(
@@ -2608,6 +2691,7 @@ def start_shadow_run(
             cwd=str(REPO_ROOT),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            **({"env": child_env} if child_env is not None else {}),
             **popen_group,
         )
     except Exception as e:
@@ -2629,9 +2713,12 @@ def start_shadow_run(
             "elapsed_sec": 0,
         }
 
+    message = f"Shadow rehearsal started ({run_id}) on {target_db.name}."
+    if filter_note:
+        message += f" {filter_note}"
     return {
         "ok": True,
-        "message": f"Shadow rehearsal started ({run_id}) on {target_db.name}.",
+        "message": message,
         "pid": proc.pid,
         "run_id": run_id,
         "status": status,
@@ -3241,9 +3328,8 @@ def api_service_status(name: str = "hub"):
 @app.get("/api/system/shadow/next")
 def api_system_shadow_next():
     """Preview the next fresh shadow store (read-only, no state change)."""
-    seq = _get_next_shadow_seq()
-    stamp = time.strftime("%d-%m_%H-%M", time.localtime())
-    db_name = f"{seq}_shadow_{stamp}.db"
+    naming = _fresh_shadow_naming()
+    seq, db_name = naming["seq"], naming["db_name"]
     markets_info: dict = {"exists": False, "age_sec": None}
     try:
         from core_brain.runtime_paths import runtime_file as _rf
@@ -3261,6 +3347,7 @@ def api_system_shadow_next():
         "seq": seq,
         "db_name": db_name,
         "db_path": str((LIVE_ROOT / "data" / db_name).resolve()),
+        "profile_slug": naming["slug"] or None,
         "markets": markets_info,
     })
 
@@ -3283,13 +3370,16 @@ async def api_system_shadow_start(
     target_db = body.get("db") or db
     target_run_id = body.get("run_id") or run_id
     target_minutes = body.get("minutes") if body.get("minutes") is not None else minutes
+    profile_env: dict | None = None
+    took_fresh = False
     if body.get("fresh") is True and not target_db:
-        seq = _get_next_shadow_seq()
-        stamp = time.strftime("%d-%m_%H-%M", time.localtime())
-        fresh_name = f"{seq}_shadow_{stamp}.db"
-        target_db = str((LIVE_ROOT / "data" / fresh_name).resolve())
+        took_fresh = True
+        naming = _fresh_shadow_naming()
+        target_db = str((LIVE_ROOT / "data" / naming["db_name"]).resolve())
         if not target_run_id:
-            target_run_id = f"shadow-{seq}"
+            target_run_id = naming["run_id"]
+        if naming["profile"] is not None:
+            profile_env = dict(naming["profile"].get("env") or {})
         try:
             from core_brain.order_registry import OrderRegistry as _Reg
             _Reg(db_path=target_db)
@@ -3299,7 +3389,16 @@ async def api_system_shadow_start(
             set_db_override(Path(target_db))
         except Exception:
             pass
-    return JSONResponse(start_shadow_run(target_db, target_run_id, float(target_minutes)))
+    result = start_shadow_run(target_db, target_run_id, float(target_minutes),
+                              ensure_filter=took_fresh,
+                              env_extra=profile_env)
+    if took_fresh and result.get("ok") is True:
+        try:
+            pending_file = resolve_runtime_file(PENDING_PROFILE_FILE, root=LIVE_ROOT)
+            pending_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return JSONResponse(result)
 
 
 @app.post("/api/system/shadow/stop")

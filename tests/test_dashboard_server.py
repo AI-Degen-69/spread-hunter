@@ -3009,6 +3009,11 @@ def test_master_toggle_renders_every_state():
     assert out["httpFailure"]["modalOpen"] is True
     assert "/api/system/start" not in out["httpFailure"]["fetches"]
 
+    # Overlapping modal opens: the stale sequence's late reply is ignored —
+    # one screener POST, on the fresh session, never on the stale one.
+    assert out["overlap"]["screenerPosts"] == 1
+    assert out["overlap"]["screenerPids"] == ["screener:p-fresh"]
+
 
 # ---------------------------------------------------------------------------
 # Tournament pages served in-process (no ports, no processes)
@@ -4342,5 +4347,78 @@ def test_shadow_fresh_start_creates_numbered_db_and_switches_view(client, monkey
         db_base = body["status"]["shadow_run"]["db_path"].replace("\\", "/").split("/")[-1]
         assert re.fullmatch(r"\d{2}_shadow_\d{2}-\d{2}_\d{2}-\d{2}\.db", db_base)
         assert "shadow_run" in body["status"]
+    finally:
+        set_db_override(None)
+
+
+# --- staged profile in shadow names + filter gap-fill (#857 IIIB follow-up) ---
+
+def test_slugify_profile_name_is_safe_and_prudent_free():
+    """Slugs are fs-safe and never collide with the _shadow_prudent scan."""
+    import dashboard.server as dash_mod
+    assert dash_mod._slugify_profile_name("Prudent Aggro v2!") == "run-prudent-aggro-v2"
+    assert dash_mod._slugify_profile_name("  Momentum/Mean  ") == "momentum-mean"
+    assert dash_mod._slugify_profile_name(None) == ""
+    assert dash_mod._slugify_profile_name("!!!") == ""
+
+
+def test_staged_profile_unknown_falls_back_to_legacy_naming(tmp_path, monkeypatch):
+    """A staged profile that no longer matches loads unstaged, never crashes."""
+    import dashboard.server as dash_mod
+    from dashboard.server import set_db_override
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    (tmp_path / "runtime").mkdir(exist_ok=True)
+    (tmp_path / "runtime" / "pending_profile.json").write_text(
+        '{"kind": "preset", "name": "No Such Profile"}', encoding="utf-8")
+    match, slug = dash_mod._staged_shadow_profile()
+    assert match is None and slug == ""
+    naming = dash_mod._fresh_shadow_naming()
+    assert naming["slug"] == "" and naming["run_id"].startswith("shadow-")
+    set_db_override(None)
+
+
+def test_fresh_shadow_uses_staged_profile_and_starts_filter(client, monkeypatch, tmp_path):
+    """#857 IIIB: staged profile lands in db name + run id + env; filter gap-fills."""
+    import json as _json
+    import re
+    import dashboard.server as dash_mod
+    from dashboard.server import set_db_override
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", None)
+    (tmp_path / "runtime").mkdir(exist_ok=True)
+    (tmp_path / "runtime" / "pending_profile.json").write_text(
+        _json.dumps({"kind": "preset", "name": "Prudent"}), encoding="utf-8")
+    monkeypatch.setattr(dash_mod, "_profile_options", lambda: {
+        "presets": [{"kind": "preset", "name": "Prudent",
+                     "label": "Prudent", "detail": "",
+                     "env": {"BOT_QUOTE_TOURNAMENT_PRESET": "prudent"}}],
+        "arms": []})
+    import subprocess
+    spawned = []
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append((args, kwargs.get("env")))
+            self.pid = 4242
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(dash_mod, "read_shadow_run", lambda db: None)
+    try:
+        res = client.post("/api/system/shadow/start", json={"fresh": True, "minutes": 5},
+                          headers=_control(client))
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is True, body.get("message")
+        assert body["run_id"] == "shadow-01-run-prudent", body["run_id"]
+        db_base = body["status"]["shadow_run"]["db_path"].replace("\\", "/").split("/")[-1]
+        assert re.fullmatch(r"01_shadow_\d{2}-\d{2}_\d{2}-\d{2}_run-prudent\.db", db_base), db_base
+        shadow_cmds = [c for c, _e in spawned if any("shadow_run" in p for p in c)]
+        assert len(shadow_cmds) == 1
+        shadow_env = [e for c, e in spawned if any("shadow_run" in p for p in c)][0]
+        assert shadow_env and shadow_env.get("BOT_QUOTE_TOURNAMENT_PRESET") == "prudent"
+        filter_cmds = [c for c, _e in spawned if any("filter_loop" in p for p in c)]
+        assert len(filter_cmds) == 1, "filter gap-fill did not launch"
+        procs = _json.loads((tmp_path / "runtime" / "processes.json").read_text(encoding="utf-8"))
+        assert procs["filter"]["pid"] == 4242
+        assert "Market Filter started" in body["message"]
+        assert not (tmp_path / "runtime" / "pending_profile.json").exists(), "staged profile not consumed"
     finally:
         set_db_override(None)
