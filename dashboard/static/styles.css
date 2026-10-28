@@ -970,6 +970,23 @@ header {
 .modal-btn.danger:disabled { background: rgba(239,68,68,0.3); cursor: not-allowed; }
 .modal-btn.cancel { background: var(--bg-surface-raised); color: var(--text-secondary); }
 
+/* ── Start Run launcher (#857) — reuses the modal shell above ── */
+.start-run-modal { max-width: 460px; }
+.start-run-modes, .start-run-durations { display: flex; gap: 12px; margin-bottom: 12px; }
+.start-run-modes label, .start-run-durations label { font-size: 13px; cursor: pointer; }
+.preflight-checklist { list-style: none; padding: 0; margin: 0 0 12px; }
+.preflight-checklist li { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-strong); font-size: 13px; }
+.preflight-status { font-weight: 700; text-transform: uppercase; font-size: 11px; }
+.preflight-status[data-state="pending"] { color: var(--text-muted); }
+.preflight-status[data-state="running"] { color: var(--amber-warn); }
+.preflight-status[data-state="pass"] { color: var(--green-ok); }
+.preflight-status[data-state="fail"] { color: var(--red-alert); }
+.preflight-summary { font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; min-height: 18px; }
+.shadow-target { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.shadow-target:last-of-type { margin-bottom: 12px; }
+#start-run-probe { margin-bottom: 4px; }
+#start-run-live:disabled { background: rgba(239,68,68,0.3); cursor: not-allowed; }
+
 /* ── Command palette (#477) — reuses the modal shell above ── */
 .palette-overlay { align-items: flex-start; }
 .palette-modal { max-width: 520px; margin-top: 12vh; padding: 16px; }

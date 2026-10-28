@@ -5,7 +5,7 @@
 # Usage:
 #   .\scripts\spread-hunter-menu.ps1          # interactive menu (press 1-9, r, a, p, q; loops until q or Ctrl+C)
 #   .\scripts\spread-hunter-menu.ps1 8        # run menu option 8 directly (1-9, r, a, p, q all work; single shot)
-#   .\scripts\spread-hunter-menu.ps1 start -Yes    # 1 · LIVE: preflight-stop + wipe, fresh bot + dashboard (real bids)
+#   .\scripts\spread-hunter-menu.ps1 start -Yes    # 1 · LIVE: host the live dashboard; start from its Start Run launcher (preflight-gated, no wipe)
 #   .\scripts\spread-hunter-menu.ps1 stop          # 2 · LIVE: stop bot + dashboard
 #   .\scripts\spread-hunter-menu.ps1 host          # 3 · LIVE: release :8799 from the other menu-owned dashboard (no wipe), host live & open
 #   .\scripts\spread-hunter-menu.ps1 shadow-run [-Minutes N] [-Watch] # 4 · SHADOW: preflight + wipe, full rehearsal; -Minutes -1 runs until stopped
@@ -1805,7 +1805,7 @@ function Show-ServiceTable {
 }
 
 function Start-BotStack {
-    <# Launch market filter + order manager poll + trader loop via the dashboard's start endpoint. #>
+    <# Point the operator at the preflight launcher: live starts are gated (#857). #>
     $rerank = Join-Path $ProjectPath "scripts\filter_loop.py"
     if (-not (Test-Path $rerank)) {
         Lsh-Fail "Filter module scripts/filter_loop.py is MISSING in this repo - the dashboard would spawn a phantom process. Add it before starting."
@@ -1822,13 +1822,11 @@ function Start-BotStack {
         Show-ServiceTable $status
         return
     }
-    Lsh-Step "Requesting bot stack start (Market Filter + Query Polymarket + Decide & Execute)..."
-    Lsh-Warn "Decide & Execute rests REAL maker bids. Verify the dashboard shows a clean state before proceeding."
-    $res = Invoke-Control -Endpoint "/api/system/start"
-    if (-not $res) { return }
-    if ($res.ok) { Lsh-Ok "Bot stack started: $($res.message)." }
-    else         { Lsh-Fail "Start refused: $($res.message)" }
-    if ($res.status) { Show-ServiceTable $res.status }
+    # The start endpoint refuses any request without a single-use approval
+    # earned in the browser, so the menu cannot start the stack itself: firing
+    # the POST would only add a guaranteed refusal after a wipe.
+    Lsh-Warn ("Live starts are preflight-gated: open the dashboard Start Run launcher at {0}, choose Live Real-Money, pass the 4 checks, then Start Live." -f $DashUrl)
+    if ($status) { Show-ServiceTable $status }
 }
 
 function Stop-BotStack {
@@ -2970,7 +2968,7 @@ function Show-MenuGrid {
     # Live actions that rest real maker bids carry "; type START" as the cue.
     $groups = @(
         @{ Header = "🟢 LIVE - real maker bids"; Items = @(
-            @{ K = "1"; Icon = "▶"; IconColor = "Success"; V = "Start Bot + Dashboard";     D = "Stops, wipes data & starts fresh bot + dashboard" }
+            @{ K = "1"; Icon = "▶"; IconColor = "Success"; V = "Start Bot + Dashboard";     D = "Hosts the live dashboard; start from its Start Run launcher (preflight-gated)" }
             @{ K = "2"; Icon = "■"; IconColor = "Error";   V = "Stop Bot + Dashboard";      D = "Stops bot processes and dashboard" }
             @{ K = "3"; Icon = "◉"; IconColor = "Warning"; V = "Host & Open Dashboard";     D = "Hosts unified dashboard on :8799 (live DB) & opens browser" }
         ) }
@@ -3009,14 +3007,17 @@ function Invoke-LiveAction {
     param([string]$Key)
     switch ($Key) {
         "1" {
-            # Live start preflights: stop everything, wipe, verify, then start
-            # (real maker bids). Interactive requires typed START.
+            # Live start is preflight-gated (#857): the dashboard launcher owns
+            # the start, so the menu only hosts the live dashboard. No wipe --
+            # wiping first would leave the operator with an empty stack and a
+            # start the server always refuses. Interactive requires typed START.
             if ($Action -eq "") {
                 Write-Host ""
                 $confirm = Read-Host "Type START to confirm starting the LIVE bot stack (real maker bids)"
                 if ($confirm -ne "START") { Lsh-Warn "Start cancelled."; return }
             }
-            $null = Reset-Environment -Mode "live" -Force
+            $null = Open-Dashboard -Mode "live"
+            Start-BotStack
         }
         "2" {
             Stop-BotStack

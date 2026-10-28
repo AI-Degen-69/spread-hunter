@@ -1,71 +1,65 @@
-# SPEC.md — Issue #855: Human-Readable Structured Event Stream with Bracketed Tags, Colors, and Process Filtering
+# SPEC.md — Issue #857: Preflight-guided Start Run launcher with mode selection, 24h horizon, and watchdog
 
-Branch: `plan_github_issue_855` | Issue: #855
+Branch: `i857/preflight-guided-start-run-launcher` | Issue: #857
 
 ## 1. Goal
 
-Transform the dashboard's "Live Execution & Cycle Event Stream" (`/api/log-stream` and `#event-ticker`) into an aligned, color-coded, human-readable notification feed with bracketed structural tags (`[TIME] [PROCESS] [EVENT]`), unified chronological server-side replay across all log families, and fine-grained filtering by originating process/component and event category.
+Transform the dashboard top-nav `START RUN` button (`#btn-master-toggle`) from an immediate blind launcher into an informative, safety-gated preflight modal launcher (`#start-run-modal`). The launcher enables selecting between **Shadow Rehearsal** and **Live Real-Money Run**, enforces sequential preflight verification for live capital, runs with a default 24-hour horizon (`1440m`), logs shadow rehearsals to timestamped sequence databases (`data/NN_shadow_<stamp>.db`), and actively includes the `scripts.global_stop_loss` guardrail risk watchdog.
 
-## 2. Core Principles & Non-Negotiables
+## 2. Non-goals (explicit out of scope)
 
-1. **Human-readable by default, raw on demand:** No raw console output (`[rerank.log] Scan iteration 1...`) or awkward generic fallbacks (`Status update on a market: user ws auth ok (auth_ok wallet: 0x...)`) in the primary row. The main row displays clear, plain English. The raw unformatted string is accessible exclusively via the collapsible `[SHOW DETAILS]` drawer.
-2. **Security & Privacy (Redaction):** Main event stream rows must never display wallet addresses (`0x...`), API keys, URLs, or filesystem paths.
-3. **Structured Visual Alignment:** Columns align vertically using monospace square-bracketed padding tags (`[TIME] [PROCESS] [EVENT] <MESSAGE>`). Tag column widths are fixed in monospace character units (`ch`), preventing jitter across rows.
-4. **Color Hierarchy:** Colors reflect status and severity rather than arbitrary service identity:
-   - `good` (green / `--green-ok`): Successful connections, auth ok, fills recorded, clean rank passes.
-   - `warn` (amber / `--amber-warn`): Reconnecting, retry, timeouts, pause/stop notes.
-   - `bad` (red / `--red-alert`): Disconnections, errors, stream exceptions, rank failures.
-   - `info` (cyan/blue / `--open`): Trades, quotes, order submissions, market snapshots/ticks.
-   - `muted` (gray / `--text-muted`): Normal background scans, timestamps.
-5. **Unified Chronological Aggregation:** Historical replay from `/api/log-stream` must aggregate records from all active log families (Live Ring, Filter text logs, Shadow Ring/logs) into a single chronological stream sorted by event timestamp (`ts`), breaking ties stably.
-6. **No Scope Creep:** Do NOT modify `core_brain/config.py`, trading algorithms, or on-disk NDJSON log schemas (`cycle_events.jsonl`).
+- Direct on-chain collateral deposit or withdrawal from the dashboard.
+- Arbitrary custom duration inputs beyond specified presets (1h, 6h, 24h).
+- Spawning a duplicate or standalone watchdog process from the dashboard (`order_manager poll` already owns and supervises `scripts.global_stop_loss`).
+- Relaxing or bypassing preflight checks for live execution.
+- Rewriting or deleting `data/orders.db` (production registry is strictly read-only).
 
-## 3. Architecture & Data Flow
+## 3. Architecture & Functional Components
 
-```
-┌────────────────────────────────────────────────────────┐
-│                   Server (server.py)                   │
-│                                                        │
-│  Live Ring (cycle_events) ──┐                          │
-│  Filter Logs (rerank.log)  ──┼──> Collect & Parse Ts   │
-│  Shadow Ring (shadow.db)   ──┘       │                 │
-│                                      ▼                 │
-│                              Chronological Sort        │
-│                                      │                 │
-│                         Emit SSE Replay Frames         │
-│                         (additive ts, level, msg)      │
-└──────────────────────────────┬─────────────────────────┘
-                               │ SSE /api/log-stream
-                               ▼
-┌────────────────────────────────────────────────────────┐
-│                   Browser (app.js)                     │
-│                                                        │
-│  Receive Event ──> Normalize Row Model                 │
-│                    (time, processTag, eventTag, msg)   │
-│                           │                            │
-│  Filter by Tab (Family) ──┼──> Filter by Component     │
-│                           │           │                │
-│                           ▼           ▼                │
-│                    Filter by Category (TRADES, ALERTS) │
-│                           │                            │
-│                           ▼                            │
-│                    Render CSS Grid (Fixed ch widths)   │
-│                    [TIME] [PROCESS] [EVENT] [MESSAGE]  │
-└────────────────────────────────────────────────────────┘
-```
+### 3.1 Preflight Modal Launcher (`#start-run-modal`)
+- Replaces the direct start request on `#btn-master-toggle` when stopped.
+- Accessible dialog overlay matching existing modal patterns (`role="dialog"`, `aria-labelledby`, Escape/Dismiss handlers).
+- Two modes:
+  - **Shadow Rehearsal**: Dry run, simulated balances, creates fresh numbered database (`data/NN_shadow_<stamp>.db`). Start button active immediately.
+  - **Live Real-Money**: Real capital exposed on Polymarket. Live Start button remains locked until all 4 sequential preflight checks pass.
+- Duration selection: Presets `60m` (1h), `360m` (6h), and `1440m` (24h, default).
 
-## 4. Acceptance Criteria
+### 3.2 Sequential Preflight Verification (`/api/system/preflight`)
+Sequential check pipeline with in-memory session and approval gating:
+1. **Credentials & Collateral (`credentials`)**:
+   - Validates Polymarket API credentials, signer, and funder.
+   - Verifies USDC balance and allowance are >= `VENUE_MIN_NOTIONAL_USD`.
+   - Never exposes secret keys in response.
+2. **Market Screener Freshness (`screener`)**:
+   - Inspects `runtime/markets.json` via `load_graduated_snapshot()`.
+   - Rejects stale screener data (> 15 minutes old).
+3. **Market Data & Stream Connectivity (`stream`)**:
+   - Performs REST book check (`full_book()`) and tests WebSocket market stream connectivity within a strict timeout.
+4. **Reachability Probe (`reach_probe`)**:
+   - Controlled 1-share post-only buy-and-cancel verification using `core_brain.reach_probe`.
+   - Requires explicit operator opt-in (`confirm: true`) triggered by a distinct button warning of worst-case exposure ($2.00 max).
+   - Passes ONLY on verified cancel, known order status, and zero matched size.
 
-- [ ] Replay across families emits all `source` hellos first, followed by historical events strictly sorted in chronological timestamp order.
-- [ ] Text log frames contain additive fields `ts`, `level`, and `message` without breaking existing consumers or changing `cycle_events.jsonl` on disk.
-- [ ] Events render with visually aligned, bracketed tags: `[HH:MM:SS] [PROCESS] [EVENT]` in fixed-width columns.
-- [ ] Row severity applies consistent CSS classes (`good`, `warn`, `bad`, `info`, `muted`).
-- [ ] Plain-English messages for User WS, background processes, fills, quotes, and market streams; no wallet addresses or raw errors in the main row.
-- [ ] UI provides dual filtering: Process Tabs + Component Dropdown + Event Category Buttons (`ALL`, `TRADES`, `CONNECTIONS`, `MARKET FILTER`, `ALERTS`).
-- [ ] Unit & harness tests pass: `python -m pytest -q tests/test_dashboard_server.py tests/test_cycle_stream.py` and Node.js event stream harnesses.
+### 3.3 Single-Use Approval Store & Gated Live Start
+- Passing all 4 checks generates a short-lived, single-use `preflight_id`.
+- `POST /api/system/start` requires `preflight_id` and selected `minutes`.
+- Consumes `preflight_id` atomically; duplicate or expired tokens are rejected.
+- Spawns live stack:
+  - `filter_loop`
+  - `order_manager poll --interval 0.5 --watch-guardrails` (supervises `scripts.global_stop_loss`)
+  - `trader_loop --live --no-reconcile --no-sweep --interval 5 --deadline-ts <timestamp>`
+- Atomically saves run metadata (`run_id`, `minutes`, `started_at`, `deadline_at`, `preflight_id`) to `processes.json`.
 
-## 5. Explicit Out of Scope
+### 3.4 Trader Loop Deadline Horizon
+- `core_brain/trader_loop.py` accepts `--deadline-ts <epoch_seconds>`.
+- Sleep interval is clamped using `make_deadline_sleep()` from `core_brain/shadow_run.py`.
+- When deadline is reached, raises `_Deadline` and triggers clean loop exit (`shutdown_reason = "deadline"`).
+- If deadline has already passed at startup, exits immediately.
+- Background services (`poll`, `filter_loop`) continue running until operator presses `STOP`.
 
-- Modifying core trading logic, order sizing, or risk parameters.
-- Changing NDJSON schema on disk or touching `data/orders.db`.
-- Introducing third-party frontend frameworks or npm packages.
+### 3.5 Shadow Run Sequence Numbering
+- Implements sequence generator in Python matching PowerShell `Get-NextShadowSeq`:
+  - Scans `data/*.db` matching `^(\d{1,2})_shadow_`.
+  - Increments highest sequence, wraps after 99 back to 1.
+  - Names db: `data/NN_shadow_<dd-MM_HH-mm>.db`, run ID: `shadow-NN`.
+- `POST /api/system/shadow/start` accepts `fresh: true` to generate and switch to the new DB.

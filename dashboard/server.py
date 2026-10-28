@@ -37,6 +37,7 @@ from typing import Any, Generator, Optional
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 
 logger = logging.getLogger(__name__)
@@ -1267,23 +1268,266 @@ def _uptime_sec(started_at: float | None, now: float | None = None) -> float | N
     return max(0.0, elapsed)
 
 
-def _start_stack_commands(sweep_interval_sec: float | None) -> list[list[str]]:
+def _start_stack_commands(sweep_interval_sec: float | None,
+                          deadline_ts: float | None = None) -> list[list[str]]:
     """Argv (minus the interpreter) for the three START processes.
 
     Single source for `start_bot` and the preflight preview: a flag change
     here moves both, so the preview cannot drift from what START launches.
-    The guardrail watchdog (`scripts.global_stop_loss`) is deliberately
-    absent -- the dashboard never starts it.
+    The guardrail watchdog (`scripts.global_stop_loss`) is supervised by
+    `order_manager poll --watch-guardrails`, never as a standalone process.
     """
-    query = ["-m", "core_brain.order_manager", "poll", "--interval", "0.5"]
+    query = ["-m", "core_brain.order_manager", "poll", "--interval", "0.5",
+             "--watch-guardrails"]
     if sweep_interval_sec is not None:
         query += ["--sweep-interval", f"{sweep_interval_sec:g}"]
+    decide = ["-m", "core_brain.trader_loop", "--live",
+              "--no-reconcile", "--no-sweep", "--interval", "5"]
+    if deadline_ts is not None:
+        decide += ["--deadline-ts", str(float(deadline_ts))]
     return [
         ["-m", "scripts.filter_loop"],
         query,
-        ["-m", "core_brain.trader_loop", "--live",
-         "--no-reconcile", "--no-sweep", "--interval", "5"],
+        decide,
     ]
+
+
+def _atomic_write_json(path, payload: dict) -> None:
+    """Write JSON atomically via sibling tmp file + os.replace."""
+    import tempfile as _tf
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = _tf.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with open(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2))
+            handle.flush()
+            try:
+                handle.fileno()
+                import os as _os
+                _os.fsync(handle.fileno())
+            except Exception:
+                pass
+        import os as _os2
+        _os2.replace(tmp, path)
+    finally:
+        try:
+            Path(tmp).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _get_next_shadow_seq(tag: str = "") -> str:
+    """Next 2-digit shadow run id (01..99), mirroring Get-NextShadowSeq.
+
+    Scans `data/*.db` for `NN_shadow_` (excluding `_shadow_prudent` unless
+    `tag == "prudent"`), takes max + 1, wraps past 99 back to 1.
+    """
+    import re as _re
+
+    data_dir = LIVE_ROOT / "data"
+    seqs: list[int] = []
+    try:
+        names = [p.name for p in data_dir.glob("*.db")]
+    except OSError:
+        names = []
+    for name in names:
+        base = name[:-3] if name.endswith(".db") else name
+        if tag == "prudent":
+            m = _re.match(r"^(\d{1,2})_shadow_prudent", base)
+        else:
+            if _re.match(r"^(\d{1,2})_shadow_prudent", base):
+                continue
+            m = _re.match(r"^(\d{1,2})_shadow_", base)
+        if m:
+            try:
+                seqs.append(int(m.group(1)))
+            except ValueError:
+                continue
+    nxt = (max(seqs) + 1) if seqs else 1
+    if nxt > 99:
+        nxt = 1
+    return f"{nxt:02d}"
+
+
+def _slugify_profile_name(name: str | None) -> str:
+    """Filesystem-safe profile slug for shadow db names ("", never "prudent*")."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name or "").lower()).strip("-")[:24]
+    if slug.startswith("prudent"):
+        slug = ("run-" + slug)[:24]
+    return slug.strip("-")
+
+
+def _staged_shadow_profile() -> tuple[dict | None, str]:
+    """Matched staged profile (option, slug) for the next fresh shadow, or (None, "")."""
+    pending = _read_pending_profile()
+    if not pending:
+        return None, ""
+    try:
+        options = _profile_options()
+        match = next((o for o in options["presets"] + options["arms"]
+                      if o["kind"] == pending.get("kind")
+                      and o["name"] == pending.get("name")), None)
+    except Exception:
+        match = None
+    if match is None:
+        return None, ""
+    return match, _slugify_profile_name(pending.get("name"))
+
+
+def _fresh_shadow_naming() -> dict:
+    """Next fresh shadow store naming: NN_shadow_<stamp>[_<slug>].db + run id.
+
+    The name is bumped while its file already exists: two STARTs inside the
+    same minute (or a retry right after a launch) otherwise share one store,
+    and the second run dies on the first run's fleet lock with nothing but a
+    cycle-0 heartbeat to show for it.
+    """
+    match, slug = _staged_shadow_profile()
+    stamp = time.strftime("%d-%m_%H-%M", time.localtime())
+    seq = _get_next_shadow_seq()
+    try:
+        seq_int = int(seq)
+    except (TypeError, ValueError):
+        seq_int = 1
+    db_name = ""
+    run_id = ""
+    for _ in range(100):
+        seq = f"{seq_int:02d}" if seq_int <= 99 else str(seq_int)
+        db_name = f"{seq}_shadow_{stamp}" + (f"_{slug}" if slug else "") + ".db"
+        run_id = f"shadow-{seq}" + (f"-{slug}" if slug else "")
+        try:
+            if not (LIVE_ROOT / "data" / db_name).exists():
+                break
+        except OSError:
+            break
+        seq_int = seq_int + 1 if seq_int < 99 else 1
+    return {"seq": seq, "slug": slug, "profile": match,
+            "db_name": db_name, "run_id": run_id}
+
+
+def _ensure_filter_for_shadow() -> str | None:
+    """Gap-fill the Market Filter so a fresh rehearsal has a markets file.
+
+    Read-only ranking; shared with the live stack exactly like `start_bot`'s
+    gap-fill. Returns a note when it launched the filter, else None. Never
+    raises: a filter problem must not block the rehearsal itself. Skips when
+    the process registry is unreadable (fail closed: cannot rule out a
+    running filter) or a filter is already observed.
+    """
+    import subprocess
+
+    try:
+        status = get_system_status()
+        fsvc = (status.get("services") or {}).get("filter", {})
+        if fsvc.get("running") or fsvc.get("observed_running"):
+            return None
+        saved, _err = _read_saved_procs()
+        if saved is None:
+            return None
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "scripts.filter_loop"],
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **({"start_new_session": True} if sys.platform != "win32" else {}),
+        )
+        entry = {"pid": proc.pid, "started_at": time.time()}
+        merged = dict(saved)
+        merged["filter"] = entry
+        legacy = {"screener"}
+        for key in legacy:
+            merged.pop(key, None)
+        _atomic_write_json(runtime_file("processes.json", root=LIVE_ROOT), merged)
+        return "Market Filter started for this run."
+    except Exception:
+        return None
+
+
+def _shadow_fleet_lock_info(db_path: Path) -> dict | None:
+    """A fresh-held fleet lock on a shadow target, or None.
+
+    A second rehearsal against the same store dies at startup on the first
+    run's lock with nothing but a cycle-0 heartbeat to show for it -- and the
+    child used to log to DEVNULL, so the page just flipped back to START.
+    This probe mirrors the registry's own rule (`INSTANCE_LOCK_STALE_MS`): a
+    lock younger than that refuses, whatever the holder's PID looks like now.
+    Best-effort and read-only; any error returns None (fail open) and the
+    per-run log carries the verdict instead.
+    """
+    try:
+        if not db_path.exists() or db_path.stat().st_size == 0:
+            return None
+        from core_brain.order_registry import INSTANCE_LOCK_STALE_MS
+        import sqlite3
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2.0)
+        try:
+            row = con.execute(
+                "SELECT holder, acquired_ts FROM instance_lock WHERE role = 'fleet'"
+            ).fetchone()
+        finally:
+            con.close()
+        if not row:
+            return None
+        holder, acquired_ts = row[0], row[1]
+        try:
+            age_ms = int(time.time() * 1000) - int(acquired_ts)
+        except (TypeError, ValueError):
+            return None
+        age_ms = max(0, age_ms)
+        if age_ms >= INSTANCE_LOCK_STALE_MS:
+            return None
+        return {"holder": holder, "age_ms": age_ms,
+                "stale_ms": int(INSTANCE_LOCK_STALE_MS)}
+    except Exception:
+        return None
+
+
+def _clear_shadow_fleet_lock(target_db: Path, pid: int) -> None:
+    """Drop our own fleet lock row after a confirmed shadow stop.
+
+    A SIGKILLed rehearsal never runs its lock release, so the row stays fresh
+    for a full STALE window and the next START against that store dies on it.
+    Only the row our killed PID wrote is removed (holder is `pid:hex`); a row
+    adopted by another run meanwhile is left alone. Best-effort.
+    """
+    try:
+        if resolve_db_identity(target_db)["is_production"]:
+            return
+        import sqlite3
+        con = sqlite3.connect(str(target_db), timeout=5.0)
+        try:
+            con.execute(
+                "DELETE FROM instance_lock WHERE role = 'fleet' AND holder LIKE ?",
+                (f"{int(pid)}:%",),
+            )
+            con.commit()
+        finally:
+            con.close()
+    except Exception:
+        pass
+
+
+def _invalidate_snapshots_for_db(*db_strs: str) -> None:
+    """Drop cached snapshots keyed to a store that just changed state.
+
+    Without this the next poll (10s TTL on shadow-run keys, longer for ended
+    stores) keeps serving the pre-start record and the master toggle flickers
+    back to START right after a successful launch.
+    """
+    wants = {s for s in db_strs if s}
+    if not wants:
+        return
+    try:
+        for key in list(_snapshots.keys()):
+            try:
+                if any(isinstance(part, str) and part in wants for part in key):
+                    _snapshots.pop(key, None)
+            except Exception:
+                continue
+    except Exception:
+        pass
 
 
 SERVICE_NAMES = ("filter", "query", "decide")
@@ -1725,6 +1969,22 @@ def _resolve_active_profile(shadow_run: dict | None) -> dict | None:
         return None
 
 
+def _watchdog_summary() -> dict:
+    """Lightweight watchdog state for status payloads; never raises."""
+    try:
+        health = _guardrail_health()
+    except Exception:
+        return {"running": False, "age_s": None, "alerts_total": 0}
+    if not isinstance(health, dict):
+        return {"running": False, "age_s": None, "alerts_total": 0}
+    return {
+        "running": bool(health.get("running")),
+        "age_s": health.get("age_s"),
+        "alerts_total": health.get("alerts_total", 0),
+        "pid": health.get("pid"),
+    }
+
+
 def get_system_status() -> dict:
     """Return live running status for 3 sub-services (Market Filter, Query Polymarket, Decide & Execute) and Telemetry."""
     procs_file = resolve_runtime_file("processes.json", root=LIVE_ROOT)
@@ -1881,6 +2141,8 @@ def get_system_status() -> dict:
         # is down" while a healthy trial writes to a file nobody is watching.
         "shadow_runs": _recent_shadow_runs(db_identity["path"]),
         "starting_capital": get_starting_capital(),
+        "run": saved_procs.get("run") if isinstance(saved_procs, dict) else None,
+        "watchdog": _watchdog_summary(),
         "repo_revision": _DASH_CODE,
         "dash_revision": {
             "commit": _DASH_CODE.get("commit"),
@@ -1969,8 +2231,14 @@ def get_starting_capital() -> float | None:
         return None
 
 
-def start_bot() -> dict:
-    """Launch background Screener and Reconcile loop."""
+def start_bot(preflight_id: str | None = None,
+            minutes: float | None = None) -> dict:
+    """Launch background Screener and Reconcile loop.
+
+    `minutes` sets the horizon: the Decide command carries `--deadline-ts`
+    and the run record lands in `processes.json`. `None` keeps the legacy
+    unbounded stack (service starts, older callers, existing tests).
+    """
     import subprocess
 
     # The stack always writes the production registry, whatever this page is
@@ -2080,7 +2348,16 @@ def start_bot() -> dict:
         # included) instead of just the root.
         popen_group = {"start_new_session": True} if sys.platform != "win32" else {}
 
-        stack_cmds = _start_stack_commands(resolve_sweep_interval())
+        deadline_ts: float | None = None
+        run_minutes: float | None = None
+        if minutes is not None:
+            try:
+                run_minutes = float(minutes)
+            except (TypeError, ValueError):
+                run_minutes = None
+        if run_minutes is not None and run_minutes > 0:
+            deadline_ts = time.time() + run_minutes * 60.0
+        stack_cmds = _start_stack_commands(resolve_sweep_interval(), deadline_ts)
 
         # Launch Market Filter (filter_loop) if not running
         if not filter_alive:
@@ -2162,7 +2439,31 @@ def start_bot() -> dict:
                 new_procs["starting_account_value"] = existing_starting_value
         elif existing_starting_value is not None:
             new_procs["starting_account_value"] = existing_starting_value
-        procs_file.write_text(json.dumps(new_procs, indent=2), encoding="utf-8")
+        run_record: dict | None = None
+        if run_minutes is not None and run_minutes > 0:
+            started_at = time.time()
+            stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(started_at))
+            run_id = f"live-{stamp}-{int(run_minutes)}m"
+            run_record = {
+                "run_id": run_id,
+                "minutes": run_minutes,
+                "started_at": started_at,
+                "deadline_at": started_at + run_minutes * 60.0,
+                "expired": False,
+            }
+            if preflight_id:
+                run_record["preflight_id"] = preflight_id
+            new_procs["run"] = run_record
+        else:
+            existing_run = None
+            try:
+                if procs_file.exists():
+                    existing_run = json.loads(procs_file.read_text(encoding="utf-8")).get("run")
+            except Exception:
+                existing_run = None
+            if isinstance(existing_run, dict):
+                new_procs["run"] = existing_run
+        _atomic_write_json(procs_file, new_procs)
 
         reused = [n for n, alive in
                   (("filter", filter_alive), ("query", query_alive),
@@ -2435,6 +2736,8 @@ def start_shadow_run(
     custom_db: str | None = None,
     custom_run_id: str | None = None,
     minutes: float = 10.0,
+    ensure_filter: bool = False,
+    env_extra: dict | None = None,
 ) -> dict:
     """Launch background shadow rehearsal without signer."""
     import subprocess
@@ -2459,6 +2762,25 @@ def start_shadow_run(
                 "status": get_system_status(),
             }
 
+    # A fresh-held fleet lock means the previous run never released it (a
+    # killed rehearsal skips its lock release). Spawning anyway dies at
+    # startup on InstanceInUse with only a cycle-0 heartbeat behind -- the
+    # "button flips back to START" report. Refuse with the wait instead.
+    lock = _shadow_fleet_lock_info(target_db)
+    if lock is not None:
+        held_s = lock["age_ms"] / 1000.0
+        clears_in_s = max(0.0, lock["stale_ms"] / 1000.0 - held_s)
+        return {
+            "ok": False,
+            "message": (
+                f"Refusing shadow start on {target_db.name}: the previous run "
+                f"({lock['holder']}) still holds the fleet lock "
+                f"(held {held_s:.0f}s; clears automatically in "
+                f"~{clears_in_s:.0f}s). Wait a minute and start again."
+            ),
+            "status": get_system_status(),
+        }
+
     # Run ID resolution
     if custom_run_id and str(custom_run_id).strip():
         run_id = str(custom_run_id).strip()
@@ -2467,6 +2789,10 @@ def start_shadow_run(
     else:
         stem = target_db.stem.replace("_", "-")
         run_id = stem if stem and stem != "orders" else f"shadow-{int(time.time())}"
+
+    filter_note: str | None = None
+    if ensure_filter:
+        filter_note = _ensure_filter_for_shadow()
 
     popen_group = {"start_new_session": True} if sys.platform != "win32" else {}
     cmd = [
@@ -2480,22 +2806,54 @@ def start_shadow_run(
         "--run-id",
         str(run_id),
     ]
+    child_env = None
+    if env_extra:
+        child_env = {**os.environ, **env_extra}
 
+    # The child used to log to DEVNULL, so a startup death (stale import,
+    # venue outage, lock refusal) was invisible and the page just flipped back
+    # to START. Keep one small log per run instead.
+    safe_run_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(run_id))
+    log_path = runtime_file(f"shadow_run_{safe_run_id}.out.log", root=LIVE_ROOT)
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = open(log_path, "ab")
+    except OSError as e:
+        return {
+            "ok": False,
+            "message": f"Failed to start shadow rehearsal: cannot open log {log_path}: {e}",
+            "status": get_system_status(),
+        }
     try:
         proc = subprocess.Popen(
             cmd,
             cwd=str(REPO_ROOT),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            **({"env": child_env} if child_env is not None else {}),
             **popen_group,
         )
     except Exception as e:
+        try:
+            log_fh.close()
+        except Exception:
+            pass
         return {
             "ok": False,
             "message": f"Failed to start shadow rehearsal: {e}",
             "status": get_system_status(),
         }
+    try:
+        log_fh.close()
+    except Exception:
+        pass
 
+    # The pre-start polls may have cached this store's old (ended) record;
+    # drop it so the next poll reads the new run instead of the dead one.
+    try:
+        _invalidate_snapshots_for_db(str(target_db), str(Path(target_db).resolve()))
+    except Exception:
+        pass
     status = get_system_status()
     if not status.get("shadow_run") or not status["shadow_run"].get("running"):
         status["shadow_run"] = {
@@ -2508,9 +2866,12 @@ def start_shadow_run(
             "elapsed_sec": 0,
         }
 
+    message = f"Shadow rehearsal started ({run_id}) on {target_db.name}."
+    if filter_note:
+        message += f" {filter_note}"
     return {
         "ok": True,
-        "message": f"Shadow rehearsal started ({run_id}) on {target_db.name}.",
+        "message": message,
         "pid": proc.pid,
         "run_id": run_id,
         "status": status,
@@ -2540,6 +2901,15 @@ def stop_shadow_run(custom_db: str | None = None) -> dict:
 
     outcomes = _stop_services([("shadow", pid, shadow.get("process_started_at"))], subprocess)
     outcome = outcomes.get("shadow", {}).get("outcome", "stopped")
+    if outcome in ("stopped", "forced"):
+        # A killed rehearsal never releases its fleet lock; without this the
+        # next START against the same store dies on it for a full STALE
+        # window. Only our own row is removed (holder is `pid:hex`).
+        _clear_shadow_fleet_lock(target_db, pid)
+        try:
+            _invalidate_snapshots_for_db(str(target_db), str(Path(target_db).resolve()))
+        except Exception:
+            pass
     status = get_system_status()
     if status.get("shadow_run"):
         status["shadow_run"]["running"] = False
@@ -2670,11 +3040,156 @@ def api_system_status():
     return JSONResponse(get_system_status())
 
 
-@app.post("/api/system/start")
-def api_system_start(request: Request):
-    """Start background bot stack."""
+@app.post("/api/system/preflight")
+async def api_system_preflight(request: Request):
+    """Run one sequential preflight check; issue single-use approval when all pass."""
     _authorize_control(request)
-    return JSONResponse(start_bot())
+    refusal = _refuse_unless_live_writable()
+    if refusal is not None:
+        return JSONResponse(refusal)
+    from dashboard import preflight as _pf
+
+    body: dict = {}
+    try:
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    step = body.get("step")
+    preflight_id = body.get("preflight_id")
+    confirm = body.get("confirm", False)
+    if step not in _pf.PREFLIGHT_STEPS:
+        return JSONResponse({
+            "ok": False,
+            "message": f"Unknown preflight step {step!r}.",
+            "status": get_system_status(),
+        })
+    pid = preflight_id
+    if step == _pf.PREFLIGHT_STEPS[0] and not pid:
+        pid = _pf.new_session()
+    sess = _pf.get_session(pid)
+    if sess is None:
+        return JSONResponse({
+            "ok": False,
+            "message": "Unknown or expired preflight_id; restart preflight from step 1.",
+            "status": get_system_status(),
+        })
+    # Order first: the reach probe places a real order, so an out-of-order
+    # request must be refused before any runner starts, not after it ran.
+    expected = _pf.next_step(sess)
+    if step != expected:
+        return JSONResponse({
+            "ok": False,
+            "message": f"Out of order: expected {expected!r}, got {step!r}.",
+            "preflight_id": pid,
+            "status": get_system_status(),
+        })
+    if not _pf.try_begin_step(pid, step):
+        return JSONResponse({
+            "ok": False,
+            "message": f"Preflight step {step!r} is already running; wait for it to land.",
+            "preflight_id": pid,
+            "status": get_system_status(),
+        })
+    runners = {
+        "credentials": lambda: _pf.check_credentials(),
+        "screener": lambda: _pf.check_screener(),
+        "stream": lambda: _pf.check_stream(),
+        "reach_probe": lambda: _pf.check_reach_probe(confirm=confirm is True),
+    }
+    try:
+        # Blocking venue/socket work stays off the event loop so the page
+        # keeps answering status polls while a check runs.
+        result = await run_in_threadpool(runners[step])
+    except Exception as exc:
+        result = {"ok": False, "summary": f"{step} crashed: {type(exc).__name__}",
+                  "details": {"error": f"{type(exc).__name__}: {exc}"}}
+    finally:
+        _pf.end_step(pid)
+    if not isinstance(result, dict) or "ok" not in result:
+        result = {"ok": False, "summary": f"{step} returned no verdict", "details": {}}
+    accepted, error = _pf.submit_step(pid, step, bool(result.get("ok")),
+                                      str(result.get("summary", "")),
+                                      dict(result.get("details") or {}))
+    if not accepted:
+        return JSONResponse({
+            "ok": False,
+            "message": error or "Preflight step refused.",
+            "preflight_id": pid,
+            "status": get_system_status(),
+        })
+    approved = _pf.try_approve(pid)
+    nxt = _pf.next_step(_pf.get_session(pid) or sess)
+    return JSONResponse({
+        "ok": bool(result.get("ok")),
+        "step": step,
+        "summary": result.get("summary", ""),
+        "details": result.get("details", {}),
+        "preflight_id": pid,
+        "next_step": nxt,
+        "approved": bool(approved),
+        "expires_in_sec": int(_pf.PREFLIGHT_TTL_SEC),
+    })
+
+
+@app.post("/api/system/start")
+async def api_system_start(request: Request):
+    """Start background bot stack (gated: valid single-use preflight_id)."""
+    _authorize_control(request)
+    body: dict = {}
+    try:
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    preflight_id = body.get("preflight_id")
+    minutes = body.get("minutes", 1440)
+    try:
+        minutes_f = float(minutes)
+    except (TypeError, ValueError):
+        return JSONResponse({
+            "ok": False,
+            "message": "Invalid minutes; choose 60, 360, or 1440.",
+            "status": get_system_status(),
+        })
+    if minutes_f not in (60.0, 360.0, 1440.0):
+        return JSONResponse({
+            "ok": False,
+            "message": "Invalid minutes; choose 60, 360, or 1440.",
+            "status": get_system_status(),
+        })
+    if not preflight_id or not isinstance(preflight_id, str):
+        return JSONResponse({
+            "ok": False,
+            "message": ("Live start needs a fresh preflight approval: open the "
+                        "dashboard Start Run launcher, pass all 4 checks, then start."),
+            "status": get_system_status(),
+        })
+    from dashboard import preflight as _pf
+
+    # The approval is checked here but consumed only after a start that
+    # actually launched: a refusal (stack already running, page on a shadow
+    # store, ops lock held) must not burn the token and force the operator
+    # through another $2 reach probe. A replay cannot double-spawn -- the
+    # ops lock plus start_bot's duplicate-stack refusal land it as ok=False.
+    sess = _pf.get_session(preflight_id)
+    if sess is None or sess.get("consumed") or not sess.get("approved"):
+        return JSONResponse({
+            "ok": False,
+            "message": "Invalid, expired, or already-used preflight_id; re-run preflight.",
+            "status": get_system_status(),
+        })
+    # Process spawns and the starting-capital venue read block; keep them
+    # off the event loop like the preflight runners above.
+    result = await run_in_threadpool(
+        start_bot, preflight_id=preflight_id, minutes=minutes_f)
+    if result.get("ok") is True:
+        _pf.consume_approval(preflight_id)
+    return JSONResponse(result)
 
 
 @app.post("/api/system/stop")
@@ -2999,6 +3514,33 @@ def api_service_status(name: str = "hub"):
     return JSONResponse(_probe_service_status(name))
 
 
+@app.get("/api/system/shadow/next")
+def api_system_shadow_next():
+    """Preview the next fresh shadow store (read-only, no state change)."""
+    naming = _fresh_shadow_naming()
+    seq, db_name = naming["seq"], naming["db_name"]
+    markets_info: dict = {"exists": False, "age_sec": None}
+    try:
+        from core_brain.runtime_paths import runtime_file as _rf
+        mp = _rf("markets.json", root=LIVE_ROOT)
+    except Exception:
+        mp = LIVE_ROOT / "runtime" / "markets.json"
+    try:
+        if mp.exists():
+            markets_info = {"exists": True,
+                            "age_sec": max(0.0, time.time() - mp.stat().st_mtime)}
+    except OSError:
+        pass
+    return JSONResponse({
+        "ok": True,
+        "seq": seq,
+        "db_name": db_name,
+        "db_path": str((LIVE_ROOT / "data" / db_name).resolve()),
+        "profile_slug": naming["slug"] or None,
+        "markets": markets_info,
+    })
+
+
 @app.post("/api/system/shadow/start")
 async def api_system_shadow_start(
     request: Request,
@@ -3017,7 +3559,43 @@ async def api_system_shadow_start(
     target_db = body.get("db") or db
     target_run_id = body.get("run_id") or run_id
     target_minutes = body.get("minutes") if body.get("minutes") is not None else minutes
-    return JSONResponse(start_shadow_run(target_db, target_run_id, float(target_minutes)))
+    profile_env: dict | None = None
+    took_fresh = False
+    prev_override = _ACTIVE_DB_OVERRIDE
+    if body.get("fresh") is True and not target_db:
+        took_fresh = True
+        naming = _fresh_shadow_naming()
+        target_db = str((LIVE_ROOT / "data" / naming["db_name"]).resolve())
+        if not target_run_id:
+            target_run_id = naming["run_id"]
+        if naming["profile"] is not None:
+            profile_env = dict(naming["profile"].get("env") or {})
+        try:
+            from core_brain.order_registry import OrderRegistry as _Reg
+            _Reg(db_path=target_db)
+        except Exception:
+            pass
+        try:
+            set_db_override(Path(target_db))
+        except Exception:
+            pass
+    result = start_shadow_run(target_db, target_run_id, float(target_minutes),
+                              ensure_filter=took_fresh,
+                              env_extra=profile_env)
+    if took_fresh and result.get("ok") is True:
+        try:
+            pending_file = resolve_runtime_file(PENDING_PROFILE_FILE, root=LIVE_ROOT)
+            pending_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+    elif took_fresh:
+        # The start was refused, so the page must not be left pointed at the
+        # empty store this attempt created.
+        try:
+            set_db_override(prev_override)
+        except Exception:
+            pass
+    return JSONResponse(result)
 
 
 @app.post("/api/system/shadow/stop")
@@ -5814,8 +6392,11 @@ def get_active_markets():
     """
     from core_brain.registry_state import summarize_state
     state = summarize_state(resolve_db_path(_ACTIVE_DB_OVERRIDE))
-    # Filter to markets with active orders or fills
-    active = [p for p in state.get("pairs", []) if p.get("status") in ("RESTING", "NAKED", "BALANCED")]
+    # Filter to markets with active orders or fills. Pairs carry
+    # `hedge_state` (RESTING/NAKED/BALANCED/...), never `status`: filtering
+    # on the latter matched nothing and the tab always read 0 beside open
+    # orders.
+    active = [p for p in state.get("pairs", []) if p.get("hedge_state") in ("RESTING", "NAKED", "BALANCED")]
     return JSONResponse({"markets": active})
 
 

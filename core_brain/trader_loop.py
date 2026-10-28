@@ -3350,6 +3350,21 @@ def _make_sleep_fn(wake: threading.Event) -> Callable[[float], None]:
     return _sleep
 
 
+def _run_sleep_fn(wake: threading.Event,
+                  deadline_ts: float | None) -> Callable[[float], None]:
+    """The loop's sleep, clamped to the run's horizon when one is set.
+
+    `make_deadline_sleep` raises `_Deadline` once the clock reaches
+    `deadline_ts`, which `run` already turns into a clean exit.
+    """
+    base = _make_sleep_fn(wake)
+    if deadline_ts is None:
+        return base
+    from core_brain.shadow_run import make_deadline_sleep
+
+    return make_deadline_sleep(deadline_ts, sleep=base)
+
+
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """The Trader loop's CLI, separated from `main` so the interval contract
     is testable without launching a loop (operator directive 2026-10-12).
@@ -3393,6 +3408,10 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                     help="book source with REST fallback (default: stream). "
                          "--book-source rest is the one-flag undo: today's "
                          "REST-only behavior, no socket.")
+    ap.add_argument("--deadline-ts", type=float, default=None,
+                    help="epoch seconds when this run must stop; the rotation "
+                         "sleep is clamped to the remaining time and the loop "
+                         "exits cleanly with shutdown_reason=deadline")
     a = ap.parse_args(argv)
     # The ceiling is enforced HERE, at the CLI boundary, so the loop body
     # never sees a cadence above 1s -- not silently clamped mid-flight
@@ -3506,6 +3525,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                  "(they need auth) and only show decide/plan outcomes")
         client = object()
 
+    if a.deadline_ts is not None and a.deadline_ts <= time.time():
+        log.warning("deadline-ts already passed (%.0f <= now); exiting without rotating",
+                    a.deadline_ts)
+        return 0
+
     decide_emit = partial(_emit_cycle_event, db_path=db_path)
 
     market_stream = None
@@ -3618,12 +3642,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.info("resolution sweeper started (every %ss, background)",
                  a.resolution_interval)
 
+    sleep_fn = _run_sleep_fn(wake, a.deadline_ts)
+
     try:
         results = run(
             seam,
             interval=a.interval, once=a.once, live=a.live, markets=specs,
             markets_fn=lambda: _market_specs(a.max_markets, registry=registry),
-            sleep_fn=_make_sleep_fn(wake),
+            sleep_fn=sleep_fn,
             suspects_box=suspects_box,
             spawn_guardian=not a.once,
             guardian_wake=guardian_wake,

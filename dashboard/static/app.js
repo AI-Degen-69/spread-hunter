@@ -765,6 +765,9 @@ function marketLink(m) {
  * hold the caller's chain while the reload happens. */
 function controlFetch(path, options = {}) {
   const headers = { 'X-Control-Token': CONTROL_TOKEN, ...(options.headers || {}) };
+  if (options.body != null && !('Content-Type' in headers) && !('content-type' in headers)) {
+    headers['Content-Type'] = 'application/json';
+  }
   return fetch(path, { method: 'POST', ...options, headers }).then(async (res) => {
     if (res.status === 403) {
       let stale = false;
@@ -4116,6 +4119,8 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
           }
           return;
         }
+        openStartRunModal(isShadow ? 'shadow' : 'live');
+        return;
       } else if (masterToggleBtn.disabled) {
         return;
       }
@@ -4246,6 +4251,251 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
     }
   });
 }
+
+/* ── Start Run launcher (preflight modal, #857) ── */
+const START_RUN_STEPS = ['credentials', 'screener', 'stream', 'reach_probe'];
+const startRunModalState = { open: false, mode: 'shadow', minutes: 1440, preflightId: null, checks: {}, approved: false, running: false, probeArmed: false, seq: 0 };
+function startRunModalEl(id) { return document.getElementById(id); }
+function setPreflightRow(step, state, text) {
+  const el = startRunModalEl('preflight-status-' + step);
+  if (!el) return;
+  el.textContent = text || state;
+  if (el.dataset) el.dataset.state = state;
+  el.setAttribute('data-state', state);
+}
+function startRunModalMinutes() {
+  const checked = document.querySelector && document.querySelector('input[name="start-run-minutes"]:checked');
+  const v = checked && checked.value ? parseFloat(checked.value) : startRunModalState.minutes;
+  return (v === 60 || v === 360 || v === 1440) ? v : 1440;
+}
+function startRunModalMode() {
+  const checked = document.querySelector && document.querySelector('input[name="start-run-mode"]:checked');
+  const v = checked && checked.value;
+  return (v === 'live' || v === 'shadow') ? v : startRunModalState.mode;
+}
+function updateStartRunButtons() {
+  const busy = !!startRunModalState.running;
+  const liveBtn = startRunModalEl('start-run-live');
+  if (liveBtn) liveBtn.disabled = !(startRunModalState.approved && !busy);
+  const shadowBtn = startRunModalEl('start-run-shadow');
+  if (shadowBtn) shadowBtn.disabled = busy;
+}
+function openStartRunModal(mode) {
+  const modal = startRunModalEl('start-run-modal');
+  if (!modal) return;
+  startRunModalState.open = true;
+  startRunModalState.mode = (mode === 'live' || mode === 'shadow') ? mode : 'live';
+  const modeRadio = document.querySelector
+    && document.querySelector('input[name="start-run-mode"][value="' + startRunModalState.mode + '"]');
+  if (modeRadio) modeRadio.checked = true;
+  startRunModalState.preflightId = null;
+  startRunModalState.checks = {};
+  startRunModalState.approved = false;
+  startRunModalState.running = false;
+  startRunModalState.probeArmed = false;
+  modal.classList.add('show');
+  modal.style.display = 'flex';
+  const summary = startRunModalEl('preflight-summary');
+  if (summary) summary.textContent = '';
+  START_RUN_STEPS.forEach((s) => setPreflightRow(s, 'pending', 'pending'));
+  updateStartRunButtons();
+  void refreshShadowTarget();
+  startRunModalState.seq += 1;
+  if (startRunModalState.mode === 'live') void runPreflightSequence(startRunModalState.seq);
+}
+function fmtMarketsAge(ageSec) {
+  if (ageSec == null || !isFinite(ageSec)) return 'unknown age';
+  if (ageSec < 60) return Math.round(ageSec) + 's old';
+  if (ageSec < 3600) return Math.round(ageSec / 60) + 'm old';
+  return Math.round(ageSec / 3600 * 10) / 10 + 'h old';
+}
+async function refreshShadowTarget() {
+  const targetEl = startRunModalEl('start-run-shadow-target');
+  const marketsEl = startRunModalEl('start-run-markets-line');
+  if (targetEl) targetEl.textContent = 'Shadow store: …';
+  if (marketsEl) marketsEl.textContent = 'Markets file: …';
+  let data = null;
+  try {
+    const res = await fetch('/api/system/shadow/next');
+    try { data = await res.json(); } catch { data = null; }
+  } catch (e) {
+    data = null;
+  }
+  if (!data || data.ok !== true) {
+    if (targetEl) targetEl.textContent = 'Shadow store: unavailable (could not preview).';
+    if (marketsEl) marketsEl.textContent = 'Markets file: unknown — the Market Filter loop refreshes runtime/markets.json.';
+    return;
+  }
+  if (targetEl) targetEl.textContent = 'Shadow store: will create data/' + (data.db_name || '(unknown)') + ' — the page switches to it on start.';
+  if (marketsEl) {
+    const m = data.markets || {};
+    if (!m.exists) {
+      marketsEl.textContent = 'Markets file: MISSING — start the Market Filter first or the rehearsal idles with no markets.';
+    } else {
+      marketsEl.textContent = 'Markets file: runtime/markets.json, ' + fmtMarketsAge(m.age_sec) + ' (refreshed by the Market Filter loop).';
+    }
+  }
+}
+function closeStartRunModal() {
+  const modal = startRunModalEl('start-run-modal');
+  if (!modal) return;
+  startRunModalState.open = false;
+  startRunModalState.running = false;
+  modal.classList.remove('show');
+  modal.style.display = 'none';
+}
+async function runPreflightStep(step, confirm, mySeq) {
+  setPreflightRow(step, 'running', 'running');
+  const body = { step, confirm: !!confirm };
+  const pid = startRunModalState.preflightId;
+  if (pid) body.preflight_id = pid;
+  let data = null;
+  try {
+    const res = await controlFetch('/api/system/preflight', { method: 'POST', body: JSON.stringify(body) });
+    try { data = await res.json(); } catch { data = null; }
+  } catch (e) {
+    if (mySeq !== undefined && mySeq !== startRunModalState.seq) return { ok: false, stale: true };
+    setPreflightRow(step, 'fail', 'error');
+    return { ok: false };
+  }
+  if (mySeq !== undefined && mySeq !== startRunModalState.seq) return { ok: false, stale: true };
+  if (data && data.preflight_id) startRunModalState.preflightId = data.preflight_id;
+  const passed = !!(data && data.ok === true);
+  if (data && data.ok === true) {
+    setPreflightRow(step, 'pass', 'pass');
+    startRunModalState.checks[step] = true;
+  } else {
+    setPreflightRow(step, 'fail', 'fail');
+    const summary = startRunModalEl('preflight-summary');
+    if (summary && data && data.summary) summary.textContent = data.summary;
+    else if (summary && data && data.message) summary.textContent = data.message;
+  }
+  if (data && data.approved === true) {
+    startRunModalState.approved = true;
+  }
+  updateStartRunButtons();
+  return { ok: passed, data };
+}
+async function runPreflightSequence(mySeq) {
+  if (mySeq !== undefined && mySeq !== startRunModalState.seq) return;
+  if (startRunModalState.running) return;
+  startRunModalState.running = true;
+  updateStartRunButtons();
+  for (const step of ['credentials', 'screener', 'stream']) {
+    const r = await runPreflightStep(step, false, mySeq);
+    if (!r.ok || (mySeq !== undefined && mySeq !== startRunModalState.seq)) {
+      if (mySeq === undefined || mySeq === startRunModalState.seq) {
+        startRunModalState.running = false;
+        updateStartRunButtons();
+      }
+      return;
+    }
+  }
+  if (mySeq !== undefined && mySeq !== startRunModalState.seq) return;
+  startRunModalState.running = false;
+  updateStartRunButtons();
+  const summary = startRunModalEl('preflight-summary');
+  if (summary) summary.textContent = 'Reach probe needs one explicit confirmation ($2.00 max exposure).';
+}
+async function armOrRunReachProbe() {
+  const s = startRunModalState;
+  if (s.mode !== 'live' || !s.checks.stream || s.running) return;
+  if (!startRunModalState.probeArmed) {
+    startRunModalState.probeArmed = true;
+    const summary = startRunModalEl('preflight-summary');
+    if (summary) summary.textContent = 'Reach probe posts a 1-share buy and cancels it ($2.00 max). Press again to confirm.';
+    const btn = startRunModalEl('start-run-probe');
+    if (btn) btn.textContent = 'Confirm reach probe ($2.00 max exposure)';
+    return;
+  }
+  s.running = true;
+  updateStartRunButtons();
+  try {
+    await runPreflightStep('reach_probe', true, s.seq);
+  } finally {
+    s.probeArmed = false;
+    s.running = false;
+    const btn = startRunModalEl('start-run-probe');
+    if (btn) btn.textContent = 'Run reach probe (max $2.00 exposure, buy-and-cancel)';
+    updateStartRunButtons();
+  }
+}
+async function startLiveFromModal() {
+  if (startRunModalState.running) return;
+  startRunModalState.running = true;
+  updateStartRunButtons();
+  const minutes = startRunModalMinutes();
+  const pid = startRunModalState.preflightId;
+  if (!pid || !startRunModalState.approved) { startRunModalState.running = false; updateStartRunButtons(); return; }
+  try {
+    const res = await controlFetch('/api/system/start', { method: 'POST', body: JSON.stringify({ preflight_id: pid, minutes }) });
+    let data = null;
+    try { data = await res.json(); } catch { data = null; }
+    if (!res.ok || !data || data.ok !== true) {
+      showToast((data && data.message) || ('Start refused (HTTP ' + res.status + ').'), { tone: 'error' });
+      return;
+    }
+    closeStartRunModal();
+    showToast(data.message || ('Stack started with ' + minutes + 'm horizon.'), { tone: 'ok' });
+    if (data.status) lastStatus = data.status;
+    renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
+    pollStatus();
+  } catch (e) {
+    showToast('Start error: ' + (e.message || String(e)), { tone: 'error' });
+  } finally {
+    startRunModalState.running = false;
+    updateStartRunButtons();
+  }
+}
+async function startShadowFromModal() {
+  if (startRunModalState.running) return;
+  startRunModalState.running = true;
+  updateStartRunButtons();
+  const minutes = startRunModalMinutes();
+  try {
+    const res = await controlFetch('/api/system/shadow/start', { method: 'POST', body: JSON.stringify({ fresh: true, minutes }) });
+    let data = null;
+    try { data = await res.json(); } catch { data = null; }
+    if (!res.ok || !data || data.ok !== true) {
+      showToast((data && data.message) || ('Shadow start refused (HTTP ' + res.status + ').'), { tone: 'error' });
+      return;
+    }
+    closeStartRunModal();
+    const sr = (data && data.status && data.status.shadow_run) || {};
+    showToast('Shadow rehearsal ' + (data.run_id || sr.run_id || 'launched') + ' on ' + (sr.db_path || 'fresh store') + '.', { tone: 'ok' });
+    if (data.status) lastStatus = data.status;
+    renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
+    pollStatus();
+  } catch (e) {
+    showToast('Shadow start error: ' + (e.message || String(e)), { tone: 'error' });
+  } finally {
+    startRunModalState.running = false;
+    updateStartRunButtons();
+  }
+}
+(function wireStartRunModal() {
+  const cancel = document.getElementById('start-run-cancel');
+  if (cancel && !cancel.dataset.wired) { cancel.dataset.wired = 'true'; cancel.addEventListener('click', closeStartRunModal); }
+  const probe = document.getElementById('start-run-probe');
+  if (probe && !probe.dataset.wired) { probe.dataset.wired = 'true'; probe.addEventListener('click', armOrRunReachProbe); }
+  const live = document.getElementById('start-run-live');
+  if (live && !live.dataset.wired) { live.dataset.wired = 'true'; live.addEventListener('click', startLiveFromModal); }
+  const shadow = document.getElementById('start-run-shadow');
+  if (shadow && !shadow.dataset.wired) { shadow.dataset.wired = 'true'; shadow.addEventListener('click', startShadowFromModal); }
+  try {
+    const modes = document.querySelectorAll ? document.querySelectorAll('input[name="start-run-mode"]') : [];
+    for (const r of modes) {
+      if (r.dataset && r.dataset.wired) continue;
+      if (r.dataset) r.dataset.wired = 'true';
+      r.addEventListener('change', () => {
+        const v = startRunModalMode();
+        startRunModalState.mode = v;
+        if (v === 'live' && startRunModalState.open && !startRunModalState.running && !startRunModalState.preflightId) void runPreflightSequence(startRunModalState.seq);
+      });
+    }
+  } catch { /* harness stub has no radios; mode stays as opened */ }
+  if (document.addEventListener) document.addEventListener('keydown', (e) => { if (e && e.key === 'Escape' && startRunModalState.open) closeStartRunModal(); });
+})();
 
 /* ── Render: Strategy Parameters (Human-Readable) ── */
 const PARAM_HUMAN_NAMES = {
@@ -12245,7 +12495,7 @@ if (typeof module !== 'undefined' && module.exports) {
     stitchPositionsRows, stitchPositionsHeadHtml, stitchHeldLegMarks,
     stitchActiveMarketsRows, stitchActiveMarketsHeadHtml,
     marketCategory, categoryPill, categoryIconTone,
-    showToast, dismissResetModal,
+    showToast, dismissResetModal, openStartRunModal, closeStartRunModal, startRunModalState,
     noteShadowStartLaunched, clearPendingShadowStart,
     isShadowStartPending, checkPendingShadowStart, SHADOW_START_TIMEOUT_MS,
     bookMixNote, renderRunSwitcher };

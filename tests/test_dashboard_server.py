@@ -621,11 +621,12 @@ def test_system_start_and_stop_endpoints(client, monkeypatch, tmp_path):
     spawn is stubbed; what is under test is the endpoint contract.
     """
     import dashboard.server as dash_mod
+    from dashboard import preflight as _pf
 
     spawned = []
     monkeypatch.setattr(
         dash_mod, "start_bot",
-        lambda: (spawned.append("start"), {"ok": True, "message": "stubbed"})[1],
+        lambda *a, **k: (spawned.append("start"), {"ok": True, "message": "stubbed"})[1],
     )
     monkeypatch.setattr(
         dash_mod, "stop_bot",
@@ -636,9 +637,18 @@ def test_system_start_and_stop_endpoints(client, monkeypatch, tmp_path):
     assert res_stop.status_code == 200
     assert res_stop.json().get("ok") is True
 
-    res_start = client.post("/api/system/start", headers=_control(client))
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        ok, err = _pf.submit_step(pid, step, True, step, {})
+        assert ok, err
+    assert _pf.try_approve(pid) is True
+    res_start = client.post("/api/system/start",
+                            json={"preflight_id": pid, "minutes": 1440},
+                            headers=_control(client))
     assert res_start.status_code == 200
     assert res_start.json().get("ok") is True
+    _pf.clear_sessions()
 
     assert spawned == ["stop", "start"]
 
@@ -934,11 +944,19 @@ def test_start_refuses_a_second_bot_stack(client, monkeypatch):
         subprocess, "Popen",
         lambda *a, **kw: pytest.fail("a second bot stack was spawned"),
     )
+    from dashboard import preflight as _pf
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        _pf.submit_step(pid, step, True, step, {})
+    _pf.try_approve(pid)
 
-    res = client.post("/api/system/start", headers=_control(client))
+    res = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 1440},
+                      headers=_control(client))
     assert res.status_code == 200
     assert res.json()["ok"] is False
     assert "already running" in res.json()["message"]
+    _pf.clear_sessions()
 
 
 def test_reset_db_refuses_while_the_bot_is_running(monkeypatch, temp_db):
@@ -2150,8 +2168,10 @@ def test_master_toggle_controls_live_stack_on_live_view():
     assert master["liveNothingRunning"]["mode"] == "live"
     assert "START RUN" in master["liveNothingRunning"]["html"]
 
-    # Live view click: exactly 1 whole-stack start POST, 0 alerts, 0 shadow starts
-    assert master["liveClick"]["wholeStackStarts"] == 1
+    # Live view click opens the preflight modal: 0 immediate whole-stack
+    # starts, 0 alerts, 0 shadow starts. The run launches from the modal
+    # (Start Live / Start Shadow), never from the bare toggle.
+    assert master["liveClick"]["wholeStackStarts"] == 0
     assert master["liveClick"]["shadowStarts"] == 0
     assert master["liveClick"]["alerts"] == 0
 
@@ -2166,8 +2186,15 @@ def test_shadow_start_endpoint_refuses_production(client, monkeypatch):
     """POST /api/system/shadow/start refuses to start against production database."""
     import dashboard.server as dash_mod
 
-    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", None)
-    res = client.post("/api/system/shadow/start", headers=_control(client))
+    # Direct set, not monkeypatch: the `client` fixture owns this global and
+    # resets it on teardown, so a monkeypatch restore would put the temp path
+    # back after the fixture already cleared it and leak into the next test.
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(None)
+    try:
+        res = client.post("/api/system/shadow/start", headers=_control(client))
+    finally:
+        dash_mod.set_db_override(prev_override)
     assert res.status_code == 200
     data = res.json()
     assert data["ok"] is False
@@ -2180,50 +2207,57 @@ def test_shadow_start_and_stop_endpoints(client, monkeypatch, tmp_path):
 
     shadow_db = tmp_path / "shadow_test.db"
     shadow_db.touch()
-    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", shadow_db)
+    # The start now writes a per-run child log under the runtime dir; keep
+    # it inside tmp so the stray-file guard stays green.
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    # Direct set, not monkeypatch (see test_shadow_start_endpoint_refuses_production).
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(shadow_db)
+    try:
+        # Mock subprocess.Popen
+        class FakeProc:
+            pid = 98765
 
-    # Mock subprocess.Popen
-    class FakeProc:
-        pid = 98765
+        spawned = []
+        def fake_popen(cmd, **kwargs):
+            spawned.append(cmd)
+            return FakeProc()
 
-    spawned = []
-    def fake_popen(cmd, **kwargs):
-        spawned.append(cmd)
-        return FakeProc()
+        import subprocess
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
-    import subprocess
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        res_start = client.post(
+            f"/api/system/shadow/start?minutes=5",
+            headers=_control(client),
+        )
+        assert res_start.status_code == 200
+        data_start = res_start.json()
+        assert data_start["ok"] is True
+        assert data_start["pid"] == 98765
+        assert len(spawned) == 1
+        assert "core_brain.shadow_run" in spawned[0]
+        assert data_start["status"]["shadow_run"]["running"] is True
 
-    res_start = client.post(
-        f"/api/system/shadow/start?minutes=5",
-        headers=_control(client),
-    )
-    assert res_start.status_code == 200
-    data_start = res_start.json()
-    assert data_start["ok"] is True
-    assert data_start["pid"] == 98765
-    assert len(spawned) == 1
-    assert "core_brain.shadow_run" in spawned[0]
-    assert data_start["status"]["shadow_run"]["running"] is True
+        # Test stop endpoint
+        monkeypatch.setattr(
+            dash_mod,
+            "read_shadow_run",
+            lambda *args, **kwargs: {"running": True, "ended": False, "pid": 98765, "process_started_at": 100.0},
+        )
+        monkeypatch.setattr(dash_mod, "_is_pid_alive", lambda *args, **kwargs: True)
+        monkeypatch.setattr(
+            dash_mod,
+            "_stop_services",
+            lambda targets, sp: {"shadow": {"outcome": "stopped"}},
+        )
 
-    # Test stop endpoint
-    monkeypatch.setattr(
-        dash_mod,
-        "read_shadow_run",
-        lambda *args, **kwargs: {"running": True, "ended": False, "pid": 98765, "process_started_at": 100.0},
-    )
-    monkeypatch.setattr(dash_mod, "_is_pid_alive", lambda *args, **kwargs: True)
-    monkeypatch.setattr(
-        dash_mod,
-        "_stop_services",
-        lambda targets, sp: {"shadow": {"outcome": "stopped"}},
-    )
-
-    res_stop = client.post("/api/system/shadow/stop", headers=_control(client))
-    assert res_stop.status_code == 200
-    data_stop = res_stop.json()
-    assert data_stop["ok"] is True
-    assert data_stop["outcome"] == "stopped"
+        res_stop = client.post("/api/system/shadow/stop", headers=_control(client))
+        assert res_stop.status_code == 200
+        data_stop = res_stop.json()
+        assert data_stop["ok"] is True
+        assert data_stop["outcome"] == "stopped"
+    finally:
+        dash_mod.set_db_override(prev_override)
 
 
 def test_page_surfaces_the_active_database_mode():
@@ -2970,18 +3004,31 @@ def test_master_toggle_renders_every_state():
     assert after["disabled"] is False
     assert after["ariaBusy"] is None
 
-    # A refused START puts the backend's reason on screen. The button itself
-    # corrects on the next poll (the click's own poll is deliberately skipped
-    # so it cannot paint over the click's result); what must hold is that the
-    # operator sees WHY, not a silent console warning.
-    assert "unreadable" in out["refused"]["ticker"]
+    # A START click opens the preflight modal and fires no whole-stack POST:
+    # the launcher gates the run, it does not launch it. The modal runs the
+    # first preflight check; a refusal there stays in the modal, not the ticker.
+    assert out["refused"]["modalOpen"] is True
+    assert "/api/system/start" not in out["refused"]["fetches"]
+    # Exactly one check was asked for: a refused step stops the sequence
+    # instead of walking straight on to screener and stream.
+    assert out["refused"]["fetches"] == ["/api/system/preflight"]
+    # The modal's JSON bodies must arrive as JSON: a text/plain POST is
+    # ignored by the server and the run silently falls back to prod (#857).
+    assert "application/json" in (out["refused"]["fetchContentTypes"] or [])
 
     # A partial STOP names the survivor and its outcome.
     assert "decide" in out["partialStop"]["ticker"]
     assert "still_running" in out["partialStop"]["ticker"]
 
-    # A non-JSON 500 produces an error line, not a crash.
-    assert "500" in out["httpFailure"]["ticker"]
+    # A non-JSON 500 inside preflight is a modal row failure, not a crash:
+    # the modal still opens and no whole-stack start is fired.
+    assert out["httpFailure"]["modalOpen"] is True
+    assert "/api/system/start" not in out["httpFailure"]["fetches"]
+
+    # Overlapping modal opens: the stale sequence's late reply is ignored —
+    # one screener POST, on the fresh session, never on the stale one.
+    assert out["overlap"]["screenerPosts"] == 1
+    assert out["overlap"]["screenerPids"] == ["screener:p-fresh"]
 
 
 # ---------------------------------------------------------------------------
@@ -4096,3 +4143,539 @@ def test_hub_api_state_served_in_process():
     health = client.get("/hub/api/health")
     assert health.status_code == 200
     assert health.json() == {"ok": True, "service": "hub"}
+
+
+# --- preflight verification suite (#857 Task 2) -------------------------------
+
+def test_preflight_sequential_enforcement():
+    """#857: steps 1->2->3->4 in order; out-of-order is rejected."""
+    from dashboard import preflight as pf
+    pf.clear_sessions()
+    pid = pf.new_session()
+    ok, err = pf.submit_step(pid, "screener", True, "x", {})
+    assert ok is False and "Out of order" in (err or "")
+    ok, err = pf.submit_step(pid, "credentials", True, "c", {})
+    assert ok is True
+    ok, err = pf.submit_step(pid, "reach_probe", True, "r", {})
+    assert ok is False
+    pf.clear_sessions()
+
+
+def test_preflight_reach_probe_requires_confirm():
+    """#857: reach probe fails closed without confirm:true."""
+    from dashboard import preflight as pf
+    res = pf.check_reach_probe(confirm=False, probe_fn=lambda: {"result": "PASS"})
+    assert res["ok"] is False
+    assert "confirmation" in res["summary"].lower()
+
+
+def test_preflight_approval_single_use_and_expiry():
+    """#857: approval is single-use; consumed tokens are rejected."""
+    from dashboard import preflight as pf
+    pf.clear_sessions()
+    pid = pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        ok, err = pf.submit_step(pid, step, True, step, {})
+        assert ok is True, err
+    assert pf.try_approve(pid) is True
+    assert pf.consume_approval(pid) is True
+    assert pf.consume_approval(pid) is False
+    pf.clear_sessions()
+
+
+def test_preflight_check_credentials_floor():
+    """#857: balance/allowance below venue minimum fails closed."""
+    from dashboard import preflight as pf
+    env = {"POLY_PRIVATE_KEY": "0xkey", "POLY_FUNDER": "0xfunder"}
+    low = lambda: {"balance_usd": 0.10, "allowance_usd": 0.10,
+                   "allowances": None, "raw": {}}
+    res = pf.check_credentials(balance_fn=low, env=env)
+    assert res["ok"] is False
+    rich = lambda: {"balance_usd": 150.0, "allowance_usd": 150.0,
+                    "allowances": None, "raw": {}}
+    res2 = pf.check_credentials(balance_fn=rich, env=env)
+    assert res2["ok"] is True
+    assert "150.00" in res2["summary"]
+
+
+def test_check_stream_resolves_condition_id_to_tokens():
+    """#857: graduated rows carry no tokens, so the probe resolves the cid first."""
+    from dashboard import preflight as pf
+    seen = {}
+
+    class _Stream:
+        connected = False
+
+        def ensure_market(self, cid, slug, up_token, down_token):
+            seen["ensure"] = (cid, up_token, down_token)
+
+        def start(self):
+            self.connected = True
+
+        def stop(self):
+            seen["stopped"] = True
+
+    res = pf.check_stream(
+        book_fn=lambda token: {"bids": [["0.4", "2"]]},
+        stream_factory=_Stream,
+        snapshot_fn=lambda: [{"cid": "0xabc"}],
+        resolve_fn=lambda cid: {"up_token": "UP", "down_token": "DOWN",
+                                "market_slug": "slug"},
+        timeout_sec=1.0,
+    )
+    assert res["ok"] is True
+    assert seen["ensure"] == ("0xabc", "UP", "DOWN")
+    assert seen["stopped"] is True
+
+    half = pf.check_stream(
+        book_fn=lambda token: {"bids": []},
+        stream_factory=_Stream,
+        snapshot_fn=lambda: [{"cid": "0xabc"}],
+        resolve_fn=lambda cid: {"up_token": "UP", "down_token": ""},
+        timeout_sec=1.0,
+    )
+    assert half["ok"] is False
+    assert "No market token" in half["summary"]
+
+    def _boom():
+        raise RuntimeError("markets.json unreadable")
+
+    crashed = pf.check_stream(snapshot_fn=_boom, resolve_fn=lambda cid: {})
+    assert crashed["ok"] is False
+    assert "unreadable" in crashed["summary"]
+    assert "markets.json unreadable" in crashed["details"]["error"]
+
+
+def test_preflight_endpoint_refuses_out_of_order_step(client, monkeypatch):
+    """#857: a step is refused before its runner starts, not after.
+
+    The reach probe places a real 1-share order; ordering has to be checked
+    ahead of the runner, or an out-of-order click places the order and only
+    then gets refused.
+    """
+    import dashboard.server as dash_mod
+    from dashboard import preflight as _pf
+    monkeypatch.setattr(dash_mod, "_refuse_unless_live_writable", lambda: None)
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    ran = []
+    monkeypatch.setattr(_pf, "check_reach_probe",
+                        lambda **kw: ran.append("probe") or {"ok": True, "summary": "probe"})
+    res = client.post("/api/system/preflight",
+                      json={"step": "reach_probe", "preflight_id": pid, "confirm": True},
+                      headers=_control(client))
+    body = res.json()
+    assert body["ok"] is False
+    assert "Out of order" in body["message"]
+    assert ran == []
+    _pf.clear_sessions()
+
+
+def test_preflight_endpoint_refuses_a_step_already_running(client, monkeypatch):
+    """#857: one runner per session at a time; the second request waits."""
+    import dashboard.server as dash_mod
+    from dashboard import preflight as _pf
+    monkeypatch.setattr(dash_mod, "_refuse_unless_live_writable", lambda: None)
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    called = []
+    monkeypatch.setattr(_pf, "check_credentials",
+                        lambda **kw: called.append(1) or {"ok": True, "summary": "creds"})
+    assert _pf.try_begin_step(pid, "credentials") is True
+    res = client.post("/api/system/preflight",
+                      json={"step": "credentials", "preflight_id": pid},
+                      headers=_control(client))
+    assert res.json()["ok"] is False
+    assert "already running" in res.json()["message"]
+    assert called == []
+    _pf.end_step(pid)
+    res2 = client.post("/api/system/preflight",
+                       json={"step": "credentials", "preflight_id": pid},
+                       headers=_control(client))
+    assert res2.json()["ok"] is True
+    assert called == [1]
+    _pf.clear_sessions()
+
+
+# --- gated start + shadow sequence (#857 Task 3) ------------------------------
+
+def test_refused_start_keeps_the_preflight_approval(client, monkeypatch):
+    """#857: a refusal must not burn the token and re-charge a $2 probe."""
+    import dashboard.server as dash_mod
+    from dashboard import preflight as _pf
+    monkeypatch.setattr(dash_mod, "start_bot",
+                        lambda **kw: {"ok": False, "message": "Bot stack is already running"})
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        _pf.submit_step(pid, step, True, step, {})
+    assert _pf.try_approve(pid) is True
+    res = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 1440},
+                      headers=_control(client))
+    assert res.json()["ok"] is False
+    assert _pf.get_session(pid)["consumed"] is False
+
+    monkeypatch.setattr(dash_mod, "start_bot",
+                        lambda **kw: {"ok": True, "message": "Stack started"})
+    res2 = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 1440},
+                       headers=_control(client))
+    assert res2.json()["ok"] is True
+    assert _pf.get_session(pid) is None
+    _pf.clear_sessions()
+
+
+def test_start_rejects_missing_preflight_id(client):
+    """#857: live start without approval fails closed with launcher guidance."""
+    res = client.post("/api/system/start", json={"minutes": 1440},
+                      headers=_control(client))
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is False
+    assert "preflight" in body["message"].lower()
+
+
+def test_start_rejects_invalid_minutes(client):
+    """#857: only 60/360/1440 minute horizons are accepted."""
+    from dashboard import preflight as _pf
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        _pf.submit_step(pid, step, True, step, {})
+    _pf.try_approve(pid)
+    res = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 30},
+                      headers=_control(client))
+    assert res.json()["ok"] is False
+    assert "60" in res.json()["message"]
+    _pf.clear_sessions()
+
+
+def test_start_consumes_preflight_single_use(client, monkeypatch, tmp_path):
+    """#857: a preflight_id starts once; replay is rejected (atomic)."""
+    import dashboard.server as dash_mod
+    from dashboard import preflight as _pf
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "resolve_db_identity",
+                        lambda path: {"is_production": True, "path": str(path), "mode": "LIVE"})
+    monkeypatch.setattr(dash_mod, "get_system_status", lambda: {"bot_state": "STOPPED"})
+    monkeypatch.setattr(dash_mod, "resolve_sweep_interval", lambda: None)
+    monkeypatch.setattr(dash_mod, "_capture_starting_capital", lambda: None)
+    import subprocess
+    spawned = []
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append(args)
+            self.pid = 12345
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    _pf.clear_sessions()
+    pid = _pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        _pf.submit_step(pid, step, True, step, {})
+    assert _pf.try_approve(pid) is True
+    res = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 1440},
+                      headers=_control(client))
+    assert res.json()["ok"] is True
+    res2 = client.post("/api/system/start", json={"preflight_id": pid, "minutes": 1440},
+                       headers=_control(client))
+    assert res2.json()["ok"] is False
+    assert "expired" in res2.json()["message"].lower() or "used" in res2.json()["message"].lower()
+    _pf.clear_sessions()
+
+
+def test_start_stack_commands_carry_watchdog_and_deadline():
+    """#857: poll supervises guardrail; decide carries the horizon."""
+    from dashboard.server import _start_stack_commands
+    cmds = _start_stack_commands(None, 1780000000.0)
+    poll = next(c for c in cmds if any("poll" in p for p in c))
+    decide = next(c for c in cmds if any("trader_loop" in p for p in c))
+    assert "--watch-guardrails" in poll
+    assert "--deadline-ts" in decide
+    assert decide[decide.index("--deadline-ts") + 1] == str(float(1780000000.0))
+    legacy = _start_stack_commands(None)
+    assert "--watch-guardrails" in next(c for c in legacy if any("poll" in p for p in c))
+
+
+def test_get_next_shadow_seq_wraps_and_skips_nonruns(tmp_path, monkeypatch):
+    """#857: NN_shadow_ numbering: max+1, ignores others, wraps past 99."""
+    import dashboard.server as dash_mod
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "01_shadow_27-10_10-00.db").write_bytes(b"")
+    (data / "02_shadow_27-10_11-00.db").write_bytes(b"")
+    (data / "notes.db").write_bytes(b"")
+    (data / "01_shadow.db").write_bytes(b"")
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    assert dash_mod._get_next_shadow_seq() == "03"
+    (data / "99_shadow_27-10_12-00.db").write_bytes(b"")
+    assert dash_mod._get_next_shadow_seq() == "01"
+
+
+def test_status_surfaces_run_and_watchdog(client):
+    """#857: status carries run metadata and watchdog state."""
+    body = client.get("/api/system/status").json()
+    assert "run" in body
+    assert "watchdog" in body
+    assert "running" in body["watchdog"]
+
+
+# --- preflight modal launcher (#857 Task 4) ----------------------------------
+
+def test_start_run_modal_markup_and_wiring():
+    """#857: the launcher modal offers Shadow/Live, horizons, and a 4-row checklist."""
+    html = _read_static("index.html")
+    assert 'id="start-run-modal"' in html
+    assert 'role="dialog"' in html
+    assert 'name="start-run-mode"' in html
+    assert 'value="shadow"' in html and 'value="live"' in html
+    for minutes in ('value="60"', 'value="360"', 'value="1440"'):
+        assert minutes in html
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        assert f'data-step="{step}"' in html
+    assert "$2.00" in html
+    live_btn = html.split('id="start-run-live"')[1].split(">")[0]
+    assert "disabled" in live_btn
+
+    css = _read_static("styles.css")
+    for state in ("pending", "running", "pass", "fail"):
+        assert state in css
+
+    app_js = (Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "openStartRunModal" in app_js
+    assert "/api/system/preflight" in app_js
+    assert "fresh" in app_js
+
+
+# --- shadow next preview + fresh start via JSON (#857 IIIB) ------------------
+
+def test_shadow_next_previews_seq_name_and_markets(tmp_path, monkeypatch):
+    """#857 IIIB: the modal preview names the db before anything is created."""
+    import re
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    (tmp_path / "data").mkdir(exist_ok=True)
+    (tmp_path / "runtime").mkdir(exist_ok=True)
+    from fastapi.testclient import TestClient
+    res = TestClient(dash_mod.app).get("/api/system/shadow/next")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert re.fullmatch(r"\d{2}", body["seq"])
+    assert re.fullmatch(r"\d{2}_shadow_\d{2}-\d{2}_\d{2}-\d{2}\.db", body["db_name"])
+    assert "markets" in body and "exists" in body["markets"]
+    assert list((tmp_path / "data").glob("*.db")) == []
+
+
+def test_shadow_fresh_start_creates_numbered_db_and_switches_view(client, monkeypatch, tmp_path):
+    """#857 IIIB: fresh:true mints NN_shadow_<stamp>.db and repoints the page."""
+    import re
+    import dashboard.server as dash_mod
+    from dashboard.server import set_db_override
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    # Direct set/restore, not monkeypatch (see test_shadow_start_endpoint_refuses_production).
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(None)
+    import subprocess
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            self.pid = 4242
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(dash_mod, "read_shadow_run", lambda db: None)
+    try:
+        res = client.post("/api/system/shadow/start", json={"fresh": True, "minutes": 5},
+                          headers=_control(client))
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is True, body.get("message")
+        assert re.fullmatch(r"shadow-\d{2}", body["run_id"])
+        db_base = body["status"]["shadow_run"]["db_path"].replace("\\", "/").split("/")[-1]
+        assert re.fullmatch(r"\d{2}_shadow_\d{2}-\d{2}_\d{2}-\d{2}\.db", db_base)
+        assert "shadow_run" in body["status"]
+    finally:
+        set_db_override(prev_override)
+
+
+# --- staged profile in shadow names + filter gap-fill (#857 IIIB follow-up) ---
+
+def test_slugify_profile_name_is_safe_and_prudent_free():
+    """Slugs are fs-safe and never collide with the _shadow_prudent scan."""
+    import dashboard.server as dash_mod
+    assert dash_mod._slugify_profile_name("Prudent Aggro v2!") == "run-prudent-aggro-v2"
+    assert dash_mod._slugify_profile_name("  Momentum/Mean  ") == "momentum-mean"
+    assert dash_mod._slugify_profile_name(None) == ""
+    assert dash_mod._slugify_profile_name("!!!") == ""
+
+
+def test_staged_profile_unknown_falls_back_to_legacy_naming(tmp_path, monkeypatch):
+    """A staged profile that no longer matches loads unstaged, never crashes."""
+    import dashboard.server as dash_mod
+    from dashboard.server import set_db_override
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    (tmp_path / "runtime").mkdir(exist_ok=True)
+    (tmp_path / "runtime" / "pending_profile.json").write_text(
+        '{"kind": "preset", "name": "No Such Profile"}', encoding="utf-8")
+    match, slug = dash_mod._staged_shadow_profile()
+    assert match is None and slug == ""
+    naming = dash_mod._fresh_shadow_naming()
+    assert naming["slug"] == "" and naming["run_id"].startswith("shadow-")
+    set_db_override(None)
+
+
+def test_fresh_shadow_uses_staged_profile_and_starts_filter(client, monkeypatch, tmp_path):
+    """#857 IIIB: staged profile lands in db name + run id + env; filter gap-fills."""
+    import json as _json
+    import re
+    import dashboard.server as dash_mod
+    from dashboard.server import set_db_override
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    # Direct set/restore, not monkeypatch (see test_shadow_start_endpoint_refuses_production).
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(None)
+    (tmp_path / "runtime").mkdir(exist_ok=True)
+    (tmp_path / "runtime" / "pending_profile.json").write_text(
+        _json.dumps({"kind": "preset", "name": "Prudent"}), encoding="utf-8")
+    monkeypatch.setattr(dash_mod, "_profile_options", lambda: {
+        "presets": [{"kind": "preset", "name": "Prudent",
+                     "label": "Prudent", "detail": "",
+                     "env": {"BOT_QUOTE_TOURNAMENT_PRESET": "prudent"}}],
+        "arms": []})
+    import subprocess
+    spawned = []
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append((args, kwargs.get("env")))
+            self.pid = 4242
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(dash_mod, "read_shadow_run", lambda db: None)
+    try:
+        res = client.post("/api/system/shadow/start", json={"fresh": True, "minutes": 5},
+                          headers=_control(client))
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is True, body.get("message")
+        assert body["run_id"] == "shadow-01-run-prudent", body["run_id"]
+        db_base = body["status"]["shadow_run"]["db_path"].replace("\\", "/").split("/")[-1]
+        assert re.fullmatch(r"01_shadow_\d{2}-\d{2}_\d{2}-\d{2}_run-prudent\.db", db_base), db_base
+        shadow_cmds = [c for c, _e in spawned if any("shadow_run" in p for p in c)]
+        assert len(shadow_cmds) == 1
+        shadow_env = [e for c, e in spawned if any("shadow_run" in p for p in c)][0]
+        assert shadow_env and shadow_env.get("BOT_QUOTE_TOURNAMENT_PRESET") == "prudent"
+        filter_cmds = [c for c, _e in spawned if any("filter_loop" in p for p in c)]
+        assert len(filter_cmds) == 1, "filter gap-fill did not launch"
+        procs = _json.loads((tmp_path / "runtime" / "processes.json").read_text(encoding="utf-8"))
+        assert procs["filter"]["pid"] == 4242
+        assert "Market Filter started" in body["message"]
+        assert not (tmp_path / "runtime" / "pending_profile.json").exists(), "staged profile not consumed"
+    finally:
+        set_db_override(prev_override)
+
+
+# --- shadow start reliability + active-markets hedge_state (IIIB follow-up) ---
+
+def test_active_markets_filters_on_hedge_state_not_status(client, monkeypatch):
+    """Pairs carry hedge_state, never status: the tab must not always read 0."""
+    import core_brain.registry_state as rs_mod
+    pairs = [
+        {"pair_id": "p-rest", "hedge_state": "RESTING"},
+        {"pair_id": "p-naked", "hedge_state": "NAKED"},
+        {"pair_id": "p-closed", "hedge_state": "CLOSED"},
+    ]
+    monkeypatch.setattr(rs_mod, "summarize_state", lambda db: {"pairs": pairs})
+    res = client.get("/api/active-markets")
+    assert res.status_code == 200
+    got = {m["pair_id"] for m in res.json()["markets"]}
+    assert got == {"p-rest", "p-naked"}
+
+
+def test_fresh_shadow_naming_bumps_past_existing_file(tmp_path, monkeypatch):
+    """Two STARTs in the same minute must not share one store file."""
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "_get_next_shadow_seq", lambda tag="": "01")
+    monkeypatch.setattr(dash_mod, "_staged_shadow_profile", lambda: (None, ""))
+    first = dash_mod._fresh_shadow_naming()
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / first["db_name"]).write_bytes(b"")
+    second = dash_mod._fresh_shadow_naming()
+    assert second["db_name"] != first["db_name"]
+    assert second["seq"] == "02"
+    assert second["run_id"] == "shadow-02"
+
+
+def test_shadow_start_refuses_fresh_fleet_lock(tmp_path, monkeypatch):
+    """A previous run's unreleased lock refuses with a wait, not a doomed child."""
+    import subprocess
+    import dashboard.server as dash_mod
+    from core_brain.order_registry import OrderRegistry
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    db = tmp_path / "data" / "09_shadow_28-10_10-00.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    OrderRegistry(db_path=str(db))._write_instance_lock(
+        "fleet", "99991:ab12cd34", int(time.time() * 1000))
+    def _no_spawn(*args, **kwargs):
+        raise AssertionError("must not spawn a child against a locked store")
+    monkeypatch.setattr(subprocess, "Popen", _no_spawn)
+    res = dash_mod.start_shadow_run(custom_db=str(db))
+    assert res["ok"] is False
+    assert "fleet lock" in res["message"]
+    assert "99991:ab12cd34" in res["message"]
+
+
+def test_shadow_start_writes_per_run_child_log(client, monkeypatch, tmp_path):
+    """The rehearsal child logs to a per-run file instead of DEVNULL."""
+    import re
+    import subprocess
+    import dashboard.server as dash_mod
+    from dashboard.server import set_db_override
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    # Direct set/restore, not monkeypatch (see test_shadow_start_endpoint_refuses_production).
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(None)
+    spawned: list = []
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append((args, kwargs))
+            self.pid = 4242
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(dash_mod, "read_shadow_run", lambda db: None)
+    try:
+        res = client.post("/api/system/shadow/start", json={"fresh": True, "minutes": 5},
+                          headers=_control(client))
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is True, body.get("message")
+        shadow_kwargs = [kw for cmd, kw in spawned if any("shadow_run" in p for p in cmd)]
+        assert shadow_kwargs, "shadow child was not spawned"
+        assert shadow_kwargs[0].get("stdout") is not None
+        assert shadow_kwargs[0].get("stderr") == subprocess.STDOUT
+        run_id = body["run_id"]
+        assert re.fullmatch(r"shadow-\d{2}", run_id), run_id
+        log = tmp_path / "runtime" / f"shadow_run_{run_id}.out.log"
+        assert log.is_file(), f"missing child log {log}"
+    finally:
+        set_db_override(prev_override)
+
+
+def test_shadow_stop_clears_own_fleet_lock(tmp_path, monkeypatch):
+    """A confirmed stop removes our lock row so the next START is not refused."""
+    import sqlite3
+    import dashboard.server as dash_mod
+    from core_brain.order_registry import OrderRegistry
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    db = tmp_path / "data" / "09_shadow_28-10_10-00.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    OrderRegistry(db_path=str(db))._write_instance_lock(
+        "fleet", "99992:ab12cd34", int(time.time() * 1000))
+    monkeypatch.setattr(dash_mod, "read_shadow_run", lambda db_path: {
+        "running": True, "ended": False, "pid": 99992,
+        "process_started_at": time.time() - 5, "run_id": "shadow-09"})
+    monkeypatch.setattr(dash_mod, "_is_pid_alive", lambda *a, **k: True)
+    monkeypatch.setattr(dash_mod, "_stop_services",
+                        lambda targets, sp: {"shadow": {"outcome": "stopped"}})
+    res = dash_mod.stop_shadow_run(custom_db=str(db))
+    assert res["ok"] is True
+    con = sqlite3.connect(str(db))
+    try:
+        rows = con.execute("SELECT holder FROM instance_lock WHERE role = 'fleet'").fetchall()
+    finally:
+        con.close()
+    assert rows == []

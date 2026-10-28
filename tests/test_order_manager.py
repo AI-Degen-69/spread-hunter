@@ -1267,6 +1267,36 @@ def test_balance_zero_is_a_warning_not_a_failure(capsys):
     assert "Zero." in out
 
 
+# --- balance helper extraction (#857 Task 1) --------------------------------
+
+def test_get_balance_allowance_returns_usd_and_raw():
+    """#857: helper parses 6dp strings into USD floats without touching stdout."""
+    mock_client = MagicMock()
+    mock_client.get_balance_allowance.return_value = {
+        "balance": "50000000",
+        "allowance": "100000000",
+        "allowances": {"0xexchange_contract": "100000000"},
+    }
+    info = le.get_balance_allowance("0xfunder_addr", client_instance=mock_client)
+    assert info["balance_usd"] == pytest.approx(50.0)
+    assert info["allowance_usd"] == pytest.approx(100.0)
+    assert info["allowances"] == {"0xexchange_contract": pytest.approx(100.0)}
+    assert info["raw"]["balance"] == "50000000"
+
+
+def test_get_balance_allowance_single_allowance_shape():
+    """#857: non-dict allowances fall back to the singular allowance field."""
+    mock_client = MagicMock()
+    mock_client.get_balance_allowance.return_value = {
+        "balance": "2000000",
+        "allowance": "3000000",
+    }
+    info = le.get_balance_allowance(client_instance=mock_client)
+    assert info["balance_usd"] == pytest.approx(2.0)
+    assert info["allowance_usd"] == pytest.approx(3.0)
+    assert info["allowances"] is None
+
+
 # --- reach-probe pre-flight + dry run (#840 Task 3) -------------------------
 
 def _probe_market(cid="0xprobe", up="tok-up-840", down="tok-dn-840",

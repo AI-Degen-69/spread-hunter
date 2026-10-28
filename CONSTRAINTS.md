@@ -1,39 +1,53 @@
-# CONSTRAINTS.md — Issue #855: Human-Readable Structured Event Stream
+# CONSTRAINTS.md — Issue #857: Preflight-guided Start Run launcher with mode selection, 24h horizon, and watchdog
 
-Branch: `plan_github_issue_855` | Issue: #855
+Branch: `i857/preflight-guided-start-run-launcher` | Issue: #857
 
-## 1. Safety & Production Integrity
+Locked during Station II planning. Stations III–V must hold every line below.
+Tighten only with operator approval; never loosen silently.
 
-- **LIVE is the default.** Never run opening commands (`quote`, `complete`, Trader loop start, dashboard START button) during development or verification.
-- **`data/orders.db` is strictly read-only.** Never rewrite, modify, or delete `data/orders.db`.
-- **Dynamic Risk Caps:** Do not touch `core_brain/config.py` risk limits or execution parameters.
-- **On-disk Log Schema Preserved:** Do not alter the NDJSON record structure in `cycle_events.jsonl` or other disk log files. Any SSE payload enrichment (`ts`, `level`, `message`) on text frames is purely additive at the API layer.
+## Zero regressions
 
-## 2. Writable Seams (Exclusively These)
+- Focused suites for the touched modules must pass cleanly:
+  - `python -m pytest -q tests/test_dashboard_server.py`
+  - `python -m pytest -q tests/test_trader_loop.py`
+  - `python -m pytest -q tests/test_order_manager.py`
+  - `node tests/js/master_toggle_harness.cjs dashboard/static/app.js`
+- Full regression suite `python -m pytest -q` is the GitHub CI merge gate on Ubuntu and Windows; local review runs targeted checks only.
+- Every new behavior must have a test that fails without it:
+  - Preflight sequential enforcement (steps 1 -> 2 -> 3 -> 4 in order).
+  - Reach probe failure closed without `confirm: true`.
+  - Rejection of start without valid `preflight_id`.
+  - Atomicity of `preflight_id` consumption (single-use).
+  - `--deadline-ts` enforcement in `trader_loop.py` (clean exit on deadline and immediate exit if past).
+  - Watchdog flag `--watch-guardrails` in live stack commands.
+  - Numbered shadow database sequence generation (01..99 wrap).
+  - Modal appearance on master toggle START click without initiating immediate processes.
 
-- `dashboard/server.py`: Timestamp parsing helper (`_parse_replay_ts`), console line parser (`_parse_console_line`), replay aggregation and chronological sorting in `_log_stream_sse`, and enrichment of text frames.
-- `dashboard/static/app.js`: Process/component tag mapping, event tag mapping, severity classification, stream sentence translation improvements, redaction of sensitive tokens, row model in `appendTickerEvent`, and multi-tier filtering logic in `renderTickerFeed`.
-- `dashboard/static/index.html`: Component filter dropdown `<select id="ticker-component-select">` and category button `CONNECTIONS`.
-- `dashboard/static/styles.css`: CSS Grid rules for aligned ticker columns, fixed `ch` widths, responsive wrap rules, and severity classes (`good`, `warn`, `bad`, `info`, `muted`).
-- `tests/test_dashboard_server.py`: Server-side SSE chronological replay tests and payload contract tests.
-- `tests/js/event_stream_harness.cjs`: Unit assertions for plain-English translations, tag formatting, and security redaction.
-- `tests/js/event_stream_tabs_harness.cjs`: Multi-process tab and component filter assertions.
+## Scope fences (hard)
 
-## 3. Frozen Seams (Do Not Modify)
+- **Only these files change:**
+  - `dashboard/preflight.py` (new)
+  - `dashboard/server.py`
+  - `core_brain/order_manager.py` (balance helper extraction only)
+  - `core_brain/trader_loop.py` (`--deadline-ts` CLI handling and sleep wrapping only)
+  - `dashboard/static/index.html` (`#start-run-modal` markup)
+  - `dashboard/static/app.js` (modal & preflight handler logic)
+  - `dashboard/static/styles.css` (modal and preflight indicators)
+  - `scripts/spread-hunter-menu.ps1` (`Start-BotStack` refusal messaging)
+  - `tests/test_dashboard_server.py`
+  - `tests/test_trader_loop.py`
+  - `tests/js/master_toggle_harness.cjs`
+  - `SPEC.md`, `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`, `tasks/pr-body.md`
+- **Must NOT be modified:**
+  - `data/orders.db` (production registry is strictly read-only; never rewrite or delete).
+  - `.env`, `.env.example` (never write credentials or modify env templates).
+  - `core_brain/config.py`, `core_brain/venue.py`, `core_brain/order_registry.py`, `core_brain/order_execution.py`.
+  - `core_brain/reach_probe.py` (already delivered and tested).
+  - `scripts/global_stop_loss.py` (already delivered and tested).
 
-- `core_brain/cycle_stream.py`
-- `core_brain/order_manager.py`
-- `core_brain/config.py`
-- `core_brain/trader_loop.py`
-- `core_brain/shadow_run.py`
-- `server.ts`
+## Anti-cheat & Safety rules
 
-## 4. Anti-Cheat & Quality Gates
-
-- **Zero skips / no deletions:** No existing tests in `tests/test_dashboard_server.py` or `tests/test_cycle_stream.py` may be disabled, deleted, or weakened.
-- **No external dependencies:** No new Python packages in `requirements.txt` / `pyproject.toml`, and no new npm packages.
-- **Node.js Harness Compatibility:** Headless verification via `node tests/js/event_stream_harness.cjs dashboard/static/app.js` and `node tests/js/event_stream_tabs_harness.cjs dashboard/static/app.js` must execute cleanly without browser DOM dependencies.
-- **Merge Gate Target:** Targeted checks must pass locally:
-  `python -m pytest -q tests/test_dashboard_server.py tests/test_cycle_stream.py`
-  `node tests/js/event_stream_harness.cjs dashboard/static/app.js`
-  `node tests/js/event_stream_tabs_harness.cjs dashboard/static/app.js`
+- **No test touches the live venue:** All tests must mock venue calls, CLOB clients, processes (`Popen`), and clocks.
+- **No live orders during automated build/test:** Never run live trading or unconstrained live probes.
+- **Fail closed:** Any unreadable preflight condition or missing requirement blocks live start.
+- **No duplicate watchdog:** `order_manager poll` already supervises `scripts.global_stop_loss`; the dashboard must NOT launch a separate standalone watchdog process.

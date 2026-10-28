@@ -112,7 +112,8 @@ global.fetch = async (p, opts) => {
   const path = String(p);
   const method = (opts && opts.method) || 'GET';
   if (method === 'POST') {
-    log.fetches.push({ path, method });
+    const headers = (opts && opts.headers) || {};
+    log.fetches.push({ path, method, contentType: headers['Content-Type'] || headers['content-type'] || null });
     return fetchImpl(path, opts);
   }
   // GET /api/* : every status the poll asks for. Return the harness's stack.
@@ -167,6 +168,13 @@ function unknownStack() {
   return { bot_state: 'UNKNOWN', registry_unreadable: true, services: {} };
 }
 
+function modalOpen() {
+  const m = document.getElementById('start-run-modal');
+  if (!m) return false;
+  if (m.style && m.style.display === 'flex') return true;
+  if (m.classList && m.classList.contains && m.classList.contains('show')) return true;
+  return false;
+}
 function state() {
   return {
     className: toggle.className,
@@ -180,6 +188,9 @@ function state() {
       return p.textContent;
     })(),
     ticker: (global.__tickerWrites || []).join(' | '),
+    modalOpen: modalOpen(),
+    fetches: log.fetches.map((f) => f.path),
+    fetchContentTypes: log.fetches.map((f) => f.contentType || null),
   };
 }
 
@@ -240,17 +251,26 @@ function reset() {
   const afterStop = state();
   const stopPosts = log.fetches.filter((f) => f.path === '/api/system/stop').length;
 
-  // ── Refused START: the message reaches the ticker ──
+  // ── START opens the preflight modal: no immediate whole-stack POST ──
   reset();
   setStatus(stoppedStack());
   // Settle any in-flight poll so lastStatus is the stopped stack before the
   // click, otherwise the trailing poll paints a stale RUNNING state.
   await new Promise((r) => setTimeout(r, 0));
-  fetchImpl = async () => ({
-    ok: true, status: 200,
-    json: async () => ({ ok: false, message: 'Refusing to start: process registry unreadable' }),
-  });
+  fetchImpl = async (path) => {
+    if (String(path).indexOf('/api/system/preflight') === 0) {
+      return {
+        ok: true, status: 200,
+        json: async () => ({ ok: false, step: 'credentials', summary: 'refused', preflight_id: 'pf-harness', next_step: 'credentials', approved: false }),
+      };
+    }
+    return {
+      ok: true, status: 200,
+      json: async () => ({ ok: false, message: 'Refusing to start: process registry unreadable' }),
+    };
+  };
   await toggle.click();
+  await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
   const refused = state();
@@ -270,16 +290,46 @@ function reset() {
   await toggle.click();
   const partialStop = state();
 
-  // ── HTTP 500 with a non-JSON body: an error line, not a crash ──
+  // ── Modal open is crash-free even when preflight answers HTTP 500 ──
   reset();
   setStatus(stoppedStack());
   fetchImpl = async () => ({ ok: false, status: 500, json: async () => { throw new Error('not json'); }, text: async () => '<html>' });
   await toggle.click();
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
   const httpFailure = state();
+
+  // ── Overlapping modal opens: the stale sequence cannot poison the new one ──
+  reset();
+  setStatus(stoppedStack());
+  const overlapSteps = [];
+  let overlapCredCalls = 0;
+  fetchImpl = async (path, opts) => {
+    const body = JSON.parse(opts.body);
+    overlapSteps.push(body.step + ':' + (body.preflight_id || 'none'));
+    if (body.step === 'credentials') {
+      overlapCredCalls++;
+      if (overlapCredCalls === 1) {
+        await new Promise((r) => setTimeout(r, 30));
+        return { ok: true, status: 200, json: async () => ({ ok: true, step: 'credentials', summary: 'c1', preflight_id: 'p-slow', next_step: 'screener', approved: false }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, step: 'credentials', summary: 'c2', preflight_id: 'p-fresh', next_step: 'screener', approved: false }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true, step: body.step, summary: 's', preflight_id: body.preflight_id, next_step: body.step === 'stream' ? 'reach_probe' : body.step, approved: false }) };
+  };
+  app.openStartRunModal('live');
+  await new Promise((r) => setTimeout(r, 5));
+  app.openStartRunModal('live');
+  await new Promise((r) => setTimeout(r, 100));
+  const overlap = {
+    steps: overlapSteps,
+    screenerPosts: overlapSteps.filter((s) => s.indexOf('screener:') === 0).length,
+    screenerPids: overlapSteps.filter((s) => s.indexOf('screener:') === 0),
+  };
 
   process.stdout.write(JSON.stringify({
     running, partial, stopped, unknown, nullEntry,
     doubleClick: { posts: stopPosts, busyMidFlight, afterStop },
-    refused, partialStop, httpFailure,
+    refused, partialStop, httpFailure, overlap,
   }));
 })();

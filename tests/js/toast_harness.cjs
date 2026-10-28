@@ -371,7 +371,8 @@ function postUrls() {
   await flush();
   out.syncError = { toasts: snapToasts(), btnText: el('btn-sync').textContent };
 
-  /* 8a. Master toggle START: sent + running */
+  /* 8a. Master toggle START on the live page opens the run launcher: no
+   * direct whole-stack POST and no toast — the modal is the feedback (#857). */
   resetHarness();
   const master = el('btn-master-toggle');
   master.dataset.action = 'start';
@@ -383,7 +384,11 @@ function postUrls() {
   });
   await master.click();
   await flush();
-  out.masterStart = { toasts: snapToasts() };
+  out.masterStart = {
+    toasts: snapToasts(),
+    posts: postUrls().filter((u) => /\/api\/system\/start(\?|$)/.test(u)),
+    modalShown: el('start-run-modal').className.split(/\s+/).includes('show'),
+  };
 
   /* 8b. Master toggle STOP: sent + stopped */
   resetHarness();
@@ -396,16 +401,28 @@ function postUrls() {
   await flush();
   out.masterStop = { toasts: snapToasts() };
 
-  /* 8c. Master toggle refused: error toast */
+  /* 8c. Live start stays gated: the launcher opens with Start Live disabled
+   * until preflight approves — a refused start is a gate, not an error
+   * toast, and nothing POSTs to /api/system/start (#857). */
   resetHarness();
   master.dataset.action = 'start';
+  delete master.dataset.mode;
+  master.disabled = false;
   postImpl = async () => ({
     ok: true, status: 200,
-    json: async () => ({ ok: false, message: 'Refusing to start: process registry unreadable' }),
+    json: async () => ({
+      ok: false, step: 'credentials', summary: 'refused',
+      preflight_id: 'pf-harness', next_step: 'credentials', approved: false,
+    }),
   });
   await master.click();
   await flush();
-  out.masterError = { toasts: snapToasts() };
+  out.masterError = {
+    toasts: snapToasts(),
+    posts: postUrls().filter((u) => /\/api\/system\/start(\?|$)/.test(u)),
+    modalShown: el('start-run-modal').className.split(/\s+/).includes('show'),
+    liveDisabled: el('start-run-live').disabled,
+  };
 
   /* 8d. Master toggle partial stop: warn toast names the survivor */
   resetHarness();
