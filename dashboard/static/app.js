@@ -612,10 +612,29 @@ function marketLink(m) {
   return esc(name);
 }
 
-/* ── controlFetch: CSRF-protected POST ── */
+/* ── controlFetch: CSRF-protected POST ──
+ * The token is per dashboard process: after a restart the open page holds a
+ * stale one and every control POST 403s. Surfacing that as a bare alert
+ * leaves a dead page, so offer a reload (which embeds a fresh token) and
+ * hold the caller's chain while the reload happens. */
 function controlFetch(path, options = {}) {
   const headers = { 'X-Control-Token': CONTROL_TOKEN, ...(options.headers || {}) };
-  return fetch(path, { method: 'POST', ...options, headers });
+  return fetch(path, { method: 'POST', ...options, headers }).then(async (res) => {
+    if (res.status === 403) {
+      let stale = false;
+      try {
+        stale = /control token/i.test(JSON.stringify(await res.clone().json()));
+      } catch { /* non-JSON 403: leave it to the caller */ }
+      if (stale) {
+        const go = confirm('This page lost contact with the dashboard (it restarted since the page loaded), so its control token no longer works. Reload the page to get a fresh one?');
+        if (go) {
+          location.reload();
+          return new Promise(() => {});
+        }
+      }
+    }
+    return res;
+  });
 }
 
 /* ── Visible-tab rendering (Issue #264) ─────────────────────────────
@@ -2035,9 +2054,9 @@ async function renderRunSwitcher() {
     const state = r.running === true ? 'RUNNING' : (r.finished ? 'FINISHED' : 'ENDED');
     const age = formatHeartbeatAge(r.heartbeat_age_sec);
     const label = runSwitcherLabel(r);
-    const portLink = r.dash_port
-      ? `<a href="http://${window.location.hostname}:${r.dash_port}" target="_blank" rel="noopener" class="db-run-port-link" style="font-size:11px;color:#38bdf8;text-decoration:none;margin-left:6px;" title="Open dedicated dashboard for this arm on port ${r.dash_port}">:${r.dash_port} ↗</a>`
-      : '';
+    // Per-arm dashboards retired: arms are heartbeat-only, served by :8799.
+    // No per-arm port link; the run switcher below re-points this page.
+    const portLink = '';
     const btn = isThis
       ? `<span class="db-run-current">THIS PAGE</span>`
       : `<button class="db-run-switch" data-db="${esc(r.db_path)}">SWITCH</button>`;
@@ -2210,11 +2229,16 @@ function renderProfileBadge(status) {
     });
   }
 
+  const staged = status?.pending_profile || null;
+  const stagedSuffix = (staged && typeof staged.name === 'string')
+    ? ` STAGED for next START: ${staged.name} — the pill switches after START launches it.`
+    : '';
   const profile = status?.active_profile || null;
   if (!profile || typeof profile.name !== 'string') {
     el.className = 'pill state-unknown mono';
-    el.innerHTML = renderPillHtml('PROFILE', 'unknown');
-    el.title = 'Active profile unknown: no engine has recorded its configuration for this store. Click to view or load a profile.';
+    el.innerHTML = renderPillHtml('PROFILE', staged ? `STAGED ${staged.name}` : 'unknown');
+    el.title = 'Active profile unknown: no engine has recorded its configuration for this store.'
+      + stagedSuffix + ' Click to view or load a profile.';
     return;
   }
   const name = profile.name;
@@ -2233,7 +2257,8 @@ function renderProfileBadge(status) {
   }
   el.title = `${sourceWord} profile ${name}: ${parts.join(', ')}.`
     + (typeof profile.tournament_arm === 'string' && profile.tournament_arm
-      ? ` Tournament arm ${profile.tournament_arm}.` : '');
+      ? ` Tournament arm ${profile.tournament_arm}.` : '')
+    + stagedSuffix;
   el.title += ' Click to view or load a profile.';
 }
 
@@ -2320,7 +2345,7 @@ async function renderProfileOptions() {
       const action = b.getAttribute('data-profile-action');
       const kind = b.getAttribute('data-kind');
       const name = b.getAttribute('data-name');
-      if (action === 'stage' && !confirm(`Stop the running stack and stage ${name || 'this profile'} for the next START?`)) {
+      if (action === 'load' && !confirm(`Stop the running stack and stage ${name || 'this profile'} for the next START?`)) {
         return;
       }
       b.disabled = true;
@@ -3017,10 +3042,11 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
       const svc = t.dataset.svc;
       const isOn = t.classList.contains('on');
       if (!lastDbIsProduction) {
-        alert('This dashboard is not reading the production registry. '
-          + 'Service controls act on the live stack against data/orders.db, whose orders '
-          + 'would not appear on this page. Restart the dashboard without '
-          + '--db / LIVE_DB_PATH first.');
+        // This page is reading a rehearsal or demo store, not the live
+        // registry: service controls live on :8799 only. Offer one click
+        // over instead of a dead-end alert.
+        const go = confirm('This page is reading a rehearsal or demo store, not the live registry. START and the service switches only work on the live dashboard (:8799). Open it now?');
+        if (go) window.open('http://' + window.location.hostname + ':8799/', '_blank', 'noopener');
         return;
       }
       if (isOn) {
@@ -3136,10 +3162,8 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
           : (lastStatus?.db_mode === 'LIVE' || !lastDbIsShadow);
         if (!isProd || masterToggleBtn.disabled) {
           if (!isProd) {
-            alert('This dashboard is not reading the production registry. '
-              + 'Service controls act on the live stack against data/orders.db, whose orders '
-              + 'would not appear on this page. Restart the dashboard without '
-              + '--db / LIVE_DB_PATH first.');
+            const go = confirm('This page is reading a rehearsal or demo store, not the live registry. START only runs on the live dashboard (:8799). Open it now?');
+            if (go) window.open('http://' + window.location.hostname + ':8799/', '_blank', 'noopener');
           }
           return;
         }

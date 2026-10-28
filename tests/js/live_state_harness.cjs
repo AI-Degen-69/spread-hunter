@@ -823,7 +823,24 @@ function profileVerdicts() {
   app.renderProfileBadge({});
   const reset = snap();
 
-  return { missing, runningShadow, endedShadow, runningLive, escaped, reset };
+  // A staged profile for the next START is visible on the pill itself, so
+  // Load → START never looks like a no-op while the engine record is pending.
+  app.renderProfileBadge({
+    pending_profile: { kind: 'arm', name: 'prudent-hybrid' },
+  });
+  const stagedOnly = snap();
+
+  app.renderProfileBadge({
+    active_profile: {
+      name: 'balanced', preset: 'balanced',
+      queue_clear_on: false, queue_max_clear_min: 60,
+      source: 'live', running: true,
+    },
+    pending_profile: { kind: 'arm', name: 'prudent-hybrid' },
+  });
+  const stagedOverActive = snap();
+
+  return { missing, runningShadow, endedShadow, runningLive, escaped, reset, stagedOnly, stagedOverActive };
 }
 
 function stagedTitleVerdicts() {

@@ -250,51 +250,12 @@ def ensure_cockpit_and_hub(port: int = 8800, hub_port: int = 8798) -> None:
 
 
 def reconcile_dashboards(arms: List[Dict[str, Any]], tree_mtime: float) -> None:
-    """Check each arm's dashboard; restart any that are down or holding stale code."""
-    python_exe = sys.executable
-    log_dir = ROOT / "runtime" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    """Retired: arms are heartbeat-only, served by the single :8799 dashboard.
 
-    for arm in arms:
-        port = arm.get("dash_port")
-        db_path = arm.get("db_path")
-        name = arm.get("name", f"arm-{port}")
-        if not port or not db_path:
-            continue
-
-        full_db = Path(db_path) if Path(db_path).is_absolute() else (ROOT / db_path)
-        needs_restart = False
-
-        if not is_port_listening(port):
-            needs_restart = True
-        else:
-            try:
-                url = f"http://127.0.0.1:{port}/api/system/status"
-                req = urllib.request.Request(url, headers={"User-Agent": "SpreadHunter-Reconciler"})
-                with urllib.request.urlopen(req, timeout=1.0) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    dash_started = data.get("services", {}).get("dash", {}).get("started_at", 0)
-                    if dash_started and dash_started < tree_mtime:
-                        needs_restart = True
-            except urllib.error.URLError as exc:
-                # Connection refused = down. A timeout is a slow dashboard,
-                # not a dead one; leave it running.
-                if isinstance(exc.reason, ConnectionRefusedError) or "refused" in str(exc.reason).lower():
-                    needs_restart = True
-                else:
-                    log.warning("Dashboard :%d status check failed (%s); leaving it running", port, exc)
-            except Exception as exc:
-                log.warning("Dashboard :%d status check failed (%s); leaving it running", port, exc)
-
-        if needs_restart:
-            log.info("Restarting dashboard for [%s] on port %d (fresh code)...", name, port)
-            kill_process_on_port(port)
-            lf = open(log_dir / f"dash_{port}.log", "a", encoding="utf-8")
-            subprocess.Popen(
-                [python_exe, "-m", "dashboard.server", "--port", str(port), "--db", str(full_db)],
-                stdout=lf, stderr=subprocess.STDOUT, **_detached_kwargs()
-            )
-            time.sleep(0.2)
+    Kept as a no-op for backwards compat so existing callers keep working;
+    per-arm dashboard processes are no longer started or restarted."""
+    log.info("Per-arm dashboards disabled: skipping %d arm dashboard checks (heartbeat-only)", len(arms))
+    return
 
 
 def reconcile_arms(

@@ -150,7 +150,7 @@ def test_cockpit_funnel_counts(tmp_path):
 
 
 def test_cockpit_table_drops_issue_port_fills_columns():
-    html = generate_cockpit_html({"arms": [], "tourney_key": "492"})
+    html = generate_cockpit_html({"arms": [], "tourney_key": "799"})
     for gone in ("<th>Issue</th>", "<th>Port</th>", "<th>Fills</th>"):
         assert gone not in html, f"{gone} column should be removed"
     # #608 KPI swap repinned this list: Quoted Orders (volume, no quality

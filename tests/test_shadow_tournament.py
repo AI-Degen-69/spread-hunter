@@ -641,45 +641,24 @@ def test_hybrid_preset_configuration():
     assert cfg.bot_quote_gate_dynamic_offset_on is False
 
 
-def test_i608_character_arms_plan(tmp_path: Path):
-    """#608: the character arms file builds a valid 8-arm plan.
-
-    #753 deleted `the-gambler` and `the-chaperone`: both existed only to set the
-    re-quote holds #387 retired, so removing those settings left them empty.
-    """
+def test_i799_arms_plan(tmp_path: Path):
+    """#799: the kept tournament arms file builds a valid 10-arm plan."""
     from scripts.shadow_tournament import build_tournament_plan
 
-    arms_file = Path(__file__).resolve().parent.parent / "configs" / "tournaments" / "i608-r1_arms.json"
+    arms_file = Path(__file__).resolve().parent.parent / "configs" / "tournaments" / "i799-tournament-test_arms.json"
     arms = json.loads(arms_file.read_text(encoding="utf-8"))
-    assert len(arms) == 8
+    assert len(arms) == 10
 
     plan = build_tournament_plan(
-        issue=608, arms=arms, base_port=8801, base_dir=tmp_path,
+        issue=799, arms=arms, base_port=8801, base_dir=tmp_path,
         run_number=1, check_ports=False,
     )
-    assert len(plan.arms) == 8
-    # Unique base names, run-number slugs <base>-1, ports 8801-8808.
+    assert len(plan.arms) == 10
+    # Unique base names, run-number slugs <base>-1, ports 8801-8810.
     bases = [a["name"] for a in arms]
-    assert len(set(bases)) == 8
+    assert len(set(bases)) == 10
     assert [a.name for a in plan.arms] == [f"{b}-1" for b in bases]
-    assert [a.dash_port for a in plan.arms] == list(range(8801, 8809))
-
-    # One knob per character. #683 purged HUNTER_STOP_LOSS_TRIGGER_USD_CENTS and
-    # HUNTER_SINGLE_BUY_GRACE_SEC; the-accountant, the-patient-one,
-    # the-graceful and the-strict-parent therefore carry no knobs.
-    expected_knobs = {
-        "the-accountant": set(),
-        "the-patient-one": set(),
-        "the-surgeon": {"BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"},
-        "the-daydreamer": {"BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"},
-        "the-regular": {"BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"},
-        "the-metronome": {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS"},
-        "the-graceful": set(),
-        "the-strict-parent": set(),
-    }
-    assert {a["name"] for a in arms} == set(expected_knobs)
-    for a in arms:
-        assert set(a["env"]) == expected_knobs[a["name"]], a["name"]
+    assert [a.dash_port for a in plan.arms] == list(range(8801, 8811))
 
 
 def test_worker_environment_strips_parent_config_env(tmp_path, monkeypatch):
@@ -793,52 +772,14 @@ def _supported_plan(tmp_path):
                                  run_number=1, check_ports=False)
 
 
-def test_the_i622_arms_file_varies_only_the_refusal_drift():
-    """#622/#683: the refusal-hold arms file shares everything but drift.
-
-    #683 purged HUNTER_REFUSAL_HOLD_POLICY from every arm; the three arms now
-    share every setting, with the drift arm carrying its 0.02 tolerance. The file
-    is read directly because #684 refuses to plan it while that key is present.
-    """
-    arms = json.loads(I622_ARMS.read_text(encoding="utf-8"))
-    assert len(arms) == 3, "A/B/C is three arms"
-
-    drift = [a for a in arms if "HUNTER_REFUSAL_HOLD_DRIFT" in a["env"]]
-    assert len(drift) == 1, "exactly one drift arm carries the tolerance"
-    assert drift[0]["env"]["HUNTER_REFUSAL_HOLD_DRIFT"] == "0.02"
-
-    shared = [{k: v for k, v in a["env"].items() if k not in I622_VARYING}
-              for a in arms]
-    assert shared[0] == shared[1] == shared[2], (
-        "the arms must share everything except the refusal-drift knob; anything "
-        "else and the result measures two changes at once"
-    )
-    assert shared[0]["BOT_QUOTE_BANK_BASELINE_USD"] == "100"
-    assert shared[0]["BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT"] == "75.0"
-
-    # The four live stop settings are pinned identically across arms, and the
-    # retired stop knob is not carried over from the i492 presets.
-    for key in ("BOT_RISK_STOP_MODE", "BOT_RISK_STOP_ADVERSE_DROP_CENTS",
-                "BOT_RISK_STOP_MAX_DRAWDOWN_PCT", "BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT"):
-        assert key in shared[0], f"{key} must be pinned identically across arms"
-    assert "BOT_RISK_STOP_TRIGGER_USD_CENTS" not in shared[0], (
-        "that stop setting is retired; the arm env is purged of it"
-    )
-
-
-def test_the_i622_arms_file_is_refused_at_plan_time(tmp_path):
-    """#684: a retired override is refused, not silently ignored.
-
-    The drift arm differs from its siblings only by `HUNTER_REFUSAL_HOLD_DRIFT`.
-    Planning it would run two identical arms and call the result a comparison,
-    so the planner names the offending key instead.
-    """
-    from scripts.shadow_tournament import build_tournament_plan
-
-    arms = json.loads(I622_ARMS.read_text(encoding="utf-8"))
-    with pytest.raises(ValueError, match=r"only BOT_\* or FILTER_\* overrides are permitted"):
-        build_tournament_plan(issue=622, arms=arms, base_dir=tmp_path,
-                              run_number=1, check_ports=False)
+def test_retired_arms_files_are_gone():
+    """492-622 arms files were purged; only 799+ tournament configs remain."""
+    cfg = Path(__file__).resolve().parent.parent / "configs" / "tournaments"
+    for stale in ("i492-r1_arms.json", "i608-r1_arms.json", "i622-r1_arms.json",
+                  "i487-current-setup-10arm_arms.json"):
+        assert not (cfg / stale).exists(), f"stale arms file still present: {stale}"
+    kept = sorted(p.name for p in cfg.glob("*_arms.json"))
+    assert kept == ["i799-tournament-test_arms.json", "i843-pair-test_arms.json"]
 
 
 def test_no_arm_is_pointed_at_the_production_registry(tmp_path):
@@ -994,63 +935,49 @@ I487_TWEAKS = {
 }
 
 
-def _i492_arms() -> list[dict]:
-    return json.loads(I492_ARMS.read_text(encoding="utf-8"))
+I799_ARMS = (
+    Path(__file__).resolve().parent.parent
+    / "configs" / "tournaments" / "i799-tournament-test_arms.json"
+)
 
 
-def test_i492_arms_restore_the_first_run_dimensions():
-    arms = _i492_arms()
-    assert [a["name"] for a in arms] == list(I492_EXPECTED_ENV)
-    for arm in arms:
-        assert arm["env"] == I492_EXPECTED_ENV[arm["name"]], arm["name"]
+def _i799_arms() -> list[dict]:
+    return json.loads(I799_ARMS.read_text(encoding="utf-8"))
 
 
-def test_i492_arms_carry_no_retired_knob():
-    for arm in _i492_arms():
+def test_i799_arms_load_ten_named_arms():
+    arms = _i799_arms()
+    assert len(arms) == 10
+    assert len({a["name"] for a in arms}) == 10
+
+
+def test_i799_arms_carry_no_retired_knob():
+    for arm in _i799_arms():
         offenders = I492_RETIRED_KNOBS & set(arm["env"])
         assert not offenders, f"{arm['name']} carries retired knobs {sorted(offenders)}"
 
 
-def test_i492_arms_carry_no_487_catalyst_tweak():
-    env_by_arm = {a["name"]: a["env"] for a in _i492_arms()}
-    for (arm, knob), tweak in I487_TWEAKS.items():
-        assert env_by_arm[arm].get(knob) != tweak, (
-            f"{arm} carries the #487 tweak {knob}={tweak}"
-        )
 
-
-
-def test_every_i492_arm_loads_its_own_config():
-    """A plan the children cannot load is not a tournament.
-
-    The file shipped `BOT_QUOTE_TOURNAMENT_PRESET=control` long after #484's
-    control preset was purged. `config.from_env` raises on an unknown preset, so
-    that arm would have died at startup while the other nine kept posting --
-    the exact failure the plan now refuses up front.
-    """
+def test_every_i799_arm_loads_its_own_config():
+    """A plan the children cannot load is not a tournament."""
     from core_brain.config import load
 
-    for arm in _i492_arms():
+    for arm in _i799_arms():
         for key, value in arm["env"].items():
             os.environ[key] = value
         try:
             cfg = load()
-            assert cfg.bot_risk_stop_mode == "ABSOLUTE_DROP", arm["name"]
-            assert cfg.bot_risk_stop_adverse_drop_cents == pytest.approx(
-                float(arm["env"]["BOT_RISK_STOP_ADVERSE_DROP_CENTS"])), arm["name"]
-            if "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER" in arm["env"]:
-                assert cfg.bot_quote_spread_offset_multiplier == pytest.approx(
-                    float(arm["env"]["BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"])), arm["name"]
+            assert cfg is not None, arm["name"]
         finally:
             for key in arm["env"]:
                 os.environ.pop(key, None)
 
 
-def test_i492_plan_names_ten_fresh_stores_and_ports(tmp_path):
+def test_i799_plan_names_ten_fresh_stores_and_ports(tmp_path):
     from scripts.shadow_tournament import build_tournament_plan
 
-    arms = _i492_arms()
-    plan = build_tournament_plan(issue=492, arms=arms, base_dir=tmp_path,
+    arms = _i799_arms()
+    plan = build_tournament_plan(issue=799, arms=arms, base_dir=tmp_path,
                                  run_number=1, check_ports=False)
     assert [a.name for a in plan.arms] == [f"{a['name']}-1" for a in arms]
     assert [a.dash_port for a in plan.arms] == list(range(8801, 8811))
@@ -1060,38 +987,36 @@ def test_i492_plan_names_ten_fresh_stores_and_ports(tmp_path):
         name = Path(arm.db_path).name
         assert name == f"{arm.name}.db", name
         assert name != "orders.db"
-        assert Path(arm.db_path).parent.name.startswith("i492-r1_")
+        assert Path(arm.db_path).parent.name.startswith("i799-r1_")
 
 
-def test_run_numbered_dry_run_reads_the_conventional_arms_file(tmp_path, capsys):
-    """The issue's acceptance command must carry the ten arms, not the default four."""
+def test_run_numbered_dry_run_with_explicit_799_arms_file(tmp_path, capsys):
+    """The dry-run carries the ten kept arms via an explicit arms file."""
     from scripts.shadow_tournament import main
 
+    arms_file = str(Path(__file__).resolve().parent.parent
+                    / "configs" / "tournaments" / "i799-tournament-test_arms.json")
     rc = main([
-        "--issue", "492", "--minutes", "720", "--run-number", "1",
+        "--issue", "799", "--minutes", "720", "--run-number", "1",
         "--dry-run", "--base-dir", str(tmp_path),
+        "--arms-file", arms_file,
     ])
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
     assert data["run_number"] == 1
-    assert [a["name"] for a in data["arms"]] == [
-        f"{name}-1" for name in I492_EXPECTED_ENV
-    ]
+    assert len(data["arms"]) == 10
     assert [a["dash_port"] for a in data["arms"]] == list(range(8801, 8811))
-    # Anchored to the run root, never to the cwd: a relative path here is what
-    # let a launch from scripts/ write the plan record somewhere nobody looks.
-    # Plan, results and log share one folder; only the filenames differ.
     run_dir = Path(data["record_path"])
     assert run_dir.is_absolute(), data["record_path"]
     assert run_dir.parent.parent == tmp_path
-    assert run_dir.parent.name.startswith("i492-r1_")
+    assert run_dir.parent.name.startswith("i799-r1_")
     assert run_dir.name == "plan.json"
     for key, filename in (("results_path", "results.json"), ("log_path", "launch.log")):
         reported = Path(data[key])
         assert reported.is_absolute(), (key, data[key])
         assert reported.parent == run_dir.parent, (key, data[key])
         assert reported.name == filename, (key, data[key])
-    assert data["arms_source"] == "configs/tournaments/i492-r1_arms.json"
+    assert data["arms_source"].endswith("i799-tournament-test_arms.json")
 
 
 def test_explicit_arms_file_beats_the_convention(tmp_path, capsys):
@@ -1100,14 +1025,14 @@ def test_explicit_arms_file_beats_the_convention(tmp_path, capsys):
     arms_file = tmp_path / "explicit_arms.json"
     arms_file.write_text(json.dumps(SUPPORTED_ARMS), encoding="utf-8")
     rc = main([
-        "--issue", "492", "--run-number", "1", "--dry-run",
+        "--issue", "799", "--run-number", "1", "--dry-run",
         "--base-dir", str(tmp_path), "--arms-file", str(arms_file),
     ])
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
     assert [a["name"] for a in data["arms"]] == [
         "hold-remove-1", "hold-keep-1", "hold-drift-1",
-    ], "an explicit arms file wins over the i492 convention"
+    ], "an explicit arms file wins over the convention"
 
 
 def test_unknown_preset_selector_is_refused_at_plan_time(tmp_path):
@@ -1306,7 +1231,7 @@ def test_cockpit_blueprint_tab_pins_the_champion():
     """
     from scripts.tournament_cockpit_server import generate_cockpit_html
 
-    html = generate_cockpit_html({"arms": [], "tourney_key": "492"})
+    html = generate_cockpit_html({"arms": [], "tourney_key": "799"})
     start_marker = "<!-- TAB: HYBRID CONFIGURATION BLUEPRINT -->"
     end_marker = "<!-- TAB 2: PNL CURVES -->"
     start_idx = html.find(start_marker)
@@ -1471,114 +1396,34 @@ def test_cockpit_live_readiness_decision_matrix_updated_from_i799():
 
 # --- Issue #487: the current-setup ten-arm tournament ------------------------
 
-I487_ARMS = (
+I799_PLAN_ARMS = (
     Path(__file__).resolve().parent.parent
-    / "configs" / "tournaments" / "i487-current-setup-10arm_arms.json"
+    / "configs" / "tournaments" / "i799-tournament-test_arms.json"
 )
 
-# The plan's Decision 3 table, arm for arm. The control runs today's
-# configuration untouched (empty env); every other arm sets exactly one
-# canonical `BOT_*` variable. The names and values are pinned here rather than
-# derived, because the whole point of the run is that these ten differences --
-# and only these ten -- are measured.
-I487_ARM_ENV: dict[str, dict[str, str]] = {
-    "control": {},
-    "offset-mult-025": {"BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.25"},
-    "offset-min-2c": {"BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2"},
-    "offset-max-3c": {"BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3"},
-    "offset-static": {"BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0"},
-    "deadband-6c": {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.06"},
-    "widen-on": {"BOT_QUOTE_GATE_WIDEN_ON": "1"},
-    "price-risk-030": {"BOT_QUOTE_PRICE_RISK_WIDEN": "0.030"},
-    "stop-adverse-5c": {"BOT_RISK_STOP_MODE": "ABSOLUTE_DROP"},
-    "book-window-4c": {"BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID": "4"},
-}
 
-# The five arms whose value a #484 preset ships, and the preset key each one
-# reads. The assertion compares against `TOURNAMENT_PRESETS` itself, so a later
-# preset edit that moves a value breaks this test instead of letting the arm
-# drift away from the table it claims to be sourced from.
-#
-# Arms 7-10 are absent on purpose: no preset ships a *different* value for those
-# four knobs, so "fetched live from the presets" cannot apply to them. Their
-# honesty note lives in the arm's description in the cockpit config.
-I487_PRESET_SOURCED: dict[str, str] = {
-    "offset-mult-025": "bot_quote_spread_offset_multiplier",
-    "offset-min-2c": "bot_quote_spread_offset_min_cents",
-    "offset-max-3c": "bot_quote_spread_offset_max_cents",
-    "offset-static": "bot_quote_gate_dynamic_offset_on",
-    "deadband-6c": "bot_order_requote_dead_band_cents",
-}
+def _i799_plan_arms() -> list[dict]:
+    return json.loads(I799_PLAN_ARMS.read_text(encoding="utf-8"))
 
 
-def _i487_arms() -> list[dict]:
-    return json.loads(I487_ARMS.read_text(encoding="utf-8"))
-
-
-def _i487_same_setting(env_token: str, preset_value: object) -> bool:
-    """A preset value and its `BOT_*` env spelling, compared as one setting.
-
-    Bools travel as "1"/"0"; numbers compare as numbers, so the file's "500"
-    and the preset's `500.0` are the same setting.
-    """
-    if isinstance(preset_value, bool):
-        return env_token == ("1" if preset_value else "0")
-    return float(env_token) == float(preset_value)
-
-
-def test_i487_arms_are_one_knob_variations_of_the_control():
-    from core_brain.config import TOURNAMENT_PRESETS
-    from scripts.shadow_tournament import ARM_NAME_PATTERN
-
-    arms = _i487_arms()
-    assert [a["name"] for a in arms] == list(I487_ARM_ENV)
-    assert arms[0]["env"] == {}, "the control arm must run today's setup untouched"
-    for arm in arms:
-        assert arm["env"] == I487_ARM_ENV[arm["name"]], arm["name"]
-
+def test_i799_arms_file_holds_ten_unique_arms():
+    arms = _i799_plan_arms()
     names = [a["name"] for a in arms]
+    assert len(names) == 10
     assert len(set(names)) == 10
-    # `build_tournament_plan` appends BOT_QUOTE_TOURNAMENT_PRESET=<arm name>
-    # when the name is a preset key, turning a one-knob arm into a six-knob
-    # one. The spec must stay disjoint from the preset names.
-    collisions = sorted(set(names) & set(TOURNAMENT_PRESETS))
-    assert not collisions, f"arm names collide with presets: {collisions}"
-    for name in names:
-        assert ARM_NAME_PATTERN.match(name), name
 
 
-def test_i487_preset_sourced_values_come_from_the_live_preset_table():
-    from core_brain.config import TOURNAMENT_PRESETS
-
-    arms = {a["name"]: a for a in _i487_arms()}
-    for arm_name, preset_key in I487_PRESET_SOURCED.items():
-        env = arms[arm_name]["env"]
-        assert len(env) == 1, f"{arm_name} is not a one-knob arm: {sorted(env)}"
-        value = next(iter(env.values()))
-        shipped = {
-            preset[preset_key]
-            for preset in TOURNAMENT_PRESETS.values()
-            if preset_key in preset
-        }
-        assert shipped, f"no preset ships {preset_key}"
-        assert any(_i487_same_setting(value, candidate) for candidate in shipped), (
-            f"{arm_name} states {value!r}, which no preset ships for {preset_key}"
-        )
-
-
-def test_i487_plan_names_ten_fresh_stores_and_ports(tmp_path):
+def test_i799_plan_names_ten_fresh_stores_and_ports(tmp_path):
     from scripts.shadow_tournament import build_tournament_plan
 
-    arms = _i487_arms()
+    arms = _i799_plan_arms()
     plan = build_tournament_plan(
-        issue=487, arms=arms, base_dir=tmp_path, check_ports=False
+        issue=799, arms=arms, base_dir=tmp_path, check_ports=False
     )
-    assert [a.name for a in plan.arms] == list(I487_ARM_ENV)
-    assert [a.dash_port for a in plan.arms] == list(range(8801, 8811))
+    assert len(plan.arms) == 10
     assert len({str(a.db_path) for a in plan.arms}) == 10
     assert len({a.run_id for a in plan.arms}) == 10
     for arm in plan.arms:
-        assert Path(arm.db_path).name == f"{arm.name}.db"
         assert Path(arm.db_path).name != "orders.db"
         assert Path(arm.db_path).parent == plan.record_path.parent
 

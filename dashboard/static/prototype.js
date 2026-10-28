@@ -311,11 +311,13 @@ function buildNavLabel(doc, text) {
   return label;
 }
 
-/* Where the operator goes next. Everything here opens in a new tab, so
- * leaving the rail never takes the running dashboard down with it — including
- * the research pages: they read stores outside data/orders.db and keep their
- * own documents (Hebrew RTL, their own poll loops, no control token), so they
- * are adopted by navigation rather than restyled into the shell. */
+/* Where the operator goes next. Hub and Cockpit are folded pages on this same
+ * dashboard (/hub/, /cockpit/) and navigate in place; everything else opens
+ * in a new tab, so leaving the rail never takes the running dashboard down
+ * with it — including the research pages: they read stores outside
+ * data/orders.db and keep their own documents (Hebrew RTL, their own poll
+ * loops, no control token), so they are adopted by navigation rather than
+ * restyled into the shell. */
 const RAIL_LINKS = [
   {
     href: '/explainer',
@@ -323,13 +325,13 @@ const RAIL_LINKS = [
     icon: 'M2 3h5a2 2 0 0 1 2 2v8a2 2 0 0 0-2-2H2z M14 3H9a2 2 0 0 0-2 2v8a2 2 0 0 1 2-2h5z',
   },
   {
-    href: 'http://127.0.0.1:8798',
+    href: '/hub/',
     label: 'Tournament Hub',
     icon: 'M2 4h12v9H2z M5 2h6 M5 15h6',
     launcher: 'hub',
   },
   {
-    href: 'http://127.0.0.1:8800',
+    href: '/cockpit/',
     label: 'Tournament Cockpit',
     icon: 'M2 13.5h12 M3 11l3-6 4 4 4-7',
     launcher: 'cockpit',
@@ -379,8 +381,13 @@ function buildRailLinks(doc) {
     const link = doc.createElement('a');
     link.className = 'proto-nav-btn';
     link.href = entry.href;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
+    // Hub and Cockpit are folded into :8799 (/hub/, /cockpit/): same-tab
+    // navigation, so no popup is ever pre-opened. External destinations
+    // still open in a new tab.
+    if (!entry.launcher) {
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    }
     link.title = entry.label;
     if (entry.launcher) {
       link.setAttribute('data-launcher', entry.launcher);
