@@ -377,34 +377,69 @@ def _print_stranded_section(registry=None) -> None:
         print(f"  {pid}  {latest[pid].get('detail') or ''}")
 
 
-def balance(funder: str | None) -> None:
-    """USDC the venue will actually let an order draw on. Read-only, no order."""
+def get_balance_allowance(funder: str | None = None, client_instance=None) -> dict:
+    """Return USDC collateral balance and allowance details.
+
+    Read-only venue GET; never places an order. `client_instance` injects a
+    fake CLOB client for tests so no network is touched.
+
+    Returns:
+        {
+            "balance_usd": float,
+            "allowance_usd": float,
+            "allowances": dict[str, float] | None,
+            "raw": dict,
+        }
+    """
     from py_clob_client_v2.clob_types import AssetType, BalanceAllowanceParams
 
-    who = funder or os.environ.get("POLY_FUNDER") or "(signer address)"
     sig_type = int(os.environ.get("POLY_SIG_TYPE", "3"))
+    venue_client = client_instance if client_instance is not None else client(funder)
+    r = venue_client.get_balance_allowance(
+        BalanceAllowanceParams(asset_type=AssetType.COLLATERAL,
+                               signature_type=sig_type))
+    if not isinstance(r, dict):
+        r = dict(r) if r is not None else {}
+    # USDC on Polygon is 6dp and the API returns integer base units as strings.
+    bal_usd = float(r.get("balance", 0) or 0) / 1e6
+    allowances_raw = r.get("allowances")
+    if isinstance(allowances_raw, dict):
+        allowances_usd = {k: float(v or 0) / 1e6 for k, v in allowances_raw.items()}
+        allowance_usd = max(allowances_usd.values()) if allowances_usd else 0.0
+    else:
+        allowances_usd = None
+        allowance_usd = float(r.get("allowance", 0) or 0) / 1e6
+    return {
+        "balance_usd": bal_usd,
+        "allowance_usd": allowance_usd,
+        "allowances": allowances_usd,
+        "raw": r,
+    }
+
+
+def balance(funder: str | None) -> None:
+    """USDC the venue will actually let an order draw on. Read-only, no order."""
+    who = funder or os.environ.get("POLY_FUNDER") or "(signer address)"
     print(f"funder     {who}")
     try:
-        r = client(funder).get_balance_allowance(
-            BalanceAllowanceParams(asset_type=AssetType.COLLATERAL,
-                                   signature_type=sig_type))
+        info = get_balance_allowance(funder)
     except Exception as e:
         print(f"           ERROR {type(e).__name__}: {e}")
         raise SystemExit(1)
+    r = info["raw"]
     print(f"raw        {r}")
 
     # USDC on Polygon is 6dp and the API returns integer base units as strings.
-    bal = float(r.get("balance", 0) or 0) / 1e6
+    bal = float(info["balance_usd"])
     print(f"balance    ${bal:,.2f} USDC")
-    
-    allowances = r.get("allowances")
+
+    allowances = info["allowances"]
     if isinstance(allowances, dict):
         print("allowances:")
-        for target, amt in allowances.items():
-            allow_val = float(amt or 0) / 1e6
-            print(f"  {target[:10]}...: ${allow_val:,.2f}")
+        for target, allow_val in allowances.items():
+            print(f"  {target[:10]}...: ${float(allow_val):,.2f}")
     else:
-        allow = float(r.get("allowance", 0) or 0) / 1e6
+        allow = float(info["allowance_usd"])
         print(f"allowance  ${allow:,.2f}")
 
     if bal == 0:

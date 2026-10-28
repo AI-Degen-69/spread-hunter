@@ -4617,6 +4617,28 @@ def test_book_source_rest_is_the_one_flag_undo():
     assert _parse_args(["--book-source", "stream"]).book_source == "stream"
 
 
+def test_deadline_ts_defaults_none_and_parses():
+    """#857: --deadline-ts is opt-in; absent means no horizon."""
+    from core_brain.trader_loop import _parse_args
+
+    assert _parse_args([]).deadline_ts is None
+    a = _parse_args(["--deadline-ts", "1780000000"])
+    assert a.deadline_ts == pytest.approx(1780000000.0)
+
+
+def test_deadline_sleep_raises_at_deadline():
+    """#857: the wrapped sleep ends the run via _Deadline, not a hang."""
+    import time as _time
+    from core_brain.shadow_run import _Deadline, make_deadline_sleep
+
+    expired = make_deadline_sleep(_time.time() - 1.0)
+    with pytest.raises(_Deadline):
+        expired(5.0)
+
+    future = make_deadline_sleep(_time.time() + 60.0, sleep=lambda s: None)
+    future(0.01)  # must not raise
+
+
 def test_guardian_saver_fn_routes_decisions_through_provider(monkeypatch):
     """#659: guardian defense evaluates the held bid from the provider."""
     import core_brain.single_buy_saver as saver_mod
