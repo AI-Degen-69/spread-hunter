@@ -4,14 +4,20 @@ function streamProcessTag(ev, family) {
   const svc = ((ev && ev.service) || '').toLowerCase();
   const act = ((ev && ev.action) || '').toLowerCase();
 
-  if (fam === 'filter' || svc.includes('filter') || svc.includes('screener')) return 'FILTER';
-  if (fam === 'shadow') return 'SHADOW';
+  // The process is what emitted the event, not which stream carried it: a
+  // shadow rehearsal quotes through the same decide/query services as the live
+  // run. Flattening every shadow row to SHADOW hides the very split the
+  // component picker exists to expose.
   if (svc === 'user_stream' || act.startsWith('user_ws_')) return 'USER_WS';
   if (svc === 'market_stream' || act.startsWith('market_stream_')) return 'MKT_WS';
-  if (svc === 'decide' || svc === 'trader' || act === 'decide' || act === 'submit') return 'TRADER';
   if (svc === 'guardrail' || svc === 'guardian') return 'GUARD';
+  if (svc === 'decide' || svc === 'trader' || act === 'decide' || act === 'submit') return 'TRADER';
   if (svc === 'query' || svc === 'engine') return 'QUERY';
+  if (svc === 'filter' || svc === 'screener' || svc.includes('filter') || svc.includes('screener')) return 'FILTER';
+  // Text logs carry no service; the family is all we can attribute them to.
+  if (fam === 'filter') return 'FILTER';
   if (svc) return svc.toUpperCase().slice(0, 8);
+  if (fam === 'shadow') return 'SHADOW';
   return fam ? fam.toUpperCase().slice(0, 8) : 'LIVE';
 }
 
@@ -112,6 +118,12 @@ function translateConsoleLine(data) {
   }
   if (text.includes('Risk guardian running in background') || text.includes('guardian running')) {
     return { msg: 'Risk guardian running in background', evTag: 'GUARD', severity: 'muted' };
+  }
+  // Screener scan output. It arrives on stdout of the shadow or live run, not
+  // on the filter family, so attribute it here or MARKET FILTER stays empty
+  // while the feed is full of scan lines.
+  if (/\btape-read\b/.test(text) || /\bqual_rows=/.test(text)) {
+    return { msg: cleanMsg, evTag: 'SCAN', severity: 'muted', service: 'filter' };
   }
 
   let sev = 'muted';
@@ -1647,6 +1659,11 @@ function setTickerTab(tab) {
 function updateTickerSubtitle() {
   const subEl = document.getElementById('ticker-source-subtitle');
   if (!subEl) return;
+  const meta = activeTickerTab === 'all' ? null : tickerSourceMetadata[activeTickerTab];
+  if (meta && meta.available === false && meta.reason) {
+    subEl.textContent = meta.reason;
+    return;
+  }
   if (activeTickerTab === 'filter') {
     const labels = (tickerSourceMetadata.filter && tickerSourceMetadata.filter.labels.length)
       ? tickerSourceMetadata.filter.labels.join(' + ')
@@ -1764,6 +1781,24 @@ function setTickerComponent(c) {
   renderTickerFeed();
 }
 
+function setTickerAutoscroll(on) {
+  tickerAutoscroll = !!on;
+  const btn = document.getElementById('btn-pause-ticker');
+  if (!btn) return;
+  btn.textContent = tickerAutoscroll ? 'AUTOSCROLL: ON' : 'AUTOSCROLL: PAUSED';
+  btn.style.color = tickerAutoscroll ? 'var(--text-secondary)' : '#fbbf24';
+}
+
+function tickerIsAutoscroll() {
+  return tickerAutoscroll;
+}
+
+// Reading mode: the moment the operator scrolls away from the newest row we
+// stop jumping the feed to the top and hold their place while events arrive.
+function tickerHandleScroll() {
+  if (tickerAutoscroll && (tickerEl.scrollTop || 0) > 8) setTickerAutoscroll(false);
+}
+
 // CONNECTIONS: anything that answers "is the stack actually talking to the
 // venue?" — socket opens, logins, drops, and the background workers waking,
 // starting, stopping, or dying. Socket *traffic* (ticks, snapshots) is data,
@@ -1830,8 +1865,18 @@ function tickerScopeLabel() {
 }
 
 function tickerEmptyState() {
+  const tabMeta = activeTickerTab === 'all' ? null : tickerSourceMetadata[activeTickerTab];
   let state;
-  if (tickerFilter === 'trades' || tickerFilter === 'decide') {
+  // A missing feed outranks the category: "no trades yet" would imply the
+  // stream is healthy and merely quiet.
+  if (tabMeta && tabMeta.available === false && tabMeta.reason) {
+    const titles = {
+      filter: 'Filter loop feed unavailable.',
+      shadow: 'Shadow rehearsal unavailable.',
+      live: 'Live run feed unavailable.',
+    };
+    state = { title: titles[activeTickerTab] || 'Feed unavailable.', msg: tabMeta.reason };
+  } else if (tickerFilter === 'trades' || tickerFilter === 'decide') {
     state = { title: 'No trades yet.', msg: 'Fills, sells, exits, merges and redeems show up here as they happen.' };
   } else if (tickerFilter === 'filter') {
     state = { title: 'No market filter updates yet.', msg: 'Scans show up here as they run.' };
@@ -1842,12 +1887,7 @@ function tickerEmptyState() {
   } else if (activeTickerTab === 'filter') {
     state = { title: 'No filter loop events yet.', msg: 'Filter scans and rerank.log updates will appear here.' };
   } else if (activeTickerTab === 'shadow') {
-    const meta = tickerSourceMetadata.shadow;
-    if (meta && !meta.available && meta.reason) {
-      state = { title: 'Shadow rehearsal unavailable.', msg: meta.reason };
-    } else {
-      state = { title: 'No shadow rehearsal events yet.', msg: 'Events from the active shadow rehearsal will appear here.' };
-    }
+    state = { title: 'No shadow rehearsal events yet.', msg: 'Events from the active shadow rehearsal will appear here.' };
   } else if (activeTickerTab === 'live') {
     state = { title: 'No live run events yet.', msg: 'Events from the live trading loop will appear here.' };
   } else {
@@ -1855,7 +1895,7 @@ function tickerEmptyState() {
   }
 
   const scope = tickerScopeLabel();
-  if (scope) state.msg += ` Showing ${scope} only.`;
+  if (scope) state.msg = state.msg.replace(/\.?\s*$/, '.') + ` Showing ${scope} only.`;
   return state;
 }
 
@@ -1869,7 +1909,41 @@ function tickerColorClass(ev) {
   return streamSeverityClass(ev);
 }
 
+// The row at the top of the viewport, remembered by sequence number so a
+// rebuild can put the operator back on the same line. Heights are read only
+// while reading mode is active, never on the hot path.
+function captureTickerAnchor() {
+  const top = tickerEl.scrollTop || 0;
+  let acc = 0;
+  for (const row of tickerEl.children) {
+    const h = row.offsetHeight || 0;
+    if (acc + h > top) {
+      return { seq: row.dataset ? row.dataset.seq : null, offset: top - acc };
+    }
+    acc += h;
+  }
+  return null;
+}
+
+function restoreTickerAnchor(anchor) {
+  if (!anchor || !anchor.seq) {
+    tickerEl.scrollTop = 0;
+    return;
+  }
+  let acc = 0;
+  for (const row of tickerEl.children) {
+    if (row.dataset && row.dataset.seq === anchor.seq) {
+      tickerEl.scrollTop = acc + (anchor.offset || 0);
+      return;
+    }
+    acc += row.offsetHeight || 0;
+  }
+  tickerEl.scrollTop = 0;
+}
+
 function renderTickerFeed() {
+  const prevTop = tickerEl.scrollTop || 0;
+  const anchor = (!tickerAutoscroll && prevTop > 0) ? captureTickerAnchor() : null;
   tickerEl.innerHTML = '';
   updateTickerComponentSelect();
   const currentEvents = getActiveTickerEvents();
@@ -1878,6 +1952,7 @@ function renderTickerFeed() {
   if (filtered.length === 0) {
     const st = tickerEmptyState();
     tickerEl.innerHTML = `<div class="empty-state"><div class="empty-state-title">${esc(st.title)}</div><div class="empty-state-msg">${esc(st.msg)}</div></div>`;
+    tickerEl.scrollTop = 0;
     return;
   }
 
@@ -1885,6 +1960,7 @@ function renderTickerFeed() {
     const div = document.createElement('div');
     const sev = ev.severity || tickerColorClass(ev) || 'muted';
     div.className = `ticker-event ${sev}`;
+    if (div.dataset) div.dataset.seq = String(ev.seq);
     const raw = tickerShowDetails ? `<div class="ticker-raw">${esc(ev.rawDetail || ev.line)}</div>` : '';
     const timeDisplay = ev.timeTag || extractTimeFromLine(ev.line) || '--:--:--';
     const procDisplay = ev.processTag || streamProcessTag(ev, ev.family);
@@ -1902,6 +1978,10 @@ function renderTickerFeed() {
 
   if (tickerAutoscroll) {
     tickerEl.scrollTop = 0;
+  } else if (anchor) {
+    restoreTickerAnchor(anchor);
+  } else {
+    tickerEl.scrollTop = prevTop;
   }
 }
 
@@ -1958,10 +2038,13 @@ if (btnClearTicker) {
 const btnPauseTicker = document.getElementById('btn-pause-ticker');
 if (btnPauseTicker) {
   btnPauseTicker.addEventListener('click', () => {
-    tickerAutoscroll = !tickerAutoscroll;
-    btnPauseTicker.textContent = tickerAutoscroll ? 'AUTOSCROLL: ON' : 'AUTOSCROLL: PAUSED';
-    btnPauseTicker.style.color = tickerAutoscroll ? 'var(--text-secondary)' : '#fbbf24';
+    setTickerAutoscroll(!tickerAutoscroll);
+    if (tickerAutoscroll) tickerEl.scrollTop = 0;
   });
+}
+
+if (tickerEl && typeof tickerEl.addEventListener === 'function') {
+  tickerEl.addEventListener('scroll', tickerHandleScroll);
 }
 
 const tickerShadowPicker = document.getElementById('ticker-shadow-picker');
@@ -1995,12 +2078,12 @@ function connectLogStream(runId) {
         const data = JSON.parse(e.data);
         if (data && data.family) {
           tickerSourceMetadata[data.family] = data;
-          if (data.family === 'shadow') {
-            const shadowBtn = document.querySelector('.ticker-tab-btn[data-tab="shadow"]');
-            if (shadowBtn) {
-              shadowBtn.classList.toggle('unavailable', !data.available);
-              shadowBtn.title = data.available ? (data.labels || []).join(' ') : (data.reason || 'Unavailable');
-            }
+          // An unavailable feed must look unavailable on its own tab: an
+          // empty LIVE RUN that never explains itself reads as broken filters.
+          const tabBtn = document.querySelector(`.ticker-tab-btn[data-tab="${data.family}"]`);
+          if (tabBtn) {
+            tabBtn.classList.toggle('unavailable', !data.available);
+            tabBtn.title = data.available ? (data.labels || []).join(' ') : (data.reason || 'Unavailable');
           }
           if (tickerBuffers[data.family]) {
             tickerBuffers[data.family].length = 0;
@@ -2040,10 +2123,12 @@ function connectLogStream(runId) {
         } else if (data.source === 'text') {
           const fileTag = data.file || 'log';
           const rawLine = `[${fileTag}] ${data.text}`;
-          const svc = data.family === 'filter' ? 'filter' : '';
           const ts = data.ts ? fmtLocalTime(data.ts) : '--:--:--';
-          const procTag = data.family === 'filter' ? 'FILTER' : (fileTag.replace(/\.[^/.]+$/, '').toUpperCase().slice(0, 8));
-          const { msg, evTag, severity } = translateConsoleLine(data);
+          const { msg, evTag, severity, service: frameService } = translateConsoleLine(data);
+          const svc = frameService || (data.family === 'filter' ? 'filter' : '');
+          const procTag = frameService
+            ? streamProcessTag({ service: frameService, action: evTag.toLowerCase() }, data.family)
+            : (data.family === 'filter' ? 'FILTER' : (fileTag.replace(/\.[^/.]+$/, '').toUpperCase().slice(0, 8)));
           appendTickerEvent(rawLine, msg, '', svc, evTag.toLowerCase(), {}, data.family, {
             timeTag: ts,
             processTag: procTag,
@@ -11594,6 +11679,7 @@ if (typeof module !== 'undefined' && module.exports) {
     renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,
     tickerEventComponent, tickerComponentChoices, updateTickerComponentSelect,
     setTickerComponent, tickerScopeLabel, tickerIsAlertEvent, tickerIsConnectionEvent,
+    setTickerAutoscroll, tickerIsAutoscroll, tickerHandleScroll, updateTickerSubtitle,
     setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,

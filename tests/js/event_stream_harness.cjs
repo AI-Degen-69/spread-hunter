@@ -247,6 +247,11 @@ try {
     trader: app.streamProcessTag({ service: 'decide', action: 'decide' }, 'live'),
     guard: app.streamProcessTag({ service: 'guardrail', action: 'alert' }, 'live'),
     query: app.streamProcessTag({ service: 'query', action: 'fill_recorded' }, 'live'),
+    // A shadow rehearsal attributes its rows to the real process, not to the
+    // stream that carried them.
+    shadowTrader: app.streamProcessTag({ service: 'decide', action: 'decide' }, 'shadow'),
+    shadowQuery: app.streamProcessTag({ service: 'query', action: 'fill_recorded' }, 'shadow'),
+    shadowText: app.streamProcessTag({ service: '', action: '' }, 'shadow'),
     eventConnected: app.streamEventTag({ action: 'user_ws_connected' }),
     eventDisconnected: app.streamEventTag({ action: 'user_ws_disconnected' }),
     eventFill: app.streamEventTag({ action: 'fill_recorded' }),
@@ -299,6 +304,9 @@ try {
     traceback: app.translateConsoleLine({ file: 'rerank.log', text: 'Traceback (most recent call last):' }),
     errorLine: app.translateConsoleLine({ file: 'rerank.log', text: 'ERROR could not reach venue', level: 'ERROR' }),
     plain: app.translateConsoleLine({ file: 'rerank.log', text: 'Scan iteration 9 completed in 42ms' }),
+    // A screener scan on shadow/live stdout is still a MARKET FILTER row.
+    tapeRead: app.translateConsoleLine({ file: 'shadow_run-abc.out.log',
+      text: 'INFO tape-read brazil run=shadow cycle=8 status=empty qual_rows=0' }),
   };
 
   // Details toggle: hidden by default, shown on toggle, survives rebuilds.

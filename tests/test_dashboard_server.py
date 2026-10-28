@@ -2751,6 +2751,21 @@ def test_event_stream_tabs_harness():
     # Switching tabs retires a component the new tab does not carry.
     assert out["componentReset"] is True
 
+    # Reading mode: scrolling away pauses autoscroll, holds the operator's
+    # place, and following again pins the newest row.
+    assert out["autoPausedOnScroll"] is True
+    assert out["scrollHeldWhileReading"] is True
+    assert out["scrollPinnedWhenFollowing"] is True
+    assert out["pauseButtonLabel"] == "AUTOSCROLL: ON"
+
+    # An unavailable feed explains itself instead of showing a blank tab.
+    assert out["liveUnavailableText"] is True
+    assert "Cycle ring not found on disk" in out["liveSubtitle"]
+    assert out["liveUnavailableWithCategory"] is True
+
+    # A screener scan on shadow stdout is a MARKET FILTER row with its own tag.
+    assert out["shadowScanTagged"] is True
+
 
 def test_ticker_component_dropdown_and_category_filters_ship():
     """The component picker and CONNECTIONS chip are wired, not just styled."""
@@ -2787,6 +2802,10 @@ def test_event_stream_row_vocabulary_and_redaction():
     assert tags["userWs"] == "USER_WS" and tags["marketWs"] == "MKT_WS"
     assert tags["filterFamily"] == "FILTER" and tags["trader"] == "TRADER"
     assert tags["guard"] == "GUARD" and tags["query"] == "QUERY"
+    # Shadow rows keep their real process; only un-attributable text is SHADOW.
+    assert tags["shadowTrader"] == "TRADER"
+    assert tags["shadowQuery"] == "QUERY"
+    assert tags["shadowText"] == "SHADOW"
     # Full words, never a mid-word slice: CONNECTED, not "CONNECTE".
     assert tags["eventConnected"] == "CONNECTED"
     assert tags["eventDisconnected"] == "DISCONN"
@@ -2827,6 +2846,10 @@ def test_event_stream_row_vocabulary_and_redaction():
     assert console["traceback"]["evTag"] == "ERROR" and console["traceback"]["severity"] == "bad"
     assert console["errorLine"]["severity"] == "bad"
     assert console["plain"]["evTag"] == "LOG" and console["plain"]["severity"] == "muted"
+    # Scan output on shadow/live stdout keeps its MARKET FILTER identity.
+    assert console["tapeRead"]["evTag"] == "SCAN"
+    assert console["tapeRead"]["service"] == "filter"
+    assert console["tapeRead"]["severity"] == "muted"
 
 
 # ── Issue #457: the single master toggle ──────────────────────────────────────

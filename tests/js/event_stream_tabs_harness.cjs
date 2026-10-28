@@ -61,6 +61,7 @@ global.document = {
     return elements.get(id);
   },
   querySelectorAll() { return []; },
+  querySelector() { return null; },
   createElement(tag) { return new FakeEl(tag); },
   addEventListener() {},
   body: new FakeEl('body'),
@@ -112,7 +113,8 @@ const app = mod.exports;
 const out = { exportsOk: false };
 
 try {
-  out.exportsOk = ['setTickerTab', 'setTickerFilter', 'tickerTabCounts', 'connectLogStream']
+  out.exportsOk = ['setTickerTab', 'setTickerFilter', 'tickerTabCounts', 'connectLogStream',
+    'setTickerAutoscroll', 'tickerIsAutoscroll', 'tickerHandleScroll', 'updateTickerSubtitle']
     .every((k) => typeof app[k] === 'function');
 
   const emitLogEvent = (payload) => {
@@ -302,6 +304,60 @@ try {
   out.componentReset = app.tickerComponentChoices().length === 1
     && app.tickerComponentChoices()[0] === 'FILTER'
     && document.getElementById('ticker-component-select').value === 'all';
+
+  // ── Screener scans on shadow stdout land in MARKET FILTER ──
+  emitLogEvent({ source: 'text', family: 'shadow', file: 'shadow_run-abc.out.log',
+    text: 'INFO tape-read brazil run=shadow cycle=8 status=empty qual_rows=0' });
+  app.setTickerTab('shadow');
+  app.setTickerComponent('all');
+  app.setTickerFilter('filter');
+  out.shadowScanRows = rows();
+  out.shadowScanTagged = out.shadowScanRows.some((r) => r.includes('[FILTER]') && r.includes('[SCAN]'));
+  app.setTickerFilter('all');
+
+  // ── Reading mode: scrolling away stops the feed jumping to the top ──
+  app.setTickerTab('live');
+  app.setTickerFilter('all');
+  app.setTickerComponent('all');
+  app.setTickerAutoscroll(true);
+  const tickerBox = document.getElementById('event-ticker');
+  tickerBox.scrollTop = 64;
+  app.tickerHandleScroll();
+  out.autoPausedOnScroll = app.tickerIsAutoscroll() === false;
+
+  emitLogEvent({
+    source: 'ring', family: 'live',
+    event: { ts: '2024-01-15T14:33:00Z', service: 'user_stream',
+             action: 'user_ws_reconnecting', extra: { delay_sec: 2 } },
+  });
+  out.scrollHeldWhileReading = tickerBox.scrollTop === 64;
+
+  app.setTickerAutoscroll(true);
+  emitLogEvent({
+    source: 'ring', family: 'live',
+    event: { ts: '2024-01-15T14:33:01Z', service: 'user_stream',
+             action: 'user_ws_connected', extra: {} },
+  });
+  out.scrollPinnedWhenFollowing = tickerBox.scrollTop === 0;
+  out.pauseButtonLabel = document.getElementById('btn-pause-ticker').textContent;
+
+  // ── An unavailable feed explains itself instead of showing a blank tab ──
+  activeLogStreamSource.emit('source', {
+    family: 'live', labels: ['cycle_events.jsonl'], available: false,
+    reason: 'Cycle ring not found on disk', run_id: null,
+  });
+  app.setTickerTab('live');
+  const unavailableHtml = document.getElementById('event-ticker').innerHTML;
+  out.liveUnavailableText = unavailableHtml.includes('Live run feed unavailable.')
+    && unavailableHtml.includes('Cycle ring not found on disk');
+  out.liveSubtitle = document.getElementById('ticker-source-subtitle').textContent;
+
+  // The missing feed outranks the category: TRADES on an unavailable live feed
+  // must not pretend the stream is healthy and merely quiet.
+  app.setTickerFilter('trades');
+  out.liveUnavailableWithCategory = document.getElementById('event-ticker').innerHTML
+    .includes('Live run feed unavailable.');
+  app.setTickerFilter('all');
 
 } catch (err) {
   out.error = String(err && err.stack ? err.stack : err);
