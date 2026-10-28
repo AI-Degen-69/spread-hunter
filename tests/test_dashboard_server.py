@@ -4096,3 +4096,56 @@ def test_hub_api_state_served_in_process():
     health = client.get("/hub/api/health")
     assert health.status_code == 200
     assert health.json() == {"ok": True, "service": "hub"}
+
+
+# --- preflight verification suite (#857 Task 2) -------------------------------
+
+def test_preflight_sequential_enforcement():
+    """#857: steps 1->2->3->4 in order; out-of-order is rejected."""
+    from dashboard import preflight as pf
+    pf.clear_sessions()
+    pid = pf.new_session()
+    ok, err = pf.submit_step(pid, "screener", True, "x", {})
+    assert ok is False and "Out of order" in (err or "")
+    ok, err = pf.submit_step(pid, "credentials", True, "c", {})
+    assert ok is True
+    ok, err = pf.submit_step(pid, "reach_probe", True, "r", {})
+    assert ok is False
+    pf.clear_sessions()
+
+
+def test_preflight_reach_probe_requires_confirm():
+    """#857: reach probe fails closed without confirm:true."""
+    from dashboard import preflight as pf
+    res = pf.check_reach_probe(confirm=False, probe_fn=lambda: {"result": "PASS"})
+    assert res["ok"] is False
+    assert "confirmation" in res["summary"].lower()
+
+
+def test_preflight_approval_single_use_and_expiry():
+    """#857: approval is single-use; consumed tokens are rejected."""
+    from dashboard import preflight as pf
+    pf.clear_sessions()
+    pid = pf.new_session()
+    for step in ("credentials", "screener", "stream", "reach_probe"):
+        ok, err = pf.submit_step(pid, step, True, step, {})
+        assert ok is True, err
+    assert pf.try_approve(pid) is True
+    assert pf.consume_approval(pid) is True
+    assert pf.consume_approval(pid) is False
+    pf.clear_sessions()
+
+
+def test_preflight_check_credentials_floor():
+    """#857: balance/allowance below venue minimum fails closed."""
+    from dashboard import preflight as pf
+    env = {"POLY_PRIVATE_KEY": "0xkey", "POLY_FUNDER": "0xfunder"}
+    low = lambda: {"balance_usd": 0.10, "allowance_usd": 0.10,
+                   "allowances": None, "raw": {}}
+    res = pf.check_credentials(balance_fn=low, env=env)
+    assert res["ok"] is False
+    rich = lambda: {"balance_usd": 150.0, "allowance_usd": 150.0,
+                    "allowances": None, "raw": {}}
+    res2 = pf.check_credentials(balance_fn=rich, env=env)
+    assert res2["ok"] is True
+    assert "150.00" in res2["summary"]
