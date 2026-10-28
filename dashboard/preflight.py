@@ -295,17 +295,18 @@ def check_stream(book_fn: Callable[[str], dict] | None = None,
     import os as _os
 
     rows: Any = None
-    if snapshot_fn is None:
-        try:
+    snap_err = ""
+    try:
+        if snapshot_fn is None:
             from core_brain.market_feed import load_graduated_markets as _gm
             rows = _gm()
-        except Exception:
-            rows = None
-    else:
-        try:
+        else:
             rows = snapshot_fn()
-        except Exception:
-            rows = None
+    except Exception as exc:
+        # Name the real failure: "no token" would blame the markets file for
+        # a snapshot read that crashed.
+        rows = None
+        snap_err = f"{type(exc).__name__}: {exc}"
     cid: str = ""
     try:
         first = rows[0] if rows else None
@@ -316,6 +317,9 @@ def check_stream(book_fn: Callable[[str], dict] | None = None,
     except (TypeError, IndexError, AttributeError):
         cid = ""
     if not cid:
+        if snap_err:
+            return {"ok": False, "summary": f"Market snapshot unreadable: {snap_err}",
+                    "details": {"error": snap_err}}
         return {"ok": False, "summary": "No market token available for stream probe",
                 "details": {}}
     resolve = resolve_fn

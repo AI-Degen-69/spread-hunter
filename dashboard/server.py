@@ -3121,13 +3121,7 @@ async def api_system_preflight(request: Request):
             "status": get_system_status(),
         })
     approved = _pf.try_approve(pid)
-    sess2 = _pf.get_session(pid) or sess
-    nxt: str | None = None
-    for s in _pf.PREFLIGHT_STEPS:
-        entry = (sess2.get("steps") or {}).get(s)
-        if not (isinstance(entry, dict) and entry.get("ok") is True):
-            nxt = s
-            break
+    nxt = _pf.next_step(_pf.get_session(pid) or sess)
     return JSONResponse({
         "ok": bool(result.get("ok")),
         "step": step,
@@ -3177,7 +3171,13 @@ async def api_system_start(request: Request):
         })
     from dashboard import preflight as _pf
 
-    if not _pf.consume_approval(preflight_id):
+    # The approval is checked here but consumed only after a start that
+    # actually launched: a refusal (stack already running, page on a shadow
+    # store, ops lock held) must not burn the token and force the operator
+    # through another $2 reach probe. A replay cannot double-spawn -- the
+    # ops lock plus start_bot's duplicate-stack refusal land it as ok=False.
+    sess = _pf.get_session(preflight_id)
+    if sess is None or sess.get("consumed") or not sess.get("approved"):
         return JSONResponse({
             "ok": False,
             "message": "Invalid, expired, or already-used preflight_id; re-run preflight.",
@@ -3185,8 +3185,11 @@ async def api_system_start(request: Request):
         })
     # Process spawns and the starting-capital venue read block; keep them
     # off the event loop like the preflight runners above.
-    return JSONResponse(await run_in_threadpool(
-        start_bot, preflight_id=preflight_id, minutes=minutes_f))
+    result = await run_in_threadpool(
+        start_bot, preflight_id=preflight_id, minutes=minutes_f)
+    if result.get("ok") is True:
+        _pf.consume_approval(preflight_id)
+    return JSONResponse(result)
 
 
 @app.post("/api/system/stop")
@@ -3558,6 +3561,7 @@ async def api_system_shadow_start(
     target_minutes = body.get("minutes") if body.get("minutes") is not None else minutes
     profile_env: dict | None = None
     took_fresh = False
+    prev_override = _ACTIVE_DB_OVERRIDE
     if body.get("fresh") is True and not target_db:
         took_fresh = True
         naming = _fresh_shadow_naming()
@@ -3582,6 +3586,13 @@ async def api_system_shadow_start(
         try:
             pending_file = resolve_runtime_file(PENDING_PROFILE_FILE, root=LIVE_ROOT)
             pending_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+    elif took_fresh:
+        # The start was refused, so the page must not be left pointed at the
+        # empty store this attempt created.
+        try:
+            set_db_override(prev_override)
         except Exception:
             pass
     return JSONResponse(result)
