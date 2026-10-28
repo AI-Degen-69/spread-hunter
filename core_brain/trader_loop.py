@@ -3350,6 +3350,21 @@ def _make_sleep_fn(wake: threading.Event) -> Callable[[float], None]:
     return _sleep
 
 
+def _run_sleep_fn(wake: threading.Event,
+                  deadline_ts: float | None) -> Callable[[float], None]:
+    """The loop's sleep, clamped to the run's horizon when one is set.
+
+    `make_deadline_sleep` raises `_Deadline` once the clock reaches
+    `deadline_ts`, which `run` already turns into a clean exit.
+    """
+    base = _make_sleep_fn(wake)
+    if deadline_ts is None:
+        return base
+    from core_brain.shadow_run import make_deadline_sleep
+
+    return make_deadline_sleep(deadline_ts, sleep=base)
+
+
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """The Trader loop's CLI, separated from `main` so the interval contract
     is testable without launching a loop (operator directive 2026-10-12).
@@ -3627,12 +3642,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.info("resolution sweeper started (every %ss, background)",
                  a.resolution_interval)
 
-    base_sleep = _make_sleep_fn(wake)
-    if a.deadline_ts is not None:
-        from core_brain.shadow_run import make_deadline_sleep
-        sleep_fn = make_deadline_sleep(a.deadline_ts, sleep=base_sleep)
-    else:
-        sleep_fn = base_sleep
+    sleep_fn = _run_sleep_fn(wake, a.deadline_ts)
 
     try:
         results = run(

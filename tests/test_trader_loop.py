@@ -4639,6 +4639,21 @@ def test_deadline_sleep_raises_at_deadline():
     future(0.01)  # must not raise
 
 
+def test_run_sleep_fn_wraps_the_loop_sleep_in_the_horizon():
+    """#857: `main` hands `run` the deadline-clamped sleep, not a plain one."""
+    import threading
+    import time as _time
+    from core_brain.shadow_run import _Deadline
+    from core_brain.trader_loop import _run_sleep_fn
+
+    plain = _run_sleep_fn(threading.Event(), None)
+    plain(0.001)  # no horizon: sleeps, never raises
+
+    expired = _run_sleep_fn(threading.Event(), _time.time() - 1.0)
+    with pytest.raises(_Deadline):
+        expired(0.001)
+
+
 def test_guardian_saver_fn_routes_decisions_through_provider(monkeypatch):
     """#659: guardian defense evaluates the held bid from the provider."""
     import core_brain.single_buy_saver as saver_mod
