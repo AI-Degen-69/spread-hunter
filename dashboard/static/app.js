@@ -10172,7 +10172,10 @@ function stitchPositionsRows(kpi, state, sort) {
   const _posRestingByCid = groupOrdersByMarket(((state && state.orders) || []).filter(isRestingOrder));
   const _restingLeg = (cid, want) => {
     const hit = (_posRestingByCid[cid] || []).find(o => legForOrder(o, _posLegs, _posByMarket) === want);
-    return hit ? { size: Number(hit.original_size) || 0, price: Number(hit.price) || 0 } : null;
+    if (!hit) return null;
+    const remaining = (hit.size_remaining === null || hit.size_remaining === undefined)
+      ? Number(hit.original_size) || 0 : Number(hit.size_remaining) || 0;
+    return { size: remaining, price: Number(hit.price) || 0 };
   };
 
   const rows = entries.map(([cid, m]) => {
