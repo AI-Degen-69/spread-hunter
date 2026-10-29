@@ -1132,6 +1132,12 @@ def _is_live_registry(db_path: Path | str | None) -> bool:
     path the platform refuses to resolve is NOT live, because every use of this
     flag prefers the modelled number when it cannot prove it is reading the
     real account.
+
+    A live run on its own store (`data/live_pilot_<stamp>.db`) answers the same
+    question the same way and is NOT this registry, so callers that can prove
+    the page is on a live account pass `live_account=True` to `report()`
+    instead of widening this rule -- widening it would move #97's basis for
+    every rehearsal store and the 541 audit goldens with it.
     """
     if db_path is None:
         return True
@@ -1316,13 +1322,19 @@ def build_sensitivity(
     }
 
 
-def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> dict[str, Any]:
+def report(db_path: Path | str | None = None, run_id: Optional[str] = None,
+           live_account: bool = False) -> dict[str, Any]:
     """
     Generate a live KPI report containing run-level, portfolio, market-level, funnel, and mechanics metrics.
     
     Parameters:
     	db_path (Path | str | None): Path to the registry database. Uses the default database when omitted.
     	run_id (Optional[str]): Run identifier to report, or `"all"` to aggregate all runs. When omitted, selects the most recent applicable run.
+    	live_account (bool): The caller can prove this store is a LIVE account on a
+    		store other than the production registry -- the contained one-market
+    		pilot writes its marks to `data/live_pilot_<stamp>.db`. Only the
+    		dashboard passes it, and only for a store no rehearsal is registered
+    		for, so every other caller keeps the store-name rule.
     
     Returns:
     	dict[str, Any]: A dictionary containing KPI metrics, portfolio and account series, market drilldowns, funnel data, settlements, and diagnostics.
@@ -2154,8 +2166,15 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # the card asks, and registry equity cannot see venue-side activity it never
     # recorded -- which is how the page came to print $78.43 while Polymarket
     # showed $81.28 in the next tab.
+    # A live run on its own store is the same question with the same answer.
+    # Gating on the production FILENAME made the contained one-market pilot --
+    # a real account the venue is read from every second -- print
+    # `starting_capital + total_pnl`, which went NEGATIVE while Polymarket, in
+    # the next tab, showed the account funded: the venue's unrealised cashPnl
+    # subtracted from a starting capital that is itself an already-traded
+    # wallet mark. The caller proves the store is live; see `report`.
     venue_value = account.get("account_value_usd")
-    on_live_registry = _is_live_registry(db_path)
+    on_live_registry = _is_live_registry(db_path) or live_account
     use_venue = on_live_registry and venue_value is not None
     total_value = float(venue_value) if use_venue else starting_capital + total_pnl
 

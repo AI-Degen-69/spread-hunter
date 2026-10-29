@@ -3967,9 +3967,22 @@ def get_kpi(run_id: str | None = None):
     from core_brain.kpi import report as generate_kpi_report
     db_path = resolve_db_path(_ACTIVE_DB_OVERRIDE)
 
+    # Is this store a LIVE account on a store other than the production
+    # registry? The contained one-market pilot writes to
+    # `data/live_pilot_<stamp>.db`, and `report()` decides the headline basis
+    # from the production FILENAME alone -- so that page printed a modelled
+    # negative total beside a funded account the venue was read from every
+    # second. A rehearsal registered for the store keeps #97's registry basis,
+    # and every other caller of `report()` is unaffected.
+    try:
+        live_account = read_shadow_run(str(db_path)) is None
+    except Exception:
+        live_account = False
+
     def build() -> tuple[Any, int]:
         try:
-            raw = generate_kpi_report(db_path=db_path, run_id=run_id)
+            raw = generate_kpi_report(db_path=db_path, run_id=run_id,
+                                      live_account=live_account)
             return _trim_kpi_quotes(raw), 200
         except Exception as e:
             return _read_only_error_payload(e), 500

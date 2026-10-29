@@ -130,6 +130,56 @@ def test_shadow_headline_stays_on_registry_equity(temp_db):
 
 
 # --------------------------------------------------------------------------
+# Journey 4: a live run on its OWN store still reads the wallet
+# --------------------------------------------------------------------------
+
+def _pilot_store(tmp_path) -> tuple:
+    """A live pilot's store: its own filename, wallet marks only the sweep writes."""
+    db_file = tmp_path / "live_pilot_251029.db"
+    con = sqlite3.connect(str(db_file))
+    con.executescript(SCHEMA)
+    con.commit()
+    con.close()
+    reg = OrderRegistry(db_file)
+    t0 = time.time() - 3600
+    _seed(reg, t0)
+    _mark(reg, t0 + 120, 81.28)
+    return db_file, reg
+
+
+def test_a_live_run_on_its_own_store_reads_the_wallet_too(tmp_path, monkeypatch):
+    """The contained pilot writes its marks to its own store, not orders.db.
+
+    The basis followed the production FILENAME, so a live run on
+    `data/live_pilot_<stamp>.db` -- a real-money account the venue is read from
+    every second -- printed `starting_capital + total_pnl`: the venue's
+    unrealised cashPnl subtracted from a starting capital that is itself an
+    already-traded wallet mark. That modelled figure went NEGATIVE while
+    Polymarket, in the next tab, showed the account funded.
+    """
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    db_file, _reg = _pilot_store(tmp_path)
+
+    p = report(db_path=db_file, run_id="all", live_account=True)["portfolio"]
+    assert p["total_value_basis"] == "venue"
+    assert p["total_value"] == pytest.approx(81.28)
+
+
+def test_the_live_account_opt_in_is_not_the_default(tmp_path, monkeypatch):
+    """Every caller that does not claim a live account keeps #97's basis.
+
+    Widening the rule inside `report()` would have moved the basis for every
+    rehearsal store and the 541 audit goldens with it, so the proof lives at
+    the call site instead of in the filename test.
+    """
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    db_file, _reg = _pilot_store(tmp_path)
+
+    p = report(db_path=db_file, run_id="all")["portfolio"]
+    assert p["total_value_basis"] == "registry"
+
+
+# --------------------------------------------------------------------------
 # Journey 3: a float mark the venue has already superseded
 # --------------------------------------------------------------------------
 
