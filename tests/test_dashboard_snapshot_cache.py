@@ -89,7 +89,8 @@ def test_kpi_endpoint_builds_the_report_once_per_ttl(monkeypatch, tmp_path):
     # Arrange
     calls: list[str] = []
     monkeypatch.setattr(kpi_module, "report",
-                        lambda db_path, run_id=None: calls.append(str(db_path)) or {"ok": True})
+                        lambda db_path, run_id=None, live_account=False:
+                        calls.append(str(db_path)) or {"ok": True})
     monkeypatch.setattr(server, "_ACTIVE_DB_OVERRIDE", tmp_path / "orders.db")
 
     # Act
@@ -98,6 +99,74 @@ def test_kpi_endpoint_builds_the_report_once_per_ttl(monkeypatch, tmp_path):
 
     # Assert
     assert len(calls) == 1, f"the report was built {len(calls)} times for 5 polls"
+
+
+def _capture_kpi_basis(monkeypatch):
+    """Run the endpoint once and report the `live_account` it passed down."""
+    seen: list[bool] = []
+    monkeypatch.setattr(kpi_module, "report",
+                        lambda db_path, run_id=None, live_account=False:
+                        seen.append(live_account) or {"ok": True})
+    server.get_kpi()
+    assert seen, "the endpoint built no report"
+    return seen[0]
+
+
+def test_kpi_asks_for_the_wallet_on_a_store_no_rehearsal_registered(monkeypatch,
+                                                                   tmp_path):
+    """A live run on its own store is a live account (#live pilot).
+
+    The page read the modelled total on `data/live_pilot_<stamp>.db` -- a
+    negative number beside the funded account Polymarket showed -- because the
+    basis followed the production FILENAME. A live store has no rehearsal
+    registered against it; that absence is the proof the endpoint forwards.
+    """
+    monkeypatch.setattr(server, "_ACTIVE_DB_OVERRIDE",
+                        tmp_path / "live_pilot_251029.db")
+    monkeypatch.setattr(server, "read_shadow_run", lambda db: None)
+
+    assert _capture_kpi_basis(monkeypatch) is True
+
+
+def test_kpi_keeps_the_registry_basis_for_a_registered_rehearsal(monkeypatch,
+                                                                tmp_path):
+    """#97 still holds: a rehearsal's simulated gain never reaches a wallet."""
+    monkeypatch.setattr(server, "_ACTIVE_DB_OVERRIDE",
+                        tmp_path / "shadow_29-10_21-00.db")
+    monkeypatch.setattr(server, "read_shadow_run",
+                        lambda db: {"run_id": "shadow-843-t03", "db_path": db})
+
+    assert _capture_kpi_basis(monkeypatch) is False
+
+
+def test_kpi_keeps_the_registry_basis_for_a_rehearsal_minted_store(monkeypatch,
+                                                                   tmp_path):
+    """An ended rehearsal is not a live account once its heartbeat ages out.
+
+    `read_shadow_run` only reports a heartbeat fresher than
+    `SHADOW_RUN_LIST_WINDOW_S`, so absence of a registration cannot be the only
+    marker: the store's own rehearsal name has to count too, or a finished
+    tournament arm would start reporting the wallet.
+    """
+    monkeypatch.setattr(server, "_ACTIVE_DB_OVERRIDE",
+                        tmp_path / "shadow_843-t03-2026-10-29T13-53.db")
+    monkeypatch.setattr(server, "read_shadow_run", lambda db: None)
+
+    assert _capture_kpi_basis(monkeypatch) is False
+
+
+def test_kpi_keeps_the_registry_basis_when_the_store_cannot_be_read(monkeypatch,
+                                                                    tmp_path):
+    """A marker we cannot read is not evidence of a live account."""
+    monkeypatch.setattr(server, "_ACTIVE_DB_OVERRIDE",
+                        tmp_path / "live_pilot_251029.db")
+
+    def _boom(db):
+        raise OSError("rehearsal registry unreadable")
+
+    monkeypatch.setattr(server, "read_shadow_run", _boom)
+
+    assert _capture_kpi_basis(monkeypatch) is False
 
 
 def test_a_stale_snapshot_is_served_without_waiting(monkeypatch):

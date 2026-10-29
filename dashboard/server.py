@@ -1196,6 +1196,41 @@ def _recent_shadow_run(active_db_path: str | None) -> dict | None:
     )
 
 
+def _store_is_live_account(db_path: Path | str) -> bool:
+    """Whether this store holds a LIVE account reading, not a rehearsal's model.
+
+    `/api/kpi` forwards this to `core_brain.kpi.report(live_account=...)`, which
+    otherwise decides the portfolio headline basis from the production filename
+    alone. A live run on its own store -- the contained one-market pilot writing
+    `data/live_pilot_<stamp>.db` -- was therefore reported as
+    `starting_capital + total_pnl`: the venue's unrealised `cashPnl` subtracted
+    from a starting capital that is itself an already-traded wallet mark, which
+    went negative beside a funded account.
+
+    Two markers must BOTH be absent, and a marker that cannot be read counts as
+    present -- a guessed live basis is the bug this exists to fix:
+
+    * a store the pipeline minted as a rehearsal (`_is_pipeline_shadow_db`);
+    * a rehearsal currently registered against the path (`read_shadow_run`).
+
+    The name marker is not redundant with the registration. `read_shadow_run`
+    only reports a heartbeat fresher than `SHADOW_RUN_LIST_WINDOW_S`, so an
+    ended rehearsal's store -- whose marks are simulated and whose gain never
+    reached a wallet -- would otherwise read as live the moment its heartbeat
+    aged out.
+    """
+    try:
+        from core_brain.kpi import _is_pipeline_shadow_db
+        if _is_pipeline_shadow_db(db_path):
+            return False
+    except Exception:
+        return False
+    try:
+        return read_shadow_run(str(db_path)) is None
+    except Exception:
+        return False
+
+
 def _recent_other_live_shadow_runs(active_db_path: str | None) -> list[dict]:
     """`read_other_live_shadow_runs` on the shared snapshot cache."""
     return _cached_snapshot(
@@ -3969,7 +4004,22 @@ def get_kpi(run_id: str | None = None):
 
     def build() -> tuple[Any, int]:
         try:
-            raw = generate_kpi_report(db_path=db_path, run_id=run_id)
+            # Is this store a LIVE account on a store other than the production
+            # registry? The contained one-market pilot writes to
+            # `data/live_pilot_<stamp>.db`, and `report()` decides the headline
+            # basis from the production FILENAME alone -- so that page printed a
+            # modelled negative total beside a funded account the venue was read
+            # from every second.
+            #
+            # Two markers must agree, and a marker we cannot read is NOT one of
+            # them: a rehearsal-minted store name, or a rehearsal registered
+            # against the path, keeps #97's registry basis. An unresolvable path
+            # or an unreadable rehearsal registry also stays on registry equity,
+            # because a guessed live basis is the bug this change fixes.
+            # Computed inside the build so a cache hit pays for neither lookup.
+            raw_live_account = _store_is_live_account(db_path)
+            raw = generate_kpi_report(db_path=db_path, run_id=run_id,
+                                      live_account=raw_live_account)
             return _trim_kpi_quotes(raw), 200
         except Exception as e:
             return _read_only_error_payload(e), 500
