@@ -265,11 +265,44 @@ def test_the_rail_spans_its_column():
     # Act
     rail = _rule(css, ".proto-sidebar")
 
-    # Assert - both rows of the 100vh grid, flush with the window edge.
-    assert "grid-row: 1 / 3" in rail
+    # Assert - every row of the 100vh grid, flush with the window edge.
+    assert "grid-row: 1 / -1" in rail
     assert "height: 100%" in rail
     assert "top: 0" in rail
     assert "max-height" not in rail
+
+
+def test_the_stale_banner_keeps_its_own_grid_row():
+    # Arrange - `#backend-contact-banner` is a direct child of `.container`, so
+    # the app-shell grid made it a grid item. Auto-placed, it landed in the
+    # 56px rail column and read as a vertical sliver once `app.js` added `.show`.
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+
+    # Act
+    banner = _rule(css, ".proto-body .backend-stale-banner")
+    drawer = css.split("@media (max-width: 900px)")[1]
+    mobile_banner = _rule(drawer, ".proto-body .backend-stale-banner")
+
+    # Assert - its own row in the content column, on both layouts.
+    assert "grid-row: 2" in banner
+    assert "grid-column: 2" in banner
+    assert "grid-row: 2" in mobile_banner
+    assert "grid-column: 1" in mobile_banner
+
+
+def test_a_stored_pin_does_not_widen_the_phone_layout():
+    # Arrange - the pin state lives in `localStorage`, so a wide-window pin is
+    # restored on a narrow reload. Its desktop rule outranks the media query's
+    # single-column rule, which held column 1 at 236px beside a fixed drawer.
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+
+    # Act
+    drawer = css.split("@media (max-width: 900px)")[1]
+    pinned = _rule(drawer, ".proto-body.proto-rail-pinned .container")
+
+    # Assert
+    assert "grid-template-columns: minmax(0, 1fr)" in pinned
+    assert "236px" not in pinned
 
 
 def test_the_rail_does_not_scroll_away_with_the_page():

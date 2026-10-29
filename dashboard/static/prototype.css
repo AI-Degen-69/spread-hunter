@@ -15,12 +15,17 @@
 }
 
 /* The collapsed rail eats 56px, so the content column keeps nearly the whole
-   window. Two rows so the rail can span the header and the content below it. */
+   window. Three rows so the stale-data banner can take one of its own: the
+   banner is a child of `.container`, so as a grid item it was auto-placed. */
 .proto-body .container {
   max-width: 1900px;
-  gap: 10px;
+  column-gap: 10px;
+  /* No row gap: the banner row collapses to nothing while the banner is
+     `display: none`, and a gutter there would still take 10px. The header and
+     the banner carry that spacing as a bottom margin instead. */
+  row-gap: 0;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
   grid-template-columns: 56px minmax(0, 1fr);
   height: 100vh;
 }
@@ -29,14 +34,23 @@
 .proto-body header {
   grid-column: 2;
   grid-row: 1;
-  margin-bottom: 0;
+  margin-bottom: 10px;
 }
 
-/* Shell occupies content column (col 2), row 2. It scrolls, the shell does
+/* The stale-data banner is a direct child of `.container` in `index.html`, so
+   it is a grid item: auto-placed, it landed in the 56px rail column and read as
+   a vertical sliver. Content column, its own row above the page. */
+.proto-body .backend-stale-banner {
+  grid-column: 2;
+  grid-row: 2;
+  margin-bottom: 10px;
+}
+
+/* Shell occupies the content column (col 2), row 3. It scrolls, the shell does
    not grow: a taller page inside a 100vh grid must not scroll the rail off. */
 .proto-body .proto-shell {
   grid-column: 2;
-  grid-row: 2;
+  grid-row: 3;
   display: block;
   min-height: 0;
   overflow-y: auto;
@@ -99,7 +113,9 @@
 
 .proto-sidebar {
   grid-column: 1;
-  grid-row: 1 / 3;
+  /* Every row, including the banner's, so the rail stays flush with the window
+     edge whichever rows are populated. */
+  grid-row: 1 / -1;
   position: sticky;
   top: 0;
   align-self: stretch;
@@ -398,16 +414,26 @@
   .proto-body .container {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* A pin stored on a wide window survives a narrow reload, and its desktop
+     rule outranks this one, so it would hold column 1 at 236px while the rail
+     itself is a fixed drawer. One column, always, at this width. */
+  .proto-body.proto-rail-pinned .container {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .proto-body header {
     grid-column: 1;
     grid-row: 1;
+  }
+  .proto-body .backend-stale-banner {
+    grid-column: 1;
+    grid-row: 2;
   }
   /* Scoped like the base rule: a bare `.proto-shell` loses the cascade to
      `.proto-body .proto-shell`, which would place the page in an implicit
      second column of a one-column grid. */
   .proto-body .proto-shell {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 3;
   }
 
   /* Labels are always readable in the drawer; the collapsed-rail clipping is
