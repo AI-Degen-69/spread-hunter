@@ -139,6 +139,36 @@ def test_kpi_keeps_the_registry_basis_for_a_registered_rehearsal(monkeypatch,
     assert _capture_kpi_basis(monkeypatch) is False
 
 
+def test_kpi_keeps_the_registry_basis_for_a_rehearsal_minted_store(monkeypatch,
+                                                                   tmp_path):
+    """An ended rehearsal is not a live account once its heartbeat ages out.
+
+    `read_shadow_run` only reports a heartbeat fresher than
+    `SHADOW_RUN_LIST_WINDOW_S`, so absence of a registration cannot be the only
+    marker: the store's own rehearsal name has to count too, or a finished
+    tournament arm would start reporting the wallet.
+    """
+    monkeypatch.setattr(server, "_ACTIVE_DB_OVERRIDE",
+                        tmp_path / "shadow_843-t03-2026-10-29T13-53.db")
+    monkeypatch.setattr(server, "read_shadow_run", lambda db: None)
+
+    assert _capture_kpi_basis(monkeypatch) is False
+
+
+def test_kpi_keeps_the_registry_basis_when_the_store_cannot_be_read(monkeypatch,
+                                                                    tmp_path):
+    """A marker we cannot read is not evidence of a live account."""
+    monkeypatch.setattr(server, "_ACTIVE_DB_OVERRIDE",
+                        tmp_path / "live_pilot_251029.db")
+
+    def _boom(db):
+        raise OSError("rehearsal registry unreadable")
+
+    monkeypatch.setattr(server, "read_shadow_run", _boom)
+
+    assert _capture_kpi_basis(monkeypatch) is False
+
+
 def test_a_stale_snapshot_is_served_without_waiting(monkeypatch):
     """A reader never pays for a rebuild once any snapshot exists.
 
