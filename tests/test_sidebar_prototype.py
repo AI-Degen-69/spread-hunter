@@ -258,16 +258,34 @@ def test_the_nav_toggle_sits_with_the_wordmark():
 
 
 def test_the_rail_spans_its_column():
-    # Arrange — five items sized to their content left a 237px card beside a
+    # Arrange - five items sized to their content left a 237px card beside a
     # 1300px page, which reads as an unfinished panel rather than as the rail.
     css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
 
     # Act
-    rail = css.split(".proto-sidebar {")[1].split("}")[0]
+    rail = _rule(css, ".proto-sidebar")
 
-    # Assert
-    assert "height: calc(100vh - 24px)" in rail
+    # Assert - both rows of the 100vh grid, flush with the window edge.
+    assert "grid-row: 1 / 3" in rail
+    assert "height: 100%" in rail
+    assert "top: 0" in rail
     assert "max-height" not in rail
+
+
+def test_the_rail_does_not_scroll_away_with_the_page():
+    # Arrange - a sticky rail inside a content-height parent has no travel
+    # range: on a page taller than the window the navigation left the screen,
+    # and `styles.css` put 76px of body padding outside the 100vh container, so
+    # the document always overflowed by that much.
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+
+    # Act
+    shell = _rule(css, ".proto-body .proto-shell")
+    body = _rule(css, ".proto-body")
+
+    # Assert - the shell scrolls, the body adds nothing outside the viewport.
+    assert "overflow-y: auto" in shell
+    assert "padding: 0 20px" in body
 
 
 def test_the_page_notes_orient_rather_than_narrate():
