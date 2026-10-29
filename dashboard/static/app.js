@@ -9591,13 +9591,22 @@ function otToggleSort(view, col) {
 // (green for YES, red for NO) + a muted `cost $X` subline. An absent leg renders the
 // side badge plus a muted `emptyLabel` instead of numbers.
 //   sizeSuffix lets each tab keep its own unit wording (e.g. ' sh' on Positions).
-function dualLegLine({ side, size, price, cost, emptyLabel, sizeSuffix, counterpart }) {
+function dualLegLine({ side, size, price, cost, emptyLabel, sizeSuffix, counterpart, resting }) {
   const isYes = side === 'YES';
   const badgeCls = isYes ? 'yes' : 'no';
   const priceCls = isYes ? 'stitch-quote-up' : 'stitch-quote-down';
   const suffix = sizeSuffix || '';
   const hasLeg = (size !== null && size !== undefined && Number(size) > 0);
   if (!hasLeg) {
+    // A resting order on the missing side is the live fact: the leg is not
+    // merely absent, its hedge is working. This beats every other absent
+    // rung, including the filled/cancelled counterpart notes below.
+    if (resting && Number(resting.size) > 0) {
+      return `<div class="stitch-quote-rung">`
+        + `<span class="stitch-leg-pill missing">${side}</span>`
+        + `<span style="color:#22d3ee;font-size:11px;">${fmtShares(Number(resting.size))} resting @ ${fmtPrice(Number(resting.price))} \u2014 hedge working</span>`
+        + `</div>`;
+    }
     // Counterpart fate for an absent leg: a filled counterpart holds a
     // position, a cancelled one is requoting. Both override the generic
     // missing rung; genuinely missing legs keep it.
@@ -10154,6 +10163,18 @@ function stitchPositionsRows(kpi, state, sort) {
     return `<tr><td colspan="9" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No legs have filled, so nothing is held.</td></tr>`;
   }
 
+  // Resting hedge per market: a held leg whose missing side still has an
+  // order on the book is hedge-pending, not orphaned. Keyed by leg name
+  // (UP/DN), never by pair_id, so a re-quoted hedge on a fresh pair still
+  // reads as the position's protection.
+  const _posByMarket = (kpi && kpi.by_market) || {};
+  const _posLegs = tokenLegMap(kpi);
+  const _posRestingByCid = groupOrdersByMarket(((state && state.orders) || []).filter(isRestingOrder));
+  const _restingLeg = (cid, want) => {
+    const hit = (_posRestingByCid[cid] || []).find(o => legForOrder(o, _posLegs, _posByMarket) === want);
+    return hit ? { size: Number(hit.original_size) || 0, price: Number(hit.price) || 0 } : null;
+  };
+
   const rows = entries.map(([cid, m]) => {
     const overlay = liveLegMids(m);
     const mark = positionMarkValue(m, overlay.mids);
@@ -10183,10 +10204,16 @@ function stitchPositionsRows(kpi, state, sort) {
     const curSort = (upSh > 0 ? overlay.mids.up : null)
       ?? (dnSh > 0 ? overlay.mids.dn : null) ?? null;
     const ts = latestFillTs(m);
+    // The hedge for each MISSING side, if one rests. A held leg never needs
+    // one; passing it anyway is harmless because dualLegLine only reads the
+    // rung for an absent leg.
+    const restUp = upSh > 0 ? null : _restingLeg(cid, 'UP');
+    const restDn = dnSh > 0 ? null : _restingLeg(cid, 'DN');
+    const hedgePending = status === 'unpaired' && Boolean(restUp || restDn);
     return {
       cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost: cost, totalSh,
       mark, unrealized, unrealizedPct, legMarks, curSort,
-      status, ts,
+      status, ts, restUp, restDn, hedgePending,
       live: overlay.live, liveAgeMs: overlay.ageMs,
     };
   });
@@ -10216,7 +10243,7 @@ function stitchPositionsRows(kpi, state, sort) {
   return sorted.map(({
     cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost, totalSh,
     mark, unrealized, unrealizedPct, legMarks, curSort,
-    status, ts, live, liveAgeMs
+    status, ts, restUp, restDn, hedgePending, live, liveAgeMs
   }) => {
     const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
     const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
@@ -10226,16 +10253,21 @@ function stitchPositionsRows(kpi, state, sort) {
     const ageDisp = ageSec !== null ? fmtStopwatch(ageSec) : '--';
     const tsDisp = (ts && Number.isFinite(toMs(ts))) ? fmtTimestamp(ts) : '--';
 
-    // Status / Hedge badge
+    // Status / Hedge badge. A lone held leg with its hedge still resting is
+    // SINGLE FILL (cyan, same family as the Orders tab pill), not UNPAIRED
+    // (red): the position is protected and waiting, not orphaned.
     let statusBadge = '';
     if (status === 'paired') {
       const pc = (m.pair_cost !== null && m.pair_cost !== undefined) ? fmtPrice(m.pair_cost) : '';
       statusBadge = `<span class="stitch-status-badge quoting"><span class="stitch-status-dot quoting"></span>PAIRED${pc ? ` (${pc})` : ''}</span>`;
     } else if (status === 'partial') {
       statusBadge = `<span class="stitch-status-badge resting"><span class="stitch-status-dot resting"></span>PARTIAL</span>`;
+    } else if (hedgePending) {
+      statusBadge = `<span class="stitch-status-badge resting" title="Position held — hedge resting"><span class="stitch-status-dot resting"></span>SINGLE FILL</span>`;
     } else {
       statusBadge = `<span class="stitch-status-badge idle" style="border-color:rgba(244,63,94,0.3);background:rgba(244,63,94,0.1);color:#fb7185;"><span class="stitch-status-dot idle" style="background:#fb7185;"></span>⚠️ UNPAIRED</span>`;
     }
+    const hedgeRowCls = hedgePending ? ' is-hedge-pending' : '';
 
     // PnL state per leg; the pair total carries the row's tone.
     const totalCls = unrealized > 0 ? 'pos' : (unrealized < 0 ? 'neg' : 'flat');
@@ -10254,7 +10286,7 @@ function stitchPositionsRows(kpi, state, sort) {
           <div class="stitch-cur-${e.leg === 'YES' ? 'up' : 'down'}" data-leg="${e.leg}">${e.leg} ${fmtPrice(e.mid)}${e.live ? ' <span class="stitch-cur-live">●</span>' : ''}</div>`).join('')
       : `<span style="color:#64748b;font-size:11px;">--</span>`;
 
-    return `<tr class="stitch-ot-row" data-cid="${esc(cid)}">
+    return `<tr class="stitch-ot-row${hedgeRowCls}" data-cid="${esc(cid)}">
       <!-- Col 0: MARKET & CLASSIFICATION (market anchors far left; the category lives in its own column) -->
       <td class="stitch-market-cell">
         <div class="stitch-market-title">
@@ -10269,8 +10301,8 @@ function stitchPositionsRows(kpi, state, sort) {
 
       <!-- Col 2: HELD INVENTORY (dual-leg YES / NO block, shared with Orders) -->
       ${stitchDualLegCell(
-        dualLegLine({ side: 'YES', size: upSh, price: upAvg, cost: upCost, emptyLabel: 'No YES held', sizeSuffix: ' sh' }),
-        dualLegLine({ side: 'NO', size: dnSh, price: dnAvg, cost: dnCost, emptyLabel: 'No NO held', sizeSuffix: ' sh' }),
+        dualLegLine({ side: 'YES', size: upSh, price: upAvg, cost: upCost, emptyLabel: 'No YES held', sizeSuffix: ' sh', resting: restUp }),
+        dualLegLine({ side: 'NO', size: dnSh, price: dnAvg, cost: dnCost, emptyLabel: 'No NO held', sizeSuffix: ' sh', resting: restDn }),
         { cellClass: 'mono font-tabular' })}
 
       <!-- Col 3: TOTAL COST -->

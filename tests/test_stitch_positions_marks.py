@@ -399,3 +399,61 @@ def test_stitch_positions_sorted_render_has_no_activity_pill():
     assert "quoting-breathing" not in html
     for body in by_cid.values():
         assert "stitch-status-badge" in body
+
+
+# ── hedge-aware held inventory: a missing leg with a resting order ──────────
+
+
+def _lakers_kpi():
+    # Lakers shape: 5 NO @ $0.45 held, nothing held on YES, both tokens named.
+    kpi = _kpi(up_sh=0.0, up_cost=0.0, dn_sh=5.0, dn_cost=2.25, dn_mid=0.51)
+    m = kpi["by_market"]["0xabc"]
+    m["title"] = "Lakers vs Clippers"
+    m["quotes"].append({"side": "UP", "price": 0.46, "mid": 0.52,
+                          "token_id": "tok-up", "ts": 1700000000000})
+    return kpi
+
+
+def _resting_up(price=0.46, size=5.0, status="open"):
+    return {"id": "loc-up", "order_id": "v-up", "condition_id": "0xabc",
+            "token_id": "tok-up", "side": "BUY", "price": price,
+            "original_size": size, "status": status,
+            "posted_ts": 1700000000000, "age_sec": 300}
+
+
+@requires_node
+def test_held_no_with_resting_yes_shows_hedge_working_not_no_held():
+    # The Lakers case: 5 NO held + 5 YES resting @ $0.46. The YES rung names
+    # the hedge instead of "No YES held", and the row reads SINGLE FILL
+    # (cyan), never the red UNPAIRED orphan pill.
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_lakers_kpi())};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(
+            kpi, {{orders: [{json.dumps(_resting_up())}]}}, null)
+    }}));
+    """))
+    html = res["html"]
+    assert "5 resting @ $0.46" in html
+    assert "hedge working" in html
+    assert "No YES held" not in html
+    assert "SINGLE FILL" in html
+    assert "UNPAIRED" not in html
+    assert "is-hedge-pending" in html
+
+
+@requires_node
+def test_held_no_without_resting_yes_stays_unpaired():
+    # The Kansas case: a lone held leg with no hedge resting keeps the honest
+    # red pill and the plain "No YES held" rung.
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_lakers_kpi())};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(kpi, {{orders: []}}, null)
+    }}));
+    """))
+    html = res["html"]
+    assert "No YES held" in html
+    assert "hedge working" not in html
+    assert "UNPAIRED" in html
+    assert "SINGLE FILL" not in html
