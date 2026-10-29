@@ -258,16 +258,67 @@ def test_the_nav_toggle_sits_with_the_wordmark():
 
 
 def test_the_rail_spans_its_column():
-    # Arrange — five items sized to their content left a 237px card beside a
+    # Arrange - five items sized to their content left a 237px card beside a
     # 1300px page, which reads as an unfinished panel rather than as the rail.
     css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
 
     # Act
-    rail = css.split(".proto-sidebar {")[1].split("}")[0]
+    rail = _rule(css, ".proto-sidebar")
+
+    # Assert - every row of the 100vh grid, flush with the window edge.
+    assert "grid-row: 1 / -1" in rail
+    assert "height: 100%" in rail
+    assert "top: 0" in rail
+    assert "max-height" not in rail
+
+
+def test_the_stale_banner_keeps_its_own_grid_row():
+    # Arrange - `#backend-contact-banner` is a direct child of `.container`, so
+    # the app-shell grid made it a grid item. Auto-placed, it landed in the
+    # 56px rail column and read as a vertical sliver once `app.js` added `.show`.
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+
+    # Act
+    banner = _rule(css, ".proto-body .backend-stale-banner")
+    drawer = css.split("@media (max-width: 900px)")[1]
+    mobile_banner = _rule(drawer, ".proto-body .backend-stale-banner")
+
+    # Assert - its own row in the content column, on both layouts.
+    assert "grid-row: 2" in banner
+    assert "grid-column: 2" in banner
+    assert "grid-row: 2" in mobile_banner
+    assert "grid-column: 1" in mobile_banner
+
+
+def test_a_stored_pin_does_not_widen_the_phone_layout():
+    # Arrange - the pin state lives in `localStorage`, so a wide-window pin is
+    # restored on a narrow reload. Its desktop rule outranks the media query's
+    # single-column rule, which held column 1 at 236px beside a fixed drawer.
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+
+    # Act
+    drawer = css.split("@media (max-width: 900px)")[1]
+    pinned = _rule(drawer, ".proto-body.proto-rail-pinned .container")
 
     # Assert
-    assert "height: calc(100vh - 24px)" in rail
-    assert "max-height" not in rail
+    assert "grid-template-columns: minmax(0, 1fr)" in pinned
+    assert "236px" not in pinned
+
+
+def test_the_rail_does_not_scroll_away_with_the_page():
+    # Arrange - a sticky rail inside a content-height parent has no travel
+    # range: on a page taller than the window the navigation left the screen,
+    # and `styles.css` put 76px of body padding outside the 100vh container, so
+    # the document always overflowed by that much.
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+
+    # Act
+    shell = _rule(css, ".proto-body .proto-shell")
+    body = _rule(css, ".proto-body")
+
+    # Assert - the shell scrolls, the body adds nothing outside the viewport.
+    assert "overflow-y: auto" in shell
+    assert "padding: 0 20px" in body
 
 
 def test_the_page_notes_orient_rather_than_narrate():

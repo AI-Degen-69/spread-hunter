@@ -550,7 +550,9 @@ function mountSidebarLayout(doc) {
   pages.className = 'proto-pages';
 
   const panels = resolvePanels(scope);
-  shell.appendChild(buildSidebar(scope));
+  // The rail is a grid child of `.container`, not of the shell: it spans both
+  // rows (header + content) while the shell occupies the content row only.
+  container.appendChild(buildSidebar(scope));
   for (const entry of PAGE_LAYOUT) {
     pages.appendChild(buildPage(scope, entry, panels[entry.page]));
   }
