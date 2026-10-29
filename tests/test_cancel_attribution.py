@@ -529,6 +529,76 @@ def test_a_partially_migrated_store_is_not_called_unreadable(tmp_path):
     assert summary["unattributed"] == 1
 
 
+def test_a_dropped_market_holding_fills_keeps_its_resting_hedge():
+    """Held-inventory shield: a dropped market holding filled shares on one
+    leg keeps its resting hedge on the other. Cancelling the hedge orphans
+    the position with no owner (the Kansas 3:45h orphan: DOWN cancelled as
+    `market_dropped` while 6 YES sat filled)."""
+    from types import SimpleNamespace
+
+    from core_brain.trader_loop import _cancel_dropped_markets
+
+    resting = SimpleNamespace(
+        id="o-down", order_id="v-down", condition_id="0xgone", token_id="DN",
+        price=0.54, side="BUY", status="open", pair_id="pair-1")
+    held = SimpleNamespace(
+        id="o-up", order_id="v-up", condition_id="0xgone", token_id="UP",
+        price=0.39, side="BUY", status="filled", pair_id="pair-1")
+    handed: list = []
+    emitted: list = []
+
+    seam = SimpleNamespace(
+        client=object(),
+        registry=SimpleNamespace(
+            get_active_orders=lambda: [resting],
+            get_lifecycle_state=lambda _pid: None,
+            get_unpaired_filled_orders=lambda: [held]),
+        cancel_fn=lambda _c, _r, orders: handed.extend(orders) or len(orders),
+        resting_order_ids_fn=None,
+        db_path=None,
+    )
+
+    out = _cancel_dropped_markets(
+        seam, current_markets=[],
+        emit_fn=lambda *a, **k: emitted.append(k))
+
+    assert handed == []
+    assert [r.status for r in out] == ["WARNED"]
+    assert out[0].why == "dropped_market_hedge_protected"
+
+
+def test_a_resolved_market_with_held_fills_still_exits():
+    """Resolution overrides the held-inventory shield: books are gone, so
+    the hedge cannot be left resting."""
+    from types import SimpleNamespace
+
+    from core_brain.trader_loop import CANCEL_MARKET_DROPPED, _cancel_dropped_markets
+
+    resting = SimpleNamespace(
+        id="o-down", order_id="v-down", condition_id="0xgone", token_id="DN",
+        price=0.54, side="BUY", status="open", pair_id="pair-1")
+    held = SimpleNamespace(
+        id="o-up", order_id="v-up", condition_id="0xgone", token_id="UP",
+        price=0.39, side="BUY", status="filled", pair_id="pair-1")
+    handed: list = []
+
+    seam = SimpleNamespace(
+        client=object(),
+        registry=SimpleNamespace(
+            get_active_orders=lambda: [resting],
+            get_lifecycle_state=lambda _pid: None,
+            get_unpaired_filled_orders=lambda: [held]),
+        cancel_fn=lambda _c, _r, orders: handed.extend(orders) or len(orders),
+        resting_order_ids_fn=None,
+        db_path=None,
+    )
+
+    _cancel_dropped_markets(seam, current_markets=[],
+                            resolved_cids={"0xgone"})
+
+    assert [o["id"] for o in handed] == ["o-down"]
+
+
 def test_a_path_with_uri_characters_still_opens(tmp_path):
     # Arrange — `#` in a filename would otherwise be read as the URI's
     # fragment. (`?` is the other case the escaping covers, but Windows will

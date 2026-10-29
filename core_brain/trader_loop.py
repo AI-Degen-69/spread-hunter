@@ -1164,12 +1164,42 @@ def _cancel_dropped_markets(
             if rec is not None and rec.state in _HEDGE_PROTECTED_STATES:
                 protected_cids[pcid] = rec.state
 
+    # HELD-INVENTORY SHIELD. A dropped market holding filled shares on one
+    # leg keeps its resting hedge on the other: cancelling the hedge orphans
+    # the position with no owner (filled legs are not in `dropped`, so the
+    # lifecycle shield above cannot see them). Reads the registry's unpaired
+    # fills, never inferred state. Resolved markets still exit first, and an
+    # unreadable registry fails PROTECTED, never cancelled, for the same
+    # reason as the lifecycle shield. Registries without the getter keep the
+    # shipped behaviour.
+    held_cids: set[str] = set()
+    _held_getter = (getattr(seam.registry, "get_unpaired_filled_orders", None)
+                    if seam.registry is not None else None)
+    if callable(_held_getter):
+        try:
+            for h in _held_getter() or []:
+                _hcid = getattr(h, "condition_id", None)
+                if _hcid and str(_hcid).lower() not in resolved_lc:
+                    held_cids.add(_hcid)
+        except Exception as e:
+            log.warning("dropped-market shield could not read held inventory: "
+                        "%s: %s", type(e).__name__, e)
+            for o in dropped:
+                if getattr(o, "status", "") == "open" and o.condition_id \
+                        and o.condition_id.lower() not in resolved_lc:
+                    held_cids.add(o.condition_id)
+            emit_fn(service="decide", cycle=cycle, phase="quoting",
+                    action="dropped_hedge_protected", market_slug="",
+                    reason="dropped_market_hedge_protect_read_failed: "
+                    f"{type(e).__name__}: {e}",
+                    extra={"condition_id": "", "pair_id": ""})
+
     open_cids = sorted({o.condition_id for o in dropped
                         if getattr(o, "status", "") == "open"})
     for dropped_cid in open_cids:
-        if (dropped_cid in protected_cids
+        if ((dropped_cid in protected_cids or dropped_cid in held_cids)
                 and dropped_cid.lower() not in resolved_lc):
-            state = protected_cids[dropped_cid]
+            state = protected_cids.get(dropped_cid, "HELD_INVENTORY")
             n = sum(1 for o in dropped
                     if o.condition_id == dropped_cid
                     and getattr(o, "status", "") == "open")
