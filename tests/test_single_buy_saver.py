@@ -13,10 +13,12 @@ Stage 3 invariants:
 
 import time
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 import pytest
 
+from core_brain import trader_loop as tl
 from core_brain.config import MakerConfig
 from core_brain.market_resolution import MarketEndState
 from core_brain.order_registry import (
@@ -3087,9 +3089,10 @@ def _cap797_pair(registry: OrderRegistry, filled_ms: int) -> None:
     ))
 
 
-def _cap797_route(registry: OrderRegistry, venue, now_s: float) -> dict:
+def _cap797_route(registry: OrderRegistry, venue, now_s: float, cfg=None) -> dict:
     results = lp.manage_single_leg_positions(
-        venue, registry, _trig525_cfg(), live=True, now=now_s,
+        venue, registry, cfg if cfg is not None else _trig525_cfg(),
+        live=True, now=now_s,
         venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
     )
     assert len(results) == 1
@@ -3162,6 +3165,94 @@ def test_cap_bailout_does_not_fire_without_an_opposing_ask(
 
     assert routed["action"] != "exited"
     assert not any(c.startswith("sell:") for c in venue.calls)
+
+
+# ---------------------------------------------------------------------------
+# A cap bail-out closes the market to fresh entries, not just the leg
+# ---------------------------------------------------------------------------
+# moe/live-251029: the pilot sold a naked NO at 20:03:14 and BOUGHT YES again
+# at 20:03:28 -- fourteen seconds later. It sold a naked YES at 20:08:29 and
+# bought two more at 20:08:35/36. One unfilled hedge became four entries and
+# -1.60 on a single market, because the bail-out released the leg but left the
+# market open for business.
+
+def test_a_cap_bailout_blocks_fresh_entries_on_that_market(registry):
+    """The market honours the same floor a hard stop does (#796)."""
+    _cap797_pair(registry, CAP797_FILL_MS)
+    venue = DecisionThenExecutionBook(
+        decision_bid=0.35, execution_bid=0.34, light_ask=0.4225)
+
+    routed = _cap797_route(registry, venue, CAP797_FILL_S + CAP797_WAIT_S + 1.0)
+
+    assert routed["action"] == "exited"
+    marks = registry.requalification_marks()
+    assert CAP797_COND in marks, "the market was left open for a fresh entry"
+    assert marks[CAP797_COND].reason.startswith("hard_stop"), (
+        "only a hard-stop-prefixed mark gets the lockout window")
+
+
+def test_the_cap_bailout_block_stops_the_next_quote_not_just_the_ledger(
+        registry):
+    """The mark the bail-out writes is the gate the trader actually reads.
+
+    A mark nothing reads would leave the fourteen-second re-entry intact, so
+    this drives the two real readers: the visit skip for an unmanaged market
+    and the submit gate that catches a re-entry planned in the same rotation.
+    """
+    _cap797_pair(registry, CAP797_FILL_MS)
+    venue = DecisionThenExecutionBook(
+        decision_bid=0.35, execution_bid=0.34, light_ask=0.4225)
+    _cap797_route(registry, venue, CAP797_FILL_S + CAP797_WAIT_S + 1.0)
+
+    marks = registry.requalification_marks()
+    assert tl._is_awaiting_requalification(registry, marks, CAP797_COND), (
+        "the market would be visited and quoted again")
+
+    class _Seam:
+        def __init__(self, store):
+            self.registry = store
+
+    class _Intent:
+        pair_id = None
+
+    kept, blocked = tl._enforce_entry_gate(
+        _Seam(registry), CAP797_COND, [_Intent()], None)
+
+    assert kept == [] and blocked, "a fresh entry would have gone out"
+
+
+def test_the_cap_bailout_block_expires_with_the_hard_stop_window(registry):
+    """A block that cannot expire would retire the market for the whole run.
+
+    The release sweep deletes marks whose reason matches the hard-stop prefix;
+    a differently named mark would sit there until a newer publication, which
+    for a market the feed stopped listing is never.
+    """
+    _cap797_pair(registry, CAP797_FILL_MS)
+    venue = DecisionThenExecutionBook(
+        decision_bid=0.35, execution_bid=0.34, light_ask=0.4225)
+    now_s = CAP797_FILL_S + CAP797_WAIT_S + 1.0
+    _cap797_route(registry, venue, now_s)
+
+    released = registry.release_hard_stop_blocks(
+        int((now_s + 901.0) * 1000), 900.0)
+
+    assert released == 1
+    assert CAP797_COND not in registry.requalification_marks()
+
+
+def test_a_disabled_lockout_writes_no_block(registry):
+    """Floor off is the pre-#796 behaviour: the exit alone decides."""
+    _cap797_pair(registry, CAP797_FILL_MS)
+    cfg = replace(_trig525_cfg(), bot_risk_hard_stop_entry_lockout_sec=0.0)
+    venue = DecisionThenExecutionBook(
+        decision_bid=0.35, execution_bid=0.34, light_ask=0.4225)
+
+    routed = _cap797_route(
+        registry, venue, CAP797_FILL_S + CAP797_WAIT_S + 1.0, cfg=cfg)
+
+    assert routed["action"] == "exited"
+    assert CAP797_COND not in registry.requalification_marks()
 
 
 # ---------------------------------------------------------------------------
