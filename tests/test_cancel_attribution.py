@@ -529,30 +529,44 @@ def test_a_partially_migrated_store_is_not_called_unreadable(tmp_path):
     assert summary["unattributed"] == 1
 
 
-def test_a_dropped_market_holding_fills_keeps_its_resting_hedge():
-    """Held-inventory shield: a dropped market holding filled shares on one
-    leg keeps its resting hedge on the other. Cancelling the hedge orphans
-    the position with no owner (the Kansas 3:45h orphan: DOWN cancelled as
-    `market_dropped` while 6 YES sat filled)."""
+def _seed_held_pair(registry: OrderRegistry) -> None:
+    """One pair, production shape: filled UP + resting DOWN, same pair_id.
+
+    Both legs post under one `pair_id`, so the pair-aware unpaired-fills
+    getter hides the fill exactly when the hedge is still resting -- the
+    shape this shield must still see."""
+    registry.create_order(OrderRecord(
+        id="o-up", order_id="v-up", condition_id="0xgone",
+        token_id=UP, side="BUY", price=0.39, original_size=6.0,
+        status="filled", posted_ts=1, last_polled_ts=1, pair_id="pair-1",
+        max_pair_cost_at_post=0.99,
+    ))
+    registry.create_order(OrderRecord(
+        id="o-down", order_id="v-down", condition_id="0xgone",
+        token_id=DOWN, side="BUY", price=0.54, original_size=6.0,
+        status="open", posted_ts=1, last_polled_ts=1, pair_id="pair-1",
+        max_pair_cost_at_post=0.99,
+    ))
+
+
+def test_a_dropped_market_holding_fills_keeps_its_resting_hedge(registry):
+    """Held-inventory shield, production shape: a dropped market holding
+    filled shares on one leg keeps its resting hedge on the other.
+    Cancelling the hedge orphans the position with no owner (the Kansas
+    3:45h orphan: DOWN cancelled as `market_dropped` while 6 YES sat
+    filled). Uses a real registry because the mocked getter masked the
+    pair-exclusion bug (#869)."""
     from types import SimpleNamespace
 
     from core_brain.trader_loop import _cancel_dropped_markets
 
-    resting = SimpleNamespace(
-        id="o-down", order_id="v-down", condition_id="0xgone", token_id="DN",
-        price=0.54, side="BUY", status="open", pair_id="pair-1")
-    held = SimpleNamespace(
-        id="o-up", order_id="v-up", condition_id="0xgone", token_id="UP",
-        price=0.39, side="BUY", status="filled", pair_id="pair-1")
+    _seed_held_pair(registry)
     handed: list = []
     emitted: list = []
 
     seam = SimpleNamespace(
         client=object(),
-        registry=SimpleNamespace(
-            get_active_orders=lambda: [resting],
-            get_lifecycle_state=lambda _pid: None,
-            get_unpaired_filled_orders=lambda: [held]),
+        registry=registry,
         cancel_fn=lambda _c, _r, orders: handed.extend(orders) or len(orders),
         resting_order_ids_fn=None,
         db_path=None,
@@ -565,29 +579,23 @@ def test_a_dropped_market_holding_fills_keeps_its_resting_hedge():
     assert handed == []
     assert [r.status for r in out] == ["WARNED"]
     assert out[0].why == "dropped_market_hedge_protected"
+    assert any(e.get("extra", {}).get("lifecycle_state") == "HELD_INVENTORY"
+               for e in emitted)
 
 
-def test_a_resolved_market_with_held_fills_still_exits():
+def test_a_resolved_market_with_held_fills_still_exits(registry):
     """Resolution overrides the held-inventory shield: books are gone, so
     the hedge cannot be left resting."""
     from types import SimpleNamespace
 
-    from core_brain.trader_loop import CANCEL_MARKET_DROPPED, _cancel_dropped_markets
+    from core_brain.trader_loop import _cancel_dropped_markets
 
-    resting = SimpleNamespace(
-        id="o-down", order_id="v-down", condition_id="0xgone", token_id="DN",
-        price=0.54, side="BUY", status="open", pair_id="pair-1")
-    held = SimpleNamespace(
-        id="o-up", order_id="v-up", condition_id="0xgone", token_id="UP",
-        price=0.39, side="BUY", status="filled", pair_id="pair-1")
+    _seed_held_pair(registry)
     handed: list = []
 
     seam = SimpleNamespace(
         client=object(),
-        registry=SimpleNamespace(
-            get_active_orders=lambda: [resting],
-            get_lifecycle_state=lambda _pid: None,
-            get_unpaired_filled_orders=lambda: [held]),
+        registry=registry,
         cancel_fn=lambda _c, _r, orders: handed.extend(orders) or len(orders),
         resting_order_ids_fn=None,
         db_path=None,
@@ -597,6 +605,44 @@ def test_a_resolved_market_with_held_fills_still_exits():
                             resolved_cids={"0xgone"})
 
     assert [o["id"] for o in handed] == ["o-down"]
+
+
+def test_a_same_leg_extra_beside_the_fill_still_cancels(registry):
+    """#869 -- the shield is per-order, not per-condition: the open DOWN
+    hedge is kept, but an extra open UP resting beside the filled UP is not
+    protection and still cancels. Keeping it would grow unmatched inventory
+    instead of guarding the fill."""
+    from types import SimpleNamespace
+
+    from core_brain.trader_loop import CANCEL_MARKET_DROPPED, _cancel_dropped_markets
+
+    _seed_held_pair(registry)
+    registry.create_order(OrderRecord(
+        id="o-up2", order_id="v-up2", condition_id="0xgone",
+        token_id=UP, side="BUY", price=0.40, original_size=6.0,
+        status="open", posted_ts=2, last_polled_ts=2, pair_id="pair-2",
+        max_pair_cost_at_post=0.99,
+    ))
+    handed: list = []
+    emitted: list = []
+
+    seam = SimpleNamespace(
+        client=object(),
+        registry=registry,
+        cancel_fn=lambda _c, _r, orders: handed.extend(orders) or len(orders),
+        resting_order_ids_fn=None,
+        db_path=None,
+    )
+
+    out = _cancel_dropped_markets(
+        seam, current_markets=[],
+        emit_fn=lambda *a, **k: emitted.append(k))
+
+    assert [o["id"] for o in handed] == ["o-up2"]
+    assert handed[0]["cancel_reason"] == CANCEL_MARKET_DROPPED
+    assert [r.status for r in out] == ["WARNED", "CANCELLED"]
+    assert any(e.get("extra", {}).get("lifecycle_state") == "HELD_INVENTORY"
+               for e in emitted)
 
 
 def test_a_path_with_uri_characters_still_opens(tmp_path):

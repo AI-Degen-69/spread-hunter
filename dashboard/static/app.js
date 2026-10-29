@@ -10169,7 +10169,13 @@ function stitchPositionsRows(kpi, state, sort) {
   // reads as the position's protection.
   const _posByMarket = (kpi && kpi.by_market) || {};
   const _posLegs = tokenLegMap(kpi);
-  const _posRestingByCid = groupOrdersByMarket(((state && state.orders) || []).filter(isRestingOrder));
+  // `pending` is signed-but-unconfirmed (no venue id yet), so it must not
+  // read as a working hedge: only venue-confirmed resting legs count here.
+  // A partial with nothing remaining yields size 0 and falls through to the
+  // generic missing rung via the size guard in dualLegLine.
+  const _posRestingByCid = groupOrdersByMarket(
+    ((state && state.orders) || []).filter(
+      o => isRestingOrder(o) && String(o.status || '').toLowerCase() !== 'pending'));
   const _restingLeg = (cid, want) => {
     const hit = (_posRestingByCid[cid] || []).find(o => legForOrder(o, _posLegs, _posByMarket) === want);
     if (!hit) return null;

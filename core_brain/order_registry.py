@@ -1750,6 +1750,23 @@ class OrderRegistry:
             ).fetchall()
             return [self._row_to_order(r) for r in rows]
 
+    def get_filled_orders(self) -> list[OrderRecord]:
+        """Return filled or partial orders regardless of pair assignment.
+
+        Unlike `get_unpaired_filled_orders`, a fill is reported even when its
+        pair still has an open or pending leg -- which is exactly the shape of
+        a working hedge (one leg filled, the other resting under the same
+        `pair_id`). Pair-aware callers keep using the unpaired getter; the
+        dropped-market held-inventory shield needs this pair-agnostic view so
+        a held leg is visible precisely when its hedge is still on the book.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM orders WHERE status IN ('filled', 'partial') "
+                "ORDER BY posted_ts ASC"
+            ).fetchall()
+            return [self._row_to_order(r) for r in rows]
+
     # --- Telemetry Logging Methods -----------------------------------------
 
     def log_quote(self, quote: QuoteRecord) -> int:

@@ -414,11 +414,14 @@ def _lakers_kpi():
     return kpi
 
 
-def _resting_up(price=0.46, size=5.0, status="open"):
-    return {"id": "loc-up", "order_id": "v-up", "condition_id": "0xabc",
-            "token_id": "tok-up", "side": "BUY", "price": price,
-            "original_size": size, "status": status,
-            "posted_ts": 1700000000000, "age_sec": 300}
+def _resting_up(price=0.46, size=5.0, status="open", remaining=None):
+    order = {"id": "loc-up", "order_id": "v-up", "condition_id": "0xabc",
+             "token_id": "tok-up", "side": "BUY", "price": price,
+             "original_size": size, "status": status,
+             "posted_ts": 1700000000000, "age_sec": 300}
+    if remaining is not None:
+        order["size_remaining"] = remaining
+    return order
 
 
 @requires_node
@@ -426,15 +429,18 @@ def test_held_no_with_resting_yes_shows_hedge_working_not_no_held():
     # The Lakers case: 5 NO held + 5 YES resting @ $0.46. The YES rung names
     # the hedge instead of "No YES held", and the row reads SINGLE FILL
     # (cyan), never the red UNPAIRED orphan pill.
+    # original 8 vs remaining 5: the rung must read the remainder. If the
+    # renderer used original_size, this would print "8 resting" and fail.
     res = json.loads(_eval_js(f"""
     const kpi = {json.dumps(_lakers_kpi())};
     console.log(JSON.stringify({{
         html: app.stitchPositionsRows(
-            kpi, {{orders: [{json.dumps(_resting_up())}]}}, null)
+            kpi, {{orders: [{json.dumps(_resting_up(size=8.0, remaining=5.0))}]}}, null)
     }}));
     """))
     html = res["html"]
     assert "5 resting @ $0.46" in html
+    assert "8 resting" not in html
     assert "hedge working" in html
     assert "No YES held" not in html
     assert "SINGLE FILL" in html

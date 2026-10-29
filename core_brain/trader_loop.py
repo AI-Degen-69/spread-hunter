@@ -1167,42 +1167,81 @@ def _cancel_dropped_markets(
     # HELD-INVENTORY SHIELD. A dropped market holding filled shares on one
     # leg keeps its resting hedge on the other: cancelling the hedge orphans
     # the position with no owner (filled legs are not in `dropped`, so the
-    # lifecycle shield above cannot see them). Reads the registry's unpaired
-    # fills, never inferred state. Resolved markets still exit first, and an
+    # lifecycle shield above cannot see them). Reads filled inventory,
+    # never inferred state. Resolved markets still exit first, and an
     # unreadable registry fails PROTECTED, never cancelled, for the same
     # reason as the lifecycle shield. Registries without the getter keep the
     # shipped behaviour.
-    held_cids: set[str] = set()
-    _held_getter = (getattr(seam.registry, "get_unpaired_filled_orders", None)
-                    if seam.registry is not None else None)
+    #
+    # Pair-agnostic by necessity (#869): both legs post under one `pair_id`,
+    # so the unpaired-fills getter excludes a fill exactly when its hedge is
+    # still resting. `get_filled_orders` reports the fill regardless; older
+    # registries fall back to the unpaired getter (best effort).
+    #
+    # Per-order, not per-condition: only an open order on the MISSING leg (a
+    # token the fills do not hold) is the hedge. A same-leg extra resting
+    # beside the fill is not protection and still cancels -- keeping it would
+    # grow unmatched inventory instead of guarding the position.
+    held_tokens: dict[str, set[str]] = {}
+    held_failed = False
+    held_known = False
+    _held_getter = None
+    if seam.registry is not None:
+        _held_getter = getattr(seam.registry, "get_filled_orders", None)
+        if not callable(_held_getter):
+            _held_getter = getattr(seam.registry,
+                                   "get_unpaired_filled_orders", None)
     if callable(_held_getter):
         try:
             for h in _held_getter() or []:
                 _hcid = getattr(h, "condition_id", None)
                 if _hcid and str(_hcid).lower() not in resolved_lc:
-                    held_cids.add(_hcid)
+                    _htok = getattr(h, "token_id", None)
+                    if _htok:
+                        held_tokens.setdefault(_hcid, set()).add(str(_htok))
+            held_known = True
         except Exception as e:
             log.warning("dropped-market shield could not read held inventory: "
                         "%s: %s", type(e).__name__, e)
-            for o in dropped:
-                if getattr(o, "status", "") == "open" and o.condition_id \
-                        and o.condition_id.lower() not in resolved_lc:
-                    held_cids.add(o.condition_id)
+            held_failed = True
             emit_fn(service="decide", cycle=cycle, phase="quoting",
                     action="dropped_hedge_protected", market_slug="",
                     reason="dropped_market_hedge_protect_read_failed: "
                     f"{type(e).__name__}: {e}",
                     extra={"condition_id": "", "pair_id": ""})
 
+    def _held_token(o) -> str:
+        return str(getattr(o, "token_id", "") or "")
+
     open_cids = sorted({o.condition_id for o in dropped
                         if getattr(o, "status", "") == "open"})
     for dropped_cid in open_cids:
-        if ((dropped_cid in protected_cids or dropped_cid in held_cids)
-                and dropped_cid.lower() not in resolved_lc):
-            state = protected_cids.get(dropped_cid, "HELD_INVENTORY")
-            n = sum(1 for o in dropped
-                    if o.condition_id == dropped_cid
-                    and getattr(o, "status", "") == "open")
+        is_resolved = dropped_cid.lower() in resolved_lc
+        cid_opens = [o for o in dropped
+                     if o.condition_id == dropped_cid
+                     and getattr(o, "status", "") == "open"]
+        if is_resolved:
+            kept: list = []
+            canc = list(cid_opens)
+            state = "RESOLVED"
+        elif dropped_cid in protected_cids:
+            state = protected_cids[dropped_cid]
+            kept, canc = list(cid_opens), []
+        elif held_failed:
+            state = "HELD_INVENTORY"
+            kept, canc = list(cid_opens), []
+        elif held_known and dropped_cid in held_tokens:
+            # Only a condition with held fills splits per-order. A market
+            # with no fills -- or a registry with no fill getter -- keeps
+            # the shipped behaviour below (cancel all opens).
+            state = "HELD_INVENTORY"
+            _held = held_tokens[dropped_cid]
+            kept = [o for o in cid_opens if _held_token(o) not in _held]
+            canc = [o for o in cid_opens if _held_token(o) in _held]
+        else:
+            kept, canc = [], list(cid_opens)
+        if kept:
+            n = len(kept)
             log.warning("dropped market %s holds a %s hedge leg: "
                         "%d open order(s) left resting",
                         dropped_cid, state, n)
@@ -1214,8 +1253,8 @@ def _cancel_dropped_markets(
             out.append(LiveFleetResult(
                 status="WARNED", condition_id=dropped_cid,
                 why="dropped_market_hedge_protected"))
+        if not canc:
             continue
-        is_resolved = dropped_cid.lower() in resolved_lc
         reason = (LifecycleStop.RESOLVED.code if is_resolved
                   else CANCEL_MARKET_DROPPED)
         dropped_orders = [
@@ -1231,8 +1270,7 @@ def _cancel_dropped_markets(
                 # reason reads as either.
                 "cancel_reason": reason,
             }
-            for o in dropped
-            if o.condition_id == dropped_cid and getattr(o, "status", "") == "open"
+            for o in canc
         ]
         try:
             cancelled = seam.cancel_fn(seam.client, seam.registry, dropped_orders)
