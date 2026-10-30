@@ -593,6 +593,30 @@ def test_a_refused_store_switch_shows_the_servers_reason():
     assert "res.json().catch" in fn
 
 
+# ── background-run banner: browsing another store never hides a live run ────
+
+@requires_node
+def test_a_run_writing_another_store_is_named_in_the_header_banner():
+    v = _harness("runelsewhere")
+    # Quiet production page: no banner to explain away.
+    assert v["idle"]["shown"] is False
+    # A rehearsal on a different store while this page reads a rehearsal.
+    assert v["rehearsalElsewhere"]["shown"] is True
+    text = v["rehearsalElsewhere"]["text"]
+    assert "RUNNING IN BACKGROUND" in text
+    assert "shadow-01-queue-clear-5m" in text and "queue-clear-5m" in text
+    assert "02_shadow_y.db" in text and "01_shadow_x.db" in text
+
+
+@requires_node
+def test_the_live_stack_alive_while_reading_a_rehearsal_raises_the_banner():
+    v = _harness("runelsewhere")
+    assert v["liveElsewhere"]["shown"] is True
+    assert "the live stack" in v["liveElsewhere"]["text"]
+    # And it clears when the page is back on production with nothing elsewhere.
+    assert v["cleared"]["shown"] is False
+
+
 # ── the ENGINE pill says which run it judged and why it stalled (#337) ──────
 
 @requires_node

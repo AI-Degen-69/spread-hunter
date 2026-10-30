@@ -529,30 +529,42 @@ def test_profile_badge_renders_states():
 
 
 @requires_node
-def test_profile_picker_lists_view_and_load():
+def test_profile_picker_lists_view_and_start():
     p = _harness("profilepicker")
     html = p["html"]
-    assert 'class="pill-label"' in html and 'class="pill-value"' in html
-    assert 'data-profile-action="view"' in html
-    assert html.count('data-profile-action="load"') == 3
-    assert 'data-profile-action="clear"' in html
+    assert 'class="arm-name"' in html 
+    assert 'data-action="detail"' in html
+    assert html.count('data-action="pick"') >= 3  # arms + presets
+    assert 'data-action="clear"' in html
     assert "STAGED" in html
     assert "&lt;b&gt;Clear" in html
     assert "<b>Clear" not in html
-    # The arm without a store offers Load but no View.
-    assert html.count('data-profile-action="view"') == 1
-    assert 'data-profile-action' not in p["empty"]
-    assert 'db-run-row' not in p["empty"]
+    # The arm without a store offers Start but no View.
+    # The group header above the rows already names the issue and tournament, so
+    # a row repeats neither: the store state is the row's own pill, and the full
+    # sentence explaining it stays reachable on the row tooltip.
+    assert "issue #799" in html and "tournament-test" in html
+    assert '<span class="arm-meta">issue #' not in html, (
+        "an arm row must not restate the group header's issue line")
+    assert '<span class="arm-meta">Preset' not in html, (
+        "a preset row must not restate the Presets heading, which already says it is code")
+    assert '<span class="arm-kpi empty">no store yet</span>' in html
+    assert "no store yet — START creates one" in html  # tooltip, not a visible line
+    assert 'data-action' not in p["empty"]
+    assert 'arm-row' not in p["empty"]
 
 
-def test_profile_load_confirm_guard_matches_emitted_action():
-    # The picker emits data-profile-action="load"; the click handler must
-    # confirm on that same action. A guard on a stale name ('stage') never
-    # fires, and Load would stop the live stack with no warning.
+def test_profile_pick_hands_the_profile_to_the_start_dialog():
+    # The picker's Start is a selection, not a stack change: it opens the START
+    # dialog with the profile attached, and that dialog is where Live-vs-Shadow
+    # is chosen and where both start endpoints receive the profile. Nothing in
+    # the picker may stop the stack on a click.
     app_js = (STATIC / "app.js").read_text(encoding="utf-8")
-    assert 'data-profile-action="load"' in app_js
-    assert "action === 'load'" in app_js
-    assert "action === 'stage'" not in app_js
+    assert 'data-action="pick"' in app_js
+    assert "openStartRunModal('shadow', entry)" in app_js
+    assert "profile: startRunModalState.profile" in app_js
+    assert 'data-profile-action="load"' not in app_js
+    assert "/api/profile/stage" not in app_js
 
 
 def test_profile_badge_is_a_button_with_a_dropdown(dom: DOMNode):

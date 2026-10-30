@@ -40,6 +40,7 @@ class FakeEl {
   set innerHTML(v) { this._html = String(v); }
   get innerHTML() { return this._html; }
   addEventListener() {}
+  querySelector() { return null; }
   querySelectorAll() { return []; }
   appendChild() {}
   setAttribute() {}

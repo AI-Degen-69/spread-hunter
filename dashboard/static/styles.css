@@ -1137,6 +1137,30 @@ td { font-size: 13px; }
 .backend-stale-banner.show { display: flex; }
 .backend-stale-banner .stale-age { margin-left: auto; color: var(--text-secondary); font-size: 11px; }
 
+/* ── Background-run notice ──
+ * A run is writing a store this page is not reading: browsing stays free, but
+ * the numbers on screen are not that run's. Blue, not amber -- a run elsewhere
+ * is information, not a fault. Same box as the stale banner so the two stack. */
+.run-elsewhere-banner {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(8, 47, 73, 0.75);
+  border-radius: 8px;
+  color: #7dd3fc;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 600;
+}
+.run-elsewhere-banner.show { display: flex; }
+
+/* Two buttons in the picker's action column (View + Start). */
+.db-run-actions { display: flex; gap: 4px; justify-content: flex-end; }
+
 /* Status pills — OPEN distinct from FILLED */
 .pill.open { background: rgba(56,189,248,0.15); color: #7dd3fc; border: 1px solid rgba(56,189,248,0.35); }
 .pill.filled { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
@@ -3913,6 +3937,122 @@ th[aria-sort] .ot-sort-btn {
   outline: 2px solid var(--open);
   outline-offset: 1px;
 }
+
+/* ── Profile Picker: Arm Rows (grouped by issue, no pills) ── */
+.arm-group { margin-bottom: 8px; }
+.arm-group-header {
+  padding: 4px 8px;
+  font: 600 11px/1 'IBM Plex Sans', system-ui, sans-serif;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 4px;
+}
+.arm-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.arm-row:hover { background: var(--bg-surface-raised); border-color: var(--border-strong); }
+.arm-row.staged, .staged-row {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+.arm-row.preset-row { opacity: 0.85; }
+.arm-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.arm-name {
+  font: 500 13px/1.3 'IBM Plex Sans', system-ui, sans-serif;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.arm-staged-tag {
+  font: 600 10px/1 'JetBrains Mono', monospace;
+  color: var(--signal);
+  background: rgba(16, 185, 129, 0.15);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+}
+.arm-meta {
+  font: 400 11px/1 'JetBrains Mono', monospace;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.arm-row-kpis {
+  display: flex;
+  gap: 8px;
+  font: 400 11px/1 'JetBrains Mono', monospace;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.arm-row-kpis.has-kpis { color: var(--text-primary); }
+.arm-kpi { padding: 2px 6px; border-radius: 3px; background: rgba(255,255,255,0.05); }
+.arm-kpi.empty { color: var(--text-muted); font-style: italic; background: none; }
+.preset-kpis .arm-kpi { color: var(--text-muted); font-style: italic; }
+.arm-row-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.arm-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.arm-btn:hover { color: var(--text-primary); background: var(--bg-card); border-color: var(--border-strong); }
+.arm-btn:focus-visible { outline: 2px solid var(--open); outline-offset: 2px; }
+.arm-btn-detail { font-size: 14px; }
+.arm-btn-start { color: var(--signal); border-color: rgba(16, 185, 129, 0.3); }
+.arm-btn-start:hover { background: rgba(16, 185, 129, 0.15); }
+.arm-btn-clear { color: var(--loss); border-color: rgba(239, 68, 68, 0.3); }
+.arm-btn-clear:hover { background: rgba(239, 68, 68, 0.1); }
+
+/* ── Arm Detail Modal ── */
+.arm-detail-modal { max-width: 520px; width: 90vw; max-height: 80vh; overflow: auto; }
+.arm-detail-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-strong); }
+.arm-detail-color { width: 4px; height: 40px; border-radius: 2px; flex-shrink: 0; }
+.arm-detail-header h3 { font: 700 16px/1.2 'Big Shoulders Display', sans-serif; color: var(--text-primary); margin: 0; }
+.arm-detail-badge { font: 500 10px/1 'JetBrains Mono', monospace; color: var(--open); background: rgba(56, 189, 248, 0.15); padding: 2px 8px; border-radius: 3px; margin-top: 2px; }
+.arm-detail-section { margin-bottom: 16px; }
+.arm-detail-section h4 { font: 600 12px/1 'IBM Plex Sans', system-ui, sans-serif; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 6px; }
+.arm-detail-section p { font: 400 13px/1.5 'IBM Plex Sans', system-ui, sans-serif; color: var(--text-primary); margin: 0; }
+.arm-detail-desc { font-size: 12px !important; color: var(--text-muted) !important; margin-top: 4px !important; }
+.arm-detail-env { list-style: none; padding: 0; margin: 0; font: 400 12px/1.6 'JetBrains Mono', monospace; }
+.arm-detail-env li { display: flex; gap: 8px; padding: 4px 0; }
+.arm-detail-env code { color: var(--open); background: rgba(56, 189, 248, 0.1); padding: 1px 4px; border-radius: 3px; }
+.arm-detail-env code:last-child { color: var(--gold); background: rgba(251, 191, 36, 0.1); }
+.arm-detail-kpis { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font: 400 12px/1.5 'JetBrains Mono', monospace; }
+.arm-detail-kpis dt { color: var(--text-muted); }
+.arm-detail-kpis dd { margin: 0; color: var(--text-primary); }
+.arm-detail-note { color: var(--text-muted) !important; font-style: italic; }
+.arm-detail-error { color: var(--loss); padding: 16px; text-align: center; }
+.arm-detail-loading { color: var(--text-muted); padding: 16px; text-align: center; }
+.arm-detail-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-strong); }
+.arm-detail-btn { padding: 8px 16px; font: 500 12px/1 'IBM Plex Sans', system-ui, sans-serif; border-radius: 6px; cursor: pointer; transition: all 0.15s ease; }
+.arm-detail-btn:not(.primary) { color: var(--text-primary); background: var(--bg-surface-raised); border: 1px solid var(--border-strong); }
+.arm-detail-btn:not(.primary):hover { background: var(--bg-card); }
+.arm-detail-btn.primary { color: #080c14; background: var(--signal); border: none; }
+.arm-detail-btn.primary:hover { background: #05d97a; }
 
 
 

@@ -1401,7 +1401,7 @@ def _staged_shadow_profile() -> tuple[dict | None, str]:
         return None, ""
     try:
         options = _profile_options()
-        match = next((o for o in options["presets"] + options["arms"]
+        match = next((o for o in _profile_choices(options)
                       if o["kind"] == pending.get("kind")
                       and o["name"] == pending.get("name")), None)
     except Exception:
@@ -1864,6 +1864,10 @@ def _tournament_arms_configs() -> list[dict]:
             continue
         if not isinstance(data, list):
             continue
+        # `i799-tournament-test_arms.json` names the issue that ran the
+        # tournament and the tournament key. The operator asked to see where
+        # each arm came from, so carry both rather than the bare filename.
+        meta = re.match(r"i(\d+)-(.+?)_arms\.json$", path.name)
         for entry in data:
             if not isinstance(entry, dict) or not entry.get("name"):
                 continue
@@ -1877,6 +1881,8 @@ def _tournament_arms_configs() -> list[dict]:
                 "profile": str(entry.get("profile") or ""),
                 "env": env,
                 "source": path.name,
+                "issue": int(meta.group(1)) if meta else None,
+                "tournament": meta.group(2) if meta else None,
             })
     return arms
 
@@ -1921,21 +1927,65 @@ def _arm_stores(now: float | None = None) -> dict[str, str]:
 
 
 def _profile_options() -> dict:
-    """Every loadable profile: code presets plus tournament arms (#856 IIIB)."""
+    """Every loadable profile: code presets plus tournament arms (#856 IIIB).
+
+    Arms are grouped by tournament issue so the picker can render them in
+    sections (issue 799, issue 843, etc.). Within each issue, arms are
+    sorted by performance if their store exists and has KPIs.
+    """
     from core_brain.config import TOURNAMENT_PRESETS
     presets = [{
         "kind": "preset",
         "name": name,
-        "label": name,
+        # The row and the detail heading render `label`, so the preset reads as a
+        # name there. `name` stays the lowercase TOURNAMENT_PRESETS key every
+        # lookup and START hands to the engine.
+        "label": name.replace("_", " ").title(),
         "detail": str(preset.get("description", "")),
         "env": {"BOT_QUOTE_TOURNAMENT_PRESET": name},
     } for name, preset in TOURNAMENT_PRESETS.items()]
     stores = _arm_stores()
     arms = []
     for arm in _tournament_arms_configs():
-        arm["has_store"] = arm["name"] in stores
+        arm["store"] = stores.get(arm["name"])
+        arm["has_store"] = arm["store"] is not None
         arms.append(arm)
-    return {"presets": presets, "arms": arms}
+    # Group arms by issue number
+    by_issue: dict[int | None, list[dict]] = {}
+    for arm in arms:
+        issue = arm.get("issue")
+        by_issue.setdefault(issue, []).append(arm)
+    # Sort issues: numeric issues first (descending so newest first), then None
+    sorted_issues = sorted(
+        [i for i in by_issue.keys() if i is not None],
+        reverse=True
+    ) + ([None] if None in by_issue else [])
+    grouped = []
+    for issue in sorted_issues:
+        arms_in_issue = by_issue[issue]
+        # Try to sort by performance if stores exist and have KPIs
+        # For now, keep the original order from the arms file (which is
+        # roughly thesis order: control, then variants)
+        grouped.append({
+            "issue": issue,
+            "tournament": arms_in_issue[0].get("tournament") if arms_in_issue else None,
+            "arms": arms_in_issue,
+        })
+    return {"presets": presets, "arms_grouped": grouped}
+
+
+def _profile_choices(options: dict) -> list[dict]:
+    """Every loadable profile as one flat list, for a lookup by kind and name.
+
+    `_profile_options` nests arms under their tournament issue so the picker can
+    render sections; a lookup has no sections, so it reads the same arms from
+    here. One flattening rule keeps presets and grouped arms in step.
+    """
+    return list(options.get("presets", [])) + [
+        arm
+        for group in options.get("arms_grouped", [])
+        for arm in group.get("arms", [])
+    ]
 
 
 def _resolve_arm_store(arm_name: str | None, now: float | None = None) -> str | None:
@@ -1965,6 +2015,57 @@ def _read_pending_profile() -> dict | None:
         "name": raw["name"],
         "staged_at": raw.get("staged_at"),
     }
+
+
+def _write_pending_profile(kind, name) -> dict | None:
+    """Stage a profile identity for the START already in flight (#856 IIIB).
+
+    Identity only, exactly like POST /api/profile/stage: the env is
+    re-resolved from the current options at launch, so a hand-edited file
+    cannot inject overrides. Unlike that endpoint this never stops the stack
+    -- the caller is a start that owns the duplicate-stack check. Returns the
+    matched option, or None when the name does not resolve.
+    """
+    if not isinstance(kind, str) or not isinstance(name, str) or not name.strip():
+        return None
+    options = _profile_options()
+    match = next((o for o in _profile_choices(options)
+                  if o["kind"] == kind and o["name"] == name), None)
+    if match is None:
+        return None
+    record = {"kind": kind, "name": name, "staged_at": time.time()}
+    try:
+        target = runtime_file(PENDING_PROFILE_FILE, root=LIVE_ROOT)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_text(json.dumps(record), encoding="utf-8")
+        tmp.replace(target)
+    except OSError as e:
+        # The caller turns None into a refusal; say in the log which refusal it
+        # really was, so a disk failure is not read as a typo.
+        logger.warning("could not stage profile %s:%s: %s", kind, name, e)
+        return None
+    return match
+
+
+def _stage_profile_for_start(wanted: dict) -> str | None:
+    """Stage the profile a START body picked, or return its refusal message.
+
+    Two failures reach the caller as the same None and are not the same thing:
+    a name that resolves to nothing is the operator's typo, while a profile
+    that exists but cannot be written into runtime/ is a disk problem. Calling
+    the second one "unknown profile" sends them hunting for a spelling that was
+    already right, so each failure names itself.
+    """
+    kind = wanted.get("kind")
+    name = wanted.get("name")
+    if _write_pending_profile(kind, name) is not None:
+        return None
+    if not any(o["kind"] == kind and o["name"] == name
+               for o in _profile_choices(_profile_options())):
+        return f"Unknown profile {kind}:{name}."
+    return (f"Could not stage profile {kind}:{name} — nothing was started. "
+            "The dashboard log says why.")
 
 
 def _resolve_active_profile(shadow_run: dict | None) -> dict | None:
@@ -2363,7 +2464,7 @@ def start_bot(preflight_id: str | None = None,
                 pending = json.loads(pending_path.read_text(encoding="utf-8"))
                 if isinstance(pending, dict):
                     options = _profile_options()
-                    match = next((o for o in options["presets"] + options["arms"]
+                    match = next((o for o in _profile_choices(options)
                                   if o["kind"] == pending.get("kind")
                                   and o["name"] == pending.get("name")), None)
                     if match is not None:
@@ -3218,6 +3319,20 @@ async def api_system_start(request: Request):
             "message": "Invalid, expired, or already-used preflight_id; re-run preflight.",
             "status": get_system_status(),
         })
+    # A profile chosen in the picker rides this start: write its identity and
+    # let start_bot re-resolve the env, so the live stack runs the picked arm
+    # rather than whatever was staged before. Written only after the approval
+    # is known good -- a refused start must leave no staged profile behind for
+    # the next START to inherit.
+    wanted = body.get("profile")
+    if isinstance(wanted, dict):
+        refusal = _stage_profile_for_start(wanted)
+        if refusal is not None:
+            return JSONResponse({
+                "ok": False,
+                "message": refusal,
+                "status": get_system_status(),
+            })
     # Process spawns and the starting-capital venue read block; keep them
     # off the event loop like the preflight runners above.
     result = await run_in_threadpool(
@@ -3279,8 +3394,86 @@ def api_profile_options():
 
     Read-only listing. Presets come from TOURNAMENT_PRESETS, arms from
     configs/tournaments/*_arms.json with the env block that reproduces them.
+    Arms are grouped by tournament issue number.
     """
     return JSONResponse(_profile_options())
+
+
+@app.get("/api/profile/arm-detail")
+def api_profile_arm_detail(request: Request, name: str | None = None):
+    """Detailed view of a tournament arm or preset: its config, env, and KPIs from its store.
+
+    If the arm has a store on disk, computes KPIs from that store (read-only).
+    If no store exists, returns the arm's thesis, env, and thesis config only.
+    Read-only: no authorization required.
+    """
+    if not name:
+        return JSONResponse({"ok": False, "message": "name required"})
+    options = _profile_options()
+    # Flatten grouped arms
+    all_arms = []
+    for group in options.get("arms_grouped", []):
+        all_arms.extend(group.get("arms", []))
+    all_presets = options.get("presets", [])
+    
+    # Search both arms and presets by name (kind parameter is optional for backward compat)
+    entry = next((a for a in all_arms if a["name"] == name), None)
+    if not entry:
+        entry = next((p for p in all_presets if p["name"] == name), None)
+    
+    if not entry:
+        return JSONResponse({"ok": False, "message": f"Unknown arm/preset: {name}"})
+    
+    detail = {
+        "ok": True,
+        "name": entry["name"],
+        "label": entry.get("label"),
+        "profile": entry.get("profile") or entry.get("detail"),
+        "env": entry.get("env"),
+        "issue": entry.get("issue"),
+        "tournament": entry.get("tournament"),
+        "source": entry.get("source"),
+        "has_store": entry.get("has_store", False),
+        "store": entry.get("store"),
+        "thesis": entry.get("thesis"),
+        "desc": entry.get("desc"),
+        "worst_catalyst": entry.get("worst_catalyst"),
+        "worst_catalyst_desc": entry.get("worst_catalyst_desc"),
+        "hypothesized_tweak": entry.get("hypothesized_tweak"),
+        "tweak_rationale": entry.get("tweak_rationale"),
+        "color": entry.get("color"),
+        "kind": entry.get("kind", "arm"),
+    }
+    # If the arm has a store, fetch KPIs from it
+    if entry.get("has_store") and entry.get("store"):
+        try:
+            # Temporarily switch to the arm's store to compute KPIs
+            from dashboard.server import set_db_override, get_system_status
+            import core_brain.kpi as kpi_mod
+            prev_override = resolve_db_path(_ACTIVE_DB_OVERRIDE)
+            try:
+                set_db_override(Path(entry["store"]))
+                kpi_data = kpi_mod.report(db_path=entry["store"])
+                detail["kpis"] = {
+                    "run_profitability": kpi_data.get("run_profitability"),
+                    "portfolio": kpi_data.get("portfolio"),
+                    "markets_quoted": kpi_data.get("markets_quoted"),
+                    "markets_filled": kpi_data.get("markets_filled"),
+                    "markets_settled": kpi_data.get("markets_settled"),
+                    "fills": kpi_data.get("fills"),
+                    "quotes": kpi_data.get("quotes"),
+                    "fill_rate": kpi_data.get("fill_rate"),
+                    "spread_capture": kpi_data.get("spread_capture"),
+                    "avg_edge_cents": kpi_data.get("avg_edge_cents"),
+                    "median_seconds_to_fill": kpi_data.get("median_seconds_to_fill"),
+                    "median_queue_ahead": kpi_data.get("median_queue_ahead"),
+                    "days": kpi_data.get("days"),
+                }
+            finally:
+                set_db_override(prev_override)
+        except Exception as e:
+            detail["kpis_error"] = f"Could not compute KPIs: {e}"
+    return JSONResponse(detail)
 
 
 @app.post("/api/profile/view")
@@ -3317,7 +3510,7 @@ def api_profile_stage(request: Request, kind: str | None = None, name: str | Non
     if refusal is not None:
         return JSONResponse(refusal)
     options = _profile_options()
-    match = next((o for o in options["presets"] + options["arms"]
+    match = next((o for o in _profile_choices(options)
                   if o["kind"] == kind and o["name"] == name), None)
     if match is None:
         return JSONResponse({
@@ -3599,6 +3792,18 @@ async def api_system_shadow_start(
     prev_override = _ACTIVE_DB_OVERRIDE
     if body.get("fresh") is True and not target_db:
         took_fresh = True
+        # A profile chosen in the picker rides this start: write its identity
+        # before naming, so the fresh store carries the arm slug and the child
+        # env carries its measured settings.
+        wanted = body.get("profile")
+        if isinstance(wanted, dict):
+            refusal = _stage_profile_for_start(wanted)
+            if refusal is not None:
+                return JSONResponse({
+                    "ok": False,
+                    "message": refusal,
+                    "status": get_system_status(),
+                })
         naming = _fresh_shadow_naming()
         target_db = str((LIVE_ROOT / "data" / naming["db_name"]).resolve())
         if not target_run_id:
