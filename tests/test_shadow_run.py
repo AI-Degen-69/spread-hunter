@@ -2007,10 +2007,17 @@ class TestTapeMissReplay:
         def _get(url, params=None, **kw):
             params = dict(params or {})
             lim = int(params.get("limit", 500)) or 500
-            idx = int(params.get("offset", 0)) // lim
-            if params.get("takerOnly", "default") is False:
-                return _FakeTapeResponse(holder["maker"].get(idx, []))
-            return _FakeTapeResponse(holder["taker"].get(idx, []))
+            cursor = params.get("cursor")
+            if cursor is not None and str(cursor).isdigit():
+                idx = int(cursor)
+            else:
+                idx = int(params.get("offset", 0)) // lim
+            is_maker = (params.get("takerOnly", "default") is False or params.get("taker_only", "default") is False)
+            rows = holder["maker"].get(idx, []) if is_maker else holder["taker"].get(idx, [])
+            if "/v2" in str(url):
+                next_cursor = str(idx + 1) if (idx + 1) in (holder["maker"] if is_maker else holder["taker"]) else None
+                return _FakeTapeResponse({"data": rows, "pagination": {"next_cursor": next_cursor}})
+            return _FakeTapeResponse(rows)
 
         monkeypatch.setattr(markets._SESSION, "get", _get, raising=False)
 
@@ -2134,10 +2141,17 @@ class TestFullCycleRehearsal:
         def _get(url, params=None, **kw):
             params = dict(params or {})
             lim = int(params.get("limit", 500)) or 500
-            idx = int(params.get("offset", 0)) // lim
-            if params.get("takerOnly", "default") is False:
-                return _FakeTapeResponse(holder["maker"].get(idx, []))
-            return _FakeTapeResponse(holder["taker"].get(idx, []))
+            cursor = params.get("cursor")
+            if cursor is not None and str(cursor).isdigit():
+                idx = int(cursor)
+            else:
+                idx = int(params.get("offset", 0)) // lim
+            is_maker = (params.get("takerOnly", "default") is False or params.get("taker_only", "default") is False)
+            rows = holder["maker"].get(idx, []) if is_maker else holder["taker"].get(idx, [])
+            if "/v2" in str(url):
+                next_cursor = str(idx + 1) if (idx + 1) in (holder["maker"] if is_maker else holder["taker"]) else None
+                return _FakeTapeResponse({"data": rows, "pagination": {"next_cursor": next_cursor}})
+            return _FakeTapeResponse(rows)
 
         monkeypatch.setattr(markets._SESSION, "get", _get, raising=False)
 

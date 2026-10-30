@@ -435,9 +435,47 @@ def test_the_default_tape_reader_keeps_only_this_token(monkeypatch):
     fetch = markout_mod._default_trades_fn()
     rows = fetch("tok-up", "0xmarket")
 
-    # Assert — queried by market, filtered to the token.
-    assert "market=0xmarket" in captured[0]["url"]
+    # Assert — queried by condition, filtered to the token.
+    assert "condition=0xmarket" in captured[0]["url"]
+    assert "market=0xmarket" not in captured[0]["url"]
     assert [r["asset"] for r in rows] == ["tok-up"]
+
+
+def test_the_default_tape_reader_v2_envelope_with_cursor(monkeypatch):
+    import json
+    import time
+    from core_brain import markout as markout_mod
+
+    captured = []
+    now = time.time()
+
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def read(self):
+            return json.dumps(self._payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+    def _urlopen(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        captured.append({"url": url, "timeout": timeout})
+        if "cursor=" not in url:
+            return _Resp({"data": [{"token_id": "tok-up", "price": 0.5, "timestamp": now}], "pagination": {"next_cursor": "c2"}})
+        return _Resp({"data": [{"token_id": "tok-up", "price": 0.51, "timestamp": now}], "pagination": {"next_cursor": None}})
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+    fetch = markout_mod._default_trades_fn()
+    rows = fetch("tok-up", "0xmarket")
+    assert len(rows) == 2
+    assert "condition=0xmarket" in captured[0]["url"]
+    assert "cursor=c2" in captured[1]["url"]
 
 
 def test_the_default_tape_reader_needs_a_market():

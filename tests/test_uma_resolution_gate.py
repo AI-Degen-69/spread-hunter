@@ -345,3 +345,44 @@ def test_uma_cache_clean_reuse_ttl_expiry_flagged_pinned_unreachable_uncached():
     assert cache3.status_for("0xabc", fetch3, now_s=1000.0).unreachable
     assert cache3.status_for("0xabc", fetch3, now_s=1001.0).unreachable
     assert fetch3_calls == ["0xabc", "0xabc"]
+
+
+def test_parse_market_row_accepts_v2_position_ids():
+    market = {
+        "version": "v2",
+        "conditionId": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        "positionIds": ["111222333", "444555666"],
+        "eventStartTime": "2026-10-30T10:00:00Z",
+        "endDate": "2026-10-30T10:05:00Z",
+    }
+    parsed = _parse_market_row(market)
+    assert parsed is not None
+    assert parsed.up_token == "111222333"
+    assert parsed.down_token == "444555666"
+
+
+def test_pair_scanner_accepts_v2_position_ids():
+    row = {
+        "version": "v2",
+        "conditionId": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        "positionIds": ["111222333", "444555666"],
+        "slug": "test-v2-market",
+        "question": "Will BTC hit 100k?",
+        "volume24hr": 50000.0,
+    }
+    candidate = parse_candidate(row)
+    assert candidate is not None
+    assert candidate.up_token == "111222333"
+    assert candidate.down_token == "444555666"
+
+
+def test_v2_resolution_status_resolved_flags():
+    row = {
+        "version": "v2",
+        "resolutionStatus": "resolved",
+        "conditionId": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        "positionIds": ["111222333", "444555666"],
+    }
+    assert extract_uma_resolution_status(row) == "resolved"
+    end_state = parse_end_state(row)
+    assert end_state.resolved is True

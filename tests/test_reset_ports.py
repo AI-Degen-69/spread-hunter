@@ -119,6 +119,24 @@ class TestStrictBalanceRead:
                [{"asset": DOWN, "size": 7.0}])
         assert fetch_token_balances(FUNDER, UP, DOWN) == (0.0, 7.0)
 
+    def test_v2_cursor_pagination_reads_every_page(self, monkeypatch):
+        """V2 envelope with data and cursor pagination."""
+        import core_brain.single_buy_saver as saver
+
+        monkeypatch.setattr(saver, "POSITIONS_PAGE_SIZE", 2)
+        _pages(
+            monkeypatch,
+            {
+                "data": [{"token_id": "other-1", "current_size": 1.0}, {"token_id": "other-2", "current_size": 1.0}],
+                "pagination": {"next_cursor": "c2"},
+            },
+            {
+                "data": [{"token_id": DOWN, "current_size": 7.0}],
+                "pagination": {"next_cursor": None},
+            },
+        )
+        assert fetch_token_balances(FUNDER, UP, DOWN) == (0.0, 7.0)
+
 
 class FakeLiveClient:
     """Venue double: cancel records, open orders and trades are staged."""

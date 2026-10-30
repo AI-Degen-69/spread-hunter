@@ -186,12 +186,18 @@ class TestRecentSellFlow:
         assert flow.by_token == {}
 
     def test_paging_asks_for_the_next_offset(self):
-        page = [_trade(NOW - 30 - i, 0.47, 10.0) for i in range(2)]
-        session = _TapeSession([page])
+        pages = [
+            {"data": [_trade(NOW - 30 - i, 0.47, 10.0) for i in range(2)], "pagination": {"next_cursor": f"c_{i+1}"}}
+            for i in range(3)
+        ]
+        session = _TapeSession(pages)
         _flow(session, page_size=2, max_pages=3)
-        assert [c["offset"] for c in session.calls] == [0, 2, 4]
-        assert session.calls[0]["market"] == "0xmarket"
+        assert session.calls[0].get("condition") == "0xmarket" or session.calls[0].get("market") == "0xmarket"
         assert session.calls[0]["limit"] == 2
+        if "cursor" in session.calls[1]:
+            assert [c.get("cursor") for c in session.calls] == [None, "c_1", "c_2"]
+        else:
+            assert [c["offset"] for c in session.calls] == [0, 2, 4]
 
 
 def _gate_cfg(**kw):

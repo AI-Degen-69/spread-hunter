@@ -72,14 +72,31 @@ def _as_float(value: Any) -> Optional[float]:
 def fetch_positions_value(funder: str, timeout: float = 15.0) -> Optional[float]:
     """Total current value of the account's open positions, in USD.
 
-    GET /value returns a *list* of one row, not an object -- reading it as a
-    dict yields None and would silently value every open book at zero.
+    Data API v2 returns {"data": {"proxy_wallet": ..., "value": ...}}.
+    Data API v1 returned a list of one row: [{"user": ..., "value": ...}].
+    Both shapes are accepted.
     """
     try:
-        payload = _get_json(DATA_API_BASE, "/value", {"user": funder}, timeout)
+        payload = _get_json(DATA_API_BASE, "/v2/value", {"user": funder}, timeout)
     except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+        try:
+            payload = _get_json(DATA_API_BASE, "/value", {"user": funder}, timeout)
+        except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+            return None
+
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return _as_float(data.get("value"))
+        elif isinstance(data, list):
+            rows = data
+        else:
+            rows = [payload]
+    elif isinstance(payload, list):
+        rows = payload
+    else:
         return None
-    rows = payload if isinstance(payload, list) else [payload]
+
     total = 0.0
     seen = False
     for row in rows:
@@ -95,47 +112,131 @@ def fetch_positions_value(funder: str, timeout: float = 15.0) -> Optional[float]
 def fetch_open_positions(funder: str, timeout: float = 15.0) -> Optional[list[dict]]:
     """Every open position, paginated, including sub-share dust.
 
-    sizeThreshold=0 because the endpoint defaults to 1 and would drop sub-share
-    holdings -- an omission that reads as "the account holds nothing".
+    Uses Data API v2 cursor pagination with filter_amount=0 (replacing sizeThreshold=0).
+    Falls back to Data API v1 pagination if needed.
     """
     out: list[dict] = []
+    cursor: Optional[str] = None
     offset = 0
+    use_v2 = True
+
     while True:
         try:
-            payload = _get_json(
-                DATA_API_BASE, "/positions",
-                {"user": funder, "sizeThreshold": 0,
-                 "limit": POSITIONS_PAGE_SIZE, "offset": offset},
-                timeout,
-            )
+            if use_v2:
+                params: dict[str, Any] = {"user": funder, "filter_amount": 0, "limit": POSITIONS_PAGE_SIZE}
+                if cursor:
+                    params["cursor"] = cursor
+                payload = _get_json(DATA_API_BASE, "/v2/positions", params, timeout)
+            else:
+                params = {"user": funder, "sizeThreshold": 0, "limit": POSITIONS_PAGE_SIZE, "offset": offset}
+                payload = _get_json(DATA_API_BASE, "/positions", params, timeout)
         except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+            if use_v2 and not out:
+                use_v2 = False
+                continue
             return None
-        rows = [r for r in (payload or []) if isinstance(r, dict)]
-        out.extend(rows)
-        if len(payload or []) < POSITIONS_PAGE_SIZE:
+
+        if isinstance(payload, dict) and "data" in payload:
+            data = payload.get("data") or []
+            rows = [r for r in data if isinstance(r, dict)]
+            for r in rows:
+                if "condition_id" in r and "conditionId" not in r:
+                    r["conditionId"] = r["condition_id"]
+                if "unrealized_pnl" in r and "cashPnl" not in r:
+                    r["cashPnl"] = r["unrealized_pnl"]
+                if "realized_pnl" in r and "realizedPnl" not in r:
+                    r["realizedPnl"] = r["realized_pnl"]
+                if "entry_cost_usdc" in r and "initialValue" not in r:
+                    r["initialValue"] = r["entry_cost_usdc"]
+            out.extend(rows)
+            pagination = payload.get("pagination") or {}
+            next_cursor = pagination.get("next_cursor")
+            if not next_cursor:
+                break
+            if str(next_cursor) == cursor:
+                return None
+            cursor = str(next_cursor)
+        elif isinstance(payload, list):
+            rows = [r for r in payload if isinstance(r, dict)]
+            for r in rows:
+                if "conditionId" in r and "condition_id" not in r:
+                    r["condition_id"] = r["conditionId"]
+                if "cashPnl" in r and "unrealized_pnl" not in r:
+                    r["unrealized_pnl"] = r["cashPnl"]
+                if "realizedPnl" in r and "realized_pnl" not in r:
+                    r["realized_pnl"] = r["realizedPnl"]
+                if "initialValue" in r and "entry_cost_usdc" not in r:
+                    r["entry_cost_usdc"] = r["initialValue"]
+            out.extend(rows)
+            if len(payload) < POSITIONS_PAGE_SIZE:
+                break
+            offset += POSITIONS_PAGE_SIZE
+        else:
             break
-        offset += POSITIONS_PAGE_SIZE
+
     return out
 
 
 def fetch_closed_positions(funder: str, timeout: float = 15.0) -> Optional[list[dict]]:
-    """Every position the account has closed, with the venue's realised P&L."""
+    """Every position the account has closed, with the venue's realised P&L.
+
+    Uses Data API v2 GET /v2/positions?status=CLOSED, falling back to /closed-positions.
+    """
     out: list[dict] = []
+    cursor: Optional[str] = None
     offset = 0
+    use_v2 = True
+
     while True:
         try:
-            payload = _get_json(
-                DATA_API_BASE, "/closed-positions",
-                {"user": funder, "limit": POSITIONS_PAGE_SIZE, "offset": offset},
-                timeout,
-            )
+            if use_v2:
+                params: dict[str, Any] = {"user": funder, "status": "CLOSED", "limit": POSITIONS_PAGE_SIZE}
+                if cursor:
+                    params["cursor"] = cursor
+                payload = _get_json(DATA_API_BASE, "/v2/positions", params, timeout)
+            else:
+                params = {"user": funder, "limit": POSITIONS_PAGE_SIZE, "offset": offset}
+                payload = _get_json(DATA_API_BASE, "/closed-positions", params, timeout)
         except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+            if use_v2 and not out:
+                use_v2 = False
+                continue
             return None
-        rows = [r for r in (payload or []) if isinstance(r, dict)]
-        out.extend(rows)
-        if len(payload or []) < POSITIONS_PAGE_SIZE:
+
+        if isinstance(payload, dict) and "data" in payload:
+            data = payload.get("data") or []
+            rows = [r for r in data if isinstance(r, dict)]
+            for r in rows:
+                if "condition_id" in r and "conditionId" not in r:
+                    r["conditionId"] = r["condition_id"]
+                if "realized_pnl" in r and "realizedPnl" not in r:
+                    r["realizedPnl"] = r["realized_pnl"]
+                if "entry_cost_usdc" in r and "initialValue" not in r:
+                    r["initialValue"] = r["entry_cost_usdc"]
+            out.extend(rows)
+            pagination = payload.get("pagination") or {}
+            next_cursor = pagination.get("next_cursor")
+            if not next_cursor:
+                break
+            if str(next_cursor) == cursor:
+                return None
+            cursor = str(next_cursor)
+        elif isinstance(payload, list):
+            rows = [r for r in payload if isinstance(r, dict)]
+            for r in rows:
+                if "conditionId" in r and "condition_id" not in r:
+                    r["condition_id"] = r["conditionId"]
+                if "realizedPnl" in r and "realized_pnl" not in r:
+                    r["realized_pnl"] = r["realizedPnl"]
+                if "initialValue" in r and "entry_cost_usdc" not in r:
+                    r["entry_cost_usdc"] = r["initialValue"]
+            out.extend(rows)
+            if len(payload) < POSITIONS_PAGE_SIZE:
+                break
+            offset += POSITIONS_PAGE_SIZE
+        else:
             break
-        offset += POSITIONS_PAGE_SIZE
+
     return out
 
 
@@ -143,10 +244,29 @@ def fetch_user_pnl(funder: str, interval: str = "all",
                    fidelity: str = "1d", timeout: float = 15.0) -> Optional[float]:
     """Newest point of the venue's own P&L series, in USD.
 
-    The series is `[{"t": epoch_seconds, "p": pnl_usd}, ...]`. An empty series
-    means the venue has no P&L history for this account, which is not a claim
-    that P&L is zero -- so it returns None.
+    Tries Data API v2 GET /v2/user-pnl first, falling back to legacy USER_PNL_BASE.
     """
+    # 1. Try Data API v2
+    try:
+        payload = _get_json(
+            DATA_API_BASE, "/v2/user-pnl",
+            {"user": funder, "interval": interval, "fidelity": fidelity},
+            timeout,
+        )
+        if isinstance(payload, dict) and "data" in payload:
+            data = payload.get("data") or {}
+            points = data.get("points") if isinstance(data, dict) else None
+            if points and isinstance(points, list):
+                rows = [r for r in points if isinstance(r, dict) and r.get("t") is not None]
+                if rows:
+                    newest = max(rows, key=lambda r: float(r["t"]))
+                    val = _as_float(newest.get("p"))
+                    if val is not None:
+                        return val
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+        pass
+
+    # 2. Legacy fallback
     try:
         payload = _get_json(
             USER_PNL_BASE, "/user-pnl",
@@ -167,8 +287,9 @@ def fetch_user_pnl(funder: str, interval: str = "all",
 # decides is decided here, where a test can drive it with fixed inputs.
 # ----------------------------------------------------------------------------
 
-def _sum_field(rows: Optional[list[dict]], field: str) -> Optional[float]:
-    """Sum one field across rows. None if rows is None; 0.0 for an empty list.
+def _sum_field(rows: Optional[list[dict]], *fields: str) -> Optional[float]:
+    """Sum across rows, taking the first matching field from *fields for each row.
+    None if rows is None; 0.0 for an empty list.
 
     The distinction is the whole point: `None` means the venue was not reached,
     `0.0` means it was reached and reported nothing held. Collapsing the two is
@@ -178,9 +299,12 @@ def _sum_field(rows: Optional[list[dict]], field: str) -> Optional[float]:
         return None
     total = 0.0
     for row in rows:
-        v = _as_float(row.get(field))
-        if v is not None:
-            total += v
+        for f in fields:
+            if f in row:
+                v = _as_float(row.get(f))
+                if v is not None:
+                    total += v
+                break
     return total
 
 
@@ -201,9 +325,9 @@ def compose_account_mark(
     deposits, derived as `account_value - pnl` -- which is what makes 0.30 on a
     101.88 account read as +0.30%, matching the venue's own display.
     """
-    unrealized_usd = _sum_field(open_positions, "cashPnl")
-    committed_usd = _sum_field(open_positions, "initialValue")
-    pnl_closed_usd = _sum_field(closed_positions, "realizedPnl")
+    unrealized_usd = _sum_field(open_positions, "unrealized_pnl", "cashPnl", "cash_pnl")
+    committed_usd = _sum_field(open_positions, "entry_cost_usdc", "total_cost_usdc", "initialValue", "initial_value")
+    pnl_closed_usd = _sum_field(closed_positions, "realized_pnl", "realizedPnl")
 
     account_value_usd: Optional[float] = None
     if collateral_usd is not None and positions_value_usd is not None:
