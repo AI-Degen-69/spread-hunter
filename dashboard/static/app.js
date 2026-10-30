@@ -2835,6 +2835,40 @@ function dbModeVerdict(status) {
 
 let lastStatusForRuns = null;
 
+/* A run is going somewhere this page is not looking: say so, in the chrome,
+ * on every poll. Browsing other stores is allowed and stays allowed -- the
+ * banner is what keeps "these numbers are not that run's" from being a guess. */
+function renderRunElsewhereBanner(status) {
+  const el = document.getElementById('run-elsewhere-banner');
+  if (!el) return;
+  const text = el.querySelector('.run-elsewhere-text');
+  if (!text) return;
+  const here = String(status?.db_path || '').split(/[\\/]/).pop();
+  const bits = [];
+  for (const r of (status?.shadow_runs || [])) {
+    if (!r || r.running !== true || r.is_active_db === true) continue;
+    const file = String(r.db_path || '').split(/[\\/]/).pop() || 'a store';
+    const arm = r.tournament && r.tournament.arm ? ` (arm ${r.tournament.arm})` : '';
+    bits.push(`${r.run_id || file}${arm} → ${file}`);
+  }
+  // The live stack only ever writes the production registry, so seeing its
+  // three services alive while this page reads anything else means exactly
+  // the case the banner exists for.
+  const svcs = status?.services || {};
+  if (status?.db_is_production !== true
+      && svcs.filter?.running && svcs.query?.running && svcs.decide?.running) {
+    bits.push('the live stack → data/orders.db');
+  }
+  if (!bits.length) {
+    el.classList.remove('show');
+    return;
+  }
+  el.classList.add('show');
+  text.textContent = `RUNNING IN BACKGROUND — ${bits.join('; ')}. This page is `
+    + `reading ${here || 'another store'}, so its numbers are not that run's. `
+    + 'Click the DB badge to switch and watch it.';
+}
+
 function closeRunSwitcher() {
   const sw = document.getElementById('db-run-switcher');
   if (sw) sw.style.display = 'none';
@@ -3238,75 +3272,348 @@ function toggleProfileDropdown() {
   renderProfileOptions();
 }
 
+/* Arm detail modal: shows thesis, config, and KPIs from the arm's store. */
+let armDetailModalOpen = false;
+function openArmDetailModal(armName) {
+  const modal = document.getElementById('arm-detail-modal');
+  if (!modal) return;
+  // Show loading state
+  modal.querySelector('.arm-detail-content').innerHTML = '<div class="arm-detail-loading">Loading…</div>';
+  modal.classList.add('show');
+  modal.style.display = 'flex';
+  armDetailModalOpen = true;
+  // Fetch details
+  fetch(`/api/profile/arm-detail?name=${encodeURIComponent(armName)}`)
+    .then(r => r.json())
+    .then(data => {
+      if (!data.ok) {
+        modal.querySelector('.arm-detail-content').innerHTML = `<div class="arm-detail-error">${esc(data.message || 'Failed to load')}</div>`;
+        return;
+      }
+      modal.querySelector('.arm-detail-content').innerHTML = renderArmDetailHtml(data);
+      // Re-wire buttons in the new content
+      modal.querySelectorAll('[data-action]').forEach(b => {
+        b.addEventListener('click', async () => {
+          const action = b.getAttribute('data-action');
+          const name = b.getAttribute('data-name');
+          const kind = b.getAttribute('data-kind') || data.kind || 'arm';
+          if (action === 'pick') {
+            const res = await fetch('/api/profile/options');
+            const options = await res.json();
+            const allEntries = (options.arms_grouped || []).flatMap(g => g.arms || []).concat(options.presets || []);
+            const entry = allEntries.find(a => a.name === name);
+            if (entry) {
+              closeArmDetailModal();
+              closeProfileDropdown();
+              openStartRunModal('shadow', entry);
+            }
+            return;
+          }
+          if (action === 'view') {
+            closeArmDetailModal();
+            closeProfileDropdown();
+            const res = await controlFetch(`/api/profile/view?name=${encodeURIComponent(name)}`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.ok) {
+              alert(data.message || data.detail || `View failed (HTTP ${res.status}).`);
+            } else {
+              pollStatus();
+            }
+          }
+        });
+      });
+    })
+    .catch(e => {
+      modal.querySelector('.arm-detail-content').innerHTML = `<div class="arm-detail-error">Error: ${esc(e.message)}</div>`;
+    });
+}
+
+function closeArmDetailModal() {
+  const modal = document.getElementById('arm-detail-modal');
+  if (!modal) return;
+  modal.classList.remove('show');
+  modal.style.display = 'none';
+  armDetailModalOpen = false;
+}
+
+/* Render arm detail HTML with thesis, env, and KPIs. */
+function renderArmDetailHtml(arm) {
+  const kpis = arm.kpis || {};
+  const rp = kpis.run_profitability || {};
+  const lines = [];
+  // Header
+  lines.push(`<div class="arm-detail-header">`);
+  if (arm.color) lines.push(`<div class="arm-detail-color" style="background:${esc(arm.color)}"></div>`);
+  lines.push(`<h3>${esc(arm.label || arm.name)}</h3>`);
+  if (arm.issue) lines.push(`<span class="arm-detail-badge">Issue #${arm.issue}</span>`);
+  if (arm.tournament) lines.push(`<span class="arm-detail-badge">${esc(arm.tournament)}</span>`);
+  lines.push(`</div>`);
+  // Thesis / description
+  if (arm.desc) lines.push(`<div class="arm-detail-section"><h4>Thesis</h4><p>${esc(arm.desc)}</p></div>`);
+  if (arm.profile) lines.push(`<div class="arm-detail-section"><h4>Profile</h4><p>${esc(arm.profile)}</p></div>`);
+  // Config / env
+  if (arm.env && Object.keys(arm.env).length) {
+    lines.push(`<div class="arm-detail-section"><h4>Environment Variables</h4><ul class="arm-detail-env">`);
+    for (const [k, v] of Object.entries(arm.env)) {
+      lines.push(`<li><code>${esc(k)}</code> = <code>${esc(v)}</code></li>`);
+    }
+    lines.push(`</ul></div>`);
+  }
+  // Worst catalyst / tweaks
+  if (arm.worst_catalyst) lines.push(`<div class="arm-detail-section"><h4>Worst Catalyst</h4><p>${esc(arm.worst_catalyst)}</p>${arm.worst_catalyst_desc ? `<p class="arm-detail-desc">${esc(arm.worst_catalyst_desc)}</p>` : ''}</div>`);
+  if (arm.hypothesized_tweak) lines.push(`<div class="arm-detail-section"><h4>Hypothesized Tweak</h4><p><code>${esc(arm.hypothesized_tweak)}</code></p>${arm.tweak_rationale ? `<p class="arm-detail-desc">${esc(arm.tweak_rationale)}</p>` : ''}</div>`);
+  // KPIs
+  if (Object.keys(kpis).length) {
+    lines.push(`<div class="arm-detail-section"><h4>Performance (from store)</h4><dl class="arm-detail-kpis">`);
+    if (rp.realized_pnl !== undefined) lines.push(`<dt>Realized PnL</dt><dd>${rp.realized_pnl >= 0 ? '+' : ''}${rp.realized_pnl.toFixed(2)}</dd>`);
+    if (rp.unrealized_usd !== undefined) lines.push(`<dt>Unrealized PnL</dt><dd>${rp.unrealized_usd >= 0 ? '+' : ''}${rp.unrealized_usd.toFixed(2)}</dd>`);
+    if (rp.total_pnl !== undefined) lines.push(`<dt>Total PnL</dt><dd>${rp.total_pnl >= 0 ? '+' : ''}${rp.total_pnl.toFixed(2)}</dd>`);
+    if (rp.pnl_pct !== undefined) lines.push(`<dt>PnL %</dt><dd>${rp.pnl_pct >= 0 ? '+' : ''}${rp.pnl_pct.toFixed(1)}%</dd>`);
+    if (rp.wins !== undefined && rp.losses !== undefined) lines.push(`<dt>Wins / Losses</dt><dd>${rp.wins} / ${rp.losses}</dd>`);
+    if (rp.win_rate !== undefined) lines.push(`<dt>Win Rate</dt><dd>${(rp.win_rate * 100).toFixed(1)}%</dd>`);
+    if (rp.expectancy_usd !== undefined) lines.push(`<dt>Expectancy</dt><dd>${rp.expectancy_usd >= 0 ? '+' : ''}${rp.expectancy_usd.toFixed(2)}</dd>`);
+    if (rp.closes_count !== undefined) lines.push(`<dt>Completed Pairs</dt><dd>${rp.closes_count}</dd>`);
+    if (kpis.markets_quoted !== undefined) lines.push(`<dt>Markets Quoted</dt><dd>${kpis.markets_quoted}</dd>`);
+    if (kpis.markets_filled !== undefined) lines.push(`<dt>Markets Filled</dt><dd>${kpis.markets_filled}</dd>`);
+    if (kpis.fill_rate !== undefined) lines.push(`<dt>Fill Rate</dt><dd>${(kpis.fill_rate * 100).toFixed(1)}%</dd>`);
+    if (kpis.spread_capture !== undefined) lines.push(`<dt>Spread Capture</dt><dd>${kpis.spread_capture.toFixed(2)}</dd>`);
+    if (kpis.avg_edge_cents !== undefined) lines.push(`<dt>Avg Edge</dt><dd>${kpis.avg_edge_cents.toFixed(1)}¢</dd>`);
+    if (kpis.median_seconds_to_fill !== undefined) lines.push(`<dt>Median Time to Fill</dt><dd>${kpis.median_seconds_to_fill.toFixed(1)}s</dd>`);
+    if (kpis.median_queue_ahead !== undefined) lines.push(`<dt>Median Queue Ahead</dt><dd>${kpis.median_queue_ahead.toFixed(1)}</dd>`);
+    if (kpis.days !== undefined) lines.push(`<dt>Run Duration</dt><dd>${kpis.days.toFixed(1)} days</dd>`);
+    lines.push(`</dl></div>`);
+  } else if (arm.has_store) {
+    lines.push(`<div class="arm-detail-section"><h4>Performance</h4><p class="arm-detail-note">Store exists but KPIs could not be computed${arm.kpis_error ? `: ${esc(arm.kpis_error)}` : ''}.</p></div>`);
+  } else {
+    lines.push(`<div class="arm-detail-section"><h4>Performance</h4><p class="arm-detail-note">No store on disk yet — START creates one.</p></div>`);
+  }
+  // Actions
+  lines.push(`<div class="arm-detail-actions">`);
+  if (arm.has_store) {
+    lines.push(`<button class="arm-detail-btn" data-action="view" data-name="${esc(arm.name)}" data-kind="${esc(arm.kind)}">View Store</button>`);
+  }
+  lines.push(`<button class="arm-detail-btn primary" data-action="pick" data-name="${esc(arm.name)}" data-kind="${esc(arm.kind)}">Start This Arm</button>`);
+  lines.push(`</div>`);
+  return lines.join('');
+}
+
+/* Wire arm detail modal actions. */
+function wireArmDetailModal() {
+  const modal = document.getElementById('arm-detail-modal');
+  if (!modal || modal.dataset.wired) return;
+  modal.dataset.wired = 'true';
+  // Close on backdrop click
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeArmDetailModal();
+  });
+  // Close on Escape
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && armDetailModalOpen) closeArmDetailModal();
+  });
+}
+
+/* Where a profile comes from, in the operator's words: an arm names the
+ * tournament that measured it and the issue that ran it; a preset is code. */
+function profileOrigin(entry) {
+  if (entry.kind !== 'arm') return 'core_brain/config.py · TOURNAMENT_PRESETS';
+  const bits = [];
+  if (entry.issue) bits.push(`issue #${entry.issue}`);
+  if (entry.tournament) bits.push(entry.tournament);
+  return bits.length ? bits.join(' · ') : 'tournament arm';
+}
+
+/* What this profile has on disk right now: a store means there is a dashboard
+ * to open; no store means START is the thing that creates one. */
+function profileStore(entry) {
+  if (entry.kind !== 'arm') return 'no store of its own — START writes the run it launches';
+  if (!entry.has_store) return 'no store yet — START creates one';
+  return `store ${String(entry.store || '').split(/[\\/]/).pop()}`;
+}
+
+/* Extract performance score for sorting: higher = better.
+ * Uses expectancy if available, else win_rate * total_pnl, else total_pnl. */
+function armPerformanceScore(arm) {
+  if (!arm.kpis || !arm.kpis.run_profitability) return -Infinity;
+  const rp = arm.kpis.run_profitability;
+  if (rp.expectancy_usd !== undefined && rp.expectancy_usd !== null) return rp.expectancy_usd;
+  if (rp.win_rate !== undefined && rp.total_pnl !== undefined) return (rp.win_rate || 0) * (rp.total_pnl || 0);
+  return rp.total_pnl || -Infinity;
+}
+
+function armRowHtml(arm, stagedName) {
+  const isStaged = `arm:${arm.name}` === stagedName;
+  const label = arm.label || arm.name;
+  const hasKpis = arm.kpis && arm.kpis.run_profitability;
+  const rp = hasKpis ? arm.kpis.run_profitability : null;
+  const storeText = profileStore(arm);
+  const originText = profileOrigin(arm);
+  const thesis = arm.profile || arm.desc || '';
+  const envKeys = arm.env ? Object.keys(arm.env).length : 0;
+  // Build a tooltip with key info
+  const tooltipBits = [];
+  if (thesis) tooltipBits.push(thesis);
+  if (rp && rp.total_pnl !== undefined) tooltipBits.push(`PnL: ${rp.total_pnl >= 0 ? '+' : ''}${rp.total_pnl.toFixed(2)}`);
+  if (rp && rp.win_rate !== undefined) tooltipBits.push(`Win rate: ${(rp.win_rate * 100).toFixed(1)}%`);
+  if (rp && rp.closes_count !== undefined) tooltipBits.push(`Pairs: ${rp.closes_count}`);
+  tooltipBits.push(storeText);
+  tooltipBits.push(originText);
+  const tooltip = tooltipBits.join(' · ');
+  return `<div class="arm-row${isStaged ? ' staged' : ''}" data-arm="${esc(arm.name)}" title="${esc(tooltip)}">
+      <div class="arm-row-main">
+        <span class="arm-name">${esc(label)}${isStaged ? ' <span class="arm-staged-tag">STAGED</span>' : ''}</span>
+      </div>
+      <div class="arm-row-kpis${hasKpis ? ' has-kpis' : ''}">
+        ${hasKpis ? `
+          <span class="arm-kpi" title="Realized PnL">${rp.realized_pnl !== undefined ? (rp.realized_pnl >= 0 ? '+' : '') + rp.realized_pnl.toFixed(2) : '—'}</span>
+          <span class="arm-kpi" title="Win Rate">${rp.win_rate !== undefined ? (rp.win_rate * 100).toFixed(1) + '%' : '—'}</span>
+          <span class="arm-kpi" title="Pairs">${rp.closes_count !== undefined ? rp.closes_count : '—'}</span>
+          <span class="arm-kpi" title="Expectancy">${rp.expectancy_usd !== undefined ? (rp.expectancy_usd >= 0 ? '+' : '') + rp.expectancy_usd.toFixed(2) : '—'}</span>
+        ` : `
+          <span class="arm-kpi empty">no store yet</span>
+        `}
+      </div>
+      <div class="arm-row-actions">
+        <button class="arm-btn arm-btn-detail" data-action="detail" data-name="${esc(arm.name)}" data-kind="${esc(arm.kind)}" title="Show thesis, config, and KPIs">⋯</button>
+        <button class="arm-btn arm-btn-start" data-action="pick" data-name="${esc(arm.name)}" data-kind="${esc(arm.kind)}" title="Start this arm">▶</button>
+      </div>
+    </div>`;
+}
+
+function presetRowHtml(preset, stagedName) {
+  const isStaged = `preset:${preset.name}` === stagedName;
+  const label = preset.label || preset.name;
+  const detail = preset.detail || preset.profile || '';
+  const tooltipBits = [];
+  if (detail) tooltipBits.push(detail);
+  tooltipBits.push('core_brain/config.py · TOURNAMENT_PRESETS');
+  tooltipBits.push('no store of its own — START writes the run it launches');
+  const tooltip = tooltipBits.join(' · ');
+  return `<div class="arm-row preset-row${isStaged ? ' staged' : ''}" data-arm="${esc(preset.name)}" title="${esc(tooltip)}">
+      <div class="arm-row-main">
+        <span class="arm-name">${esc(label)}${isStaged ? ' <span class="arm-staged-tag">STAGED</span>' : ''}</span>
+        <span class="arm-meta">Preset · ${esc(profileOrigin(preset))}</span>
+      </div>
+      <div class="arm-row-kpis preset-kpis">
+        <span class="arm-kpi empty">code preset</span>
+      </div>
+      <div class="arm-row-actions">
+        <button class="arm-btn arm-btn-detail" data-action="detail" data-name="${esc(preset.name)}" data-kind="preset" title="Show preset details">⋯</button>
+        <button class="arm-btn arm-btn-start" data-action="pick" data-name="${esc(preset.name)}" data-kind="preset" title="Start this preset">▶</button>
+      </div>
+    </div>`;
+}
+
 function profileOptionsHtml(options, pending) {
-  const staged = pending && typeof pending.name === 'string' ? pending : null;
+  const grouped = options?.arms_grouped || [];
+  const presets = options?.presets || [];
+  if (!grouped.length && !presets.length) return '';
+  // Flatten all arms to check staged
+  const allArms = grouped.flatMap(g => g.arms || []);
+  // A staged name that no longer resolves cannot be launched
+  const staged = pending && typeof pending.name === 'string'
+    && allArms.concat(presets).some(o => o.kind === pending.kind && o.name === pending.name)
+    ? pending : null;
   const stagedName = staged ? `${staged.kind}:${staged.name}` : '';
   let out = '';
   if (staged) {
-    out += `<div class="db-run-row" title="The next START launches the stack with this profile.">
-      <span class="pill state-running mono"><span class="pill-label">STAGED</span> <span class="pill-value">${esc(staged.name)}</span></span>
-      <span class="db-run-name">For the next START</span>
-      <button class="db-run-switch" data-profile-action="clear" title="Drop the staged profile; START uses the current env.">Clear</button>
+    out += `<div class="arm-row staged-row" title="The next START launches this profile.">
+      <div class="arm-row-main">
+        <span class="arm-name">${esc(staged.label || staged.name)} <span class="arm-staged-tag">STAGED</span></span>
+        <span class="arm-meta">For the next START</span>
+      </div>
+      <div class="arm-row-actions">
+        <button class="arm-btn arm-btn-clear" data-action="clear" title="Drop the staged profile">Clear</button>
+      </div>
     </div>`;
   }
-  let listed = 0;
-  out += '<div class="services-dropdown-head"><span>Tournament arms — view a store, or load one for START.</span></div>';
-  for (const arm of (options?.arms || [])) {
-    listed += 1;
-    const key = `arm:${arm.name}`;
-    const tag = key === stagedName ? ' <span class="pill-detail">STAGED</span>' : '';
-    const viewBtn = arm.has_store
-      ? `<button class="db-run-switch" data-profile-action="view" data-kind="arm" data-name="${esc(arm.name)}" title="Point this page at the store ${esc(arm.name)} is writing (read-only).">View</button>`
-      : '';
-    out += `<div class="db-run-row" title="${esc(arm.profile || arm.label || arm.name)}${arm.source ? ` · ${esc(arm.source)}` : ''}">
-      <span class="pill state-unknown mono"><span class="pill-label">ARM</span> <span class="pill-value">${esc(arm.name)}</span></span>
-      <span class="db-run-name">${esc(arm.label || arm.name)}${tag}</span>
-      ${viewBtn}
-      <button class="db-run-switch" data-profile-action="load" data-kind="arm" data-name="${esc(arm.name)}" title="Stop the stack and stage ${esc(arm.name)} for the next START.">Load</button>
-    </div>`;
+  // Tournament arms grouped by issue
+  if (grouped.length) {
+    out += '<div class="services-dropdown-head"><span>Tournament Arms — measured settings, grouped by issue</span></div>';
+    for (const group of grouped) {
+      const issue = group.issue;
+      const tournament = group.tournament;
+      const arms = group.arms || [];
+      // Sort arms by performance (best first) if KPIs available
+      const sortedArms = [...arms].sort((a, b) => armPerformanceScore(b) - armPerformanceScore(a));
+      const issueLabel = issue !== null ? `Issue #${issue}${tournament ? ` · ${tournament}` : ''}` : 'Ungrouped';
+      out += `<div class="arm-group"><div class="arm-group-header">${esc(issueLabel)}</div>`;
+      out += sortedArms.map(a => armRowHtml(a, stagedName)).join('');
+      out += `</div>`;
+    }
   }
-  out += '<div class="services-dropdown-head"><span>Presets — load one for START.</span></div>';
-  for (const preset of (options?.presets || [])) {
-    listed += 1;
-    const key = `preset:${preset.name}`;
-    const tag = key === stagedName ? ' <span class="pill-detail">STAGED</span>' : '';
-    out += `<div class="db-run-row" title="${esc(preset.detail || preset.name)}">
-      <span class="pill state-unknown mono"><span class="pill-label">PRESET</span> <span class="pill-value">${esc(preset.name)}</span></span>
-      <span class="db-run-name">${esc(preset.name)}${tag}</span>
-      <button class="db-run-switch" data-profile-action="load" data-kind="preset" data-name="${esc(preset.name)}" title="Stop the stack and stage preset ${esc(preset.name)} for the next START.">Load</button>
-    </div>`;
+  // Presets
+  if (presets.length) {
+    out += '<div class="services-dropdown-head"><span>Presets — code profiles (no tournament store)</span></div>';
+    out += presets.map(p => presetRowHtml(p, stagedName)).join('');
   }
-  if (!listed) return '';
   return out;
 }
 
 async function renderProfileOptions() {
   const panel = document.getElementById('profile-dropdown');
   if (!panel) return;
-  let options = { presets: [], arms: [] };
+  let options = { presets: [], arms_grouped: [] };
   try {
     const res = await fetch('/api/profile/options');
     if (res.ok) options = await res.json();
   } catch {
     // A picker that cannot list profiles says so instead of going blank.
   }
+  // Fetch KPIs for arms that have stores (lazy, non-blocking)
+  // We'll do this after rendering to not block the UI
   panel.innerHTML = profileOptionsHtml(options, lastStatus?.pending_profile || null)
-    || '<div class="db-run-row"><span class="db-run-name">No profiles available.</span></div>';
-  panel.querySelectorAll('[data-profile-action]').forEach(b => {
+    || '<div class="arm-row"><span class="arm-name">No profiles available.</span></div>';
+  
+  // Wire arm detail modal
+  wireArmDetailModal();
+  
+  // Now fetch KPIs for arms with stores and update rows
+  const allArms = (options.arms_grouped || []).flatMap(g => g.arms || []);
+  const armsWithStores = allArms.filter(a => a.has_store && a.store);
+  if (armsWithStores.length) {
+    // Fetch KPIs in parallel (but limit concurrency)
+    await Promise.all(armsWithStores.map(async arm => {
+      try {
+        const res = await fetch(`/api/profile/arm-detail?name=${encodeURIComponent(arm.name)}`);
+        const data = await res.json();
+        if (data.ok && data.kpis) {
+          arm.kpis = data.kpis;
+          // Update the row in the DOM
+          updateArmRowKpis(arm.name, data.kpis);
+        }
+      } catch (e) {
+        // Silently ignore KPI fetch errors
+      }
+    }));
+  }
+  
+  // Wire buttons using data-action (not data-profile-action)
+  panel.querySelectorAll('[data-action]').forEach(b => {
     b.addEventListener('click', async () => {
-      const action = b.getAttribute('data-profile-action');
-      const kind = b.getAttribute('data-kind');
+      const action = b.getAttribute('data-action');
       const name = b.getAttribute('data-name');
-      if (action === 'load' && !confirm(`Stop the running stack and stage ${name || 'this profile'} for the next START?`)) {
+      if (action === 'detail') {
+        openArmDetailModal(name);
+        return;
+      }
+      if (action === 'pick') {
+        // Get the arm/preset entry from options
+        const all = (options.arms_grouped || []).flatMap(g => g.arms || []).concat(options.presets || []);
+        const entry = all.find(o => o.name === name);
+        if (entry) {
+          closeProfileDropdown();
+          openStartRunModal('shadow', entry);
+        }
+        return;
+      }
+      if (action === 'clear' && !confirm('Drop the staged profile? The next START uses the current env.')) {
         return;
       }
       b.disabled = true;
       try {
         const endpoint = action === 'view'
           ? `/api/profile/view?name=${encodeURIComponent(name || '')}`
-          : action === 'clear'
-            ? '/api/profile/clear'
-            : `/api/profile/stage?kind=${encodeURIComponent(kind || '')}&name=${encodeURIComponent(name || '')}`;
+          : '/api/profile/clear';
         const res = await controlFetch(endpoint);
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) {
@@ -3328,11 +3635,28 @@ async function renderProfileOptions() {
   });
 }
 
+/* Update a single arm row's KPIs after fetching them. */
+function updateArmRowKpis(armName, kpis) {
+  const row = document.querySelector(`.arm-row[data-arm="${esc(armName)}"]`);
+  if (!row) return;
+  const rp = kpis.run_profitability || {};
+  const kpisEl = row.querySelector('.arm-row-kpis');
+  if (!kpisEl) return;
+  kpisEl.classList.add('has-kpis');
+  kpisEl.innerHTML = `
+    <span class="arm-kpi" title="Realized PnL">${rp.realized_pnl !== undefined ? (rp.realized_pnl >= 0 ? '+' : '') + rp.realized_pnl.toFixed(2) : '—'}</span>
+    <span class="arm-kpi" title="Win Rate">${rp.win_rate !== undefined ? (rp.win_rate * 100).toFixed(1) + '%' : '—'}</span>
+    <span class="arm-kpi" title="Pairs">${rp.closes_count !== undefined ? rp.closes_count : '—'}</span>
+    <span class="arm-kpi" title="Expectancy">${rp.expectancy_usd !== undefined ? (rp.expectancy_usd >= 0 ? '+' : '') + rp.expectancy_usd.toFixed(2) : '—'}</span>
+  `;
+}
+
 function renderDbMode(status) {
   setShadowRun(status);
   renderCodeVersion(status);
   renderProfileBadge(status);
   lastStatusForRuns = status;
+  renderRunElsewhereBanner(status);
   const el = document.getElementById('db-mode-badge');
   if (!el) return;
 
@@ -4254,7 +4578,7 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
 
 /* ── Start Run launcher (preflight modal, #857) ── */
 const START_RUN_STEPS = ['credentials', 'screener', 'stream', 'reach_probe'];
-const startRunModalState = { open: false, mode: 'shadow', minutes: 1440, preflightId: null, checks: {}, approved: false, running: false, probeArmed: false, seq: 0 };
+const startRunModalState = { open: false, mode: 'shadow', minutes: 1440, preflightId: null, checks: {}, approved: false, running: false, probeArmed: false, seq: 0, profile: null };
 function startRunModalEl(id) { return document.getElementById(id); }
 function setPreflightRow(step, state, text) {
   const el = startRunModalEl('preflight-status-' + step);
@@ -4280,11 +4604,14 @@ function updateStartRunButtons() {
   const shadowBtn = startRunModalEl('start-run-shadow');
   if (shadowBtn) shadowBtn.disabled = busy;
 }
-function openStartRunModal(mode) {
+function openStartRunModal(mode, profile) {
   const modal = startRunModalEl('start-run-modal');
   if (!modal) return;
   startRunModalState.open = true;
   startRunModalState.mode = (mode === 'live' || mode === 'shadow') ? mode : 'live';
+  // A profile picked in the header menu rides the start: the modal is where
+  // live-vs-shadow is decided, and the pick is what gets launched.
+  startRunModalState.profile = (profile && profile.kind && profile.name) ? profile : null;
   const modeRadio = document.querySelector
     && document.querySelector('input[name="start-run-mode"][value="' + startRunModalState.mode + '"]');
   if (modeRadio) modeRadio.checked = true;
@@ -4299,6 +4626,7 @@ function openStartRunModal(mode) {
   if (summary) summary.textContent = '';
   START_RUN_STEPS.forEach((s) => setPreflightRow(s, 'pending', 'pending'));
   updateStartRunButtons();
+  renderStartRunProfileLine();
   void refreshShadowTarget();
   startRunModalState.seq += 1;
   if (startRunModalState.mode === 'live') void runPreflightSequence(startRunModalState.seq);
@@ -4341,8 +4669,26 @@ function closeStartRunModal() {
   if (!modal) return;
   startRunModalState.open = false;
   startRunModalState.running = false;
+  startRunModalState.profile = null;
   modal.classList.remove('show');
   modal.style.display = 'none';
+}
+
+function renderStartRunProfileLine() {
+  const el = startRunModalEl('start-run-profile-line');
+  if (!el) return;
+  const p = startRunModalState.profile;
+  if (p) {
+    const src = p.issue
+      ? ` · issue #${p.issue}${p.tournament ? ` ${p.tournament}` : ''}`
+      : '';
+    el.textContent = `Profile: ${p.label || p.name} (${p.kind})${src}`;
+    return;
+  }
+  const staged = lastStatus && lastStatus.pending_profile;
+  el.textContent = staged
+    ? `Profile: ${staged.name} (${staged.kind}, staged in the header menu)`
+    : 'Profile: current environment (nothing staged)';
 }
 async function runPreflightStep(step, confirm, mySeq) {
   setPreflightRow(step, 'running', 'running');
@@ -4428,7 +4774,7 @@ async function startLiveFromModal() {
   const pid = startRunModalState.preflightId;
   if (!pid || !startRunModalState.approved) { startRunModalState.running = false; updateStartRunButtons(); return; }
   try {
-    const res = await controlFetch('/api/system/start', { method: 'POST', body: JSON.stringify({ preflight_id: pid, minutes }) });
+    const res = await controlFetch('/api/system/start', { method: 'POST', body: JSON.stringify({ preflight_id: pid, minutes, profile: startRunModalState.profile }) });
     let data = null;
     try { data = await res.json(); } catch { data = null; }
     if (!res.ok || !data || data.ok !== true) {
@@ -4453,7 +4799,7 @@ async function startShadowFromModal() {
   updateStartRunButtons();
   const minutes = startRunModalMinutes();
   try {
-    const res = await controlFetch('/api/system/shadow/start', { method: 'POST', body: JSON.stringify({ fresh: true, minutes }) });
+    const res = await controlFetch('/api/system/shadow/start', { method: 'POST', body: JSON.stringify({ fresh: true, minutes, profile: startRunModalState.profile }) });
     let data = null;
     try { data = await res.json(); } catch { data = null; }
     if (!res.ok || !data || data.ok !== true) {
@@ -12521,6 +12867,7 @@ if (typeof module !== 'undefined' && module.exports) {
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState, resolveHeldRead,
     engineReasonText, engineProvenanceText, renderScanStatePill,
     renderMarketScanPill, renderPillHtml, renderDbMode, renderProfileBadge, profileOptionsHtml, startButtonTitle, renderServiceHeader,
+    renderRunElsewhereBanner,
     getMasterToggleClasses,
     aggregateServiceState,
     placePanel, closeServicesDropdown, closeRunSwitcher, bindServicesDropdown, repositionHeaderPanels,

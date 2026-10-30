@@ -141,6 +141,12 @@
     <span class="stale-age mono"></span>
   </div>
 
+  <!-- ── Background-run notice: a stack or rehearsal is writing a store this
+       page is not reading. Browsing another store never hides it. ── -->
+  <div id="run-elsewhere-banner" class="run-elsewhere-banner" role="status">
+    <span class="run-elsewhere-text"></span>
+  </div>
+
   <!-- The tab row the sidebar replaced. `prototype.js` hides it and empties the
        three panels below into the rail's pages; the sections themselves stay,
        because `app.js` still toggles them by id and reads `#tab-3.hidden`
@@ -851,6 +857,7 @@
   <div class="modal start-run-modal">
     <div class="modal-title" id="start-run-title">START RUN</div>
     <div class="modal-body">
+      <div class="shadow-target" id="start-run-profile-line">Profile: current environment</div>
       <div class="start-run-modes" role="radiogroup" aria-label="Run mode">
         <label><input type="radio" name="start-run-mode" value="shadow" checked> Shadow Rehearsal</label>
         <label><input type="radio" name="start-run-mode" value="live"> Live Real-Money</label>
@@ -876,6 +883,14 @@
       <button class="modal-btn" id="start-run-shadow" type="button">Start Shadow</button>
       <button class="modal-btn danger" id="start-run-live" type="button" disabled>Start Live</button>
     </div>
+  </div>
+</div>
+
+<!-- ── Arm Detail Modal: thesis, config, KPIs ── -->
+<div id="arm-detail-modal" class="modal-overlay" role="dialog" aria-labelledby="arm-detail-title" aria-modal="true">
+  <div class="modal arm-detail-modal">
+    <div class="modal-title" id="arm-detail-title">Arm Details</div>
+    <div class="arm-detail-content"></div>
   </div>
 </div>
 

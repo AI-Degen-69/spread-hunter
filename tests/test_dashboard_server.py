@@ -3918,14 +3918,35 @@ def _stage(client, monkeypatch, tmp_path, kind, name):
         set_db_override(None)
 
 
+def _all_arms(data):
+    """Arms arrive nested under their tournament issue for the picker's sections."""
+    return [a for group in data["arms_grouped"] for a in group["arms"]]
+
+
 def test_profile_options_lists_presets_and_arms(client):
     data = client.get("/api/profile/options").json()
     assert {p["name"] for p in data["presets"]} == {
         "conservative", "balanced", "aggressive", "prudent", "hybrid", "baseline"}
     assert all(p["env"].get("BOT_QUOTE_TOURNAMENT_PRESET") == p["name"]
                for p in data["presets"])
-    assert len(data["arms"]) > 0
-    assert all(a["name"] and isinstance(a["env"], dict) for a in data["arms"])
+    # The picker row and the detail heading render `label`, so it reads as a
+    # name; `name` stays the lowercase TOURNAMENT_PRESETS key.
+    assert {p["name"]: p["label"] for p in data["presets"]}["conservative"] == "Conservative"
+    arms = _all_arms(data)
+    assert len(arms) > 0
+    assert all(a["name"] and isinstance(a["env"], dict) for a in arms)
+
+
+def test_profile_options_arms_name_their_tournament_and_store(client):
+    """Every arm says where it came from, and whether a store exists to view."""
+    data = client.get("/api/profile/options").json()
+    assert all({"issue", "tournament", "store", "has_store"} <= set(a)
+               for a in _all_arms(data))
+    arm = next(a for a in _all_arms(data) if a["name"] == "queue-clear-5m")
+    assert arm["issue"] == 799, "issue number must come from i799-*_arms.json"
+    assert arm["tournament"] == "tournament-test"
+    assert arm["store"] is None or isinstance(arm["store"], str)
+    assert arm["has_store"] is (arm["store"] is not None)
 
 
 def test_profile_stage_preset_stops_nothing_and_records_pending(
@@ -4536,7 +4557,7 @@ def test_fresh_shadow_uses_staged_profile_and_starts_filter(client, monkeypatch,
         "presets": [{"kind": "preset", "name": "Prudent",
                      "label": "Prudent", "detail": "",
                      "env": {"BOT_QUOTE_TOURNAMENT_PRESET": "prudent"}}],
-        "arms": []})
+        "arms_grouped": []})
     import subprocess
     spawned = []
     class _FakePopen:
@@ -4564,6 +4585,96 @@ def test_fresh_shadow_uses_staged_profile_and_starts_filter(client, monkeypatch,
         assert procs["filter"]["pid"] == 4242
         assert "Market Filter started" in body["message"]
         assert not (tmp_path / "runtime" / "pending_profile.json").exists(), "staged profile not consumed"
+    finally:
+        set_db_override(prev_override)
+
+
+def test_write_pending_profile_stores_identity_only_and_rejects_unknown(tmp_path, monkeypatch):
+    """The START-time profile write is identity only, same as /api/profile/stage."""
+    import json as _json
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "_profile_options", lambda: {
+        "presets": [{"kind": "preset", "name": "Prudent",
+                     "label": "Prudent", "detail": "",
+                     "env": {"BOT_QUOTE_TOURNAMENT_PRESET": "prudent"}}],
+        "arms_grouped": []})
+    match = dash_mod._write_pending_profile("preset", "Prudent")
+    assert match is not None and match["name"] == "Prudent"
+    written = _json.loads(
+        (tmp_path / "runtime" / "pending_profile.json").read_text(encoding="utf-8"))
+    assert set(written) == {"kind", "name", "staged_at"}
+    assert written["kind"] == "preset" and written["name"] == "Prudent"
+    assert dash_mod._write_pending_profile("preset", "No Such Profile") is None
+    assert dash_mod._write_pending_profile("arm", "Prudent") is None
+
+
+def test_shadow_start_body_profile_names_the_store_and_sets_env(client, monkeypatch, tmp_path):
+    """Picking an arm in the picker and pressing Start launches that arm."""
+    import json as _json
+    import re
+    import dashboard.server as dash_mod
+    from dashboard.server import set_db_override
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(None)
+    (tmp_path / "runtime").mkdir(exist_ok=True)
+    # Nothing staged beforehand: the profile rides the start body.
+    monkeypatch.setattr(dash_mod, "_profile_options", lambda: {
+        "presets": [],
+        # Arms arrive nested for the picker's sections; a lookup flattens them.
+        "arms_grouped": [{"issue": 799, "tournament": "tournament-test",
+                          "arms": [
+                              {"kind": "arm", "name": "queue-clear-5m",
+                               "label": "Queue Clear 5m", "detail": "",
+                               "env": {"BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
+                                       "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"}}]}]})
+    import subprocess
+    spawned = []
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append((args, kwargs.get("env")))
+            self.pid = 4242
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(dash_mod, "read_shadow_run", lambda db: None)
+    try:
+        res = client.post("/api/system/shadow/start",
+                          json={"fresh": True, "minutes": 5,
+                                "profile": {"kind": "arm", "name": "queue-clear-5m"}},
+                          headers=_control(client))
+        body = res.json()
+        assert res.status_code == 200 and body["ok"] is True, body.get("message")
+        assert re.fullmatch(r"shadow-\d+-queue-clear-5m", body["run_id"]), body["run_id"]
+        db_base = body["status"]["shadow_run"]["db_path"].replace("\\", "/").split("/")[-1]
+        assert "queue-clear-5m" in db_base, db_base
+        env = [e for c, e in spawned if any("shadow_run" in p for p in c)][0]
+        assert env and env.get("BOT_ORDER_GATE_QUEUE_CLEAR_ON") == "1"
+        assert env.get("BOT_ORDER_QUEUE_MAX_CLEAR_MIN") == "5"
+        assert not (tmp_path / "runtime" / "pending_profile.json").exists()
+    finally:
+        set_db_override(prev_override)
+
+
+def test_shadow_start_unknown_body_profile_is_refused(client, monkeypatch, tmp_path):
+    """A bad profile name fails loudly instead of launching a different arm."""
+    import subprocess
+    import dashboard.server as dash_mod
+    from dashboard.server import set_db_override
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    prev_override = dash_mod._ACTIVE_DB_OVERRIDE
+    dash_mod.set_db_override(None)
+    (tmp_path / "runtime").mkdir(exist_ok=True)
+    spawned = []
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda *a, **k: spawned.append(a) or type("P", (), {"pid": 1})())
+    try:
+        body = client.post("/api/system/shadow/start",
+                           json={"fresh": True, "minutes": 5,
+                                 "profile": {"kind": "arm", "name": "no-such-arm"}},
+                           headers=_control(client)).json()
+        assert body["ok"] is False
+        assert "no-such-arm" in body["message"]
+        assert spawned == [], "a refused profile must not spawn a rehearsal"
     finally:
         set_db_override(prev_override)
 

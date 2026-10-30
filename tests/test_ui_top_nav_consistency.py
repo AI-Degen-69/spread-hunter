@@ -193,9 +193,8 @@ def test_profile_picker_is_wired():
     js = _js()
     assert "id=\"profile-dropdown\"" in _html(), "picker panel must exist in markup"
     for marker in ("profileOptionsHtml", "renderProfileOptions",
-                   "/api/profile/options", "/api/profile/stage",
-                   "/api/profile/view", "/api/profile/clear",
-                   "data-profile-action"):
+                   "/api/profile/options", "/api/profile/view",
+                   "/api/profile/clear", "data-profile-action"):
         assert marker in js, f"app.js must wire the picker ({marker})"
     assert "aria-expanded" in _slice(js, "function toggleProfileDropdown", ("function profileOptionsHtml",)), \
         "picker toggle must manage aria-expanded"

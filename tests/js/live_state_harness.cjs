@@ -63,9 +63,16 @@ class FakeEl {
   get textContent() { return this._text; }
   addEventListener() {}
   querySelector(sel) {
-    if (sel === '.stale-age') {
-      if (!this._ageEl) { this._ageEl = new FakeEl('span'); this._ageEl.className = 'stale-age'; }
-      return this._ageEl;
+    if (sel && sel.charAt(0) === '.') {
+      const cls = sel.slice(1);
+      if (!this._qEls) this._qEls = {};
+      if (!this._qEls[cls]) {
+        const el = new FakeEl('span');
+        el.className = cls;
+        this._qEls[cls] = el;
+        if (cls === 'stale-age') this._ageEl = el;
+      }
+      return this._qEls[cls];
     }
     return null;
   }
@@ -855,20 +862,67 @@ function profilePickerVerdicts() {
   const html = app.profileOptionsHtml(
     {
       presets: [{ kind: 'preset', name: 'balanced', detail: 'Proportional tracking' }],
-      arms: [{ kind: 'arm', name: 'queue-clear-5m', label: 'Queue <b>Clear</b>',
-               profile: 'arms profile', env: {}, has_store: true },
-             { kind: 'arm', name: 'loose-baseline', label: 'Loose',
-               profile: '', env: {}, has_store: false }],
+      arms_grouped: [
+        { issue: 843, tournament: 'pair-test', arms: [
+          { kind: 'arm', name: 'queue-clear-5m', label: 'Queue <b>Clear</b>',
+            profile: 'arms profile', env: {}, has_store: true,
+            store: 'data/799-tournament-1-queue-clear-5m.db',
+            issue: 799, tournament: 'tournament-test' },
+          { kind: 'arm', name: 'loose-baseline', label: 'Loose',
+            profile: '', env: {}, has_store: false,
+            issue: 843, tournament: 'pair-test' }
+        ]},
+        { issue: 799, tournament: 'tournament-test', arms: [
+          { kind: 'arm', name: 'balanced-mid', label: 'Balanced Mid',
+            profile: 'balanced preset', env: {}, has_store: false,
+            issue: 799, tournament: 'tournament-test' }
+        ]}
+      ]
     },
     { kind: 'arm', name: 'queue-clear-5m' });
-  const empty = app.profileOptionsHtml({ presets: [], arms: [] }, null);
+  const empty = app.profileOptionsHtml({ presets: [], arms_grouped: [] }, null);
   return { html, empty };
+}
+
+function runElsewhereVerdicts() {
+  const el = global.document.getElementById('run-elsewhere-banner');
+  const read = () => ({
+    shown: el.classList.contains('show'),
+    text: el.querySelector('.run-elsewhere-text').textContent,
+  });
+  app.renderRunElsewhereBanner({
+    db_is_production: true, db_path: 'C:/d/orders.db',
+    shadow_runs: [], services: {},
+  });
+  const idle = read();
+  app.renderRunElsewhereBanner({
+    db_is_production: false, db_path: 'C:/d/01_shadow_x.db',
+    shadow_runs: [{ run_id: 'shadow-01-queue-clear-5m',
+                    db_path: 'C:/d/02_shadow_y.db', running: true,
+                    is_active_db: false, tournament: { arm: 'queue-clear-5m' } }],
+    services: {},
+  });
+  const rehearsalElsewhere = read();
+  app.renderRunElsewhereBanner({
+    db_is_production: false, db_path: 'C:/d/01_shadow_x.db',
+    shadow_runs: [],
+    services: { filter: { running: true }, query: { running: true },
+                decide: { running: true } },
+  });
+  const liveElsewhere = read();
+  app.renderRunElsewhereBanner({
+    db_is_production: true, db_path: 'C:/d/orders.db',
+    shadow_runs: [], services: {},
+  });
+  const cleared = read();
+  return { idle, rehearsalElsewhere, liveElsewhere, cleared };
 }
 
 let out;
 if (script === 'dbmode') out = dbModeVerdicts();
 else if (script === 'profile') out = profileVerdicts();
 else if (script === 'profilepicker') out = profilePickerVerdicts();
+else if (script === 'runelsewhere') out = runElsewhereVerdicts();
 else if (script === 'stagedtitle') out = stagedTitleVerdicts();
 else if (script === 'runswitcher') out = runSwitcherVerdicts();
 else if (script === 'trialbanner') out = trialBannerVerdicts();
