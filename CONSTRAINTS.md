@@ -1,71 +1,67 @@
-# CONSTRAINTS.md — Issue #872: Unify currency settings to honest units
+# CONSTRAINTS.md — Issue #866: Arm-specific effective Strategy Parameters
 
-Branch: `i872/unify-all-currency-settings-to-integer-cents` | Issue: #872
+Branch: `i866/fix-strategy-parameters-panel-shows-global-config` | Issue: #866
 
 Locked during Station II planning. Stations III–V must hold every line below.
 Tighten only with operator approval; never loosen silently.
 
 ## The one invariant this change exists to protect
 
-**Every numeric value the engine applies is bit-identical before and after.**
+**The global (no-arm) panel path is byte-identical, and an arm view never shows
+a value the engine does not use.**
 
-`bot_order_requote_dead_band_usd` stays `0.03`, `bot_risk_stop_adverse_drop_usd` stays `0.05`,
-the `hybrid` preset stays `0.060`, `bot_quote_spread_offset_min_cents`/`_max_cents` stay `1`/`20`.
-The 4.5¢ champion stop (`tests/test_champion_lane_parity.py`, `docs/live-lane-audit.md`,
-`scripts/tournament_cockpit_server.py`) keeps producing the same trigger cents at every entry
-price. If any test expectation has to move for a value to pass, the change is wrong — re-read
-the unit, do not edit the expectation.
+A failed arm resolution returns a structured error (`NO_PLAN / MALFORMED_PLAN /
+UNKNOWN_ARM / AMBIGUOUS_ARM / EVAL_FAILED`) — never a silent fallback to global
+values that the operator would read as the arm's config.
 
 ## Zero regressions
 
 - Targeted suites covering the touched modules must pass cleanly:
-  - `python -m pytest -q tests/test_config.py`
-  - `python -m pytest -q tests/test_config_single_source.py tests/test_config_divergence_guard.py`
-  - `python -m pytest -q tests/test_stop_loss_config.py tests/test_single_leg_lifecycle.py tests/test_dual_stop_loss.py tests/test_risk_guardian.py tests/test_single_buy_saver.py`
-  - `python -m pytest -q tests/test_trader_loop.py tests/test_completable_pair_gate.py tests/test_dynamic_offset.py`
-  - `python -m pytest -q tests/test_champion_lane_parity.py tests/test_shadow_tournament.py tests/test_tournament_cockpit_arms.py tests/test_tournament_arms_i843.py`
-  - `python -m pytest -q tests/test_dashboard_server.py`
-- Full `python -m pytest -q` is the GitHub CI merge gate on Ubuntu and Windows; local runs are
-  targeted only.
-- Every new behavior needs a test that fails without it:
-  - old `*_CENTS` name still loads when the new name is unset, with exactly one `WARNING`;
-  - one warning per key per process, not one per `from_env()` call;
-  - new name wins when both are set; blank new name falls through to the old one;
-  - offset keys reject `19.9` / `6.0` / `abc` / `nan` / `inf` instead of truncating;
-  - arms files use whole-cent text only, and load with no deprecation warning.
+  - `python -m pytest -q tests/test_dashboard_server.py` (existing
+    `/api/parameters` tests: catalog shape, zero-DeprecationWarning, scoring
+    placeholder path)
+  - New focused tests for `dashboard/arm_params.py` (catalog, exact/ambiguous
+    arm match, child eval, memo) — each new behavior needs a test that fails
+    without it.
+- Full `python -m pytest -q` is the GitHub CI merge gate on Ubuntu and Windows;
+  local runs are targeted only.
+- The flow-window card must assert the true engine default (`1800.0`) when no
+  loader reads the recorded override — a test pinning `300` as the engine value
+  is evidence of the lie, not of correctness.
 
 ## Scope fences (hard)
 
 - **Only these areas change:**
-  - `core_brain/config.py` — the two field names, their loader blocks, the `hybrid` preset key,
-    the alias reader, `_whole_cents()`.
-  - `core_brain/single_leg_lifecycle.py` — `DROP_CENTS_MIN/MAX` → `DROP_USD_MIN/MAX` and the
-    parameter names that carry the same dollar value.
-  - The readers listed in `tasks/plan.md` §T2 (trader_loop, risk_guardian, single_buy_saver,
-    shadow_tournament, tournament_hub, stream_market_decisions, verify_loose_baseline_tape).
-  - `dashboard/server.py` — the two `get_parameters` cards, `name`/`key`/`env_var` only.
-  - `.env.example`, `configs/tournaments/*.json`, `scripts/tournament_cockpit_server.py` copy,
-    `docs/agents/strategy.md`, `docs/live-lane-audit.md`.
-  - `tests/**` — mechanical renames plus the new `tests/test_config.py`.
-  - `tasks/plan.md`, `tasks/todo.md`, `CONSTRAINTS.md`, `docs/backlog/i872-currency-unit-inventory.md`.
+  - `dashboard/arm_params.py` (new): plan catalog, arm resolution, child
+    entry point, parent runner + memo. No cockpit imports.
+  - `dashboard/server.py`: `get_parameters()` gains optional
+    `?arm=&plan=&tourney=` wiring plus the three Queue Gate cards
+    (`name`/`key`/`env_var`/`value` only). Global path untouched.
+  - `dashboard/static/index.html` + `dashboard/static/app.js`: arm picker in
+    `#params-panel` header, fetch with params, stale-response guard, identity
+    + global-default labels.
+  - `tests/**`: new `arm_params` tests + endpoint `?arm=` tests.
+  - `tasks/plan.md`, `tasks/todo.md`, `CONSTRAINTS.md`, `SPEC.md`.
 - **Must NOT be modified:**
-  - `data/orders.db` (production registry, strictly read-only) and `data/tournaments/*/plan.json`.
-  - Any engine arithmetic: `evaluate_single_leg_lifecycle` trigger math, merge/settlement,
-    pair-cost gates.
-  - Risk ratios (`*_pct` fields). Only the names of money amounts change.
-  - The other 13 `_cents` fields — inventoried, not converted.
-  - `dashboard/static/**` except `dashboard/static/strategy_explainer.html`, which is edited only to
-    stop documenting the two retired key names. Currency **formatting** stays out of scope for #872.
-  - `core_brain/venue.py`, `core_brain/env_file.py`, `core_brain/order_registry.py`.
+  - `core_brain/config.py`, `scoring/config.py` (no env-map params, no new
+    readers — the flow-window reader stays absent by design this round).
+  - `scripts/shadow_tournament.py`, `scripts/tournament_hub.py`,
+    `scripts/tournament_cockpit_server.py` (launcher + cockpit untouched).
+  - `data/orders.db` (production registry, strictly read-only) and any
+    `data/tournaments/*/plan.json`.
+  - Engine arithmetic, merge/settlement, risk ratios (`*_pct`).
 
 ## Anti-cheat & safety rules
 
-- **Anti-cheat:** no skipped/xfailed tests, no deleted assertions, no weakened bounds, no
-  silent `int()` coercion left in place of the strict parser, no `# type: ignore`/`noqa` added
-  to get green.
-- **No new dependencies.** Standard library only; do not introduce `Decimal` into money math.
-- **A retired name is not silently ignored.** The two old `_CENTS` spellings must warn loudly
-  once per process. "Inert" would silently change the dead band from 10¢ to 3¢.
-- **No live venue contact.** Planning, build, tests and review never run `quote`, `complete`,
-  the Trader loop, or the dashboard START button.
-- **No production database in any manual check.** Any `status` run points at a disposable DB.
+- **Anti-cheat:** no skipped/xfailed tests, no deleted assertions, no weakened
+  bounds, no `# type: ignore`/`noqa` added to get green. Never swap
+  `os.environ` in the dashboard process (multi-threaded) — isolation is the
+  child process only.
+- **No new dependencies.** Standard library only (`sys.executable -m`,
+  `dataclasses.asdict`, timeouts, locks).
+- **No live venue contact.** Planning, build, tests and review never run
+  `quote`, `complete`, the Trader loop, or the dashboard START button. No
+  worker launch for verification (`reconcile_tournament_stack` is out of bounds
+  for this change); verify dashboard-only against an existing `plan.json`.
+- **No production database in any manual check.** Any `status` run points at a
+  disposable DB.

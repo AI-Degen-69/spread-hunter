@@ -1,33 +1,24 @@
-# Build checklist — Issue #872
+# Build checklist — Issue #866
 
-Branch: `i872/unify-all-currency-settings-to-integer-cents`
+Branch: `i866/fix-strategy-parameters-panel-shows-global-config`
 
-## T1 — Whole-cent strictness for the two offset keys `[Backend/Logic]` S
-- [ ] `_whole_cents(name, raw, lo, hi)` in `core_brain/config.py`
-- [ ] Use it for `BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS` / `_MAX_CENTS`
-- [ ] `tests/test_config.py`: autouse env/reset fixture + offset strictness tests
-- [ ] Focused run green
+## T1 — Arm catalog + isolated child evaluation `[Backend/Logic]` M
+- [ ] `dashboard/arm_params.py`: catalog via `parse_tournament_run_dir_name`, resolve order plan → tourney → newest, exact then round-suffix arm match, 5 distinct errors
+- [ ] `__main__` child: launcher-style env build, `declare_rehearsal()`, both loaders separately, strict JSON, no trade, no `.env`
+- [ ] Parent runner: timeout + rebuild both MakerConfigs + `_NoScoringConfig` path + thread-safe memo (configs only)
+- [ ] `tests/test_arm_params.py` green (catalog, matches, round-trip incl. balanced → 4, memo)
 
-## T2 — Honest USD names for the two dollar keys `[Backend/Logic]` L
-- [ ] Rename `bot_order_requote_dead_band_cents` → `..._usd` (field, loader, comment, preset, env var)
-- [ ] Rename `bot_risk_stop_adverse_drop_cents` → `..._usd` (field, loader, comment, env var)
-- [ ] Alias window reader: old names warn once per key per process
-- [ ] `DROP_CENTS_MIN/MAX` → `DROP_USD_MIN/MAX` + lifecycle parameter names
-- [ ] Engine readers: trader_loop, risk_guardian, single_buy_saver, scripts (4 files)
-- [ ] Dashboard cards: `name`, `key`, `env_var` (values untouched)
-- [ ] `.env.example` renamed lines with correct unit comments
-- [ ] Mechanical test renames across 15 files — expectations unchanged
-- [ ] Focused run green
+## T2 — Endpoint wiring + three Queue Gate cards `[Backend/Logic]` M
+- [ ] `get_parameters()`: `?arm=&plan=&tourney=`, no-arm path untouched, `arm_context` / `arm_error`
+- [ ] Three queue cards incl. flow-window `1800s` + ignored-override note + shipped-defaults basis
+- [ ] Endpoint `?arm=` tests green (`4¢` vs `20¢`, error path, no-arm identical)
 
-## T3 — Shipped inputs, docs, cockpit copy, inventory `[Docs]` M
-- [ ] `configs/tournaments/i799-tournament-test_arms.json` keys + tweak text
-- [ ] `docs/agents/strategy.md` + `docs/live-lane-audit.md` unit statements
-- [ ] `scripts/tournament_cockpit_server.py` suggestions/labels + its tests
-- [ ] `docs/backlog/i872-currency-unit-inventory.md` (remaining 13 `_cents` fields)
-- [ ] Focused run green
+## T3 — Arm picker dropdown + labels `[Design/UI]` S
+- [ ] `#params-panel` header select + identity line + global-default label
+- [ ] `app.js` param fetch + stale-response guard + context/error render
+- [ ] Browser gate (balanced arm `4¢`, cleared `20¢`, bogus arm error)
 
 ## T4 — Gates and handoff `[Testing]` S
-- [ ] Grep gate: no `*_cents` identifier holds dollars
 - [ ] Targeted suites in one run
-- [ ] Operator "How to verify" block (hands-on only)
-- [ ] PR body + push + PR open
+- [ ] Grep gate: no `os.environ` swap in `dashboard/`, no loader/launcher touched
+- [ ] Operator "How to verify" block (hands-on only) + PR body
