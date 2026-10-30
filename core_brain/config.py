@@ -541,13 +541,13 @@ class MakerConfig:
 
         dyn_min = _env("BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS")
         if dyn_min:
-            kw["bot_quote_spread_offset_min_cents"] = int(_bounded_float(
-                "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS", dyn_min, 1.0, 10.0))
+            kw["bot_quote_spread_offset_min_cents"] = _whole_cents(
+                "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS", dyn_min, 1, 10)
 
         dyn_max = _env("BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS")
         if dyn_max:
-            kw["bot_quote_spread_offset_max_cents"] = int(_bounded_float(
-                "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS", dyn_max, 1.0, 20.0))
+            kw["bot_quote_spread_offset_max_cents"] = _whole_cents(
+                "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS", dyn_max, 1, 20)
 
         dyn_age = _env("BOT_QUOTE_SPREAD_OFFSET_MAX_AGE_SEC")
         if dyn_age:
@@ -726,6 +726,27 @@ def _bounded_float(name: str, raw: str, lo: float, hi: float) -> float:
         raise ValueError(f"{name}={raw!r} is not finite")
     if not lo <= value <= hi:
         raise ValueError(f"{name}={raw!r} is outside {lo:g}..{hi:g}")
+    return value
+
+
+def _whole_cents(name: str, raw: str, lo: int, hi: int) -> int:
+    """An integer count of cents inside `lo`..`hi`, or a ValueError naming the key.
+
+    Whole cents only. `6` is six cents; `6.5` and `6.0` are refused rather than
+    truncated, because `_bounded_float(...)` followed by `int()` silently ran
+    6 for both of them until #872 and the operator had no way to see it. The
+    message names the unit so a reader never has to guess the scale.
+    """
+    text = raw.strip()
+    if not (text.isdigit() or (text[:1] in ("+", "-") and text[1:].isdigit())):
+        raise ValueError(
+            f"{name}={raw!r} must be whole cents, for example 6 = 6\u00a2"
+        )
+    value = int(text)
+    if not lo <= value <= hi:
+        raise ValueError(
+            f"{name}={raw!r} is outside {lo}..{hi} whole cents"
+        )
     return value
 
 
