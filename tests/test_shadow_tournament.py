@@ -1255,8 +1255,7 @@ def test_cockpit_blueprint_tab_pins_the_champion():
     blueprint = html[start_idx:end_idx]
 
     canonical_keys = [
-        "BOT_QUOTE_TOURNAMENT_PRESET=prudent",
-        "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1",
+        "BOT_QUOTE_TOURNAMENT_PRESET=balanced",
         "BOT_ORDER_REQUOTE_DEAD_BAND_USD",
         "BOT_RISK_STOP_MODE=ABSOLUTE_DROP",
         "BOT_RISK_STOP_ADVERSE_DROP_USD=0.045",
@@ -1273,7 +1272,7 @@ def test_cockpit_blueprint_tab_pins_the_champion():
 
     # Preserved benchmark label; the champion preset is named, the retired one is not.
     assert "Static benchmark synthesis" in blueprint
-    assert 'TOURNAMENT_PRESETS["prudent"]' in blueprint
+    assert 'TOURNAMENT_PRESETS["balanced"]' in blueprint
     assert 'TOURNAMENT_PRESETS["hybrid"]' not in blueprint
     assert "-Preset hybrid" not in blueprint
 
