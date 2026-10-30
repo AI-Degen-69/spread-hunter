@@ -27,9 +27,10 @@ evidence.
 - Every new behavior needs a test that fails without it (see `tasks/plan.md` per-task
   assertions: current-folder selection, nested-worktree rejection, relative-command-line
   Unknown, Foreign refusal with path, PID-reuse skip, order-of-kill, rescan catch).
-- **No existing test file is modified.** New tests live only in the four new files.
-  If a green run needs an old expectation moved, the change is wrong — re-read the
-  script, do not edit the expectation.
+- **Only the pinned `MenuKeys` literal in `tests/test_menu_navigation.py` may change**
+  (to cover key `x`); no existing assertion is weakened. All other new tests live
+  only in the four new files. If a green run needs an old expectation moved, the
+  change is wrong — re-read the script, do not edit the expectation.
 
 ## Scope fences (hard)
 
@@ -40,6 +41,7 @@ evidence.
     stays running. Nothing else in the README.
   - New: `tests/test_menu_project_root.py`, `tests/test_menu_checkout_ownership.py`,
     `tests/test_menu_dashboard_identity.py`, `tests/test_menu_force_stop.py`.
+  - `tests/test_menu_navigation.py` — pinned `MenuKeys` literal only (adds `x`).
   - `tasks/plan.md`, `tasks/todo.md`, `CONSTRAINTS.md`, `SPEC.md`.
 - **Must NOT be modified:**
   - Any Python module (`core_brain/**`, `dashboard/**`, `scripts/*.py`).

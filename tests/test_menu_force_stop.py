@@ -63,7 +63,9 @@ LIFTED = _lift(
 
 def _run(main: Path, sib: Path, wt: Path, *, port_pid: int = 101,
          wpg_fail: tuple = (), flip: tuple = (), late: dict | None = None,
-         dash_record: bool = False, legacy_session: bool = False) -> dict:
+         dash_record: bool = False, legacy_session: bool = False,
+         owned_only: bool = False, extra: tuple = (),
+         tree_kill: dict | None = None) -> dict:
     main_s = str(main).replace("'", "''")
     run_dir = main / "runtime"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -105,6 +107,11 @@ def _run(main: Path, sib: Path, wt: Path, *, port_pid: int = 101,
         {"pid": 110, "name": "python.exe",
          "cmd": "python -m core_brain.shadow_run --db relative110.db", "t": 0},
     ]
+    if owned_only:
+        table = [row for row in table if row["pid"] in (101, 102, 103)]
+    for row in extra:
+        table.append({"pid": row["pid"], "name": row.get("name", "python.exe"),
+                      "cmd": row["cmd"], "t": 0})
     if late:
         late_row = dict(late)
         late_row["t"] = 0
@@ -112,6 +119,12 @@ def _run(main: Path, sib: Path, wt: Path, *, port_pid: int = 101,
         late_row = None
     table_json = json.dumps(table)
     late_json = json.dumps(late_row)
+    if tree_kill:
+        tree_lit = "@{ " + " ".join(
+            f"{p} = @({', '.join(str(c) for c in ch) })" for p, ch in tree_kill.items()) + " }"
+    else:
+        tree_lit = "@{}"
+    extra_starts = [f"$script:Starts[{r['pid']}] = $script:BaseUnix" for r in extra]
     script = "\n".join([
         "$ErrorActionPreference = 'Stop'",
         LIFTED,
@@ -160,6 +173,8 @@ def _run(main: Path, sib: Path, wt: Path, *, port_pid: int = 101,
         "  $script:Calls['wpg'] += @($ProcessId)",
         "  if ($script:WpgFail -contains $ProcessId) { return $false }",
         "  $script:Starts.Remove($ProcessId)",
+        "  if ($script:TreeKill.ContainsKey($ProcessId)) {",
+        "    foreach ($ch in $script:TreeKill[$ProcessId]) { $script:Starts.Remove([int]$ch) } }",
         "  return $true }",
         "function taskkill { $script:Calls['kill'] += @(($args -join ' ')) }",
         "function Stop-TsBridge { $script:Calls['ts'] = [int]$script:Calls['ts'] + 1 }",
@@ -168,6 +183,7 @@ def _run(main: Path, sib: Path, wt: Path, *, port_pid: int = 101,
         "function Lsh-Fail($m) { $script:Log += @(\"FAIL:$m\") }",
         "function Lsh-Warn($m) { $script:Log += @(\"WARN:$m\") }",
         "$script:Table1 = ('" + table_json.replace("'", "''") + "' | ConvertFrom-Json)",
+        f"$script:TreeKill = {tree_lit}",
         "$script:Starts = @{ 101 = $script:BaseUnix; 102 = $script:BaseUnix;",
         "  103 = $script:BaseUnix; 104 = $script:BaseUnix; 105 = $script:BaseUnix;",
         "  106 = $script:BaseUnix; 107 = ($script:BaseUnix + 3600);",
@@ -175,6 +191,7 @@ def _run(main: Path, sib: Path, wt: Path, *, port_pid: int = 101,
         "if ($script:LateRow -ne 'null') {",
         "  $lr = ($script:LateRow | ConvertFrom-Json)",
         "  $script:Starts[[int]$lr.pid] = $script:BaseUnix }",
+        *[f"{line}" for line in extra_starts],
         "$r = Stop-WorktreeProcessesForce",
         "$out = @{ result = $r; log = @($script:Log);",
         "  killed = @($script:Calls['kill']); ts = [int]$script:Calls['ts'] }",
@@ -256,6 +273,26 @@ def test_force_stop_rescan_catches_late_owned_process(tmp_path):
     assert 111 in killed
     assert killed.index(111) > killed.index(103)
     assert res["result"] is True
+
+
+def test_force_stop_all_owned_rescan_is_not_inconclusive(tmp_path):
+    main, sib, wt = _make_tree(tmp_path)
+    res = _run(main, sib, wt, legacy_session=True, owned_only=True)
+    assert _killed_pids(res) == [101, 102, 103]
+    assert res["result"] is True
+    text = "\n".join(res["log"])
+    assert "inconclusive" not in text
+
+
+def test_force_stop_tree_killed_child_not_reported_running(tmp_path):
+    main, sib, wt = _make_tree(tmp_path)
+    extra = ({"pid": 112, "cmd": f"python -m scripts.filter_loop \"{main}/c.json\""},
+             {"pid": 113, "cmd": f"python -m scripts.filter_loop \"{main}/c.json\""})
+    res = _run(main, sib, wt, legacy_session=True, owned_only=True, extra=extra,
+               tree_kill={112: [113]})
+    assert res["result"] is True
+    text = "\n".join(res["log"])
+    assert "still running" not in text
 
 
 def test_force_stop_leaves_registry_and_bridge_alone(tmp_path):

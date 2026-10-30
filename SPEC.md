@@ -28,11 +28,11 @@ stoppable from its own checkout's menu.
 
 ## 3. Architecture & functional components
 
-### 3.1 Checkout selection — `Resolve-ProjectRoot -CurrentPath -ScriptRoot`
+### 3.1 Checkout selection — `Resolve-ProjectRoot -CurrentPath -ScriptCheckout`
 
 - Caller passes `(Get-Location).ProviderPath`. If that exact folder holds both marker
   files (`core_brain/order_manager.py` and `dashboard/server.py`), it wins (source
-  `"current folder"`). Otherwise the parent of `ScriptRoot` wins (source
+  `"current folder"`). Otherwise the parent of `ScriptCheckout` wins (source
   `"script location"`). No parent-folder walk. Result normalized via `GetFullPath`,
   trailing separator stripped.
 - Assigned to `$ProjectPath` before any dependent path is built (current line 51);

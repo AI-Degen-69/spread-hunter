@@ -46,10 +46,10 @@ criteria, §5 edge cases). The one improvement proposal (§5 below) is folded in
 
 | Function / key | Signature / mapping | Contract |
 |---|---|---|
-| `Resolve-ProjectRoot` | `-CurrentPath -ScriptRoot → @{ Path; Source }` | Exact-folder marker check only; `Source ∈ {"current folder","script location"}`; `GetFullPath`-normalized, no trailing separator |
+| `Resolve-ProjectRoot` | `-CurrentPath -ScriptCheckout → @{ Path; Source }` | Exact-folder marker check only; `Source ∈ {"current folder","script location"}`; `GetFullPath`-normalized, no trailing separator |
 | `Test-PathInCheckout` | `-Path -Root → bool` | Case-insensitive boundary match; bounded nested-checkout walk between path and root, never above root |
 | `Get-CommandLineCheckoutOwner` | `-CommandLine -Root → Owned\|Foreign\|Unknown` | argv[0] ignored; quoting + `--opt=value` honored; none/mixed → Unknown |
-| `Get-DashboardOwnership` | `-Port → Owned\|Foreign\|Unknown` | Owned = canonical `data/orders.db` + registry under local `runtime/` or `run/` + `services.dash.pid == Get-PortPid`; read-only, never writes records |
+| `Get-DashboardOwnership` | `-PortNumber → Owned\|Foreign\|Unknown` | Owned = canonical `data/orders.db` + registry under local `runtime/` or `run/` + `services.dash.pid == Get-PortPid`; read-only, never writes records |
 | `Stop-WorktreeProcessesForce` | `→ bool` | Kill order dash → order_manager → rest; `taskkill /T /F` + `Wait-ProcessGone`; PID-reuse re-check; one rescan; three-list report + resting-orders warning |
 | Action map / dispatch | `stop-all-force, force-stop, nuke → x` | `x ∉ $script:MenuKeys` (verified at build time); `stop-all/stopall/clean/reset → 7` preserved; `Invoke-LiveAction "x"` calls only the force stop |
 
@@ -74,7 +74,7 @@ Depends on: nothing. Files: `scripts/spread-hunter-menu.ps1` (≈lines 50–61, 
 `status`, 3 timebox launches, comment near 1038–1039), `tests/test_menu_project_root.py`
 (new), `README.md` (one checkout-rule sentence — or defer to T3's README pass).
 
-- Add `Resolve-ProjectRoot -CurrentPath -ScriptRoot` near the top (closing brace at
+- Add `Resolve-ProjectRoot -CurrentPath -ScriptCheckout` near the top (closing brace at
   column zero for `_lift`); set `$ProjectPath` from it at the current line 51;
   `-WorkingDirectory $ProjectPath` on the three timebox launches; fix the 1038–1039
   comment; header/`status` print `Checkout: <path> (from current folder|from script

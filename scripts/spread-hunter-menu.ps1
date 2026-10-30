@@ -55,10 +55,10 @@ function Resolve-ProjectRoot {
     checkout. Never walks parent folders. #>
     param([string]$CurrentPath, [string]$ScriptCheckout)
     $markersOk = $false
-    if ($CurrentPath -and (Test-Path $CurrentPath)) {
+    if ($CurrentPath -and (Test-Path -LiteralPath $CurrentPath)) {
         $up = Join-Path $CurrentPath "core_brain/order_manager.py"
         $down = Join-Path $CurrentPath "dashboard/server.py"
-        if ((Test-Path $up) -and (Test-Path $down)) { $markersOk = $true }
+        if ((Test-Path -LiteralPath $up) -and (Test-Path -LiteralPath $down)) { $markersOk = $true }
     }
     if ($markersOk) {
         $sel = [System.IO.Path]::GetFullPath($CurrentPath).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
@@ -2788,7 +2788,7 @@ function Get-ForceStopTargets {
         try { $born = (Get-Process -Id $p.ProcessId -ErrorAction Stop).StartTime } catch { $born = $null }
         $found += [pscustomobject]@{ Pid = [int]$p.ProcessId; CommandLine = [string]$p.CommandLine; Verdict = $verdict; Rank = $rank; BornAt = $born }
     }
-    return @($found | Sort-Object Rank, Pid)
+    return ,@($found | Sort-Object Rank, Pid)
 }
 
 function Stop-WorktreeProcessesForce {
@@ -2823,6 +2823,11 @@ function Stop-WorktreeProcessesForce {
         $owned = @($targets | Where-Object { $_.Verdict -eq 'Owned' })
         if (($pass -eq 1) -and ($owned.Count -eq 0)) { break }
         foreach ($t in $owned) {
+            if (-not (Test-PidAlive -ProcessId $t.Pid)) {
+                # An earlier taskkill /T already ended this child.
+                if (-not ($stopped -contains $t.Pid)) { $stopped += $t.Pid }
+                continue
+            }
             if ($null -eq $t.BornAt) {
                 Lsh-Warn ("PID {0} start time unreadable; leaving it running." -f $t.Pid)
                 if (-not ($survived -contains $t.Pid)) { $survived += $t.Pid }
@@ -2834,6 +2839,7 @@ function Stop-WorktreeProcessesForce {
         }
     }
     $foreign = @($lastTargets | Where-Object { $_.Verdict -eq 'Foreign' } | ForEach-Object { $_.Pid })
+    $survived = @($survived | Where-Object { Test-PidAlive -ProcessId $_ })
     $unknown = @($lastTargets | Where-Object { $_.Verdict -eq 'Unknown' } | ForEach-Object { $_.Pid })
     foreach ($sp in $survived) { if (-not ($unknown -contains $sp)) { $unknown += $sp } }
     if ($stopped.Count -gt 0) { Lsh-Ok ("Force stop complete: stopped PID(s) {0}." -f ($stopped -join ", ")) }
