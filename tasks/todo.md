@@ -9,10 +9,10 @@ Branch: `i881/improve-align-spread-hunter-menu-script-for-pwd-aw`
 - [x] Focused run green
 
 ## T2 — Ownership + dashboard identity [Code] M
-- [ ] `Test-PathInCheckout`, `Get-CommandLineCheckoutOwner`, `Get-DashboardOwnership`
-- [ ] Wiring: adoption gate, 4 status labels, `Stop-BotStack` gate, 3 predicate swaps
-- [ ] `tests/test_menu_checkout_ownership.py` + `tests/test_menu_dashboard_identity.py`
-- [ ] Focused run green, existing menu suites untouched and green
+- [x] `Test-PathInCheckout`, `Get-CommandLineCheckoutOwner`, `Get-DashboardOwnership`
+- [x] Wiring: adoption gate, 4 status labels, `Stop-BotStack` gate, predicate swaps
+- [x] `tests/test_menu_checkout_ownership.py` + `tests/test_menu_dashboard_identity.py`
+- [x] Focused run green, existing menu suites untouched and green
 
 ## T3 — Force stop + wiring + docs [Code] M
 - [ ] `Stop-WorktreeProcessesForce` (order, PID-reuse guard, rescan, 3-list report)

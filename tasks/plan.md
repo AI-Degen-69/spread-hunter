@@ -88,7 +88,7 @@ Depends on: nothing. Files: `scripts/spread-hunter-menu.ps1` (≈lines 50–61, 
 - Done when: from a worktree folder, main's script by full path prints the worktree
   as the checkout.
 
-## T2 — Ownership proofs + dashboard identity [Code] M
+## T2 — Ownership proofs + dashboard identity [Code] M [x]
 
 Depends on: T1. Files: `scripts/spread-hunter-menu.ps1` (≈lines 529–561, 909–956,
 1832–1841, 1982–1999, 2090–2148, 2563–2638), `tests/test_menu_checkout_ownership.py`
@@ -108,6 +108,12 @@ Depends on: T1. Files: `scripts/spread-hunter-menu.ps1` (≈lines 529–561, 909
   status-labels-write-nothing / stop_bot_stack skips-or-controls.
 - Done when: main's `status` labels a worktree dashboard `other checkout` and main's
   `stop` never POSTs to it.
+- Reconciliation note (build): the same Owned-predicate swap was also applied to
+  `Test-OrphanStackProcess`, which carries the identical `-like "*$ProjectPath*"`
+  prefix flaw (a sibling checkout's orphan would block this checkout's reset).
+  Same one-line narrowing, same fail-closed direction (relative command lines stay
+  unmatched either way); not in the leave-untouched list, aligned with the
+  checkout-local invariant.
 
 ## T3 — Separate force-stop action + wiring + docs [Code] M
 
