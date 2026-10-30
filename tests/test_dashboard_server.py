@@ -3618,6 +3618,12 @@ def test_parameters_cards_canonical_env_var_badges(client):
         "bot_risk_stop_adverse_drop_usd": "BOT_RISK_STOP_ADVERSE_DROP_USD",
         "bot_risk_stop_max_drawdown_pct": "BOT_RISK_STOP_MAX_DRAWDOWN_PCT",
         "bot_risk_circuit_max_drawdown_pct": "BOT_RISK_CIRCUIT_MAX_DRAWDOWN_PCT",
+        # Queue-clear gate (#866)
+        "bot_order_gate_queue_clear_on": "BOT_ORDER_GATE_QUEUE_CLEAR_ON",
+        "bot_order_queue_max_clear_min": "BOT_ORDER_QUEUE_MAX_CLEAR_MIN",
+        # Flow window has no loader (engine always uses 1800s), so like other
+        # derived cards it carries no env badge; the card action names the
+        # ignored variable instead.
     }
 
     env_example_path = Path(__file__).resolve().parent.parent / ".env.example"
@@ -3627,7 +3633,7 @@ def test_parameters_cards_canonical_env_var_badges(client):
     response = client.get("/api/parameters")
     assert response.status_code == 200
     params = response.json()["parameters"]
-    assert len(params) == 57
+    assert len(params) == 60
 
     card_keys = {p["key"] for p in params}
     assert card_keys >= set(expected_badges.keys())
@@ -4839,3 +4845,118 @@ def test_shadow_stop_clears_own_fleet_lock(tmp_path, monkeypatch):
     finally:
         con.close()
     assert rows == []
+
+
+def _write_arm_plan(root, *, issue=866, run_number=1, stamp="2026-10-30T12-00",
+                    arms=None):
+    """Write a fixture tournament plan record; hermetic, never in data/."""
+    from pathlib import Path as _P
+    root = _P(root)
+    d = root / f"i{issue}-r{run_number}_{stamp}"
+    d.mkdir(parents=True, exist_ok=True)
+    plan = {"issue": issue, "stamp": stamp, "run_number": run_number,
+            "minutes": 60.0,
+            "arms": arms if arms is not None else [
+                {"name": "control", "env": {}},
+                {"name": "balanced-only",
+                 "env": {"BOT_QUOTE_TOURNAMENT_PRESET": "balanced"}},
+            ]}
+    (d / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    return d / "plan.json"
+
+
+@pytest.fixture
+def arm_tournament_root(tmp_path, monkeypatch):
+    """Point arm resolution at a fixture root with one balanced arm."""
+    import dashboard.arm_params as arm_params
+    root = tmp_path / "tournaments"
+    root.mkdir()
+    _write_arm_plan(root)
+    monkeypatch.setattr(arm_params, "default_tournament_root", lambda: root)
+    arm_params.clear_memo()
+    yield root
+    arm_params.clear_memo()
+
+
+def _param_by_name(data, name):
+    for p in data["parameters"]:
+        if p["name"] == name:
+            return p
+    raise AssertionError(f"parameter {name!r} missing from /api/parameters")
+
+
+def test_parameters_arm_returns_effective_values(client, arm_tournament_root):
+    """?arm=balanced-only shows the arm's effective 4c ceiling, not global 20c."""
+    response = client.get("/api/parameters?arm=balanced-only")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["arm_context"]["arm"] == "balanced-only"
+    assert data["arm_context"]["issue"] == 866
+    assert data["arm_error"] is None
+    assert _param_by_name(data, "bot_quote_spread_offset_max_cents")["raw_value"] == 4
+
+
+def test_parameters_no_arm_stays_global(client, arm_tournament_root):
+    """No arm param keeps the byte-identical global path: 20c, no arm keys."""
+    data = client.get("/api/parameters").json()
+    assert _param_by_name(data, "bot_quote_spread_offset_max_cents")["raw_value"] == 20
+    assert "arm_context" not in data
+    assert "arm_error" not in data
+
+
+def test_parameters_unknown_arm_returns_structured_error(client, arm_tournament_root):
+    """Unknown arm never falls back to global values silently."""
+    data = client.get("/api/parameters?arm=no-such-arm").json()
+    assert data["parameters"] == []
+    assert data["arm_context"] is None
+    assert data["arm_error"]["code"] == "UNKNOWN_ARM"
+
+
+def test_parameters_queue_gate_cards_show_engine_values(client, arm_tournament_root):
+    """The three Queue Gate cards exist and show true engine values."""
+    data = client.get("/api/parameters").json()
+    on = _param_by_name(data, "bot_order_gate_queue_clear_on")
+    max_clear = _param_by_name(data, "bot_order_queue_max_clear_min")
+    flow = _param_by_name(data, "bot_order_queue_flow_window_sec")
+    assert on["raw_value"] is False
+    assert max_clear["raw_value"] == 60.0
+    assert flow["raw_value"] == 1800.0
+
+
+def test_parameters_arm_flow_override_note(client, tmp_path, monkeypatch):
+    """A plan recording BOT_ORDER_QUEUE_FLOW_WINDOW_SEC gets an honesty note."""
+    import dashboard.arm_params as arm_params
+    root = tmp_path / "tournaments"
+    root.mkdir()
+    _write_arm_plan(root, arms=[{"name": "flow5",
+                                 "env": {"BOT_ORDER_QUEUE_FLOW_WINDOW_SEC": "300"}}])
+    monkeypatch.setattr(arm_params, "default_tournament_root", lambda: root)
+    arm_params.clear_memo()
+    try:
+        data = client.get("/api/parameters?arm=flow5").json()
+    finally:
+        arm_params.clear_memo()
+    flow = _param_by_name(data, "bot_order_queue_flow_window_sec")
+    assert flow["raw_value"] == 1800.0
+    assert "ignored" in flow["action"]
+
+
+def test_parameter_arms_catalog_lists_fixture_arms(client, arm_tournament_root):
+    """The arm picker catalog exposes plan identity and arm names."""
+    data = client.get("/api/parameter-arms").json()
+    assert len(data["arms"]) == 1
+    entry = data["arms"][0]
+    assert entry["issue"] == 866
+    assert entry["arms"] == ["control", "balanced-only"]
+    assert entry["record_error"] is None
+    assert entry["plan_key"].startswith("i866-r1_")
+
+
+def test_parameter_arms_catalog_empty_without_plans(client, tmp_path, monkeypatch):
+    """No launched plans means an empty picker, not an error."""
+    import dashboard.arm_params as arm_params
+    root = tmp_path / "tournaments"
+    root.mkdir()
+    monkeypatch.setattr(arm_params, "default_tournament_root", lambda: root)
+    data = client.get("/api/parameter-arms").json()
+    assert data == {"arms": []}

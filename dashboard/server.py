@@ -5544,7 +5544,8 @@ def log_stream_events(
 
 
 @app.get("/api/parameters")
-def get_parameters(registry=None):
+def get_parameters(registry=None, arm: str | None = None,
+                   plan: str | None = None, tourney: str | None = None):
     """Return active strategy settings, trigger thresholds, and action descriptions.
 
     Consolidates safety limits from core_brain.config:MakerConfig (bot_pos_price_max_pair_cost_usd,
@@ -5556,7 +5557,47 @@ def get_parameters(registry=None):
     # Display-only endpoint: never places an order. `for_display=True` keeps an
     # inherited rehearsal-only trial knob from 500-ing this panel (see
     # core_brain.config.load).
-    cfg = load_cfg(for_display=True)
+    arm_context = None
+    arm_record_env: dict = {}
+    arm_db_override = None
+    if arm:
+        from dashboard import arm_params as _arm_params
+        try:
+            _plan_path = _arm_params.resolve_plan_path(plan=plan or None,
+                                                       tourney=tourney or None)
+            _arm_rec = _arm_params.resolve_arm(_plan_path, arm)
+            _result = _arm_params.evaluate_arm(_plan_path, arm)
+        except _arm_params.ArmParamsError as exc:
+            return JSONResponse({"parameters": [], "arm_context": None,
+                                 "arm_error": {"code": exc.code, "message": str(exc)}})
+        cfg = _result.core
+        arm_record_env = dict(_arm_rec.get("env", {}))
+        _db = _arm_rec.get("db_path")
+        if isinstance(_db, str) and _db:
+            _db_path = Path(_db)
+            if not _db_path.is_absolute():
+                _db_path = LIVE_ROOT / _db_path
+            if _db_path.is_file():
+                arm_db_override = str(_db_path)
+        from core_brain.shadow_run import parse_tournament_run_dir_name
+        _parsed = parse_tournament_run_dir_name(_plan_path.parent)
+        _issue = _parsed["issue"] if _parsed else None
+        if _issue is None:
+            try:
+                with open(_plan_path, "r", encoding="utf-8") as _f:
+                    _plan_data = json.load(_f)
+                if isinstance(_plan_data.get("issue"), int):
+                    _issue = _plan_data["issue"]
+            except (OSError, ValueError):
+                pass
+        arm_context = {
+            "plan_key": _plan_path.parent.name,
+            "issue": _issue,
+            "arm": _arm_rec["name"],
+            "source": "plan" if plan else ("tourney" if tourney else "newest"),
+        }
+    else:
+        cfg = load_cfg(for_display=True)
     portfolio_usd = None
     try:
         reg = registry
@@ -5565,7 +5606,8 @@ def get_parameters(registry=None):
             # Build from the dashboard's active store, not DEFAULT_DB_PATH: a
             # panel that reads data/orders.db ignores --db / set_db_override and
             # shows the production wallet's caps against a demo or shadow DB.
-            reg = OrderRegistry(db_path=resolve_db_path(_ACTIVE_DB_OVERRIDE))
+            _store = arm_db_override or resolve_db_path(_ACTIVE_DB_OVERRIDE)
+            reg = OrderRegistry(db_path=_store)
         am = reg.get_latest_account_mark()
         if am and am.get("account_value_usd") is not None and float(am["account_value_usd"]) > 0:
             portfolio_usd = float(am["account_value_usd"])
@@ -5597,9 +5639,17 @@ def get_parameters(registry=None):
     sweep = resolve_sweep_interval()
 
     from scoring.config import load as load_scoring
-    scoring_error = None
+    if arm:
+        scoring_error = _result.scoring_error
+        if _result.scoring is not None:
+            scfg = _result.scoring
+        else:
+            scfg = _NoScoringConfig(scoring_error or "arm scoring config unavailable")
+    else:
+        scoring_error = None
     try:
-        scfg = load_scoring()
+        if not arm:
+            scfg = load_scoring()
     except (TypeError, ValueError) as exc:
         scoring_error = f"{type(exc).__name__}: {exc}"
         logger.warning(
@@ -5612,6 +5662,8 @@ def get_parameters(registry=None):
         # lets all 19 f-string read sites keep their format specs.
         scfg = _NoScoringConfig(scoring_error)
 
+    _flow_override = str(arm_record_env.get("BOT_ORDER_QUEUE_FLOW_WINDOW_SEC", "")).strip()
+    _flow_ignored = bool(arm) and _flow_override not in ("", "1800", "1800.0")
     params = [
         # =====================================================================
         # SCOPE 1: MARKET FILTERING (MARKET SCREENER)
@@ -6443,6 +6495,61 @@ def get_parameters(registry=None):
             "action": "Fetches fresh on-chain USDC balance and updates float marks",
         },
 
+        # Queue-Clear Gate (bot engine refuses books stuck behind slow queues)
+        {
+            "name": "bot_order_gate_queue_clear_on",
+            "key": "bot_order_gate_queue_clear_on",
+            "display_name": "Queue-Clear Gate Active",
+            "scope": "bot_engine",
+            "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
+            "subgroup": "protection_lifecycle",
+            "subgroup_label": "Protection & Lifecycle: Order Management & Requoting",
+            "value": f"{cfg.bot_order_gate_queue_clear_on}",
+            "raw_value": cfg.bot_order_gate_queue_clear_on,
+            "default": "False",
+            "env_var": "BOT_ORDER_GATE_QUEUE_CLEAR_ON",
+            "category": "Queue Realism",
+            "badge": "safety",
+            "trigger": "Queue-clear gate switch",
+            "action": "Refuses books whose queue cannot clear within the max-clear window",
+        },
+        {
+            "name": "bot_order_queue_max_clear_min",
+            "key": "bot_order_queue_max_clear_min",
+            "display_name": "Max Queue Clear Time",
+            "scope": "bot_engine",
+            "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
+            "subgroup": "protection_lifecycle",
+            "subgroup_label": "Protection & Lifecycle: Order Management & Requoting",
+            "value": f"{cfg.bot_order_queue_max_clear_min:.1f}m",
+            "raw_value": cfg.bot_order_queue_max_clear_min,
+            "default": "60.0m",
+            "env_var": "BOT_ORDER_QUEUE_MAX_CLEAR_MIN",
+            "category": "Queue Realism",
+            "badge": "cadence",
+            "trigger": f"Calculated queue clear time > {cfg.bot_order_queue_max_clear_min:.1f}m",
+            "action": "Screens out congested queues that cannot drain within the window",
+        },
+        {
+            "name": "bot_order_queue_flow_window_sec",
+            "key": "bot_order_queue_flow_window_sec",
+            "display_name": "Queue Flow Window",
+            "scope": "bot_engine",
+            "scope_label": "Scope 2: Bot Engine (Shared Live & Shadow)",
+            "subgroup": "protection_lifecycle",
+            "subgroup_label": "Protection & Lifecycle: Order Management & Requoting",
+            "value": f"{cfg.bot_order_queue_flow_window_sec:.0f}s",
+            "raw_value": cfg.bot_order_queue_flow_window_sec,
+            "default": "1800s",
+            "env_var": "",
+            "category": "Queue Realism",
+            "badge": "cadence",
+            "trigger": "Lookback window for queue flow measurement",
+            "action": (f"Recorded override BOT_ORDER_QUEUE_FLOW_WINDOW_SEC={_flow_override} "
+                        f"has no loader and is ignored; engine uses {cfg.bot_order_queue_flow_window_sec:.0f}s"
+                        if _flow_ignored else
+                        "Averages queue flow over a 30-minute window before admitting books"),
+        },
         # Single-Buy Rescue & Aging
         {
             "name": "bot_risk_gate_pairs_rule_on",
@@ -6635,7 +6742,18 @@ def get_parameters(registry=None):
             "trigger": "scoring.config.load() raised",
             "action": "Scope 1 shows a placeholder, not engine values. Fix the named variable and restart the dashboard.",
         })
-    return JSONResponse({"parameters": params})
+    body: dict = {"parameters": params}
+    if arm:
+        body["arm_context"] = arm_context
+        body["arm_error"] = None
+    return JSONResponse(body)
+
+
+@app.get("/api/parameter-arms")
+def get_parameter_arms():
+    """Catalog for the Strategy Parameters arm picker: newest plan per issue."""
+    from dashboard import arm_params as _arm_params
+    return JSONResponse({"arms": _arm_params.list_plan_catalog()})
 
 
 @app.get("/api/active-markets")

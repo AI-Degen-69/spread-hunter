@@ -4919,6 +4919,10 @@ let cachedParameters = [];
 let activeParamScope = 'all';
 let paramSortCol = 'category'; // Default view: sorted a-z asc by category
 let paramSortDir = 'asc';       // Default view: asc
+let selectedParamArm = '';    // "plan_key|arm" or '' for the global default
+let paramArmContext = null;
+let paramArmError = null;
+let paramFetchSeq = 0;        // stale-response guard for arm switching
 
 function compareParams(a, b, col, dir) {
   let res = 0;
@@ -5003,7 +5007,47 @@ const CANONICAL_SCOPE_CONFIG = {
   }
 };
 
+function renderParamArmIdentity() {
+  const el = document.getElementById('param-arm-identity');
+  if (!el) return;
+  if (paramArmError) {
+    el.textContent = `Arm unavailable (${paramArmError.code}): ${paramArmError.message}`;
+  } else if (paramArmContext) {
+    el.textContent = `Arm ${paramArmContext.arm} \u00b7 plan ${paramArmContext.plan_key} (${paramArmContext.source}) \u2014 effective values`;
+  } else {
+    el.textContent = 'Global default \u2014 shipped base config';
+  }
+}
+
+async function loadParamArms() {
+  const select = document.getElementById('param-arm-select');
+  if (!select) return;
+  try {
+    const res = await fetch('/api/parameter-arms');
+    if (!res.ok) return;
+    const data = await res.json();
+    const entries = (data && data.arms) || [];
+    select.querySelectorAll('option[data-plan]').forEach(o => o.remove());
+    for (const entry of entries) {
+      if (entry.record_error || !Array.isArray(entry.arms)) continue;
+      const group = document.createElement('optgroup');
+      group.label = `Issue #${entry.issue}`;
+      for (const arm of entry.arms) {
+        const opt = document.createElement('option');
+        opt.value = `${entry.plan_key}|${arm}`;
+        opt.textContent = arm;
+        opt.setAttribute('data-plan', entry.plan_key);
+        group.appendChild(opt);
+      }
+      if (group.children.length) select.appendChild(group);
+    }
+  } catch (e) {
+    console.debug('Failed to load parameter arms:', e);
+  }
+}
+
 function renderParametersView() {
+  renderParamArmIdentity();
   const params = cachedParameters || [];
   const filtered = activeParamScope === 'all'
     ? params
@@ -5198,10 +5242,19 @@ function renderParametersView() {
 }
 
 async function renderParameters() {
+  const seq = ++paramFetchSeq;
   try {
-    const res = await fetch('/api/parameters');
+    let _paramUrl = '/api/parameters';
+    if (selectedParamArm) {
+      const _sep = selectedParamArm.lastIndexOf('|');
+      _paramUrl = `/api/parameters?arm=${encodeURIComponent(selectedParamArm.slice(_sep + 1))}&plan=${encodeURIComponent(selectedParamArm.slice(0, _sep))}`;
+    }
+    const res = await fetch(_paramUrl);
     if (!res.ok) return;
     const data = await res.json();
+    if (seq !== paramFetchSeq) return; // a newer arm selection already won
+    paramArmContext = data.arm_context || null;
+    paramArmError = data.arm_error || null;
     cachedParameters = data.parameters || [];
     renderParametersView();
   } catch (e) {
@@ -5225,6 +5278,15 @@ document.addEventListener('click', (e) => {
     }
   }
 });
+
+// Wire up Parameters arm picker: refetch effective values on change
+const paramArmSelect = document.getElementById('param-arm-select');
+if (paramArmSelect) {
+  paramArmSelect.addEventListener('change', (e) => {
+    selectedParamArm = e.target.value || '';
+    renderParameters();
+  });
+}
 
 // Wire up Parameter View switch (Grid vs Table)
 const paramGridBtn = document.getElementById('param-view-grid-btn');
@@ -12808,6 +12870,7 @@ if (typeof module === 'undefined' || !module.exports) {
   initDistControls();
   initTopMetaScrollCue();
   bindServicesDropdown();
+  loadParamArms();
   pollStatus();
   renderParameters();
   setInterval(pollStatus, POLL_MS);

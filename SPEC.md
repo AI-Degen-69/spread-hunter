@@ -1,65 +1,75 @@
-# SPEC.md — Issue #857: Preflight-guided Start Run launcher with mode selection, 24h horizon, and watchdog
+# SPEC.md — Issue #866: Arm-specific effective values in Strategy Parameters panel
 
-Branch: `i857/preflight-guided-start-run-launcher` | Issue: #857
+Branch: `i866/fix-strategy-parameters-panel-shows-global-config` | Issue: #866
 
 ## 1. Goal
 
-Transform the dashboard top-nav `START RUN` button (`#btn-master-toggle`) from an immediate blind launcher into an informative, safety-gated preflight modal launcher (`#start-run-modal`). The launcher enables selecting between **Shadow Rehearsal** and **Live Real-Money Run**, enforces sequential preflight verification for live capital, runs with a default 24-hour horizon (`1440m`), logs shadow rehearsals to timestamped sequence databases (`data/NN_shadow_<stamp>.db`), and actively includes the `scripts.global_stop_loss` guardrail risk watchdog.
+The Strategy Parameters panel stops lying by omission: when an arm is selected it
+shows that arm's **effective** engine values (preset + arm env overrides applied
+through the real loaders), and when nothing is selected it clearly labels the
+global base config. Acceptance: `GET /api/parameters?arm=balanced-only` (or any
+preset arm) returns `bot_quote_spread_offset_max_cents = 4¢` instead of the global
+20¢ default.
 
 ## 2. Non-goals (explicit out of scope)
 
-- Direct on-chain collateral deposit or withdrawal from the dashboard.
-- Arbitrary custom duration inputs beyond specified presets (1h, 6h, 24h).
-- Spawning a duplicate or standalone watchdog process from the dashboard (`order_manager poll` already owns and supervises `scripts.global_stop_loss`).
-- Relaxing or bypassing preflight checks for live execution.
-- Rewriting or deleting `data/orders.db` (production registry is strictly read-only).
+- No change to trading-path loaders (`core_brain/config.py`, `scoring/config.py`)
+  or the shadow launcher (`scripts/shadow_tournament.py`, `scripts/tournament_hub.py`).
+- No live venue contact: no `quote`, `complete`, Trader loop, or START button.
+- No production database writes; `data/orders.db` stays read-only.
+- No cockpit cross-page handoff (links carrying plan+arm into the Strategy page):
+  deferred, the in-panel dropdown meets the acceptance criteria alone.
+- No new external dependencies; standard library only.
 
-## 3. Architecture & Functional Components
+## 3. Functional components
 
-### 3.1 Preflight Modal Launcher (`#start-run-modal`)
-- Replaces the direct start request on `#btn-master-toggle` when stopped.
-- Accessible dialog overlay matching existing modal patterns (`role="dialog"`, `aria-labelledby`, Escape/Dismiss handlers).
-- Two modes:
-  - **Shadow Rehearsal**: Dry run, simulated balances, creates fresh numbered database (`data/NN_shadow_<stamp>.db`). Start button active immediately.
-  - **Live Real-Money**: Real capital exposed on Polymarket. Live Start button remains locked until all 4 sequential preflight checks pass.
-- Duration selection: Presets `60m` (1h), `360m` (6h), and `1440m` (24h, default).
+### 3.1 Arm context resolution
+- Catalog stamped run folders containing `plan.json` (via
+  `core_brain/shadow_run.parse_tournament_run_dir_name`), newest plan per issue,
+  with arm names for the dropdown.
+- Resolve order: explicit `plan` (confined to the tournament runs folder) →
+  `tourney` via `latest_tournament_record(issue)` → newest plan across issues.
+- Exact arm-name match first; round-suffix-stripped match only when exactly one
+  arm matches. Distinct errors, never silent fallback to global:
+  `NO_PLAN / MALFORMED_PLAN / UNKNOWN_ARM / AMBIGUOUS_ARM / EVAL_FAILED`.
 
-### 3.2 Sequential Preflight Verification (`/api/system/preflight`)
-Sequential check pipeline with in-memory session and approval gating:
-1. **Credentials & Collateral (`credentials`)**:
-   - Validates Polymarket API credentials, signer, and funder.
-   - Verifies USDC balance and allowance are >= `VENUE_MIN_NOTIONAL_USD`.
-   - Never exposes secret keys in response.
-2. **Market Screener Freshness (`screener`)**:
-   - Inspects `runtime/markets.json` via `load_graduated_snapshot()`.
-   - Rejects stale screener data (> 15 minutes old).
-3. **Market Data & Stream Connectivity (`stream`)**:
-   - Performs REST book check (`full_book()`) and tests WebSocket market stream connectivity within a strict timeout.
-4. **Reachability Probe (`reach_probe`)**:
-   - Controlled 1-share post-only buy-and-cancel verification using `core_brain.reach_probe`.
-   - Requires explicit operator opt-in (`confirm: true`) triggered by a distinct button warning of worst-case exposure ($2.00 max).
-   - Passes ONLY on verified cancel, known order status, and zero matched size.
+### 3.2 Isolated evaluation (non-trading child process)
+- New module `dashboard/arm_params.py`, free of cockpit imports so the dashboard
+  still starts when research modules fail.
+- Parent builds the child env exactly like the launcher: copy parent env, strip
+  every `BOT_*` / `FILTER_*`, apply the arm's `env` overrides, set
+  `SPREAD_HUNTER_DB` to the arm's `db_path`. Child calls `declare_rehearsal()`
+  before loading (same as shadow workers), loads core (`load(for_display=True)`)
+  and scoring configs separately, serializes strict JSON (`dataclasses.asdict` +
+  `filter_common_spread_max_cents`, tuples→lists, NaN/Inf = error). Never trades,
+  never loads `.env`.
+- Parent runs `sys.executable -m …` with a timeout, rebuilds both `MakerConfig`
+  objects from declared fields only (tuples restored), routes scoring failure to
+  the existing `_NoScoringConfig` path. Small thread-safe memo keyed by
+  (plan path, plan mtime, arm name); cards are rebuilt fresh per request so
+  account marks stay current; the global (no-arm) path stays uncached.
 
-### 3.3 Single-Use Approval Store & Gated Live Start
-- Passing all 4 checks generates a short-lived, single-use `preflight_id`.
-- `POST /api/system/start` requires `preflight_id` and selected `minutes`.
-- Consumes `preflight_id` atomically; duplicate or expired tokens are rejected.
-- Spawns live stack:
-  - `filter_loop`
-  - `order_manager poll --interval 0.5 --watch-guardrails` (supervises `scripts.global_stop_loss`)
-  - `trader_loop --live --no-reconcile --no-sweep --interval 5 --deadline-ts <timestamp>`
-- Atomically saves run metadata (`run_id`, `minutes`, `started_at`, `deadline_at`, `preflight_id`) to `processes.json`.
+### 3.3 Endpoint (`GET /api/parameters`)
+- Optional `?arm=<name>&plan=<key>&tourney=<id>`. Response adds
+  `arm_context: {plan_key, issue, arm, source} | null` plus `arm_error` on
+  failure. Global path byte-identical to today.
+- Three missing Queue Gate cards, showing what the engine actually uses:
+  `bot_order_gate_queue_clear_on`, `bot_order_queue_max_clear_min`, and
+  `bot_order_queue_flow_window_sec` (= 1800s default; the loader has **no**
+  `BOT_ORDER_QUEUE_FLOW_WINDOW_SEC` reader, so a plan recording `300` gets a
+  visible "recorded override ignored" note rather than a fake 300).
 
-### 3.4 Trader Loop Deadline Horizon
-- `core_brain/trader_loop.py` accepts `--deadline-ts <epoch_seconds>`.
-- Sleep interval is clamped using `make_deadline_sleep()` from `core_brain/shadow_run.py`.
-- When deadline is reached, raises `_Deadline` and triggers clean loop exit (`shutdown_reason = "deadline"`).
-- If deadline has already passed at startup, exits immediately.
-- Background services (`poll`, `filter_loop`) continue running until operator presses `STOP`.
+### 3.4 UI (panel header dropdown)
+- Arm picker in `#params-panel` header (populated from the catalog, grouped by
+  tournament), `app.js` fetches with arm/plan params, guards against stale
+  responses, and displays exact plan+arm identity. A "Global default" label
+  marks the unselected state.
 
-### 3.5 Shadow Run Sequence Numbering
-- Implements sequence generator in Python matching PowerShell `Get-NextShadowSeq`:
-  - Scans `data/*.db` matching `^(\d{1,2})_shadow_`.
-  - Increments highest sequence, wraps after 99 back to 1.
-  - Names db: `data/NN_shadow_<dd-MM_HH-mm>.db`, run ID: `shadow-NN`.
-- `POST /api/system/shadow/start` accepts `fresh: true` to generate and switch to the new DB.
+## 4. Acceptance
+
+- `GET /api/parameters?arm=<balanced-preset-arm>` returns max-offset `4¢`;
+  no-arm request returns the global `20¢` with a global-default label.
+- Queue cards present with true engine values; flow-window card notes the
+  ignored override when a plan records one.
+- Unknown/ambiguous arm returns a structured error, never global values.
+- Dashboard-only verification: no worker launch, no venue contact.
