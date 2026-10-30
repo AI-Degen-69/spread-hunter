@@ -425,10 +425,28 @@ def test_tournament_metadata_carries_no_never_rendered_badge():
         assert "badge_cls" not in meta, key
 
 
-def test_nav_pill_is_the_single_current_setup_badge():
-    html = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "799"})
-    assert html.count("CURRENT SETUP</span>") == 1
-    assert html.count('class="tourney-pill') == 1
+def test_nav_switcher_offers_799_and_843_with_the_active_pill() -> None:
+    """The top nav flips between the #799 and #843 cockpits in one click.
+
+    The #799 pill is the live setup and carries the single CURRENT SETUP badge;
+    whichever page is being viewed is the highlighted one.
+    """
+    def _active(html: str) -> dict[str, bool]:
+        import re as _re
+        nav = _re.search(r'<div class="tourney-nav">.*?</div>', html, _re.S).group(0)
+        out = {}
+        for key in ("799", "843"):
+            m = _re.search(r'<a href="/' + key + r'" class="([^"]*)"', nav)
+            out[key] = bool(m and "active" in m.group(1))
+        return out
+
+    html_799 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "799"})
+    assert html_799.count("CURRENT SETUP</span>") == 1
+    assert html_799.count('class="tourney-pill') == 2
+    assert _active(html_799) == {"799": True, "843": False}
+
+    html_843 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "843"})
+    assert _active(html_843) == {"799": False, "843": True}
 
 
 # --- The page follows the newest run, whatever issue launched it -------------
@@ -737,13 +755,13 @@ def test_open_dash_accepts_only_an_arm_port_and_a_tournament_store():
 # a shell or a `.env`. The prose and the executable settings live in two files --
 # this markup and `configs/tournaments/i799-tournament-test_arms.json` -- and one
 # value edited in one file and not the other would misreport what the champion
-# actually is. So the nine values are asserted across all three places at once,
-# and the ways the pane could break the engine are asserted absent.
+# actually is. So the seven values are asserted across all three places at once,
+# and the ways the pane could break the engine are asserted absent. The base is
+# the `balanced` preset (balanced-mid), which ships dynamic offset ON and a
+# 2-4c band, so neither of those needs an explicit line.
 
 CHAMPION_ENV = {
-    "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
-    "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
-    "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "6",
+    "BOT_QUOTE_TOURNAMENT_PRESET": "balanced",
     "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.06",
     "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
     "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.045",
@@ -805,7 +823,7 @@ def test_hybrid_blueprint_shows_the_champion_values_in_all_three_places():
         assert f"{key}={value}" in env, f"{key} is missing from the .env block"
 
     for arm in (
-        "prudent-hybrid", "static-floor-2c", "low-churn-deadband", "hair-trigger-2c",
+        "balanced-mid", "static-floor-2c", "low-churn-deadband", "hair-trigger-2c",
         "patient-stop-9c", "wide-shield", "queue-clear-5m",
     ):
         assert arm in table, f"source arm {arm} is not named in the table"
@@ -814,7 +832,7 @@ def test_hybrid_blueprint_shows_the_champion_values_in_all_three_places():
     assert "$0.990" in blueprint, "the pair cap value must stay visible"
 
     # Raw so the single backslashes survive the render.
-    assert r".\scripts\spread-hunter-menu.ps1 shadow-run -Preset prudent -Minutes 60" in commands
+    assert r".\scripts\spread-hunter-menu.ps1 shadow-run -Preset balanced -Minutes 60" in commands
     assert "python -m core_brain.shadow_run" in commands
     for flag in ("--db", "--run-id", "--interval", "--starting-bankroll-usd"):
         assert flag in commands, f"the direct rehearsal command lost {flag}"
@@ -822,7 +840,7 @@ def test_hybrid_blueprint_shows_the_champion_values_in_all_three_places():
     # The direct rehearsal writes a standalone store the cockpit cannot resolve
     # (it serves data/tournaments run records), so the recipe's read-back step
     # must point at the dashboard that opens that store.
-    assert "python -m dashboard.server --db data/champion_prudent_shadow_01.db" in commands
+    assert "python -m dashboard.server --db data/champion_balanced_shadow_01.db" in commands
     assert "python -m scripts.tournament_cockpit_server" not in commands
 
     assert "Performance Forecast" in blueprint
@@ -862,10 +880,10 @@ def test_hybrid_blueprint_never_tells_an_operator_to_break_the_engine():
 
 
 def test_hybrid_blueprint_offset_row_matches_the_799_arm_that_ran_it():
-    """The pane names `prudent-hybrid` as the offset's source, so the two must
+    """The pane names `balanced-mid` as the offset's source, so the two must
     agree: the arm file is what the launcher executes, and a value edited in one
     file and not the other would misreport the champion to the operator."""
-    arm_env = {a["name"]: a.get("env", {}) for a in _i799_source()}[("prudent-hybrid")]
+    arm_env = {a["name"]: a.get("env", {}) for a in _i799_source()}[("balanced-mid")]
 
     for key, value in arm_env.items():
         assert CHAMPION_ENV[key] == value, (
@@ -1027,6 +1045,23 @@ def test_render_all_renders_the_row_through_the_same_cell():
     # An arm with no notes still renders through the same helper: two `N/A`, no
     # empty description or rationale line, and no throw.
     assert refilled["rows"]["bare"].count("N/A") == 2, refilled["rows"]["bare"]
+
+
+@NODE_REQUIRED
+def test_a_poll_with_zero_arms_shows_the_empty_state_instead_of_throwing():
+    """#873: an empty arms list is a valid poll, not a crash.
+
+    `_load_arms_from_file` returns [] when the arms file is missing or does not
+    parse, and every resolver then hands the page an empty list. The radar read
+    `ctrl.label` off a `state.arms[0]`-derived pair, so zero arms cleared the
+    leaderboard and then died mid-render. The page has to put the placeholder on
+    screen and finish.
+    """
+    out = _run_annotation_cases({})
+
+    assert out["errors"] == []
+    assert out["emptyArms"]["shown"] is True, out["emptyArms"]
+    assert out["emptyArms"]["text"] == "No arms in this tournament", out["emptyArms"]
 
 
 def test_embedded_state_cannot_close_its_own_script_tag():

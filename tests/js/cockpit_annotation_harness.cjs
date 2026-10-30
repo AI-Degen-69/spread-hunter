@@ -6,7 +6,9 @@
  *   html  - the page text returned by generate_cockpit_html()
  *   cells - {case name: arm}  -> annotationCellHtml(arm)
  *   rows  - {case name: arm | null} -> renderAll() with that one arm (null = [])
- * Prints JSON on stdout: {cells: {case: html}, rows: {case: html}, errors: []}
+ * Prints JSON on stdout: {cells, rows, emptyArms, errors}
+ *   emptyArms - renderAll() driven with arms: [] -> {shown, text}: the page must
+ *               put the empty-state placeholder on screen and not throw (#873).
  *
  * The page's own script is the unit under test, so nothing is re-implemented
  * here: the real script is extracted from the real page and executed.
@@ -153,4 +155,22 @@ for (const [name, arm] of Object.entries(input.rows || {})) {
   }
 }
 
-process.stdout.write(JSON.stringify({ cells, rows, errors }));
+/* Issue #873: zero arms is a valid poll (no tournament yet / arms file
+ * missing). The page has to say so rather than die on the radar's ctrl.label. */
+const emptyArms = { shown: false, text: '' };
+if (api && api.renderAll) {
+  const tbody = element('leaderboard-tbody');
+  tbody.children = [];
+  tbody.innerHTML = '';
+  try {
+    api.setArms([]);
+    api.renderAll();
+    const el = element('arms-empty-state');
+    emptyArms.shown = el.style.display === 'block';
+    emptyArms.text = String(el.textContent || el.innerText || '');
+  } catch (e) {
+    errors.push(`emptyArms: ${e && e.message}`);
+  }
+}
+
+process.stdout.write(JSON.stringify({ cells, rows, emptyArms, errors }));
