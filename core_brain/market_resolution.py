@@ -399,8 +399,13 @@ def parse_end_state(row: dict, now_ts: Optional[float] = None) -> Optional[Marke
     try:
         outcomes = row.get("outcomes") or row.get("outcomeLabels")
         prices = row.get("outcomePrices") or row.get("outcome_prices")
-        token_ids = (row.get("positionIds") or row.get("position_ids")
-                     or row.get("clobTokenIds") or row.get("clob_token_ids"))
+        is_v2 = str(row.get("version") or "").lower() == "v2"
+        if is_v2:
+            token_ids = (row.get("positionIds") or row.get("position_ids")
+                         or row.get("clobTokenIds") or row.get("clob_token_ids"))
+        else:
+            token_ids = (row.get("clobTokenIds") or row.get("clob_token_ids")
+                         or row.get("positionIds") or row.get("position_ids"))
         # gamma ships these as JSON-encoded STRINGS (e.g. '"["1","0"]"') rather
         # than arrays; normalise both spellings so the winner is found either way.
         def _as_list(v):

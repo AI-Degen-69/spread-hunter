@@ -139,14 +139,34 @@ def fetch_open_positions(funder: str, timeout: float = 15.0) -> Optional[list[di
         if isinstance(payload, dict) and "data" in payload:
             data = payload.get("data") or []
             rows = [r for r in data if isinstance(r, dict)]
+            for r in rows:
+                if "condition_id" in r and "conditionId" not in r:
+                    r["conditionId"] = r["condition_id"]
+                if "unrealized_pnl" in r and "cashPnl" not in r:
+                    r["cashPnl"] = r["unrealized_pnl"]
+                if "realized_pnl" in r and "realizedPnl" not in r:
+                    r["realizedPnl"] = r["realized_pnl"]
+                if "entry_cost_usdc" in r and "initialValue" not in r:
+                    r["initialValue"] = r["entry_cost_usdc"]
             out.extend(rows)
             pagination = payload.get("pagination") or {}
             next_cursor = pagination.get("next_cursor")
             if not next_cursor:
                 break
+            if str(next_cursor) == cursor:
+                return None
             cursor = str(next_cursor)
         elif isinstance(payload, list):
             rows = [r for r in payload if isinstance(r, dict)]
+            for r in rows:
+                if "conditionId" in r and "condition_id" not in r:
+                    r["condition_id"] = r["conditionId"]
+                if "cashPnl" in r and "unrealized_pnl" not in r:
+                    r["unrealized_pnl"] = r["cashPnl"]
+                if "realizedPnl" in r and "realized_pnl" not in r:
+                    r["realized_pnl"] = r["realizedPnl"]
+                if "initialValue" in r and "entry_cost_usdc" not in r:
+                    r["entry_cost_usdc"] = r["initialValue"]
             out.extend(rows)
             if len(payload) < POSITIONS_PAGE_SIZE:
                 break
@@ -186,14 +206,30 @@ def fetch_closed_positions(funder: str, timeout: float = 15.0) -> Optional[list[
         if isinstance(payload, dict) and "data" in payload:
             data = payload.get("data") or []
             rows = [r for r in data if isinstance(r, dict)]
+            for r in rows:
+                if "condition_id" in r and "conditionId" not in r:
+                    r["conditionId"] = r["condition_id"]
+                if "realized_pnl" in r and "realizedPnl" not in r:
+                    r["realizedPnl"] = r["realized_pnl"]
+                if "entry_cost_usdc" in r and "initialValue" not in r:
+                    r["initialValue"] = r["entry_cost_usdc"]
             out.extend(rows)
             pagination = payload.get("pagination") or {}
             next_cursor = pagination.get("next_cursor")
             if not next_cursor:
                 break
+            if str(next_cursor) == cursor:
+                return None
             cursor = str(next_cursor)
         elif isinstance(payload, list):
             rows = [r for r in payload if isinstance(r, dict)]
+            for r in rows:
+                if "conditionId" in r and "condition_id" not in r:
+                    r["condition_id"] = r["conditionId"]
+                if "realizedPnl" in r and "realized_pnl" not in r:
+                    r["realized_pnl"] = r["realizedPnl"]
+                if "initialValue" in r and "entry_cost_usdc" not in r:
+                    r["entry_cost_usdc"] = r["initialValue"]
             out.extend(rows)
             if len(payload) < POSITIONS_PAGE_SIZE:
                 break

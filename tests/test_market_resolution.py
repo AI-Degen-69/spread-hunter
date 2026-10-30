@@ -560,6 +560,32 @@ def test_parse_winner_when_gamma_ships_json_strings():
     assert s.winning_token_id == "0xAAA"
 
 
+def test_parse_winner_v1_with_both_token_fields_prefers_clob_tokens():
+    """A V1 market containing both positionIds and clobTokenIds prefers clobTokenIds."""
+    row = {
+        "condition_id": "0xC", "closed": True, "version": "v1",
+        "outcomes": ["Up", "Down"], "outcomePrices": ["1", "0"],
+        "clobTokenIds": ["0xCLOB_UP", "0xCLOB_DN"],
+        "positionIds": ["0xPOS_UP", "0xPOS_DN"],
+    }
+    s = parse_end_state(row, now_ts=0)
+    assert s.winner_token == "Up"
+    assert s.winning_token_id == "0xCLOB_UP"
+
+
+def test_parse_winner_v2_with_both_token_fields_prefers_position_ids():
+    """A V2 market containing both positionIds and clobTokenIds prefers positionIds."""
+    row = {
+        "condition_id": "0xC", "closed": True, "version": "v2",
+        "outcomes": ["Up", "Down"], "outcomePrices": ["1", "0"],
+        "clobTokenIds": ["0xCLOB_UP", "0xCLOB_DN"],
+        "positionIds": ["0xPOS_UP", "0xPOS_DN"],
+    }
+    s = parse_end_state(row, now_ts=0)
+    assert s.winner_token == "Up"
+    assert s.winning_token_id == "0xPOS_UP"
+
+
 def test_book_shadow_settlement_realizes_pnl_for_held_shares(registry):
     """Held shares on the winning side redeem at $1.00; PnL = proceeds - cost."""
     reg, db = registry

@@ -192,7 +192,7 @@ def test_positions_request_sets_size_threshold_zero(monkeypatch):
 
     monkeypatch.setattr(acct, "_get_json", fake)
     acct.fetch_open_positions("0xee")
-    assert seen.get("filter_amount") == 0 or seen.get("sizeThreshold") == 0
+    assert seen.get("filter_amount") == 0
 
 
 def test_positions_paginate_past_the_first_page(monkeypatch):

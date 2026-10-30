@@ -654,7 +654,8 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
         r = _SESSION.get(TRADES_API, params=params, timeout=TAPE_TIMEOUT)
         r.raise_for_status()
         payload = r.json() or []
-        if isinstance(payload, dict) and "data" in payload:
+        is_v2_envelope = isinstance(payload, dict) and "data" in payload
+        if is_v2_envelope:
             rows = payload.get("data")
             if not isinstance(rows, list):
                 raise ValueError("tape response data is not a list")
@@ -714,7 +715,7 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
             slot[p] = slot.get(p, 0.0) + size
         if len(rows) < int(limit) or not fresh:
             break
-        if use_v2 and not cursor:
+        if is_v2_envelope and not cursor:
             break
     else:
         info["truncated"] = True

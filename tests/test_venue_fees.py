@@ -259,6 +259,41 @@ def test_v2_activity_envelope_in_lifetime_taker_fees():
     assert total.fees_usd == pytest.approx(0.05)
 
 
+def test_v2_activity_two_pages_linked_by_cursor():
+    pages = [
+        {"data": [{"side": "BUY", "size": 10.0, "price": 0.50, "usdc_size": 5.05}], "pagination": {"next_cursor": "c2"}},
+        {"data": [{"side": "BUY", "size": 10.0, "price": 0.50, "usdc_size": 5.05}], "pagination": {"next_cursor": None}},
+    ]
+    calls = []
+
+    def _fetch(offset):
+        calls.append(offset)
+        return pages[len(calls) - 1]
+
+    total = lifetime_taker_fees(FUNDER, fetch=_fetch)
+    assert total is not None
+    assert total.complete is True
+    assert total.rows == 2
+    assert total.fees_usd == pytest.approx(0.10)
+
+
+def test_v2_activity_repeated_cursor_marks_incomplete():
+    pages = [
+        {"data": [{"side": "BUY", "size": 10.0, "price": 0.50, "usdc_size": 5.05}], "pagination": {"next_cursor": "loop"}},
+        {"data": [{"side": "BUY", "size": 10.0, "price": 0.50, "usdc_size": 5.05}], "pagination": {"next_cursor": "loop"}},
+    ]
+    calls = []
+
+    def _fetch(offset):
+        calls.append(offset)
+        return pages[min(len(calls) - 1, len(pages) - 1)]
+
+    total = lifetime_taker_fees(FUNDER, fetch=_fetch)
+    assert total is not None
+    assert total.complete is False
+    assert total.rows == 1
+
+
 def test_float_noise_below_zero_normalises_rather_than_refusing():
     # Arrange — the arithmetic can land a hair under zero on an exact-fee row.
     row = {"side": "BUY", "size": 3.0, "price": 0.1, "usdcSize": 0.3 - 1e-12}

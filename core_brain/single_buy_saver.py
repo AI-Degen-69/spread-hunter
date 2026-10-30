@@ -197,6 +197,7 @@ def fetch_positions(funder: str, timeout: float = 10.0) -> dict[str, float]:
     """
     positions: dict[str, float] = {}
     cursor: Optional[str] = None
+    seen_cursors: set[str] = set()
     offset = 0
     use_v2 = True
     while True:
@@ -220,7 +221,8 @@ def fetch_positions(funder: str, timeout: float = 10.0) -> dict[str, float]:
 
         is_v2_envelope = isinstance(payload, dict) and "data" in payload
         if is_v2_envelope:
-            rows = payload.get("data") or []
+            data = payload.get("data")
+            rows = data if isinstance(data, list) else []
             pagination = payload.get("pagination") or {}
             next_cursor = pagination.get("next_cursor")
             cursor = str(next_cursor) if next_cursor else None
@@ -242,8 +244,11 @@ def fetch_positions(funder: str, timeout: float = 10.0) -> dict[str, float]:
                 continue
 
         if is_v2_envelope:
-            if not cursor or len(rows) < POSITIONS_PAGE_SIZE:
+            if not cursor:
                 break
+            if cursor in seen_cursors:
+                break
+            seen_cursors.add(cursor)
         else:
             if len(rows) < POSITIONS_PAGE_SIZE:
                 break
@@ -264,6 +269,7 @@ def fetch_token_balances(funder: str, up_token_id: str, down_token_id: str,
     """
     balances: dict[str, float] = {}
     cursor: Optional[str] = None
+    seen_cursors: set[str] = set()
     offset = 0
     use_v2 = True
     try:
@@ -308,8 +314,11 @@ def fetch_token_balances(funder: str, up_token_id: str, down_token_id: str,
                     raise ExposureUnavailable(
                         f"token balance size for {token!r} is not numeric") from exc
             if is_v2_envelope:
-                if not cursor or len(rows) < POSITIONS_PAGE_SIZE:
+                if not cursor:
                     break
+                if cursor in seen_cursors:
+                    raise ExposureUnavailable("positions cursor repeated")
+                seen_cursors.add(cursor)
             else:
                 if len(rows) < POSITIONS_PAGE_SIZE:
                     break

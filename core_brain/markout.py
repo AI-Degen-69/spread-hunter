@@ -447,6 +447,7 @@ def _default_trades_fn(horizons: tuple[float, ...] = MARKOUT_HORIZONS):
         if not condition_id:
             return rows
         cursor: Optional[str] = None
+        seen_cursors: set[str] = set()
         use_v2 = "/v2" in base
         for page_index in range(TAPE_MAX_PAGES):
             if use_v2:
@@ -481,8 +482,15 @@ def _default_trades_fn(horizons: tuple[float, ...] = MARKOUT_HORIZONS):
             # reference neither leg ever printed at.
             rows.extend(t for t in page
                         if isinstance(t, dict) and str(t.get("token_id") or t.get("asset")) == str(token_id))
-            if (use_v2 and not cursor) or len(page) < TAPE_PAGE_SIZE:
-                break
+            if use_v2:
+                if not cursor:
+                    break
+                if cursor in seen_cursors:
+                    break
+                seen_cursors.add(cursor)
+            else:
+                if len(page) < TAPE_PAGE_SIZE:
+                    break
 
             oldest = None
             for trade in page:

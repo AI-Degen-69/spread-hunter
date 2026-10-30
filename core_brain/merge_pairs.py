@@ -50,8 +50,14 @@ def encode_v2_merge(condition_id: str, amount: int) -> str:
     """
     selector = "5b63685e"
     clean = condition_id.lower().replace("0x", "").strip()
+    if len(clean) == 64:
+        if clean[-2:] != "00":
+            raise ValueError("32-byte V2 condition IDs must end with 00")
+        clean = clean[:62]
+    if len(clean) != 62 or any(c not in "0123456789abcdef" for c in clean):
+        raise ValueError("V2 condition ID must contain 62 hexadecimal characters")
     # bytes31 is 62 hex chars, left-aligned in a 32-byte word (64 hex chars ending in 00)
-    p_cond = clean[:62].ljust(64, "0")
+    p_cond = clean.ljust(64, "0")
     p_amount = hex(int(amount))[2:].zfill(64)
     return "0x" + selector + p_cond + p_amount
 

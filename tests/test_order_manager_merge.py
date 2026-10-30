@@ -432,9 +432,48 @@ def test_v2_merge_encoding_and_target():
     assert merge_target(True, version="v2") == ROUTER_V2_CONTRACT
     assert merge_target(False, version="v2") == ROUTER_V2_CONTRACT
 
-    # 1.0 share = 1_000_000 base units
-    cid = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    # 1.0 share = 1_000_000 base units, 32-byte condition ID ending in 00 or 31-byte (62 hex chars)
+    cid = "0x" + "12" * 30 + "cd00"
     calldata = encode_v2_merge(cid, 1_000_000)
     assert calldata.startswith("0x5b63685e")
     assert len(calldata) == 2 + 8 + 64 + 64
     assert calldata.endswith("00000000000000000000000000000000000000000000000000000000000f4240")
+
+    # Reject 32-byte condition IDs not ending in 00
+    with pytest.raises(ValueError, match="32-byte V2 condition IDs must end with 00"):
+        encode_v2_merge("0x" + "12" * 31 + "ff", 1_000_000)
+
+
+def test_v2_order_manager_merge(tmp_path, capsys):
+    """Test order_manager.merge(version='v2') with a 31-byte condition ID."""
+    from unittest.mock import MagicMock
+    from core_brain import markets
+    cond_id = "0x" + "aa" * 31
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    env_vars = make_live_env(acc, funder)
+
+    mock_client = MagicMock()
+    mock_client.get_balance_allowance.return_value = {"balance": "10000000"}
+
+    mock_gamma_resp = MagicMock()
+    mock_gamma_resp.json.return_value = [{"condition_id": cond_id, "positionIds": ["tok-up-v2", "tok-dn-v2"]}]
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "client", return_value=mock_client), \
+         patch.object(markets._SESSION, "get", return_value=mock_gamma_resp), \
+         patch("core_brain.market_resolution.fetch_uma_resolution_status") as mock_res:
+        from core_brain.market_resolution import UmaResolutionStatus
+        mock_res.return_value = UmaResolutionStatus(condition_id=cond_id, status=None)
+
+        le.merge(cond_id, amount=2.0, live=False, version="v2")
+
+    captured = capsys.readouterr().out
+    assert "MERGE (gasless via Polymarket Relayer)" in captured
+    assert "target          0x12121212006e4CD160D18e3f00711DA5c3372600" in captured
+    assert "0x5b63685e" in captured
+    assert "token_up        tok-up-v2 (held: 10.00)" in captured
+    assert "token_down      tok-dn-v2 (held: 10.00)" in captured
+    assert "amount          2.00 shares" in captured
+    assert "DRY RUN -- nothing sent" in captured

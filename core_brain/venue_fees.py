@@ -148,6 +148,8 @@ def lifetime_taker_fees(funder: str, timeout: float = 15.0,
     priced = 0
     offset = 0
     cursor: Optional[str] = None
+    seen_cursors: set[str] = set()
+    cursor_mode = False
     complete = True
     while True:
         try:
@@ -171,10 +173,16 @@ def lifetime_taker_fees(funder: str, timeout: float = 15.0,
             break
 
         if isinstance(raw_page, dict) and "data" in raw_page:
+            cursor_mode = True
             page = raw_page.get("data")
             pagination = raw_page.get("pagination") or {}
             next_cursor = pagination.get("next_cursor")
+            if next_cursor and str(next_cursor) in seen_cursors:
+                complete = False
+                break
             cursor = str(next_cursor) if next_cursor else None
+            if cursor:
+                seen_cursors.add(cursor)
         elif isinstance(raw_page, list):
             page = raw_page
             cursor = None
@@ -210,7 +218,10 @@ def lifetime_taker_fees(funder: str, timeout: float = 15.0,
 
         if not complete:
             break
-        if len(page) < ACTIVITY_PAGE_SIZE:
+        if cursor_mode:
+            if not cursor:
+                break
+        elif len(page) < ACTIVITY_PAGE_SIZE:
             break
         if offset >= row_cap:
             complete = False

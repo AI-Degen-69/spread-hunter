@@ -93,6 +93,8 @@ from core_brain.runtime_paths import legacy_runtime_file  # noqa: E402
 # core_brain.settlement; the relayer/RPC submit path stays here with the CLI verbs.
 from core_brain.merge_pairs import (
     CTF_CONTRACT,
+    POSITION_MANAGER_V2_CONTRACT,
+    ROUTER_V2_CONTRACT,
     merge_target,
     USDC_E_CONTRACT,
     ZERO_BYTES32,
@@ -881,8 +883,16 @@ def _emit_settlement_event(
 def _merge_size_from_call_data(call_data: str | None) -> float | None:
     """Best-effort merge share count from the merge call data; None when unreadable."""
     try:
-        if call_data and len(call_data) >= 10 + 64 * 5:
-            amount_hex = call_data[10 + 64 * 4: 10 + 64 * 5]
+        if not call_data:
+            return None
+        clean = call_data.lower()
+        # V2 merge: selector 0x5b63685e (10 chars), then bytes31 cond (64 chars), uint256 amount (64 chars)
+        if clean.startswith("0x5b63685e") and len(clean) >= 10 + 64 * 2:
+            amount_hex = clean[10 + 64 * 1: 10 + 64 * 2]
+            return int(amount_hex, 16) / 10**6
+        # V1 merge: selector 4 bytes (10 chars), then 5 words (collateral, parent, condition, indexSets, amount)
+        if len(clean) >= 10 + 64 * 5:
+            amount_hex = clean[10 + 64 * 4: 10 + 64 * 5]
             return int(amount_hex, 16) / 10**6
     except Exception:
         pass
@@ -1246,10 +1256,7 @@ def _submit_and_log(
             from core_brain.order_registry import OrderRegistry, CloseRecord, get_run_id
             registry = OrderRegistry()
             close_registry = registry
-            amt = 0.0
-            if call_data and len(call_data) >= 10 + 64 * 5:
-                amount_hex = call_data[10 + 64 * 4 : 10 + 64 * 5]
-                amt = int(amount_hex, 16) / 10**6
+            amt = _merge_size_from_call_data(call_data) or 0.0
             
             with registry._conn() as conn:
                 up_unit_cost, dn_unit_cost = _resolve_merge_unit_costs(
@@ -1484,7 +1491,8 @@ _IS_APPROVED_FOR_ALL_SELECTOR = "0xe985e9c5"
 
 
 def is_approved_for_all(owner: str, operator: str,
-                        rpc_url: str | None = None) -> bool | None:
+                        rpc_url: str | None = None,
+                        token_contract: str = CTF_CONTRACT) -> bool | None:
     """Has `owner` approved `operator` to move its conditional tokens?
 
     None means the question could not be answered -- every RPC endpoint failed
@@ -1508,7 +1516,7 @@ def is_approved_for_all(owner: str, operator: str,
         "jsonrpc": "2.0",
         "id": 1,
         "method": "eth_call",
-        "params": [{"to": CTF_CONTRACT, "data": call_data}, "latest"],
+        "params": [{"to": token_contract, "data": call_data}, "latest"],
     }).encode("utf-8")
 
     endpoints: list[str] = []
@@ -1549,6 +1557,10 @@ def merge(condition_id: str,
 
     Supports Protocol V2 Router merges as well as legacy CTF / NegRisk merges.
     """
+    clean_cid = condition_id.lower().replace("0x", "").strip()
+    if version != "v2" and (len(clean_cid) == 62 or (len(clean_cid) == 64 and clean_cid.endswith("00"))):
+        version = "v2"
+
     if index_sets is None:
         index_sets = [1, 2]
     amount_base_units = int(round(amount * 1e6))
@@ -1562,11 +1574,27 @@ def merge(condition_id: str,
     # Pre-flight Guard 4: Idempotency check
     _check_idempotency_guard(condition_id, force=force)
 
-    # Derive token IDs deterministically via CTF
-    token_ids = [
-        get_position_id(collateral, get_collection_id(parent_collection_id, condition_id, idx))
-        for idx in index_sets
-    ]
+    if str(version).lower() == "v2":
+        token_ids: list[str] = []
+        try:
+            from core_brain.markets import _SESSION
+            gamma_host = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com").rstrip("/")
+            r = _SESSION.get(f"{gamma_host}/markets", params={"condition_ids": condition_id}, timeout=5)
+            r_json = r.json()
+            m = r_json[0] if isinstance(r_json, list) and r_json else (r_json.get("data", [None])[0] if isinstance(r_json, dict) else None)
+            raw_pos = (m.get("positionIds") or m.get("position_ids")) if m else None
+            if isinstance(raw_pos, str):
+                import json as _json
+                raw_pos = _json.loads(raw_pos)
+            token_ids = [str(x) for x in (raw_pos or [])]
+        except Exception:
+            token_ids = []
+    else:
+        # Derive token IDs deterministically via CTF
+        token_ids = [
+            get_position_id(collateral, get_collection_id(parent_collection_id, condition_id, idx))
+            for idx in index_sets
+        ]
     up_tok_id = token_ids[0] if len(token_ids) > 0 else ""
     dn_tok_id = token_ids[1] if len(token_ids) > 1 else ""
 
@@ -1605,11 +1633,25 @@ def merge(condition_id: str,
             amount=amount_base_units,
         )
 
-    denom = get_payout_denominator(condition_id)
-    if denom is None:
-        resolved_str = "unknown (RPC unreachable)"
+    if str(version).lower() == "v2":
+        from core_brain.market_resolution import fetch_uma_resolution_status
+        gamma_host = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")
+        res_status = fetch_uma_resolution_status(gamma_host, condition_id)
+        if res_status.unreachable:
+            denom = None
+            resolved_str = "unknown (Gamma unreachable)"
+        elif res_status.flagged:
+            denom = 1
+            resolved_str = "yes"
+        else:
+            denom = 0
+            resolved_str = "no"
     else:
-        resolved_str = "yes" if denom > 0 else "no"
+        denom = get_payout_denominator(condition_id)
+        if denom is None:
+            resolved_str = "unknown (RPC unreachable)"
+        else:
+            resolved_str = "yes" if denom > 0 else "no"
 
     # No gas line. The relayer sends the merge from its own address and pays
     # for it (`/trading/wallets-auth`, "Execute Gasless Transactions"), so the
@@ -1707,12 +1749,13 @@ def merge(condition_id: str,
             # that has only ever merged standard markets has never approved the
             # negRisk adapter -- so the first negRisk merge would revert on
             # approval rather than on routing.
-            approved = is_approved_for_all(funder, call_target)
+            token_contract = POSITION_MANAGER_V2_CONTRACT if str(version).lower() == "v2" else CTF_CONTRACT
+            approved = is_approved_for_all(funder, call_target, token_contract=token_contract)
+            contract_label = "PositionManager" if str(version).lower() == "v2" else "CTF"
             if approved is False:
                 guard_failures.append(
-                    f"{funder} has not approved {call_target} as an operator on the "
-                    f"CTF, so this merge would revert. Call setApprovalForAll on the "
-                    f"CTF for that contract first."
+                    f"{funder} has not approved {call_target} as an operator on {contract_label}, "
+                    f"so this merge would revert. Call setApprovalForAll on {contract_label} for that contract first."
                 )
             elif approved is None:
                 guard_failures.append(
@@ -3633,6 +3676,8 @@ def main() -> None:
                    help="Route through the NegRisk collateral adapter (--neg-risk) or the CTF "
                         "(--no-neg-risk). Read from the venue when omitted; an unreadable flag "
                         "refuses the merge rather than guessing a target that would revert.")
+    m.add_argument("--version", choices=["v1", "v2"], default=None,
+                   help="Market version: 'v1' (CTF/NegRisk) or 'v2' (Router/PositionManager). Autodetected if omitted.")
     m.add_argument("--live", action=argparse.BooleanOptionalAction,
                default=argparse.SUPPRESS,
                help="send to venue (default: True). --no-live works before or after the subcommand.")
@@ -3785,6 +3830,7 @@ def main() -> None:
             force=a.force,
             neg_risk=a.neg_risk,
             live=is_live,
+            version=a.version or "v1",
         )
     elif a.cmd == "probe":
         probe(
