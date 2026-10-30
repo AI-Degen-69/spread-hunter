@@ -18,7 +18,7 @@ Branch: `i866/fix-strategy-parameters-panel-shows-global-config`
 - [ ] `app.js` param fetch + stale-response guard + context/error render
 - [ ] Browser gate (balanced arm `4¢`, cleared `20¢`, bogus arm error)
 
-## T4 — Gates and handoff `[Testing]` S
+## T4 — Gates and handoff `[Testing]` S · done
 - [ ] Targeted suites in one run
 - [ ] Grep gate: no `os.environ` swap in `dashboard/`, no loader/launcher touched
 - [ ] Operator "How to verify" block (hands-on only) + PR body

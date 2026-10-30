@@ -139,7 +139,7 @@ Depends on: T2
   `20¢` with the global-default label; pick a bogus arm (via console) and
   confirm the structured error, not global values.
 
-### T4 — Gates and handoff · S · `[Testing]`
+### [x] T4 — Gates and handoff · S · `[Testing]`
 Depends on: T1, T2, T3
 
 - Targeted runs: `tests/test_arm_params.py` + `tests/test_dashboard_server.py
