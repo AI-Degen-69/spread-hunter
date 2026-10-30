@@ -1,60 +1,72 @@
-# CONSTRAINTS.md — Issue #875: Correct Sharpe ratio convention (time-series)
+# CONSTRAINTS.md — Issue #881: PWD-aware menu checkout + force stop
 
-Branch: `i875/establish-correct-sharpe-ratio-convention` | Issue: #875
+Branch: `i881/improve-align-spread-hunter-menu-script-for-pwd-aw` | Issue: #881
 
 Locked during Station II planning. Stations III–V must hold every line below.
 Tighten only with operator approval; never loosen silently.
 
 ## The one invariant this change exists to protect
 
-**Every dollar figure stays bit-identical; only the risk-adjusted ratio changes.**
+**A menu never touches a process or dashboard that belongs to another checkout.**
 
-`total_pnl`, `mean_pnl`, `profit_factor`, `max_drawdown`, merge/stop counts and
-all gate thresholds (`2.70` / `2.20` / `2.50` / `$4.00`) keep their numeric values.
-The Sharpe number itself is *supposed* to move — it was a per-trade ratio ×10 and
-becomes an annualized time-series ratio. Any test whose PnL/PF/MDD expectation
-moves is evidence of scope creep — stop and re-read.
+`Unknown` means leave it running. `Foreign` means name the other checkout's path and
+stop. Ownership needs positive proof (command-line paths, matching local records with
+exact start ticks, or an Owned dashboard-port identity) — never the absence of contrary
+evidence.
 
 ## Zero regressions
 
-- Targeted suites covering the touched modules must pass cleanly:
-  - `python -m pytest -q tests/test_sharpe_ratio.py` (new — fails without the change)
-  - `python -m pytest -q tests/test_tournament_cockpit_decision_gates.py tests/test_reevaluate_tournament_run.py`
-  - `python -m pytest -q tests/test_shadow_tournament.py tests/test_tournament_cockpit_funnel.py`
-  - `python -m pytest -q tests/test_trade_analytics.py tests/test_kpi.py tests/test_541_parity_ledger.py` (kpi untouched — must stay green)
-- Full `python -m pytest -q` is the GitHub CI merge gate on Ubuntu and Windows; local runs are
-  targeted only.
-- Every new behavior needs a test that fails without it:
-  - known-series helper test with hand-computed closed form (see plan T1);
-  - cockpit test asserting the new `sharpe_ratio` field on a fixture DB (not the proxy);
-  - `None`/NO_DATA cases: no trades, single step, flat equity.
+- Targeted suites covering the touched area must pass cleanly (harness shells out to
+  `pwsh`/`powershell` and skips when neither exists — a skip is reported, never faked):
+  - `python -m pytest -q tests/test_menu_project_root.py tests/test_menu_checkout_ownership.py tests/test_menu_dashboard_identity.py tests/test_menu_force_stop.py`
+  - `python -m pytest -q tests/test_menu_shadow_ports.py tests/test_menu_navigation.py tests/test_menu_extra_words.py tests/test_menu_global_stop_clean.py tests/test_menu_open_dashboard_sweep.py tests/test_menu_status_rows.py tests/test_menu_live_state.py tests/test_menu_process_args.py tests/test_menu_dashboard_port_env.py`
+  - `python -m pytest -q tests/test_pid_recycling.py tests/test_runtime_paths.py tests/test_single_registry_path.py tests/test_instance_lock.py tests/test_stop_lifecycle_457.py`
+  - `python -m pytest -q tests/test_dashboard_server.py tests/test_dashboard_port.py tests/test_global_stop_loss.py`
+- Full `python -m pytest -q` is the GitHub CI merge gate on Ubuntu and Windows; local
+  runs are targeted only.
+- Every new behavior needs a test that fails without it (see `tasks/plan.md` per-task
+  assertions: current-folder selection, nested-worktree rejection, relative-command-line
+  Unknown, Foreign refusal with path, PID-reuse skip, order-of-kill, rescan catch).
+- **No existing test file is modified.** New tests live only in the four new files.
+  If a green run needs an old expectation moved, the change is wrong — re-read the
+  script, do not edit the expectation.
 
 ## Scope fences (hard)
 
-- **Only these areas change:**
-  - `core_brain/sharpe.py` (new) — `sharpe_ratio()`, `risk_free_rate_from_env()`, `SHARPE_FORMULA_TEXT`.
-  - `scripts/tournament_cockpit_server.py` — `analyze_arm_database` ratio, `compute_decision_gates`
-    thresholds as named constants, cockpit HTML `Sharpe Ratio` label + formula tooltip.
-  - `scripts/reevaluate_tournament_run.py` — gate/ranking/display switch to `sharpe_ratio`.
-  - `docs/sharpe-ratio-convention.md` (new) — the locked convention note.
-  - `tests/test_sharpe_ratio.py` (new) + mechanical `sharpe_proxy` → `sharpe_ratio` updates in
-    cockpit/reevaluate/shadow-tournament tests.
-  - `tasks/plan.md`, `tasks/todo.md`, `CONSTRAINTS.md`.
+- **Only these change:**
+  - `scripts/spread-hunter-menu.ps1` — the resolver, the three ownership helpers, the
+    four wiring sites, the force-stop function, key `x` dispatch, menu text.
+  - `README.md` — the actions-table rows for the three aliases + checkout rule + what
+    stays running. Nothing else in the README.
+  - New: `tests/test_menu_project_root.py`, `tests/test_menu_checkout_ownership.py`,
+    `tests/test_menu_dashboard_identity.py`, `tests/test_menu_force_stop.py`.
+  - `tasks/plan.md`, `tasks/todo.md`, `CONSTRAINTS.md`, `SPEC.md`.
 - **Must NOT be modified:**
-  - `core_brain/kpi.py` (`compute_trade_analytics` per-trade Sharpe stays — explicit
-    no-annualisation rationale at `kpi.py:579-585`; golden payload `0.6229353305576062` pins it).
-  - `core_brain/config.py`, `.env.example` (new setting lives in `sharpe.py` via `_bounded_float`
-    import; no config-schema change this round).
-  - `data/orders.db` (production registry, strictly read-only) and any `data/tournaments/*`.
-  - Gate threshold *numbers* (`GATE_SHARPE_MIN = 2.70` etc. — relabeled for review, never retuned here).
-  - Historical backfills — future runs only, no recomputation of past figures.
-  - Live market risk-free rates — constant configurable default `0`, no network source.
+  - Any Python module (`core_brain/**`, `dashboard/**`, `scripts/*.py`).
+  - `data/orders.db` and everything else under `data/`; `processes.json`,
+    `markets.json`, heartbeat, locks, `runtime/` pid files (force stop removes a
+    dashboard/session record only after every PID in it has exited).
+  - `AGENTS.md`, `docs/agents/*`, `.gitignore`.
+  - `Stop-TsBridge`, the resume stray scan, `Kill-RecordedPid`, `Get-DashInstance`,
+    `Get-ProcessRecord`, `Stop-Dashboard`, `Stop-ShadowDashboard`.
+  - The module-regex text pinned by `test_menu_global_stop_clean.py`
+    (`-m\s+(core_brain\.|dashboard\.server|scripts\.(`) — byte-identical.
 
 ## Anti-cheat & safety rules
 
-- **Anti-cheat:** no skipped/xfailed tests, no deleted assertions, no weakened bounds, no
-  `# type: ignore`/`noqa` added to get green. `None` means unmeasurable — never render it as `0.0`.
-- **No new dependencies.** Standard library only (`math`, `os`).
-- **No live venue contact.** Planning, build, tests and review never run `quote`, `complete`,
-  the Trader loop, or the dashboard START button.
-- **No production database in any manual check.** Any `status` run points at a disposable DB.
+- **Anti-cheat:** no skipped/xfailed tests added, no deleted assertions, no weakened
+  bounds, no `# type: ignore`/`noqa`, no PowerShell `Set-StrictMode` loosening to get
+  green. A PowerShell host missing on the machine is a reported skip, not a pass.
+- **Harness discipline:** new tests use the `_lift` pattern (function closing braces at
+  column zero — all new functions obey this), temporary checkout folders with marker
+  files, and stub side effects (`Get-CimInstance`, `taskkill`, `Invoke-RestMethod`,
+  `Get-PortPid`, `Wait-ProcessGone`). Never run stop/adopt against live services.
+- **Stub fidelity:** the code calls `taskkill`, not `taskkill.exe`, so the stub
+  intercepts it — keep it that way.
+- **No new dependencies.** No Python changes at all; no `psutil`, no `Add-Type`
+  memory-read helper, no parent-chain check (C5 stays a follow-up-ticket decision).
+- **No live venue contact.** Build and tests never run `quote`, `complete`, the Trader
+  loop, or the dashboard START button. Operator hands-on checks run `status` first and
+  use a worktree with no live trading for the force-stop step.
+- **No production database in any manual check.** Any `status` run points at a
+  disposable DB.
