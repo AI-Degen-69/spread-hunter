@@ -789,7 +789,8 @@ def recent_sell_flow(condition_id: str, window_sec: float, *,
         except Exception as e:
             log.debug("flow tape fetch failed: %s", e)
             return SellFlow("unavailable", window, {})
-        if isinstance(payload, dict) and "data" in payload:
+        is_v2_envelope = isinstance(payload, dict) and "data" in payload
+        if is_v2_envelope:
             rows = payload.get("data")
             if not isinstance(rows, list):
                 log.debug("flow tape response data is not a list")
@@ -857,7 +858,7 @@ def recent_sell_flow(condition_id: str, window_sec: float, *,
         # already at or behind the window start has covered the whole window.
         # Either way the reading is complete; anything else means the page limit
         # bounded it and the numbers are a floor.
-        if (use_v2 and not cursor) or len(rows) < page_size or (oldest is not None and oldest <= cutoff):
+        if (is_v2_envelope and not cursor) or len(rows) < page_size or (oldest is not None and oldest <= cutoff):
             return SellFlow("complete", window, by_token)
 
     return SellFlow("truncated", window, by_token)
