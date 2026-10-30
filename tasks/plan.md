@@ -1,174 +1,156 @@
-# Station II Plan — Issue #875: Correct Sharpe ratio convention (time-series)
+# Station II Plan — Issue #881: PWD-aware worktree menu + nuclear process stop
 
-Branch: `i875/establish-correct-sharpe-ratio-convention` | Issue: #875
+Branch: `i881/improve-align-spread-hunter-menu-script-for-pwd-aw` | Issue: #881
 
-- **Tier:** Standard (new helper + cockpit + reevaluate + docs + tests; one architectural decision)
-- **Task types:** Code (primary), Testing, Docs, UX/Copy (cockpit label + tooltip)
-- **Stack / runner:** Python 3, `pytest` (`python -m pytest -q`)
+- **Tier:** Standard — one script plus docs and harness tests; a single architectural
+  decision (checkout-local ownership with fail-closed Unknown). Rationale: no new
+  dependency, no public API, no schema change; all power is in narrowing match
+  predicates and adding one fenced action.
+- **Task types:** Code (PowerShell menu logic + pytest harness tests).
+- **Stack / runner:** PowerShell 7 menu (`pwsh` 7.6 available, Windows PowerShell 5.1
+  fallback); tests are Python `pytest` files that shell lifted functions to a PowerShell
+  host and skip when none exists (`python -m pytest -q`).
 
 ---
 
-## 1. The problem, in one line
+## 1. CodeRabbit intake note (read once, not twice)
 
-The cockpit calls `(mean_pnl / std_pnl × 10)` a Sharpe ratio:
+The `coderabbitai` plan comment carries its full plan plus a byte-identical echo inside
+`<!-- <rawResChunk> -->` — only the rendered copy was used. Adopted: the 3-task split
+(1.1 checkout selection → 1.2 ownership/dashboard identity → 1.3 force stop), all named
+functions and test files, the four dashboard status labels, the seven-module regex, the
+kill order (dash → order_manager → rest), PID-reuse guard, single rescan, three-list
+report + resting-orders warning, and the `x`-key wiring. Rejected: the `Add-Type`
+memory-read helper and the parent-chain check (fragile/unsupported — stays a follow-up
+decision per C5); fixing `Stop-TsBridge` and the resume stray scan (left as-is per
+scope); adding a `BOT_ORDER_QUEUE_FLOW_WINDOW_SEC`-style reader (not this issue).
+`[UNVERIFIED]` carried into tasks: confirm `x` is unused (verify against
+`$script:MenuKeys`); confirm `registry_path` default source in `dashboard/server.py`
+before trusting it in `Get-DashboardOwnership`; confirm option 7's command-line
+confirmation rule before mirroring it in the `x` action.
 
-> `sharpe_proxy = (mean_pnl / std_pnl * 10.0) if std_pnl > 0.0 else 0.0`
-> (`scripts/tournament_cockpit_server.py:687`)
+## 2. Domain skill routing
 
-That is a per-trade PnL ratio scaled by ten — not the Sharpe ratio the blueprint's
-`9.52` and the gates' `≥ 2.70` pretend it is. Two different metrics share one label.
+Task type is Code → planning skills `test-driven-development` (every behavior gets a
+failing-first harness test) and `incremental-implementation` (land T1 → T2 → T3 in
+order; each task is a complete vertical slice with its own tests). No frontend, API, or
+docs skill applies: menu copy changes are one-line labels, and the README edit is a
+tabled row, not a documentation design task.
 
-## 2. Grounding: what the code actually gives us (verified, not assumed)
+## 3. Spec pointer
 
-| Fact | Evidence |
-| --- | --- |
-| Unthinned closes exist before chart thinning | `analyze_arm_database` reads all `closes` rows `ORDER BY ts ASC` (`tournament_cockpit_server.py:573-579`); thinning to 60 points happens later (`:666-677`) |
-| Arm env overrides ride along in `cfg["env"]` | `reevaluate_tournament_run.py:175-182` builds `cfg` with `"env": arm.get("env", {})` |
-| `kpi.compute_trade_analytics` must NOT change | `kpi.py:579-585` explicitly rejects annualisation ("trades are not daily observations"); golden payload pins `sharpe_ratio: 0.6229353305576062`; ~10 test files assert it |
-| `_bounded_float(name, raw, lo, hi)` exists for the new setting | `core_brain/config.py:703` — import it, don't reimplement |
-| No `BOT_SHARPE_*` / `RISK_FREE` anywhere today | grep over `.env.example`, `core_brain/config.py`, `scoring/config.py` — empty |
-| No `docs/adr/`, no `CONTEXT.md` | `ls` fails — convention note goes to `docs/sharpe-ratio-convention.md` (new) |
-| `shadow_paired_runs` is NOT reachable from arm DBs | cockpit never queries it; paired runs use dedicated 2-arm stores (`paired_shadow.py:154+`), tournaments run 6 arms — **[UNVERIFIED]** whether any arm DB carries the table |
+Full acceptance spec: `SPEC.md` (goal, non-goals, §3.1–§3.4 components, §4 acceptance
+criteria, §5 edge cases). The one improvement proposal (§5 below) is folded into T1.
 
-## 3. CodeRabbit intake (read once; Stations III–V need not reopen it)
+## 4. Interface contracts (locked — callers and tests pin these)
 
-**Adopted:** the 3-part skeleton (helper → cockpit → reevaluate); 5-minute clock grid with
-carry-forward; 365-day annualisation; risk-free as yearly decimal ratio `0.0..1.0` with compound
-per-step conversion; thresholds kept as numbers in named constants flagged for review; setting read
-in the helper module so `config.py`/`.env.example` stay untouched; the exact known-series test
-values (100, 110, 99, 108.9 → returns +0.10, −0.10, +0.10).
+| Function / key | Signature / mapping | Contract |
+|---|---|---|
+| `Resolve-ProjectRoot` | `-CurrentPath -ScriptRoot → @{ Path; Source }` | Exact-folder marker check only; `Source ∈ {"current folder","script location"}`; `GetFullPath`-normalized, no trailing separator |
+| `Test-PathInCheckout` | `-Path -Root → bool` | Case-insensitive boundary match; bounded nested-checkout walk between path and root, never above root |
+| `Get-CommandLineCheckoutOwner` | `-CommandLine -Root → Owned\|Foreign\|Unknown` | argv[0] ignored; quoting + `--opt=value` honored; none/mixed → Unknown |
+| `Get-DashboardOwnership` | `-Port → Owned\|Foreign\|Unknown` | Owned = canonical `data/orders.db` + registry under local `runtime/` or `run/` + `services.dash.pid == Get-PortPid`; read-only, never writes records |
+| `Stop-WorktreeProcessesForce` | `→ bool` | Kill order dash → order_manager → rest; `taskkill /T /F` + `Wait-ProcessGone`; PID-reuse re-check; one rescan; three-list report + resting-orders warning |
+| Action map / dispatch | `stop-all-force, force-stop, nuke → x` | `x ∉ $script:MenuKeys` (verified at build time); `stop-all/stopall/clean/reset → 7` preserved; `Invoke-LiveAction "x"` calls only the force stop |
 
-**Rejected:**
-- *Paired-record capital fallback* (`shadow_paired_runs` lookup as first source) — no plumbing
-  carries a tournament DB into `analyze_arm_database(cfg)`; `cfg` has only the arm DB path.
-  Two-level fallback instead (arm env → cockpit default), basis published.
-- *Seven tasks / per-surface rewrites of `kpi.py` and dashboard tiles* — over-split and wrong:
-  `kpi.py` per-trade Sharpe is intentional and pinned; dashboard static binding just renders it.
-- *New `HUNTER_*` env alias* — no caller uses it; one name only.
+## 5. Improvement proposal (adopted — test hardening, not scope expansion)
 
-**Left `[UNVERIFIED]` for Build to check, not trust:** exact dashboard `get_parameters`-style card
-line numbers (none found — dashboard needs no change); whether `test_541_golden_payload.json`
-or cockpit HTML snapshot tests assert the old proxy digits (grep in T4).
+> **Evidence:** today `$PSScriptRoot` appears exactly once in the 3410-line script
+> (line 51: `$ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path`).
+> **Proposal:** add a static test asserting `$PSScriptRoot` is still referenced exactly
+> once after T1, so no future edit can silently re-couple a path to the script location.
+> Folded into T1's test list below.
 
-## 4. Interface contract (locked before code)
+## 6. Dependency graph
 
-**New module `core_brain/sharpe.py`:**
+`T1 (checkout root) → T2 (ownership + dashboard identity) → T3 (force stop + wiring)`.
+T2 needs T1's root; T3 needs both (kill scoping uses the T2 classifiers on the T1 root).
 
-```python
-def sharpe_ratio(points: list[tuple[float, float]],
-                 risk_free_rate_annual: float = 0.0,
-                 bucket_seconds: int = 300) -> float | None
-SHARPE_FORMULA_TEXT: str   # plain formula, reused by both surfaces' tooltips
-def risk_free_rate_from_env() -> float  # BOT_SHARPE_RISK_FREE_RATE, unset/blank → 0.0,
-                                        # via config._bounded_float, range 0.0..1.0
-```
+---
 
-- `points` = `(epoch seconds, portfolio value in dollars)`; drop non-finite times/values and
-  values ≤ 0; sort stably by time; last wins on duplicate timestamps.
-- Grid from first point in `bucket_seconds` steps through first grid time ≥ last point;
-  carry last known value forward (quiet periods = zero-return steps).
-- Step return = `end/start − 1`; per-step risk-free = `(1 + annual)^(step/31_536_000) − 1`;
-  ratio = `mean(excess) / stdev_sample(excess) × √(31_536_000/step)` (n−1).
-- Return `None` (never `NaN`, never placeholder `0.0`) when: no valid points, < 2 step
-  returns, or zero spread. Callers render `None` as `NO_DATA`.
+## T1 — Checkout selection from the current folder [Code] S [x]
 
-**Cockpit payload:** field `sharpe_proxy` → `sharpe_ratio` (float | `None` → JSON `null`).
-All readers move in the same change: `analyze_arm_database`, `compute_decision_gates`,
-`generate_cockpit_html` (2 sites), `reevaluate_tournament_run.py` (gate, ranking key, display).
-Gates keep numbers, gain names: `SHARPE_TARGET = 2.70`, `SHARPE_MARGINAL = 2.20` + review flag.
+Depends on: nothing. Files: `scripts/spread-hunter-menu.ps1` (≈lines 50–61, header,
+`status`, 3 timebox launches, comment near 1038–1039), `tests/test_menu_project_root.py`
+(new), `README.md` (one checkout-rule sentence — or defer to T3's README pass).
 
-**Capital base (2-level, published):** `sharpe_capital_basis ∈ {arm_env, assumed_default}` —
-arm `env["BOT_QUOTE_BANK_BASELINE_USD"]` first, else cockpit-process `config.load()` default.
-Equity points from **unthinned** close rows: opening point at `min(first_ts, first close)`,
-then `starting_money + running realized PnL` per close, closing point at `max(last_ts, last close)`.
+- Add `Resolve-ProjectRoot -CurrentPath -ScriptRoot` near the top (closing brace at
+  column zero for `_lift`); set `$ProjectPath` from it at the current line 51;
+  `-WorkingDirectory $ProjectPath` on the three timebox launches; fix the 1038–1039
+  comment; header/`status` print `Checkout: <path> (from current folder|from script
+  location)` + mixed-checkout note. `Resolve-RuntimeFile`, `Get-ServiceEntry`,
+  `Show-CheckoutIdentity` untouched.
+- Tests (temp folders + `_lift`, `pwsh`/`powershell` or skip): both markers → current
+  folder; one marker → script location; subfolder of checkout (`<checkout>/scripts`)
+  → fallback (no parent walk); unrelated folder → fallback; spaces + trailing
+  separator normalized; timebox launches pin working directory (source inspection);
+  **static: `$PSScriptRoot` occurs exactly once** (the improvement proposal).
+- Done when: from a worktree folder, main's script by full path prints the worktree
+  as the checkout.
 
-**Must not change:** `kpi.py` outputs and golden values; threshold numbers; past figures.
+## T2 — Ownership proofs + dashboard identity [Code] M
 
-## 5. Tasks
+Depends on: T1. Files: `scripts/spread-hunter-menu.ps1` (≈lines 529–561, 909–956,
+1832–1841, 1982–1999, 2090–2148, 2563–2638), `tests/test_menu_checkout_ownership.py`
+(new), `tests/test_menu_dashboard_identity.py` (new).
 
-### [x] T1 — Shared helper + tests + convention note · M · `[Backend/Logic]`
-Depends on: —
+- Add `Test-PathInCheckout`, `Get-CommandLineCheckoutOwner`, read-only
+  `Get-DashboardOwnership` (column-zero braces); require Owned in
+  `Test-DashboardServer`; four status labels; `status` writes nothing; `Stop-BotStack`
+  gates the POST; replace the three substring predicates keeping regex text identical;
+  leave record helpers, `Stop-Dashboard`, `Stop-ShadowDashboard`, `Stop-TsBridge`,
+  resume stray scan untouched.
+- Tests: owned path / prefix-sibling refusal / case-slash-`..` normalization /
+  nested-worktree both directions / relative command line → Unknown / absolute args
+  decide owner / mixed → Unknown / interpreter path ignored / absolute script path
+  owned; dashboard adopt-Owned / sibling-with-production-flag Foreign with path /
+  PID-mismatch Unknown / db-override-not-owned / request-failure Unknown /
+  status-labels-write-nothing / stop_bot_stack skips-or-controls.
+- Done when: main's `status` labels a worktree dashboard `other checkout` and main's
+  `stop` never POSTs to it.
 
-- `core_brain/sharpe.py` (new): implement the contract in §4 exactly. Import `_bounded_float`
-  from `core_brain.config` (verified at `config.py:703`); no edits to `config.py`.
-- `tests/test_sharpe_ratio.py` (new): every test name contains `sharpe`. Series 100, 110, 99,
-  108.9 at 0/300/600/900 s (returns +0.10, −0.10, +0.10; per-step ratio √3/6; hand calc in comment):
-  known-series ≈ `(√3/6) × √105120`; nonzero-rate `0.05` with compound per-step deduction;
-  irregular gap `(0,100)→(900,110)` carry-forward (returns 0,0,0.10); duplicate-timestamp +
-  shuffled input; invalid (`NaN`/`inf`/≤0) dropped; flat → `None`; single step → `None`;
-  empty/all-invalid → `None`; env unset/blank → `0.0`, `"0.05"` → `0.05`,
-  `"-0.01"`/`"1.5"`/`"abc"`/`"nan"` raise.
-- `docs/sharpe-ratio-convention.md` (new): formula, 5-min steps, carry-forward, 365-day scaling,
-  rate units + compound conversion, capital fallback + assumption warning, `None` cases,
-  short-sample/serial-dependence caveats, threshold-review flag (2.70/2.20 tuned for the proxy),
-  old-vs-new golden note, no live-rate / no backfill.
-- Verify: `python -m pytest -q tests/test_sharpe_ratio.py`
+## T3 — Separate force-stop action + wiring + docs [Code] M
 
-### [x] T2 — Cockpit switch (analyzer + gates + UI) · L · `[Backend/Logic]` + `[UX/Copy]`
-Depends on: T1
+Depends on: T1, T2. Files: `scripts/spread-hunter-menu.ps1` (new
+`Stop-WorktreeProcessesForce`, `$actionMap`, `Invoke-LiveAction`, menu text),
+`tests/test_menu_force_stop.py` (new), `README.md` (actions table).
 
-- `scripts/tournament_cockpit_server.py`: in `analyze_arm_database`, delete the proxy line
-  (`:686-687`); build equity points from unthinned rows per §4; call `sharpe_ratio()` with
-  `risk_free_rate_from_env()`; emit `sharpe_ratio` (+ `sharpe_capital_basis`), drop `sharpe_proxy`.
-  `compute_decision_gates`: read `sharpe_ratio`, keep `2.70`/`2.20` as named constants, `None` → `NO_DATA`.
-  HTML: `Sharpe:` → `Sharpe Ratio` with `title="{SHARPE_FORMULA_TEXT}"` at both card sites
-  (`~:1057`, `~:1086`); gate copy `Sharpe Proxy Gate` → `Sharpe Ratio Gate`.
-- Tests: update `tests/test_tournament_cockpit_decision_gates.py`,
-  `tests/test_tournament_cockpit_funnel.py`, `tests/test_shadow_tournament.py` fixtures/keys
-  (`sharpe_proxy` → `sharpe_ratio`); add one analyzer test on a temp arm DB asserting the new
-  field equals the helper on the same closes and `None` renders `NO_DATA`.
-- Verify: `python -m pytest -q tests/test_tournament_cockpit_decision_gates.py tests/test_shadow_tournament.py tests/test_tournament_cockpit_funnel.py`
+- Seven-module regex candidate scan (creation time read once); Owned/Foreign/Unknown
+  per §3.3; kill order dash → order_manager → rest with pre-kill creation-time
+  re-check; `taskkill /T /F` (not `taskkill.exe`); `Wait-ProcessGone`; one rescan;
+  three-list report + resting-orders warning verbatim; record cleanup only on full
+  exit; never touch `processes.json`/`markets.json`/heartbeat/locks/`data/`; never
+  call `Stop-TsBridge`/`Stop-BotStack`/`Stop-AllSpreadHunterProcesses`. Wire the three
+  aliases to `x` after verifying `x` unused; interactive yes/no; command-line follows
+  option 7's rule (verify first). Option 7 untouched.
+- Tests with stub harness + fake PIDs 101–110: kill list `[101, 102, 103]` in order /
+  Foreign {104, 106} vs Unknown {105, 107, 110} / modules 108–109 ignored /
+  changed-start-time skipped / survivor → false + record kept / rescan catch /
+  registry+bridge untouched / action-map routes + `stop-all→7`, `stop→2` preserved /
+  dispatch calls force-stop only.
+- Done when: in a worktree, `stop-all-force` stops its adopted dashboard + recorded
+  workers and lists main's processes as left running.
 
-### [x] T3 — Re-evaluate script switch · S · `[Backend/Logic]`
-Depends on: T1
+## Checkpoints
 
-- `scripts/reevaluate_tournament_run.py`: `risk_gates["sharpe"]` from `sharpe_ratio`
-  (`:190`); ranking key (`:267`) `sharpe_proxy` → `sharpe_ratio`; per-arm record (`:217`) and
-  table format (`:308-326,338`) renamed; golden text `S=Sharpe>=2.70` kept.
-- Tests: `tests/test_reevaluate_tournament_run.py` keys/fixtures renamed; one gate test with
-  `sharpe_ratio: None` → gate `False`.
-- Verify: `python -m pytest -q tests/test_reevaluate_tournament_run.py`
+- After T1: header/`status` proves checkout selection; T1 tests green.
+- After T2: adoption/ownership proves isolation; T1+T2 tests green.
+- After T3: force-stop proves scoped kill; all new + listed regression suites green.
 
-### [x] T4 — Gates and handoff · S · `[Testing]`
-Depends on: T1, T2, T3
+## Sub-issue mapping
 
-- Grep gate: no production `sharpe_proxy` remains
-  (`grep -rn sharpe_proxy scripts/ core_brain/ dashboard/ --include=*.py --include=*.js` → only
-  historical docs/comments); confirm `test_541_golden_payload.json` `sharpe_ratio: 0.6229…` untouched.
-- Targeted suites from T1–T3 plus kpi regression in one run:
-  `test_sharpe_ratio + decision_gates + reevaluate + shadow_tournament + trade_analytics + kpi`.
-- Issue acceptance: `python -m pytest -q tests/ -k "sharpe"` passes.
-- Operator "How to verify" block (hands-on only, no pytest) + PR body.
+Skipped with reason: single-owner 3-task change on one branch — `tasks/todo.md`
+checklist is the tracker; no parallel work to coordinate, no `blocked-by` edges needed.
 
-**Checkpoints:** after T1 (helper green), after T2 (cockpit card shows new ratio), after T3
-(reevaluate agrees), after T4 (targeted run + handoff). In `auto` mode these are one-line reports.
+## Operator hands-on checks (safe order; worktree with no live trading for step 4)
 
-## 6. Deliberately out of scope
-
-- Retuning the 2.70/2.20 gates — flagged for review on future runs, numbers unchanged here.
-- `kpi.compute_trade_analytics` per-trade Sharpe — intentional, pinned, untouched.
-- Dashboard tiles rendering `trade_analytics.sharpe_ratio` — same kpi meaning, no change.
-- `BOT_SHARPE_RISK_FREE_RATE` in `config.py`/`.env.example` — lives in `sharpe.py` this round.
-- Live risk-free rates; historical backfills; paired-record capital lookup (no plumbing).
-
-## 7. Open questions from the issue, answered from code
-
-1. *Risk-free rate?* — `0` default for USDC, configurable `BOT_SHARPE_RISK_FREE_RATE` (yearly
-   decimal ratio); issue allows exactly this.
-2. *Which series?* — unthinned close history inside `analyze_arm_database`, not the 60-point
-   chart `series` (same curve, full detail).
-3. *Do cockpit, dashboard, trader share one function?* — narrowed with evidence: cockpit +
-   reevaluate share the new helper; trader/dashboard kpi metric is a different, documented
-   statistic that stays.
-4. *Label?* — cockpit `Sharpe` → `Sharpe Ratio` + formula tooltip; dashboard tile already reads
-   `Sharpe & Sortino Ratio` and keeps its kpi meaning.
-
-## 8. Rejected proposals log
-
-| Proposal | Verdict | Why |
-| --- | --- | --- |
-| Paired-record capital fallback first | Rejected | No tournament-DB path in `cfg`; arm DBs may lack the table — [UNVERIFIED], 2-level fallback instead |
-| Rewrite `kpi.py` per-trade Sharpe to the time-series formula | Rejected | Explicit no-annualisation rationale + golden pin + ~10 test files |
-| Keep payload key `sharpe_proxy` with new value | Rejected | Key would lie about its contents; rename + move readers atomically |
-| Retune gates to the new metric now | Deferred | Needs future-run data; numbers kept, review flagged |
-| `HUNTER_*` alias for the new setting | Rejected | No caller uses it; one name only |
+1. In a worktree folder run `.\scripts\spread-hunter-menu.ps1 status` → header shows
+   the worktree path `(from current folder)`.
+2. Same folder, run main's script by full path with `status` → worktree path +
+   mixed-checkout note.
+3. Only if nothing listens on 8799: in a worktree terminal run
+   `python -m dashboard.server --port 8799` (do NOT press START), then main's `status`
+   → `LISTENING – other checkout: <worktree>`, and no adoption record written.
+4. In the worktree run `host`, then `status` (`ON (owned)`), then `stop-all-force` →
+   dashboard + recorded workers stopped, main's processes listed as left running.
+5. From main, `status` → main's processes unchanged.

@@ -48,7 +48,27 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+function Resolve-ProjectRoot {
+    <# Pick the checkout this menu serves: the exact current folder when it
+    holds both spread-hunter marker files, otherwise the script's own
+    checkout. Never walks parent folders. #>
+    param([string]$CurrentPath, [string]$ScriptCheckout)
+    $markersOk = $false
+    if ($CurrentPath -and (Test-Path $CurrentPath)) {
+        $up = Join-Path $CurrentPath "core_brain/order_manager.py"
+        $down = Join-Path $CurrentPath "dashboard/server.py"
+        if ((Test-Path $up) -and (Test-Path $down)) { $markersOk = $true }
+    }
+    if ($markersOk) {
+        $sel = [System.IO.Path]::GetFullPath($CurrentPath).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+        return [pscustomobject]@{ Path = $sel; Source = "current folder" }
+    }
+    return [pscustomobject]@{ Path = $ScriptCheckout; Source = "script location" }
+}
+$script:ScriptCheckout = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+$script:SelectedCheckout = Resolve-ProjectRoot -CurrentPath (Get-Location).ProviderPath -ScriptCheckout $script:ScriptCheckout
+$ProjectPath = $script:SelectedCheckout.Path
+$script:CheckoutSource = $script:SelectedCheckout.Source
 $Port    = 8799
 $LivePort     = $Port
 $DashUrl     = "http://127.0.0.1:$Port"
@@ -1034,9 +1054,10 @@ function Open-Dashboard {
         if ($ok) {
             Lsh-Step "Sweeping Polymarket account balance to sync live starting capital..."
             try {
-                # `python -m` resolves modules against the caller's cwd, and
-                # every Start-Process launch in this script pins
-                # -WorkingDirectory $ProjectPath for exactly that reason. A
+                # `python -m` resolves modules against the caller's cwd; worker
+                # and timebox Start-Process launches pin -WorkingDirectory
+                # $ProjectPath for exactly that reason (browser launches open
+                # a URL and take no working folder). A
                 # direct `& python` call inherits the shell's location, so a
                 # menu launched outside the repo root died here with
                 # ModuleNotFoundError: No module named 'core_brain'.
@@ -1433,7 +1454,7 @@ function Resume-ShadowRun {
         }
         Start-Process -FilePath "powershell" `
             -ArgumentList "-NoProfile", "-Command", $killCmd `
-            -WindowStyle Hidden
+            -WindowStyle Hidden -WorkingDirectory $ProjectPath
     }
 
     $session = [ordered]@{
@@ -1591,7 +1612,7 @@ function Start-NewShadowRun {
         foreach ($t in $timerTargets) {
             $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
         }
-        Start-Process -FilePath "powershell" -ArgumentList "-NoProfile", "-Command", $killCmd -WindowStyle Hidden
+        Start-Process -FilePath "powershell" -ArgumentList "-NoProfile", "-Command", $killCmd -WindowStyle Hidden -WorkingDirectory $ProjectPath
     }
 
     Start-Sleep -Seconds 3
@@ -1981,6 +2002,10 @@ function Get-HeartbeatAgeSec {
 
 function Show-Status {
     Lsh-Banner -Title "SPREAD HUNTER - STATUS" -Subtitle "Execution engine: $(Split-Path $ProjectPath -Leaf)"
+    Write-Host ("  Checkout: {0} (from {1})" -f $ProjectPath, $script:CheckoutSource)
+    if ($script:ScriptCheckout -ne $ProjectPath) {
+        Write-Host ("  Note: menu logic comes from {0}; Python code comes from {1}." -f $script:ScriptCheckout, $ProjectPath)
+    }
 
     # ── 1 · DASHBOARD ──
     $inst = Get-DashInstance
@@ -2821,7 +2846,7 @@ function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wip
                         }
                         Start-Process -FilePath "powershell" `
                             -ArgumentList "-NoProfile", "-Command", $killCmd `
-                            -WindowStyle Hidden
+                            -WindowStyle Hidden -WorkingDirectory $ProjectPath
                     }
                     Lsh-Ok "Shadow session running: screener + loop + stop-loss watcher. Stop Bot + Dashboard (5 / stop-shadow) ends it early."
                 }
@@ -2959,6 +2984,10 @@ function Show-MenuGrid {
     $cNeutral = Get-ProfileColor -Name Neutral
 
     Write-Host "  SPREAD HUNTER - CONTROL CENTER" -ForegroundColor $cInfo
+    Write-Host ("  Checkout: {0} (from {1})" -f $ProjectPath, $script:CheckoutSource) -ForegroundColor $cNeutral
+    if ($script:ScriptCheckout -ne $ProjectPath) {
+        Write-Host ("  Note: menu logic comes from {0}; Python code comes from {1}." -f $script:ScriptCheckout, $ProjectPath) -ForegroundColor $cNeutral
+    }
     Write-Host ("" + ("─" * 30)) -ForegroundColor (Get-ProfileColor -Name Border)
     Write-Host ""
 
