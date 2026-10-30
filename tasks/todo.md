@@ -15,7 +15,7 @@ Branch: `i881/improve-align-spread-hunter-menu-script-for-pwd-aw`
 - [x] Focused run green, existing menu suites untouched and green
 
 ## T3 — Force stop + wiring + docs [Code] M
-- [ ] `Stop-WorktreeProcessesForce` (order, PID-reuse guard, rescan, 3-list report)
-- [ ] `x` wiring verified unused; option 7 preserved; menu text + README rows
-- [ ] `tests/test_menu_force_stop.py` (9 assertions on PIDs 101–110)
-- [ ] Focused run green; operator hands-on checks (status-first, no live trading)
+- [x] `Stop-WorktreeProcessesForce` (order, PID-reuse guard, rescan, 3-list report)
+- [x] `x` wiring verified unused; option 7 preserved; menu text + README rows
+- [x] `tests/test_menu_force_stop.py` (9 assertions on PIDs 101–110)
+- [x] Focused run green; operator hands-on checks (status-first, no live trading)

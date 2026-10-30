@@ -115,7 +115,7 @@ Depends on: T1. Files: `scripts/spread-hunter-menu.ps1` (≈lines 529–561, 909
   unmatched either way); not in the leave-untouched list, aligned with the
   checkout-local invariant.
 
-## T3 — Separate force-stop action + wiring + docs [Code] M
+## T3 — Separate force-stop action + wiring + docs [Code] M [x]
 
 Depends on: T1, T2. Files: `scripts/spread-hunter-menu.ps1` (new
 `Stop-WorktreeProcessesForce`, `$actionMap`, `Invoke-LiveAction`, menu text),
@@ -136,6 +136,10 @@ Depends on: T1, T2. Files: `scripts/spread-hunter-menu.ps1` (new
   dispatch calls force-stop only.
 - Done when: in a worktree, `stop-all-force` stops its adopted dashboard + recorded
   workers and lists main's processes as left running.
+- Reconciliation note (build): `test_menu_navigation.py::test_menu_key_set_is_identical_everywhere`
+  pins the exact `MenuKeys` literal, and the specified key `x` cannot pass the dispatch
+  allow-list without joining it. The literal gained `"x"` (one-line diff); the pin's
+  anti-drift purpose is preserved — `test_every_key_has_a_branch` now also covers `x`.
 
 ## Checkpoints
 

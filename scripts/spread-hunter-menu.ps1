@@ -14,6 +14,7 @@
 #   .\scripts\spread-hunter-menu.ps1 open-shadow   # 6 · SHADOW: release :8799 from the other menu-owned dashboard (no wipe), host shadow & open
 #   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] [-ResumeDb <path|all>] [-Preset <name>] [-Prudent] # R · SHADOW: resume shadow run(s) in place (no wipe) & reattach dashboard(s) — interactive picks 01 / 02 / all / Prudent
 #   .\scripts\spread-hunter-menu.ps1 clean         # 7 · GLOBAL: kill all + wipe data + verify (no start)
+#   .\scripts\spread-hunter-menu.ps1 stop-all-force # X · force-stop every Owned process of THIS checkout (no wipe; others keep running)
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
 #   .\scripts\spread-hunter-menu.ps1 audit         # A · MAINTENANCE: storage audit (read-only disk usage)
 #   .\scripts\spread-hunter-menu.ps1 prune         # P · MAINTENANCE: storage prune (deletes stale stores/reports)
@@ -2715,6 +2716,164 @@ function Stop-ShadowSession {
     return $killedAny
 }
 
+function Get-ForceStopTargets {
+    <# Discover every stoppable spread-hunter python process of THIS checkout
+    and classify it Owned, Foreign, or Unknown. Read-only: never kills. The
+    preview list and both kill passes share this helper. #>
+    $forcePattern = '-m\s+(scripts\.filter_loop|core_brain\.trader_loop|core_brain\.order_manager\s+poll|scripts\.global_stop_loss|dashboard\.server|core_brain\.shadow_run|core_brain\.statistics_observer)\b|scripts[\\/]global_stop_loss\.py'
+    $found = @()
+    try {
+        $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+    } catch {
+        Lsh-Warn "Could not read the process table; force-stop scan is inconclusive."
+        return $null
+    }
+    $saved = $null
+    if (Test-Path $ProcsFile) { try { $saved = Get-Content $ProcsFile -Raw | ConvertFrom-Json } catch {} }
+    $registryOwned = @{}
+    if ($saved) {
+        foreach ($name in @("filter", "query", "decide")) {
+            $info = Get-ServiceEntry -Saved $saved -Key $name
+            if ($info -and $info.pid) {
+                try {
+                    if (Test-RecordLive -ProcessId ([int]$info.pid) -StartedAt $info.started_at) { $registryOwned[[int]$info.pid] = $true }
+                } catch {}
+            }
+        }
+    }
+    $dashPid = $null
+    try { $di = Get-DashInstance; if ($di) { $dashPid = $di.pid } } catch {}
+    $sessionOwned = @{}
+    $sessionFiles = @(Get-ChildItem $RunDir -Filter "shadow-session-*.json" -ErrorAction SilentlyContinue)
+    if (Test-Path $ShadowSessionFile) { $sessionFiles += Get-Item $ShadowSessionFile }
+    foreach ($sf in $sessionFiles) {
+        $s = $null
+        try { $s = Get-Content $sf.FullName -Raw | ConvertFrom-Json } catch {}
+        if ($s) {
+            foreach ($slot in @($s.loop, $s.screener, $s.observer, $s.watcher)) {
+                $rp = $null
+                try { $rp = Get-ProcessRecord -Entry $slot } catch {}
+                if ($rp) { $sessionOwned[$rp.Id] = $true }
+            }
+        }
+    }
+    $portOwner = $null
+    try { $portOwner = Get-PortPid } catch {}
+    $portProve = $false
+    if ($portOwner) {
+        try { $portProve = ((Get-DashboardOwnership).Verdict -eq 'Owned') } catch { $portProve = $false }
+    }
+    foreach ($p in $procs) {
+        if ($p.Name -notmatch '^python') { continue }
+        if (-not $p.CommandLine) { continue }
+        if ($p.ProcessId -eq $PID) { continue }
+        if ($p.CommandLine -notmatch $forcePattern) { continue }
+        if ($p.CommandLine -match 'polymarket_docs_mcp') { continue }
+        $cli = Get-CommandLineCheckoutOwner -CommandLine $p.CommandLine -Root $ProjectPath
+        $rec = $registryOwned.ContainsKey([int]$p.ProcessId) -or ($dashPid -and ($dashPid -eq [int]$p.ProcessId)) -or $sessionOwned.ContainsKey([int]$p.ProcessId)
+        $isPort = ($portProve -and $portOwner -and ([int]$p.ProcessId -eq [int]$portOwner))
+        if (($cli -eq 'Foreign') -and ($rec -or $isPort)) {
+            $verdict = 'Unknown'
+        } elseif (($cli -eq 'Owned') -or $rec -or $isPort) {
+            $verdict = 'Owned'
+        } elseif ($cli -eq 'Foreign') {
+            $verdict = 'Foreign'
+        } else {
+            $verdict = 'Unknown'
+        }
+        $rank = 2
+        if ($p.CommandLine -match 'dashboard\.server') { $rank = 0 }
+        elseif ($p.CommandLine -match 'core_brain\.order_manager') { $rank = 1 }
+        $born = $null
+        try { $born = (Get-Process -Id $p.ProcessId -ErrorAction Stop).StartTime } catch { $born = $null }
+        $found += [pscustomobject]@{ Pid = [int]$p.ProcessId; CommandLine = [string]$p.CommandLine; Verdict = $verdict; Rank = $rank; BornAt = $born }
+    }
+    return @($found | Sort-Object Rank, Pid)
+}
+
+function Stop-WorktreeProcessesForce {
+    <# Stop every Owned spread-hunter process of this checkout — recorded or
+    not — while leaving Foreign and Unknown processes running. Kills in
+    supervisor order (dashboard, order manager, rest), re-verifies each PID's
+    creation time at kill time through Kill-RecordedPid, rescans once for
+    late arrivals, and reports three lists. Removes a dashboard or
+    shadow-session record only after every PID in it has exited. Never
+    touches processes.json, markets.json, heartbeat, locks, data/, the TS
+    bridge, or the recorded-stack stop paths. With -Preview, only returns
+    the Owned targets without touching anything. #>
+    param([switch]$Preview)
+    $targets = Get-ForceStopTargets
+    if ($null -eq $targets) {
+        Lsh-Warn "Force-stop scan was inconclusive; leaving everything running."
+        return $null
+    }
+    if ($Preview) { return ,@($targets | Where-Object { $_.Verdict -eq 'Owned' }) }
+    $stopped = @()
+    $survived = @()
+    $lastTargets = @()
+    for ($pass = 0; $pass -lt 2; $pass++) {
+        if ($pass -eq 1) {
+            $targets = Get-ForceStopTargets
+            if ($null -eq $targets) {
+                Lsh-Warn "Force-stop rescan was inconclusive; leaving everything running."
+                return $null
+            }
+        }
+        $lastTargets = @($targets)
+        $owned = @($targets | Where-Object { $_.Verdict -eq 'Owned' })
+        if (($pass -eq 1) -and ($owned.Count -eq 0)) { break }
+        foreach ($t in $owned) {
+            if ($null -eq $t.BornAt) {
+                Lsh-Warn ("PID {0} start time unreadable; leaving it running." -f $t.Pid)
+                if (-not ($survived -contains $t.Pid)) { $survived += $t.Pid }
+                continue
+            }
+            $ok = Kill-RecordedPid -Name "force-stop target" -TargetPid $t.Pid -StartedTicks $t.BornAt.ToUniversalTime().Ticks
+            if ($ok) { $stopped += $t.Pid }
+            elseif (-not ($survived -contains $t.Pid)) { $survived += $t.Pid }
+        }
+    }
+    $foreign = @($lastTargets | Where-Object { $_.Verdict -eq 'Foreign' } | ForEach-Object { $_.Pid })
+    $unknown = @($lastTargets | Where-Object { $_.Verdict -eq 'Unknown' } | ForEach-Object { $_.Pid })
+    foreach ($sp in $survived) { if (-not ($unknown -contains $sp)) { $unknown += $sp } }
+    if ($stopped.Count -gt 0) { Lsh-Ok ("Force stop complete: stopped PID(s) {0}." -f ($stopped -join ", ")) }
+    else { Lsh-Ok "Force stop complete: no Owned processes were running." }
+    if ($foreign.Count -gt 0) { Lsh-Warn ("Left running - other checkout: {0}." -f ($foreign -join ", ")) }
+    if ($unknown.Count -gt 0) { Lsh-Warn ("Left running - could not prove ownership: {0}." -f ($unknown -join ", ")) }
+    if ($survived.Count -gt 0) { Lsh-Fail ("Owned target(s) still running: {0}." -f ($survived -join ", ")) }
+    Lsh-Warn "Stopping processes does not cancel resting venue orders."
+    if (Test-Path $DashPidFile) {
+        $dpids = @()
+        try {
+            $dd = Get-Content $DashPidFile -Raw | ConvertFrom-Json
+            if ($dd -and $dd.dash -and $dd.dash.pid) { $dpids += [int]$dd.dash.pid }
+        } catch {}
+        $dashGone = ($dpids.Count -gt 0)
+        foreach ($dp in $dpids) { if (Test-PidAlive -ProcessId $dp) { $dashGone = $false } }
+        if ($dashGone) { Remove-Item $DashPidFile -Force -ErrorAction SilentlyContinue }
+    }
+    $sessionFiles = @(Get-ChildItem $RunDir -Filter "shadow-session-*.json" -ErrorAction SilentlyContinue)
+    if (Test-Path $ShadowSessionFile) { $sessionFiles += Get-Item $ShadowSessionFile }
+    foreach ($sf in $sessionFiles) {
+        $s = $null
+        try { $s = Get-Content $sf.FullName -Raw | ConvertFrom-Json } catch {}
+        if (-not $s) { continue }
+        $known = @()
+        $unproven = 0
+        foreach ($slot in @($s.loop, $s.screener, $s.observer, $s.watcher)) {
+            if ($slot -and $slot.pid) {
+                if ($slot.started_ticks) { $known += [int]$slot.pid }
+                else { $unproven++ }
+            }
+        }
+        if (($known.Count -eq 0) -or ($unproven -gt 0)) { continue }
+        $allGone = $true
+        foreach ($kp in $known) { if (Test-PidAlive -ProcessId $kp) { $allGone = $false } }
+        if ($allGone) { Remove-Item $sf.FullName -Force -ErrorAction SilentlyContinue }
+    }
+    return ($survived.Count -eq 0)
+}
+
 function Stop-AllSpreadHunterProcesses {
     <# Stop all spread-hunter processes: bot stacks, dashboards, shadow runs,
        watchers, observers, tournament cockpit, filter loop, arm dashboards,
@@ -3096,7 +3255,7 @@ function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wip
 # One ordered key list is the single source of truth for the menu: the grid,
 # the prompt, the invalid-selection message and the command-line allow-list
 # all derive from it, so a new key only has to be added in one place (#475).
-$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'c', 't', 'q')
+$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'c', 't', 'q', 'x')
 
 function Format-MenuHint {
     <# Render the key list as the operator-facing hint, e.g. "1-9, r, a, p, q".
@@ -3139,6 +3298,7 @@ function Show-MenuGrid {
         ) }
         @{ Header = "MAINTENANCE & TOURNAMENT"; Items = @(
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop &| Clean";       D = "1. Stop All (default) | 2. Stop & CLEAN Data" }
+            @{ K = "x"; Icon = "✖"; IconColor = "Error";   V = "Force Stop Checkout";          D = "Stop every Owned process of THIS checkout (recorded or not); others keep running" }
             @{ K = "8"; Icon = "≡"; IconColor = "Info";    V = "Check System Status";        D = "Static Status page" }
             @{ K = "t"; Icon = "⚖"; IconColor = "Success"; V = "Tournament Reconcile";       D = "Align & sync 10 arms, filter loop, 10 dashboards & Cockpit" }
             @{ K = "c"; Icon = "⌖"; IconColor = "Info";    V = "Tournament Cockpit";         D = "Open Advanced Analytics & Decision Cockpit on :8800" }
@@ -3276,6 +3436,26 @@ function Invoke-LiveAction {
                 }
                 $null = Reset-Environment -Mode "none"
             }
+        }
+        "x" {
+            $preview = Stop-WorktreeProcessesForce -Preview
+            if ($null -eq $preview) {
+                Lsh-Warn "Force-stop preview was inconclusive; leaving everything running."
+                return
+            }
+            if ($preview.Count -eq 0) {
+                Lsh-Ok "No Owned spread-hunter processes to force-stop in this checkout."
+                return
+            }
+            Lsh-Step "Force stop will kill these Owned processes of this checkout:"
+            foreach ($t in $preview) {
+                Lsh-Step (("  PID {0}: {1}" -f $t.Pid, $t.CommandLine))
+            }
+            if ($Action -eq "") {
+                $confirm = Read-Host ("  Stop these {0} process(es) with taskkill /T /F? [y/N]" -f $preview.Count)
+                if ($confirm -notmatch '^[yY]') { Lsh-Warn "Force stop cancelled."; return }
+            }
+            $null = Stop-WorktreeProcessesForce
         }
         "8" { Show-Status }
         "r" {
@@ -3515,6 +3695,9 @@ if ($Action -ne "") {
         "get"          = "7"
         "stop-all"     = "7"
         "stopall"      = "7"
+        "stop-all-force" = "x"
+        "force-stop"   = "x"
+        "nuke"         = "x"
         "status"       = "8"
         "statistical"  = "9"
         "stats"        = "9"

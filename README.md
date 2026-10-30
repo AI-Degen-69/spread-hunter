@@ -169,7 +169,12 @@ stack and preserves the captured `starting_account_value`.
 
 **PowerShell control center** — `.\scripts\spread-hunter-menu.ps1` with
 `start` / `stop` / `host` (`open`) / `shadow-run` / `stop-shadow` / `open-shadow` /
-`clean` / `status` / `statistical-run` / `tournament-cockpit`. See
+`clean` / `status` / `statistical-run` / `tournament-cockpit` /
+`stop-all-force` (`force-stop`, `nuke`, key `x`). The menu serves the checkout in the
+current folder (both `core_brain/order_manager.py` and `dashboard/server.py` present)
+and otherwise falls back to the script's own checkout; `stop-all-force` stops every
+Owned process of that checkout — recorded or not — while other checkouts keep running
+and resting venue orders are never cancelled. See
 [docs/agents/first-run.md](docs/agents/first-run.md) for what each option covers.
 
 ## Safety rails

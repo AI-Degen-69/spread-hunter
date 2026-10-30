@@ -59,7 +59,7 @@ def test_menu_key_set_is_identical_everywhere():
     place silently misses another — the exact drift that hid `t` from the
     prompt and let `audit`/`prune` live outside the grid.
     """
-    assert _menu_keys() == ["1", "2", "3", "4", "5", "6", "7", "8", "9", "r", "a", "p", "c", "t", "q"]
+    assert _menu_keys() == ["1", "2", "3", "4", "5", "6", "7", "8", "9", "r", "a", "p", "c", "t", "q", "x"]
     src = _menu_source()
     # The allow-list reads that same list, not a hand-written literal.
     assert "$script:MenuKeys -notcontains $key" in src
