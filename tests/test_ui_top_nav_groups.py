@@ -546,6 +546,8 @@ def test_profile_picker_lists_view_and_start():
     assert "issue #799" in html and "tournament-test" in html
     assert '<span class="arm-meta">issue #' not in html, (
         "an arm row must not restate the group header's issue line")
+    assert '<span class="arm-meta">Preset' not in html, (
+        "a preset row must not restate the Presets heading, which already says it is code")
     assert '<span class="arm-kpi empty">no store yet</span>' in html
     assert "no store yet — START creates one" in html  # tooltip, not a visible line
     assert 'data-action' not in p["empty"]

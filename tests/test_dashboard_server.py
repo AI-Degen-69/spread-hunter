@@ -4355,6 +4355,55 @@ def test_start_rejects_missing_preflight_id(client):
     assert "preflight" in body["message"].lower()
 
 
+def test_refused_start_stages_no_profile(client, monkeypatch, tmp_path):
+    """#886: a start refused for its approval stages nothing.
+
+    The profile write is a side effect, and a refused start must leave no
+    staged profile behind for the next START -- even an unrelated one -- to
+    inherit.
+    """
+    import dashboard.server as dash_mod
+    from dashboard import preflight as _pf
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    (tmp_path / "runtime").mkdir(exist_ok=True)
+    monkeypatch.setattr(
+        dash_mod, "_write_pending_profile",
+        lambda *_a, **_k: pytest.fail("the profile was staged before the approval check"))
+    _pf.clear_sessions()
+    try:
+        body = client.post(
+            "/api/system/start",
+            json={"preflight_id": "not-a-session", "minutes": 1440,
+                  "profile": {"kind": "preset", "name": "balanced"}},
+            headers=_control(client)).json()
+        assert body["ok"] is False
+        assert "preflight" in body["message"].lower()
+        assert not (tmp_path / "runtime" / "pending_profile.json").exists()
+    finally:
+        _pf.clear_sessions()
+
+
+def test_body_profile_that_cannot_be_staged_is_not_called_unknown(monkeypatch, tmp_path):
+    """#886: an unwritable runtime is a disk problem, not a misspelled profile."""
+    import dashboard.server as dash_mod
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    (tmp_path / "runtime").mkdir(exist_ok=True)
+    monkeypatch.setattr(dash_mod, "_profile_options", lambda: {
+        "presets": [{"kind": "preset", "name": "balanced",
+                     "label": "Balanced", "detail": "", "env": {}}],
+        "arms_grouped": []})
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(dash_mod, "runtime_file", _boom)
+    assert dash_mod._stage_profile_for_start(
+        {"kind": "preset", "name": "balanced"}
+    ).startswith("Could not stage profile preset:balanced")
+    assert dash_mod._stage_profile_for_start(
+        {"kind": "preset", "name": "nope"}) == "Unknown profile preset:nope."
+
+
 def test_start_rejects_invalid_minutes(client):
     """#857: only 60/360/1440 minute horizons are accepted."""
     from dashboard import preflight as _pf

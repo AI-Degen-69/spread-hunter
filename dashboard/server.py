@@ -2040,9 +2040,32 @@ def _write_pending_profile(kind, name) -> dict | None:
         tmp = target.with_suffix(target.suffix + ".tmp")
         tmp.write_text(json.dumps(record), encoding="utf-8")
         tmp.replace(target)
-    except OSError:
+    except OSError as e:
+        # The caller turns None into a refusal; say in the log which refusal it
+        # really was, so a disk failure is not read as a typo.
+        logger.warning("could not stage profile %s:%s: %s", kind, name, e)
         return None
     return match
+
+
+def _stage_profile_for_start(wanted: dict) -> str | None:
+    """Stage the profile a START body picked, or return its refusal message.
+
+    Two failures reach the caller as the same None and are not the same thing:
+    a name that resolves to nothing is the operator's typo, while a profile
+    that exists but cannot be written into runtime/ is a disk problem. Calling
+    the second one "unknown profile" sends them hunting for a spelling that was
+    already right, so each failure names itself.
+    """
+    kind = wanted.get("kind")
+    name = wanted.get("name")
+    if _write_pending_profile(kind, name) is not None:
+        return None
+    if not any(o["kind"] == kind and o["name"] == name
+               for o in _profile_choices(_profile_options())):
+        return f"Unknown profile {kind}:{name}."
+    return (f"Could not stage profile {kind}:{name} — nothing was started. "
+            "The dashboard log says why.")
 
 
 def _resolve_active_profile(shadow_run: dict | None) -> dict | None:
@@ -3282,19 +3305,6 @@ async def api_system_start(request: Request):
                         "dashboard Start Run launcher, pass all 4 checks, then start."),
             "status": get_system_status(),
         })
-    # A profile chosen in the picker rides this start: write its identity and
-    # let start_bot re-resolve the env, so the live stack runs the picked arm
-    # rather than whatever was staged before.
-    wanted = body.get("profile")
-    if isinstance(wanted, dict):
-        match = _write_pending_profile(wanted.get("kind"), wanted.get("name"))
-        if match is None:
-            return JSONResponse({
-                "ok": False,
-                "message": (f"Unknown profile "
-                            f"{wanted.get('kind')}:{wanted.get('name')}."),
-                "status": get_system_status(),
-            })
     from dashboard import preflight as _pf
 
     # The approval is checked here but consumed only after a start that
@@ -3309,6 +3319,20 @@ async def api_system_start(request: Request):
             "message": "Invalid, expired, or already-used preflight_id; re-run preflight.",
             "status": get_system_status(),
         })
+    # A profile chosen in the picker rides this start: write its identity and
+    # let start_bot re-resolve the env, so the live stack runs the picked arm
+    # rather than whatever was staged before. Written only after the approval
+    # is known good -- a refused start must leave no staged profile behind for
+    # the next START to inherit.
+    wanted = body.get("profile")
+    if isinstance(wanted, dict):
+        refusal = _stage_profile_for_start(wanted)
+        if refusal is not None:
+            return JSONResponse({
+                "ok": False,
+                "message": refusal,
+                "status": get_system_status(),
+            })
     # Process spawns and the starting-capital venue read block; keep them
     # off the event loop like the preflight runners above.
     result = await run_in_threadpool(
@@ -3773,12 +3797,11 @@ async def api_system_shadow_start(
         # env carries its measured settings.
         wanted = body.get("profile")
         if isinstance(wanted, dict):
-            match = _write_pending_profile(wanted.get("kind"), wanted.get("name"))
-            if match is None:
+            refusal = _stage_profile_for_start(wanted)
+            if refusal is not None:
                 return JSONResponse({
                     "ok": False,
-                    "message": (f"Unknown profile "
-                                f"{wanted.get('kind')}:{wanted.get('name')}."),
+                    "message": refusal,
                     "status": get_system_status(),
                 })
         naming = _fresh_shadow_naming()

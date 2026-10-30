@@ -3491,7 +3491,6 @@ function presetRowHtml(preset, stagedName) {
   return `<div class="arm-row preset-row${isStaged ? ' staged' : ''}" data-arm="${esc(preset.name)}" title="${esc(tooltip)}">
       <div class="arm-row-main">
         <span class="arm-name">${esc(label)}${isStaged ? ' <span class="arm-staged-tag">STAGED</span>' : ''}</span>
-        <span class="arm-meta">Preset · ${esc(profileOrigin(preset))}</span>
       </div>
       <div class="arm-row-kpis preset-kpis">
         <span class="arm-kpi empty">code preset</span>
