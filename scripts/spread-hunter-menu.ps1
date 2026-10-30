@@ -48,7 +48,23 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+function Test-IsSpreadHunterRepo {
+    param([string]$Candidate)
+    if ([string]::IsNullOrWhiteSpace($Candidate)) { return $false }
+    try {
+        $o = Join-Path $Candidate "core_brain/order_manager.py"
+        $d = Join-Path $Candidate "dashboard/server.py"
+        return ((Test-Path $o) -and (Test-Path $d))
+    } catch { return $false }
+}
+$script:FallbackProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$script:PwCandidate = $null
+try { $script:PwCandidate = (Get-Location).Path } catch { $script:PwCandidate = $null }
+if ($script:PwCandidate -and (Test-IsSpreadHunterRepo $script:PwCandidate)) {
+    $ProjectPath = $script:PwCandidate
+} else {
+    $ProjectPath = $script:FallbackProjectPath
+}
 $Port    = 8799
 $LivePort     = $Port
 $DashUrl     = "http://127.0.0.1:$Port"
@@ -607,8 +623,9 @@ function Start-Dashboard {
     $hadPort = Test-Path Env:PORT
     if ($hadPort) { $savedPort = $env:PORT; Remove-Item Env:PORT }
     try {
+        $liveDb = Join-Path $ProjectPath "data/orders.db"
         $dash = Start-Process -FilePath "python" `
-            -ArgumentList "-m", "dashboard.server", "--port", "$LivePort" `
+            -ArgumentList (Format-ProcessArgs @("-m", "dashboard.server", "--port", "$LivePort", "--db", $liveDb)) `
             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput $OutLog `
             -RedirectStandardError  $ErrLog
@@ -2637,6 +2654,66 @@ function Stop-AllSpreadHunterProcesses {
     }
 }
 
+function Get-WorktreeSpreadHunterProcesses {
+    <# Nuclear-scan helper: every python whose command line both matches a
+       spread-hunter module and carries this worktree's path (via --db,
+       --data-dir, --ring, --out-dir, --report). Scoped to $ProjectPath so a
+       sibling checkout is never matched. #>
+    param([string]$ScopePath = $ProjectPath)
+    $shPattern = '-m\s+(core_brain\.|dashboard\.server|scripts\.(filter_loop|filter_markets|tournament_|shadow_tournament|statistical_validation|global_stop_loss|reconcile_tournament_stack|resume_tournament_arms|rank_markets))'
+    try {
+        return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -match '^python' -and $_.CommandLine -and `
+                ($_.CommandLine -like "*$ScopePath*") -and ($_.CommandLine -match $shPattern) -and `
+                ($_.CommandLine -notmatch 'polymarket_docs_mcp')
+            })
+    } catch { return @() }
+}
+
+function Stop-WorktreeProcessesForce {
+    <# Nuclear stop: kill ALL spread-hunter processes from THIS worktree
+       regardless of PID-file ownership. Recorded services first, then the
+       path-scoped scan, then the :8799 holder when it serves this worktree.
+       Never touches another checkout (every kill requires $ProjectPath in
+       the command line or a verified port holder). Data files untouched. #>
+    param([string]$ScopePath = $ProjectPath)
+    Lsh-Banner -Title "FORCE STOP WORKTREE" -Subtitle "nuclear stop for $(Split-Path $ScopePath -Leaf) (any owner, this worktree only)"
+    Lsh-Step ("Scope: {0}" -f $ScopePath)
+    Stop-BotStack
+    $null = Stop-ShadowSession
+    $null = Stop-ShadowRun
+    Stop-Guardrail
+    $null = Stop-Dashboard
+    $null = Stop-ShadowDashboard
+    $targets = @(Get-WorktreeSpreadHunterProcesses -ScopePath $ScopePath)
+    foreach ($p in $targets) {
+        Lsh-Step ("Stopping worktree process PID {0} ({1})..." -f $p.ProcessId, $p.CommandLine)
+        taskkill /F /T /PID $p.ProcessId 2>$null | Out-Null
+        Wait-ProcessGone -ProcessId $p.ProcessId | Out-Null
+    }
+    $pidOnPort = Get-PortPid -PortNumber $LivePort
+    if ($pidOnPort -and (Test-DashboardServer)) {
+        try { $holder = @(Get-CimInstance Win32_Process -Filter "ProcessId=$pidOnPort" -ErrorAction Stop)[0] } catch { $holder = $null }
+        $holderCmd = if ($holder -and $holder.CommandLine) { $holder.CommandLine } else { "" }
+        if ($holderCmd -like "*$ScopePath*") {
+            Lsh-Step ("Freeing :$LivePort worktree dashboard (PID $pidOnPort)...")
+            taskkill /F /T /PID $pidOnPort 2>$null | Out-Null
+            Wait-ProcessGone -ProcessId $pidOnPort | Out-Null
+        } elseif ($holderCmd -match 'dashboard\.server') {
+            Lsh-Warn ("Port :$LivePort dashboard PID $pidOnPort has no worktree path in its command line; leaving it (start new dashboards with --db so nuke can scope them).")
+        }
+    }
+    if (Test-Path $RunDir) {
+        Get-ChildItem $RunDir -File -Filter "*.pid*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem $RunDir -File -Filter "*.sock" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem $RunDir -File -Filter "*.lock" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+    $left = @(Get-WorktreeSpreadHunterProcesses -ScopePath $ScopePath)
+    if ($left.Count -gt 0) { Lsh-Warn ("{0} worktree process(es) still lingering." -f $left.Count) }
+    else { Lsh-Ok "Worktree force-stop complete; sibling checkouts untouched." }
+}
+
 function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wipe -> verify clean ->
     start the requested mode. Mode "none" stops after the clean proof;
     "shadow" also brings up the shadow dashboard (and a rehearsal run when
@@ -2941,7 +3018,7 @@ function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wip
 # One ordered key list is the single source of truth for the menu: the grid,
 # the prompt, the invalid-selection message and the command-line allow-list
 # all derive from it, so a new key only has to be added in one place (#475).
-$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'c', 't', 'q')
+$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'c', 't', 'x', 'q')
 
 function Format-MenuHint {
     <# Render the key list as the operator-facing hint, e.g. "1-9, r, a, p, q".
@@ -2986,6 +3063,7 @@ function Show-MenuGrid {
             @{ K = "9"; Icon = "▣"; IconColor = "Info";    V = "Overnight Statistics";         D = "Run shadow + statistics + dashboard for hours" }
             @{ K = "a"; Icon = "◫"; IconColor = "Neutral"; V = "Storage Audit";             D = "Report disk usage of every store and report (read-only)" }
             @{ K = "p"; Icon = "⨯"; IconColor = "Error";   V = "Storage Prune";             D = "Delete stale stores/reports per retention (prunes data)" }
+            @{ K = "x"; Icon = "✖"; IconColor = "Error";   V = "Force Stop Worktree";        D = "Nuclear stop: kill ALL spread-hunter processes from this worktree (any owner)" }
         ) }
     )
 
@@ -3237,6 +3315,10 @@ function Invoke-LiveAction {
             Start-Process "http://127.0.0.1:8800"
             Lsh-Ok "Opened Tournament Cockpit at http://127.0.0.1:8800"
         }
+        "x" {
+            Stop-WorktreeProcessesForce
+            Lsh-Ok "Force stop completed for this worktree; data preserved."
+        }
         "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {
             # The hint already ends in q, so do not append ", or q" again.
@@ -3356,6 +3438,10 @@ if ($Action -ne "") {
         "get"          = "7"
         "stop-all"     = "7"
         "stopall"      = "7"
+        "stop-all-force" = "x"
+        "force-stop"   = "x"
+        "nuke"         = "x"
+        "x"            = "x"
         "status"       = "8"
         "statistical"  = "9"
         "stats"        = "9"
