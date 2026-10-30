@@ -2287,7 +2287,7 @@ def _manage_single_leg_positions_locked(
     bot_pos_price_max_pair_cost_usd = float(0.995 if _mpc is None else _mpc)
     grid_tick = float(getattr(cfg, "bot_quote_grid_tick_size_usd", DEFAULT_TICK_SIZE))
     bot_risk_stop_mode = str(getattr(cfg, "bot_risk_stop_mode", "NONE"))
-    bot_risk_stop_adverse_drop_cents = float(getattr(cfg, "bot_risk_stop_adverse_drop_cents", 0.05))
+    bot_risk_stop_adverse_drop_usd = float(getattr(cfg, "bot_risk_stop_adverse_drop_usd", 0.05))
     bot_risk_stop_max_drawdown_pct = float(getattr(cfg, "bot_risk_stop_max_drawdown_pct", 10.0))
     _edp = getattr(cfg, "bot_risk_circuit_max_drawdown_pct", None)
     bot_risk_circuit_max_drawdown_pct = float(75.0 if _edp is None else _edp)
@@ -2491,7 +2491,7 @@ def _manage_single_leg_positions_locked(
             decision = transition(
                 position, previous_state, bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
                 settlement_due=False, tick_size=grid_tick,
-                bot_risk_stop_mode=bot_risk_stop_mode, bot_risk_stop_adverse_drop_cents=bot_risk_stop_adverse_drop_cents,
+                bot_risk_stop_mode=bot_risk_stop_mode, bot_risk_stop_adverse_drop_usd=bot_risk_stop_adverse_drop_usd,
                 bot_risk_stop_max_drawdown_pct=bot_risk_stop_max_drawdown_pct,
                 bot_risk_circuit_max_drawdown_pct=bot_risk_circuit_max_drawdown_pct,
             )
@@ -2683,7 +2683,7 @@ def _manage_single_leg_positions_locked(
                         position, registry, bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
                         settlement_due=True, tick_size=grid_tick,
                         bot_risk_stop_mode=bot_risk_stop_mode,
-                        bot_risk_stop_adverse_drop_cents=bot_risk_stop_adverse_drop_cents,
+                        bot_risk_stop_adverse_drop_usd=bot_risk_stop_adverse_drop_usd,
                         bot_risk_stop_max_drawdown_pct=bot_risk_stop_max_drawdown_pct,
                         bot_risk_circuit_max_drawdown_pct=bot_risk_circuit_max_drawdown_pct,
                     )

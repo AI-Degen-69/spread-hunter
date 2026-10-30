@@ -1748,7 +1748,7 @@ def _lifecycle_quote_context(
             registry,
             bot_pos_price_max_pair_cost_usd=float(cfg.bot_pos_price_max_pair_cost_usd),
             bot_risk_stop_mode=str(cfg.bot_risk_stop_mode),
-            bot_risk_stop_adverse_drop_cents=float(cfg.bot_risk_stop_adverse_drop_cents),
+            bot_risk_stop_adverse_drop_usd=float(cfg.bot_risk_stop_adverse_drop_usd),
             bot_risk_stop_max_drawdown_pct=float(cfg.bot_risk_stop_max_drawdown_pct),
             bot_risk_circuit_max_drawdown_pct=float(cfg.bot_risk_circuit_max_drawdown_pct),
             tick_size=float(cfg.bot_quote_grid_tick_size_usd),
@@ -2226,7 +2226,7 @@ def _visit_one(
                 visit_outcome.value,
                 why, 1, emit_fn)
         plan_kwargs = {
-            "dead_band": float(getattr(cfg, "bot_order_requote_dead_band_cents", 0.0)),
+            "dead_band": float(getattr(cfg, "bot_order_requote_dead_band_usd", 0.0)),
             "cfg": cfg,
             "reasons": cancel_reasons,
         }

@@ -396,7 +396,7 @@ def test_flat_inventory_refuses_a_lone_leg():
     # 0.65 passes — both mids inside [0.20,0.80] so the 2026-08-28 tighten
     # does not mask the lone-leg case.
     cfg = MakerConfig(bot_quote_require_two_sided_when_flat_on=True,
-                      bot_quote_price_band_min_cents=0.30, bot_quote_price_band_max_cents=0.70)
+                      bot_quote_price_band_min_usd=0.30, bot_quote_price_band_max_usd=0.70)
     flat = Inventory(up_shares=0, down_shares=0, up_cost=0.0, down_cost=0.0)
     up = {"best_bid": 0.24, "best_ask": 0.26,
           "bids": {0.24: 9999.0}, "asks": {0.26: 9999.0}}

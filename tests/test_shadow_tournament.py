@@ -184,6 +184,21 @@ def test_build_tournament_plan_rejects_a_retired_env_name():
         build_tournament_plan(issue=371, arms=bad_env_arms, check_ports=False)
 
 
+def test_build_tournament_plan_rejects_the_money_field_names_872_retired():
+    """#872 renamed two preset fields; the old spellings must not run the default.
+
+    `_preset_to_env` reads the `_usd` field names, so an arm still spelled with
+    the `_cents` name would quietly launch at the shipped stop distance instead
+    of the one the arm was written to test.
+    """
+    from scripts.shadow_tournament import build_tournament_plan
+
+    for field in ("bot_risk_stop_adverse_drop_cents", "bot_order_requote_dead_band_cents"):
+        stale_arms = [{"name": "arm-one", field: 0.045}]
+        with pytest.raises(ValueError, match=r"retired preset keys"):
+            build_tournament_plan(issue=371, arms=stale_arms, check_ports=False)
+
+
 def test_build_tournament_plan_rejects_a_retired_preset_key():
     """A pre-#732 arm key is refused, not silently left at the shipped default.
 
@@ -627,7 +642,7 @@ def test_hybrid_preset_configuration():
     assert preset["bot_quote_gate_dynamic_offset_on"] is False
     # the static spread offset was purged from the preset
     assert "bot_quote_spread_static_offset_cents" not in preset
-    assert preset["bot_order_requote_dead_band_cents"] == 0.060
+    assert preset["bot_order_requote_dead_band_usd"] == 0.060
     # The stop and grace knobs were retired in #619; no preset carries them.
     assert "stop_loss_trigger_usd_cents" not in preset
     assert "single_buy_grace_sec" not in preset
@@ -636,7 +651,7 @@ def test_hybrid_preset_configuration():
     # reward_offset keeps the shipped class default (0.020); the preset no
     # longer touches it.
     assert cfg.bot_quote_spread_static_offset_cents == 0.020
-    assert cfg.bot_order_requote_dead_band_cents == 0.060
+    assert cfg.bot_order_requote_dead_band_usd == 0.060
     assert cfg.bot_risk_stop_mode == "NONE"
     assert cfg.bot_quote_gate_dynamic_offset_on is False
 
@@ -806,7 +821,7 @@ I492_ARMS = (
 # The first run's per-leg stop cap was `single_buy_max_loss_usd`, in DOLLARS.
 # #573 renamed it to `HUNTER_STOP_LOSS_TRIGGER_USD_CENTS` (same magnitude, x100
 # units) and #619 replaced it with the entry-relative ABSOLUTE_DROP trigger,
-# which reads `BOT_RISK_STOP_ADVERSE_DROP_CENTS` in dollars again. Re-expressing the original
+# which reads `BOT_RISK_STOP_ADVERSE_DROP_USD` in dollars again. Re-expressing the original
 # 4.5c cap as ABSOLUTE_DROP + 0.045 keeps the dimension the arm was measuring;
 # dropping it would silently disable every arm's stop, changing more than the
 # two script fixes this rerun exists to isolate.
@@ -819,7 +834,7 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
     "control": {
         "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.045",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.045",
     },
     "conservative": {
         "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
@@ -827,7 +842,7 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "5",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.030",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.030",
         "BOT_QUOTE_TOURNAMENT_PRESET": "conservative",
     },
     "balanced": {
@@ -836,7 +851,7 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.050",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.050",
         "BOT_QUOTE_TOURNAMENT_PRESET": "balanced",
     },
     "aggressive": {
@@ -845,7 +860,7 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.065",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.065",
         "BOT_QUOTE_TOURNAMENT_PRESET": "aggressive",
     },
     "prudent": {
@@ -854,7 +869,7 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.038",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.038",
         "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
     },
     "stickhold": {
@@ -863,7 +878,7 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.065",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.065",
     },
     "queuehug": {
         "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
@@ -871,25 +886,25 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.050",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.050",
     },
     "deadband-tight": {
         "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
         "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.75",
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "5",
-        "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.01",
+        "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.01",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.030",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.030",
     },
     "deadband-wide": {
         "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
         "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER": "0.50",
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "4",
-        "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.06",
+        "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.050",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.050",
     },
     "snapstop": {
         "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
@@ -897,7 +912,7 @@ I492_EXPECTED_ENV: dict[str, dict[str, str]] = {
         "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS": "2",
         "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "3",
         "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.030",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.030",
     },
 }
 
@@ -924,12 +939,12 @@ I492_RETIRED_KNOBS = {
 # but the values stay. They are the one job this table still has: keeping a #492
 # baseline arm free of a #487-era tweak, so the rerun is still the baseline.
 I487_TWEAKS = {
-    ("control", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"): "0.060",
-    ("conservative", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"): "0.045",
+    ("control", "BOT_RISK_STOP_ADVERSE_DROP_USD"): "0.060",
+    ("conservative", "BOT_RISK_STOP_ADVERSE_DROP_USD"): "0.045",
     ("balanced", "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"): "0.25",
-    ("aggressive", "BOT_RISK_STOP_ADVERSE_DROP_CENTS"): "0.045",
+    ("aggressive", "BOT_RISK_STOP_ADVERSE_DROP_USD"): "0.045",
     ("prudent", "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"): "0.30",
-    ("deadband-tight", "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS"): "0.05",
+    ("deadband-tight", "BOT_ORDER_REQUOTE_DEAD_BAND_USD"): "0.05",
     ("deadband-wide", "BOT_QUOTE_SPREAD_OFFSET_MULTIPLIER"): "0.25",
     ("snapstop", "HUNTER_SINGLE_BUY_GRACE_SEC"): "45",
 }
@@ -1087,7 +1102,7 @@ def test_a_supported_alias_still_plans(tmp_path):
         arms=[{
             "name": "arm-one",
             "env": {
-                "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.05",
+                "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.05",
                 "BOT_QUOTE_PRICE_RISK_WIDEN": "0.02",
             },
         }],
@@ -1096,7 +1111,7 @@ def test_a_supported_alias_still_plans(tmp_path):
         check_ports=False,
     )
     env = plan.arms[0].env
-    assert env["BOT_RISK_STOP_ADVERSE_DROP_CENTS"] == "0.05"
+    assert env["BOT_RISK_STOP_ADVERSE_DROP_USD"] == "0.05"
     assert env["BOT_QUOTE_PRICE_RISK_WIDEN"] == "0.02"
 
 
@@ -1242,9 +1257,9 @@ def test_cockpit_blueprint_tab_pins_the_champion():
     canonical_keys = [
         "BOT_QUOTE_TOURNAMENT_PRESET=prudent",
         "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1",
-        "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS",
+        "BOT_ORDER_REQUOTE_DEAD_BAND_USD",
         "BOT_RISK_STOP_MODE=ABSOLUTE_DROP",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD=0.045",
         "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC",
         "BOT_POS_PRICE_MAX_PAIR_COST_USD",
     ]

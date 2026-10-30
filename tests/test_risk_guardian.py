@@ -272,7 +272,7 @@ def test_build_watches_stop_level_and_average_fill_shift(monkeypatch):
 
     cfg = SimpleNamespace(
         bot_risk_stop_mode="ABSOLUTE_DROP",
-        bot_risk_stop_adverse_drop_cents=0.05,
+        bot_risk_stop_adverse_drop_usd=0.05,
         bot_risk_stop_max_drawdown_pct=10.0,
         bot_risk_circuit_max_drawdown_pct=75.0,
         bot_pos_price_max_pair_cost_usd=0.99,
@@ -315,7 +315,7 @@ def test_build_watches_exclusions_and_optional_hedge_watch(monkeypatch):
     )
     cfg = SimpleNamespace(
         bot_risk_stop_mode="ABSOLUTE_DROP",
-        bot_risk_stop_adverse_drop_cents=0.05,
+        bot_risk_stop_adverse_drop_usd=0.05,
         bot_risk_stop_max_drawdown_pct=10.0,
         bot_risk_circuit_max_drawdown_pct=75.0,
         bot_pos_price_max_pair_cost_usd=0.99,

@@ -23,8 +23,8 @@ from pathlib import Path
 from core_brain import rehearsal
 
 from core_brain.single_leg_lifecycle import (
-    DROP_CENTS_MAX,
-    DROP_CENTS_MIN,
+    DROP_USD_MAX,
+    DROP_USD_MIN,
     STOP_LOSS_MODES,
 )
 
@@ -47,14 +47,17 @@ class MakerConfig:
     # between the book midpoint and our resting quote. Prices are dollars on the
     # 0-1 scale; the env value is cents. The quoting engine refuses or skips a
     # quote outside the window and clamps the dynamic offset to it. It is NOT a
-    # filter on which markets we quote -- `filter_common_spread_max_cents`
+    # filter on which markets we quote -- `filter_common_spread_max_usd`
     # (2.05c) is the wide-book rejection bar (see CONSTRAINTS.md). The two
     # shipped defaults are deliberate: 0.15 for the engine, 0.045 for the
     # picker, whose copy the ranker does not gate on; both loaders read the
     # same variable the same way.
     bot_quote_book_max_spread_from_mid: float = 0.15
     bot_pos_price_max_pair_cost_usd: float = 0.99
-    bot_quote_book_max_spread_cents: float = 0.06
+    # USD on the 0-1 price scale -- `0.06` is a six-cent bid-ask spread. Named
+    # `_usd` since #883; a `_cents` suffix that held dollars was the 100x
+    # footgun #872 and #883 exist to remove.
+    bot_quote_book_max_spread_usd: float = 0.06
 
     # =========================================================================
     # SCOPE 1: MARKET FILTERING (MARKET SCREENER)
@@ -160,8 +163,10 @@ class MakerConfig:
     bot_quote_alloc_couple_min_usd: float = 10.0
     bot_quote_waive_attenuation_below_floor_on: bool = True
     bot_quote_require_two_sided_when_flat_on: bool = True
-    bot_quote_price_band_min_cents: float = 0.10
-    bot_quote_price_band_max_cents: float = 0.90
+    # USD on the 0-1 price scale -- the band is 10c to 90c, not 0.10c to 0.90c.
+    # Named `_usd` since #883; every reader compares it to a venue price.
+    bot_quote_price_band_min_usd: float = 0.10
+    bot_quote_price_band_max_usd: float = 0.90
     bot_quote_window_max_pct: float = 0.40
     bot_quote_gate_price_band_on: bool = True
     bot_quote_gate_quote_window_on: bool = True
@@ -205,7 +210,10 @@ class MakerConfig:
     # 3. Protection, Stops, Requotes & Order Lifecycle Phase
     bot_order_max_fills_per_market: int = 25
     bot_order_requote_interval_sec: float = 2.0
-    bot_order_requote_dead_band_cents: float = 0.03
+    # USD per share, 0.0..1.00 -- `0.03` is three cents. Named `_usd` since #872:
+    # it held a dollar fraction under a `_cents` name, so a reader who trusted
+    # the suffix was off by 100x. Every reader takes it as dollars unchanged.
+    bot_order_requote_dead_band_usd: float = 0.03
     bot_order_poll_interval_sec: float = 1.0
     bot_order_gate_queue_clear_on: bool = False
     bot_order_queue_max_clear_min: float = 60.0
@@ -244,7 +252,11 @@ class MakerConfig:
     bot_risk_pairs_complete_gain_cents: float = 3.68
     bot_risk_pairs_exit_cost_cents: float = 3.67
     bot_risk_stop_mode: str = "NONE"
-    bot_risk_stop_adverse_drop_cents: float = 0.05
+    # USD per share, DROP_USD_MIN..DROP_USD_MAX -- `0.05` is five cents. Named
+    # `_usd` since #872 for the same reason as the dead band above. The live
+    # champion runs `0.045` (4.5c), which no integer-cents field can express
+    # without moving the stop.
+    bot_risk_stop_adverse_drop_usd: float = 0.05
     bot_risk_stop_max_drawdown_pct: float = 10.0
     bot_risk_circuit_max_drawdown_pct: float = 75.0
     bot_risk_hedge_emergency_pct: float = 0.8
@@ -280,18 +292,18 @@ class MakerConfig:
     # DERIVED VALUE
     # =========================================================================
     @property
-    def filter_common_spread_max_cents(self) -> float:
+    def filter_common_spread_max_usd(self) -> float:
         """The picking bar: the live gate times the picking share (#572).
 
-        Read-only, and a price FRACTION rather than whole cents -- the same
-        convention `bot_quote_price_band_min_cents` (0.10) and
-        `bot_quote_spread_static_offset_cents` (0.020) already use. One
-        derivation, so the rehearsal trial pass-through and the six-decimal
-        rounding stay in one place.
+        Read-only, and USD on the 0-1 price scale (`0.0205` is 2.05c), so the
+        name states the unit its readers need -- the dashboard multiplies by
+        100 to print it as cents. Same scale as `bot_quote_price_band_min_usd`
+        (0.10). One derivation, so the rehearsal trial pass-through and the
+        six-decimal rounding stay in one place.
         """
         if self.bot_quote_wide_book_trial is not None:
             return self.bot_quote_wide_book_trial
-        return round(self.bot_quote_book_max_spread_cents * self.filter_std_spread_share_pct, 6)
+        return round(self.bot_quote_book_max_spread_usd * self.filter_std_spread_share_pct, 6)
 
     @property
     def tau_cancel_sec(self) -> float:
@@ -361,7 +373,7 @@ class MakerConfig:
                                        var_name="BOT_QUOTE_WIDE_BOOK_TRIAL")
         if wide is not None and wide > 0:
             kw["bot_quote_wide_book_trial"] = wide
-            kw["bot_quote_book_max_spread_cents"] = wide
+            kw["bot_quote_book_max_spread_usd"] = wide
             window = kw.get("bot_quote_book_max_spread_from_mid",
                             cls.bot_quote_book_max_spread_from_mid)
             kw["bot_quote_book_max_spread_from_mid"] = max(window, wide)
@@ -394,10 +406,11 @@ class MakerConfig:
             kw["bot_pos_price_max_complete_usd"] = _bounded_float(
                 "BOT_POS_PRICE_MAX_COMPLETE_USD", ccap, 0.0, 1.0)
 
-        rdb = _env("BOT_ORDER_REQUOTE_DEAD_BAND_CENTS")
-        if rdb:
-            kw["bot_order_requote_dead_band_cents"] = _bounded_float(
-                "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS", rdb, 0.0, 1.0)
+        dead_band = _renamed_env(
+            "BOT_ORDER_REQUOTE_DEAD_BAND_USD", "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS")
+        if dead_band is not None:
+            _var, _raw = dead_band
+            kw["bot_order_requote_dead_band_usd"] = _bounded_float(_var, _raw, 0.0, 1.0)
 
         qcg = _env("BOT_ORDER_GATE_QUEUE_CLEAR_ON")
         if qcg:
@@ -453,10 +466,12 @@ class MakerConfig:
                 )
             kw["bot_risk_stop_mode"] = mode
 
-        dc = _env("BOT_RISK_STOP_ADVERSE_DROP_CENTS")
-        if dc:
-            kw["bot_risk_stop_adverse_drop_cents"] = _bounded_float(
-                "BOT_RISK_STOP_ADVERSE_DROP_CENTS", dc, DROP_CENTS_MIN, DROP_CENTS_MAX)
+        drop = _renamed_env(
+            "BOT_RISK_STOP_ADVERSE_DROP_USD", "BOT_RISK_STOP_ADVERSE_DROP_CENTS")
+        if drop is not None:
+            _var, _raw = drop
+            kw["bot_risk_stop_adverse_drop_usd"] = _bounded_float(
+                _var, _raw, DROP_USD_MIN, DROP_USD_MAX)
 
         for _can_name, _field in (
             ("BOT_RISK_STOP_MAX_DRAWDOWN_PCT", "bot_risk_stop_max_drawdown_pct"),
@@ -541,13 +556,13 @@ class MakerConfig:
 
         dyn_min = _env("BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS")
         if dyn_min:
-            kw["bot_quote_spread_offset_min_cents"] = int(_bounded_float(
-                "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS", dyn_min, 1.0, 10.0))
+            kw["bot_quote_spread_offset_min_cents"] = _whole_cents(
+                "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS", dyn_min, 1, 10)
 
         dyn_max = _env("BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS")
         if dyn_max:
-            kw["bot_quote_spread_offset_max_cents"] = int(_bounded_float(
-                "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS", dyn_max, 1.0, 20.0))
+            kw["bot_quote_spread_offset_max_cents"] = _whole_cents(
+                "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS", dyn_max, 1, 20)
 
         dyn_age = _env("BOT_QUOTE_SPREAD_OFFSET_MAX_AGE_SEC")
         if dyn_age:
@@ -602,7 +617,7 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
     },
     "hybrid": {
         "bot_quote_gate_dynamic_offset_on": False,
-        "bot_order_requote_dead_band_cents": 0.060,
+        "bot_order_requote_dead_band_usd": 0.060,
         "description": "Empirical Winner Hybrid: control edge + Deadband-Wide (6c deadband)",
     },
     "baseline": {
@@ -729,6 +744,65 @@ def _bounded_float(name: str, raw: str, lo: float, hi: float) -> float:
     return value
 
 
+#: Retired env spellings that already warned in this process. The dashboard
+#: calls `from_env()` on every request; a warning per call would bury the one
+#: line that exists to get the operator to rename their `.env`. Cleared by
+#: `tests/test_config.py`'s autouse fixture.
+_DEPRECATION_WARNED: set[str] = set()
+
+
+def _renamed_env(new_name: str, old_name: str) -> tuple[str, str] | None:
+    """`(name_used, value)` for `new_name`, falling back to its retired spelling.
+
+    #872 renamed the two dollar-valued `_CENTS` keys to `_USD`. The value and
+    its unit are identical under both spellings, so the fallback is a pure
+    rename and nothing can lose precision -- but the retired spelling is NOT
+    inert, the way a `HUNTER_*` name is. Silently ignoring
+    `BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.10` would run the shipped 3c band while
+    the operator reads 10c in their own `.env`, which is the silent-ignore
+    failure the rest of this loader refuses (#707). It names the key, the value
+    and the replacement, once per key per process, and then loads normally.
+
+    The new spelling always wins when both are set, and a blank new spelling
+    falls through to the old one, matching `_env`'s "blank is unset" rule.
+    """
+    value = _env(new_name)
+    if value is not None:
+        return new_name, value
+    legacy = _env(old_name)
+    if legacy is None:
+        return None
+    if old_name not in _DEPRECATION_WARNED:
+        _DEPRECATION_WARNED.add(old_name)
+        logging.getLogger(__name__).warning(
+            f"DEPRECATED: {old_name}={legacy.strip()} is retired; read as "
+            f"{new_name}={legacy.strip()}. Write {new_name}={legacy.strip()}. "
+            "The old name stops working after the deprecation window."
+        )
+    return old_name, legacy
+
+
+def _whole_cents(name: str, raw: str, lo: int, hi: int) -> int:
+    """An integer count of cents inside `lo`..`hi`, or a ValueError naming the key.
+
+    Whole cents only. `6` is six cents; `6.5` and `6.0` are refused rather than
+    truncated, because `_bounded_float(...)` followed by `int()` silently ran
+    6 for both of them until #872 and the operator had no way to see it. The
+    message names the unit so a reader never has to guess the scale.
+    """
+    text = raw.strip()
+    if not (text.isdigit() or (text[:1] in ("+", "-") and text[1:].isdigit())):
+        raise ValueError(
+            f"{name}={raw!r} must be whole cents, for example 6 means 6 cents"
+        )
+    value = int(text)
+    if not lo <= value <= hi:
+        raise ValueError(
+            f"{name}={raw!r} is outside {lo}..{hi} whole cents"
+        )
+    return value
+
+
 def resolve_wide_book_trial(raw: str, *, for_display: bool = False, var_name: str = "BOT_QUOTE_WIDE_BOOK_TRIAL") -> float | None:
     if not raw.strip():
         return None
@@ -736,10 +810,10 @@ def resolve_wide_book_trial(raw: str, *, for_display: bool = False, var_name: st
         if for_display:
             logging.getLogger(__name__).warning(
                 f"{var_name} ignored for a display-only config load "
-                "(this process is not a rehearsal); shipped bot_quote_book_max_spread_cents stands.")
+                "(this process is not a rehearsal); shipped bot_quote_book_max_spread_usd stands.")
             return None
         raise ValueError(
-            f"{var_name} widens bot_quote_book_max_spread_cents, the gate that "
+            f"{var_name} widens bot_quote_book_max_spread_usd, the gate that "
             "refuses a book where a fill may leave a leg that cannot be "
             "closed. It applies only in a process that has declared itself "
             "unable to place an order: core_brain.shadow_run, whose client "

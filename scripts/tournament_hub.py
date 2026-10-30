@@ -148,7 +148,12 @@ def build_arm_view(plan: dict, arm: dict, reachable_map: Optional[dict[int, bool
         "dashboard_reachable": dashboard_reachable,
         "db_path": str(db_path),
         "db_exists": db_path.exists(),
-        "stop_loss_usd_cents": env.get("BOT_RISK_STOP_ADVERSE_DROP_CENTS"),
+        # Saved `plan.json` files predate the #872 rename, and their `env` is
+        # replayed verbatim, so a finished run still reports its stop.
+        "stop_loss_usd_cents": env.get(
+            "BOT_RISK_STOP_ADVERSE_DROP_USD",
+            env.get("BOT_RISK_STOP_ADVERSE_DROP_CENTS"),
+        ),
         "dynamic_offset": env.get("BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON"),
         "offset_min_cents": env.get("BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"),
         "offset_max_cents": env.get("BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"),

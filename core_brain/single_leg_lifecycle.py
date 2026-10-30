@@ -24,10 +24,12 @@ SIZE_EPS = 1e-6
 # and a silent alias would run an operator's number in the wrong scale.
 STOP_LOSS_MODES = frozenset({"NONE", "ABSOLUTE_DROP", "PERCENTAGE_DROP"})
 
-# `bot_risk_stop_adverse_drop_cents` is a price drop in DOLLARS per share, bounded to the contract.
+# `bot_risk_stop_adverse_drop_usd` is a price drop in DOLLARS per share, bounded to the
+# contract. The bounds are dollars too, and named so since #872: `DROP_CENTS_MIN = 0.01`
+# read as one hundredth of a cent while bounding a one-cent drop.
 # The emergency drawdown is a percentage in the open interval (0, 100].
-DROP_CENTS_MIN = 0.01
-DROP_CENTS_MAX = 0.90
+DROP_USD_MIN = 0.01
+DROP_USD_MAX = 0.90
 # No stop can ever trigger below one cent: the venue's smallest tick, and the
 # only price at which an exit is still an exit rather than a donation.
 EMERGENCY_FLOOR_MIN = 0.01
@@ -371,7 +373,7 @@ def hedge_unreachable_at_cap(
 
 def _validated_stop_knobs(
     mode: str,
-    bot_risk_stop_adverse_drop_cents: float,
+    bot_risk_stop_adverse_drop_usd: float,
     bot_risk_stop_max_drawdown_pct: float,
     bot_risk_circuit_max_drawdown_pct: float,
 ) -> tuple[str, Decimal, Decimal, Decimal]:
@@ -388,12 +390,12 @@ def _validated_stop_knobs(
         raise ValueError(
             f"bot_risk_stop_mode must be one of {choices}, got {mode!r}"
         )
-    drop_value = float(bot_risk_stop_adverse_drop_cents)
+    drop_value = float(bot_risk_stop_adverse_drop_usd)
     if (not math.isfinite(drop_value)
-            or not DROP_CENTS_MIN <= drop_value <= DROP_CENTS_MAX):
+            or not DROP_USD_MIN <= drop_value <= DROP_USD_MAX):
         raise ValueError(
-            f"bot_risk_stop_adverse_drop_cents must be between {DROP_CENTS_MIN} and "
-            f"{DROP_CENTS_MAX}, got {bot_risk_stop_adverse_drop_cents!r}"
+            f"bot_risk_stop_adverse_drop_usd must be between {DROP_USD_MIN} and "
+            f"{DROP_USD_MAX}, got {bot_risk_stop_adverse_drop_usd!r}"
         )
     drawdown_value = float(bot_risk_stop_max_drawdown_pct)
     if not math.isfinite(drawdown_value) or not 0 < drawdown_value <= 100:
@@ -418,7 +420,7 @@ def _validated_stop_knobs(
 def stop_trigger(
     entry: float,
     mode: str,
-    bot_risk_stop_adverse_drop_cents: float,
+    bot_risk_stop_adverse_drop_usd: float,
     bot_risk_stop_max_drawdown_pct: float,
     bot_risk_circuit_max_drawdown_pct: float,
 ) -> tuple[float, str]:
@@ -446,7 +448,7 @@ def stop_trigger(
             f"entry must be between zero and one, got {entry!r}"
         )
     normalised, drop_value, drawdown_value, emergency_value = (
-        _validated_stop_knobs(mode, bot_risk_stop_adverse_drop_cents, bot_risk_stop_max_drawdown_pct,
+        _validated_stop_knobs(mode, bot_risk_stop_adverse_drop_usd, bot_risk_stop_max_drawdown_pct,
                               bot_risk_circuit_max_drawdown_pct)
     )
 
@@ -478,7 +480,7 @@ def transition(
     bot_pos_price_max_pair_cost_usd: float,
     settlement_due: bool = False,
     bot_risk_stop_mode: str = "NONE",
-    bot_risk_stop_adverse_drop_cents: float = 0.05,
+    bot_risk_stop_adverse_drop_usd: float = 0.05,
     bot_risk_stop_max_drawdown_pct: float = 10.0,
     bot_risk_circuit_max_drawdown_pct: float = 75.0,
     escalation_multiple: float = 2.0,
@@ -490,7 +492,7 @@ def transition(
         return _refused(previous_state, "pair cap must be finite and positive")
     try:
         _validated_stop_knobs(
-            bot_risk_stop_mode, bot_risk_stop_adverse_drop_cents, bot_risk_stop_max_drawdown_pct, bot_risk_circuit_max_drawdown_pct,
+            bot_risk_stop_mode, bot_risk_stop_adverse_drop_usd, bot_risk_stop_max_drawdown_pct, bot_risk_circuit_max_drawdown_pct,
         )
     except ValueError as exc:
         return _refused(previous_state, str(exc))
@@ -571,7 +573,7 @@ def transition(
         "opposite_token_id": opposite_token,
     }
     active_trigger, trigger_source = stop_trigger(
-        held_average, bot_risk_stop_mode, bot_risk_stop_adverse_drop_cents, bot_risk_stop_max_drawdown_pct,
+        held_average, bot_risk_stop_mode, bot_risk_stop_adverse_drop_usd, bot_risk_stop_max_drawdown_pct,
         bot_risk_circuit_max_drawdown_pct,
     )
     if held_bid is not None and held_bid <= active_trigger:
@@ -701,7 +703,7 @@ def evaluate(
     bot_pos_price_max_pair_cost_usd: float,
     settlement_due: bool = False,
     bot_risk_stop_mode: str = "NONE",
-    bot_risk_stop_adverse_drop_cents: float = 0.05,
+    bot_risk_stop_adverse_drop_usd: float = 0.05,
     bot_risk_stop_max_drawdown_pct: float = 10.0,
     bot_risk_circuit_max_drawdown_pct: float = 75.0,
     tick_size: float = 0.01,
@@ -723,7 +725,7 @@ def evaluate(
         bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
         settlement_due=settlement_due,
         bot_risk_stop_mode=bot_risk_stop_mode,
-        bot_risk_stop_adverse_drop_cents=bot_risk_stop_adverse_drop_cents,
+        bot_risk_stop_adverse_drop_usd=bot_risk_stop_adverse_drop_usd,
         bot_risk_stop_max_drawdown_pct=bot_risk_stop_max_drawdown_pct,
         bot_risk_circuit_max_drawdown_pct=bot_risk_circuit_max_drawdown_pct,
         tick_size=tick_size,

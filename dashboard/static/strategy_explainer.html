@@ -485,7 +485,7 @@
 
       <div class="grid-2">
         <div class="subcard">
-          <h4>3¢ Re-Quote Dead Band (`bot_order_requote_dead_band_cents = 0.03`)</h4>
+          <h4>3¢ Re-Quote Dead Band (`bot_order_requote_dead_band_usd = 0.03`)</h4>
           <p>
             Every cancel+replace sends an order to the back of the queue (median queue depth ahead is ~1058 shares). The 3¢ dead band suppresses ~48% of unnecessary re-quotes caused by minor mid-price flutter, giving orders time to fill.
           </p>
@@ -616,10 +616,10 @@
               <td><strong>Top-3 Level Depth Floor</strong>: Refuses books with top-3 bid depth &le; $500 on either leg to guarantee safe exit liquidity.</td>
             </tr>
             <tr>
-              <td><code>filter_common_spread_max_cents</code></td>
+              <td><code>filter_common_spread_max_usd</code></td>
               <td><code>2.05¢</code></td>
               <td><span style="color:var(--text-muted)">Derived</span></td>
-              <td><strong>Derived Picking Spread Cap</strong>: Derived as <code>bot_quote_book_max_spread_cents * 41/120</code> (2.05¢); ensures bot only picks tight touches.</td>
+              <td><strong>Derived Picking Spread Cap</strong>: Derived as <code>bot_quote_book_max_spread_usd * 41/120</code> (2.05¢); ensures bot only picks tight touches.</td>
             </tr>
             <tr>
               <td><code>filter_std_queue_max_clear_min</code></td>
@@ -712,13 +712,13 @@
               <td>Minimum capital allocation floor required to engage a new candidate market.</td>
             </tr>
             <tr>
-              <td><code>bot_quote_price_band_min_cents</code></td>
+              <td><code>bot_quote_price_band_min_usd</code></td>
               <td><code>$0.10</code></td>
               <td>Pricing Band</td>
               <td><strong>Lower Probability Bound</strong>: Rejects bids below 10¢ where adverse selection risk spikes.</td>
             </tr>
             <tr>
-              <td><code>bot_quote_price_band_max_cents</code></td>
+              <td><code>bot_quote_price_band_max_usd</code></td>
               <td><code>$0.90</code></td>
               <td>Pricing Band</td>
               <td><strong>Upper Probability Bound</strong>: Rejects bids above 90¢ where spread capture margin is negligible.</td>
@@ -766,7 +766,7 @@
               <td>Venue minimum order size protocol floor. Refuses smaller orders.</td>
             </tr>
             <tr>
-              <td><code>bot_quote_book_max_spread_cents</code></td>
+              <td><code>bot_quote_book_max_spread_usd</code></td>
               <td><code>$0.06</code></td>
               <td>Book Health</td>
               <td>Continuous gate: rejects books with bid-ask spread wider than 6¢ to prevent illiquid quotes.</td>
@@ -878,10 +878,10 @@
               <td>Minimum amendment cadence to prevent venue rate limit exhaustion.</td>
             </tr>
             <tr>
-              <td><code>bot_order_requote_dead_band_cents</code></td>
+              <td><code>bot_order_requote_dead_band_usd</code></td>
               <td><code>$0.03</code></td>
               <td>Queue Protection</td>
-              <td>Suppresses unnecessary cancel-replace churn when target shifts &lt; 3¢. Env: <span class="badge-env">BOT_ORDER_REQUOTE_DEAD_BAND_CENTS</span>.</td>
+              <td>Suppresses unnecessary cancel-replace churn when target shifts &lt; 3¢. Env: <span class="badge-env">BOT_ORDER_REQUOTE_DEAD_BAND_USD</span> (USD per share: <code>0.03</code> is 3¢, not 0.03¢).</td>
             </tr>
             <tr>
               <td><code>bot_order_poll_interval_sec</code></td>
@@ -926,10 +926,10 @@
               <td>Defensive liquidation rule mode (<code>NONE</code>, <code>ABSOLUTE_DROP</code>, <code>PERCENTAGE_DROP</code>). Env: <span class="badge-env">BOT_RISK_STOP_MODE</span>.</td>
             </tr>
             <tr>
-              <td><code>bot_risk_stop_adverse_drop_cents</code></td>
+              <td><code>bot_risk_stop_adverse_drop_usd</code></td>
               <td><code>$0.05</code></td>
               <td>Stop-Loss System</td>
-              <td>Triggers defensive exit if mid drops 5¢ below acquisition cost. Env: <span class="badge-env">BOT_RISK_STOP_ADVERSE_DROP_CENTS</span>.</td>
+              <td>Triggers defensive exit if mid drops 5¢ below acquisition cost. Env: <span class="badge-env">BOT_RISK_STOP_ADVERSE_DROP_USD</span> (USD per share: <code>0.045</code> is 4.5¢).</td>
             </tr>
             <tr>
               <td><code>bot_risk_stop_max_drawdown_pct</code></td>

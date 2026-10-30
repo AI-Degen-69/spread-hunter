@@ -1713,7 +1713,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         <tr>
           <td><strong>Requote Deadband</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>0.060 (6.0¢)</strong></td>
-          <td><code>BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06</code></td>
+          <td><code>BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06</code></td>
           <td><span class="badge badge-amber">not tested at 6¢ in #799</span></td>
           <td><strong>Queue priority defender.</strong> The deadband is the price move the bot ignores before it re-quotes: wide enough that 1¢ jitter cannot demote the order, tight enough that the quote is not resting on a stale price. 6¢ sits between <code>static-floor-2c</code> (3¢ at the time) and <code>low-churn-deadband</code> (10¢), and carries the #485 <code>deadband-wide</code> lesson. No #799 arm ran a 6¢ deadband, so this value is reasoned rather than measured.</td>
         </tr>
@@ -1727,7 +1727,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         <tr>
           <td><strong>Single-Buy Loss Stop</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>$0.045 (4.5¢)</strong></td>
-          <td><code>BOT_RISK_STOP_MODE=ABSOLUTE_DROP</code><br><code>BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045</code></td>
+          <td><code>BOT_RISK_STOP_MODE=ABSOLUTE_DROP</code><br><code>BOT_RISK_STOP_ADVERSE_DROP_USD=0.045</code></td>
           <td><span class="badge badge-amber">between #799 hair-trigger-2c and patient-stop-9c</span></td>
           <td><strong>A trigger, not a loss cap.</strong> In <code>ABSOLUTE_DROP</code> mode the trigger is the entry price minus 0.045, <strong>rounded up to a whole cent</strong>; the emergency floor can set a higher trigger. A 2¢ stop fired on 44.1% of legs in the #799 review (<code>hair-trigger-2c</code>), while 9¢ and 8¢ (<code>patient-stop-9c</code>, <code>wide-shield</code>) let the tail bleed. 4.5¢ was not tested in #799.</td>
         </tr>
@@ -1799,9 +1799,9 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
       <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #a5d6a7; overflow-x: auto;">
 # --- Champion environment (Windows PowerShell 7) ---
 $env:BOT_QUOTE_TOURNAMENT_PRESET = "balanced"
-$env:BOT_ORDER_REQUOTE_DEAD_BAND_CENTS = "0.06"
+$env:BOT_ORDER_REQUOTE_DEAD_BAND_USD = "0.06"
 $env:BOT_RISK_STOP_MODE = "ABSOLUTE_DROP"
-$env:BOT_RISK_STOP_ADVERSE_DROP_CENTS = "0.045"
+$env:BOT_RISK_STOP_ADVERSE_DROP_USD = "0.045"
 $env:BOT_ORDER_GATE_QUEUE_CLEAR_ON = "1"
 $env:BOT_ORDER_QUEUE_MAX_CLEAR_MIN = "3.0"
 $env:BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC = "45.0"
@@ -1828,9 +1828,9 @@ python -m dashboard.server --db data/champion_balanced_shadow_01.db
       <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #81d4fa; overflow-x: auto;">
 # --- Spread Hunter HYBRID Champion Config ---
 BOT_QUOTE_TOURNAMENT_PRESET=balanced
-BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06
+BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06
 BOT_RISK_STOP_MODE=ABSOLUTE_DROP
-BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045
+BOT_RISK_STOP_ADVERSE_DROP_USD=0.045
 BOT_ORDER_GATE_QUEUE_CLEAR_ON=1
 BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3.0
 BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
@@ -1987,7 +1987,7 @@ BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
       <ul>
         <li><strong>Volatility Pricing Base: <code>balanced-mid</code> (Preset: <code>balanced</code>)</strong> — Book-spread tracking at dynamic 0.50x (2–4¢ floor/ceiling) captured the highest realized PnL (+<strong>$23.39</strong> across 161 trades) without quote starvation.</li>
         <li><strong>Queue-Clear Gate: <code>queue-clear-5m</code> (Mandatory Guard)</strong> — Slashes max drawdown by <strong>73%</strong> (to $2.60) while delivering tournament-high Sharpe (<strong>4.67</strong>), Profit Factor (<strong>3.23</strong>), and positive tail expectancy (MC P5 +$12.90).</li>
-        <li><strong>Disciplined Deadband: <code>BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06</code> (6.0¢)</strong> — Prevents fee churn and queue rank loss without the toxic stickiness of 10¢.</li>
+        <li><strong>Disciplined Deadband: <code>BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06</code> (6.0¢)</strong> — Prevents fee churn and queue rank loss without the toxic stickiness of 10¢.</li>
         <li><strong>Orphan Loss Stop: <code>BOT_RISK_STOP_MODE=ABSOLUTE_DROP</code> &bull; <code>0.045</code> (4.5¢)</strong> — Protects single legs without the 57% stop churn of 2¢ hair-triggers or the -$2.10 deep tail bleed of 9¢ leashes.</li>
         <li><strong>Aged-Out Rescue Lead: <code>BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0</code></strong> — Orderly emergency single-leg unwind into resolution.</li>
       </ul>

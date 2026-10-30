@@ -36,8 +36,8 @@ def test_decide_quotes_basic_two_sided():
         bot_quote_size_shares=120,
         bot_quote_size_min_shares=50,
         bot_quote_spread_static_offset_cents=0.02,
-        bot_quote_price_band_min_cents=0.10,
-        bot_quote_price_band_max_cents=0.90,
+        bot_quote_price_band_min_usd=0.10,
+        bot_quote_price_band_max_usd=0.90,
     )
     up_book = {
         "best_bid": 0.50, "best_ask": 0.52,
@@ -66,8 +66,8 @@ def test_decide_quotes_outside_band_or_settled_declined():
         bot_pos_objective="rewards",
         bot_quote_size_shares=120,
         bot_quote_size_min_shares=50,
-        bot_quote_price_band_min_cents=0.10,
-        bot_quote_price_band_max_cents=0.90,
+        bot_quote_price_band_min_usd=0.10,
+        bot_quote_price_band_max_usd=0.90,
     )
     # Severe one-sided market outside band / settled
     up_book = {
@@ -212,7 +212,7 @@ def test_flat_inventory_refuses_a_lone_leg():
     from dataclasses import replace
     from core_brain.config import load
 
-    cfg = replace(load(), bot_quote_bank_baseline_usd=5000.0, bot_quote_price_band_min_cents=0.30, bot_quote_price_band_max_cents=0.70)
+    cfg = replace(load(), bot_quote_bank_baseline_usd=5000.0, bot_quote_price_band_min_usd=0.30, bot_quote_price_band_max_usd=0.70)
     flat = Inventory(up_shares=0, down_shares=0, up_cost=0.0, down_cost=0.0)
     # UP is blocked by price band (mid 0.25 -> price ~0.23 < 0.30) while
     # DOWN (mid 0.65 -> price ~0.63) passes. Both mids inside [0.20,0.80]
@@ -244,7 +244,7 @@ def test_flat_lone_leg_refusal_names_blocked_side():
     from dataclasses import replace
     from core_brain.config import load
 
-    cfg = replace(load(), bot_quote_bank_baseline_usd=5000.0, bot_quote_price_band_min_cents=0.30, bot_quote_price_band_max_cents=0.70)
+    cfg = replace(load(), bot_quote_bank_baseline_usd=5000.0, bot_quote_price_band_min_usd=0.30, bot_quote_price_band_max_usd=0.70)
     flat = Inventory(up_shares=0, down_shares=0, up_cost=0.0, down_cost=0.0)
     up = {"best_bid": 0.24, "best_ask": 0.26,
           "bids": {0.24: 9999.0}, "asks": {0.26: 9999.0}}
@@ -272,8 +272,8 @@ def test_flat_pair_sizes_harmonize_to_minimum():
         bot_quote_size_shares=120,
         bot_quote_size_min_shares=5,
         bot_quote_spread_static_offset_cents=0.02,
-        bot_quote_price_band_min_cents=0.10,
-        bot_quote_price_band_max_cents=0.90,
+        bot_quote_price_band_min_usd=0.10,
+        bot_quote_price_band_max_usd=0.90,
     )
     up_book = {
         "best_bid": 0.54, "best_ask": 0.56,
@@ -327,8 +327,8 @@ def test_unbalanced_deficit_leg_keeps_its_size():
         bot_quote_size_shares=120,
         bot_quote_size_min_shares=5,
         bot_quote_spread_static_offset_cents=0.02,
-        bot_quote_price_band_min_cents=0.10,
-        bot_quote_price_band_max_cents=0.90,
+        bot_quote_price_band_min_usd=0.10,
+        bot_quote_price_band_max_usd=0.90,
     )
     heavy = Inventory(up_shares=40, down_shares=0, up_cost=4.0, down_cost=0.0)
     up_book = {
@@ -357,7 +357,7 @@ def test_unbalanced_deficit_leg_keeps_its_size():
 
 
 def _lifecycle_quote_case(*, price=0.51, size=10,
-                          bot_quote_price_band_min_cents=0.10,
+                          bot_quote_price_band_min_usd=0.10,
                           bot_quote_size_shares=120, bid_depth=1000.0,
                           bot_pos_price_max_pair_cost_usd=0.99,
                           bot_risk_gate_hard_blocks_on=True):
@@ -372,8 +372,8 @@ def _lifecycle_quote_case(*, price=0.51, size=10,
         bot_risk_exposure_max_naked_usd=100.0,
         bot_risk_gate_hard_blocks_on=bot_risk_gate_hard_blocks_on,
         bot_quote_gate_price_band_on=True,
-        bot_quote_price_band_min_cents=bot_quote_price_band_min_cents,
-        bot_quote_price_band_max_cents=0.90,
+        bot_quote_price_band_min_usd=bot_quote_price_band_min_usd,
+        bot_quote_price_band_max_usd=0.90,
         bot_quote_book_min_depth_shares=1.0,
     )
     up_book = {
@@ -559,7 +559,7 @@ def test_lifecycle_book_health_cannot_be_disabled_by_ordinary_gate_toggle():
 
 def test_lifecycle_escalation_keeps_price_band_checks_active():
     cfg, up, down, inventory, override = _lifecycle_quote_case(
-        bot_quote_price_band_min_cents=0.52,
+        bot_quote_price_band_min_usd=0.52,
     )
 
     intents, why = decide_quotes(
@@ -729,8 +729,8 @@ def test_decide_quotes_admits_mid_between_15_and_20_cents():
         bot_quote_size_shares=120,
         bot_quote_size_min_shares=50,
         bot_quote_spread_static_offset_cents=0.02,
-        bot_quote_price_band_min_cents=0.10,
-        bot_quote_price_band_max_cents=0.90,
+        bot_quote_price_band_min_usd=0.10,
+        bot_quote_price_band_max_usd=0.90,
     )
     # Mid 0.17 for UP, Mid 0.83 for DOWN - inside [0.10, 0.90]
     up_book = {
@@ -754,8 +754,8 @@ def test_decide_quotes_refuses_mid_outside_configured_band():
         bot_pos_objective="rewards",
         bot_quote_size_shares=120,
         bot_quote_size_min_shares=50,
-        bot_quote_price_band_min_cents=0.10,
-        bot_quote_price_band_max_cents=0.90,
+        bot_quote_price_band_min_usd=0.10,
+        bot_quote_price_band_max_usd=0.90,
     )
     # Mid 0.1499 for UP, Mid 0.8501 for DOWN - inside the configured
     # [0.10, 0.90] band, so the decided-market gate must NOT refuse them.
@@ -780,8 +780,8 @@ def test_decide_quotes_refuses_mid_outside_configured_band_edges():
         bot_pos_objective="rewards",
         bot_quote_size_shares=120,
         bot_quote_size_min_shares=50,
-        bot_quote_price_band_min_cents=0.10,
-        bot_quote_price_band_max_cents=0.90,
+        bot_quote_price_band_min_usd=0.10,
+        bot_quote_price_band_max_usd=0.90,
     )
     # Mid 0.09 for UP, Mid 0.91 for DOWN - outside the configured band.
     up_book = {
@@ -812,8 +812,8 @@ def test_decide_quotes_decided_band_follows_custom_config_band():
         # couple allocation that buys 10sh, under the 50sh venue floor, so the
         # books would be refused by sizing and never reach the band at all.
         bot_quote_size_mode="shares",
-        bot_quote_price_band_min_cents=0.05,
-        bot_quote_price_band_max_cents=0.95,
+        bot_quote_price_band_min_usd=0.05,
+        bot_quote_price_band_max_usd=0.95,
     )
     up_book = {
         "token_id": "tok_up",
@@ -847,8 +847,8 @@ def _expiry_cfg() -> MakerConfig:
         bot_quote_size_mode="shares",
         bot_quote_size_shares=120,
         bot_quote_size_min_shares=50,
-        bot_quote_price_band_min_cents=0.10,
-        bot_quote_price_band_max_cents=0.90,
+        bot_quote_price_band_min_usd=0.10,
+        bot_quote_price_band_max_usd=0.90,
     )
 
 

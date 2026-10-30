@@ -221,15 +221,17 @@ def is_port_available(port: int, host: str = "127.0.0.1") -> bool:
             return False
 
 
-# Arm keys that named a config field before #732 renamed them to `bot_*`.
-# They are not read below, so an arm still carrying one would quietly run the
-# shipped default and the tournament would compare an arm nobody chose. Fail
-# at plan time instead of after the runs have spent their minutes.
+# Arm keys that named a config field before #732 renamed them to `bot_*`, plus
+# the two money fields #872 renamed from `_cents` to `_usd`. They are not read
+# below, so an arm still carrying one would quietly run the shipped default and
+# the tournament would compare an arm nobody chose. Fail at plan time instead
+# of after the runs have spent their minutes.
 _RETIRED_PRESET_KEYS = frozenset({
     "dynamic_offset_enabled", "dynamic_offset_multiplier",
     "dynamic_offset_min_cents", "dynamic_offset_max_cents",
     "stop_loss_mode", "drop_cents", "max_spread_from_mid",
     "apply_widen_gate",
+    "bot_risk_stop_adverse_drop_cents", "bot_order_requote_dead_band_cents",
 })
 
 # The re-quote holds #387 retired, named on both surfaces an arm can use: the
@@ -278,8 +280,8 @@ def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
         env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"] = str(int(preset["bot_quote_spread_offset_max_cents"]))
     if "bot_risk_stop_mode" in preset:
         env["BOT_RISK_STOP_MODE"] = str(preset["bot_risk_stop_mode"])
-    if "bot_risk_stop_adverse_drop_cents" in preset:
-        env["BOT_RISK_STOP_ADVERSE_DROP_CENTS"] = str(preset["bot_risk_stop_adverse_drop_cents"])
+    if "bot_risk_stop_adverse_drop_usd" in preset:
+        env["BOT_RISK_STOP_ADVERSE_DROP_USD"] = str(preset["bot_risk_stop_adverse_drop_usd"])
     # Loose-baseline knobs. These let an arm quote the raw dynamic
     # offset with no upper clamp and no WIDENED snap-back, without touching
     # the shipped defaults or any other arm.

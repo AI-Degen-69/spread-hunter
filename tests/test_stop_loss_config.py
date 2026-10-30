@@ -14,7 +14,7 @@ def test_defaults_are_none_mode_and_the_spec_numbers():
     cfg = MakerConfig()
 
     assert cfg.bot_risk_stop_mode == "NONE"
-    assert cfg.bot_risk_stop_adverse_drop_cents == 0.05
+    assert cfg.bot_risk_stop_adverse_drop_usd == 0.05
     assert cfg.bot_risk_stop_max_drawdown_pct == 10.0
     assert cfg.bot_risk_circuit_max_drawdown_pct == 75.0
 
@@ -58,12 +58,12 @@ def test_mode_env_refuses_non_canonical_spellings(monkeypatch, raw):
 
 
 def test_drop_cents_env_is_parsed_and_bounded(monkeypatch):
-    monkeypatch.setenv("BOT_RISK_STOP_ADVERSE_DROP_CENTS", "0.05")
-    assert load().bot_risk_stop_adverse_drop_cents == 0.05
+    monkeypatch.setenv("BOT_RISK_STOP_ADVERSE_DROP_USD", "0.05")
+    assert load().bot_risk_stop_adverse_drop_usd == 0.05
 
     for raw in ("0.0", "0.009", "0.91", "nan", "inf"):
-        monkeypatch.setenv("BOT_RISK_STOP_ADVERSE_DROP_CENTS", raw)
-        with pytest.raises(ValueError, match="BOT_RISK_STOP_ADVERSE_DROP_CENTS"):
+        monkeypatch.setenv("BOT_RISK_STOP_ADVERSE_DROP_USD", raw)
+        with pytest.raises(ValueError, match="BOT_RISK_STOP_ADVERSE_DROP_USD"):
             load()
 
 
@@ -102,7 +102,7 @@ def test_a_retired_env_var_does_not_move_its_replacement(monkeypatch):
 
     cfg = load()
 
-    assert cfg.bot_risk_stop_adverse_drop_cents == 0.05
+    assert cfg.bot_risk_stop_adverse_drop_usd == 0.05
     assert cfg.bot_risk_stop_mode == "NONE"
 
 

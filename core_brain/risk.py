@@ -274,7 +274,7 @@ def book_health(book: dict, cfg) -> BookHealth:
         the naked leg a fill would create is decided against us. Both ends are
         tested against both quotes -- the recorded failure was a 0.999 bid
         against a 0.001 ask, an inverted shape no single arm catches.
-      * TOO WIDE / TOO THIN. A spread wider than `bot_quote_book_max_spread_cents` puts the
+      * TOO WIDE / TOO THIN. A spread wider than `bot_quote_book_max_spread_usd` puts the
         whole quote window inside it, so quoting there means being the most
         exposed order in the book. Summed bid depth under `bot_quote_book_min_depth_shares`
         means nothing is there to absorb an exit.
@@ -305,10 +305,10 @@ def book_health(book: dict, cfg) -> BookHealth:
     # the two are equal; keeping the normalised form means a future reordering
     # cannot silently reintroduce the negative-width hole.
     spread = hi - lo
-    if spread > cfg.bot_quote_book_max_spread_cents:
+    if spread > cfg.bot_quote_book_max_spread_usd:
         return BookHealth(False,
                           f"book too wide {100*spread:.1f}c > "
-                          f"{100*cfg.bot_quote_book_max_spread_cents:.1f}c",
+                          f"{100*cfg.bot_quote_book_max_spread_usd:.1f}c",
                           depth_evaluated=False)
 
     bids = book.get("bids")
@@ -443,7 +443,7 @@ def hard_block(
         healthy leg would have left a position no price could unwind.
       * OWN SIDE. The book we would rest into, on the same three arms.
       * DOLLAR CAP. Naked cost on this side at or past `bot_risk_exposure_max_naked_usd`.
-      * PRICE BAND (R7). Outside `bot_quote_price_band_min_cents..bot_quote_price_band_max_cents` the spread
+      * PRICE BAND (R7). Outside `bot_quote_price_band_min_usd..bot_quote_price_band_max_usd` the spread
         has collapsed toward one tick on an outcome the market already
         considers settled, so there is nothing to capture -- while a wrong
         resolution still costs the full $1.00. Reported AFTER the dollar cap
@@ -559,9 +559,9 @@ def hard_block(
     # config says. Switchable for the same reason it always was: a gate that
     # cannot be turned off cannot be attributed a result.
     if cfg.bot_quote_gate_price_band_on and not (
-            cfg.bot_quote_price_band_min_cents <= price <= cfg.bot_quote_price_band_max_cents):
-        return (f"{price:.3f} outside band {cfg.bot_quote_price_band_min_cents:.2f}-"
-                f"{cfg.bot_quote_price_band_max_cents:.2f}")
+            cfg.bot_quote_price_band_min_usd <= price <= cfg.bot_quote_price_band_max_usd):
+        return (f"{price:.3f} outside band {cfg.bot_quote_price_band_min_usd:.2f}-"
+                f"{cfg.bot_quote_price_band_max_usd:.2f}")
 
     # PAIR COST, for the heavy side. `other_avg > 0` guards it, exactly as
     # the legacy branch does: a zero average means we hold none of that token,

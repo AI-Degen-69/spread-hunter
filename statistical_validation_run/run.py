@@ -220,7 +220,7 @@ def snapshot_stat_validation_env(
     cfg_path = artifact_dir / "config_snapshot.json"
     try:
         with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump({**dataclasses.asdict(cfg), "filter_common_spread_max_cents": cfg.filter_common_spread_max_cents}, f, indent=2)
+            json.dump({**dataclasses.asdict(cfg), "filter_common_spread_max_usd": cfg.filter_common_spread_max_usd}, f, indent=2)
     except (OSError, TypeError) as e:
         log.warning("snapshot: failed to write config_snapshot.json: %s", e)
 
