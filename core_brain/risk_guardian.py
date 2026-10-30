@@ -90,8 +90,8 @@ def build_watches(
     # One read per field: the second `getattr` in each pair used to be the
     # legacy alias, and #732 deleted every alias, so it re-read the same name.
     bot_risk_stop_mode = str(getattr(cfg, "bot_risk_stop_mode", None) or "NONE")
-    _dc = getattr(cfg, "bot_risk_stop_adverse_drop_cents", None)
-    bot_risk_stop_adverse_drop_cents = float(0.05 if _dc is None else _dc)
+    _drop = getattr(cfg, "bot_risk_stop_adverse_drop_usd", None)
+    bot_risk_stop_adverse_drop_usd = float(0.05 if _drop is None else _drop)
     _ddp = getattr(cfg, "bot_risk_stop_max_drawdown_pct", None)
     bot_risk_stop_max_drawdown_pct = float(10.0 if _ddp is None else _ddp)
     _edp = getattr(cfg, "bot_risk_circuit_max_drawdown_pct", None)
@@ -140,7 +140,7 @@ def build_watches(
             stop_level, stop_source = stop_trigger(
                 held_avg,
                 bot_risk_stop_mode,
-                bot_risk_stop_adverse_drop_cents,
+                bot_risk_stop_adverse_drop_usd,
                 bot_risk_stop_max_drawdown_pct,
                 bot_risk_circuit_max_drawdown_pct,
             )

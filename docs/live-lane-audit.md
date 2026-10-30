@@ -38,9 +38,9 @@ so both lanes read the same map — pinned by
 | Knob | Value | Notes |
 |---|---|---|
 | `BOT_QUOTE_TOURNAMENT_PRESET` | `prudent` | dynamic offset ON, 0.60x, clamp 2¢–4¢; carries no deadband/stop/queue gate of its own |
-| `BOT_ORDER_REQUOTE_DEAD_BAND_CENTS` | `0.06` | dollar-valued despite `_cents`; loader does no ÷100 (`config.py:393-396`) |
+| `BOT_ORDER_REQUOTE_DEAD_BAND_USD` | `0.06` | USD per share (6¢), so no ÷100 anywhere (`config.py:404-408`, renamed by #872) |
 | `BOT_RISK_STOP_MODE` | `ABSOLUTE_DROP` | the drop below is inert unless this mode is set (shipped default `NONE`) |
-| `BOT_RISK_STOP_ADVERSE_DROP_CENTS` | `0.045` | dollars, bounded to `DROP_CENTS_MIN..MAX` (`config.py:452-458`) |
+| `BOT_RISK_STOP_ADVERSE_DROP_USD` | `0.045` | USD per share (4.5¢), bounded to `DROP_USD_MIN..MAX` (`config.py:465-470`, renamed by #872) |
 | `BOT_ORDER_GATE_QUEUE_CLEAR_ON` | `1` | without it the gate is record-only |
 | `BOT_ORDER_QUEUE_MAX_CLEAR_MIN` | `3` | minutes |
 

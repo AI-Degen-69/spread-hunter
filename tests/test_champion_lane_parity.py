@@ -21,9 +21,9 @@ from core_brain.shadow_run import shadow_cfg  # noqa: E402
 
 CHAMPION_ENV = {
     "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
-    "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.06",
+    "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06",
     "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-    "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.045",
+    "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.045",
     "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
     "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "3",
 }
@@ -64,9 +64,9 @@ def test_champion_values_are_effective(champion_env):
     assert cfg.bot_quote_spread_offset_multiplier == pytest.approx(0.60)
     assert cfg.bot_quote_spread_offset_min_cents == 2
     assert cfg.bot_quote_spread_offset_max_cents == 4
-    assert cfg.bot_order_requote_dead_band_cents == pytest.approx(0.06)
+    assert cfg.bot_order_requote_dead_band_usd == pytest.approx(0.06)
     assert cfg.bot_risk_stop_mode == "ABSOLUTE_DROP"
-    assert cfg.bot_risk_stop_adverse_drop_cents == pytest.approx(0.045)
+    assert cfg.bot_risk_stop_adverse_drop_usd == pytest.approx(0.045)
     assert cfg.bot_order_gate_queue_clear_on is True
     assert cfg.bot_order_queue_max_clear_min == pytest.approx(3.0)
 
@@ -108,9 +108,9 @@ def test_champion_env_survives_os_environ_snapshot(champion_env):
     """The six champion keys are exactly the documented contract surface."""
     assert set(CHAMPION_ENV) == {
         "BOT_QUOTE_TOURNAMENT_PRESET",
-        "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS",
+        "BOT_ORDER_REQUOTE_DEAD_BAND_USD",
         "BOT_RISK_STOP_MODE",
-        "BOT_RISK_STOP_ADVERSE_DROP_CENTS",
+        "BOT_RISK_STOP_ADVERSE_DROP_USD",
         "BOT_ORDER_GATE_QUEUE_CLEAR_ON",
         "BOT_ORDER_QUEUE_MAX_CLEAR_MIN",
     }

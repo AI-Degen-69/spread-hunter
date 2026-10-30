@@ -9,7 +9,7 @@
     "env": {},
     "worst_catalyst": "Stop-loss exits 27.5% of closes (11/40)",
     "worst_catalyst_desc": "6.4 h snapshot: 11 stop exits on 40 trades -- the most filled orders in the run -- clustered between minute 194 and 268, the volatile print every arm met; this arm sets no stop mode in its env, so 5c is the shipped default threshold, not an active stop.",
-    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06",
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06",
     "tweak_rationale": "Hypothesis: the shipped 3c deadband requotes into the volatile cluster and re-enters lower; 6c holds queue position and only re-prices on a real move."
   },
   {
@@ -43,7 +43,7 @@
     },
     "worst_catalyst": "8 stop exits on 33 closes (24.2%)",
     "worst_catalyst_desc": "6.4 h snapshot: two early stops at minute 194 (-$0.70) and 205 (-$0.40) landed in the same volatile cluster that hit every arm; the 2-4c offset gave up before the pair completed.",
-    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06",
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06",
     "tweak_rationale": "Hypothesis: a 6c deadband holds the resting quote through the volatile window instead of cancelling and re-entering at a worse price."
   },
   {
@@ -58,11 +58,11 @@
     "env": {
       "BOT_QUOTE_TOURNAMENT_PRESET": "conservative",
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-      "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.080"
+      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.080"
     },
     "worst_catalyst": "9 stop exits on 34 closes (26.5%), -$0.37 average loss",
     "worst_catalyst_desc": "6.4 h snapshot: the widest offset did not stop the stops -- average loss per stop was -$0.37 against -$0.19 for Hair Trigger, with VaR95 at -$0.70.",
-    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.050",
+    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.050",
     "tweak_rationale": "Hypothesis: the 0.75x offset already cushions price, so an 8c stop only enlarges each loss; the shipped 5c stop cuts the tail without firing on spread noise."
   },
   {
@@ -80,7 +80,7 @@
     },
     "worst_catalyst": "Gap trade at minute 193.8: cumulative $1.19 to $0.49",
     "worst_catalyst_desc": "6.4 h snapshot: 7 stops, worst single loss -$0.70, Sharpe 9.52 and profit factor 7.36 -- the best risk-adjusted arm; its one structural exposure is the cluster every arm met.",
-    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06",
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06",
     "tweak_rationale": "Hypothesis: no stop change is warranted; a 6c deadband is the cheapest way to turn that recurring cluster stop into a hold."
   },
   {
@@ -111,11 +111,11 @@
     "worst_catalyst_desc": "10 stops on 37 trades; 10¢ deadband holds stale quotes too long into adverse price shifts.",
     "env": {
       "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0",
-      "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.10"
+      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.10"
     },
     "worst_catalyst": "10 stop exits on 37 closes (27.0%)",
     "worst_catalyst_desc": "6.4 h snapshot: back-to-back losses at minute 280 (-$0.09, -$0.31) filled right after -- the 10c deadband holds a quote after the book has already moved against it.",
-    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06",
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06",
     "tweak_rationale": "Hypothesis: 6c still suppresses churn on micro-moves but re-prices before a stale quote fills into an adverse book."
   },
   {
@@ -129,11 +129,11 @@
     "worst_catalyst_desc": "15 stops on 34 trades (44.1% stop rate); premature liquidation destroys pairs on 1-tick flicker.",
     "env": {
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-      "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.020"
+      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.020"
     },
     "worst_catalyst": "Stop-loss exit rate 44.1% (15/34)",
     "worst_catalyst_desc": "6.4 h snapshot: 15 stops against 19 merges -- the arm mostly stops out; average loss -$0.19 and the lowest total PnL of the active arms.",
-    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
+    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.045",
     "tweak_rationale": "Hypothesis: 2c is tighter than normal spread noise, so the stop fragments the pairs it means to protect; 4.5c only fires on a genuine adverse move."
   },
   {
@@ -147,11 +147,11 @@
     "worst_catalyst_desc": "Starvation + severe tail loss: only 6 trades, -$2.10 loss at min 360.6 degraded Sharpe to 3.38.",
     "env": {
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-      "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.090"
+      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.090"
     },
     "worst_catalyst": "6 completed trades; -$2.10 close at minute 360.6",
     "worst_catalyst_desc": "6.4 h snapshot: 13 fills on 24 quotes (54.2%) and no stops, but near-inactive quoting; the single -$2.10 loss (VaR95 -$2.10) erased most of the session's gains.",
-    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.060",
+    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.060",
     "tweak_rationale": "Hypothesis: a 9c leash is wide enough to never fire and to hold an orphan through a real break; 6c keeps the stop a circuit breaker rather than decoration."
   },
   {

@@ -215,7 +215,7 @@ def test_tournament_preset_leaves_the_stop_to_the_operator_env():
         with mock.patch.dict(os.environ, {"BOT_QUOTE_TOURNAMENT_PRESET": name}):
             cfg = load()
         assert cfg.bot_risk_stop_mode == "NONE"
-        assert cfg.bot_risk_stop_adverse_drop_cents == 0.05
+        assert cfg.bot_risk_stop_adverse_drop_usd == 0.05
         assert cfg.bot_risk_stop_max_drawdown_pct == 10.0
         assert cfg.bot_risk_circuit_max_drawdown_pct == 75.0
 

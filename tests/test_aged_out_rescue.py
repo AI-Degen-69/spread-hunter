@@ -195,7 +195,7 @@ def test_no_unrelated_shipped_default_moved():
     # #619 replaced the static cent stop with the entry-relative one; these are
     # the new shipped defaults, asserted here so they cannot drift unnoticed.
     assert cfg.bot_risk_stop_mode == "NONE"
-    assert cfg.bot_risk_stop_adverse_drop_cents == 0.05
+    assert cfg.bot_risk_stop_adverse_drop_usd == 0.05
     assert cfg.bot_risk_stop_max_drawdown_pct == 10.0
     assert cfg.bot_risk_circuit_max_drawdown_pct == 75.0
 

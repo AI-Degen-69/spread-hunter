@@ -1089,7 +1089,7 @@ class TestVisitOnePassesTheDeadBand:
                 "bids": {0.46: 5000.0}, "asks": {0.48: 5000.0}}
         books = {"tok-up": up, "tok-dn": down}
         seam = VenueSeam(
-            base_cfg=MakerConfig(bot_order_requote_dead_band_cents=0.03,
+            base_cfg=MakerConfig(bot_order_requote_dead_band_usd=0.03,
                                  bot_pos_price_max_complete_usd=1.00),
             fetch_market=lambda cid: market,
             fetch_books=lambda host, tok: books[tok],
@@ -3316,7 +3316,7 @@ def test_visit_one_passes_canonical_dead_band():
         seen.update(kw)
         return [], []
 
-    cfg = MakerConfig(bot_order_requote_dead_band_cents=0.05)
+    cfg = MakerConfig(bot_order_requote_dead_band_usd=0.05)
     seam = VenueSeam(
         base_cfg=cfg,
         fetch_market=lambda cid: market,
@@ -3329,7 +3329,7 @@ def test_visit_one_passes_canonical_dead_band():
         warnings.simplefilter("always")
         _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=False, plan_fn=spy)
 
-    dead_band_warns = [w for w in recorded if "trader_loop.py" in w.filename and "bot_order_requote_dead_band_cents" in str(w.message)]
+    dead_band_warns = [w for w in recorded if "trader_loop.py" in w.filename and "bot_order_requote_dead_band_usd" in str(w.message)]
     assert dead_band_warns == []
     assert seen["dead_band"] == 0.05
 
@@ -4309,7 +4309,7 @@ class TestGuardianReactiveWake:
 
         cfg = SimpleNamespace(
             bot_risk_stop_mode="ABSOLUTE_DROP",
-            bot_risk_stop_adverse_drop_cents=0.05,
+            bot_risk_stop_adverse_drop_usd=0.05,
             bot_risk_stop_max_drawdown_pct=10.0,
             bot_risk_circuit_max_drawdown_pct=75.0,
             bot_pos_price_max_pair_cost_usd=0.99,

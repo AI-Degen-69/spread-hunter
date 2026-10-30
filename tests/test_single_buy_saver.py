@@ -2741,7 +2741,7 @@ def _moe_cfg():
         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
         bot_risk_exposure_max_order_usd=100.0,
         bot_risk_stop_mode="ABSOLUTE_DROP",
-        bot_risk_stop_adverse_drop_cents=0.02)
+        bot_risk_stop_adverse_drop_usd=0.02)
 
 
 def _moe_market_state_fn():
@@ -3573,7 +3573,7 @@ def test_manager_hard_stop_unchanged_with_orphan_toggle_on(registry: OrderRegist
         bot_risk_orphan_profit_min_age_sec=3600.0,
         bot_risk_orphan_min_profit_pct=0.05,
         bot_risk_stop_mode="ABSOLUTE_DROP",
-        bot_risk_stop_adverse_drop_cents=0.05,
+        bot_risk_stop_adverse_drop_usd=0.05,
         bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
     )
     client = FakeClient(best_bid=0.50, bid_depth=10.0)

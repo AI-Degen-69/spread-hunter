@@ -169,7 +169,7 @@ def main():
             # the emergency floor as the backstop, so a $0.10-$0.14 fill is no
             # longer cut the instant it fills.
             trig, trig_source = stop_trigger(
-                up_q, cfg.bot_risk_stop_mode, cfg.bot_risk_stop_adverse_drop_cents, cfg.bot_risk_stop_max_drawdown_pct,
+                up_q, cfg.bot_risk_stop_mode, cfg.bot_risk_stop_adverse_drop_usd, cfg.bot_risk_stop_max_drawdown_pct,
                 cfg.bot_risk_circuit_max_drawdown_pct,
             )
             print(f"  STOP  if up fills {up_q:.2f}, naked-leg cut at bid <= {trig:.2f} "

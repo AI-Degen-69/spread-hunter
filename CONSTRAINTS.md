@@ -1,53 +1,71 @@
-# CONSTRAINTS.md — Issue #857: Preflight-guided Start Run launcher with mode selection, 24h horizon, and watchdog
+# CONSTRAINTS.md — Issue #872: Unify currency settings to honest units
 
-Branch: `i857/preflight-guided-start-run-launcher` | Issue: #857
+Branch: `i872/unify-all-currency-settings-to-integer-cents` | Issue: #872
 
 Locked during Station II planning. Stations III–V must hold every line below.
 Tighten only with operator approval; never loosen silently.
 
+## The one invariant this change exists to protect
+
+**Every numeric value the engine applies is bit-identical before and after.**
+
+`bot_order_requote_dead_band_usd` stays `0.03`, `bot_risk_stop_adverse_drop_usd` stays `0.05`,
+the `hybrid` preset stays `0.060`, `bot_quote_spread_offset_min_cents`/`_max_cents` stay `1`/`20`.
+The 4.5¢ champion stop (`tests/test_champion_lane_parity.py`, `docs/live-lane-audit.md`,
+`scripts/tournament_cockpit_server.py`) keeps producing the same trigger cents at every entry
+price. If any test expectation has to move for a value to pass, the change is wrong — re-read
+the unit, do not edit the expectation.
+
 ## Zero regressions
 
-- Focused suites for the touched modules must pass cleanly:
+- Targeted suites covering the touched modules must pass cleanly:
+  - `python -m pytest -q tests/test_config.py`
+  - `python -m pytest -q tests/test_config_single_source.py tests/test_config_divergence_guard.py`
+  - `python -m pytest -q tests/test_stop_loss_config.py tests/test_single_leg_lifecycle.py tests/test_dual_stop_loss.py tests/test_risk_guardian.py tests/test_single_buy_saver.py`
+  - `python -m pytest -q tests/test_trader_loop.py tests/test_completable_pair_gate.py tests/test_dynamic_offset.py`
+  - `python -m pytest -q tests/test_champion_lane_parity.py tests/test_shadow_tournament.py tests/test_tournament_cockpit_arms.py tests/test_tournament_arms_i843.py`
   - `python -m pytest -q tests/test_dashboard_server.py`
-  - `python -m pytest -q tests/test_trader_loop.py`
-  - `python -m pytest -q tests/test_order_manager.py`
-  - `node tests/js/master_toggle_harness.cjs dashboard/static/app.js`
-- Full regression suite `python -m pytest -q` is the GitHub CI merge gate on Ubuntu and Windows; local review runs targeted checks only.
-- Every new behavior must have a test that fails without it:
-  - Preflight sequential enforcement (steps 1 -> 2 -> 3 -> 4 in order).
-  - Reach probe failure closed without `confirm: true`.
-  - Rejection of start without valid `preflight_id`.
-  - Atomicity of `preflight_id` consumption (single-use).
-  - `--deadline-ts` enforcement in `trader_loop.py` (clean exit on deadline and immediate exit if past).
-  - Watchdog flag `--watch-guardrails` in live stack commands.
-  - Numbered shadow database sequence generation (01..99 wrap).
-  - Modal appearance on master toggle START click without initiating immediate processes.
+- Full `python -m pytest -q` is the GitHub CI merge gate on Ubuntu and Windows; local runs are
+  targeted only.
+- Every new behavior needs a test that fails without it:
+  - old `*_CENTS` name still loads when the new name is unset, with exactly one `WARNING`;
+  - one warning per key per process, not one per `from_env()` call;
+  - new name wins when both are set; blank new name falls through to the old one;
+  - offset keys reject `19.9` / `6.0` / `abc` / `nan` / `inf` instead of truncating;
+  - arms files use whole-cent text only, and load with no deprecation warning.
 
 ## Scope fences (hard)
 
-- **Only these files change:**
-  - `dashboard/preflight.py` (new)
-  - `dashboard/server.py`
-  - `core_brain/order_manager.py` (balance helper extraction only)
-  - `core_brain/trader_loop.py` (`--deadline-ts` CLI handling and sleep wrapping only)
-  - `dashboard/static/index.html` (`#start-run-modal` markup)
-  - `dashboard/static/app.js` (modal & preflight handler logic)
-  - `dashboard/static/styles.css` (modal and preflight indicators)
-  - `scripts/spread-hunter-menu.ps1` (`Start-BotStack` refusal messaging)
-  - `tests/test_dashboard_server.py`
-  - `tests/test_trader_loop.py`
-  - `tests/js/master_toggle_harness.cjs`
-  - `SPEC.md`, `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`, `tasks/pr-body.md`
+- **Only these areas change:**
+  - `core_brain/config.py` — the two field names, their loader blocks, the `hybrid` preset key,
+    the alias reader, `_whole_cents()`.
+  - `core_brain/single_leg_lifecycle.py` — `DROP_CENTS_MIN/MAX` → `DROP_USD_MIN/MAX` and the
+    parameter names that carry the same dollar value.
+  - The readers listed in `tasks/plan.md` §T2 (trader_loop, risk_guardian, single_buy_saver,
+    shadow_tournament, tournament_hub, stream_market_decisions, verify_loose_baseline_tape).
+  - `dashboard/server.py` — the two `get_parameters` cards, `name`/`key`/`env_var` only.
+  - `.env.example`, `configs/tournaments/*.json`, `scripts/tournament_cockpit_server.py` copy,
+    `docs/agents/strategy.md`, `docs/live-lane-audit.md`.
+  - `tests/**` — mechanical renames plus the new `tests/test_config.py`.
+  - `tasks/plan.md`, `tasks/todo.md`, `CONSTRAINTS.md`, `docs/backlog/i872-currency-unit-inventory.md`.
 - **Must NOT be modified:**
-  - `data/orders.db` (production registry is strictly read-only; never rewrite or delete).
-  - `.env`, `.env.example` (never write credentials or modify env templates).
-  - `core_brain/config.py`, `core_brain/venue.py`, `core_brain/order_registry.py`, `core_brain/order_execution.py`.
-  - `core_brain/reach_probe.py` (already delivered and tested).
-  - `scripts/global_stop_loss.py` (already delivered and tested).
+  - `data/orders.db` (production registry, strictly read-only) and `data/tournaments/*/plan.json`.
+  - Any engine arithmetic: `evaluate_single_leg_lifecycle` trigger math, merge/settlement,
+    pair-cost gates.
+  - Risk ratios (`*_pct` fields). Only the names of money amounts change.
+  - The other 13 `_cents` fields — inventoried, not converted.
+  - `dashboard/static/**` except `dashboard/static/strategy_explainer.html`, which is edited only to
+    stop documenting the two retired key names. Currency **formatting** stays out of scope for #872.
+  - `core_brain/venue.py`, `core_brain/env_file.py`, `core_brain/order_registry.py`.
 
-## Anti-cheat & Safety rules
+## Anti-cheat & safety rules
 
-- **No test touches the live venue:** All tests must mock venue calls, CLOB clients, processes (`Popen`), and clocks.
-- **No live orders during automated build/test:** Never run live trading or unconstrained live probes.
-- **Fail closed:** Any unreadable preflight condition or missing requirement blocks live start.
-- **No duplicate watchdog:** `order_manager poll` already supervises `scripts.global_stop_loss`; the dashboard must NOT launch a separate standalone watchdog process.
+- **Anti-cheat:** no skipped/xfailed tests, no deleted assertions, no weakened bounds, no
+  silent `int()` coercion left in place of the strict parser, no `# type: ignore`/`noqa` added
+  to get green.
+- **No new dependencies.** Standard library only; do not introduce `Decimal` into money math.
+- **A retired name is not silently ignored.** The two old `_CENTS` spellings must warn loudly
+  once per process. "Inert" would silently change the dead band from 10¢ to 3¢.
+- **No live venue contact.** Planning, build, tests and review never run `quote`, `complete`,
+  the Trader loop, or the dashboard START button.
+- **No production database in any manual check.** Any `status` run points at a disposable DB.
