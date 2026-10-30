@@ -81,7 +81,7 @@ matches.
 
 ## 4. Tasks
 
-### T1 — Arm catalog + isolated child evaluation · M · `[Backend/Logic]`
+### [x] T1 — Arm catalog + isolated child evaluation · M · `[Backend/Logic]`
 Depends on: — (riskiest first)
 
 - `dashboard/arm_params.py` (new, no cockpit imports): scan stamped run

@@ -2,7 +2,7 @@
 
 Branch: `i866/fix-strategy-parameters-panel-shows-global-config`
 
-## T1 — Arm catalog + isolated child evaluation `[Backend/Logic]` M
+## T1 — Arm catalog + isolated child evaluation `[Backend/Logic]` M · done
 - [ ] `dashboard/arm_params.py`: catalog via `parse_tournament_run_dir_name`, resolve order plan → tourney → newest, exact then round-suffix arm match, 5 distinct errors
 - [ ] `__main__` child: launcher-style env build, `declare_rehearsal()`, both loaders separately, strict JSON, no trade, no `.env`
 - [ ] Parent runner: timeout + rebuild both MakerConfigs + `_NoScoringConfig` path + thread-safe memo (configs only)
