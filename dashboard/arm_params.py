@@ -173,18 +173,24 @@ def resolve_plan_path(*, plan: str | None = None, tourney: int | str | None = No
     """Resolve which plan record to read; raises NO_PLAN when nothing qualifies."""
     root = Path(tourn_root) if tourn_root is not None else default_tournament_root()
     if plan:
-        candidate = root / plan / "plan.json"
+        # Confine explicit plans to the tournament runs folder: a plan key is a
+        # folder name, never a path. Anything escaping the root is refused.
+        candidate = (root / plan / "plan.json").resolve()
+        try:
+            candidate.relative_to(root.resolve())
+        except ValueError:
+            raise ArmParamsError(NO_PLAN, f"no plan record at {plan!r}") from None
         if candidate.is_file():
             return candidate
-        # Allow a direct plan.json path as well.
-        direct = Path(plan)
-        if direct.is_file():
-            return direct
         raise ArmParamsError(NO_PLAN, f"no plan record at {plan!r}")
     if tourney is not None:
+        try:
+            wanted = int(str(tourney).strip())
+        except (TypeError, ValueError):
+            raise ArmParamsError(NO_PLAN, f"no tournament record for issue {tourney!r}") from None
         from core_brain.shadow_run import latest_tournament_record
 
-        found = latest_tournament_record(tourney, root)
+        found = latest_tournament_record(wanted, root)
         if found is not None:
             return found
         raise ArmParamsError(NO_PLAN, f"no tournament record for issue {tourney}")

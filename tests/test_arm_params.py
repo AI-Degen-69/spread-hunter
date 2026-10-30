@@ -75,6 +75,27 @@ def test_resolve_prefers_explicit_plan(tourn_root):
     assert got == explicit
 
 
+def test_resolve_tourney_picks_newest_plan(tourn_root):
+    _write_plan(tourn_root, "", issue=866,
+                arms=[{"name": "control", "env": {}}], run_number=1)
+    newest = _write_plan(tourn_root, "", issue=866,
+                         arms=[{"name": "control", "env": {}}], run_number=2)
+    assert arm_params.resolve_plan_path(tourney=866, tourn_root=tourn_root) == newest
+    assert arm_params.resolve_plan_path(tourney="866 ", tourn_root=tourn_root) == newest
+
+
+def test_resolve_malformed_tourney_raises_no_plan(tourn_root):
+    with pytest.raises(ArmParamsError) as exc:
+        arm_params.resolve_plan_path(tourney="not-a-number", tourn_root=tourn_root)
+    assert exc.value.code == "NO_PLAN"
+
+
+def test_resolve_plan_traversal_raises_no_plan(tourn_root):
+    with pytest.raises(ArmParamsError) as exc:
+        arm_params.resolve_plan_path(plan="../../outside", tourn_root=tourn_root)
+    assert exc.value.code == "NO_PLAN"
+
+
 def test_resolve_unknown_plan_raises_no_plan(tourn_root):
     with pytest.raises(ArmParamsError) as exc:
         arm_params.resolve_plan_path(plan="i866_r9_missing_20261030-120000",
