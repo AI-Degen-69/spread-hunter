@@ -81,7 +81,7 @@ def recover_fee(row: Any) -> Optional[float]:
         return None
     size = _as_float(row.get("size"))
     price = _as_float(row.get("price"))
-    usdc = _as_float(row.get("usdcSize"))
+    usdc = _as_float(row.get("usdc_size") if row.get("usdc_size") is not None else row.get("usdcSize"))
     if size is None or price is None or usdc is None:
         return None
     if size < 0 or price < 0 or usdc < 0:
@@ -141,20 +141,27 @@ def lifetime_taker_fees(funder: str, timeout: float = 15.0,
     if not funder:
         return None
 
-    reader = fetch if fetch is not None else (
-        lambda offset: _get_json("/activity",
-                                 {"user": funder, "type": "TRADE",
-                                  "limit": ACTIVITY_PAGE_SIZE, "offset": offset},
-                                 timeout))
+    reader = fetch
 
     total = 0.0
     seen = 0
     priced = 0
     offset = 0
+    cursor: Optional[str] = None
     complete = True
     while True:
         try:
-            page = reader(offset)
+            if reader is not None:
+                raw_page = reader(offset)
+            else:
+                params: dict[str, Any] = {
+                    "user": funder,
+                    "type": "TRADE",
+                    "limit": ACTIVITY_PAGE_SIZE,
+                }
+                if cursor:
+                    params["cursor"] = cursor
+                raw_page = _get_json("/v2/activity", params, timeout)
         except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
             if offset == 0:
                 return None
@@ -162,10 +169,22 @@ def lifetime_taker_fees(funder: str, timeout: float = 15.0,
             # incomplete rather than as a lifetime figure.
             complete = False
             break
+
+        if isinstance(raw_page, dict) and "data" in raw_page:
+            page = raw_page.get("data")
+            pagination = raw_page.get("pagination") or {}
+            next_cursor = pagination.get("next_cursor")
+            cursor = str(next_cursor) if next_cursor else None
+        elif isinstance(raw_page, list):
+            page = raw_page
+            cursor = None
+        else:
+            if offset == 0:
+                return None
+            complete = False
+            break
+
         if not isinstance(page, list):
-            # A shape we cannot read is not the end of the feed. On the first
-            # page there is nothing to report; later, keep what was counted and
-            # say the total is short.
             if offset == 0:
                 return None
             complete = False

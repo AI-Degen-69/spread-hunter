@@ -183,16 +183,16 @@ def test_value_endpoint_empty_list_is_none(monkeypatch):
 
 
 def test_positions_request_sets_size_threshold_zero(monkeypatch):
-    """The endpoint defaults to sizeThreshold=1 and would drop sub-share dust."""
+    """The endpoint defaults to a dust floor (filter_amount or sizeThreshold) and would drop sub-share dust."""
     seen = {}
 
     def fake(base, path, params, timeout):
         seen.update(params)
-        return []
+        return {"data": [], "pagination": {"next_cursor": None}}
 
     monkeypatch.setattr(acct, "_get_json", fake)
     acct.fetch_open_positions("0xee")
-    assert seen["sizeThreshold"] == 0
+    assert seen.get("filter_amount") == 0 or seen.get("sizeThreshold") == 0
 
 
 def test_positions_paginate_past_the_first_page(monkeypatch):
@@ -201,11 +201,53 @@ def test_positions_paginate_past_the_first_page(monkeypatch):
 
     def fake(base, path, params, timeout):
         calls["n"] += 1
-        return page if calls["n"] == 1 else [{"asset": "last", "cashPnl": 1.0}]
+        if calls["n"] == 1:
+            return {"data": page, "pagination": {"next_cursor": "page_2"}}
+        return {"data": [{"asset": "last", "cashPnl": 1.0}], "pagination": {"next_cursor": None}}
 
     monkeypatch.setattr(acct, "_get_json", fake)
     rows = acct.fetch_open_positions("0xee")
     assert len(rows) == acct.POSITIONS_PAGE_SIZE + 1
+
+
+def test_v2_value_envelope_is_read_correctly(monkeypatch):
+    """Data API v2 returns {"data": {"proxy_wallet": "0xee", "value": 61.5}}."""
+    monkeypatch.setattr(
+        acct, "_get_json",
+        lambda base, path, params, timeout: {"data": {"proxy_wallet": "0xee", "value": 61.5}},
+    )
+    assert acct.fetch_positions_value("0xee") == pytest.approx(61.5)
+
+
+def test_v2_user_pnl_envelope_is_read_correctly(monkeypatch):
+    """Data API v2 returns {"data": {"points": [{"t": 100, "p": 0.5}]}}."""
+    monkeypatch.setattr(
+        acct, "_get_json",
+        lambda base, path, params, timeout: {
+            "data": {
+                "proxy_wallet": "0xee",
+                "points": [{"t": 100, "p": 0.2}, {"t": 200, "p": 0.5}],
+            }
+        },
+    )
+    assert acct.fetch_user_pnl("0xee") == pytest.approx(0.5)
+
+
+def test_v2_snake_case_fields_in_compose():
+    """compose_account_mark recognizes v2 snake_case fields."""
+    m = acct.compose_account_mark(
+        collateral_usd=50.0,
+        positions_value_usd=61.50,
+        open_positions=[
+            {"unrealized_pnl": 8.79, "entry_cost_usdc": 52.71},
+            {"unrealized_pnl": -1.29, "entry_cost_usdc": 10.00},
+        ],
+        closed_positions=[{"realized_pnl": 2.50}],
+        user_pnl_usd=None,
+    )
+    assert m["unrealized_usd"] == pytest.approx(7.50)
+    assert m["committed_usd"] == pytest.approx(62.71)
+    assert m["pnl_closed_usd"] == pytest.approx(2.50)
 
 
 def test_network_failure_returns_none_not_empty(monkeypatch):

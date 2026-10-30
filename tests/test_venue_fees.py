@@ -42,6 +42,11 @@ def test_a_buy_adds_the_fee_to_the_notional():
     assert recover_fee(row) == pytest.approx(0.35)
 
 
+def test_v2_snake_case_usdc_size_is_recovered():
+    row = {"side": "BUY", "size": 100.0, "price": 0.42, "usdc_size": 42.35}
+    assert recover_fee(row) == pytest.approx(0.35)
+
+
 def test_a_sell_deducts_the_fee_from_the_notional():
     # Arrange
     row = _row("SELL", 100.0, 0.58, 0.21)
@@ -238,6 +243,20 @@ def test_a_response_that_is_not_a_list_is_not_the_end_of_the_feed():
 def test_a_first_response_that_is_not_a_list_reports_nothing():
     # Arrange / Act / Assert
     assert lifetime_taker_fees(FUNDER, fetch=lambda offset: {"error": "nope"}) is None
+
+
+def test_v2_activity_envelope_in_lifetime_taker_fees():
+    # Arrange — Data API v2 envelope with data array and pagination
+    rows = [{"side": "BUY", "size": 10.0, "price": 0.50, "usdc_size": 5.05}]
+    envelope = {"data": rows, "pagination": {"next_cursor": None}}
+
+    # Act
+    total = lifetime_taker_fees(FUNDER, fetch=lambda offset: envelope)
+
+    # Assert
+    assert total is not None
+    assert total.complete is True
+    assert total.fees_usd == pytest.approx(0.05)
 
 
 def test_float_noise_below_zero_normalises_rather_than_refusing():

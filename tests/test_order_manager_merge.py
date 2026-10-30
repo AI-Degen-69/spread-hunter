@@ -418,3 +418,23 @@ class TestLiveMergeReset:
         assert inv.up_shares == pytest.approx(15.0)
         assert inv.down_shares == pytest.approx(0.0)
         assert reg.requalification_marks() == {}
+
+
+def test_v2_merge_encoding_and_target():
+    from core_brain.merge_pairs import (
+        encode_v2_merge,
+        merge_target,
+        ROUTER_V2_CONTRACT,
+    )
+
+    # V2 routing targets Router directly regardless of neg_risk
+    assert merge_target(None, version="v2") == ROUTER_V2_CONTRACT
+    assert merge_target(True, version="v2") == ROUTER_V2_CONTRACT
+    assert merge_target(False, version="v2") == ROUTER_V2_CONTRACT
+
+    # 1.0 share = 1_000_000 base units
+    cid = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    calldata = encode_v2_merge(cid, 1_000_000)
+    assert calldata.startswith("0x5b63685e")
+    assert len(calldata) == 2 + 8 + 64 + 64
+    assert calldata.endswith("00000000000000000000000000000000000000000000000000000000000f4240")

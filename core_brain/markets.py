@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -112,7 +113,11 @@ def _parse_market(market: dict) -> Optional[LiveMarket]:
 
 
 def _parse_market_row(market: dict) -> Optional[LiveMarket]:
-    token_ids_raw = market.get("clobTokenIds")
+    version = str(market.get("version") or "v1").lower()
+    if version == "v2":
+        token_ids_raw = market.get("positionIds") or market.get("clobTokenIds")
+    else:
+        token_ids_raw = market.get("clobTokenIds") or market.get("positionIds")
     if not token_ids_raw:
         return None
     token_ids = json.loads(token_ids_raw) if isinstance(token_ids_raw, str) else token_ids_raw
@@ -126,7 +131,7 @@ def _parse_market_row(market: dict) -> Optional[LiveMarket]:
                and str(t).strip() for t in token_ids):
         return None
 
-    condition_id = market.get("conditionId")
+    condition_id = market.get("conditionId") or market.get("condition_id")
     if not condition_id:
         return None
 
@@ -322,7 +327,7 @@ def market_meta(condition_id: str) -> dict:
 
 # --- book / tape fetchers (moved here from the deleted strategy/main.py, #14) --
 
-TRADES_API = "https://data-api.polymarket.com/trades"
+TRADES_API = os.environ.get("POLYMARKET_TRADES_API", "https://data-api.polymarket.com/v2/trades")
 
 # (connect, read) rather than one scalar. Split deliberately: a host that is not
 # answering its SYN at all is abandoned in ~3s, while a host that did answer
@@ -629,21 +634,37 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
         "truncated": False,
     }
     maker_walk = taker_only is not None
+    cursor: Optional[str] = None
+    use_v2 = "/v2" in TRADES_API
     for page in range(TRADE_MAX_PAGES):
         offset = page * int(limit)
         if offset >= TRADE_MAX_OFFSET:
             info["truncated"] = True
             break
-        params = {"market": condition_id, "limit": limit, "offset": offset}
-        if maker_walk:
-            params["takerOnly"] = False
+        if use_v2:
+            params: dict[str, Any] = {"condition": condition_id, "limit": limit}
+            if cursor:
+                params["cursor"] = cursor
+            if maker_walk:
+                params["taker_only"] = False
+        else:
+            params = {"market": condition_id, "limit": limit, "offset": offset}
+            if maker_walk:
+                params["takerOnly"] = False
         r = _SESSION.get(TRADES_API, params=params, timeout=TAPE_TIMEOUT)
         r.raise_for_status()
-        rows = r.json() or []
-        if not isinstance(rows, list):
-            # Structural failure, not an empty tape: raise so the caller
-            # marks the walk `unavailable` and discards its staged pages
-            # for a later poll, instead of committing them as `empty`.
+        payload = r.json() or []
+        if isinstance(payload, dict) and "data" in payload:
+            rows = payload.get("data")
+            if not isinstance(rows, list):
+                raise ValueError("tape response data is not a list")
+            pagination = payload.get("pagination") or {}
+            next_cursor = pagination.get("next_cursor")
+            cursor = str(next_cursor) if next_cursor else None
+        elif isinstance(payload, list):
+            rows = payload
+            cursor = None
+        else:
             raise ValueError("tape response is not a list")
         info["pages_read"] += 1
         fresh = False
@@ -654,7 +675,9 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
                     info["rejected_rows"].get("row", 0) + 1
                 continue
             side = _row_side(t)
-            blind = (str(t.get("transactionHash") or ""), str(t.get("asset")),
+            tx_hash = str(t.get("transaction_hash") or t.get("transactionHash") or "")
+            asset_id = str(t.get("token_id") or t.get("asset") or "")
+            blind = (tx_hash, asset_id,
                      t.get("timestamp"), t.get("price"), t.get("size"))
             key = blind + (side,)
             if key in seen or key in staged:
@@ -679,7 +702,7 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
                         info["non_qualifying_rows"].get("side", 0) + 1
                     continue
             info["qualifying_rows"] += 1
-            tok = str(t.get("asset"))
+            tok = str(t.get("token_id") or t.get("asset"))
             try:
                 p = round(float(t.get("price") or 0), 4)
                 size = float(t.get("size") or 0)
@@ -690,6 +713,8 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
             slot = walk_out.setdefault(tok, {})
             slot[p] = slot.get(p, 0.0) + size
         if len(rows) < int(limit) or not fresh:
+            break
+        if use_v2 and not cursor:
             break
     else:
         info["truncated"] = True
@@ -746,24 +771,42 @@ def recent_sell_flow(condition_id: str, window_sec: float, *,
     seen: set = set()
     pages = max(1, int(max_pages))
 
+    cursor: Optional[str] = None
+    use_v2 = "/v2" in TRADES_API
+
     for page_index in range(pages):
         try:
-            r = sess.get(TRADES_API,
-                         params={"market": condition_id, "limit": page_size,
-                                 "offset": page_index * page_size},
-                         timeout=TAPE_TIMEOUT)
-            rows = r.json()
+            if use_v2:
+                params: dict[str, Any] = {"condition": condition_id, "limit": page_size}
+                if cursor:
+                    params["cursor"] = cursor
+            else:
+                params = {"market": condition_id, "limit": page_size,
+                          "offset": page_index * page_size}
+            r = sess.get(TRADES_API, params=params, timeout=TAPE_TIMEOUT)
+            payload = r.json()
         except Exception as e:
             log.debug("flow tape fetch failed: %s", e)
             return SellFlow("unavailable", window, {})
-        if not isinstance(rows, list):
+        if isinstance(payload, dict) and "data" in payload:
+            rows = payload.get("data")
+            if not isinstance(rows, list):
+                log.debug("flow tape response data is not a list")
+                return SellFlow("unavailable", window, {})
+            pagination = payload.get("pagination") or {}
+            next_cursor = pagination.get("next_cursor")
+            cursor = str(next_cursor) if next_cursor else None
+        elif isinstance(payload, list):
+            rows = payload
+            cursor = None
+        else:
             # NOT an empty window. A falsy non-list payload (`null`, `{}`) read as
             # `[]` would claim a COMPLETE window with no sells at any price -- the
             # one reading that refuses a placement -- on a response that carried
             # no measurement at all. The ranker's tape reader refuses the same
             # shapes; so does this one.
             log.debug("flow tape response is not a list (got %s)",
-                      type(rows).__name__)
+                      type(payload).__name__)
             return SellFlow("unavailable", window, {})
 
         oldest: Optional[float] = None
@@ -792,7 +835,9 @@ def recent_sell_flow(condition_id: str, window_sec: float, *,
             side = t.get("side")
             if side is None or str(side).strip().upper() != "SELL":
                 continue
-            key = (str(t.get("transactionHash") or ""), str(t.get("asset")),
+            tx_hash = str(t.get("transaction_hash") or t.get("transactionHash") or "")
+            asset_id = str(t.get("token_id") or t.get("asset") or "")
+            key = (tx_hash, asset_id,
                    t.get("timestamp"), t.get("price"), t.get("size"))
             if key in seen:
                 continue
@@ -804,14 +849,14 @@ def recent_sell_flow(condition_id: str, window_sec: float, *,
                 continue
             if not math.isfinite(p) or not math.isfinite(size) or size <= 0:
                 continue
-            level = by_token.setdefault(str(t.get("asset")), {})
+            level = by_token.setdefault(asset_id, {})
             level[p] = level.get(p, 0.0) + size
 
         # A short page is the end of the tape, and a page whose oldest row is
         # already at or behind the window start has covered the whole window.
         # Either way the reading is complete; anything else means the page limit
         # bounded it and the numbers are a floor.
-        if len(rows) < page_size or (oldest is not None and oldest <= cutoff):
+        if (use_v2 and not cursor) or len(rows) < page_size or (oldest is not None and oldest <= cutoff):
             return SellFlow("complete", window, by_token)
 
     return SellFlow("truncated", window, by_token)

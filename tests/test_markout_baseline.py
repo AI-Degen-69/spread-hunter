@@ -435,8 +435,8 @@ def test_the_default_tape_reader_keeps_only_this_token(monkeypatch):
     fetch = markout_mod._default_trades_fn()
     rows = fetch("tok-up", "0xmarket")
 
-    # Assert — queried by market, filtered to the token.
-    assert "market=0xmarket" in captured[0]["url"]
+    # Assert — queried by condition (or legacy market), filtered to the token.
+    assert "condition=0xmarket" in captured[0]["url"] or "market=0xmarket" in captured[0]["url"]
     assert [r["asset"] for r in rows] == ["tok-up"]
 
 

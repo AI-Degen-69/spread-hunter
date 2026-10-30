@@ -196,22 +196,40 @@ def fetch_positions(funder: str, timeout: float = 10.0) -> dict[str, float]:
     knowing nothing.
     """
     positions: dict[str, float] = {}
+    cursor: Optional[str] = None
     offset = 0
+    use_v2 = True
     while True:
-        # sizeThreshold=0 because the endpoint defaults to 1 and would drop
-        # every sub-share holding -- a silent omission that the divergence gate
-        # would then read as "the venue says we hold nothing". Paginated for the
-        # same reason: the default limit is 100, and a truncated page is not an
-        # empty portfolio either.
-        url = (
-            f"{DATA_API_BASE}/positions?user={funder}"
-            f"&sizeThreshold=0&limit={POSITIONS_PAGE_SIZE}&offset={offset}"
-        )
+        # filter_amount=0 (v2) or sizeThreshold=0 (v1) because the endpoint
+        # defaults to 1 and would drop every sub-share holding -- a silent omission
+        # that the divergence gate would then read as "the venue says we hold nothing".
+        # Paginated for the same reason: the default limit is 100, and a truncated
+        # page is not an empty portfolio either.
+        if use_v2:
+            url = f"{DATA_API_BASE}/v2/positions?user={funder}&filter_amount=0&limit={POSITIONS_PAGE_SIZE}"
+            if cursor:
+                url += f"&cursor={cursor}"
+        else:
+            url = (
+                f"{DATA_API_BASE}/positions?user={funder}"
+                f"&sizeThreshold=0&limit={POSITIONS_PAGE_SIZE}&offset={offset}"
+            )
         req = urllib.request.Request(url, headers={"User-Agent": "spread-hunter"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
 
-        rows = payload or []
+        is_v2_envelope = isinstance(payload, dict) and "data" in payload
+        if is_v2_envelope:
+            rows = payload.get("data") or []
+            pagination = payload.get("pagination") or {}
+            next_cursor = pagination.get("next_cursor")
+            cursor = str(next_cursor) if next_cursor else None
+        elif isinstance(payload, list):
+            rows = payload
+            cursor = None
+        else:
+            rows = []
+
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -219,12 +237,16 @@ def fetch_positions(funder: str, timeout: float = 10.0) -> dict[str, float]:
             if not token:
                 continue
             try:
-                positions[token] = float(row.get("size", 0.0) or 0.0)
+                positions[token] = float(row.get("size", 0.0) or row.get("total_size", 0.0) or row.get("current_size", 0.0) or 0.0)
             except (TypeError, ValueError):
                 continue
 
-        if len(rows) < POSITIONS_PAGE_SIZE:
-            break
+        if is_v2_envelope:
+            if not cursor or len(rows) < POSITIONS_PAGE_SIZE:
+                break
+        else:
+            if len(rows) < POSITIONS_PAGE_SIZE:
+                break
         offset += POSITIONS_PAGE_SIZE
 
     return positions
@@ -241,20 +263,38 @@ def fetch_token_balances(funder: str, up_token_id: str, down_token_id: str,
     read earns the right to say so.
     """
     balances: dict[str, float] = {}
+    cursor: Optional[str] = None
     offset = 0
+    use_v2 = True
     try:
         while True:
-            url = (
-                f"{DATA_API_BASE}/positions?user={funder}"
-                f"&sizeThreshold=0&limit={POSITIONS_PAGE_SIZE}&offset={offset}"
-            )
+            if use_v2:
+                url = f"{DATA_API_BASE}/v2/positions?user={funder}&filter_amount=0&limit={POSITIONS_PAGE_SIZE}"
+                if cursor:
+                    url += f"&cursor={cursor}"
+            else:
+                url = (
+                    f"{DATA_API_BASE}/positions?user={funder}"
+                    f"&sizeThreshold=0&limit={POSITIONS_PAGE_SIZE}&offset={offset}"
+                )
             req = urllib.request.Request(url, headers={"User-Agent": "spread-hunter"})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
-            if not isinstance(payload, list):
+            is_v2_envelope = isinstance(payload, dict) and "data" in payload
+            if is_v2_envelope:
+                rows = payload.get("data")
+                if not isinstance(rows, list):
+                    raise ExposureUnavailable(f"token balance read data is {type(rows).__name__}, not a list")
+                pagination = payload.get("pagination") or {}
+                next_cursor = pagination.get("next_cursor")
+                cursor = str(next_cursor) if next_cursor else None
+            elif isinstance(payload, list):
+                rows = payload
+                cursor = None
+            else:
                 raise ExposureUnavailable(
-                    f"token balance read returned {type(payload).__name__}, not a list")
-            for row in payload:
+                    f"token balance read returned {type(payload).__name__}, not a list or v2 page")
+            for row in rows:
                 if not isinstance(row, dict):
                     raise ExposureUnavailable(
                         f"token balance row is {type(row).__name__}, not an object")
@@ -263,12 +303,16 @@ def fetch_token_balances(funder: str, up_token_id: str, down_token_id: str,
                 if not token:
                     raise ExposureUnavailable("token balance row carries no token id")
                 try:
-                    balances[token] = float(row.get("size", 0.0) or 0.0)
+                    balances[token] = float(row.get("size", 0.0) or row.get("total_size", 0.0) or row.get("current_size", 0.0) or 0.0)
                 except (TypeError, ValueError) as exc:
                     raise ExposureUnavailable(
                         f"token balance size for {token!r} is not numeric") from exc
-            if len(payload) < POSITIONS_PAGE_SIZE:
-                break
+            if is_v2_envelope:
+                if not cursor or len(rows) < POSITIONS_PAGE_SIZE:
+                    break
+            else:
+                if len(rows) < POSITIONS_PAGE_SIZE:
+                    break
             offset += POSITIONS_PAGE_SIZE
     except ExposureUnavailable:
         raise

@@ -97,6 +97,7 @@ from core_brain.merge_pairs import (
     USDC_E_CONTRACT,
     ZERO_BYTES32,
     encode_merge_positions,
+    encode_v2_merge,
     encode_redeem_positions,
     get_collection_id,
     get_position_id,
@@ -1542,13 +1543,11 @@ def merge(condition_id: str,
           parent_collection_id: str = ZERO_BYTES32,
           force: bool = False,
           neg_risk: bool | None = None,
-          live: bool = True) -> None:
+          live: bool = True,
+          version: str = "v1") -> None:
     """Gasless merge of full outcome sets (UP + DOWN) back into collateral.
 
-    `neg_risk` decides which contract the call goes to: a negative-risk market
-    merges through Polymarket's NegRisk collateral adapter, everything else on
-    the CTF. Left as None it is read from the venue, and a read that fails
-    refuses the merge rather than guessing a target that would revert.
+    Supports Protocol V2 Router merges as well as legacy CTF / NegRisk merges.
     """
     if index_sets is None:
         index_sets = [1, 2]
@@ -1578,13 +1577,13 @@ def merge(condition_id: str,
     # is reported as deferred rather than refused: the check that protects the
     # money happens where the money is spent.
     routing_deferred = False
-    if neg_risk is None:
+    if neg_risk is None and str(version).lower() != "v2":
         if live:
             neg_risk = resolve_neg_risk(condition_id)
         else:
             routing_deferred = True
     try:
-        call_target = merge_target(neg_risk)
+        call_target = merge_target(neg_risk, version=version)
     except ValueError:
         call_target = None
 
@@ -1595,13 +1594,16 @@ def merge(condition_id: str,
         from eth_account import Account
         signer = Account.from_key(key).address
 
-    call_data = encode_merge_positions(
-        collateral_token=collateral,
-        parent_collection_id=parent_collection_id,
-        condition_id=condition_id,
-        index_sets=index_sets,
-        amount=amount_base_units,
-    )
+    if str(version).lower() == "v2":
+        call_data = encode_v2_merge(condition_id, amount_base_units)
+    else:
+        call_data = encode_merge_positions(
+            collateral_token=collateral,
+            parent_collection_id=parent_collection_id,
+            condition_id=condition_id,
+            index_sets=index_sets,
+            amount=amount_base_units,
+        )
 
     denom = get_payout_denominator(condition_id)
     if denom is None:
