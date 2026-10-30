@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import time
 import threading
@@ -2068,6 +2069,51 @@ class AgedOutMarketStateCache:
         return (float(end_ts) - float(lead_sec) - now_s) > self._skip_margin_sec
 
 
+#: The `reason` of the fresh-entry block a cap bail-out writes. It carries the
+#: `hard_stop` prefix `order_registry.is_hard_stop_mark` keys on, so the #796
+#: lockout floor, its timed release and the publication gate all apply to it
+#: unchanged -- one mechanism, not a second cooldown next to it.
+PAIR_CAP_BAILOUT_BLOCK_REASON = "hard_stop_pair_cap_bailout"
+
+
+def _block_fresh_entries_after_cap_bailout(registry: OrderRegistry,
+                                          condition_id: str, cfg,
+                                          now_s: float) -> None:
+    """Close the market to fresh entries once a cap bail-out has sold the leg.
+
+    A bail-out sells the leg, not the opportunity. moe/live-251029 re-quoted the
+    same market 14 seconds after the first bail-out and again 6 seconds after
+    the second: one unfilled hedge became four entries and -1.60 on a single
+    market whose price was walking away from both sides.
+
+    The mark is the one both readers already honour: the visit skip for a
+    market with no lifecycle row (`_is_awaiting_requalification`) and
+    `_enforce_entry_gate` for a market whose row survived, which keeps the
+    managed pair's hedges and merges while dropping fresh submits.
+
+    A zero (or unreadable) lockout writes nothing: floor off is the pre-#796
+    behaviour, where the exit alone decides.
+    """
+    raw = getattr(cfg, "bot_risk_hard_stop_entry_lockout_sec", None)
+    if raw is None:
+        from core_brain.config import DEFAULT_HARD_STOP_LOCKOUT_SEC
+        raw = DEFAULT_HARD_STOP_LOCKOUT_SEC
+    try:
+        lockout_sec = float(raw)
+    except (TypeError, ValueError):
+        lockout_sec = 0.0
+    if not (math.isfinite(lockout_sec) and lockout_sec > 0):
+        return
+    try:
+        registry.mark_hard_stop_block(
+            condition_id, PAIR_CAP_BAILOUT_BLOCK_REASON, int(now_s * 1000))
+    except Exception as exc:
+        # Best-effort: the exit already happened, and a failed block must never
+        # turn a booked close into an error the caller retries.
+        log.warning("cap-bailout entry block failed for %s: %s",
+                    condition_id, exc)
+
+
 def _pair_cap_hedge_bailout(
     client,
     registry: OrderRegistry,
@@ -2144,6 +2190,13 @@ def _pair_cap_hedge_bailout(
         unreachable_for_sec=round(age_s, 3),
         opposing_best_ask=opposing_ask,
     )
+    # Only a sale reopens the market to the next quote. A refused, held or
+    # dry-run route leaves the leg managed, and its own retry owns the next
+    # attempt -- blocking here would strand the inventory instead of the
+    # market.
+    if bailout.get("action") == "exited":
+        _block_fresh_entries_after_cap_bailout(
+            registry, position.condition_id, cfg, now_s)
     return bailout
 
 
