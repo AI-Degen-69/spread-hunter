@@ -81,10 +81,10 @@ def test_wide_book_trial_falls_back_to_shipped_for_display(monkeypatch, caplog):
         cfg = core_config.load(for_display=True)
 
     assert cfg.bot_quote_wide_book_trial is None
-    assert cfg.bot_quote_book_max_spread_cents == MakerConfig.bot_quote_book_max_spread_cents
+    assert cfg.bot_quote_book_max_spread_usd == MakerConfig.bot_quote_book_max_spread_usd
     # The picking bar degrades with the gate (#572): the page shows the shipped
     # contract, never a trial value the process it describes cannot act on.
-    assert cfg.filter_common_spread_max_cents == MakerConfig().filter_common_spread_max_cents == 0.0205
+    assert cfg.filter_common_spread_max_usd == MakerConfig().filter_common_spread_max_usd == 0.0205
     assert "BOT_QUOTE_WIDE_BOOK_TRIAL ignored" in caplog.text
 
 
@@ -94,7 +94,7 @@ def test_clean_environment_is_unaffected_by_the_flag():
     display = core_config.load(for_display=True)
 
     assert plain.bot_pos_price_max_pair_cost_usd == display.bot_pos_price_max_pair_cost_usd
-    assert plain.bot_quote_book_max_spread_cents == display.bot_quote_book_max_spread_cents
+    assert plain.bot_quote_book_max_spread_usd == display.bot_quote_book_max_spread_usd
 
 
 def test_kpi_module_imports_with_an_inherited_trial_knob(monkeypatch):
@@ -160,7 +160,7 @@ def test_retained_neighbors_still_declared():
     }
     expected_scoring = {
         "filter_common_vol_min_top3_depth_usd",
-        # `filter_common_spread_max_cents` is derived (a property) since #572, so
+        # `filter_common_spread_max_usd` is derived (a property) since #572, so
         # the declared scoring knob to guard is the share it derives from.
         "filter_std_spread_share_pct",
     }

@@ -47,14 +47,17 @@ class MakerConfig:
     # between the book midpoint and our resting quote. Prices are dollars on the
     # 0-1 scale; the env value is cents. The quoting engine refuses or skips a
     # quote outside the window and clamps the dynamic offset to it. It is NOT a
-    # filter on which markets we quote -- `filter_common_spread_max_cents`
+    # filter on which markets we quote -- `filter_common_spread_max_usd`
     # (2.05c) is the wide-book rejection bar (see CONSTRAINTS.md). The two
     # shipped defaults are deliberate: 0.15 for the engine, 0.045 for the
     # picker, whose copy the ranker does not gate on; both loaders read the
     # same variable the same way.
     bot_quote_book_max_spread_from_mid: float = 0.15
     bot_pos_price_max_pair_cost_usd: float = 0.99
-    bot_quote_book_max_spread_cents: float = 0.06
+    # USD on the 0-1 price scale -- `0.06` is a six-cent bid-ask spread. Named
+    # `_usd` since #883; a `_cents` suffix that held dollars was the 100x
+    # footgun #872 and #883 exist to remove.
+    bot_quote_book_max_spread_usd: float = 0.06
 
     # =========================================================================
     # SCOPE 1: MARKET FILTERING (MARKET SCREENER)
@@ -160,8 +163,10 @@ class MakerConfig:
     bot_quote_alloc_couple_min_usd: float = 10.0
     bot_quote_waive_attenuation_below_floor_on: bool = True
     bot_quote_require_two_sided_when_flat_on: bool = True
-    bot_quote_price_band_min_cents: float = 0.10
-    bot_quote_price_band_max_cents: float = 0.90
+    # USD on the 0-1 price scale -- the band is 10c to 90c, not 0.10c to 0.90c.
+    # Named `_usd` since #883; every reader compares it to a venue price.
+    bot_quote_price_band_min_usd: float = 0.10
+    bot_quote_price_band_max_usd: float = 0.90
     bot_quote_window_max_pct: float = 0.40
     bot_quote_gate_price_band_on: bool = True
     bot_quote_gate_quote_window_on: bool = True
@@ -287,18 +292,18 @@ class MakerConfig:
     # DERIVED VALUE
     # =========================================================================
     @property
-    def filter_common_spread_max_cents(self) -> float:
+    def filter_common_spread_max_usd(self) -> float:
         """The picking bar: the live gate times the picking share (#572).
 
-        Read-only, and a price FRACTION rather than whole cents -- the same
-        convention `bot_quote_price_band_min_cents` (0.10) and
-        `bot_quote_spread_static_offset_cents` (0.020) already use. One
-        derivation, so the rehearsal trial pass-through and the six-decimal
-        rounding stay in one place.
+        Read-only, and USD on the 0-1 price scale (`0.0205` is 2.05c), so the
+        name states the unit its readers need -- the dashboard multiplies by
+        100 to print it as cents. Same scale as `bot_quote_price_band_min_usd`
+        (0.10). One derivation, so the rehearsal trial pass-through and the
+        six-decimal rounding stay in one place.
         """
         if self.bot_quote_wide_book_trial is not None:
             return self.bot_quote_wide_book_trial
-        return round(self.bot_quote_book_max_spread_cents * self.filter_std_spread_share_pct, 6)
+        return round(self.bot_quote_book_max_spread_usd * self.filter_std_spread_share_pct, 6)
 
     @property
     def tau_cancel_sec(self) -> float:
@@ -368,7 +373,7 @@ class MakerConfig:
                                        var_name="BOT_QUOTE_WIDE_BOOK_TRIAL")
         if wide is not None and wide > 0:
             kw["bot_quote_wide_book_trial"] = wide
-            kw["bot_quote_book_max_spread_cents"] = wide
+            kw["bot_quote_book_max_spread_usd"] = wide
             window = kw.get("bot_quote_book_max_spread_from_mid",
                             cls.bot_quote_book_max_spread_from_mid)
             kw["bot_quote_book_max_spread_from_mid"] = max(window, wide)
@@ -805,10 +810,10 @@ def resolve_wide_book_trial(raw: str, *, for_display: bool = False, var_name: st
         if for_display:
             logging.getLogger(__name__).warning(
                 f"{var_name} ignored for a display-only config load "
-                "(this process is not a rehearsal); shipped bot_quote_book_max_spread_cents stands.")
+                "(this process is not a rehearsal); shipped bot_quote_book_max_spread_usd stands.")
             return None
         raise ValueError(
-            f"{var_name} widens bot_quote_book_max_spread_cents, the gate that "
+            f"{var_name} widens bot_quote_book_max_spread_usd, the gate that "
             "refuses a book where a fill may leave a leg that cannot be "
             "closed. It applies only in a process that has declared itself "
             "unable to place an order: core_brain.shadow_run, whose client "

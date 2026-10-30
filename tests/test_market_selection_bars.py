@@ -128,8 +128,8 @@ def test_a_thin_leg_refuses_the_pair_even_when_the_other_leg_is_deep():
 
 
 def test_the_permanent_spread_bar_is_two_point_zero_five_cents():
-    assert ScoringConfig().filter_common_spread_max_cents == 0.0205
-    assert MakerConfig().filter_common_spread_max_cents == 0.0205
+    assert ScoringConfig().filter_common_spread_max_usd == 0.0205
+    assert MakerConfig().filter_common_spread_max_usd == 0.0205
 
 
 def test_the_picker_bar_is_a_share_of_the_live_gate():
@@ -137,22 +137,22 @@ def test_the_picker_bar_is_a_share_of_the_live_gate():
     gate times a documented share -- not a second absolute that can be edited
     out of step with the gate it has to stay under."""
     for cfg in (ScoringConfig(), MakerConfig()):
-        assert cfg.bot_quote_book_max_spread_cents == 0.06
+        assert cfg.bot_quote_book_max_spread_usd == 0.06
         assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
-        assert cfg.filter_common_spread_max_cents == round(
-            cfg.bot_quote_book_max_spread_cents * cfg.filter_std_spread_share_pct, 6) == 0.0205
+        assert cfg.filter_common_spread_max_usd == round(
+            cfg.bot_quote_book_max_spread_usd * cfg.filter_std_spread_share_pct, 6) == 0.0205
 
 
 def test_moving_the_live_gate_moves_the_picker_bar():
     """Raising the gate raises the picking limit with it, and nothing else has
     to be found and edited."""
     for cls in (ScoringConfig, MakerConfig):
-        broad = cls(bot_quote_book_max_spread_cents=0.30)
-        assert broad.filter_common_spread_max_cents == round(0.30 * broad.filter_std_spread_share_pct, 6)
-        assert broad.filter_common_spread_max_cents == 0.1025
+        broad = cls(bot_quote_book_max_spread_usd=0.30)
+        assert broad.filter_common_spread_max_usd == round(0.30 * broad.filter_std_spread_share_pct, 6)
+        assert broad.filter_common_spread_max_usd == 0.1025
 
         # The share's one escape hatch: pick exactly as wide as the gate.
-        assert cls(filter_std_spread_share_pct=1.0).filter_common_spread_max_cents == 0.06
+        assert cls(filter_std_spread_share_pct=1.0).filter_common_spread_max_usd == 0.06
 
 
 def test_the_picker_bar_is_derived_not_settable():
@@ -162,7 +162,7 @@ def test_the_picker_bar_is_derived_not_settable():
 
     for cls in (ScoringConfig, MakerConfig):
         with pytest.raises(TypeError):
-            cls(filter_common_spread_max_cents=0.05)
+            cls(filter_common_spread_max_usd=0.05)
 
 
 def test_the_filter_markets_spread_bar_matches_config():
@@ -185,7 +185,7 @@ def test_moving_the_live_gate_moves_the_selector_fallback(monkeypatch):
     book = ({0.49: 20_000.0}, {0.52: 20_000.0})
     assert not selector.book_allowed(*book)[0]
 
-    monkeypatch.setattr(scoring_config.MakerConfig, "bot_quote_book_max_spread_cents", 0.12)
+    monkeypatch.setattr(scoring_config.MakerConfig, "bot_quote_book_max_spread_usd", 0.12)
     try:
         reloaded = importlib.reload(selector)
         ok, reason, _, spread = reloaded.book_allowed(*book)
@@ -216,7 +216,7 @@ def test_book_allowed_default_spread_gate_boundary():
 # --- #652: the derived picking cap ------------------------------------------
 #
 # The cap used to be reachable under two names (the alias and the canonical
-# `filter_common_spread_max_cents`). #732 deleted the alias, so the only name
+# `filter_common_spread_max_usd`). #732 deleted the alias, so the only name
 # left is the canonical one and the "both names hold one number" test it
 # needed went with it; `test_the_permanent_spread_bar_is_two_point_zero_five_cents`
 # still pins the number itself.
@@ -224,8 +224,8 @@ def test_book_allowed_default_spread_gate_boundary():
 
 def test_the_canonical_picking_bar_name_follows_the_live_gate_and_the_trial():
     for cls in (ScoringConfig, MakerConfig):
-        assert cls(bot_quote_book_max_spread_cents=0.30).filter_common_spread_max_cents == 0.1025
-        assert cls(bot_quote_wide_book_trial=0.15).filter_common_spread_max_cents == 0.15
+        assert cls(bot_quote_book_max_spread_usd=0.30).filter_common_spread_max_usd == 0.1025
+        assert cls(bot_quote_wide_book_trial=0.15).filter_common_spread_max_usd == 0.15
 
 
 def test_the_canonical_picking_bar_name_is_derived_not_settable():
@@ -234,11 +234,11 @@ def test_the_canonical_picking_bar_name_is_derived_not_settable():
 
     for cls in (ScoringConfig, MakerConfig):
         with pytest.raises(TypeError):
-            cls(filter_common_spread_max_cents=0.05)
+            cls(filter_common_spread_max_usd=0.05)
 
         cfg = cls()
         with pytest.raises(AttributeError):
-            cfg.filter_common_spread_max_cents = 0.05
+            cfg.filter_common_spread_max_usd = 0.05
 
 
 def test_the_canonical_picking_bar_name_is_not_a_stored_field():
@@ -246,7 +246,7 @@ def test_the_canonical_picking_bar_name_is_not_a_stored_field():
     import dataclasses
 
     for cls in (ScoringConfig, MakerConfig):
-        assert "filter_common_spread_max_cents" not in {
+        assert "filter_common_spread_max_usd" not in {
             f.name for f in dataclasses.fields(cls)}
 
 

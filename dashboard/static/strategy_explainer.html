@@ -616,10 +616,10 @@
               <td><strong>Top-3 Level Depth Floor</strong>: Refuses books with top-3 bid depth &le; $500 on either leg to guarantee safe exit liquidity.</td>
             </tr>
             <tr>
-              <td><code>filter_common_spread_max_cents</code></td>
+              <td><code>filter_common_spread_max_usd</code></td>
               <td><code>2.05¢</code></td>
               <td><span style="color:var(--text-muted)">Derived</span></td>
-              <td><strong>Derived Picking Spread Cap</strong>: Derived as <code>bot_quote_book_max_spread_cents * 41/120</code> (2.05¢); ensures bot only picks tight touches.</td>
+              <td><strong>Derived Picking Spread Cap</strong>: Derived as <code>bot_quote_book_max_spread_usd * 41/120</code> (2.05¢); ensures bot only picks tight touches.</td>
             </tr>
             <tr>
               <td><code>filter_std_queue_max_clear_min</code></td>
@@ -712,13 +712,13 @@
               <td>Minimum capital allocation floor required to engage a new candidate market.</td>
             </tr>
             <tr>
-              <td><code>bot_quote_price_band_min_cents</code></td>
+              <td><code>bot_quote_price_band_min_usd</code></td>
               <td><code>$0.10</code></td>
               <td>Pricing Band</td>
               <td><strong>Lower Probability Bound</strong>: Rejects bids below 10¢ where adverse selection risk spikes.</td>
             </tr>
             <tr>
-              <td><code>bot_quote_price_band_max_cents</code></td>
+              <td><code>bot_quote_price_band_max_usd</code></td>
               <td><code>$0.90</code></td>
               <td>Pricing Band</td>
               <td><strong>Upper Probability Bound</strong>: Rejects bids above 90¢ where spread capture margin is negligible.</td>
@@ -766,7 +766,7 @@
               <td>Venue minimum order size protocol floor. Refuses smaller orders.</td>
             </tr>
             <tr>
-              <td><code>bot_quote_book_max_spread_cents</code></td>
+              <td><code>bot_quote_book_max_spread_usd</code></td>
               <td><code>$0.06</code></td>
               <td>Book Health</td>
               <td>Continuous gate: rejects books with bid-ask spread wider than 6¢ to prevent illiquid quotes.</td>

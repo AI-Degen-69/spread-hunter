@@ -265,6 +265,35 @@ def test_hybrid_preset_sets_the_renamed_dead_band(monkeypatch):
 RETIRED_MONEY_NAMES = frozenset({DEAD_BAND_RETIRED, DROPS_RETIRED})
 
 
+def test_price_band_and_book_spread_state_their_unit_and_keep_their_values():
+    """#883: three `_cents` names held dollars, and the derived bar inherited one.
+
+    The rename is the whole change, so the values are the assertion that nothing
+    moved: 10c / 90c for the band, a 6c book spread, and the 41/120 picking bar
+    at 2.05c.
+    """
+    import dataclasses
+
+    cfg = core_config.MakerConfig()
+    assert cfg.bot_quote_price_band_min_usd == 0.10
+    assert cfg.bot_quote_price_band_max_usd == 0.90
+    assert cfg.bot_quote_book_max_spread_usd == 0.06
+    assert cfg.filter_common_spread_max_usd == 0.0205
+    assert cfg.filter_common_spread_max_usd == round(
+        cfg.bot_quote_book_max_spread_usd * cfg.filter_std_spread_share_pct, 6)
+
+    declared = {f.name for f in dataclasses.fields(core_config.MakerConfig)}
+    for retired in (
+        "bot_quote_price_band_min_cents",
+        "bot_quote_price_band_max_cents",
+        "bot_quote_book_max_spread_cents",
+    ):
+        assert retired not in declared, f"{retired} still holds dollars under a cents name"
+    # Derived since #572: a field would be a second number a caller could pass.
+    assert "filter_common_spread_max_cents" not in declared
+    assert "filter_common_spread_max_usd" not in declared
+
+
 def test_arms_files_use_whole_cents_and_no_retired_money_names(monkeypatch, caplog):
     """Every shipped arm must match the unit its key advertises.
 

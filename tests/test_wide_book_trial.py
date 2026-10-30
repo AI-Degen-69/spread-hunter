@@ -139,8 +139,8 @@ def test_load_moves_all_three_ceilings_together(mod, monkeypatch):
     cfg = _load_with(mod, monkeypatch, BOT_QUOTE_WIDE_BOOK_TRIAL="0.15")
 
     assert cfg.bot_quote_wide_book_trial == 0.15
-    assert cfg.bot_quote_book_max_spread_cents == 0.15
-    assert cfg.filter_common_spread_max_cents == 0.15
+    assert cfg.bot_quote_book_max_spread_usd == 0.15
+    assert cfg.filter_common_spread_max_usd == 0.15
     assert cfg.bot_quote_book_max_spread_from_mid == 0.15
 
 
@@ -149,8 +149,8 @@ def test_load_leaves_the_ceilings_alone_when_unset(mod, monkeypatch):
     cfg = _load_with(mod, monkeypatch)
 
     assert cfg.bot_quote_wide_book_trial is None
-    assert cfg.bot_quote_book_max_spread_cents == 0.06
-    assert cfg.filter_common_spread_max_cents == 0.0205
+    assert cfg.bot_quote_book_max_spread_usd == 0.06
+    assert cfg.filter_common_spread_max_usd == 0.0205
     # Both copies of the field are the same thing: the quote window, the
     # largest distance from the book midpoint our resting quote may sit at.
     # The two shipped defaults are deliberate -- 0.15 for the engine, 0.045
@@ -168,11 +168,11 @@ def test_a_narrow_trial_never_tightens_the_quote_window(mod, monkeypatch):
 
     cfg = _load_with(mod, monkeypatch, BOT_QUOTE_WIDE_BOOK_TRIAL="0.02")
 
-    assert cfg.bot_quote_book_max_spread_cents == 0.02
+    assert cfg.bot_quote_book_max_spread_usd == 0.02
     # A narrow trial narrows the picking bar with it -- the trial is one
     # decision, and the picker reads the same knob (#572). What it must NOT do
     # is shrink the quote window below the shipped value.
-    assert cfg.filter_common_spread_max_cents == 0.02
+    assert cfg.filter_common_spread_max_usd == 0.02
     expected = 0.15 if mod is core_config else 0.045
     assert cfg.bot_quote_book_max_spread_from_mid == expected
 
@@ -185,7 +185,7 @@ def test_an_unpinned_override_is_what_the_trial_compares_against(mod, monkeypatc
 
     wider = _load_with(mod, monkeypatch, BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID="22",
                        BOT_QUOTE_WIDE_BOOK_TRIAL="0.12")
-    assert wider.bot_quote_book_max_spread_cents == 0.12
+    assert wider.bot_quote_book_max_spread_usd == 0.12
     assert wider.bot_quote_book_max_spread_from_mid == 0.22
 
     # The trial still wins when it is the wider of the two.
@@ -220,7 +220,7 @@ def test_trial_widens_a_venue_supplied_window_rather_than_replacing_it(
                      BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID="20",
                      BOT_QUOTE_WIDE_BOOK_TRIAL="0.15")
 
-    assert cfg.bot_quote_book_max_spread_cents == 0.15
+    assert cfg.bot_quote_book_max_spread_usd == 0.15
     assert cfg.bot_quote_book_max_spread_from_mid == 0.20
 
 
@@ -258,7 +258,7 @@ def test_a_13c_book_clears_the_ranker_bar_and_the_live_gate_under_the_trial(
 
     ok, reason, _, spread = book_allowed(
         {0.435: 5000.0}, {0.565: 5000.0}, min_depth_usd=1000.0,
-        max_spread=cfg.filter_common_spread_max_cents)
+        max_spread=cfg.filter_common_spread_max_usd)
     assert spread == 0.13
     assert ok, reason
 

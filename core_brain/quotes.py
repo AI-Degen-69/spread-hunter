@@ -95,7 +95,7 @@ def _in_band(cfg: MakerConfig, price: float) -> bool:
     """Is this a price worth resting at? 54% of powerwinner's volume is here."""
     if not cfg.bot_quote_gate_price_band_on:
         return True
-    return cfg.bot_quote_price_band_min_cents <= price <= cfg.bot_quote_price_band_max_cents
+    return cfg.bot_quote_price_band_min_usd <= price <= cfg.bot_quote_price_band_max_usd
 
 
 def mid_price(best_bid: Optional[float], best_ask: Optional[float]) -> Optional[float]:
@@ -361,7 +361,7 @@ def _decide_quotes_from_mid(
             continue
 
         # DECIDED MARKET — no room to work. The band is the CONFIGURED price
-        # band (bot_quote_price_band_min_cents/bot_quote_price_band_max_cents), not a hardcoded pair of edges: the
+        # band (bot_quote_price_band_min_usd/bot_quote_price_band_max_usd), not a hardcoded pair of edges: the
         # operator's directive is 10c-90c, and a second hardcoded band here
         # silently ignored whatever the config said (#582). Mirrors
         # scripts/filter_markets.py's decided check.
@@ -374,10 +374,10 @@ def _decide_quotes_from_mid(
         # A live series is NOT exempt (time-of-game purge, #597): game progress
         # says nothing about when this market decides, so the band applies to
         # every market alike.
-        if mid <= cfg.bot_quote_price_band_min_cents or mid >= cfg.bot_quote_price_band_max_cents:
+        if mid <= cfg.bot_quote_price_band_min_usd or mid >= cfg.bot_quote_price_band_max_usd:
             blocked.append(
                 f"{side}: mid {mid:.3f} outside "
-                f"[{cfg.bot_quote_price_band_min_cents:.2f},{cfg.bot_quote_price_band_max_cents:.2f}] -- decided market")
+                f"[{cfg.bot_quote_price_band_min_usd:.2f},{cfg.bot_quote_price_band_max_usd:.2f}] -- decided market")
             continue
 
         # INVENTORY SKEW. Push the heavy side away from mid and pull the light
@@ -628,9 +628,9 @@ def _decide_lifecycle_escalation(
         return [], f"{side}: no two-sided book"
     # The band, no series exemption (time-of-game purge, #597). The band is
     # the CONFIGURED price band, not a hardcoded pair of edges (#582).
-    if mid <= cfg.bot_quote_price_band_min_cents or mid >= cfg.bot_quote_price_band_max_cents:
+    if mid <= cfg.bot_quote_price_band_min_usd or mid >= cfg.bot_quote_price_band_max_usd:
         return [], (f"{side}: mid {mid:.3f} outside "
-                    f"[{cfg.bot_quote_price_band_min_cents:.2f},{cfg.bot_quote_price_band_max_cents:.2f}] -- decided market")
+                    f"[{cfg.bot_quote_price_band_min_usd:.2f},{cfg.bot_quote_price_band_max_usd:.2f}] -- decided market")
 
     blocked = risk.hard_block(
         cfg,
@@ -764,7 +764,7 @@ def decide_quotes(
                 continue
             if not _in_band(cfg, p):
                 blocked.append(f"{side}: {p:.2f} outside band "
-                               f"{cfg.bot_quote_price_band_min_cents:.2f}-{cfg.bot_quote_price_band_max_cents:.2f}")
+                               f"{cfg.bot_quote_price_band_min_usd:.2f}-{cfg.bot_quote_price_band_max_usd:.2f}")
                 continue
             if side == "UP":
                 p_up = p
