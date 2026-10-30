@@ -107,7 +107,7 @@ Depends on: — (riskiest first)
   exact/round-suffix/ambiguous/unknown arm, child round-trip incl. balanced
   preset → max `4`, memo invalidation on mtime change).
 
-### T2 — Endpoint wiring + three Queue Gate cards · M · `[Backend/Logic]`
+### [x] T2 — Endpoint wiring + three Queue Gate cards · M · `[Backend/Logic]`
 Depends on: T1
 
 - `dashboard/server.py` `get_parameters()` (`:5547`): accept

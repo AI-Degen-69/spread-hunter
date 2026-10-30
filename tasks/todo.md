@@ -8,7 +8,7 @@ Branch: `i866/fix-strategy-parameters-panel-shows-global-config`
 - [ ] Parent runner: timeout + rebuild both MakerConfigs + `_NoScoringConfig` path + thread-safe memo (configs only)
 - [ ] `tests/test_arm_params.py` green (catalog, matches, round-trip incl. balanced → 4, memo)
 
-## T2 — Endpoint wiring + three Queue Gate cards `[Backend/Logic]` M
+## T2 — Endpoint wiring + three Queue Gate cards `[Backend/Logic]` M · done
 - [ ] `get_parameters()`: `?arm=&plan=&tourney=`, no-arm path untouched, `arm_context` / `arm_error`
 - [ ] Three queue cards incl. flow-window `1800s` + ignored-override note + shipped-defaults basis
 - [ ] Endpoint `?arm=` tests green (`4¢` vs `20¢`, error path, no-arm identical)
