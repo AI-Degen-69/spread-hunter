@@ -37,14 +37,39 @@ CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 # deprecated as of 2026-07-14 and is deliberately NOT used here.
 NEG_RISK_CTF_COLLATERAL_ADAPTER = "0xadA2005600Dec949baf300f4C6120000bDB6eAab"
 
+# Protocol V2 Contracts (Polygon Mainnet)
+ROUTER_V2_CONTRACT = "0x12121212006e4CD160D18e3f00711DA5c3372600"
+POSITION_MANAGER_V2_CONTRACT = "0x006F54F7f9A22e0000CC2AB60031000000ae9fEF"
+EXCHANGE_V3_CONTRACT = "0xe3333700cA9d93003F00f0F71f8515005F6c00Aa"
+PUSD_CONTRACT = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
 
-def merge_target(neg_risk: bool | None) -> str:
+
+def encode_v2_merge(condition_id: str, amount: int) -> str:
+    """Encode ABI call for Router.merge(bytes31 conditionId, uint256 amount).
+    Selector: 0x5b63685e
+    """
+    selector = "5b63685e"
+    clean = condition_id.lower().replace("0x", "").strip()
+    if len(clean) == 64:
+        if clean[-2:] != "00":
+            raise ValueError("32-byte V2 condition IDs must end with 00")
+        clean = clean[:62]
+    if len(clean) != 62 or any(c not in "0123456789abcdef" for c in clean):
+        raise ValueError("V2 condition ID must contain 62 hexadecimal characters")
+    # bytes31 is 62 hex chars, left-aligned in a 32-byte word (64 hex chars ending in 00)
+    p_cond = clean.ljust(64, "0")
+    p_amount = hex(int(amount))[2:].zfill(64)
+    return "0x" + selector + p_cond + p_amount
+
+
+def merge_target(neg_risk: bool | None, version: str = "v1") -> str:
     """Which contract a merge for this market must be sent to.
 
-    `None` is not `False`. A market whose negRisk flag could not be read is a
-    market whose routing is unknown, and guessing has exactly one failure mode:
-    a reverted merge on a pair we are already holding. Raise instead.
+    Protocol V2 markets merge through Router (0x12121212006e4CD160D18e3f00711DA5c3372600).
+    V1 markets merge through NegRisk collateral adapter if neg_risk else CTF.
     """
+    if str(version).lower() == "v2":
+        return ROUTER_V2_CONTRACT
     if neg_risk is None:
         raise ValueError(
             "cannot route a merge without the market's negRisk flag: a negRisk "

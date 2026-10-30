@@ -307,13 +307,17 @@ def parse_candidate(row: Any) -> Optional[Candidate]:
     if extract_uma_resolution_status(row):
         return None
 
-    raw_tokens = row.get("clobTokenIds")
+    version = str(row.get("version") or "v1").lower()
+    if version == "v2":
+        raw_tokens = row.get("positionIds") or row.get("clobTokenIds")
+    else:
+        raw_tokens = row.get("clobTokenIds") or row.get("positionIds")
     tokens: Sequence[Any]
     if isinstance(raw_tokens, str):
         try:
             tokens = json.loads(raw_tokens)
         except (ValueError, TypeError):
-            log.debug("unparseable clobTokenIds on %s", condition_id)
+            log.debug("unparseable token IDs on %s", condition_id)
             return None
     elif isinstance(raw_tokens, list):
         tokens = raw_tokens

@@ -435,7 +435,7 @@ def _default_trades_fn(horizons: tuple[float, ...] = MARKOUT_HORIZONS):
     import urllib.parse
     import urllib.request
 
-    base = "https://data-api.polymarket.com/trades"
+    base = "https://data-api.polymarket.com/v2/trades"
     headers = {"User-Agent": "spread-hunter"}
     span = max(horizons) if horizons else 0.0
 
@@ -446,26 +446,51 @@ def _default_trades_fn(horizons: tuple[float, ...] = MARKOUT_HORIZONS):
         rows: list = []
         if not condition_id:
             return rows
+        cursor: Optional[str] = None
+        seen_cursors: set[str] = set()
+        use_v2 = "/v2" in base
         for page_index in range(TAPE_MAX_PAGES):
-            params = {"market": condition_id, "limit": TAPE_PAGE_SIZE,
-                      "offset": page_index * TAPE_PAGE_SIZE}
+            if use_v2:
+                params = {"condition": condition_id, "limit": TAPE_PAGE_SIZE}
+                if cursor:
+                    params["cursor"] = cursor
+            else:
+                params = {"market": condition_id, "limit": TAPE_PAGE_SIZE,
+                          "offset": page_index * TAPE_PAGE_SIZE}
             url = f"{base}?{urllib.parse.urlencode(params)}"
             try:
                 req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=5) as resp:
-                    page = _json.loads(resp.read().decode("utf-8"))
+                    payload = _json.loads(resp.read().decode("utf-8"))
             except (urllib.error.URLError, OSError, ValueError) as exc:
                 log.debug("tape page %d failed for %s: %r", page_index, token_id, exc)
                 break
-            if not isinstance(page, list) or not page:
+            if isinstance(payload, dict) and "data" in payload:
+                page = payload.get("data") or []
+                pagination = payload.get("pagination") or {}
+                next_cursor = pagination.get("next_cursor")
+                cursor = str(next_cursor) if next_cursor else None
+            elif isinstance(payload, list):
+                page = payload
+                cursor = None
+            else:
+                break
+            if not page:
                 break
             # Only this token's prints. The complement leg trades in the same
             # market and at the mirror price; averaging the two would produce a
             # reference neither leg ever printed at.
             rows.extend(t for t in page
-                        if isinstance(t, dict) and str(t.get("asset")) == str(token_id))
-            if len(page) < TAPE_PAGE_SIZE:
-                break
+                        if isinstance(t, dict) and str(t.get("token_id") or t.get("asset")) == str(token_id))
+            if use_v2:
+                if not cursor:
+                    break
+                if cursor in seen_cursors:
+                    break
+                seen_cursors.add(cursor)
+            else:
+                if len(page) < TAPE_PAGE_SIZE:
+                    break
 
             oldest = None
             for trade in page:

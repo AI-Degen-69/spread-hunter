@@ -133,11 +133,18 @@ def paged_tape(monkeypatch):
             params = dict(params or {})
             calls.append(params)
             lim = int(params.get("limit", 500)) or 500
-            idx = int(params.get("offset", 0)) // lim
-            to = params.get("takerOnly", "default")
+            cursor = params.get("cursor")
+            if cursor is not None and str(cursor).isdigit():
+                idx = int(cursor) // lim
+            else:
+                idx = int(params.get("offset", 0)) // lim
+            to = params.get("takerOnly") if "takerOnly" in params else params.get("taker_only", "default")
             rows = pages.get((idx, to), pages.get(idx, []))
             if isinstance(rows, Exception):
                 raise rows
+            if "/v2" in str(url):
+                next_cursor = str((idx + 1) * lim) if len(rows) >= lim else None
+                return _FakeResponse({"data": rows, "pagination": {"next_cursor": next_cursor}})
             return _FakeResponse(rows)
 
         monkeypatch.setattr(markets._SESSION, "get", _get, raising=False)
@@ -185,7 +192,7 @@ def test_second_page_is_read_when_first_page_has_no_overlap(paged_tape):
 
     # Assert -- both pages count, the walk ends on the empty third page.
     assert out == {"tok": {0.26: 12.0}}
-    walk1 = [p.get("offset", 0) for p in paged_tape.calls if "takerOnly" not in p]
+    walk1 = [int(p.get("cursor", p.get("offset", 0))) for p in paged_tape.calls if "takerOnly" not in p and "taker_only" not in p]
     assert walk1 == [0, 1, 2]
 
 
@@ -204,7 +211,7 @@ def test_pagination_stops_at_first_all_seen_page(paged_tape):
     out = markets.recent_trades("0xcond", seen, limit=2)
 
     # Assert -- page 2 never requested; the all-seen page adds nothing.
-    walk1 = [p.get("offset", 0) for p in paged_tape.calls if "takerOnly" not in p]
+    walk1 = [int(p.get("cursor", p.get("offset", 0))) for p in paged_tape.calls if "takerOnly" not in p and "taker_only" not in p]
     assert walk1 == [0, 2]
     assert out == {"tok": {0.26: 5.0}}
 
@@ -219,7 +226,7 @@ def test_pagination_respects_the_page_bound(paged_tape):
     out = markets.recent_trades("0xcond", set(), limit=1)
 
     # Assert
-    walk1 = [p.get("offset", 0) for p in paged_tape.calls if "takerOnly" not in p]
+    walk1 = [int(p.get("cursor", p.get("offset", 0))) for p in paged_tape.calls if "takerOnly" not in p and "taker_only" not in p]
     assert walk1 == list(range(bound))
     assert out == {"tok": {0.26: float(bound)}}
 
@@ -246,7 +253,7 @@ def test_maker_buy_absent_from_taker_view_counts(paged_tape):
 
     # Assert
     assert out == {"tok": {0.26: 30.0}}
-    assert any(p.get("takerOnly") is False for p in paged_tape.calls)
+    assert any(p.get("takerOnly") is False or p.get("taker_only") is False for p in paged_tape.calls)
 
 
 def test_maker_sell_absent_from_taker_view_does_not_count(paged_tape):
@@ -326,7 +333,7 @@ def test_taker_buy_mode_never_opens_the_maker_walk(paged_tape):
 
     # Assert
     assert out == {"tok": {0.26: 93.0}}
-    assert not any(p.get("takerOnly") is False for p in paged_tape.calls)
+    assert not any(p.get("takerOnly") is False or p.get("taker_only") is False for p in paged_tape.calls)
 
 
 def test_non_list_tape_response_is_unavailable_not_empty(tape):
