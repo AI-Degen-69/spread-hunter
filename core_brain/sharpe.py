@@ -53,7 +53,7 @@ def sharpe_ratio(
             f"risk_free_rate_annual={risk_free_rate_annual!r} is not finite"
         )
     if not isinstance(bucket_seconds, int) or isinstance(bucket_seconds, bool):
-        raise ValueError(f"bucket_seconds={bucket_seconds!r} must be an int")
+        raise TypeError(f"bucket_seconds={bucket_seconds!r} must be an int")
     if bucket_seconds <= 0:
         raise ValueError(f"bucket_seconds={bucket_seconds!r} must be positive")
 

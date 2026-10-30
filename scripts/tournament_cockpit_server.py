@@ -47,7 +47,7 @@ from core_brain.shadow_run import (  # noqa: E402
     latest_tournament_record,
     parse_tournament_run_dir_name,
 )
-from core_brain.sharpe import (  # noqa: E402
+from core_brain.sharpe import (
     SHARPE_FORMULA_TEXT,
     risk_free_rate_from_env,
     sharpe_ratio,
@@ -1675,7 +1675,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         <span class="m-label">2. Sharpe Ratio Gate</span>
         <span class="badge {decision_gates['gates']['sharpe']['badge']}" id="dg-gate-sharpe-badge">{decision_gates['gates']['sharpe']['status']}</span>
       </div>
-      <div class="m-val tabular" id="dg-gate-sharpe-val">{decision_gates['gates']['sharpe']['current']:.2f} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; {decision_gates['gates']['sharpe']['target']:.2f})</span></div>
+      <div class="m-val tabular" id="dg-gate-sharpe-val">{(f"{decision_gates['gates']['sharpe']['current']:.2f}" if decision_gates['gates']['sharpe']['status'] != 'NO_DATA' else 'NO_DATA')} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; {decision_gates['gates']['sharpe']['target']:.2f})</span></div>
       <div class="m-sub" id="dg-gate-sharpe-sub">{decision_gates['gates']['sharpe']['text']}</div>
     </div>
 
