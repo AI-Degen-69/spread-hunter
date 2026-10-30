@@ -119,7 +119,7 @@ Depends on: T1
   field equals the helper on the same closes and `None` renders `NO_DATA`.
 - Verify: `python -m pytest -q tests/test_tournament_cockpit_decision_gates.py tests/test_shadow_tournament.py tests/test_tournament_cockpit_funnel.py`
 
-### T3 — Re-evaluate script switch · S · `[Backend/Logic]`
+### [x] T3 — Re-evaluate script switch · S · `[Backend/Logic]`
 Depends on: T1
 
 - `scripts/reevaluate_tournament_run.py`: `risk_gates["sharpe"]` from `sharpe_ratio`
@@ -129,7 +129,7 @@ Depends on: T1
   `sharpe_ratio: None` → gate `False`.
 - Verify: `python -m pytest -q tests/test_reevaluate_tournament_run.py`
 
-### T4 — Gates and handoff · S · `[Testing]`
+### [x] T4 — Gates and handoff · S · `[Testing]`
 Depends on: T1, T2, T3
 
 - Grep gate: no production `sharpe_proxy` remains
