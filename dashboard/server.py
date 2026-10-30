@@ -6749,6 +6749,13 @@ def get_parameters(registry=None, arm: str | None = None,
     return JSONResponse(body)
 
 
+@app.get("/api/parameter-arms")
+def get_parameter_arms():
+    """Catalog for the Strategy Parameters arm picker: newest plan per issue."""
+    from dashboard import arm_params as _arm_params
+    return JSONResponse({"arms": _arm_params.list_plan_catalog()})
+
+
 @app.get("/api/active-markets")
 def get_active_markets():
     """Return graduated and currently quoted markets with order depth and PnL.

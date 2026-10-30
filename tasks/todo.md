@@ -13,7 +13,7 @@ Branch: `i866/fix-strategy-parameters-panel-shows-global-config`
 - [ ] Three queue cards incl. flow-window `1800s` + ignored-override note + shipped-defaults basis
 - [ ] Endpoint `?arm=` tests green (`4¢` vs `20¢`, error path, no-arm identical)
 
-## T3 — Arm picker dropdown + labels `[Design/UI]` S
+## T3 — Arm picker dropdown + labels `[Design/UI]` S · done
 - [ ] `#params-panel` header select + identity line + global-default label
 - [ ] `app.js` param fetch + stale-response guard + context/error render
 - [ ] Browser gate (balanced arm `4¢`, cleared `20¢`, bogus arm error)

@@ -4939,3 +4939,24 @@ def test_parameters_arm_flow_override_note(client, tmp_path, monkeypatch):
     flow = _param_by_name(data, "bot_order_queue_flow_window_sec")
     assert flow["raw_value"] == 1800.0
     assert "ignored" in flow["action"]
+
+
+def test_parameter_arms_catalog_lists_fixture_arms(client, arm_tournament_root):
+    """The arm picker catalog exposes plan identity and arm names."""
+    data = client.get("/api/parameter-arms").json()
+    assert len(data["arms"]) == 1
+    entry = data["arms"][0]
+    assert entry["issue"] == 866
+    assert entry["arms"] == ["control", "balanced-only"]
+    assert entry["record_error"] is None
+    assert entry["plan_key"].startswith("i866-r1_")
+
+
+def test_parameter_arms_catalog_empty_without_plans(client, tmp_path, monkeypatch):
+    """No launched plans means an empty picker, not an error."""
+    import dashboard.arm_params as arm_params
+    root = tmp_path / "tournaments"
+    root.mkdir()
+    monkeypatch.setattr(arm_params, "default_tournament_root", lambda: root)
+    data = client.get("/api/parameter-arms").json()
+    assert data == {"arms": []}

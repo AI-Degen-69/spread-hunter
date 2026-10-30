@@ -124,7 +124,7 @@ Depends on: T1
   response byte-identical to before. Run:
   `python -m pytest -q tests/test_dashboard_server.py -k "parameters"`.
 
-### T3 — Arm picker dropdown + labels · S · `[Design/UI]`
+### [x] T3 — Arm picker dropdown + labels · S · `[Design/UI]`
 Depends on: T2
 
 - `dashboard/static/index.html` `#params-panel` header: arm `<select>`

@@ -237,6 +237,13 @@
             <button class="param-scope-btn" data-scope="bot_engine" type="button">BOT ENGINE (LIVE &amp; SHADOW)</button>
             <button class="param-scope-btn" data-scope="market_screener" type="button">MARKET FILTER</button>
           </div>
+          <div style="display:flex;align-items:center;gap:6px" role="group" aria-label="Parameters arm filter">
+            <label for="param-arm-select" style="font-size:11px;color:var(--text-muted)">ARM</label>
+            <select id="param-arm-select" aria-label="Show effective parameters for arm">
+              <option value="">Global default</option>
+            </select>
+          </div>
+          <div id="param-arm-identity" style="font-size:11px;color:var(--text-muted);width:100%">Global default &mdash; shipped base config</div>
           <div class="analytics-ci-buttons" style="margin:0" role="group" aria-label="Parameters view mode">
             <button id="param-view-grid-btn" type="button">CARDS VIEW</button>
             <button id="param-view-table-btn" class="active" type="button">TABLE VIEW</button>
