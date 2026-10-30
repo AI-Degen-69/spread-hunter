@@ -60,3 +60,9 @@ runs only).
   unannualised (trades are not daily observations). Different statistic, same
   family name — do not interchange them.
 - No trader use; the execution path never reads this module.
+
+## Open follow-ups (noticed, not touching in #875)
+
+| ID | Candidate | Evidence | Status |
+| --- | --- | --- | --- |
+| N1 | `matrix_rationale` arm narratives still quote old proxy numbers (e.g. "Sharpe 4.67") | `scripts/tournament_cockpit_server.py` matrix rationale copy | open |

@@ -346,6 +346,7 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
             "port": record_arm.get("dash_port", 0),
             "db": record_arm.get("db_path", ""),
             "run_id": record_arm.get("run_id", ""),
+            "env": record_arm.get("env", entry.get("env", {})),
             "color": entry.get("color") or _PLAN_ARM_COLORS[i % len(_PLAN_ARM_COLORS)],
             "desc": entry.get("desc") or entry.get("profile") or "",
             "worst_catalyst": _note_text(entry.get("worst_catalyst")),
@@ -506,6 +507,7 @@ def resolve_tournament_arms_with_status(
                 "db": pa.get("db_path", base["db"]),
                 "run_id": pa.get("run_id", base["run_id"]),
                 "port": pa.get("dash_port", base["port"]),
+                "env": pa.get("env", base.get("env", {})),
             })
         else:
             merged.append(base)
@@ -835,7 +837,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
     balanced_only_arm = next((a for a in arms_data if "balanced-only" in a.get("name", "") or a.get("name") == "balanced-mid"), None)
     
     if test_arm is None and ok_arms:
-        test_arm = max(ok_arms, key=lambda x: (x.get("sharpe_ratio") or 0.0))
+        test_arm = max(ok_arms, key=lambda x: (x.get("sharpe_ratio") is not None, x.get("sharpe_ratio") or 0.0))
     elif test_arm is None and arms_data:
         test_arm = arms_data[0]
         
@@ -976,7 +978,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
         "target_n": target_n,
         "gates": {
             "power": {"status": gate_power_status, "badge": gate_power_badge, "text": gate_power_text, "current": test_n, "target": target_n},
-            "sharpe": {"status": gate_sharpe_status, "badge": gate_sharpe_badge, "text": gate_sharpe_text, "current": observed_sharpe if observed_sharpe is not None else 0.0, "target": target_sharpe},
+            "sharpe": {"status": gate_sharpe_status, "badge": gate_sharpe_badge, "text": gate_sharpe_text, "current": observed_sharpe, "target": target_sharpe},
             "pf": {"status": gate_pf_status, "badge": gate_pf_badge, "text": gate_pf_text, "current": observed_pf, "target": target_pf},
             "mdd": {"status": gate_mdd_status, "badge": gate_mdd_badge, "text": gate_mdd_text, "current": observed_mdd, "target": target_mdd},
             "starvation": {"status": gate_starv_status, "badge": gate_starv_badge, "text": gate_starv_text},
@@ -2194,7 +2196,7 @@ function renderAll() {{
     hbSet('hb-merge', hbPct(hbArm.merge_rate));
     hbSet('hb-aggmerge', hbPct(state.agg_merge_rate));
     hbSet('hb-sharpe', hbArm.sharpe_ratio != null ? Number(hbArm.sharpe_ratio).toFixed(2) : 'NO_DATA');
-    const hbBest = [...hbArms].sort((a, b) => (b.sharpe_ratio ?? 0) - (a.sharpe_ratio ?? 0))[0];
+    const hbBest = [...hbArms].sort((a, b) => (b.sharpe_ratio ?? -Infinity) - (a.sharpe_ratio ?? -Infinity))[0];
     if (hbBest) {{
       hbSet('hb-bestsharpe', hbBest.sharpe_ratio != null ? Number(hbBest.sharpe_ratio).toFixed(2) : 'NO_DATA');
       hbSet('hb-bestsharpearm', hbBest.label || hbBest.name);
@@ -2620,7 +2622,7 @@ function renderDgArmCards(arms) {{
         '<div>PnL: <strong class="tabular ' + pnlCls + '">' + pnlStr + '</strong></div>' +
         '<div>Quoted: <strong class="tabular">' + quoted.toLocaleString() + '</strong></div>' +
         '<div>Trades: <strong class="tabular">' + (a.trades_count || 0).toLocaleString() + '</strong></div>' +
-        '<div>Sharpe Ratio: <strong class="tabular">' + (a.sharpe_ratio != null ? a.sharpe_ratio.toFixed(2) : 'NO_DATA') + '</strong></div>' +
+        '<div title="{html.escape(SHARPE_FORMULA_TEXT)}">Sharpe Ratio: <strong class="tabular">' + (a.sharpe_ratio != null ? a.sharpe_ratio.toFixed(2) : 'NO_DATA') + '</strong></div>' +
         '<div>Max DD: <strong class="tabular">$' + (a.max_drawdown || 0).toFixed(2) + '</strong></div>' +
         '<div>Merge Rate: <strong class="tabular">' + (a.merge_rate || 0).toFixed(1) + '%</strong></div>' +
       '</div>' +
@@ -2660,7 +2662,7 @@ function updateDecisionGatesUI() {{
       const val = document.getElementById('dg-gate-' + g + '-val');
       if (val) {{
         if (g === 'power') val.innerHTML = (gate.current || 0).toLocaleString() + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">/ ' + (gate.target || 2117).toLocaleString() + '</span>';
-        else if (g === 'sharpe') val.innerHTML = (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.7).toFixed(2) + ')</span>';
+        else if (g === 'sharpe') val.innerHTML = (gate.status === 'NO_DATA' || gate.current == null ? 'NO_DATA' : Number(gate.current).toFixed(2)) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.7).toFixed(2) + ')</span>';
         else if (g === 'pf') val.innerHTML = (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.5).toFixed(2) + ')</span>';
         else if (g === 'mdd') val.innerHTML = '$' + (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &lt; $' + (gate.target || 4.0).toFixed(2) + ')</span>';
       }}

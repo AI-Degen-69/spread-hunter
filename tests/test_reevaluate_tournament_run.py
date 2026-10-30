@@ -341,7 +341,7 @@ def test_uncomputable_sample_size_renders_not_computable():
                 "stop_exits": 0,
                 "merge_rate_pct": 0.0,
                 "total_pnl": 0.0,
-                "sharpe_ratio": 0.0,
+                "sharpe_ratio": None,
                 "profit_factor": 0.0,
                 "max_drawdown": 0.0,
                 "n_required_002": None,
@@ -360,6 +360,7 @@ def test_uncomputable_sample_size_renders_not_computable():
     }
     rendered = render_text(ev)
     assert "not computable" in rendered
+    assert "NO_DATA" in rendered
 
 
 def test_render_text_shows_no_data_for_unmeasurable_sharpe():

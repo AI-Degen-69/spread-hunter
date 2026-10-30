@@ -846,9 +846,14 @@ def test_hybrid_blueprint_shows_the_champion_values_in_all_three_places():
     assert "Performance Forecast" in blueprint
     assert "Failure Modes &amp; Stress Scenarios" in blueprint
     for figure in (
-        "80% - 84%", "82% - 86%", "&gt; 10.5", "+$0.38 - +$0.46", "&gt; 8.0", "&gt; +$30.00",
+        "80% - 84%", "82% - 86%", "+$0.38 - +$0.46", "&gt; 8.0", "&gt; +$30.00",
     ):
         assert figure in blueprint, f"forecast figure {figure} is missing"
+    # #875 replaces the old per-trade proxy figure with the honest convention:
+    # nothing is measured yet, so the card must say so instead of quoting > 10.5.
+    assert "&gt; 10.5" not in blueprint, "old proxy Sharpe figure is back"
+    assert "to be measured" in blueprint
+    assert "Annualised time-series Sharpe" in blueprint
     for scenario in (
         "Flash Directional Breakout",
         "Liquidity Vacuum / Book Desertion",
