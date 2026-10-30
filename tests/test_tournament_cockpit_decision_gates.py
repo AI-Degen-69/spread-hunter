@@ -37,7 +37,7 @@ def test_compute_decision_gates_underpowered_provisional_pass():
             "status": "ok",
             "trades_count": 190,
             "total_pnl": 12.0,
-            "sharpe_proxy": 1.80,
+            "sharpe_ratio": 1.80,
             "profit_factor": 1.90,
             "max_drawdown": 5.20,
             "merge_rate": 70.0,
@@ -47,7 +47,7 @@ def test_compute_decision_gates_underpowered_provisional_pass():
             "status": "ok",
             "trades_count": 185,
             "total_pnl": 18.0,
-            "sharpe_proxy": 2.30,
+            "sharpe_ratio": 2.30,
             "profit_factor": 2.20,
             "max_drawdown": 4.10,
             "merge_rate": 78.0,
@@ -57,7 +57,7 @@ def test_compute_decision_gates_underpowered_provisional_pass():
             "status": "ok",
             "trades_count": 170,
             "total_pnl": 9.5,
-            "sharpe_proxy": 2.75,
+            "sharpe_ratio": 2.75,
             "profit_factor": 2.60,
             "max_drawdown": 2.10,
             "merge_rate": 81.0,
@@ -67,7 +67,7 @@ def test_compute_decision_gates_underpowered_provisional_pass():
             "status": "ok",
             "trades_count": 180,
             "total_pnl": 21.0,
-            "sharpe_proxy": 2.85,
+            "sharpe_ratio": 2.85,
             "profit_factor": 2.90,
             "max_drawdown": 1.85,
             "merge_rate": 84.5,
@@ -90,7 +90,7 @@ def test_compute_decision_gates_volume_starvation():
             "status": "ok",
             "trades_count": 200,
             "total_pnl": 20.0,
-            "sharpe_proxy": 2.4,
+            "sharpe_ratio": 2.4,
             "profit_factor": 2.1,
             "max_drawdown": 3.5,
         },
@@ -99,7 +99,7 @@ def test_compute_decision_gates_volume_starvation():
             "status": "ok",
             "trades_count": 90,  # 55% drop > 40% threshold
             "total_pnl": 5.0,
-            "sharpe_proxy": 2.8,
+            "sharpe_ratio": 2.8,
             "profit_factor": 2.6,
             "max_drawdown": 1.5,
         },
@@ -117,7 +117,7 @@ def test_compute_decision_gates_fully_powered_winner():
             "status": "ok",
             "trades_count": 2200,
             "total_pnl": 120.0,
-            "sharpe_proxy": 2.4,
+            "sharpe_ratio": 2.4,
             "profit_factor": 2.1,
             "max_drawdown": 3.8,
         },
@@ -126,7 +126,7 @@ def test_compute_decision_gates_fully_powered_winner():
             "status": "ok",
             "trades_count": 2150,  # N >= 2,117
             "total_pnl": 180.0,
-            "sharpe_proxy": 2.95,
+            "sharpe_ratio": 2.95,
             "profit_factor": 3.10,
             "max_drawdown": 2.20,
         },
@@ -151,7 +151,7 @@ def test_generate_cockpit_html_contains_decision_gates_tab():
     assert 'id="tab-decision-gates"' in html
     assert 'Critical Decision Gates (5-Second Skim)' in html
     assert '1. Sample Power Gate' in html
-    assert '2. Sharpe Proxy Gate' in html
+    assert '2. Sharpe Ratio Gate' in html
     assert '3. Profit Factor Gate' in html
     assert '4. Max Drawdown Gate' in html
     assert '5. Volume Starvation Check' in html

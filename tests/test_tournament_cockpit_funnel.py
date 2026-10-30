@@ -155,11 +155,12 @@ def test_cockpit_table_drops_issue_port_fills_columns():
         assert gone not in html, f"{gone} column should be removed"
     # #608 KPI swap repinned this list: Quoted Orders (volume, no quality
     # signal) and Merged-legs (Merge % already carries the ratio) are gone;
-    # the already-computed Sharpe / Profit Factor / VaR95 / MC P5 are promoted.
+    # the already-computed Sharpe Ratio / Profit Factor / VaR95 / MC P5 are
+    # promoted (#875: time-series Sharpe Ratio, not the retired proxy).
     for gone in ("<th>Quoted Orders</th>", "<th>Merged (legs \u00d72)</th>"):
         assert gone not in html, f"{gone} column should be removed"
     for kept in (
-        "<th>Sharpe</th>",
+        "Sharpe Ratio</th>",
         "<th>Profit Factor</th>",
         "<th>VaR95</th>",
         "<th>MC P5</th>",
@@ -167,6 +168,76 @@ def test_cockpit_table_drops_issue_port_fills_columns():
         "<th>Stop-Loss Exits</th>",
     ):
         assert kept in html, f"{kept} funnel column should be present"
+
+
+def test_cockpit_sharpe_ratio_uses_arm_bankroll_and_full_series(tmp_path, monkeypatch):
+    """#875 wiring: equity from unthinned closes on the arm bankroll.
+
+    Closes +10/-10/+10 on a $100 arm bankroll mirror the helper's known
+    series shape; the math itself is pinned in tests/test_sharpe_ratio.py,
+    here we pin the wiring (full-resolution equity, capital basis label).
+    """
+    from core_brain.sharpe import sharpe_ratio as _helper
+
+    db = tmp_path / "sharpe.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(SCHEMA)
+    conn.execute(f"INSERT INTO queue_marks (ts, run_id) VALUES (0.0, '{RUN_ID}')")
+    conn.execute(f"INSERT INTO queue_marks (ts, run_id) VALUES (900.0, '{RUN_ID}')")
+    for ts, pnl in ((0.0, 10.0), (300.0, -10.0), (600.0, 10.0), (900.0, 0.0)):
+        conn.execute(
+            "INSERT INTO closes (ts, method, realized_pnl, run_id) "
+            f"VALUES ({ts}, 'shadow_merge', {pnl}, '{RUN_ID}')"
+        )
+    conn.commit()
+    conn.close()
+    arm = analyze_arm_database({
+        "issue": 492,
+        "name": "sharpe-arm",
+        "label": "Sharpe Arm",
+        "port": 8997,
+        "db": str(db),
+        "run_id": RUN_ID,
+        "env": {"BOT_QUOTE_BANK_BASELINE_USD": "100"},
+    })
+    assert arm["status"] == "ok"
+    expected_points = [
+        (0.0, 100.0),
+        (0.0, 110.0),
+        (300.0, 100.0),
+        (600.0, 110.0),
+        (900.0, 110.0),
+    ]
+    assert arm["sharpe_ratio"] == round(_helper(expected_points), 2)
+    assert arm["sharpe_capital_basis"] == "arm_env"
+
+
+def test_cockpit_sharpe_ratio_none_without_trades_or_dispersion(tmp_path, monkeypatch):
+    """Unmeasurable equity renders NO_DATA, never a fabricated 0.0."""
+    db = tmp_path / "flat.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(SCHEMA)
+    conn.execute(f"INSERT INTO queue_marks (ts, run_id) VALUES (0.0, '{RUN_ID}')")
+    conn.execute(f"INSERT INTO queue_marks (ts, run_id) VALUES (600.0, '{RUN_ID}')")
+    for ts in (0.0, 300.0, 600.0):
+        conn.execute(
+            "INSERT INTO closes (ts, method, realized_pnl, run_id) "
+            f"VALUES ({ts}, 'shadow_merge', 0.0, '{RUN_ID}')"
+        )
+    conn.commit()
+    conn.close()
+    monkeypatch.delenv("BOT_QUOTE_BANK_BASELINE_USD", raising=False)
+    arm = analyze_arm_database({
+        "issue": 492,
+        "name": "flat-arm",
+        "label": "Flat Arm",
+        "port": 8996,
+        "db": str(db),
+        "run_id": RUN_ID,
+    })
+    assert arm["status"] == "ok"
+    assert arm["sharpe_ratio"] is None
+    assert arm["sharpe_capital_basis"] == "assumed_default"
 
 
 def test_cockpit_no_trades_returns_zero_funnel(tmp_path):

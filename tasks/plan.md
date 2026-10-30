@@ -1,177 +1,174 @@
-# Station II Plan — Issue #866: Arm-specific effective values in Strategy Parameters
+# Station II Plan — Issue #875: Correct Sharpe ratio convention (time-series)
 
-Branch: `i866/fix-strategy-parameters-panel-shows-global-config` | Issue: #866
+Branch: `i875/establish-correct-sharpe-ratio-convention` | Issue: #875
 
-- **Tier:** Standard (2–5 files: one new module + endpoint + two static files + tests; one architectural decision — child-process isolation).
-- **Task types:** Code (primary), Design/UI (arm picker dropdown + labels).
-- **Stack / runner:** Python 3, dashboard (Flask-style `dashboard/server.py`), vanilla JS (`dashboard/static/app.js`), `pytest` (`python -m pytest -q`).
+- **Tier:** Standard (new helper + cockpit + reevaluate + docs + tests; one architectural decision)
+- **Task types:** Code (primary), Testing, Docs, UX/Copy (cockpit label + tooltip)
+- **Stack / runner:** Python 3, `pytest` (`python -m pytest -q`)
 
 ---
 
 ## 1. The problem, in one line
 
-The Strategy Parameters panel always renders the global base config, so an
-operator comparing arms reads the wrong numbers (e.g. global 20¢ ceiling while
-the balanced arm actually runs 2–4¢).
+The cockpit calls `(mean_pnl / std_pnl × 10)` a Sharpe ratio:
 
-## 2. CodeRabbit intake (read once; Stations III–V need not reopen it)
+> `sharpe_proxy = (mean_pnl / std_pnl * 10.0) if std_pnl > 0.0 else 0.0`
+> (`scripts/tournament_cockpit_server.py:687`)
 
-Adopted: the task skeleton (catalog → child eval → endpoint + cards → picker);
-the non-trading child process running the real loaders with a worker-style env
-(only isolation that survives the dashboard's multi-threaded process); distinct
-error codes with no silent global fallback; the thread-safe memo keyed by
-(plan path, mtime, arm); dashboard-only verification (no worker launch).
-Borrowed test ideas: exact/ambiguous arm-match assertions, child-eval
-round-trip, endpoint `?arm=` returning 4¢, regression file
-`tests/test_dashboard_server.py`.
+That is a per-trade PnL ratio scaled by ten — not the Sharpe ratio the blueprint's
+`9.52` and the gates' `≥ 2.70` pretend it is. Two different metrics share one label.
 
-Rejected:
-- *Six phases with separate catalog/runner/memo tasks* — over-split; merged
-  into T1 (one module, one contract) per the simplicity rule.
-- *`?run_id=` as the arm selector* — the ticket's `?arm=` default stays;
-  `plan`/`tourney` are optional disambiguators, not replacements.
-- *Cockpit-to-Strategy deep links carrying plan+arm* — out of scope; the
-  in-panel dropdown meets acceptance alone (SPEC §2).
+## 2. Grounding: what the code actually gives us (verified, not assumed)
 
-Checked during planning instead of trusted (`[UNVERIFIED]` → verified):
-- Issue cites `dashboard/server.py:5291` — stale; `get_parameters` lives at
-  `:5547`, parameter list extends past `:6383` (verified by grep).
-- Issue names arm `balanced-queue5-flow5` — does not exist; repo has
-  `balanced-queue5` (i843, 4 arms) and `balanced-mid` / `queue-clear-5m`
-  (i799, 10 arms). Plan resolves any arm by name; no hardcoded arm.
-- Issue expects flow window `300` — the engine has no
-  `BOT_ORDER_QUEUE_FLOW_WINDOW_SEC` reader (`core_brain/config.py:415-433`
-  reads only the first two queue keys; field default `1800.0` at `:220`;
-  consumed at `trader_loop.py:1422`). T2 shows the true `1800s` with an
-  ignored-override note (needs no extra approval: showing `300` would be the
-  lie this issue exists to fix).
-- No `data/tournaments/` on disk right now — T4 verifies against a fixture
-  `plan.json` (or any existing record), never by launching workers.
+| Fact | Evidence |
+| --- | --- |
+| Unthinned closes exist before chart thinning | `analyze_arm_database` reads all `closes` rows `ORDER BY ts ASC` (`tournament_cockpit_server.py:573-579`); thinning to 60 points happens later (`:666-677`) |
+| Arm env overrides ride along in `cfg["env"]` | `reevaluate_tournament_run.py:175-182` builds `cfg` with `"env": arm.get("env", {})` |
+| `kpi.compute_trade_analytics` must NOT change | `kpi.py:579-585` explicitly rejects annualisation ("trades are not daily observations"); golden payload pins `sharpe_ratio: 0.6229353305576062`; ~10 test files assert it |
+| `_bounded_float(name, raw, lo, hi)` exists for the new setting | `core_brain/config.py:703` — import it, don't reimplement |
+| No `BOT_SHARPE_*` / `RISK_FREE` anywhere today | grep over `.env.example`, `core_brain/config.py`, `scoring/config.py` — empty |
+| No `docs/adr/`, no `CONTEXT.md` | `ls` fails — convention note goes to `docs/sharpe-ratio-convention.md` (new) |
+| `shadow_paired_runs` is NOT reachable from arm DBs | cockpit never queries it; paired runs use dedicated 2-arm stores (`paired_shadow.py:154+`), tournaments run 6 arms — **[UNVERIFIED]** whether any arm DB carries the table |
 
-## 3. Interface contract (locked before code)
+## 3. CodeRabbit intake (read once; Stations III–V need not reopen it)
 
-**Request:** `GET /api/parameters?arm=<name>&plan=<run-folder-key>&tourney=<id>`
-(all three optional; global path = no params, byte-identical to today).
+**Adopted:** the 3-part skeleton (helper → cockpit → reevaluate); 5-minute clock grid with
+carry-forward; 365-day annualisation; risk-free as yearly decimal ratio `0.0..1.0` with compound
+per-step conversion; thresholds kept as numbers in named constants flagged for review; setting read
+in the helper module so `config.py`/`.env.example` stay untouched; the exact known-series test
+values (100, 110, 99, 108.9 → returns +0.10, −0.10, +0.10).
 
-**Response additions:**
-```json
-{
-  "parameters": [ "...unchanged cards + 3 queue cards..." ],
-  "arm_context": {"plan_key": "<repo-relative run folder>", "issue": 843,
-                  "arm": "balanced-queue5", "source": "plan|tourney|newest"} | null,
-  "arm_error": {"code": "UNKNOWN_ARM", "message": "..."} // on failure only
-}
+**Rejected:**
+- *Paired-record capital fallback* (`shadow_paired_runs` lookup as first source) — no plumbing
+  carries a tournament DB into `analyze_arm_database(cfg)`; `cfg` has only the arm DB path.
+  Two-level fallback instead (arm env → cockpit default), basis published.
+- *Seven tasks / per-surface rewrites of `kpi.py` and dashboard tiles* — over-split and wrong:
+  `kpi.py` per-trade Sharpe is intentional and pinned; dashboard static binding just renders it.
+- *New `HUNTER_*` env alias* — no caller uses it; one name only.
+
+**Left `[UNVERIFIED]` for Build to check, not trust:** exact dashboard `get_parameters`-style card
+line numbers (none found — dashboard needs no change); whether `test_541_golden_payload.json`
+or cockpit HTML snapshot tests assert the old proxy digits (grep in T4).
+
+## 4. Interface contract (locked before code)
+
+**New module `core_brain/sharpe.py`:**
+
+```python
+def sharpe_ratio(points: list[tuple[float, float]],
+                 risk_free_rate_annual: float = 0.0,
+                 bucket_seconds: int = 300) -> float | None
+SHARPE_FORMULA_TEXT: str   # plain formula, reused by both surfaces' tooltips
+def risk_free_rate_from_env() -> float  # BOT_SHARPE_RISK_FREE_RATE, unset/blank → 0.0,
+                                        # via config._bounded_float, range 0.0..1.0
 ```
 
-**Resolution order:** explicit `plan` (confined under the tournament runs
-folder) → `tourney` via `latest_tournament_record(issue)` (+ newest-run
-override in `_resolve_plan_for_tourney_key`) → newest plan across issues.
-Arm match: exact first, then round-suffix-stripped only when exactly one arm
-matches.
+- `points` = `(epoch seconds, portfolio value in dollars)`; drop non-finite times/values and
+  values ≤ 0; sort stably by time; last wins on duplicate timestamps.
+- Grid from first point in `bucket_seconds` steps through first grid time ≥ last point;
+  carry last known value forward (quiet periods = zero-return steps).
+- Step return = `end/start − 1`; per-step risk-free = `(1 + annual)^(step/31_536_000) − 1`;
+  ratio = `mean(excess) / stdev_sample(excess) × √(31_536_000/step)` (n−1).
+- Return `None` (never `NaN`, never placeholder `0.0`) when: no valid points, < 2 step
+  returns, or zero spread. Callers render `None` as `NO_DATA`.
 
-**Three new cards** (keys = engine field names):
-| key | value source | note |
-| --- | --- | --- |
-| `bot_order_gate_queue_clear_on` | effective bool | — |
-| `bot_order_queue_max_clear_min` | effective float (`Xm`) | — |
-| `bot_order_queue_flow_window_sec` | effective float (`1800s`) | visible "recorded `300` ignored — no loader reads it" note when the plan records an override |
+**Cockpit payload:** field `sharpe_proxy` → `sharpe_ratio` (float | `None` → JSON `null`).
+All readers move in the same change: `analyze_arm_database`, `compute_decision_gates`,
+`generate_cockpit_html` (2 sites), `reevaluate_tournament_run.py` (gate, ranking key, display).
+Gates keep numbers, gain names: `SHARPE_TARGET = 2.70`, `SHARPE_MARGINAL = 2.20` + review flag.
 
-**Must not change:** engine arithmetic; loader signatures; launcher/cockpit;
-`data/orders.db`; saved `plan.json` files.
+**Capital base (2-level, published):** `sharpe_capital_basis ∈ {arm_env, assumed_default}` —
+arm `env["BOT_QUOTE_BANK_BASELINE_USD"]` first, else cockpit-process `config.load()` default.
+Equity points from **unthinned** close rows: opening point at `min(first_ts, first close)`,
+then `starting_money + running realized PnL` per close, closing point at `max(last_ts, last close)`.
 
-## 4. Tasks
+**Must not change:** `kpi.py` outputs and golden values; threshold numbers; past figures.
 
-### [x] T1 — Arm catalog + isolated child evaluation · M · `[Backend/Logic]`
-Depends on: — (riskiest first)
+## 5. Tasks
 
-- `dashboard/arm_params.py` (new, no cockpit imports): scan stamped run
-  folders with `plan.json` via `parse_tournament_run_dir_name()` from
-  `core_brain/shadow_run.py`; catalog = newest plan per issue (repo-relative
-  key, issue, run number, stamp, arm names). Resolve `(plan, tourney, arm)`
-  per §3; validate arm record (non-empty name, `env: dict[str,str]`,
-  optional `db_path`); distinct errors, never silent global fallback.
-- `__main__` entry point, run as `sys.executable -m dashboard.arm_params`:
-  build child env like `scripts/shadow_tournament.py` (copy parent, strip
-  `BOT_*`/`FILTER_*`, apply arm `env`, set `SPREAD_HUNTER_DB`); child calls
-  `declare_rehearsal()`, loads core (`load(for_display=True)`) + scoring
-  separately with per-loader error capture; strict JSON out
-  (`dataclasses.asdict` + `filter_common_spread_max_cents`, tuples→lists,
-  NaN/Inf = error). No trading, no `.env` load; note the shipped-defaults
-  basis in the response.
-- Parent runner: timeout, non-zero/invalid-JSON → `EVAL_FAILED` with readable
-  message; rebuild both `MakerConfig`s from declared fields only (restore
-  tuples); scoring failure → existing `_NoScoringConfig` path. Memo
-  (thread-safe, keyed plan-path + mtime + arm) caches configs only; cards
-  rebuilt per request; global path uncached.
-- Verify: new `tests/test_arm_params.py` (catalog from fixture plans,
-  exact/round-suffix/ambiguous/unknown arm, child round-trip incl. balanced
-  preset → max `4`, memo invalidation on mtime change).
+### [x] T1 — Shared helper + tests + convention note · M · `[Backend/Logic]`
+Depends on: —
 
-### [x] T2 — Endpoint wiring + three Queue Gate cards · M · `[Backend/Logic]`
+- `core_brain/sharpe.py` (new): implement the contract in §4 exactly. Import `_bounded_float`
+  from `core_brain.config` (verified at `config.py:703`); no edits to `config.py`.
+- `tests/test_sharpe_ratio.py` (new): every test name contains `sharpe`. Series 100, 110, 99,
+  108.9 at 0/300/600/900 s (returns +0.10, −0.10, +0.10; per-step ratio √3/6; hand calc in comment):
+  known-series ≈ `(√3/6) × √105120`; nonzero-rate `0.05` with compound per-step deduction;
+  irregular gap `(0,100)→(900,110)` carry-forward (returns 0,0,0.10); duplicate-timestamp +
+  shuffled input; invalid (`NaN`/`inf`/≤0) dropped; flat → `None`; single step → `None`;
+  empty/all-invalid → `None`; env unset/blank → `0.0`, `"0.05"` → `0.05`,
+  `"-0.01"`/`"1.5"`/`"abc"`/`"nan"` raise.
+- `docs/sharpe-ratio-convention.md` (new): formula, 5-min steps, carry-forward, 365-day scaling,
+  rate units + compound conversion, capital fallback + assumption warning, `None` cases,
+  short-sample/serial-dependence caveats, threshold-review flag (2.70/2.20 tuned for the proxy),
+  old-vs-new golden note, no live-rate / no backfill.
+- Verify: `python -m pytest -q tests/test_sharpe_ratio.py`
+
+### [x] T2 — Cockpit switch (analyzer + gates + UI) · L · `[Backend/Logic]` + `[UX/Copy]`
 Depends on: T1
 
-- `dashboard/server.py` `get_parameters()` (`:5547`): accept
-  `?arm=&plan=&tourney=`; no-arm → today's code path untouched; with-arm →
-  `arm_params` resolve + eval, attach `arm_context` / `arm_error`, build the
-  same card list from the effective configs (attribute access keeps working
-  because real `MakerConfig`s are rebuilt).
-- Add the three cards from §3 at the queue-gate subgroup; flow-window card
-  carries the ignored-override note. Response states the shipped-defaults
-  basis (child never loads `.env`).
-- Verify: `tests/test_dashboard_server.py` additions — `?arm=balanced-only`
-  (fixture plan) returns max-offset `4¢` + correct `arm_context`; unknown arm
-  returns `arm_error` and no parameters masquerading as arm values; no-arm
-  response byte-identical to before. Run:
-  `python -m pytest -q tests/test_dashboard_server.py -k "parameters"`.
+- `scripts/tournament_cockpit_server.py`: in `analyze_arm_database`, delete the proxy line
+  (`:686-687`); build equity points from unthinned rows per §4; call `sharpe_ratio()` with
+  `risk_free_rate_from_env()`; emit `sharpe_ratio` (+ `sharpe_capital_basis`), drop `sharpe_proxy`.
+  `compute_decision_gates`: read `sharpe_ratio`, keep `2.70`/`2.20` as named constants, `None` → `NO_DATA`.
+  HTML: `Sharpe:` → `Sharpe Ratio` with `title="{SHARPE_FORMULA_TEXT}"` at both card sites
+  (`~:1057`, `~:1086`); gate copy `Sharpe Proxy Gate` → `Sharpe Ratio Gate`.
+- Tests: update `tests/test_tournament_cockpit_decision_gates.py`,
+  `tests/test_tournament_cockpit_funnel.py`, `tests/test_shadow_tournament.py` fixtures/keys
+  (`sharpe_proxy` → `sharpe_ratio`); add one analyzer test on a temp arm DB asserting the new
+  field equals the helper on the same closes and `None` renders `NO_DATA`.
+- Verify: `python -m pytest -q tests/test_tournament_cockpit_decision_gates.py tests/test_shadow_tournament.py tests/test_tournament_cockpit_funnel.py`
 
-### [x] T3 — Arm picker dropdown + labels · S · `[Design/UI]`
-Depends on: T2
+### [x] T3 — Re-evaluate script switch · S · `[Backend/Logic]`
+Depends on: T1
 
-- `dashboard/static/index.html` `#params-panel` header: arm `<select>`
-  (grouped by tournament, populated from the catalog endpoint data) + identity
-  line (plan key + arm) + "Global default" label when unselected.
-- `dashboard/static/app.js` `renderParameters()`: fetch with arm/plan params,
-  monotonically-guarded against stale responses; `renderParametersView()`
-  renders `arm_context`/`arm_error` states without touching scope/view-mode
-  logic.
-- Verify: browser gate — open the dashboard, pick a balanced arm, confirm the
-  max-offset card reads `4¢` with plan+arm identity; clear the picker, confirm
-  `20¢` with the global-default label; pick a bogus arm (via console) and
-  confirm the structured error, not global values.
+- `scripts/reevaluate_tournament_run.py`: `risk_gates["sharpe"]` from `sharpe_ratio`
+  (`:190`); ranking key (`:267`) `sharpe_proxy` → `sharpe_ratio`; per-arm record (`:217`) and
+  table format (`:308-326,338`) renamed; golden text `S=Sharpe>=2.70` kept.
+- Tests: `tests/test_reevaluate_tournament_run.py` keys/fixtures renamed; one gate test with
+  `sharpe_ratio: None` → gate `False`.
+- Verify: `python -m pytest -q tests/test_reevaluate_tournament_run.py`
 
 ### [x] T4 — Gates and handoff · S · `[Testing]`
 Depends on: T1, T2, T3
 
-- Targeted runs: `tests/test_arm_params.py` + `tests/test_dashboard_server.py
-  -k parameters` in one pass; grep gate confirming no `os.environ` swap was
-  introduced in `dashboard/` and no loader/launcher file was touched.
+- Grep gate: no production `sharpe_proxy` remains
+  (`grep -rn sharpe_proxy scripts/ core_brain/ dashboard/ --include=*.py --include=*.js` → only
+  historical docs/comments); confirm `test_541_golden_payload.json` `sharpe_ratio: 0.6229…` untouched.
+- Targeted suites from T1–T3 plus kpi regression in one run:
+  `test_sharpe_ratio + decision_gates + reevaluate + shadow_tournament + trade_analytics + kpi`.
+- Issue acceptance: `python -m pytest -q tests/ -k "sharpe"` passes.
 - Operator "How to verify" block (hands-on only, no pytest) + PR body.
 
-**Checkpoints:** after T1 (child round-trip green), after T2 (endpoint `?arm=`
-green), after T3 (browser gate), after T4 (targeted run + handoff). In `auto`
-mode these are one-line reports.
+**Checkpoints:** after T1 (helper green), after T2 (cockpit card shows new ratio), after T3
+(reevaluate agrees), after T4 (targeted run + handoff). In `auto` mode these are one-line reports.
 
-## 5. Deliberately out of scope
+## 6. Deliberately out of scope
 
-- `?run_id=` selector; cockpit deep links; flow-window env reader
-  (`BOT_ORDER_QUEUE_FLOW_WINDOW_SEC` stays unread — T2 surfaces the truth
-  instead); `Decimal` money math; risk-ratio changes; `data/orders.db`.
+- Retuning the 2.70/2.20 gates — flagged for review on future runs, numbers unchanged here.
+- `kpi.compute_trade_analytics` per-trade Sharpe — intentional, pinned, untouched.
+- Dashboard tiles rendering `trade_analytics.sharpe_ratio` — same kpi meaning, no change.
+- `BOT_SHARPE_RISK_FREE_RATE` in `config.py`/`.env.example` — lives in `sharpe.py` this round.
+- Live risk-free rates; historical backfills; paired-record capital lookup (no plumbing).
 
-## 6. Open questions from the issue, answered from code
+## 7. Open questions from the issue, answered from code
 
-1. *"Load the plan, find the arm's env overrides, apply to a temp config"* —
-   answered: temp config = child process with worker-style env (T1), because
-   both loaders read process-wide `os.environ` (`core_brain/config.py:840`,
-   `scoring/config.py:154`) and the dashboard server is multi-threaded.
-2. *"Add missing queue gate parameters"* — answered: two have readers, the
-   flow window does not; all three cards ship, the third with an honesty note.
-3. *"Dropdown in panel header"* — answered: `#params-panel` header select (T3).
+1. *Risk-free rate?* — `0` default for USDC, configurable `BOT_SHARPE_RISK_FREE_RATE` (yearly
+   decimal ratio); issue allows exactly this.
+2. *Which series?* — unthinned close history inside `analyze_arm_database`, not the 60-point
+   chart `series` (same curve, full detail).
+3. *Do cockpit, dashboard, trader share one function?* — narrowed with evidence: cockpit +
+   reevaluate share the new helper; trader/dashboard kpi metric is a different, documented
+   statistic that stays.
+4. *Label?* — cockpit `Sharpe` → `Sharpe Ratio` + formula tooltip; dashboard tile already reads
+   `Sharpe & Sortino Ratio` and keeps its kpi meaning.
 
-## 7. Rejected proposals log
+## 8. Rejected proposals log
 
 | Proposal | Verdict | Why |
 | --- | --- | --- |
-| Swap `os.environ` under a lock in-process | Rejected | Dashboard is multi-threaded; other threads read the same env — the child is the only safe isolation |
-| Add env-map params to both loaders | Rejected | Changes the trading path the ticket puts out of scope; child reuses loaders untouched |
-| Show recorded `300` as the flow-window engine value | Rejected | No loader reads it; `trader_loop.py:1422` falls back to the `1800.0` field default — showing `300` repeats the exact lie being fixed |
-| Launch `reconcile_tournament_stack` workers to verify | Rejected | Real-money-adjacent worker launch for a dashboard-only change; verify against an existing/fixture `plan.json` + dashboard only |
+| Paired-record capital fallback first | Rejected | No tournament-DB path in `cfg`; arm DBs may lack the table — [UNVERIFIED], 2-level fallback instead |
+| Rewrite `kpi.py` per-trade Sharpe to the time-series formula | Rejected | Explicit no-annualisation rationale + golden pin + ~10 test files |
+| Keep payload key `sharpe_proxy` with new value | Rejected | Key would lie about its contents; rename + move readers atomically |
+| Retune gates to the new metric now | Deferred | Needs future-run data; numbers kept, review flagged |
+| `HUNTER_*` alias for the new setting | Rejected | No caller uses it; one name only |

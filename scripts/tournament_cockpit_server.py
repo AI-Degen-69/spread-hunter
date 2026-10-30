@@ -42,9 +42,15 @@ from core_brain.close_methods import (  # noqa: E402
     SETTLEMENT,
     SHADOW_MERGE_NOTE,
 )
+from core_brain.config import load as _load_config  # noqa: E402
 from core_brain.shadow_run import (  # noqa: E402
     latest_tournament_record,
     parse_tournament_run_dir_name,
+)
+from core_brain.sharpe import (
+    SHARPE_FORMULA_TEXT,
+    risk_free_rate_from_env,
+    sharpe_ratio,
 )
 
 I843_ARMS_FILE = ROOT / "configs" / "tournaments" / "i843-pair-test_arms.json"
@@ -340,6 +346,7 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
             "port": record_arm.get("dash_port", 0),
             "db": record_arm.get("db_path", ""),
             "run_id": record_arm.get("run_id", ""),
+            "env": record_arm.get("env", entry.get("env", {})),
             "color": entry.get("color") or _PLAN_ARM_COLORS[i % len(_PLAN_ARM_COLORS)],
             "desc": entry.get("desc") or entry.get("profile") or "",
             "worst_catalyst": _note_text(entry.get("worst_catalyst")),
@@ -500,6 +507,7 @@ def resolve_tournament_arms_with_status(
                 "db": pa.get("db_path", base["db"]),
                 "run_id": pa.get("run_id", base["run_id"]),
                 "port": pa.get("dash_port", base["port"]),
+                "env": pa.get("env", base.get("env", {})),
             })
         else:
             merged.append(base)
@@ -623,6 +631,8 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
             "total_pnl": 0.0,
             "mean_pnl": 0.0,
             "std_pnl": 0.0,
+            "sharpe_ratio": None,
+            "sharpe_capital_basis": None,
             "win_rate": 0.0,
             "merge_rate": 0.0,
             "exit_rate": 0.0,
@@ -683,8 +693,41 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
     sorted_pnls = sorted(pnls)
     var_95 = sorted_pnls[max(0, int(0.05 * n))]
 
-    # Sharpe Proxy (Per 100 Trades Normalized)
-    sharpe_proxy = (mean_pnl / std_pnl * 10.0) if std_pnl > 0.0 else 0.0
+    # Sharpe Ratio (time-series, #875): equity from unthinned closes on the
+    # starting bankroll, resampled to 5-minute buckets in core_brain/sharpe.py.
+    _env_overrides = cfg.get("env", {}) or {}
+    _raw_bank = _env_overrides.get("BOT_QUOTE_BANK_BASELINE_USD")
+    try:
+        _candidate = (
+            float(_raw_bank)
+            if str(_raw_bank or "").strip()
+            else None
+        )
+    except (TypeError, ValueError):
+        _candidate = None
+    if _candidate is not None and math.isfinite(_candidate) and _candidate > 0:
+        _starting_money = _candidate
+        sharpe_capital_basis = "arm_env"
+    else:
+        _starting_money = _load_config().bot_quote_bank_baseline_usd
+        sharpe_capital_basis = "assumed_default"
+    _equity_points: list[tuple[float, float]] = []
+    _close_ts = [float(r[0] or 0.0) for r in rows]
+    if _close_ts:
+        _open_t = min(first_ts or _close_ts[0], _close_ts[0])
+        _equity_points.append((_open_t, _starting_money))
+        _running_pnl = 0.0
+        for _ts, _row in zip(_close_ts, rows):
+            _running_pnl += float(_row[2] or 0.0)
+            _equity_points.append((_ts, _starting_money + _running_pnl))
+        _close_t = max(last_ts or _close_ts[-1], _close_ts[-1])
+        if _close_t != _equity_points[-1][0]:
+            _equity_points.append((_close_t, _starting_money + _running_pnl))
+    sharpe_value = (
+        sharpe_ratio(_equity_points, risk_free_rate_from_env())
+        if _close_ts
+        else None
+    )
 
     # Monte Carlo 100-Trade Simulation (500 iterations)
     rng = random.Random(42 + cfg["port"])
@@ -756,7 +799,8 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
         "avg_win": round(sum(wins) / len(wins), 4) if wins else 0.0,
         "avg_loss": round(sum(losses) / len(losses), 4) if losses else 0.0,
         "var_95": round(var_95, 4),
-        "sharpe_proxy": round(sharpe_proxy, 2),
+        "sharpe_ratio": round(sharpe_value, 2) if sharpe_value is not None else None,
+        "sharpe_capital_basis": sharpe_capital_basis,
         "mc_p5": round(mc_p5, 2),
         "mc_p50": round(mc_p50, 2),
         "mc_p95": round(mc_p95, 2),
@@ -768,12 +812,19 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
     }
 
 
+#: Sharpe Ratio gate levels (#875). These numbers were tuned for the retired
+#: per-trade proxy and now apply to the time-series metric — re-check them on
+#: future runs; do not retune on history.
+SHARPE_TARGET = 2.70
+SHARPE_MARGINAL = 2.20
+
+
 def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "843") -> dict[str, Any]:
     """Compute 5 critical decision gates and overall verdict from arms data.
     
     Evaluates:
     - Gate 1: Statistical Sample Power Gate (target N >= 2,117 trades for 0.02 resolve; flags nominal PnL as underpowered if N < 2,117)
-    - Gate 2: Sharpe Proxy Gate (target >= 2.70)
+    - Gate 2: Sharpe Ratio Gate (target >= 2.70)
     - Gate 3: Profit Factor Gate (target >= 2.50)
     - Gate 4: Max Drawdown Gate (target < $4.00)
     - Gate 5: Volume Starvation Gate (test arm trades drop < 40% vs baseline)
@@ -786,7 +837,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
     balanced_only_arm = next((a for a in arms_data if "balanced-only" in a.get("name", "") or a.get("name") == "balanced-mid"), None)
     
     if test_arm is None and ok_arms:
-        test_arm = max(ok_arms, key=lambda x: x.get("sharpe_proxy", 0.0))
+        test_arm = max(ok_arms, key=lambda x: (x.get("sharpe_ratio") is not None, x.get("sharpe_ratio") or 0.0))
     elif test_arm is None and arms_data:
         test_arm = arms_data[0]
         
@@ -807,9 +858,10 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
         gate_power_badge = "badge-amber"
         gate_power_text = f"0 / {target_n:,} Closed Trades — Rehearsal Initializing"
         
-    target_sharpe = 2.70
-    observed_sharpe = test_arm.get("sharpe_proxy", 0.0) if test_arm else 0.0
-    if not test_arm or test_n == 0:
+    target_sharpe = SHARPE_TARGET
+    observed_raw = test_arm.get("sharpe_ratio") if test_arm else None
+    observed_sharpe = observed_raw if isinstance(observed_raw, (int, float)) else None
+    if not test_arm or test_n == 0 or observed_sharpe is None:
         gate_sharpe_status = "NO_DATA"
         gate_sharpe_badge = "badge-amber"
         gate_sharpe_text = f"Target: ≥ {target_sharpe:.2f} | Observed: NO_DATA"
@@ -817,7 +869,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
         gate_sharpe_status = "PASS"
         gate_sharpe_badge = "badge-green"
         gate_sharpe_text = f"Target: ≥ {target_sharpe:.2f} | Observed: {observed_sharpe:.2f} (+{((observed_sharpe/target_sharpe)-1)*100:.1f}%)"
-    elif observed_sharpe >= 2.20:
+    elif observed_sharpe >= SHARPE_MARGINAL:
         gate_sharpe_status = "MARGINAL"
         gate_sharpe_badge = "badge-amber"
         gate_sharpe_text = f"Target: ≥ {target_sharpe:.2f} | Observed: {observed_sharpe:.2f} (Within 20%)"
@@ -896,7 +948,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
     elif gate_sharpe_status == "FAIL" or gate_mdd_status == "FAIL":
         overall_verdict = "REJECTED: CRITICAL RISK GATES FAILED"
         overall_badge = "badge-red"
-        overall_desc = "Observed risk metrics fail required Sharpe proxy (>= 2.70) or max drawdown (< $4.00) limits."
+        overall_desc = "Observed risk metrics fail required Sharpe Ratio (>= 2.70) or max drawdown (< $4.00) limits."
     elif test_n < target_n:
         if gate_sharpe_status == "PASS" and gate_mdd_status == "PASS" and gate_starv_status == "HEALTHY":
             overall_verdict = "PROVISIONAL PASS: COMPLEMENTARY RISK SHAPE"
@@ -1054,7 +1106,8 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         pnl_str = ("+$" if pnl >= 0 else "-$") + f"{abs(pnl):.2f}"
         pnl_cls = "positive" if pnl >= 0 else "negative"
         trades_cnt = a.get("trades_count", 0)
-        sharpe = a.get("sharpe_proxy", 0.0)
+        sharpe = a.get("sharpe_ratio")
+        sharpe_txt = f"{sharpe:.2f}" if isinstance(sharpe, (int, float)) else "NO_DATA"
         mdd = a.get("max_drawdown", 0.0)
         merge_pct = a.get("merge_rate", 0.0)
         stops = a.get("stop_loss_exits_count", 0)
@@ -1083,7 +1136,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
             <div>PnL: <strong class="tabular {pnl_cls}">{pnl_str}</strong></div>
             <div>Quoted: <strong class="tabular">{quoted:,}</strong></div>
             <div>Trades: <strong class="tabular">{trades_cnt:,}</strong></div>
-            <div>Sharpe: <strong class="tabular">{sharpe:.2f}</strong></div>
+            <div title="{SHARPE_FORMULA_TEXT}">Sharpe Ratio: <strong class="tabular">{sharpe_txt}</strong></div>
             <div>Max DD: <strong class="tabular">${mdd:.2f}</strong></div>
             <div>Merge Rate: <strong class="tabular">{merge_pct:.1f}%</strong></div>
           </div>
@@ -1137,6 +1190,8 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         mcp5_prefix = "+$" if mcp5 >= 0 else "-$"
         name = arm.get("name", "")
         rationale = matrix_rationale.get(name, html.escape(arm.get("desc", "")))
+        sharpe_cell = arm.get("sharpe_ratio")
+        sharpe_txt = f"{sharpe_cell:.2f}" if isinstance(sharpe_cell, (int, float)) else "NO_DATA"
         dm_rows.append(
             f'<tr>'
             f'<td><strong>#{idx+1}</strong> <span style="color: {arm.get("color", "#fff")}">●</span> <strong>{html.escape(arm.get("label") or name)}</strong>'
@@ -1145,7 +1200,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
             f'<td class="tabular"><strong>{arm.get("score", 0)}</strong> / 100</td>'
             f'<td class="tabular {pnl_cls}"><strong>{pnl_prefix}{abs(pnl):.2f}</strong></td>'
             f'<td class="tabular">{arm.get("mean_pnl", 0.0):.3f}</td>'
-            f'<td class="tabular">{(arm.get("sharpe_proxy") or 0.0):.2f}</td>'
+            f'<td class="tabular" title="{html.escape(SHARPE_FORMULA_TEXT)}">{sharpe_txt}</td>'
             f'<td class="tabular">{(arm.get("profit_factor") or 0.0):.2f}</td>'
             f'<td class="tabular">{(arm.get("win_rate") or 0.0):.1f}%</td>'
             f'<td class="tabular">{(arm.get("merge_rate") or 0.0):.1f}%</td>'
@@ -1537,7 +1592,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
       <thead>
         <tr>
           <th>Rank &amp; Arm</th>
-          <th>Sharpe</th>
+          <th title="{SHARPE_FORMULA_TEXT}">Sharpe Ratio</th>
           <th>Profit Factor</th>
           <th>VaR95</th>
           <th>MC P5</th>
@@ -1616,13 +1671,13 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
       <div class="m-sub" id="dg-gate-power-sub">{decision_gates['gates']['power']['text']}</div>
     </div>
 
-    <!-- Gate 2: Sharpe Proxy -->
+    <!-- Gate 2: Sharpe Ratio -->
     <div class="m-card">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <span class="m-label">2. Sharpe Proxy Gate</span>
+        <span class="m-label">2. Sharpe Ratio Gate</span>
         <span class="badge {decision_gates['gates']['sharpe']['badge']}" id="dg-gate-sharpe-badge">{decision_gates['gates']['sharpe']['status']}</span>
       </div>
-      <div class="m-val tabular" id="dg-gate-sharpe-val">{decision_gates['gates']['sharpe']['current']:.2f} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; {decision_gates['gates']['sharpe']['target']:.2f})</span></div>
+      <div class="m-val tabular" id="dg-gate-sharpe-val">{(f"{decision_gates['gates']['sharpe']['current']:.2f}" if decision_gates['gates']['sharpe']['status'] != 'NO_DATA' else 'NO_DATA')} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; {decision_gates['gates']['sharpe']['target']:.2f})</span></div>
       <div class="m-sub" id="dg-gate-sharpe-sub">{decision_gates['gates']['sharpe']['text']}</div>
     </div>
 
@@ -1767,7 +1822,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
       <ul style="list-style-type: none; padding-left: 0; line-height: 1.8;">
         <li>🎯 <strong>Observed Win Rate:</strong> <span id="hb-win" class="tabular positive">—</span> <span style="color: var(--text-muted);">vs league <span id="hb-aggwin" class="tabular">—</span></span></li>
         <li>🔗 <strong>Merge-to-Close:</strong> <span id="hb-merge" class="tabular positive">—</span> <span style="color: var(--text-muted);">vs league <span id="hb-aggmerge" class="tabular">—</span></span></li>
-        <li>⚡ <strong>Sharpe Proxy:</strong> <span id="hb-sharpe" class="tabular positive">—</span> <span style="color: var(--text-muted);">league best <span id="hb-bestsharpe" class="tabular">—</span> (<span id="hb-bestsharpearm">—</span>)</span></li>
+        <li>⚡ <strong>Sharpe Ratio:</strong> <span id="hb-sharpe" class="tabular positive">—</span> <span style="color: var(--text-muted);">league best <span id="hb-bestsharpe" class="tabular">—</span> (<span id="hb-bestsharpearm">—</span>)</span></li>
         <li>💰 <strong>Realized EV / Trade:</strong> <span id="hb-ev" class="tabular positive">—</span> per closed position</li>
         <li>⚖️ <strong>Profit Factor:</strong> <span id="hb-pf" class="tabular positive">—</span></li>
         <li>🎲 <strong>Monte Carlo P5 (100-Trade Draw):</strong> <span id="hb-mcp5" class="tabular positive">—</span></li>
@@ -1848,7 +1903,7 @@ BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
       <ul>
         <li><strong>Projected Win Rate: <span class="tabular positive">80% - 84%</span></strong><br>Share of closes with positive realized P&amp;L.</li>
         <li><strong>Merge-to-Close Ratio: <span class="tabular positive">82% - 86%</span></strong><br>Pairs merged &divide; every close.</li>
-        <li><strong>Expected Sharpe Proxy: <span class="tabular positive">&gt; 10.5</span></strong><br>Mean P&amp;L per close &divide; its standard deviation, &times; 10.</li>
+        <li><strong>Expected Sharpe Ratio: <span class="tabular positive">to be measured</span></strong><br>Annualised time-series Sharpe on portfolio equity (5-minute buckets, 365-day year). Old proxy gates (&ge; 2.70) are under review for the new metric.</li>
         <li><strong>Expected EV per Trade: <span class="tabular positive">+$0.38 - +$0.46</span></strong><br>Mean realized P&amp;L of one close.</li>
         <li><strong>Target Profit Factor: <span class="tabular positive">&gt; 8.0</span></strong><br>Gross wins &divide; gross losses.</li>
         <li><strong>Projected 100-Trade Monte Carlo 5th Percentile: <span class="tabular positive">&gt; +$30.00</span></strong><br>5th percentile of 500 resamples of 100 trades from the realized distribution.</li>
@@ -1963,7 +2018,7 @@ BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC=45.0
           <th>Live Score</th>
           <th>Total PnL</th>
           <th>EV / Trade</th>
-          <th>Sharpe</th>
+          <th title="{SHARPE_FORMULA_TEXT}">Sharpe Ratio</th>
           <th>Profit Factor</th>
           <th>Win Rate</th>
           <th>Merge Rate</th>
@@ -2140,16 +2195,16 @@ function renderAll() {{
     hbSet('hb-aggwin', hbPct(state.agg_win_rate));
     hbSet('hb-merge', hbPct(hbArm.merge_rate));
     hbSet('hb-aggmerge', hbPct(state.agg_merge_rate));
-    hbSet('hb-sharpe', Number(hbArm.sharpe_proxy || 0).toFixed(2));
-    const hbBest = [...hbArms].sort((a, b) => (b.sharpe_proxy || 0) - (a.sharpe_proxy || 0))[0];
+    hbSet('hb-sharpe', hbArm.sharpe_ratio != null ? Number(hbArm.sharpe_ratio).toFixed(2) : 'NO_DATA');
+    const hbBest = [...hbArms].sort((a, b) => (b.sharpe_ratio ?? -Infinity) - (a.sharpe_ratio ?? -Infinity))[0];
     if (hbBest) {{
-      hbSet('hb-bestsharpe', Number(hbBest.sharpe_proxy || 0).toFixed(2));
+      hbSet('hb-bestsharpe', hbBest.sharpe_ratio != null ? Number(hbBest.sharpe_ratio).toFixed(2) : 'NO_DATA');
       hbSet('hb-bestsharpearm', hbBest.label || hbBest.name);
     }}
     // The queue-gate row cites the arm that ran it. Binding its Sharpe keeps that
     // row honest if the arm stops leading the field.
     const hbQc = hbArms.find(a => a.name === 'queue-clear-5m');
-    if (hbQc) hbSet('hb-qcsharpe', Number(hbQc.sharpe_proxy || 0).toFixed(2));
+    if (hbQc) hbSet('hb-qcsharpe', hbQc.sharpe_ratio != null ? Number(hbQc.sharpe_ratio).toFixed(2) : 'NO_DATA');
     // 3 decimals: the leaderboard's EV / TRADE column is the value to match.
     hbSet('hb-ev', (hbArm.mean_pnl >= 0 ? '+$' : '-$') + Math.abs(Number(hbArm.mean_pnl) || 0).toFixed(3));
     hbSet('hb-pf', Number(hbArm.profit_factor || 0).toFixed(2));
@@ -2203,7 +2258,7 @@ function renderAll() {{
         <td class="tabular"><strong>${{arm.score || 0}}</strong> / 100</td>
         <td class="tabular ${{pnlClass}}"><strong>${{pnlPrefix}}${{Math.abs(pnl).toFixed(2)}}</strong></td>
         <td class="tabular">${{(arm.mean_pnl || 0).toFixed(3)}}</td>
-        <td class="tabular">${{(arm.sharpe_proxy ?? 0).toFixed(2)}}</td>
+        <td class="tabular">${{(arm.sharpe_ratio != null ? arm.sharpe_ratio.toFixed(2) : 'NO_DATA')}}</td>
         <td class="tabular">${{(arm.profit_factor ?? 0).toFixed(2)}}</td>
         <td class="tabular">${{(arm.win_rate ?? 0).toFixed(1)}}%</td>
         <td class="tabular">${{(arm.merge_rate ?? 0).toFixed(1)}}%</td>
@@ -2227,7 +2282,7 @@ function renderAll() {{
       <td><strong>#${{idx+1}}</strong> <span style="color: ${{arm.color}}">●</span> <strong>${{arm.label}}</strong>
         <div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px; max-width: 260px;">${{arm.desc || ''}}</div>
       </td>
-      <td class="tabular">${{(arm.sharpe_proxy ?? 0).toFixed(2)}}</td>
+      <td class="tabular">${{(arm.sharpe_ratio != null ? arm.sharpe_ratio.toFixed(2) : 'NO_DATA')}}</td>
       <td class="tabular">${{(arm.profit_factor ?? 0).toFixed(2)}}</td>
       <td class="tabular">${{(arm.var_95 ?? 0).toFixed(4)}}</td>
       <td class="tabular">${{(arm.mc_p5 ?? 0).toFixed(2)}}</td>
@@ -2567,7 +2622,7 @@ function renderDgArmCards(arms) {{
         '<div>PnL: <strong class="tabular ' + pnlCls + '">' + pnlStr + '</strong></div>' +
         '<div>Quoted: <strong class="tabular">' + quoted.toLocaleString() + '</strong></div>' +
         '<div>Trades: <strong class="tabular">' + (a.trades_count || 0).toLocaleString() + '</strong></div>' +
-        '<div>Sharpe: <strong class="tabular">' + (a.sharpe_proxy || 0).toFixed(2) + '</strong></div>' +
+        '<div title="{html.escape(SHARPE_FORMULA_TEXT)}">Sharpe Ratio: <strong class="tabular">' + (a.sharpe_ratio != null ? a.sharpe_ratio.toFixed(2) : 'NO_DATA') + '</strong></div>' +
         '<div>Max DD: <strong class="tabular">$' + (a.max_drawdown || 0).toFixed(2) + '</strong></div>' +
         '<div>Merge Rate: <strong class="tabular">' + (a.merge_rate || 0).toFixed(1) + '%</strong></div>' +
       '</div>' +
@@ -2607,7 +2662,7 @@ function updateDecisionGatesUI() {{
       const val = document.getElementById('dg-gate-' + g + '-val');
       if (val) {{
         if (g === 'power') val.innerHTML = (gate.current || 0).toLocaleString() + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">/ ' + (gate.target || 2117).toLocaleString() + '</span>';
-        else if (g === 'sharpe') val.innerHTML = (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.7).toFixed(2) + ')</span>';
+        else if (g === 'sharpe') val.innerHTML = (gate.status === 'NO_DATA' || gate.current == null ? 'NO_DATA' : Number(gate.current).toFixed(2)) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.7).toFixed(2) + ')</span>';
         else if (g === 'pf') val.innerHTML = (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.5).toFixed(2) + ')</span>';
         else if (g === 'mdd') val.innerHTML = '$' + (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &lt; $' + (gate.target || 4.0).toFixed(2) + ')</span>';
       }}
