@@ -788,7 +788,7 @@ def _whole_cents(name: str, raw: str, lo: int, hi: int) -> int:
     text = raw.strip()
     if not (text.isdigit() or (text[:1] in ("+", "-") and text[1:].isdigit())):
         raise ValueError(
-            f"{name}={raw!r} must be whole cents, for example 6 = 6\u00a2"
+            f"{name}={raw!r} must be whole cents, for example 6 means 6 cents"
         )
     value = int(text)
     if not lo <= value <= hi:
