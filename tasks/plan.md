@@ -104,7 +104,7 @@ Depends on: —
   old-vs-new golden note, no live-rate / no backfill.
 - Verify: `python -m pytest -q tests/test_sharpe_ratio.py`
 
-### T2 — Cockpit switch (analyzer + gates + UI) · L · `[Backend/Logic]` + `[UX/Copy]`
+### [x] T2 — Cockpit switch (analyzer + gates + UI) · L · `[Backend/Logic]` + `[UX/Copy]`
 Depends on: T1
 
 - `scripts/tournament_cockpit_server.py`: in `analyze_arm_database`, delete the proxy line
