@@ -262,6 +262,53 @@ def test_hybrid_preset_sets_the_renamed_dead_band(monkeypatch):
     assert core_config.load().bot_order_requote_dead_band_usd == 0.060
 
 
+RETIRED_MONEY_NAMES = frozenset({DEAD_BAND_RETIRED, DROPS_RETIRED})
+
+
+def test_arms_files_use_whole_cents_and_no_retired_money_names(monkeypatch, caplog):
+    """Every shipped arm must match the unit its key advertises.
+
+    This is the gate for the issue itself: a `_CENTS` key holding `"0.10"` is
+    the 100x footgun, and a retired spelling still shipping in a checked-in
+    arms file is how the alias window becomes permanent.
+    """
+    import json
+    import pathlib
+
+    arms_dir = pathlib.Path(__file__).resolve().parent.parent / "configs" / "tournaments"
+    arms_files = sorted(arms_dir.glob("*.json"))
+    assert arms_files, f"no arms files under {arms_dir}"
+
+    checked = 0
+    for path in arms_files:
+        arms = json.loads(path.read_text(encoding="utf-8"))
+        assert isinstance(arms, list), path.name
+        for arm in arms:
+            env = arm.get("env") or {}
+            for key, value in env.items():
+                assert not (RETIRED_MONEY_NAMES & {key}), (
+                    f"{path.name} arm {arm['name']} still sets the retired {key}"
+                )
+                if key.endswith("_CENTS"):
+                    assert value.strip().isdigit(), (
+                        f"{path.name} arm {arm['name']} sets {key}={value!r}, "
+                        "which is not whole cents"
+                    )
+            for key in env:
+                monkeypatch.setenv(key, env[key])
+            with caplog.at_level(logging.WARNING):
+                core_config.load()
+            assert "DEPRECATED" not in caplog.text, (
+                f"{path.name} arm {arm['name']} loads through a retired name"
+            )
+            for key in env:
+                monkeypatch.delenv(key, raising=False)
+            caplog.clear()
+            checked += 1
+
+    assert checked >= 4, "the arms sweep did not actually walk the shipped arms"
+
+
 @pytest.mark.parametrize("name", [DROPS, DROPS_RETIRED])
 def test_the_45c_champion_stop_survives_the_rename(monkeypatch, name):
     """The live champion's 4.5c stop is the reason this is a rename, not a

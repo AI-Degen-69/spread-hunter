@@ -155,7 +155,7 @@ Depends on: —
   `nan`/`inf` rejected, blank keeps the default/preset.
 - Verify: `python -m pytest -q tests/test_config.py tests/test_dynamic_offset.py tests/test_shadow_tournament.py -k "offset or cents or preset"`
 
-### [ ] T2 — Honest USD names for the two dollar keys · L · `[Backend/Logic]`
+### [x] T2 — Honest USD names for the two dollar keys · L · `[Backend/Logic]`
 Depends on: T1 (same loader region)
 
 One atomic rename; a half-renamed config does not import, so this does not split further.
@@ -185,7 +185,7 @@ One atomic rename; a half-renamed config does not import, so this does not split
   `0.060`. Any test whose expectation changes is evidence of a unit slip — stop and re-read.
 - Verify: `python -m pytest -q tests/test_config.py tests/test_stop_loss_config.py tests/test_single_leg_lifecycle.py tests/test_dual_stop_loss.py tests/test_risk_guardian.py tests/test_champion_lane_parity.py tests/test_dashboard_server.py tests/test_trader_loop.py tests/test_completable_pair_gate.py`
 
-### [ ] T3 — Shipped inputs, docs, cockpit copy, inventory · M · `[Docs]`
+### [x] T3 — Shipped inputs, docs, cockpit copy, inventory · M · `[Docs]`
 Depends on: T2
 
 - `configs/tournaments/i799-tournament-test_arms.json`: env keys → new names; values unchanged
