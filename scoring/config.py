@@ -63,7 +63,7 @@ class MakerConfig(CoreMakerConfig):
     # between the book midpoint and our resting quote. Prices are dollars on the
     # 0-1 scale; the env value is cents. The quoting engine refuses or skips a
     # quote outside the window and clamps the dynamic offset to it. It is NOT a
-    # filter on which markets we quote -- `filter_common_spread_max_cents`
+    # filter on which markets we quote -- `filter_common_spread_max_usd`
     # (2.05c) is the wide-book rejection bar (see CONSTRAINTS.md). The two
     # shipped defaults are deliberate: 0.15 for the engine, 0.045 for the
     # picker, whose copy the ranker does not gate on; both loaders read the
@@ -142,7 +142,7 @@ def resolve_wide_book_trial(raw: str, *, var_name: str = "BOT_QUOTE_WIDE_BOOK_TR
         return None
     if not rehearsal.is_rehearsal():
         raise ValueError(
-            f"{var_name} widens bot_quote_book_max_spread_cents, the gate that "
+            f"{var_name} widens bot_quote_book_max_spread_usd, the gate that "
             "refuses a book where a fill may leave a leg that cannot be "
             "closed. It applies only in a process that has declared itself "
             "unable to place an order: core_brain.shadow_run, whose client "
@@ -203,9 +203,9 @@ def load() -> MakerConfig:
     # loads the engine config unguarded, so it fails instead of showing a made-up
     # number -- #709 owns turning that into a readable message.
     #
-    # NOT the book gate. `filter_common_spread_max_cents` (2.05c) is the bid-ask
+    # NOT the book gate. `filter_common_spread_max_usd` (2.05c) is the bid-ask
     # WIDTH wide books are refused on, derived from
-    # `bot_quote_book_max_spread_cents * filter_std_spread_share_pct`. It must
+    # `bot_quote_book_max_spread_usd * filter_std_spread_share_pct`. It must
     # never read this value: a distance-from-mid window and a bid-ask width are
     # different measurements.
     sp = _env("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
@@ -228,7 +228,7 @@ def load() -> MakerConfig:
         # derived property (#572), and the quote window is widened only if
         # the trial is wider than it already is.
         kw["bot_quote_wide_book_trial"] = wide
-        kw["bot_quote_book_max_spread_cents"] = wide
+        kw["bot_quote_book_max_spread_usd"] = wide
         window = kw.get("bot_quote_book_max_spread_from_mid",
                         MakerConfig.bot_quote_book_max_spread_from_mid)
         kw["bot_quote_book_max_spread_from_mid"] = max(window, wide)

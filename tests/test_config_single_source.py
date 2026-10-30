@@ -36,7 +36,7 @@ SCORING_DEFAULTS: dict[str, object] = {
     "bot_risk_exposure_max_naked_usd": 120.0,
     "bot_risk_gate_hard_blocks_on": True,
     "bot_risk_circuit_decided_price_cents": 0.02,
-    "bot_quote_book_max_spread_cents": 0.06,
+    "bot_quote_book_max_spread_usd": 0.06,
     "bot_quote_wide_book_trial": None,
     "bot_quote_book_min_depth_shares": 200.0,
     "bot_risk_hedge_emergency_pct": 0.8,
@@ -81,8 +81,8 @@ SCORING_DEFAULTS: dict[str, object] = {
     "bot_quote_size_min_shares": 50,
     "bot_quote_book_max_spread_from_mid": 0.045,
     "bot_quote_size_shares": 120,
-    "bot_quote_price_band_min_cents": 0.10,
-    "bot_quote_price_band_max_cents": 0.90,
+    "bot_quote_price_band_min_usd": 0.10,
+    "bot_quote_price_band_max_usd": 0.90,
     "bot_quote_window_max_pct": 0.40,
     "bot_quote_gate_price_band_on": True,
     "bot_quote_gate_quote_window_on": True,
@@ -165,7 +165,7 @@ def test_derived_values_unchanged():
         assert cfg.bot_latency_net_oneway_ms == 3.93
         assert cfg.bot_quote_window_max_pct == 0.40
         assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
-        assert cfg.filter_common_spread_max_cents == 0.0205
+        assert cfg.filter_common_spread_max_usd == 0.0205
 
 
 def test_db_path_unchanged_under_every_env_state(monkeypatch):
@@ -513,7 +513,7 @@ def test_execution_coupling_overrides(monkeypatch):
     monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
     cfg = scoring_config.load()
     assert cfg.bot_quote_wide_book_trial == 0.12
-    assert cfg.bot_quote_book_max_spread_cents == 0.12
+    assert cfg.bot_quote_book_max_spread_usd == 0.12
     assert cfg.bot_quote_book_max_spread_from_mid == 0.12
 
     # Smaller trial does not lower bot_quote_book_max_spread_from_mid
@@ -725,7 +725,7 @@ def test_wide_book_trial_refusal_names_variable(monkeypatch):
     monkeypatch.setenv("BOT_QUOTE_WIDE_BOOK_TRIAL", "0.12")
     with pytest.raises(ValueError) as exc1:
         scoring_config.load()
-    assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens bot_quote_book_max_spread_cents" in str(exc1.value)
+    assert "BOT_QUOTE_WIDE_BOOK_TRIAL widens bot_quote_book_max_spread_usd" in str(exc1.value)
 
     # 2. The retired variable is inert outside a rehearsal: no refusal, no error
     monkeypatch.delenv("BOT_QUOTE_WIDE_BOOK_TRIAL", raising=False)

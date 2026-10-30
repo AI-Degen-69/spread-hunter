@@ -98,12 +98,12 @@ MOVEMENT_WINDOW_SEC = _CFG.filter_live_vel_lookback_sec
 MIN_MOVEMENT_USD = _CFG.filter_live_vel_min_usd
 TRADES_API = "https://data-api.polymarket.com/trades"
 # The book gate: a bid-ask WIDTH, derived from
-# `bot_quote_book_max_spread_cents * filter_std_spread_share_pct`
-# (`filter_common_spread_max_cents`, 2.05c, #572). NOT
+# `bot_quote_book_max_spread_usd * filter_std_spread_share_pct`
+# (`filter_common_spread_max_usd`, 2.05c, #572). NOT
 # `bot_quote_book_max_spread_from_mid`, which is the
 # distance from mid we allow a resting quote to sit at -- a different
 # measurement, read only by the quoting code and never by this ranker (#690).
-MAX_BOOK_SPREAD = _CFG.filter_common_spread_max_cents
+MAX_BOOK_SPREAD = _CFG.filter_common_spread_max_usd
 MIN_RANGE_CENTS = _CFG.filter_live_move_min_range_cents
 VOLATILITY_WINDOW_SEC = _CFG.filter_live_move_lookback_sec
 VELOCITY_GATE_ENABLED = _CFG.filter_live_gate_velocity_on
@@ -1693,7 +1693,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         mid = (max(bids)[0] + min(asks)[0]) / 2.0
         # Outside the configured price band the book is one-sided in
         # practice and the position is mostly a bet on a near-settled
-        # outcome. The band is the config's (bot_quote_price_band_min_cents/max_cents), not a
+        # outcome. The band is the config's (bot_quote_price_band_min_usd/max_cents), not a
         # hardcoded pair of edges -- a second hardcoded band here silently
         # ignored whatever the config said (#582). Mirrors the quoter's
         # decided check in core_brain/quotes.py.
@@ -1702,8 +1702,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         # series sits outside the band on its way to a decided market like
         # everything else -- game progress is not evidence about when this
         # market decides, and the band owns that alone.
-        band_low = _CFG.bot_quote_price_band_min_cents
-        band_high = _CFG.bot_quote_price_band_max_cents
+        band_low = _CFG.bot_quote_price_band_min_usd
+        band_high = _CFG.bot_quote_price_band_max_usd
         if not band_low < mid < band_high:
             return _reject_row(
                 source,

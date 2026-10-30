@@ -50,7 +50,7 @@ def _book(mid: float, token: str) -> dict:
 def _cfg(**kw) -> MakerConfig:
     base = dict(bot_pos_objective="rewards", bot_quote_size_mode="shares", bot_quote_size_shares=120,
                 bot_quote_size_min_shares=50, bot_quote_spread_static_offset_cents=0.02,
-                bot_quote_price_band_min_cents=0.10, bot_quote_price_band_max_cents=0.90,
+                bot_quote_price_band_min_usd=0.10, bot_quote_price_band_max_usd=0.90,
                 bot_pos_price_max_pair_cost_usd=0.99, bot_pos_price_max_complete_usd=1.00)
     base.update(kw)
     return MakerConfig(**base)

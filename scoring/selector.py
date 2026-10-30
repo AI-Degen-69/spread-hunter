@@ -19,7 +19,7 @@ from scoring.config import MakerConfig as _MakerConfig
 # and it would keep refusing books after the gate moved. `round(..., 6)` for
 # the same binary64 reason the config property rounds.
 _PICKER_BAR: float = round(
-    _MakerConfig.bot_quote_book_max_spread_cents * _MakerConfig.filter_std_spread_share_pct, 6)
+    _MakerConfig.bot_quote_book_max_spread_usd * _MakerConfig.filter_std_spread_share_pct, 6)
 
 
 # Normalize separators before matching so both human titles ("Game 1") and

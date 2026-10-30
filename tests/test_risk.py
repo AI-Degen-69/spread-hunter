@@ -34,7 +34,7 @@ def test_skew_offset_scales_with_max_skew_offset():
 
 
 def test_book_health_checks_min_book_depth_shares():
-    cfg = MakerConfig(bot_quote_book_min_depth_shares=200.0, bot_quote_book_max_spread_cents=0.06)
+    cfg = MakerConfig(bot_quote_book_min_depth_shares=200.0, bot_quote_book_max_spread_usd=0.06)
 
     # Thin book (150 shares < 200)
     thin_book = {
