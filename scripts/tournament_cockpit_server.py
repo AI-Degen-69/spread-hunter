@@ -1439,14 +1439,19 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 </head>
 <body>
 
-<!-- Tournament Navigation Switcher: the current setup is the only page served.
-     The past-run pages (#484, #492, #608) were purged; their routes 404. -->
+<!-- Tournament Navigation Switcher: pick which tournament's cockpit to view.
+     Both #799 (the current live setup) and the #843 pair-test rehearsal are
+     served; the active pill follows the page being viewed. -->
 <div class="tourney-nav">
   <span class="tourney-nav-label">Tournament Evaluation:</span>
-  <a href="/799" class="tourney-pill active">
+  <a href="/799" class="tourney-pill {'active' if tourney_key == '799' else ''}">
     <span>🧪</span>
-    <span>{initial_data.get('tourney_meta', {}).get('nav_label') or '#799 Presets (10 Arms)'}</span>
+    <span>#799 Presets (10 Arms)</span>
     <span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">CURRENT SETUP</span>
+  </a>
+  <a href="/843" class="tourney-pill {'active' if tourney_key == '843' else ''}">
+    <span>🚦</span>
+    <span>#843 Pair Test (4 Arms)</span>
   </a>
 </div>
 
@@ -1526,6 +1531,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
       <span>Best-minus-worst: <strong class="tabular" id="agg-spread">{('$' + f"{initial_data.get('agg_spread', 0.0):.2f}") if initial_data.get('agg_has_data') else 'NO_DATA'}</strong></span>
     </div>
   </div>
+  <div id="arms-empty-state" style="display: none; margin-bottom: 16px; padding: 16px; border: 1px dashed #2a3550; border-radius: 10px; background: #0e1420; text-align: center; font-size: 13px; font-weight: 600; color: #8b9bb4;"></div>
   <div class="table-box">
     <table>
       <thead>
@@ -1578,20 +1584,8 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 
 <!-- TAB: DECISION GATES & REHEARSAL STATUS -->
 <div id="tab-decision-gates" class="tab-pane">
-  <!-- Run Selector Bar -->
-  <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; padding: 12px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;">
-    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-      <span style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Rehearsal Evaluation:</span>
-      <div style="display: flex; gap: 6px;">
-        <button class="btn" style="padding: 5px 12px; font-size: 12px; cursor: pointer;" onclick="selectGatesTourney('843', this)">🚦 #843 Pair Test (Balanced + Queue-5m)</button>
-        <button class="btn" style="padding: 5px 12px; font-size: 12px; cursor: pointer;" onclick="selectGatesTourney('799', this)">📊 #799 Strategy Presets (10 Arms)</button>
-
-      </div>
-    </div>
-    <div style="font-size: 11.5px; color: var(--text-muted);">
-      Pre-registered rule: <code style="color: var(--blue);">docs/runs/2026-10-26-843-balanced-queue5-pair.md</code>
-    </div>
-  </div>
+  <!-- The tournament switcher lives in the top nav bar; the rehearsal pane
+       follows whichever tournament the page is serving. -->
 
   <!-- Overall Verdict Banner -->
   <div style="padding: 16px 20px; border-radius: 10px; margin-bottom: 20px; border: 1px solid var(--border); background: var(--bg-card); display: flex; flex-direction: column; gap: 8px;">
@@ -1684,7 +1678,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
       </div>
       <div style="text-align: right; max-width: 340px;">
         <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Status in Codebase</div>
-        <div class="tabular" style="color: var(--green); font-size: 14px; font-weight: 700;">core_brain.config.TOURNAMENT_PRESETS["prudent"] + explicit overrides</div>
+        <div class="tabular" style="color: var(--green); font-size: 14px; font-weight: 700;">core_brain.config.TOURNAMENT_PRESETS["balanced"] + explicit overrides</div>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">No single shipped preset holds this configuration.</div>
       </div>
     </div>
@@ -1725,10 +1719,10 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         </tr>
         <tr>
           <td><strong>Volatility Pricing Offset</strong></td>
-          <td class="tabular positive" style="font-size: 14px;"><strong>Dynamic 0.60x, 2-6¢ clamp</strong></td>
-          <td><code>BOT_QUOTE_TOURNAMENT_PRESET=prudent</code><br><code>BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1</code><br><code>BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6</code></td>
-          <td><span class="badge badge-green">#799 prudent-hybrid</span></td>
-          <td><strong>Volatility tracker.</strong> offset = round(0.60 × the recent range in cents), held between 2 and 6. A clamp is the allowed floor and ceiling: the <code>prudent</code> preset alone stops at 4¢, so <code>=6</code> is what lifts it to this band. Stale or missing range data falls back to the static base offset. The #799 review credits this arm with the best Sharpe (9.52) and the smallest drawdown ($0.70), against -$2.28 for <code>static-floor-2c</code>.</td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>Dynamic 0.50x, 2-4¢ clamp</strong></td>
+          <td><code>BOT_QUOTE_TOURNAMENT_PRESET=balanced</code></td>
+          <td><span class="badge badge-green">#799 balanced-mid</span></td>
+          <td><strong>Volatility tracker.</strong> offset = round(0.50 × the recent range in cents), held between 2 and 4. The <code>balanced</code> preset ships exactly this band (0.50x, 2¢ floor, 4¢ ceiling), so no offset-ceiling line is needed — the leader ran with no override beyond the preset. Stale or missing range data falls back to the static base offset.</td>
         </tr>
         <tr>
           <td><strong>Single-Buy Loss Stop</strong></td>
@@ -1801,12 +1795,10 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <div class="decision-grid" style="margin-bottom: 24px;">
     <div class="decision-box">
       <h3 style="color: var(--blue);">💻 Ready-to-Run PowerShell &amp; CLI Commands</h3>
-      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">A rehearsal reads these from the shell environment, not from <code>.env</code>. Set all nine, then run one command:</p>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">A rehearsal reads these from the shell environment, not from <code>.env</code>. Set all seven, then run one command:</p>
       <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #a5d6a7; overflow-x: auto;">
 # --- Champion environment (Windows PowerShell 7) ---
-$env:BOT_QUOTE_TOURNAMENT_PRESET = "prudent"
-$env:BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON = "1"
-$env:BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS = "6"
+$env:BOT_QUOTE_TOURNAMENT_PRESET = "balanced"
 $env:BOT_ORDER_REQUOTE_DEAD_BAND_USD = "0.06"
 $env:BOT_RISK_STOP_MODE = "ABSOLUTE_DROP"
 $env:BOT_RISK_STOP_ADVERSE_DROP_USD = "0.045"
@@ -1817,27 +1809,25 @@ $env:BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC = "45.0"
 # The pair cap stays at its shipped $0.990 default - clear any inherited value:
 Remove-Item Env:BOT_POS_PRICE_MAX_PAIR_COST_USD -ErrorAction SilentlyContinue
 
-# 1. Interactive menu - the prudent preset, 60-minute rehearsal (needs PowerShell 7):
-.\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset prudent -Minutes 60
+# 1. Interactive menu - the balanced preset, 60-minute rehearsal (needs PowerShell 7):
+.\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset balanced -Minutes 60
 
 # 2. Or run the same rehearsal directly:
-python -m core_brain.shadow_run --minutes 60 --interval 1 --db data/champion_prudent_shadow_01.db --run-id shadow-champion-prudent-01 --starting-bankroll-usd 100
+python -m core_brain.shadow_run --minutes 60 --interval 1 --db data/champion_balanced_shadow_01.db --run-id shadow-champion-balanced-01 --starting-bankroll-usd 100
 
 # 3. Read the result: a direct --db rehearsal writes a standalone store that
 #    the cockpit cannot resolve (it serves data/tournaments run records), so
 #    open the store in the execution dashboard:
-python -m dashboard.server --db data/champion_prudent_shadow_01.db
+python -m dashboard.server --db data/champion_balanced_shadow_01.db
       </pre>
     </div>
 
     <div class="decision-box">
       <h3 style="color: var(--green);">🛡️ Live Production Environment Variables (.env)</h3>
-      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">The same nine values for the live trader, which does read <code>.env</code>:</p>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">The same seven values for the live trader, which does read <code>.env</code>:</p>
       <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #81d4fa; overflow-x: auto;">
 # --- Spread Hunter HYBRID Champion Config ---
-BOT_QUOTE_TOURNAMENT_PRESET=prudent
-BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1
-BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS=6
+BOT_QUOTE_TOURNAMENT_PRESET=balanced
 BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06
 BOT_RISK_STOP_MODE=ABSOLUTE_DROP
 BOT_RISK_STOP_ADVERSE_DROP_USD=0.045
@@ -2262,6 +2252,27 @@ function renderAll() {{
 }}
 
 function renderCharts() {{
+  // Zero arms is a valid poll, not a crash -- and it happens for real: the arms
+  // file is read once at import and yields [] when it is missing or does not
+  // parse (`_load_arms_from_file`), which every resolver then passes through
+  // untouched. Every chart below reads fields off a `state.arms[0]`-derived
+  // pair (the radar's `label: ctrl.label` was the one that threw), so an empty
+  // list used to die mid-render and leave the operator behind a cleared
+  // leaderboard with a JS error instead of an explanation (#873). State the empty case and stop.
+  const armList = Array.isArray(state.arms) ? state.arms : [];
+  const emptyState = document.getElementById('arms-empty-state');
+  if (emptyState) {{
+    emptyState.textContent = armList.length ? '' : 'No arms in this tournament';
+    emptyState.style.display = armList.length ? 'none' : 'block';
+  }}
+  if (!armList.length) {{
+    // A chart drawn from the previous, non-empty poll must not outlive it.
+    Object.keys(charts).forEach((key) => {{
+      if (charts[key]) {{ charts[key].destroy(); charts[key] = null; }}
+    }});
+    return;
+  }}
+
   // PnL Line Chart
   const lineCtx = document.getElementById('pnlLineChart');
   if (lineCtx) {{
@@ -2520,27 +2531,6 @@ function fetchLiveStats() {{
         statusEl.style.color = 'var(--amber)';
       }}
     }});
-}}
-
-function selectGatesTourney(key, btn) {{
-  if (btn && btn.parentElement) {{
-    btn.parentElement.querySelectorAll('.btn').forEach(b => {{
-      b.style.background = 'transparent';
-      b.style.borderColor = 'var(--border)';
-    }});
-    btn.style.background = 'var(--bg-subtle)';
-    btn.style.borderColor = 'var(--text-primary)';
-  }}
-  fetch('/api/stats?tourney=' + key)
-    .then(r => r.json())
-    .then(data => {{
-      state = data;
-      renderAll();
-      if (data.arms) {{
-        renderDgArmCards(data.arms);
-      }}
-    }})
-    .catch(err => console.log('Error loading tourney:', err));
 }}
 
 function renderDgArmCards(arms) {{
