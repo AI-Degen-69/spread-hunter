@@ -54,7 +54,8 @@ the unit, do not edit the expectation.
     pair-cost gates.
   - Risk ratios (`*_pct` fields). Only the names of money amounts change.
   - The other 13 `_cents` fields — inventoried, not converted.
-  - `dashboard/static/**` (currency formatting is out of scope for #872).
+  - `dashboard/static/**` except `dashboard/static/strategy_explainer.html`, which is edited only to
+    stop documenting the two retired key names. Currency **formatting** stays out of scope for #872.
   - `core_brain/venue.py`, `core_brain/env_file.py`, `core_brain/order_registry.py`.
 
 ## Anti-cheat & safety rules

@@ -221,15 +221,17 @@ def is_port_available(port: int, host: str = "127.0.0.1") -> bool:
             return False
 
 
-# Arm keys that named a config field before #732 renamed them to `bot_*`.
-# They are not read below, so an arm still carrying one would quietly run the
-# shipped default and the tournament would compare an arm nobody chose. Fail
-# at plan time instead of after the runs have spent their minutes.
+# Arm keys that named a config field before #732 renamed them to `bot_*`, plus
+# the two money fields #872 renamed from `_cents` to `_usd`. They are not read
+# below, so an arm still carrying one would quietly run the shipped default and
+# the tournament would compare an arm nobody chose. Fail at plan time instead
+# of after the runs have spent their minutes.
 _RETIRED_PRESET_KEYS = frozenset({
     "dynamic_offset_enabled", "dynamic_offset_multiplier",
     "dynamic_offset_min_cents", "dynamic_offset_max_cents",
     "stop_loss_mode", "drop_cents", "max_spread_from_mid",
     "apply_widen_gate",
+    "bot_risk_stop_adverse_drop_cents", "bot_order_requote_dead_band_cents",
 })
 
 # The re-quote holds #387 retired, named on both surfaces an arm can use: the

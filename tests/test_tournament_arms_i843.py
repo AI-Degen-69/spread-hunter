@@ -16,10 +16,15 @@ from scripts.shadow_tournament import (
 
 ARMS_PATH = Path("configs/tournaments/i843-pair-test_arms.json")
 
+# Both spellings of each money override: #872 renamed the keys, and the retired
+# `_CENTS` names still load through the deprecation window, so an arm setting
+# one is just as effective a safety override as the `_USD` name.
 SAFETY_OVERRIDE_KEYS = frozenset({
     "BOT_RISK_STOP_MODE",
     "BOT_RISK_STOP_ADVERSE_DROP_USD",
+    "BOT_RISK_STOP_ADVERSE_DROP_CENTS",
     "BOT_ORDER_REQUOTE_DEAD_BAND_USD",
+    "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS",
     "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC",
 })
 

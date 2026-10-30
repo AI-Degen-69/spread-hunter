@@ -184,6 +184,21 @@ def test_build_tournament_plan_rejects_a_retired_env_name():
         build_tournament_plan(issue=371, arms=bad_env_arms, check_ports=False)
 
 
+def test_build_tournament_plan_rejects_the_money_field_names_872_retired():
+    """#872 renamed two preset fields; the old spellings must not run the default.
+
+    `_preset_to_env` reads the `_usd` field names, so an arm still spelled with
+    the `_cents` name would quietly launch at the shipped stop distance instead
+    of the one the arm was written to test.
+    """
+    from scripts.shadow_tournament import build_tournament_plan
+
+    for field in ("bot_risk_stop_adverse_drop_cents", "bot_order_requote_dead_band_cents"):
+        stale_arms = [{"name": "arm-one", field: 0.045}]
+        with pytest.raises(ValueError, match=r"retired preset keys"):
+            build_tournament_plan(issue=371, arms=stale_arms, check_ports=False)
+
+
 def test_build_tournament_plan_rejects_a_retired_preset_key():
     """A pre-#732 arm key is refused, not silently left at the shipped default.
 
