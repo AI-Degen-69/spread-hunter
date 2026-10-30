@@ -339,15 +339,15 @@ def test_stop_trigger_floors_at_one_cent():
 
 
 @pytest.mark.parametrize(
-    ("bot_risk_stop_adverse_drop_cents", "expected", "source"),
+    ("bot_risk_stop_adverse_drop_usd", "expected", "source"),
     # 0.50 - 0.90 is below zero, so the 0.125 emergency floor protects --
     # rounded up to the 0.13 cent.
     [(0.01, 0.49, "strategy"), (0.90, 0.13, "emergency")],
 )
-def test_stop_trigger_accepts_both_drop_cents_endpoints(bot_risk_stop_adverse_drop_cents, expected,
+def test_stop_trigger_accepts_both_drop_cents_endpoints(bot_risk_stop_adverse_drop_usd, expected,
                                                        source):
     trigger, got_source = stop_trigger(
-        0.50, "ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents, 10.0, 75.0,
+        0.50, "ABSOLUTE_DROP", bot_risk_stop_adverse_drop_usd, 10.0, 75.0,
     )
 
     assert trigger == pytest.approx(expected)
@@ -378,11 +378,11 @@ def test_stop_trigger_refuses_non_canonical_modes(mode):
 
 
 @pytest.mark.parametrize(
-    "bot_risk_stop_adverse_drop_cents", [0.0, 0.009, 0.91, float("nan"), float("inf")]
+    "bot_risk_stop_adverse_drop_usd", [0.0, 0.009, 0.91, float("nan"), float("inf")]
 )
-def test_stop_trigger_refuses_drop_cents_outside_the_contract(bot_risk_stop_adverse_drop_cents):
-    with pytest.raises(ValueError, match="bot_risk_stop_adverse_drop_cents"):
-        stop_trigger(0.50, "ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents, 10.0, 75.0)
+def test_stop_trigger_refuses_drop_cents_outside_the_contract(bot_risk_stop_adverse_drop_usd):
+    with pytest.raises(ValueError, match="bot_risk_stop_adverse_drop_usd"):
+        stop_trigger(0.50, "ABSOLUTE_DROP", bot_risk_stop_adverse_drop_usd, 10.0, 75.0)
 
 
 @pytest.mark.parametrize("pct", [0.0, -1.0, 100.1, float("nan")])
@@ -475,8 +475,8 @@ def test_transition_refuses_an_unknown_stop_mode():
 
 @pytest.mark.parametrize(
     "knobs",
-    [{"bot_risk_stop_adverse_drop_cents": 0.0},
-     {"bot_risk_stop_adverse_drop_cents": 0.91},
+    [{"bot_risk_stop_adverse_drop_usd": 0.0},
+     {"bot_risk_stop_adverse_drop_usd": 0.91},
      {"bot_risk_stop_max_drawdown_pct": 0.0},
      {"bot_risk_stop_max_drawdown_pct": float("nan")},
      {"bot_risk_circuit_max_drawdown_pct": 101.0},
@@ -744,6 +744,6 @@ def test_transition_unchanged_for_hard_stop():
     pos = _position(up_size=10.0, down_size=0.0, up_avg=0.60, up_bid=0.50)
     decision = transition(
         pos, None, bot_pos_price_max_pair_cost_usd=0.99,
-        bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents=0.05,
+        bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_usd=0.05,
     )
     assert decision.action == "hard_stop"

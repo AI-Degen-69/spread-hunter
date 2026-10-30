@@ -23,6 +23,10 @@ from core_brain import config as core_config  # noqa: E402
 
 OFFSET_MIN = "BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS"
 OFFSET_MAX = "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"
+DEAD_BAND = "BOT_ORDER_REQUOTE_DEAD_BAND_USD"
+DEAD_BAND_RETIRED = "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS"
+DROPS = "BOT_RISK_STOP_ADVERSE_DROP_USD"
+DROPS_RETIRED = "BOT_RISK_STOP_ADVERSE_DROP_CENTS"
 
 
 @pytest.fixture(autouse=True)
@@ -156,3 +160,118 @@ def test_spread_offset_cents_whole_values_log_no_deprecation(monkeypatch, caplog
     with caplog.at_level(logging.WARNING):
         core_config.load()
     assert "DEPRECATED" not in caplog.text
+
+
+# --- the two dollar-valued keys: renamed to `_usd`, retired names still read --
+
+def test_defaults_are_usd_for_dead_band_and_adverse_drop():
+    """The shipped numbers did not move when the names did."""
+    cfg = core_config.load()
+    assert cfg.bot_order_requote_dead_band_usd == 0.03
+    assert cfg.bot_risk_stop_adverse_drop_usd == 0.05
+    assert isinstance(cfg.bot_order_requote_dead_band_usd, float)
+
+
+def test_canonical_usd_names_load(monkeypatch, caplog):
+    monkeypatch.setenv(DEAD_BAND, "0.10")
+    monkeypatch.setenv(DROPS, "0.08")
+    with caplog.at_level(logging.WARNING):
+        cfg = core_config.load()
+    assert cfg.bot_order_requote_dead_band_usd == 0.10
+    assert cfg.bot_risk_stop_adverse_drop_usd == 0.08
+    assert "DEPRECATED" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "retired_name,canonical_name,field,raw",
+    [
+        (DEAD_BAND_RETIRED, DEAD_BAND, "bot_order_requote_dead_band_usd", "0.10"),
+        (DROPS_RETIRED, DROPS, "bot_risk_stop_adverse_drop_usd", "0.045"),
+    ],
+)
+def test_retired_cents_name_still_loads_with_one_warning(
+        monkeypatch, caplog, retired_name, canonical_name, field, raw):
+    """The alias is a rename, not a conversion: same value, one loud warning.
+
+    A silently ignored retired name is the failure this guards: the operator
+    would read 0.10 in their own `.env` while the loader ran the shipped 0.03.
+    """
+    monkeypatch.setenv(retired_name, raw)
+    with caplog.at_level(logging.WARNING):
+        cfg = core_config.load()
+    assert getattr(cfg, field) == float(raw)
+
+    deprecated = [r for r in caplog.records
+                  if r.levelno == logging.WARNING and "DEPRECATED" in r.getMessage()]
+    assert len(deprecated) == 1
+    message = deprecated[0].getMessage()
+    assert retired_name in message
+    assert raw in message
+    assert f"{canonical_name}={raw}" in message
+
+    # The dashboard calls `from_env()` per request; one warning per key per
+    # process is what makes the line readable.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert getattr(core_config.load(), field) == float(raw)
+    assert "DEPRECATED" not in caplog.text
+
+
+def test_canonical_usd_name_beats_its_retired_spelling(monkeypatch, caplog):
+    monkeypatch.setenv(DEAD_BAND_RETIRED, "0.10")
+    monkeypatch.setenv(DEAD_BAND, "0.04")
+    with caplog.at_level(logging.WARNING):
+        cfg = core_config.load()
+    assert cfg.bot_order_requote_dead_band_usd == 0.04
+    assert "DEPRECATED" not in caplog.text
+
+
+def test_blank_canonical_usd_name_falls_through_to_the_retired_one(monkeypatch, caplog):
+    """`_env` reads blank as unset, and the fallback keeps that rule."""
+    monkeypatch.setenv(DROPS, "   ")
+    monkeypatch.setenv(DROPS_RETIRED, "0.08")
+    with caplog.at_level(logging.WARNING):
+        cfg = core_config.load()
+    assert cfg.bot_risk_stop_adverse_drop_usd == 0.08
+    assert "DEPRECATED" in caplog.text
+
+
+@pytest.mark.parametrize("name", [DEAD_BAND, DEAD_BAND_RETIRED])
+@pytest.mark.parametrize("raw", ["1.5", "-0.1", "abc", "nan", "inf"])
+def test_dead_band_rejections_name_the_spelling_the_operator_used(
+        monkeypatch, name, raw):
+    monkeypatch.setenv(name, raw)
+    with pytest.raises(ValueError) as exc:
+        core_config.load()
+    assert name in str(exc.value)
+
+
+@pytest.mark.parametrize("name", [DROPS, DROPS_RETIRED])
+@pytest.mark.parametrize("raw", ["0.0", "0.91", "abc"])
+def test_adverse_drop_rejections_name_the_spelling_the_operator_used(
+        monkeypatch, name, raw):
+    monkeypatch.setenv(name, raw)
+    with pytest.raises(ValueError) as exc:
+        core_config.load()
+    assert name in str(exc.value)
+
+
+def test_hybrid_preset_sets_the_renamed_dead_band(monkeypatch):
+    """The preset table carries the field name, so the rename had to reach it."""
+    monkeypatch.setenv("BOT_QUOTE_TOURNAMENT_PRESET", "hybrid")
+    assert core_config.load().bot_order_requote_dead_band_usd == 0.060
+
+
+@pytest.mark.parametrize("name", [DROPS, DROPS_RETIRED])
+def test_the_45c_champion_stop_survives_the_rename(monkeypatch, name):
+    """The live champion's 4.5c stop is the reason this is a rename, not a
+    conversion: 4.5c has no integer-cent form, and the trigger it produces at a
+    sub-cent entry must be identical through either spelling."""
+    from core_brain.single_leg_lifecycle import stop_trigger
+
+    monkeypatch.setenv(name, "0.045")
+    loaded = core_config.load().bot_risk_stop_adverse_drop_usd
+    assert loaded == 0.045
+    for entry in (0.50, 0.512, 0.53, 0.618, 0.33):
+        assert stop_trigger(entry, "ABSOLUTE_DROP", loaded, 10.0, 75.0) == \
+            stop_trigger(entry, "ABSOLUTE_DROP", 0.045, 10.0, 75.0)

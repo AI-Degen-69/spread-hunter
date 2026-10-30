@@ -176,7 +176,7 @@ def main():
     # shares. Show the exact trigger price on the whole-cent book.
     fill = price                       # assume we get filled at our resting bid
     trigger_price, trigger_source = stop_trigger(
-        fill, cfg.bot_risk_stop_mode, cfg.bot_risk_stop_adverse_drop_cents, cfg.bot_risk_stop_max_drawdown_pct,
+        fill, cfg.bot_risk_stop_mode, cfg.bot_risk_stop_adverse_drop_usd, cfg.bot_risk_stop_max_drawdown_pct,
         cfg.bot_risk_circuit_max_drawdown_pct,
     )
     trigger_cent = math.floor(trigger_price * 100.0 + 1e-9) / 100.0
@@ -192,7 +192,7 @@ def main():
     # operator can see them survive their own entry-relative trigger instead.
     for ex_fill in (0.10, 0.12, 0.14):
         ex_price, ex_source = stop_trigger(
-            ex_fill, cfg.bot_risk_stop_mode, cfg.bot_risk_stop_adverse_drop_cents, cfg.bot_risk_stop_max_drawdown_pct,
+            ex_fill, cfg.bot_risk_stop_mode, cfg.bot_risk_stop_adverse_drop_usd, cfg.bot_risk_stop_max_drawdown_pct,
             cfg.bot_risk_circuit_max_drawdown_pct,
         )
         ex_cent = math.floor(ex_price * 100.0 + 1e-9) / 100.0

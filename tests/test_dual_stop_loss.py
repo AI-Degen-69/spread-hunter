@@ -249,7 +249,7 @@ def test_absolute_mode_cuts_a_fixed_cent_drop(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents=0.05),
+        _cfg(bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_usd=0.05),
         now=now_s,
     )
 
@@ -265,7 +265,7 @@ def test_the_floor_wins_when_the_mode_trigger_is_below_it(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents=0.90),
+        _cfg(bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_usd=0.90),
         now=now_s,
     )
 
@@ -282,7 +282,7 @@ def test_the_floor_does_not_cut_below_its_own_level(registry):
 
     results = auto_manage_pairs(
         client, registry,
-        _cfg(bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_cents=0.90),
+        _cfg(bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_usd=0.90),
         now=now_s,
     )
 

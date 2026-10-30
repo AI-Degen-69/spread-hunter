@@ -278,8 +278,8 @@ def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
         env["BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS"] = str(int(preset["bot_quote_spread_offset_max_cents"]))
     if "bot_risk_stop_mode" in preset:
         env["BOT_RISK_STOP_MODE"] = str(preset["bot_risk_stop_mode"])
-    if "bot_risk_stop_adverse_drop_cents" in preset:
-        env["BOT_RISK_STOP_ADVERSE_DROP_CENTS"] = str(preset["bot_risk_stop_adverse_drop_cents"])
+    if "bot_risk_stop_adverse_drop_usd" in preset:
+        env["BOT_RISK_STOP_ADVERSE_DROP_USD"] = str(preset["bot_risk_stop_adverse_drop_usd"])
     # Loose-baseline knobs. These let an arm quote the raw dynamic
     # offset with no upper clamp and no WIDENED snap-back, without touching
     # the shipped defaults or any other arm.

@@ -504,7 +504,7 @@ def test_newest_run_of_another_issue_owns_the_arm_table(tmp_path, monkeypatch):
     assert loose["tweak_rationale"] == spec["loose-baseline"]["tweak_rationale"]
     # The control moves no knob, so it must not borrow one from another arm; the
     # note names the lever the analyst would try next, not a setting it ran.
-    assert loose["hypothesized_tweak"] == "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS=0.06"
+    assert loose["hypothesized_tweak"] == "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06"
     tight = {a["name"]: a for a in arms}["tight-touch"]
     assert tight["hypothesized_tweak"] == "BOT_QUOTE_TOURNAMENT_PRESET=balanced"
     assert tight["desc"] == spec["tight-touch"]["desc"]
@@ -744,9 +744,9 @@ CHAMPION_ENV = {
     "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
     "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
     "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "6",
-    "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.06",
+    "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06",
     "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-    "BOT_RISK_STOP_ADVERSE_DROP_CENTS": "0.045",
+    "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.045",
     "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
     "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "3.0",
     "BOT_RISK_AGED_OUT_RESCUE_LEAD_SEC": "45.0",
@@ -941,7 +941,7 @@ def test_annotation_cell_renders_every_populated_field():
     filled = _annotation_arm(
         worst_catalyst="Stop-out rate 44.1% (15/34)",
         worst_catalyst_desc="6.4 h snapshot: 15 stops on 34 trades, 19 merges",
-        hypothesized_tweak="BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
+        hypothesized_tweak="BOT_RISK_STOP_ADVERSE_DROP_USD=0.045",
         tweak_rationale="Hypothesis: 2c fires on normal spread noise.",
     )
 
@@ -952,7 +952,7 @@ def test_annotation_cell_renders_every_populated_field():
     positions = [
         cell.find("Stop-out rate 44.1% (15/34)"),
         cell.find("6.4 h snapshot: 15 stops"),
-        cell.find("BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045"),
+        cell.find("BOT_RISK_STOP_ADVERSE_DROP_USD=0.045"),
         cell.find("Hypothesis: 2c fires"),
     ]
     assert all(pos >= 0 for pos in positions), cell
@@ -1015,7 +1015,7 @@ def test_render_all_renders_the_row_through_the_same_cell():
     """The first render and every 5s poll go through one code path."""
     filled = _annotation_arm(
         worst_catalyst="Stop-out rate 44.1% (15/34)",
-        hypothesized_tweak="BOT_RISK_STOP_ADVERSE_DROP_CENTS=0.045",
+        hypothesized_tweak="BOT_RISK_STOP_ADVERSE_DROP_USD=0.045",
         tweak_rationale="Hypothesis: 2c is tighter than normal spread noise.",
     )
 

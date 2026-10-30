@@ -20,15 +20,15 @@ class TestConfigKnobs:
         cfg = MakerConfig()
         assert cfg.bot_pos_price_max_complete_usd == 1.00
         assert cfg.bot_pos_gate_complete_cost_on is True
-        assert cfg.bot_order_requote_dead_band_cents == 0.03
+        assert cfg.bot_order_requote_dead_band_usd == 0.03
 
     def test_completable_cap_is_overridable_from_the_environment(self):
         with mock.patch.dict(os.environ, {"BOT_POS_PRICE_MAX_COMPLETE_USD": "0.98"}):
             assert load().bot_pos_price_max_complete_usd == 0.98
 
     def test_dead_band_is_overridable_from_the_environment(self):
-        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0.0"}):
-            assert load().bot_order_requote_dead_band_cents == 0.0
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.0"}):
+            assert load().bot_order_requote_dead_band_usd == 0.0
 
 
 class TestCompletablePairBlock:
@@ -186,19 +186,19 @@ class TestOverrideValidation:
 
     @pytest.mark.parametrize("bad", ["nan", "inf", "-0.01", "1.5", "abc"])
     def test_a_non_finite_negative_or_oversized_dead_band_is_refused(self, bad):
-        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": bad}):
-            with pytest.raises(ValueError, match="BOT_ORDER_REQUOTE_DEAD_BAND_CENTS"):
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_USD": bad}):
+            with pytest.raises(ValueError, match="BOT_ORDER_REQUOTE_DEAD_BAND_USD"):
                 load()
 
     def test_a_zero_dead_band_is_accepted(self):
-        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "0"}):
-            assert load().bot_order_requote_dead_band_cents == 0.0
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0"}):
+            assert load().bot_order_requote_dead_band_usd == 0.0
 
     def test_the_dead_band_ceiling_is_accepted(self):
         # Both ends of the bound, so a future tightening cannot move the
         # ceiling without a test saying so. 1.00 is the instrument's whole
         # price range and already means "never re-quote"; it is the last
         # value that is a setting rather than a typo.
-        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_CENTS": "1.0"}):
-            assert load().bot_order_requote_dead_band_cents == 1.0
+        with mock.patch.dict(os.environ, {"BOT_ORDER_REQUOTE_DEAD_BAND_USD": "1.0"}):
+            assert load().bot_order_requote_dead_band_usd == 1.0
 
