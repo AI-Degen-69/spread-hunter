@@ -341,7 +341,7 @@ def test_uncomputable_sample_size_renders_not_computable():
                 "stop_exits": 0,
                 "merge_rate_pct": 0.0,
                 "total_pnl": 0.0,
-                "sharpe_proxy": 0.0,
+                "sharpe_ratio": 0.0,
                 "profit_factor": 0.0,
                 "max_drawdown": 0.0,
                 "n_required_002": None,
@@ -360,6 +360,44 @@ def test_uncomputable_sample_size_renders_not_computable():
     }
     rendered = render_text(ev)
     assert "not computable" in rendered
+
+
+def test_render_text_shows_no_data_for_unmeasurable_sharpe():
+    """#875: a None ratio renders NO_DATA, never a fabricated number."""
+    import scripts.reevaluate_tournament_run as tool
+
+    ev = {
+        "issue": 799,
+        "stamp": "2026-10-26T00-12",
+        "minutes_planned": 1440.0,
+        "run_dir": "/tmp",
+        "arms": [
+            {
+                "name": "flat-arm",
+                "elapsed_min": 60.0,
+                "trades": 5,
+                "merges": 5,
+                "stop_exits": 0,
+                "merge_rate_pct": 100.0,
+                "total_pnl": 0.0,
+                "sharpe_ratio": None,
+                "profit_factor": 1.0,
+                "max_drawdown": 0.0,
+                "n_required_002": None,
+                "gates": {
+                    "sharpe": False,
+                    "profit_factor": False,
+                    "max_drawdown": True,
+                    "powered": False,
+                },
+                "verdict": None,
+            }
+        ],
+        "ranked": ["flat-arm"],
+        "leader": "flat-arm",
+        "caveat": "caveat text",
+    }
+    assert "NO_DATA" in tool.render_text(ev)
 
 
 def test_verdict_reports_no_data_for_a_missing_store(tmp_path, monkeypatch):

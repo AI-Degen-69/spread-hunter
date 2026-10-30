@@ -187,7 +187,11 @@ def evaluate_run(plan_path: Path, with_verdict: bool = False) -> dict[str, Any]:
         n_required = required_sample_size(sigma, DELTA_USD, Z_ALPHA_90_ONE_SIDED, Z_BETA_80_POWER)
         trades = int(metrics.get("trades_count") or 0)
         risk_gates = {
-            "sharpe": round(float(metrics.get("sharpe_proxy") or 0.0), 2) >= GATE_SHARPE_MIN,
+            "sharpe": (
+                round(float(metrics.get("sharpe_ratio")), 2) >= GATE_SHARPE_MIN
+                if isinstance(metrics.get("sharpe_ratio"), (int, float))
+                else False
+            ),
             "profit_factor": round(float(metrics.get("profit_factor") or 0.0), 2)
             >= GATE_PROFIT_FACTOR_MIN,
             "max_drawdown": float(metrics.get("max_drawdown") or 0.0) < GATE_MAX_DRAWDOWN_USD,
@@ -214,7 +218,7 @@ def evaluate_run(plan_path: Path, with_verdict: bool = False) -> dict[str, Any]:
                 "total_pnl": metrics.get("total_pnl", 0.0),
                 "mean_pnl": metrics.get("mean_pnl", 0.0),
                 "sigma": round(sigma, 4),
-                "sharpe_proxy": metrics.get("sharpe_proxy", 0.0),
+                "sharpe_ratio": metrics.get("sharpe_ratio"),
                 "profit_factor": metrics.get("profit_factor", 0.0),
                 "max_drawdown": metrics.get("max_drawdown", 0.0),
                 "var_95": metrics.get("var_95"),
@@ -264,7 +268,7 @@ def evaluate_run(plan_path: Path, with_verdict: bool = False) -> dict[str, Any]:
         # them and the ordering is the risk-shape gates first, then Sharpe, then realised PnL.
         ranked = sorted(
             arms,
-            key=lambda a: (a["risk_gates_passed"], a["sharpe_proxy"], a["total_pnl"]),
+            key=lambda a: (a["risk_gates_passed"], (a["sharpe_ratio"] if isinstance(a.get("sharpe_ratio"), (int, float)) else float("-inf")), a["total_pnl"]),
             reverse=True,
         )
         if any_powered:
@@ -323,7 +327,7 @@ def render_text(ev: dict[str, Any]) -> str:
         lines.append(
             f"{a['name']:<20}{a['elapsed_min'] / 60.0:>6.1f}{a['trades']:>8}{a['merges']:>8}"
             f"{a['stop_exits']:>7}{_fmt(a['merge_rate_pct']):>8}{_fmt(a['total_pnl']):>9}"
-            f"{_fmt(a['sharpe_proxy']):>8}{_fmt(a['profit_factor']):>7}"
+            f"{_fmt(a['sharpe_ratio'] if a.get('sharpe_ratio') is not None else 'NO_DATA'):>8}{_fmt(a['profit_factor']):>7}"
             f"{_fmt(a['max_drawdown']):>7}{n_req:>15}  {marks}"
         )
     has_go = any(a.get("verdict") == "GO" for a in ev["arms"])
