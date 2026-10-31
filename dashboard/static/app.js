@@ -11894,7 +11894,7 @@ window.setKanbanLane = function(lane) {
   buttons.forEach(btn => {
     const active = btn.dataset.lane === lane;
     btn.classList.toggle('active', active);
-    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
 
   if (typeof renderScreener === 'function' && window.__lastScreenerArgs) {

@@ -308,7 +308,7 @@
   border: 1px solid transparent;
   border-radius: 6px;
   color: var(--text-secondary);
-  font: 500 12px 'IBM Plex Sans', sans-serif;
+  font: 600 12px 'IBM Plex Sans', system-ui, 'Segoe UI', sans-serif;
   text-align: left;
   cursor: pointer;
   transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
@@ -323,14 +323,14 @@
   color: #38bdf8;
   background: rgba(56, 189, 248, 0.12);
   border-color: rgba(56, 189, 248, 0.35);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .proto-sub-nav-btn[data-sub="live"][aria-current="subpage"] {
   color: #c084fc;
   background: rgba(168, 85, 247, 0.15);
   border-color: rgba(168, 85, 247, 0.4);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .proto-sub-nav-btn .proto-nav-icon {
@@ -818,9 +818,9 @@
   background: transparent;
   border: 1px solid transparent;
   color: #94a3b8;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  font-weight: 500;
+  font-family: 'JetBrains Mono', system-ui, 'Segoe UI', monospace;
+  font-size: 12px;
+  font-weight: 600;
   padding: 5px 12px;
   border-radius: 6px;
   transition: all 0.15s ease;
@@ -840,8 +840,8 @@
 }
 
 .proto-body .ot-tab-btn .ot-count {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-family: 'JetBrains Mono', system-ui, 'Segoe UI', monospace;
+  font-size: 11px;
   padding: 1px 6px;
   border-radius: 4px;
   background: rgba(148, 163, 184, 0.15);
@@ -964,9 +964,9 @@
   background: rgba(6, 182, 212, 0.15);
   border: 1px solid rgba(6, 182, 212, 0.4);
   color: #06b6d4;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', system-ui, 'Segoe UI', monospace;
   font-weight: 700;
-  font-size: 10px;
+  font-size: 11px;
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -975,9 +975,9 @@
   background: rgba(245, 158, 11, 0.15);
   border: 1px solid rgba(245, 158, 11, 0.4);
   color: #f59e0b;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', system-ui, 'Segoe UI', monospace;
   font-weight: 700;
-  font-size: 10px;
+  font-size: 11px;
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -1376,9 +1376,9 @@
   background: #182232;
   border: 1px solid #233147;
   color: #94a3b8;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', system-ui, 'Segoe UI', monospace;
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 /* `Uncategorized` is an answer, not missing data: it keeps the chip in the
