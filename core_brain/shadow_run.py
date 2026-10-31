@@ -612,6 +612,15 @@ def make_deadline_sleep(
     return sleep_fn
 
 
+class _DroppedMarketRef:
+    """Minimal market reference for dropped conditions with active resting orders."""
+
+    def __init__(self, condition_id: str, slug: Optional[str] = None):
+        self.condition_id = str(condition_id)
+        self.slug = slug
+        self.market_slug = slug
+
+
 @dataclass
 class ShadowIntent:
     """A decided intent, stamped with the market it belongs to.
@@ -1189,6 +1198,87 @@ def build_shadow_seam(
         clob_host=clob_host,
     )
 
+    def settle_dropped_markets_fn(current_markets) -> list[str]:
+        """Settle tape for any market with active orders that dropped out of current_markets.
+
+        When a market leaves the active feed, the held-inventory shield (#869)
+        leaves working hedges resting on the book so as not to orphan filled
+        shares. In shadow mode, fills exist only from reading the tape, so if
+        dropped markets are never settled, their resting orders can never fill
+        even when the venue price crosses them.
+        """
+        mine_run_id = registry._run_id()
+        try:
+            active_orders = [
+                o for o in registry.get_active_orders()
+                if getattr(o, "status", "") in ("open", "partial")
+                and (getattr(o, "run_id", None) or mine_run_id) == mine_run_id
+            ]
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not read active orders for dropped settlement: %s", exc)
+            return []
+
+        if not active_orders:
+            return []
+
+        current_cids = {
+            str(getattr(m, "condition_id", getattr(m, "cid", ""))).lower()
+            for m in (current_markets or [])
+        }
+        from core_brain.market_lifecycle import resolved_condition_ids
+        cycle_resolved = resolved_condition_ids(registry)
+        dropped_cids = {
+            str(o.condition_id) for o in active_orders
+            if o.condition_id and str(o.condition_id).lower() not in current_cids
+            and str(o.condition_id).lower() not in cycle_resolved
+        }
+        if not dropped_cids:
+            return []
+
+        slug_by_cid: dict[str, str] = {}
+        try:
+            with registry._conn() as conn:
+                for cid in dropped_cids:
+                    row = conn.execute(
+                        "SELECT market_slug FROM quotes WHERE condition_id = ? "
+                        "AND market_slug IS NOT NULL LIMIT 1",
+                        (cid,),
+                    ).fetchone()
+                    if row and row[0]:
+                        slug_by_cid[cid] = row[0]
+        except (sqlite3.Error, OSError):
+            pass
+
+        settled: list[str] = []
+        for cid in sorted(dropped_cids):
+            seen = seen_by_market.setdefault(cid, set())
+            market_cycles[cid] = market_cycles.get(cid, 0) + 1
+            cycle = market_cycles[cid]
+            fill_trade_ids: set[str] = set()
+            stub_market = _DroppedMarketRef(condition_id=cid, slug=slug_by_cid.get(cid))
+            try:
+                settle_market(
+                    registry, stub_market, db_path=db_path,
+                    traded_fn=resolved_traded_fn, seen=seen,
+                    book_fn=shadow_fetch_books, clob_host=clob_host,
+                    cycle=cycle, fill_trade_ids=fill_trade_ids,
+                )
+                settled.append(cid)
+                for tid in sorted(fill_trade_ids):
+                    emit_fn(
+                        cycle, "reconciling", "user_fill_received",
+                        service="decide",
+                        extra={
+                            "simulated": True,
+                            "trade_id": tid,
+                            "condition_id": cid,
+                            "cycle": cycle,
+                        },
+                    )
+            except Exception as e:  # noqa: BLE001
+                log.warning("settle failed for dropped market %s: %s", cid[:12], e)
+        return settled
+
     seam = VenueSeam(
         client=client,
         registry=registry,
@@ -1210,6 +1300,7 @@ def build_shadow_seam(
         record_market_event=shadow_record_market_event,
     )
     seam.book_provider = book_provider
+    seam.settle_dropped_markets_fn = settle_dropped_markets_fn
     return seam
 
 
@@ -1532,6 +1623,12 @@ def run_shadow(
     def shadow_sweep() -> None:
         """Run the production lifecycle policy against the isolated shadow store."""
         from core_brain.shadow_exec import record_shadow_merges
+
+        if hasattr(seam, "settle_dropped_markets_fn"):
+            try:
+                seam.settle_dropped_markets_fn(markets_holder[0])
+            except Exception as exc:
+                log.warning("settle dropped markets failed: %s", exc)
 
         _shadow_lifecycle_pass()
         try:

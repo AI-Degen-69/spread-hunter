@@ -357,7 +357,7 @@ class TestPairsSweep:
     calls every cycle, previously a no-op in shadow mode.
     """
 
-    def _seed_single_buy(self, db_path) -> None:
+    def _seed_single_buy(self, db_path, run_id=None) -> None:
         """A naked pair in the shadow store: tok-up filled 20 at 0.47,
         tok-dn still resting -- the exact fixture the unit test in
         `tests/test_shadow_exec.py` uses, seeded here directly against the
@@ -371,7 +371,7 @@ class TestPairsSweep:
         from core_brain.config import load
 
         init_db(db_path)
-        reg = OrderRegistry(db_path=db_path)
+        reg = OrderRegistry(db_path=db_path, run_id=run_id)
         ensure_shadow_tables(db_path)
         intents = [
             QuoteIntent(side="UP", token_id="tok-up", price=0.47, size=20,
@@ -448,6 +448,49 @@ class TestPairsSweep:
             )
 
         assert not any("completed" in r.message for r in caplog.records)
+
+    def test_dropped_market_with_active_hedge_is_settled_and_merged_on_sweep(
+            self, tmp_path, monkeypatch):
+        """When a market drops from the feed, held-inventory keeps its hedge resting.
+        Shadow sweep must settle that dropped market from the tape so it can fill
+        and merge rather than freezing in 'open' state forever.
+        """
+        from core_brain.order_registry import OrderRegistry
+        from core_brain.shadow_run import run_shadow
+        from core_brain import markets as markets_mod
+
+        db = tmp_path / "shadow.db"
+        run_id = "shadow-test-dropped"
+        self._seed_single_buy(db, run_id=run_id)
+
+        settled_cids = []
+        def fake_recent_trades(condition_id, seen, **kwargs):
+            settled_cids.append(condition_id)
+            if condition_id == "0xabc":
+                return {"tok-dn": {0.50: 20.0}}
+            return {}
+
+        monkeypatch.setattr(markets_mod, "recent_trades", fake_recent_trades)
+        monkeypatch.setattr(markets_mod, "_ORIGINAL_RECENT_TRADES", object())
+        monkeypatch.setattr(markets_mod, "recent_trades_detailed",
+                            lambda cid, seen, **k: markets_mod.TradeTapeReport(
+                                "complete", {"tok-dn": {0.50: 20.0} if cid == "0xabc" else {}}, ()))
+
+        run_shadow(
+            minutes=0.0, db_path=db, run_id=run_id,
+            markets_fn=lambda max_markets=None: [FakeMarket("0xother")],
+            client_fn=lambda: object(),
+            fetch_books=self._canonical_book,
+        )
+
+        assert "0xabc" in settled_cids
+
+        registry = OrderRegistry(db_path=db, run_id=run_id)
+        orders = registry.get_all_orders()
+        assert all(o["status"] == "filled" for o in orders if o["condition_id"] == "0xabc")
+        merges = [c for c in registry.get_all_closes() if c.get("condition_id") == "0xabc"]
+        assert len(merges) >= 1
+        assert merges[0]["method"] in ("merge", "shadow_merge")
 
     def test_one_fetch_books_serves_quoting_and_the_lifecycle_sweep(
             self, tmp_path):
