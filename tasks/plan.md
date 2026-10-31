@@ -1,166 +1,107 @@
-# Station II Plan — Issue #881: PWD-aware worktree menu + nuclear process stop
+# Implementation Plan — Issue #867: Redesign dashboard layout and theme (pill misuse, font legibility, redundant port numbers)
 
-Branch: `i881/improve-align-spread-hunter-menu-script-for-pwd-aw` | Issue: #881
+**Issue:** [#867](https://github.com/AI-Degen-69/spread-hunter/issues/867)
+**Branch:** `i867/redesign-dashboard-layout-and-theme`
+**Worktree:** `C:\Users\Tiger\.worktrees\spread-hunter\i867`
+**Spec:** [`SPEC.md`](../SPEC.md)
+**Constraints:** [`CONSTRAINTS.md`](../CONSTRAINTS.md)
 
-- **Tier:** Standard — one script plus docs and harness tests; a single architectural
-  decision (checkout-local ownership with fail-closed Unknown). Rationale: no new
-  dependency, no public API, no schema change; all power is in narrowing match
-  predicates and adding one fenced action.
-- **Task types:** Code (PowerShell menu logic + pytest harness tests).
-- **Stack / runner:** PowerShell 7 menu (`pwsh` 7.6 available, Windows PowerShell 5.1
-  fallback); tests are Python `pytest` files that shell lifted functions to a PowerShell
-  host and skip when none exists (`python -m pytest -q`).
+## Overview
 
----
-
-## 1. CodeRabbit intake note (read once, not twice)
-
-The `coderabbitai` plan comment carries its full plan plus a byte-identical echo inside
-`<!-- <rawResChunk> -->` — only the rendered copy was used. Adopted: the 3-task split
-(1.1 checkout selection → 1.2 ownership/dashboard identity → 1.3 force stop), all named
-functions and test files, the four dashboard status labels, the seven-module regex, the
-kill order (dash → order_manager → rest), PID-reuse guard, single rescan, three-list
-report + resting-orders warning, and the `x`-key wiring. Rejected: the `Add-Type`
-memory-read helper and the parent-chain check (fragile/unsupported — stays a follow-up
-decision per C5); fixing `Stop-TsBridge` and the resume stray scan (left as-is per
-scope); adding a `BOT_ORDER_QUEUE_FLOW_WINDOW_SEC`-style reader (not this issue).
-`[UNVERIFIED]` carried into tasks: confirm `x` is unused (verify against
-`$script:MenuKeys`); confirm `registry_path` default source in `dashboard/server.py`
-before trusting it in `Get-DashboardOwnership`; confirm option 7's command-line
-confirmation rule before mirroring it in the `x` action.
-
-## 2. Domain skill routing
-
-Task type is Code → planning skills `test-driven-development` (every behavior gets a
-failing-first harness test) and `incremental-implementation` (land T1 → T2 → T3 in
-order; each task is a complete vertical slice with its own tests). No frontend, API, or
-docs skill applies: menu copy changes are one-line labels, and the README edit is a
-tabled row, not a documentation design task.
-
-## 3. Spec pointer
-
-Full acceptance spec: `SPEC.md` (goal, non-goals, §3.1–§3.4 components, §4 acceptance
-criteria, §5 edge cases). The one improvement proposal (§5 below) is folded into T1.
-
-## 4. Interface contracts (locked — callers and tests pin these)
-
-| Function / key | Signature / mapping | Contract |
-|---|---|---|
-| `Resolve-ProjectRoot` | `-CurrentPath -ScriptCheckout → @{ Path; Source }` | Exact-folder marker check only; `Source ∈ {"current folder","script location"}`; `GetFullPath`-normalized, no trailing separator |
-| `Test-PathInCheckout` | `-Path -Root → bool` | Case-insensitive boundary match; bounded nested-checkout walk between path and root, never above root |
-| `Get-CommandLineCheckoutOwner` | `-CommandLine -Root → Owned\|Foreign\|Unknown` | argv[0] ignored; quoting + `--opt=value` honored; none/mixed → Unknown |
-| `Get-DashboardOwnership` | `-PortNumber → Owned\|Foreign\|Unknown` | Owned = canonical `data/orders.db` + registry under local `runtime/` or `run/` + `services.dash.pid == Get-PortPid`; read-only, never writes records |
-| `Stop-WorktreeProcessesForce` | `→ bool` | Kill order dash → order_manager → rest; `taskkill /T /F` + `Wait-ProcessGone`; PID-reuse re-check; one rescan; three-list report + resting-orders warning |
-| Action map / dispatch | `stop-all-force, force-stop, nuke → x` | `x ∉ $script:MenuKeys` (verified at build time); `stop-all/stopall/clean/reset → 7` preserved; `Invoke-LiveAction "x"` calls only the force stop |
-
-## 5. Improvement proposal (adopted — test hardening, not scope expansion)
-
-> **Evidence:** today `$PSScriptRoot` appears exactly once in the 3410-line script
-> (line 51: `$ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path`).
-> **Proposal:** add a static test asserting `$PSScriptRoot` is still referenced exactly
-> once after T1, so no future edit can silently re-couple a path to the script location.
-> Folded into T1's test list below.
-
-## 6. Dependency graph
-
-`T1 (checkout root) → T2 (ownership + dashboard identity) → T3 (force stop + wiring)`.
-T2 needs T1's root; T3 needs both (kill scoping uses the T2 classifiers on the T1 root).
+Fix four dashboard UI/UX pain points identified in Issue #867:
+1. **Interactive dropdown triggers (`PROFILE`, `DB`, `SERVICES`) disguised as static pills:** Promote `#db-mode-badge` to `<button type="button">` with `aria-haspopup="true"`, `aria-expanded="false"`, and `aria-controls="db-run-switcher"`, style `.top-meta .pill[aria-haspopup]` as a button with a `6px` border-radius and a single rotating `▾` caret (`::after`), remove the duplicate literal `.services-caret`, add graceful `.pill-detail` ellipsis truncation on `#db-mode-badge`, and wire `#db-mode-badge` before `if (!mode)` in `renderDbMode()` so clicking works even when the initial status mode is unknown.
+2. **DB run switcher premature truncation (`..._loo`), redundant port numbers (`:8800`), and missing active profile indicator:** Remove `:port` from `runSwitcherLabel()`, widen `.db-run-switcher` and update `.db-run-row` from `150px 1fr auto` to `minmax(0, 1fr) auto` (while preserving `auto 1fr auto` on `.db-demo-row`) so run rows use full popover width without breaking `.pill` / `.pill-label` / `.pill-value` grammar, and add an unmistakable `✓ ACTIVE` badge + `.active` highlight to the currently active profile/preset row in `#profile-dropdown`.
+3. **Disconnected kanban lane switcher & fragile Windows typography:** Restyle `.kanban-lane-switcher` as a unified connected segmented control (`gap: 0`, shared outer border, internal dividers, responsive narrow-viewport flex) with `aria-pressed` toggled by `window.setKanbanLane()`, add `system-ui, 'Segoe UI'` fallbacks to `body`, `.mono`, and `--font-display`, raise `body` font-weight to `500`, raise `.pill-label`, `.pill-detail`, and `.lane-count-pill` to `11px`, boost `.pill.state-unknown` contrast to ≥ 4.5:1, and align `prototype.css` rules in place.
 
 ---
 
-## T1 — Checkout selection from the current folder [Code] S [x]
+## Tasks
 
-Depends on: nothing. Files: `scripts/spread-hunter-menu.ps1` (≈lines 50–61, header,
-`status`, 3 timebox launches, comment near 1038–1039), `tests/test_menu_project_root.py`
-(new), `README.md` (one checkout-rule sentence — or defer to T3's README pass).
+### Task 1 (`T1`, Size: S, `[Design/UI]`): Shared Typography, Status Pill Contrast & Top Nav Dropdown Triggers (COMPLETED)
 
-- Add `Resolve-ProjectRoot -CurrentPath -ScriptCheckout` near the top (closing brace at
-  column zero for `_lift`); set `$ProjectPath` from it at the current line 51;
-  `-WorkingDirectory $ProjectPath` on the three timebox launches; fix the 1038–1039
-  comment; header/`status` print `Checkout: <path> (from current folder|from script
-  location)` + mixed-checkout note. `Resolve-RuntimeFile`, `Get-ServiceEntry`,
-  `Show-CheckoutIdentity` untouched.
-- Tests (temp folders + `_lift`, `pwsh`/`powershell` or skip): both markers → current
-  folder; one marker → script location; subfolder of checkout (`<checkout>/scripts`)
-  → fallback (no parent walk); unrelated folder → fallback; spaces + trailing
-  separator normalized; timebox launches pin working directory (source inspection);
-  **static: `$PSScriptRoot` occurs exactly once** (the improvement proposal).
-- Done when: from a worktree folder, main's script by full path prints the worktree
-  as the checkout.
+- **Files:**
+  - `dashboard/static/styles.css`
+  - `dashboard/static/index.html`
+  - `dashboard/static/app.js`
+  - `tests/test_ui_top_nav_groups.py`
+  - `tests/js/live_state_harness.cjs`
+- **Changes:**
+  1. **`dashboard/static/styles.css`:**
+     - Add `system-ui, 'Segoe UI'` before generic family in `--font-display` (`'Big Shoulders Display', Impact, system-ui, 'Segoe UI', sans-serif`), `body` (`'IBM Plex Sans', -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', sans-serif`), and `.mono` (`'JetBrains Mono', ui-monospace, system-ui, 'Segoe UI', monospace`). Keep `'IBM Plex Sans'` literal in `.tab-btn`.
+     - Add `font-weight: 500;` to `body`.
+     - Raise `.pill-label` and `.pill-detail` `font-size` from `9px` to `11px`.
+     - Raise `.pill.state-unknown` text color from `var(--text-muted)` to `var(--text-secondary)` (`#94a3b8`, ≥ 4.5:1 contrast) and give `.pill.state-unknown` a dashed border (`border-style: dashed;`) so it remains visually distinct from `.pill.state-stopped`.
+     - After `.pill.mode-stale`, add `.top-meta .pill[aria-haspopup]` (`border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; padding: 5px 10px; transition: border-color 0.15s ease, background-color 0.15s ease;`), `:hover`, `[aria-expanded="true"]`, `.top-meta .pill[aria-haspopup]::after` (`content: "▾"; font-size: 10px; opacity: 0.75; margin-left: 2px; display: inline-block; transition: transform 0.15s ease;`), and `.top-meta .pill[aria-expanded="true"]::after { transform: rotate(180deg); }`.
+     - Add `#db-mode-badge .pill-detail { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: bottom; }` for graceful top-bar truncation.
+     - Remove `font: inherit;` from `.services-pill-trigger` and remove `.services-caret` CSS rules (`lines 534–535, 576`).
+  2. **`dashboard/static/index.html`:**
+     - Change `#db-mode-badge` (`line 85`) from `<span ...>` to `<button id="db-mode-badge" class="pill state-unknown mono" type="button" title="Active registry" aria-haspopup="true" aria-expanded="false" aria-controls="db-run-switcher"><span class="pill-label">DB</span> <span class="pill-value">UNKNOWN</span></button>`.
+     - Remove `<span class="services-caret" aria-hidden="true">▾</span>` from `#hud-services-pill` (`line 95`).
+  3. **`dashboard/static/app.js`:**
+     - In `closeRunSwitcher()`, also reset `aria-expanded="false"` on `#db-mode-badge`.
+     - In `renderRunSwitcher()`, when setting `sw.style.display = 'block'`, set `aria-expanded="true"` on `#db-mode-badge`.
+     - In `renderDbMode(status)`, move the `if (!el.dataset.wired)` click wiring block *before* `if (!mode)` and remove `el.style.cursor = 'pointer';`.
+  4. **Tests (`tests/test_ui_top_nav_groups.py` & `tests/js/live_state_harness.cjs`):**
+     - Add `test_header_pill_text_is_at_least_11px`, `test_font_stacks_have_system_fallback`, `test_dropdown_triggers_are_buttons_with_popup_attributes`, `test_dropdown_trigger_css`, and `test_db_badge_wires_before_unknown_early_return`.
+- **Verification:**
+  - `rtk pytest -q tests/test_ui_top_nav_groups.py tests/test_ui_top_nav_consistency.py tests/test_live_state_language.py`
 
-## T2 — Ownership proofs + dashboard identity [Code] M [x]
+---
 
-Depends on: T1. Files: `scripts/spread-hunter-menu.ps1` (≈lines 529–561, 909–956,
-1832–1841, 1982–1999, 2090–2148, 2563–2638), `tests/test_menu_checkout_ownership.py`
-(new), `tests/test_menu_dashboard_identity.py` (new).
+### Task 2 (`T2`, Size: S, `[Design/UI]`): Port-Free Arm Labels, DB Run Switcher List Polish & Active Profile Indicator (COMPLETED)
 
-- Add `Test-PathInCheckout`, `Get-CommandLineCheckoutOwner`, read-only
-  `Get-DashboardOwnership` (column-zero braces); require Owned in
-  `Test-DashboardServer`; four status labels; `status` writes nothing; `Stop-BotStack`
-  gates the POST; replace the three substring predicates keeping regex text identical;
-  leave record helpers, `Stop-Dashboard`, `Stop-ShadowDashboard`, `Stop-TsBridge`,
-  resume stray scan untouched.
-- Tests: owned path / prefix-sibling refusal / case-slash-`..` normalization /
-  nested-worktree both directions / relative command line → Unknown / absolute args
-  decide owner / mixed → Unknown / interpreter path ignored / absolute script path
-  owned; dashboard adopt-Owned / sibling-with-production-flag Foreign with path /
-  PID-mismatch Unknown / db-override-not-owned / request-failure Unknown /
-  status-labels-write-nothing / stop_bot_stack skips-or-controls.
-- Done when: main's `status` labels a worktree dashboard `other checkout` and main's
-  `stop` never POSTs to it.
-- Reconciliation note (build): the same Owned-predicate swap was also applied to
-  `Test-OrphanStackProcess`, which carries the identical `-like "*$ProjectPath*"`
-  prefix flaw (a sibling checkout's orphan would block this checkout's reset).
-  Same one-line narrowing, same fail-closed direction (relative command lines stay
-  unmatched either way); not in the leave-untouched list, aligned with the
-  checkout-local invariant.
+- **Files:**
+  - `dashboard/static/app.js`
+  - `dashboard/static/styles.css`
+  - `tests/test_live_state_language.py`
+  - `tests/test_ui_top_nav_groups.py`
+  - `tests/js/live_state_harness.cjs`
+- **Changes:**
+  1. **`dashboard/static/app.js`:**
+     - In `runSwitcherLabel(run)`, remove `const portPart = run.dash_port ? ':' + run.dash_port : '';` and return `` `#${idxStr} ${t.arm}${pidPart}` ``.
+     - Update `armRowHtml(arm, stagedName, activeName)` and `presetRowHtml(preset, stagedName, activeName)` to accept `activeName`, add `.active` class when matched, and render `<span class="arm-active-tag">✓ ACTIVE</span>` alongside `.arm-staged-tag`.
+     - Update `profileOptionsHtml(options, pending, activeProfile = null)` to derive `activeName` (`arm:<name>` or `preset:<name>`) from `activeProfile` (`tournament_arm`, `preset`, or `name`) and pass it to `armRowHtml` / `presetRowHtml`.
+     - Update `renderProfileOptions()` to pass `lastStatus?.active_profile || null` as the 3rd argument to `profileOptionsHtml`.
+  2. **`dashboard/static/styles.css`:**
+     - Widen `.db-run-switcher` (`width: 440px`), change `.db-run-row` from `grid-template-columns: 150px 1fr auto` to `grid-template-columns: minmax(0, 1fr) auto`, add `.db-run-row.db-demo-row { grid-template-columns: auto 1fr auto; }`, and add `.db-run-row:not(.db-demo-row) > .pill { width: 100%; border-radius: 4px; justify-content: flex-start; }` so run switcher rows show full run names cleanly without 150px mid-word clipping.
+     - Add `.arm-row.active` and `.arm-active-tag` styles in `#profile-dropdown`.
+  3. **Tests (`tests/test_live_state_language.py`, `tests/test_ui_top_nav_groups.py`, `tests/js/live_state_harness.cjs`):**
+     - Update `test_run_switcher_label_formatting` in `tests/test_live_state_language.py` to expect `"#01 aggressive (pid 4242)"` and assert `":" not in res["tournamentWithPort"]`.
+     - Extend `test_profile_picker_lists_view_and_start` and add `test_db_run_switcher_rows_do_not_truncate_at_150px` in `tests/test_ui_top_nav_groups.py`.
+- **Verification:**
+  - `rtk pytest -q tests/test_live_state_language.py tests/test_ui_top_nav_groups.py tests/test_ui_top_nav_consistency.py tests/test_dashboard_run_switcher.py`
 
-## T3 — Separate force-stop action + wiring + docs [Code] M [x]
+---
 
-Depends on: T1, T2. Files: `scripts/spread-hunter-menu.ps1` (new
-`Stop-WorktreeProcessesForce`, `$actionMap`, `Invoke-LiveAction`, menu text),
-`tests/test_menu_force_stop.py` (new), `README.md` (actions table).
+### Task 3 (`T3`, Size: S, `[Design/UI]`): Connected Segmented Kanban Lane Switcher & Prototype Typography Alignment (COMPLETED)
 
-- Seven-module regex candidate scan (creation time read once); Owned/Foreign/Unknown
-  per §3.3; kill order dash → order_manager → rest with pre-kill creation-time
-  re-check; `taskkill /T /F` (not `taskkill.exe`); `Wait-ProcessGone`; one rescan;
-  three-list report + resting-orders warning verbatim; record cleanup only on full
-  exit; never touch `processes.json`/`markets.json`/heartbeat/locks/`data/`; never
-  call `Stop-TsBridge`/`Stop-BotStack`/`Stop-AllSpreadHunterProcesses`. Wire the three
-  aliases to `x` after verifying `x` unused; interactive yes/no; command-line follows
-  option 7's rule (verify first). Option 7 untouched.
-- Tests with stub harness + fake PIDs 101–110: kill list `[101, 102, 103]` in order /
-  Foreign {104, 106} vs Unknown {105, 107, 110} / modules 108–109 ignored /
-  changed-start-time skipped / survivor → false + record kept / rescan catch /
-  registry+bridge untouched / action-map routes + `stop-all→7`, `stop→2` preserved /
-  dispatch calls force-stop only.
-- Done when: in a worktree, `stop-all-force` stops its adopted dashboard + recorded
-  workers and lists main's processes as left running.
-- Reconciliation note (build): `test_menu_navigation.py::test_menu_key_set_is_identical_everywhere`
-  pins the exact `MenuKeys` literal, and the specified key `x` cannot pass the dispatch
-  allow-list without joining it. The literal gained `"x"` (one-line diff); the pin's
-  anti-drift purpose is preserved — `test_every_key_has_a_branch` now also covers `x`.
+- **Files:**
+  - `dashboard/static/styles.css`
+  - `dashboard/static/app.js`
+  - `dashboard/static/prototype.css`
+  - `tests/test_kanban_lanes.py`
+- **Changes:**
+  1. **`dashboard/static/styles.css`:**
+     - Update `.kanban-lane-switcher`: `gap: 0; padding: 0; border-radius: 8px; overflow: hidden; border: 1px solid var(--border-strong); background: rgba(0, 0, 0, 0.45);`.
+     - Update `.lane-tab-btn`: `border: none; border-right: 1px solid var(--border-subtle); border-radius: 0; font-family: 'IBM Plex Sans', system-ui, 'Segoe UI', sans-serif;` and `.lane-tab-btn:last-child { border-right: none; }`.
+     - Update `.lane-count-pill`: `font-size: 11px;`.
+     - In `@media (max-width: 900px)`, add `.kanban-lane-switcher { width: 100%; } .lane-tab-btn { flex: 1 1 0; min-width: 0; justify-content: center; } .lane-tab-btn .lane-name { overflow: hidden; text-overflow: ellipsis; }`.
+  2. **`dashboard/static/app.js`:**
+     - In `window.setKanbanLane` (`line 11877`), change `btn.setAttribute('aria-selected', ...)` to `btn.setAttribute('aria-pressed', active ? 'true' : 'false')`.
+  3. **`dashboard/static/prototype.css`:**
+     - Edit existing rules in place (keeping `proto-` prefix on every selector): `.proto-sub-nav-btn` weight `500` → `600`; `.proto-sub-nav-btn[data-sub="regular"][aria-current="subpage"]` and `[data-sub="live"][aria-current="subpage"]` weight `600` → `700`; `.proto-body .ot-tab-btn` `font-size: 12px; font-weight: 600;`; `.proto-body .ot-tab-btn .ot-count` `font-size: 11px;`; `.proto-body .stitch-category-pill` `font-weight: 600;`; `.proto-body .pill.active` and `.proto-body .pill.reconnecting` `font-size: 11px;`.
+  4. **Tests (`tests/test_kanban_lanes.py`):**
+     - Add `test_lane_switcher_is_connected` and `test_set_kanban_lane_writes_aria_pressed`.
+- **Verification:**
+  - `rtk pytest -q tests/test_kanban_lanes.py tests/test_sidebar_prototype.py tests/test_dashboard_narrow_viewport.py`
+  - Full UI suite check: `rtk pytest -q tests/test_ui_top_nav_groups.py tests/test_ui_top_nav_consistency.py tests/test_live_state_language.py tests/test_kanban_lanes.py tests/test_sidebar_prototype.py tests/test_dashboard_narrow_viewport.py tests/test_dashboard_run_switcher.py tests/test_ui_278_status_strip.py tests/test_ui_277_touch_targets.py`
 
-## Checkpoints
+---
 
-- After T1: header/`status` proves checkout selection; T1 tests green.
-- After T2: adoption/ownership proves isolation; T1+T2 tests green.
-- After T3: force-stop proves scoped kill; all new + listed regression suites green.
+## Run-Environment Caveats
 
-## Sub-issue mapping
+| ID | Caveat | Owner | When |
+| --- | --- | --- | --- |
+| E1 | Primary checkout (`C:\Users\Tiger\Agents\Projects\AI Trading\spread-hunter`) is running a live 6-arm shadow tournament on ports `8801–8806` and holds untracked `configs/tournaments/i843-6arm-test_arms.json`. All #867 work and verification must run strictly inside worktree `C:\Users\Tiger\.worktrees\spread-hunter\i867` (and on an unused port such as `8817` if launching a temporary preview server) so the active tournament is never disturbed. | model | During Station III / Station IV |
+| E2 | Tracked `SPEC.md`, `CONSTRAINTS.md`, `tasks/plan.md`, and `tasks/todo.md` on `origin/main` (`98e959c7`) were leftovers from closed Issue #881 and were replaced in this worktree with Issue #867's contract and plan. | model | Completed in Station II (`0eaac7c2`) |
 
-Skipped with reason: single-owner 3-task change on one branch — `tasks/todo.md`
-checklist is the tracker; no parallel work to coordinate, no `blocked-by` edges needed.
-
-## Operator hands-on checks (safe order; worktree with no live trading for step 4)
-
-1. In a worktree folder run `.\scripts\spread-hunter-menu.ps1 status` → header shows
-   the worktree path `(from current folder)`.
-2. Same folder, run main's script by full path with `status` → worktree path +
-   mixed-checkout note.
-3. Only if nothing listens on 8799: in a worktree terminal run
-   `python -m dashboard.server --port 8799` (do NOT press START), then main's `status`
-   → `LISTENING – other checkout: <worktree>`, and no adoption record written.
-4. In the worktree run `host`, then `status` (`ON (owned)`), then `stop-all-force` →
-   dashboard + recorded workers stopped, main's processes listed as left running.
-5. From main, `status` → main's processes unchanged.

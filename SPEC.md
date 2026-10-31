@@ -1,126 +1,60 @@
-# SPEC.md — Issue #881: PWD-aware worktree support and nuclear process stop
+# SPEC.md — Issue #867: Redesign Dashboard Layout and Theme
 
-Branch: `i881/improve-align-spread-hunter-menu-script-for-pwd-aw` | Issue: #881
+Branch: `i867/redesign-dashboard-layout-and-theme` | Issue: #867
 
 ## 1. Goal
 
-The PowerShell control center (`scripts/spread-hunter-menu.ps1`) becomes checkout-local:
-the operator's current folder decides which spread-hunter checkout (main repo or a
-worktree) the menu serves. Every stop/adopt/status path proves ownership before acting,
-and a new separate force-stop action (`stop-all-force` / `force-stop` / `nuke`, key `x`)
-stops every Owned process of this checkout — even ones the menu did not start — while
-leaving sibling/nested checkouts alone. A hand-started dashboard becomes adoptable and
-stoppable from its own checkout's menu.
+Redesign the dashboard header controls, dropdown popovers, kanban lane switcher, and typography so interactive controls look and behave like controls (buttons with downward carets `▾` and connected segmented tabs), passive status badges keep clean pill styling with WCAG AA contrast, redundant port numbers are removed from tournament arm labels, and 11–13px text renders crisply across Windows and Linux.
 
-## 2. Non-goals (explicit out of scope)
+## 2. Non-Goals (Out of Scope)
 
-- No `Add-Type` memory-read helper to fetch another process's working folder, and no
-  parent-PID-chain ownership check (open question C5 belongs to a follow-up ticket).
-- No Python changes: `core_brain/runtime_paths.py`, `core_brain/order_registry.py`,
-  `core_brain/order_manager.py`, `dashboard/server.py`, `scripts/global_stop_loss.py`.
-- No change to option 7's role: `stop-all`/`stopall`/`clean`/`reset` stay mapped to `7`.
-- No change to `Stop-TsBridge` and the resume stray scan (left as-is, documented as R3).
-- No data writes: `data/orders.db`, `processes.json`, `markets.json`, heartbeat, locks,
-  and everything under `data/` are never touched by the force stop (dashboard/session
-  records removed only after every PID in the record has exited).
-- No fix for the `scripts/global_stop_loss.py` `started_at`-heartbeat guardrail gap (R4,
-  needs a Python change — separate ticket).
+- Backend API changes (`dashboard/server.py`, `core_brain/**`, `scripts/*.py`).
+- Data polling, SSE socket logic, or start/stop modal orchestration in `dashboard/static/app.js`.
+- Introducing new pages, panels, or layout routing (`dashboard/static/prototype.js`).
+- Rewriting or modifying `data/orders.db` or `data/demo_orders.db`.
 
-## 3. Architecture & functional components
+## 3. Components & Behaviour
 
-### 3.1 Checkout selection — `Resolve-ProjectRoot -CurrentPath -ScriptCheckout`
+### 3.1 Typography & Status Pill Legibility (`dashboard/static/styles.css`)
+- **Font stacks with OS-native fallbacks:** Extend `body`, `.mono`, and `--font-display` font-family declarations with `system-ui, 'Segoe UI'` before the generic family (`sans-serif` / `monospace`). Retain literal `'IBM Plex Sans'` in `.tab-btn` for existing test compatibility.
+- **Font weights & minimum sizes:**
+  - Set `body` base `font-weight: 500` so body copy renders crisply on Windows subpixel antialiasing.
+  - Raise `.pill-label` and `.pill-detail` `font-size` from `9px` to `11px`.
+  - Brighten `.pill.state-unknown` text color to `#cbd5e1` (or `var(--text-secondary)` `#94a3b8` with dark border) so contrast on the slate background meets ≥ 4.5:1 while remaining distinct from `.state-stopped`.
 
-- Caller passes `(Get-Location).ProviderPath`. If that exact folder holds both marker
-  files (`core_brain/order_manager.py` and `dashboard/server.py`), it wins (source
-  `"current folder"`). Otherwise the parent of `ScriptCheckout` wins (source
-  `"script location"`). No parent-folder walk. Result normalized via `GetFullPath`,
-  trailing separator stripped.
-- Assigned to `$ProjectPath` before any dependent path is built (current line 51);
-  `Resolve-RuntimeFile` and `Get-ServiceEntry` unchanged. `$PSScriptRoot` keeps exactly
-  one use (this fallback). `Show-CheckoutIdentity` unchanged.
-- The three timebox launches pin `-WorkingDirectory $ProjectPath`; the comment near
-  lines 1038–1039 is corrected to cover workers, timeboxes, and browser launches.
-- Header and `status` print `Checkout: <path> (from current folder|from script location)`;
-  when the script's own checkout differs from the selected one, one note is printed:
-  menu logic comes from the script checkout, Python code from the selected checkout.
+### 3.2 Top Nav Dropdown Triggers (`dashboard/static/index.html`, `styles.css`, `app.js`)
+- **Semantic button for DB trigger:** Change `#db-mode-badge` in `index.html` from `<span>` to `<button type="button">` with `aria-haspopup="true"`, `aria-expanded="false"`, and `aria-controls="db-run-switcher"`. Preserve its `id` and `.pill state-unknown mono` classes.
+- **Unified dropdown button affordance (`.top-meta .pill[aria-haspopup]`):**
+  - Style `#profile-badge`, `#db-mode-badge`, and `#hud-services-pill` via `.top-meta .pill[aria-haspopup]` with a subtle button container (`border-radius: 6px`, dark surface fill, crisp border, `cursor: pointer`, `font-size: 12px`, `font-weight: 600`).
+  - Add an explicit downward caret via `.top-meta .pill[aria-haspopup]::after { content: "▾"; ... }` that rotates `180deg` when `[aria-expanded="true"]`, and remove the duplicate literal `.services-caret` span from `#hud-services-pill` so every dropdown trigger renders a single unified caret.
+  - Truncate lengthy DB store filenames gracefully inside `#db-mode-badge .pill-detail` (`max-width: 180px`, `overflow: hidden`, `text-overflow: ellipsis`, `white-space: nowrap`) so long filenames (`02_shadow_30-10_09-15_loose-baseline.db`) never bloat the navbar.
+- **Resilient DB switcher wiring (`renderDbMode` & `closeRunSwitcher`):**
+  - Wire the click/outside-click/Escape listeners on `#db-mode-badge` *before* the `if (!mode)` early return in `renderDbMode()`, matching `renderProfileBadge()`.
+  - Synchronize `aria-expanded="true"` / `"false"` on `#db-mode-badge` whenever `#db-run-switcher` opens or closes (including `closeRunSwitcher()`, outside click, and Escape).
 
-### 3.2 Ownership — `Test-PathInCheckout`, `Get-CommandLineCheckoutOwner`, `Get-DashboardOwnership`
+### 3.3 DB Run Switcher & Profile Popover Polish (`dashboard/static/app.js`, `styles.css`)
+- **Port-free tournament arm labels:** In `runSwitcherLabel(run)`, omit `portPart` (`:${run.dash_port}`) so tournament arms render `#01 aggressive (pid 4242)` instead of `#01 aggressive:8801 (pid 4242)`.
+- **Unambiguous active & staged state in Profile Popover (`profileOptionsHtml`, `armRowHtml`, `presetRowHtml`):**
+  - Pass optional `activeProfile` (`lastStatus?.active_profile || null`) into `profileOptionsHtml(options, pending, activeProfile)`.
+  - Match the active profile against an arm (`activeProfile.name === arm.name || activeProfile.tournament_arm === arm.name`) or preset (`!activeProfile.tournament_arm && (activeProfile.name === preset.name || activeProfile.preset === preset.name)`).
+  - Mark the matching row with `.active` class and `<span class="arm-active-tag">✓ ACTIVE</span>` alongside existing `.staged` / `STAGED` support, styled with a distinct cyan/blue highlight so the currently loaded configuration is unmistakable at a glance.
+- **DB Run Switcher row layout (`.db-run-row`):**
+  - Widen `.db-run-switcher` (`width: 420px`) and refine `.db-run-row` (`grid-template-columns: minmax(0, 1fr) auto`) so run names in `.pill-label` never truncate abruptly at 150px (`..._loo`) while keeping `.pill`, `.pill-label`, `.pill-value`, and `.pill-detail` intact.
 
-- `Test-PathInCheckout -Path -Root`: case-insensitive `GetFullPath` compare, equality
-  or root-plus-separator prefix; then a bounded walk between path and root (never above
-  root) rejects paths inside a nested checkout that carries both marker files.
-- `Get-CommandLineCheckoutOwner -CommandLine -Root`: respects quoting and `--opt=value`,
-  skips argv[0] (interpreter path proves nothing), collects drive-letter/UNC absolute
-  paths. Owned = ≥1 path and all local; Foreign = all outside; Unknown = none or mixed.
-- `Get-DashboardOwnership -Port` (read-only, `/api/system/status`): Owned only when the
-  canonical `db_path` equals `<root>\data\orders.db` AND `registry_path` is inside local
-  `runtime/` or `run/` AND `services.dash.pid` equals `Get-PortPid`. Foreign with the
-  served path on checkout mismatch; Unknown on any error, missing field, or PID mismatch.
-- Wiring: `Test-DashboardServer` additionally requires Owned (adoption flow otherwise
-  unchanged; a Foreign refusal prints the other checkout's path). Status rows show
-  `ON (owned)` / `LISTENING – this checkout, not adopted` / `LISTENING – other checkout:
-  <path>` / `LISTENING – unknown`, and `status` never writes records. `Stop-BotStack`
-  POSTs `/api/system/stop` only to an Owned listener. `Stop-ShadowRun` and the three
-  `Stop-AllSpreadHunterProcesses` predicates replace the `-like "*$ProjectPath*"` test
-  with `Get-CommandLineCheckoutOwner == Owned`, keeping the existing module-regex text
-  byte-identical (static test `test_menu_global_stop_clean.py` pins it).
-- Untouched: `Kill-RecordedPid`, `Get-DashInstance`, `Get-ProcessRecord`,
-  `Stop-Dashboard`, `Stop-ShadowDashboard`, `Stop-TsBridge`, resume stray scan.
+### 3.4 Connected Kanban Lane Switcher & Prototype Alignment (`styles.css`, `prototype.css`, `app.js`)
+- **Connected segmented control (`.kanban-lane-switcher`):**
+  - Remove button gaps (`gap: 0`, `padding: 0`, `overflow: hidden`, unified border and `border-radius: 8px`).
+  - Style `.lane-tab-btn` segments with `border-radius: 0`, `border: none`, and `border-right: 1px solid var(--border-subtle)` between segments (`:last-child { border-right: none }`), keeping distinct active tints for `regular` (cyan), `live` (purple), and `all` (neutral) and raising `.lane-count-pill` from `10px` to `11px`.
+  - At `@media (max-width: 900px)`, give `.lane-tab-btn` `flex: 1 1 0`, `min-width: 0`, and truncate `.lane-name` with `text-overflow: ellipsis` while keeping `.lane-count-pill` visible.
+  - In `window.setKanbanLane`, write `aria-pressed` (`'true'` / `'false'`) to match `index.html`.
+- **Prototype stylesheet alignment (`dashboard/static/prototype.css`):**
+  - Edit existing rules in place (no duplicate selectors): raise `.proto-sub-nav-btn` weight to `600` (and `[aria-current="subpage"]` to `700`), `.proto-body .ot-tab-btn` to `12px` / `600`, `.proto-body .ot-tab-btn .ot-count` to `11px`, `.proto-body .stitch-category-pill` weight to `600`, and `.proto-body .pill.active` / `.proto-body .pill.reconnecting` to `11px`.
 
-### 3.3 Force stop — `Stop-WorktreeProcessesForce` (key `x`)
+## 4. Acceptance Criteria
 
-- Candidates: `Win32_Process` names matching `^python` whose command line matches the
-  seven-module regex or `scripts[\\/]global_stop_loss\.py`. Read each creation time once.
-  Never stop `$PID`; unrelated modules (`polymarket_docs_mcp`, bare `pytest` mentions)
-  are excluded by the regex.
-- Ownership per candidate: (a) command-line owner, (b) PID in this checkout's
-  `processes.json` (via `Get-ServiceEntry`, 60s `started_at` rule) or in a dashboard /
-  session record with present, exactly-equal start ticks (a record without start ticks
-  proves nothing), or (c) dashboard-port owner with Owned identity. Foreign command line
-  is Foreign unless a local record conflicts → Unknown. Anything else → Unknown, left
-  running. Missing/unreadable evidence is Unknown, never Owned.
-- Kill order: `dashboard.server` first, `core_brain.order_manager` second, rest after.
-  Re-verify creation time immediately before each kill (PID-reuse guard); `taskkill
-  /T /F`, then `Wait-ProcessGone`; exactly one rescan for late arrivals.
-- Report prints three lists (`stopped` / `left running – other checkout` / `left running –
-  could not prove ownership`) plus the exact warning `Stopping processes does not cancel
-  resting venue orders.` Success = every Owned target exited.
-
-### 3.4 Wiring & docs
-
-- Action map: `stop-all-force`, `force-stop`, `nuke` → key `x` (verified unused:
-  `$script:MenuKeys` lists only `1 2 3 4 5 6 7 8 9 r a p c t q`). `Invoke-LiveAction`
-  dispatches `x` to the force stop only; interactive asks yes/no, command-line follows
-  option 7's confirmation rule. README actions table documents the aliases, the
-  exact-folder checkout rule, and what stays running.
-
-## 4. Acceptance criteria
-
-1. From a worktree folder, the menu header/`status` shows the worktree path
-   `(from current folder)`; running main's script by full path from the worktree shows
-   the worktree plus the mixed-checkout note.
-2. Main's `status` labels a worktree dashboard `LISTENING – other checkout: <path>` and
-   writes no adoption record; main's `stop` never POSTs to it.
-3. `stop-all-force` in a worktree stops that worktree's adopted dashboard and recorded
-   workers and lists main's processes as left running; afterwards main's `status` is
-   unchanged.
-4. No existing test file is modified; all listed regression suites still pass.
-
-## 5. Edge cases
-
-- Relative-only command lines (e.g. `python -m dashboard.server --port 8799`) → Unknown,
-  keeps running; the operator must adopt via `host`/`open` first (accepted gap, C5).
-- Mixed local/foreign absolute paths in one command line → Unknown.
-- PID creation time changed between discovery and kill → skip, report (recycled PID).
-- `--reload` dashboard whose reported PID differs from the port owner → Unknown, refused.
-- A `--db` override pointing outside the checkout with a local registry → not Owned.
-- Case/`/`/`..` variants normalize to the same checkout (no false Foreign).
-
-## 6. Ticket open questions — resolutions adopted here
-
-- Exact-folder check only, no parent walk (ticket default; subfolder falls back).
-- Keep option 7, add separate action (ticket default).
-- Narrow the existing stop paths that can reach sibling checkouts (required for
-  criterion 3 — each change only narrows the match).
-- Dashboard identity = `db_path` + `registry_path` + port-owner PID equality (stronger
-  than the ticket's `db_path`-only default; `db_path` alone is overridable).
+- [ ] `PROFILE`, `DB`, and `SERVICES` render as `<button type="button">` controls with `aria-haspopup="true"`, `aria-expanded`, `aria-controls`, button border-radius (`6px`), and a single downward caret (`▾`).
+- [ ] `#db-mode-badge` truncates lengthy filenames gracefully with `text-overflow: ellipsis` and opens `#db-run-switcher` even when initial status mode is unknown.
+- [ ] `runSwitcherLabel()` omits `:88xx` port numbers from tournament arm labels while preserving arm index, name, and PID suffix.
+- [ ] `#profile-dropdown` marks the currently active profile/preset with `.active` and `✓ ACTIVE` in addition to `STAGED`.
+- [ ] `.kanban-lane-switcher` is styled as a zero-gap connected segmented control and `setKanbanLane()` updates `aria-pressed`.
+- [ ] `body`, `.mono`, and `--font-display` include `system-ui, 'Segoe UI'` fallbacks, `body` weight is `500`, `.pill-label`/`.pill-detail`/`.lane-count-pill` are `11px`, and `prototype.css` weights/sizes match.
