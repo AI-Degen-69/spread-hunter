@@ -24,7 +24,7 @@
   --open: #38bdf8;
   --warn: #f59e0b;
   --gold: #fbbf24;
-  --font-display: 'Big Shoulders Display', Impact, sans-serif;
+  --font-display: 'Big Shoulders Display', Impact, system-ui, 'Segoe UI', sans-serif;
 
   --red-alert: #ef4444;
   --red-bg: rgba(127, 29, 29, 0.65);
@@ -79,19 +79,20 @@ body {
      decorative") governs the whole page surface. */
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', sans-serif;
+  font-weight: 500;
   min-height: 100vh;
   padding: 20px 20px 76px;
   line-height: 1.5;
 }
 
 .font-display {
-  font-family: 'Big Shoulders Display', Impact, sans-serif;
+  font-family: 'Big Shoulders Display', Impact, system-ui, 'Segoe UI', sans-serif;
   letter-spacing: 0.02em;
   font-weight: 800;
 }
 .mono {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: 'JetBrains Mono', ui-monospace, system-ui, 'Segoe UI', monospace;
   font-variant-numeric: tabular-nums;
 }
 
@@ -211,7 +212,7 @@ header {
    not a second visual vocabulary. */
 .pill-label {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.05em;
 }
@@ -220,7 +221,7 @@ header {
 }
 .pill-detail {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 .top-status-clock {
   color: var(--text-secondary);
@@ -427,7 +428,7 @@ header {
 .pill.state-degraded { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
 .pill.state-down { background: var(--red-bg); color: #fca5a5; border: 1px solid var(--red-border); }
 .pill.state-stopped { background: rgba(100,116,139,0.35); color: var(--text-secondary); border: 1px solid rgba(148, 163, 184, 0.3); }
-.pill.state-unknown { background: rgba(100,116,139,0.35); color: var(--text-muted); border: 1px solid rgba(100, 116, 139, 0.3); }
+.pill.state-unknown { background: rgba(100,116,139,0.25); color: var(--text-secondary); border: 1px dashed rgba(148, 163, 184, 0.35); }
 
 /* Liveness dot. Until this rule existed the dots rendered in every service
    card and header pill were unstyled inline spans — invisible. RUNNING blinks
@@ -467,6 +468,41 @@ header {
    Red, not amber: nothing on the page is updating, and the operator has to be
    told that before they read the rest of the dashboard. */
 .pill.mode-stale { background: var(--red-bg); color: #f87171; border: 1px solid var(--red-border); }
+
+/* Interactive header dropdown triggers (#867): PROFILE, DB, and SERVICES open
+   popover panels, so they use a 6px button silhouette and a single rotating
+   downward caret rather than the 9999px static status-pill capsule. */
+.top-meta .pill[aria-haspopup] {
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 10px;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.top-meta .pill[aria-haspopup]:hover,
+.top-meta .pill[aria-expanded="true"] {
+  border-color: var(--border-strong);
+}
+.top-meta .pill[aria-haspopup]::after {
+  content: "▾";
+  font-size: 10px;
+  opacity: 0.75;
+  margin-left: 2px;
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+.top-meta .pill[aria-expanded="true"]::after {
+  transform: rotate(180deg);
+}
+#db-mode-badge .pill-detail {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
 
 /* ── Header Panels (#504) ──
    Both panels are direct children of <header> positioned below their triggers.
@@ -524,15 +560,12 @@ header {
    so the scrollport of .top-meta can never clip the open panel. */
 .services-pill-trigger {
   cursor: pointer;
-  font: inherit;
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
 .services-pill-trigger:hover { border-color: var(--border-strong); }
 .services-pill-trigger[aria-expanded="true"] { border-color: var(--border-strong); }
-.services-caret { font-size: 9px; opacity: 0.7; transition: transform 0.15s; }
-.services-pill-trigger[aria-expanded="true"] .services-caret { transform: rotate(180deg); }
 .services-dropdown {
   width: 500px;
   font-family: 'JetBrains Mono', monospace;
@@ -573,7 +606,7 @@ header {
   letter-spacing: 0.04em;
 }
 @media (prefers-reduced-motion: reduce) {
-  .services-caret { transition: none; }
+  .top-meta .pill[aria-haspopup]::after { transition: none; }
 }
 .db-run-state.state-running { color: var(--signal); }
 .db-run-state.state-stopped { color: var(--text-muted); }

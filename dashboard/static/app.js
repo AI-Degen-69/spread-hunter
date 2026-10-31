@@ -2871,7 +2871,9 @@ function renderRunElsewhereBanner(status) {
 
 function closeRunSwitcher() {
   const sw = document.getElementById('db-run-switcher');
+  const badge = document.getElementById('db-mode-badge');
   if (sw) sw.style.display = 'none';
+  if (badge) badge.setAttribute('aria-expanded', 'false');
 }
 
 function closeServicesDropdown() {
@@ -3030,6 +3032,7 @@ async function renderRunSwitcher() {
   if (!runs.length) {
     sw.innerHTML = demoRow + `<div class="db-run-empty">No rehearsal is registered on this machine.</div>`;
     sw.style.display = 'block';
+    if (badge) badge.setAttribute('aria-expanded', 'true');
     wireDemoSwitcher(sw);
     placeRunSwitcher(sw, badge);
     return;
@@ -3060,6 +3063,7 @@ async function renderRunSwitcher() {
   });
   sw.innerHTML = `<div class="db-run-head">Which run is this page reading?</div>` + demoRow + rows.join('');
   sw.style.display = 'block';
+  if (badge) badge.setAttribute('aria-expanded', 'true');
   wireDemoSwitcher(sw);
   placeRunSwitcher(sw, badge);
   sw.querySelectorAll('.db-run-switch').forEach(b => {
@@ -3659,6 +3663,33 @@ function renderDbMode(status) {
   const el = document.getElementById('db-mode-badge');
   if (!el) return;
 
+  // The switcher is the badge's answer to "which run is this, and can I watch
+  // a different one". Wired once before the !mode guard so clicking DB opens
+  // the switcher even when the initial status payload is unknown (#867).
+  if (!el.dataset.wired) {
+    el.dataset.wired = '1';
+    el.addEventListener('click', () => {
+      const sw = document.getElementById('db-run-switcher');
+      if (!sw) return;
+      if (sw.style.display === 'block') { closeRunSwitcher(); return; }
+      closeServicesDropdown();
+      closeProfileDropdown();
+      renderRunSwitcher();
+    });
+    document.addEventListener('click', (e) => {
+      const sw = document.getElementById('db-run-switcher');
+      if (!sw || sw.style.display !== 'block') return;
+      if (sw.contains(e.target) || (el.contains && el.contains(e.target))) return;
+      closeRunSwitcher();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeRunSwitcher();
+        closeServicesDropdown();
+      }
+    });
+  }
+
   const mode = status?.db_mode || null;
   lastDbIsProduction = status?.db_is_production === true || mode === 'LIVE';
   lastDbIsShadow = status?.db_is_production === false || mode === 'SHADOW';
@@ -3699,33 +3730,6 @@ function renderDbMode(status) {
               .map(r => `${r.runId} → ${(r.dbPath || '').split(/[\\/]/).pop()}`).join('; ')}. `
           + `Click to switch this page to one of them.`
         : `Orders, fills and PnL on this page are not live positions, and START is disabled.`);
-  }
-
-  // The switcher is the badge's answer to "which run is this, and can I watch
-  // a different one". Wired once; the handler reads the last status.
-  if (!el.dataset.wired) {
-    el.dataset.wired = 'true';
-    el.style.cursor = 'pointer';
-    el.addEventListener('click', () => {
-      const sw = document.getElementById('db-run-switcher');
-      if (!sw) return;
-      if (sw.style.display === 'block') { closeRunSwitcher(); return; }
-      closeServicesDropdown();
-      closeProfileDropdown();
-      renderRunSwitcher();
-    });
-    document.addEventListener('click', (e) => {
-      const sw = document.getElementById('db-run-switcher');
-      if (!sw || sw.style.display !== 'block') return;
-      if (sw.contains(e.target) || (el.contains && el.contains(e.target))) return;
-      closeRunSwitcher();
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        closeRunSwitcher();
-        closeServicesDropdown();
-      }
-    });
   }
 }
 

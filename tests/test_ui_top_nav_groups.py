@@ -586,3 +586,61 @@ def test_start_button_title_names_the_staged_profile():
     assert t["staged"] == "Start bot execution stack with staged profile balanced."
     assert t["none"] == ""
     assert t["nullPending"] == ""
+
+
+# ── Issue #867: Dropdown Trigger Buttons, Typography & Legibility ──
+
+def test_header_pill_text_is_at_least_11px(css: str):
+    for selector in (".pill-label", ".pill-detail"):
+        m = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+        assert m, f"{selector} rule not found in styles.css"
+        sz = re.search(r"font-size:\s*(\d+)px", m.group(1))
+        assert sz and int(sz.group(1)) >= 11, (
+            f"{selector} font-size must be >= 11px for Windows legibility (#867)"
+        )
+
+
+def test_font_stacks_have_system_fallback(css: str):
+    body = re.search(r"body\s*\{([^}]*)\}", css)
+    assert body and "Segoe UI" in body.group(1) and "system-ui" in body.group(1)
+    assert re.search(r"font-weight:\s*500", body.group(1)), "body must use font-weight: 500 (#867)"
+    mono = re.search(r"\.mono\s*\{([^}]*)\}", css)
+    assert mono and "Segoe UI" in mono.group(1) and "system-ui" in mono.group(1)
+
+
+def test_dropdown_triggers_are_buttons_with_popup_attributes(dom: DOMNode):
+    expected = {
+        "profile-badge": "profile-dropdown",
+        "db-mode-badge": "db-run-switcher",
+        "hud-services-pill": "services-dropdown",
+    }
+    for trigger_id, panel_id in expected.items():
+        el = dom.find_one(id=trigger_id)
+        assert el is not None, f"Expected #{trigger_id} in DOM"
+        assert el.tag == "button", f"#{trigger_id} must be a <button>"
+        assert el.get_attr("type") == "button", f"#{trigger_id} must have type=button"
+        assert el.get_attr("aria-haspopup") == "true", f"#{trigger_id} must have aria-haspopup=true"
+        assert el.get_attr("aria-expanded") == "false", f"#{trigger_id} must start aria-expanded=false"
+        assert el.get_attr("aria-controls") == panel_id, f"#{trigger_id} must control #{panel_id}"
+    assert dom.find_one(cls="services-caret") is None, (
+        "Literal .services-caret span must be removed so ::after draws a single caret (#867)"
+    )
+
+
+def test_dropdown_trigger_css(css: str):
+    rule = re.search(r"\.top-meta\s+\.pill\[aria-haspopup\]\s*\{([^}]*)\}", css)
+    assert rule, ".top-meta .pill[aria-haspopup] rule missing"
+    assert "border-radius: 6px" in rule.group(1)
+    assert "cursor: pointer" in rule.group(1)
+    caret = re.search(r"\.top-meta\s+\.pill\[aria-haspopup\]::after\s*\{([^}]*)\}", css)
+    assert caret and "▾" in caret.group(1)
+    trunc = re.search(r"#db-mode-badge\s+\.pill-detail\s*\{([^}]*)\}", css)
+    assert trunc and "text-overflow: ellipsis" in trunc.group(1)
+
+
+@requires_node
+def test_db_badge_wires_before_unknown_early_return():
+    assert _harness("topnav")["dbUnknownWired"] is True, (
+        "#db-mode-badge click handler must wire even when status.db_mode is missing (#867)"
+    )
+

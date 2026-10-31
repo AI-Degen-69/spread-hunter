@@ -655,6 +655,9 @@ function topNavVerdicts() {
     stateText: enginePill.textContent,
   };
 
+  app.renderDbMode({});
+  const dbUnknownWired = dbBadge.dataset.wired === '1';
+
   app.renderDbMode({ db_mode: 'LIVE', db_is_production: true });
   const dbProd = {
     className: dbBadge.className,
@@ -768,6 +771,7 @@ function topNavVerdicts() {
     engineRunning,
     engineStalledElsewhere,
     engineNoPayload,
+    dbUnknownWired,
     dbProd,
     dbLiveWithName,
     masterRunning,
