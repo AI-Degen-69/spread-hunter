@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>שליטה מבודדת בתהליכים וסגירה בטוחה של עסקאות - Showcase #881 &amp; #895</title>
+  <style>
+    :root {
+      --bg: #0c1219;
+      --card-bg: rgba(22, 33, 49, 0.75);
+      --card-border: rgba(94, 129, 172, 0.25);
+      --ink: #e2e8f0;
+      --ink-dim: #94a3b8;
+      --accent-blue: #38bdf8;
+      --accent-amber: #fbbf24;
+      --accent-emerald: #34d399;
+      --accent-rose: #fb7185;
+      --accent-purple: #c084fc;
+      --font: system-ui, -apple-system, "Segoe UI", Roboto, "Heebo", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg);
+      color: var(--ink);
+      font-family: var(--font);
+      line-height: 1.6;
+      padding: 2rem 1rem;
+      min-height: 100vh;
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(56, 189, 248, 0.08) 0%, transparent 40%),
+        radial-gradient(circle at 85% 85%, rgba(251, 191, 36, 0.08) 0%, transparent 40%);
+    }
+
+    .container {
+      max-width: 1050px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 2rem;
+    }
+
+    /* Meta Bar */
+    .meta-bar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.85rem 1.5rem;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      gap: 1rem;
+      backdrop-filter: blur(10px);
+    }
+
+    .meta-links {
+      display: flex;
+      gap: 0.85rem;
+      flex-wrap: wrap;
+    }
+
+    .badge-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .badge-link:hover {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--accent-blue);
+      color: var(--accent-blue);
+    }
+
+    .status-pill {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 9999px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .status-merged { background: rgba(52, 211, 153, 0.2); color: var(--accent-emerald); }
+
+    /* Header */
+    header {
+      text-align: center;
+      padding: 1.5rem 0 0.5rem;
+    }
+
+    h1 {
+      font-size: 2.25rem;
+      font-weight: 800;
+      line-height: 1.25;
+      background: linear-gradient(135deg, #ffffff 30%, #93c5fd 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.8rem;
+    }
+
+    .lead {
+      color: var(--ink-dim);
+      font-size: 1.15rem;
+      max-width: 820px;
+      margin: 0 auto;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 1.75rem;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+    }
+
+    .card-title {
+      font-size: 1.35rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    /* Tabs Navigation */
+    .tab-nav {
+      display: flex;
+      gap: 0.5rem;
+      background: rgba(15, 23, 42, 0.6);
+      padding: 0.35rem;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      margin-bottom: 1.5rem;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 0.75rem 1.25rem;
+      border: none;
+      background: transparent;
+      color: var(--ink-dim);
+      font-family: var(--font);
+      font-size: 0.95rem;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+
+    .tab-btn:hover {
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .tab-btn.active {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent-blue);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    .tab-btn.tab-amber.active {
+      background: rgba(251, 191, 36, 0.15);
+      color: var(--accent-amber);
+      border: 1px solid rgba(251, 191, 36, 0.3);
+    }
+
+    .tab-pane {
+      display: none;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .tab-pane.active {
+      display: block;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Story Grid */
+    .story-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+
+    @media (max-width: 768px) {
+      .story-grid { grid-template-columns: 1fr; }
+    }
+
+    .story-box {
+      padding: 1.25rem;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .story-box.before {
+      border-right: 4px solid var(--accent-rose);
+    }
+
+    .story-box.after {
+      border-right: 4px solid var(--accent-emerald);
+    }
+
+    .story-box-title {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+    }
+    .before .story-box-title { color: var(--accent-rose); }
+    .after .story-box-title { color: var(--accent-emerald); }
+
+    /* Interactive Centerpiece Box */
+    .mockup-container {
+      background: #080d14;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin: 1rem 0;
+      position: relative;
+    }
+
+    .mockup-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding-bottom: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .mockup-controls {
+      display: flex;
+      gap: 0.6rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .btn-action {
+      background: rgba(56, 189, 248, 0.2);
+      border: 1px solid var(--accent-blue);
+      color: var(--accent-blue);
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: var(--font);
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+
+    .btn-action:hover {
+      background: var(--accent-blue);
+      color: #080d14;
+    }
+
+    .btn-danger {
+      background: rgba(251, 113, 133, 0.2);
+      border-color: var(--accent-rose);
+      color: var(--accent-rose);
+    }
+    .btn-danger:hover {
+      background: var(--accent-rose);
+      color: #080d14;
+    }
+
+    .btn-reset {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: var(--ink-dim);
+    }
+    .btn-reset:hover {
+      border-color: var(--ink);
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    /* Process Table Mockup */
+    .proc-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: right;
+      font-size: 0.88rem;
+    }
+
+    .proc-table th {
+      padding: 0.6rem 0.85rem;
+      color: var(--ink-dim);
+      font-weight: 600;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .proc-table td {
+      padding: 0.75rem 0.85rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .proc-row {
+      transition: all 0.3s ease;
+    }
+
+    .proc-row.terminated {
+      opacity: 0.35;
+      background: rgba(251, 113, 133, 0.1);
+      text-decoration: line-through;
+    }
+
+    .badge-status {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+    .badge-owned { background: rgba(52, 211, 153, 0.2); color: var(--accent-emerald); }
+    .badge-foreign { background: rgba(251, 191, 36, 0.2); color: var(--accent-amber); }
+    .badge-unknown { background: rgba(148, 163, 184, 0.2); color: var(--ink-dim); }
+
+    /* Interactive Stepper / Tape Simulation */
+    .tape-sim {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .market-status-box {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 1.25rem;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .market-tag {
+      font-size: 0.8rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      background: rgba(251, 113, 133, 0.2);
+      color: var(--accent-rose);
+      font-weight: 700;
+    }
+
+    .step-track {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.75rem;
+      position: relative;
+    }
+
+    @media (max-width: 680px) {
+      .step-track { grid-template-columns: 1fr; }
+    }
+
+    .step-node {
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 1rem;
+      text-align: center;
+      position: relative;
+      transition: all 0.3s ease;
+    }
+
+    .step-node.active {
+      border-color: var(--accent-emerald);
+      background: rgba(52, 211, 153, 0.12);
+      box-shadow: 0 0 15px rgba(52, 211, 153, 0.2);
+    }
+
+    .step-number {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 0.5rem;
+      font-size: 0.8rem;
+      font-weight: bold;
+    }
+    .step-node.active .step-number {
+      background: var(--accent-emerald);
+      color: #080d14;
+    }
+
+    .step-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+    }
+
+    .step-desc {
+      font-size: 0.75rem;
+      color: var(--ink-dim);
+    }
+
+    /* Steps runway list */
+    .steps-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      margin-top: 1rem;
+    }
+
+    .step-item {
+      display: flex;
+      gap: 1rem;
+      align-items: flex-start;
+      background: rgba(0, 0, 0, 0.2);
+      padding: 0.85rem 1.25rem;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .step-num {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent-blue);
+      min-width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.85rem;
+    }
+
+    .step-content strong {
+      color: #ffffff;
+      display: block;
+      margin-bottom: 0.2rem;
+    }
+
+    .step-content p {
+      color: var(--ink-dim);
+      font-size: 0.9rem;
+    }
+
+    code {
+      font-family: Consolas, Monaco, "Courier New", monospace;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.88em;
+      color: #7dd3fc;
+    }
+
+    .ltr-inline {
+      direction: ltr;
+      display: inline-block;
+    }
+
+    /* Result Pill */
+    .result-box {
+      margin-top: 1rem;
+      padding: 1rem;
+      border-radius: 10px;
+      background: rgba(52, 211, 153, 0.1);
+      border: 1px solid rgba(52, 211, 153, 0.25);
+      color: var(--accent-emerald);
+      font-weight: 600;
+      font-size: 0.92rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    
+    <!-- Meta Bar -->
+    <div class="meta-bar">
+      <div style="font-weight: 700; font-size: 1rem;">
+        ⚡ סיכום שדרוגי מערכת המסחר (סיום עבודה #881 ו-#895)
+      </div>
+      <div class="meta-links">
+        <a class="badge-link" href="https://github.com/AI-Degen-69/spread-hunter/pull/893" target="_blank" rel="noopener">
+          <span>PR #893</span>
+          <span class="status-pill status-merged">מוזג</span>
+        </a>
+        <a class="badge-link" href="https://github.com/AI-Degen-69/spread-hunter/issues/881" target="_blank" rel="noopener">
+          <span>Issue #881</span>
+        </a>
+        <a class="badge-link" href="https://github.com/AI-Degen-69/spread-hunter/pull/896" target="_blank" rel="noopener">
+          <span>PR #896</span>
+          <span class="status-pill status-merged">מוזג</span>
+        </a>
+        <a class="badge-link" href="https://github.com/AI-Degen-69/spread-hunter/issues/895" target="_blank" rel="noopener">
+          <span>Issue #895</span>
+        </a>
+      </div>
+    </div>
+
+    <!-- Header -->
+    <header>
+      <h1>שליטה מבודדת ובטוחה בתהליכים וסגירת עסקאות</h1>
+      <p class="lead">
+        שני שדרוגים קריטיים שנכנסו לליבת המערכת: תפריט הפעלה שמבדיל באופן מוחלט בין תיקיות עבודה שונות ולא פוגע בתהליכים זרים, ומנגנון סליקה אוטומטי שמונע אובדן רווח בעסקאות פתוחות שיוצאות מסבב השווקים.
+      </p>
+    </header>
+
+    <!-- Main Card with Tabs -->
+    <div class="card">
+      <div class="tab-nav">
+        <button class="tab-btn active" onclick="switchTab('tab-881')">
+          <span>🖥️ בידוד תהליכים ותפריט מקומי (#881)</span>
+        </button>
+        <button class="tab-btn tab-amber" onclick="switchTab('tab-895')">
+          <span>📈 סליקת שווקים שהוסרו ועדכון סינון (#895)</span>
+        </button>
+      </div>
+
+      <!-- TAB 1: Issue #881 -->
+      <div id="tab-881" class="tab-pane active">
+        <div class="story-grid">
+          <div class="story-box before">
+            <div class="story-box-title">❌ מה היה שבור קודם</div>
+            <p>
+              התפריט נעל את נתיב הפרויקט לפי מיקום הסקריפט בלבד. הפעלת תפריט מתוך <span class="ltr-inline"><code>Worktree</code></span> נפרד הריצה בטעות קוד מהתיקייה הראשית, ופקודת עצירה גלובלית (<span class="ltr-inline"><code>Stop-All</code></span>) כיבתה תהליכים של חלונות עבודה מקבילים בלי להבדיל ביניהם.
+            </p>
+          </div>
+          <div class="story-box after">
+            <div class="story-box-title">✅ מה עובד עכשיו</div>
+            <p>
+              התפריט מזהה אוטומטית את תיקיית העבודה הפעילה (<span class="ltr-inline"><code>Current Folder</code></span>). פעולת העצירה החדשה במקש <span class="ltr-inline"><code>x</code></span> בודקת בעלות מדויקת ומחסלת <strong>אך ורק</strong> תהליכים של התיקייה הנוכחית, תוך השארת תהליכים זרים פעילים ובטוחים.
+            </p>
+          </div>
+        </div>
+
+        <div class="card-title">
+          <span>🕹️ הדמיה אינטראקטיבית: פעולת העצירה המקומית (<span class="ltr-inline"><code>stop-all-force</code></span>)</span>
+        </div>
+        <p style="color: var(--ink-dim); font-size: 0.95rem;">
+          הדגמה של סריקת התהליכים במערכת: לחץ על <strong>"בצע עצירה מאולצת (מקש x)"</strong> וצפה כיצד התהליכים המקומיים בלבד נעצרים, בעוד תהליכי התיקייה הראשית או תהליכים לא מזוהים ממשיכים לרוץ.
+        </p>
+
+        <div class="mockup-container">
+          <div class="mockup-header">
+            <div>
+              <strong>מצב תהליכים במערכת</strong>
+              <div style="font-size: 0.8rem; color: var(--ink-dim);">תיקיית עבודה פעילה: <span class="ltr-inline"><code>C:/Trading/spread-hunter-wt1</code></span></div>
+            </div>
+            <div class="mockup-controls">
+              <button id="btn-force-stop" class="btn-action btn-danger" onclick="triggerForceStop()">בצע עצירה מאולצת (מקש x)</button>
+              <button class="btn-action btn-reset" onclick="resetProcesses()">אפס רשימה</button>
+            </div>
+          </div>
+
+          <table class="proc-table">
+            <thead>
+              <tr>
+                <th>PID</th>
+                <th>שם תהליך</th>
+                <th>פקודת הרצה (נתיב)</th>
+                <th>סיווג בעלות</th>
+                <th>סטטוס נוכחי</th>
+              </tr>
+            </thead>
+            <tbody id="proc-table-body">
+              <tr id="row-101" class="proc-row">
+                <td><span class="ltr-inline"><code>101</code></span></td>
+                <td><strong>Dashboard Server</strong></td>
+                <td><span class="ltr-inline"><code>python -m dashboard.server (spread-hunter-wt1)</code></span></td>
+                <td><span class="badge-status badge-owned">Owned (בבעלותנו)</span></td>
+                <td id="status-101" style="color: var(--accent-emerald);">רץ (Listening)</td>
+              </tr>
+              <tr id="row-102" class="proc-row">
+                <td><span class="ltr-inline"><code>102</code></span></td>
+                <td><strong>Order Manager</strong></td>
+                <td><span class="ltr-inline"><code>python -m core_brain.order_manager (spread-hunter-wt1)</code></span></td>
+                <td><span class="badge-status badge-owned">Owned (בבעלותנו)</span></td>
+                <td id="status-102" style="color: var(--accent-emerald);">רץ (Active)</td>
+              </tr>
+              <tr id="row-205" class="proc-row">
+                <td><span class="ltr-inline"><code>205</code></span></td>
+                <td><strong>Trader Loop (Primary)</strong></td>
+                <td><span class="ltr-inline"><code>python -m scripts.trader_loop (spread-hunter-main)</code></span></td>
+                <td><span class="badge-status badge-foreign">Foreign (תיקייה זרה)</span></td>
+                <td id="status-205" style="color: var(--accent-amber);">מוגן (ממשיך לרוץ)</td>
+              </tr>
+              <tr id="row-309" class="proc-row">
+                <td><span class="ltr-inline"><code>309</code></span></td>
+                <td><strong>External Python Task</strong></td>
+                <td><span class="ltr-inline"><code>python -m scripts.adhoc_tool</code></span></td>
+                <td><span class="badge-status badge-unknown">Unknown (ללא נתיב מלא)</span></td>
+                <td id="status-309" style="color: var(--ink-dim);">הושאר פעיל</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div id="stop-result" class="result-box" style="display: none;">
+            ✅ תוצאת פעולה: תהליכים 101 ו-102 נעצרו ונמחקו מרשומות ה-PID. תהליך 205 (של התיקייה הראשית) ותהליך 309 נותרו פועלים לחלוטין.
+          </div>
+        </div>
+
+        <div style="margin-top: 1.5rem;">
+          <div class="card-title">🔍 איך לבדוק זאת באפליקציה האמיתית</div>
+          <ul class="steps-list">
+            <li class="step-item">
+              <div class="step-num">1</div>
+              <div class="step-content">
+                <strong>הרצת בדיקת סטטוס מתוך תיקיית עבודה נפרדת</strong>
+                <p>פתח טרמינל בתוך תיקיית <span class="ltr-inline"><code>worktree</code></span> והרץ <span class="ltr-inline"><code>.\scripts\spread-hunter-menu.ps1 status</code></span>. שים לב לשורת הפתיחה המציגה <span class="ltr-inline"><code>Checkout: ... (from current folder)</code></span> במקום נתיב המקור.</p>
+              </div>
+            </li>
+            <li class="step-item">
+              <div class="step-num">2</div>
+              <div class="step-content">
+                <strong>בדיקת עצירה מקומית בטוחה</strong>
+                <p>הקש בתפריט על מקש <span class="ltr-inline"><code>x</code></span> (או הרץ ישירות <span class="ltr-inline"><code>.\scripts\spread-hunter-menu.ps1 stop-all-force</code></span>). ראה כיצד התפריט עוצר רק את תהליכי התיקייה המקומית ומדווח על תהליכים זרים כ-<span class="ltr-inline"><code>left running</code></span>.</p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- TAB 2: Issue #895 -->
+      <div id="tab-895" class="tab-pane">
+        <div class="story-grid">
+          <div class="story-box before">
+            <div class="story-box-title">❌ מה היה שבור קודם</div>
+            <p>
+              כאשר שוק פעיל יצא מרשימת השווקים הפופולריים (<span class="ltr-inline"><code>markets.json</code></span>), מנגנון ההגנה שמר על פקודת הגידור, אך מנוע הדמה לא המשיך לסרוק את העסקאות עבורו. עסקאות גידור שבוצעו בפועל נתקעו כרגל בודדת ולא מוזגו לדולר. בנוסף, בהרצה מחודשת של טורניר סקריפט הסינון לא הופעל מחדש.
+            </p>
+          </div>
+          <div class="story-box after">
+            <div class="story-box-title">✅ מה עובד עכשיו</div>
+            <p>
+              מנוע הדמה מזהה שווקים שהוסרו אך מחזיקים פוזיציה פתוחה וסולק אותם אוטומטית מול נתוני השוק (<span class="ltr-inline"><code>Tape</code></span>). הרגליים מתמזגות חזרה ל-$1.00 מלא של USDC. בנוסף, סקריפט <span class="ltr-inline"><code>resume_tournament_arms.py</code></span> מפעיל ברקע את לולאת הסינון כדי לשמור על שווקים עדכניים.
+            </p>
+          </div>
+        </div>
+
+        <div class="card-title">
+          <span>🔄 תהליך סליקת שוק שהוסר (Lifecycle Simulation)</span>
+        </div>
+        <p style="color: var(--ink-dim); font-size: 0.95rem;">
+          לחץ על כפתור <strong>"הרץ צעד הבא בתהליך"</strong> כדי לראות כיצד שוק שיצא מסבב הסינון ממשיך לקבל עדכוני עסקאות עד למיזוג המלא:
+        </p>
+
+        <div class="mockup-container">
+          <div class="mockup-header">
+            <div>
+              <strong>שוק: "ETH Above 3000 by Nov 1" (הוסר מ-markets.json)</strong>
+              <div style="font-size: 0.8rem; color: var(--ink-dim);">מחזיק: 1 רגל UP נקנתה ב-0.48$ | פקודת DOWN תלויה ב-0.49$</div>
+            </div>
+            <div class="mockup-controls">
+              <button id="btn-tape-step" class="btn-action" onclick="nextTapeStep()">הרץ צעד הבא בתהליך</button>
+              <button class="btn-action btn-reset" onclick="resetTapeSim()">התחל מחדש</button>
+            </div>
+          </div>
+
+          <div class="step-track">
+            <div id="step-1" class="step-node active">
+              <div class="step-number">1</div>
+              <div class="step-title">השוק הוסר</div>
+              <div class="step-desc">השוק יצא מ-markets.json עקב נפח נמוך</div>
+            </div>
+            <div id="step-2" class="step-node">
+              <div class="step-number">2</div>
+              <div class="step-title">הגנה על פוזיציה</div>
+              <div class="step-desc">מגן הגידור מונע ביטול פקודת הרגל הנגדית</div>
+            </div>
+            <div id="step-3" class="step-node">
+              <div class="step-number">3</div>
+              <div class="step-title">סליקת Tape ייעודית</div>
+              <div class="step-desc">סריקה מיוחדת של עסקאות השוק שנפלט</div>
+            </div>
+            <div id="step-4" class="step-node">
+              <div class="step-number">4</div>
+              <div class="step-title">מיזוג ל-$1.00</div>
+              <div class="step-desc">פקודת הגידור התמלאה, הזוג ננעל ונפדה ברווח</div>
+            </div>
+          </div>
+
+          <div id="tape-result-box" class="result-box" style="margin-top: 1.25rem;">
+            🟢 מצב נוכחי: שוק מוגדר כ-Dropped Market. פקודת הגידור נשמרת ברקע.
+          </div>
+        </div>
+
+        <div style="margin-top: 1.5rem;">
+          <div class="card-title">🔍 איך לבדוק זאת באפליקציה האמיתית</div>
+          <ul class="steps-list">
+            <li class="step-item">
+              <div class="step-num">1</div>
+              <div class="step-content">
+                <strong>חידוש הרצת זרועות טורניר עם סריקת שווקים רציפה</strong>
+                <p>הרץ חידוש טורניר באמצעות <span class="ltr-inline"><code>python scripts/resume_tournament_arms.py --tournament-dir data/tournaments/&lt;run&gt;</code></span> וודא שמופיעה ביומן ההודעה <span class="ltr-inline"><code>[LAUNCH] Starting market filter loop</code></span> וקובץ היומן <span class="ltr-inline"><code>logs/market-filter.log</code></span> מתעדכן.</p>
+              </div>
+            </li>
+            <li class="step-item">
+              <div class="step-num">2</div>
+              <div class="step-content">
+                <strong>אימות סליקת שווקים שנפלטו בהרצת דמה</strong>
+                <p>בהרצת <span class="ltr-inline"><code>python -m core_brain.shadow_run --minutes 5</code></span>, כאשר שוק פעיל עם רגל גידור נפלט מהסבב, עקוב אחר הלוג וודא שמתבצעת קריאת סליקה (<span class="ltr-inline"><code>settle_dropped_markets</code></span>) ועסקת המיזוג מתבצעת כראוי.</p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    // Tab Switching
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+      
+      const targetPane = document.getElementById(tabId);
+      if (targetPane) targetPane.classList.add('active');
+
+      if (tabId === 'tab-881') {
+        document.querySelectorAll('.tab-btn')[0].classList.add('active');
+      } else {
+        document.querySelectorAll('.tab-btn')[1].classList.add('active');
+      }
+    }
+
+    // Process Mockup Logic
+    let isStopped = false;
+    function triggerForceStop() {
+      if (isStopped) return;
+      isStopped = true;
+
+      const row101 = document.getElementById('row-101');
+      const row102 = document.getElementById('row-102');
+      const status101 = document.getElementById('status-101');
+      const status102 = document.getElementById('status-102');
+      const resultBox = document.getElementById('stop-result');
+
+      row101.classList.add('terminated');
+      row102.classList.add('terminated');
+
+      status101.textContent = 'נעצר (Terminated)';
+      status101.style.color = 'var(--accent-rose)';
+
+      status102.textContent = 'נעצר (Terminated)';
+      status102.style.color = 'var(--accent-rose)';
+
+      resultBox.style.display = 'flex';
+    }
+
+    function resetProcesses() {
+      isStopped = false;
+      const row101 = document.getElementById('row-101');
+      const row102 = document.getElementById('row-102');
+      const status101 = document.getElementById('status-101');
+      const status102 = document.getElementById('status-102');
+      const resultBox = document.getElementById('stop-result');
+
+      row101.classList.remove('terminated');
+      row102.classList.remove('terminated');
+
+      status101.textContent = 'רץ (Listening)';
+      status101.style.color = 'var(--accent-emerald)';
+
+      status102.textContent = 'רץ (Active)';
+      status102.style.color = 'var(--accent-emerald)';
+
+      resultBox.style.display = 'none';
+    }
+
+    // Tape Simulation Logic
+    let currentStep = 1;
+    const stepMessages = [
+      "🟢 שלב 1: שוק מוגדר כ-Dropped Market. פקודת הגידור נשמרת ברקע.",
+      "🛡️ שלב 2: שריון הגידור (HELD_INVENTORY) חוסם ביטול פקודות ומגן על ההשקעה.",
+      "📡 שלב 3: מנוע ה-Sweep סורק ייעודית את ה-Tape של שוק זה על אף שהוסר מ-markets.json.",
+      "💰 שלב 4: פקודת הגידור התמלאה ב-0.49$! הזוג מוזג ב-$1.00 - רווח נקי של 0.03$ ננעל בהצלחה."
+    ];
+
+    function nextTapeStep() {
+      if (currentStep < 4) {
+        currentStep++;
+      } else {
+        currentStep = 1;
+      }
+      updateTapeUI();
+    }
+
+    function resetTapeSim() {
+      currentStep = 1;
+      updateTapeUI();
+    }
+
+    function updateTapeUI() {
+      for (let i = 1; i <= 4; i++) {
+        const el = document.getElementById('step-' + i);
+        if (i <= currentStep) {
+          el.classList.add('active');
+        } else {
+          el.classList.remove('active');
+        }
+      }
+      const res = document.getElementById('tape-result-box');
+      res.textContent = stepMessages[currentStep - 1];
+    }
+  </script>
+</body>
+</html>
