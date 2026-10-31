@@ -550,8 +550,25 @@ def test_profile_picker_lists_view_and_start():
         "a preset row must not restate the Presets heading, which already says it is code")
     assert '<span class="arm-kpi empty">no store yet</span>' in html
     assert "no store yet — START creates one" in html  # tooltip, not a visible line
+    assert 'class="arm-row active"' in html, "active tournament arm must carry .active class (#867)"
+    assert "✓ ACTIVE" in html, "active tournament arm must carry ✓ ACTIVE badge (#867)"
+    assert 'class="arm-row preset-row active"' in p["htmlPresetActive"], (
+        "active preset must carry .active class (#867)"
+    )
+    assert "✓ ACTIVE" in p["htmlPresetActive"]
     assert 'data-action' not in p["empty"]
     assert 'arm-row' not in p["empty"]
+
+
+def test_db_run_switcher_rows_do_not_truncate_at_150px(css: str):
+    row = re.search(r"\.db-run-row\s*\{([^}]*)\}", css)
+    assert row, ".db-run-row rule missing"
+    assert "150px" not in row.group(1), (
+        ".db-run-row must not cap the run label column at 150px (#867)"
+    )
+    assert "minmax(0, 1fr) auto" in row.group(1)
+    demo = re.search(r"\.db-run-row\.db-demo-row\s*\{([^}]*)\}", css)
+    assert demo and "grid-template-columns" in demo.group(1)
 
 
 def test_profile_pick_hands_the_profile_to_the_start_dialog():
