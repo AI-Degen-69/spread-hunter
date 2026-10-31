@@ -14,6 +14,7 @@
 #   .\scripts\spread-hunter-menu.ps1 open-shadow   # 6 · SHADOW: release :8799 from the other menu-owned dashboard (no wipe), host shadow & open
 #   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] [-ResumeDb <path|all>] [-Preset <name>] [-Prudent] # R · SHADOW: resume shadow run(s) in place (no wipe) & reattach dashboard(s) — interactive picks 01 / 02 / all / Prudent
 #   .\scripts\spread-hunter-menu.ps1 clean         # 7 · GLOBAL: kill all + wipe data + verify (no start)
+#   .\scripts\spread-hunter-menu.ps1 stop-all-force # X · force-stop every Owned process of THIS checkout (no wipe; others keep running)
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
 #   .\scripts\spread-hunter-menu.ps1 audit         # A · MAINTENANCE: storage audit (read-only disk usage)
 #   .\scripts\spread-hunter-menu.ps1 prune         # P · MAINTENANCE: storage prune (deletes stale stores/reports)
@@ -48,7 +49,27 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+function Resolve-ProjectRoot {
+    <# Pick the checkout this menu serves: the exact current folder when it
+    holds both spread-hunter marker files, otherwise the script's own
+    checkout. Never walks parent folders. #>
+    param([string]$CurrentPath, [string]$ScriptCheckout)
+    $markersOk = $false
+    if ($CurrentPath -and (Test-Path -LiteralPath $CurrentPath)) {
+        $up = Join-Path $CurrentPath "core_brain/order_manager.py"
+        $down = Join-Path $CurrentPath "dashboard/server.py"
+        if ((Test-Path -LiteralPath $up) -and (Test-Path -LiteralPath $down)) { $markersOk = $true }
+    }
+    if ($markersOk) {
+        $sel = [System.IO.Path]::GetFullPath($CurrentPath).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+        return [pscustomobject]@{ Path = $sel; Source = "current folder" }
+    }
+    return [pscustomobject]@{ Path = $ScriptCheckout; Source = "script location" }
+}
+$script:ScriptCheckout = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+$script:SelectedCheckout = Resolve-ProjectRoot -CurrentPath (Get-Location).ProviderPath -ScriptCheckout $script:ScriptCheckout
+$ProjectPath = $script:SelectedCheckout.Path
+$script:CheckoutSource = $script:SelectedCheckout.Source
 $Port    = 8799
 $LivePort     = $Port
 $DashUrl     = "http://127.0.0.1:$Port"
@@ -536,10 +557,103 @@ function Test-DashboardServer {
     #>
     try {
         $r = Invoke-RestMethod -Uri "$DashUrl/api/system/status" -UseBasicParsing -TimeoutSec 4
-        return ($null -ne $r.services -and $null -ne $r.services.dash -and ($r.db_is_production -eq $true))
+        if ($null -eq $r.services -or $null -eq $r.services.dash -or ($r.db_is_production -ne $true)) { return $false }
+        return ((Get-DashboardOwnership).Verdict -eq 'Owned')
     } catch {
         return $false
     }
+}
+
+function Test-PathInCheckout {
+    <# True when $Path is the checkout root or lives under it without crossing
+    a nested-checkout boundary. Comparison is case-insensitive on full paths.
+    Any folder between the path and the root (root itself excluded) holding
+    both marker files rejects the path, so main never claims a worktree file. #>
+    param([string]$Path, [string]$Root)
+    if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
+    try {
+        $full = [System.IO.Path]::GetFullPath($Path)
+        $base = [System.IO.Path]::GetFullPath($Root)
+    } catch { return $false }
+    $sep = [string][System.IO.Path]::DirectorySeparatorChar
+    $cmp = [System.StringComparison]::OrdinalIgnoreCase
+    $normFull = $full.TrimEnd($sep)
+    if (-not $normFull) { $normFull = $full }
+    $normBase = $base.TrimEnd($sep)
+    if (-not $normBase) { $normBase = $base }
+    $inRoot = $normFull.Equals($normBase, $cmp) -or $normFull.StartsWith($normBase + $sep, $cmp)
+    if (-not $inRoot) { return $false }
+    $dir = $full
+    try {
+        if (-not (Test-Path $dir -PathType Container)) { $dir = [System.IO.Path]::GetDirectoryName($full) }
+    } catch { $dir = [System.IO.Path]::GetDirectoryName($full) }
+    while ($dir -and -not $dir.Equals($base, $cmp)) {
+        if (((Test-Path (Join-Path $dir 'core_brain/order_manager.py'))) -and ((Test-Path (Join-Path $dir 'dashboard/server.py')))) { return $false }
+        $parent = [System.IO.Path]::GetDirectoryName($dir)
+        if (-not $parent -or $parent -eq $dir) { break }
+        $dir = $parent
+    }
+    return $true
+}
+
+function Get-CommandLineCheckoutOwner {
+    <# Owned when every absolute path argument lives in this checkout, Foreign
+    when every one lives outside it, Unknown when there are none or they mix.
+    argv[0] (the interpreter) proves nothing and is skipped; double quotes
+    and --opt=value forms are honored. #>
+    param([string]$CommandLine, [string]$Root)
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { return 'Unknown' }
+    $tokens = @([regex]::Matches($CommandLine, '"[^"]*"|\S+') | ForEach-Object { $_.Value })
+    if ($tokens.Count -le 1) { return 'Unknown' }
+    $paths = @()
+    foreach ($tok in $tokens[1..($tokens.Count - 1)]) {
+        $t = $tok.Trim('"').Trim("'")
+        if ($t -match '^[A-Za-z0-9_.~-]+=(.+)$') { $t = $Matches[1].Trim('"').Trim("'") }
+        if ($t -match '^(?:[A-Za-z]:[\\/]|\\\\|/)') { $paths += $t }
+    }
+    if ($paths.Count -eq 0) { return 'Unknown' }
+    $local = @($paths | Where-Object { Test-PathInCheckout -Path $_ -Root $Root })
+    if ($local.Count -eq $paths.Count) { return 'Owned' }
+    if ($local.Count -eq 0) { return 'Foreign' }
+    return 'Unknown'
+}
+
+function Get-DashboardOwnership {
+    <# Read-only verdict on the dashboard answering $PortNumber: Owned only
+    when its db_path is this checkout's data/orders.db, its registry_path
+    sits under this checkout's runtime/ or run/, and its reported
+    services.dash.pid equals the port owner. Anything else is Foreign (with
+    the served path) or Unknown. Never writes records. #>
+    param([int]$PortNumber = 0)
+    if (-not $PSBoundParameters.ContainsKey('PortNumber')) { $PortNumber = $Port }
+    if ($PortNumber -le 0) { return [pscustomobject]@{ Verdict = 'Unknown'; ServedPath = $null } }
+    try {
+        $r = Invoke-RestMethod -Uri ("http://127.0.0.1:{0}/api/system/status" -f $PortNumber) -UseBasicParsing -TimeoutSec 4
+    } catch {
+        return [pscustomobject]@{ Verdict = 'Unknown'; ServedPath = $null }
+    }
+    $dbPath = $null; $regPath = $null; $dashPid = 0
+    try { $dbPath = [string]$r.db_path } catch {}
+    try { $regPath = [string]$r.registry_path } catch {}
+    try { $dashPid = [int]$r.services.dash.pid } catch {}
+    if ([string]::IsNullOrWhiteSpace($dbPath) -or [string]::IsNullOrWhiteSpace($regPath) -or ($dashPid -le 0)) {
+        return [pscustomobject]@{ Verdict = 'Unknown'; ServedPath = $dbPath }
+    }
+    $portPid = Get-PortPid -PortNumber $PortNumber
+    if (-not $portPid -or $portPid -ne $dashPid) {
+        return [pscustomobject]@{ Verdict = 'Unknown'; ServedPath = $dbPath }
+    }
+    $wantDb = Join-Path $ProjectPath 'data/orders.db'
+    $dbOk = $false
+    try {
+        $dbOk = [System.IO.Path]::GetFullPath($dbPath).Equals([System.IO.Path]::GetFullPath($wantDb), [System.StringComparison]::OrdinalIgnoreCase)
+    } catch { $dbOk = $false }
+    $regOk = (Test-PathInCheckout -Path $regPath -Root (Join-Path $ProjectPath 'runtime')) -or `
+             (Test-PathInCheckout -Path $regPath -Root (Join-Path $ProjectPath 'run'))
+    if ($dbOk -and $regOk) {
+        return [pscustomobject]@{ Verdict = 'Owned'; ServedPath = $dbPath }
+    }
+    return [pscustomobject]@{ Verdict = 'Foreign'; ServedPath = $dbPath }
 }
 
 function Adopt-DashboardInstance {
@@ -575,6 +689,11 @@ function Start-Dashboard {
     }
     if (Test-Port) {
         $portPid = Get-PortPid
+        $listener = Get-DashboardOwnership
+        if ($listener.Verdict -eq 'Foreign') {
+            Lsh-Warn ("Port {0} serves another checkout ({1}); this menu will not adopt it. Run this menu from that checkout instead." -f $LivePort, $listener.ServedPath)
+            return $false
+        }
         if (Test-DashboardServer) {
             $adopt = $false
             if ($Action -ne "") {
@@ -928,7 +1047,7 @@ function Stop-ShadowRun {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
-                ($_.CommandLine -like "*$ProjectPath*") -and `
+                ((Get-CommandLineCheckoutOwner -CommandLine $_.CommandLine -Root $ProjectPath) -eq 'Owned') -and `
                 ((($_.CommandLine -like "*core_brain.shadow_run*") -or ($_.CommandLine -like "*statistics_observer*")) -and ((-not $RunId) -or ($_.CommandLine -like "*--run-id $RunId*")) -or `
                  (($_.CommandLine -like "*scripts.global_stop_loss*") -and ($_.CommandLine -like "*shadow_*.db*" -or $_.CommandLine -like "*shadow.db*") -and ((-not $RunId) -or ($_.CommandLine -like "*$RunId*"))))
             })
@@ -1034,9 +1153,10 @@ function Open-Dashboard {
         if ($ok) {
             Lsh-Step "Sweeping Polymarket account balance to sync live starting capital..."
             try {
-                # `python -m` resolves modules against the caller's cwd, and
-                # every Start-Process launch in this script pins
-                # -WorkingDirectory $ProjectPath for exactly that reason. A
+                # `python -m` resolves modules against the caller's cwd; worker
+                # and timebox Start-Process launches pin -WorkingDirectory
+                # $ProjectPath for exactly that reason (browser launches open
+                # a URL and take no working folder). A
                 # direct `& python` call inherits the shell's location, so a
                 # menu launched outside the repo root died here with
                 # ModuleNotFoundError: No module named 'core_brain'.
@@ -1433,7 +1553,7 @@ function Resume-ShadowRun {
         }
         Start-Process -FilePath "powershell" `
             -ArgumentList "-NoProfile", "-Command", $killCmd `
-            -WindowStyle Hidden
+            -WindowStyle Hidden -WorkingDirectory $ProjectPath
     }
 
     $session = [ordered]@{
@@ -1591,7 +1711,7 @@ function Start-NewShadowRun {
         foreach ($t in $timerTargets) {
             $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
         }
-        Start-Process -FilePath "powershell" -ArgumentList "-NoProfile", "-Command", $killCmd -WindowStyle Hidden
+        Start-Process -FilePath "powershell" -ArgumentList "-NoProfile", "-Command", $killCmd -WindowStyle Hidden -WorkingDirectory $ProjectPath
     }
 
     Start-Sleep -Seconds 3
@@ -1832,12 +1952,21 @@ function Start-BotStack {
 function Stop-BotStack {
     <# Stop the stack via the API; if the dashboard is down, kill recorded PIDs directly. #>
     if (Test-Port) {
-        Lsh-Step "Requesting bot stack stop..."
-        $res = Invoke-Control -Endpoint "/api/system/stop"
-        if (-not $res) { return }
-        if ($res.ok) { Lsh-Ok "Bot stack stopped: $($res.message)." }
-        else         { Lsh-Fail "Stop refused: $($res.message)" }
-        return
+        $listener = Get-DashboardOwnership
+        if ($listener.Verdict -ne 'Owned') {
+            if ($listener.Verdict -eq 'Foreign') {
+                Lsh-Warn ("Dashboard on :{0} serves another checkout ({1}); using recorded PIDs instead." -f $Port, $listener.ServedPath)
+            } else {
+                Lsh-Warn "Dashboard listener identity is unknown; using recorded PIDs instead."
+            }
+        } else {
+            Lsh-Step "Requesting bot stack stop..."
+            $res = Invoke-Control -Endpoint "/api/system/stop"
+            if (-not $res) { return }
+            if ($res.ok) { Lsh-Ok "Bot stack stopped: $($res.message)." }
+            else         { Lsh-Fail "Stop refused: $($res.message)" }
+            return
+        }
     }
     if (Test-Path $ProcsFile) {
         $saved = $null
@@ -1981,18 +2110,33 @@ function Get-HeartbeatAgeSec {
 
 function Show-Status {
     Lsh-Banner -Title "SPREAD HUNTER - STATUS" -Subtitle "Execution engine: $(Split-Path $ProjectPath -Leaf)"
+    Write-Host ("  Checkout: {0} (from {1})" -f $ProjectPath, $script:CheckoutSource)
+    if ($script:ScriptCheckout -ne $ProjectPath) {
+        Write-Host ("  Note: menu logic comes from {0}; Python code comes from {1}." -f $script:ScriptCheckout, $ProjectPath)
+    }
 
     # ── 1 · DASHBOARD ──
     $inst = Get-DashInstance
     $portUp = Test-Port
     if ($inst) {
-        Write-SectionHeader -Number "1" -Title "DASHBOARD" -Status "ON" -StatusStyle "Success"
+        Write-SectionHeader -Number "1" -Title "DASHBOARD" -Status "ON (owned)" -StatusStyle "Success"
         Write-ProcessRow -Label "Dashboard" -Running $true -PidVal $inst.pid -Path $StackPaths["dash"] -ExtraInfo $DashUrl
         Write-FileRow -Label "PID file" -Status "FOUND" -Path "runtime/live-dash.pids.json" -Dynamic ("PID {0} recorded" -f $inst.pid)
     } elseif ($portUp) {
-        Write-SectionHeader -Number "1" -Title "DASHBOARD" -Status "LISTENING" -StatusStyle "Warning"
-        Write-FileRow -Label "Dashboard" -Status "LISTENING" -Path $StackPaths["dash"] -Dynamic ("PID {0} on port {1} (external)" -f (Get-PortPid), $LivePort)
-        Write-FileRow -Label "PID file" -Status "MISSING" -Path "runtime/live-dash.pids.json" -Dynamic "Not Owned by Menu"
+        $dashOwner = Get-DashboardOwnership
+        if ($dashOwner.Verdict -eq 'Foreign') {
+            Write-SectionHeader -Number "1" -Title "DASHBOARD" -Status "LISTENING" -StatusStyle "Warning"
+            Write-FileRow -Label "Dashboard" -Status "LISTENING" -Path $StackPaths["dash"] -Dynamic ("PID {0} on port {1} (other checkout: {2})" -f (Get-PortPid), $LivePort, $dashOwner.ServedPath)
+            Write-FileRow -Label "PID file" -Status "MISSING" -Path "runtime/live-dash.pids.json" -Dynamic "Not Owned by Menu"
+        } elseif ($dashOwner.Verdict -eq 'Owned') {
+            Write-SectionHeader -Number "1" -Title "DASHBOARD" -Status "LISTENING" -StatusStyle "Warning"
+            Write-FileRow -Label "Dashboard" -Status "LISTENING" -Path $StackPaths["dash"] -Dynamic ("PID {0} on port {1} (this checkout, not adopted - use host/open to adopt)" -f (Get-PortPid), $LivePort)
+            Write-FileRow -Label "PID file" -Status "MISSING" -Path "runtime/live-dash.pids.json" -Dynamic "Not adopted"
+        } else {
+            Write-SectionHeader -Number "1" -Title "DASHBOARD" -Status "LISTENING" -StatusStyle "Warning"
+            Write-FileRow -Label "Dashboard" -Status "LISTENING" -Path $StackPaths["dash"] -Dynamic ("PID {0} on port {1} (unknown owner)" -f (Get-PortPid), $LivePort)
+            Write-FileRow -Label "PID file" -Status "MISSING" -Path "runtime/live-dash.pids.json" -Dynamic "Not Owned by Menu"
+        }
     } else {
         Write-SectionHeader -Number "1" -Title "DASHBOARD" -Status "OFF" -StatusStyle "Error"
         Write-ProcessRow -Label "Dashboard" -Running $false -Path $StackPaths["dash"] -RunCmd ("python -m dashboard.server --port {0}" -f $LivePort)
@@ -2089,12 +2233,23 @@ function Show-Status {
 
     # ── 2 · BOT STACK (dashboard API when up, processes.json otherwise) ──
     $status = $null
+    $listenerNote = $null
     if ($portUp) {
         try { $status = Invoke-RestMethod -Uri "$DashUrl/api/system/status" -UseBasicParsing -TimeoutSec 5 } catch {}
+        $stackOwner = Get-DashboardOwnership
+        if ($status -and $stackOwner.Verdict -ne 'Owned') {
+            $status = $null
+            if ($stackOwner.Verdict -eq 'Foreign') {
+                $listenerNote = ("Listener serves another checkout ({0}); showing local records." -f $stackOwner.ServedPath)
+            } else {
+                $listenerNote = "Listener identity is unknown; showing local records."
+            }
+        }
     }
     if ($status) {
         Show-ServiceTable $status
     } else {
+        if ($listenerNote) { Lsh-Warn $listenerNote }
         $saved = $null
         if (Test-Path $ProcsFile) { try { $saved = Get-Content $ProcsFile -Raw | ConvertFrom-Json } catch {} }
         $rows = @()
@@ -2128,6 +2283,7 @@ function Show-Status {
     $gh = $null
     if ($portUp) {
         try { $gh = Invoke-RestMethod -Uri "$DashUrl/api/guardrail-health" -UseBasicParsing -TimeoutSec 5 } catch {}
+        if ($gh -and (Get-DashboardOwnership).Verdict -ne 'Owned') { $gh = $null }
     }
     if ($gh) {
         # Live-state language (DESIGN.md): the watcher's ~5s heartbeat drives
@@ -2296,7 +2452,7 @@ function Test-OrphanStackProcess {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
-                ($_.CommandLine -like "*$ProjectPath*") -and ($_.CommandLine -match $markerPattern) -and `
+                ((Get-CommandLineCheckoutOwner -CommandLine $_.CommandLine -Root $ProjectPath) -eq 'Owned') -and ($_.CommandLine -match $markerPattern) -and `
                 ($_.CommandLine -notmatch 'polymarket_docs_mcp')
             })
     } catch { return $null }
@@ -2560,6 +2716,170 @@ function Stop-ShadowSession {
     return $killedAny
 }
 
+function Get-ForceStopTargets {
+    <# Discover every stoppable spread-hunter python process of THIS checkout
+    and classify it Owned, Foreign, or Unknown. Read-only: never kills. The
+    preview list and both kill passes share this helper. #>
+    $forcePattern = '-m\s+(scripts\.filter_loop|core_brain\.trader_loop|core_brain\.order_manager\s+poll|scripts\.global_stop_loss|dashboard\.server|core_brain\.shadow_run|core_brain\.statistics_observer)\b|scripts[\\/]global_stop_loss\.py'
+    $found = @()
+    try {
+        $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+    } catch {
+        Lsh-Warn "Could not read the process table; force-stop scan is inconclusive."
+        return $null
+    }
+    $saved = $null
+    if (Test-Path $ProcsFile) { try { $saved = Get-Content $ProcsFile -Raw | ConvertFrom-Json } catch {} }
+    $registryOwned = @{}
+    if ($saved) {
+        foreach ($name in @("filter", "query", "decide")) {
+            $info = Get-ServiceEntry -Saved $saved -Key $name
+            if ($info -and $info.pid) {
+                try {
+                    if (Test-RecordLive -ProcessId ([int]$info.pid) -StartedAt $info.started_at) { $registryOwned[[int]$info.pid] = $true }
+                } catch {}
+            }
+        }
+    }
+    $dashPid = $null
+    try { $di = Get-DashInstance; if ($di) { $dashPid = $di.pid } } catch {}
+    $sessionOwned = @{}
+    $sessionFiles = @(Get-ChildItem $RunDir -Filter "shadow-session-*.json" -ErrorAction SilentlyContinue)
+    if (Test-Path $ShadowSessionFile) { $sessionFiles += Get-Item $ShadowSessionFile }
+    foreach ($sf in $sessionFiles) {
+        $s = $null
+        try { $s = Get-Content $sf.FullName -Raw | ConvertFrom-Json } catch {}
+        if ($s) {
+            foreach ($slot in @($s.loop, $s.screener, $s.observer, $s.watcher)) {
+                $rp = $null
+                try { $rp = Get-ProcessRecord -Entry $slot } catch {}
+                if ($rp) { $sessionOwned[$rp.Id] = $true }
+            }
+        }
+    }
+    $portOwner = $null
+    try { $portOwner = Get-PortPid } catch {}
+    $portProve = $false
+    if ($portOwner) {
+        try { $portProve = ((Get-DashboardOwnership).Verdict -eq 'Owned') } catch { $portProve = $false }
+    }
+    foreach ($p in $procs) {
+        if ($p.Name -notmatch '^python') { continue }
+        if (-not $p.CommandLine) { continue }
+        if ($p.ProcessId -eq $PID) { continue }
+        if ($p.CommandLine -notmatch $forcePattern) { continue }
+        if ($p.CommandLine -match 'polymarket_docs_mcp') { continue }
+        $cli = Get-CommandLineCheckoutOwner -CommandLine $p.CommandLine -Root $ProjectPath
+        $rec = $registryOwned.ContainsKey([int]$p.ProcessId) -or ($dashPid -and ($dashPid -eq [int]$p.ProcessId)) -or $sessionOwned.ContainsKey([int]$p.ProcessId)
+        $isPort = ($portProve -and $portOwner -and ([int]$p.ProcessId -eq [int]$portOwner))
+        if (($cli -eq 'Foreign') -and ($rec -or $isPort)) {
+            $verdict = 'Unknown'
+        } elseif (($cli -eq 'Owned') -or $rec -or $isPort) {
+            $verdict = 'Owned'
+        } elseif ($cli -eq 'Foreign') {
+            $verdict = 'Foreign'
+        } else {
+            $verdict = 'Unknown'
+        }
+        $rank = 2
+        if ($p.CommandLine -match 'dashboard\.server') { $rank = 0 }
+        elseif ($p.CommandLine -match 'core_brain\.order_manager') { $rank = 1 }
+        $born = $null
+        try { $born = (Get-Process -Id $p.ProcessId -ErrorAction Stop).StartTime } catch { $born = $null }
+        $found += [pscustomobject]@{ Pid = [int]$p.ProcessId; CommandLine = [string]$p.CommandLine; Verdict = $verdict; Rank = $rank; BornAt = $born }
+    }
+    return ,@($found | Sort-Object Rank, Pid)
+}
+
+function Stop-WorktreeProcessesForce {
+    <# Stop every Owned spread-hunter process of this checkout — recorded or
+    not — while leaving Foreign and Unknown processes running. Kills in
+    supervisor order (dashboard, order manager, rest), re-verifies each PID's
+    creation time at kill time through Kill-RecordedPid, rescans once for
+    late arrivals, and reports three lists. Removes a dashboard or
+    shadow-session record only after every PID in it has exited. Never
+    touches processes.json, markets.json, heartbeat, locks, data/, the TS
+    bridge, or the recorded-stack stop paths. With -Preview, only returns
+    the Owned targets without touching anything. #>
+    param([switch]$Preview)
+    $targets = Get-ForceStopTargets
+    if ($null -eq $targets) {
+        Lsh-Warn "Force-stop scan was inconclusive; leaving everything running."
+        return $null
+    }
+    if ($Preview) { return ,@($targets | Where-Object { $_.Verdict -eq 'Owned' }) }
+    $stopped = @()
+    $survived = @()
+    $lastTargets = @()
+    for ($pass = 0; $pass -lt 2; $pass++) {
+        if ($pass -eq 1) {
+            $targets = Get-ForceStopTargets
+            if ($null -eq $targets) {
+                Lsh-Warn "Force-stop rescan was inconclusive; leaving everything running."
+                return $null
+            }
+        }
+        $lastTargets = @($targets)
+        $owned = @($targets | Where-Object { $_.Verdict -eq 'Owned' })
+        if (($pass -eq 1) -and ($owned.Count -eq 0)) { break }
+        foreach ($t in $owned) {
+            if (-not (Test-PidAlive -ProcessId $t.Pid)) {
+                # An earlier taskkill /T already ended this child.
+                if (-not ($stopped -contains $t.Pid)) { $stopped += $t.Pid }
+                continue
+            }
+            if ($null -eq $t.BornAt) {
+                Lsh-Warn ("PID {0} start time unreadable; leaving it running." -f $t.Pid)
+                if (-not ($survived -contains $t.Pid)) { $survived += $t.Pid }
+                continue
+            }
+            $ok = Kill-RecordedPid -Name "force-stop target" -TargetPid $t.Pid -StartedTicks $t.BornAt.ToUniversalTime().Ticks
+            if ($ok) { $stopped += $t.Pid }
+            elseif (-not ($survived -contains $t.Pid)) { $survived += $t.Pid }
+        }
+    }
+    $foreign = @($lastTargets | Where-Object { $_.Verdict -eq 'Foreign' } | ForEach-Object { $_.Pid })
+    $survived = @($survived | Where-Object { Test-PidAlive -ProcessId $_ })
+    $unknown = @($lastTargets | Where-Object { $_.Verdict -eq 'Unknown' } | ForEach-Object { $_.Pid })
+    foreach ($sp in $survived) { if (-not ($unknown -contains $sp)) { $unknown += $sp } }
+    if ($stopped.Count -gt 0) { Lsh-Ok ("Force stop complete: stopped PID(s) {0}." -f ($stopped -join ", ")) }
+    else { Lsh-Ok "Force stop complete: no Owned processes were running." }
+    if ($foreign.Count -gt 0) { Lsh-Warn ("Left running - other checkout: {0}." -f ($foreign -join ", ")) }
+    if ($unknown.Count -gt 0) { Lsh-Warn ("Left running - could not prove ownership: {0}." -f ($unknown -join ", ")) }
+    if ($survived.Count -gt 0) { Lsh-Fail ("Owned target(s) still running: {0}." -f ($survived -join ", ")) }
+    Lsh-Warn "Stopping processes does not cancel resting venue orders."
+    if (Test-Path $DashPidFile) {
+        $dpids = @()
+        try {
+            $dd = Get-Content $DashPidFile -Raw | ConvertFrom-Json
+            if ($dd -and $dd.dash -and $dd.dash.pid) { $dpids += [int]$dd.dash.pid }
+        } catch {}
+        $dashGone = ($dpids.Count -gt 0)
+        foreach ($dp in $dpids) { if (Test-PidAlive -ProcessId $dp) { $dashGone = $false } }
+        if ($dashGone) { Remove-Item $DashPidFile -Force -ErrorAction SilentlyContinue }
+    }
+    $sessionFiles = @(Get-ChildItem $RunDir -Filter "shadow-session-*.json" -ErrorAction SilentlyContinue)
+    if (Test-Path $ShadowSessionFile) { $sessionFiles += Get-Item $ShadowSessionFile }
+    foreach ($sf in $sessionFiles) {
+        $s = $null
+        try { $s = Get-Content $sf.FullName -Raw | ConvertFrom-Json } catch {}
+        if (-not $s) { continue }
+        $known = @()
+        $unproven = 0
+        foreach ($slot in @($s.loop, $s.screener, $s.observer, $s.watcher)) {
+            if ($slot -and $slot.pid) {
+                if ($slot.started_ticks) { $known += [int]$slot.pid }
+                else { $unproven++ }
+            }
+        }
+        if (($known.Count -eq 0) -or ($unproven -gt 0)) { continue }
+        $allGone = $true
+        foreach ($kp in $known) { if (Test-PidAlive -ProcessId $kp) { $allGone = $false } }
+        if ($allGone) { Remove-Item $sf.FullName -Force -ErrorAction SilentlyContinue }
+    }
+    return ($survived.Count -eq 0)
+}
+
 function Stop-AllSpreadHunterProcesses {
     <# Stop all spread-hunter processes: bot stacks, dashboards, shadow runs,
        watchers, observers, tournament cockpit, filter loop, arm dashboards,
@@ -2584,7 +2904,7 @@ function Stop-AllSpreadHunterProcesses {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
-                ($_.CommandLine -like "*$ProjectPath*") -and ($_.CommandLine -match $shPattern) -and `
+                ((Get-CommandLineCheckoutOwner -CommandLine $_.CommandLine -Root $ProjectPath) -eq 'Owned') -and ($_.CommandLine -match $shPattern) -and `
                 ($_.CommandLine -notmatch 'polymarket_docs_mcp')
             })
         foreach ($p in $procs) {
@@ -2603,7 +2923,7 @@ function Stop-AllSpreadHunterProcesses {
         if ($pidOnPort) {
             try { $holder = @(Get-CimInstance Win32_Process -Filter "ProcessId=$pidOnPort" -ErrorAction Stop)[0] } catch { $holder = $null }
             $holderCmd = if ($holder -and $holder.CommandLine) { $holder.CommandLine } else { "" }
-            if ($holderCmd -like "*$ProjectPath*" -and $holderCmd -match $shPattern) {
+            if (((Get-CommandLineCheckoutOwner -CommandLine $holderCmd -Root $ProjectPath) -eq 'Owned') -and ($holderCmd -match $shPattern)) {
                 Lsh-Step "Freeing port :$port (PID $pidOnPort)..."
                 taskkill /F /T /PID $pidOnPort 2>$null | Out-Null
                 Wait-ProcessGone -ProcessId $pidOnPort | Out-Null
@@ -2627,7 +2947,7 @@ function Stop-AllSpreadHunterProcesses {
     $lingering = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
             $_.Name -match '^python' -and $_.CommandLine -and `
-            ($_.CommandLine -like "*$ProjectPath*") -and ($_.CommandLine -match $shPattern) -and `
+            ((Get-CommandLineCheckoutOwner -CommandLine $_.CommandLine -Root $ProjectPath) -eq 'Owned') -and ($_.CommandLine -match $shPattern) -and `
             ($_.CommandLine -notmatch 'polymarket_docs_mcp')
         })
     if ((Test-StackAlive) -or ($lingering.Count -gt 0)) {
@@ -2821,7 +3141,7 @@ function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wip
                         }
                         Start-Process -FilePath "powershell" `
                             -ArgumentList "-NoProfile", "-Command", $killCmd `
-                            -WindowStyle Hidden
+                            -WindowStyle Hidden -WorkingDirectory $ProjectPath
                     }
                     Lsh-Ok "Shadow session running: screener + loop + stop-loss watcher. Stop Bot + Dashboard (5 / stop-shadow) ends it early."
                 }
@@ -2941,7 +3261,7 @@ function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wip
 # One ordered key list is the single source of truth for the menu: the grid,
 # the prompt, the invalid-selection message and the command-line allow-list
 # all derive from it, so a new key only has to be added in one place (#475).
-$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'c', 't', 'q')
+$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'c', 't', 'q', 'x')
 
 function Format-MenuHint {
     <# Render the key list as the operator-facing hint, e.g. "1-9, r, a, p, q".
@@ -2959,6 +3279,10 @@ function Show-MenuGrid {
     $cNeutral = Get-ProfileColor -Name Neutral
 
     Write-Host "  SPREAD HUNTER - CONTROL CENTER" -ForegroundColor $cInfo
+    Write-Host ("  Checkout: {0} (from {1})" -f $ProjectPath, $script:CheckoutSource) -ForegroundColor $cNeutral
+    if ($script:ScriptCheckout -ne $ProjectPath) {
+        Write-Host ("  Note: menu logic comes from {0}; Python code comes from {1}." -f $script:ScriptCheckout, $ProjectPath) -ForegroundColor $cNeutral
+    }
     Write-Host ("" + ("─" * 30)) -ForegroundColor (Get-ProfileColor -Name Border)
     Write-Host ""
 
@@ -2980,6 +3304,7 @@ function Show-MenuGrid {
         ) }
         @{ Header = "MAINTENANCE & TOURNAMENT"; Items = @(
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop &| Clean";       D = "1. Stop All (default) | 2. Stop & CLEAN Data" }
+            @{ K = "x"; Icon = "✖"; IconColor = "Error";   V = "Force Stop Checkout";          D = "Stop every Owned process of THIS checkout (recorded or not); others keep running" }
             @{ K = "8"; Icon = "≡"; IconColor = "Info";    V = "Check System Status";        D = "Static Status page" }
             @{ K = "t"; Icon = "⚖"; IconColor = "Success"; V = "Tournament Reconcile";       D = "Align & sync 10 arms, filter loop, 10 dashboards & Cockpit" }
             @{ K = "c"; Icon = "⌖"; IconColor = "Info";    V = "Tournament Cockpit";         D = "Open Advanced Analytics & Decision Cockpit on :8800" }
@@ -3117,6 +3442,26 @@ function Invoke-LiveAction {
                 }
                 $null = Reset-Environment -Mode "none"
             }
+        }
+        "x" {
+            $preview = Stop-WorktreeProcessesForce -Preview
+            if ($null -eq $preview) {
+                Lsh-Warn "Force-stop preview was inconclusive; leaving everything running."
+                return
+            }
+            if ($preview.Count -eq 0) {
+                Lsh-Ok "No Owned spread-hunter processes to force-stop in this checkout."
+                return
+            }
+            Lsh-Step "Force stop will kill these Owned processes of this checkout:"
+            foreach ($t in $preview) {
+                Lsh-Step (("  PID {0}: {1}" -f $t.Pid, $t.CommandLine))
+            }
+            if ($Action -eq "") {
+                $confirm = Read-Host ("  Stop these {0} process(es) with taskkill /T /F? [y/N]" -f $preview.Count)
+                if ($confirm -notmatch '^[yY]') { Lsh-Warn "Force stop cancelled."; return }
+            }
+            $null = Stop-WorktreeProcessesForce
         }
         "8" { Show-Status }
         "r" {
@@ -3356,6 +3701,9 @@ if ($Action -ne "") {
         "get"          = "7"
         "stop-all"     = "7"
         "stopall"      = "7"
+        "stop-all-force" = "x"
+        "force-stop"   = "x"
+        "nuke"         = "x"
         "status"       = "8"
         "statistical"  = "9"
         "stats"        = "9"
