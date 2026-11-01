@@ -460,9 +460,12 @@ def resolve_tournament_arms_with_status(
     _WARNED_RECORD = None
     # A run that launched its own arm set (#843's six-arm continuation) is read
     # as itself: merging it over the four static presets would hide two real arms
-    # and keep two rows pointing at a different run's stores.
+    # and keep two rows pointing at a different run's stores. Also treat partial
+    # / legacy records (fewer arms than the static preset) as standalone -- they
+    # are not continuations of the full preset.
     static_names = {base["name"] for base in default_arms}
-    if any(a["name"] not in static_names for a in record_arms):
+    if (any(a["name"] not in static_names for a in record_arms)
+            or len(record_arms) != len(default_arms)):
         return build_plan_arms(latest_plan) or default_arms, None
     plan_arms: dict[str, Any] = {}
     for a in record_arms:
