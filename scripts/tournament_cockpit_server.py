@@ -94,6 +94,23 @@ ARMS_CONFIG_799 = _load_arms_from_file(I799_ARMS_FILE, 799, 8801)
 # default; this constant no longer selects a page.
 ARMS_CONFIG = ARMS_CONFIG_799
 
+# Decision gate arm identification per tournament key.
+# Each tournament has different arm names; this maps the logical role to the
+# arm name pattern for that tournament.
+DECISION_GATE_ARM_MAP = {
+    "843": {
+        "test_arm_pattern": "balanced-queue5",      # The hybrid arm combining balanced preset + queue gate
+        "baseline_arm_names": ["control"],           # Pure control/baseline
+        "balanced_only_arm_names": ["balanced-only"],  # Balanced preset only
+    },
+    "799": {
+        "test_arm_pattern": "queue-clear-5m",       # Queue clear gate test
+        "baseline_arm_names": ["loose-baseline"],    # Pure control/baseline
+        "balanced_only_arm_names": ["balanced-mid"], # Balanced preset only
+    },
+}
+
+
 TOURNAMENTS = {
     "843": {
         "id": "843",
@@ -828,9 +845,11 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
     total_trades = sum(a.get("trades_count", 0) for a in arms_data)
     ok_arms = [a for a in arms_data if a.get("status") == "ok"]
     
-    test_arm = next((a for a in arms_data if "balanced-queue5" in a.get("name", "")), None)
-    baseline_arm = next((a for a in arms_data if a.get("name") in ("control", "loose-baseline")), None)
-    balanced_only_arm = next((a for a in arms_data if "balanced-only" in a.get("name", "") or a.get("name") == "balanced-mid"), None)
+    # Tournament-specific arm identification
+    arm_map = DECISION_GATE_ARM_MAP.get(tourney_key, DECISION_GATE_ARM_MAP["843"])
+    test_arm = next((a for a in arms_data if arm_map["test_arm_pattern"] in a.get("name", "")), None)
+    baseline_arm = next((a for a in arms_data if a.get("name") in arm_map["baseline_arm_names"]), None)
+    balanced_only_arm = next((a for a in arms_data if a.get("name") in arm_map["balanced_only_arm_names"]), None)
     
     if test_arm is None and ok_arms:
         test_arm = max(ok_arms, key=lambda x: (x.get("sharpe_ratio") is not None, x.get("sharpe_ratio") or 0.0))
@@ -940,7 +959,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
     elif gate_starv_status == "STARVATION":
         overall_verdict = "REJECTED: VOLUME STARVATION DETECTED"
         overall_badge = "badge-red"
-        overall_desc = "Combining the balanced preset and 5m queue-clear gate severely chokes order fills. Knobs are mutually restrictive."
+        overall_desc = "Combining the test configuration severely chokes order fills. Knobs are mutually restrictive."
     elif gate_sharpe_status == "FAIL" or gate_mdd_status == "FAIL":
         overall_verdict = "REJECTED: CRITICAL RISK GATES FAILED"
         overall_badge = "badge-red"
@@ -1093,9 +1112,11 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     )
     
     # Generate Per-Arm Cards for Decision Gates Tab
+    arm_map = DECISION_GATE_ARM_MAP.get(tourney_key, DECISION_GATE_ARM_MAP["843"])
+    test_pattern = arm_map["test_arm_pattern"]
     arm_cards = []
     for a in initial_data.get("arms", []):
-        is_test = "balanced-queue5" in a.get("name", "")
+        is_test = test_pattern in a.get("name", "")
         card_border = "border: 2px solid var(--blue);" if is_test else "border: 1px solid var(--border);"
         test_badge = '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px; margin-left: 6px;">TEST ARM</span>' if is_test else ''
         pnl = a.get("total_pnl", 0.0)
