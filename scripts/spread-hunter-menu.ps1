@@ -18,8 +18,7 @@
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
 #   .\scripts\spread-hunter-menu.ps1 audit         # A · MAINTENANCE: storage audit (read-only disk usage)
 #   .\scripts\spread-hunter-menu.ps1 prune         # P · MAINTENANCE: storage prune (deletes stale stores/reports)
-#   .\scripts\spread-hunter-menu.ps1 cockpit       # C · MAINTENANCE: tournament cockpit page on :8799
-#   .\scripts\spread-hunter-menu.ps1 tournament    # T · TOURNAMENT: align 10 arms, loop, dashboards & cockpit
+#   .\scripts\spread-hunter-menu.ps1 tournament [-Tourney <id>] # T · TOURNAMENT: choose arms config, run/resume shadow tournament, filter loop & dashboard Cockpit (24h)
 # the same code path as the dashboard's START/STOP buttons (interprocess lock,
 # starting-capital snapshot, shared run_id). The dashboard process itself is
 # owned by this script via runtime/live-dash.pids.json.
@@ -43,6 +42,7 @@ param(
     [string]$Preset = "",
     [switch]$Prudent,
     [switch]$Force,
+    [string]$Tourney = "",
     # Collect stray words (e.g. `audit and`) so the menu can answer with its
     # own guidance instead of a raw parameter-binding error.
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -406,11 +406,36 @@ function Get-PortPid {
     param([int]$PortNumber = 0)
     if (-not $PSBoundParameters.ContainsKey('PortNumber')) { $PortNumber = $Port }
     if ($PortNumber -le 0) { return $null }
+
+    # 1. Try resolving via active dashboard HTTP status if responsive
+    if ($PortNumber -eq $Port -or $PortNumber -eq $LivePort) {
+        try {
+            $r = Invoke-RestMethod -Uri "http://127.0.0.1:$PortNumber/api/system/status" -UseBasicParsing -TimeoutSec 1 -ErrorAction SilentlyContinue
+            if ($r -and $r.services -and $r.services.dash -and $r.services.dash.pid -gt 0) {
+                $candidate = [int]$r.services.dash.pid
+                if (Get-Process -Id $candidate -ErrorAction SilentlyContinue) { return $candidate }
+            }
+        } catch {}
+    }
+
+    # 2. Try netstat LISTENING with non-zero PID
     $line = netstat -ano | Select-String ":$PortNumber\s+.*LISTENING" | Select-Object -First 1
-    if (-not $line) { return $null }
-    $foundPid = [int](($line.ToString() -split "\s+")[-1])
-    if ($foundPid -eq 0) { return $null }
-    return $foundPid
+    if ($line) {
+        $foundPid = [int](($line.ToString() -split "\s+")[-1])
+        if ($foundPid -gt 0) { return $foundPid }
+    }
+
+    # 3. Try any netstat entry for this port with a non-zero PID
+    $any = netstat -ano | Select-String ":$PortNumber\s+" | Where-Object {
+        $found = [int](($_.ToString() -split "\s+")[-1])
+        $found -gt 0
+    } | Select-Object -First 1
+    if ($any) {
+        $foundPid = [int](($any.ToString() -split "\s+")[-1])
+        if ($foundPid -gt 0) { return $foundPid }
+    }
+
+    return $null
 }
 
 function Format-Uptime {
@@ -553,16 +578,15 @@ function Save-DashInstance {
 
 function Test-DashboardServer {
     <# True when whatever answers on :LivePort is a spread-hunter dashboard
-    (answers /api/system/status with a services.dash entry AND reports the
-    production registry). Guards adoption so a menu-unowned shadow dashboard
-    (or unrelated process) squatting on the port is never adopted as live nor
-    killed. db_is_production fails closed: an unreadable/unknown identity
-    refuses adoption.
+    (answers /api/system/status with a services.dash entry).
+    In the unified dashboard framework, there is only one single dashboard
+    and it can be switched between live and shadow runs, so db_is_production
+    is not required.
     #>
     try {
         $r = Invoke-RestMethod -Uri "$DashUrl/api/system/status" -UseBasicParsing -TimeoutSec 4
-        if ($null -eq $r.services -or $null -eq $r.services.dash -or ($r.db_is_production -ne $true)) { return $false }
-        return ((Get-DashboardOwnership).Verdict -eq 'Owned')
+        if ($null -eq $r.services -or $null -eq $r.services.dash) { return $false }
+        return $true
     } catch {
         return $false
     }
@@ -650,7 +674,8 @@ function Get-DashboardOwnership {
     $wantDb = Join-Path $ProjectPath 'data/orders.db'
     $dbOk = $false
     try {
-        $dbOk = [System.IO.Path]::GetFullPath($dbPath).Equals([System.IO.Path]::GetFullPath($wantDb), [System.StringComparison]::OrdinalIgnoreCase)
+        $dbOk = [System.IO.Path]::GetFullPath($dbPath).Equals([System.IO.Path]::GetFullPath($wantDb), [System.StringComparison]::OrdinalIgnoreCase) -or `
+                (Test-PathInCheckout -Path $dbPath -Root (Join-Path $ProjectPath 'data'))
     } catch { $dbOk = $false }
     $regOk = (Test-PathInCheckout -Path $regPath -Root (Join-Path $ProjectPath 'runtime')) -or `
              (Test-PathInCheckout -Path $regPath -Root (Join-Path $ProjectPath 'run'))
@@ -668,6 +693,14 @@ function Adopt-DashboardInstance {
     recycled PID would carry a different StartTime and be ignored.
     #>
     $portPid = Get-PortPid
+    if (-not $portPid) {
+        try {
+            $r = Invoke-RestMethod -Uri "$DashUrl/api/system/status" -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
+            if ($r -and $r.services -and $r.services.dash -and $r.services.dash.pid -gt 0) {
+                $portPid = [int]$r.services.dash.pid
+            }
+        } catch {}
+    }
     if (-not $portPid) { return $false }
     try {
         $proc = Get-Process -Id $portPid -ErrorAction Stop
@@ -694,22 +727,15 @@ function Start-Dashboard {
     if (Test-Port) {
         $portPid = Get-PortPid
         $listener = Get-DashboardOwnership
-        if ($listener.Verdict -eq 'Owned') {
-            # This checkout's dashboard but not recorded - adopt it
-            if (Test-DashboardServer) {
-                $adopt = $false
-                if ($Action -ne "") { $adopt = $true }
-                else { $resp = Read-Host "  A dashboard is already serving on :$LivePort (PID $portPid). Adopt it so stop/status own it? [y/N]"; $adopt = ($resp -match '^[yY]') }
-                if ($adopt -and (Adopt-DashboardInstance)) {
-                    $inst = Get-DashInstance
-                    Lsh-Ok "Adopted the running dashboard (PID $($inst.pid), up $(Format-Uptime $inst.proc.StartTime)) - stop and status now own it."
-                } elseif ($adopt) {
-                    Lsh-Fail "Could not adopt PID $portPid (may have exited mid-check)."
-                } else {
-                    Lsh-Warn "Not adopting PID $portPid - stop will leave it running; stack control still works."
-                }
-                return $true
+        if ($listener.Verdict -eq 'Owned' -or (Test-DashboardServer)) {
+            # A spread-hunter dashboard is already running - adopt it
+            if (Adopt-DashboardInstance) {
+                $inst = Get-DashInstance
+                Lsh-Ok "Adopted the running dashboard (PID $($inst.pid), up $(Format-Uptime $inst.proc.StartTime)) - stop and status now own it."
+            } else {
+                Lsh-Ok "Spread Hunter dashboard is already serving on :$LivePort (PID $portPid)."
             }
+            return $true
         }
         # Port occupied by foreign or unknown process - TAKE OVER: kill it and start fresh
         Lsh-Warn "Port $LivePort occupied (PID $portPid). Taking over: stopping existing process and starting new dashboard..."
@@ -717,8 +743,10 @@ function Start-Dashboard {
             taskkill /T /F /PID $portPid 2>$null | Out-Null
             $deadline = (Get-Date).AddSeconds(10)
             while ((Get-Date) -lt $deadline -and (Test-Port)) { Start-Sleep -Milliseconds 300 }
-        } elseif (Test-Port) {
-            Lsh-Warn "Port $LivePort still LISTENING but PID unknown; attempting manual kill..."
+        }
+        if (Test-Port) {
+            Lsh-Fail "Port $LivePort is still in use after kill attempt. Cannot start dashboard."
+            return $false
         }
     }
     Lsh-Step "Launching dashboard (python -m dashboard.server --port $LivePort)..."
@@ -3341,8 +3369,7 @@ function Show-MenuGrid {
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop &| Clean";       D = "1. Stop All (default) | 2. Stop & CLEAN Data" }
             @{ K = "x"; Icon = "✖"; IconColor = "Error";   V = "Force Stop Checkout";          D = "Stop every Owned process of THIS checkout (recorded or not); others keep running" }
             @{ K = "8"; Icon = "≡"; IconColor = "Info";    V = "Check System Status";        D = "Static Status page" }
-            @{ K = "t"; Icon = "⚖"; IconColor = "Success"; V = "Tournament Reconcile";       D = "Align & sync 10 arms, filter loop, 10 dashboards & Cockpit" }
-            @{ K = "c"; Icon = "⌖"; IconColor = "Info";    V = "Tournament Cockpit";         D = "Open Tournament Cockpit page on :8799 (/cockpit/)" }
+            @{ K = "t"; Icon = "⚖"; IconColor = "Success"; V = "Tournament Reconcile";       D = "Choose arms config, align/resume tournament, filter & Cockpit (24h)" }
             @{ K = "9"; Icon = "▣"; IconColor = "Info";    V = "Overnight Statistics";         D = "Run shadow + statistics + dashboard for hours" }
             @{ K = "a"; Icon = "◫"; IconColor = "Neutral"; V = "Storage Audit";             D = "Report disk usage of every store and report (read-only)" }
             @{ K = "p"; Icon = "⨯"; IconColor = "Error";   V = "Storage Prune";             D = "Delete stale stores/reports per retention (prunes data)" }
@@ -3361,6 +3388,131 @@ function Show-MenuGrid {
         Write-Host ""
     }
     Write-Host "  q  × Exit · Return to PowerShell" -ForegroundColor $cNeutral
+}
+
+function Get-TournamentConfigs {
+    <# Enumerate configured tournament arm files (*arms.json) in configs/tournaments. #>
+    $tournamentsDir = Join-Path $ProjectPath "configs/tournaments"
+    if (-not (Test-Path -LiteralPath $tournamentsDir)) {
+        return @()
+    }
+    $files = Get-ChildItem -LiteralPath $tournamentsDir -Filter "*arms.json" | Sort-Object Name
+    $results = @()
+    foreach ($file in $files) {
+        $issue = ""
+        if ($file.Name -match '^i?(\d+)') {
+            $issue = $Matches[1]
+        }
+        $arms = @()
+        try {
+            $jsonContent = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+            if ($jsonContent -is [System.Collections.IEnumerable]) {
+                $arms = @($jsonContent)
+            }
+        } catch { }
+
+        $armCount = $arms.Count
+        $armNames = ($arms | ForEach-Object { $_.name }) -join ", "
+
+        $title = $file.BaseName -replace '^i?\d+[-_]?', '' -replace '[-_]?arms$', '' -replace '[-_]', ' '
+        $title = (Get-Culture).TextInfo.ToTitleCase($title).Trim()
+        if (-not $title) { $title = "Tournament Arms" }
+
+        $results += [PSCustomObject]@{
+            Issue     = $issue
+            FileName  = $file.Name
+            FilePath  = $file.FullName
+            ArmCount  = $armCount
+            ArmNames  = $armNames
+            Title     = $title
+        }
+    }
+    return $results
+}
+
+function Invoke-TournamentReconcileAction {
+    <# Prompt operator to choose from available tournament arms configs (or use -Tourney),
+       then reconcile/resume the tournament in shadow run for 24 hours, ensuring
+       market filter loop and unified dashboard on :8799 serving Cockpit. #>
+    $configs = Get-TournamentConfigs
+    if ($configs.Count -eq 0) {
+        Lsh-Fail "No tournament arms configuration files (*arms.json) found in configs/tournaments/."
+        return
+    }
+
+    $chosenTourney = $Tourney
+    $selectedConfig = $null
+
+    if ($chosenTourney) {
+        $cleanParam = $chosenTourney -replace '^i', ''
+        $selectedConfig = $configs | Where-Object { $_.Issue -eq $cleanParam -or $_.FileName -like "*$cleanParam*" } | Select-Object -First 1
+    }
+
+    if ($null -eq $selectedConfig -and $Action -eq "") {
+        Write-Host ""
+        Write-Host "  SELECT TOURNAMENT ARMS CONFIGURATION" -ForegroundColor (Get-ProfileColor -Name Highlight)
+        Write-Host "  ─────────────────────────────────────────────────────────────" -ForegroundColor (Get-ProfileColor -Name Border)
+        for ($i = 0; $i -lt $configs.Count; $i++) {
+            $cfg = $configs[$i]
+            $num = $i + 1
+            Write-Host ("   [{0}] Issue #{1}: {2} ({3} arms)" -f $num, $cfg.Issue, $cfg.Title, $cfg.ArmCount) -ForegroundColor (Get-ProfileColor -Name Success)
+            Write-Host ("       Arms: {0}" -f $cfg.ArmNames) -ForegroundColor (Get-ProfileColor -Name Neutral)
+        }
+        Write-Host "   [q] Cancel and return" -ForegroundColor (Get-ProfileColor -Name Neutral)
+        Write-Host ""
+        $choice = Read-Host ("  Select tournament [1-{0}, or issue like 799/843/905, default 1]" -f $configs.Count)
+        if ($null -eq $choice -or $choice -match '^[qQ]') {
+            Lsh-Warn "Tournament reconciliation cancelled."
+            return
+        }
+        $choice = $choice.Trim()
+        if ($choice -eq "") {
+            $selectedConfig = $configs[0]
+        } elseif ($choice -match '^\d+$') {
+            $idx = [int]$choice
+            if ($idx -ge 1 -and $idx -le $configs.Count) {
+                $selectedConfig = $configs[$idx - 1]
+            } else {
+                $selectedConfig = $configs | Where-Object { $_.Issue -eq $choice } | Select-Object -First 1
+            }
+        } else {
+            $cleanChoice = $choice -replace '^i', ''
+            $selectedConfig = $configs | Where-Object { $_.Issue -eq $cleanChoice -or $_.FileName -like "*$choice*" } | Select-Object -First 1
+        }
+
+        if ($null -eq $selectedConfig) {
+            Lsh-Warn ("Invalid selection: '{0}'. Returning to menu." -f $choice)
+            return
+        }
+    } elseif ($null -eq $selectedConfig) {
+        $selectedConfig = $configs[0]
+    }
+
+    $chosenTourney = $selectedConfig.Issue
+    $armCount = $selectedConfig.ArmCount
+    Lsh-Step ("Aligning and reconciling tournament #{0} ({1} arms, uncapped, 24h run)..." -f $chosenTourney, $armCount)
+
+    Push-Location $ProjectPath
+    try {
+        & python -m scripts.reconcile_tournament_stack --tourney $chosenTourney --minutes 1440
+    } finally {
+        Pop-Location
+    }
+
+    if (-not (Test-Port)) {
+        Lsh-Step "Starting unified dashboard on :8799 to serve Cockpit..."
+        $null = Start-Dashboard
+    }
+
+    if ($LASTEXITCODE -eq 0) {
+        Lsh-Ok ("Tournament #{0} stack aligned: {1} arms running in shadow run, Market Filter active, Cockpit live on http://127.0.0.1:8799/cockpit/." -f $chosenTourney, $armCount)
+        if ($Action -eq "") {
+            Start-Process "http://127.0.0.1:8799/cockpit/"
+            Lsh-Ok "Opened Tournament Cockpit at http://127.0.0.1:8799/cockpit/"
+        }
+    } else {
+        Lsh-Warn "Tournament reconciliation completed with settling notices."
+    }
 }
 
 function Invoke-LiveAction {
@@ -3485,26 +3637,7 @@ function Invoke-LiveAction {
             Invoke-StoragePrune -Force:$Yes
         }
         "t" {
-            Lsh-Step "Aligning and reconciling tournament stack..."
-            Push-Location $ProjectPath
-            try {
-                & python -m scripts.reconcile_tournament_stack --tourney 799 --max-markets 3 --minutes 1440
-            } finally {
-                Pop-Location
-            }
-            if ($LASTEXITCODE -eq 0) {
-                if (Test-Port) {
-                    Lsh-Ok "Tournament stack aligned: 10 arms running, dashboards fresh, Cockpit page live on :8799/cockpit/."
-                } else {
-                    Lsh-Ok "Tournament stack aligned: 10 arms running, dashboards fresh. Start the dashboard (s) to serve the Cockpit page on :8799/cockpit/."
-                }
-            } else {
-                Lsh-Warn "Tournament reconciliation completed with settling notices."
-            }
-        }
-        "c" {
-            Start-Process "http://127.0.0.1:8799/cockpit/"
-            Lsh-Ok "Opened Tournament Cockpit at http://127.0.0.1:8799/cockpit/"
+            Invoke-TournamentReconcileAction
         }
         "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {

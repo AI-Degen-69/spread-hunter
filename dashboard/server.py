@@ -6912,7 +6912,19 @@ def _open_dash_retired_page() -> str:
 def cockpit_stats(tourney: str | None = None):
     """Tournament stats JSON, built in-process by the cockpit’s own builder."""
     cockpit_mod = _load_cockpit()
-    key = tourney if tourney in cockpit_mod.SERVED_TOURNAMENT_KEYS else cockpit_mod.CURRENT_SETUP_KEY
+    if tourney and tourney in cockpit_mod.SERVED_TOURNAMENT_KEYS:
+        key = tourney
+    else:
+        newest = cockpit_mod._newest_plan_record()
+        if newest is not None:
+            from core_brain.shadow_run import parse_tournament_run_dir_name
+            parsed = parse_tournament_run_dir_name(newest.parent)
+            if parsed and str(parsed.get("issue")) in cockpit_mod.SERVED_TOURNAMENT_KEYS:
+                key = str(parsed["issue"])
+            else:
+                key = cockpit_mod.CURRENT_SETUP_KEY
+        else:
+            key = cockpit_mod.CURRENT_SETUP_KEY
     return JSONResponse(cockpit_mod.get_cached_stats(key))
 
 

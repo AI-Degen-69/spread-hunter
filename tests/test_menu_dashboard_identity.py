@@ -98,6 +98,21 @@ def test_matching_dashboard_is_adoptable(tmp_path):
     got = _scenario(st, 1234, main)
     assert got["verdict"] == "Owned"
 
+def test_shadow_store_in_checkout_is_adoptable_and_owned(tmp_path):
+    main = _make_checkout(tmp_path / "main")
+    st = _status(main / "data" / "01_shadow_2026-11-01T12-00.db",
+                 main / "runtime" / "processes.json", 1234, production=False)
+    got = _scenario(st, 1234, main)
+    assert got["verdict"] == "Owned"
+
+
+def test_tournament_store_in_checkout_is_adoptable_and_owned(tmp_path):
+    main = _make_checkout(tmp_path / "main")
+    st = _status(main / "data" / "tournaments" / "i843" / "orders.db",
+                 main / "runtime" / "processes.json", 1234, production=False)
+    got = _scenario(st, 1234, main)
+    assert got["verdict"] == "Owned"
+
 
 def test_sibling_dashboard_with_production_flag_is_refused(tmp_path):
     main = _make_checkout(tmp_path / "main")
