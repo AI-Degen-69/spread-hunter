@@ -3572,6 +3572,130 @@ function Invoke-LiveAction {
             }
             if (-not $found) { Lsh-Ok "No filter_loop processes found." }
         }
+        "2" {
+            Stop-BotStack
+            $null = Stop-Dashboard
+            Lsh-Ok "Live stack is down."
+        }
+        "4" {
+            $mins = $Minutes
+            $validPresets = @('control', 'conservative', 'balanced', 'aggressive', 'prudent', 'hybrid')
+            if ($Preset) {
+                $cleanPreset = $Preset.Trim().ToLower()
+                if ($cleanPreset -notin $validPresets) {
+                    Lsh-Fail "Unknown preset: '$Preset'. Supported presets: $($validPresets -join ', ')."
+                    return
+                }
+                $script:ShadowPreset = $cleanPreset
+            } elseif ($Prudent -or ($Action -eq "shadow-prudent") -or ($Action -eq "prudent")) {
+                $script:ShadowPreset = "prudent"
+            }
+            if ($Action -eq "") {
+                if (-not $script:ShadowPreset) {
+                    Write-Host "  Start new shadow rehearsal (no data wiped):" -ForegroundColor (Get-ProfileColor -Name Info)
+                    Write-Host "    [1] Standard Baseline (control) -> 01_shadow, 02_shadow..."
+                    Write-Host "    [2] Prudent Hybrid (2¢-4¢ dynamic offset, 0.60x) -> 01_shadow_prudent, 02_shadow_prudent..."
+                    $pChoice = Read-Host "  Profile choice? [1/2, default 1]"
+                    if ($pChoice -match '^[2pP]') {
+                        $script:ShadowPreset = "prudent"
+                    }
+                }
+                $presetLabel = if ($script:ShadowPreset -eq "prudent") { "Prudent Hybrid" } else { "Standard Baseline" }
+                $resp = Read-Host ("  Minutes for this {0} shadow run (default 1440 / 24h, 5 for quick check, -1 until stopped)?" -f $presetLabel)
+                if ($resp -and $resp -match '^\s*(?:-1|[0-9]+(?:\.[0-9]+)?)\s*$') { $mins = [double]$resp }
+            }
+            if ($mins -eq 0) { $mins = 1440 }
+            $script:Minutes = [int]$mins
+            $null = Start-NewShadowRun
+        }
+        "r" {
+            # Resume one shadow run or all of them. -ResumeDb <path> resumes
+            # that single store; -ResumeDb all resumes every candidate store.
+            # Interactive with no -ResumeDb lists what is on disk and asks.
+            # Non-interactive with no -ResumeDb keeps the pinned 01 default.
+            $resumeDbList = @()
+            $validPresets = @('control', 'conservative', 'balanced', 'aggressive', 'prudent', 'hybrid')
+            if ($Preset) {
+                $cleanPreset = $Preset.Trim().ToLower()
+                if ($cleanPreset -notin $validPresets) {
+                    Lsh-Fail "Unknown preset: '$Preset'. Supported presets: $($validPresets -join ', ')."
+                    return
+                }
+                $script:ShadowPreset = $cleanPreset
+            } elseif ($Prudent) {
+                $script:ShadowPreset = "prudent"
+            }
+            if ($ResumeDb -eq "all") {
+                $resumeDbList = @(Get-ShadowResumeStores | ForEach-Object { $_.Path })
+                if ($resumeDbList.Count -eq 0) {
+                    Lsh-Fail "No resumable shadow stores found in data/ (expected NN_shadow_*.db)."
+                    return
+                }
+                Lsh-Step ("Resuming all {0} shadow runs (no data wiped)." -f $resumeDbList.Count)
+            } elseif ($ResumeDb -ne "") {
+                $resumeDbList = @($ResumeDb)
+            } elseif ($Action -ne "") {
+                $resumeDbList = @("")
+            } else {
+                $stores = @(Get-ShadowResumeStores)
+                if ($stores.Count -eq 0) {
+                    Lsh-Fail "No resumable shadow stores found in data/ (expected NN_shadow_*.db)."
+                    return
+                }
+                Write-Host "  Available shadow runs to resume:" -ForegroundColor (Get-ProfileColor -Name Info)
+                for ($i = 0; $i -lt $stores.Count; $i++) {
+                    Write-Host ("    [{0}] {1} ({2})" -f ($i + 1), $stores[$i].RunId, $stores[$i].Name)
+                }
+                Write-Host "    [A] All runs"
+                Write-Host "    [P] Prudent Hybrid run on shadow-01 (2¢-4¢ dynamic offset, 0.60x)"
+                $promptLimit = if ($stores.Count -gt 1) { "1-$($stores.Count)/A/P" } else { "1/A/P" }
+                $choice = Read-Host ("  Resume which run? [{0}, C to cancel]" -f $promptLimit)
+                if ($choice -match '^[pP]') {
+                    $prudentPick = $stores | Where-Object { $_.RunId -like "*-prudent" } | Select-Object -First 1
+                    $s01 = $stores | Where-Object { $_.RunId -eq "shadow-01" } | Select-Object -First 1
+                    $picked = if ($prudentPick) { $prudentPick } elseif ($s01) { $s01 } else { $stores[0] }
+                    $confirm = Read-Host ("  Resume {0} from {1} with Prudent Hybrid dynamic offset (no data wiped)? [y/N]" -f $picked.RunId, $picked.Name)
+                    if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
+                    $script:ShadowPreset = "prudent"
+                    $resumeDbList = @($picked.Path)
+                } elseif ($choice -match '^[aA]') {
+                    $confirm = Read-Host ("  Resume all {0} runs (no data wiped)? [y/N]" -f $stores.Count)
+                    if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
+                    $resumeDbList = @($stores | ForEach-Object { $_.Path })
+                } elseif ($choice -match '^\s*(\d+)\s*$' -and [int]$Matches[1] -ge 1 -and [int]$Matches[1] -le $stores.Count) {
+                    $picked = $stores[[int]$Matches[1] - 1]
+                    $confirm = Read-Host ("  Resume {0} from {1} (no data wiped)? [y/N]" -f $picked.RunId, $picked.Name)
+                    if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
+                    if ($picked.RunId -like "*-prudent") { $script:ShadowPreset = "prudent" }
+                    $resumeDbList = @($picked.Path)
+                } else {
+                    Lsh-Warn "Resume cancelled."
+                    return
+                }
+            }
+            $resumeDbBefore = $ResumeDb
+            $watchBefore = $Watch
+            if ($resumeDbList.Count -gt 1 -and $watchBefore) {
+                Lsh-Warn "-Watch streams the last resumed run's log; earlier runs start without it."
+            }
+            $failedResumes = @()
+            foreach ($resumeDb in $resumeDbList) {
+                $script:ResumeDb = $resumeDb
+                if ($resumeDbList.Count -gt 1 -and $resumeDb -ne $resumeDbList[-1]) {
+                    $script:Watch = $false
+                } else {
+                    $script:Watch = $watchBefore
+                }
+                if (-not (Resume-ShadowRun)) { $failedResumes += $resumeDb }
+            }
+            $script:ResumeDb = $resumeDbBefore
+            $script:Watch = $watchBefore
+            $script:ShadowPreset = ""
+            if ($failedResumes.Count -gt 0) {
+                $failedNames = @($failedResumes | ForEach-Object { if ($_ -eq "") { "(pinned default)" } else { Split-Path -Leaf $_ } })
+                Lsh-Fail ("Resume incomplete: {0} store(s) failed: {1}." -f $failedResumes.Count, ($failedNames -join ", "))
+            }
+        }
         "7" {
             $subChoice = "1"
             if ($Action -eq "clean") {
@@ -3736,6 +3860,17 @@ function Invoke-InteractiveMenu {
 # ── Dispatch ──
 if ($Action -ne "") {
     $actionMap = @{
+        "stop"               = "2"
+        "live-stop"          = "2"
+        "shadow"             = "4"
+        "shadow-start"       = "4"
+        "shadow-run"         = "4"
+        "shadow-prudent"     = "4"
+        "prudent"            = "4"
+        "resume"             = "r"
+        "shadow-resume"      = "r"
+        "resume-shadow"      = "r"
+        "resume-01"          = "r"
         "start-dashboard"    = "s"
         "dashboard"          = "s"
         "dash"               = "s"
@@ -3785,7 +3920,8 @@ if ($Action -ne "") {
     # typo fails fast instead of falling into the "invalid selection" path.
     # The allow-list is the same key set the grid, prompt and error message
     # name (#475), so a stray action can never be accepted here.
-    if ($script:MenuKeys -notcontains $key) {
+    $legacyKeys = @('1', '2', '3', '4', '5', '6', 'r')
+    if ($script:MenuKeys -notcontains $key -and $legacyKeys -notcontains $key) {
         Write-Host ("ERROR: Unknown action '{0}' (use {1}, or a name like start/stop/status/audit/prune)" -f $Action, (Format-MenuHint)) -ForegroundColor Red
         exit 1
     }
