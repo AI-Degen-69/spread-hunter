@@ -3046,6 +3046,8 @@ function Invoke-StorageAudit {
             "price_tape"           = "Price Tape Store (Excluded)"
             "orphan_wal_shm"       = "Orphan SQLite Siblings"
             "reports"              = "Performance Reports"
+            "sqlite_sibling"       = "SQLite WAL & SHM Siblings"
+            "user_protected"       = "User Protected Stores"
         }
 
         foreach ($famKey in ($groups.Keys | Sort-Object)) {
