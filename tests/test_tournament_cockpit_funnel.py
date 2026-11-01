@@ -190,6 +190,37 @@ def test_cockpit_arm_carries_per_kpi_sufficiency_rows(tmp_path):
         assert [lv["confidence_pct"] for lv in row["levels"]] == [90, 95, 99]
 
 
+def test_cockpit_arm_card_shows_per_kpi_sufficiency(tmp_path):
+    """The new KPI analytics are visible on the page, not just in the JSON.
+
+    Each arm card carries its own sufficiency table (Have vs Need @95%):
+    the seed arm's expectancy needs 14 closes at 95% but has 3, so it reads
+    LOCKED; an arm that never reported reads unmeasured, never zero."""
+    from scripts.tournament_cockpit_server import generate_cockpit_html
+    db = _seed(tmp_path)
+    arm = analyze_arm_database({
+        "issue": 492,
+        "name": "funnel-arm",
+        "label": "Funnel Arm",
+        "port": 8999,
+        "db": str(db),
+        "run_id": RUN_ID,
+    })
+    html = generate_cockpit_html({"tourney_key": "843", "arms": [arm]})
+    assert "Per-KPI Sufficiency @95%" in html
+    assert "PnL Expectancy ($)" in html
+    assert "Avg Return per Trade (%)" in html
+    assert "LOCKED" in html
+    assert "3 closes" in html
+
+    ghost = generate_cockpit_html({
+        "tourney_key": "843",
+        "arms": [{"name": "ghost", "label": "Ghost", "port": 8999,
+                    "status": "missing_db", "trades_count": 0}],
+    })
+    assert "unmeasured \u2014 arm has not reported yet" in ghost
+
+
 def test_cockpit_table_drops_issue_port_fills_columns():
     html = generate_cockpit_html({"arms": [], "tourney_key": "799"})
     for gone in ("<th>Issue</th>", "<th>Port</th>", "<th>Fills</th>"):

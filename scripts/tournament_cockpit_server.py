@@ -884,6 +884,75 @@ SHARPE_TARGET = 2.70
 SHARPE_MARGINAL = 2.20
 
 
+def _sufficiency_95_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Condense sufficiency rows to their 95% striving level for display.
+
+    One dict per KPI: label, observation base and count, the arm's own
+    required N at 95% (None when unmeasured), remaining, progress, and the
+    unlock verdict. Shared by the server-side card HTML and the live JS
+    repaint below so first paint and poll updates can never disagree."""
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        lv95 = next(
+            (lv for lv in (row.get("levels") or []) if lv.get("confidence_pct") == 95), {}) or {}
+        sufficient = row.get("sufficient_95")
+        if sufficient is True:
+            verdict, badge = "SUFFICIENT", "badge-green"
+        elif lv95.get("required_n") is None:
+            verdict, badge = "—", ""
+        else:
+            verdict, badge = "LOCKED", "badge-amber"
+        out.append({
+            "key": row.get("key", ""),
+            "label": row.get("label", row.get("key", "")),
+            "base": row.get("base", "closes"),
+            "base_n": row.get("base_n", 0),
+            "required_95": lv95.get("required_n"),
+            "remaining_95": lv95.get("remaining_n"),
+            "progress_95": lv95.get("progress_pct"),
+            "verdict": verdict,
+            "badge": badge,
+        })
+    return out
+
+
+def _sufficiency_mini_html(rows: list[dict[str, Any]]) -> str:
+    """Compact per-KPI sufficiency table for one arm card (@95% striving level)."""
+    summaries = _sufficiency_95_rows(rows)
+    if not summaries:
+        return (
+            '<div style="font-size: 11.5px; color: var(--text-muted);">'
+            'Per-KPI Sufficiency: unmeasured — arm has not reported yet.</div>'
+        )
+    body = []
+    for s in summaries:
+        req = f"{s['required_95']:,}" if s["required_95"] is not None else "—"
+        prog = s["progress_95"]
+        bar = (
+            f'<div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; min-width: 48px;">'
+            f'<div style="background: var(--green); height: 6px; border-radius: 4px; width: {prog}%;"></div></div>'
+            if isinstance(prog, (int, float)) else '<span style="color: var(--text-muted);">—</span>'
+        )
+        badge = (
+            f'<span class="badge {s["badge"]}" style="font-size: 9px; padding: 2px 6px;">{s["verdict"]}</span>'
+            if s["badge"] else '<span style="color: var(--text-muted);">—</span>'
+        )
+        body.append(
+            f'<tr><td style="padding: 2px 4px 2px 0;">{html.escape(str(s["label"]))}</td>'
+            f'<td class="tabular" style="padding: 2px 4px; white-space: nowrap;">{s["base_n"]} {html.escape(str(s["base"]))}</td>'
+            f'<td class="tabular" style="padding: 2px 4px;">{req}</td>'
+            f'<td style="padding: 2px 4px;">{bar}</td>'
+            f'<td style="padding: 2px 0 2px 4px; text-align: right;">{badge}</td></tr>'
+        )
+    return (
+        '<div style="margin: 8px 0 4px; padding-top: 8px; border-top: 1px solid var(--border);">'
+        '<div style="font-size: 11px; font-weight: 700; color: var(--text-muted); '
+        'text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">'
+        'Per-KPI Sufficiency @95%</div>'
+        '<table style="width: 100%; font-size: 11px; border-collapse: collapse;">' + "".join(body) + '</table></div>'
+    )
+
+
 def _test_arm_sufficiency_row(arm: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
     """One sufficiency row off the test arm, or None when the arm never ran.
 
@@ -1256,6 +1325,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
             <div>Max DD: <strong class="tabular">${mdd:.2f}</strong></div>
             <div>Merge Rate: <strong class="tabular">{merge_pct:.1f}%</strong></div>
           </div>
+          {_sufficiency_mini_html(a.get('sufficiency_rows') or [])}
           <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4;">
             {html.escape(a.get('desc', ''))}
           </div>
@@ -2711,6 +2781,40 @@ function fetchLiveStats() {{
     }});
 }}
 
+function suffMiniHtml(rows) {{
+  if (!rows || !rows.length) {{
+    return '<div style="font-size: 11.5px; color: var(--text-muted);">' +
+      'Per-KPI Sufficiency: unmeasured — arm has not reported yet.</div>';
+  }}
+  let body = '';
+  rows.forEach(r => {{
+    const lv95 = ((r.levels || []).filter(lv => lv.confidence_pct === 95)[0]) || {{}};
+    const req = (lv95.required_n != null ? Number(lv95.required_n).toLocaleString() : '—');
+    const prog = (typeof lv95.progress_pct === 'number' ? lv95.progress_pct : null);
+    let verdict, badge;
+    if (r.sufficient_95 === true) {{ verdict = 'SUFFICIENT'; badge = 'badge-green'; }}
+    else if (lv95.required_n == null) {{ verdict = '—'; badge = ''; }}
+    else {{ verdict = 'LOCKED'; badge = 'badge-amber'; }}
+    const bar = (prog !== null)
+      ? '<div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; min-width: 48px;">' +
+        '<div style="background: var(--green); height: 6px; border-radius: 4px; width: ' + prog + '%;"></div></div>'
+      : '<span style="color: var(--text-muted);">—</span>';
+    const badgeHtml = badge
+      ? '<span class="badge ' + badge + '" style="font-size: 9px; padding: 2px 6px;">' + verdict + '</span>'
+      : '<span style="color: var(--text-muted);">—</span>';
+    body += '<tr><td style="padding: 2px 4px 2px 0;">' + escHtml(r.label || r.key) + '</td>' +
+      '<td class="tabular" style="padding: 2px 4px; white-space: nowrap;">' + (r.base_n || 0) + ' ' + escHtml(r.base || 'closes') + '</td>' +
+      '<td class="tabular" style="padding: 2px 4px;">' + req + '</td>' +
+      '<td style="padding: 2px 4px;">' + bar + '</td>' +
+      '<td style="padding: 2px 0 2px 4px; text-align: right;">' + badgeHtml + '</td></tr>';
+  }});
+  return '<div style="margin: 8px 0 4px; padding-top: 8px; border-top: 1px solid var(--border);">' +
+    '<div style="font-size: 11px; font-weight: 700; color: var(--text-muted); ' +
+    'text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">' +
+    'Per-KPI Sufficiency @95%</div>' +
+    '<table style="width: 100%; font-size: 11px; border-collapse: collapse;">' + body + '</table></div>';
+}}
+
 function renderDgArmCards(arms) {{
   const container = document.getElementById('dg-arm-cards-container');
   if (!container) return;
@@ -2750,6 +2854,7 @@ function renderDgArmCards(arms) {{
         '<div>Max DD: <strong class="tabular">$' + (a.max_drawdown || 0).toFixed(2) + '</strong></div>' +
         '<div>Merge Rate: <strong class="tabular">' + (a.merge_rate || 0).toFixed(1) + '%</strong></div>' +
       '</div>' +
+      suffMiniHtml(a.sufficiency_rows || []) +
       '<div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4;">' + escHtml(a.desc || '') + '</div>' +
     '</div>';
   }});

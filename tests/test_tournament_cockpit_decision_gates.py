@@ -138,6 +138,31 @@ def test_compute_decision_gates_arm_without_rows_reads_unmeasured():
     assert "N=0" not in res["overall_desc"]
 
 
+def test_sufficiency_95_summary_verdicts():
+    """The card summary unlocks each KPI separately at the striving level."""
+    rows = [
+        {"key": "expectancy_usd", "label": "PnL Expectancy ($)", "base": "closes",
+         "base_n": 180, "sufficient_95": False,
+         "levels": [{"confidence_pct": 95, "required_n": 1800,
+                        "remaining_n": 1620, "progress_pct": 10}]},
+        {"key": "merge_rate", "label": "Merge Rate (%)", "base": "closes",
+         "base_n": 180, "sufficient_95": True,
+         "levels": [{"confidence_pct": 95, "required_n": 150,
+                        "remaining_n": 0, "progress_pct": 100}]},
+        {"key": "avg_duration_merge", "label": "Avg Fill-to-Close: Merges",
+         "base": "merges", "base_n": 0, "sufficient_95": None,
+         "levels": [{"confidence_pct": 95, "required_n": None,
+                        "remaining_n": None, "progress_pct": None}]},
+    ]
+    out = {s["key"]: s for s in cockpit._sufficiency_95_rows(rows)}
+    assert out["expectancy_usd"]["verdict"] == "LOCKED"
+    assert out["expectancy_usd"]["required_95"] == 1800
+    assert out["expectancy_usd"]["remaining_95"] == 1620
+    assert out["merge_rate"]["verdict"] == "SUFFICIENT"
+    assert out["avg_duration_merge"]["verdict"] == "—"
+    assert out["avg_duration_merge"]["required_95"] is None
+
+
 def test_compute_decision_gates_volume_starvation():
     arms = [
         {
