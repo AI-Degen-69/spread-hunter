@@ -280,6 +280,26 @@ def test_i917_build_tournament_plan_and_dry_run_cli(tmp_path: Path):
     assert plan_json["issue"] == 917
     assert plan_json["minutes"] == 1440.0
     assert [a["name"] for a in plan_json["arms"]] == EXPECTED_ARMS
+    for arm_entry in plan_json["arms"]:
+        assert "dash_argv" not in arm_entry
+        assert "--dash-port" not in arm_entry["shadow_argv"]
+
+
+def test_i917_served_on_dashboard_cockpit_8799():
+    from fastapi.testclient import TestClient
+    from dashboard.server import app
+    from scripts import tournament_cockpit_server as cockpit
+
+    assert "917" in cockpit.SERVED_TOURNAMENT_KEYS
+    assert [a["name"] for a in cockpit.ARMS_CONFIG_917] == EXPECTED_ARMS
+
+    res = TestClient(app).get("/cockpit/917")
+    assert res.status_code == 200
+    assert "Issue #917" in res.text
+    assert 'href="/cockpit/917" class="tourney-pill active"' in res.text
+    assert "http://127.0.0.1:8800" not in res.text
+    for arm_name in EXPECTED_ARMS:
+        assert arm_name in res.text
 
 
 def test_i917_run_doc_exists_and_matches_arms():

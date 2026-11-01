@@ -73,7 +73,6 @@ class ArmPlan:
     dash_port: int
     env: dict[str, str] = field(default_factory=dict)
     shadow_argv: list[str] = field(default_factory=list)
-    dash_argv: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -84,7 +83,6 @@ class ArmPlan:
             "dash_port": self.dash_port,
             "env": self.env,
             "shadow_argv": self.shadow_argv,
-            "dash_argv": self.dash_argv,
         }
 
 
@@ -303,7 +301,7 @@ def build_tournament_plan(
     markets_path: Optional[str | Path] = None,
     stamp: Optional[str] = None,
     base_dir: str | Path = TOURNAMENT_ROOT,
-    check_ports: bool = True,
+    check_ports: bool = False,
     python_executable: str = sys.executable,
     run_number: Optional[int] = None,
     run_name: Optional[str] = None,
@@ -446,23 +444,11 @@ def build_tournament_plan(
             str(minutes),
             "--interval",
             str(interval),
-            "--dash-port",
-            str(dash_port),
         ]
         if max_markets is not None:
             shadow_argv.extend(["--max-markets", str(max_markets)])
         if markets_path is not None:
             shadow_argv.extend(["--markets-path", str(markets_path)])
-
-        dash_argv = [
-            python_executable,
-            "-m",
-            "dashboard.server",
-            "--port",
-            str(dash_port),
-            "--db",
-            str(db_path),
-        ]
 
         arm_plans.append(
             ArmPlan(
@@ -473,7 +459,6 @@ def build_tournament_plan(
                 dash_port=dash_port,
                 env=arm_env,
                 shadow_argv=shadow_argv,
-                dash_argv=dash_argv,
             )
         )
 

@@ -72,6 +72,8 @@ Configured in `configs/tournaments/i917-multistrat-defense_arms.json`:
 
 ## 3. Execution Commands (For Operator Rehearsal)
 
+All 6 arms run headless/heartbeat-only without separate per-arm dashboard ports; the unified dashboard on `:8799` serves the Tournament `#917` cockpit directly as a page at `http://127.0.0.1:8799/cockpit/917`.
+
 Validate the 6-arm tournament plan first (spends nothing, writes nothing):
 
 ```powershell
