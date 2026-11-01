@@ -615,12 +615,24 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
             # Closes (settlement / shadow_merge_note / '' are nontrade, not exits)
             nontrade_exclude = (SETTLEMENT, SHADOW_MERGE_NOTE, "")
             rows = c.execute(
-                "SELECT ts, method, realized_pnl, cost_basis, proceeds, shares FROM closes "
+                "SELECT ts, method, realized_pnl, cost_basis, proceeds, shares, "
+                "condition_id, tx_hash FROM closes "
                 "WHERE run_id = ? AND method NOT IN ("
                 + ", ".join("?" for _ in nontrade_exclude) + ") "
                 "ORDER BY ts ASC",
                 (cfg["run_id"], *nontrade_exclude),
             ).fetchall()
+
+            try:
+                fill_rows = c.execute(
+                    "SELECT f.venue_ts, f.recorded_ts, f.size, f.order_uuid, "
+                    "o.condition_id, o.pair_id, o.side "
+                    "FROM fills f LEFT JOIN orders o ON f.order_uuid = o.id "
+                    "WHERE f.run_id = ?",
+                    (cfg["run_id"],),
+                ).fetchall()
+            except sqlite3.Error:
+                fill_rows = []
 
             # Order lifecycle funnel:
             #   quoted  -> every quote row placed (one per leg per requote cycle)
@@ -697,9 +709,9 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
     # card reads (core_brain.kpi.kpi_sufficiency_table): one row per
     # estimator, each sized from the observations IT uses, at 90/95/99.
     # No arm-vs-arm comparison anywhere: each arm is measured against its
-    # own observation count. Durations stay unmeasured — the arm store
-    # carries no fill-to-close linkage yet, and a blank row is honest
-    # where a zero would lie.
+    # own observation count, and every row with >= 1 observation carries its
+    # current calculated value so the matrix and cards show live averages
+    # rather than hiding underpowered metrics behind a LOCKED label.
     _close_pcts: list[float] = []
     _stop_depth_pcts: list[float] = []
     for r in rows:
@@ -710,6 +722,7 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
             _close_pcts.append(_pct)
             if r[1] in stop_loss_methods:
                 _stop_depth_pcts.append(_pct)
+    _merge_durations_s, _stop_durations_s = _fill_to_close_durations(rows, fill_rows)
     sufficiency_rows = _kpi_sufficiency_table(
         n_closes=n,
         expectancy_usd=list(pnls),
@@ -718,6 +731,20 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
         n_stops=len(stops),
         stop_depth_pcts=_stop_depth_pcts,
         n_merges=len(merges),
+        merge_durations_s=_merge_durations_s,
+        stop_durations_s=_stop_durations_s,
+    )
+    _enrich_sufficiency_rows(
+        sufficiency_rows,
+        expectancy_usd=pnls,
+        return_pcts=_close_pcts,
+        n_closes=n,
+        n_wins=len(wins),
+        n_stops=len(stops),
+        stop_depth_pcts=_stop_depth_pcts,
+        n_merges=len(merges),
+        merge_durations_s=_merge_durations_s,
+        stop_durations_s=_stop_durations_s,
     )
 
     tot_pnl = sum(pnls)
@@ -887,32 +914,220 @@ SHARPE_TARGET = 2.70
 SHARPE_MARGINAL = 2.20
 
 
+def _fmt_duration_sec(sec: float) -> str:
+    """Format fill-to-close duration in seconds into a compact human string."""
+    if sec < 60.0:
+        if abs(sec - round(sec)) < 0.05:
+            return f"{int(round(sec))}s"
+        return f"{sec:.1f}s"
+    if sec < 3600.0:
+        total_s = int(round(sec))
+        m, s = divmod(total_s, 60)
+        return f"{m}m {s:02d}s"
+    total_m = int(round(sec / 60.0))
+    h, m = divmod(total_m, 60)
+    return f"{h}h {m:02d}m"
+
+
+def _fill_to_close_durations(
+    close_rows: list[tuple[Any, ...]],
+    fill_rows: list[tuple[Any, ...]],
+) -> tuple[list[float], list[float]]:
+    """Compute (merge_durations_s, stop_durations_s) from BUY fills and trade closes.
+
+    Links each close to its opening BUY fill timestamp (first fill of the pair):
+    1. Directly by `pair_id` when `closes.tx_hash` carries `pair_id` (or `pair_id:N`).
+    2. Otherwise to the earliest unconsumed BUY fill group on the same `condition_id`
+       whose opening fill timestamp is at or before `close.ts`.
+    """
+    if not close_rows or not fill_rows:
+        return [], []
+
+    pair_first_ts: dict[str, float] = {}
+    pair_cid: dict[str, str] = {}
+    pair_shares: dict[str, float] = {}
+    for v_ts, r_ts, sz, order_uuid, cid, pid, side in fill_rows:
+        if side and str(side).upper() != "BUY":
+            continue
+        raw_ts = v_ts if v_ts is not None else r_ts
+        if raw_ts is None or not cid:
+            continue
+        try:
+            ts_val = float(raw_ts)
+        except (TypeError, ValueError):
+            continue
+        ts_s = ts_val / 1000.0 if ts_val > 1e11 else ts_val
+        key = str(pid) if pid else f"order:{order_uuid}"
+        if key not in pair_first_ts or ts_s < pair_first_ts[key]:
+            pair_first_ts[key] = ts_s
+            pair_cid[key] = str(cid)
+        pair_shares[key] = pair_shares.get(key, 0.0) + max(0.0, float(sz or 0.0))
+
+    if not pair_first_ts:
+        return [], []
+
+    explicit_pid_by_idx: dict[int, str] = {}
+    for idx, r in enumerate(close_rows):
+        tx_hash = r[7] if len(r) > 7 else None
+        if tx_hash:
+            pid = str(tx_hash).split(":")[0]
+            if pid in pair_first_ts:
+                explicit_pid_by_idx[idx] = pid
+                sh = max(0.0, float(r[5] or 0.0))
+                consumed = 2.0 * sh if r[1] in MERGE_METHODS else sh
+                if consumed > 0:
+                    pair_shares[pid] = max(0.0, pair_shares.get(pid, 0.0) - consumed)
+                else:
+                    pair_shares[pid] = 0.0
+
+    cands_by_cid: dict[str, list[list[Any]]] = {}
+    for key, f_ts in pair_first_ts.items():
+        rem_sh = pair_shares.get(key, 0.0)
+        if rem_sh > 1e-6:
+            cands_by_cid.setdefault(pair_cid[key], []).append([f_ts, key, rem_sh])
+    for cid_list in cands_by_cid.values():
+        cid_list.sort(key=lambda item: item[0])
+
+    merge_durs: list[float] = []
+    stop_durs: list[float] = []
+    for idx, r in enumerate(close_rows):
+        c_ts = float(r[0] or 0.0)
+        method = r[1]
+        sh = max(0.0, float(r[5] or 0.0))
+        cid = str(r[6]) if len(r) > 6 and r[6] else ""
+        f_ts: float | None = None
+        if idx in explicit_pid_by_idx:
+            f_ts = pair_first_ts.get(explicit_pid_by_idx[idx])
+        elif cid and cid in cands_by_cid:
+            for cand in cands_by_cid[cid]:
+                if cand[0] <= c_ts and cand[2] > 1e-6:
+                    f_ts = float(cand[0])
+                    consumed = 2.0 * sh if method in MERGE_METHODS else sh
+                    cand[2] = max(0.0, cand[2] - consumed) if consumed > 0 else 0.0
+                    break
+        if f_ts is not None and c_ts >= f_ts:
+            dur = c_ts - f_ts
+            if method in MERGE_METHODS:
+                merge_durs.append(dur)
+            elif method in RESCUE_METHODS:
+                stop_durs.append(dur)
+    return merge_durs, stop_durs
+
+
+def _enrich_sufficiency_rows(
+    rows: list[dict[str, Any]],
+    *,
+    expectancy_usd: list[float],
+    return_pcts: list[float],
+    n_closes: int,
+    n_wins: int,
+    n_stops: int,
+    stop_depth_pcts: list[float],
+    n_merges: int,
+    merge_durations_s: list[float],
+    stop_durations_s: list[float],
+) -> None:
+    """Attach `value` and `formatted_value` to each KPI row when base_n >= 1."""
+    mean_or_none = lambda vals: (sum(vals) / len(vals)) if vals else None
+    rate_or_none = lambda num, den: (100.0 * num / den) if den > 0 else None
+
+    val_map: dict[str, tuple[float | None, str | None]] = {}
+    exp_val = mean_or_none(expectancy_usd)
+    val_map["expectancy_usd"] = (
+        round(exp_val, 4) if exp_val is not None else None,
+        (f"+${exp_val:.2f}" if exp_val >= 0 else f"-${abs(exp_val):.2f}")
+        if exp_val is not None else None,
+    )
+    ret_val = mean_or_none(return_pcts)
+    val_map["avg_return_pct"] = (
+        round(ret_val, 2) if ret_val is not None else None,
+        f"{ret_val:+.1f}%" if ret_val is not None else None,
+    )
+    win_val = rate_or_none(n_wins, n_closes)
+    val_map["win_rate"] = (
+        round(win_val, 2) if win_val is not None else None,
+        f"{win_val:.1f}%" if win_val is not None else None,
+    )
+    stop_rate_val = rate_or_none(n_stops, n_closes)
+    val_map["stop_loss_rate"] = (
+        round(stop_rate_val, 2) if stop_rate_val is not None else None,
+        f"{stop_rate_val:.1f}%" if stop_rate_val is not None else None,
+    )
+    depth_val = mean_or_none(stop_depth_pcts)
+    val_map["avg_stop_loss_depth_pct"] = (
+        round(depth_val, 2) if depth_val is not None else None,
+        f"{depth_val:+.1f}%" if depth_val is not None else None,
+    )
+    merge_rate_val = rate_or_none(n_merges, n_closes)
+    val_map["merge_rate"] = (
+        round(merge_rate_val, 2) if merge_rate_val is not None else None,
+        f"{merge_rate_val:.1f}%" if merge_rate_val is not None else None,
+    )
+    m_dur_val = mean_or_none(merge_durations_s)
+    val_map["avg_duration_merge"] = (
+        round(m_dur_val, 2) if m_dur_val is not None else None,
+        _fmt_duration_sec(m_dur_val) if m_dur_val is not None else None,
+    )
+    s_dur_val = mean_or_none(stop_durations_s)
+    val_map["avg_duration_stop"] = (
+        round(s_dur_val, 2) if s_dur_val is not None else None,
+        _fmt_duration_sec(s_dur_val) if s_dur_val is not None else None,
+    )
+
+    for row in rows:
+        key = str(row.get("key", ""))
+        if key in val_map:
+            raw_v, fmt_v = val_map[key]
+            row["value"] = raw_v
+            row["formatted_value"] = fmt_v
+
+
+def _row_formatted_value(row: dict[str, Any] | None) -> str | None:
+    """Resolve the display string for a sufficiency row's current value."""
+    if not row:
+        return None
+    fmt = row.get("formatted_value")
+    if isinstance(fmt, str) and fmt.strip():
+        return fmt.strip()
+    base_n = row.get("base_n") or 0
+    if row.get("type") == "proportion" and base_n > 0 and row.get("successes") is not None:
+        return f"{100.0 * float(row['successes']) / float(base_n):.1f}%"
+    return None
+
+
 def _sufficiency_95_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Condense sufficiency rows to their 95% striving level for display.
 
     One dict per KPI: label, observation base and count, the arm's own
     required N at 95% (None when unmeasured), remaining, progress, and the
-    unlock verdict. Shared by the server-side card HTML and the live JS
-    repaint below so first paint and poll updates can never disagree."""
+    current calculated value (or unlock status when no value string was
+    supplied). Shared by the server-side card HTML and the live JS repaint
+    below so first paint and poll updates can never disagree."""
     out: list[dict[str, Any]] = []
     for row in rows or []:
         lv95 = next(
             (lv for lv in (row.get("levels") or []) if lv.get("confidence_pct") == 95), {}) or {}
         sufficient = row.get("sufficient_95")
+        fmt_val = _row_formatted_value(row)
+        base_n = row.get("base_n", 0) or 0
         if sufficient is True:
-            verdict, badge = "SUFFICIENT", "badge-green"
+            verdict = fmt_val if fmt_val is not None else "SUFFICIENT"
+            badge = "badge-green"
+        elif fmt_val is not None:
+            verdict, badge = fmt_val, "badge-amber"
         elif lv95.get("required_n") is None:
             verdict, badge = "—", ""
         else:
-            verdict, badge = "LOCKED", "badge-amber"
+            verdict, badge = f"n={base_n}", "badge-amber"
         out.append({
             "key": row.get("key", ""),
             "label": row.get("label", row.get("key", "")),
             "base": row.get("base", "closes"),
-            "base_n": row.get("base_n", 0),
+            "base_n": base_n,
             "required_95": lv95.get("required_n"),
             "remaining_95": lv95.get("remaining_n"),
             "progress_95": lv95.get("progress_pct"),
+            "formatted_value": fmt_val,
             "verdict": verdict,
             "badge": badge,
         })
@@ -937,7 +1152,7 @@ def _sufficiency_mini_html(rows: list[dict[str, Any]]) -> str:
             if isinstance(prog, (int, float)) else '<span style="color: var(--text-muted);">—</span>'
         )
         badge = (
-            f'<span class="badge {s["badge"]}" style="font-size: 9px; padding: 2px 6px;">{s["verdict"]}</span>'
+            f'<span class="badge {s["badge"]} tabular" style="font-size: 9px; padding: 2px 6px;">{html.escape(str(s["verdict"]))}</span>'
             if s["badge"] else '<span style="color: var(--text-muted);">—</span>'
         )
         body.append(
@@ -985,16 +1200,22 @@ def _dg_cell_html(row: dict[str, Any] | None, confidence: int) -> str:
         return '<span style="color: var(--text-muted);">unmeasured</span>'
     lv = _dg_level(row, confidence)
     req = lv.get("required_n")
-    base_n = row.get("base_n", 0)
+    base_n = row.get("base_n", 0) or 0
     prog = lv.get("progress_pct")
-    if row.get("sufficient_95") is True and confidence == 95 or (
-        confidence != 95 and isinstance(prog, (int, float)) and prog >= 100
-    ):
-        badge = '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px;">SUFFICIENT</span>'
+    fmt_val = _row_formatted_value(row)
+    is_sufficient = (
+        (row.get("sufficient_95") is True and confidence == 95)
+        or (confidence != 95 and isinstance(prog, (int, float)) and prog >= 100)
+    )
+    if is_sufficient:
+        label = fmt_val if fmt_val is not None else "SUFFICIENT"
+        badge = f'<span class="badge badge-green tabular" style="font-size: 9px; padding: 2px 6px;">{html.escape(str(label))}</span>'
+    elif fmt_val is not None:
+        badge = f'<span class="badge badge-amber tabular" style="font-size: 9px; padding: 2px 6px;">{html.escape(str(fmt_val))}</span>'
     elif req is None:
         return '<span style="color: var(--text-muted);">unmeasured</span>'
     else:
-        badge = '<span class="badge badge-amber" style="font-size: 9px; padding: 2px 6px;">LOCKED</span>'
+        badge = f'<span class="badge badge-amber tabular" style="font-size: 9px; padding: 2px 6px;">n={base_n}</span>'
     have_need = (
         f'<span class="tabular">{base_n} / {req:,}</span>' if req is not None
         else f'<span class="tabular">{base_n} / —</span>'
@@ -1044,9 +1265,9 @@ def _dg_matrix_html(arms: list[dict[str, Any]], confidence: int = 95) -> str:
         'border-collapse: collapse;">' + "<thead><tr>" + "".join(head) + "</tr></thead>"
         + "<tbody>" + "".join(body) + "</tbody></table>"
         + f'<div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">'
-        f'Have / Need closes at {confidence}% confidence. '
-        'SUFFICIENT unlocks that KPI\u2019s verdict; LOCKED is still gathering closes; '
-        'unmeasured means the arm has not reported that KPI yet.</div>'
+        f'Current value and Have / Need observations at {confidence}% confidence. '
+        'Green badges have reached sufficiency; amber badges show the live running '
+        'calculation while still gathering observations; unmeasured means no observations yet.</div>'
     )
 
 
@@ -2854,6 +3075,18 @@ function fetchLiveStats() {{
     }});
 }}
 
+function rowFormattedValue(r) {{
+  if (!r) return null;
+  if (typeof r.formatted_value === 'string' && r.formatted_value.trim()) {{
+    return r.formatted_value.trim();
+  }}
+  const baseN = r.base_n || 0;
+  if (r.type === 'proportion' && baseN > 0 && r.successes != null) {{
+    return (100.0 * Number(r.successes) / Number(baseN)).toFixed(1) + '%';
+  }}
+  return null;
+}}
+
 function suffMiniHtml(rows) {{
   if (!rows || !rows.length) {{
     return '<div style="font-size: 11.5px; color: var(--text-muted);">' +
@@ -2864,19 +3097,22 @@ function suffMiniHtml(rows) {{
     const lv95 = ((r.levels || []).filter(lv => lv.confidence_pct === 95)[0]) || {{}};
     const req = (lv95.required_n != null ? Number(lv95.required_n).toLocaleString() : '—');
     const prog = (typeof lv95.progress_pct === 'number' ? lv95.progress_pct : null);
+    const fmtVal = rowFormattedValue(r);
+    const baseN = r.base_n || 0;
     let verdict, badge;
-    if (r.sufficient_95 === true) {{ verdict = 'SUFFICIENT'; badge = 'badge-green'; }}
+    if (r.sufficient_95 === true) {{ verdict = fmtVal != null ? fmtVal : 'SUFFICIENT'; badge = 'badge-green'; }}
+    else if (fmtVal != null) {{ verdict = fmtVal; badge = 'badge-amber'; }}
     else if (lv95.required_n == null) {{ verdict = '—'; badge = ''; }}
-    else {{ verdict = 'LOCKED'; badge = 'badge-amber'; }}
+    else {{ verdict = 'n=' + baseN; badge = 'badge-amber'; }}
     const bar = (prog !== null)
       ? '<div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; min-width: 48px;">' +
         '<div style="background: var(--green); height: 6px; border-radius: 4px; width: ' + prog + '%;"></div></div>'
       : '<span style="color: var(--text-muted);">—</span>';
     const badgeHtml = badge
-      ? '<span class="badge ' + badge + '" style="font-size: 9px; padding: 2px 6px;">' + verdict + '</span>'
+      ? '<span class="badge ' + badge + ' tabular" style="font-size: 9px; padding: 2px 6px;">' + escHtml(verdict) + '</span>'
       : '<span style="color: var(--text-muted);">—</span>';
     body += '<tr><td style="padding: 2px 4px 2px 0;">' + escHtml(r.label || r.key) + '</td>' +
-      '<td class="tabular" style="padding: 2px 4px; white-space: nowrap;">' + (r.base_n || 0) + ' ' + escHtml(r.base || 'closes') + '</td>' +
+      '<td class="tabular" style="padding: 2px 4px; white-space: nowrap;">' + baseN + ' ' + escHtml(r.base || 'closes') + '</td>' +
       '<td class="tabular" style="padding: 2px 4px;">' + req + '</td>' +
       '<td style="padding: 2px 4px;">' + bar + '</td>' +
       '<td style="padding: 2px 0 2px 4px; text-align: right;">' + badgeHtml + '</td></tr>';
@@ -2917,18 +3153,20 @@ function dgCellHtml(row, confidence) {{
   const req = lv.required_n;
   const baseN = row.base_n || 0;
   const prog = lv.progress_pct;
-  if (req == null) return '<span style="color: var(--text-muted);">unmeasured</span>';
+  const fmtVal = rowFormattedValue(row);
+  if (req == null && fmtVal == null) return '<span style="color: var(--text-muted);">unmeasured</span>';
   let sufficient = row.sufficient_95 === true && confidence === 95;
   if (confidence !== 95 && typeof prog === 'number' && prog >= 100) sufficient = true;
-  const badge = sufficient
-    ? '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px;">SUFFICIENT</span>'
-    : '<span class="badge badge-amber" style="font-size: 9px; padding: 2px 6px;">LOCKED</span>';
+  const label = sufficient ? (fmtVal != null ? fmtVal : 'SUFFICIENT') : (fmtVal != null ? fmtVal : ('n=' + baseN));
+  const badgeCls = sufficient ? 'badge-green' : 'badge-amber';
+  const badge = '<span class="badge ' + badgeCls + ' tabular" style="font-size: 9px; padding: 2px 6px;">' + escHtml(label) + '</span>';
   const bar = (typeof prog === 'number')
     ? '<div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; margin-top: 3px;">' +
       '<div style="background: var(--green); height: 6px; border-radius: 4px; width: ' + prog + '%;"></div></div>'
     : '';
+  const reqTxt = (req != null ? Number(req).toLocaleString() : '—');
   return badge + '<div style="font-size: 10.5px; margin-top: 2px;"><span class="tabular">' +
-    baseN + ' / ' + req.toLocaleString() + '</span></div>' + bar;
+    baseN + ' / ' + reqTxt + '</span></div>' + bar;
 }}
 
 function dgMatrixHtml(arms, confidence) {{
@@ -2969,8 +3207,9 @@ function dgMatrixHtml(arms, confidence) {{
   return '<table id="dg-matrix-table" style="width: 100%; font-size: 11.5px; border-collapse: collapse;">' +
     '<thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table>' +
     '<div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">' +
-    'Have / Need closes at ' + confidence + '% confidence. SUFFICIENT unlocks that KPI\u2019s verdict; ' +
-    'LOCKED is still gathering closes; unmeasured means the arm has not reported that KPI yet.</div>';
+    'Current value and Have / Need observations at ' + confidence + '% confidence. ' +
+    'Green badges have reached sufficiency; amber badges show the live running ' +
+    'calculation while still gathering observations; unmeasured means no observations yet.</div>';
 }}
 
 function renderDgMatrix() {{
