@@ -3573,7 +3573,11 @@ function Invoke-LiveAction {
                 Pop-Location
             }
             if ($LASTEXITCODE -eq 0) {
-                Lsh-Ok "Tournament stack aligned: 10 arms running, dashboards fresh, Cockpit page live on :8799/cockpit/."
+                if (Test-Port) {
+                    Lsh-Ok "Tournament stack aligned: 10 arms running, dashboards fresh, Cockpit page live on :8799/cockpit/."
+                } else {
+                    Lsh-Ok "Tournament stack aligned: 10 arms running, dashboards fresh. Start the dashboard (s) to serve the Cockpit page on :8799/cockpit/."
+                }
             } else {
                 Lsh-Warn "Tournament reconciliation completed with settling notices."
             }

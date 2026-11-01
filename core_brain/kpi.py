@@ -227,12 +227,12 @@ def _sufficiency_levels(required_fn, base_n: int) -> tuple[list[dict], Optional[
     `required_fn(z)` returns the required N at multiplier z, or 0/None when the
     row is unmeasurable (no observations, zero stdev). Unmeasurable levels read
     None -- never a fabricated zero -- matching the renderer's `unmeasured`.
-    The striving verdict (SUFFICIENCY_STRIVE_PCT) is True only when nothing
-    more is needed; None when nothing is measurable.
+    The striving verdict reads the SUFFICIENCY_STRIVE_PCT level alone: True
+    when that level needs nothing more, False while it still does, None when
+    it is unmeasurable. Higher levels (99%) never hold the verdict back.
     """
     levels = []
-    measurable = 0
-    sufficient = True
+    verdict: Optional[bool] = None
     for conf_pct, z_val in SAMPLE_SUFFICIENCY_LEVELS:
         req_n = required_fn(z_val)
         if not req_n:
@@ -244,10 +244,9 @@ def _sufficiency_levels(required_fn, base_n: int) -> tuple[list[dict], Optional[
                 "progress_pct": None,
             })
             continue
-        measurable += 1
         rem_n = max(0, req_n - base_n) if base_n > 0 else req_n
-        if rem_n > 0:
-            sufficient = False
+        if conf_pct == SUFFICIENCY_STRIVE_PCT:
+            verdict = rem_n == 0
         levels.append({
             "confidence_pct": conf_pct,
             "z": z_val,
@@ -255,7 +254,6 @@ def _sufficiency_levels(required_fn, base_n: int) -> tuple[list[dict], Optional[
             "remaining_n": rem_n,
             "progress_pct": min(100, round((base_n / req_n) * 100)) if req_n > 0 else 0,
         })
-    verdict: Optional[bool] = (sufficient and measurable > 0) if measurable else None
     return levels, verdict
 
 

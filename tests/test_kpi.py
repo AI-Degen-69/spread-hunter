@@ -174,6 +174,28 @@ def test_sample_size_sufficiency_empty_closes():
     assert suff_empty["statuses"]["fill_rate"]["levels"][1]["remaining_n"] == 385
 
 
+def test_sufficient_95_reads_the_striving_level_alone():
+    """Meeting 95% unlocks the verdict even while 99% still needs closes."""
+    required_by_z = {
+        Z_90_SAMPLE_SUFFICIENCY: 100,
+        Z_95_SAMPLE_SUFFICIENCY: 150,
+        Z_99_SAMPLE_SUFFICIENCY: 200,
+    }
+    levels, verdict = kpi_mod._sufficiency_levels(
+        lambda z: required_by_z[z], 150,
+    )
+    by_conf = {lv["confidence_pct"]: lv for lv in levels}
+    assert by_conf[95]["remaining_n"] == 0
+    assert by_conf[99]["remaining_n"] == 50
+    assert verdict is True
+    # Still gathering at the striving level: verdict stays False.
+    _, verdict_locked = kpi_mod._sufficiency_levels(lambda z: required_by_z[z], 100)
+    assert verdict_locked is False
+    # Nothing measurable: verdict stays unmeasured, never False.
+    _, verdict_none = kpi_mod._sufficiency_levels(lambda z: 0, 0)
+    assert verdict_none is None
+
+
 def test_active_orders_preserved_in_by_market_when_days_to_resolve_negative(tmp_path, monkeypatch):
     import sqlite3, time
     from core_brain.kpi import report

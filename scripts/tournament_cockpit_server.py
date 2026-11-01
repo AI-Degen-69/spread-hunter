@@ -1180,7 +1180,7 @@ def _arm_verdict(arm: dict[str, Any], gates: dict[str, Any]) -> tuple[str, str, 
                 "No completed trades recorded for this arm yet.")
     if sharpe == "FAIL" or mdd == "FAIL":
         return ("REJECTED: CRITICAL RISK GATES FAILED", "badge-red",
-                "Observed Sharpe Ratio (< 2.70) or max drawdown (\u2265 $4.00) fails this arm's risk limits.")
+                "Observed Sharpe Ratio (< 2.20) or max drawdown (> $5.50) fails this arm's risk limits.")
     if sufficient:
         if sharpe == "PASS" and mdd == "PASS" and pf == "PASS":
             return ("CLEARED: ALL GATES PASS AT 95%", "badge-green",
