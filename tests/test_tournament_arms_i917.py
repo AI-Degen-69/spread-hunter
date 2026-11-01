@@ -280,3 +280,18 @@ def test_i917_build_tournament_plan_and_dry_run_cli(tmp_path: Path):
     assert plan_json["issue"] == 917
     assert plan_json["minutes"] == 1440.0
     assert [a["name"] for a in plan_json["arms"]] == EXPECTED_ARMS
+
+
+def test_i917_run_doc_exists_and_matches_arms():
+    doc_path = Path("docs/runs/2026-11-01-917-multistrat-defense.md")
+    assert doc_path.is_file(), f"Run doc missing: {doc_path}"
+    text = doc_path.read_text(encoding="utf-8")
+    for arm_name in EXPECTED_ARMS:
+        assert f"`{arm_name}`" in text, f"Run doc missing arm {arm_name}"
+    assert "1440" in text
+    assert "360" in text
+    assert "pairs_completed >= 20" in text
+    assert "completion_rate_pct >= 55.0" in text
+    assert "bail_out_loss_rate_pct <= 25.0" in text
+    assert "--dry-run" in text
+
