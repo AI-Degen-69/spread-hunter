@@ -683,9 +683,9 @@ def test_engine_pill_renders_down_and_reveals_neutral_elsewhere_tag_when_other_r
     assert _plain(rendered["stateHtml"]) == "OFF"
     assert "STALLED — process gone (pid 1234 not running)" in rendered["pillTitle"]
     assert rendered["elsewhereDisplay"] == ""
-    assert rendered["elsewhereText"] == "1 RUN LIVE ON ANOTHER STORE"
-    assert "other-live (data/NN_shadow.db, runtime/shadow_run_other-live.json)" in rendered["elsewhereTitle"]
-    assert "its numbers are not shown on this page" in rendered["elsewhereTitle"]
+    assert rendered["elsewhereText"] == "1 SHADOW RUNNING ELSEWHERE"
+    assert "NN_shadow.db" in rendered["elsewhereTitle"]
+    assert "its numbers are not that run's" in rendered["elsewhereTitle"]
 
 
 def test_the_served_page_carries_the_engine_elsewhere_tag():
