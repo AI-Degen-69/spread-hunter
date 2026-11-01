@@ -27,10 +27,10 @@ Design and wire a 6-arm multi-strategy shadow tournament (`configs/tournaments/i
 Define 6 orthogonal arms with full metadata (`name`, `label`, `color`, `profile`, `desc`, `thesis`, `env`):
 1. `macro-non-sports`: Structural exclusion of in-play sports/esports (`BOT_MARKET_EXCLUDE_SPORTS_ON="1"`, `FILTER_EXCLUDE_SPORTS="1"`).
 2. `taker-snapper`: Instant taker completion when `held_avg + opposing_ask < $0.99` (`BOT_RISK_STRANDED_COMPLETION_ON="1"`).
-3. `fast-bailout-60s`: Rapid 60-second stranded wait and 5% drawdown stop (`BOT_RISK_STRANDED_MAX_WAIT_SEC="60"`, `BOT_RISK_STOP_MODE="PERCENTAGE_DROP"`, `BOT_RISK_STOP_MAX_DRAWDOWN_PCT="5.0"`).
+3. `fast-bailout-60s`: Rapid 60-second aged-out exit window and 45-second stranded max wait (`BOT_RISK_PAIRS_EXIT_WINDOW_SEC="60.0"`, `BOT_RISK_STRANDED_MAX_WAIT_SEC="45.0"`), inheriting shipped stop-loss rules.
 4. `wide-cushion-live`: Deep volatility buffer quoting 5¢–10¢ from mid with 10¢ book spread tolerance (`BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS="5"`, `BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS="10"`, `BOT_QUOTE_BOOK_MAX_SPREAD_USD="0.10"`).
 5. `queue-gated-hybrid`: Fast 2-minute queue clearance gate with `balanced` preset (`BOT_QUOTE_TOURNAMENT_PRESET="balanced"`, `BOT_ORDER_GATE_QUEUE_CLEAR_ON="1"`, `BOT_ORDER_QUEUE_MAX_CLEAR_MIN="2"`).
-6. `control-baseline`: Shipped loose baseline (`env: {}`) for direct benchmarking.
+6. `control-baseline`: i905 queue-clear-5m control anchor (`BOT_ORDER_GATE_QUEUE_CLEAR_ON=1`, `BOT_ORDER_QUEUE_MAX_CLEAR_MIN=5`) for direct benchmarking.
 
 ### 3.3 Pre-Registered Tournament Run Document & Verification Suite (`docs/runs/2026-11-01-917-multistrat-defense.md`, `tests/test_tournament_arms_i917.py`)
 - Pre-register hypotheses, per-KPI sample sufficiency gates, separation criteria, 1440-minute horizon (with 360-minute interim checkpoint), and operator rehearsal commands in `docs/runs/2026-11-01-917-multistrat-defense.md`.

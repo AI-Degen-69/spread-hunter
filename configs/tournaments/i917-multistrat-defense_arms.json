@@ -23,8 +23,7 @@
     "hypothesis": "Immediate taker completion of the opposing leg after a maker fill locks in positive spread before live match state shifts, lifting pair completion above 70%.",
     "env": {
       "BOT_RISK_STRANDED_COMPLETION_ON": "1",
-      "BOT_RISK_STRANDED_MAX_WAIT_SEC": "10.0",
-      "BOT_POS_PRICE_MAX_PAIR_COST_USD": "0.99"
+      "BOT_RISK_STRANDED_MAX_WAIT_SEC": "10.0"
     }
   },
   {

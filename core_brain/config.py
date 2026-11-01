@@ -380,12 +380,17 @@ class MakerConfig:
         else:
             max_sp_usd = _env("BOT_QUOTE_BOOK_MAX_SPREAD_USD")
             if max_sp_usd:
-                val_sp = _bounded_float(
-                    "BOT_QUOTE_BOOK_MAX_SPREAD_USD", max_sp_usd.strip(), 0.0, 0.30)
-                kw["bot_quote_book_max_spread_usd"] = val_sp
-                window = kw.get("bot_quote_book_max_spread_from_mid",
-                                cls.bot_quote_book_max_spread_from_mid)
-                kw["bot_quote_book_max_spread_from_mid"] = max(window, val_sp)
+                if rehearsal.is_rehearsal() or for_display:
+                    val_sp = _bounded_float(
+                        "BOT_QUOTE_BOOK_MAX_SPREAD_USD", max_sp_usd.strip(), 0.0, 0.30)
+                    kw["bot_quote_book_max_spread_usd"] = val_sp
+                    window = kw.get("bot_quote_book_max_spread_from_mid",
+                                    cls.bot_quote_book_max_spread_from_mid)
+                    kw["bot_quote_book_max_spread_from_mid"] = max(window, val_sp)
+                else:
+                    logging.getLogger(__name__).warning(
+                        "BOT_QUOTE_BOOK_MAX_SPREAD_USD ignored outside rehearsal; "
+                        "shipped bot_quote_book_max_spread_usd stands.")
 
         # Trial knobs: the screener keeps the shipped default (None) and fails open
         # (scoring/config.py:197-249), while the engine raises and fails loud naming the variable.
@@ -853,7 +858,8 @@ def resolve_wide_book_trial(raw: str, *, for_display: bool = False, var_name: st
 
 
 def resolve_pair_cost_trial(raw: str, *, for_display: bool = False, var_name: str = "BOT_POS_PRICE_MAX_PAIR_COST_USD") -> float:
-    if not rehearsal.is_rehearsal():
+    val = _bounded_float(var_name, raw, 0.0, 1.0)
+    if not rehearsal.is_rehearsal() and val > MakerConfig.bot_pos_price_max_pair_cost_usd:
         if for_display:
             logging.getLogger(__name__).warning(
                 f"{var_name} ignored for a display-only config load "
@@ -864,7 +870,7 @@ def resolve_pair_cost_trial(raw: str, *, for_display: bool = False, var_name: st
             "pair assembling above the $1.00 the instrument pays. It applies "
             "only in a process that has declared itself unable to place an "
             "order -- core_brain.shadow_run, whose client cannot sign.")
-    return _bounded_float(var_name, raw, 0.0, 1.0)
+    return val
 
 
 def load(*, for_display: bool = False) -> MakerConfig:

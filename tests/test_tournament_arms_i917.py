@@ -108,6 +108,14 @@ def test_from_env_parses_book_max_spread_usd_and_widens_window(monkeypatch):
     monkeypatch.delenv("BOT_QUOTE_WIDE_BOOK_TRIAL", raising=False)
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID", "8")  # 0.08
     monkeypatch.setenv("BOT_QUOTE_BOOK_MAX_SPREAD_USD", "0.12")
+
+    # Outside rehearsal, shipped default stands
+    monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: False)
+    cfg_live = MakerConfig.from_env()
+    assert cfg_live.bot_quote_book_max_spread_usd == pytest.approx(0.06)
+
+    # Inside rehearsal, spread and window adjustment apply
+    monkeypatch.setattr("core_brain.rehearsal.is_rehearsal", lambda: True)
     cfg = MakerConfig.from_env()
     assert cfg.bot_quote_book_max_spread_usd == pytest.approx(0.12)
     assert cfg.bot_quote_book_max_spread_from_mid == pytest.approx(0.12)
