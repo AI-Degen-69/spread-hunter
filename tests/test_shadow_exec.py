@@ -1949,3 +1949,63 @@ def test_no_merge_cycle_books_a_profit_it_did_not_make(registry):
             "a merge booked the whole payout as profit")
         assert c["up_cost_removed"] + c["dn_cost_removed"] == pytest.approx(
             c["cost_basis"])
+
+
+def test_settle_market_passes_min_ts_to_traded_fn(registry):
+    """Resting orders supply their posted_ts as a min_ts floor to traded_fn."""
+    from core_brain.shadow_exec import ensure_shadow_tables, record_submit, settle_market
+    reg, db = registry
+    ensure_shadow_tables(db)
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}}, now_fn=lambda: 1790000000.0)
+
+    received_min_ts = []
+    def _mock_traded(cid, seen, min_ts=None):
+        received_min_ts.append(min_ts)
+        return {}
+
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(), traded_fn=_mock_traded)
+    assert len(received_min_ts) == 1
+    assert received_min_ts[0] == pytest.approx(1790000000.0)
+
+
+def test_settle_market_book_sweep_fallback_when_tape_unavailable(registry):
+    """When tape is unavailable (e.g. 429), a book whose best_ask <= bid price fills."""
+    from core_brain.shadow_exec import ensure_shadow_tables, record_submit, settle_market
+    from core_brain.order_registry import inventory_from_registry
+    from core_brain.markets import TradeTapeReport, TapeWalkReport
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}})
+
+    unavailable_report = TradeTapeReport(
+        status="unavailable",
+        volume_by_token_price={},
+        walks=(TapeWalkReport(
+            name="taker", status="unavailable", pages_read=0, rows_read=0,
+            qualifying_rows=0, accepted_volume=0, rejected_rows={},
+            non_qualifying_rows={}, first_trade_ts=None, last_trade_ts=None,
+            error="HTTP 429",
+        ),),
+    )
+
+    def _book_fn(_host, token_id):
+        if token_id == "tok-up":
+            return {"best_bid": 0.45, "best_ask": 0.46, "bids": {0.45: 100}, "asks": {0.46: 100}}
+        return {"best_bid": 0.50, "best_ask": 0.52, "bids": {0.50: 100}, "asks": {0.52: 100}}
+
+    fills = settle_market(
+        reg, FakeMarket(), db_path=db, seen=set(),
+        traded_fn=lambda cid, seen, min_ts=None: unavailable_report,
+        book_fn=_book_fn,
+    )
+
+    assert len(fills) == 1
+    assert fills[0].token_id == "tok-up"
+    assert fills[0].price == 0.47
+    assert fills[0].clearing_price == 0.46
+    inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
+    assert inv.up_shares == 20.0
+

@@ -350,3 +350,25 @@ def test_non_list_tape_response_is_unavailable_not_empty(tape):
     assert len(report.walks) == 1
     assert report.walks[0].status == "unavailable"
     assert markets.recent_trades("0xcond", set()) == {}
+
+
+def test_trades_older_than_min_ts_are_ignored_for_volume_but_staged(tape):
+    t_old = _trade("SELL", 0.40, 10.0, "0xold", ts=1790000000)
+    t_new = _trade("SELL", 0.42, 5.0, "0xnew", ts=1790000100)
+    tape([t_old, t_new])
+
+    seen = set()
+    out = markets.recent_trades("0xcond", seen, min_ts=1790000050)
+
+    assert out == {"tok": {0.42: 5.0}}
+    assert len(seen) == 2
+
+
+def test_min_ts_milliseconds_normalized(tape):
+    t_old = _trade("SELL", 0.40, 10.0, "0xold", ts=1790000000000)
+    t_new = _trade("SELL", 0.42, 5.0, "0xnew", ts=1790000100000)
+    tape([t_old, t_new])
+
+    seen = set()
+    out = markets.recent_trades("0xcond", seen, min_ts=1790000050)
+    assert out == {"tok": {0.42: 5.0}}

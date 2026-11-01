@@ -1967,16 +1967,23 @@ def _default_fetch_books() -> Callable[[str, str], dict]:
     return fetch
 
 
-def _default_traded_fn() -> Callable[[str, set], Any]:
+def _default_traded_fn() -> Callable[..., Any]:
     """The live tape reader. Public endpoint, no credentials, no signer."""
-    def traded(condition_id: str, seen: set) -> Any:
+    def traded(condition_id: str, seen: set, min_ts: float | None = None) -> Any:
+        import inspect
         import core_brain.markets as markets
         if getattr(markets, "recent_trades", None) is not getattr(
                 markets, "_ORIGINAL_RECENT_TRADES", None):
             # A test substituted the dict reader: keep calling the double
             # rather than bypassing it with the detailed reader.
+            try:
+                sig = inspect.signature(markets.recent_trades)
+                if "min_ts" in sig.parameters:
+                    return markets.recent_trades(condition_id, seen, min_ts=min_ts)
+            except Exception:
+                pass
             return markets.recent_trades(condition_id, seen)
-        return markets.recent_trades_detailed(condition_id, seen)
+        return markets.recent_trades_detailed(condition_id, seen, min_ts=min_ts)
 
     return traded
 
