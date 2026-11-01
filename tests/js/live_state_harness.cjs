@@ -655,6 +655,9 @@ function topNavVerdicts() {
     stateText: enginePill.textContent,
   };
 
+  app.renderDbMode({});
+  const dbUnknownWired = dbBadge.dataset.wired === '1';
+
   app.renderDbMode({ db_mode: 'LIVE', db_is_production: true });
   const dbProd = {
     className: dbBadge.className,
@@ -768,6 +771,7 @@ function topNavVerdicts() {
     engineRunning,
     engineStalledElsewhere,
     engineNoPayload,
+    dbUnknownWired,
     dbProd,
     dbLiveWithName,
     masterRunning,
@@ -879,9 +883,17 @@ function profilePickerVerdicts() {
         ]}
       ]
     },
-    { kind: 'arm', name: 'queue-clear-5m' });
+    { kind: 'arm', name: 'queue-clear-5m' },
+    { name: 'balanced+loose-baseline', preset: 'balanced', tournament_arm: 'loose-baseline' });
+  const htmlPresetActive = app.profileOptionsHtml(
+    {
+      presets: [{ kind: 'preset', name: 'balanced', detail: 'Proportional tracking' }],
+      arms_grouped: []
+    },
+    null,
+    { name: 'balanced', preset: 'balanced' });
   const empty = app.profileOptionsHtml({ presets: [], arms_grouped: [] }, null);
-  return { html, empty };
+  return { html, htmlPresetActive, empty };
 }
 
 function runElsewhereVerdicts() {

@@ -295,3 +295,27 @@ def test_a_snapshot_without_lanes_says_so_instead_of_showing_global_numbers():
     assert res["live"]["livePill"] == "1"
 
 
+def test_lane_switcher_is_connected():
+    css = (_STATIC / "styles.css").read_text(encoding="utf-8")
+    switcher = re.search(r"\.kanban-lane-switcher\s*\{([^}]*)\}", css)
+    assert switcher, ".kanban-lane-switcher rule missing"
+    assert "gap: 0" in switcher.group(1)
+    assert "overflow: hidden" in switcher.group(1)
+    btn = re.search(r"\.lane-tab-btn\s*\{([^}]*)\}", css)
+    assert btn, ".lane-tab-btn rule missing"
+    assert "border-radius: 0" in btn.group(1)
+    assert "border-right:" in btn.group(1)
+    last = re.search(r"\.lane-tab-btn:last-child\s*\{([^}]*)\}", css)
+    assert last and "border-right: none" in last.group(1)
+    pill = re.search(r"\.lane-count-pill\s*\{([^}]*)\}", css)
+    assert pill and "font-size: 11px" in pill.group(1)
+
+
+def test_set_kanban_lane_writes_aria_pressed():
+    js = (_STATIC / "app.js").read_text(encoding="utf-8")
+    fn = js.split("window.setKanbanLane = function", 1)[1].split("};", 1)[0]
+    assert "setAttribute('aria-pressed'" in fn
+    assert "setAttribute('aria-selected'" not in fn
+
+
+

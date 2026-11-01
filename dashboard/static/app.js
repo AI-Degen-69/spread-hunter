@@ -2871,7 +2871,9 @@ function renderRunElsewhereBanner(status) {
 
 function closeRunSwitcher() {
   const sw = document.getElementById('db-run-switcher');
+  const badge = document.getElementById('db-mode-badge');
   if (sw) sw.style.display = 'none';
+  if (badge) badge.setAttribute('aria-expanded', 'false');
 }
 
 function closeServicesDropdown() {
@@ -2905,9 +2907,8 @@ function runSwitcherLabel(run) {
   const t = run.tournament;
   if (t && t.arm) {
     const idxStr = String(t.index ?? 1).padStart(2, '0');
-    const portPart = run.dash_port ? `:${run.dash_port}` : '';
     const pidPart = run.pid ? ` (pid ${run.pid})` : '';
-    return `#${idxStr} ${t.arm}${portPart}${pidPart}`;
+    return `#${idxStr} ${t.arm}${pidPart}`;
   }
   return (run.db_path || '').split(/[\\/]/).pop() || '';
 }
@@ -3030,6 +3031,7 @@ async function renderRunSwitcher() {
   if (!runs.length) {
     sw.innerHTML = demoRow + `<div class="db-run-empty">No rehearsal is registered on this machine.</div>`;
     sw.style.display = 'block';
+    if (badge) badge.setAttribute('aria-expanded', 'true');
     wireDemoSwitcher(sw);
     placeRunSwitcher(sw, badge);
     return;
@@ -3060,6 +3062,7 @@ async function renderRunSwitcher() {
   });
   sw.innerHTML = `<div class="db-run-head">Which run is this page reading?</div>` + demoRow + rows.join('');
   sw.style.display = 'block';
+  if (badge) badge.setAttribute('aria-expanded', 'true');
   wireDemoSwitcher(sw);
   placeRunSwitcher(sw, badge);
   sw.querySelectorAll('.db-run-switch').forEach(b => {
@@ -3440,8 +3443,9 @@ function armPerformanceScore(arm) {
   return rp.total_pnl || -Infinity;
 }
 
-function armRowHtml(arm, stagedName) {
+function armRowHtml(arm, stagedName, activeName = '') {
   const isStaged = `arm:${arm.name}` === stagedName;
+  const isActive = `arm:${arm.name}` === activeName;
   const label = arm.label || arm.name;
   const hasKpis = arm.kpis && arm.kpis.run_profitability;
   const rp = hasKpis ? arm.kpis.run_profitability : null;
@@ -3458,9 +3462,9 @@ function armRowHtml(arm, stagedName) {
   tooltipBits.push(storeText);
   tooltipBits.push(originText);
   const tooltip = tooltipBits.join(' · ');
-  return `<div class="arm-row${isStaged ? ' staged' : ''}" data-arm="${esc(arm.name)}" title="${esc(tooltip)}">
+  return `<div class="arm-row${isActive ? ' active' : ''}${isStaged ? ' staged' : ''}" data-arm="${esc(arm.name)}" title="${esc(tooltip)}">
       <div class="arm-row-main">
-        <span class="arm-name">${esc(label)}${isStaged ? ' <span class="arm-staged-tag">STAGED</span>' : ''}</span>
+        <span class="arm-name">${esc(label)}${isActive ? ' <span class="arm-active-tag">✓ ACTIVE</span>' : ''}${isStaged ? ' <span class="arm-staged-tag">STAGED</span>' : ''}</span>
       </div>
       <div class="arm-row-kpis${hasKpis ? ' has-kpis' : ''}">
         ${hasKpis ? `
@@ -3479,8 +3483,9 @@ function armRowHtml(arm, stagedName) {
     </div>`;
 }
 
-function presetRowHtml(preset, stagedName) {
+function presetRowHtml(preset, stagedName, activeName = '') {
   const isStaged = `preset:${preset.name}` === stagedName;
+  const isActive = `preset:${preset.name}` === activeName;
   const label = preset.label || preset.name;
   const detail = preset.detail || preset.profile || '';
   const tooltipBits = [];
@@ -3488,9 +3493,9 @@ function presetRowHtml(preset, stagedName) {
   tooltipBits.push('core_brain/config.py · TOURNAMENT_PRESETS');
   tooltipBits.push('no store of its own — START writes the run it launches');
   const tooltip = tooltipBits.join(' · ');
-  return `<div class="arm-row preset-row${isStaged ? ' staged' : ''}" data-arm="${esc(preset.name)}" title="${esc(tooltip)}">
+  return `<div class="arm-row preset-row${isActive ? ' active' : ''}${isStaged ? ' staged' : ''}" data-arm="${esc(preset.name)}" title="${esc(tooltip)}">
       <div class="arm-row-main">
-        <span class="arm-name">${esc(label)}${isStaged ? ' <span class="arm-staged-tag">STAGED</span>' : ''}</span>
+        <span class="arm-name">${esc(label)}${isActive ? ' <span class="arm-active-tag">✓ ACTIVE</span>' : ''}${isStaged ? ' <span class="arm-staged-tag">STAGED</span>' : ''}</span>
       </div>
       <div class="arm-row-kpis preset-kpis">
         <span class="arm-kpi empty">code preset</span>
@@ -3502,7 +3507,7 @@ function presetRowHtml(preset, stagedName) {
     </div>`;
 }
 
-function profileOptionsHtml(options, pending) {
+function profileOptionsHtml(options, pending, activeProfile = null) {
   const grouped = options?.arms_grouped || [];
   const presets = options?.presets || [];
   if (!grouped.length && !presets.length) return '';
@@ -3513,6 +3518,18 @@ function profileOptionsHtml(options, pending) {
     && allArms.concat(presets).some(o => o.kind === pending.kind && o.name === pending.name)
     ? pending : null;
   const stagedName = staged ? `${staged.kind}:${staged.name}` : '';
+  let activeName = '';
+  if (activeProfile && typeof activeProfile === 'object') {
+    if (typeof activeProfile.tournament_arm === 'string' && activeProfile.tournament_arm) {
+      activeName = `arm:${activeProfile.tournament_arm}`;
+    } else if (typeof activeProfile.preset === 'string' && activeProfile.preset) {
+      activeName = `preset:${activeProfile.preset}`;
+    } else if (typeof activeProfile.name === 'string' && activeProfile.name) {
+      activeName = allArms.some(a => a.name === activeProfile.name)
+        ? `arm:${activeProfile.name}`
+        : `preset:${activeProfile.name}`;
+    }
+  }
   let out = '';
   if (staged) {
     out += `<div class="arm-row staged-row" title="The next START launches this profile.">
@@ -3536,14 +3553,14 @@ function profileOptionsHtml(options, pending) {
       const sortedArms = [...arms].sort((a, b) => armPerformanceScore(b) - armPerformanceScore(a));
       const issueLabel = issue !== null ? `Issue #${issue}${tournament ? ` · ${tournament}` : ''}` : 'Ungrouped';
       out += `<div class="arm-group"><div class="arm-group-header">${esc(issueLabel)}</div>`;
-      out += sortedArms.map(a => armRowHtml(a, stagedName)).join('');
+      out += sortedArms.map(a => armRowHtml(a, stagedName, activeName)).join('');
       out += `</div>`;
     }
   }
   // Presets
   if (presets.length) {
     out += '<div class="services-dropdown-head"><span>Presets — code profiles (no tournament store)</span></div>';
-    out += presets.map(p => presetRowHtml(p, stagedName)).join('');
+    out += presets.map(p => presetRowHtml(p, stagedName, activeName)).join('');
   }
   return out;
 }
@@ -3560,8 +3577,11 @@ async function renderProfileOptions() {
   }
   // Fetch KPIs for arms that have stores (lazy, non-blocking)
   // We'll do this after rendering to not block the UI
-  panel.innerHTML = profileOptionsHtml(options, lastStatus?.pending_profile || null)
-    || '<div class="arm-row"><span class="arm-name">No profiles available.</span></div>';
+  panel.innerHTML = profileOptionsHtml(
+    options,
+    lastStatus?.pending_profile || null,
+    lastStatus?.active_profile || null,
+  ) || '<div class="arm-row"><span class="arm-name">No profiles available.</span></div>';
   
   // Wire arm detail modal
   wireArmDetailModal();
@@ -3659,6 +3679,33 @@ function renderDbMode(status) {
   const el = document.getElementById('db-mode-badge');
   if (!el) return;
 
+  // The switcher is the badge's answer to "which run is this, and can I watch
+  // a different one". Wired once before the !mode guard so clicking DB opens
+  // the switcher even when the initial status payload is unknown (#867).
+  if (!el.dataset.wired) {
+    el.dataset.wired = '1';
+    el.addEventListener('click', () => {
+      const sw = document.getElementById('db-run-switcher');
+      if (!sw) return;
+      if (sw.style.display === 'block') { closeRunSwitcher(); return; }
+      closeServicesDropdown();
+      closeProfileDropdown();
+      renderRunSwitcher();
+    });
+    document.addEventListener('click', (e) => {
+      const sw = document.getElementById('db-run-switcher');
+      if (!sw || sw.style.display !== 'block') return;
+      if (sw.contains(e.target) || (el.contains && el.contains(e.target))) return;
+      closeRunSwitcher();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeRunSwitcher();
+        closeServicesDropdown();
+      }
+    });
+  }
+
   const mode = status?.db_mode || null;
   lastDbIsProduction = status?.db_is_production === true || mode === 'LIVE';
   lastDbIsShadow = status?.db_is_production === false || mode === 'SHADOW';
@@ -3699,33 +3746,6 @@ function renderDbMode(status) {
               .map(r => `${r.runId} → ${(r.dbPath || '').split(/[\\/]/).pop()}`).join('; ')}. `
           + `Click to switch this page to one of them.`
         : `Orders, fills and PnL on this page are not live positions, and START is disabled.`);
-  }
-
-  // The switcher is the badge's answer to "which run is this, and can I watch
-  // a different one". Wired once; the handler reads the last status.
-  if (!el.dataset.wired) {
-    el.dataset.wired = 'true';
-    el.style.cursor = 'pointer';
-    el.addEventListener('click', () => {
-      const sw = document.getElementById('db-run-switcher');
-      if (!sw) return;
-      if (sw.style.display === 'block') { closeRunSwitcher(); return; }
-      closeServicesDropdown();
-      closeProfileDropdown();
-      renderRunSwitcher();
-    });
-    document.addEventListener('click', (e) => {
-      const sw = document.getElementById('db-run-switcher');
-      if (!sw || sw.style.display !== 'block') return;
-      if (sw.contains(e.target) || (el.contains && el.contains(e.target))) return;
-      closeRunSwitcher();
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        closeRunSwitcher();
-        closeServicesDropdown();
-      }
-    });
   }
 }
 
@@ -11874,7 +11894,7 @@ window.setKanbanLane = function(lane) {
   buttons.forEach(btn => {
     const active = btn.dataset.lane === lane;
     btn.classList.toggle('active', active);
-    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
 
   if (typeof renderScreener === 'function' && window.__lastScreenerArgs) {

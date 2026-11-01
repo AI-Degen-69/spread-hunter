@@ -24,7 +24,7 @@
   --open: #38bdf8;
   --warn: #f59e0b;
   --gold: #fbbf24;
-  --font-display: 'Big Shoulders Display', Impact, sans-serif;
+  --font-display: 'Big Shoulders Display', Impact, system-ui, 'Segoe UI', sans-serif;
 
   --red-alert: #ef4444;
   --red-bg: rgba(127, 29, 29, 0.65);
@@ -79,19 +79,20 @@ body {
      decorative") governs the whole page surface. */
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', sans-serif;
+  font-weight: 500;
   min-height: 100vh;
   padding: 20px 20px 76px;
   line-height: 1.5;
 }
 
 .font-display {
-  font-family: 'Big Shoulders Display', Impact, sans-serif;
+  font-family: 'Big Shoulders Display', Impact, system-ui, 'Segoe UI', sans-serif;
   letter-spacing: 0.02em;
   font-weight: 800;
 }
 .mono {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: 'JetBrains Mono', ui-monospace, system-ui, 'Segoe UI', monospace;
   font-variant-numeric: tabular-nums;
 }
 
@@ -211,7 +212,7 @@ header {
    not a second visual vocabulary. */
 .pill-label {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.05em;
 }
@@ -220,7 +221,7 @@ header {
 }
 .pill-detail {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 .top-status-clock {
   color: var(--text-secondary);
@@ -427,7 +428,7 @@ header {
 .pill.state-degraded { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
 .pill.state-down { background: var(--red-bg); color: #fca5a5; border: 1px solid var(--red-border); }
 .pill.state-stopped { background: rgba(100,116,139,0.35); color: var(--text-secondary); border: 1px solid rgba(148, 163, 184, 0.3); }
-.pill.state-unknown { background: rgba(100,116,139,0.35); color: var(--text-muted); border: 1px solid rgba(100, 116, 139, 0.3); }
+.pill.state-unknown { background: rgba(100,116,139,0.25); color: var(--text-secondary); border: 1px dashed rgba(148, 163, 184, 0.35); }
 
 /* Liveness dot. Until this rule existed the dots rendered in every service
    card and header pill were unstyled inline spans — invisible. RUNNING blinks
@@ -468,6 +469,41 @@ header {
    told that before they read the rest of the dashboard. */
 .pill.mode-stale { background: var(--red-bg); color: #f87171; border: 1px solid var(--red-border); }
 
+/* Interactive header dropdown triggers (#867): PROFILE, DB, and SERVICES open
+   popover panels, so they use a 6px button silhouette and a single rotating
+   downward caret rather than the 9999px static status-pill capsule. */
+.top-meta .pill[aria-haspopup] {
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 10px;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.top-meta .pill[aria-haspopup]:hover,
+.top-meta .pill[aria-expanded="true"] {
+  border-color: var(--border-strong);
+}
+.top-meta .pill[aria-haspopup]::after {
+  content: "▾";
+  font-size: 10px;
+  opacity: 0.75;
+  margin-left: 2px;
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+.top-meta .pill[aria-expanded="true"]::after {
+  transform: rotate(180deg);
+}
+#db-mode-badge .pill-detail {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
 /* ── Header Panels (#504) ──
    Both panels are direct children of <header> positioned below their triggers.
    Moving them out of .top-meta prevents clipping by the horizontal scrollport. */
@@ -486,7 +522,7 @@ header {
 }
 
 .db-run-switcher {
-  width: 380px;
+  width: 440px;
   display: block;
 }
 .db-run-head {
@@ -497,15 +533,29 @@ header {
 }
 .db-run-row {
   display: grid;
-  grid-template-columns: 150px 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 5px 6px;
   border-radius: 4px;
 }
+.db-run-row.db-demo-row {
+  grid-template-columns: auto 1fr auto;
+}
 .db-run-row:hover { background: rgba(255, 255, 255, 0.04); }
 .db-run-row.current { background: rgba(255, 255, 255, 0.06); }
 .db-run-row .pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-run-row:not(.db-demo-row) > .pill {
+  width: 100%;
+  border-radius: 4px;
+  justify-content: flex-start;
+}
+.db-run-row:not(.db-demo-row) > .pill .pill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 .db-run-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 /* The run's stream-vs-REST book mix (#659 N2): the counts the run recorded.
  * Muted on purpose -- DESIGN.md lets a saturated hue mean a state only, and
@@ -524,15 +574,12 @@ header {
    so the scrollport of .top-meta can never clip the open panel. */
 .services-pill-trigger {
   cursor: pointer;
-  font: inherit;
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
 .services-pill-trigger:hover { border-color: var(--border-strong); }
 .services-pill-trigger[aria-expanded="true"] { border-color: var(--border-strong); }
-.services-caret { font-size: 9px; opacity: 0.7; transition: transform 0.15s; }
-.services-pill-trigger[aria-expanded="true"] .services-caret { transform: rotate(180deg); }
 .services-dropdown {
   width: 500px;
   font-family: 'JetBrains Mono', monospace;
@@ -573,7 +620,7 @@ header {
   letter-spacing: 0.04em;
 }
 @media (prefers-reduced-motion: reduce) {
-  .services-caret { transition: none; }
+  .top-meta .pill[aria-haspopup]::after { transition: none; }
 }
 .db-run-state.state-running { color: var(--signal); }
 .db-run-state.state-stopped { color: var(--text-muted); }
@@ -1235,30 +1282,35 @@ td { font-size: 13px; }
 
 /* ── Kanban Lane Switcher & Dual Pipeline ── */
 .kanban-lane-switcher {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: rgba(0, 0, 0, 0.4);
-  padding: 4px;
-  border-radius: 10px;
-  border: 1px solid var(--border-subtle);
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
 }
 
 .lane-tab-btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  padding: 7px 14px;
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: 7px;
+  border: none;
+  border-right: 1px solid var(--border-subtle);
+  border-radius: 0;
   color: var(--text-secondary);
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: 'IBM Plex Sans', system-ui, 'Segoe UI', sans-serif;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 150ms ease;
+  transition: background-color 150ms ease, color 150ms ease;
   white-space: nowrap;
+}
+.lane-tab-btn:last-child {
+  border-right: none;
 }
 
 .lane-tab-btn:hover {
@@ -1267,30 +1319,28 @@ td { font-size: 13px; }
 }
 
 .lane-tab-btn.active[data-lane="regular"] {
-  background: rgba(56, 189, 248, 0.12);
+  background: rgba(56, 189, 248, 0.16);
   color: #38bdf8;
-  border-color: rgba(56, 189, 248, 0.35);
-  box-shadow: 0 2px 8px rgba(56, 189, 248, 0.1);
+  box-shadow: inset 0 -2px 0 #38bdf8;
 }
 
 .lane-tab-btn.active[data-lane="live"] {
-  background: rgba(168, 85, 247, 0.15);
+  background: rgba(168, 85, 247, 0.18);
   color: #c084fc;
-  border-color: rgba(168, 85, 247, 0.4);
-  box-shadow: 0 2px 10px rgba(168, 85, 247, 0.15);
+  box-shadow: inset 0 -2px 0 #c084fc;
 }
 
 .lane-tab-btn.active[data-lane="all"] {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.12);
   color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 -2px 0 var(--text-primary);
 }
 
 .lane-count-pill {
   padding: 1px 7px;
   border-radius: 9999px;
-  font-size: 10px;
-  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', system-ui, 'Segoe UI', monospace;
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-muted);
 }
@@ -1749,6 +1799,18 @@ td { font-size: 13px; }
     border-left: none;
     padding-left: 0;
     margin-left: 0;
+  }
+  .kanban-lane-switcher {
+    width: 100%;
+  }
+  .lane-tab-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    justify-content: center;
+  }
+  .lane-tab-btn .lane-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 @media (max-width: 768px) {
@@ -3965,19 +4027,31 @@ th[aria-sort] .ot-sort-btn {
   background: rgba(16, 185, 129, 0.1);
   border-color: rgba(16, 185, 129, 0.3);
 }
+.arm-row.active {
+  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.35);
+}
 .arm-row.preset-row { opacity: 0.85; }
 .arm-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .arm-name {
-  font: 500 13px/1.3 'IBM Plex Sans', system-ui, sans-serif;
+  font: 500 13px/1.3 'IBM Plex Sans', system-ui, 'Segoe UI', sans-serif;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .arm-staged-tag {
-  font: 600 10px/1 'JetBrains Mono', monospace;
+  font: 600 10px/1 'JetBrains Mono', system-ui, 'Segoe UI', monospace;
   color: var(--signal);
   background: rgba(16, 185, 129, 0.15);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+}
+.arm-active-tag {
+  font: 600 10px/1 'JetBrains Mono', system-ui, 'Segoe UI', monospace;
+  color: var(--open);
+  background: rgba(56, 189, 248, 0.15);
   padding: 1px 6px;
   border-radius: 3px;
   margin-left: 6px;

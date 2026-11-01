@@ -777,7 +777,10 @@ def test_a_held_snapshot_ages_against_the_scan_interval():
 @requires_node
 def test_run_switcher_label_formatting():
     res = _harness("runswitcher")
-    assert res["tournamentWithPort"] == "#01 aggressive:8801 (pid 4242)"
+    assert res["tournamentWithPort"] == "#01 aggressive (pid 4242)"
+    assert ":" not in res["tournamentWithPort"], (
+        "tournament arm labels must not include redundant port numbers (#867)"
+    )
     assert res["tournamentNoPort"] == "#02 conservative (pid 4243)"
     assert res["standardShadow"] == "01_shadow_touchpair.db"
 
