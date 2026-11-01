@@ -614,14 +614,24 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
 
             # Closes (settlement / shadow_merge_note / '' are nontrade, not exits)
             nontrade_exclude = (SETTLEMENT, SHADOW_MERGE_NOTE, "")
-            rows = c.execute(
-                "SELECT ts, method, realized_pnl, cost_basis, proceeds, shares, "
-                "condition_id, tx_hash FROM closes "
-                "WHERE run_id = ? AND method NOT IN ("
-                + ", ".join("?" for _ in nontrade_exclude) + ") "
-                "ORDER BY ts ASC",
-                (cfg["run_id"], *nontrade_exclude),
-            ).fetchall()
+            try:
+                rows = c.execute(
+                    "SELECT ts, method, realized_pnl, cost_basis, proceeds, shares, "
+                    "condition_id, tx_hash FROM closes "
+                    "WHERE run_id = ? AND method NOT IN ("
+                    + ", ".join("?" for _ in nontrade_exclude) + ") "
+                    "ORDER BY ts ASC",
+                    (cfg["run_id"], *nontrade_exclude),
+                ).fetchall()
+            except sqlite3.Error:
+                base_rows = c.execute(
+                    "SELECT ts, method, realized_pnl, cost_basis, proceeds, shares FROM closes "
+                    "WHERE run_id = ? AND method NOT IN ("
+                    + ", ".join("?" for _ in nontrade_exclude) + ") "
+                    "ORDER BY ts ASC",
+                    (cfg["run_id"], *nontrade_exclude),
+                ).fetchall()
+                rows = [(*r, None, None) for r in base_rows]
 
             try:
                 fill_rows = c.execute(
