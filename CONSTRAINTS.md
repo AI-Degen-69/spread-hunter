@@ -1,35 +1,32 @@
-# CONSTRAINTS.md — Issue #867: Redesign Dashboard Layout and Theme
+# CONSTRAINTS.md — Issue #917: Multi-Strategy Tournament Design Addressing Live Market Adverse Selection
 
-Branch: `i867/redesign-dashboard-layout-and-theme` | Issue: #867
+Branch: `plan_github_issue_917` | Issue: #917
 
 Locked during Station II planning. Stations III–V must hold every line below.
 
 ## Zero Regressions
 
 - Targeted test suites covering all touched files must pass:
-  - `python -m pytest -q tests/test_ui_top_nav_groups.py tests/test_ui_top_nav_consistency.py tests/test_ui_278_status_strip.py tests/test_ui_277_touch_targets.py tests/test_live_state_language.py tests/test_dashboard_run_switcher.py tests/test_kanban_lanes.py tests/test_sidebar_prototype.py tests/test_dashboard_narrow_viewport.py`
-- Existing grammar and class-list contracts in `test_ui_top_nav_groups.py` and `test_ui_top_nav_consistency.py` (`test_header_status_pills_share_markup`, `test_profile_badge_renders_states`, `test_switcher_rows_use_pill_grammar`, `test_tab_row_styling`, `test_pill_value_css`, `test_superseded_top_nav_pills_hidden`) must pass without weakening assertions.
-- In `prototype.css`, edit existing rules in place — never append duplicate selectors (`test_sidebar_prototype.py`'s `_rule()` helper inspects the first matching selector block).
+  - `python -m pytest -q tests/test_tournament_arms_i917.py tests/test_shadow_tournament.py tests/test_config_divergence_guard.py tests/test_config_single_source.py tests/test_wide_book_trial.py tests/test_trader_loop.py`
+- Existing config single-source and divergence guards (`tests/test_config_divergence_guard.py`, `tests/test_config_single_source.py`, `tests/test_wide_book_trial.py`) must pass without modifying any shipped field default on `MakerConfig` or `SCORING_DEFAULTS`.
+- In `core_brain/trader_loop.py`, `_market_specs` must preserve the exact 17-key dictionary shape asserted by `tests/test_trader_loop.py`.
 
 ## Scope Fences (Hard)
 
-- **Only these files may be modified:**
-  - `dashboard/static/index.html`
-  - `dashboard/static/styles.css`
-  - `dashboard/static/prototype.css`
-  - `dashboard/static/app.js` (strictly limited to `renderDbMode`, `closeRunSwitcher`, `runSwitcherLabel`, `profileOptionsHtml`/`armRowHtml`/`presetRowHtml`/`renderProfileOptions`, and `setKanbanLane`)
-  - `tests/js/live_state_harness.cjs`
-  - `tests/test_ui_top_nav_groups.py`
-  - `tests/test_live_state_language.py`
-  - `tests/test_kanban_lanes.py`
-  - `SPEC.md`, `CONSTRAINTS.md`
+- **Only these files may be created or modified:**
+  - `core_brain/config.py` (strictly limited to parsing `BOT_RISK_STRANDED_COMPLETION_ON`, `BOT_RISK_STRANDED_MAX_WAIT_SEC`, and `BOT_QUOTE_BOOK_MAX_SPREAD_USD` inside `MakerConfig.from_env()`)
+  - `core_brain/trader_loop.py` (strictly limited to filtering sports/live rows in `_market_specs` when `BOT_MARKET_EXCLUDE_SPORTS_ON` or `FILTER_EXCLUDE_SPORTS` is enabled)
+  - `configs/tournaments/i917-multistrat-defense_arms.json`
+  - `docs/runs/2026-11-01-917-multistrat-defense.md`
+  - `tests/test_tournament_arms_i917.py`
+  - `SPEC.md`, `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`
 - **Must NOT be modified:**
-  - `dashboard/server.py`, `dashboard/preflight.py`, `core_brain/**`, `scripts/**`
-  - `dashboard/static/prototype.js`, `dashboard/static/analysis_v2.css`, `dashboard/static/analysis_v2.js`
-  - `data/orders.db`, `data/demo_orders.db`
+  - Shipped default values in `core_brain/config.py` and `scoring/config.py`
+  - `core_brain/single_buy_saver.py`, `core_brain/single_leg_lifecycle.py`, `scoring/selector.py`, `scripts/shadow_tournament.py`, `scripts/reevaluate_tournament_run.py`
+  - `data/orders.db`, `data/tournaments/i799*`, `data/tournaments/i905*`
 
 ## Anti-Cheat & Safety Rules
 
 - Never skip or disable tests, delete existing assertions, or suppress linters.
-- Never run live-order commands (`quote`, `complete`, `trader_loop`, `dashboard/preflight.py`, or pressing START on the production database).
+- Never run live-order commands (`quote`, `complete`, `trader_loop`, or starting the live Trader).
 - No new external dependencies.

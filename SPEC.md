@@ -1,60 +1,45 @@
-# SPEC.md — Issue #867: Redesign Dashboard Layout and Theme
+# SPEC.md — Issue #917: Multi-Strategy Tournament Design Addressing Live Market Adverse Selection
 
-Branch: `i867/redesign-dashboard-layout-and-theme` | Issue: #867
+Branch: `plan_github_issue_917` | Issue: #917
 
 ## 1. Goal
 
-Redesign the dashboard header controls, dropdown popovers, kanban lane switcher, and typography so interactive controls look and behave like controls (buttons with downward carets `▾` and connected segmented tabs), passive status badges keep clean pill styling with WCAG AA contrast, redundant port numbers are removed from tournament arm labels, and 11–13px text renders crisply across Windows and Linux.
+Design and wire a 6-arm multi-strategy shadow tournament (`configs/tournaments/i917-multistrat-defense_arms.json`) with orthogonal defense profiles (`macro-non-sports`, `taker-snapper`, `fast-bailout-60s`, `wide-cushion-live`, `queue-gated-hybrid`, `control-baseline`) to counter live in-play adverse selection and pair-cap lockout observed in Tournament #905, ensure every arm's `BOT_*` / `FILTER_*` environment overrides take effect at runtime without altering shipped production defaults, and lock the pre-registered decision rule in `docs/runs/2026-11-01-917-multistrat-defense.md`.
 
 ## 2. Non-Goals (Out of Scope)
 
-- Backend API changes (`dashboard/server.py`, `core_brain/**`, `scripts/*.py`).
-- Data polling, SSE socket logic, or start/stop modal orchestration in `dashboard/static/app.js`.
-- Introducing new pages, panels, or layout routing (`dashboard/static/prototype.js`).
-- Rewriting or modifying `data/orders.db` or `data/demo_orders.db`.
+- Modifying shipped production default values on `MakerConfig` in `core_brain/config.py` or `SCORING_DEFAULTS` in `scoring/config.py`.
+- Running live real-money venue commands (`quote`, `complete`, `trader_loop`, or starting the live dashboard trader).
+- Mutating historical run databases in `data/tournaments/i799*`, `data/tournaments/i905*`, or `data/orders.db`.
 
 ## 3. Components & Behaviour
 
-### 3.1 Typography & Status Pill Legibility (`dashboard/static/styles.css`)
-- **Font stacks with OS-native fallbacks:** Extend `body`, `.mono`, and `--font-display` font-family declarations with `system-ui, 'Segoe UI'` before the generic family (`sans-serif` / `monospace`). Retain literal `'IBM Plex Sans'` in `.tab-btn` for existing test compatibility.
-- **Font weights & minimum sizes:**
-  - Set `body` base `font-weight: 500` so body copy renders crisply on Windows subpixel antialiasing.
-  - Raise `.pill-label` and `.pill-detail` `font-size` from `9px` to `11px`.
-  - Brighten `.pill.state-unknown` text color to `#cbd5e1` (or `var(--text-secondary)` `#94a3b8` with dark border) so contrast on the slate background meets ≥ 4.5:1 while remaining distinct from `.state-stopped`.
+### 3.1 Runtime Environment Override Wiring (`core_brain/config.py`, `core_brain/trader_loop.py`)
+- **`MakerConfig.from_env()` (`core_brain/config.py`):**
+  - Parse `BOT_RISK_STRANDED_COMPLETION_ON` (`"1"`, `"true"`, `"yes"`, `"on"` → `True`; `"0"`, `"false"`, `"no"`, `"off"` → `False`) into `bot_risk_stranded_completion_on` (shipped default remains `False`).
+  - Parse `BOT_RISK_STRANDED_MAX_WAIT_SEC` via `_bounded_float("BOT_RISK_STRANDED_MAX_WAIT_SEC", raw, 0.0, 86400.0)` into `bot_risk_stranded_max_wait_sec` (shipped default remains `300.0`).
+  - Parse `BOT_QUOTE_BOOK_MAX_SPREAD_USD` via `_bounded_float("BOT_QUOTE_BOOK_MAX_SPREAD_USD", raw, 0.0, 0.30)` into `bot_quote_book_max_spread_usd` when `BOT_QUOTE_WIDE_BOOK_TRIAL` is not set (shipped default remains `0.06`), widening `bot_quote_book_max_spread_from_mid` to `max(window, val)` when needed.
+- **Per-Arm Non-Sports Market Exclusion (`core_brain/trader_loop.py` `_market_specs`):**
+  - When `BOT_MARKET_EXCLUDE_SPORTS_ON` or `FILTER_EXCLUDE_SPORTS` is set to a truthy value (`"1"`, `"true"`, `"yes"`, `"on"`), filter `gms` inside `_market_specs` (before `max_markets` slicing) to exclude any `GraduatedMarket` where `gm.event_live` is `True` or `scoring.selector.is_sports_or_esports(title=gm.title, slug=gm.slug, event_title=gm.event_title, sports_market_type=gm.sports_market_type)` is `True`.
+  - Preserve the exact 17-key dict schema of `_market_specs` items (`tests/test_trader_loop.py`).
 
-### 3.2 Top Nav Dropdown Triggers (`dashboard/static/index.html`, `styles.css`, `app.js`)
-- **Semantic button for DB trigger:** Change `#db-mode-badge` in `index.html` from `<span>` to `<button type="button">` with `aria-haspopup="true"`, `aria-expanded="false"`, and `aria-controls="db-run-switcher"`. Preserve its `id` and `.pill state-unknown mono` classes.
-- **Unified dropdown button affordance (`.top-meta .pill[aria-haspopup]`):**
-  - Style `#profile-badge`, `#db-mode-badge`, and `#hud-services-pill` via `.top-meta .pill[aria-haspopup]` with a subtle button container (`border-radius: 6px`, dark surface fill, crisp border, `cursor: pointer`, `font-size: 12px`, `font-weight: 600`).
-  - Add an explicit downward caret via `.top-meta .pill[aria-haspopup]::after { content: "▾"; ... }` that rotates `180deg` when `[aria-expanded="true"]`, and remove the duplicate literal `.services-caret` span from `#hud-services-pill` so every dropdown trigger renders a single unified caret.
-  - Truncate lengthy DB store filenames gracefully inside `#db-mode-badge .pill-detail` (`max-width: 180px`, `overflow: hidden`, `text-overflow: ellipsis`, `white-space: nowrap`) so long filenames (`02_shadow_30-10_09-15_loose-baseline.db`) never bloat the navbar.
-- **Resilient DB switcher wiring (`renderDbMode` & `closeRunSwitcher`):**
-  - Wire the click/outside-click/Escape listeners on `#db-mode-badge` *before* the `if (!mode)` early return in `renderDbMode()`, matching `renderProfileBadge()`.
-  - Synchronize `aria-expanded="true"` / `"false"` on `#db-mode-badge` whenever `#db-run-switcher` opens or closes (including `closeRunSwitcher()`, outside click, and Escape).
+### 3.2 Six-Arm Multi-Strategy Tournament Configuration (`configs/tournaments/i917-multistrat-defense_arms.json`)
+Define 6 orthogonal arms with full metadata (`name`, `label`, `color`, `profile`, `desc`, `thesis`, `env`):
+1. `macro-non-sports`: Structural exclusion of in-play sports/esports (`BOT_MARKET_EXCLUDE_SPORTS_ON="1"`, `FILTER_EXCLUDE_SPORTS="1"`).
+2. `taker-snapper`: Instant taker completion when `held_avg + opposing_ask < $0.99` (`BOT_RISK_STRANDED_COMPLETION_ON="1"`).
+3. `fast-bailout-60s`: Rapid 60-second stranded wait and 5% drawdown stop (`BOT_RISK_STRANDED_MAX_WAIT_SEC="60"`, `BOT_RISK_STOP_MODE="PERCENTAGE_DROP"`, `BOT_RISK_STOP_MAX_DRAWDOWN_PCT="5.0"`).
+4. `wide-cushion-live`: Deep volatility buffer quoting 5¢–10¢ from mid with 10¢ book spread tolerance (`BOT_QUOTE_SPREAD_OFFSET_MIN_CENTS="5"`, `BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS="10"`, `BOT_QUOTE_BOOK_MAX_SPREAD_USD="0.10"`).
+5. `queue-gated-hybrid`: Fast 2-minute queue clearance gate with `balanced` preset (`BOT_QUOTE_TOURNAMENT_PRESET="balanced"`, `BOT_ORDER_GATE_QUEUE_CLEAR_ON="1"`, `BOT_ORDER_QUEUE_MAX_CLEAR_MIN="2"`).
+6. `control-baseline`: Shipped loose baseline (`env: {}`) for direct benchmarking.
 
-### 3.3 DB Run Switcher & Profile Popover Polish (`dashboard/static/app.js`, `styles.css`)
-- **Port-free tournament arm labels:** In `runSwitcherLabel(run)`, omit `portPart` (`:${run.dash_port}`) so tournament arms render `#01 aggressive (pid 4242)` instead of `#01 aggressive:8801 (pid 4242)`.
-- **Unambiguous active & staged state in Profile Popover (`profileOptionsHtml`, `armRowHtml`, `presetRowHtml`):**
-  - Pass optional `activeProfile` (`lastStatus?.active_profile || null`) into `profileOptionsHtml(options, pending, activeProfile)`.
-  - Match the active profile against an arm (`activeProfile.name === arm.name || activeProfile.tournament_arm === arm.name`) or preset (`!activeProfile.tournament_arm && (activeProfile.name === preset.name || activeProfile.preset === preset.name)`).
-  - Mark the matching row with `.active` class and `<span class="arm-active-tag">✓ ACTIVE</span>` alongside existing `.staged` / `STAGED` support, styled with a distinct cyan/blue highlight so the currently loaded configuration is unmistakable at a glance.
-- **DB Run Switcher row layout (`.db-run-row`):**
-  - Widen `.db-run-switcher` (`width: 420px`) and refine `.db-run-row` (`grid-template-columns: minmax(0, 1fr) auto`) so run names in `.pill-label` never truncate abruptly at 150px (`..._loo`) while keeping `.pill`, `.pill-label`, `.pill-value`, and `.pill-detail` intact.
-
-### 3.4 Connected Kanban Lane Switcher & Prototype Alignment (`styles.css`, `prototype.css`, `app.js`)
-- **Connected segmented control (`.kanban-lane-switcher`):**
-  - Remove button gaps (`gap: 0`, `padding: 0`, `overflow: hidden`, unified border and `border-radius: 8px`).
-  - Style `.lane-tab-btn` segments with `border-radius: 0`, `border: none`, and `border-right: 1px solid var(--border-subtle)` between segments (`:last-child { border-right: none }`), keeping distinct active tints for `regular` (cyan), `live` (purple), and `all` (neutral) and raising `.lane-count-pill` from `10px` to `11px`.
-  - At `@media (max-width: 900px)`, give `.lane-tab-btn` `flex: 1 1 0`, `min-width: 0`, and truncate `.lane-name` with `text-overflow: ellipsis` while keeping `.lane-count-pill` visible.
-  - In `window.setKanbanLane`, write `aria-pressed` (`'true'` / `'false'`) to match `index.html`.
-- **Prototype stylesheet alignment (`dashboard/static/prototype.css`):**
-  - Edit existing rules in place (no duplicate selectors): raise `.proto-sub-nav-btn` weight to `600` (and `[aria-current="subpage"]` to `700`), `.proto-body .ot-tab-btn` to `12px` / `600`, `.proto-body .ot-tab-btn .ot-count` to `11px`, `.proto-body .stitch-category-pill` weight to `600`, and `.proto-body .pill.active` / `.proto-body .pill.reconnecting` to `11px`.
+### 3.3 Pre-Registered Tournament Run Document & Verification Suite (`docs/runs/2026-11-01-917-multistrat-defense.md`, `tests/test_tournament_arms_i917.py`)
+- Pre-register hypotheses, per-KPI sample sufficiency gates, separation criteria, 1440-minute horizon (with 360-minute interim checkpoint), and operator rehearsal commands in `docs/runs/2026-11-01-917-multistrat-defense.md`.
+- Validate schema, port isolation, runtime `MakerConfig.from_env()` resolution, `_market_specs` non-sports filtering, and `python -m scripts.shadow_tournament --dry-run` pure JSON output in `tests/test_tournament_arms_i917.py`.
 
 ## 4. Acceptance Criteria
 
-- [ ] `PROFILE`, `DB`, and `SERVICES` render as `<button type="button">` controls with `aria-haspopup="true"`, `aria-expanded`, `aria-controls`, button border-radius (`6px`), and a single downward caret (`▾`).
-- [ ] `#db-mode-badge` truncates lengthy filenames gracefully with `text-overflow: ellipsis` and opens `#db-run-switcher` even when initial status mode is unknown.
-- [ ] `runSwitcherLabel()` omits `:88xx` port numbers from tournament arm labels while preserving arm index, name, and PID suffix.
-- [ ] `#profile-dropdown` marks the currently active profile/preset with `.active` and `✓ ACTIVE` in addition to `STAGED`.
-- [ ] `.kanban-lane-switcher` is styled as a zero-gap connected segmented control and `setKanbanLane()` updates `aria-pressed`.
-- [ ] `body`, `.mono`, and `--font-display` include `system-ui, 'Segoe UI'` fallbacks, `body` weight is `500`, `.pill-label`/`.pill-detail`/`.lane-count-pill` are `11px`, and `prototype.css` weights/sizes match.
+- [ ] `configs/tournaments/i917-multistrat-defense_arms.json` created with 6 distinct strategy profiles (`macro-non-sports`, `taker-snapper`, `fast-bailout-60s`, `wide-cushion-live`, `queue-gated-hybrid`, `control-baseline`).
+- [ ] Every arm's environment overrides take effect at runtime (`MakerConfig.from_env()` and `_market_specs`) while shipped defaults remain 100% unchanged.
+- [ ] Schema, naming, port allocation, config resolution, and isolation verified via `tests/test_tournament_arms_i917.py`.
+- [ ] `python -m scripts.shadow_tournament --issue 917 --arms-file configs/tournaments/i917-multistrat-defense_arms.json --dry-run` passes cleanly with pure JSON output.
+- [ ] Pre-registered decision rule and rehearsal protocol documented in `docs/runs/2026-11-01-917-multistrat-defense.md`.
