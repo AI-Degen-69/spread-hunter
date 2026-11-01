@@ -2959,11 +2959,117 @@ function Clear-RuntimeState {
 }
 
 function Invoke-StorageAudit {
-    <# Run the read-only storage audit via core_brain.data_retention. #>
+    <# Run the read-only storage audit via core_brain.data_retention with PCS theme output. #>
     Push-Location $ProjectPath
     try {
-        & python -m core_brain.data_retention --audit
-        return ($LASTEXITCODE -eq 0)
+        Lsh-Banner -Title "SPREAD HUNTER - STORAGE AUDIT" -Subtitle "Storage audit & retention inspection (read-only)"
+        Lsh-Step "Scanning repository storage and retention rules..."
+        $jsonOut = & python -m core_brain.data_retention --json
+        if ($LASTEXITCODE -ne 0 -or -not $jsonOut) {
+            Lsh-Fail "Storage retention audit failed or returned empty results."
+            return $false
+        }
+        $rawJson = $jsonOut -join "`n"
+        $items = $rawJson | ConvertFrom-Json
+        if (-not $items) {
+            Lsh-Warn "No audited files found in storage directories."
+            return $true
+        }
+
+        $totalCount = $items.Count
+        [long]$totalBytes = 0
+        $reclaimCount = 0
+        [long]$reclaimBytes = 0
+        $groups = @{}
+
+        foreach ($it in $items) {
+            $totalBytes += [long]$it.size_bytes
+            if ($it.action -eq "delete") {
+                $reclaimCount++
+                $reclaimBytes += [long]$it.size_bytes
+            }
+            $fam = [string]$it.family
+            if (-not $groups.ContainsKey($fam)) {
+                $groups[$fam] = [ordered]@{ Count = 0; Bytes = [long]0; ReclaimCount = 0; ReclaimBytes = [long]0 }
+            }
+            $groups[$fam].Count++
+            $groups[$fam].Bytes += [long]$it.size_bytes
+            if ($it.action -eq "delete") {
+                $groups[$fam].ReclaimCount++
+                $groups[$fam].ReclaimBytes += [long]$it.size_bytes
+            }
+        }
+
+        $totalGb = $totalBytes / 1GB
+        $reclaimGb = $reclaimBytes / 1GB
+        $statusText = if ($reclaimCount -gt 0) { ("PRUNE AVAILABLE ({0} FILES)" -f $reclaimCount) } else { "OPTIMAL (0 RECLAIMABLE)" }
+        $statusStyle = if ($reclaimCount -gt 0) { "Warning" } else { "Success" }
+
+        Write-SectionHeader -Number "1" -Title "RETENTION POLICY & INVENTORY" -Status $statusText -StatusStyle $statusStyle
+
+        $cBorder  = Get-ProfileColor -Name Border
+        $cInfo    = Get-ProfileColor -Name Info
+        $cText    = Get-ProfileColor -Name Text
+        $cSuccess = Get-ProfileColor -Name Success
+        $cWarn    = Get-ProfileColor -Name Warning
+        $cNeutral = Get-ProfileColor -Name Neutral
+
+        Write-Host "  Retention window : " -ForegroundColor $cNeutral -NoNewline
+        Write-Host "14 days" -ForegroundColor $cInfo -NoNewline
+        Write-Host " | User protected patterns : " -ForegroundColor $cNeutral -NoNewline
+        Write-Host "None" -ForegroundColor $cText
+
+        Write-Host "  Total storage    : " -ForegroundColor $cNeutral -NoNewline
+        Write-Host ("{0:N3} GB" -f $totalGb) -ForegroundColor $cInfo -NoNewline
+        Write-Host (" ({0} files audited)" -f $totalCount) -ForegroundColor $cNeutral
+
+        Write-Host "  Reclaimable      : " -ForegroundColor $cNeutral -NoNewline
+        if ($reclaimCount -gt 0) {
+            Write-Host ("{0:N3} GB" -f $reclaimGb) -ForegroundColor $cWarn -NoNewline
+            Write-Host (" ({0} eligible files; run 'p' to prune)" -f $reclaimCount) -ForegroundColor $cNeutral
+        } else {
+            Write-Host "0.000 GB (0 files eligible for prune)" -ForegroundColor $cSuccess
+        }
+
+        Write-SectionHeader -Number "2" -Title "STORAGE DOMAIN BREAKDOWN" -Status ("{0} Domains" -f $groups.Keys.Count) -StatusStyle "Info"
+
+        $familyLabels = @{
+            "tournament_store"     = "Tournament DB Stores"
+            "tournament_artifact"  = "Tournament Logs & Artifacts"
+            "tournament_other"     = "Tournament Metadata"
+            "tournament_symlink"   = "Tournament Active Symlinks"
+            "database_store"       = "Rehearsal / Shadow Stores"
+            "rehearsal_stats"      = "Shadow Stat Directories"
+            "runtime_state"        = "Runtime State & Sockets"
+            "archive"              = "Archived Runs"
+            "production_registry"  = "Production Registry (Locked)"
+            "price_tape"           = "Price Tape Store (Excluded)"
+            "orphan_wal_shm"       = "Orphan SQLite Siblings"
+            "reports"              = "Performance Reports"
+        }
+
+        foreach ($famKey in ($groups.Keys | Sort-Object)) {
+            $g = $groups[$famKey]
+            $label = if ($familyLabels.ContainsKey($famKey)) { $familyLabels[$famKey] } else { $famKey }
+            $sizeStr = if ($g.Bytes -ge 1GB) { "{0:N2} GB" -f ($g.Bytes / 1GB) } else { "{0:N2} MB" -f ($g.Bytes / 1MB) }
+
+            Write-Host ("  {0,-32}" -f $label) -ForegroundColor $cText -NoNewline
+            Write-Host (" {0,5} files " -f $g.Count) -ForegroundColor $cNeutral -NoNewline
+            Write-Host (" {0,10} " -f $sizeStr) -ForegroundColor $cInfo -NoNewline
+            if ($g.ReclaimCount -gt 0) {
+                $recStr = if ($g.ReclaimBytes -ge 1GB) { "{0:N2} GB" -f ($g.ReclaimBytes / 1GB) } else { "{0:N2} MB" -f ($g.ReclaimBytes / 1MB) }
+                Write-Host (" [Reclaimable: {0} ({1})]" -f $g.ReclaimCount, $recStr) -ForegroundColor $cWarn
+            } else {
+                Write-Host " [Clean]" -ForegroundColor $cSuccess
+            }
+        }
+        Write-Host ""
+        if ($reclaimCount -gt 0) {
+            Lsh-Warn "Storage has reclaimable files. Use Option 'p' (Storage Prune) to safely prune eligible files."
+        } else {
+            Lsh-Ok "Storage audit complete. All audited stores conform to retention policy."
+        }
+        return $true
     } finally {
         Pop-Location
     }
@@ -2974,8 +3080,9 @@ function Invoke-StoragePrune {
     param([switch]$Force)
     Push-Location $ProjectPath
     try {
+        Lsh-Banner -Title "SPREAD HUNTER - STORAGE PRUNE" -Subtitle "Safe pruning of stale data stores"
         Lsh-Step "Evaluating data retention policy (dry-run)..."
-        & python -m core_brain.data_retention --audit
+        $null = Invoke-StorageAudit
         if ($LASTEXITCODE -ne 0) {
             Lsh-Fail "Storage audit failed; aborting prune."
             return $false
@@ -4026,7 +4133,7 @@ function Invoke-LiveAction {
                 Write-Host "  ─────────────────────────────────────────────────────────────" -ForegroundColor (Get-ProfileColor -Name Border)
                 Write-Host "   [1] Stop All (Force Takeover) [DEFAULT]" -ForegroundColor (Get-ProfileColor -Name Info)
                 Write-Host "       Kills all spread-hunter processes & dashboards on 8798/8799/8800 across any checkout" -ForegroundColor (Get-ProfileColor -Name Neutral)
-                Write-Host "   [2] Stop & CLEAN Data" -ForegroundColor Red
+                Write-Host "   [2] Stop & CLEAN Data" -ForegroundColor (Get-ProfileColor -Name Danger)
                 Write-Host "       Stops like 1, then purges runtime, shadow, and tournament data (data/orders.db strictly preserved)" -ForegroundColor (Get-ProfileColor -Name Neutral)
                 Write-Host ""
                 $inputChoice = Read-Host "  Select option [1/2, default 1]"
@@ -4046,7 +4153,7 @@ function Invoke-LiveAction {
                 }
             } elseif ($subChoice -eq "2") {
                 Write-Host ""
-                Write-Host "  WARNING: STOP & CLEAN DATA will purge all shadow, tournament, and stats runs!" -ForegroundColor Red
+                Write-Host "  WARNING: STOP & CLEAN DATA will purge all shadow, tournament, and stats runs!" -ForegroundColor (Get-ProfileColor -Name Danger)
                 if (-not $Yes) {
                     $confirm = Read-Host "  Are you sure you want to STOP ALL and PURGE runtime & dashboard data? data/orders.db is kept. [y/N]"
                     if ($confirm -notmatch '^[yY]') {
@@ -4068,10 +4175,10 @@ function Invoke-LiveAction {
             $null = Reset-Environment -Mode "statistical"
         }
         "a" {
-            Invoke-StorageAudit
+            $null = Invoke-StorageAudit
         }
         "p" {
-            Invoke-StoragePrune -Force:$Yes
+            $null = Invoke-StoragePrune -Force:$Yes
         }
         "t" {
             Invoke-TournamentReconcileAction
@@ -4214,7 +4321,7 @@ if ($Action -ne "") {
         "reconcile-tournament" = "t"
     }
     if ($ExtraArgs.Count -gt 0) {
-        Write-Host ("ERROR: Too many words: '{0} {1}'. Run one action at a time (e.g. .\scripts\spread-hunter-menu.ps1 audit) — '-and' is not a menu word; call the menu twice to run two actions." -f $Action, ($ExtraArgs -join ' ')) -ForegroundColor Red
+        Write-Host ("ERROR: Too many words: '{0} {1}'. Run one action at a time (e.g. .\scripts\spread-hunter-menu.ps1 audit) — '-and' is not a menu word; call the menu twice to run two actions." -f $Action, ($ExtraArgs -join ' ')) -ForegroundColor (Get-ProfileColor -Name Error)
         exit 1
     }
     $key = $Action.Trim()
@@ -4227,13 +4334,13 @@ if ($Action -ne "") {
     # name (#475), so a stray action can never be accepted here.
     $legacyKeys = @('1', '2', '3', '4', '5', '6', 'r')
     if ($script:MenuKeys -notcontains $key -and $legacyKeys -notcontains $key) {
-        Write-Host ("ERROR: Unknown action '{0}' (use {1}, or a name like start/stop/status/audit/prune)" -f $Action, (Format-MenuHint)) -ForegroundColor Red
+        Write-Host ("ERROR: Unknown action '{0}' (use {1}, or a name like start/stop/status/audit/prune)" -f $Action, (Format-MenuHint)) -ForegroundColor (Get-ProfileColor -Name Error)
         exit 1
     }
 
     # Require -Yes flag for non-interactive LIVE start (key 1)
     if ($key -eq "1" -and -not $Yes) {
-        Write-Host "ERROR: Non-interactive LIVE start requires explicit -Yes flag" -ForegroundColor Red
+        Write-Host "ERROR: Non-interactive LIVE start requires explicit -Yes flag" -ForegroundColor (Get-ProfileColor -Name Error)
         Write-Host "Usage: .\scripts\spread-hunter-menu.ps1 start -Yes"
         exit 1
     }

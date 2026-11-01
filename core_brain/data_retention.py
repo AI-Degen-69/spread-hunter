@@ -7,7 +7,7 @@ Strict safety invariants:
 1. `data/orders.db` (and `-wal`/`-shm`) is THE production registry. It is
    strictly refused by `assert_not_protected_store()` and can never be deleted.
 2. `data/price_tape.db` is excluded from deletion.
-3. User-protected patterns (e.g. `01_shadow`) are preserved.
+3. User-protected patterns (when configured) are preserved.
 4. Dry-run is the default for all audit and prune operations.
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ class DataRetentionPolicy:
     retention_days: int = 14
     protected_filenames: tuple[str, ...] = ("orders.db", "orders.db-wal", "orders.db-shm")
     excluded_filenames: tuple[str, ...] = ("price_tape.db", "price_tape.db-wal", "price_tape.db-shm")
-    user_protected_patterns: tuple[str, ...] = (r"(^|[/\\])01_shadow([_.-]|$)",)
+    user_protected_patterns: tuple[str, ...] = ()
     preserve_newest_per_family: bool = True
 
 
@@ -843,7 +843,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print("================================================================================")
     print("SPREAD-HUNTER DATA STORAGE AUDIT")
-    print(f"Retention Window: {policy.retention_days} days | Protected patterns: {policy.user_protected_patterns}")
+    protected_repr = ", ".join(policy.user_protected_patterns) if policy.user_protected_patterns else "None"
+    print(f"Retention Window: {policy.retention_days} days | Protected patterns: {protected_repr}")
     print(f"Total Files Audited: {len(items)} | Total Size: {total_bytes / (1024*1024*1024):.3f} GB")
     print(f"Reclaimable Files: {len([i for i in items if i.action == AuditAction.DELETE])} | Reclaimable Size: {reclaim_bytes / (1024*1024*1024):.3f} GB")
     print("================================================================================")
