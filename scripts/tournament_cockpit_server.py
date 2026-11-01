@@ -1105,30 +1105,118 @@ def _row_formatted_value(row: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _row_numeric_value(row: dict[str, Any] | None) -> float | None:
+    """Extract numeric KPI value for green/yellow/red health classification."""
+    if not row:
+        return None
+    raw = row.get("value")
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+    base_n = row.get("base_n") or 0
+    if row.get("type") == "proportion" and base_n > 0 and row.get("successes") is not None:
+        return 100.0 * float(row["successes"]) / float(base_n)
+    fmt = _row_formatted_value(row)
+    if not fmt:
+        return None
+    s = fmt.strip().lower()
+    # Duration string (e.g. "5m 11s", "1h 02m", "18.9s")
+    if s.endswith("s") or s.endswith("m"):
+        try:
+            total = 0.0
+            for part in s.split():
+                if part.endswith("h"):
+                    total += float(part[:-1]) * 3600.0
+                elif part.endswith("m"):
+                    total += float(part[:-1]) * 60.0
+                elif part.endswith("s"):
+                    total += float(part[:-1])
+                else:
+                    return None
+            return total
+        except ValueError:
+            pass
+    cleaned = fmt.replace("$", "").replace("%", "").replace(",", "").strip()
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _kpi_value_tone(row: dict[str, Any] | None, is_sufficient: bool = False) -> str:
+    """Classify a KPI's current value into green (good), yellow (warn), or red (bad)."""
+    if not row:
+        return ""
+    val = _row_numeric_value(row)
+    if val is None:
+        if is_sufficient:
+            return "kpi-val-good"
+        if (row.get("base_n") or 0) > 0:
+            return "kpi-val-warn"
+        return ""
+    key = str(row.get("key", ""))
+    if key == "expectancy_usd":
+        if val < 0.0:
+            return "kpi-val-bad"
+        return "kpi-val-good" if val >= 0.15 else "kpi-val-warn"
+    if key == "avg_return_pct":
+        if val < 0.0:
+            return "kpi-val-bad"
+        return "kpi-val-good" if val >= 2.0 else "kpi-val-warn"
+    if key == "win_rate":
+        if val < 50.0:
+            return "kpi-val-bad"
+        return "kpi-val-good" if val >= 65.0 else "kpi-val-warn"
+    if key == "stop_loss_rate":
+        if val <= 25.0:
+            return "kpi-val-good"
+        return "kpi-val-warn" if val <= 40.0 else "kpi-val-bad"
+    if key == "avg_stop_loss_depth_pct":
+        depth = abs(val)
+        if depth <= 8.0:
+            return "kpi-val-good"
+        return "kpi-val-warn" if depth <= 15.0 else "kpi-val-bad"
+    if key == "merge_rate":
+        if val < 45.0:
+            return "kpi-val-bad"
+        return "kpi-val-good" if val >= 60.0 else "kpi-val-warn"
+    if key == "avg_duration_merge":
+        if val <= 180.0:
+            return "kpi-val-good"
+        return "kpi-val-warn" if val <= 420.0 else "kpi-val-bad"
+    if key == "avg_duration_stop":
+        if val <= 180.0:
+            return "kpi-val-good"
+        return "kpi-val-warn" if val <= 360.0 else "kpi-val-bad"
+    if val < 0.0:
+        return "kpi-val-bad"
+    return "kpi-val-good" if val > 0.0 else "kpi-val-warn"
+
+
 def _sufficiency_95_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Condense sufficiency rows to their 95% striving level for display.
 
     One dict per KPI: label, observation base and count, the arm's own
     required N at 95% (None when unmeasured), remaining, progress, and the
-    current calculated value (or unlock status when no value string was
-    supplied). Shared by the server-side card HTML and the live JS repaint
-    below so first paint and poll updates can never disagree."""
+    current calculated value with its green/yellow/red health class. Shared by
+    the server-side card HTML and the live JS repaint below so first paint and
+    poll updates can never disagree."""
     out: list[dict[str, Any]] = []
     for row in rows or []:
         lv95 = next(
             (lv for lv in (row.get("levels") or []) if lv.get("confidence_pct") == 95), {}) or {}
-        sufficient = row.get("sufficient_95")
+        sufficient = row.get("sufficient_95") is True
         fmt_val = _row_formatted_value(row)
         base_n = row.get("base_n", 0) or 0
-        if sufficient is True:
+        tone = _kpi_value_tone(row, is_sufficient=sufficient)
+        if sufficient:
             verdict = fmt_val if fmt_val is not None else "SUFFICIENT"
-            badge = "badge-green"
+            badge = tone or "kpi-val-good"
         elif fmt_val is not None:
-            verdict, badge = fmt_val, "badge-amber"
+            verdict, badge = fmt_val, tone or "kpi-val-warn"
         elif lv95.get("required_n") is None:
             verdict, badge = "—", ""
         else:
-            verdict, badge = f"n={base_n}", "badge-amber"
+            verdict, badge = f"n={base_n}", "kpi-val-warn"
         out.append({
             "key": row.get("key", ""),
             "label": row.get("label", row.get("key", "")),
@@ -1161,23 +1249,23 @@ def _sufficiency_mini_html(rows: list[dict[str, Any]]) -> str:
             f'<div style="background: var(--green); height: 6px; border-radius: 4px; width: {prog}%;"></div></div>'
             if isinstance(prog, (int, float)) else '<span style="color: var(--text-muted);">—</span>'
         )
-        badge = (
-            f'<span class="badge {s["badge"]} tabular" style="font-size: 9px; padding: 2px 6px;">{html.escape(str(s["verdict"]))}</span>'
+        val_html = (
+            f'<span class="kpi-val {s["badge"]} tabular">{html.escape(str(s["verdict"]))}</span>'
             if s["badge"] else '<span style="color: var(--text-muted);">—</span>'
         )
         body.append(
-            f'<tr><td style="padding: 2px 4px 2px 0;">{html.escape(str(s["label"]))}</td>'
-            f'<td class="tabular" style="padding: 2px 4px; white-space: nowrap;">{s["base_n"]} {html.escape(str(s["base"]))}</td>'
-            f'<td class="tabular" style="padding: 2px 4px;">{req}</td>'
-            f'<td style="padding: 2px 4px;">{bar}</td>'
-            f'<td style="padding: 2px 0 2px 4px; text-align: right;">{badge}</td></tr>'
+            f'<tr><td style="padding: 3px 6px 3px 0;">{html.escape(str(s["label"]))}</td>'
+            f'<td class="tabular" style="padding: 3px 6px; white-space: nowrap; text-align: right;">{val_html}</td>'
+            f'<td class="tabular" style="padding: 3px 6px; text-align: right; color: var(--text-muted);">{req}</td>'
+            f'<td style="padding: 3px 6px;">{bar}</td>'
+            f'<td class="tabular" style="padding: 3px 0 3px 6px; white-space: nowrap; text-align: right; color: var(--text-muted);">{s["base_n"]} {html.escape(str(s["base"]))}</td></tr>'
         )
     return (
         '<div style="margin: 8px 0 4px; padding-top: 8px; border-top: 1px solid var(--border);">'
         '<div style="font-size: 11px; font-weight: 700; color: var(--text-muted); '
         'text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">'
         'Per-KPI Sufficiency @95%</div>'
-        '<table style="width: 100%; font-size: 11px; border-collapse: collapse;">' + "".join(body) + '</table></div>'
+        '<table style="width: 100%; font-size: 11.5px; border-collapse: collapse;">' + "".join(body) + '</table></div>'
     )
 
 
@@ -1217,15 +1305,16 @@ def _dg_cell_html(row: dict[str, Any] | None, confidence: int) -> str:
         (row.get("sufficient_95") is True and confidence == 95)
         or (confidence != 95 and isinstance(prog, (int, float)) and prog >= 100)
     )
+    tone = _kpi_value_tone(row, is_sufficient=is_sufficient)
     if is_sufficient:
         label = fmt_val if fmt_val is not None else "SUFFICIENT"
-        badge = f'<span class="badge badge-green tabular" style="font-size: 9px; padding: 2px 6px;">{html.escape(str(label))}</span>'
+        val_html = f'<span class="kpi-val {tone or "kpi-val-good"} tabular">{html.escape(str(label))}</span>'
     elif fmt_val is not None:
-        badge = f'<span class="badge badge-amber tabular" style="font-size: 9px; padding: 2px 6px;">{html.escape(str(fmt_val))}</span>'
+        val_html = f'<span class="kpi-val {tone or "kpi-val-warn"} tabular">{html.escape(str(fmt_val))}</span>'
     elif req is None:
         return '<span style="color: var(--text-muted);">unmeasured</span>'
     else:
-        badge = f'<span class="badge badge-amber tabular" style="font-size: 9px; padding: 2px 6px;">n={base_n}</span>'
+        val_html = f'<span class="kpi-val kpi-val-warn tabular">n={base_n}</span>'
     have_need = (
         f'<span class="tabular">{base_n} / {req:,}</span>' if req is not None
         else f'<span class="tabular">{base_n} / —</span>'
@@ -1235,7 +1324,7 @@ def _dg_cell_html(row: dict[str, Any] | None, confidence: int) -> str:
         f'<div style="background: var(--green); height: 6px; border-radius: 4px; width: {prog}%;"></div></div>'
         if isinstance(prog, (int, float)) else ''
     )
-    return f'{badge}<div style="font-size: 10.5px; margin-top: 2px;">{have_need}</div>{bar}'
+    return f'{val_html}<div style="font-size: 10.5px; color: var(--text-muted); margin-top: 2px;">{have_need}</div>{bar}'
 
 
 def _dg_matrix_html(arms: list[dict[str, Any]], confidence: int = 95) -> str:
@@ -1276,8 +1365,8 @@ def _dg_matrix_html(arms: list[dict[str, Any]], confidence: int = 95) -> str:
         + "<tbody>" + "".join(body) + "</tbody></table>"
         + f'<div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">'
         f'Current value and Have / Need observations at {confidence}% confidence. '
-        'Green badges have reached sufficiency; amber badges show the live running '
-        'calculation while still gathering observations; unmeasured means no observations yet.</div>'
+        'Values are colored green (good), yellow (average), or red (bad) by KPI range; '
+        'unmeasured means no observations yet.</div>'
     )
 
 
@@ -2006,6 +2095,19 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   .badge-green {{ background: var(--green-glow); color: var(--green); border: 1px solid rgba(0,230,118,0.3); }}
   .badge-amber {{ background: rgba(255,214,0,0.15); color: var(--amber); border: 1px solid rgba(255,214,0,0.3); }}
   .badge-red {{ background: var(--red-glow); color: var(--red); border: 1px solid rgba(255,82,82,0.3); }}
+
+  .kpi-val {{
+    display: inline-block;
+    font-size: 12.5px;
+    font-weight: 700;
+    line-height: 1.25;
+    letter-spacing: 0.15px;
+    text-transform: none;
+    white-space: nowrap;
+  }}
+  .kpi-val-good {{ color: var(--green); }}
+  .kpi-val-warn {{ color: #ffd54f; }}
+  .kpi-val-bad  {{ color: var(--red); }}
 
   .positive {{ color: var(--green); }}
   .negative {{ color: var(--red); }}
@@ -3097,6 +3199,79 @@ function rowFormattedValue(r) {{
   return null;
 }}
 
+function rowNumericValue(r) {{
+  if (!r) return null;
+  if (typeof r.value === 'number' && !isNaN(r.value)) return r.value;
+  const baseN = r.base_n || 0;
+  if (r.type === 'proportion' && baseN > 0 && r.successes != null) {{
+    return 100.0 * Number(r.successes) / Number(baseN);
+  }}
+  const fmt = rowFormattedValue(r);
+  if (!fmt) return null;
+  const s = fmt.trim().toLowerCase();
+  if (s.endsWith('s') || s.endsWith('m')) {{
+    let total = 0.0;
+    const parts = s.split(/\s+/);
+    let ok = true;
+    for (const p of parts) {{
+      if (p.endsWith('h')) total += parseFloat(p.slice(0, -1)) * 3600.0;
+      else if (p.endsWith('m')) total += parseFloat(p.slice(0, -1)) * 60.0;
+      else if (p.endsWith('s')) total += parseFloat(p.slice(0, -1));
+      else ok = false;
+    }}
+    if (ok && !isNaN(total)) return total;
+  }}
+  const cleaned = fmt.replace(/[$%,]/g, '').trim();
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}}
+
+function kpiValueTone(r, isSufficient) {{
+  if (!r) return '';
+  const val = rowNumericValue(r);
+  if (val == null) {{
+    if (isSufficient) return 'kpi-val-good';
+    if ((r.base_n || 0) > 0) return 'kpi-val-warn';
+    return '';
+  }}
+  const key = String(r.key || '');
+  if (key === 'expectancy_usd') {{
+    if (val < 0.0) return 'kpi-val-bad';
+    return val >= 0.15 ? 'kpi-val-good' : 'kpi-val-warn';
+  }}
+  if (key === 'avg_return_pct') {{
+    if (val < 0.0) return 'kpi-val-bad';
+    return val >= 2.0 ? 'kpi-val-good' : 'kpi-val-warn';
+  }}
+  if (key === 'win_rate') {{
+    if (val < 50.0) return 'kpi-val-bad';
+    return val >= 65.0 ? 'kpi-val-good' : 'kpi-val-warn';
+  }}
+  if (key === 'stop_loss_rate') {{
+    if (val <= 25.0) return 'kpi-val-good';
+    return val <= 40.0 ? 'kpi-val-warn' : 'kpi-val-bad';
+  }}
+  if (key === 'avg_stop_loss_depth_pct') {{
+    const depth = Math.abs(val);
+    if (depth <= 8.0) return 'kpi-val-good';
+    return depth <= 15.0 ? 'kpi-val-warn' : 'kpi-val-bad';
+  }}
+  if (key === 'merge_rate') {{
+    if (val < 45.0) return 'kpi-val-bad';
+    return val >= 60.0 ? 'kpi-val-good' : 'kpi-val-warn';
+  }}
+  if (key === 'avg_duration_merge') {{
+    if (val <= 180.0) return 'kpi-val-good';
+    return val <= 420.0 ? 'kpi-val-warn' : 'kpi-val-bad';
+  }}
+  if (key === 'avg_duration_stop') {{
+    if (val <= 180.0) return 'kpi-val-good';
+    return val <= 360.0 ? 'kpi-val-warn' : 'kpi-val-bad';
+  }}
+  if (val < 0.0) return 'kpi-val-bad';
+  return val > 0.0 ? 'kpi-val-good' : 'kpi-val-warn';
+}}
+
 function suffMiniHtml(rows) {{
   if (!rows || !rows.length) {{
     return '<div style="font-size: 11.5px; color: var(--text-muted);">' +
@@ -3109,29 +3284,31 @@ function suffMiniHtml(rows) {{
     const prog = (typeof lv95.progress_pct === 'number' ? lv95.progress_pct : null);
     const fmtVal = rowFormattedValue(r);
     const baseN = r.base_n || 0;
+    const isSuff = r.sufficient_95 === true;
+    const tone = kpiValueTone(r, isSuff);
     let verdict, badge;
-    if (r.sufficient_95 === true) {{ verdict = fmtVal != null ? fmtVal : 'SUFFICIENT'; badge = 'badge-green'; }}
-    else if (fmtVal != null) {{ verdict = fmtVal; badge = 'badge-amber'; }}
+    if (isSuff) {{ verdict = fmtVal != null ? fmtVal : 'SUFFICIENT'; badge = tone || 'kpi-val-good'; }}
+    else if (fmtVal != null) {{ verdict = fmtVal; badge = tone || 'kpi-val-warn'; }}
     else if (lv95.required_n == null) {{ verdict = '—'; badge = ''; }}
-    else {{ verdict = 'n=' + baseN; badge = 'badge-amber'; }}
+    else {{ verdict = 'n=' + baseN; badge = 'kpi-val-warn'; }}
     const bar = (prog !== null)
       ? '<div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; min-width: 48px;">' +
         '<div style="background: var(--green); height: 6px; border-radius: 4px; width: ' + prog + '%;"></div></div>'
       : '<span style="color: var(--text-muted);">—</span>';
-    const badgeHtml = badge
-      ? '<span class="badge ' + badge + ' tabular" style="font-size: 9px; padding: 2px 6px;">' + escHtml(verdict) + '</span>'
+    const valHtml = badge
+      ? '<span class="kpi-val ' + badge + ' tabular">' + escHtml(verdict) + '</span>'
       : '<span style="color: var(--text-muted);">—</span>';
-    body += '<tr><td style="padding: 2px 4px 2px 0;">' + escHtml(r.label || r.key) + '</td>' +
-      '<td class="tabular" style="padding: 2px 4px; white-space: nowrap;">' + baseN + ' ' + escHtml(r.base || 'closes') + '</td>' +
-      '<td class="tabular" style="padding: 2px 4px;">' + req + '</td>' +
-      '<td style="padding: 2px 4px;">' + bar + '</td>' +
-      '<td style="padding: 2px 0 2px 4px; text-align: right;">' + badgeHtml + '</td></tr>';
+    body += '<tr><td style="padding: 3px 6px 3px 0;">' + escHtml(r.label || r.key) + '</td>' +
+      '<td class="tabular" style="padding: 3px 6px; white-space: nowrap; text-align: right;">' + valHtml + '</td>' +
+      '<td class="tabular" style="padding: 3px 6px; text-align: right; color: var(--text-muted);">' + req + '</td>' +
+      '<td style="padding: 3px 6px;">' + bar + '</td>' +
+      '<td class="tabular" style="padding: 3px 0 3px 6px; white-space: nowrap; text-align: right; color: var(--text-muted);">' + baseN + ' ' + escHtml(r.base || 'closes') + '</td></tr>';
   }});
   return '<div style="margin: 8px 0 4px; padding-top: 8px; border-top: 1px solid var(--border);">' +
     '<div style="font-size: 11px; font-weight: 700; color: var(--text-muted); ' +
     'text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">' +
     'Per-KPI Sufficiency @95%</div>' +
-    '<table style="width: 100%; font-size: 11px; border-collapse: collapse;">' + body + '</table></div>';
+    '<table style="width: 100%; font-size: 11.5px; border-collapse: collapse;">' + body + '</table></div>';
 }}
 
 // Decision-gates view state: the selected confidence level (90/95/99,
@@ -3168,14 +3345,14 @@ function dgCellHtml(row, confidence) {{
   let sufficient = row.sufficient_95 === true && confidence === 95;
   if (confidence !== 95 && typeof prog === 'number' && prog >= 100) sufficient = true;
   const label = sufficient ? (fmtVal != null ? fmtVal : 'SUFFICIENT') : (fmtVal != null ? fmtVal : ('n=' + baseN));
-  const badgeCls = sufficient ? 'badge-green' : 'badge-amber';
-  const badge = '<span class="badge ' + badgeCls + ' tabular" style="font-size: 9px; padding: 2px 6px;">' + escHtml(label) + '</span>';
+  const tone = kpiValueTone(row, sufficient) || (sufficient ? 'kpi-val-good' : 'kpi-val-warn');
+  const valHtml = '<span class="kpi-val ' + tone + ' tabular">' + escHtml(label) + '</span>';
   const bar = (typeof prog === 'number')
     ? '<div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; margin-top: 3px;">' +
       '<div style="background: var(--green); height: 6px; border-radius: 4px; width: ' + prog + '%;"></div></div>'
     : '';
   const reqTxt = (req != null ? Number(req).toLocaleString() : '—');
-  return badge + '<div style="font-size: 10.5px; margin-top: 2px;"><span class="tabular">' +
+  return valHtml + '<div style="font-size: 10.5px; color: var(--text-muted); margin-top: 2px;"><span class="tabular">' +
     baseN + ' / ' + reqTxt + '</span></div>' + bar;
 }}
 
@@ -3218,8 +3395,8 @@ function dgMatrixHtml(arms, confidence) {{
     '<thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table>' +
     '<div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">' +
     'Current value and Have / Need observations at ' + confidence + '% confidence. ' +
-    'Green badges have reached sufficiency; amber badges show the live running ' +
-    'calculation while still gathering observations; unmeasured means no observations yet.</div>';
+    'Values are colored green (good), yellow (average), or red (bad) by KPI range; ' +
+    'unmeasured means no observations yet.</div>';
 }}
 
 function renderDgMatrix() {{

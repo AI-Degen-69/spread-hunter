@@ -140,42 +140,59 @@ def test_arm_without_rows_reads_unmeasured():
 
 
 def test_sufficiency_95_summary_verdicts():
-    """The card summary shows each KPI's current calculated value instead of LOCKED."""
+    """The card summary shows each KPI's current calculated value with green/yellow/red tone and swapped column order."""
     rows = [
         {"key": "expectancy_usd", "label": "PnL Expectancy ($)", "base": "closes",
-         "base_n": 180, "sufficient_95": False, "formatted_value": "+$0.12",
+         "base_n": 180, "sufficient_95": False, "value": 0.12, "formatted_value": "+$0.12",
          "levels": [{"confidence_pct": 95, "required_n": 1800,
                       "remaining_n": 1620, "progress_pct": 10}]},
         {"key": "merge_rate", "label": "Merge Rate (%)", "base": "closes",
-         "base_n": 180, "sufficient_95": True, "formatted_value": "84.5%",
+         "base_n": 180, "sufficient_95": True, "value": 84.5, "formatted_value": "84.5%",
          "levels": [{"confidence_pct": 95, "required_n": 150,
                       "remaining_n": 0, "progress_pct": 100}]},
         {"key": "avg_duration_stop", "label": "Avg Fill-to-Close: Stops",
-         "base": "stops", "base_n": 1, "sufficient_95": None, "formatted_value": "5m 11s",
+         "base": "stops", "base_n": 1, "sufficient_95": None, "value": 311.0, "formatted_value": "5m 11s",
          "levels": [{"confidence_pct": 95, "required_n": None,
                       "remaining_n": None, "progress_pct": None}]},
         {"key": "avg_duration_merge", "label": "Avg Fill-to-Close: Merges",
-         "base": "merges", "base_n": 0, "sufficient_95": None, "formatted_value": None,
+         "base": "merges", "base_n": 0, "sufficient_95": None, "value": None, "formatted_value": None,
          "levels": [{"confidence_pct": 95, "required_n": None,
                       "remaining_n": None, "progress_pct": None}]},
+        {"key": "avg_stop_loss_depth_pct", "label": "Avg Stop-Loss Depth (%)",
+         "base": "stops", "base_n": 2, "sufficient_95": False, "value": -17.8, "formatted_value": "-17.8%",
+         "levels": [{"confidence_pct": 95, "required_n": 80,
+                      "remaining_n": 78, "progress_pct": 3}]},
     ]
     out = {s["key"]: s for s in cockpit._sufficiency_95_rows(rows)}
     assert out["expectancy_usd"]["verdict"] == "+$0.12"
-    assert out["expectancy_usd"]["badge"] == "badge-amber"
+    assert out["expectancy_usd"]["badge"] == "kpi-val-warn"
     assert out["expectancy_usd"]["required_95"] == 1800
     assert out["expectancy_usd"]["remaining_95"] == 1620
     assert out["merge_rate"]["verdict"] == "84.5%"
-    assert out["merge_rate"]["badge"] == "badge-green"
+    assert out["merge_rate"]["badge"] == "kpi-val-good"
     # A 1-observation row has no stdev/required_n yet, but still shows its current value
     assert out["avg_duration_stop"]["verdict"] == "5m 11s"
-    assert out["avg_duration_stop"]["badge"] == "badge-amber"
+    assert out["avg_duration_stop"]["badge"] == "kpi-val-warn"
     assert out["avg_duration_merge"]["verdict"] == "—"
     assert out["avg_duration_merge"]["required_95"] is None
-    # Matrix cell also shows the current value instead of LOCKED or unmeasured when base_n >= 1
+    assert out["avg_stop_loss_depth_pct"]["verdict"] == "-17.8%"
+    assert out["avg_stop_loss_depth_pct"]["badge"] == "kpi-val-bad"
+
+    # Mini-table column order: label -> calculated value -> required_n -> progress bar -> base_n base
+    mini_html = cockpit._sufficiency_mini_html(rows)
+    exp_row_start = mini_html.index("PnL Expectancy ($)")
+    exp_val_pos = mini_html.index("+$0.12", exp_row_start)
+    exp_req_pos = mini_html.index("1,800", exp_row_start)
+    exp_closes_pos = mini_html.index("180 closes", exp_row_start)
+    assert exp_row_start < exp_val_pos < exp_req_pos < exp_closes_pos
+
+    # Matrix cell also shows the current value with kpi-val tone instead of LOCKED or unmeasured when base_n >= 1
     assert "+$0.12" in cockpit._dg_cell_html(rows[0], 95)
+    assert "kpi-val-warn" in cockpit._dg_cell_html(rows[0], 95)
     assert "LOCKED" not in cockpit._dg_cell_html(rows[0], 95)
     assert "5m 11s" in cockpit._dg_cell_html(rows[2], 95)
     assert "1 / —" in cockpit._dg_cell_html(rows[2], 95)
+    assert "kpi-val-bad" in cockpit._dg_cell_html(rows[4], 95)
 
 
 def test_volume_starvation_is_run_level_not_a_verdict():
