@@ -449,13 +449,12 @@ def test_nav_switcher_offers_799_and_843_with_the_active_pill() -> None:
     assert _active(html_843) == {"799": False, "843": True}
 
 
-# --- The page follows the newest run, whatever issue launched it -------------
+# --- Each page reads its own issue's run ------------------------------------
 #
-# A #799 ten-arm run launched into `data/tournaments/` and the cockpit kept
-# showing the #799 presets underneath a "#799" header: ten rows of tweaks that
-# never ran, over zeroed metrics. The key in the URL is a page, not a claim
-# about which run is live, so the page reads the newest record on disk and says
-# whose run it is.
+# The switcher offers one page per issue. A #843 run launched into
+# `data/tournaments/` used to repaint the #799 page with #843's arms under a
+# "#843" header, so the #799 pill showed another experiment's six arms and the
+# #843 pill showed four presets merged around a run that launched six.
 
 I799_ARMS_SPEC = ROOT / "configs" / "tournaments" / "i799-tournament-test_arms.json"
 
@@ -493,43 +492,8 @@ def _plan(tmp_path: Path, run_dir: str, arms: list[dict], *, source=None, minute
     return path
 
 
-def test_newest_run_of_another_issue_owns_the_arm_table(tmp_path, monkeypatch):
-    """The ten rows must be the ten arms that are actually running."""
-    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
-    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
-    _record(tmp_path, "i799-tournament-test_2026-10-17T18-48", [{
-        "name": "loose-baseline",
-        "db_path": "data/487/control.db",
-        "run_id": "shadow-487-control",
-        "dash_port": 8801,
-    }])
-    _plan(
-        tmp_path, "i843-pair-test_2026-10-24T09-05", _i799_records(),
-        source=_i799_source(), minutes=1440,
-    )
-
-    arms = cockpit.resolve_tournament_arms("799")
-
-    spec = {a["name"]: a for a in _i799_source()}
-    assert [a["name"] for a in arms] == list(spec)
-    loose = arms[0]
-    assert loose["label"] == "Loose Baseline"
-    assert loose["db"] == "data/tournaments/i799/tournament-test/loose-baseline.db"
-    assert loose["port"] == 8810
-    # The #799 arms file carries analyst notes now, and an explicit note wins over
-    # the text this module generates from env/thesis.
-    assert loose["worst_catalyst"] == spec["loose-baseline"]["worst_catalyst"]
-    assert loose["tweak_rationale"] == spec["loose-baseline"]["tweak_rationale"]
-    # The control moves no knob, so it must not borrow one from another arm; the
-    # note names the lever the analyst would try next, not a setting it ran.
-    assert loose["hypothesized_tweak"] == "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06"
-    tight = {a["name"]: a for a in arms}["tight-touch"]
-    assert tight["hypothesized_tweak"] == "BOT_QUOTE_TOURNAMENT_PRESET=balanced"
-    assert tight["desc"] == spec["tight-touch"]["desc"]
-
-
-def test_page_header_and_progress_follow_the_newest_run(tmp_path, monkeypatch):
-    """The live page follows the newest launch, whatever issue it belongs to."""
+def test_another_issues_run_does_not_own_the_799_arm_table(tmp_path, monkeypatch):
+    """#843's run belongs to the #843 page; the #799 page keeps its own arms."""
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
     _plan(
@@ -542,18 +506,68 @@ def test_page_header_and_progress_follow_the_newest_run(tmp_path, monkeypatch):
         minutes=1440,
     )
 
+    arms = cockpit.resolve_tournament_arms("799")
+
+    assert [a["name"] for a in arms] == _spec_arm_names()
+    assert cockpit.resolve_tournament_meta("799")[0] is cockpit.TOURNAMENTS["799"]
+
+
+def test_a_run_with_its_own_arm_set_is_read_as_itself(tmp_path, monkeypatch):
+    """A six-arm continuation under #843 must not be merged into the four presets.
+
+    Merging by name hides the two arms the static table does not know and keeps
+    two rows pointing at pair-test stores this run never wrote.
+    """
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    names = [
+        "control", "balanced-only", "queue5-flow5", "queue5-flow30",
+        "balanced-queue5-flow5", "balanced-queue5-flow30",
+    ]
+    _plan(
+        tmp_path, "i843-6arm-continuation_2026-11-01T01-18",
+        [
+            {
+                "name": name,
+                "db_path": f"data/tournaments/i843-6arm-continuation/{name}.db",
+                "run_id": f"shadow-843-{name}",
+                "dash_port": 8801 + i,
+            }
+            for i, name in enumerate(names)
+        ],
+        source=[{"name": name, "label": name.title(), "desc": f"arm {name}"} for name in names],
+        minutes=1440,
+    )
+
+    arms, record_error = cockpit.resolve_tournament_arms_with_status("843")
+
+    assert record_error is None
+    assert [a["name"] for a in arms] == names
+    assert {a["db"] for a in arms} == {
+        f"data/tournaments/i843-6arm-continuation/{name}.db" for name in names
+    }
+    # The pair-test presets this run never launched must not ride along.
+    assert "queue5-only" not in {a["name"] for a in arms}
+    assert "balanced-queue5" not in {a["name"] for a in arms}
+
+
+def test_page_header_and_progress_follow_this_issues_run(tmp_path, monkeypatch):
+    """The #799 page reports the length and title of the run it is showing."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
+    _plan(
+        tmp_path, "i799-tournament-test_2026-10-24T09-05", _i799_records(),
+        source=_i799_source(), minutes=1440,
+    )
+
     meta, target_minutes = cockpit.resolve_tournament_meta("799")
     assert target_minutes == 1440.0
-    assert meta["issue_primary"] == 843
-    assert "#843" in meta["title"]
-    assert "24-Hour" in meta["subtitle"]
-    assert meta["nav_label"].startswith("#843")
-    # The static presets must not ride into the browser inside the meta payload.
-    assert "arms" not in meta
+    assert meta["issue_primary"] == 799
+    assert "#799" in meta["title"]
 
     # The leaderboard card titles read from the same meta.
     stats = cockpit.collect_all_stats("799")
-    assert stats["l1_title"] == "#843 Top Performer"
+    assert stats["l1_title"] == "#799 Top Performer"
 
 
 def test_progress_counts_against_the_launched_length_not_twelve_hours(tmp_path, monkeypatch):
@@ -589,8 +603,8 @@ def test_pnl_chart_labels_follow_the_launched_length(tmp_path, monkeypatch):
     assert "Elapsed Minutes (0 to 720)" not in html
 
 
-def test_launch_stamp_decides_not_the_issue_number(tmp_path, monkeypatch):
-    """Newest launch wins: an issue number says nothing about launch order."""
+def test_a_newer_run_of_another_issue_does_not_repaint_the_page(tmp_path, monkeypatch):
+    """The newest launch on disk belongs to its own issue's page, not #799's."""
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
     _plan(tmp_path, "i608-r1_2026-10-24T08-00", [{
@@ -608,13 +622,18 @@ def test_launch_stamp_decides_not_the_issue_number(tmp_path, monkeypatch):
 
     arms = cockpit.resolve_tournament_arms("799")
 
-    assert [a["name"] for a in arms] == ["control-1"]
-    assert arms[0]["db"] == "data/newer492.db"
-    assert cockpit.resolve_tournament_meta("799")[0]["issue_primary"] == 492
+    assert [a["name"] for a in arms] == _spec_arm_names()
+    assert cockpit.resolve_tournament_meta("799")[0]["issue_primary"] == 799
 
 
 def test_archive_keys_keep_their_own_records(tmp_path, monkeypatch):
-    """#799 and #843 keep their own records; neither bleeds into the other."""
+    """#799 and #843 keep their own records; neither bleeds into the other.
+
+    Each page reads its own issue's run. A legacy record for #843 (a run folder
+    with plan.json but no arms_source) merges with the static preset for that
+    issue. #799 reads its own 10-arm plan (with arms_source). The static
+    TOURNAMENTS meta is only used when no run exists for that key.
+    """
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
     _record(tmp_path, "i843-pair-test_2026-10-17T18-48", [{
@@ -630,10 +649,22 @@ def test_archive_keys_keep_their_own_records(tmp_path, monkeypatch):
 
     c843 = {a["name"]: a for a in cockpit.resolve_tournament_arms("843")}
     assert c843["control"]["db"] == "data/real843.db"
-
+    # #843 meta reflects its own run (the legacy record), not the static preset
     meta, minutes = cockpit.resolve_tournament_meta("843")
-    assert meta is cockpit.TOURNAMENTS["843"]
+    assert meta["issue_primary"] == 843
+    assert "#843" in meta["title"]
+    # The run had no minutes, so default applies
     assert minutes == cockpit.DEFAULT_TOURNAMENT_MINUTES
+    # Legacy record (no arms_source) merges with static preset, so all 4 arms present
+    assert "balanced-queue5" in {a["name"] for a in c843.values()}
+    assert len(c843) == 4
+
+    # #799 reads its own 10-arm plan (with arms_source), unaffected by #843's record
+    c799 = {a["name"]: a for a in cockpit.resolve_tournament_arms("799")}
+    assert len(c799) == 10
+    assert c799["loose-baseline"]["db"].startswith("data/tournaments/i799")
+    meta799, _ = cockpit.resolve_tournament_meta("799")
+    assert meta799["issue_primary"] == 799
 
 
 def test_a_launch_without_a_plan_does_not_take_over_the_page(tmp_path, monkeypatch):

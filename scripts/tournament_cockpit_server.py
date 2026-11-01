@@ -94,6 +94,29 @@ ARMS_CONFIG_799 = _load_arms_from_file(I799_ARMS_FILE, 799, 8801)
 # default; this constant no longer selects a page.
 ARMS_CONFIG = ARMS_CONFIG_799
 
+# Decision gate arm identification per tournament key.
+# Each tournament has different arm names; this maps the logical role to the
+# arm name pattern for that tournament.
+DECISION_GATE_ARM_MAP = {
+    "843": {
+        "test_arm_pattern": "balanced-queue5",      # The hybrid arm combining balanced preset + queue gate
+        "baseline_arm_names": ["control"],           # Pure control/baseline
+        "balanced_only_arm_names": ["balanced-only"],  # Balanced preset only
+        "test_arm_desc": "Balanced + Queue Gate Hybrid",
+        "starvation_desc": "Combining the balanced preset and 5m queue-clear gate severely chokes order fills. Knobs are mutually restrictive.",
+        "provisional_desc": "Observed Sharpe ({sharpe:.2f}) and Drawdown (${mdd:.2f}) validate the hybrid hypothesis without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades).",
+    },
+    "799": {
+        "test_arm_pattern": "queue-clear-5m",       # Queue clear gate test
+        "baseline_arm_names": ["loose-baseline"],    # Pure control/baseline
+        "balanced_only_arm_names": ["balanced-mid"], # Balanced preset only
+        "test_arm_desc": "Queue Clear 5m Gate",
+        "starvation_desc": "The 5m queue-clear gate severely restricts order fills. The filter is too aggressive for current market conditions.",
+        "provisional_desc": "Observed Sharpe ({sharpe:.2f}) and Drawdown (${mdd:.2f}) validate the queue-clear gate without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades).",
+    },
+}
+
+
 TOURNAMENTS = {
     "843": {
         "id": "843",
@@ -362,21 +385,6 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
     return arms
 
 
-def _arms_from_newest_plan(meta: dict[str, Any]) -> Optional[list[dict[str, Any]]]:
-    """The newest run's own arms when it is not the run this page describes.
-
-    A run of the page's own issue is merged over the static presets instead, so
-    a partial record still reads as the ten-arm table it was launched from.
-    """
-    newest = _newest_plan_record()
-    if newest is None:
-        return None
-    issue, _ = _plan_identity(newest)
-    if issue is None or issue == int(meta.get("issue_primary") or 0):
-        return None
-    return build_plan_arms(newest) or None
-
-
 def _resolve_plan_for_tourney_key(
     tourney_key: str,
     meta: dict[str, Any],
@@ -399,54 +407,43 @@ def _resolve_plan_for_tourney_key(
 def resolve_tournament_meta(
     tourney_key: str = CURRENT_SETUP_KEY,
 ) -> tuple[dict[str, Any], float]:
-    """The page's branding and planned length, following the newest run.
+    """The page's branding and planned length, from this key's own newest run.
 
-    A table that follows a newer run of another issue needs a header that says
-    so: "#487" over ten #799 arms is the same lie as ten #487 presets over a
-    #799 run. Planned minutes come from that record, so progress is measured
-    against the length the run was launched with, not a fixed 12 hours.
+    The key names one page per issue, and each page reads its own issue's
+    record: a #843 run launched into `data/tournaments/` must not repaint the
+    #799 page with another experiment's arms under a "#843" header. Planned
+    minutes come from that record, so progress is measured against the length
+    the run was launched with, not a fixed 12 hours.
+
+    When a run exists for this key, the meta reflects that run's label and
+    arm count. Archive keys without a run keep their static meta.
     """
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
-    if tourney_key != CURRENT_SETUP_KEY:
-        plan = _resolve_plan_for_tourney_key(tourney_key, meta)
-        if plan is not None:
-            _, minutes = _plan_identity(plan)
-            if minutes:
-                return meta, minutes
-        return meta, DEFAULT_TOURNAMENT_MINUTES
-    newest = _newest_plan_record()
-    if newest is None:
-        return meta, DEFAULT_TOURNAMENT_MINUTES
-    issue, minutes = _plan_identity(newest)
-    target_minutes = minutes or DEFAULT_TOURNAMENT_MINUTES
-    if issue is None or issue == int(meta.get("issue_primary") or 0):
-        return meta, target_minutes
-    # A newest run whose arms cannot be read cannot own the header either: the
-    # arm table falls back to the older record, and a header naming the failed
-    # run would sit above another run's arms.
-    plan_arms = build_plan_arms(newest)
-    if not plan_arms:
-        return meta, DEFAULT_TOURNAMENT_MINUTES
-    arms_label = f"{len(plan_arms)} Arms"
-    run_label = (parse_tournament_run_dir_name(newest.parent) or {}).get("name")
-    run_label = (run_label or "run").replace("-", " ").title()
-    # The #487 preset table rides along inside its meta; leaving it there would
-    # ship those ten arms to the browser as this run's arms, under a #799 title.
-    branding = {key: value for key, value in meta.items() if key != "arms"}
-    return {
-        **branding,
-        "id": str(issue),
-        "title": f"Issue #{issue} Tournament \u2014 Live Run",
-        "subtitle": f"{target_minutes / 60.0:g}-Hour Multi-Arm Shadow Evaluation | {run_label} | {arms_label}",
-        "description": (
-            f"Following the newest tournament record on disk: issue #{issue}, {arms_label.lower()} "
-            "launched from its own arms file. Comparative reading happens after the planned run "
-            "length; the catalyst column is this run's own arms file, quoted as written."
-        ),
-        "issue_primary": issue,
-        "issue_secondary": issue,
-        "nav_label": f"#{issue} {run_label} ({arms_label})",
-    }, target_minutes
+    plan = _resolve_plan_for_tourney_key(tourney_key, meta)
+    if plan is not None:
+        _, minutes = _plan_identity(plan)
+        target_minutes = minutes or DEFAULT_TOURNAMENT_MINUTES
+        # Build a dynamic meta reflecting this run's label and arm count.
+        run_label = (parse_tournament_run_dir_name(plan.parent) or {}).get("name")
+        run_label = (run_label or "run").replace("-", " ").title()
+        arms = resolve_tournament_arms(tourney_key)
+        arms_label = f"{len(arms)} Arms"
+        branding = {key: value for key, value in meta.items() if key != "arms"}
+        return {
+            **branding,
+            "id": str(tourney_key),
+            "title": f"Issue #{tourney_key} Tournament \u2014 Live Run",
+            "subtitle": f"{target_minutes / 60.0:g}-Hour Multi-Arm Shadow Evaluation | {run_label} | {arms_label}",
+            "description": (
+                f"Following the tournament record on disk: issue #{tourney_key}, {arms_label.lower()} "
+                "launched from its own arms file. Comparative reading happens after the planned run "
+                "length; the catalyst column is this run's own arms file, quoted as written."
+            ),
+            "issue_primary": int(tourney_key),
+            "issue_secondary": int(tourney_key),
+            "nav_label": f"#{tourney_key} {run_label} ({arms_label})",
+        }, target_minutes
+    return meta, DEFAULT_TOURNAMENT_MINUTES
 
 
 def resolve_tournament_arms_with_status(
@@ -467,17 +464,8 @@ def resolve_tournament_arms_with_status(
     if tourney_key not in ("843", "799"):
         return default_arms, None
 
-    # The served page follows the newest run on disk, whatever issue launched it:
-    # an operator who starts a ten-arm #799 run must see ten #799 arms, not the
-    # #487 presets that happen to share the key. Only when an older run of this
-    # key is the newest thing on disk does the key's own record apply. Archive
-    # keys keep their own records -- #492 and #608 are frozen contracts, and the
-    # newest run on disk says nothing about what they evaluated.
-    if tourney_key == CURRENT_SETUP_KEY:
-        page_arms = _arms_from_newest_plan(meta)
-        if page_arms:
-            return page_arms, None
-
+    # Each page reads its own issue's record: the key in the URL is a page, and
+    # a #843 run on disk says nothing about the ten #799 arms this page lists.
     # One resolver for every key: `latest_tournament_record` ranks by parsed
     # (run number, stamp), so a named run (#487's `--stamp current_setup_10arm`)
     # no longer wins or loses on the accident of `c` sorting after a digit.
@@ -493,6 +481,18 @@ def resolve_tournament_arms_with_status(
             _WARNED_RECORD = message
         return default_arms, message
     _WARNED_RECORD = None
+    # A run that launched its own arm set (#843's six-arm continuation) is read
+    # as itself: merging it over the four static presets would hide two real arms
+    # and keep two rows pointing at a different run's stores. A record with NEW
+    # arm names (not in the static preset) is a standalone set; a subset of the
+    # static preset's arms is a partial run and should merge.
+    static_names = {base["name"] for base in default_arms}
+    # Normalize record arm names by stripping numbered suffixes for legacy records
+    # without arms_source, so "control-1" matches "control" in static preset.
+    record_names = {_strip_round_suffix(a["name"]) for a in record_arms}
+    if record_names - static_names:
+        # Record has arm names the static preset doesn't know -> standalone set
+        return build_plan_arms(latest_plan) or default_arms, None
     plan_arms: dict[str, Any] = {}
     for a in record_arms:
         plan_arms[a["name"]] = a
@@ -521,6 +521,16 @@ def resolve_tournament_arms(tourney_key: str = CURRENT_SETUP_KEY) -> list[dict[s
     record exists but could not be read.
     """
     return resolve_tournament_arms_with_status(tourney_key)[0]
+
+
+def nav_label_for(tourney_key: str) -> str:
+    """The switcher pill's text: the run this page serves, named as it launched.
+
+    A static "#843 Pair Test (4 Arms)" over a six-arm continuation run would name
+    an experiment the page is not showing.
+    """
+    meta, _ = resolve_tournament_meta(tourney_key)
+    return meta.get("nav_label") or f"#{tourney_key}"
 
 
 def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> dict[str, Any]:
@@ -832,9 +842,11 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
     total_trades = sum(a.get("trades_count", 0) for a in arms_data)
     ok_arms = [a for a in arms_data if a.get("status") == "ok"]
     
-    test_arm = next((a for a in arms_data if "balanced-queue5" in a.get("name", "")), None)
-    baseline_arm = next((a for a in arms_data if a.get("name") in ("control", "loose-baseline")), None)
-    balanced_only_arm = next((a for a in arms_data if "balanced-only" in a.get("name", "") or a.get("name") == "balanced-mid"), None)
+    # Tournament-specific arm identification
+    arm_map = DECISION_GATE_ARM_MAP.get(tourney_key, DECISION_GATE_ARM_MAP["843"])
+    test_arm = next((a for a in arms_data if arm_map["test_arm_pattern"] in a.get("name", "")), None)
+    baseline_arm = next((a for a in arms_data if a.get("name") in arm_map["baseline_arm_names"]), None)
+    balanced_only_arm = next((a for a in arms_data if a.get("name") in arm_map["balanced_only_arm_names"]), None)
     
     if test_arm is None and ok_arms:
         test_arm = max(ok_arms, key=lambda x: (x.get("sharpe_ratio") is not None, x.get("sharpe_ratio") or 0.0))
@@ -937,6 +949,11 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
             gate_starv_badge = "badge-red"
             gate_starv_text = f"Drop: {drop_pct:+.1f}% vs {ref_arm.get('name')} — Volume Starvation Detected"
             
+    # Tournament-specific description templates
+    arm_map = DECISION_GATE_ARM_MAP.get(tourney_key, DECISION_GATE_ARM_MAP["843"])
+    starvation_desc = arm_map.get("starvation_desc", "Combining the test configuration severely chokes order fills. Knobs are mutually restrictive.")
+    provisional_desc_template = arm_map.get("provisional_desc", "Observed Sharpe ({sharpe:.2f}) and Drawdown (${mdd:.2f}) validate the test hypothesis without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades).")
+    
     if test_n == 0:
         overall_verdict = "PENDING REHEARSAL DATA"
         overall_badge = "badge-amber"
@@ -944,7 +961,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
     elif gate_starv_status == "STARVATION":
         overall_verdict = "REJECTED: VOLUME STARVATION DETECTED"
         overall_badge = "badge-red"
-        overall_desc = "Combining the balanced preset and 5m queue-clear gate severely chokes order fills. Knobs are mutually restrictive."
+        overall_desc = starvation_desc
     elif gate_sharpe_status == "FAIL" or gate_mdd_status == "FAIL":
         overall_verdict = "REJECTED: CRITICAL RISK GATES FAILED"
         overall_badge = "badge-red"
@@ -953,7 +970,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
         if gate_sharpe_status == "PASS" and gate_mdd_status == "PASS" and gate_starv_status == "HEALTHY":
             overall_verdict = "PROVISIONAL PASS: COMPLEMENTARY RISK SHAPE"
             overall_badge = "badge-green"
-            overall_desc = f"Observed Sharpe ({observed_sharpe:.2f}) and Drawdown (${observed_mdd:.2f}) validate the hybrid hypothesis without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades)."
+            overall_desc = provisional_desc_template.format(sharpe=observed_sharpe, mdd=observed_mdd, target_n=target_n)
         else:
             overall_verdict = "INCONCLUSIVE: SAMPLE UNDERPOWERED"
             overall_badge = "badge-amber"
@@ -974,6 +991,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
         "overall_desc": overall_desc,
         "test_arm_name": test_arm.get("name", "N/A") if test_arm else "N/A",
         "test_arm_label": test_arm.get("label", "N/A") if test_arm else "N/A",
+        "test_arm_pattern": arm_map["test_arm_pattern"],
         "total_trades": total_trades,
         "target_n": target_n,
         "gates": {
@@ -1097,9 +1115,11 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     )
     
     # Generate Per-Arm Cards for Decision Gates Tab
+    arm_map = DECISION_GATE_ARM_MAP.get(tourney_key, DECISION_GATE_ARM_MAP["843"])
+    test_pattern = arm_map["test_arm_pattern"]
     arm_cards = []
     for a in initial_data.get("arms", []):
-        is_test = "balanced-queue5" in a.get("name", "")
+        is_test = test_pattern in a.get("name", "")
         card_border = "border: 2px solid var(--blue);" if is_test else "border: 1px solid var(--border);"
         test_badge = '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px; margin-left: 6px;">TEST ARM</span>' if is_test else ''
         pnl = a.get("total_pnl", 0.0)
@@ -1210,6 +1230,21 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
             f'</tr>'
         )
     dm_tbody_content = "\n".join(dm_rows)
+    # One pill per served tournament, each naming the run its own page shows.
+    nav_pills = []
+    for key, icon in (("799", "🧪"), ("843", "🚦")):
+        badge = (
+            '<span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">'
+            "CURRENT SETUP</span>"
+            if key == CURRENT_SETUP_KEY else ""
+        )
+        active = "active" if tourney_key == key else ""
+        nav_pills.append(
+            f'<a href="/{key}" class="tourney-pill {active}">'
+            f"<span>{icon}</span>"
+            f"<span>{html.escape(nav_label_for(key))}</span>{badge}</a>"
+        )
+    nav_pills_html = "\n  ".join(nav_pills)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1499,15 +1534,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
      served; the active pill follows the page being viewed. -->
 <div class="tourney-nav">
   <span class="tourney-nav-label">Tournament Evaluation:</span>
-  <a href="/799" class="tourney-pill {'active' if tourney_key == '799' else ''}">
-    <span>🧪</span>
-    <span>#799 Presets (10 Arms)</span>
-    <span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">CURRENT SETUP</span>
-  </a>
-  <a href="/843" class="tourney-pill {'active' if tourney_key == '843' else ''}">
-    <span>🚦</span>
-    <span>#843 Pair Test (4 Arms)</span>
-  </a>
+  {nav_pills_html}
 </div>
 
 <header>
@@ -2591,9 +2618,10 @@ function fetchLiveStats() {{
 function renderDgArmCards(arms) {{
   const container = document.getElementById('dg-arm-cards-container');
   if (!container) return;
+  const testPattern = (state.decision_gates && state.decision_gates.test_arm_pattern) || '';
   let html = '';
   arms.forEach(a => {{
-    const isTest = (a.name || '').includes('balanced-queue5');
+    const isTest = testPattern !== '' && (a.name || '').includes(testPattern);
     const border = isTest ? 'border: 2px solid var(--blue);' : 'border: 1px solid var(--border);';
     const badge = isTest ? '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px; margin-left: 6px;">TEST ARM</span>' : '';
     const pnl = a.total_pnl || 0.0;
