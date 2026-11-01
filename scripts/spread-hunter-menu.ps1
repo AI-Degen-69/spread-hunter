@@ -727,14 +727,18 @@ function Start-Dashboard {
     if (Test-Port) {
         $portPid = Get-PortPid
         $listener = Get-DashboardOwnership
-        if ($listener.Verdict -eq 'Owned' -or (Test-DashboardServer)) {
-            # A spread-hunter dashboard is already running - adopt it
+        if ($listener.Verdict -eq 'Owned') {
+            # A spread-hunter dashboard from this checkout is already running - adopt it
             if (Adopt-DashboardInstance) {
                 $inst = Get-DashInstance
                 Lsh-Ok "Adopted the running dashboard (PID $($inst.pid), up $(Format-Uptime $inst.proc.StartTime)) - stop and status now own it."
             } else {
                 Lsh-Ok "Spread Hunter dashboard is already serving on :$LivePort (PID $portPid)."
             }
+            return $true
+        } elseif (Test-DashboardServer) {
+            # Unified dashboard already running on this machine - connect to it without claiming exclusive stop ownership
+            Lsh-Ok "Spread Hunter unified dashboard is already serving on :$LivePort (PID $portPid, $($listener.ServedPath))."
             return $true
         }
         # Port occupied by foreign or unknown process - TAKE OVER: kill it and start fresh
@@ -3060,7 +3064,7 @@ function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wip
 
     # 2 · STOP (API stop when a dashboard answers; recorded PIDs otherwise)
     Lsh-Phase -Text "PHASE 2 · STOP"
-    Stop-AllSpreadHunterProcesses -Force
+    Stop-AllSpreadHunterProcesses -Force:$Force
 
     # 3 · VERIFY STOPPED before wiping (never wipe beside a live stack)
     Lsh-Phase -Text "PHASE 3 · VERIFY STOPPED"
@@ -3444,8 +3448,8 @@ function Invoke-TournamentReconcileAction {
     $selectedConfig = $null
 
     if ($chosenTourney) {
-        $cleanParam = $chosenTourney -replace '^i', ''
-        $selectedConfig = $configs | Where-Object { $_.Issue -eq $cleanParam -or $_.FileName -like "*$cleanParam*" } | Select-Object -First 1
+        $cleanParam = $chosenTourney -replace '^[i#]+', ''
+        $selectedConfig = $configs | Where-Object { $_.Issue -eq $cleanParam } | Select-Object -First 1
     }
 
     if ($null -eq $selectedConfig -and $Action -eq "") {
@@ -3485,6 +3489,10 @@ function Invoke-TournamentReconcileAction {
             return
         }
     } elseif ($null -eq $selectedConfig) {
+        if ($chosenTourney) {
+            Lsh-Fail ("No tournament config matches -Tourney '{0}'." -f $chosenTourney)
+            return
+        }
         $selectedConfig = $configs[0]
     }
 
