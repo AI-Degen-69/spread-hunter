@@ -186,3 +186,44 @@ def test_meta_and_arms_resolve_same_plan_record():
         record_arms = cockpit._read_arm_record(plan)
         assert len(arms) == len(record_arms)
         assert {a["name"] for a in arms} == {ra["name"] for ra in record_arms}
+
+
+def _healthy_905_arms(test_n=185, test_sharpe=2.90):
+    return [
+        {"name": "loose-baseline", "status": "ok", "trades_count": 200,
+         "total_pnl": 20.0, "sharpe_ratio": 2.40, "profit_factor": 2.10,
+         "max_drawdown": 3.50},
+        {"name": "balanced-mid", "status": "ok", "trades_count": 195,
+         "total_pnl": 19.0, "sharpe_ratio": 2.50, "profit_factor": 2.20,
+         "max_drawdown": 4.20},
+        {"name": "queue-clear-5m", "status": "ok", "trades_count": test_n,
+         "total_pnl": 21.0, "sharpe_ratio": test_sharpe, "profit_factor": 2.90,
+         "max_drawdown": 1.80},
+        {"name": "prudent-hybrid", "status": "ok", "trades_count": 190,
+         "total_pnl": 17.0, "sharpe_ratio": 2.20, "profit_factor": 2.00,
+         "max_drawdown": 5.00},
+        {"name": "static-floor-2c", "status": "ok", "trades_count": 188,
+         "total_pnl": 15.0, "sharpe_ratio": 2.00, "profit_factor": 1.90,
+         "max_drawdown": 4.50},
+    ]
+
+
+def test_905_gate_map_names_the_rematch_candidate():
+    arm_map = cockpit.DECISION_GATE_ARM_MAP["905"]
+    assert arm_map["test_arm_pattern"] == "queue-clear-5m"
+    assert arm_map["baseline_arm_names"] == ["loose-baseline"]
+
+
+def test_905_provisional_pass_names_the_rank_lead():
+    res = cockpit.compute_decision_gates(_healthy_905_arms(), "905")
+    assert "PROVISIONAL PASS" in res["overall_verdict"]
+    assert res["overall_badge"] == "badge-green"
+    assert "rank lead" in res["overall_desc"]
+    assert res["gates"]["starvation"]["status"] == "HEALTHY"
+
+
+def test_905_starvation_names_the_rematch():
+    res = cockpit.compute_decision_gates(_healthy_905_arms(test_n=90), "905")
+    assert "VOLUME STARVATION" in res["overall_verdict"]
+    assert res["overall_badge"] == "badge-red"
+    assert "rematch" in res["overall_desc"]

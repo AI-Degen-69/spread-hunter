@@ -55,6 +55,7 @@ from core_brain.sharpe import (
 
 I843_ARMS_FILE = ROOT / "configs" / "tournaments" / "i843-pair-test_arms.json"
 I799_ARMS_FILE = ROOT / "configs" / "tournaments" / "i799-tournament-test_arms.json"
+I905_ARMS_FILE = ROOT / "configs" / "tournaments" / "i905-top5-rematch_arms.json"
 
 
 def _load_arms_from_file(file_path: Path, issue_num: int, start_port: int = 8801) -> list[dict[str, Any]]:
@@ -89,6 +90,7 @@ def _load_arms_from_file(file_path: Path, issue_num: int, start_port: int = 8801
 
 ARMS_CONFIG_843 = _load_arms_from_file(I843_ARMS_FILE, 843, 8801)
 ARMS_CONFIG_799 = _load_arms_from_file(I799_ARMS_FILE, 799, 8801)
+ARMS_CONFIG_905 = _load_arms_from_file(I905_ARMS_FILE, 905, 8801)
 
 # Legacy alias kept for older imports. The cockpit now serves #799 by
 # default; this constant no longer selects a page.
@@ -114,6 +116,14 @@ DECISION_GATE_ARM_MAP = {
         "starvation_desc": "The 5m queue-clear gate severely restricts order fills. The filter is too aggressive for current market conditions.",
         "provisional_desc": "Observed Sharpe ({sharpe:.2f}) and Drawdown (${mdd:.2f}) validate the queue-clear gate without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades).",
     },
+    "905": {
+        "test_arm_pattern": "queue-clear-5m",       # Rematch candidate: the #799 rank leader
+        "baseline_arm_names": ["loose-baseline"],    # Pure control/baseline
+        "balanced_only_arm_names": ["balanced-mid"], # Balanced preset only
+        "test_arm_desc": "Top-5 Rematch Candidate",
+        "starvation_desc": "The 5m queue-clear gate severely restricts order fills in the rematch. The filter is too aggressive for current market conditions.",
+        "provisional_desc": "Observed Sharpe ({sharpe:.2f}) and Drawdown (${mdd:.2f}) hold the #799 rank lead without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades).",
+    },
 }
 
 
@@ -138,6 +148,16 @@ TOURNAMENTS = {
         "issue_secondary": 799,
         "nav_label": "#799 Presets (10 Arms)",
     },
+    "905": {
+        "id": "905",
+        "title": "Issue #905 Top-5 Rematch",
+        "subtitle": "5-Arm Fresh Shadow Rehearsal | Top-5 Tournament #799 Arms, Empty Stores",
+        "description": "Fresh rematch of the top-5 Tournament #799 arms (queue-clear-5m, balanced-mid, loose-baseline, prudent-hybrid, static-floor-2c) from empty stores, re-measuring risk shape on current market conditions.",
+        "arms": ARMS_CONFIG_905,
+        "issue_primary": 905,
+        "issue_secondary": 905,
+        "nav_label": "#905 Top-5 Rematch (5 Arms)",
+    },
 }
 
 
@@ -154,6 +174,9 @@ PAGE_PATHS: dict[str, str] = {
     "/799": "799",
     "/799.html": "799",
     "/cockpit_799": "799",
+    "/905": "905",
+    "/905.html": "905",
+    "/cockpit_905": "905",
 }
 # The keys the JSON API may serve: the served pages' own tournaments, derived so
 # a new page cannot forget to widen this.
@@ -396,7 +419,7 @@ def _resolve_plan_for_tourney_key(
     otherwise merge last week's r1 db/port into today's rows.
     """
     latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
-    if tourney_key in (CURRENT_SETUP_KEY, "843", "799"):
+    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905"):
         newest = _newest_plan_record()
         newest_issue = _plan_identity(newest)[0] if newest is not None else None
         if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
@@ -461,7 +484,7 @@ def resolve_tournament_arms_with_status(
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
     # Unknown keys fall back to the static table; live keys resolve their plan file.
-    if tourney_key not in ("843", "799"):
+    if tourney_key not in ("843", "799", "905"):
         return default_arms, None
 
     # Each page reads its own issue's record: the key in the URL is a page, and
@@ -1232,7 +1255,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     dm_tbody_content = "\n".join(dm_rows)
     # One pill per served tournament, each naming the run its own page shows.
     nav_pills = []
-    for key, icon in (("799", "🧪"), ("843", "🚦")):
+    for key, icon in (("799", "🧪"), ("843", "🚦"), ("905", "🏆")):
         badge = (
             '<span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">'
             "CURRENT SETUP</span>"

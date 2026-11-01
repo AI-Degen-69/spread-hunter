@@ -3948,11 +3948,16 @@ def test_profile_options_arms_name_their_tournament_and_store(client):
     data = client.get("/api/profile/options").json()
     assert all({"issue", "tournament", "store", "has_store"} <= set(a)
                for a in _all_arms(data))
-    arm = next(a for a in _all_arms(data) if a["name"] == "queue-clear-5m")
+    arm = next(a for a in _all_arms(data)
+                if a["name"] == "queue-clear-5m" and a["issue"] == 799)
     assert arm["issue"] == 799, "issue number must come from i799-*_arms.json"
     assert arm["tournament"] == "tournament-test"
     assert arm["store"] is None or isinstance(arm["store"], str)
     assert arm["has_store"] is (arm["store"] is not None)
+    # the #905 rematch reuses arm names; its rows live in their own section
+    rematch = next(a for a in _all_arms(data)
+                   if a["name"] == "queue-clear-5m" and a["issue"] == 905)
+    assert rematch["tournament"] == "top5-rematch"
 
 
 def test_profile_options_keep_tournaments_of_one_issue_separate(
