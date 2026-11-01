@@ -536,9 +536,9 @@ function ConvertTo-RelativePath {
         return $norm.Substring($proj.Length + 1)
     }
     if ($env:USERPROFILE) {
-        $home = $env:USERPROFILE -replace '\\', '/'
-        if ($norm.StartsWith($home + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
-            return '~/' + $norm.Substring($home.Length + 1)
+        $uHome = $env:USERPROFILE -replace '\\', '/'
+        if ($norm.StartsWith($uHome + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return '~/' + $norm.Substring($uHome.Length + 1)
         }
     }
     return $norm
@@ -2025,11 +2025,11 @@ function Write-StackRows {
     if ($totalCount -eq 0) { $totalCount = 3 }
 
     if ($runningCount -eq $totalCount) {
-        Write-SectionHeader -Number "2" -Title "BOT STACK" -Status ("ON ({0}/{1})" -f $runningCount, $totalCount) -StatusStyle "Success"
+        Write-SectionHeader -Number "2" -Title "BOT STACK (LIVE REAL-MONEY)" -Status ("ON ({0}/{1})" -f $runningCount, $totalCount) -StatusStyle "Success"
     } elseif ($runningCount -gt 0) {
-        Write-SectionHeader -Number "2" -Title "BOT STACK" -Status ("PARTIAL ({0}/{1})" -f $runningCount, $totalCount) -StatusStyle "Warning"
+        Write-SectionHeader -Number "2" -Title "BOT STACK (LIVE REAL-MONEY)" -Status ("PARTIAL ({0}/{1})" -f $runningCount, $totalCount) -StatusStyle "Warning"
     } else {
-        Write-SectionHeader -Number "2" -Title "BOT STACK" -Status ("OFF (0/{0})" -f $totalCount) -StatusStyle "Error"
+        Write-SectionHeader -Number "2" -Title "BOT STACK (LIVE REAL-MONEY)" -Status ("OFF (0/{0})" -f $totalCount) -StatusStyle "Neutral"
     }
     foreach ($r in $Rows) {
         Write-ProcessRow -Label $r.Name -Running $r.Running -PidVal $r.Pid -Path $r.Path -RunCmd $r.RunCmd -CadenceSec $r.CadenceSec
@@ -2039,9 +2039,25 @@ function Write-StackRows {
     }
 }
 
+function Get-FilterLoopProcess {
+    <# Probe for an active scripts.filter_loop python process on this machine. #>
+    try {
+        $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -match '^python' -and $_.CommandLine -and `
+                $_.CommandLine -like "*scripts.filter_loop*"
+            })
+        if ($procs.Count -gt 0) { return $procs[0] }
+    } catch {}
+    return $null
+}
+
 function Show-ServiceTable {
     <# Render the /api/system/status payload: bot state count + 3 stack services. #>
     param($Status)
+    $filterProc = Get-FilterLoopProcess
+    $pipelineFile = Join-Path $ProjectPath "runtime\pipeline.json"
+    $filterObserved = (Test-Path $pipelineFile) -and (((Get-Date) - (Get-Item $pipelineFile).LastWriteTime).TotalSeconds -le 300)
     $rows = @()
     foreach ($svc in @("filter", "query", "decide")) {
         $s = $Status.services.$svc
@@ -2052,10 +2068,18 @@ function Show-ServiceTable {
                 decide     = "Decide & Execute"
             }[$svc]
             if (-not $label) { $label = $s.name }
+            $isRunning = [bool]$s.running
+            $pidVal = $s.pid
+            if ($svc -eq "filter") {
+                if (-not $isRunning -and ($s.observed_running -or $filterProc -or $filterObserved)) {
+                    $isRunning = $true
+                    if ($filterProc) { $pidVal = $filterProc.ProcessId }
+                }
+            }
             $rows += [pscustomobject]@{
                 Name = $label
-                Running = [bool]$s.running
-                Pid = $s.pid
+                Running = $isRunning
+                Pid = $pidVal
                 Path = $StackPaths[$svc]
                 RunCmd = $StackCmds[$svc]
                 CadenceSec = @{ filter = 600; query = 0.5; decide = 5 }[$svc]
@@ -2249,6 +2273,170 @@ function Get-HeartbeatAgeSec {
     } catch { return $null }
 }
 
+function Get-ActiveShadowRuns {
+    <# Discover active shadow & tournament arms via dashboard API, local files, and process table. #>
+    param($DashStatus = $null)
+    $results = @()
+    $seenRunIds = @{}
+
+    # 1. From active dashboard status API if provided
+    if ($DashStatus -and $DashStatus.shadow_runs) {
+        $allSr = @($DashStatus.shadow_runs)
+        if ($DashStatus.shadow_run) { $allSr += $DashStatus.shadow_run }
+        foreach ($sr in $allSr) {
+            $rId = [string]$sr.run_id
+            if (-not $rId -or $seenRunIds.ContainsKey($rId)) { continue }
+            $seenRunIds[$rId] = $true
+
+            $tourneyId = $null
+            $armTag = $null
+            $armIdx = 0
+            if ($sr.tournament -and $sr.tournament.issue) {
+                $tourneyId = [string]$sr.tournament.issue
+                $armTag = [string]$sr.tournament.arm
+            } elseif ($rId -match '^shadow-(\d{3,})-t(\d+)-(.+?)(?:-\d{4}-\d{2}-\d{2}.*)?$') {
+                $tourneyId = $Matches[1]
+                $armIdx = [int]$Matches[2]
+                $armTag = $Matches[3]
+            } elseif ($sr.db_path -match '[/\\]tournaments[/\\]i?(\d+)[^/\\]*[/\\]([^/\\]+)\.db') {
+                $tourneyId = $Matches[1]
+                $armTag = $Matches[2]
+            }
+
+            $state = if ($sr.running) { "Running" } else { "Stopped" }
+            $results += [pscustomobject]@{
+                Pid         = if ($sr.pid) { [int]$sr.pid } else { $null }
+                Alive       = [bool]$sr.running
+                State       = $state
+                AgeSec      = if ($null -ne $sr.heartbeat_age_sec) { [int]$sr.heartbeat_age_sec } else { $null }
+                Finished    = [bool]$sr.finished
+                RunId       = $rId
+                DbPath      = [string]$sr.db_path
+                Cycle       = if ($null -ne $sr.cycle) { [int]$sr.cycle } else { 0 }
+                ProfileName = if ($sr.profile -and $sr.profile.name) { [string]$sr.profile.name } else { "" }
+                TourneyId   = $tourneyId
+                ArmIdx      = $armIdx
+                ArmTag      = $armTag
+            }
+        }
+    }
+
+    # 2. Local disk scan in runtime/shadow_run_*.json
+    $proj = if ($ProjectPath) { $ProjectPath } else { (Get-Location).Path }
+    $runDir = Join-Path $proj "runtime"
+    $files = @(Get-ChildItem $runDir -File -Filter "shadow_run_*.json" -ErrorAction SilentlyContinue)
+    $nowEpoch = [double]((Get-Date).ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds
+    foreach ($f in $files) {
+        try {
+            $data = Get-Content $f.FullName -Raw | ConvertFrom-Json
+            if (-not $data) { continue }
+            $rId = [string]$data.run_id
+            if (-not $rId -or $seenRunIds.ContainsKey($rId)) { continue }
+            $seenRunIds[$rId] = $true
+
+            $pid = [int]$data.pid
+            $isAlive = Test-PidAlive -ProcessId $pid
+            $hbTs = 0.0
+            if ($data.heartbeat_ts) { [double]::TryParse("$($data.heartbeat_ts)", [ref]$hbTs) | Out-Null }
+            $ageSec = if ($hbTs -gt 0) { [int][Math]::Max(0, ($nowEpoch - $hbTs)) } else { $null }
+            $finished = [bool]$data.finished
+            $runId = [string]$data.run_id
+            $dbPath = [string]$data.db_path
+            $cycle = if ($null -ne $data.cycle) { [int]$data.cycle } else { 0 }
+            $profileName = if ($data.profile -and $data.profile.name) { [string]$data.profile.name } else { "" }
+
+            $state = "Stopped"
+            if ($isAlive -and -not $finished) {
+                if ($null -eq $ageSec -or $ageSec -le 60) { $state = "Running" }
+                elseif ($ageSec -le 180) { $state = "Degraded" }
+                else { $state = "Down" }
+            } elseif ($finished) {
+                $state = "Stopped"
+            } else {
+                $state = "Down"
+            }
+
+            $tourneyId = $null
+            $armTag = $null
+            $armIdx = 0
+            if ($runId -match '^shadow-(\d{3,})-t(\d+)-(.+?)(?:-\d{4}-\d{2}-\d{2}.*)?$') {
+                $tourneyId = $Matches[1]
+                $armIdx = [int]$Matches[2]
+                $armTag = $Matches[3]
+            } elseif ($dbPath -match '[/\\]tournaments[/\\]i?(\d+)[^/\\]*[/\\]([^/\\]+)\.db') {
+                $tourneyId = $Matches[1]
+                $armTag = $Matches[2]
+                $armIdx = 0
+            }
+
+            $results += [pscustomobject]@{
+                Pid         = $pid
+                Alive       = $isAlive
+                State       = $state
+                AgeSec      = $ageSec
+                Finished    = $finished
+                RunId       = $runId
+                DbPath      = $dbPath
+                Cycle       = $cycle
+                ProfileName = $profileName
+                TourneyId   = $tourneyId
+                ArmIdx      = $armIdx
+                ArmTag      = $armTag
+            }
+        } catch {}
+    }
+
+    # 3. Running process table fallback if neither dashboard nor files found active arms
+    $activeCount = @($results | Where-Object { $_.State -eq 'Running' }).Count
+    if ($activeCount -eq 0) {
+        try {
+            $shadowProcs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.Name -match '^python' -and $_.CommandLine -and $_.CommandLine -like "*core_brain.shadow_run*"
+                })
+            foreach ($sp in $shadowProcs) {
+                $cmd = [string]$sp.CommandLine
+                $rId = $null
+                $db = $null
+                if ($cmd -match '--run-id\s+([^\s]+)') { $rId = $Matches[1] }
+                if ($cmd -match '--db\s+([^\s]+)') { $db = $Matches[1].Trim('"').Trim("'") }
+                if (-not $rId) { continue }
+                if ($seenRunIds.ContainsKey($rId)) { continue }
+                $seenRunIds[$rId] = $true
+
+                $tourneyId = $null
+                $armTag = $null
+                $armIdx = 0
+                if ($rId -match '^shadow-(\d{3,})-t(\d+)-(.+?)(?:-\d{4}-\d{2}-\d{2}.*)?$') {
+                    $tourneyId = $Matches[1]
+                    $armIdx = [int]$Matches[2]
+                    $armTag = $Matches[3]
+                } elseif ($db -and $db -match '[/\\]tournaments[/\\]i?(\d+)[^/\\]*[/\\]([^/\\]+)\.db') {
+                    $tourneyId = $Matches[1]
+                    $armTag = $Matches[2]
+                }
+
+                $results += [pscustomobject]@{
+                    Pid         = [int]$sp.ProcessId
+                    Alive       = $true
+                    State       = "Running"
+                    AgeSec      = $null
+                    Finished    = $false
+                    RunId       = $rId
+                    DbPath      = $db
+                    Cycle       = 0
+                    ProfileName = $armTag
+                    TourneyId   = $tourneyId
+                    ArmIdx      = $armIdx
+                    ArmTag      = $armTag
+                }
+            }
+        } catch {}
+    }
+
+    return $results
+}
+
 function Show-Status {
     Lsh-Banner -Title "SPREAD HUNTER - STATUS" -Subtitle "Execution engine: $(Split-Path $ProjectPath -Leaf)"
     Write-Host ("  Checkout: {0} (from {1})" -f $ProjectPath, $script:CheckoutSource)
@@ -2284,7 +2472,7 @@ function Show-Status {
         Write-FileRow -Label "PID file" -Status "MISSING" -Path "runtime/live-dash.pids.json" -Dynamic "No PID File"
     }
 
-    # ── 1b · SHADOW DASHBOARD (one row per menu-owned instance) ──
+    # ── 1b · SHADOW DASHBOARD (legacy instances only) ──
     $sess = $null
     if (Test-Path $ShadowSessionFile) { try { $sess = Get-Content $ShadowSessionFile -Raw | ConvertFrom-Json } catch {} }
     $shadowInsts = @(Get-ShadowDashInstances)
@@ -2307,8 +2495,6 @@ function Show-Status {
             Write-ProcessRow -Label $instLabel -Running $true -PidVal $shadowInst.pid -Path $StackPaths["shadowDash"] -ExtraInfo $extraInfo
             Write-FileRow -Label "PID file" -Status "FOUND" -Path (ConvertTo-RelativePath $shadowInst.pidfile) -Dynamic ("PID {0} recorded" -f $shadowInst.pid)
         }
-        # The bridge is a singleton: show the instance whose session recorded
-        # it, not the legacy-only session and not an arbitrary live one.
         $tsPid = $null; $tsPort = 8800
         $bridgeFiles = @(Get-ChildItem $RunDir -Filter "shadow-session-*.json" -ErrorAction SilentlyContinue)
         if (Test-Path $ShadowSessionFile) { $bridgeFiles += Get-Item $ShadowSessionFile }
@@ -2327,19 +2513,64 @@ function Show-Status {
         $tsTarget = " -> :$tsPort"
         Write-ProcessRow -Label "TS Bridge" -Running $tsAlive -PidVal $(if ($tsAlive) { $tsPid } else { $null }) -Path "server.ts" -ExtraInfo @(@{ t = "http://127.0.0.1:8800"; c = 'Link' }, @{ t = $tsTarget; c = 'Neutral' })
     } elseif ($shadowStale.Count -gt 0) {
-        # pidfiles but nothing alive — stale
         Write-SectionHeader -Number "1b" -Title "SHADOW DASHBOARD" -Status "STALE" -StatusStyle "Warning"
         Write-ProcessRow -Label "Shadow Dashboard" -Running $false -Path $StackPaths["shadowDash"] -RunCmd $StackCmds["shadowDash"]
         foreach ($st in $shadowStale) {
             Write-FileRow -Label "PID file" -Status "STALE" -Path (ConvertTo-RelativePath $st.pidfile) -Dynamic "No Active PID"
         }
-    } else {
-        Write-SectionHeader -Number "1b" -Title "SHADOW DASHBOARD" -Status "OFF" -StatusStyle "Error"
-        Write-ProcessRow -Label "Shadow Dashboard" -Running $false -Path $StackPaths["shadowDash"] -RunCmd $StackCmds["shadowDash"]
-        Write-FileRow -Label "PID file" -Status "MISSING" -Path "runtime/shadow-dash.pids.json" -Dynamic "no PID file"
     }
 
-    # ── 1c · SHADOW RUNS (recorded sessions, one row-set per run id) ──
+    # ── 1c · TOURNAMENT ARMS & ACTIVE SHADOW RUNS ──
+    $rawStatus = $null
+    if ($portUp) {
+        try { $rawStatus = Invoke-RestMethod -Uri "$DashUrl/api/system/status" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue } catch {}
+    }
+    $activeShadow = @(Get-ActiveShadowRuns -DashStatus $rawStatus)
+    $tourneyArms = @($activeShadow | Where-Object { $null -ne $_.TourneyId })
+    if ($tourneyArms.Count -gt 0) {
+        $byTourney = $tourneyArms | Group-Object TourneyId
+        foreach ($grp in $byTourney) {
+            $tId = $grp.Name
+            $arms = @($grp.Group | Sort-Object ArmIdx, ArmTag)
+            $runningCount = @($arms | Where-Object { $_.State -eq 'Running' -or $_.State -eq 'Degraded' }).Count
+            $totalCount = $arms.Count
+            $hdrStatus = if ($runningCount -eq $totalCount) { "ON ({0}/{1})" -f $runningCount, $totalCount }
+                         elseif ($runningCount -gt 0) { "PARTIAL ({0}/{1})" -f $runningCount, $totalCount }
+                         else { "OFF (0/{0})" -f $totalCount }
+            $hdrStyle = if ($runningCount -eq $totalCount) { "Success" }
+                        elseif ($runningCount -gt 0) { "Warning" }
+                        else { "Error" }
+            Write-SectionHeader -Number "1c" -Title ("TOURNAMENT ARMS (Issue #{0})" -f $tId) -Status $hdrStatus -StatusStyle $hdrStyle
+            foreach ($arm in $arms) {
+                $armTitle = if ($arm.ArmIdx -gt 0) { "Arm {0} [{1}]" -f $arm.ArmIdx, $arm.ArmTag } else { "Arm [{0}]" -f $arm.ArmTag }
+                $dbRel = ConvertTo-RelativePath $arm.DbPath
+                $extra = if ($arm.Cycle -gt 0) { "Cycle $($arm.Cycle)" } else { "" }
+                Write-ProcessRow -Label $armTitle -Running ($arm.State -eq 'Running') -PidVal $(if ($arm.Alive) { $arm.Pid } else { $null }) -Path $dbRel -HeartbeatAgeSec $arm.AgeSec -ExtraInfo $extra
+            }
+            if ($portUp) {
+                Write-FileRow -Label "Tournament Cockpit" -Status "LIVE" -Path "http://127.0.0.1:8799/cockpit/" -Dynamic "Real-time arm stats & visualizer"
+            }
+        }
+    }
+
+    $standaloneRuns = @($activeShadow | Where-Object { $null -eq $_.TourneyId -and ($_.State -eq 'Running' -or $_.State -eq 'Degraded') })
+    if ($standaloneRuns.Count -gt 0) {
+        Write-SectionHeader -Number "1c" -Title "ACTIVE SHADOW RUNS" -Status ("ON ({0})" -f $standaloneRuns.Count) -StatusStyle "Success"
+        foreach ($sr in $standaloneRuns) {
+            $dbRel = ConvertTo-RelativePath $sr.DbPath
+            $extra = @(
+                @{ t = "Cycle $($sr.Cycle)"; c = 'Neutral' },
+                @{ t = " · "; c = 'Neutral' },
+                @{ t = $dbRel; c = 'Link' }
+            )
+            if ($null -ne $sr.AgeSec) {
+                $extra += @{ t = " ({0} old)" -f (Format-AgeSec $sr.AgeSec); c = 'Neutral' }
+            }
+            Write-ProcessRow -Label $sr.RunId -Running ($sr.State -eq 'Running') -PidVal $(if ($sr.Alive) { $sr.Pid } else { $null }) -Path $dbRel -ExtraInfo $extra
+        }
+    }
+
+    # ── 1c2 · RECORDED SESSIONS (legacy shadow-session-*.json) ──
     $sessionFiles = @(Get-ChildItem $RunDir -Filter "shadow-session-*.json" -ErrorAction SilentlyContinue)
     if (Test-Path $ShadowSessionFile) { $sessionFiles += Get-Item $ShadowSessionFile }
     foreach ($sf in $sessionFiles) {
@@ -2394,30 +2625,34 @@ function Show-Status {
         $saved = $null
         if (Test-Path $ProcsFile) { try { $saved = Get-Content $ProcsFile -Raw | ConvertFrom-Json } catch {} }
         $rows = @()
-        if ($saved) {
-            foreach ($name in @("filter", "query", "decide")) {
-                $info = Get-ServiceEntry -Saved $saved -Key $name
-                $running = [bool]($info -and $info.pid -and (Test-PidAlive -ProcessId $info.pid))
-                $label = @{
-                    filter     = "Market Filter"
-                    query      = "Query Polymarket"
-                    decide     = "Decide & Execute"
-                }[$name]
-                $rows += [pscustomobject]@{
-                    Name = $label
-                    Running = $running
-                    Pid = $info.pid
-                    Path = $StackPaths[$name]
-                    RunCmd = $StackCmds[$name]
+        $filterProc = Get-FilterLoopProcess
+        $pipelineFile = Join-Path $ProjectPath "runtime\pipeline.json"
+        $filterObserved = (Test-Path $pipelineFile) -and (((Get-Date) - (Get-Item $pipelineFile).LastWriteTime).TotalSeconds -le 300)
+        $rows = @()
+        foreach ($name in @("filter", "query", "decide")) {
+            $info = if ($saved) { Get-ServiceEntry -Saved $saved -Key $name } else { $null }
+            $running = [bool]($info -and $info.pid -and (Test-PidAlive -ProcessId $info.pid))
+            $pidVal = if ($running) { $info.pid } else { $null }
+            if ($name -eq "filter" -and -not $running) {
+                if ($filterProc -or $filterObserved) {
+                    $running = $true
+                    if ($filterProc) { $pidVal = $filterProc.ProcessId }
                 }
             }
-            Write-StackRows -Rows $rows
-        } else {
-            Write-SectionHeader -Number "2" -Title "BOT STACK" -Status "OFF (0/3)" -StatusStyle "Error"
-            Write-ProcessRow -Label "Market Filter" -Running $false -Path $StackPaths["filter"] -RunCmd $StackCmds["filter"]
-            Write-ProcessRow -Label "Query Polymarket" -Running $false -Path $StackPaths["query"] -RunCmd $StackCmds["query"]
-            Write-ProcessRow -Label "Decide & Execute" -Running $false -Path $StackPaths["decide"] -RunCmd $StackCmds["decide"]
+            $label = @{
+                filter     = "Market Filter"
+                query      = "Query Polymarket"
+                decide     = "Decide & Execute"
+            }[$name]
+            $rows += [pscustomobject]@{
+                Name = $label
+                Running = $running
+                Pid = $pidVal
+                Path = $StackPaths[$name]
+                RunCmd = $StackCmds[$name]
+            }
         }
+        Write-StackRows -Rows $rows
     }
 
     # ── 3 · GLOBAL STOP LOSS (API when up, heartbeat file otherwise) ──
@@ -2494,8 +2729,12 @@ function Show-ScreenerAndFeed {
     $hdrStatus = if (-not $modulesOk) { "MISSING" } else { $feedStatus }
     Write-SectionHeader -Number "4" -Title "MARKET FILTER & UNIVERSE FEED" -Status $hdrStatus
 
-    $stRerank = if (Test-Path $rerank) { "FOUND" } else { "MISSING" }
-    Write-FileRow -Label "Filter loop" -Status $stRerank -Path "scripts/filter_loop.py" -Dynamic "Runs Every 10 Min"
+        $filterProc = Get-FilterLoopProcess
+    $stRerank = if (Test-Path $rerank) {
+        if ($filterProc) { "RUNNING" } else { "FOUND" }
+    } else { "MISSING" }
+    $filterDyn = if ($filterProc) { "PID $($filterProc.ProcessId) · Runs Every 10 Min" } else { "Runs Every 10 Min" }
+    Write-FileRow -Label "Filter loop" -Status $stRerank -Path "scripts/filter_loop.py" -Dynamic $filterDyn
 
     $stRanker = if (Test-Path $ranker) { "FOUND" } else { "MISSING" }
     Write-FileRow -Label "Filter engine" -Status $stRanker -Path "scripts/filter_markets.py" -Dynamic "Fetch & Filter"
