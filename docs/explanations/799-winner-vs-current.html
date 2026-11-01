@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>799 Winner You Remember vs Current Winner — What Changed</title>
+<style>
+:root{--bg:#0b0e14;--panel:#131826;--line:#26314a;--txt:#eef2fb;--mut:#9aa7c2;--grn:#00e676;--amb:#ffb300;--red:#ff5252;--blu:#40c4ff;--pur:#e040fb}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 18px 60px}
+.hero{background:linear-gradient(135deg,rgba(0,230,118,.14),rgba(64,196,255,.12));border:1px solid #1f7a4d;border-radius:14px;padding:22px}
+.hero h1{margin:.2em 0;font-size:24px}
+.eyebrow{font-size:12px;letter-spacing:.08em;color:var(--grn);font-weight:700}
+.sub{color:var(--mut);max-width:70ch}
+.tabs{display:flex;gap:8px;margin:22px 0 0;flex-wrap:wrap}
+.tabs button{background:#1a2236;color:var(--txt);border:1px solid var(--line);border-radius:999px;padding:9px 16px;cursor:pointer;font-weight:600}
+.tabs button[aria-selected="true"]{background:var(--grn);color:#06130c;border-color:var(--grn)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;margin-top:14px}
+.panel h2{margin-top:0;font-size:18px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{text-align:left;padding:10px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.badge{display:inline-block;font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 10px;margin:2px 4px 2px 0}
+.g{background:rgba(0,230,118,.15);color:var(--grn);border:1px solid rgba(0,230,118,.4)}
+.a{background:rgba(255,179,0,.14);color:var(--amb);border:1px solid rgba(255,179,0,.4)}
+.r{background:rgba(255,82,82,.13);color:var(--red);border:1px solid rgba(255,82,82,.4)}
+.b{background:rgba(64,196,255,.13);color:var(--blu);border:1px solid rgba(64,196,255,.4)}
+code{background:#090c12;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12.5px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:820px){.grid2{grid-template-columns:1fr}}
+.callout{border-left:4px solid var(--amb);background:rgba(255,179,0,.08);padding:12px 14px;border-radius:0 10px 10px 0;margin:12px 0}
+.callout.red{border-color:var(--red);background:rgba(255,82,82,.08)}
+.callout.green{border-color:var(--grn);background:rgba(0,230,118,.08)}
+.tl{position:relative;margin:8px 0 0 8px;padding-left:22px;border-left:2px solid var(--line)}
+.tl div{margin:0 0 14px;position:relative}
+.tl div::before{content:"";position:absolute;left:-29px;top:4px;width:10px;height:10px;border-radius:50%;background:var(--blu)}
+.bars{display:grid;gap:10px;margin-top:10px}
+.bar-row{display:grid;grid-template-columns:170px 1fr 110px;gap:10px;align-items:center;font-size:13px}
+.track{background:#0a0e17;border:1px solid var(--line);border-radius:8px;height:18px;overflow:hidden}
+.fill{height:100%;border-radius:7px;background:linear-gradient(90deg,var(--blu),var(--grn))}
+.fill.warn{background:linear-gradient(90deg,var(--amb),var(--red))}
+.note{color:var(--mut);font-size:13px}
+footer{color:var(--mut);font-size:12.5px;margin-top:18px}
+.sr{position:absolute;left:-9999px}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div class="eyebrow">TOURNAMENT #799 → CURRENT BLUEPRINT</div>
+    <h1>The winner you remember vs the “winner” running now</h1>
+    <p class="sub">You remember the <strong>6.4&nbsp;h interim snapshot</strong> of <code>balanced-mid</code> (+$28.37 / Sharpe 2.72). The full 21.8&nbsp;h run faded, an audit re-derived every store read-only, and today’s cockpit runs a <strong>7-knob synthesis</strong> that no #799 arm ever ran. That is the whole profit gap.</p>
+    <div class="tabs" role="tablist" aria-label="Views">
+      <button role="tab" aria-selected="true" data-t="settings">1 · Settings table</button>
+      <button role="tab" aria-selected="false" data-t="results">2 · Results chart</button>
+      <button role="tab" aria-selected="false" data-t="why">3 · Why it looks worse</button>
+    </div>
+  </div>
+
+  <section class="panel" id="p-settings">
+    <h2>Setting-by-setting: remembered arm vs current blueprint</h2>
+    <p class="note">Remembered = <code>balanced-mid</code> as it ran in #799 (one env key). Current = Production HYBRID Blueprint pane (<code>TOURNAMENT_PRESETS["balanced"] + explicit overrides</code>). Shipped defaults from <code>core_brain/config.py</code>.</p>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Setting</th><th>799 <code>balanced-mid</code> (ran)</th><th>Current blueprint (runs now)</th><th>Changed?</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Preset</strong><br><span class="note">BOT_QUOTE_TOURNAMENT_PRESET</span></td>
+          <td><code>balanced</code><br><span class="note">dynamic 0.50×, 2–4¢</span><br><span class="badge g">only env key</span></td>
+          <td><code>balanced</code><br><span class="note">same 0.50×, 2–4¢</span><br><span class="badge g">kept</span></td>
+          <td><span class="badge g">SAME</span></td></tr>
+        <tr><td><strong>Offset ceiling</strong><br><span class="note">SPREAD_OFFSET_MAX_CENTS</span></td>
+          <td class="num">4¢ (preset default, no override)</td>
+          <td class="num">4¢ (no line needed)<br><span class="note">earlier 6¢ draft was never run — removed</span></td>
+          <td><span class="badge g">SAME</span></td></tr>
+        <tr><td><strong>Requote deadband</strong><br><span class="note">REQUOTE_DEAD_BAND_USD</span></td>
+          <td class="num">0.03 (3¢ shipped)<br><span class="note">#799 varied only 10¢ arm</span></td>
+          <td class="num"><strong>0.06 (6¢)</strong><br><span class="note">#485 lesson, reasoned not measured</span></td>
+          <td><span class="badge a">NEW · untested at 6¢</span></td></tr>
+        <tr><td><strong>Single-leg stop</strong><br><span class="note">STOP_MODE / ADVERSE_DROP_USD</span></td>
+          <td><code>NONE</code> (shipped; 5¢ threshold inert)<br><span class="note">63 rescue exits, no absolute stop fired</span></td>
+          <td><code>ABSOLUTE_DROP</code> + <strong>0.045 (4.5¢)</strong><br><span class="note">trigger = entry − 4.5¢, rounded up to cent</span></td>
+          <td><span class="badge a">NEW · between tested 2¢ and 9¢</span></td></tr>
+        <tr><td><strong>Queue-clear gate</strong><br><span class="note">GATE_QUEUE_CLEAR_ON / MAX_CLEAR_MIN</span></td>
+          <td>OFF / 60 min (shipped)<br><span class="note">this arm took every book</span></td>
+          <td>ON + <strong>3.0 min</strong><br><span class="note">tightened from tested 5m</span></td>
+          <td><span class="badge a">NEW · 5m tested, 3m not</span></td></tr>
+        <tr><td><strong>Aged-out rescue lead</strong><br><span class="note">AGED_OUT_RESCUE_LEAD_SEC</span></td>
+          <td class="num">900 s (shipped, all arms)</td>
+          <td class="num"><strong>45.0 s</strong><br><span class="note">settlement-squeeze defence</span></td>
+          <td><span class="badge a">NEW · not varied in #799</span></td></tr>
+        <tr><td><strong>Pair cap</strong><br><span class="note">POS_PRICE_MAX_PAIR_COST_USD</span></td>
+          <td class="num">$0.990 (shipped, leave unset)</td>
+          <td class="num">$0.990 (shipped, leave unset)</td>
+          <td><span class="badge g">SAME</span></td></tr>
+      </tbody>
+    </table>
+    </div>
+    <div class="callout red"><strong>4 of 7 knobs are synthesis, not measurement.</strong> Deadband 6¢, stop 4.5¢, queue 3m, rescue 45s — none ran on any #799 store. The audit calls any such blend “an 11th configuration”: a next rehearsal, never a deployment. That alone breaks profit comparability.</div>
+    <div class="callout"><strong>Also retired:</strong> old <code>hybrid</code> preset (dynamic OFF + 6¢ deadband) was declared obsolete (<code>a85d737e</code>) and the blueprint was re-pinned to <code>balanced</code> (<code>3abaa736</code>). If your memory includes hybrid-era fills, that engine no longer exists.</div>
+  </section>
+
+  <section class="panel" id="p-results" hidden>
+    <h2>Results: interim memory vs measured full run vs true risk leader</h2>
+    <p class="note">All measured rows re-derived read-only via <code>scripts.reevaluate_tournament_run --run-dir … --verdict</code>. Verdict gate: 90% CI lower bound &gt; 1.0% → GO, else NO-GO. Every arm: NO-GO.</p>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Row</th><th>Closes</th><th>PnL</th><th>Sharpe</th><th>PF</th><th>MDD</th><th>Merge</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td><strong>balanced-mid claimed</strong> (6.4h)</td><td class="num">121</td><td class="num">+$28.37</td><td class="num">2.72</td><td class="num">2.85</td><td class="num">$3.37</td><td class="num">65.3%</td><td><span class="badge a">snapshot</span></td></tr>
+        <tr><td><strong>balanced-mid measured</strong> (21.8h)</td><td class="num">166</td><td class="num">+$23.46</td><td class="num">1.66</td><td class="num">1.80</td><td class="num">$9.64</td><td class="num">59.6%</td><td><span class="badge r">NO-GO −4.74%</span></td></tr>
+        <tr><td><strong>loose-baseline measured</strong> (actual PnL #1)</td><td class="num">171</td><td class="num">+$23.97</td><td class="num">1.59</td><td class="num">1.74</td><td class="num">$7.51</td><td class="num">57.9%</td><td><span class="badge r">NO-GO −4.22%</span></td></tr>
+        <tr><td><strong>queue-clear-5m measured</strong> (risk-shape leader)</td><td class="num">87</td><td class="num">+$17.74</td><td class="num">4.74</td><td class="num">3.28</td><td class="num">$2.60</td><td class="num">64.4%</td><td><span class="badge r">NO-GO −2.50%</span> <span class="badge g">3/3 gates</span></td></tr>
+        <tr><td><strong>current blueprint</strong> (balanced + 4 overrides)</td><td class="num">—</td><td class="num">to be measured</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td><span class="badge a">untested combo</span></td></tr>
+      </tbody>
+    </table>
+    </div>
+    <h3 style="font-size:14px;margin:16px 0 4px">Visual: the fade (real numbers)</h3>
+    <div class="bars" aria-label="Profit and risk bars">
+      <div class="bar-row"><span>PnL balanced (claim → measured)</span><div class="track"><div class="fill" style="width:100%"></div></div><span class="num">$28.37 → $23.46</span></div>
+      <div class="bar-row"><span>Sharpe balanced (claim → measured)</span><div class="track"><div class="fill warn" style="width:61%"></div></div><span class="num">2.72 → 1.66</span></div>
+      <div class="bar-row"><span>Drawdown balanced (claim → measured)</span><div class="track"><div class="fill warn" style="width:100%"></div></div><span class="num">$3.37 → $9.64</span></div>
+      <div class="bar-row"><span>H2 Sharpe: balanced vs queue-5m</span><div class="track"><div class="fill warn" style="width:26%"></div></div><span class="num">0.86 vs 3.33</span></div>
+      <div class="bar-row"><span>Volume cost of queue gate</span><div class="track"><div class="fill" style="width:51%"></div></div><span class="num">87 vs ~170 trades −49%</span></div>
+    </div>
+    <div class="callout green"><strong>Half-split is the smoking gun.</strong> balanced-mid H1 Sharpe 4.46 → H2 0.86; queue-clear-5m H1 6.00 → H2 3.33 (only arm still above the 2.70 gate). The second half of the day was a different market.</div>
+  </section>
+
+  <section class="panel" id="p-why" hidden>
+    <h2>Why today looks less profitable — four compounding causes</h2>
+    <div class="grid2">
+      <div><strong>1 · Window, not regression.</strong><p class="note">Interim 6.4h caught the hot start (H1 mean +$0.199/trade). The full run added 90 cooler closes (H2 +$0.092). Same bot, longer day, lower average.</p></div>
+      <div><strong>2 · New filters cost volume.</strong><p class="note">Queue 3m + balanced band ANDed = fewer quotes than either alone (#843 “volume starvation” hypothesis). queue-5m already traded −49%. 3m is stricter and unmeasured; 89% of queue movement is cancels, so most refused books read “infinite” clear time.</p></div>
+      <div><strong>3 · New stop + lockout change exits.</strong><p class="note">NONE → 4.5¢ absolute stop cuts orphans earlier (2¢ fired 44% in #799; 8–9¢ bled). Plus <code>cf71630a</code> hard-stop lockout (900s) blocks re-entry — the old run re-entered <code>bun-stu-moe</code> 4 min after stopping out.</p></div>
+      <div><strong>4 · Ruler + venue changed.</strong><p class="note"><code>926984be</code> annualised Sharpe — old proxy vs new Sharpe don’t compare. <code>2ac776b8</code> Data API v2 + Protocol V2, <code>2b1aa33f/5afb1556</code> hedge-on-dropped-markets, <code>2a14ea05</code> range telemetry — all post-date #799.</p></div>
+    </div>
+    <div class="tl" aria-label="Timeline">
+      <div><strong>00:14–06:30, Oct 26</strong> — hot start → +$28 snapshot, Sharpe 2.72 <span class="badge b">memory forms here</span></div>
+      <div><strong>06:30–21:57, Oct 26</strong> — edge fades → +$23.46, Sharpe 1.66, MDD $9.64 <span class="badge a">full run</span></div>
+      <div><strong>Audit #839</strong> — read-only re-derive: balanced 2nd on PnL, 0/3 gates; queue-5m 3/3 gates, still NO-GO <span class="badge r">no arm approved</span></div>
+      <div><strong>Blueprint #838</strong> — hybrid retired → balanced + 4 reasoned overrides <span class="badge a">untested 11th config</span></div>
+      <div><strong>Since then</strong> — lockout, hedge-keep, API v2, annualised Sharpe <span class="badge b">today’s engine ≠ #799 engine</span></div>
+    </div>
+    <div class="callout"><strong>Concrete example:</strong> a book with 1,777 shares ahead and zero tape for hours fills leg 1, then drifts 6¢. Old <code>balanced-mid</code> (no stop, no queue filter, 3¢ deadband) holds and hopes. Current (4.5¢ stop, 3m queue refusal, 6¢ deadband, 900s lockout) either refuses the book upfront or cuts at −$0.045 and sits out 15 min. Smaller loss, fewer merges, lower headline PnL — by design.</div>
+    <h3 style="font-size:14px">How to verify hands-on</h3>
+    <p class="note">1 · Cockpit <code>python -m scripts.tournament_cockpit_server --port 8800</code> → <code>http://127.0.0.1:8800</code> → compare <code>balanced-mid</code> vs <code>queue-clear-5m</code> PnL/Sharpe/merge, and read the blueprint’s four amber “not tested in #799” badges.<br>2 · Re-derive: <code>python -m scripts.reevaluate_tournament_run --run-dir data/tournaments/i799-tournament-1m_2026-10-26T00-12 --verdict</code> (main checkout; stores are gitignored).<br>3 · Feel current: menu <code>shadow-run -Preset balanced -Minutes 60</code>, open with <code>python -m dashboard.server --db data/champion_balanced_shadow_01.db</code>.</p>
+  </section>
+
+  <footer>Sources: <code>configs/tournaments/i799-tournament-test_arms.json</code> · cockpit blueprint (<code>scripts/tournament_cockpit_server.py:1763</code>) · <code>docs/audits/live-migration-799.md</code> · <code>core_brain/config.py: TOURNAMENT_PRESETS</code> · commits <code>3abaa736, a85d737e, cf71630a, 2b1aa33f, 5afb1556, 2ac776b8, 926984be</code>. Interim figures are a 6.4h snapshot; measured figures are the 21.8h full run. Current blueprint has no measured row yet.</footer>
+</div>
+<script>
+(function(){
+  const btns=[...document.querySelectorAll('.tabs button')];
+  const map={settings:'p-settings',results:'p-results',why:'p-why'};
+  function show(k){btns.forEach(b=>b.setAttribute('aria-selected',b.dataset.t===k?'true':'false'));Object.entries(map).forEach(([key,id])=>{document.getElementById(id).hidden=key!==k;});}
+  btns.forEach(b=>b.addEventListener('click',()=>show(b.dataset.t)));
+})();
+</script>
+</body>
+</html>
