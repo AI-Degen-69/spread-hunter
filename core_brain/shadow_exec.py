@@ -782,7 +782,7 @@ def settle_market(
     market,
     *,
     db_path: Path | str,
-    traded_fn: Callable[[str, set], Any],
+    traded_fn: Callable[..., Any],
     seen: set,
     cycle: int = 0,
     now_fn: Callable[[], float] = time.time,
@@ -803,22 +803,6 @@ def settle_market(
     `seen` set above means a second `recent_trades` call this cycle returns
     nothing. Omitting `book_fn` keeps the previous behaviour exactly.
     """
-    traded = traded_fn(market.condition_id, seen)
-
-    from core_brain.markets import TradeTapeReport
-    is_detailed = isinstance(traded, TradeTapeReport) or (
-        hasattr(traded, "status") and hasattr(traded, "volume_by_token_price")
-        and hasattr(traded, "walks")
-    )
-    if is_detailed:
-        tape_report = traded
-        report_status = tape_report.status
-        volume_map = dict(tape_report.volume_by_token_price or {})
-    else:
-        tape_report = None
-        report_status = None
-        volume_map = traded or {}
-
     # Scoped to THIS run's orders. `data/shadow.db` is reused between
     # rehearsals by design, and `get_active_orders` reads every open row in
     # the store: without this filter a run started while an older run's
@@ -837,21 +821,125 @@ def settle_market(
     # no-measurement branches below can tell "no orders" from "not ours".
     owned = [o for o in resting if o.run_id == mine_run_id]
 
+    # Timestamp floor: resting orders can only fill on trades timestamped at or after post time
+    # (1-second margin accounts for venue integer-second timestamp granularity)
+    min_ts: Optional[float] = None
+    if owned:
+        posted_vals = [
+            float(o.posted_ts) / 1000.0 if float(o.posted_ts) > 1e11 else float(o.posted_ts)
+            for o in owned if o.posted_ts is not None
+        ]
+        if posted_vals:
+            min_ts = max(0.0, math.floor(min(posted_vals)) - 1.0)
+
+    import inspect
+    try:
+        sig = inspect.signature(traded_fn)
+        accepts_min_ts = "min_ts" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+    except (ValueError, TypeError):
+        accepts_min_ts = False
+
+    if accepts_min_ts and min_ts is not None:
+        traded = traded_fn(market.condition_id, seen, min_ts=min_ts)
+    else:
+        traded = traded_fn(market.condition_id, seen)
+
+    from core_brain.markets import TradeTapeReport
+    is_detailed = isinstance(traded, TradeTapeReport) or (
+        hasattr(traded, "status") and hasattr(traded, "volume_by_token_price")
+        and hasattr(traded, "walks")
+    )
+    if is_detailed:
+        tape_report = traded
+        report_status = tape_report.status
+        volume_map = dict(tape_report.volume_by_token_price or {})
+    else:
+        tape_report = None
+        report_status = None
+        volume_map = traded or {}
+
     if is_detailed and report_status == "unavailable":
+        # Fallback: check live orderbook for sweep through our resting bid
+        book_fills = []
+        if book_fn is not None and owned:
+            for o in owned:
+                try:
+                    book = book_fn(clob_host, o.token_id)
+                except Exception:
+                    book = None
+                if book:
+                    best_ask = book.get("best_ask")
+                    if best_ask is not None and float(best_ask) <= float(o.price):
+                        rem = max(0.0, o.original_size - _filled_size(db_path, o.id))
+                        if rem > 0:
+                            book_fills.append(ShadowFill(
+                                local_id=o.id,
+                                token_id=o.token_id,
+                                price=o.price,
+                                size=rem,
+                                clearing_price=float(best_ask),
+                            ))
+        if not book_fills:
+            _write_tape_read(
+                db_path, market, mine_run_id, cycle, now_fn, tape_report,
+                report_status,
+                settlement={
+                    "measurement_status": "unavailable",
+                    "observed_volume": None,
+                    "total_qualifying_volume": None,
+                    "unmatched_volume": None,
+                    "queue_consumed": None,
+                    "fill_credited": None,
+                    "resting_levels": [],
+                },
+            )
+            return []
+
+        now_ms = int(now_fn() * 1000)
+        by_id = {
+            o.id: ShadowRestingOrder(
+                local_id=o.id, token_id=o.token_id, price=o.price,
+                size=o.original_size, filled=_filled_size(db_path, o.id),
+                queue_ahead=0.0,
+            ) for o in owned
+        }
+        owned_by_id = {o.id: o for o in owned}
+        for f in book_fills:
+            trade_id = f"{SHADOW_TRADE_PREFIX}{uuid.uuid4().hex[:16]}"
+            if fill_trade_ids is not None:
+                fill_trade_ids.add(trade_id)
+            if f.clearing_price is not None:
+                _write_clearing_print(db_path, trade_id, f.clearing_price)
+            registry.record_fill(FillRecord(
+                trade_id=trade_id,
+                order_uuid=f.local_id, size=f.size, price=f.price,
+                venue_ts=now_ms, recorded_ts=now_ms,
+            ))
+            _log_shadow_markout(
+                registry, owned_by_id.get(f.local_id), market,
+                price=f.price, size=f.size, fill_sec=now_ms / 1000.0,
+            )
+            order = by_id[f.local_id]
+            total_filled = order.filled + f.size
+            status = "filled" if total_filled >= order.size - 1e-9 else "partial"
+            registry.update_order_status(f.local_id, status=status,
+                                         last_polled_ts=now_ms)
         _write_tape_read(
             db_path, market, mine_run_id, cycle, now_fn, tape_report,
-            report_status,
+            "book_sweep",
             settlement={
-                "measurement_status": "unavailable",
-                "observed_volume": None,
-                "total_qualifying_volume": None,
-                "unmatched_volume": None,
-                "queue_consumed": None,
-                "fill_credited": None,
+                "measurement_status": "book_sweep",
+                "observed_volume": sum(f.size for f in book_fills),
+                "total_qualifying_volume": sum(f.size for f in book_fills),
+                "unmatched_volume": 0.0,
+                "queue_consumed": 0.0,
+                "fill_credited": sum(f.size for f in book_fills),
                 "resting_levels": [],
             },
         )
-        return []
+        return book_fills
 
     if is_detailed and not owned:
         if resting and book_fn is not None:

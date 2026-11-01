@@ -446,14 +446,15 @@ def _failure_label(exc: BaseException) -> str:
 
 
 def recent_trades(condition_id: str, seen: set, limit: int = 500,
-                  taker_side: str | None = "SELL") -> dict:
+                  taker_side: str | None = "SELL",
+                  min_ts: float | None = None) -> dict:
     """Volume by (token_id, price) that could fill a RESTING BID since we looked.
 
     Compatibility wrapper over `recent_trades_detailed`: same volume, the
     walk-health report discarded. See that function for the side semantics.
     """
     return recent_trades_detailed(
-        condition_id, seen, limit=limit, taker_side=taker_side,
+        condition_id, seen, limit=limit, taker_side=taker_side, min_ts=min_ts,
     ).volume_by_token_price
 
 
@@ -461,7 +462,8 @@ _ORIGINAL_RECENT_TRADES = recent_trades
 
 
 def recent_trades_detailed(condition_id: str, seen: set, limit: int = 500,
-                           taker_side: str | None = "SELL") -> TradeTapeReport:
+                           taker_side: str | None = "SELL",
+                           min_ts: float | None = None) -> TradeTapeReport:
     """Volume by (token_id, price) plus the per-walk read health behind it.
 
     The fill model needs this to tell a level that was TRADED from one that was
@@ -550,7 +552,8 @@ def recent_trades_detailed(condition_id: str, seen: set, limit: int = 500,
 
     try:
         staged, walk_out, info = _walk_tape(condition_id, seen, taker_ids,
-                                            wanted, limit, taker_only=None)
+                                            wanted, limit, taker_only=None,
+                                            min_ts=min_ts)
     except Exception as e:
         log.debug("tape fetch failed: %s", e)
         walks.append(_report("taker", {}, {}, error=_failure_label(e)))
@@ -564,7 +567,8 @@ def recent_trades_detailed(condition_id: str, seen: set, limit: int = 500,
         try:
             staged, walk_out, info = _walk_tape(
                 condition_id, seen, taker_ids,
-                wanted, limit, taker_only=False)
+                wanted, limit, taker_only=False,
+                min_ts=min_ts)
         except (requests.RequestException, ValueError) as e:
             log.debug("maker tape fetch failed: %s", e)
             walks.append(_report("maker", {}, {}, error=_failure_label(e)))
@@ -612,7 +616,8 @@ def _merge_tape_volume(out: dict, walk_out: dict) -> None:
 
 
 def _walk_tape(condition_id: str, seen: set, taker_ids: set,
-               wanted, limit: int, taker_only):
+               wanted, limit: int, taker_only,
+               min_ts: float | None = None):
     """One paginated pass over the tape.
 
     Returns this walk's `(staged_identities, volume, info)`; the caller commits
@@ -678,8 +683,9 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
             side = _row_side(t)
             tx_hash = str(t.get("transaction_hash") or t.get("transactionHash") or "")
             asset_id = str(t.get("token_id") or t.get("asset") or "")
+            raw_ts = t.get("timestamp")
             blind = (tx_hash, asset_id,
-                     t.get("timestamp"), t.get("price"), t.get("size"))
+                     raw_ts, t.get("price"), t.get("size"))
             key = blind + (side,)
             if key in seen or key in staged:
                 info["non_qualifying_rows"]["duplicate"] = \
@@ -687,6 +693,15 @@ def _walk_tape(condition_id: str, seen: set, taker_ids: set,
                 continue
             staged.add(key)
             fresh = True
+            if min_ts is not None and raw_ts is not None:
+                try:
+                    norm_ts = float(raw_ts) / 1000.0 if float(raw_ts) > 1e11 else float(raw_ts)
+                    if norm_ts < float(min_ts):
+                        info["non_qualifying_rows"]["older_than_min_ts"] = \
+                            info["non_qualifying_rows"].get("older_than_min_ts", 0) + 1
+                        continue
+                except (ValueError, TypeError):
+                    pass
             if not maker_walk:
                 taker_ids.add(blind)
                 if wanted is not None and side != wanted:

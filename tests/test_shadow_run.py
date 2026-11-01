@@ -9,6 +9,8 @@ The tests that matter here are the ones about what shadow mode must NOT do.
 """
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from core_brain.trader_loop import VenueSeam, run
@@ -2035,8 +2037,9 @@ class TestTapeMissReplay:
     COND = "0xcond401"
 
     @staticmethod
-    def _row(side, price, size, tx, ts=1791368500):
-        return {"transactionHash": tx, "asset": "tok-dn", "timestamp": ts,
+    def _row(side, price, size, tx, ts=None):
+        trade_ts = int(time.time()) if ts is None else ts
+        return {"transactionHash": tx, "asset": "tok-dn", "timestamp": trade_ts,
                 "price": price, "size": size, "side": side}
 
     @staticmethod
