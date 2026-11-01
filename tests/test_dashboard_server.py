@@ -3955,6 +3955,42 @@ def test_profile_options_arms_name_their_tournament_and_store(client):
     assert arm["has_store"] is (arm["store"] is not None)
 
 
+def test_profile_options_keep_tournaments_of_one_issue_separate(
+        client, monkeypatch, tmp_path):
+    """Two tournaments of one issue are two sections, not ten arms (#901).
+
+    The grouping key is (issue, tournament). Keying on the issue alone folds
+    `i843-pair-test_arms.json` into the `6arm-test` section and titles that
+    section after whichever file sorted first, so four arms read as if they
+    came from a tournament that never produced them.
+    """
+    import dashboard.server as dash_mod
+    cfg = tmp_path / "configs" / "tournaments"
+    cfg.mkdir(parents=True)
+    (cfg / "i843-pair-test_arms.json").write_text(json.dumps([
+        {"name": "control", "label": "Control (Loose Baseline)"},
+        {"name": "balanced-only", "label": "Balanced Only"},
+    ]), encoding="utf-8")
+    (cfg / "i843-6arm-test_arms.json").write_text(json.dumps(
+        [{"name": f"section-{n}"} for n in range(6)]), encoding="utf-8")
+    monkeypatch.setattr(dash_mod, "REPO_ROOT", tmp_path)
+
+    sections = client.get("/api/profile/options").json()["arms_grouped"]
+    # The ordered key list, not a set or a dict: a section emitted twice would
+    # collapse in either of those and the arm count would still add up, so the
+    # ordering assertion is what proves two sections exist — and pins the
+    # newest-issue-first, then-name ordering (#901).
+    assert [(g["issue"], g["tournament"]) for g in sections] == [
+        (843, "6arm-test"), (843, "pair-test")], (
+        "each tournament of one issue renders as its own section (#901)")
+    groups = {(g["issue"], g["tournament"]): [a["name"] for a in g["arms"]]
+              for g in sections}
+    assert groups[(843, "6arm-test")] == [f"section-{n}" for n in range(6)]
+    assert groups[(843, "pair-test")] == ["control", "balanced-only"]
+    assert sum(len(names) for names in groups.values()) == 8, (
+        "every arm appears exactly once across the sections")
+
+
 def test_profile_stage_preset_stops_nothing_and_records_pending(
         client, monkeypatch, tmp_path):
     res = _stage(client, monkeypatch, tmp_path, "preset", "balanced")

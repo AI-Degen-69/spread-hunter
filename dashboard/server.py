@@ -1950,27 +1950,31 @@ def _profile_options() -> dict:
         arm["store"] = stores.get(arm["name"])
         arm["has_store"] = arm["store"] is not None
         arms.append(arm)
-    # Group arms by issue number
-    by_issue: dict[int | None, list[dict]] = {}
+    # Group by the tournament that produced the arms, not by issue alone: one
+    # issue can run several tournaments (`i843-pair-test`, `i843-6arm-test`),
+    # and one bucket per issue both inflates the section and titles it after
+    # whichever file sorted first, so the other tournament's arms read as if
+    # they came from it (#901).
+    by_tournament: dict[tuple[int | None, str | None], list[dict]] = {}
     for arm in arms:
-        issue = arm.get("issue")
-        by_issue.setdefault(issue, []).append(arm)
-    # Sort issues: numeric issues first (descending so newest first), then None
-    sorted_issues = sorted(
-        [i for i in by_issue.keys() if i is not None],
-        reverse=True
-    ) + ([None] if None in by_issue else [])
-    grouped = []
-    for issue in sorted_issues:
-        arms_in_issue = by_issue[issue]
-        # Try to sort by performance if stores exist and have KPIs
-        # For now, keep the original order from the arms file (which is
-        # roughly thesis order: control, then variants)
-        grouped.append({
+        key = (arm.get("issue"), arm.get("tournament"))
+        by_tournament.setdefault(key, []).append(arm)
+    # Newest issue first, arms with no issue last, then tournament name so the
+    # picker's order never depends on directory iteration.
+    ordered = sorted(
+        by_tournament,
+        key=lambda k: (k[0] is None, -(k[0] or 0), k[1] or ""),
+    )
+    # Within a tournament keep the arms file order (roughly thesis order:
+    # control, then variants); performance sorting is the picker's job.
+    grouped = [
+        {
             "issue": issue,
-            "tournament": arms_in_issue[0].get("tournament") if arms_in_issue else None,
-            "arms": arms_in_issue,
-        })
+            "tournament": tournament,
+            "arms": by_tournament[(issue, tournament)],
+        }
+        for issue, tournament in ordered
+    ]
     return {"presets": presets, "arms_grouped": grouped}
 
 
