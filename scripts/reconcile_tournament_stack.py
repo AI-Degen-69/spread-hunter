@@ -228,16 +228,16 @@ def ensure_filter_loop() -> bool:
     return True
 
 
-def ensure_dashboard(port: int = 8799) -> bool:
+def ensure_dashboard(port: int = 8799, log_dir: Optional[Path] = None) -> bool:
     """Ensure the Unified Dashboard is listening on :8799, serving Cockpit and all arms."""
     if is_port_listening(port):
         log.info("Unified Dashboard is listening on :%d (Cockpit live at http://127.0.0.1:%d/cockpit/)", port, port)
         return True
     log.info("Starting Unified Dashboard on port %d...", port)
     python_exe = sys.executable
-    log_dir = ROOT / "runtime" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    lf = open(log_dir / "dashboard.log", "a", encoding="utf-8")
+    target_log_dir = log_dir if log_dir is not None else (ROOT / "runtime" / "logs")
+    target_log_dir.mkdir(parents=True, exist_ok=True)
+    lf = open(target_log_dir / "dashboard.log", "a", encoding="utf-8")
     cmd = [python_exe, "-m", "dashboard.server", "--port", str(port)]
     subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, **_detached_kwargs())
     deadline = time.time() + 5.0
@@ -441,9 +441,12 @@ def reconcile(tourney_id: str = "799", max_markets: Optional[int] = None, minute
         from scripts.shadow_tournament import build_tournament_plan
         arms_file = ROOT / "configs" / "tournaments" / f"i{clean_id}-tournament-test_arms.json"
         if not arms_file.is_file():
-            candidates = list((ROOT / "configs" / "tournaments").glob(f"i{clean_id}*arms.json"))
+            candidates = list((ROOT / "configs" / "tournaments").glob(f"i{clean_id}-*arms.json"))
             if not candidates:
-                candidates = list((ROOT / "configs" / "tournaments").glob(f"*{clean_id}*arms.json"))
+                candidates = list((ROOT / "configs" / "tournaments").glob(f"i{clean_id}_*arms.json"))
+            if not candidates:
+                pattern = re.compile(rf"(^|[^0-9]){re.escape(clean_id)}([^0-9]|$)")
+                candidates = [f for f in (ROOT / "configs" / "tournaments").glob("*arms.json") if pattern.search(f.name)]
             if candidates:
                 arms_file = candidates[0]
 

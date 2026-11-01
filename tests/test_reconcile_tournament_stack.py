@@ -96,7 +96,7 @@ def test_ensure_dashboard_when_listening():
             mock_popen.assert_not_called()
 
 
-def test_ensure_dashboard_starts_when_not_listening():
+def test_ensure_dashboard_starts_when_not_listening(tmp_path):
     """If dashboard is not listening, ensure_dashboard launches dashboard.server."""
     listening_sequence = [False, True]
 
@@ -105,7 +105,7 @@ def test_ensure_dashboard_starts_when_not_listening():
 
     with patch("scripts.reconcile_tournament_stack.is_port_listening", side_effect=mock_listening):
         with patch("subprocess.Popen") as mock_popen:
-            assert ensure_dashboard(8799) is True
+            assert ensure_dashboard(8799, log_dir=tmp_path / "runtime" / "logs") is True
             mock_popen.assert_called_once()
             args = mock_popen.call_args[0][0]
             assert "dashboard.server" in args

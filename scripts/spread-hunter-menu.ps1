@@ -425,8 +425,8 @@ function Get-PortPid {
         if ($foundPid -gt 0) { return $foundPid }
     }
 
-    # 3. Try any netstat entry for this port with a non-zero PID
-    $any = netstat -ano | Select-String ":$PortNumber\s+" | Where-Object {
+    # 3. Try any netstat entry where this port is the LOCAL address with a non-zero PID
+    $any = netstat -ano | Select-String "^\s*TCP\s+\S+:$PortNumber\s+" | Where-Object {
         $found = [int](($_.ToString() -split "\s+")[-1])
         $found -gt 0
     } | Select-Object -First 1
@@ -3492,9 +3492,11 @@ function Invoke-TournamentReconcileAction {
     $armCount = $selectedConfig.ArmCount
     Lsh-Step ("Aligning and reconciling tournament #{0} ({1} arms, uncapped, 24h run)..." -f $chosenTourney, $armCount)
 
+    $pyExit = 1
     Push-Location $ProjectPath
     try {
         & python -m scripts.reconcile_tournament_stack --tourney $chosenTourney --minutes 1440
+        $pyExit = $LASTEXITCODE
     } finally {
         Pop-Location
     }
@@ -3504,7 +3506,7 @@ function Invoke-TournamentReconcileAction {
         $null = Start-Dashboard
     }
 
-    if ($LASTEXITCODE -eq 0) {
+    if ($pyExit -eq 0) {
         Lsh-Ok ("Tournament #{0} stack aligned: {1} arms running in shadow run, Market Filter active, Cockpit live on http://127.0.0.1:8799/cockpit/." -f $chosenTourney, $armCount)
         if ($Action -eq "") {
             Start-Process "http://127.0.0.1:8799/cockpit/"
@@ -3523,13 +3525,12 @@ function Invoke-LiveAction {
             # and open it in the browser. The dashboard serves whatever DB
             # is currently active (live orders.db or shadow NN_shadow_*.db)
             # via its on-page run switcher.
-            $null = Start-Dashboard
-            if ($?) { Start-Process $DashUrl }
+            if (Start-Dashboard) { Start-Process $DashUrl }
         }
         "k" {
             # Kill Dashboard (unified :8799) — force-kill any process on the port
-            $null = Stop-Dashboard -Force
-            Lsh-Ok "Dashboard killed."
+            if (Stop-Dashboard -Force) { Lsh-Ok "Dashboard killed." }
+            else { Lsh-Warn "Dashboard port is still in use." }
         }
         "f" {
             # Start Market Filter Loop in background (unattached)
