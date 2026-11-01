@@ -1859,7 +1859,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('overview', this)">🏆 Leaderboard &amp; Overview</button>
   <button class="tab-btn" onclick="switchTab('decision-gates', this)">🚦 Decision Gates &amp; Rehearsal Status</button>
-  <button class="tab-btn" onclick="switchTab('hybrid-config', this)">⚙️ HYBRID Configuration Blueprint</button>
+  {'<button class="tab-btn" onclick="switchTab(\'hybrid-config\', this)">⚙️ HYBRID Configuration Blueprint</button>' if tourney_key != "905" else ''}
   <button class="tab-btn" onclick="switchTab('pnl-chart', this)">📈 Cumulative PnL Curves</button>
   <button class="tab-btn" onclick="switchTab('risk-stats', this)">⚖️ Risk &amp; Volatility (EV, &sigma;, MDD)</button>
   <button class="tab-btn" onclick="switchTab('execution', this)">🎯 Merge vs Fallout Quality</button>
@@ -1976,7 +1976,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 </div>
 
 <!-- TAB: HYBRID CONFIGURATION BLUEPRINT -->
-<div id="tab-hybrid-config" class="tab-pane">
+<div id="tab-hybrid-config" class="tab-pane" style="{'display: none !important;' if tourney_key == '905' else ''}">
   <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.12), rgba(0, 176, 255, 0.12)); border: 1px solid rgba(0, 230, 118, 0.4); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
       <div>
