@@ -377,6 +377,15 @@ class MakerConfig:
             window = kw.get("bot_quote_book_max_spread_from_mid",
                             cls.bot_quote_book_max_spread_from_mid)
             kw["bot_quote_book_max_spread_from_mid"] = max(window, wide)
+        else:
+            max_sp_usd = _env("BOT_QUOTE_BOOK_MAX_SPREAD_USD")
+            if max_sp_usd:
+                val_sp = _bounded_float(
+                    "BOT_QUOTE_BOOK_MAX_SPREAD_USD", max_sp_usd.strip(), 0.0, 0.30)
+                kw["bot_quote_book_max_spread_usd"] = val_sp
+                window = kw.get("bot_quote_book_max_spread_from_mid",
+                                cls.bot_quote_book_max_spread_from_mid)
+                kw["bot_quote_book_max_spread_from_mid"] = max(window, val_sp)
 
         # Trial knobs: the screener keeps the shipped default (None) and fails open
         # (scoring/config.py:197-249), while the engine raises and fails loud naming the variable.
@@ -568,6 +577,27 @@ class MakerConfig:
         if dyn_age:
             kw["bot_quote_spread_offset_max_age_sec"] = _bounded_float(
                 "BOT_QUOTE_SPREAD_OFFSET_MAX_AGE_SEC", dyn_age, 0.0, 86400.0)
+
+        str_comp = _env("BOT_RISK_STRANDED_COMPLETION_ON")
+        if str_comp:
+            kw["bot_risk_stranded_completion_on"] = (
+                str_comp.strip().lower() in ("1", "true", "yes", "on")
+            )
+
+        str_wait = _env("BOT_RISK_STRANDED_MAX_WAIT_SEC")
+        if str_wait:
+            kw["bot_risk_stranded_max_wait_sec"] = _bounded_float(
+                "BOT_RISK_STRANDED_MAX_WAIT_SEC", str_wait, 0.0, 86400.0)
+
+        exit_win = _env("BOT_RISK_PAIRS_EXIT_WINDOW_SEC") or _env("BOT_POS_HOLD_MAX_SEC")
+        if exit_win:
+            win_var = (
+                "BOT_RISK_PAIRS_EXIT_WINDOW_SEC"
+                if _env("BOT_RISK_PAIRS_EXIT_WINDOW_SEC")
+                else "BOT_POS_HOLD_MAX_SEC"
+            )
+            kw["bot_risk_pairs_exit_window_sec"] = _bounded_float(
+                win_var, exit_win, 1.0, 86400.0)
 
         return cls(**kw)
 

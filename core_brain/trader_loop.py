@@ -2545,6 +2545,25 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
     if not gms:
         return []
 
+    exclude_sports = (
+        os.environ.get("BOT_MARKET_EXCLUDE_SPORTS_ON", "").strip().lower()
+        in ("1", "true", "yes", "on")
+        or os.environ.get("FILTER_EXCLUDE_SPORTS", "").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
+    if exclude_sports:
+        from scoring.selector import is_sports_or_esports
+        gms = [
+            gm for gm in gms
+            if not getattr(gm, "event_live", False)
+            and not is_sports_or_esports(
+                title=getattr(gm, "title", "") or "",
+                slug=getattr(gm, "slug", "") or "",
+                event_title=getattr(gm, "event_title", "") or "",
+                sports_market_type=getattr(gm, "sports_market_type", "") or "",
+            )
+        ]
+
     if max_markets and registry is not None:
         try:
             active_orders = registry.get_active_orders()
