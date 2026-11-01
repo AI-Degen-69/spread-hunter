@@ -294,16 +294,16 @@ def reconcile_arms(
                 is_stale = code_predates_tree(hb, clock=tree_mtime)
 
                 if is_running and not is_stale:
-                    if old_pid:
-                        cmdline = _pid_commandline(old_pid)
-                        if max_markets and f"--max-markets {max_markets}" not in cmdline:
-                            needs_restart = True
-                        elif not max_markets and "--max-markets" in cmdline:
-                            needs_restart = True
-                        else:
-                            needs_restart = False
-                    else:
-                        needs_restart = False
+                    cmdline = _pid_commandline(old_pid) if old_pid else ""
+                    needs_restart = False
+                    if cmdline:
+                        tokens = cmdline.split()
+                        running_cap = None
+                        if "--max-markets" in tokens:
+                            pos = tokens.index("--max-markets") + 1
+                            running_cap = tokens[pos] if pos < len(tokens) else None
+                        wanted_cap = str(max_markets) if max_markets else None
+                        needs_restart = running_cap != wanted_cap
                 else:
                     needs_restart = True
             except Exception:
