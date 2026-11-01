@@ -3975,10 +3975,16 @@ def test_profile_options_keep_tournaments_of_one_issue_separate(
         [{"name": f"section-{n}"} for n in range(6)]), encoding="utf-8")
     monkeypatch.setattr(dash_mod, "REPO_ROOT", tmp_path)
 
-    groups = {(g["issue"], g["tournament"]): [a["name"] for a in g["arms"]]
-              for g in client.get("/api/profile/options").json()["arms_grouped"]}
-    assert set(groups) == {(843, "6arm-test"), (843, "pair-test")}, (
+    sections = client.get("/api/profile/options").json()["arms_grouped"]
+    # The ordered key list, not a set or a dict: a section emitted twice would
+    # collapse in either of those and the arm count would still add up, so the
+    # ordering assertion is what proves two sections exist — and pins the
+    # newest-issue-first, then-name ordering (#901).
+    assert [(g["issue"], g["tournament"]) for g in sections] == [
+        (843, "6arm-test"), (843, "pair-test")], (
         "each tournament of one issue renders as its own section (#901)")
+    groups = {(g["issue"], g["tournament"]): [a["name"] for a in g["arms"]]
+              for g in sections}
     assert groups[(843, "6arm-test")] == [f"section-{n}" for n in range(6)]
     assert groups[(843, "pair-test")] == ["control", "balanced-only"]
     assert sum(len(names) for names in groups.values()) == 8, (
