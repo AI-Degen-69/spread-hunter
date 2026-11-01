@@ -627,7 +627,13 @@ def test_a_newer_run_of_another_issue_does_not_repaint_the_page(tmp_path, monkey
 
 
 def test_archive_keys_keep_their_own_records(tmp_path, monkeypatch):
-    """#799 and #843 keep their own records; neither bleeds into the other."""
+    """#799 and #843 keep their own records; neither bleeds into the other.
+
+    Each page reads its own issue's run. A legacy record for #843 (a run folder
+    with plan.json) is that issue's run, so #843 meta reflects it. #799 reads
+    its own 10-arm plan. The static TOURNAMENTS meta is only used when no run
+    exists for that key.
+    """
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     monkeypatch.setattr(cockpit, "_WARNED_RECORD", None)
     _record(tmp_path, "i843-pair-test_2026-10-17T18-48", [{
@@ -643,10 +649,22 @@ def test_archive_keys_keep_their_own_records(tmp_path, monkeypatch):
 
     c843 = {a["name"]: a for a in cockpit.resolve_tournament_arms("843")}
     assert c843["control"]["db"] == "data/real843.db"
-
+    # #843 meta reflects its own run (the legacy record), not the static preset
     meta, minutes = cockpit.resolve_tournament_meta("843")
-    assert meta is cockpit.TOURNAMENTS["843"]
+    assert meta["issue_primary"] == 843
+    assert "#843" in meta["title"]
+    # The run had no minutes, so default applies
     assert minutes == cockpit.DEFAULT_TOURNAMENT_MINUTES
+    # Static preset arms (balanced-queue5 etc.) not merged because record has
+    # different arm names
+    assert "balanced-queue5" not in {a["name"] for a in c843.values()}
+
+    # #799 reads its own 10-arm plan, unaffected by #843's record
+    c799 = {a["name"]: a for a in cockpit.resolve_tournament_arms("799")}
+    assert len(c799) == 10
+    assert c799["loose-baseline"]["db"].startswith("data/tournaments/i799")
+    meta799, _ = cockpit.resolve_tournament_meta("799")
+    assert meta799["issue_primary"] == 799
 
 
 def test_a_launch_without_a_plan_does_not_take_over_the_page(tmp_path, monkeypatch):
