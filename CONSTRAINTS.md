@@ -22,7 +22,7 @@ Locked during Station II planning. Stations III–V must hold every line below.
   - `tests/test_ui_top_nav_groups.py`
   - `tests/test_live_state_language.py`
   - `tests/test_kanban_lanes.py`
-  - `SPEC.md`, `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`
+  - `SPEC.md`, `CONSTRAINTS.md`
 - **Must NOT be modified:**
   - `dashboard/server.py`, `dashboard/preflight.py`, `core_brain/**`, `scripts/**`
   - `dashboard/static/prototype.js`, `dashboard/static/analysis_v2.css`, `dashboard/static/analysis_v2.js`
