@@ -406,7 +406,7 @@ def test_report_ships_the_stop_slippage_section_and_bumps_the_version(tmp_path):
     section = payload["statistical_analytics"]["stop_slippage"]
     assert section["measured_count"] == 1
     assert section["mean_vs_floor"] == pytest.approx(0.02)
-    assert payload["payload_version"] == 260
+    assert payload["payload_version"] == kpi.KPI_PAYLOAD_VERSION
 
 
 def test_report_separates_two_runs_that_share_a_condition(tmp_path):

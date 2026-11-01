@@ -426,7 +426,7 @@ def test_tournament_metadata_carries_no_never_rendered_badge():
 
 
 def test_nav_switcher_offers_799_and_843_with_the_active_pill() -> None:
-    """The top nav flips between the #799 and #843 cockpits in one click.
+    """The top nav flips between the #799, #843 and #905 cockpits in one click.
 
     The #799 pill is the live setup and carries the single CURRENT SETUP badge;
     whichever page is being viewed is the highlighted one.
@@ -435,18 +435,21 @@ def test_nav_switcher_offers_799_and_843_with_the_active_pill() -> None:
         import re as _re
         nav = _re.search(r'<div class="tourney-nav">.*?</div>', html, _re.S).group(0)
         out = {}
-        for key in ("799", "843"):
+        for key in ("799", "843", "905"):
             m = _re.search(r'<a href="/' + key + r'" class="([^"]*)"', nav)
             out[key] = bool(m and "active" in m.group(1))
         return out
 
     html_799 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "799"})
     assert html_799.count("CURRENT SETUP</span>") == 1
-    assert html_799.count('class="tourney-pill') == 2
-    assert _active(html_799) == {"799": True, "843": False}
+    assert html_799.count('class="tourney-pill') == 3
+    assert _active(html_799) == {"799": True, "843": False, "905": False}
 
     html_843 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "843"})
-    assert _active(html_843) == {"799": False, "843": True}
+    assert _active(html_843) == {"799": False, "843": True, "905": False}
+
+    html_905 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "905"})
+    assert _active(html_905) == {"799": False, "843": False, "905": True}
 
 
 # --- Each page reads its own issue's run ------------------------------------
@@ -1242,3 +1245,60 @@ def test_i799_notes_do_not_change_the_launch_plan():
         stamp=fixed_stamp)
 
     assert [arm.to_dict() for arm in annotated.arms] == [arm.to_dict() for arm in plain.arms]
+
+
+# --- Issue #905: the dedicated top-5 rematch tab -------------------------------
+#
+# The rematch runs its own arms file and reads only its own issue's record. A
+# 905 page that fell back to the 799 ten-arm table (or 404'd) would mix two
+# experiments' arms under one header, so the wiring gets its own tests.
+
+I905_ARMS_SPEC = ROOT / "configs" / "tournaments" / "i905-top5-rematch_arms.json"
+I905_ARM_NAMES = [
+    "queue-clear-5m",
+    "balanced-mid",
+    "loose-baseline",
+    "prudent-hybrid",
+    "static-floor-2c",
+]
+
+
+def test_i905_arm_table_names_the_five_rematch_arms():
+    arms = cockpit.ARMS_CONFIG_905
+    assert [a["name"] for a in arms] == I905_ARM_NAMES
+    assert [a["port"] for a in arms] == list(range(8801, 8806))
+    spec = {a["name"]: a for a in json.loads(I905_ARMS_SPEC.read_text(encoding="utf-8"))}
+    assert set(spec) == set(I905_ARM_NAMES)
+    for arm in arms:
+        assert arm["env"] == spec[arm["name"]]["env"], arm["name"]
+
+
+def test_i905_resolves_only_its_own_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    _record(tmp_path, "i799-tournament-test_2026-10-17T18-48", [{
+        "name": "loose-baseline",
+        "db_path": "data/real799.db",
+        "run_id": "shadow-real-799",
+        "dash_port": 8901,
+    }])
+    _record(tmp_path, "i905-top5-rematch_2026-11-01T08-08", [{
+        "name": "queue-clear-5m",
+        "db_path": "data/real905.db",
+        "run_id": "shadow-real-905",
+        "dash_port": 8801,
+    }])
+    c905 = {a["name"]: a for a in cockpit.resolve_tournament_arms("905")}
+    assert list(c905) == I905_ARM_NAMES
+    assert c905["queue-clear-5m"]["db"] == "data/real905.db"
+    assert c905["queue-clear-5m"]["run_id"] == "shadow-real-905"
+    # the 799 record must not bleed into the 905 page
+    assert c905["loose-baseline"]["db"].startswith("data/tournaments/i905")
+
+
+def test_cockpit_serves_the_905_page(monkeypatch):
+    _stub_stats(monkeypatch)
+    for path in ("/905", "/905.html", "/cockpit_905"):
+        handler = _CockpitHandlerStub(path)
+        handler.do_GET()
+        assert handler.statuses == [200], path
+    assert "905" in cockpit.SERVED_TOURNAMENT_KEYS

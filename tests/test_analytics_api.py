@@ -184,8 +184,10 @@ def test_the_payload_version_is_pinned_on_both_sides(app_js, kpi_module):
     # cap field to `bot_pos_price_max_pair_cost_usd`, so a page served by a
     # pre-#732 process now reads a stale backend: both sides sat at 259. #730
     # added the `stop_slippage` section, so a pre-#730 page would read the new
-    # card as unmeasured: both sides sit at 260.
-    assert backend.group(1) == "260"
+    # card as unmeasured: both sides sit at 260. The 2026-11-01 sufficiency
+    # alignment flattened sample_size_sufficiency (per-estimator rows with own
+    # bases at 90/95/99, adaptive means N): both sides sit at 261.
+    assert backend.group(1) == "261"
 
 
 def test_a_stale_backend_shows_a_restart_note(app_js, index_html, styles_css):

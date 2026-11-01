@@ -7,10 +7,10 @@ import pytest
 from core_brain import kpi as kpi_mod
 from core_brain.kpi import (
     KPI_PAYLOAD_VERSION,
+    Z_90_SAMPLE_SUFFICIENCY,
     Z_95_SAMPLE_SUFFICIENCY,
     Z_98_SAMPLE_SUFFICIENCY,
     Z_99_SAMPLE_SUFFICIENCY,
-    DEFAULT_COHEN_D,
     DEFAULT_PROPORTION_MARGIN,
     required_sample_size_for_mean,
     required_sample_size_cohen_d,
@@ -81,45 +81,74 @@ def test_sample_size_sufficiency_payload_4_closes():
     suff = res["sample_size_sufficiency"]
     assert suff["current_n"] == 4
     assert suff["std_dev_usd"] == pytest.approx(0.11547, abs=1e-4)
-    assert suff["effect_size_d"] == 0.20
     assert len(suff["levels"]) == 3
 
-    lvl95, lvl98, lvl99 = suff["levels"]
+    # Means rows size from the arm's own stdev (0.11547 USD here, margin
+    # $0.02): N adapts to the arm, so 91/129/222 -- not the old fixed 97.
+    lvl90, lvl95, lvl99 = suff["levels"]
+    assert lvl90["confidence_pct"] == 90
+    assert lvl90["z"] == Z_90_SAMPLE_SUFFICIENCY
+    assert lvl90["required_n"] == 91
+    assert lvl90["remaining_n"] == 87
+    assert lvl90["progress_pct"] == 4  # min(100, round(4 / 91 * 100)) = 4
+
     assert lvl95["confidence_pct"] == 95
     assert lvl95["z"] == Z_95_SAMPLE_SUFFICIENCY
-    assert lvl95["required_n"] == 97
-    assert lvl95["remaining_n"] == 93
-    assert lvl95["progress_pct"] == 4  # min(100, round(4 / 97 * 100)) = 4
+    assert lvl95["required_n"] == 129
+    assert lvl95["remaining_n"] == 125
+    assert lvl95["progress_pct"] == 3  # min(100, round(4 / 129 * 100)) = 3
 
-    assert lvl98["confidence_pct"] == 98
-    assert lvl98["z"] == Z_98_SAMPLE_SUFFICIENCY
-    assert lvl98["required_n"] == 136
-    assert lvl98["remaining_n"] == 132
-    assert lvl98["progress_pct"] == 3  # min(100, round(4 / 136 * 100)) = 3
+    assert lvl99["confidence_pct"] == 99
+    assert lvl99["z"] == Z_99_SAMPLE_SUFFICIENCY
+    assert lvl99["required_n"] == 222
+    assert lvl99["remaining_n"] == 218
+    assert lvl99["progress_pct"] == 2
 
-    # Segmented statuses
+    # Segmented statuses: one row per estimator, own observation base each.
     statuses = suff["statuses"]
     assert "pnl_expectancy" in statuses
+    assert "expectancy_usd" in statuses
+    assert "avg_return_pct" in statuses
+    assert "win_rate" in statuses
     assert "stop_loss_rate" in statuses
+    assert "avg_stop_loss_depth_pct" in statuses
     assert "merge_rate" in statuses
+    assert "avg_duration_merge" in statuses
+    assert "avg_duration_stop" in statuses
     assert "fill_rate" in statuses
+    # Legacy alias still points at the expectancy row.
+    assert statuses["pnl_expectancy"] == statuses["expectancy_usd"]
 
-    assert statuses["pnl_expectancy"]["base"] == "closes"
-    assert statuses["pnl_expectancy"]["current_n"] == 4
-    assert statuses["pnl_expectancy"]["levels"][0]["required_n"] == 97
+    assert statuses["expectancy_usd"]["base"] == "closes"
+    assert statuses["expectancy_usd"]["current_n"] == 4
+    assert statuses["expectancy_usd"]["target_margin"] == 0.02
+    assert statuses["expectancy_usd"]["levels"][0]["required_n"] == 91
+    assert statuses["expectancy_usd"]["sufficient_95"] is False
 
+    # Proportion rows stay conservative (p = 0.50, +/-5pt): 271/385/664.
     assert statuses["stop_loss_rate"]["base"] == "closes"
     assert statuses["stop_loss_rate"]["current_n"] == 4
-    assert statuses["stop_loss_rate"]["levels"][0]["required_n"] == 385
+    assert statuses["stop_loss_rate"]["levels"][0]["required_n"] == 271
+    assert statuses["stop_loss_rate"]["levels"][1]["required_n"] == 385
+    assert statuses["stop_loss_rate"]["levels"][2]["required_n"] == 664
 
     assert statuses["merge_rate"]["base"] == "closes"
     assert statuses["merge_rate"]["current_n"] == 4
-    assert statuses["merge_rate"]["levels"][0]["required_n"] == 385
+    assert statuses["merge_rate"]["levels"][1]["required_n"] == 385
+
+    # Subset rows with no observations stay unmeasured, never zero.
+    assert statuses["avg_stop_loss_depth_pct"]["base"] == "stops"
+    assert statuses["avg_stop_loss_depth_pct"]["base_n"] == 0
+    assert statuses["avg_stop_loss_depth_pct"]["levels"][1]["required_n"] is None
+    assert statuses["avg_stop_loss_depth_pct"]["sufficient_95"] is None
+    assert statuses["avg_duration_merge"]["levels"][1]["required_n"] is None
 
     assert statuses["fill_rate"]["base"] == "orders"
     assert statuses["fill_rate"]["current_n"] == 20
-    assert statuses["fill_rate"]["levels"][0]["required_n"] == 385
-    assert statuses["fill_rate"]["levels"][0]["remaining_n"] == 365
+    assert statuses["fill_rate"]["levels"][0]["required_n"] == 271
+    assert statuses["fill_rate"]["levels"][0]["remaining_n"] == 251
+    assert statuses["fill_rate"]["levels"][1]["required_n"] == 385
+    assert statuses["fill_rate"]["levels"][1]["remaining_n"] == 365
 
 
 def test_sample_size_sufficiency_empty_closes():
@@ -134,12 +163,37 @@ def test_sample_size_sufficiency_empty_closes():
     assert suff_empty["current_n"] == 0
     assert suff_empty["std_dev_usd"] is None
     assert len(suff_empty["levels"]) == 3
-    assert suff_empty["levels"][0]["required_n"] == 97
-    assert suff_empty["levels"][0]["remaining_n"] == 97
-    assert suff_empty["levels"][0]["progress_pct"] == 0
+    # No stdev, no sizing: expectancy levels read unmeasured at every level.
+    assert suff_empty["levels"][0]["confidence_pct"] == 90
+    assert suff_empty["levels"][0]["required_n"] is None
+    assert suff_empty["levels"][0]["remaining_n"] is None
+    assert suff_empty["levels"][0]["progress_pct"] is None
 
     assert suff_empty["statuses"]["fill_rate"]["current_n"] == 0
-    assert suff_empty["statuses"]["fill_rate"]["levels"][0]["remaining_n"] == 385
+    assert suff_empty["statuses"]["fill_rate"]["levels"][0]["remaining_n"] == 271
+    assert suff_empty["statuses"]["fill_rate"]["levels"][1]["remaining_n"] == 385
+
+
+def test_sufficient_95_reads_the_striving_level_alone():
+    """Meeting 95% unlocks the verdict even while 99% still needs closes."""
+    required_by_z = {
+        Z_90_SAMPLE_SUFFICIENCY: 100,
+        Z_95_SAMPLE_SUFFICIENCY: 150,
+        Z_99_SAMPLE_SUFFICIENCY: 200,
+    }
+    levels, verdict = kpi_mod._sufficiency_levels(
+        lambda z: required_by_z[z], 150,
+    )
+    by_conf = {lv["confidence_pct"]: lv for lv in levels}
+    assert by_conf[95]["remaining_n"] == 0
+    assert by_conf[99]["remaining_n"] == 50
+    assert verdict is True
+    # Still gathering at the striving level: verdict stays False.
+    _, verdict_locked = kpi_mod._sufficiency_levels(lambda z: required_by_z[z], 100)
+    assert verdict_locked is False
+    # Nothing measurable: verdict stays unmeasured, never False.
+    _, verdict_none = kpi_mod._sufficiency_levels(lambda z: 0, 0)
+    assert verdict_none is None
 
 
 def test_active_orders_preserved_in_by_market_when_days_to_resolve_negative(tmp_path, monkeypatch):

@@ -1562,49 +1562,226 @@
     "risk_reward_ratio": 1.8000000000000003,
     "sample_size_sufficiency": {
       "current_n": 8,
-      "effect_size_d": 0.2,
       "levels": [
         {
+          "confidence_pct": 90,
+          "progress_pct": 0,
+          "remaining_n": 15775,
+          "required_n": 15783,
+          "z": 1.64485
+        },
+        {
           "confidence_pct": 95,
-          "progress_pct": 8,
-          "remaining_n": 89,
-          "required_n": 97,
+          "progress_pct": 0,
+          "remaining_n": 22401,
+          "required_n": 22409,
           "z": 1.95996
         },
         {
-          "confidence_pct": 98,
-          "progress_pct": 6,
-          "remaining_n": 128,
-          "required_n": 136,
-          "z": 2.32635
-        },
-        {
           "confidence_pct": 99,
-          "progress_pct": 5,
-          "remaining_n": 158,
-          "required_n": 166,
+          "progress_pct": 0,
+          "remaining_n": 38696,
+          "required_n": 38704,
           "z": 2.57583
         }
       ],
       "statuses": {
+        "avg_duration_merge": {
+          "base": "merges",
+          "base_n": 0,
+          "current_n": 0,
+          "effect_size_d": null,
+          "key": "avg_duration_merge",
+          "label": "Avg Fill-to-Close: Merges",
+          "levels": [
+            {
+              "confidence_pct": 90,
+              "progress_pct": null,
+              "remaining_n": null,
+              "required_n": null,
+              "z": 1.64485
+            },
+            {
+              "confidence_pct": 95,
+              "progress_pct": null,
+              "remaining_n": null,
+              "required_n": null,
+              "z": 1.95996
+            },
+            {
+              "confidence_pct": 99,
+              "progress_pct": null,
+              "remaining_n": null,
+              "required_n": null,
+              "z": 2.57583
+            }
+          ],
+          "sufficient_95": null,
+          "target": "+/-60s",
+          "target_margin": 60.0,
+          "type": "mean"
+        },
+        "avg_duration_stop": {
+          "base": "stops",
+          "base_n": 0,
+          "current_n": 0,
+          "effect_size_d": null,
+          "key": "avg_duration_stop",
+          "label": "Avg Fill-to-Close: Stops",
+          "levels": [
+            {
+              "confidence_pct": 90,
+              "progress_pct": null,
+              "remaining_n": null,
+              "required_n": null,
+              "z": 1.64485
+            },
+            {
+              "confidence_pct": 95,
+              "progress_pct": null,
+              "remaining_n": null,
+              "required_n": null,
+              "z": 1.95996
+            },
+            {
+              "confidence_pct": 99,
+              "progress_pct": null,
+              "remaining_n": null,
+              "required_n": null,
+              "z": 2.57583
+            }
+          ],
+          "sufficient_95": null,
+          "target": "+/-60s",
+          "target_margin": 60.0,
+          "type": "mean"
+        },
+        "avg_return_pct": {
+          "base": "closes",
+          "base_n": 6,
+          "current_n": 6,
+          "effect_size_d": null,
+          "key": "avg_return_pct",
+          "label": "Avg Return per Trade (%)",
+          "levels": [
+            {
+              "confidence_pct": 90,
+              "progress_pct": 1,
+              "remaining_n": 775,
+              "required_n": 781,
+              "z": 1.64485
+            },
+            {
+              "confidence_pct": 95,
+              "progress_pct": 1,
+              "remaining_n": 1103,
+              "required_n": 1109,
+              "z": 1.95996
+            },
+            {
+              "confidence_pct": 99,
+              "progress_pct": 0,
+              "remaining_n": 1910,
+              "required_n": 1916,
+              "z": 2.57583
+            }
+          ],
+          "sufficient_95": false,
+          "target": "+/-2.0pp",
+          "target_margin": 2.0,
+          "type": "mean"
+        },
+        "avg_stop_loss_depth_pct": {
+          "base": "stops",
+          "base_n": 2,
+          "current_n": 2,
+          "effect_size_d": null,
+          "key": "avg_stop_loss_depth_pct",
+          "label": "Avg Stop-Loss Depth (%)",
+          "levels": [
+            {
+              "confidence_pct": 90,
+              "progress_pct": 0,
+              "remaining_n": 683,
+              "required_n": 685,
+              "z": 1.64485
+            },
+            {
+              "confidence_pct": 95,
+              "progress_pct": 0,
+              "remaining_n": 971,
+              "required_n": 973,
+              "z": 1.95996
+            },
+            {
+              "confidence_pct": 99,
+              "progress_pct": 0,
+              "remaining_n": 1678,
+              "required_n": 1680,
+              "z": 2.57583
+            }
+          ],
+          "sufficient_95": false,
+          "target": "+/-2.0pp",
+          "target_margin": 2.0,
+          "type": "mean"
+        },
+        "expectancy_usd": {
+          "base": "closes",
+          "base_n": 8,
+          "current_n": 8,
+          "effect_size_d": null,
+          "key": "expectancy_usd",
+          "label": "PnL Expectancy ($)",
+          "levels": [
+            {
+              "confidence_pct": 90,
+              "progress_pct": 0,
+              "remaining_n": 15775,
+              "required_n": 15783,
+              "z": 1.64485
+            },
+            {
+              "confidence_pct": 95,
+              "progress_pct": 0,
+              "remaining_n": 22401,
+              "required_n": 22409,
+              "z": 1.95996
+            },
+            {
+              "confidence_pct": 99,
+              "progress_pct": 0,
+              "remaining_n": 38696,
+              "required_n": 38704,
+              "z": 2.57583
+            }
+          ],
+          "sufficient_95": false,
+          "target": "+/-$0.02",
+          "target_margin": 0.02,
+          "type": "mean"
+        },
         "fill_rate": {
           "base": "orders",
+          "base_n": 8,
           "current_n": 8,
-          "label": "Fill Rate",
+          "effect_size_d": null,
+          "key": "fill_rate",
+          "label": "Fill Rate (%)",
           "levels": [
+            {
+              "confidence_pct": 90,
+              "progress_pct": 3,
+              "remaining_n": 263,
+              "required_n": 271,
+              "z": 1.64485
+            },
             {
               "confidence_pct": 95,
               "progress_pct": 2,
               "remaining_n": 377,
               "required_n": 385,
               "z": 1.95996
-            },
-            {
-              "confidence_pct": 98,
-              "progress_pct": 1,
-              "remaining_n": 534,
-              "required_n": 542,
-              "z": 2.32635
             },
             {
               "confidence_pct": 99,
@@ -1614,27 +1791,32 @@
               "z": 2.57583
             }
           ],
+          "sufficient_95": false,
+          "target": "+/-5pt (p=0.50)",
           "target_margin": 0.05,
           "type": "proportion"
         },
         "merge_rate": {
           "base": "closes",
+          "base_n": 8,
           "current_n": 8,
-          "label": "Merge Rate",
+          "effect_size_d": null,
+          "key": "merge_rate",
+          "label": "Merge Rate (%)",
           "levels": [
+            {
+              "confidence_pct": 90,
+              "progress_pct": 3,
+              "remaining_n": 263,
+              "required_n": 271,
+              "z": 1.64485
+            },
             {
               "confidence_pct": 95,
               "progress_pct": 2,
               "remaining_n": 377,
               "required_n": 385,
               "z": 1.95996
-            },
-            {
-              "confidence_pct": 98,
-              "progress_pct": 1,
-              "remaining_n": 534,
-              "required_n": 542,
-              "z": 2.32635
             },
             {
               "confidence_pct": 99,
@@ -1644,57 +1826,68 @@
               "z": 2.57583
             }
           ],
+          "successes": 5,
+          "sufficient_95": false,
+          "target": "+/-5pt (p=0.50)",
           "target_margin": 0.05,
           "type": "proportion"
         },
         "pnl_expectancy": {
           "base": "closes",
+          "base_n": 8,
           "current_n": 8,
-          "effect_size_d": 0.2,
-          "label": "PnL Expectancy",
+          "effect_size_d": null,
+          "key": "expectancy_usd",
+          "label": "PnL Expectancy ($)",
           "levels": [
             {
+              "confidence_pct": 90,
+              "progress_pct": 0,
+              "remaining_n": 15775,
+              "required_n": 15783,
+              "z": 1.64485
+            },
+            {
               "confidence_pct": 95,
-              "progress_pct": 8,
-              "remaining_n": 89,
-              "required_n": 97,
+              "progress_pct": 0,
+              "remaining_n": 22401,
+              "required_n": 22409,
               "z": 1.95996
             },
             {
-              "confidence_pct": 98,
-              "progress_pct": 6,
-              "remaining_n": 128,
-              "required_n": 136,
-              "z": 2.32635
-            },
-            {
               "confidence_pct": 99,
-              "progress_pct": 5,
-              "remaining_n": 158,
-              "required_n": 166,
+              "progress_pct": 0,
+              "remaining_n": 38696,
+              "required_n": 38704,
               "z": 2.57583
             }
           ],
-          "type": "continuous"
+          "sufficient_95": false,
+          "target": "+/-$0.02",
+          "target_margin": 0.02,
+          "type": "mean"
         },
         "stop_loss_rate": {
           "base": "closes",
+          "base_n": 8,
           "current_n": 8,
-          "label": "Stop Loss Rate",
+          "effect_size_d": null,
+          "key": "stop_loss_rate",
+          "label": "Stop-Loss Rate (%)",
           "levels": [
+            {
+              "confidence_pct": 90,
+              "progress_pct": 3,
+              "remaining_n": 263,
+              "required_n": 271,
+              "z": 1.64485
+            },
             {
               "confidence_pct": 95,
               "progress_pct": 2,
               "remaining_n": 377,
               "required_n": 385,
               "z": 1.95996
-            },
-            {
-              "confidence_pct": 98,
-              "progress_pct": 1,
-              "remaining_n": 534,
-              "required_n": 542,
-              "z": 2.32635
             },
             {
               "confidence_pct": 99,
@@ -1704,6 +1897,45 @@
               "z": 2.57583
             }
           ],
+          "successes": 3,
+          "sufficient_95": false,
+          "target": "+/-5pt (p=0.50)",
+          "target_margin": 0.05,
+          "type": "proportion"
+        },
+        "win_rate": {
+          "base": "closes",
+          "base_n": 8,
+          "current_n": 8,
+          "effect_size_d": null,
+          "key": "win_rate",
+          "label": "Win Rate (%)",
+          "levels": [
+            {
+              "confidence_pct": 90,
+              "progress_pct": 3,
+              "remaining_n": 263,
+              "required_n": 271,
+              "z": 1.64485
+            },
+            {
+              "confidence_pct": 95,
+              "progress_pct": 2,
+              "remaining_n": 377,
+              "required_n": 385,
+              "z": 1.95996
+            },
+            {
+              "confidence_pct": 99,
+              "progress_pct": 1,
+              "remaining_n": 656,
+              "required_n": 664,
+              "z": 2.57583
+            }
+          ],
+          "successes": 5,
+          "sufficient_95": false,
+          "target": "+/-5pt (p=0.50)",
           "target_margin": 0.05,
           "type": "proportion"
         }

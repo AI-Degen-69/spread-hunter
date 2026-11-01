@@ -149,6 +149,78 @@ def test_cockpit_funnel_counts(tmp_path):
     assert arm["stop_loss_exits_count"] == 2
 
 
+def test_cockpit_arm_carries_per_kpi_sufficiency_rows(tmp_path):
+    """Each arm measures itself: one row per estimator, own base each.
+
+    The seed holds 1 merge, 2 stop exits (settlement excluded), all without
+    cost_basis -- so dollar expectancy sizes from 3 closes, percent and
+    duration rows stay unmeasured instead of inventing a zero."""
+    db = _seed(tmp_path)
+    arm = analyze_arm_database({
+        "issue": 492,
+        "name": "funnel-arm",
+        "label": "Funnel Arm",
+        "port": 8999,
+        "db": str(db),
+        "run_id": RUN_ID,
+    })
+    assert arm["status"] == "ok"
+    rows = {r["key"]: r for r in arm["sufficiency_rows"]}
+    assert set(rows) == {
+        "expectancy_usd", "avg_return_pct", "win_rate", "stop_loss_rate",
+        "avg_stop_loss_depth_pct", "merge_rate", "avg_duration_merge",
+        "avg_duration_stop",
+    }
+    assert rows["expectancy_usd"]["base"] == "closes"
+    assert rows["expectancy_usd"]["base_n"] == 3
+    assert rows["win_rate"]["base_n"] == 3
+    assert rows["stop_loss_rate"]["base_n"] == 3
+    assert rows["merge_rate"]["base_n"] == 3
+    # No cost_basis in this seed: percent rows observe nothing.
+    assert rows["avg_return_pct"]["base_n"] == 0
+    assert rows["avg_return_pct"]["levels"][1]["required_n"] is None
+    assert rows["avg_stop_loss_depth_pct"]["base"] == "stops"
+    assert rows["avg_stop_loss_depth_pct"]["base_n"] == 0
+    # No fill-to-close linkage in the store: duration rows unmeasured.
+    assert rows["avg_duration_merge"]["base"] == "merges"
+    assert rows["avg_duration_merge"]["levels"][1]["required_n"] is None
+    assert rows["avg_duration_stop"]["levels"][1]["required_n"] is None
+    # Every row carries the 90/95/99 triple; nothing sizes arm-vs-arm.
+    for row in rows.values():
+        assert [lv["confidence_pct"] for lv in row["levels"]] == [90, 95, 99]
+
+
+def test_cockpit_arm_card_shows_per_kpi_sufficiency(tmp_path):
+    """The new KPI analytics are visible on the page, not just in the JSON.
+
+    Each arm card carries its own sufficiency table (Have vs Need @95%):
+    the seed arm's expectancy needs 14 closes at 95% but has 3, so it reads
+    LOCKED; an arm that never reported reads unmeasured, never zero."""
+    from scripts.tournament_cockpit_server import generate_cockpit_html
+    db = _seed(tmp_path)
+    arm = analyze_arm_database({
+        "issue": 492,
+        "name": "funnel-arm",
+        "label": "Funnel Arm",
+        "port": 8999,
+        "db": str(db),
+        "run_id": RUN_ID,
+    })
+    html = generate_cockpit_html({"tourney_key": "843", "arms": [arm]})
+    assert "Per-KPI Sufficiency @95%" in html
+    assert "PnL Expectancy ($)" in html
+    assert "Avg Return per Trade (%)" in html
+    assert "LOCKED" in html
+    assert "3 closes" in html
+
+    ghost = generate_cockpit_html({
+        "tourney_key": "843",
+        "arms": [{"name": "ghost", "label": "Ghost", "port": 8999,
+                    "status": "missing_db", "trades_count": 0}],
+    })
+    assert "unmeasured \u2014 arm has not reported yet" in ghost
+
+
 def test_cockpit_table_drops_issue_port_fills_columns():
     html = generate_cockpit_html({"arms": [], "tourney_key": "799"})
     for gone in ("<th>Issue</th>", "<th>Port</th>", "<th>Fills</th>"):

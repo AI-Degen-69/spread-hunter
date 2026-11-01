@@ -178,8 +178,8 @@ def test_sample_sufficiency_renders_three_levels():
         "std_dev_usd": 0.11547,
         "target_margin_usd": 0.02,
         "levels": [
+            {"confidence_pct": 90, "z": 1.64485, "required_n": 91, "remaining_n": 87, "progress_pct": 4},
             {"confidence_pct": 95, "z": 1.95996, "required_n": 129, "remaining_n": 125, "progress_pct": 3},
-            {"confidence_pct": 98, "z": 2.32635, "required_n": 181, "remaining_n": 177, "progress_pct": 2},
             {"confidence_pct": 99, "z": 2.57583, "required_n": 222, "remaining_n": 218, "progress_pct": 2},
         ],
     }
@@ -187,9 +187,9 @@ def test_sample_sufficiency_renders_three_levels():
     out = _mount(kpi)
     assert not out["errors"]
     html = out["sample_sufficiency_html"]
-    assert "95%" in html and "98%" in html and "99%" in html
-    assert "129" in html and "181" in html and "222" in html
-    assert "125" in html and "177" in html and "218" in html
+    assert "90%" in html and "95%" in html and "99%" in html
+    assert "91" in html and "129" in html and "222" in html
+    assert "87" in html and "125" in html and "218" in html
     assert "dist-progress-bar" in html
     assert "dist-progress-fill" in html
 
@@ -200,8 +200,8 @@ def test_sample_sufficiency_n_zero_has_no_undefined():
         "std_dev_usd": None,
         "target_margin_usd": 0.02,
         "levels": [
+            {"confidence_pct": 90, "z": 1.64485, "required_n": None, "remaining_n": None, "progress_pct": None},
             {"confidence_pct": 95, "z": 1.95996, "required_n": None, "remaining_n": None, "progress_pct": None},
-            {"confidence_pct": 98, "z": 2.32635, "required_n": None, "remaining_n": None, "progress_pct": None},
             {"confidence_pct": 99, "z": 2.57583, "required_n": None, "remaining_n": None, "progress_pct": None},
         ],
     }
@@ -216,47 +216,61 @@ def test_sample_sufficiency_n_zero_has_no_undefined():
 
 
 def test_sample_sufficiency_renders_segmented_statuses():
+    # Live payload shape: one row per estimator, each sized from the
+    # observations IT uses, at 90/95/99. Means rows carry their native-unit
+    # target label; proportion rows stay conservative (p = 0.50, +/-5pt).
     payload = {
         "current_n": 4,
         "std_dev_usd": 0.11547,
         "target_margin_usd": 0.02,
-        "effect_size_d": 0.20,
         "statuses": {
-            "pnl_expectancy": {
-                "label": "PnL Expectancy",
-                "type": "continuous",
+            "expectancy_usd": {
+                "label": "PnL Expectancy ($)",
+                "type": "mean",
                 "base": "closes",
+                "base_n": 4,
                 "current_n": 4,
-                "effect_size_d": 0.20,
+                "target": "+/-$0.02",
+                "target_margin": 0.02,
                 "levels": [
-                    {"confidence_pct": 95, "z": 1.95996, "required_n": 97, "remaining_n": 93, "progress_pct": 4},
+                    {"confidence_pct": 90, "z": 1.64485, "required_n": 91, "remaining_n": 87, "progress_pct": 4},
+                    {"confidence_pct": 95, "z": 1.95996, "required_n": 129, "remaining_n": 125, "progress_pct": 3},
+                    {"confidence_pct": 99, "z": 2.57583, "required_n": 222, "remaining_n": 218, "progress_pct": 2},
                 ],
             },
             "stop_loss_rate": {
-                "label": "Stop Loss Rate",
+                "label": "Stop-Loss Rate (%)",
                 "type": "proportion",
                 "base": "closes",
+                "base_n": 4,
                 "current_n": 4,
+                "target": "+/-5pt (p=0.50)",
                 "target_margin": 0.05,
                 "levels": [
+                    {"confidence_pct": 90, "z": 1.64485, "required_n": 271, "remaining_n": 267, "progress_pct": 1},
                     {"confidence_pct": 95, "z": 1.95996, "required_n": 385, "remaining_n": 381, "progress_pct": 1},
+                    {"confidence_pct": 99, "z": 2.57583, "required_n": 664, "remaining_n": 660, "progress_pct": 1},
                 ],
             },
             "merge_rate": {
-                "label": "Merge Rate",
+                "label": "Merge Rate (%)",
                 "type": "proportion",
                 "base": "closes",
+                "base_n": 4,
                 "current_n": 4,
+                "target": "+/-5pt (p=0.50)",
                 "target_margin": 0.05,
                 "levels": [
                     {"confidence_pct": 95, "z": 1.95996, "required_n": 385, "remaining_n": 381, "progress_pct": 1},
                 ],
             },
             "fill_rate": {
-                "label": "Fill Rate",
+                "label": "Fill Rate (%)",
                 "type": "proportion",
                 "base": "orders",
+                "base_n": 15,
                 "current_n": 15,
+                "target": "+/-5pt (p=0.50)",
                 "target_margin": 0.05,
                 "levels": [
                     {"confidence_pct": 95, "z": 1.95996, "required_n": 385, "remaining_n": 370, "progress_pct": 4},
@@ -264,7 +278,7 @@ def test_sample_sufficiency_renders_segmented_statuses():
             },
         },
         "levels": [
-            {"confidence_pct": 95, "z": 1.95996, "required_n": 97, "remaining_n": 93, "progress_pct": 4},
+            {"confidence_pct": 95, "z": 1.95996, "required_n": 129, "remaining_n": 125, "progress_pct": 3},
         ],
     }
     kpi = {"trade_analytics": {"sample_size_sufficiency": payload}}
@@ -272,14 +286,15 @@ def test_sample_sufficiency_renders_segmented_statuses():
     assert not out["errors"]
     html = out["sample_sufficiency_html"]
     assert "PnL Expectancy" in html
-    assert "Stop Loss Rate" in html
+    assert "Stop-Loss Rate" in html
     assert "Merge Rate" in html
     assert "Fill Rate" in html
-    assert "Cohen&#39;s d = 0.2" in html or "Cohen's d = 0.2" in html
-    assert "Margin = 5%" in html
+    assert "+/-$0.02" in html
+    assert "+/-5pt (p=0.50)" in html
     assert "(closes)" in html
     assert "(orders)" in html
-    assert "97" in html
+    assert "91" in html
+    assert "129" in html
     assert "385" in html
     assert "undefined" not in html
     assert "NaN" not in html

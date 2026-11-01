@@ -231,7 +231,7 @@ let lastStatusAtMs = null;
  * envelope; anything lower (or missing) means this page is newer than the
  * process answering it. Keep EXPECTED_PAYLOAD_VERSION matched with
  * KPI_PAYLOAD_VERSION in core_brain/kpi.py. */
-const EXPECTED_PAYLOAD_VERSION = 260;
+const EXPECTED_PAYLOAD_VERSION = 261;
 let payloadVersionWarned = false;
 
 // True when the payload is absent, malformed, or predates this page.
@@ -7493,7 +7493,8 @@ function renderPnlCiReadout(ta, hostId, key) {
 
 /* Tier 1: Sample size & confidence level sufficiency (#443).
  * Shows observations count, margin of error, required/remaining closes, and progress bars
- * across 95%, 98%, and 99% confidence levels.
+ * across 90%, 95%, and 99% confidence levels. One block per KPI row: each row
+ * sizes the observations IT is estimated from (closes, stops, merges, orders).
  */
 function renderSampleSufficiency(ta, hostId) {
   const host = document.getElementById(hostId || 'sample-sufficiency-readout');
@@ -7504,18 +7505,24 @@ function renderSampleSufficiency(ta, hostId) {
   const hasStatuses = Object.keys(statuses).length > 0;
 
   if (hasStatuses) {
-    const statusKeys = ['pnl_expectancy', 'stop_loss_rate', 'merge_rate', 'fill_rate'];
+    const statusKeys = ['expectancy_usd', 'avg_return_pct', 'win_rate', 'stop_loss_rate',
+      'avg_stop_loss_depth_pct', 'merge_rate', 'avg_duration_merge', 'avg_duration_stop',
+      'fill_rate'];
     const blocksHtml = statusKeys.map(key => {
       const st = statuses[key];
       if (!st) return '';
       const label = esc(st.label || key);
       const base = esc(st.base || 'closes');
-      const currentN = (st.current_n != null && Number.isFinite(Number(st.current_n)))
-        ? Number(st.current_n)
-        : 0;
-      const targetParam = st.type === 'continuous'
-        ? `Cohen's d = ${st.effect_size_d || 0.20}`
-        : `Margin = ${(Number(st.target_margin || 0.05) * 100).toFixed(0)}%`;
+      const currentN = (st.base_n != null && Number.isFinite(Number(st.base_n)))
+        ? Number(st.base_n)
+        : ((st.current_n != null && Number.isFinite(Number(st.current_n)))
+          ? Number(st.current_n)
+          : 0);
+      const targetParam = (typeof st.target === 'string' && st.target)
+        ? st.target
+        : (st.type === 'continuous'
+          ? `Cohen's d = ${st.effect_size_d || 0.20}`
+          : `Margin = ${(Number(st.target_margin || 0.05) * 100).toFixed(0)}%`);
 
       const levels = Array.isArray(st.levels) ? st.levels : [];
       // Focus on 95% primary gate row while also rendering full table or rows
@@ -7583,8 +7590,8 @@ function renderSampleSufficiency(ta, hostId) {
   // writes a critical value down is a second source for the same number (#535).
   // With no `levels` in the payload every cell reads 'unmeasured'.
   const defaultLevels = [
+    { confidence_pct: 90, required_n: null, remaining_n: null, progress_pct: null },
     { confidence_pct: 95, required_n: null, remaining_n: null, progress_pct: null },
-    { confidence_pct: 98, required_n: null, remaining_n: null, progress_pct: null },
     { confidence_pct: 99, required_n: null, remaining_n: null, progress_pct: null },
   ];
   const levels = (Array.isArray(suff.levels) && suff.levels.length) ? suff.levels : defaultLevels;
@@ -7626,7 +7633,7 @@ function renderSampleSufficiency(ta, hostId) {
   host.innerHTML = `
     <div class="sample-suff-meta">
       <span>Current observations: <b class="mono">${n}</b></span>
-      <span>Effect size: <b class="mono">Cohen's d = 0.20</b></span>
+      <span>Target: <b class="mono">+/-$0.02 (own-sample sizing)</b></span>
     </div>
     <table class="sample-suff-table">
       <thead>

@@ -263,16 +263,18 @@ def test_sufficiency_table_fills_from_the_payload(tmp_path, live_payload):
     out = _run(live_payload, "render", tmp_path)
     rows = {r["key"]: r for r in out["sufficiency"]}
     assert set(rows) == {"pnl_expectancy", "stop_loss_rate", "merge_rate", "fill_rate"}
-    assert rows["pnl_expectancy"]["req"] == "97"
+    # Expectancy sizes from the demo arm's own stdev ($0.1305, margin $0.02),
+    # so the 95% required N is 164 -- it moves with the arm, not a constant.
+    assert rows["pnl_expectancy"]["req"] == "164"
     assert rows["pnl_expectancy"]["cur"] == "3 closes"
     # fill_rate is counted in ORDERS, not closes -- the unit must follow.
     assert rows["fill_rate"]["cur"] == "44 orders"
-    assert rows["stop_loss_rate"]["dataset"]["r98"] == "542"
+    assert rows["stop_loss_rate"]["dataset"]["r90"] == "271"
 
 
 @requires_node
 def test_sufficiency_toggle_repaints_visible_cells(tmp_path, live_payload):
-    """Clicking 98/99 repaints the visible .req/.rem/.pct cells, not just data.
+    """Clicking 90/99 repaints the visible .req/.rem/.pct cells, not just data.
 
     The toggle is the module's own init; the harness wires it and fires the
     pills the way a click does.
@@ -280,19 +282,19 @@ def test_sufficiency_toggle_repaints_visible_cells(tmp_path, live_payload):
     out = _run(live_payload, "toggle", tmp_path)
     assert not out["errors"], out["errors"]
     t = out["toggle"]
-    rows98 = {r["key"]: r for r in t["r98"]}
-    assert rows98["stop_loss_rate"]["req"] == "542"
-    assert rows98["stop_loss_rate"]["rem"] == "539"
-    assert rows98["pnl_expectancy"]["req"] == "136"
+    rows90 = {r["key"]: r for r in t["r90"]}
+    assert rows90["stop_loss_rate"]["req"] == "271"
+    assert rows90["stop_loss_rate"]["rem"] == "268"
+    assert rows90["pnl_expectancy"]["req"] == "116"
     rows99 = {r["key"]: r for r in t["r99"]}
     assert rows99["stop_loss_rate"]["req"] == "664"
     assert rows99["stop_loss_rate"]["rem"] == "661"
-    assert rows99["pnl_expectancy"]["req"] == "166"
+    assert rows99["pnl_expectancy"]["req"] == "283"
     rows95 = {r["key"]: r for r in t["r95"]}
-    assert rows95["pnl_expectancy"]["req"] == "97"
-    assert rows95["pnl_expectancy"]["rem"] == "94"
+    assert rows95["pnl_expectancy"]["req"] == "164"
+    assert rows95["pnl_expectancy"]["rem"] == "161"
     # The progress bar tracks the same pct the cell shows.
-    for rows in (rows95, rows98, rows99):
+    for rows in (rows95, rows90, rows99):
         for r in rows.values():
             assert r["pfill"] == r["pct"], r
 

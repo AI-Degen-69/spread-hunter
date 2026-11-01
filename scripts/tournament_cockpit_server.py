@@ -8,7 +8,10 @@ arm records and stores stay: they are launch/compare data, not pages.
 Computes risk, expectancy (EV), standard deviation, max drawdown,
 Monte Carlo projections, and Live Readiness Scoring.
 
-Usage:
+The Cockpit is a page on the unified dashboard (:8799) with one tab per run:
+    http://127.0.0.1:8799/cockpit/        # run tabs: 799, 843, 905
+
+Legacy standalone usage (local debugging only, not the operator flow):
     python -m scripts.tournament_cockpit_server --port 8800
 """
 from __future__ import annotations
@@ -52,9 +55,11 @@ from core_brain.sharpe import (
     risk_free_rate_from_env,
     sharpe_ratio,
 )
+from core_brain.kpi import kpi_sufficiency_table as _kpi_sufficiency_table  # noqa: E402
 
 I843_ARMS_FILE = ROOT / "configs" / "tournaments" / "i843-pair-test_arms.json"
 I799_ARMS_FILE = ROOT / "configs" / "tournaments" / "i799-tournament-test_arms.json"
+I905_ARMS_FILE = ROOT / "configs" / "tournaments" / "i905-top5-rematch_arms.json"
 
 
 def _load_arms_from_file(file_path: Path, issue_num: int, start_port: int = 8801) -> list[dict[str, Any]]:
@@ -89,30 +94,32 @@ def _load_arms_from_file(file_path: Path, issue_num: int, start_port: int = 8801
 
 ARMS_CONFIG_843 = _load_arms_from_file(I843_ARMS_FILE, 843, 8801)
 ARMS_CONFIG_799 = _load_arms_from_file(I799_ARMS_FILE, 799, 8801)
+ARMS_CONFIG_905 = _load_arms_from_file(I905_ARMS_FILE, 905, 8801)
 
 # Legacy alias kept for older imports. The cockpit now serves #799 by
 # default; this constant no longer selects a page.
 ARMS_CONFIG = ARMS_CONFIG_799
 
-# Decision gate arm identification per tournament key.
-# Each tournament has different arm names; this maps the logical role to the
-# arm name pattern for that tournament.
+# Run-level volume-check roles per tournament key. Each tournament has
+# different arm names; this maps the logical role to the arm name pattern
+# for the one explicitly comparative readout (volume flow between two
+# configurations). Nothing here selects a test subject: every arm gets its
+# own verdict from its own gates in compute_decision_gates.
 DECISION_GATE_ARM_MAP = {
     "843": {
-        "test_arm_pattern": "balanced-queue5",      # The hybrid arm combining balanced preset + queue gate
+        "volume_arm_pattern": "balanced-queue5",      # Arm whose knob may choke fills
         "baseline_arm_names": ["control"],           # Pure control/baseline
         "balanced_only_arm_names": ["balanced-only"],  # Balanced preset only
-        "test_arm_desc": "Balanced + Queue Gate Hybrid",
-        "starvation_desc": "Combining the balanced preset and 5m queue-clear gate severely chokes order fills. Knobs are mutually restrictive.",
-        "provisional_desc": "Observed Sharpe ({sharpe:.2f}) and Drawdown (${mdd:.2f}) validate the hybrid hypothesis without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades).",
     },
     "799": {
-        "test_arm_pattern": "queue-clear-5m",       # Queue clear gate test
+        "volume_arm_pattern": "queue-clear-5m",       # Arm whose knob may choke fills
         "baseline_arm_names": ["loose-baseline"],    # Pure control/baseline
         "balanced_only_arm_names": ["balanced-mid"], # Balanced preset only
-        "test_arm_desc": "Queue Clear 5m Gate",
-        "starvation_desc": "The 5m queue-clear gate severely restricts order fills. The filter is too aggressive for current market conditions.",
-        "provisional_desc": "Observed Sharpe ({sharpe:.2f}) and Drawdown (${mdd:.2f}) validate the queue-clear gate without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades).",
+    },
+    "905": {
+        "volume_arm_pattern": "queue-clear-5m",       # Arm whose knob may choke fills
+        "baseline_arm_names": ["loose-baseline"],    # Pure control/baseline
+        "balanced_only_arm_names": ["balanced-mid"], # Balanced preset only
     },
 }
 
@@ -138,6 +145,16 @@ TOURNAMENTS = {
         "issue_secondary": 799,
         "nav_label": "#799 Presets (10 Arms)",
     },
+    "905": {
+        "id": "905",
+        "title": "Issue #905 Top-5 Rematch",
+        "subtitle": "5-Arm Fresh Shadow Rehearsal | Top-5 Tournament #799 Arms, Empty Stores",
+        "description": "Fresh rematch of the top-5 Tournament #799 arms (queue-clear-5m, balanced-mid, loose-baseline, prudent-hybrid, static-floor-2c) from empty stores, re-measuring risk shape on current market conditions.",
+        "arms": ARMS_CONFIG_905,
+        "issue_primary": 905,
+        "issue_secondary": 905,
+        "nav_label": "#905 Top-5 Rematch (5 Arms)",
+    },
 }
 
 
@@ -154,6 +171,9 @@ PAGE_PATHS: dict[str, str] = {
     "/799": "799",
     "/799.html": "799",
     "/cockpit_799": "799",
+    "/905": "905",
+    "/905.html": "905",
+    "/cockpit_905": "905",
 }
 # The keys the JSON API may serve: the served pages' own tournaments, derived so
 # a new page cannot forget to widen this.
@@ -396,7 +416,7 @@ def _resolve_plan_for_tourney_key(
     otherwise merge last week's r1 db/port into today's rows.
     """
     latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
-    if tourney_key in (CURRENT_SETUP_KEY, "843", "799"):
+    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905"):
         newest = _newest_plan_record()
         newest_issue = _plan_identity(newest)[0] if newest is not None else None
         if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
@@ -461,7 +481,7 @@ def resolve_tournament_arms_with_status(
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
     # Unknown keys fall back to the static table; live keys resolve their plan file.
-    if tourney_key not in ("843", "799"):
+    if tourney_key not in ("843", "799", "905"):
         return default_arms, None
 
     # Each page reads its own issue's record: the key in the URL is a page, and
@@ -663,6 +683,33 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
     single_exits = n - len(merges)
     paired_completions = len(merges)
 
+    # Per-KPI sample-size sufficiency — the same builder the :8799 dashboard
+    # card reads (core_brain.kpi.kpi_sufficiency_table): one row per
+    # estimator, each sized from the observations IT uses, at 90/95/99.
+    # No arm-vs-arm comparison anywhere: each arm is measured against its
+    # own observation count. Durations stay unmeasured — the arm store
+    # carries no fill-to-close linkage yet, and a blank row is honest
+    # where a zero would lie.
+    _close_pcts: list[float] = []
+    _stop_depth_pcts: list[float] = []
+    for r in rows:
+        _p = float(r[2] or 0.0)
+        _c = float(r[3] or 0.0)
+        if _c > 0:
+            _pct = 100.0 * _p / _c
+            _close_pcts.append(_pct)
+            if r[1] in stop_loss_methods:
+                _stop_depth_pcts.append(_pct)
+    sufficiency_rows = _kpi_sufficiency_table(
+        n_closes=n,
+        expectancy_usd=list(pnls),
+        return_pcts=list(_close_pcts),
+        n_wins=len(wins),
+        n_stops=len(stops),
+        stop_depth_pcts=_stop_depth_pcts,
+        n_merges=len(merges),
+    )
+
     tot_pnl = sum(pnls)
     mean_pnl = tot_pnl / n
     var = sum((p - mean_pnl) ** 2 for p in pnls) / (n - 1) if n > 1 else 0.0
@@ -792,6 +839,7 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
             "stop_loss": len(stops),
         },
         "trades_count": n,
+        "sufficiency_rows": sufficiency_rows,
         "merges_count": len(merges),
         "exits_count": single_exits,
         "stop_loss_exits_count": len(stops),
@@ -829,179 +877,387 @@ SHARPE_TARGET = 2.70
 SHARPE_MARGINAL = 2.20
 
 
-def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "843") -> dict[str, Any]:
-    """Compute 5 critical decision gates and overall verdict from arms data.
-    
-    Evaluates:
-    - Gate 1: Statistical Sample Power Gate (target N >= 2,117 trades for 0.02 resolve; flags nominal PnL as underpowered if N < 2,117)
-    - Gate 2: Sharpe Ratio Gate (target >= 2.70)
-    - Gate 3: Profit Factor Gate (target >= 2.50)
-    - Gate 4: Max Drawdown Gate (target < $4.00)
-    - Gate 5: Volume Starvation Gate (test arm trades drop < 40% vs baseline)
-    """
-    total_trades = sum(a.get("trades_count", 0) for a in arms_data)
-    ok_arms = [a for a in arms_data if a.get("status") == "ok"]
-    
-    # Tournament-specific arm identification
-    arm_map = DECISION_GATE_ARM_MAP.get(tourney_key, DECISION_GATE_ARM_MAP["843"])
-    test_arm = next((a for a in arms_data if arm_map["test_arm_pattern"] in a.get("name", "")), None)
-    baseline_arm = next((a for a in arms_data if a.get("name") in arm_map["baseline_arm_names"]), None)
-    balanced_only_arm = next((a for a in arms_data if a.get("name") in arm_map["balanced_only_arm_names"]), None)
-    
-    if test_arm is None and ok_arms:
-        test_arm = max(ok_arms, key=lambda x: (x.get("sharpe_ratio") is not None, x.get("sharpe_ratio") or 0.0))
-    elif test_arm is None and arms_data:
-        test_arm = arms_data[0]
-        
-    target_n = 2117
-    test_n = test_arm.get("trades_count", 0) if test_arm else 0
-    power_ratio = round((test_n / target_n) * 100.0, 1) if target_n > 0 else 0.0
-    
-    if test_n >= target_n:
-        gate_power_status = "PASS"
-        gate_power_badge = "badge-green"
-        gate_power_text = f"N = {test_n:,} / {target_n:,} ({power_ratio}%) — Statistically Powered for PnL"
-    elif test_n > 0:
-        gate_power_status = "UNDERPOWERED"
-        gate_power_badge = "badge-amber"
-        gate_power_text = f"N = {test_n:,} / {target_n:,} ({power_ratio}%) — Nominal PnL Inconclusive; Evaluating Risk Shape"
+def _sufficiency_95_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Condense sufficiency rows to their 95% striving level for display.
+
+    One dict per KPI: label, observation base and count, the arm's own
+    required N at 95% (None when unmeasured), remaining, progress, and the
+    unlock verdict. Shared by the server-side card HTML and the live JS
+    repaint below so first paint and poll updates can never disagree."""
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        lv95 = next(
+            (lv for lv in (row.get("levels") or []) if lv.get("confidence_pct") == 95), {}) or {}
+        sufficient = row.get("sufficient_95")
+        if sufficient is True:
+            verdict, badge = "SUFFICIENT", "badge-green"
+        elif lv95.get("required_n") is None:
+            verdict, badge = "—", ""
+        else:
+            verdict, badge = "LOCKED", "badge-amber"
+        out.append({
+            "key": row.get("key", ""),
+            "label": row.get("label", row.get("key", "")),
+            "base": row.get("base", "closes"),
+            "base_n": row.get("base_n", 0),
+            "required_95": lv95.get("required_n"),
+            "remaining_95": lv95.get("remaining_n"),
+            "progress_95": lv95.get("progress_pct"),
+            "verdict": verdict,
+            "badge": badge,
+        })
+    return out
+
+
+def _sufficiency_mini_html(rows: list[dict[str, Any]]) -> str:
+    """Compact per-KPI sufficiency table for one arm card (@95% striving level)."""
+    summaries = _sufficiency_95_rows(rows)
+    if not summaries:
+        return (
+            '<div style="font-size: 11.5px; color: var(--text-muted);">'
+            'Per-KPI Sufficiency: unmeasured — arm has not reported yet.</div>'
+        )
+    body = []
+    for s in summaries:
+        req = f"{s['required_95']:,}" if s["required_95"] is not None else "—"
+        prog = s["progress_95"]
+        bar = (
+            f'<div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; min-width: 48px;">'
+            f'<div style="background: var(--green); height: 6px; border-radius: 4px; width: {prog}%;"></div></div>'
+            if isinstance(prog, (int, float)) else '<span style="color: var(--text-muted);">—</span>'
+        )
+        badge = (
+            f'<span class="badge {s["badge"]}" style="font-size: 9px; padding: 2px 6px;">{s["verdict"]}</span>'
+            if s["badge"] else '<span style="color: var(--text-muted);">—</span>'
+        )
+        body.append(
+            f'<tr><td style="padding: 2px 4px 2px 0;">{html.escape(str(s["label"]))}</td>'
+            f'<td class="tabular" style="padding: 2px 4px; white-space: nowrap;">{s["base_n"]} {html.escape(str(s["base"]))}</td>'
+            f'<td class="tabular" style="padding: 2px 4px;">{req}</td>'
+            f'<td style="padding: 2px 4px;">{bar}</td>'
+            f'<td style="padding: 2px 0 2px 4px; text-align: right;">{badge}</td></tr>'
+        )
+    return (
+        '<div style="margin: 8px 0 4px; padding-top: 8px; border-top: 1px solid var(--border);">'
+        '<div style="font-size: 11px; font-weight: 700; color: var(--text-muted); '
+        'text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">'
+        'Per-KPI Sufficiency @95%</div>'
+        '<table style="width: 100%; font-size: 11px; border-collapse: collapse;">' + "".join(body) + '</table></div>'
+    )
+
+
+def _dg_kpi_rows(arms: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Union of KPI sufficiency rows across arms, first-seen order.
+
+    Each entry is {key, label}. Arms that never reported contribute no
+    rows; a KPI measured by only some arms still gets a matrix row, with
+    unmeasured cells for the arms that lack it."""
+    seen: dict[str, str] = {}
+    for arm in arms or []:
+        for row in (arm.get("sufficiency_rows") or []):
+            key = str(row.get("key", ""))
+            if key and key not in seen:
+                seen[key] = str(row.get("label", key))
+    return [{"key": k, "label": v} for k, v in seen.items()]
+
+
+def _dg_level(row: dict[str, Any], confidence: int) -> dict[str, Any]:
+    """One confidence level out of a sufficiency row ({} when absent)."""
+    for lv in (row.get("levels") or []):
+        if lv.get("confidence_pct") == confidence:
+            return lv
+    return {}
+
+
+def _dg_cell_html(row: dict[str, Any] | None, confidence: int) -> str:
+    """One KPI x arm matrix cell at the selected confidence level."""
+    if not row:
+        return '<span style="color: var(--text-muted);">unmeasured</span>'
+    lv = _dg_level(row, confidence)
+    req = lv.get("required_n")
+    base_n = row.get("base_n", 0)
+    prog = lv.get("progress_pct")
+    if row.get("sufficient_95") is True and confidence == 95 or (
+        confidence != 95 and isinstance(prog, (int, float)) and prog >= 100
+    ):
+        badge = '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px;">SUFFICIENT</span>'
+    elif req is None:
+        return '<span style="color: var(--text-muted);">unmeasured</span>'
     else:
-        gate_power_status = "NO_DATA"
-        gate_power_badge = "badge-amber"
-        gate_power_text = f"0 / {target_n:,} Closed Trades — Rehearsal Initializing"
-        
+        badge = '<span class="badge badge-amber" style="font-size: 9px; padding: 2px 6px;">LOCKED</span>'
+    have_need = (
+        f'<span class="tabular">{base_n} / {req:,}</span>' if req is not None
+        else f'<span class="tabular">{base_n} / —</span>'
+    )
+    bar = (
+        f'<div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; margin-top: 3px;">'
+        f'<div style="background: var(--green); height: 6px; border-radius: 4px; width: {prog}%;"></div></div>'
+        if isinstance(prog, (int, float)) else ''
+    )
+    return f'{badge}<div style="font-size: 10.5px; margin-top: 2px;">{have_need}</div>{bar}'
+
+
+def _dg_matrix_html(arms: list[dict[str, Any]], confidence: int = 95) -> str:
+    """KPI (rows) x arm (columns) sufficiency matrix at one confidence level.
+
+    Server pre-renders the 95% view for first paint; the confidence toggle
+    and the live poll re-render from the same `sufficiency_rows` payload."""
+    kpi_rows = _dg_kpi_rows(arms)
+    if not kpi_rows or not arms:
+        return (
+            '<div style="font-size: 12px; color: var(--text-muted);">'
+            'KPI matrix unmeasured — no arm has reported sufficiency rows yet.</div>'
+        )
+    rows_by_arm = {
+        a.get("name", ""): {r.get("key"): r for r in (a.get("sufficiency_rows") or [])}
+        for a in arms
+    }
+    head = [f"<th style=\"text-align: left;\">KPI x Arm @ {confidence}%</th>"]
+    for a in arms:
+        head.append(
+            f'<th data-dg-matrix-arm="{html.escape(a.get("name", ""))}">'
+            f'{html.escape(a.get("label", a.get("name", "")))}</th>'
+        )
+    body = []
+    for kpi in kpi_rows:
+        cells = [f'<td style="text-align: left;">{html.escape(kpi["label"])}</td>']
+        for a in arms:
+            row = rows_by_arm.get(a.get("name", ""), {}).get(kpi["key"])
+            cells.append(
+                f'<td data-dg-matrix-arm="{html.escape(a.get("name", ""))}" '
+                f'data-dg-kpi="{html.escape(kpi["key"])}">'
+                f'{_dg_cell_html(row, confidence)}</td>'
+            )
+        body.append("<tr>" + "".join(cells) + "</tr>")
+    return (
+        '<table id="dg-matrix-table" style="width: 100%; font-size: 11.5px; '
+        'border-collapse: collapse;">' + "<thead><tr>" + "".join(head) + "</tr></thead>"
+        + "<tbody>" + "".join(body) + "</tbody></table>"
+        + f'<div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">'
+        f'Have / Need closes at {confidence}% confidence. '
+        'SUFFICIENT unlocks that KPI\u2019s verdict; LOCKED is still gathering closes; '
+        'unmeasured means the arm has not reported that KPI yet.</div>'
+    )
+
+
+def _dg_filter_html(arms: list[dict[str, Any]]) -> str:
+    """Arm visibility checkboxes: one or many arms, default all on."""
+    boxes = []
+    for a in arms or []:
+        name = html.escape(a.get("name", ""))
+        label = html.escape(a.get("label", a.get("name", "")))
+        boxes.append(
+            f'<label style="display: inline-flex; align-items: center; gap: 6px; '
+            f'font-size: 12px; margin-right: 14px; cursor: pointer;">'
+            f'<input type="checkbox" data-dg-arm-toggle="{name}" checked> {label}</label>'
+        )
+    return "".join(boxes)
+
+
+def _arm_sufficiency_row(arm: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
+    """One sufficiency row off an arm, or None when the arm never ran.
+
+    Hand-built arm dicts (tests, missing DBs) carry no `sufficiency_rows`:
+    that reads as unmeasured, never as a fabricated zero."""
+    for row in ((arm or {}).get("sufficiency_rows") or []):
+        if row.get("key") == key:
+            return row
+    return None
+
+
+def _arm_gate_set(arm: dict[str, Any]) -> dict[str, Any]:
+    """Four own-sample gates for ONE arm: expectancy sufficiency at 95%,
+    Sharpe, profit factor, max drawdown. No cross-arm comparison anywhere:
+    every number is the arm's own."""
+    n = arm.get("trades_count", 0) or 0
+
+    exp_row = _arm_sufficiency_row(arm, "expectancy_usd")
+    exp_95 = {lv.get("confidence_pct"): lv for lv in (exp_row.get("levels") or [])} if exp_row else {}
+    exp_95 = exp_95.get(95, {})
+    target_n = exp_95.get("required_n")
+    remaining_n = exp_95.get("remaining_n")
+    sufficient = bool(exp_row) and exp_row.get("sufficient_95") is True
+    power_ratio = round((n / target_n) * 100.0, 1) if target_n else 0.0
+
+    if n == 0:
+        power = {"status": "NO_DATA", "badge": "badge-amber",
+                 "text": "0 Closed Trades — Rehearsal Initializing",
+                 "current": 0, "target": None}
+    elif sufficient:
+        power = {"status": "PASS", "badge": "badge-green",
+                 "text": (f"N = {n:,} / {target_n:,} ({power_ratio}%) — "
+                           "PnL Expectancy Sufficient at 95% (own-sample sizing)"),
+                 "current": n, "target": target_n}
+    elif target_n:
+        power = {"status": "UNDERPOWERED", "badge": "badge-amber",
+                 "text": (f"N = {n:,} / {target_n:,} ({power_ratio}%) — "
+                           f"Expectancy Inconclusive at 95% ({remaining_n:,} to go); Evaluating Risk Shape"),
+                 "current": n, "target": target_n}
+    else:
+        power = {"status": "UNDERPOWERED", "badge": "badge-amber",
+                 "text": (f"N = {n} — Expectancy Not Yet Measurable "
+                           "(need >= 2 closes); Evaluating Risk Shape"),
+                 "current": n, "target": None}
+
     target_sharpe = SHARPE_TARGET
-    observed_raw = test_arm.get("sharpe_ratio") if test_arm else None
+    observed_raw = arm.get("sharpe_ratio")
     observed_sharpe = observed_raw if isinstance(observed_raw, (int, float)) else None
-    if not test_arm or test_n == 0 or observed_sharpe is None:
-        gate_sharpe_status = "NO_DATA"
-        gate_sharpe_badge = "badge-amber"
-        gate_sharpe_text = f"Target: ≥ {target_sharpe:.2f} | Observed: NO_DATA"
+    if n == 0 or observed_sharpe is None:
+        sharpe = {"status": "NO_DATA", "badge": "badge-amber",
+                  "text": f"Target: \u2265 {target_sharpe:.2f} | Observed: NO_DATA",
+                  "current": None, "target": target_sharpe}
     elif observed_sharpe >= target_sharpe:
-        gate_sharpe_status = "PASS"
-        gate_sharpe_badge = "badge-green"
-        gate_sharpe_text = f"Target: ≥ {target_sharpe:.2f} | Observed: {observed_sharpe:.2f} (+{((observed_sharpe/target_sharpe)-1)*100:.1f}%)"
+        sharpe = {"status": "PASS", "badge": "badge-green",
+                  "text": (f"Target: \u2265 {target_sharpe:.2f} | Observed: {observed_sharpe:.2f} "
+                            f"(+{((observed_sharpe / target_sharpe) - 1) * 100:.1f}%)"),
+                  "current": observed_sharpe, "target": target_sharpe}
     elif observed_sharpe >= SHARPE_MARGINAL:
-        gate_sharpe_status = "MARGINAL"
-        gate_sharpe_badge = "badge-amber"
-        gate_sharpe_text = f"Target: ≥ {target_sharpe:.2f} | Observed: {observed_sharpe:.2f} (Within 20%)"
+        sharpe = {"status": "MARGINAL", "badge": "badge-amber",
+                  "text": (f"Target: \u2265 {target_sharpe:.2f} | Observed: {observed_sharpe:.2f} "
+                            "(Within 20%)"),
+                  "current": observed_sharpe, "target": target_sharpe}
     else:
-        gate_sharpe_status = "FAIL"
-        gate_sharpe_badge = "badge-red"
-        gate_sharpe_text = f"Target: ≥ {target_sharpe:.2f} | Observed: {observed_sharpe:.2f} (Below threshold)"
-        
+        sharpe = {"status": "FAIL", "badge": "badge-red",
+                  "text": f"Target: \u2265 {target_sharpe:.2f} | Observed: {observed_sharpe:.2f} (Below threshold)",
+                  "current": observed_sharpe, "target": target_sharpe}
+
     target_pf = 2.50
-    observed_pf = test_arm.get("profit_factor", 0.0) if test_arm else 0.0
-    if not test_arm or test_n == 0:
-        gate_pf_status = "NO_DATA"
-        gate_pf_badge = "badge-amber"
-        gate_pf_text = f"Target: ≥ {target_pf:.2f} | Observed: NO_DATA"
+    observed_pf = arm.get("profit_factor", 0.0) or 0.0
+    if n == 0:
+        pf = {"status": "NO_DATA", "badge": "badge-amber",
+              "text": f"Target: \u2265 {target_pf:.2f} | Observed: NO_DATA",
+              "current": None, "target": target_pf}
     elif observed_pf >= target_pf:
-        gate_pf_status = "PASS"
-        gate_pf_badge = "badge-green"
-        gate_pf_text = f"Target: ≥ {target_pf:.2f} | Observed: {observed_pf:.2f}"
+        pf = {"status": "PASS", "badge": "badge-green",
+              "text": f"Target: \u2265 {target_pf:.2f} | Observed: {observed_pf:.2f}",
+              "current": observed_pf, "target": target_pf}
     elif observed_pf >= 1.80:
-        gate_pf_status = "MARGINAL"
-        gate_pf_badge = "badge-amber"
-        gate_pf_text = f"Target: ≥ {target_pf:.2f} | Observed: {observed_pf:.2f}"
+        pf = {"status": "MARGINAL", "badge": "badge-amber",
+              "text": f"Target: \u2265 {target_pf:.2f} | Observed: {observed_pf:.2f}",
+              "current": observed_pf, "target": target_pf}
     else:
-        gate_pf_status = "FAIL"
-        gate_pf_badge = "badge-red"
-        gate_pf_text = f"Target: ≥ {target_pf:.2f} | Observed: {observed_pf:.2f}"
-        
+        pf = {"status": "FAIL", "badge": "badge-red",
+              "text": f"Target: \u2265 {target_pf:.2f} | Observed: {observed_pf:.2f}",
+              "current": observed_pf, "target": target_pf}
+
     target_mdd = 4.00
-    observed_mdd = test_arm.get("max_drawdown", 0.0) if test_arm else 0.0
-    if not test_arm or test_n == 0:
-        gate_mdd_status = "NO_DATA"
-        gate_mdd_badge = "badge-amber"
-        gate_mdd_text = f"Target: < ${target_mdd:.2f} | Observed: NO_DATA"
+    observed_mdd = arm.get("max_drawdown", 0.0) or 0.0
+    if n == 0:
+        mdd = {"status": "NO_DATA", "badge": "badge-amber",
+               "text": f"Target: < ${target_mdd:.2f} | Observed: NO_DATA",
+               "current": None, "target": target_mdd}
     elif observed_mdd < target_mdd:
-        gate_mdd_status = "PASS"
-        gate_mdd_badge = "badge-green"
-        gate_mdd_text = f"Target: < ${target_mdd:.2f} | Observed: ${observed_mdd:.2f} (Protected)"
+        mdd = {"status": "PASS", "badge": "badge-green",
+               "text": f"Target: < ${target_mdd:.2f} | Observed: ${observed_mdd:.2f} (Protected)",
+               "current": observed_mdd, "target": target_mdd}
     elif observed_mdd <= 5.50:
-        gate_mdd_status = "MARGINAL"
-        gate_mdd_badge = "badge-amber"
-        gate_mdd_text = f"Target: < ${target_mdd:.2f} | Observed: ${observed_mdd:.2f}"
+        mdd = {"status": "MARGINAL", "badge": "badge-amber",
+               "text": f"Target: < ${target_mdd:.2f} | Observed: ${observed_mdd:.2f}",
+               "current": observed_mdd, "target": target_mdd}
     else:
-        gate_mdd_status = "FAIL"
-        gate_mdd_badge = "badge-red"
-        gate_mdd_text = f"Target: < ${target_mdd:.2f} | Observed: ${observed_mdd:.2f} (Excessive Drawdown)"
-        
-    ref_arm = balanced_only_arm or baseline_arm
-    ref_n = ref_arm.get("trades_count", 0) if ref_arm else 0
-    if not test_arm or test_n == 0 or ref_n == 0:
-        gate_starv_status = "NO_DATA"
-        gate_starv_badge = "badge-amber"
-        gate_starv_text = "Baseline comparison pending trade activity"
-    else:
-        drop_pct = ((ref_n - test_n) / ref_n) * 100.0 if ref_n > 0 else 0.0
-        if drop_pct <= 20.0:
-            gate_starv_status = "HEALTHY"
-            gate_starv_badge = "badge-green"
-            gate_starv_text = f"Drop: {drop_pct:+.1f}% vs {ref_arm.get('name')} ({test_n} vs {ref_n} trades) — Fast Fills Preserved"
-        elif drop_pct <= 40.0:
-            gate_starv_status = "MODERATE"
-            gate_starv_badge = "badge-amber"
-            gate_starv_text = f"Drop: {drop_pct:+.1f}% vs {ref_arm.get('name')} ({test_n} vs {ref_n} trades) — Moderate Restriction"
-        else:
-            gate_starv_status = "STARVATION"
-            gate_starv_badge = "badge-red"
-            gate_starv_text = f"Drop: {drop_pct:+.1f}% vs {ref_arm.get('name')} — Volume Starvation Detected"
-            
-    # Tournament-specific description templates
+        mdd = {"status": "FAIL", "badge": "badge-red",
+               "text": f"Target: < ${target_mdd:.2f} | Observed: ${observed_mdd:.2f} (Excessive Drawdown)",
+               "current": observed_mdd, "target": target_mdd}
+
+    return {"power": power, "sharpe": sharpe, "pf": pf, "mdd": mdd,
+            "trades_count": n, "expectancy_sufficient": sufficient,
+            "expectancy_target_n": target_n, "expectancy_remaining_n": remaining_n}
+
+
+def _arm_verdict(arm: dict[str, Any], gates: dict[str, Any]) -> tuple[str, str, str]:
+    """One arm's verdict from its own gates. Neutral copy: no arm is the
+    test subject and none inherits another's rank -- each configuration is
+    judged on its own settings."""
+    n = gates["trades_count"]
+    sharpe = gates["sharpe"]["status"]
+    mdd = gates["mdd"]["status"]
+    pf = gates["pf"]["status"]
+    sufficient = gates["expectancy_sufficient"]
+    target_n = gates["expectancy_target_n"]
+    remaining_n = gates["expectancy_remaining_n"]
+    if n == 0:
+        return ("PENDING REHEARSAL DATA", "badge-amber",
+                "No completed trades recorded for this arm yet.")
+    if sharpe == "FAIL" or mdd == "FAIL":
+        return ("REJECTED: CRITICAL RISK GATES FAILED", "badge-red",
+                "Observed Sharpe Ratio (< 2.20) or max drawdown (> $5.50) fails this arm's risk limits.")
+    if sufficient:
+        if sharpe == "PASS" and mdd == "PASS" and pf == "PASS":
+            return ("CLEARED: ALL GATES PASS AT 95%", "badge-green",
+                    f"PnL expectancy sufficient at 95% (N={n:,}); Sharpe, profit factor and drawdown inside limits.")
+        return ("NOT CLEARED: GATED METRIC BELOW STANDARD", "badge-red",
+                "Expectancy is sufficient at 95% but the arm fails one or more risk gates.")
+    if sharpe == "PASS" and mdd == "PASS":
+        if target_n:
+            return ("PROVISIONAL: RISK SHAPE HOLDS", "badge-green",
+                    f"Sharpe and drawdown hold inside limits; PnL expectancy inconclusive at 95% ({remaining_n:,} closes to go).")
+        return ("PROVISIONAL: RISK SHAPE HOLDS", "badge-green",
+                "Risk shape holds inside limits; PnL expectancy not yet measurable (need >= 2 closes).")
+    return ("INCONCLUSIVE: SAMPLE UNDERPOWERED", "badge-amber",
+            f"Sample size (N={n}) is statistically underpowered; risk shape still evaluating.")
+
+
+def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "843") -> dict[str, Any]:
+    """Per-arm decision gates plus one run-level volume check.
+
+    Every arm gets its own verdict from its own gates:
+    - Gate 1: expectancy sufficiency at 95% (own-sample sizing, required N
+      adapts to the arm -- no fixed constant, no arm-vs-arm comparison)
+    - Gate 2: Sharpe Ratio (target >= 2.70)
+    - Gate 3: Profit Factor (target >= 2.50)
+    - Gate 4: Max Drawdown (target < $4.00)
+    The run-level volume check compares fill counts between the configured
+    roles (it is explicitly a comparison, not a verdict on any arm).
+    """
     arm_map = DECISION_GATE_ARM_MAP.get(tourney_key, DECISION_GATE_ARM_MAP["843"])
-    starvation_desc = arm_map.get("starvation_desc", "Combining the test configuration severely chokes order fills. Knobs are mutually restrictive.")
-    provisional_desc_template = arm_map.get("provisional_desc", "Observed Sharpe ({sharpe:.2f}) and Drawdown (${mdd:.2f}) validate the test hypothesis without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades).")
-    
-    if test_n == 0:
-        overall_verdict = "PENDING REHEARSAL DATA"
-        overall_badge = "badge-amber"
-        overall_desc = "No completed trades recorded in active arm database yet. Rehearsal loop is running."
-    elif gate_starv_status == "STARVATION":
-        overall_verdict = "REJECTED: VOLUME STARVATION DETECTED"
-        overall_badge = "badge-red"
-        overall_desc = starvation_desc
-    elif gate_sharpe_status == "FAIL" or gate_mdd_status == "FAIL":
-        overall_verdict = "REJECTED: CRITICAL RISK GATES FAILED"
-        overall_badge = "badge-red"
-        overall_desc = "Observed risk metrics fail required Sharpe Ratio (>= 2.70) or max drawdown (< $4.00) limits."
-    elif test_n < target_n:
-        if gate_sharpe_status == "PASS" and gate_mdd_status == "PASS" and gate_starv_status == "HEALTHY":
-            overall_verdict = "PROVISIONAL PASS: COMPLEMENTARY RISK SHAPE"
-            overall_badge = "badge-green"
-            overall_desc = provisional_desc_template.format(sharpe=observed_sharpe, mdd=observed_mdd, target_n=target_n)
-        else:
-            overall_verdict = "INCONCLUSIVE: SAMPLE UNDERPOWERED"
-            overall_badge = "badge-amber"
-            overall_desc = f"Sample size (N={test_n}) is statistically underpowered. Risk shape is currently evaluating."
+    arm_verdicts = []
+    for arm in arms_data:
+        gates = _arm_gate_set(arm)
+        verdict, badge, desc = _arm_verdict(arm, gates)
+        arm_verdicts.append({
+            "name": arm.get("name", ""),
+            "label": arm.get("label", arm.get("name", "")),
+            "verdict": verdict,
+            "badge": badge,
+            "desc": desc,
+            "trades_count": gates["trades_count"],
+            "gates": {"power": gates["power"], "sharpe": gates["sharpe"],
+                      "pf": gates["pf"], "mdd": gates["mdd"]},
+        })
+
+    # Run-level volume check: does the volume arm's knob choke fills vs the
+    # reference role? Informational for the run, never a verdict on an arm.
+    vol_arm = next((a for a in arms_data if arm_map["volume_arm_pattern"] in a.get("name", "")), None)
+    ref_arm = next((a for a in arms_data if a.get("name") in arm_map["balanced_only_arm_names"]), None)
+    if ref_arm is None:
+        ref_arm = next((a for a in arms_data if a.get("name") in arm_map["baseline_arm_names"]), None)
+    vol_n = vol_arm.get("trades_count", 0) if vol_arm else 0
+    ref_n = ref_arm.get("trades_count", 0) if ref_arm else 0
+    if vol_arm is None or ref_arm is None or vol_n == 0 or ref_n == 0:
+        volume_check = {"status": "NO_DATA", "badge": "badge-amber",
+                        "text": "Volume comparison pending trade activity"}
     else:
-        if gate_sharpe_status == "PASS" and gate_mdd_status == "PASS" and gate_pf_status == "PASS" and gate_starv_status == "HEALTHY":
-            overall_verdict = "EMPIRICAL WINNER: COMPLEMENTARY EDGE VALIDATED"
-            overall_badge = "badge-green"
-            overall_desc = f"Both knobs complement each other with statistical confidence (N={test_n:,}). Champion blueprint fully cleared for production consideration."
+        drop_pct = ((ref_n - vol_n) / ref_n) * 100.0 if ref_n > 0 else 0.0
+        if drop_pct <= 20.0:
+            volume_check = {"status": "HEALTHY", "badge": "badge-green",
+                            "text": (f"Drop: {drop_pct:+.1f}% -- {vol_arm.get('name')} ({vol_n} trades) vs "
+                                    f"{ref_arm.get('name')} ({ref_n} trades) — fills flowing")}
+        elif drop_pct <= 40.0:
+            volume_check = {"status": "MODERATE", "badge": "badge-amber",
+                            "text": (f"Drop: {drop_pct:+.1f}% -- {vol_arm.get('name')} ({vol_n} trades) vs "
+                                    f"{ref_arm.get('name')} ({ref_n} trades) — moderate restriction")}
         else:
-            overall_verdict = "REJECTED: POWERED TEST FAILED CRITICAL CRITERIA"
-            overall_badge = "badge-red"
-            overall_desc = "Sample size is sufficient but arm failed one or more critical decision gates."
+            volume_check = {"status": "STARVATION", "badge": "badge-red",
+                            "text": (f"Drop: {drop_pct:+.1f}% -- {vol_arm.get('name')} ({vol_n} trades) vs "
+                                    f"{ref_arm.get('name')} ({ref_n} trades) — volume starvation detected")}
 
     return {
-        "overall_verdict": overall_verdict,
-        "overall_badge": overall_badge,
-        "overall_desc": overall_desc,
-        "test_arm_name": test_arm.get("name", "N/A") if test_arm else "N/A",
-        "test_arm_label": test_arm.get("label", "N/A") if test_arm else "N/A",
-        "test_arm_pattern": arm_map["test_arm_pattern"],
-        "total_trades": total_trades,
-        "target_n": target_n,
-        "gates": {
-            "power": {"status": gate_power_status, "badge": gate_power_badge, "text": gate_power_text, "current": test_n, "target": target_n},
-            "sharpe": {"status": gate_sharpe_status, "badge": gate_sharpe_badge, "text": gate_sharpe_text, "current": observed_sharpe, "target": target_sharpe},
-            "pf": {"status": gate_pf_status, "badge": gate_pf_badge, "text": gate_pf_text, "current": observed_pf, "target": target_pf},
-            "mdd": {"status": gate_mdd_status, "badge": gate_mdd_badge, "text": gate_mdd_text, "current": observed_mdd, "target": target_mdd},
-            "starvation": {"status": gate_starv_status, "badge": gate_starv_badge, "text": gate_starv_text},
-        },
+        "tourney_key": tourney_key,
+        "total_trades": sum(a.get("trades_count", 0) for a in arms_data),
+        "arm_verdicts": arm_verdicts,
+        "volume_check": volume_check,
     }
+
 
 
 def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
@@ -1114,14 +1370,15 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         initial_data.get("arms", []), tourney_key
     )
     
-    # Generate Per-Arm Cards for Decision Gates Tab
-    arm_map = DECISION_GATE_ARM_MAP.get(tourney_key, DECISION_GATE_ARM_MAP["843"])
-    test_pattern = arm_map["test_arm_pattern"]
+    # Generate Per-Arm Cards for Decision Gates Tab. Every arm is judged on
+    # its own settings: no arm is the test subject, none inherits another's
+    # rank, so all cards share one neutral border and carry their own verdict.
+    arm_verdict_by_name = {
+        v.get("name", ""): v for v in (decision_gates.get("arm_verdicts") or [])
+    }
     arm_cards = []
     for a in initial_data.get("arms", []):
-        is_test = test_pattern in a.get("name", "")
-        card_border = "border: 2px solid var(--blue);" if is_test else "border: 1px solid var(--border);"
-        test_badge = '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px; margin-left: 6px;">TEST ARM</span>' if is_test else ''
+        verdict = arm_verdict_by_name.get(a.get("name", ""), {})
         pnl = a.get("total_pnl", 0.0)
         pnl_str = ("+$" if pnl >= 0 else "-$") + f"{abs(pnl):.2f}"
         pnl_cls = "positive" if pnl >= 0 else "negative"
@@ -1143,15 +1400,20 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         else:
             status_label = status.upper()
             status_badge_cls = "badge-amber"
+        verdict_badge = verdict.get("badge", "badge-amber")
+        verdict_text = verdict.get("verdict", "PENDING REHEARSAL DATA")
+        verdict_desc = verdict.get("desc", "No completed trades recorded for this arm yet.")
         arm_cards.append(f"""
-        <div class="m-card" style="{card_border}">
+        <div class="m-card" data-dg-arm-card="{html.escape(a.get('name', ''))}" style="border: 1px solid var(--border);">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
             <div>
-              <div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">{html.escape(a.get('label', a.get('name', '')))}{test_badge}</div>
+              <div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">{html.escape(a.get('label', a.get('name', '')))}</div>
               <div style="font-size: 11px; color: var(--text-muted); font-family: monospace;">{html.escape(a.get('name', ''))} | Port {a.get('port', 0)}</div>
             </div>
             <span class="badge {status_badge_cls}">{html.escape(status_label)}</span>
           </div>
+          <div style="margin-bottom: 4px;"><span class="badge {verdict_badge}" style="font-size: 10px; padding: 3px 8px;">{html.escape(verdict_text)}</span></div>
+          <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4; margin-bottom: 4px;">{html.escape(verdict_desc)}</div>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; padding: 8px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font-size: 12px;">
             <div>PnL: <strong class="tabular {pnl_cls}">{pnl_str}</strong></div>
             <div>Quoted: <strong class="tabular">{quoted:,}</strong></div>
@@ -1160,6 +1422,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
             <div>Max DD: <strong class="tabular">${mdd:.2f}</strong></div>
             <div>Merge Rate: <strong class="tabular">{merge_pct:.1f}%</strong></div>
           </div>
+          {_sufficiency_mini_html(a.get('sufficiency_rows') or [])}
           <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4;">
             {html.escape(a.get('desc', ''))}
           </div>
@@ -1232,9 +1495,10 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     dm_tbody_content = "\n".join(dm_rows)
     # One pill per served tournament, each naming the run its own page shows.
     nav_pills = []
-    for key, icon in (("799", "🧪"), ("843", "🚦")):
+    for key, icon in (("799", "🧪"), ("843", "🚦"), ("905", "🏆")):
         badge = (
-            '<span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">'
+            '<span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;" '
+            f'title="The live rehearsal this cockpit follows (tournament #{CURRENT_SETUP_KEY})">'
             "CURRENT SETUP</span>"
             if key == CURRENT_SETUP_KEY else ""
         )
@@ -1669,78 +1933,43 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <!-- The tournament switcher lives in the top nav bar; the rehearsal pane
        follows whichever tournament the page is serving. -->
 
-  <!-- Overall Verdict Banner -->
+  <!-- Run-level bar: totals plus the volume check. The volume check is
+       informational for the run -- it is never a verdict on any arm. -->
   <div style="padding: 16px 20px; border-radius: 10px; margin-bottom: 20px; border: 1px solid var(--border); background: var(--bg-card); display: flex; flex-direction: column; gap: 8px;">
     <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <span class="badge {decision_gates['overall_badge']}" id="dg-verdict-badge" style="font-size: 12px; padding: 4px 10px;">{decision_gates['overall_verdict']}</span>
-        <span id="dg-test-arm" style="font-size: 13px; font-weight: 600; color: var(--text-primary);">{decision_gates['test_arm_label']}</span>
+      <div style="font-size: 12px; color: var(--text-muted);">
+        Run total: <strong class="tabular" id="dg-run-trades" style="color: var(--text-primary);">{decision_gates['total_trades']:,}</strong> closed trades — each arm below is judged on its own settings.
       </div>
-      <div id="dg-trades-text" style="font-size: 12px; color: var(--text-muted);">
-        Sample Size: <strong class="tabular" style="color: var(--text-primary);">{decision_gates['gates']['power']['current']:,}</strong> / {decision_gates['target_n']:,} closed trades
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 12px; color: var(--text-muted);">Volume check:</span>
+        <span class="badge {decision_gates['volume_check']['badge']}" id="dg-volume-badge">{decision_gates['volume_check']['status']}</span>
       </div>
     </div>
-    <div id="dg-verdict-desc" style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5;">
-      {decision_gates['overall_desc']}
-    </div>
-  </div>
-
-  <!-- 5 Critical Decision Gate Cards -->
-  <div style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;">Critical Decision Gates (5-Second Skim)</div>
-  <div class="metrics-grid" style="margin-bottom: 24px;">
-    <!-- Gate 1: Stat Power -->
-    <div class="m-card">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <span class="m-label">1. Sample Power Gate</span>
-        <span class="badge {decision_gates['gates']['power']['badge']}" id="dg-gate-power-badge">{decision_gates['gates']['power']['status']}</span>
-      </div>
-      <div class="m-val tabular" id="dg-gate-power-val">{decision_gates['gates']['power']['current']:,} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">/ {decision_gates['target_n']:,}</span></div>
-      <div class="m-sub" id="dg-gate-power-sub">{decision_gates['gates']['power']['text']}</div>
-    </div>
-
-    <!-- Gate 2: Sharpe Ratio -->
-    <div class="m-card">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <span class="m-label">2. Sharpe Ratio Gate</span>
-        <span class="badge {decision_gates['gates']['sharpe']['badge']}" id="dg-gate-sharpe-badge">{decision_gates['gates']['sharpe']['status']}</span>
-      </div>
-      <div class="m-val tabular" id="dg-gate-sharpe-val">{(f"{decision_gates['gates']['sharpe']['current']:.2f}" if decision_gates['gates']['sharpe']['status'] != 'NO_DATA' else 'NO_DATA')} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; {decision_gates['gates']['sharpe']['target']:.2f})</span></div>
-      <div class="m-sub" id="dg-gate-sharpe-sub">{decision_gates['gates']['sharpe']['text']}</div>
-    </div>
-
-    <!-- Gate 3: Profit Factor -->
-    <div class="m-card">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <span class="m-label">3. Profit Factor Gate</span>
-        <span class="badge {decision_gates['gates']['pf']['badge']}" id="dg-gate-pf-badge">{decision_gates['gates']['pf']['status']}</span>
-      </div>
-      <div class="m-val tabular" id="dg-gate-pf-val">{decision_gates['gates']['pf']['current']:.2f} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; {decision_gates['gates']['pf']['target']:.2f})</span></div>
-      <div class="m-sub" id="dg-gate-pf-sub">{decision_gates['gates']['pf']['text']}</div>
-    </div>
-
-    <!-- Gate 4: Max Drawdown -->
-    <div class="m-card">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <span class="m-label">4. Max Drawdown Gate</span>
-        <span class="badge {decision_gates['gates']['mdd']['badge']}" id="dg-gate-mdd-badge">{decision_gates['gates']['mdd']['status']}</span>
-      </div>
-      <div class="m-val tabular" id="dg-gate-mdd-val">${decision_gates['gates']['mdd']['current']:.2f} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &lt; ${decision_gates['gates']['mdd']['target']:.2f})</span></div>
-      <div class="m-sub" id="dg-gate-mdd-sub">{decision_gates['gates']['mdd']['text']}</div>
-    </div>
-
-    <!-- Gate 5: Volume Starvation -->
-    <div class="m-card">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <span class="m-label">5. Volume Starvation Check</span>
-        <span class="badge {decision_gates['gates']['starvation']['badge']}" id="dg-gate-starvation-badge">{decision_gates['gates']['starvation']['status']}</span>
-      </div>
-      <div class="m-val tabular" style="font-size: 18px;">Drop &lt; 40% Target</div>
-      <div class="m-sub" id="dg-gate-starvation-sub">{decision_gates['gates']['starvation']['text']}</div>
+    <div id="dg-volume-text" style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5;">
+      {decision_gates['volume_check']['text']}
     </div>
   </div>
 
-  <!-- Per-Arm Comparative Cards -->
-  <div style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;">Per-Arm Breakdown ({len(initial_data.get('arms', []))} Arms Under Evaluation)</div>
+  <!-- Sufficiency matrix: KPIs (rows) x arms (columns) at 90/95/99 -->
+  <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">
+    <div style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Sufficiency Matrix — KPIs x Arms</div>
+    <div id="dg-conf-toggle" style="display: flex; gap: 6px; align-items: center;">
+      <span style="font-size: 11px; color: var(--text-muted);">Confidence:</span>
+      <button type="button" class="dg-conf-btn" data-dg-conf="90" style="font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer;">90%</button>
+      <button type="button" class="dg-conf-btn" data-dg-conf="95" style="font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--green); background: var(--green-glow); color: var(--text-primary); cursor: pointer;">95%</button>
+      <button type="button" class="dg-conf-btn" data-dg-conf="99" style="font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer;">99%</button>
+    </div>
+  </div>
+  <div id="dg-arm-filter" style="margin-bottom: 12px; font-size: 12px;">
+    <span style="font-size: 11px; color: var(--text-muted); margin-right: 8px;">Show arms:</span>{_dg_filter_html(initial_data.get('arms', []))}
+  </div>
+  <div id="dg-matrix-container" class="table-box" style="margin-bottom: 24px;">{_dg_matrix_html(initial_data.get('arms', []), 95)}</div>
+
+    <!-- Retired single-arm gate cards (Gate 2+) removed: every arm now
+         carries its own gates; the matrix above and the arm cards below
+         are the decision-gates surface. -->
+  <!-- Per-Arm Verdict Cards: each arm judged on its own gates -->
+  <div style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;">Per-Arm Verdicts ({len(initial_data.get('arms', []))} Arms — Each Judged On Its Own Gates)</div>
   <div id="dg-arm-cards-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-bottom: 24px;">
     {arm_cards_html}
   </div>
@@ -2615,15 +2844,170 @@ function fetchLiveStats() {{
     }});
 }}
 
+function suffMiniHtml(rows) {{
+  if (!rows || !rows.length) {{
+    return '<div style="font-size: 11.5px; color: var(--text-muted);">' +
+      'Per-KPI Sufficiency: unmeasured — arm has not reported yet.</div>';
+  }}
+  let body = '';
+  rows.forEach(r => {{
+    const lv95 = ((r.levels || []).filter(lv => lv.confidence_pct === 95)[0]) || {{}};
+    const req = (lv95.required_n != null ? Number(lv95.required_n).toLocaleString() : '—');
+    const prog = (typeof lv95.progress_pct === 'number' ? lv95.progress_pct : null);
+    let verdict, badge;
+    if (r.sufficient_95 === true) {{ verdict = 'SUFFICIENT'; badge = 'badge-green'; }}
+    else if (lv95.required_n == null) {{ verdict = '—'; badge = ''; }}
+    else {{ verdict = 'LOCKED'; badge = 'badge-amber'; }}
+    const bar = (prog !== null)
+      ? '<div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; min-width: 48px;">' +
+        '<div style="background: var(--green); height: 6px; border-radius: 4px; width: ' + prog + '%;"></div></div>'
+      : '<span style="color: var(--text-muted);">—</span>';
+    const badgeHtml = badge
+      ? '<span class="badge ' + badge + '" style="font-size: 9px; padding: 2px 6px;">' + verdict + '</span>'
+      : '<span style="color: var(--text-muted);">—</span>';
+    body += '<tr><td style="padding: 2px 4px 2px 0;">' + escHtml(r.label || r.key) + '</td>' +
+      '<td class="tabular" style="padding: 2px 4px; white-space: nowrap;">' + (r.base_n || 0) + ' ' + escHtml(r.base || 'closes') + '</td>' +
+      '<td class="tabular" style="padding: 2px 4px;">' + req + '</td>' +
+      '<td style="padding: 2px 4px;">' + bar + '</td>' +
+      '<td style="padding: 2px 0 2px 4px; text-align: right;">' + badgeHtml + '</td></tr>';
+  }});
+  return '<div style="margin: 8px 0 4px; padding-top: 8px; border-top: 1px solid var(--border);">' +
+    '<div style="font-size: 11px; font-weight: 700; color: var(--text-muted); ' +
+    'text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">' +
+    'Per-KPI Sufficiency @95%</div>' +
+    '<table style="width: 100%; font-size: 11px; border-collapse: collapse;">' + body + '</table></div>';
+}}
+
+// Decision-gates view state: the selected confidence level (90/95/99,
+// striving for 95) and the arms hidden by the operator's filter. This is a
+// view choice, not poll data, so it survives the 5-second repaints.
+var dgConfidence = 95;
+var dgHiddenArms = {{}};
+var dgControlsWired = false;
+
+function dgVisibleArms(arms) {{
+  return (arms || []).filter(a => !dgHiddenArms[a.name]);
+}}
+
+function dgVerdictFor(name) {{
+  const vs = (state.decision_gates && state.decision_gates.arm_verdicts) || [];
+  for (const v of vs) {{
+    if (v.name === name) return v;
+  }}
+  return {{}};
+}}
+
+function dgCellHtml(row, confidence) {{
+  if (!row) return '<span style="color: var(--text-muted);">unmeasured</span>';
+  let lv = null;
+  for (const c of (row.levels || [])) {{
+    if (c.confidence_pct === confidence) lv = c;
+  }}
+  lv = lv || {{}};
+  const req = lv.required_n;
+  const baseN = row.base_n || 0;
+  const prog = lv.progress_pct;
+  if (req == null) return '<span style="color: var(--text-muted);">unmeasured</span>';
+  let sufficient = row.sufficient_95 === true && confidence === 95;
+  if (confidence !== 95 && typeof prog === 'number' && prog >= 100) sufficient = true;
+  const badge = sufficient
+    ? '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px;">SUFFICIENT</span>'
+    : '<span class="badge badge-amber" style="font-size: 9px; padding: 2px 6px;">LOCKED</span>';
+  const bar = (typeof prog === 'number')
+    ? '<div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; margin-top: 3px;">' +
+      '<div style="background: var(--green); height: 6px; border-radius: 4px; width: ' + prog + '%;"></div></div>'
+    : '';
+  return badge + '<div style="font-size: 10.5px; margin-top: 2px;"><span class="tabular">' +
+    baseN + ' / ' + req.toLocaleString() + '</span></div>' + bar;
+}}
+
+function dgMatrixHtml(arms, confidence) {{
+  const list = dgVisibleArms(arms);
+  if (!list.length) {{
+    return '<div style="font-size: 12px; color: var(--text-muted);">' +
+      'All arms filtered out — tick at least one arm above.</div>';
+  }}
+  const keys = [];
+  const labels = {{}};
+  list.forEach(a => {{
+    (a.sufficiency_rows || []).forEach(r => {{
+      if (r && r.key && !(r.key in labels)) {{ keys.push(r.key); labels[r.key] = r.label || r.key; }}
+    }});
+  }});
+  if (!keys.length) {{
+    return '<div style="font-size: 12px; color: var(--text-muted);">' +
+      'KPI matrix unmeasured — no arm has reported sufficiency rows yet.</div>';
+  }}
+  const byArm = {{}};
+  list.forEach(a => {{
+    const m = {{}};
+    (a.sufficiency_rows || []).forEach(r => {{ if (r && r.key) m[r.key] = r; }});
+    byArm[a.name] = m;
+  }});
+  let head = '<th style="text-align: left;">KPI x Arm @ ' + confidence + '%</th>';
+  list.forEach(a => {{
+    head += '<th>' + escHtml(a.label || a.name) + '</th>';
+  }});
+  let body = '';
+  keys.forEach(k => {{
+    let cells = '<td style="text-align: left;">' + escHtml(labels[k]) + '</td>';
+    list.forEach(a => {{
+      cells += '<td>' + dgCellHtml(byArm[a.name][k] || null, confidence) + '</td>';
+    }});
+    body += '<tr>' + cells + '</tr>';
+  }});
+  return '<table id="dg-matrix-table" style="width: 100%; font-size: 11.5px; border-collapse: collapse;">' +
+    '<thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table>' +
+    '<div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">' +
+    'Have / Need closes at ' + confidence + '% confidence. SUFFICIENT unlocks that KPI\u2019s verdict; ' +
+    'LOCKED is still gathering closes; unmeasured means the arm has not reported that KPI yet.</div>';
+}}
+
+function renderDgMatrix() {{
+  const el = document.getElementById('dg-matrix-container');
+  if (!el) return;
+  el.innerHTML = dgMatrixHtml(state.arms, dgConfidence);
+}}
+
+function dgWireControls() {{
+  if (dgControlsWired) return;
+  dgControlsWired = true;
+  const toggle = document.getElementById('dg-conf-toggle');
+  if (toggle) {{
+    toggle.addEventListener('click', ev => {{
+      const btn = ev.target && ev.target.closest ? ev.target.closest('[data-dg-conf]') : null;
+      if (!btn) return;
+      dgConfidence = parseInt(btn.getAttribute('data-dg-conf'), 10) || 95;
+      const btns = toggle.querySelectorAll('[data-dg-conf]');
+      btns.forEach(b => {{
+        const on = b.getAttribute('data-dg-conf') === String(dgConfidence);
+        b.style.border = on ? '1px solid var(--green)' : '1px solid var(--border)';
+        b.style.background = on ? 'var(--green-glow)' : 'transparent';
+        b.style.color = on ? 'var(--text-primary)' : 'var(--text-muted)';
+      }});
+      renderDgMatrix();
+    }});
+  }}
+  const filter = document.getElementById('dg-arm-filter');
+  if (filter) {{
+    filter.addEventListener('change', ev => {{
+      const box = ev.target && ev.target.closest ? ev.target.closest('[data-dg-arm-toggle]') : null;
+      if (!box) return;
+      const name = box.getAttribute('data-dg-arm-toggle');
+      if (box.checked) {{ delete dgHiddenArms[name]; }}
+      else {{ dgHiddenArms[name] = true; }}
+      renderDgArmCards(state.arms);
+      renderDgMatrix();
+    }});
+  }}
+}}
+
 function renderDgArmCards(arms) {{
   const container = document.getElementById('dg-arm-cards-container');
   if (!container) return;
-  const testPattern = (state.decision_gates && state.decision_gates.test_arm_pattern) || '';
   let html = '';
-  arms.forEach(a => {{
-    const isTest = testPattern !== '' && (a.name || '').includes(testPattern);
-    const border = isTest ? 'border: 2px solid var(--blue);' : 'border: 1px solid var(--border);';
-    const badge = isTest ? '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px; margin-left: 6px;">TEST ARM</span>' : '';
+  dgVisibleArms(arms).forEach(a => {{
+    const v = dgVerdictFor(a.name);
     const pnl = a.total_pnl || 0.0;
     const pnlStr = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
     const pnlCls = pnl >= 0 ? 'positive' : 'negative';
@@ -2638,14 +3022,16 @@ function renderDgArmCards(arms) {{
       statusLabel = 'QUOTING (' + quoted + ')';
       statusCls = 'badge-green';
     }}
-    html += '<div class="m-card" style="' + border + '">' +
+    html += '<div class="m-card" data-dg-arm-card="' + escHtml(a.name || '') + '" style="border: 1px solid var(--border);">' +
       '<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">' +
         '<div>' +
-          '<div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">' + escHtml(a.label || a.name) + badge + '</div>' +
+          '<div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">' + escHtml(a.label || a.name) + '</div>' +
           '<div style="font-size: 11px; color: var(--text-muted); font-family: monospace;">' + escHtml(a.name) + ' | Port ' + (a.port || 0) + '</div>' +
         '</div>' +
         '<span class="badge ' + statusCls + '">' + escHtml(statusLabel) + '</span>' +
       '</div>' +
+      '<div style="margin-bottom: 4px;"><span class="badge ' + (v.badge || 'badge-amber') + '" style="font-size: 10px; padding: 3px 8px;">' + escHtml(v.verdict || 'PENDING REHEARSAL DATA') + '</span></div>' +
+      '<div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4; margin-bottom: 4px;">' + escHtml(v.desc || 'No completed trades recorded for this arm yet.') + '</div>' +
       '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; padding: 8px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font-size: 12px;">' +
         '<div>PnL: <strong class="tabular ' + pnlCls + '">' + pnlStr + '</strong></div>' +
         '<div>Quoted: <strong class="tabular">' + quoted.toLocaleString() + '</strong></div>' +
@@ -2654,6 +3040,7 @@ function renderDgArmCards(arms) {{
         '<div>Max DD: <strong class="tabular">$' + (a.max_drawdown || 0).toFixed(2) + '</strong></div>' +
         '<div>Merge Rate: <strong class="tabular">' + (a.merge_rate || 0).toFixed(1) + '%</strong></div>' +
       '</div>' +
+      suffMiniHtml(a.sufficiency_rows || []) +
       '<div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4;">' + escHtml(a.desc || '') + '</div>' +
     '</div>';
   }});
@@ -2662,42 +3049,22 @@ function renderDgArmCards(arms) {{
 
 function updateDecisionGatesUI() {{
   if (!state || !state.decision_gates) return;
+  dgWireControls();
   if (state.arms) {{
     renderDgArmCards(state.arms);
+    renderDgMatrix();
   }}
   const dg = state.decision_gates;
-  const vBadge = document.getElementById('dg-verdict-badge');
-  if (vBadge) {{
-    vBadge.className = 'badge ' + (dg.overall_badge || 'badge-amber');
-    vBadge.textContent = dg.overall_verdict || 'PENDING';
+  const runTrades = document.getElementById('dg-run-trades');
+  if (runTrades) runTrades.textContent = (dg.total_trades || 0).toLocaleString();
+  const vol = dg.volume_check || {{}};
+  const volBadge = document.getElementById('dg-volume-badge');
+  if (volBadge) {{
+    volBadge.className = 'badge ' + (vol.badge || 'badge-amber');
+    volBadge.textContent = vol.status || 'NO_DATA';
   }}
-  const vDesc = document.getElementById('dg-verdict-desc');
-  if (vDesc) vDesc.textContent = dg.overall_desc || '';
-  const vArm = document.getElementById('dg-test-arm');
-  if (vArm) vArm.textContent = dg.test_arm_label || '';
-  const vTrades = document.getElementById('dg-trades-text');
-  if (vTrades && dg.gates && dg.gates.power) {{
-    vTrades.innerHTML = 'Sample Size: <strong class="tabular" style="color: var(--text-primary);">' + (dg.gates.power.current || 0).toLocaleString() + '</strong> / ' + (dg.target_n || 2117).toLocaleString() + ' closed trades';
-  }}
-  ['power', 'sharpe', 'pf', 'mdd', 'starvation'].forEach(g => {{
-    if (dg.gates && dg.gates[g]) {{
-      const gate = dg.gates[g];
-      const badge = document.getElementById('dg-gate-' + g + '-badge');
-      if (badge) {{
-        badge.className = 'badge ' + (gate.badge || 'badge-amber');
-        badge.textContent = gate.status || 'NO_DATA';
-      }}
-      const val = document.getElementById('dg-gate-' + g + '-val');
-      if (val) {{
-        if (g === 'power') val.innerHTML = (gate.current || 0).toLocaleString() + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">/ ' + (gate.target || 2117).toLocaleString() + '</span>';
-        else if (g === 'sharpe') val.innerHTML = (gate.status === 'NO_DATA' || gate.current == null ? 'NO_DATA' : Number(gate.current).toFixed(2)) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.7).toFixed(2) + ')</span>';
-        else if (g === 'pf') val.innerHTML = (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.5).toFixed(2) + ')</span>';
-        else if (g === 'mdd') val.innerHTML = '$' + (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &lt; $' + (gate.target || 4.0).toFixed(2) + ')</span>';
-      }}
-      const sub = document.getElementById('dg-gate-' + g + '-sub');
-      if (sub) sub.textContent = gate.text || '';
-    }}
-  }});
+  const volText = document.getElementById('dg-volume-text');
+  if (volText) volText.textContent = vol.text || '';
 }}
 // Polling interval
 setInterval(fetchLiveStats, 5000);
