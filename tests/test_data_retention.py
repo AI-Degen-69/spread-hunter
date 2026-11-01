@@ -421,3 +421,123 @@ def test_runtime_walk_does_not_follow_dir_symlinks(tmp_path: Path):
     assert len(link_items) == 1
     assert link_items[0].action == AuditAction.KEEP
 
+def test_tournament_stores_and_artifacts_audited(tmp_path: Path):
+    """Tournament directories, stores, and artifacts under data/tournaments/ are scanned and audited."""
+    tournaments_dir = tmp_path / "data" / "tournaments"
+    t_run = tournaments_dir / "i905-test"
+    t_run.mkdir(parents=True)
+    logs_dir = t_run / "logs"
+    logs_dir.mkdir()
+
+    active_db = t_run / "balanced-mid.db"
+    active_db.write_text("db content")
+    active_wal = t_run / "balanced-mid.db-wal"
+    active_wal.write_text("wal content")
+    plan_json = t_run / "plan.json"
+    plan_json.write_text("{}")
+    log_file = logs_dir / "arm-01.log"
+    log_file.write_text("log content")
+
+    # Older tournament (> 14 days)
+    old_run = tournaments_dir / "i799-old"
+    old_run.mkdir(parents=True)
+    stale_db = old_run / "loose.db"
+    stale_db.write_text("stale db content")
+    old_time = time.time() - (30 * 86400)
+    os.utime(stale_db, (old_time, old_time))
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=True)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    item_map = {it.path.name: it for it in items}
+    assert "balanced-mid.db" in item_map
+    assert item_map["balanced-mid.db"].family == "tournament_store"
+    assert item_map["balanced-mid.db"].action == AuditAction.KEEP
+
+    assert "balanced-mid.db-wal" in item_map
+    assert item_map["balanced-mid.db-wal"].family == "sqlite_sibling"
+    assert item_map["balanced-mid.db-wal"].action == AuditAction.KEEP
+
+    assert "plan.json" in item_map
+    assert item_map["plan.json"].family == "tournament_artifact"
+    assert item_map["plan.json"].action == AuditAction.KEEP
+
+    assert "arm-01.log" in item_map
+    assert item_map["arm-01.log"].family == "tournament_artifact"
+    assert item_map["arm-01.log"].action == AuditAction.KEEP
+
+    assert "loose.db" in item_map
+    assert item_map["loose.db"].family == "tournament_store"
+    # Even if stale, newest is preserved if only one or if another is kept,
+    # let's test with preserve_newest_per_family=False:
+    policy_no_preserve = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=False)
+    items_no_preserve = audit_storage(base_dir=tmp_path, policy=policy_no_preserve)
+    stale_item = next(it for it in items_no_preserve if it.path.name == "loose.db")
+    assert stale_item.action == AuditAction.DELETE
+
+
+def test_arbitrary_database_store_in_data_audited(tmp_path: Path):
+    """Non-shadow, non-protected databases in data/ are audited under database_store."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    custom_db = data_dir / "custom_model.db"
+    custom_db.write_text("custom db")
+
+    policy = DataRetentionPolicy(retention_days=14)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    item = next(it for it in items if it.path.name == "custom_model.db")
+    assert item.family == "database_store"
+    assert item.action == AuditAction.KEEP
+
+def test_database_store_preserves_db_with_recent_wal(tmp_path: Path):
+    """An old database file is kept if its WAL or SHM sibling indicates recent activity."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    db_file = data_dir / "active_trader.db"
+    db_file.write_text("old base content")
+    wal_file = data_dir / "active_trader.db-wal"
+    wal_file.write_text("recent wal content")
+
+    old_time = time.time() - (30 * 86400)
+    os.utime(db_file, (old_time, old_time))
+    recent_time = time.time() - (1 * 86400)
+    os.utime(wal_file, (recent_time, recent_time))
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=False)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    db_item = next(it for it in items if it.path.name == "active_trader.db")
+    assert db_item.action == AuditAction.KEEP
+    assert "within 14d" in db_item.reason
+
+
+def test_all_stale_tournament_preserves_newest_real_db_with_symlink(tmp_path: Path):
+    """When all tournament databases are stale, newest real database is preserved despite symlinks."""
+    tournaments_dir = tmp_path / "data" / "tournaments" / "i799-stale"
+    tournaments_dir.mkdir(parents=True)
+
+    db_old = tournaments_dir / "arm_old.db"
+    db_old.write_text("content old")
+    t_old = time.time() - (40 * 86400)
+    os.utime(db_old, (t_old, t_old))
+
+    db_newest = tournaments_dir / "arm_newer.db"
+    db_newest.write_text("content newest")
+    t_newest = time.time() - (20 * 86400)
+    os.utime(db_newest, (t_newest, t_newest))
+
+    outside = tmp_path / "outside_file.txt"
+    outside.write_text("outside")
+    symlink_file = tournaments_dir / "link.db"
+    try:
+        symlink_file.symlink_to(outside)
+    except OSError:
+        pass
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=True)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    items_by_name = {it.path.name: it for it in items}
+    assert items_by_name["arm_newest.db" if "arm_newest.db" in items_by_name else "arm_newer.db"].action == AuditAction.KEEP
+    assert items_by_name["arm_old.db"].action == AuditAction.DELETE

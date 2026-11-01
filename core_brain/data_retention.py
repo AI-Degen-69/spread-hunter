@@ -287,6 +287,35 @@ def audit_storage(
                     )
                     continue
 
+                # Any other database store in data/
+                if name.endswith(".db"):
+                    # SQLite databases must be evaluated as a single store with their siblings:
+                    # if a WAL or SHM file has newer activity, use that mtime.
+                    effective_mtime = mtime
+                    for ext in ("-wal", "-shm"):
+                        sib = entry.parent / f"{name}{ext}"
+                        if sib.exists():
+                            try:
+                                effective_mtime = max(effective_mtime, sib.stat().st_mtime)
+                            except OSError:
+                                pass
+                    db_age_days = max(0.0, (now - effective_mtime) / 86400.0)
+                    items.append(
+                        AuditItem(
+                            path=entry,
+                            family="database_store",
+                            action=AuditAction.KEEP if db_age_days <= policy.retention_days else AuditAction.DELETE,
+                            reason=(
+                                f"Database store within {policy.retention_days}d retention window ({db_age_days:.1f}d old)"
+                                if db_age_days <= policy.retention_days
+                                else f"Database store exceeds {policy.retention_days}d retention window ({db_age_days:.1f}d old)"
+                            ),
+                            size_bytes=size,
+                            mtime=effective_mtime,
+                        )
+                    )
+                    continue
+
                 # Other generic file in data/
                 items.append(
                     AuditItem(
@@ -300,7 +329,154 @@ def audit_storage(
                 )
 
             elif entry.is_dir():
-                if entry.name == "archive":
+                if entry.name == "tournaments":
+                    for child in _iter_audit_leaves(entry):
+                        if child.is_symlink():
+                            items.append(
+                                AuditItem(
+                                    path=child,
+                                    family="tournament_symlink",
+                                    action=AuditAction.KEEP,
+                                    reason="Symbolic link (not followed)",
+                                    size_bytes=0,
+                                    mtime=now,
+                                )
+                            )
+                            continue
+                        if not child.is_file():
+                            continue
+                        c_stat = child.stat()
+                        c_size = c_stat.st_size
+                        c_mtime = c_stat.st_mtime
+                        c_age_days = max(0.0, (now - c_mtime) / 86400.0)
+                        c_name = child.name
+
+                        if is_protected_registry_path(child):
+                            items.append(
+                                AuditItem(
+                                    path=child,
+                                    family="production_registry",
+                                    action=AuditAction.PROTECTED,
+                                    reason="Production registry (strictly protected)",
+                                    size_bytes=c_size,
+                                    mtime=c_mtime,
+                                )
+                            )
+                            continue
+
+                        # Check excluded names and user protected patterns inside tournaments
+                        if c_name.lower() in [f.lower() for f in policy.excluded_filenames]:
+                            items.append(
+                                AuditItem(
+                                    path=child,
+                                    family="tournament_excluded",
+                                    action=AuditAction.KEEP,
+                                    reason="Excluded file (preserved)",
+                                    size_bytes=c_size,
+                                    mtime=c_mtime,
+                                )
+                            )
+                            continue
+
+                        if any(re.search(pat, c_name, re.IGNORECASE) for pat in policy.user_protected_patterns):
+                            items.append(
+                                AuditItem(
+                                    path=child,
+                                    family="user_protected",
+                                    action=AuditAction.KEEP,
+                                    reason=f"User protected pattern match ({c_name})",
+                                    size_bytes=c_size,
+                                    mtime=c_mtime,
+                                )
+                            )
+                            continue
+
+                        if c_name.endswith("-wal") or c_name.endswith("-shm"):
+                            base_name = re.sub(r"-(wal|shm)$", "", c_name)
+                            base_file = child.parent / base_name
+                            if not base_file.exists():
+                                items.append(
+                                    AuditItem(
+                                        path=child,
+                                        family="orphan_wal_shm",
+                                        action=AuditAction.DELETE,
+                                        reason=f"Orphan SQLite WAL/SHM file (base {base_name} missing)",
+                                        size_bytes=c_size,
+                                        mtime=c_mtime,
+                                    )
+                                )
+                            else:
+                                items.append(
+                                    AuditItem(
+                                        path=child,
+                                        family="sqlite_sibling",
+                                        action=AuditAction.KEEP,
+                                        reason=f"SQLite journal/index sibling of existing base database ({base_name})",
+                                        size_bytes=c_size,
+                                        mtime=c_mtime,
+                                    )
+                                )
+                            continue
+
+                        if c_name.endswith(".db"):
+                            # Check sibling WAL/SHM timestamps for recent activity
+                            effective_c_mtime = c_mtime
+                            for ext in ("-wal", "-shm"):
+                                sib = child.parent / f"{c_name}{ext}"
+                                if sib.exists():
+                                    try:
+                                        effective_c_mtime = max(effective_c_mtime, sib.stat().st_mtime)
+                                    except OSError:
+                                        pass
+                            t_db_age_days = max(0.0, (now - effective_c_mtime) / 86400.0)
+                            items.append(
+                                AuditItem(
+                                    path=child,
+                                    family="tournament_store",
+                                    action=AuditAction.KEEP if t_db_age_days <= policy.retention_days else AuditAction.DELETE,
+                                    reason=(
+                                        f"Tournament DB within {policy.retention_days}d ({t_db_age_days:.1f}d old)"
+                                        if t_db_age_days <= policy.retention_days
+                                        else f"Tournament DB exceeds {policy.retention_days}d ({t_db_age_days:.1f}d old)"
+                                    ),
+                                    size_bytes=c_size,
+                                    mtime=effective_c_mtime,
+                                )
+                            )
+                            continue
+
+                        if c_name.endswith(".log") or c_name.endswith(".json"):
+                            items.append(
+                                AuditItem(
+                                    path=child,
+                                    family="tournament_artifact",
+                                    action=AuditAction.KEEP if c_age_days <= policy.retention_days else AuditAction.DELETE,
+                                    reason=(
+                                        f"Tournament artifact within {policy.retention_days}d ({c_age_days:.1f}d old)"
+                                        if c_age_days <= policy.retention_days
+                                        else f"Tournament artifact exceeds {policy.retention_days}d ({c_age_days:.1f}d old)"
+                                    ),
+                                    size_bytes=c_size,
+                                    mtime=c_mtime,
+                                )
+                            )
+                            continue
+
+                        items.append(
+                            AuditItem(
+                                path=child,
+                                family="tournament_other",
+                                action=AuditAction.KEEP if c_age_days <= policy.retention_days else AuditAction.DELETE,
+                                reason=(
+                                    f"Tournament file within {policy.retention_days}d ({c_age_days:.1f}d old)"
+                                    if c_age_days <= policy.retention_days
+                                    else f"Tournament file exceeds {policy.retention_days}d ({c_age_days:.1f}d old)"
+                                ),
+                                size_bytes=c_size,
+                                mtime=c_mtime,
+                            )
+                        )
+                elif entry.name == "archive":
                     for arch_entry in entry.iterdir():
                         if arch_entry.is_file():
                             stat = arch_entry.stat()
@@ -443,7 +619,7 @@ def audit_storage(
             family_groups.setdefault(it.family, []).append(it)
 
         for fam, group in family_groups.items():
-            if fam in ("rehearsal_stats", "archive", "reports"):
+            if fam in ("rehearsal_stats", "archive", "reports", "tournament_store", "database_store"):
                 # If all items in this family are marked DELETE, keep the newest one
                 if all(it.action == AuditAction.DELETE for it in group) and len(group) > 0:
                     newest = max(group, key=lambda x: x.mtime)

@@ -59,7 +59,7 @@ def test_menu_key_set_is_identical_everywhere():
     place silently misses another — the exact drift that hid `t` from the
     prompt and let `audit`/`prune` live outside the grid.
     """
-    assert _menu_keys() == ["s", "k", "f", "d", "7", "8", "9", "a", "p", "t", "q", "x"]
+    assert _menu_keys() == ["s", "k", "f", "d", "7", "8", "9", "a", "p", "t", "q"]
     src = _menu_source()
     # The allow-list reads that same list, not a hand-written literal.
     assert "$script:MenuKeys -notcontains $key" in src
@@ -154,7 +154,7 @@ if ($script:pruneForce -ne $true)  { $failures.Add("p did not pass Force under -
 $Yes = $false; Invoke-LiveAction "p"
 if ($script:pruneForce -ne $false) { $failures.Add("p passed Force without -Yes") | Out-Null }
 $warned = (Invoke-LiveAction "z" *>&1 | Out-String)
-if (-not $warned.Contains("7-9, s, k, f, d, a, p, t, q, x")) { $failures.Add("warn did not name the full hint") | Out-Null }
+if (-not $warned.Contains("7-9, s, k, f, d, a, p, t, q")) { $failures.Add("warn did not name the full hint") | Out-Null }
 if ($failures.Count) { $failures | ForEach-Object { Write-Host ("FAIL " + $_) }; exit 1 }
 Write-Host "ALL DISPATCH CHECKS PASS"
 """,
