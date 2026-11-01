@@ -2975,3 +2975,141 @@ def test_stitch_orders_badge_value_edge_sep_styles_are_removed():
     assert ".is-partial" not in css
 
 
+
+@requires_node
+def test_live_market_with_negative_days_to_resolve_stays_in_open_positions_and_active_markets():
+    cid = "0xlivematch"
+    kpi = {
+        "by_market": {
+            cid: {
+                "condition_id": cid,
+                "title": "Will Como 1907 win on 2026-11-01?",
+                "category": "Serie A",
+                "days_to_resolve": -0.03,
+                "volume_24h": 287000.0,
+                "resolved": False,
+                "quotes_count": 2,
+                "up_sh": 10.0,
+                "up_cost": 7.50,
+                "dn_sh": 0.0,
+                "dn_cost": 0.0,
+                "total_sh": 10.0,
+                "total_cost": 7.50,
+                "pair_cost": 0.94,
+                "realized_pnl": 0.0,
+                "event_live": True,
+                "quotes": [
+                    _quote("tok-up", "UP", 0.75, 100.0),
+                    _quote("tok-dn", "DN", 0.19, 100.0),
+                ],
+            }
+        }
+    }
+    state = {
+        "orders": [
+            {
+                "order_id": "ord-dn-hedge",
+                "condition_id": cid,
+                "token_id": "tok-dn",
+                "pair_id": "pair-live",
+                "side": "BUY",
+                "price": 0.19,
+                "original_size": 10.0,
+                "size_matched": 0.0,
+                "size_remaining": 10.0,
+                "status": "open",
+                "posted_ts": 1000,
+                "age_sec": 60.0,
+            }
+        ]
+    }
+    rendered = _render("positions", kpi, state, surface="stitch")
+    assert rendered["counts"]["positions"] == 1
+    assert cid in _cids(rendered)
+    assert "Will Como 1907 win on 2026-11-01?" in rendered["html"]
+    assert "No legs have filled, so nothing is held." not in rendered["html"]
+
+    active = _render("active-markets", kpi, state, surface="stitch")
+    assert active["counts"]["active-markets"] == 1
+    assert cid in _cids(active)
+
+
+@requires_node
+def test_live_market_without_inventory_stays_active_via_live_event_flag():
+    cid = "0xlive_no_inv"
+    kpi = {
+        "by_market": {
+            cid: {
+                "condition_id": cid,
+                "title": "Live Match No Inventory",
+                "category": "Serie A",
+                "days_to_resolve": -0.03,
+                "volume_24h": 50000.0,
+                "resolved": False,
+                "quotes_count": 2,
+                "up_sh": 0.0,
+                "dn_sh": 0.0,
+                "total_sh": 0.0,
+                "total_cost": 0.0,
+                "realized_pnl": 0.0,
+                "event_live": True,
+                "quotes": [
+                    _quote("tok-up", "UP", 0.75, 100.0),
+                    _quote("tok-dn", "DN", 0.19, 100.0),
+                ],
+            }
+        }
+    }
+    state = {"orders": []}
+    active = _render("active-markets", kpi, state, surface="stitch")
+    assert active["counts"]["active-markets"] == 1
+    assert cid in _cids(active)
+
+
+@requires_node
+def test_non_live_market_with_negative_days_to_resolve_stays_active_via_resting_order():
+    cid = "0xresting_neg_dtr"
+    kpi = {
+        "by_market": {
+            cid: {
+                "condition_id": cid,
+                "title": "Expired Market With Resting Order",
+                "category": "Serie A",
+                "days_to_resolve": -0.03,
+                "volume_24h": 50000.0,
+                "resolved": False,
+                "quotes_count": 2,
+                "up_sh": 0.0,
+                "dn_sh": 0.0,
+                "total_sh": 0.0,
+                "total_cost": 0.0,
+                "realized_pnl": 0.0,
+                "event_live": False,
+                "quotes": [
+                    _quote("tok-up", "UP", 0.75, 100.0),
+                    _quote("tok-dn", "DN", 0.19, 100.0),
+                ],
+            }
+        }
+    }
+    state = {
+        "orders": [
+            {
+                "order_id": "ord-resting-test",
+                "condition_id": cid,
+                "token_id": "tok-dn",
+                "pair_id": "pair-test",
+                "side": "BUY",
+                "price": 0.19,
+                "original_size": 10.0,
+                "size_matched": 0.0,
+                "size_remaining": 10.0,
+                "status": "open",
+                "posted_ts": 1000,
+                "age_sec": 60.0,
+            }
+        ]
+    }
+    active = _render("active-markets", kpi, state, surface="stitch")
+    assert active["counts"]["active-markets"] == 1
+    assert cid in _cids(active)

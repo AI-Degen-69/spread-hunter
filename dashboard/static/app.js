@@ -9187,8 +9187,14 @@ function queueAheadByOrder(kpi) {
 }
 
 function isFinishedMarket(m) {
-  return m.resolved === true
-    || (m.days_to_resolve !== null && m.days_to_resolve !== undefined && m.days_to_resolve < 0);
+  if (!m) return false;
+  if (m.resolved === true) return true;
+  // A market holding inventory is live exposure — never finished.
+  const totalSh = Number(m.total_sh) || ((Number(m.up_sh) || 0) + (Number(m.dn_sh) || 0));
+  if (totalSh > 0) return false;
+  // A live sports / in-progress event has not finished even if past scheduled start.
+  if (m.event_live || m.live_event) return false;
+  return m.days_to_resolve !== null && m.days_to_resolve !== undefined && m.days_to_resolve < 0;
 }
 
 /* How old a market's newest quote may be and still count as "being quoted".
@@ -9207,8 +9213,8 @@ const QUOTE_STALE_MS = 15 * 60 * 1000;
 /* Quoted means the bot is working this market right now: it has a resting
  * order, or it logged a quote inside QUOTE_STALE_MS. */
 function isQuotedMarket(m, orders, nowMs) {
-  if (isFinishedMarket(m)) return false;
   if ((orders || []).some(o => isRestingOrder(o))) return true;
+  if (isFinishedMarket(m)) return false;
   if (!((m.quotes_count || 0) > 0)) return false;
   // No timestamp in the payload is unmeasured, not stale: the trim keeps the
   // newest quote per leg, so this only fires on a payload that dropped them --

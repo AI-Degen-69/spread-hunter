@@ -1747,6 +1747,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None,
             "resolved": (cid.lower() in resolution_cids)
                        or (isinstance(meta.get("days_to_resolve"), (int, float))
                            and meta.get("days_to_resolve") < 0
+                           and not (meta.get("event_live") or meta.get("live_event"))
                            and cid not in active_order_cids
                            and not (up_sh > 0 or dn_sh > 0)),
             # Winner + resolved time when the sweeper recorded a resolution,
@@ -1822,6 +1823,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None,
                     and not ((m.get("up_sh") or 0) > 0 or (m.get("dn_sh") or 0) > 0)
                     and m.get("days_to_resolve") is not None
                     and m.get("days_to_resolve") < 0
+                    and not (m.get("event_live") or m.get("live_event"))
                     and not m["settlements"]
                 )
                 and (m["quotes_count"] > 0 or m["fills_count"] > 0
