@@ -539,6 +539,9 @@ function dbModeVerdicts() {
       activeRunId: v.activeRunId,
       hereRunning: v.hereRunning,
       liveElsewhere: v.liveElsewhere.map(r => r.runId),
+      liveStackServices: v.liveStackServices,
+      liveStackComplete: v.liveStackComplete,
+      liveElsewhereComplete: v.liveElsewhere.map(r => r.complete),
     };
   };
   const dead = { run_id: 'shadow-01', db_path: '/d/01_shadow.db', running: false, is_active_db: true, heartbeat_age_sec: 4800 };
@@ -556,6 +559,22 @@ function dbModeVerdicts() {
     noField: call({ db_is_production: false }),
     // The production registry is never "stale store".
     production: call({ db_is_production: true, shadow_runs: [dead, live] }),
+    // #904: Decide alone through the per-service control is still live
+    // execution on the production store, and must reach the switcher.
+    decideOnly: call({
+      db_is_production: false,
+      services: { filter: { running: false }, query: { running: false }, decide: { running: true } },
+    }),
+    // The full three-service stack is live and complete.
+    fullStack: call({
+      db_is_production: false,
+      services: { filter: { running: true }, query: { running: true }, decide: { running: true } },
+    }),
+    // Filter and Query without Decide spend nothing: not live execution.
+    noDecide: call({
+      db_is_production: false,
+      services: { filter: { running: true }, query: { running: true }, decide: { running: false } },
+    }),
   };
 }
 
@@ -930,13 +949,63 @@ function runElsewhereVerdicts() {
   return { idle, rehearsalElsewhere, liveElsewhere, cleared };
 }
 
+/* Drive renderRunSwitcher end-to-end with shadow runs present. CodeRabbit on
+ * #904: the shadow-row callback read a `activeRunId` that the live-stack
+ * rewrite had deleted, so opening the DB badge threw ReferenceError and the
+ * switcher never rendered. A label-only test could not see it. */
+async function runSwitcherRenderVerdicts() {
+  const sw = new FakeEl('div');
+  sw.id = 'db-run-switcher';
+  elements.set('db-run-switcher', sw);
+  const badge = new FakeEl('span');
+  badge.id = 'db-mode-badge';
+  elements.set('db-mode-badge', badge);
+
+  const status = {
+    db_is_production: false,
+    db_path: 'data/01_shadow_touchpair.db',
+    services: { filter: { running: true }, query: { running: true }, decide: { running: true } },
+    shadow_runs: [
+      {
+        run_id: 'trial-01',
+        db_path: 'data/01_shadow_touchpair.db',
+        running: true,
+        is_active_db: true,
+        heartbeat_age_sec: 2,
+      },
+      {
+        run_id: 'trial-02',
+        db_path: 'data/02_shadow_other.db',
+        running: true,
+        is_active_db: false,
+        heartbeat_age_sec: 9,
+      },
+    ],
+  };
+  // renderDbMode caches the status that renderRunSwitcher reads.
+  let error = null;
+  try {
+    app.renderDbMode(status);
+    await app.renderRunSwitcher();
+  } catch (e) {
+    error = String(e && e.message ? e.message : e);
+  }
+  return {
+    error,
+    html: sw.innerHTML,
+    hasLiveRow: /LIVE PRODUCTION STACK/.test(sw.innerHTML),
+    hasThisPage: /THIS PAGE/.test(sw.innerHTML),
+    shadowRows: (sw.innerHTML.match(/data-run-id="trial-/g) || []).length,
+  };
+}
+
 let out;
 if (script === 'dbmode') out = dbModeVerdicts();
-else if (script === 'profile') out = profileVerdicts();
-else if (script === 'profilepicker') out = profilePickerVerdicts();
+else if (script === 'profile') out = profileVerdicts();else if (script === 'profilepicker') out = profilePickerVerdicts();
 else if (script === 'runelsewhere') out = runElsewhereVerdicts();
 else if (script === 'stagedtitle') out = stagedTitleVerdicts();
 else if (script === 'runswitcher') out = runSwitcherVerdicts();
+else if (script === 'runswitcherrender') out = 'PENDING_ASYNC';
 else if (script === 'trialbanner') out = trialBannerVerdicts();
 else if (script === 'marketscan') out = marketScanVerdicts();
 else if (script === 'telemetrycount') out = telemetryCountVerdicts();
@@ -965,4 +1034,10 @@ else out = {
   topnav: topNavVerdicts(),
 };
 
-process.stdout.write(JSON.stringify(out));
+if (script === 'runswitcherrender') {
+  runSwitcherRenderVerdicts()
+    .then((res) => process.stdout.write(JSON.stringify(res)))
+    .catch((e) => process.stdout.write(JSON.stringify({ error: String(e) })));
+} else {
+  process.stdout.write(JSON.stringify(out));
+}

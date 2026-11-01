@@ -544,6 +544,11 @@ header {
 }
 .db-run-row:hover { background: rgba(255, 255, 255, 0.04); }
 .db-run-row.current { background: rgba(255, 255, 255, 0.06); }
+.db-run-row.db-run-live-stack {
+  background: rgba(255, 60, 60, 0.08);
+  border: 1px solid rgba(255, 60, 60, 0.3);
+}
+.db-run-row.db-run-live-stack:hover { background: rgba(255, 60, 60, 0.12); }
 .db-run-row .pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .db-run-row:not(.db-demo-row) > .pill {
   width: 100%;
@@ -4055,6 +4060,18 @@ th[aria-sort] .ot-sort-btn {
   padding: 1px 6px;
   border-radius: 3px;
   margin-left: 6px;
+}
+.arm-live-tag {
+  font: 600 10px/1 'JetBrains Mono', system-ui, 'Segoe UI', monospace;
+  color: #ff4d4d;
+  background: rgba(255, 60, 60, 0.15);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+}
+.arm-row.live-arm {
+  background: rgba(255, 60, 60, 0.05);
+  border-left: 2px solid rgba(255, 60, 60, 0.5);
 }
 .arm-meta {
   font: 400 11px/1 'JetBrains Mono', monospace;

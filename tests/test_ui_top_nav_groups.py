@@ -308,7 +308,7 @@ def test_engine_and_elsewhere_renders_grammar():
     assert {"pill", "engine-elsewhere-pill", "mono"}.issubset(set(stalled["elsewhereClass"].split()))
     assert 'class="pill-label"' in stalled["elsewhereHtml"]
     assert 'class="pill-value"' in stalled["elsewhereHtml"]
-    assert stalled["elsewhereText"] == "1 RUN LIVE ON ANOTHER STORE"
+    assert stalled["elsewhereText"] == "1 SHADOW RUNNING ELSEWHERE"
 
 
 @requires_node

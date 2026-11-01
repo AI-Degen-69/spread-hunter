@@ -2822,15 +2822,48 @@ function dbModeVerdict(status) {
       dbPath: r.db_path,
       file: r.source_file,
       ageSec: r.heartbeat_age_sec,
+      isLiveStack: false,
     }));
+  // The live production stack writes data/orders.db and is NOT in shadow_runs
+  // (those are rehearsals), so it is detected from the per-service status.
+  // Decide is what spends money on the production store: started on its own
+  // through the per-service control it rests maker bids with no Filter or
+  // Query beside it, and that partial stack must still appear in the switcher.
+  const svcs = status?.services || {};
+  const liveStackServices = ['filter', 'query', 'decide'].filter(n => svcs[n]?.running);
+  const isLiveExecuting = liveStackServices.includes('decide');
+  const liveStackComplete = liveStackServices.length === 3;
+  const liveStackDb = 'data/orders.db';
+  const liveStackRunId = 'live-stack';
+  // If live execution is running and this page is NOT reading the production
+  // DB, add it to the "elsewhere" list with a clear marker.
+  if (isLiveExecuting && status?.db_is_production !== true) {
+    liveElsewhere.unshift({
+      runId: liveStackRunId,
+      dbPath: liveStackDb,
+      file: 'live-stack',
+      ageSec: 0,
+      isLiveStack: true,
+      services: liveStackServices,
+      complete: liveStackComplete,
+    });
+  }
+  // Determine activeRunId: could be a shadow run, or the live stack if on production DB.
+  let activeRunId = active ? active.run_id : null;
+  if (!activeRunId && status?.db_is_production === true && isLiveExecuting) {
+    activeRunId = liveStackRunId;
+  }
   // null means "this page's store has no rehearsal registered", which is the
   // ordinary live-stack case and must never read as stale. Only an explicitly
   // ended run for THIS store, with a live run elsewhere to point at, is stale.
-  const hereRunning = active ? active.running === true : null;
+  const hereRunning = active ? active.running === true : (isLiveExecuting && status?.db_is_production === true ? true : null);
   const stale = status?.db_is_production !== true
     && hereRunning === false
     && liveElsewhere.length > 0;
-  return { stale, liveElsewhere, activeRunId: active ? active.run_id : null, hereRunning };
+  return {
+    stale, liveElsewhere, activeRunId, hereRunning,
+    liveStackServices, liveStackComplete,
+  };
 }
 
 let lastStatusForRuns = null;
@@ -3024,21 +3057,39 @@ async function renderRunSwitcher() {
   const badge = document.getElementById('db-mode-badge');
   if (!sw) return;
   const runs = (lastStatusForRuns?.shadow_runs || []).filter(r => r && r.db_path);
+  const verdict = dbModeVerdict(lastStatusForRuns);
   // The demo row renders whether or not any rehearsal is registered: the
   // bogus store is not a run, it is a fixture, and the empty state must not
   // hide the one control that works on a machine with no runs at all.
   const demoRow = demoSwitcherRow();
-  if (!runs.length) {
-    sw.innerHTML = demoRow + `<div class="db-run-empty">No rehearsal is registered on this machine.</div>`;
-    sw.style.display = 'block';
-    if (badge) badge.setAttribute('aria-expanded', 'true');
-    wireDemoSwitcher(sw);
-    placeRunSwitcher(sw, badge);
-    return;
+  // Build rows: live production stack first, then shadow runs
+  const allRows = [];
+  // Add live production stack row if running (shows as THIS PAGE if active, or SWITCH TO LIVE if not)
+  const isLiveStackRunning = verdict.liveElsewhere.some(r => r.isLiveStack) || (verdict.activeRunId === 'live-stack');
+  if (isLiveStackRunning) {
+    const ls = verdict.liveElsewhere.find(r => r.isLiveStack) || { dbPath: 'data/orders.db' };
+    const isThis = verdict.activeRunId === 'live-stack';
+    // A partial stack (e.g. Decide alone through the per-service control) is
+    // still spending on the production store, but must not read as the full
+    // three-service stack the operator may expect to be running.
+    const services = ls.services || verdict.liveStackServices || [];
+    const complete = ls.complete !== undefined ? ls.complete : verdict.liveStackComplete;
+    const label = complete
+      ? '🔴 LIVE PRODUCTION STACK'
+      : `🔴 LIVE EXECUTION · ${services.map(s => s.toUpperCase()).join(' + ') || 'PARTIAL'}`;
+    const state = 'RUNNING';
+    const age = '';
+    const btn = isThis
+      ? `<span class="db-run-current">THIS PAGE</span>`
+      : `<button class="db-run-switch" data-db="${esc(ls.dbPath)}">SWITCH TO LIVE</button>`;
+    allRows.push(`<div class="db-run-row${isThis ? ' current' : ''} db-run-live-stack" data-run-id="live-stack">
+        <span class="pill state-running"><span class="pill-label">${esc(label)}</span> <span class="pill-value">${state}</span></span>
+        ${btn}
+      </div>`);
   }
-  const activeRunId = dbModeVerdict(lastStatusForRuns).activeRunId;
-  const rows = runs.map(r => {
-    const isThis = activeRunId === r.run_id;
+  // Add shadow runs
+  const shadowRows = runs.map(r => {
+    const isThis = verdict.activeRunId === r.run_id;
     const state = r.running === true ? 'RUNNING' : (r.finished ? 'FINISHED' : 'ENDED');
     const age = formatHeartbeatAge(r.heartbeat_age_sec);
     const label = runSwitcherLabel(r);
@@ -3060,7 +3111,8 @@ async function renderRunSwitcher() {
         ${btn}${mixHtml}
       </div>`;
   });
-  sw.innerHTML = `<div class="db-run-head">Which run is this page reading?</div>` + demoRow + rows.join('');
+  allRows.push(...shadowRows);
+  sw.innerHTML = `<div class="db-run-head">Which run is this page reading?</div>` + demoRow + allRows.join('');
   sw.style.display = 'block';
   if (badge) badge.setAttribute('aria-expanded', 'true');
   wireDemoSwitcher(sw);
@@ -3368,22 +3420,22 @@ function renderArmDetailHtml(arm) {
   // KPIs
   if (Object.keys(kpis).length) {
     lines.push(`<div class="arm-detail-section"><h4>Performance (from store)</h4><dl class="arm-detail-kpis">`);
-    if (rp.realized_pnl !== undefined) lines.push(`<dt>Realized PnL</dt><dd>${rp.realized_pnl >= 0 ? '+' : ''}${rp.realized_pnl.toFixed(2)}</dd>`);
-    if (rp.unrealized_usd !== undefined) lines.push(`<dt>Unrealized PnL</dt><dd>${rp.unrealized_usd >= 0 ? '+' : ''}${rp.unrealized_usd.toFixed(2)}</dd>`);
-    if (rp.total_pnl !== undefined) lines.push(`<dt>Total PnL</dt><dd>${rp.total_pnl >= 0 ? '+' : ''}${rp.total_pnl.toFixed(2)}</dd>`);
-    if (rp.pnl_pct !== undefined) lines.push(`<dt>PnL %</dt><dd>${rp.pnl_pct >= 0 ? '+' : ''}${rp.pnl_pct.toFixed(1)}%</dd>`);
+    if (rp.realized_pnl != null) lines.push(`<dt>Realized PnL</dt><dd>${rp.realized_pnl >= 0 ? '+' : ''}${rp.realized_pnl.toFixed(2)}</dd>`);
+    if (rp.unrealized_usd != null) lines.push(`<dt>Unrealized PnL</dt><dd>${rp.unrealized_usd >= 0 ? '+' : ''}${rp.unrealized_usd.toFixed(2)}</dd>`);
+    if (rp.total_pnl != null) lines.push(`<dt>Total PnL</dt><dd>${rp.total_pnl >= 0 ? '+' : ''}${rp.total_pnl.toFixed(2)}</dd>`);
+    if (rp.pnl_pct != null) lines.push(`<dt>PnL %</dt><dd>${rp.pnl_pct >= 0 ? '+' : ''}${rp.pnl_pct.toFixed(1)}%</dd>`);
     if (rp.wins !== undefined && rp.losses !== undefined) lines.push(`<dt>Wins / Losses</dt><dd>${rp.wins} / ${rp.losses}</dd>`);
-    if (rp.win_rate !== undefined) lines.push(`<dt>Win Rate</dt><dd>${(rp.win_rate * 100).toFixed(1)}%</dd>`);
-    if (rp.expectancy_usd !== undefined) lines.push(`<dt>Expectancy</dt><dd>${rp.expectancy_usd >= 0 ? '+' : ''}${rp.expectancy_usd.toFixed(2)}</dd>`);
+    if (rp.win_rate != null) lines.push(`<dt>Win Rate</dt><dd>${(rp.win_rate * 100).toFixed(1)}%</dd>`);
+    if (rp.expectancy_usd != null) lines.push(`<dt>Expectancy</dt><dd>${rp.expectancy_usd >= 0 ? '+' : ''}${rp.expectancy_usd.toFixed(2)}</dd>`);
     if (rp.closes_count !== undefined) lines.push(`<dt>Completed Pairs</dt><dd>${rp.closes_count}</dd>`);
     if (kpis.markets_quoted !== undefined) lines.push(`<dt>Markets Quoted</dt><dd>${kpis.markets_quoted}</dd>`);
     if (kpis.markets_filled !== undefined) lines.push(`<dt>Markets Filled</dt><dd>${kpis.markets_filled}</dd>`);
-    if (kpis.fill_rate !== undefined) lines.push(`<dt>Fill Rate</dt><dd>${(kpis.fill_rate * 100).toFixed(1)}%</dd>`);
-    if (kpis.spread_capture !== undefined) lines.push(`<dt>Spread Capture</dt><dd>${kpis.spread_capture.toFixed(2)}</dd>`);
-    if (kpis.avg_edge_cents !== undefined) lines.push(`<dt>Avg Edge</dt><dd>${kpis.avg_edge_cents.toFixed(1)}¢</dd>`);
-    if (kpis.median_seconds_to_fill !== undefined) lines.push(`<dt>Median Time to Fill</dt><dd>${kpis.median_seconds_to_fill.toFixed(1)}s</dd>`);
-    if (kpis.median_queue_ahead !== undefined) lines.push(`<dt>Median Queue Ahead</dt><dd>${kpis.median_queue_ahead.toFixed(1)}</dd>`);
-    if (kpis.days !== undefined) lines.push(`<dt>Run Duration</dt><dd>${kpis.days.toFixed(1)} days</dd>`);
+    if (kpis.fill_rate != null) lines.push(`<dt>Fill Rate</dt><dd>${(kpis.fill_rate * 100).toFixed(1)}%</dd>`);
+    if (kpis.spread_capture != null) lines.push(`<dt>Spread Capture</dt><dd>${kpis.spread_capture.toFixed(2)}</dd>`);
+    if (kpis.avg_edge_cents != null) lines.push(`<dt>Avg Edge</dt><dd>${kpis.avg_edge_cents.toFixed(1)}¢</dd>`);
+    if (kpis.median_seconds_to_fill != null) lines.push(`<dt>Median Time to Fill</dt><dd>${kpis.median_seconds_to_fill.toFixed(1)}s</dd>`);
+    if (kpis.median_queue_ahead != null) lines.push(`<dt>Median Queue Ahead</dt><dd>${kpis.median_queue_ahead.toFixed(1)}</dd>`);
+    if (kpis.days != null) lines.push(`<dt>Run Duration</dt><dd>${kpis.days.toFixed(1)} days</dd>`);
     lines.push(`</dl></div>`);
   } else if (arm.has_store) {
     lines.push(`<div class="arm-detail-section"><h4>Performance</h4><p class="arm-detail-note">Store exists but KPIs could not be computed${arm.kpis_error ? `: ${esc(arm.kpis_error)}` : ''}.</p></div>`);
@@ -3443,9 +3495,10 @@ function armPerformanceScore(arm) {
   return rp.total_pnl || -Infinity;
 }
 
-function armRowHtml(arm, stagedName, activeName = '') {
+function armRowHtml(arm, stagedName, activeName = '', liveArmName = '') {
   const isStaged = `arm:${arm.name}` === stagedName;
   const isActive = `arm:${arm.name}` === activeName;
+  const isLive = arm.name === liveArmName;
   const label = arm.label || arm.name;
   const hasKpis = arm.kpis && arm.kpis.run_profitability;
   const rp = hasKpis ? arm.kpis.run_profitability : null;
@@ -3462,16 +3515,16 @@ function armRowHtml(arm, stagedName, activeName = '') {
   tooltipBits.push(storeText);
   tooltipBits.push(originText);
   const tooltip = tooltipBits.join(' · ');
-  return `<div class="arm-row${isActive ? ' active' : ''}${isStaged ? ' staged' : ''}" data-arm="${esc(arm.name)}" title="${esc(tooltip)}">
+  return `<div class="arm-row${isActive ? ' active' : ''}${isStaged ? ' staged' : ''}${isLive ? ' live-arm' : ''}" data-arm="${esc(arm.name)}" title="${esc(tooltip)}">
       <div class="arm-row-main">
-        <span class="arm-name">${esc(label)}${isActive ? ' <span class="arm-active-tag">✓ ACTIVE</span>' : ''}${isStaged ? ' <span class="arm-staged-tag">STAGED</span>' : ''}</span>
+        <span class="arm-name">${esc(label)}${isLive ? ' <span class="arm-live-tag">🔴 LIVE</span>' : ''}${isActive ? ' <span class="arm-active-tag">✓ ACTIVE</span>' : ''}${isStaged ? ' <span class="arm-staged-tag">STAGED</span>' : ''}</span>
       </div>
       <div class="arm-row-kpis${hasKpis ? ' has-kpis' : ''}">
         ${hasKpis ? `
-          <span class="arm-kpi" title="Realized PnL">${rp.realized_pnl !== undefined ? (rp.realized_pnl >= 0 ? '+' : '') + rp.realized_pnl.toFixed(2) : '—'}</span>
-          <span class="arm-kpi" title="Win Rate">${rp.win_rate !== undefined ? (rp.win_rate * 100).toFixed(1) + '%' : '—'}</span>
+          <span class="arm-kpi" title="Realized PnL">${rp.realized_pnl != null ? (rp.realized_pnl >= 0 ? '+' : '') + rp.realized_pnl.toFixed(2) : '—'}</span>
+          <span class="arm-kpi" title="Win Rate">${rp.win_rate != null ? (rp.win_rate * 100).toFixed(1) + '%' : '—'}</span>
           <span class="arm-kpi" title="Pairs">${rp.closes_count !== undefined ? rp.closes_count : '—'}</span>
-          <span class="arm-kpi" title="Expectancy">${rp.expectancy_usd !== undefined ? (rp.expectancy_usd >= 0 ? '+' : '') + rp.expectancy_usd.toFixed(2) : '—'}</span>
+          <span class="arm-kpi" title="Expectancy">${rp.expectancy_usd != null ? (rp.expectancy_usd >= 0 ? '+' : '') + rp.expectancy_usd.toFixed(2) : '—'}</span>
         ` : `
           <span class="arm-kpi empty">no store yet</span>
         `}
@@ -3519,15 +3572,18 @@ function profileOptionsHtml(options, pending, activeProfile = null) {
     ? pending : null;
   const stagedName = staged ? `${staged.kind}:${staged.name}` : '';
   let activeName = '';
+  let liveArmName = '';
   if (activeProfile && typeof activeProfile === 'object') {
     if (typeof activeProfile.tournament_arm === 'string' && activeProfile.tournament_arm) {
       activeName = `arm:${activeProfile.tournament_arm}`;
+      if (activeProfile.source === 'live') liveArmName = activeProfile.tournament_arm;
     } else if (typeof activeProfile.preset === 'string' && activeProfile.preset) {
       activeName = `preset:${activeProfile.preset}`;
     } else if (typeof activeProfile.name === 'string' && activeProfile.name) {
       activeName = allArms.some(a => a.name === activeProfile.name)
         ? `arm:${activeProfile.name}`
         : `preset:${activeProfile.name}`;
+      if (activeProfile.source === 'live') liveArmName = activeProfile.name;
     }
   }
   let out = '';
@@ -3553,7 +3609,7 @@ function profileOptionsHtml(options, pending, activeProfile = null) {
       const sortedArms = [...arms].sort((a, b) => armPerformanceScore(b) - armPerformanceScore(a));
       const issueLabel = issue !== null ? `Issue #${issue}${tournament ? ` · ${tournament}` : ''}` : 'Ungrouped';
       out += `<div class="arm-group"><div class="arm-group-header">${esc(issueLabel)}</div>`;
-      out += sortedArms.map(a => armRowHtml(a, stagedName, activeName)).join('');
+      out += sortedArms.map(a => armRowHtml(a, stagedName, activeName, liveArmName)).join('');
       out += `</div>`;
     }
   }
@@ -3663,10 +3719,10 @@ function updateArmRowKpis(armName, kpis) {
   if (!kpisEl) return;
   kpisEl.classList.add('has-kpis');
   kpisEl.innerHTML = `
-    <span class="arm-kpi" title="Realized PnL">${rp.realized_pnl !== undefined ? (rp.realized_pnl >= 0 ? '+' : '') + rp.realized_pnl.toFixed(2) : '—'}</span>
-    <span class="arm-kpi" title="Win Rate">${rp.win_rate !== undefined ? (rp.win_rate * 100).toFixed(1) + '%' : '—'}</span>
+    <span class="arm-kpi" title="Realized PnL">${rp.realized_pnl != null ? (rp.realized_pnl >= 0 ? '+' : '') + rp.realized_pnl.toFixed(2) : '—'}</span>
+    <span class="arm-kpi" title="Win Rate">${rp.win_rate != null ? (rp.win_rate * 100).toFixed(1) + '%' : '—'}</span>
     <span class="arm-kpi" title="Pairs">${rp.closes_count !== undefined ? rp.closes_count : '—'}</span>
-    <span class="arm-kpi" title="Expectancy">${rp.expectancy_usd !== undefined ? (rp.expectancy_usd >= 0 ? '+' : '') + rp.expectancy_usd.toFixed(2) : '—'}</span>
+    <span class="arm-kpi" title="Expectancy">${rp.expectancy_usd != null ? (rp.expectancy_usd >= 0 ? '+' : '') + rp.expectancy_usd.toFixed(2) : '—'}</span>
   `;
 }
 
@@ -12112,16 +12168,39 @@ function renderScanStatePill(scanState, opts) {
       }
     }
 
-    // Elsewhere notice: show only when other_live_runs is not empty AND engine is not RUNNING on this store
-    const otherRuns = scanState.other_live_runs || [];
+    // Elsewhere notice: show only when liveElsewhere is not empty AND engine is not RUNNING on this store.
+    // Accepts opts.liveElsewhere (camelCase, from dbModeVerdict) or the legacy
+    // scanState.other_live_runs (snake_case, rehearsal heartbeats only).
+    const rawRuns = (opts && opts.liveElsewhere) || scanState.other_live_runs || [];
+    const otherRuns = rawRuns.map(r => ({
+      runId: r.runId || r.run_id || 'unnamed',
+      dbPath: r.dbPath || r.db_path || 'unknown store',
+      isLiveStack: r.isLiveStack || false,
+      complete: r.complete !== false,
+    }));
     if (elsewhereTag) {
       if (otherRuns.length > 0 && state !== 'running') {
         elsewhereTag.style.display = '';
-        const countLabel = otherRuns.length === 1 ? '1 RUN' : `${otherRuns.length} RUNS`;
+        // Separate live stack from shadow runs for clarity. A partial live
+        // execution (Decide alone) is named as such, not as a full stack.
+        const liveStack = otherRuns.filter(r => r.isLiveStack);
+        const shadowRuns = otherRuns.filter(r => !r.isLiveStack);
+        const liveLabel = liveStack.some(r => r.complete === false) ? 'LIVE EXEC' : 'LIVE STACK';
+        let countLabel = '';
+        if (liveStack.length && shadowRuns.length) {
+          countLabel = `${liveLabel} + ${shadowRuns.length} SHADOW`;
+        } else if (liveStack.length) {
+          countLabel = liveLabel;
+        } else {
+          countLabel = shadowRuns.length === 1 ? '1 SHADOW' : `${shadowRuns.length} SHADOWS`;
+        }
         elsewhereTag.className = 'pill engine-elsewhere-pill mono';
-        elsewhereTag.innerHTML = renderPillHtml(countLabel, 'LIVE ON ANOTHER STORE');
-        const details = otherRuns.map(r => `${r.run_id || 'unnamed'} (${r.db_path || 'unknown store'}, ${r.heartbeat_file || 'unknown file'})`).join('; ');
-        elsewhereTag.title = `${details} — its numbers are not shown on this page`;
+        elsewhereTag.innerHTML = renderPillHtml(countLabel, 'RUNNING ELSEWHERE');
+        const details = otherRuns.map(r => {
+          const prefix = r.isLiveStack ? '🔴 LIVE: ' : '';
+          return `${prefix}${r.runId} → ${r.dbPath.split(/[\\/]/).pop()}`;
+        }).join('; ');
+        elsewhereTag.title = `${details} — this page reads a different store, so its numbers are not that run's. Click DB badge to switch.`;
       } else {
         elsewhereTag.style.display = 'none';
       }
@@ -12792,10 +12871,11 @@ async function pollStatus() {
     const engineHeld = resolveHeldRead(scanState, lastScanState, lastScanStateAtMs, pollNowMs, backendStale);
     const kpiHeld = resolveHeldRead(kpi, lastKpi, lastKpiAtMs, pollNowMs, backendStale);
     const statusHeld = resolveHeldRead(status, lastStatus, lastStatusAtMs, pollNowMs, backendStale);
+    const dbVerdict = statusHeld.payload ? dbModeVerdict(statusHeld.payload) : { liveElsewhere: [] };
     renderMarketScanPill(statusHeld.payload, kpiHeld.payload,
       { kpiReadFailed: !kpi, ageOffsetSec: kpiHeld.ageOffsetSec });
     renderScanStatePill(engineHeld.payload,
-      { ageOffsetSec: engineHeld.ageOffsetSec, readFailed: engineHeld.readFailed });
+      { ageOffsetSec: engineHeld.ageOffsetSec, readFailed: engineHeld.readFailed, liveElsewhere: dbVerdict.liveElsewhere });
 
     // Service uptime rides on the status payload, so it must not wait on
     // /api/kpi: the Market Filter header still needs a stopwatch when the KPI read
@@ -12902,7 +12982,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, renderProfileBadge, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderRunSwitcher, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, renderProfileBadge, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent, streamProcessTag, streamEventTag, streamSeverityClass, translateConsoleLine,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,
