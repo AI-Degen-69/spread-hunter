@@ -460,7 +460,6 @@ def resolve_tournament_arms_with_status(
     global _WARNED_RECORD
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
-    print(f"DEBUG: tourney_key={tourney_key}, default_arms={len(default_arms)}")
     # Unknown keys fall back to the static table; live keys resolve their plan file.
     if tourney_key not in ("843", "799"):
         return default_arms, None
@@ -471,7 +470,6 @@ def resolve_tournament_arms_with_status(
     # (run number, stamp), so a named run (#487's `--stamp current_setup_10arm`)
     # no longer wins or loses on the accident of `c` sorting after a digit.
     latest_plan = _resolve_plan_for_tourney_key(tourney_key, meta)
-    print(f"DEBUG: latest_plan={latest_plan}")
     if latest_plan is None:
         return default_arms, None
     try:
@@ -483,20 +481,18 @@ def resolve_tournament_arms_with_status(
             _WARNED_RECORD = message
         return default_arms, message
     _WARNED_RECORD = None
-    print(f"DEBUG: record_arms={len(record_arms)}, names={[a['name'] for a in record_arms]}")
     # A run that launched its own arm set (#843's six-arm continuation) is read
     # as itself: merging it over the four static presets would hide two real arms
     # and keep two rows pointing at a different run's stores. A record with NEW
     # arm names (not in the static preset) is a standalone set; a subset of the
     # static preset's arms is a partial run and should merge.
     static_names = {base["name"] for base in default_arms}
-    record_names = {a["name"] for a in record_arms}
-    print(f"DEBUG: static_names={len(static_names)}, record_names={record_names}, diff={record_names - static_names}")
+    # Normalize record arm names by stripping numbered suffixes for legacy records
+    # without arms_source, so "control-1" matches "control" in static preset.
+    record_names = {_strip_round_suffix(a["name"]) for a in record_arms}
     if record_names - static_names:
         # Record has arm names the static preset doesn't know -> standalone set
-        print("DEBUG: TAKING STANDALONE PATH")
         return build_plan_arms(latest_plan) or default_arms, None
-    print("DEBUG: TAKING MERGE PATH")
     plan_arms: dict[str, Any] = {}
     for a in record_arms:
         plan_arms[a["name"]] = a
@@ -533,13 +529,8 @@ def nav_label_for(tourney_key: str) -> str:
     A static "#843 Pair Test (4 Arms)" over a six-arm continuation run would name
     an experiment the page is not showing.
     """
-    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
-    plan = _resolve_plan_for_tourney_key(tourney_key, meta)
-    if plan is None:
-        return meta.get("nav_label") or f"#{tourney_key}"
-    run_label = (parse_tournament_run_dir_name(plan.parent) or {}).get("name")
-    run_label = (run_label or "run").replace("-", " ").title()
-    return f"#{tourney_key} {run_label} ({len(resolve_tournament_arms(tourney_key))} Arms)"
+    meta, _ = resolve_tournament_meta(tourney_key)
+    return meta.get("nav_label") or f"#{tourney_key}"
 
 
 def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> dict[str, Any]:
@@ -1000,6 +991,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
         "overall_desc": overall_desc,
         "test_arm_name": test_arm.get("name", "N/A") if test_arm else "N/A",
         "test_arm_label": test_arm.get("label", "N/A") if test_arm else "N/A",
+        "test_arm_pattern": arm_map["test_arm_pattern"],
         "total_trades": total_trades,
         "target_n": target_n,
         "gates": {
@@ -2626,9 +2618,10 @@ function fetchLiveStats() {{
 function renderDgArmCards(arms) {{
   const container = document.getElementById('dg-arm-cards-container');
   if (!container) return;
+  const testPattern = (state.decision_gates && state.decision_gates.test_arm_pattern) || '';
   let html = '';
   arms.forEach(a => {{
-    const isTest = (a.name || '').includes('balanced-queue5');
+    const isTest = testPattern !== '' && (a.name || '').includes(testPattern);
     const border = isTest ? 'border: 2px solid var(--blue);' : 'border: 1px solid var(--border);';
     const badge = isTest ? '<span class="badge badge-green" style="font-size: 9px; padding: 2px 6px; margin-left: 6px;">TEST ARM</span>' : '';
     const pnl = a.total_pnl || 0.0;
