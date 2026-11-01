@@ -2824,36 +2824,46 @@ function dbModeVerdict(status) {
       ageSec: r.heartbeat_age_sec,
       isLiveStack: false,
     }));
-  // The live production stack: filter+query+decide all running, writing to data/orders.db
-  // It is NOT in shadow_runs (those are rehearsals). Detect from services.
+  // The live production stack writes data/orders.db and is NOT in shadow_runs
+  // (those are rehearsals), so it is detected from the per-service status.
+  // Decide is what spends money on the production store: started on its own
+  // through the per-service control it rests maker bids with no Filter or
+  // Query beside it, and that partial stack must still appear in the switcher.
   const svcs = status?.services || {};
-  const isLiveStackRunning = svcs.filter?.running && svcs.query?.running && svcs.decide?.running;
+  const liveStackServices = ['filter', 'query', 'decide'].filter(n => svcs[n]?.running);
+  const isLiveExecuting = liveStackServices.includes('decide');
+  const liveStackComplete = liveStackServices.length === 3;
   const liveStackDb = 'data/orders.db';
   const liveStackRunId = 'live-stack';
-  // If live stack is running and this page is NOT reading the production DB,
-  // add it to the "elsewhere" list with a clear marker.
-  if (isLiveStackRunning && status?.db_is_production !== true) {
+  // If live execution is running and this page is NOT reading the production
+  // DB, add it to the "elsewhere" list with a clear marker.
+  if (isLiveExecuting && status?.db_is_production !== true) {
     liveElsewhere.unshift({
       runId: liveStackRunId,
       dbPath: liveStackDb,
       file: 'live-stack',
       ageSec: 0,
       isLiveStack: true,
+      services: liveStackServices,
+      complete: liveStackComplete,
     });
   }
   // Determine activeRunId: could be a shadow run, or the live stack if on production DB.
   let activeRunId = active ? active.run_id : null;
-  if (!activeRunId && status?.db_is_production === true && isLiveStackRunning) {
+  if (!activeRunId && status?.db_is_production === true && isLiveExecuting) {
     activeRunId = liveStackRunId;
   }
   // null means "this page's store has no rehearsal registered", which is the
   // ordinary live-stack case and must never read as stale. Only an explicitly
   // ended run for THIS store, with a live run elsewhere to point at, is stale.
-  const hereRunning = active ? active.running === true : (isLiveStackRunning && status?.db_is_production === true ? true : null);
+  const hereRunning = active ? active.running === true : (isLiveExecuting && status?.db_is_production === true ? true : null);
   const stale = status?.db_is_production !== true
     && hereRunning === false
     && liveElsewhere.length > 0;
-  return { stale, liveElsewhere, activeRunId, hereRunning };
+  return {
+    stale, liveElsewhere, activeRunId, hereRunning,
+    liveStackServices, liveStackComplete,
+  };
 }
 
 let lastStatusForRuns = null;
@@ -3059,7 +3069,14 @@ async function renderRunSwitcher() {
   if (isLiveStackRunning) {
     const ls = verdict.liveElsewhere.find(r => r.isLiveStack) || { dbPath: 'data/orders.db' };
     const isThis = verdict.activeRunId === 'live-stack';
-    const label = '🔴 LIVE PRODUCTION STACK';
+    // A partial stack (e.g. Decide alone through the per-service control) is
+    // still spending on the production store, but must not read as the full
+    // three-service stack the operator may expect to be running.
+    const services = ls.services || verdict.liveStackServices || [];
+    const complete = ls.complete !== undefined ? ls.complete : verdict.liveStackComplete;
+    const label = complete
+      ? '🔴 LIVE PRODUCTION STACK'
+      : `🔴 LIVE EXECUTION · ${services.map(s => s.toUpperCase()).join(' + ') || 'PARTIAL'}`;
     const state = 'RUNNING';
     const age = '';
     const btn = isThis
@@ -3072,7 +3089,7 @@ async function renderRunSwitcher() {
   }
   // Add shadow runs
   const shadowRows = runs.map(r => {
-    const isThis = activeRunId === r.run_id;
+    const isThis = verdict.activeRunId === r.run_id;
     const state = r.running === true ? 'RUNNING' : (r.finished ? 'FINISHED' : 'ENDED');
     const age = formatHeartbeatAge(r.heartbeat_age_sec);
     const label = runSwitcherLabel(r);
@@ -12151,26 +12168,29 @@ function renderScanStatePill(scanState, opts) {
       }
     }
 
-    // Elsewhere notice: show only when liveElsewhere is not empty AND engine is not RUNNING on this store
-    // Elsewhere notice: show only when liveElsewhere is not empty AND engine is not RUNNING on this store
-    // Support both new format (opts.liveElsewhere with camelCase) and legacy (scanState.other_live_runs with snake_case)
+    // Elsewhere notice: show only when liveElsewhere is not empty AND engine is not RUNNING on this store.
+    // Accepts opts.liveElsewhere (camelCase, from dbModeVerdict) or the legacy
+    // scanState.other_live_runs (snake_case, rehearsal heartbeats only).
     const rawRuns = (opts && opts.liveElsewhere) || scanState.other_live_runs || [];
     const otherRuns = rawRuns.map(r => ({
       runId: r.runId || r.run_id || 'unnamed',
       dbPath: r.dbPath || r.db_path || 'unknown store',
       isLiveStack: r.isLiveStack || false,
+      complete: r.complete !== false,
     }));
     if (elsewhereTag) {
       if (otherRuns.length > 0 && state !== 'running') {
         elsewhereTag.style.display = '';
-        // Separate live stack from shadow runs for clarity
+        // Separate live stack from shadow runs for clarity. A partial live
+        // execution (Decide alone) is named as such, not as a full stack.
         const liveStack = otherRuns.filter(r => r.isLiveStack);
         const shadowRuns = otherRuns.filter(r => !r.isLiveStack);
+        const liveLabel = liveStack.some(r => r.complete === false) ? 'LIVE EXEC' : 'LIVE STACK';
         let countLabel = '';
         if (liveStack.length && shadowRuns.length) {
-          countLabel = `LIVE STACK + ${shadowRuns.length} SHADOW`;
+          countLabel = `${liveLabel} + ${shadowRuns.length} SHADOW`;
         } else if (liveStack.length) {
-          countLabel = 'LIVE STACK';
+          countLabel = liveLabel;
         } else {
           countLabel = shadowRuns.length === 1 ? '1 SHADOW' : `${shadowRuns.length} SHADOWS`;
         }
@@ -12962,7 +12982,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, renderProfileBadge, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderRunSwitcher, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, renderProfileBadge, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent, streamProcessTag, streamEventTag, streamSeverityClass, translateConsoleLine,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,

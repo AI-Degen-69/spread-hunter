@@ -540,6 +540,25 @@ def test_the_production_registry_is_never_a_stale_store():
     assert _harness("dbmode")["production"]["stale"] is False
 
 
+@requires_node
+def test_decide_alone_counts_as_live_execution():
+    """#904: Decide started on its own through the per-service control rests
+    maker bids on the production store with no Filter or Query beside it, so a
+    three-service check would hide it from the switcher."""
+    dbmode = _harness("dbmode")
+    decide_only = dbmode["decideOnly"]
+    assert decide_only["liveElsewhere"] == ["live-stack"]
+    assert decide_only["liveElsewhereComplete"] == [False]
+    assert decide_only["liveStackServices"] == ["decide"]
+
+    full = dbmode["fullStack"]
+    assert full["liveElsewhere"] == ["live-stack"]
+    assert full["liveStackComplete"] is True
+
+    # Filter and Query spend nothing without Decide: no live execution.
+    assert dbmode["noDecide"]["liveElsewhere"] == []
+
+
 def test_the_served_page_carries_the_run_switcher():
     html = (_STATIC / "index.html").read_text(encoding="utf-8")
     assert 'id="db-run-switcher"' in html
@@ -783,4 +802,15 @@ def test_run_switcher_label_formatting():
     )
     assert res["tournamentNoPort"] == "#02 conservative (pid 4243)"
     assert res["standardShadow"] == "01_shadow_touchpair.db"
+
+
+@requires_node
+def test_run_switcher_renders_with_shadow_runs_present():
+    """#904: the live-stack rewrite dropped the `activeRunId` the shadow-row
+    callback still read, so opening the DB badge threw ReferenceError and the
+    switcher never rendered — a label-only test could not see it."""
+    res = _harness("runswitcherrender")
+    assert res["error"] is None, f"renderRunSwitcher threw: {res['error']}"
+    assert res["hasLiveRow"] is True, "live production stack row is missing"
+    assert res["shadowRows"] == 2, res["html"]
 
