@@ -42,6 +42,7 @@ param(
     [string]$ResumeDb = "",
     [string]$Preset = "",
     [switch]$Prudent,
+    [switch]$Force,
     # Collect stray words (e.g. `audit and`) so the menu can answer with its
     # own guidance instead of a raw parameter-binding error.
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -400,13 +401,16 @@ function Test-Port {
 
 function Get-PortPid {
     <# PID LISTENING on a port, or $null. No port passed means the live :8799;
-       an explicit 0 is never a port and reads $null without probing. #>
+       an explicit 0 is never a port and reads $null without probing.
+       Returns $null when PID cannot be determined (e.g. PID 0 from netstat). #>
     param([int]$PortNumber = 0)
     if (-not $PSBoundParameters.ContainsKey('PortNumber')) { $PortNumber = $Port }
     if ($PortNumber -le 0) { return $null }
     $line = netstat -ano | Select-String ":$PortNumber\s+.*LISTENING" | Select-Object -First 1
     if (-not $line) { return $null }
-    return [int](($line.ToString() -split "\s+")[-1])
+    $foundPid = [int](($line.ToString() -split "\s+")[-1])
+    if ($foundPid -eq 0) { return $null }
+    return $foundPid
 }
 
 function Format-Uptime {
@@ -690,31 +694,32 @@ function Start-Dashboard {
     if (Test-Port) {
         $portPid = Get-PortPid
         $listener = Get-DashboardOwnership
-        if ($listener.Verdict -eq 'Foreign') {
-            Lsh-Warn ("Port {0} serves another checkout ({1}); this menu will not adopt it. Run this menu from that checkout instead." -f $LivePort, $listener.ServedPath)
-            return $false
-        }
-        if (Test-DashboardServer) {
-            $adopt = $false
-            if ($Action -ne "") {
-                # CLI (lsh start): adopt silently once verified.
-                $adopt = $true
-            } else {
-                $resp = Read-Host "  A dashboard is already serving on :$LivePort (PID $portPid). Adopt it so stop/status own it? [y/N]"
-                $adopt = ($resp -match '^[yY]')
+        if ($listener.Verdict -eq 'Owned') {
+            # This checkout's dashboard but not recorded - adopt it
+            if (Test-DashboardServer) {
+                $adopt = $false
+                if ($Action -ne "") { $adopt = $true }
+                else { $resp = Read-Host "  A dashboard is already serving on :$LivePort (PID $portPid). Adopt it so stop/status own it? [y/N]"; $adopt = ($resp -match '^[yY]') }
+                if ($adopt -and (Adopt-DashboardInstance)) {
+                    $inst = Get-DashInstance
+                    Lsh-Ok "Adopted the running dashboard (PID $($inst.pid), up $(Format-Uptime $inst.proc.StartTime)) - stop and status now own it."
+                } elseif ($adopt) {
+                    Lsh-Fail "Could not adopt PID $portPid (may have exited mid-check)."
+                } else {
+                    Lsh-Warn "Not adopting PID $portPid - stop will leave it running; stack control still works."
+                }
+                return $true
             }
-            if ($adopt -and (Adopt-DashboardInstance)) {
-                $inst = Get-DashInstance
-                Lsh-Ok "Adopted the running dashboard (PID $($inst.pid), up $(Format-Uptime $inst.proc.StartTime)) - stop and status now own it."
-            } elseif ($adopt) {
-                Lsh-Fail "Could not adopt PID $portPid (may have exited mid-check)."
-            } else {
-                Lsh-Warn "Not adopting PID $portPid - stop will leave it running; stack control still works."
-            }
-            return $true
         }
-        Lsh-Fail "Port $LivePort is occupied by PID $portPid, which does NOT answer as a spread-hunter dashboard - refusing to act on it. Free the port manually first."
-        return $false
+        # Port occupied by foreign or unknown process - TAKE OVER: kill it and start fresh
+        Lsh-Warn "Port $LivePort occupied (PID $portPid). Taking over: stopping existing process and starting new dashboard..."
+        if ($portPid -gt 0) {
+            taskkill /T /F /PID $portPid 2>$null | Out-Null
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline -and (Test-Port)) { Start-Sleep -Milliseconds 300 }
+        } elseif (Test-Port) {
+            Lsh-Warn "Port $LivePort still LISTENING but PID unknown; attempting manual kill..."
+        }
     }
     Lsh-Step "Launching dashboard (python -m dashboard.server --port $LivePort)..."
     # A stray PORT in this shell (e.g. PORT=0) is inherited by the child and
@@ -756,7 +761,9 @@ function Start-Dashboard {
 }
 
 function Stop-Dashboard {
-    <# Stop the dashboard we own; leaves foreign processes on :8799 alone. #>
+    <# Stop the dashboard we own; leaves foreign processes on :8799 alone.
+       With -Force, kills whatever is listening on :8799 regardless of ownership. #>
+    param([switch]$Force)
     $inst = Get-DashInstance
     if ($null -ne $inst) {
         Lsh-Step "Stopping dashboard PID $($inst.pid)..."
@@ -766,6 +773,17 @@ function Stop-Dashboard {
         taskkill /T /F /PID $($inst.pid) 2>$null | Out-Null
         $deadline = (Get-Date).AddSeconds(10)
         while ((Get-Date) -lt $deadline -and (Test-Port)) { Start-Sleep -Milliseconds 300 }
+    }
+    if ($Force -and (Test-Port)) {
+        $portPid = Get-PortPid
+        if ($portPid -gt 0) {
+            Lsh-Step "Force-stopping dashboard on port $LivePort (PID $portPid)..."
+            taskkill /T /F /PID $portPid 2>$null | Out-Null
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline -and (Test-Port)) { Start-Sleep -Milliseconds 300 }
+        } elseif (Test-Port) {
+            Lsh-Warn "Port $LivePort is LISTENING but PID could not be determined; try manual kill."
+        }
     }
     Remove-Item $DashPidFile -ErrorAction SilentlyContinue
     if (Test-Port) {
@@ -984,8 +1002,10 @@ function Start-ShadowDashboard {
 function Stop-ShadowDashboard {
     <# Stop menu-owned shadow dashboards; leaves foreign processes on any
        port alone. No run id stops every instance (the stop-shadow action);
-       a run id stops only that instance plus the pre-#288 legacy record. #>
-    param([string]$RunId = $null, [switch]$LegacyOnly)
+       a run id stops only that instance plus the pre-#288 legacy record.
+       With -Force, kills whatever is listening on the instance port(s)
+       regardless of ownership. #>
+    param([string]$RunId = $null, [switch]$LegacyOnly, [switch]$Force)
     $targets = @(Get-ShadowDashInstances | Where-Object {
         if ($LegacyOnly) { -not $_.run_id }
         elseif (-not $RunId) { $true }
@@ -1012,6 +1032,22 @@ function Stop-ShadowDashboard {
             # Keep the record: the dashboard is still ours and still running,
             # and discarding the pidfile would orphan it from every later stop.
             Lsh-Warn "Shadow dashboard $label PID $($inst.pid) did not exit; record kept."
+        }
+    }
+    if ($Force) {
+        $ports = @($targets | Where-Object { $_.port -gt 0 } | ForEach-Object { $_.port } | Sort-Object -Unique)
+        foreach ($port in $ports) {
+            if (Test-Port -PortNumber $port) {
+                $portPid = Get-PortPid -PortNumber $port
+                if ($portPid -gt 0) {
+                    Lsh-Step "Force-stopping shadow dashboard on port $port (PID $portPid)..."
+                    taskkill /T /F /PID $portPid 2>$null | Out-Null
+                    $deadline = (Get-Date).AddSeconds(10)
+                    while ((Get-Date) -lt $deadline -and (Test-Port -PortNumber $port)) { Start-Sleep -Milliseconds 300 }
+                } elseif (Test-Port -PortNumber $port) {
+                    Lsh-Warn "Port $port is LISTENING but PID could not be determined; try manual kill."
+                }
+            }
         }
     }
     $foreign = $false
@@ -2884,7 +2920,9 @@ function Stop-AllSpreadHunterProcesses {
     <# Stop all spread-hunter processes: bot stacks, dashboards, shadow runs,
        watchers, observers, tournament cockpit, filter loop, arm dashboards,
        and any orphaned spread-hunter python processes.
+       With -Force, also kills any dashboard on the known ports regardless of ownership.
        Leaves all databases and data files strictly intact. #>
+    param([switch]$Force)
     Lsh-Banner -Title "STOPPING ALL PROCESSES" -Subtitle "scripts, dashboards & background workers (data preserved)"
 
     # 1 · Recorded services
@@ -2893,8 +2931,8 @@ function Stop-AllSpreadHunterProcesses {
     $null = Stop-ShadowSession   # screener, loop, watcher, observer, ts-bridge, shadow dashboards
     $null = Stop-ShadowRun       # unrecorded rehearsal loops / observers
     Stop-Guardrail
-    $null = Stop-Dashboard
-    $null = Stop-ShadowDashboard
+    $null = Stop-Dashboard -Force:$Force
+    $null = Stop-ShadowDashboard -Force:$Force
 
     # 2 · Orphan & tournament processes (this checkout only: the module match
     # alone could hit a sibling checkout, so ProjectPath is required)
@@ -2994,7 +3032,7 @@ function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wip
 
     # 2 · STOP (API stop when a dashboard answers; recorded PIDs otherwise)
     Lsh-Phase -Text "PHASE 2 · STOP"
-    Stop-AllSpreadHunterProcesses
+    Stop-AllSpreadHunterProcesses -Force
 
     # 3 · VERIFY STOPPED before wiping (never wipe beside a live stack)
     Lsh-Phase -Text "PHASE 3 · VERIFY STOPPED"
@@ -3261,7 +3299,7 @@ function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wip
 # One ordered key list is the single source of truth for the menu: the grid,
 # the prompt, the invalid-selection message and the command-line allow-list
 # all derive from it, so a new key only has to be added in one place (#475).
-$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'c', 't', 'q', 'x')
+$script:MenuKeys = @('s', 'k', 'f', 'd', '7', '8', '9', 'a', 'p', 't', 'q', 'x')
 
 function Format-MenuHint {
     <# Render the key list as the operator-facing hint, e.g. "1-9, r, a, p, q".
@@ -3291,16 +3329,13 @@ function Show-MenuGrid {
     # <target>", Reset+ = "Stop all, wipe state, then start the <target>".
     # Live actions that rest real maker bids carry "; type START" as the cue.
     $groups = @(
-        @{ Header = "🟢 LIVE - real maker bids"; Items = @(
-            @{ K = "1"; Icon = "▶"; IconColor = "Success"; V = "Start Bot + Dashboard";     D = "Hosts the live dashboard; start from its Start Run launcher (preflight-gated)" }
-            @{ K = "2"; Icon = "■"; IconColor = "Error";   V = "Stop Bot + Dashboard";      D = "Stops bot processes and dashboard" }
-            @{ K = "3"; Icon = "◉"; IconColor = "Warning"; V = "Host & Open Dashboard";     D = "Hosts unified dashboard on :8799 (live DB) & opens browser" }
+        @{ Header = "🌐 DASHBOARD (unified :8799)"; Items = @(
+            @{ K = "s"; Icon = "▶"; IconColor = "Success"; V = "Start Dashboard";        D = "Launch/adopt the unified dashboard on :8799 & open browser (serves live or shadow DB)" }
+            @{ K = "k"; Icon = "■"; IconColor = "Error";   V = "Kill Dashboard";        D = "Force-kill ANY process on dashboard port :8799 (no ownership check; other terminal can take over)" }
         ) }
-        @{ Header = "🥷 SHADOW - rehearsal, spends nothing"; Items = @(
-            @{ K = "4"; Icon = "▷"; IconColor = "Info";    V = "Start Shadow Run";          D = "Start new shadow rehearsal (standard or prudent); prompts profile + minutes (no wipe)" }
-            @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Shadow Run";           D = "Stops rehearsal loop, watcher and dashboard" }
-            @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Open Shadow Dashboard";     D = "Hosts unified dashboard on :8799 (shadow DB) & opens browser" }
-            @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run(s)";  D = "Resume a shadow rehearsal in place (no wipe): pick 01 / 02 / all / Prudent" }
+        @{ Header = "🔍 MARKET FILTER LOOP"; Items = @(
+            @{ K = "f"; Icon = "▶"; IconColor = "Success"; V = "Start Filter Loop";     D = "Start market filter loop in background (unattached, refreshes universe feed)" }
+            @{ K = "d"; Icon = "■"; IconColor = "Error";   V = "Kill Filter Loop";      D = "Force-kill ANY filter_loop process (no ownership check)" }
         ) }
         @{ Header = "MAINTENANCE & TOURNAMENT"; Items = @(
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop &| Clean";       D = "1. Stop All (default) | 2. Stop & CLEAN Data" }
@@ -3331,80 +3366,50 @@ function Show-MenuGrid {
 function Invoke-LiveAction {
     param([string]$Key)
     switch ($Key) {
-        "1" {
-            # Live start is preflight-gated (#857): the dashboard launcher owns
-            # the start, so the menu only hosts the live dashboard. No wipe --
-            # wiping first would leave the operator with an empty stack and a
-            # start the server always refuses. Interactive requires typed START.
-            if ($Action -eq "") {
-                Write-Host ""
-                $confirm = Read-Host "Type START to confirm starting the LIVE bot stack (real maker bids)"
-                if ($confirm -ne "START") { Lsh-Warn "Start cancelled."; return }
-            }
-            $null = Open-Dashboard -Mode "live"
-            Start-BotStack
+        "s" {
+            # Start Dashboard (unified :8799) — launch/adopt the dashboard
+            # and open it in the browser. The dashboard serves whatever DB
+            # is currently active (live orders.db or shadow NN_shadow_*.db)
+            # via its on-page run switcher.
+            $null = Start-Dashboard
+            if ($?) { Start-Process $DashUrl }
         }
-        "2" {
-            Stop-BotStack
-            $null = Stop-Dashboard
-            Lsh-Ok "Live stack is down."
+        "k" {
+            # Kill Dashboard (unified :8799) — force-kill any process on the port
+            $null = Stop-Dashboard -Force
+            Lsh-Ok "Dashboard killed."
         }
-        "3" {
-            $null = Open-Dashboard -Mode "live"
+        "f" {
+            # Start Market Filter Loop in background (unattached)
+            Lsh-Step "Starting market filter loop (python -m scripts.filter_loop)..."
+            $filterLoop = Start-Process -FilePath "python" `
+                -ArgumentList "-m", "scripts.filter_loop" `
+                -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+                -RedirectStandardOutput (Join-Path $RunDir "filter_loop.out.log") `
+                -RedirectStandardError (Join-Path $RunDir "filter_loop.err.log")
+            Lsh-Ok "Market filter loop started (PID $($filterLoop.Id)) - running in background, check runtime/filter_loop.out.log"
         }
-        "4" {
-            $mins = $Minutes
-            $validPresets = @('control', 'conservative', 'balanced', 'aggressive', 'prudent', 'hybrid')
-            if ($Preset) {
-                $cleanPreset = $Preset.Trim().ToLower()
-                if ($cleanPreset -notin $validPresets) {
-                    Lsh-Fail "Unknown preset: '$Preset'. Supported presets: $($validPresets -join ', ')."
-                    return
+        "d" {
+            # Kill Market Filter Loop — force-kill any filter_loop process
+            Lsh-Warn "Force-killing ANY filter_loop process (no ownership check)..."
+            $found = $false
+            try {
+                $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
+                    Where-Object {
+                        $_.Name -match '^python' -and $_.CommandLine -and `
+                        $_.CommandLine -like "*scripts.filter_loop*"
+                    })
+                foreach ($p in $procs) {
+                    $found = $true
+                    Lsh-Step "Stopping filter_loop PID $($p.ProcessId)..."
+                    taskkill /F /T /PID $p.ProcessId 2>$null | Out-Null
+                    Wait-ProcessGone -ProcessId $p.ProcessId | Out-Null
+                    Lsh-Ok "Filter_loop PID $($p.ProcessId) killed."
                 }
-                $script:ShadowPreset = $cleanPreset
-            } elseif ($Prudent -or ($Action -eq "shadow-prudent") -or ($Action -eq "prudent")) {
-                $script:ShadowPreset = "prudent"
+            } catch {
+                Lsh-Warn "Process table scan encountered an issue."
             }
-            if ($Action -eq "") {
-                if (-not $script:ShadowPreset) {
-                    Write-Host "  Start new shadow rehearsal (no data wiped):" -ForegroundColor (Get-ProfileColor -Name Info)
-                    Write-Host "    [1] Standard Baseline (control) -> 01_shadow, 02_shadow..."
-                    Write-Host "    [2] Prudent Hybrid (2¢-4¢ dynamic offset, 0.60x) -> 01_shadow_prudent, 02_shadow_prudent..."
-                    $pChoice = Read-Host "  Profile choice? [1/2, default 1]"
-                    if ($pChoice -match '^[2pP]') {
-                        $script:ShadowPreset = "prudent"
-                    }
-                }
-                $presetLabel = if ($script:ShadowPreset -eq "prudent") { "Prudent Hybrid" } else { "Standard Baseline" }
-                $resp = Read-Host ("  Minutes for this {0} shadow run (default 1440 / 24h, 5 for quick check, -1 until stopped)?" -f $presetLabel)
-                if ($resp -and $resp -match '^\s*(?:-1|[0-9]+(?:\.[0-9]+)?)\s*$') { $mins = [double]$resp }
-            }
-            if ($mins -eq 0) { $mins = 1440 }
-            $script:Minutes = [int]$mins
-            $null = Start-NewShadowRun
-        }
-        "9" {
-            $hrs = if ($Hours -gt 0) { $Hours } else { 12.0 }
-            if ($Action -eq "") {
-                $confirm = Read-Host "  Start a $hrs-hour statistical shadow run with its own database and dashboard? [y/N]"
-                if ($confirm -notmatch '^[yY]') { Lsh-Warn "Statistical run cancelled."; return }
-            }
-            $script:Hours = $hrs
-            $null = Reset-Environment -Mode "statistical"
-        }
-        "5" {
-            $sessStopped = Stop-ShadowSession
-            $runStopped = Stop-ShadowRun
-            if ($sessStopped -or ($runStopped -eq $true)) {
-                Lsh-Ok "Shadow session stopped."
-            } elseif ($null -eq $runStopped) {
-                Lsh-Warn "Shadow session stop finished, but the process scan was inconclusive; verify with option 1."
-            } else {
-                Lsh-Warn "No shadow session or process is running."
-            }
-        }
-        "6" {
-            $null = Open-Dashboard -Mode "shadow"
+            if (-not $found) { Lsh-Ok "No filter_loop processes found." }
         }
         "7" {
             $subChoice = "1"
@@ -3428,7 +3433,7 @@ function Invoke-LiveAction {
             }
 
             if ($subChoice -eq "1") {
-                Stop-AllSpreadHunterProcesses
+                Stop-AllSpreadHunterProcesses -Force:$Force
                 Lsh-Ok "Stop All completed. All spread-hunter processes stopped; data preserved."
             } elseif ($subChoice -eq "2") {
                 Write-Host ""
@@ -3464,99 +3469,14 @@ function Invoke-LiveAction {
             $null = Stop-WorktreeProcessesForce
         }
         "8" { Show-Status }
-        "r" {
-            # Resume one shadow run or all of them. -ResumeDb <path> resumes
-            # that single store; -ResumeDb all resumes every candidate store.
-            # Interactive with no -ResumeDb lists what is on disk and asks.
-            # Non-interactive with no -ResumeDb keeps the pinned 01 default.
-            $resumeDbList = @()
-            $validPresets = @('control', 'conservative', 'balanced', 'aggressive', 'prudent', 'hybrid')
-            if ($Preset) {
-                $cleanPreset = $Preset.Trim().ToLower()
-                if ($cleanPreset -notin $validPresets) {
-                    Lsh-Fail "Unknown preset: '$Preset'. Supported presets: $($validPresets -join ', ')."
-                    return
-                }
-                $script:ShadowPreset = $cleanPreset
-            } elseif ($Prudent) {
-                $script:ShadowPreset = "prudent"
+        "9" {
+            $hrs = if ($Hours -gt 0) { $Hours } else { 12.0 }
+            if ($Action -eq "") {
+                $confirm = Read-Host "  Start a $hrs-hour statistical shadow run with its own database and dashboard? [y/N]"
+                if ($confirm -notmatch '^[yY]') { Lsh-Warn "Statistical run cancelled."; return }
             }
-            if ($ResumeDb -eq "all") {
-                $resumeDbList = @(Get-ShadowResumeStores | ForEach-Object { $_.Path })
-                if ($resumeDbList.Count -eq 0) {
-                    Lsh-Fail "No resumable shadow stores found in data/ (expected NN_shadow_*.db)."
-                    return
-                }
-                Lsh-Step ("Resuming all {0} shadow runs (no data wiped)." -f $resumeDbList.Count)
-            } elseif ($ResumeDb -ne "") {
-                $resumeDbList = @($ResumeDb)
-            } elseif ($Action -ne "") {
-                $resumeDbList = @("")
-            } else {
-                $stores = @(Get-ShadowResumeStores)
-                if ($stores.Count -eq 0) {
-                    Lsh-Fail "No resumable shadow stores found in data/ (expected NN_shadow_*.db)."
-                    return
-                }
-                Write-Host "  Available shadow runs to resume:" -ForegroundColor (Get-ProfileColor -Name Info)
-                for ($i = 0; $i -lt $stores.Count; $i++) {
-                    Write-Host ("    [{0}] {1} ({2})" -f ($i + 1), $stores[$i].RunId, $stores[$i].Name)
-                }
-                Write-Host "    [A] All runs"
-                Write-Host "    [P] Prudent Hybrid run on shadow-01 (2¢-4¢ dynamic offset, 0.60x)"
-                $promptLimit = if ($stores.Count -gt 1) { "1-$($stores.Count)/A/P" } else { "1/A/P" }
-                $choice = Read-Host ("  Resume which run? [{0}, C to cancel]" -f $promptLimit)
-                if ($choice -match '^[pP]') {
-                    $prudentPick = $stores | Where-Object { $_.RunId -like "*-prudent" } | Select-Object -First 1
-                    $s01 = $stores | Where-Object { $_.RunId -eq "shadow-01" } | Select-Object -First 1
-                    $picked = if ($prudentPick) { $prudentPick } elseif ($s01) { $s01 } else { $stores[0] }
-                    $confirm = Read-Host ("  Resume {0} from {1} with Prudent Hybrid dynamic offset (no data wiped)? [y/N]" -f $picked.RunId, $picked.Name)
-                    if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
-                    $script:ShadowPreset = "prudent"
-                    $resumeDbList = @($picked.Path)
-                } elseif ($choice -match '^[aA]') {
-                    $confirm = Read-Host ("  Resume all {0} runs (no data wiped)? [y/N]" -f $stores.Count)
-                    if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
-                    $resumeDbList = @($stores | ForEach-Object { $_.Path })
-                } elseif ($choice -match '^\s*(\d+)\s*$' -and [int]$Matches[1] -ge 1 -and [int]$Matches[1] -le $stores.Count) {
-                    $picked = $stores[[int]$Matches[1] - 1]
-                    $confirm = Read-Host ("  Resume {0} from {1} (no data wiped)? [y/N]" -f $picked.RunId, $picked.Name)
-                    if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
-                    if ($picked.RunId -like "*-prudent") { $script:ShadowPreset = "prudent" }
-                    $resumeDbList = @($picked.Path)
-                } else {
-                    Lsh-Warn "Resume cancelled."
-                    return
-                }
-            }
-            $resumeDbBefore = $ResumeDb
-            $watchBefore = $Watch
-            if ($resumeDbList.Count -gt 1 -and $watchBefore) {
-                Lsh-Warn "-Watch streams the last resumed run's log; earlier runs start without it."
-            }
-            $failedResumes = @()
-            foreach ($resumeDb in $resumeDbList) {
-                # Script scope: this branch runs inside Invoke-LiveAction, and
-                # Resume-ShadowRun reads the script-level $ResumeDb/$Watch, so
-                # a bare assignment here would stay local and resume the wrong
-                # store. A multi-run resume streams the last run's log only:
-                # the first watched run would block on Get-Content -Wait and
-                # the later runs would never start.
-                $script:ResumeDb = $resumeDb
-                if ($resumeDbList.Count -gt 1 -and $resumeDb -ne $resumeDbList[-1]) {
-                    $script:Watch = $false
-                } else {
-                    $script:Watch = $watchBefore
-                }
-                if (-not (Resume-ShadowRun)) { $failedResumes += $resumeDb }
-            }
-            $script:ResumeDb = $resumeDbBefore
-            $script:Watch = $watchBefore
-            $script:ShadowPreset = ""
-            if ($failedResumes.Count -gt 0) {
-                $failedNames = @($failedResumes | ForEach-Object { if ($_ -eq "") { "(pinned default)" } else { Split-Path -Leaf $_ } })
-                Lsh-Fail ("Resume incomplete: {0} store(s) failed: {1}." -f $failedResumes.Count, ($failedNames -join ", "))
-            }
+            $script:Hours = $hrs
+            $null = Reset-Environment -Mode "statistical"
         }
         "a" {
             Invoke-StorageAudit
@@ -3588,7 +3508,6 @@ function Invoke-LiveAction {
         }
         "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {
-            # The hint already ends in q, so do not append ", or q" again.
             Lsh-Warn ("Invalid selection: {0} (choose {1})." -f $Key, (Format-MenuHint))
             Start-Sleep -Seconds 1
         }
@@ -3608,7 +3527,7 @@ function Read-MenuChoice {
             if ($ch -eq "`r" -or $ch -eq "`n") { Write-Host ""; return "" }
             if ([string]::IsNullOrWhiteSpace($ch) -or [char]::IsControl($ch[0])) { continue }
             Write-Host $ch
-            return $ch.Trim().ToLower()
+            return $ch.Trim()
         }
     } catch {
         try { $fallback = Read-Host }
@@ -3617,7 +3536,7 @@ function Read-MenuChoice {
             return $null
         }
         if ($null -eq $fallback) { return $null }
-        return $fallback.Trim().ToLower()
+        return $fallback.Trim()
     }
 }
 
@@ -3675,64 +3594,48 @@ function Invoke-InteractiveMenu {
 # ── Dispatch ──
 if ($Action -ne "") {
     $actionMap = @{
-        "start"        = "1"
-        "live"         = "1"
-        "live-start"   = "1"
-        "stop"         = "2"
-        "live-stop"    = "2"
-        "host"         = "3"
-        "host-live"    = "3"
-        "open"         = "3"
-        "dashboard"    = "3"
-        "dash"         = "3"
-        "shadow"       = "4"
-        "shadow-start" = "4"
-        "shadow-run"   = "4"
-        "shadow-prudent" = "4"
-        "prudent"      = "4"
-        "stop-shadow"  = "5"
-        "shadow-stop"  = "5"
-        "shadow-host"  = "6"
-        "open-shadow"  = "6"
-        "shadow-open"  = "6"
-        # Resume: option R offers every NN_shadow_ store (01 / 02 / all); default with no pick is still the pinned 01 store.
-        "resume"       = "r"
-        "shadow-resume" = "r"
-        "resume-shadow" = "r"
-        "resume-01"    = "r"
-        "reset"        = "7"
-        "clean"        = "7"
-        "get"          = "7"
-        "stop-all"     = "7"
-        "stopall"      = "7"
-        "stop-all-force" = "x"
-        "force-stop"   = "x"
-        "nuke"         = "x"
-        "status"       = "8"
-        "statistical"  = "9"
-        "stats"        = "9"
-        "overnight"    = "9"
-        "statistical-run" = "9"
-        "audit"        = "a"
-        "storage-audit"= "a"
-        "retention"    = "a"
-        "prune"        = "p"
-        "storage-prune"= "p"
-        "cockpit"      = "c"
-        "tournament-cockpit" = "c"
-        "t"            = "t"
-        "tourney"      = "t"
-        "tournament"   = "t"
-        "align"        = "t"
-        "reconcile"    = "t"
-        "align-tournament" = "t"
+        "start-dashboard"    = "s"
+        "dashboard"          = "s"
+        "dash"               = "s"
+        "kill-dashboard"     = "k"
+        "force-stop-dashboard" = "k"
+        "start-filter"       = "f"
+        "filter"             = "f"
+        "filter-loop"        = "f"
+        "kill-filter"        = "d"
+        "stop-filter"        = "d"
+        "filter-kill"        = "d"
+        "reset"              = "7"
+        "clean"              = "7"
+        "get"                = "7"
+        "stop-all"           = "7"
+        "stopall"            = "7"
+        "stop-all-force"     = "x"
+        "force-stop"         = "x"
+        "nuke"               = "x"
+        "status"             = "8"
+        "statistical"        = "9"
+        "stats"              = "9"
+        "overnight"          = "9"
+        "statistical-run"    = "9"
+        "audit"              = "a"
+        "storage-audit"      = "a"
+        "retention"          = "a"
+        "prune"              = "p"
+        "storage-prune"      = "p"
+        "t"                  = "t"
+        "tourney"            = "t"
+        "tournament"         = "t"
+        "align"              = "t"
+        "reconcile"          = "t"
+        "align-tournament"   = "t"
         "reconcile-tournament" = "t"
     }
     if ($ExtraArgs.Count -gt 0) {
         Write-Host ("ERROR: Too many words: '{0} {1}'. Run one action at a time (e.g. .\scripts\spread-hunter-menu.ps1 audit) — '-and' is not a menu word; call the menu twice to run two actions." -f $Action, ($ExtraArgs -join ' ')) -ForegroundColor Red
         exit 1
     }
-    $key = $Action.Trim().ToLower()
+    $key = $Action.Trim()
     if ($actionMap.ContainsKey($key)) { $key = $actionMap[$key] }
 
     # Menu numbers work directly too: `.\scripts\spread-hunter-menu.ps1 8`
