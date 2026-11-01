@@ -391,19 +391,33 @@ function Test-PidAlive {
 }
 
 function Test-Port {
-    <# True when a port is in LISTENING state with an active process (PID > 0).
+    <# True when a port is actively accepting connections on localhost or has an active owning process (PID > 0).
        No port passed means the live :8799; an explicit 0 is never a port and reads $false without probing.
        Ignores PID 0 orphan/draining TCP entries. #>
     param([int]$PortNumber = 0)
     if (-not $PSBoundParameters.ContainsKey('PortNumber')) { $PortNumber = $Port }
     if ($PortNumber -le 0) { return $false }
 
+    # 1. Direct TCP loopback connection probe (fastest, most accurate)
     try {
-        $conn = Get-NetTCPConnection -LocalPort $PortNumber -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 0 }
-        if ($conn) { return $true }
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $iar = $tcp.BeginConnect("127.0.0.1", $PortNumber, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne(200, $false)) {
+            $tcp.EndConnect($iar)
+            $tcp.Close()
+            return $true
+        }
+        $tcp.Close()
     } catch {}
 
-    $lines = @(netstat -ano | Select-String ":$PortNumber\s+.*LISTENING")
+    # 2. Windows native TCP connection query without state filter (handles blank enum states)
+    try {
+        $conns = @(Get-NetTCPConnection -LocalPort $PortNumber -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 0 })
+        if ($conns.Count -gt 0) { return $true }
+    } catch {}
+
+    # 3. Netstat fallback
+    $lines = @(netstat -ano | Select-String ":$PortNumber\s+")
     foreach ($line in $lines) {
         $parts = ($line.ToString().Trim() -split "\s+")
         if ($parts.Count -gt 0) {
@@ -435,16 +449,16 @@ function Get-PortPid {
         } catch {}
     }
 
-    # 2. Try native Windows TCP connection query (fast, robust)
+    # 2. Try native Windows TCP connection query (fast, robust, no state filter)
     try {
-        $conns = @(Get-NetTCPConnection -LocalPort $PortNumber -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 0 })
+        $conns = @(Get-NetTCPConnection -LocalPort $PortNumber -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 0 })
         if ($conns.Count -gt 0) {
             return [int]$conns[0].OwningProcess
         }
     } catch {}
 
-    # 3. Try netstat LISTENING with non-zero PID (safely trimmed)
-    $lines = @(netstat -ano | Select-String ":$PortNumber\s+.*LISTENING")
+    # 3. Try netstat with non-zero PID (safely trimmed)
+    $lines = @(netstat -ano | Select-String ":$PortNumber\s+")
     foreach ($line in $lines) {
         $parts = ($line.ToString().Trim() -split "\s+")
         if ($parts.Count -gt 0) {
@@ -617,15 +631,16 @@ function Save-DashInstance {
 
 function Test-DashboardServer {
     <# True when whatever answers on :LivePort is a spread-hunter dashboard
-    (answers /api/system/status with a services.dash entry).
+    (answers /api/system/status with a valid status payload).
     In the unified dashboard framework, there is only one single dashboard
     and it can be switched between live and shadow runs, so db_is_production
     is not required.
     #>
     try {
         $r = Invoke-RestMethod -Uri "$DashUrl/api/system/status" -UseBasicParsing -TimeoutSec 4
-        if ($null -eq $r.services -or $null -eq $r.services.dash) { return $false }
-        return $true
+        if ($null -eq $r) { return $false }
+        if ($null -ne $r.services -or $null -ne $r.db_path -or $null -ne $r.bot_state) { return $true }
+        return $false
     } catch {
         return $false
     }
@@ -703,6 +718,10 @@ function Get-DashboardOwnership {
     try { $dbPath = [string]$r.db_path } catch {}
     try { $regPath = [string]$r.registry_path } catch {}
     try { $dashPid = [int]$r.services.dash.pid } catch {}
+    if ($dashPid -le 0) {
+        $detectedPid = Get-PortPid -PortNumber $PortNumber
+        if ($detectedPid) { $dashPid = [int]$detectedPid }
+    }
     if ([string]::IsNullOrWhiteSpace($dbPath) -or [string]::IsNullOrWhiteSpace($regPath) -or ($dashPid -le 0)) {
         return [pscustomobject]@{ Verdict = 'Unknown'; ServedPath = $dbPath }
     }
