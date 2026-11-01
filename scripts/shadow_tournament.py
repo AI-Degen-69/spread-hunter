@@ -70,32 +70,34 @@ class ArmPlan:
     name: str
     db_path: Path
     run_id: str
-    dash_port: int
+    dash_port: Optional[int] = None
     env: dict[str, str] = field(default_factory=dict)
     shadow_argv: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "index": self.index,
             "name": self.name,
             "db_path": str(self.db_path),
             "run_id": self.run_id,
-            "dash_port": self.dash_port,
             "env": self.env,
             "shadow_argv": self.shadow_argv,
         }
+        if self.dash_port is not None:
+            d["dash_port"] = self.dash_port
+        return d
 
 
 @dataclass
 class TournamentPlan:
     issue: int
     stamp: str
-    base_port: int
-    minutes: float
-    interval: float
-    dashboards: bool
-    record_path: Path
-    results_path: Path
+    base_port: Optional[int] = None
+    minutes: float = 5.0
+    interval: float = 1.0
+    dashboards: bool = False
+    record_path: Path = field(default_factory=Path)
+    results_path: Path = field(default_factory=Path)
     log_path: Optional[Path] = None
     markets_path: Optional[str] = None
     arms: list[ArmPlan] = field(default_factory=list)
@@ -103,11 +105,10 @@ class TournamentPlan:
     arms_source: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "issue": self.issue,
             "stamp": self.stamp,
             "run_number": self.run_number,
-            "base_port": self.base_port,
             "minutes": self.minutes,
             "interval": self.interval,
             "dashboards": self.dashboards,
@@ -118,6 +119,9 @@ class TournamentPlan:
             "arms_source": self.arms_source,
             "arms": [a.to_dict() for a in self.arms],
         }
+        if self.base_port is not None:
+            d["base_port"] = self.base_port
+        return d
 
 
 RESULTS_NOTE = (
@@ -178,14 +182,16 @@ def write_tournament_results(plan: TournamentPlan, exit_codes: list[int]) -> Pat
     arms_data = []
     for arm, code in zip(plan.arms, exit_codes, strict=True):
         result = read_arm_results(arm.db_path, arm.run_id)
-        arms_data.append({
+        arm_entry = {
             "name": arm.name,
             "db_path": str(arm.db_path),
             "run_id": arm.run_id,
-            "dash_port": arm.dash_port,
             "exit_code": code,
             **result,
-        })
+        }
+        if arm.dash_port is not None:
+            arm_entry["dash_port"] = arm.dash_port
+        arms_data.append(arm_entry)
     payload = {
         "issue": plan.issue,
         "stamp": plan.stamp,
@@ -293,7 +299,7 @@ def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
 def build_tournament_plan(
     issue: int = 371,
     arms: Optional[list[dict[str, Any]]] = None,
-    base_port: int = 8801,
+    base_port: Optional[int] = None,
     minutes: float = 5.0,
     interval: float = MAX_ROTATION_INTERVAL_SEC,
     dashboards: bool = False,
@@ -395,14 +401,15 @@ def build_tournament_plan(
                 f"{preset_sel!r}; valid presets: {list(TOURNAMENT_PRESETS)}"
             )
 
-        # Port assignment & validation
-        dash_port = base_port + (idx - 1)
-        if dash_port == 8799:
-            raise ValueError(
-                "Port 8799 is reserved for live execution and cannot be used in tournament"
-            )
-        if check_ports and not is_port_available(dash_port):
-            raise ValueError(f"Port {dash_port} is already in use or unavailable")
+        # Optional legacy port assignment & validation (per-arm dashboards are retired)
+        dash_port = (base_port + (idx - 1)) if base_port is not None else None
+        if dash_port is not None:
+            if dash_port == 8799:
+                raise ValueError(
+                    "Port 8799 is reserved for live execution and cannot be used in tournament"
+                )
+            if check_ports and not is_port_available(dash_port):
+                raise ValueError(f"Port {dash_port} is already in use or unavailable")
 
         # Database path & safety
         db_path = build_tournament_db_path_v2(
@@ -631,7 +638,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--arms-file", type=str, default=None, help="JSON file with custom arms list")
     parser.add_argument("--minutes", type=float, default=5.0, help="Time box per arm in minutes (default: 5.0)")
     parser.add_argument("--interval", type=float, default=MAX_ROTATION_INTERVAL_SEC, help="Cycle rotation interval in seconds (default: 1.0)")
-    parser.add_argument("--base-port", type=int, default=8801, help="Starting dashboard port (default: 8801)")
+    parser.add_argument("--base-port", type=int, default=None, help="Starting dashboard port (default: None, per-arm dashboards retired)")
     parser.add_argument("--dashboards", action="store_true", help="Launch isolated dashboard monitors")
     parser.add_argument("--max-markets", type=int, default=None, help="Cap number of rotated markets")
     parser.add_argument("--markets-path", type=str, default=None, help="Path to trial universe feed")

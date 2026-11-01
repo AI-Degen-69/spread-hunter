@@ -280,7 +280,9 @@ def test_i917_build_tournament_plan_and_dry_run_cli(tmp_path: Path):
     assert plan_json["issue"] == 917
     assert plan_json["minutes"] == 1440.0
     assert [a["name"] for a in plan_json["arms"]] == EXPECTED_ARMS
+    assert "base_port" not in plan_json
     for arm_entry in plan_json["arms"]:
+        assert "dash_port" not in arm_entry
         assert "dash_argv" not in arm_entry
         assert "--dash-port" not in arm_entry["shadow_argv"]
 
