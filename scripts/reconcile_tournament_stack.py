@@ -229,24 +229,14 @@ def ensure_filter_loop() -> bool:
 
 
 def ensure_cockpit_and_hub(port: int = 8800, hub_port: int = 8798) -> None:
-    """Ensure Tournament Cockpit and Tournament Hub servers are listening."""
-    python_exe = sys.executable
-    log_dir = ROOT / "runtime" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    """Retired: Hub and Cockpit are pages on the single :8799 dashboard.
 
-    if not is_port_listening(port):
-        log.info("Launching Tournament Cockpit on port %d...", port)
-        lf = open(log_dir / "cockpit_server.log", "a", encoding="utf-8")
-        subprocess.Popen([python_exe, "-m", "scripts.tournament_cockpit_server", "--port", str(port)],
-                         stdout=lf, stderr=subprocess.STDOUT, **_detached_kwargs())
-        time.sleep(0.5)
-
-    if not is_port_listening(hub_port):
-        log.info("Launching Tournament Hub on port %d...", hub_port)
-        lf = open(log_dir / "tournament_hub.log", "a", encoding="utf-8")
-        subprocess.Popen([python_exe, "-m", "scripts.tournament_hub", "--port", str(hub_port)],
-                         stdout=lf, stderr=subprocess.STDOUT, **_detached_kwargs())
-        time.sleep(0.5)
+    Kept as a no-op for backwards compat so existing callers keep working;
+    no standalone :8800/:8798 processes are started anymore. Open
+    http://127.0.0.1:8799/cockpit/ (or /hub/) on the unified dashboard.
+    """
+    log.info("Standalone Cockpit/Hub retired: served by the :8799 dashboard (/cockpit/, /hub/)")
+    return
 
 
 def reconcile_dashboards(arms: List[Dict[str, Any]], tree_mtime: float) -> None:
@@ -487,7 +477,7 @@ def reconcile(tourney_id: str = "799", max_markets: int = 3, minutes: float = 14
     ensure_filter_loop()
 
     # 3. Ensure Cockpit and Hub
-    log.info("3. Ensuring Cockpit (:8800) and Hub (:8798)...")
+    log.info("3. Cockpit/Hub are :8799 pages (standalone :8800/:8798 retired)...")
     ensure_cockpit_and_hub()
 
     # 4. Check tree mtime

@@ -18,7 +18,7 @@
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
 #   .\scripts\spread-hunter-menu.ps1 audit         # A · MAINTENANCE: storage audit (read-only disk usage)
 #   .\scripts\spread-hunter-menu.ps1 prune         # P · MAINTENANCE: storage prune (deletes stale stores/reports)
-#   .\scripts\spread-hunter-menu.ps1 cockpit       # C · MAINTENANCE: tournament cockpit (opens :8800)
+#   .\scripts\spread-hunter-menu.ps1 cockpit       # C · MAINTENANCE: tournament cockpit page on :8799
 #   .\scripts\spread-hunter-menu.ps1 tournament    # T · TOURNAMENT: align 10 arms, loop, dashboards & cockpit
 # the same code path as the dashboard's START/STOP buttons (interprocess lock,
 # starting-capital snapshot, shared run_id). The dashboard process itself is
@@ -3307,7 +3307,7 @@ function Show-MenuGrid {
             @{ K = "x"; Icon = "✖"; IconColor = "Error";   V = "Force Stop Checkout";          D = "Stop every Owned process of THIS checkout (recorded or not); others keep running" }
             @{ K = "8"; Icon = "≡"; IconColor = "Info";    V = "Check System Status";        D = "Static Status page" }
             @{ K = "t"; Icon = "⚖"; IconColor = "Success"; V = "Tournament Reconcile";       D = "Align & sync 10 arms, filter loop, 10 dashboards & Cockpit" }
-            @{ K = "c"; Icon = "⌖"; IconColor = "Info";    V = "Tournament Cockpit";         D = "Open Advanced Analytics & Decision Cockpit on :8800" }
+            @{ K = "c"; Icon = "⌖"; IconColor = "Info";    V = "Tournament Cockpit";         D = "Open Tournament Cockpit page on :8799 (/cockpit/)" }
             @{ K = "9"; Icon = "▣"; IconColor = "Info";    V = "Overnight Statistics";         D = "Run shadow + statistics + dashboard for hours" }
             @{ K = "a"; Icon = "◫"; IconColor = "Neutral"; V = "Storage Audit";             D = "Report disk usage of every store and report (read-only)" }
             @{ K = "p"; Icon = "⨯"; IconColor = "Error";   V = "Storage Prune";             D = "Delete stale stores/reports per retention (prunes data)" }
@@ -3573,14 +3573,14 @@ function Invoke-LiveAction {
                 Pop-Location
             }
             if ($LASTEXITCODE -eq 0) {
-                Lsh-Ok "Tournament stack aligned: 10 arms running, dashboards fresh, Cockpit active on :8800."
+                Lsh-Ok "Tournament stack aligned: 10 arms running, dashboards fresh, Cockpit page live on :8799/cockpit/."
             } else {
                 Lsh-Warn "Tournament reconciliation completed with settling notices."
             }
         }
         "c" {
-            Start-Process "http://127.0.0.1:8800"
-            Lsh-Ok "Opened Tournament Cockpit at http://127.0.0.1:8800"
+            Start-Process "http://127.0.0.1:8799/cockpit/"
+            Lsh-Ok "Opened Tournament Cockpit at http://127.0.0.1:8799/cockpit/"
         }
         "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {

@@ -8,7 +8,10 @@ arm records and stores stay: they are launch/compare data, not pages.
 Computes risk, expectancy (EV), standard deviation, max drawdown,
 Monte Carlo projections, and Live Readiness Scoring.
 
-Usage:
+The Cockpit is a page on the unified dashboard (:8799) with one tab per run:
+    http://127.0.0.1:8799/cockpit/        # run tabs: 799, 843, 905
+
+Legacy standalone usage (local debugging only, not the operator flow):
     python -m scripts.tournament_cockpit_server --port 8800
 """
 from __future__ import annotations

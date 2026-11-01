@@ -156,8 +156,8 @@ if ($script:pruneForce -ne $true)  { $failures.Add("p did not pass Force under -
 $Yes = $false; Invoke-LiveAction "p"
 if ($script:pruneForce -ne $false) { $failures.Add("p passed Force without -Yes") | Out-Null }
 Invoke-LiveAction "c"
-if ($script:startedProcesses.Count -ne 1 -or $script:startedProcesses[0] -ne "http://127.0.0.1:8800") {
-    $failures.Add("c did not start cockpit URL http://127.0.0.1:8800") | Out-Null
+if ($script:startedProcesses.Count -ne 1 -or $script:startedProcesses[0] -ne "http://127.0.0.1:8799/cockpit/") {
+    $failures.Add("c did not start cockpit URL http://127.0.0.1:8799/cockpit/") | Out-Null
 }
 $warned = (Invoke-LiveAction "z" *>&1 | Out-String)
 if (-not $warned.Contains("1-9, r, a, p, c, t, q")) { $failures.Add("warn did not name the full hint") | Out-Null }

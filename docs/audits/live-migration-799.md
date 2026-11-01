@@ -246,9 +246,9 @@ them) — each step below names the checkout it runs in.
    exist yet — it ships with this branch's merge. A relative `--run-dir`
    only resolves inside the main checkout, which is why the path here is
    absolute.)
-2. Open the cockpit from the main checkout →
-   `python -m scripts.tournament_cockpit_server --port 8800`, browser to
-   `http://127.0.0.1:8800` → open any arm tab and check its PnL, Sharpe
+2. Open the cockpit on the unified dashboard →
+   `python -m dashboard.server` (port 8799), browser to
+   `http://127.0.0.1:8799/cockpit/799` → open any arm tab and check its PnL, Sharpe
    and merge counts against this audit's row. (The cockpit code path is
    untouched by this branch, so the main checkout shows the same stores.)
 3. Read this file against `tasks/plan.md`'s appendix → every figure names

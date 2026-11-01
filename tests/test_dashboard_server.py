@@ -4162,15 +4162,19 @@ def test_cockpit_nav_pills_stay_on_the_dashboard_port():
     `/843` is a 404, so clicking the #843 pill left the page on a Not Found.
     """
     from fastapi.testclient import TestClient
-    for path, active in (("/cockpit/", "/cockpit/799"), ("/cockpit/843", "/cockpit/843")):
+    for path, active in (("/cockpit/", "/cockpit/799"), ("/cockpit/843", "/cockpit/843"),
+                          ("/cockpit/905", "/cockpit/905")):
         res = TestClient(app).get(path)
         assert res.status_code == 200, path
         nav = res.text.split('<div class="tourney-nav">', 1)[1].split("</div>", 1)[0]
         assert 'href="/cockpit/799"' in nav
         assert 'href="/cockpit/843"' in nav
+        assert 'href="/cockpit/905"' in nav
         assert f'href="{active}" class="tourney-pill active"' in nav
         assert 'href="/843"' not in nav
         assert 'href="/799"' not in nav
+        assert 'href="/905"' not in nav
+        assert "http://127.0.0.1:8800" not in res.text
 
 
 def test_cockpit_api_stats_served_in_process():
