@@ -187,7 +187,17 @@ def tourney_key_for_path(path: str) -> Optional[str]:
     the purged past-run pages. Issue #698 asked for that purge; PR #703 ticked
     the acceptance boxes without delivering the route bullet, so it lands here.
     """
-    return PAGE_PATHS.get(path.split("?")[0].rstrip("/"))
+    clean = path.split("?")[0].rstrip("/")
+    if clean in ("", "/index.html"):
+        newest = _newest_plan_record()
+        if newest is not None:
+            parsed = parse_tournament_run_dir_name(newest.parent)
+            if parsed and parsed.get("issue"):
+                issue_str = str(parsed["issue"])
+                if issue_str in SERVED_TOURNAMENT_KEYS:
+                    return issue_str
+        return CURRENT_SETUP_KEY
+    return PAGE_PATHS.get(clean)
 
 
 def _strip_round_suffix(name: str) -> str:

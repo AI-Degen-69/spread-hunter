@@ -6912,7 +6912,10 @@ def _open_dash_retired_page() -> str:
 def cockpit_stats(tourney: str | None = None):
     """Tournament stats JSON, built in-process by the cockpit’s own builder."""
     cockpit_mod = _load_cockpit()
-    key = tourney if tourney in cockpit_mod.SERVED_TOURNAMENT_KEYS else cockpit_mod.CURRENT_SETUP_KEY
+    if tourney and tourney in cockpit_mod.SERVED_TOURNAMENT_KEYS:
+        key = tourney
+    else:
+        key = cockpit_mod.tourney_key_for_path("/") or cockpit_mod.CURRENT_SETUP_KEY
     return JSONResponse(cockpit_mod.get_cached_stats(key))
 
 

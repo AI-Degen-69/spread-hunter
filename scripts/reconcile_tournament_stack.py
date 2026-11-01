@@ -228,30 +228,37 @@ def ensure_filter_loop() -> bool:
     return True
 
 
+def ensure_dashboard(port: int = 8799, log_dir: Optional[Path] = None) -> bool:
+    """Ensure the Unified Dashboard is listening on :8799, serving Cockpit and all arms."""
+    if is_port_listening(port):
+        log.info("Unified Dashboard is listening on :%d (Cockpit live at http://127.0.0.1:%d/cockpit/)", port, port)
+        return True
+    log.info("Starting Unified Dashboard on port %d...", port)
+    python_exe = sys.executable
+    target_log_dir = log_dir if log_dir is not None else (ROOT / "runtime" / "logs")
+    target_log_dir.mkdir(parents=True, exist_ok=True)
+    lf = open(target_log_dir / "dashboard.log", "a", encoding="utf-8")
+    cmd = [python_exe, "-m", "dashboard.server", "--port", str(port)]
+    subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, **_detached_kwargs())
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if is_port_listening(port):
+            log.info("Unified Dashboard started successfully on port %d", port)
+            return True
+        time.sleep(0.3)
+    log.warning("Unified Dashboard process launched but port %d not yet accepting connections", port)
+    return False
+
+
 def ensure_cockpit_and_hub(port: int = 8800, hub_port: int = 8798) -> None:
-    """Retired: Hub and Cockpit are pages on the single :8799 dashboard.
-
-    Kept as a no-op for backwards compat so existing callers keep working;
-    no standalone :8800/:8798 processes are started anymore. Open
-    http://127.0.0.1:8799/cockpit/ (or /hub/) on the unified dashboard.
-    """
-    log.info("Standalone Cockpit/Hub retired: served by the :8799 dashboard (/cockpit/, /hub/)")
-    return
-
-
-def reconcile_dashboards(arms: List[Dict[str, Any]], tree_mtime: float) -> None:
-    """Retired: arms are heartbeat-only, served by the single :8799 dashboard.
-
-    Kept as a no-op for backwards compat so existing callers keep working;
-    per-arm dashboard processes are no longer started or restarted."""
-    log.info("Per-arm dashboards disabled: skipping %d arm dashboard checks (heartbeat-only)", len(arms))
-    return
+    """Hub and Cockpit are served in-process by the unified :8799 dashboard."""
+    ensure_dashboard(8799)
 
 
 def reconcile_arms(
     arms: List[Dict[str, Any]],
     logs_dir: Path,
-    max_markets: int = 3,
+    max_markets: Optional[int] = None,
     minutes: float = 1440.0,
     tree_mtime: float = 0.0,
 ) -> None:
@@ -287,7 +294,16 @@ def reconcile_arms(
                 is_stale = code_predates_tree(hb, clock=tree_mtime)
 
                 if is_running and not is_stale:
+                    cmdline = _pid_commandline(old_pid) if old_pid else ""
                     needs_restart = False
+                    if cmdline:
+                        tokens = cmdline.split()
+                        running_cap = None
+                        if "--max-markets" in tokens:
+                            pos = tokens.index("--max-markets") + 1
+                            running_cap = tokens[pos] if pos < len(tokens) else None
+                        wanted_cap = str(max_markets) if max_markets else None
+                        needs_restart = running_cap != wanted_cap
                 else:
                     needs_restart = True
             except Exception:
@@ -308,7 +324,8 @@ def reconcile_arms(
 
             log_file = logs_dir / f"arm-{idx:02d}-{name}.log"
             lf = open(log_file, "a", encoding="utf-8")
-            lf.write(f"\n===== RECONCILE {time.strftime('%Y-%m-%d %H:%M:%S')} max_markets={max_markets} (tree sync) =====\n")
+            mk_desc = f"max_markets={max_markets}" if max_markets else "uncapped"
+            lf.write(f"\n===== RECONCILE {time.strftime('%Y-%m-%d %H:%M:%S')} {mk_desc} (tree sync) =====\n")
             lf.flush()
 
             cmd = [
@@ -323,14 +340,12 @@ def reconcile_arms(
                 str(minutes),
                 "--interval",
                 "1.0",
-                "--dash-port",
-                str(dash_port),
-                "--max-markets",
-                str(max_markets),
             ]
+            if max_markets and max_markets > 0:
+                cmd.extend(["--max-markets", str(max_markets)])
             env = {**clean_env, **arm_env, "SPREAD_HUNTER_DB": str(full_db)}
             p = subprocess.Popen(cmd, env=env, stdout=lf, stderr=subprocess.STDOUT, **_detached_kwargs())
-            log.info("Launched fresh arm #%02d [%s] (PID %d) -> max_markets=%d, 24h box", idx, name, p.pid, max_markets)
+            log.info("Launched fresh arm #%02d [%s] (PID %d) -> %s, 24h box", idx, name, p.pid, mk_desc)
             time.sleep(0.3)
 
 
@@ -394,44 +409,54 @@ def verify_and_report(arms: List[Dict[str, Any]], tourney_id: str) -> bool:
             all_green = False
 
         status_str = "RUNNING (OK)" if engine_ok and not code_stale else "STALE / DOWN"
-        rows.append((idx, name, port, status_str, market_filter_state, orders_cnt, filled_cnt))
+        rows.append((idx, name, status_str, market_filter_state, orders_cnt, filled_cnt))
 
-    header = f"{'#':<3} {'Arm Name':<24} {'Port':<6} {'Engine Status':<16} {'Filter':<10} {'Orders':<8} {'Filled':<6} {'URL'}"
+    header = f"{'#':<3} {'Arm Name':<24} {'Engine Status':<16} {'Filter':<10} {'Orders':<8} {'Filled':<6}"
     log.info(header)
-    log.info("-" * len(header) + "-" * 25)
-    for idx, name, port, status_str, filter_st, orders_cnt, filled_cnt in rows:
-        url = f"http://127.0.0.1:{port}"
-        log.info(f"{idx:<3} {name:<24} {port:<6} {status_str:<16} {filter_st:<10} {orders_cnt:<8} {filled_cnt:<6} {url}")
+    log.info("-" * len(header))
+    for idx, name, status_str, filter_st, orders_cnt, filled_cnt in rows:
+        log.info(f"{idx:<3} {name:<24} {status_str:<16} {filter_st:<10} {orders_cnt:<8} {filled_cnt:<6}")
 
-    log.info("-" * len(header) + "-" * 25)
+    log.info("-" * len(header))
     log.info("Tournament Cockpit: http://127.0.0.1:8799/cockpit/")
     log.info("Tournament Hub:     http://127.0.0.1:8799/hub/")
 
     if all_green:
-        log.info("[OK] ALL 10 ARMS ARE SYNCHRONIZED, RUNNING FRESH CODE, AND MARKET FILTER IS ACTIVE!")
+        log.info("[OK] ALL %d ARMS ARE SYNCHRONIZED, RUNNING FRESH CODE, AND MARKET FILTER IS ACTIVE!", len(arms))
     else:
         log.warning("[WARN] Some arms or services are still settling. Rerun reconcile if needed.")
 
     return all_green
 
 
-def reconcile(tourney_id: str = "799", max_markets: int = 3, minutes: float = 1440.0,
-              sweep_slugs: Sequence[str] = ()) -> int:
+def reconcile(tourney_id: str = "799", max_markets: Optional[int] = None, minutes: float = 1440.0,
+              sweep_slugs: Sequence[str] = (), base_dir: Optional[Path | str] = None) -> int:
     """Full idempotent alignment pass for the specified tournament."""
-    log.info("Starting tournament #%s reconciliation pass...", tourney_id)
-    plan_path = latest_tournament_record(tourney_id, ROOT / "data" / "tournaments")
+    clean_id = str(tourney_id).lstrip("i#")
+    log.info("Starting tournament #%s reconciliation pass...", clean_id)
+    tournaments_dir = Path(base_dir) if base_dir else (ROOT / "data" / "tournaments")
+    plan_path = latest_tournament_record(clean_id, tournaments_dir)
     if plan_path is None or not plan_path.is_file():
-        log.info("No active tournament plan found on disk for tourney #%s; initializing fresh plan...", tourney_id)
+        log.info("No active tournament plan found on disk for tourney #%s; initializing fresh plan...", clean_id)
         from scripts.shadow_tournament import build_tournament_plan
-        arms_file = ROOT / "configs" / "tournaments" / f"i{tourney_id}-tournament-test_arms.json"
+        arms_file = ROOT / "configs" / "tournaments" / f"i{clean_id}-tournament-test_arms.json"
         if not arms_file.is_file():
-            candidates = list((ROOT / "configs" / "tournaments").glob(f"i{tourney_id}*arms.json"))
+            candidates = list((ROOT / "configs" / "tournaments").glob(f"i{clean_id}-*arms.json"))
+            if not candidates:
+                candidates = list((ROOT / "configs" / "tournaments").glob(f"i{clean_id}_*arms.json"))
+            if not candidates:
+                pattern = re.compile(rf"(^|[^0-9]){re.escape(clean_id)}([^0-9]|$)")
+                candidates = [f for f in (ROOT / "configs" / "tournaments").glob("*arms.json") if pattern.search(f.name)]
             if candidates:
                 arms_file = candidates[0]
 
-        arms_data = json.loads(arms_file.read_text(encoding="utf-8")) if arms_file.is_file() else None
+        if not arms_file.is_file():
+            log.error("No tournament arms configuration file found for issue #%s in configs/tournaments/", clean_id)
+            return 1
+
+        arms_data = json.loads(arms_file.read_text(encoding="utf-8"))
         plan = build_tournament_plan(
-            issue=int(tourney_id) if str(tourney_id).isdigit() else 799,
+            issue=int(clean_id) if clean_id.isdigit() else 799,
             arms=arms_data,
             base_port=8801,
             minutes=minutes,
@@ -439,7 +464,7 @@ def reconcile(tourney_id: str = "799", max_markets: int = 3, minutes: float = 14
             dashboards=True,
             max_markets=max_markets,
             run_name="tournament-1m",
-            base_dir=str(ROOT / "data" / "tournaments"),
+            base_dir=str(tournaments_dir),
             check_ports=False,
         )
         plan.record_path.parent.mkdir(parents=True, exist_ok=True)
@@ -483,16 +508,13 @@ def reconcile(tourney_id: str = "799", max_markets: int = 3, minutes: float = 14
     # 4. Check tree mtime
     tree_mtime = decision_code_mtime() or time.time()
 
-    # 5. Reconcile Dashboards
-    log.info("4. Reconciling 10 arm dashboards (:8801-:8810) to latest code...")
-    reconcile_dashboards(arms, tree_mtime)
-
-    # 6. Reconcile Shadow Arms
-    log.info("5. Reconciling 10 shadow run arms (max_markets=%d, 24h box)...", max_markets)
+    # 4. Reconcile Shadow Arms
+    mk_desc = f"max_markets={max_markets}" if max_markets else "uncapped"
+    log.info("4. Reconciling %d shadow run arms (%s, 24h box)...", len(arms), mk_desc)
     reconcile_arms(arms, logs_dir, max_markets=max_markets, minutes=minutes, tree_mtime=tree_mtime)
 
     # Give services time to initialize and write heartbeats
-    log.info("6. Waiting 5 seconds for heartbeats and sockets to settle...")
+    log.info("5. Waiting 5 seconds for heartbeats to settle...")
     time.sleep(5.0)
 
     # 7. Verify and output report
@@ -503,7 +525,7 @@ def reconcile(tourney_id: str = "799", max_markets: int = 3, minutes: float = 14
 def main() -> int:
     parser = argparse.ArgumentParser(description="Reconcile and Align Tournament Stack")
     parser.add_argument("--tourney", default="799", help="Tournament issue ID (default: 799)")
-    parser.add_argument("--max-markets", type=int, default=3, help="Max markets per arm (default: 3)")
+    parser.add_argument("--max-markets", type=int, default=None, help="Max markets per arm (default: uncapped)")
     parser.add_argument("--minutes", type=float, default=1440.0, help="Run duration in minutes (default: 1440.0)")
     parser.add_argument("--sweep-slug", action="append", default=[], metavar="SLUG",
                         help="Purge orders for this market slug from every arm database (repeatable; default: none)")
