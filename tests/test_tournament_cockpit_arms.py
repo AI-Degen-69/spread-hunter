@@ -1302,3 +1302,18 @@ def test_cockpit_serves_the_905_page(monkeypatch):
         handler.do_GET()
         assert handler.statuses == [200], path
     assert "905" in cockpit.SERVED_TOURNAMENT_KEYS
+
+
+def test_905_cockpit_hides_stale_worst_catalysts_and_blueprint():
+    html_905 = cockpit.generate_cockpit_html({"arms": cockpit.ARMS_CONFIG_905, "tourney_key": "905"})
+    # 1. 905 has no completed run to conclude catalysts/tweaks, so arm config must not carry #799 stale catalysts
+    for arm in cockpit.ARMS_CONFIG_905:
+        assert not arm.get("worst_catalyst"), arm["name"]
+        assert not arm.get("worst_catalyst_desc"), arm["name"]
+        assert not arm.get("hypothesized_tweak"), arm["name"]
+        assert not arm.get("tweak_rationale"), arm["name"]
+
+    # 2. Tab button for hybrid blueprint must not be rendered on 905
+    assert "switchTab('hybrid-config'" not in html_905
+    # The tab-pane is hidden
+    assert 'id="tab-hybrid-config" class="tab-pane" style="display: none !important;"' in html_905
