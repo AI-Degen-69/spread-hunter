@@ -102,11 +102,17 @@ DECISION_GATE_ARM_MAP = {
         "test_arm_pattern": "balanced-queue5",      # The hybrid arm combining balanced preset + queue gate
         "baseline_arm_names": ["control"],           # Pure control/baseline
         "balanced_only_arm_names": ["balanced-only"],  # Balanced preset only
+        "test_arm_desc": "Balanced + Queue Gate Hybrid",
+        "starvation_desc": "Combining the balanced preset and 5m queue-clear gate severely chokes order fills. Knobs are mutually restrictive.",
+        "provisional_desc": "Observed Sharpe ({sharpe:.2f}) and Drawdown (${mdd:.2f}) validate the hybrid hypothesis without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades).",
     },
     "799": {
         "test_arm_pattern": "queue-clear-5m",       # Queue clear gate test
         "baseline_arm_names": ["loose-baseline"],    # Pure control/baseline
         "balanced_only_arm_names": ["balanced-mid"], # Balanced preset only
+        "test_arm_desc": "Queue Clear 5m Gate",
+        "starvation_desc": "The 5m queue-clear gate severely restricts order fills. The filter is too aggressive for current market conditions.",
+        "provisional_desc": "Observed Sharpe ({sharpe:.2f}) and Drawdown (${mdd:.2f}) validate the queue-clear gate without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades).",
     },
 }
 
@@ -952,6 +958,11 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
             gate_starv_badge = "badge-red"
             gate_starv_text = f"Drop: {drop_pct:+.1f}% vs {ref_arm.get('name')} — Volume Starvation Detected"
             
+    # Tournament-specific description templates
+    arm_map = DECISION_GATE_ARM_MAP.get(tourney_key, DECISION_GATE_ARM_MAP["843"])
+    starvation_desc = arm_map.get("starvation_desc", "Combining the test configuration severely chokes order fills. Knobs are mutually restrictive.")
+    provisional_desc_template = arm_map.get("provisional_desc", "Observed Sharpe ({sharpe:.2f}) and Drawdown (${mdd:.2f}) validate the test hypothesis without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades).")
+    
     if test_n == 0:
         overall_verdict = "PENDING REHEARSAL DATA"
         overall_badge = "badge-amber"
@@ -959,7 +970,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
     elif gate_starv_status == "STARVATION":
         overall_verdict = "REJECTED: VOLUME STARVATION DETECTED"
         overall_badge = "badge-red"
-        overall_desc = "Combining the test configuration severely chokes order fills. Knobs are mutually restrictive."
+        overall_desc = starvation_desc
     elif gate_sharpe_status == "FAIL" or gate_mdd_status == "FAIL":
         overall_verdict = "REJECTED: CRITICAL RISK GATES FAILED"
         overall_badge = "badge-red"
@@ -968,7 +979,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
         if gate_sharpe_status == "PASS" and gate_mdd_status == "PASS" and gate_starv_status == "HEALTHY":
             overall_verdict = "PROVISIONAL PASS: COMPLEMENTARY RISK SHAPE"
             overall_badge = "badge-green"
-            overall_desc = f"Observed Sharpe ({observed_sharpe:.2f}) and Drawdown (${observed_mdd:.2f}) validate the hybrid hypothesis without volume starvation. (Nominal PnL remains inconclusive pending N={target_n:,} trades)."
+            overall_desc = provisional_desc_template.format(sharpe=observed_sharpe, mdd=observed_mdd, target_n=target_n)
         else:
             overall_verdict = "INCONCLUSIVE: SAMPLE UNDERPOWERED"
             overall_badge = "badge-amber"
