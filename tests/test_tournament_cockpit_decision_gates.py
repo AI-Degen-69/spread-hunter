@@ -140,28 +140,42 @@ def test_arm_without_rows_reads_unmeasured():
 
 
 def test_sufficiency_95_summary_verdicts():
-    """The card summary unlocks each KPI separately at the striving level."""
+    """The card summary shows each KPI's current calculated value instead of LOCKED."""
     rows = [
         {"key": "expectancy_usd", "label": "PnL Expectancy ($)", "base": "closes",
-         "base_n": 180, "sufficient_95": False,
+         "base_n": 180, "sufficient_95": False, "formatted_value": "+$0.12",
          "levels": [{"confidence_pct": 95, "required_n": 1800,
                       "remaining_n": 1620, "progress_pct": 10}]},
         {"key": "merge_rate", "label": "Merge Rate (%)", "base": "closes",
-         "base_n": 180, "sufficient_95": True,
+         "base_n": 180, "sufficient_95": True, "formatted_value": "84.5%",
          "levels": [{"confidence_pct": 95, "required_n": 150,
                       "remaining_n": 0, "progress_pct": 100}]},
+        {"key": "avg_duration_stop", "label": "Avg Fill-to-Close: Stops",
+         "base": "stops", "base_n": 1, "sufficient_95": None, "formatted_value": "5m 11s",
+         "levels": [{"confidence_pct": 95, "required_n": None,
+                      "remaining_n": None, "progress_pct": None}]},
         {"key": "avg_duration_merge", "label": "Avg Fill-to-Close: Merges",
-         "base": "merges", "base_n": 0, "sufficient_95": None,
+         "base": "merges", "base_n": 0, "sufficient_95": None, "formatted_value": None,
          "levels": [{"confidence_pct": 95, "required_n": None,
                       "remaining_n": None, "progress_pct": None}]},
     ]
     out = {s["key"]: s for s in cockpit._sufficiency_95_rows(rows)}
-    assert out["expectancy_usd"]["verdict"] == "LOCKED"
+    assert out["expectancy_usd"]["verdict"] == "+$0.12"
+    assert out["expectancy_usd"]["badge"] == "badge-amber"
     assert out["expectancy_usd"]["required_95"] == 1800
     assert out["expectancy_usd"]["remaining_95"] == 1620
-    assert out["merge_rate"]["verdict"] == "SUFFICIENT"
+    assert out["merge_rate"]["verdict"] == "84.5%"
+    assert out["merge_rate"]["badge"] == "badge-green"
+    # A 1-observation row has no stdev/required_n yet, but still shows its current value
+    assert out["avg_duration_stop"]["verdict"] == "5m 11s"
+    assert out["avg_duration_stop"]["badge"] == "badge-amber"
     assert out["avg_duration_merge"]["verdict"] == "—"
     assert out["avg_duration_merge"]["required_95"] is None
+    # Matrix cell also shows the current value instead of LOCKED or unmeasured when base_n >= 1
+    assert "+$0.12" in cockpit._dg_cell_html(rows[0], 95)
+    assert "LOCKED" not in cockpit._dg_cell_html(rows[0], 95)
+    assert "5m 11s" in cockpit._dg_cell_html(rows[2], 95)
+    assert "1 / —" in cockpit._dg_cell_html(rows[2], 95)
 
 
 def test_volume_starvation_is_run_level_not_a_verdict():

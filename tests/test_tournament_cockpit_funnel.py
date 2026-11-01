@@ -194,8 +194,9 @@ def test_cockpit_arm_card_shows_per_kpi_sufficiency(tmp_path):
     """The new KPI analytics are visible on the page, not just in the JSON.
 
     Each arm card carries its own sufficiency table (Have vs Need @95%):
-    the seed arm's expectancy needs 14 closes at 95% but has 3, so it reads
-    LOCKED; an arm that never reported reads unmeasured, never zero."""
+    instead of hiding underpowered parameters behind a 'LOCKED' label, each
+    row displays its current calculated value from the closes gathered so far;
+    an arm that never reported reads unmeasured, never zero."""
     from scripts.tournament_cockpit_server import generate_cockpit_html
     db = _seed(tmp_path)
     arm = analyze_arm_database({
@@ -210,8 +211,82 @@ def test_cockpit_arm_card_shows_per_kpi_sufficiency(tmp_path):
     assert "Per-KPI Sufficiency @95%" in html
     assert "PnL Expectancy ($)" in html
     assert "Avg Return per Trade (%)" in html
-    assert "LOCKED" in html
+    assert "LOCKED" not in html
+    assert "33.3%" in html  # 1 win / 3 closes and 1 merge / 3 closes
+    assert "66.7%" in html  # 2 stops / 3 closes
     assert "3 closes" in html
+
+
+def test_cockpit_arm_computes_fill_to_close_durations_and_values(tmp_path):
+    """Fill-to-close durations for merges and stops are computed from fills + orders + closes."""
+    db = tmp_path / "durations.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(SCHEMA)
+    orders_data = [
+        ("o-m1-up", "0xcond1", "tok1", "BUY", 0.45, 10.0, "filled", 1000000, 1000000, "pair-m1", RUN_ID),
+        ("o-m1-dn", "0xcond1", "tok2", "BUY", 0.50, 10.0, "filled", 1000000, 1000000, "pair-m1", RUN_ID),
+        ("o-m2-up", "0xcond2", "tok3", "BUY", 0.44, 10.0, "filled", 2000000, 2000000, "pair-m2", RUN_ID),
+        ("o-m2-dn", "0xcond2", "tok4", "BUY", 0.51, 10.0, "filled", 2000000, 2000000, "pair-m2", RUN_ID),
+        ("o-s1-up", "0xcond3", "tok5", "BUY", 0.48, 5.0, "filled", 3000000, 3000000, "pair-s1", RUN_ID),
+    ]
+    conn.executemany(
+        "INSERT INTO orders (id, condition_id, token_id, side, price, original_size, status, posted_ts, last_polled_ts, pair_id, run_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        orders_data,
+    )
+    fills_data = [
+        ("f1", "o-m1-up", 10.0, 0.45, 1700000000000, 1700000000000, RUN_ID),
+        ("f2", "o-m1-dn", 10.0, 0.50, 1700000050000, 1700000050000, RUN_ID),
+        ("f3", "o-m2-up", 10.0, 0.44, 1700001000000, 1700001000000, RUN_ID),
+        ("f4", "o-m2-dn", 10.0, 0.51, 1700001100000, 1700001100000, RUN_ID),
+        ("f5", "o-s1-up", 5.0, 0.48, 1700002000000, 1700002000000, RUN_ID),
+    ]
+    conn.executemany(
+        "INSERT INTO fills (trade_id, order_uuid, size, price, venue_ts, recorded_ts, run_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        fills_data,
+    )
+    closes_data = [
+        (1700000120.0, "0xcond1", "shadow_merge", 10.0, 9.50, 10.0, 0.50, "pair-m1", RUN_ID),
+        (1700001300.0, "0xcond2", "shadow_merge", 10.0, 9.50, 10.0, 0.50, "pair-m2", RUN_ID),
+        (1700002310.0, "0xcond3", "single_buy_exit", 5.0, 2.40, 2.00, -0.40, None, RUN_ID),
+    ]
+    conn.executemany(
+        "INSERT INTO closes (ts, condition_id, method, shares, cost_basis, proceeds, realized_pnl, tx_hash, run_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        closes_data,
+    )
+    conn.commit()
+    conn.close()
+
+    arm = analyze_arm_database({
+        "issue": 905,
+        "name": "balanced-mid",
+        "label": "Balanced Mid",
+        "port": 8802,
+        "db": str(db),
+        "run_id": RUN_ID,
+    })
+    rows = {r["key"]: r for r in arm["sufficiency_rows"]}
+    assert rows["avg_duration_merge"]["base_n"] == 2
+    assert rows["avg_duration_merge"]["value"] == 210.0
+    assert rows["avg_duration_merge"]["formatted_value"] == "3m 30s"
+    assert rows["avg_duration_stop"]["base_n"] == 1
+    assert rows["avg_duration_stop"]["value"] == 310.0
+    assert rows["avg_duration_stop"]["formatted_value"] == "5m 10s"
+    assert rows["avg_stop_loss_depth_pct"]["base_n"] == 1
+    assert rows["avg_stop_loss_depth_pct"]["formatted_value"] == "-16.7%"
+    assert rows["avg_return_pct"]["base_n"] == 3
+    assert rows["avg_return_pct"]["formatted_value"] == "-2.0%"
+    assert rows["expectancy_usd"]["formatted_value"] == "+$0.20"
+
+    html = generate_cockpit_html({"tourney_key": "905", "arms": [arm]})
+    assert "3m 30s" in html
+    assert "5m 10s" in html
+    assert "-16.7%" in html
+    assert "-2.0%" in html
+    assert "+$0.20" in html
+    assert "LOCKED" not in html
 
     ghost = generate_cockpit_html({
         "tourney_key": "843",
