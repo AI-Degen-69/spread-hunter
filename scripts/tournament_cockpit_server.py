@@ -437,6 +437,7 @@ def resolve_tournament_arms_with_status(
     global _WARNED_RECORD
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
+    print(f"DEBUG: tourney_key={tourney_key}, default_arms={len(default_arms)}")
     # Unknown keys fall back to the static table; live keys resolve their plan file.
     if tourney_key not in ("843", "799"):
         return default_arms, None
@@ -447,6 +448,7 @@ def resolve_tournament_arms_with_status(
     # (run number, stamp), so a named run (#487's `--stamp current_setup_10arm`)
     # no longer wins or loses on the accident of `c` sorting after a digit.
     latest_plan = _resolve_plan_for_tourney_key(tourney_key, meta)
+    print(f"DEBUG: latest_plan={latest_plan}")
     if latest_plan is None:
         return default_arms, None
     try:
@@ -458,15 +460,20 @@ def resolve_tournament_arms_with_status(
             _WARNED_RECORD = message
         return default_arms, message
     _WARNED_RECORD = None
+    print(f"DEBUG: record_arms={len(record_arms)}, names={[a['name'] for a in record_arms]}")
     # A run that launched its own arm set (#843's six-arm continuation) is read
     # as itself: merging it over the four static presets would hide two real arms
-    # and keep two rows pointing at a different run's stores. Also treat partial
-    # / legacy records (fewer arms than the static preset) as standalone -- they
-    # are not continuations of the full preset.
+    # and keep two rows pointing at a different run's stores. A record with NEW
+    # arm names (not in the static preset) is a standalone set; a subset of the
+    # static preset's arms is a partial run and should merge.
     static_names = {base["name"] for base in default_arms}
-    if (any(a["name"] not in static_names for a in record_arms)
-            or len(record_arms) != len(default_arms)):
+    record_names = {a["name"] for a in record_arms}
+    print(f"DEBUG: static_names={len(static_names)}, record_names={record_names}, diff={record_names - static_names}")
+    if record_names - static_names:
+        # Record has arm names the static preset doesn't know -> standalone set
+        print("DEBUG: TAKING STANDALONE PATH")
         return build_plan_arms(latest_plan) or default_arms, None
+    print("DEBUG: TAKING MERGE PATH")
     plan_arms: dict[str, Any] = {}
     for a in record_arms:
         plan_arms[a["name"]] = a
