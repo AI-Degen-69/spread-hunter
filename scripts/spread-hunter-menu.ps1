@@ -3300,10 +3300,13 @@ function Stop-AllSpreadHunterProcesses {
 
     # Free known dashboard, hub, and cockpit ports unconditionally.
     # Ports 8801..8810 were retired when per-arm dashboards were unified into :8799.
+    $myPid = $PID
+    $parentPid = 0
+    try { $parentPid = [int](Get-CimInstance Win32_Process -Filter "ProcessId=$myPid" -ErrorAction SilentlyContinue).ParentProcessId } catch {}
     $portsToCheck = @(8798, 8799, 8800)
     foreach ($port in $portsToCheck) {
         $pidOnPort = Get-PortPid -PortNumber $port
-        if ($pidOnPort) {
+        if ($pidOnPort -and $pidOnPort -ne $myPid -and $pidOnPort -ne $parentPid) {
             Lsh-Step "Freeing port :$port (PID $pidOnPort, taking over)..."
             taskkill /F /T /PID $pidOnPort 2>$null | Out-Null
             Wait-ProcessGone -ProcessId $pidOnPort | Out-Null
@@ -3332,10 +3335,13 @@ function Stop-AllSpreadHunterProcesses {
             ($_.CommandLine -match $shPattern) -and `
             ($_.CommandLine -notmatch 'polymarket_docs_mcp')
         })
-    if ((Test-StackAlive) -or ($lingering.Count -gt 0)) {
+    $allStopped = (-not (Test-StackAlive)) -and ($lingering.Count -eq 0)
+    if (-not $allStopped) {
         Lsh-Warn "Some processes may still be lingering ($($lingering.Count) process(es))."
+        return $false
     } else {
         Lsh-Ok "All spread-hunter processes, dashboards, and background workers are stopped."
+        return $true
     }
 }
 
@@ -4032,8 +4038,12 @@ function Invoke-LiveAction {
             }
 
             if ($subChoice -eq "1") {
-                Stop-AllSpreadHunterProcesses -Force:$true
-                Lsh-Ok "Stop All completed. All spread-hunter processes stopped and ports taken over; data preserved."
+                $ok = Stop-AllSpreadHunterProcesses -Force:$true
+                if ($ok) {
+                    Lsh-Ok "Stop All completed. All spread-hunter processes stopped and ports taken over; data preserved."
+                } else {
+                    Lsh-Warn "Stop All completed, but some processes may still be lingering."
+                }
             } elseif ($subChoice -eq "2") {
                 Write-Host ""
                 Write-Host "  WARNING: STOP & CLEAN DATA will purge all shadow, tournament, and stats runs!" -ForegroundColor Red
@@ -4046,10 +4056,6 @@ function Invoke-LiveAction {
                 }
                 $null = Reset-Environment -Mode "none" -Force:$true -IncludeTournaments
             }
-        }
-        "x" {
-            Stop-AllSpreadHunterProcesses -Force:$true
-            Lsh-Ok "Stop All completed. All spread-hunter processes stopped and ports taken over."
         }
         "8" { Show-Status }
         "9" {
@@ -4219,7 +4225,7 @@ if ($Action -ne "") {
     # typo fails fast instead of falling into the "invalid selection" path.
     # The allow-list is the same key set the grid, prompt and error message
     # name (#475), so a stray action can never be accepted here.
-    $legacyKeys = @('1', '2', '3', '4', '5', '6', 'r', 'x')
+    $legacyKeys = @('1', '2', '3', '4', '5', '6', 'r')
     if ($script:MenuKeys -notcontains $key -and $legacyKeys -notcontains $key) {
         Write-Host ("ERROR: Unknown action '{0}' (use {1}, or a name like start/stop/status/audit/prune)" -f $Action, (Format-MenuHint)) -ForegroundColor Red
         exit 1

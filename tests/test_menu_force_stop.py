@@ -317,7 +317,7 @@ def test_action_map_routes_force_stop_aliases():
     assert pairs.get("stop") == "2"
 
 
-def test_dispatch_key_x_calls_unified_stop():
+def test_dispatch_key_7_calls_unified_stop():
     text = MENU.read_text(encoding="utf-8")
     keys_line = next(l for l in text.splitlines() if l.strip().startswith("$script:MenuKeys"))
     start = text.index("function Invoke-LiveAction ")
@@ -336,14 +336,15 @@ def test_dispatch_key_x_calls_unified_stop():
         dispatch,
         "$Action = 'stop-all-force'",
         "$script:AllCalls = 0",
+        "$script:LastForce = $false",
         "$script:Log = @()",
-        "function Stop-AllSpreadHunterProcesses { param([switch]$Force) $script:AllCalls++ }",
+        "function Stop-AllSpreadHunterProcesses { param([switch]$Force) $script:AllCalls++; $script:LastForce = [bool]$Force; return $true }",
         "function Lsh-Step($m) { $script:Log += @(\"STEP:$m\") }",
         "function Lsh-Ok($m) { $script:Log += @(\"OK:$m\") }",
         "function Lsh-Warn($m) { $script:Log += @(\"WARN:$m\") }",
         "function Lsh-Fail($m) { $script:Log += @(\"FAIL:$m\") }",
-        "$null = Invoke-LiveAction 'x'",
-        "$out = @{ all = $script:AllCalls; log = @($script:Log) }",
+        "$null = Invoke-LiveAction '7'",
+        "$out = @{ all = $script:AllCalls; force = $script:LastForce; log = @($script:Log) }",
         "$out | ConvertTo-Json -Compress -Depth 4",
     ])
     out = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", prelude],
@@ -351,3 +352,42 @@ def test_dispatch_key_x_calls_unified_stop():
                          encoding="utf-8")
     got = json.loads(out.stdout)
     assert got["all"] == 1
+    assert got["force"] is True
+
+
+def test_clean_action_passes_include_tournaments():
+    text = MENU.read_text(encoding="utf-8")
+    start = text.index("function Invoke-LiveAction ")
+    i = text.index("{", start)
+    depth = 0
+    for j in range(i, len(text)):
+        if text[j] == "{":
+            depth += 1
+        elif text[j] == "}":
+            depth -= 1
+            if depth == 0:
+                dispatch = text[start:j + 1]
+                break
+    prelude = "\n".join([
+        dispatch,
+        "$Action = 'clean'",
+        "$Yes = $true",
+        "$script:ResetCalls = 0",
+        "$script:IncludeTournaments = $false",
+        "function Reset-Environment { param([string]$Mode, [switch]$Force, [switch]$IncludeTournaments) $script:ResetCalls++; $script:IncludeTournaments = [bool]$IncludeTournaments }",
+        "function Lsh-Step($m) { }",
+        "function Lsh-Ok($m) { }",
+        "function Lsh-Warn($m) { }",
+        "function Lsh-Fail($m) { }",
+        "$null = Invoke-LiveAction '7'",
+        "$out = @{ reset = $script:ResetCalls; tourneys = $script:IncludeTournaments }",
+        "$out | ConvertTo-Json -Compress -Depth 4",
+    ])
+    out = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", prelude],
+                         capture_output=True, text=True, check=True,
+                         encoding="utf-8")
+    last_line = [l.strip() for l in out.stdout.splitlines() if l.strip().startswith("{")][-1]
+    got = json.loads(last_line)
+    assert got["reset"] == 1
+    assert got["tourneys"] is True
+
