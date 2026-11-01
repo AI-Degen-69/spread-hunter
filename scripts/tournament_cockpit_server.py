@@ -391,13 +391,35 @@ def resolve_tournament_meta(
     #799 page with another experiment's arms under a "#843" header. Planned
     minutes come from that record, so progress is measured against the length
     the run was launched with, not a fixed 12 hours.
+
+    When a run exists for this key, the meta reflects that run's label and
+    arm count. Archive keys without a run keep their static meta.
     """
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     plan = _resolve_plan_for_tourney_key(tourney_key, meta)
     if plan is not None:
         _, minutes = _plan_identity(plan)
-        if minutes:
-            return meta, minutes
+        target_minutes = minutes or DEFAULT_TOURNAMENT_MINUTES
+        # Build a dynamic meta reflecting this run's label and arm count.
+        run_label = (parse_tournament_run_dir_name(plan.parent) or {}).get("name")
+        run_label = (run_label or "run").replace("-", " ").title()
+        arms = resolve_tournament_arms(tourney_key)
+        arms_label = f"{len(arms)} Arms"
+        branding = {key: value for key, value in meta.items() if key != "arms"}
+        return {
+            **branding,
+            "id": str(tourney_key),
+            "title": f"Issue #{tourney_key} Tournament \u2014 Live Run",
+            "subtitle": f"{target_minutes / 60.0:g}-Hour Multi-Arm Shadow Evaluation | {run_label} | {arms_label}",
+            "description": (
+                f"Following the tournament record on disk: issue #{tourney_key}, {arms_label.lower()} "
+                "launched from its own arms file. Comparative reading happens after the planned run "
+                "length; the catalyst column is this run's own arms file, quoted as written."
+            ),
+            "issue_primary": int(tourney_key),
+            "issue_secondary": int(tourney_key),
+            "nav_label": f"#{tourney_key} {run_label} ({arms_label})",
+        }, target_minutes
     return meta, DEFAULT_TOURNAMENT_MINUTES
 
 
