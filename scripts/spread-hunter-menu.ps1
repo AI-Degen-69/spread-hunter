@@ -391,12 +391,29 @@ function Test-PidAlive {
 }
 
 function Test-Port {
-    <# True when a port is in LISTENING state. No port passed means the live
-       :8799; an explicit 0 is never a port and reads $false without probing. #>
+    <# True when a port is in LISTENING state with an active process (PID > 0).
+       No port passed means the live :8799; an explicit 0 is never a port and reads $false without probing.
+       Ignores PID 0 orphan/draining TCP entries. #>
     param([int]$PortNumber = 0)
     if (-not $PSBoundParameters.ContainsKey('PortNumber')) { $PortNumber = $Port }
     if ($PortNumber -le 0) { return $false }
-    return [bool](netstat -ano | Select-String ":$PortNumber\s+.*LISTENING")
+
+    try {
+        $conn = Get-NetTCPConnection -LocalPort $PortNumber -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 0 }
+        if ($conn) { return $true }
+    } catch {}
+
+    $lines = @(netstat -ano | Select-String ":$PortNumber\s+.*LISTENING")
+    foreach ($line in $lines) {
+        $parts = ($line.ToString().Trim() -split "\s+")
+        if ($parts.Count -gt 0) {
+            $pidStr = $parts[-1]
+            if ($pidStr -match '^\d+$' -and [int]$pidStr -gt 0) {
+                return $true
+            }
+        }
+    }
+    return $false
 }
 
 function Get-PortPid {
@@ -418,21 +435,43 @@ function Get-PortPid {
         } catch {}
     }
 
-    # 2. Try netstat LISTENING with non-zero PID
-    $line = netstat -ano | Select-String ":$PortNumber\s+.*LISTENING" | Select-Object -First 1
-    if ($line) {
-        $foundPid = [int](($line.ToString() -split "\s+")[-1])
-        if ($foundPid -gt 0) { return $foundPid }
+    # 2. Try native Windows TCP connection query (fast, robust)
+    try {
+        $conns = @(Get-NetTCPConnection -LocalPort $PortNumber -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -gt 0 })
+        if ($conns.Count -gt 0) {
+            return [int]$conns[0].OwningProcess
+        }
+    } catch {}
+
+    # 3. Try netstat LISTENING with non-zero PID (safely trimmed)
+    $lines = @(netstat -ano | Select-String ":$PortNumber\s+.*LISTENING")
+    foreach ($line in $lines) {
+        $parts = ($line.ToString().Trim() -split "\s+")
+        if ($parts.Count -gt 0) {
+            $foundPid = [int]($parts[-1])
+            if ($foundPid -gt 0) { return $foundPid }
+        }
     }
 
-    # 3. Try any netstat entry where this port is the LOCAL address with a non-zero PID
-    $any = netstat -ano | Select-String "^\s*TCP\s+\S+:$PortNumber\s+" | Where-Object {
-        $found = [int](($_.ToString() -split "\s+")[-1])
-        $found -gt 0
-    } | Select-Object -First 1
-    if ($any) {
-        $foundPid = [int](($any.ToString() -split "\s+")[-1])
-        if ($foundPid -gt 0) { return $foundPid }
+    # 4. Try any netstat entry where this port is the LOCAL address with a non-zero PID
+    $any = @(netstat -ano | Select-String "^\s*TCP\s+\S+:$PortNumber\s+")
+    foreach ($line in $any) {
+        $parts = ($line.ToString().Trim() -split "\s+")
+        if ($parts.Count -gt 0) {
+            $foundPid = [int]($parts[-1])
+            if ($foundPid -gt 0) { return $foundPid }
+        }
+    }
+
+    # 5. Fallback: Find running dashboard.server process if probing the dashboard port
+    if ($PortNumber -eq $Port -or $PortNumber -eq $LivePort) {
+        try {
+            $dashProcs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^python' -and $_.CommandLine -like "*dashboard.server*" })
+            if ($dashProcs.Count -gt 0) {
+                return [int]$dashProcs[0].ProcessId
+            }
+        } catch {}
     }
 
     return $null
@@ -803,24 +842,39 @@ function Stop-Dashboard {
         # parent; the serving child would survive a plain Stop-Process and
         # keep the port while the pidfile said otherwise.
         taskkill /T /F /PID $($inst.pid) 2>$null | Out-Null
-        $deadline = (Get-Date).AddSeconds(10)
+        $deadline = (Get-Date).AddSeconds(5)
         while ((Get-Date) -lt $deadline -and (Test-Port)) { Start-Sleep -Milliseconds 300 }
     }
-    if ($Force -and (Test-Port)) {
-        $portPid = Get-PortPid
-        if ($portPid -gt 0) {
-            Lsh-Step "Force-stopping dashboard on port $LivePort (PID $portPid)..."
-            taskkill /T /F /PID $portPid 2>$null | Out-Null
-            $deadline = (Get-Date).AddSeconds(10)
-            while ((Get-Date) -lt $deadline -and (Test-Port)) { Start-Sleep -Milliseconds 300 }
-        } elseif (Test-Port) {
-            Lsh-Warn "Port $LivePort is LISTENING but PID could not be determined; try manual kill."
+    if ($Force) {
+        # If port is still listening, force-kill the port listener
+        if (Test-Port) {
+            $portPid = Get-PortPid
+            if ($portPid -gt 0) {
+                Lsh-Step "Force-stopping dashboard on port $LivePort (PID $portPid)..."
+                taskkill /T /F /PID $portPid 2>$null | Out-Null
+                $deadline = (Get-Date).AddSeconds(5)
+                while ((Get-Date) -lt $deadline -and (Test-Port)) { Start-Sleep -Milliseconds 300 }
+            }
         }
+        # In Force mode, also sweep any stray dashboard.server processes
+        try {
+            $stray = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^python' -and $_.CommandLine -like "*dashboard.server*" })
+            foreach ($p in $stray) {
+                Lsh-Step "Killing dashboard.server process PID $($p.ProcessId)..."
+                taskkill /T /F /PID $p.ProcessId 2>$null | Out-Null
+                $deadline = (Get-Date).AddSeconds(3)
+                while ((Get-Date) -lt $deadline -and (Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 200 }
+            }
+        } catch {}
     }
     Remove-Item $DashPidFile -ErrorAction SilentlyContinue
     if (Test-Port) {
-        Lsh-Warn "Port $LivePort still LISTENING (PID $(Get-PortPid)) - not owned by this menu, left running."
-        return $false
+        $remainingPid = Get-PortPid
+        if ($remainingPid -gt 0) {
+            Lsh-Warn "Port $LivePort still LISTENING (PID $remainingPid) - not owned by this menu, left running."
+            return $false
+        }
     }
     return $true
 }
