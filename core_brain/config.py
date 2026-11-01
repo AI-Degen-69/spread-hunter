@@ -377,6 +377,20 @@ class MakerConfig:
             window = kw.get("bot_quote_book_max_spread_from_mid",
                             cls.bot_quote_book_max_spread_from_mid)
             kw["bot_quote_book_max_spread_from_mid"] = max(window, wide)
+        else:
+            max_sp_usd = _env("BOT_QUOTE_BOOK_MAX_SPREAD_USD")
+            if max_sp_usd:
+                if rehearsal.is_rehearsal() or for_display:
+                    val_sp = _bounded_float(
+                        "BOT_QUOTE_BOOK_MAX_SPREAD_USD", max_sp_usd.strip(), 0.0, 0.30)
+                    kw["bot_quote_book_max_spread_usd"] = val_sp
+                    window = kw.get("bot_quote_book_max_spread_from_mid",
+                                    cls.bot_quote_book_max_spread_from_mid)
+                    kw["bot_quote_book_max_spread_from_mid"] = max(window, val_sp)
+                else:
+                    logging.getLogger(__name__).warning(
+                        "BOT_QUOTE_BOOK_MAX_SPREAD_USD ignored outside rehearsal; "
+                        "shipped bot_quote_book_max_spread_usd stands.")
 
         # Trial knobs: the screener keeps the shipped default (None) and fails open
         # (scoring/config.py:197-249), while the engine raises and fails loud naming the variable.
@@ -568,6 +582,27 @@ class MakerConfig:
         if dyn_age:
             kw["bot_quote_spread_offset_max_age_sec"] = _bounded_float(
                 "BOT_QUOTE_SPREAD_OFFSET_MAX_AGE_SEC", dyn_age, 0.0, 86400.0)
+
+        str_comp = _env("BOT_RISK_STRANDED_COMPLETION_ON")
+        if str_comp:
+            kw["bot_risk_stranded_completion_on"] = (
+                str_comp.strip().lower() in ("1", "true", "yes", "on")
+            )
+
+        str_wait = _env("BOT_RISK_STRANDED_MAX_WAIT_SEC")
+        if str_wait:
+            kw["bot_risk_stranded_max_wait_sec"] = _bounded_float(
+                "BOT_RISK_STRANDED_MAX_WAIT_SEC", str_wait, 0.0, 86400.0)
+
+        exit_win = _env("BOT_RISK_PAIRS_EXIT_WINDOW_SEC") or _env("BOT_POS_HOLD_MAX_SEC")
+        if exit_win:
+            win_var = (
+                "BOT_RISK_PAIRS_EXIT_WINDOW_SEC"
+                if _env("BOT_RISK_PAIRS_EXIT_WINDOW_SEC")
+                else "BOT_POS_HOLD_MAX_SEC"
+            )
+            kw["bot_risk_pairs_exit_window_sec"] = _bounded_float(
+                win_var, exit_win, 1.0, 86400.0)
 
         return cls(**kw)
 
@@ -823,7 +858,8 @@ def resolve_wide_book_trial(raw: str, *, for_display: bool = False, var_name: st
 
 
 def resolve_pair_cost_trial(raw: str, *, for_display: bool = False, var_name: str = "BOT_POS_PRICE_MAX_PAIR_COST_USD") -> float:
-    if not rehearsal.is_rehearsal():
+    val = _bounded_float(var_name, raw, 0.0, 1.0)
+    if not rehearsal.is_rehearsal() and val > MakerConfig.bot_pos_price_max_pair_cost_usd:
         if for_display:
             logging.getLogger(__name__).warning(
                 f"{var_name} ignored for a display-only config load "
@@ -834,7 +870,7 @@ def resolve_pair_cost_trial(raw: str, *, for_display: bool = False, var_name: st
             "pair assembling above the $1.00 the instrument pays. It applies "
             "only in a process that has declared itself unable to place an "
             "order -- core_brain.shadow_run, whose client cannot sign.")
-    return _bounded_float(var_name, raw, 0.0, 1.0)
+    return val
 
 
 def load(*, for_display: bool = False) -> MakerConfig:

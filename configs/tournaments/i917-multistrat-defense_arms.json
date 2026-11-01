@@ -1,0 +1,83 @@
+[
+  {
+    "name": "macro-non-sports",
+    "label": "Macro Non-Sports",
+    "color": "#00e5ff",
+    "profile": "non-sports universe only, 5m queue-clear gate",
+    "desc": "Excludes in-play and sports/esports markets; quotes only macro, politics, and crypto binary markets with a 5-minute queue-clear gate.",
+    "thesis": "Excluding in-play sports markets removes the sub-second score-shock adverse selection regime that caused 39%-57% bail-out loss rates in i905, restoring pair completion above 65%.",
+    "hypothesis": "Excluding in-play sports markets removes the sub-second score-shock adverse selection regime that caused 39%-57% bail-out loss rates in i905, restoring pair completion above 65%.",
+    "env": {
+      "BOT_MARKET_EXCLUDE_SPORTS_ON": "1",
+      "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
+      "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"
+    }
+  },
+  {
+    "name": "taker-snapper",
+    "label": "Taker Snapper",
+    "color": "#ff4081",
+    "profile": "stranded taker completion on, 10s max wait under $0.99 cap",
+    "desc": "Immediately crosses the opposing ask to complete a single-leg fill whenever the combined pair cost stays strictly below $0.99, with a 10-second stranded wait.",
+    "thesis": "Immediate taker completion of the opposing leg after a maker fill locks in positive spread before live match state shifts, lifting pair completion above 70%.",
+    "hypothesis": "Immediate taker completion of the opposing leg after a maker fill locks in positive spread before live match state shifts, lifting pair completion above 70%.",
+    "env": {
+      "BOT_RISK_STRANDED_COMPLETION_ON": "1",
+      "BOT_RISK_STRANDED_MAX_WAIT_SEC": "10.0"
+    }
+  },
+  {
+    "name": "fast-bailout-60s",
+    "label": "Fast Bailout 60s",
+    "color": "#ffd740",
+    "profile": "60s aged-out exit window, 45s stranded max wait",
+    "desc": "Cuts the single-leg hold window from 900s to 60s and exits unhedged stranded legs after 45s instead of waiting for deep adverse drift.",
+    "thesis": "Cutting single-leg hold time from 300s/900s to 45s/60s caps per-bailout loss before a single-point swing compounds into a multi-tick directional drawdown.",
+    "hypothesis": "Cutting single-leg hold time from 300s/900s to 45s/60s caps per-bailout loss before a single-point swing compounds into a multi-tick directional drawdown.",
+    "env": {
+      "BOT_RISK_PAIRS_EXIT_WINDOW_SEC": "60.0",
+      "BOT_RISK_STRANDED_MAX_WAIT_SEC": "45.0"
+    }
+  },
+  {
+    "name": "wide-cushion-live",
+    "label": "Wide Cushion Live",
+    "color": "#b388ff",
+    "profile": "$0.96 max pair cost cap, $0.12 book spread ceiling",
+    "desc": "Requires at least $0.04 gross pair cushion ($0.96 max pair cost) and permits wider books up to $0.12 spread.",
+    "thesis": "Demanding at least $0.04 gross margin per completed pair ($0.96 max pair cost) on wider books ($0.12 max spread) provides enough per-merge profit to offset live bail-out losses.",
+    "hypothesis": "Demanding at least $0.04 gross margin per completed pair ($0.96 max pair cost) on wider books ($0.12 max spread) provides enough per-merge profit to offset live bail-out losses.",
+    "env": {
+      "BOT_POS_PRICE_MAX_PAIR_COST_USD": "0.96",
+      "BOT_QUOTE_BOOK_MAX_SPREAD_USD": "0.12"
+    }
+  },
+  {
+    "name": "queue-gated-hybrid",
+    "label": "Queue-Gated Hybrid",
+    "color": "#69f0ae",
+    "profile": "8m queue-clear gate, 90s exit window, 30s offset max age",
+    "desc": "Combines an 8-minute queue-clear gate, a 90-second single-leg exit window, and a 30-second volatility offset freshness ceiling.",
+    "thesis": "Combining an 8-minute queue-clear gate, a 30-second volatility offset freshness window, and a 90-second single-leg exit window filters toxic flow while bounding unhedged hold duration.",
+    "hypothesis": "Combining an 8-minute queue-clear gate, a 30-second volatility offset freshness window, and a 90-second single-leg exit window filters toxic flow while bounding unhedged hold duration.",
+    "env": {
+      "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
+      "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "8",
+      "BOT_RISK_PAIRS_EXIT_WINDOW_SEC": "90.0",
+      "BOT_QUOTE_SPREAD_OFFSET_MAX_AGE_SEC": "30.0"
+    }
+  },
+  {
+    "name": "control-baseline",
+    "label": "Control Baseline",
+    "color": "#ff6e40",
+    "profile": "i905 queue-clear-5m control anchor",
+    "desc": "Control arm matching the i905 queue-clear-5m baseline on the identical live market feed.",
+    "thesis": "Control arm replicating the i905 queue-clear-5m baseline so every defense mechanism is measured against the exact same live market regime.",
+    "hypothesis": "Control arm replicating the i905 queue-clear-5m baseline so every defense mechanism is measured against the exact same live market regime.",
+    "env": {
+      "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
+      "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "5"
+    }
+  }
+]

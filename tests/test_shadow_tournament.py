@@ -665,7 +665,7 @@ def test_i799_arms_plan(tmp_path: Path):
     assert len(arms) == 10
 
     plan = build_tournament_plan(
-        issue=799, arms=arms, base_port=8801, base_dir=tmp_path,
+        issue=799, arms=arms, base_dir=tmp_path,
         run_number=1, check_ports=False,
     )
     assert len(plan.arms) == 10
@@ -673,7 +673,7 @@ def test_i799_arms_plan(tmp_path: Path):
     bases = [a["name"] for a in arms]
     assert len(set(bases)) == 10
     assert [a.name for a in plan.arms] == [f"{b}-1" for b in bases]
-    assert [a.dash_port for a in plan.arms] == list(range(8801, 8811))
+    assert all(a.dash_port is None for a in plan.arms)
 
 
 def test_worker_environment_strips_parent_config_env(tmp_path, monkeypatch):
@@ -795,7 +795,7 @@ def test_retired_arms_files_are_gone():
         assert not (cfg / stale).exists(), f"stale arms file still present: {stale}"
     kept = sorted(p.name for p in cfg.glob("*_arms.json"))
     assert kept == ["i799-tournament-test_arms.json", "i843-pair-test_arms.json",
-                    "i905-top5-rematch_arms.json"]
+                    "i905-top5-rematch_arms.json", "i917-multistrat-defense_arms.json"]
 
 
 def test_no_arm_is_pointed_at_the_production_registry(tmp_path):
@@ -996,7 +996,7 @@ def test_i799_plan_names_ten_fresh_stores_and_ports(tmp_path):
     plan = build_tournament_plan(issue=799, arms=arms, base_dir=tmp_path,
                                  run_number=1, check_ports=False)
     assert [a.name for a in plan.arms] == [f"{a['name']}-1" for a in arms]
-    assert [a.dash_port for a in plan.arms] == list(range(8801, 8811))
+    assert all(a.dash_port is None for a in plan.arms)
     assert len({str(a.db_path) for a in plan.arms}) == 10
     assert len({a.run_id for a in plan.arms}) == 10
     for arm in plan.arms:
@@ -1021,7 +1021,7 @@ def test_run_numbered_dry_run_with_explicit_799_arms_file(tmp_path, capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["run_number"] == 1
     assert len(data["arms"]) == 10
-    assert [a["dash_port"] for a in data["arms"]] == list(range(8801, 8811))
+    assert all("dash_port" not in a for a in data["arms"])
     run_dir = Path(data["record_path"])
     assert run_dir.is_absolute(), data["record_path"]
     assert run_dir.parent.parent == tmp_path

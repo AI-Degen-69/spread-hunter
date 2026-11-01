@@ -9,7 +9,7 @@ Computes risk, expectancy (EV), standard deviation, max drawdown,
 Monte Carlo projections, and Live Readiness Scoring.
 
 The Cockpit is a page on the unified dashboard (:8799) with one tab per run:
-    http://127.0.0.1:8799/cockpit/        # run tabs: 799, 843, 905
+    http://127.0.0.1:8799/cockpit/        # run tabs: 799, 843, 905, 917
 
 Legacy standalone usage (local debugging only, not the operator flow):
     python -m scripts.tournament_cockpit_server --port 8800
@@ -60,6 +60,7 @@ from core_brain.kpi import kpi_sufficiency_table as _kpi_sufficiency_table  # no
 I843_ARMS_FILE = ROOT / "configs" / "tournaments" / "i843-pair-test_arms.json"
 I799_ARMS_FILE = ROOT / "configs" / "tournaments" / "i799-tournament-test_arms.json"
 I905_ARMS_FILE = ROOT / "configs" / "tournaments" / "i905-top5-rematch_arms.json"
+I917_ARMS_FILE = ROOT / "configs" / "tournaments" / "i917-multistrat-defense_arms.json"
 
 
 def _load_arms_from_file(file_path: Path, issue_num: int, start_port: int = 8801) -> list[dict[str, Any]]:
@@ -95,6 +96,7 @@ def _load_arms_from_file(file_path: Path, issue_num: int, start_port: int = 8801
 ARMS_CONFIG_843 = _load_arms_from_file(I843_ARMS_FILE, 843, 8801)
 ARMS_CONFIG_799 = _load_arms_from_file(I799_ARMS_FILE, 799, 8801)
 ARMS_CONFIG_905 = _load_arms_from_file(I905_ARMS_FILE, 905, 8801)
+ARMS_CONFIG_917 = _load_arms_from_file(I917_ARMS_FILE, 917, 8801)
 
 # Legacy alias kept for older imports. The cockpit now serves #799 by
 # default; this constant no longer selects a page.
@@ -120,6 +122,11 @@ DECISION_GATE_ARM_MAP = {
         "volume_arm_pattern": "queue-clear-5m",       # Arm whose knob may choke fills
         "baseline_arm_names": ["loose-baseline"],    # Pure control/baseline
         "balanced_only_arm_names": ["balanced-mid"], # Balanced preset only
+    },
+    "917": {
+        "volume_arm_pattern": "queue-gated-hybrid",   # Arm whose knob may choke fills
+        "baseline_arm_names": ["control-baseline"],  # Pure control/baseline
+        "balanced_only_arm_names": ["macro-non-sports"],
     },
 }
 
@@ -155,6 +162,16 @@ TOURNAMENTS = {
         "issue_secondary": 905,
         "nav_label": "#905 Top-5 Rematch (5 Arms)",
     },
+    "917": {
+        "id": "917",
+        "title": "Issue #917 Multi-Strategy Adverse Selection Defense",
+        "subtitle": "6-Arm Live Shadow Tournament | Macro Non-Sports, Taker Snapper, Fast Bailout, Wide Cushion, Queue Hybrid, Control",
+        "description": "Pre-registered 6-arm head-to-head shadow tournament evaluating empirical defenses against single-leg adverse selection and stranded orphan resolution losses across live binary markets.",
+        "arms": ARMS_CONFIG_917,
+        "issue_primary": 917,
+        "issue_secondary": 917,
+        "nav_label": "#917 Multi-Strat Defense (6 Arms)",
+    },
 }
 
 
@@ -174,6 +191,9 @@ PAGE_PATHS: dict[str, str] = {
     "/905": "905",
     "/905.html": "905",
     "/cockpit_905": "905",
+    "/917": "917",
+    "/917.html": "917",
+    "/cockpit_917": "917",
 }
 # The keys the JSON API may serve: the served pages' own tournaments, derived so
 # a new page cannot forget to widen this.
@@ -426,7 +446,7 @@ def _resolve_plan_for_tourney_key(
     otherwise merge last week's r1 db/port into today's rows.
     """
     latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
-    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905"):
+    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905", "917"):
         newest = _newest_plan_record()
         newest_issue = _plan_identity(newest)[0] if newest is not None else None
         if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
@@ -491,7 +511,7 @@ def resolve_tournament_arms_with_status(
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
     # Unknown keys fall back to the static table; live keys resolve their plan file.
-    if tourney_key not in ("843", "799", "905"):
+    if tourney_key not in ("843", "799", "905", "917"):
         return default_arms, None
 
     # Each page reads its own issue's record: the key in the URL is a page, and
@@ -1825,7 +1845,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     dm_tbody_content = "\n".join(dm_rows)
     # One pill per served tournament, each naming the run its own page shows.
     nav_pills = []
-    for key, icon in (("799", "🧪"), ("843", "🚦"), ("905", "🏆")):
+    for key, icon in (("799", "🧪"), ("843", "🚦"), ("905", "🏆"), ("917", "🛡️")):
         badge = (
             '<span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;" '
             f'title="The live rehearsal this cockpit follows (tournament #{CURRENT_SETUP_KEY})">'
@@ -2202,7 +2222,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('overview', this)">🏆 Leaderboard &amp; Overview</button>
   <button class="tab-btn" onclick="switchTab('decision-gates', this)">🚦 Decision Gates &amp; Rehearsal Status</button>
-  {'<button class="tab-btn" onclick="switchTab(\'hybrid-config\', this)">⚙️ HYBRID Configuration Blueprint</button>' if tourney_key != "905" else ''}
+  {'<button class="tab-btn" onclick="switchTab(\'hybrid-config\', this)">⚙️ HYBRID Configuration Blueprint</button>' if tourney_key not in ("905", "917") else ''}
   <button class="tab-btn" onclick="switchTab('pnl-chart', this)">📈 Cumulative PnL Curves</button>
   <button class="tab-btn" onclick="switchTab('risk-stats', this)">⚖️ Risk &amp; Volatility (EV, &sigma;, MDD)</button>
   <button class="tab-btn" onclick="switchTab('execution', this)">🎯 Merge vs Fallout Quality</button>
@@ -2319,7 +2339,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 </div>
 
 <!-- TAB: HYBRID CONFIGURATION BLUEPRINT -->
-<div id="tab-hybrid-config" class="tab-pane" style="{'display: none !important;' if tourney_key == '905' else ''}">
+<div id="tab-hybrid-config" class="tab-pane" style="{'display: none !important;' if tourney_key in ('905', '917') else ''}">
   <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.12), rgba(0, 176, 255, 0.12)); border: 1px solid rgba(0, 230, 118, 0.4); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
       <div>
