@@ -55,6 +55,7 @@ from core_brain.sharpe import (
     risk_free_rate_from_env,
     sharpe_ratio,
 )
+from core_brain.kpi import kpi_sufficiency_table as _kpi_sufficiency_table  # noqa: E402
 
 I843_ARMS_FILE = ROOT / "configs" / "tournaments" / "i843-pair-test_arms.json"
 I799_ARMS_FILE = ROOT / "configs" / "tournaments" / "i799-tournament-test_arms.json"
@@ -689,6 +690,33 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
     single_exits = n - len(merges)
     paired_completions = len(merges)
 
+    # Per-KPI sample-size sufficiency — the same builder the :8799 dashboard
+    # card reads (core_brain.kpi.kpi_sufficiency_table): one row per
+    # estimator, each sized from the observations IT uses, at 90/95/99.
+    # No arm-vs-arm comparison anywhere: each arm is measured against its
+    # own observation count. Durations stay unmeasured — the arm store
+    # carries no fill-to-close linkage yet, and a blank row is honest
+    # where a zero would lie.
+    _close_pcts: list[float] = []
+    _stop_depth_pcts: list[float] = []
+    for r in rows:
+        _p = float(r[2] or 0.0)
+        _c = float(r[3] or 0.0)
+        if _c > 0:
+            _pct = 100.0 * _p / _c
+            _close_pcts.append(_pct)
+            if r[1] in stop_loss_methods:
+                _stop_depth_pcts.append(_pct)
+    sufficiency_rows = _kpi_sufficiency_table(
+        n_closes=n,
+        expectancy_usd=list(pnls),
+        return_pcts=list(_close_pcts),
+        n_wins=len(wins),
+        n_stops=len(stops),
+        stop_depth_pcts=_stop_depth_pcts,
+        n_merges=len(merges),
+    )
+
     tot_pnl = sum(pnls)
     mean_pnl = tot_pnl / n
     var = sum((p - mean_pnl) ** 2 for p in pnls) / (n - 1) if n > 1 else 0.0
@@ -818,6 +846,7 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
             "stop_loss": len(stops),
         },
         "trades_count": n,
+        "sufficiency_rows": sufficiency_rows,
         "merges_count": len(merges),
         "exits_count": single_exits,
         "stop_loss_exits_count": len(stops),
@@ -855,11 +884,25 @@ SHARPE_TARGET = 2.70
 SHARPE_MARGINAL = 2.20
 
 
+def _test_arm_sufficiency_row(arm: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
+    """One sufficiency row off the test arm, or None when the arm never ran.
+
+    Hand-built arm dicts (tests, missing DBs) carry no `sufficiency_rows`:
+    that reads as unmeasured, never as a fabricated zero."""
+    for row in ((arm or {}).get("sufficiency_rows") or []):
+        if row.get("key") == key:
+            return row
+    return None
+
+
 def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "843") -> dict[str, Any]:
     """Compute 5 critical decision gates and overall verdict from arms data.
-    
+
     Evaluates:
-    - Gate 1: Statistical Sample Power Gate (target N >= 2,117 trades for 0.02 resolve; flags nominal PnL as underpowered if N < 2,117)
+    - Gate 1: Per-KPI Sufficiency Gate (each estimator unlocks on its own
+      observations at 90/95/99, striving for 95; expectancy sizes from the
+      arm's own stdev, so the required N adapts to the arm -- no fixed
+      2,117, no arm-vs-arm comparison)
     - Gate 2: Sharpe Ratio Gate (target >= 2.70)
     - Gate 3: Profit Factor Gate (target >= 2.50)
     - Gate 4: Max Drawdown Gate (target < $4.00)
@@ -879,22 +922,44 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
     elif test_arm is None and arms_data:
         test_arm = arms_data[0]
         
-    target_n = 2117
+    # Gate 1 reads the test arm's own expectancy row: sufficient_95 unlocks
+    # the PnL verdict, every other KPI unlocks separately on its own base.
+    # Each arm is measured against its own observation count -- never
+    # against another arm, never against a fixed cross-run constant.
+    exp_row = _test_arm_sufficiency_row(test_arm, "expectancy_usd")
+    exp_95 = {lv.get("confidence_pct"): lv for lv in (exp_row.get("levels") or [])} if exp_row else {}
+    exp_95 = exp_95.get(95, {})
+    target_n = exp_95.get("required_n")
+    remaining_n = exp_95.get("remaining_n")
+    expectancy_sufficient = bool(exp_row) and exp_row.get("sufficient_95") is True
     test_n = test_arm.get("trades_count", 0) if test_arm else 0
-    power_ratio = round((test_n / target_n) * 100.0, 1) if target_n > 0 else 0.0
-    
-    if test_n >= target_n:
-        gate_power_status = "PASS"
-        gate_power_badge = "badge-green"
-        gate_power_text = f"N = {test_n:,} / {target_n:,} ({power_ratio}%) — Statistically Powered for PnL"
-    elif test_n > 0:
-        gate_power_status = "UNDERPOWERED"
-        gate_power_badge = "badge-amber"
-        gate_power_text = f"N = {test_n:,} / {target_n:,} ({power_ratio}%) — Nominal PnL Inconclusive; Evaluating Risk Shape"
-    else:
+    power_ratio = round((test_n / target_n) * 100.0, 1) if target_n else 0.0
+
+    if not test_arm or test_n == 0:
         gate_power_status = "NO_DATA"
         gate_power_badge = "badge-amber"
-        gate_power_text = f"0 / {target_n:,} Closed Trades — Rehearsal Initializing"
+        gate_power_text = "0 Closed Trades — Rehearsal Initializing"
+    elif expectancy_sufficient:
+        gate_power_status = "PASS"
+        gate_power_badge = "badge-green"
+        gate_power_text = (
+            f"N = {test_n:,} / {target_n:,} ({power_ratio}%) — "
+            "PnL Expectancy Sufficient at 95% (own-sample sizing)"
+        )
+    elif target_n:
+        gate_power_status = "UNDERPOWERED"
+        gate_power_badge = "badge-amber"
+        gate_power_text = (
+            f"N = {test_n:,} / {target_n:,} ({power_ratio}%) — "
+            f"Expectancy Inconclusive at 95% ({remaining_n:,} to go); Evaluating Risk Shape"
+        )
+    else:
+        gate_power_status = "UNDERPOWERED"
+        gate_power_badge = "badge-amber"
+        gate_power_text = (
+            f"N = {test_n:,} — Expectancy Not Yet Measurable "
+            "(need >= 2 closes); Evaluating Risk Shape"
+        )
         
     target_sharpe = SHARPE_TARGET
     observed_raw = test_arm.get("sharpe_ratio") if test_arm else None
@@ -992,11 +1057,15 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
         overall_verdict = "REJECTED: CRITICAL RISK GATES FAILED"
         overall_badge = "badge-red"
         overall_desc = "Observed risk metrics fail required Sharpe Ratio (>= 2.70) or max drawdown (< $4.00) limits."
-    elif test_n < target_n:
+    elif not expectancy_sufficient:
         if gate_sharpe_status == "PASS" and gate_mdd_status == "PASS" and gate_starv_status == "HEALTHY":
             overall_verdict = "PROVISIONAL PASS: COMPLEMENTARY RISK SHAPE"
             overall_badge = "badge-green"
-            overall_desc = provisional_desc_template.format(sharpe=observed_sharpe, mdd=observed_mdd, target_n=target_n)
+            if target_n:
+                overall_desc = provisional_desc_template.format(sharpe=observed_sharpe, mdd=observed_mdd, target_n=target_n)
+            else:
+                overall_desc = ("Observed risk shape validates the test hypothesis without volume starvation. "
+                                "(PnL expectancy not yet measurable -- need >= 2 closes.)")
         else:
             overall_verdict = "INCONCLUSIVE: SAMPLE UNDERPOWERED"
             overall_badge = "badge-amber"
@@ -1020,6 +1089,7 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
         "test_arm_pattern": arm_map["test_arm_pattern"],
         "total_trades": total_trades,
         "target_n": target_n,
+        "target_n_display": f"{target_n:,}" if target_n else "unmeasured",
         "gates": {
             "power": {"status": gate_power_status, "badge": gate_power_badge, "text": gate_power_text, "current": test_n, "target": target_n},
             "sharpe": {"status": gate_sharpe_status, "badge": gate_sharpe_badge, "text": gate_sharpe_text, "current": observed_sharpe, "target": target_sharpe},
@@ -1703,7 +1773,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         <span id="dg-test-arm" style="font-size: 13px; font-weight: 600; color: var(--text-primary);">{decision_gates['test_arm_label']}</span>
       </div>
       <div id="dg-trades-text" style="font-size: 12px; color: var(--text-muted);">
-        Sample Size: <strong class="tabular" style="color: var(--text-primary);">{decision_gates['gates']['power']['current']:,}</strong> / {decision_gates['target_n']:,} closed trades
+        Sample Size: <strong class="tabular" style="color: var(--text-primary);">{decision_gates['gates']['power']['current']:,}</strong> / {decision_gates['target_n_display']} closed trades
       </div>
     </div>
     <div id="dg-verdict-desc" style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5;">
@@ -1717,10 +1787,10 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     <!-- Gate 1: Stat Power -->
     <div class="m-card">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <span class="m-label">1. Sample Power Gate</span>
+        <span class="m-label">1. Per-KPI Sufficiency Gate</span>
         <span class="badge {decision_gates['gates']['power']['badge']}" id="dg-gate-power-badge">{decision_gates['gates']['power']['status']}</span>
       </div>
-      <div class="m-val tabular" id="dg-gate-power-val">{decision_gates['gates']['power']['current']:,} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">/ {decision_gates['target_n']:,}</span></div>
+      <div class="m-val tabular" id="dg-gate-power-val">{decision_gates['gates']['power']['current']:,} <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">/ {decision_gates['target_n_display']}</span></div>
       <div class="m-sub" id="dg-gate-power-sub">{decision_gates['gates']['power']['text']}</div>
     </div>
 
@@ -2703,7 +2773,7 @@ function updateDecisionGatesUI() {{
   if (vArm) vArm.textContent = dg.test_arm_label || '';
   const vTrades = document.getElementById('dg-trades-text');
   if (vTrades && dg.gates && dg.gates.power) {{
-    vTrades.innerHTML = 'Sample Size: <strong class="tabular" style="color: var(--text-primary);">' + (dg.gates.power.current || 0).toLocaleString() + '</strong> / ' + (dg.target_n || 2117).toLocaleString() + ' closed trades';
+    vTrades.innerHTML = 'Sample Size: <strong class="tabular" style="color: var(--text-primary);">' + (dg.gates.power.current || 0).toLocaleString() + '</strong> / ' + (dg.target_n != null ? dg.target_n.toLocaleString() : 'unmeasured') + ' closed trades';
   }}
   ['power', 'sharpe', 'pf', 'mdd', 'starvation'].forEach(g => {{
     if (dg.gates && dg.gates[g]) {{
@@ -2715,7 +2785,7 @@ function updateDecisionGatesUI() {{
       }}
       const val = document.getElementById('dg-gate-' + g + '-val');
       if (val) {{
-        if (g === 'power') val.innerHTML = (gate.current || 0).toLocaleString() + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">/ ' + (gate.target || 2117).toLocaleString() + '</span>';
+        if (g === 'power') val.innerHTML = (gate.current || 0).toLocaleString() + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">/ ' + (gate.target != null ? gate.target.toLocaleString() : 'unmeasured') + '</span>';
         else if (g === 'sharpe') val.innerHTML = (gate.status === 'NO_DATA' || gate.current == null ? 'NO_DATA' : Number(gate.current).toFixed(2)) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.7).toFixed(2) + ')</span>';
         else if (g === 'pf') val.innerHTML = (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &ge; ' + (gate.target || 2.5).toFixed(2) + ')</span>';
         else if (g === 'mdd') val.innerHTML = '$' + (gate.current || 0).toFixed(2) + ' <span style="font-size: 14px; color: var(--text-muted); font-weight: 400;">(Target &lt; $' + (gate.target || 4.0).toFixed(2) + ')</span>';

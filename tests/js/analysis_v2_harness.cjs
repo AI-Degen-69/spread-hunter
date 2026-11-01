@@ -118,7 +118,7 @@ html.replace(/<(article|div|span|b|i|td|tr|section)\b[^>]*>/g, (tag, kind) => {
   if (attr(tag, 'data-suff')) {
     const e = makeEl('tr');
     e.attrs['data-suff'] = attr(tag, 'data-suff');
-    ['r95', 'r98', 'r99', 'rem95', 'rem98', 'rem99', 'p95', 'p98', 'p99'].forEach((k) => {
+    ['r90', 'r95', 'r99', 'rem90', 'rem95', 'rem99', 'p90', 'p95', 'p99'].forEach((k) => {
       const v = attr(tag, 'data-' + k);
       if (v !== null) e.dataset[k] = v;
     });
@@ -171,11 +171,11 @@ nodeFor.set('tr.ssr', ssrNodes);
 /* The confidence pills get real click dispatch, so the design's own
  * toggle IIFE (executed against this stub below) attaches handlers the
  * test can fire -- the toggle is the page's code, not a copy of it. */
-const pills = ['95', '98', '99'].map((c, i) => {
+const pills = ['90', '95', '99'].map((c, i) => {
   const p = makeEl('button');
   p.attrs['data-conf'] = c;
   p.dataset.conf = c;
-  p.className = 'pill' + (i === 0 ? ' active' : '');
+  p.className = 'pill' + (c === '95' ? ' active' : '');
   p._listeners = [];
   p.addEventListener = (ev, fn) => { if (ev === 'click') p._listeners.push(fn); };
   p.click = () => p._listeners.forEach((fn) => fn());
@@ -186,7 +186,7 @@ const pills = ['95', '98', '99'].map((c, i) => {
   return p;
 });
 nodeFor.set('.conf-toggle .pill', pills);
-nodeFor.set('.conf-toggle .pill.active', [pills[0]]);
+nodeFor.set('.conf-toggle .pill.active', [pills[1]]);
 
 /* The sufficiency progress bar and the CI scale are looked up by id. */
 const suffBarEl = makeEl('i');
@@ -316,8 +316,8 @@ try {
     }));
     const pill = (c) => pills.filter((p) => p.dataset.conf === c)[0];
     out.toggle = {};
-    pill('98').click();
-    out.toggle.r98 = snap();
+    pill('90').click();
+    out.toggle.r90 = snap();
     pill('99').click();
     out.toggle.r99 = snap();
     pill('95').click();

@@ -149,6 +149,47 @@ def test_cockpit_funnel_counts(tmp_path):
     assert arm["stop_loss_exits_count"] == 2
 
 
+def test_cockpit_arm_carries_per_kpi_sufficiency_rows(tmp_path):
+    """Each arm measures itself: one row per estimator, own base each.
+
+    The seed holds 1 merge, 2 stop exits (settlement excluded), all without
+    cost_basis -- so dollar expectancy sizes from 3 closes, percent and
+    duration rows stay unmeasured instead of inventing a zero."""
+    db = _seed(tmp_path)
+    arm = analyze_arm_database({
+        "issue": 492,
+        "name": "funnel-arm",
+        "label": "Funnel Arm",
+        "port": 8999,
+        "db": str(db),
+        "run_id": RUN_ID,
+    })
+    assert arm["status"] == "ok"
+    rows = {r["key"]: r for r in arm["sufficiency_rows"]}
+    assert set(rows) == {
+        "expectancy_usd", "avg_return_pct", "win_rate", "stop_loss_rate",
+        "avg_stop_loss_depth_pct", "merge_rate", "avg_duration_merge",
+        "avg_duration_stop",
+    }
+    assert rows["expectancy_usd"]["base"] == "closes"
+    assert rows["expectancy_usd"]["base_n"] == 3
+    assert rows["win_rate"]["base_n"] == 3
+    assert rows["stop_loss_rate"]["base_n"] == 3
+    assert rows["merge_rate"]["base_n"] == 3
+    # No cost_basis in this seed: percent rows observe nothing.
+    assert rows["avg_return_pct"]["base_n"] == 0
+    assert rows["avg_return_pct"]["levels"][1]["required_n"] is None
+    assert rows["avg_stop_loss_depth_pct"]["base"] == "stops"
+    assert rows["avg_stop_loss_depth_pct"]["base_n"] == 0
+    # No fill-to-close linkage in the store: duration rows unmeasured.
+    assert rows["avg_duration_merge"]["base"] == "merges"
+    assert rows["avg_duration_merge"]["levels"][1]["required_n"] is None
+    assert rows["avg_duration_stop"]["levels"][1]["required_n"] is None
+    # Every row carries the 90/95/99 triple; nothing sizes arm-vs-arm.
+    for row in rows.values():
+        assert [lv["confidence_pct"] for lv in row["levels"]] == [90, 95, 99]
+
+
 def test_cockpit_table_drops_issue_port_fills_columns():
     html = generate_cockpit_html({"arms": [], "tourney_key": "799"})
     for gone in ("<th>Issue</th>", "<th>Port</th>", "<th>Fills</th>"):

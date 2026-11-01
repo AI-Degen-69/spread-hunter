@@ -389,7 +389,7 @@ function paintBinds(root, kpi, d) {
 }
 
 /* Sufficiency table: the confidence-toggle init in initConfidenceToggle reads
- * data-r95/98/99, data-rem* and data-p* off each <tr>, so filling those
+ * data-r90/95/99, data-rem* and data-p* off each <tr>, so filling those
  * attributes is the whole integration — no second renderer to keep in sync. */
 function paintSufficiency(root, kpi) {
   const scope = root || (typeof document !== 'undefined' ? document : null);
@@ -412,7 +412,7 @@ function paintSufficiency(root, kpi) {
       if (fill0) fill0.style.width = '0%';
       if (pct0) pct0.textContent = '—';
       Object.keys(rows[i].dataset).forEach(function (k) {
-        if (/^(r|rem|p)(95|98|99)$/.test(k)) delete rows[i].dataset[k];
+        if (/^(r|rem|p)(90|95|99)$/.test(k)) delete rows[i].dataset[k];
       });
       continue;
     }

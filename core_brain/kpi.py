@@ -57,7 +57,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 260
+KPI_PAYLOAD_VERSION = 261
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -103,15 +103,29 @@ wilson_ci = _wilson_ci
 Z_ALPHA_90_ONE_SIDED = ci_z(90)   # alpha = 0.05, one-sided (the value is one-sided 95%)
 Z_BETA_80_POWER = 0.8416       # 80% power (beta=0.20)
 
-# Two-tailed z-scores for mean sample size sufficiency (Issue #443)
+# Two-tailed z-scores for sample size sufficiency (Issue #443; levels 90/95/99
+# per the operator's 2026-11-01 alignment: strive for 95, 99 is aspirational).
+Z_90_SAMPLE_SUFFICIENCY = 1.64485
 Z_95_SAMPLE_SUFFICIENCY = 1.95996
 Z_98_SAMPLE_SUFFICIENCY = 2.32635
 Z_99_SAMPLE_SUFFICIENCY = 2.57583
 SAMPLE_SUFFICIENCY_LEVELS = (
+    (90, Z_90_SAMPLE_SUFFICIENCY),
     (95, Z_95_SAMPLE_SUFFICIENCY),
-    (98, Z_98_SAMPLE_SUFFICIENCY),
     (99, Z_99_SAMPLE_SUFFICIENCY),
 )
+# The striving level: a KPI reads SUFFICIENT when its remaining_n hits 0 here.
+SUFFICIENCY_STRIVE_PCT = 95
+
+# Target margins behind the per-KPI required-N table. Means rows size from the
+# arm's own measured stdev (N adapts to the arm); proportion rows stay
+# conservative (p = 0.50, +/-5pt) so a rare event cannot declare itself
+# sufficient on a handful of observations.
+EXPECTANCY_USD_MARGIN = 0.02
+RETURN_PCT_MARGIN = 2.0
+STOP_DEPTH_PCT_MARGIN = 2.0
+DURATION_SEC_MARGIN = 60.0
+RATE_PROPORTION_MARGIN = 0.05
 
 
 # The 90/95 band on mean close PnL lives in the pure analytics module as `mean_pnl_ci` and is
@@ -205,6 +219,130 @@ def required_sample_size_proportion(
     if p <= 0.0 or p >= 1.0 or margin <= 0.0 or z <= 0.0:
         return 0
     return math.ceil((z ** 2 * p * (1.0 - p)) / (margin ** 2))
+
+
+def _sufficiency_levels(required_fn, base_n: int) -> tuple[list[dict], Optional[bool]]:
+    """Required/remaining/progress per confidence level plus the striving verdict.
+
+    `required_fn(z)` returns the required N at multiplier z, or 0/None when the
+    row is unmeasurable (no observations, zero stdev). Unmeasurable levels read
+    None -- never a fabricated zero -- matching the renderer's `unmeasured`.
+    The striving verdict (SUFFICIENCY_STRIVE_PCT) is True only when nothing
+    more is needed; None when nothing is measurable.
+    """
+    levels = []
+    measurable = 0
+    sufficient = True
+    for conf_pct, z_val in SAMPLE_SUFFICIENCY_LEVELS:
+        req_n = required_fn(z_val)
+        if not req_n:
+            levels.append({
+                "confidence_pct": conf_pct,
+                "z": z_val,
+                "required_n": None,
+                "remaining_n": None,
+                "progress_pct": None,
+            })
+            continue
+        measurable += 1
+        rem_n = max(0, req_n - base_n) if base_n > 0 else req_n
+        if rem_n > 0:
+            sufficient = False
+        levels.append({
+            "confidence_pct": conf_pct,
+            "z": z_val,
+            "required_n": req_n,
+            "remaining_n": rem_n,
+            "progress_pct": min(100, round((base_n / req_n) * 100)) if req_n > 0 else 0,
+        })
+    verdict: Optional[bool] = (sufficient and measurable > 0) if measurable else None
+    return levels, verdict
+
+
+def kpi_sufficiency_table(
+    *,
+    n_closes: int,
+    expectancy_usd: list[float],
+    return_pcts: list[float],
+    n_wins: int,
+    n_stops: int,
+    stop_depth_pcts: list[float],
+    n_merges: int,
+    merge_durations_s: Optional[list[float]] = None,
+    stop_durations_s: Optional[list[float]] = None,
+) -> list[dict]:
+    """Per-KPI sample-size sufficiency: one row per estimator, own base each.
+
+    Every row sizes the observations IT is estimated from -- all closes for
+    expectancy, stop exits only for stop-loss depth, merges only for merge
+    duration -- so a thin arm can validate expectancy while its stop-loss
+    average stays ungated. No arm-vs-arm comparison anywhere: each arm is
+    measured against its own observation count at 90/95/99.
+
+    Duration rows are unmeasured (all levels None) when no durations are
+    supplied: the store carries no fill-to-close linkage yet, and a blank row
+    is honest where a zero would lie.
+    """
+    import statistics as _stats
+
+    def _stdev(values: list[float]) -> Optional[float]:
+        if len(values) < 2:
+            return None
+        try:
+            sd = _stats.stdev(values)
+        except Exception:
+            return None
+        return sd if sd and math.isfinite(sd) and sd > 0 else None
+
+    rows: list[dict] = []
+
+    def _mean_row(key: str, label: str, base: str, base_n: int,
+                  values: list[float], margin: float, target_label: str) -> None:
+        sd = _stdev(values)
+        levels, verdict = _sufficiency_levels(
+            lambda z, _sd=sd, _m=margin: (
+                required_sample_size_for_mean(_sd, _m, z) if _sd else 0),
+            base_n if sd else 0,
+        )
+        rows.append({
+            "key": key, "label": label, "type": "mean", "base": base,
+            "base_n": base_n, "target": target_label,
+            "target_margin": margin, "effect_size_d": None,
+            "levels": levels, "sufficient_95": verdict,
+        })
+
+    def _prop_row(key: str, label: str, base: str, successes: int, total: int) -> None:
+        levels, verdict = _sufficiency_levels(
+            lambda z: required_sample_size_proportion(0.50, RATE_PROPORTION_MARGIN, z),
+            total,
+        )
+        rows.append({
+            "key": key, "label": label, "type": "proportion", "base": base,
+            "base_n": total, "successes": successes,
+            "target": f"+/-{RATE_PROPORTION_MARGIN * 100:.0f}pt (p=0.50)",
+            "target_margin": RATE_PROPORTION_MARGIN, "effect_size_d": None,
+            "levels": levels, "sufficient_95": verdict,
+        })
+
+    _mean_row("expectancy_usd", "PnL Expectancy ($)", "closes", n_closes,
+              list(expectancy_usd), EXPECTANCY_USD_MARGIN,
+              f"+/-${EXPECTANCY_USD_MARGIN:.2f}")
+    _mean_row("avg_return_pct", "Avg Return per Trade (%)", "closes", len(return_pcts),
+              list(return_pcts), RETURN_PCT_MARGIN,
+              f"+/-{RETURN_PCT_MARGIN:.1f}pp")
+    _prop_row("win_rate", "Win Rate (%)", "closes", n_wins, n_closes)
+    _prop_row("stop_loss_rate", "Stop-Loss Rate (%)", "closes", n_stops, n_closes)
+    _mean_row("avg_stop_loss_depth_pct", "Avg Stop-Loss Depth (%)", "stops", len(stop_depth_pcts),
+              list(stop_depth_pcts), STOP_DEPTH_PCT_MARGIN,
+              f"+/-{STOP_DEPTH_PCT_MARGIN:.1f}pp")
+    _prop_row("merge_rate", "Merge Rate (%)", "closes", n_merges, n_closes)
+    _mean_row("avg_duration_merge", "Avg Fill-to-Close: Merges", "merges",
+              len(merge_durations_s or []), list(merge_durations_s or []),
+              DURATION_SEC_MARGIN, f"+/-{DURATION_SEC_MARGIN:.0f}s")
+    _mean_row("avg_duration_stop", "Avg Fill-to-Close: Stops", "stops",
+              len(stop_durations_s or []), list(stop_durations_s or []),
+              DURATION_SEC_MARGIN, f"+/-{DURATION_SEC_MARGIN:.0f}s")
+    return rows
 
 
 def power_table(
@@ -457,7 +595,10 @@ def compute_trade_analytics(
 
     mean_pnl_ci = _mean_pnl_ci(measured_pnls)
 
-    # Issue #443 & Issue #448: Sample size sufficiency per confidence level & status
+    # Per-KPI sample size sufficiency (Issues #443/#448, flattened 2026-11-01):
+    # one row per estimator, each sized from the observations IT uses, at
+    # 90/95/99. Means rows size from the arm's own measured stdev, so the
+    # required N adapts to the arm; proportion rows stay conservative.
     pnls = measured_pnls
     std_dev_usd: Optional[float] = None
     if n > 1:
@@ -466,81 +607,49 @@ def compute_trade_analytics(
         except Exception:
             std_dev_usd = None
 
-    # Continuous Cohen's d levels (d = 0.20) for PnL Expectancy
-    pnl_levels = []
-    for conf_pct, z_val in SAMPLE_SUFFICIENCY_LEVELS:
-        req_n = required_sample_size_cohen_d(DEFAULT_COHEN_D, z_val)
-        rem_n = max(0, req_n - n) if n > 0 else req_n
-        prog_pct = min(100, round((n / req_n) * 100)) if req_n > 0 else 0
-        pnl_levels.append({
-            "confidence_pct": conf_pct,
-            "z": z_val,
-            "required_n": req_n,
-            "remaining_n": rem_n,
-            "progress_pct": prog_pct,
-        })
-
-    # Proportional levels (margin = 0.05, p = 0.50 conservative)
-    def _build_prop_levels(current_cnt: int) -> list[dict[str, Any]]:
-        lvls = []
-        for conf_pct, z_val in SAMPLE_SUFFICIENCY_LEVELS:
-            req_n = required_sample_size_proportion(0.50, DEFAULT_PROPORTION_MARGIN, z_val)
-            rem_n = max(0, req_n - current_cnt) if current_cnt > 0 else req_n
-            prog_pct = min(100, round((current_cnt / req_n) * 100)) if req_n > 0 else 0
-            lvls.append({
-                "confidence_pct": conf_pct,
-                "z": z_val,
-                "required_n": req_n,
-                "remaining_n": rem_n,
-                "progress_pct": prog_pct,
-            })
-        return lvls
-
-    stop_loss_levels = _build_prop_levels(n)
-    merge_levels = _build_prop_levels(n)
-    fill_rate_levels = _build_prop_levels(orders_count)
-
-    statuses = {
-        "pnl_expectancy": {
-            "label": "PnL Expectancy",
-            "type": "continuous",
-            "base": "closes",
-            "current_n": n,
-            "effect_size_d": DEFAULT_COHEN_D,
-            "levels": pnl_levels,
-        },
-        "stop_loss_rate": {
-            "label": "Stop Loss Rate",
-            "type": "proportion",
-            "base": "closes",
-            "current_n": n,
-            "target_margin": DEFAULT_PROPORTION_MARGIN,
-            "levels": stop_loss_levels,
-        },
-        "merge_rate": {
-            "label": "Merge Rate",
-            "type": "proportion",
-            "base": "closes",
-            "current_n": n,
-            "target_margin": DEFAULT_PROPORTION_MARGIN,
-            "levels": merge_levels,
-        },
-        "fill_rate": {
-            "label": "Fill Rate",
-            "type": "proportion",
-            "base": "orders",
-            "current_n": orders_count,
-            "target_margin": DEFAULT_PROPORTION_MARGIN,
-            "levels": fill_rate_levels,
-        },
+    _stop_depth_pcts = [
+        r["return_pct"] for r in pnl_distribution
+        if r["method"] in SINGLE_BUY_EXIT_METHODS and r["return_pct"] is not None
+    ]
+    _n_stops = sum(1 for r in pnl_distribution if r["method"] in SINGLE_BUY_EXIT_METHODS)
+    _n_merges = sum(1 for r in pnl_distribution if r["method"] in MERGE_METHODS)
+    _kpi_rows = kpi_sufficiency_table(
+        n_closes=n,
+        expectancy_usd=list(pnls),
+        return_pcts=list(return_pcts),
+        n_wins=n_wins,
+        n_stops=_n_stops,
+        stop_depth_pcts=_stop_depth_pcts,
+        n_merges=_n_merges,
+    )
+    _fill_levels, _fill_verdict = _sufficiency_levels(
+        lambda z: required_sample_size_proportion(0.50, RATE_PROPORTION_MARGIN, z),
+        orders_count,
+    )
+    _fill_row = {
+        "key": "fill_rate", "label": "Fill Rate (%)", "type": "proportion",
+        "base": "orders", "base_n": orders_count,
+        "target": f"+/-{RATE_PROPORTION_MARGIN * 100:.0f}pt (p=0.50)",
+        "target_margin": RATE_PROPORTION_MARGIN, "effect_size_d": None,
+        "levels": _fill_levels, "sufficient_95": _fill_verdict,
     }
+
+    statuses = {}
+    for _row in (*_kpi_rows, _fill_row):
+        # Each row already carries its own sizing truth (target label plus
+        # the native-unit target_margin it was sized from). Only the legacy
+        # `current_n` alias is added here for older readers.
+        statuses[_row["key"]] = {**_row, "current_n": _row["base_n"]}
+    # The legacy `pnl_expectancy` key stays an alias of the expectancy row so
+    # older readers keep working; the canonical key is `expectancy_usd`.
+    statuses["pnl_expectancy"] = statuses["expectancy_usd"]
+    _exp_levels = statuses["expectancy_usd"]["levels"]
 
     sample_size_sufficiency = {
         "current_n": n,
         "std_dev_usd": std_dev_usd if n > 1 else None,
         "target_margin_usd": target_margin_usd,
-        "effect_size_d": DEFAULT_COHEN_D,
-        "levels": pnl_levels,
+        "levels": _exp_levels,
         "statuses": statuses,
     }
 

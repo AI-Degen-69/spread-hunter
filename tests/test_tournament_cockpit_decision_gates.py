@@ -71,16 +71,71 @@ def test_compute_decision_gates_underpowered_provisional_pass():
             "profit_factor": 2.90,
             "max_drawdown": 1.85,
             "merge_rate": 84.5,
+            # The arm's own expectancy row: not yet sufficient at 95%,
+            # sized from its own stdev -- the required N adapts to the arm.
+            "sufficiency_rows": [
+                {
+                    "key": "expectancy_usd",
+                    "label": "PnL Expectancy ($)",
+                    "type": "mean",
+                    "base": "closes",
+                    "base_n": 180,
+                    "sufficient_95": False,
+                    "levels": [
+                        {"confidence_pct": 90, "required_n": 1420, "remaining_n": 1240, "progress_pct": 13},
+                        {"confidence_pct": 95, "required_n": 1800, "remaining_n": 1620, "progress_pct": 10},
+                        {"confidence_pct": 99, "required_n": 3100, "remaining_n": 2920, "progress_pct": 6},
+                    ],
+                },
+            ],
         },
     ]
     res = cockpit.compute_decision_gates(arms, "843")
     assert "PROVISIONAL PASS" in res["overall_verdict"]
     assert res["overall_badge"] == "badge-green"
     assert res["gates"]["power"]["status"] == "UNDERPOWERED"
+    # The gate target is the arm's own 95% required N, not a fixed constant.
+    assert res["gates"]["power"]["target"] == 1800
+    assert res["target_n"] == 1800
     assert res["gates"]["sharpe"]["status"] == "PASS"
     assert res["gates"]["pf"]["status"] == "PASS"
     assert res["gates"]["mdd"]["status"] == "PASS"
     assert res["gates"]["starvation"]["status"] == "HEALTHY"
+
+
+def test_compute_decision_gates_arm_without_rows_reads_unmeasured():
+    """An arm that never attached sufficiency rows is unmeasured, not zero.
+
+    Hand-built and pre-change arm dicts carry no `sufficiency_rows`; the
+    gate must not fabricate a required N for them, and the verdict copy
+    must say so instead of citing a pending N=0."""
+    arms = [
+        {
+            "name": "control",
+            "status": "ok",
+            "trades_count": 190,
+            "total_pnl": 12.0,
+            "sharpe_ratio": 1.80,
+            "profit_factor": 1.90,
+            "max_drawdown": 5.20,
+        },
+        {
+            "name": "balanced-queue5",
+            "status": "ok",
+            "trades_count": 180,
+            "total_pnl": 21.0,
+            "sharpe_ratio": 2.85,
+            "profit_factor": 2.90,
+            "max_drawdown": 1.85,
+        },
+    ]
+    res = cockpit.compute_decision_gates(arms, "843")
+    assert res["gates"]["power"]["status"] == "UNDERPOWERED"
+    assert res["gates"]["power"]["target"] is None
+    assert res["target_n"] is None
+    assert "Not Yet Measurable" in res["gates"]["power"]["text"]
+    assert "not yet measurable" in res["overall_desc"]
+    assert "N=0" not in res["overall_desc"]
 
 
 def test_compute_decision_gates_volume_starvation():
@@ -124,17 +179,35 @@ def test_compute_decision_gates_fully_powered_winner():
         {
             "name": "balanced-queue5",
             "status": "ok",
-            "trades_count": 2150,  # N >= 2,117
+            "trades_count": 2150,
             "total_pnl": 180.0,
             "sharpe_ratio": 2.95,
             "profit_factor": 3.10,
             "max_drawdown": 2.20,
+            # Expectancy unlocked on its own closes at 95%: the winner
+            # verdict no longer needs a fixed cross-run constant.
+            "sufficiency_rows": [
+                {
+                    "key": "expectancy_usd",
+                    "label": "PnL Expectancy ($)",
+                    "type": "mean",
+                    "base": "closes",
+                    "base_n": 2150,
+                    "sufficient_95": True,
+                    "levels": [
+                        {"confidence_pct": 90, "required_n": 1420, "remaining_n": 0, "progress_pct": 100},
+                        {"confidence_pct": 95, "required_n": 1800, "remaining_n": 0, "progress_pct": 100},
+                        {"confidence_pct": 99, "required_n": 3100, "remaining_n": 950, "progress_pct": 69},
+                    ],
+                },
+            ],
         },
     ]
     res = cockpit.compute_decision_gates(arms, "843")
     assert "EMPIRICAL WINNER" in res["overall_verdict"]
     assert res["overall_badge"] == "badge-green"
     assert res["gates"]["power"]["status"] == "PASS"
+    assert res["gates"]["power"]["target"] == 1800
 
 
 def test_generate_cockpit_html_contains_decision_gates_tab():
@@ -150,7 +223,7 @@ def test_generate_cockpit_html_contains_decision_gates_tab():
     assert 'switchTab(\'decision-gates\', this)' in html
     assert 'id="tab-decision-gates"' in html
     assert 'Critical Decision Gates (5-Second Skim)' in html
-    assert '1. Sample Power Gate' in html
+    assert '1. Per-KPI Sufficiency Gate' in html
     assert '2. Sharpe Ratio Gate' in html
     assert '3. Profit Factor Gate' in html
     assert '4. Max Drawdown Gate' in html
@@ -171,7 +244,9 @@ def test_cockpit_serves_843_page_and_stats():
     data = json.loads(handler_api.wfile.getvalue())
     assert data["tourney_key"] == "843"
     assert "decision_gates" in data
-    assert data["decision_gates"]["target_n"] == 2117
+    # No arm database exists under this checkout: nothing measured, so no
+    # fixed constant stands in -- the target reads unmeasured (None).
+    assert data["decision_gates"]["target_n"] is None
 
 
 def test_meta_and_arms_resolve_same_plan_record():
@@ -198,7 +273,16 @@ def _healthy_905_arms(test_n=185, test_sharpe=2.90):
          "max_drawdown": 4.20},
         {"name": "queue-clear-5m", "status": "ok", "trades_count": test_n,
          "total_pnl": 21.0, "sharpe_ratio": test_sharpe, "profit_factor": 2.90,
-         "max_drawdown": 1.80},
+         "max_drawdown": 1.80,
+         "sufficiency_rows": [
+             {"key": "expectancy_usd", "label": "PnL Expectancy ($)",
+              "type": "mean", "base": "closes", "base_n": test_n,
+              "sufficient_95": False,
+              "levels": [
+                  {"confidence_pct": 95, "required_n": 1500,
+                   "remaining_n": 1500 - test_n, "progress_pct": 12},
+              ]},
+         ]},
         {"name": "prudent-hybrid", "status": "ok", "trades_count": 190,
          "total_pnl": 17.0, "sharpe_ratio": 2.20, "profit_factor": 2.00,
          "max_drawdown": 5.00},
