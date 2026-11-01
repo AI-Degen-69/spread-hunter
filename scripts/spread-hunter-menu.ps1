@@ -3278,15 +3278,15 @@ function Stop-AllSpreadHunterProcesses {
     $null = Stop-Dashboard -Force:$Force
     $null = Stop-ShadowDashboard -Force:$Force
 
-    # 2 · Orphan & tournament processes (this checkout only: the module match
-    # alone could hit a sibling checkout, so ProjectPath is required)
+    # 2 · Orphan & tournament processes across all checkouts:
+    # Unconditionally terminate any python process running spread-hunter modules.
     Lsh-Phase -Text "PHASE 2 · SCANNING FOR LINGERING PROCESSES"
-    $shPattern = '-m\s+(core_brain\.|dashboard\.server|scripts\.(filter_loop|tournament_|shadow_tournament|statistical_validation|global_stop_loss|reconcile_tournament_stack|resume_tournament_arms))'
+    $shPattern = '-m\s+(core_brain\.|dashboard\.server|scripts\.(filter_loop|filter_markets|tournament_|shadow_tournament|statistical_validation|global_stop_loss|reconcile_tournament_stack|resume_tournament_arms))'
     try {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
-                ((Get-CommandLineCheckoutOwner -CommandLine $_.CommandLine -Root $ProjectPath) -eq 'Owned') -and ($_.CommandLine -match $shPattern) -and `
+                ($_.CommandLine -match $shPattern) -and `
                 ($_.CommandLine -notmatch 'polymarket_docs_mcp')
             })
         foreach ($p in $procs) {
@@ -3298,19 +3298,19 @@ function Stop-AllSpreadHunterProcesses {
         Lsh-Warn "Process table scan encountered an issue."
     }
 
-    # Free known dashboard and cockpit ports only when the holder is ours.
-    $portsToCheck = @(8798, 8799, 8800) + @(8801..8810)
+    # Free known dashboard, hub, and cockpit ports unconditionally.
+    # Ports 8801..8810 were retired when per-arm dashboards were unified into :8799.
+    $portsToCheck = @(8798, 8799, 8800)
     foreach ($port in $portsToCheck) {
         $pidOnPort = Get-PortPid -PortNumber $port
         if ($pidOnPort) {
-            try { $holder = @(Get-CimInstance Win32_Process -Filter "ProcessId=$pidOnPort" -ErrorAction Stop)[0] } catch { $holder = $null }
-            $holderCmd = if ($holder -and $holder.CommandLine) { $holder.CommandLine } else { "" }
-            if (((Get-CommandLineCheckoutOwner -CommandLine $holderCmd -Root $ProjectPath) -eq 'Owned') -and ($holderCmd -match $shPattern)) {
-                Lsh-Step "Freeing port :$port (PID $pidOnPort)..."
-                taskkill /F /T /PID $pidOnPort 2>$null | Out-Null
-                Wait-ProcessGone -ProcessId $pidOnPort | Out-Null
-            } elseif ($holderCmd) {
-                Lsh-Warn "Port :$port held by foreign process PID $pidOnPort; leaving it running."
+            Lsh-Step "Freeing port :$port (PID $pidOnPort, taking over)..."
+            taskkill /F /T /PID $pidOnPort 2>$null | Out-Null
+            Wait-ProcessGone -ProcessId $pidOnPort | Out-Null
+            if (Get-PortPid -PortNumber $port) {
+                Lsh-Warn "Port :$port still held after kill attempt on PID $pidOnPort."
+            } else {
+                Lsh-Ok "Port :$port is now free."
             }
         }
     }
@@ -3329,7 +3329,7 @@ function Stop-AllSpreadHunterProcesses {
     $lingering = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
             $_.Name -match '^python' -and $_.CommandLine -and `
-            ((Get-CommandLineCheckoutOwner -CommandLine $_.CommandLine -Root $ProjectPath) -eq 'Owned') -and ($_.CommandLine -match $shPattern) -and `
+            ($_.CommandLine -match $shPattern) -and `
             ($_.CommandLine -notmatch 'polymarket_docs_mcp')
         })
     if ((Test-StackAlive) -or ($lingering.Count -gt 0)) {
@@ -3346,7 +3346,8 @@ function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wip
     Decide & Execute rests real maker bids. #>
     param(
         [Parameter(Mandatory)][string]$Mode,
-        [switch]$Force
+        [switch]$Force,
+        [switch]$IncludeTournaments
     )
     Lsh-Banner -Title "RESET & FRESH START" -Subtitle "verify -> stop -> wipe -> start ($Mode)"
 
@@ -3387,7 +3388,7 @@ function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wip
 
     # 4 · WIPE
     Lsh-Phase -Text "PHASE 4 · WIPE"
-    Clear-RuntimeState
+    Clear-RuntimeState -IncludeTournaments:$IncludeTournaments
 
     # 5 · VERIFY CLEAN (pidfiles are gone by construction; still guard against
     # an unregistered orphan service so we never declare clean beside one)
@@ -3643,7 +3644,7 @@ function Reset-Environment {    <# Full fresh-start reset: verify -> stop -> wip
 # One ordered key list is the single source of truth for the menu: the grid,
 # the prompt, the invalid-selection message and the command-line allow-list
 # all derive from it, so a new key only has to be added in one place (#475).
-$script:MenuKeys = @('s', 'k', 'f', 'd', '7', '8', '9', 'a', 'p', 't', 'q', 'x')
+$script:MenuKeys = @('s', 'k', 'f', 'd', '7', '8', '9', 'a', 'p', 't', 'q')
 
 function Format-MenuHint {
     <# Render the key list as the operator-facing hint, e.g. "1-9, r, a, p, q".
@@ -3683,7 +3684,6 @@ function Show-MenuGrid {
         ) }
         @{ Header = "MAINTENANCE & TOURNAMENT"; Items = @(
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop &| Clean";       D = "1. Stop All (default) | 2. Stop & CLEAN Data" }
-            @{ K = "x"; Icon = "✖"; IconColor = "Error";   V = "Force Stop Checkout";          D = "Stop every Owned process of THIS checkout (recorded or not); others keep running" }
             @{ K = "8"; Icon = "≡"; IconColor = "Info";    V = "Check System Status";        D = "Static Status page" }
             @{ K = "t"; Icon = "⚖"; IconColor = "Success"; V = "Tournament Reconcile";       D = "Choose arms config, align/resume tournament, filter & Cockpit (24h)" }
             @{ K = "9"; Icon = "▣"; IconColor = "Info";    V = "Overnight Statistics";         D = "Run shadow + statistics + dashboard for hours" }
@@ -4012,14 +4012,16 @@ function Invoke-LiveAction {
             $subChoice = "1"
             if ($Action -eq "clean") {
                 $subChoice = "2"
-            } elseif ($Action -eq "stop-all" -or $Action -eq "stop" -or $Action -eq "stopall") {
+            } elseif ($Action -eq "stop-all" -or $Action -eq "stop" -or $Action -eq "stopall" -or $Action -eq "x" -or $Action -eq "force-stop") {
                 $subChoice = "1"
             } elseif ($Action -eq "") {
                 Write-Host ""
                 Write-Host "  GLOBAL STOP &| CLEAN" -ForegroundColor (Get-ProfileColor -Name Warning)
                 Write-Host "  ─────────────────────────────────────────────────────────────" -ForegroundColor (Get-ProfileColor -Name Border)
-                Write-Host "   [1] Stop All (scripts, dashboards, all processes related to spread-hunter) [DEFAULT]" -ForegroundColor (Get-ProfileColor -Name Info)
-                Write-Host "   [2] Stop & CLEAN Data - stops like 1 but also purges runtime & dashboard data" -ForegroundColor Red
+                Write-Host "   [1] Stop All (Force Takeover) [DEFAULT]" -ForegroundColor (Get-ProfileColor -Name Info)
+                Write-Host "       Kills all spread-hunter processes & dashboards on 8798/8799/8800 across any checkout" -ForegroundColor (Get-ProfileColor -Name Neutral)
+                Write-Host "   [2] Stop & CLEAN Data" -ForegroundColor Red
+                Write-Host "       Stops like 1, then purges runtime, shadow, and tournament data (data/orders.db strictly preserved)" -ForegroundColor (Get-ProfileColor -Name Neutral)
                 Write-Host ""
                 $inputChoice = Read-Host "  Select option [1/2, default 1]"
                 if ($inputChoice -match '^[2]') {
@@ -4030,8 +4032,8 @@ function Invoke-LiveAction {
             }
 
             if ($subChoice -eq "1") {
-                Stop-AllSpreadHunterProcesses -Force:$Force
-                Lsh-Ok "Stop All completed. All spread-hunter processes stopped; data preserved."
+                Stop-AllSpreadHunterProcesses -Force:$true
+                Lsh-Ok "Stop All completed. All spread-hunter processes stopped and ports taken over; data preserved."
             } elseif ($subChoice -eq "2") {
                 Write-Host ""
                 Write-Host "  WARNING: STOP & CLEAN DATA will purge all shadow, tournament, and stats runs!" -ForegroundColor Red
@@ -4042,28 +4044,12 @@ function Invoke-LiveAction {
                         return
                     }
                 }
-                $null = Reset-Environment -Mode "none"
+                $null = Reset-Environment -Mode "none" -Force:$true -IncludeTournaments
             }
         }
         "x" {
-            $preview = Stop-WorktreeProcessesForce -Preview
-            if ($null -eq $preview) {
-                Lsh-Warn "Force-stop preview was inconclusive; leaving everything running."
-                return
-            }
-            if ($preview.Count -eq 0) {
-                Lsh-Ok "No Owned spread-hunter processes to force-stop in this checkout."
-                return
-            }
-            Lsh-Step "Force stop will kill these Owned processes of this checkout:"
-            foreach ($t in $preview) {
-                Lsh-Step (("  PID {0}: {1}" -f $t.Pid, $t.CommandLine))
-            }
-            if ($Action -eq "") {
-                $confirm = Read-Host ("  Stop these {0} process(es) with taskkill /T /F? [y/N]" -f $preview.Count)
-                if ($confirm -notmatch '^[yY]') { Lsh-Warn "Force stop cancelled."; return }
-            }
-            $null = Stop-WorktreeProcessesForce
+            Stop-AllSpreadHunterProcesses -Force:$true
+            Lsh-Ok "Stop All completed. All spread-hunter processes stopped and ports taken over."
         }
         "8" { Show-Status }
         "9" {
@@ -4199,9 +4185,10 @@ if ($Action -ne "") {
         "get"                = "7"
         "stop-all"           = "7"
         "stopall"            = "7"
-        "stop-all-force"     = "x"
-        "force-stop"         = "x"
-        "nuke"               = "x"
+        "stop-all-force"     = "7"
+        "force-stop"         = "7"
+        "nuke"               = "7"
+        "x"                  = "7"
         "status"             = "8"
         "statistical"        = "9"
         "stats"              = "9"
@@ -4232,7 +4219,7 @@ if ($Action -ne "") {
     # typo fails fast instead of falling into the "invalid selection" path.
     # The allow-list is the same key set the grid, prompt and error message
     # name (#475), so a stray action can never be accepted here.
-    $legacyKeys = @('1', '2', '3', '4', '5', '6', 'r')
+    $legacyKeys = @('1', '2', '3', '4', '5', '6', 'r', 'x')
     if ($script:MenuKeys -notcontains $key -and $legacyKeys -notcontains $key) {
         Write-Host ("ERROR: Unknown action '{0}' (use {1}, or a name like start/stop/status/audit/prune)" -f $Action, (Format-MenuHint)) -ForegroundColor Red
         exit 1

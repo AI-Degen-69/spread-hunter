@@ -310,14 +310,14 @@ def test_action_map_routes_force_stop_aliases():
     src = MENU.read_text(encoding="utf-8")
     body = src.split("$actionMap = @{", 1)[1].split("}", 1)[0]
     pairs = dict(re.findall(r'"([^"]+)"\s*=\s*"([^"]+)"', body))
-    assert pairs.get("stop-all-force") == "x"
-    assert pairs.get("force-stop") == "x"
-    assert pairs.get("nuke") == "x"
+    assert pairs.get("stop-all-force") == "7"
+    assert pairs.get("force-stop") == "7"
+    assert pairs.get("nuke") == "7"
     assert pairs.get("stop-all") == "7"
     assert pairs.get("stop") == "2"
 
 
-def test_dispatch_key_x_calls_force_stop_only():
+def test_dispatch_key_x_calls_unified_stop():
     text = MENU.read_text(encoding="utf-8")
     keys_line = next(l for l in text.splitlines() if l.strip().startswith("$script:MenuKeys"))
     start = text.index("function Invoke-LiveAction ")
@@ -331,36 +331,23 @@ def test_dispatch_key_x_calls_force_stop_only():
             if depth == 0:
                 dispatch = text[start:j + 1]
                 break
-    for with_targets in (False, True):
-        prelude = "\n".join([
-            keys_line,
-            dispatch,
-            "$Action = 'stop-all-force'",
-            "$script:ForceCalls = 0",
-            "$script:AllCalls = 0",
-            "$script:Log = @()",
-            "function Stop-WorktreeProcessesForce {",
-            "  param([switch]$Preview)",
-            "  $script:ForceCalls++",
-            ("  return ,@()" if not with_targets else
-             "  return ,@([pscustomobject]@{ Pid = 5; CommandLine = 'x'; Verdict = 'Owned' })"),
-            "}",
-            "function Stop-AllSpreadHunterProcesses { $script:AllCalls++ }",
-            "function Lsh-Step($m) { $script:Log += @(\"STEP:$m\") }",
-            "function Lsh-Ok($m) { $script:Log += @(\"OK:$m\") }",
-            "function Lsh-Warn($m) { $script:Log += @(\"WARN:$m\") }",
-            "function Lsh-Fail($m) { $script:Log += @(\"FAIL:$m\") }",
-            "$null = Invoke-LiveAction 'x'",
-            "$out = @{ force = $script:ForceCalls; all = $script:AllCalls;",
-            "  log = @($script:Log) }",
-            "$out | ConvertTo-Json -Compress -Depth 4",
-        ])
-        out = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", prelude],
-                             capture_output=True, text=True, check=True,
-                             encoding="utf-8")
-        got = json.loads(out.stdout)
-        assert got["all"] == 0
-        if with_targets:
-            assert got["force"] == 2
-        else:
-            assert got["force"] == 1
+    prelude = "\n".join([
+        keys_line,
+        dispatch,
+        "$Action = 'stop-all-force'",
+        "$script:AllCalls = 0",
+        "$script:Log = @()",
+        "function Stop-AllSpreadHunterProcesses { param([switch]$Force) $script:AllCalls++ }",
+        "function Lsh-Step($m) { $script:Log += @(\"STEP:$m\") }",
+        "function Lsh-Ok($m) { $script:Log += @(\"OK:$m\") }",
+        "function Lsh-Warn($m) { $script:Log += @(\"WARN:$m\") }",
+        "function Lsh-Fail($m) { $script:Log += @(\"FAIL:$m\") }",
+        "$null = Invoke-LiveAction 'x'",
+        "$out = @{ all = $script:AllCalls; log = @($script:Log) }",
+        "$out | ConvertTo-Json -Compress -Depth 4",
+    ])
+    out = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", prelude],
+                         capture_output=True, text=True, check=True,
+                         encoding="utf-8")
+    got = json.loads(out.stdout)
+    assert got["all"] == 1
