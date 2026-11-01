@@ -79,6 +79,12 @@ def test_user_protected_01_shadow_is_preserved(tmp_path: Path):
     assert match[0].action == AuditAction.KEEP
     assert "user protected" in match[0].reason.lower() or "protected" in match[0].action.lower()
 
+def test_default_policy_has_no_user_protected_patterns():
+    """Default policy has no user-protected patterns and displays 'None'."""
+    policy = DataRetentionPolicy()
+    assert policy.user_protected_patterns == ()
+
+
 
 def test_retention_days_threshold(tmp_path: Path):
     """Old rehearsal stats (>14d) marked for delete; fresh (<14d) kept."""
