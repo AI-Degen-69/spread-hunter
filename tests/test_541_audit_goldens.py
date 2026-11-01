@@ -62,21 +62,21 @@ Sample Mean PnL:              $0.7875
 Standard Deviation:           $1.4496
 
 Confidence Intervals for Expected PnL:
+  [90% CL]: [$-0.1837, $1.7587] | Margin of Error: +/- $0.9712
   [95% CL]: [$-0.4246, $1.9996] | Margin of Error: +/- $1.2121
-  [98% CL]: [$-0.4048, $1.9798] | Margin of Error: +/- $1.1923
   [99% CL]: [$-0.5326, $2.1076] | Margin of Error: +/- $1.3201
 
 ===========================================================================
  2. PROPORTIONS: STOP LOSS RATE & MERGE RATE
 ===========================================================================
 Stop Loss Exits: 0/8 (0.00%)
+  [90% CL]: [0.00%, 25.27%] | Margin: +/- 12.64%
   [95% CL]: [0.00%, 32.44%] | Margin: +/- 16.22%
-  [98% CL]: [0.00%, 40.35%] | Margin: +/- 20.18%
   [99% CL]: [0.00%, 45.34%] | Margin: +/- 22.67%
 
 Merged Positions: 5/8 (62.50%)
+  [90% CL]: [34.80%, 83.88%] | Margin: +/- 24.54%
   [95% CL]: [30.57%, 86.32%] | Margin: +/- 27.87%
-  [98% CL]: [26.29%, 88.62%] | Margin: +/- 31.16%
   [99% CL]: [23.75%, 89.92%] | Margin: +/- 33.09%
 
 ===========================================================================
@@ -84,18 +84,18 @@ Merged Positions: 5/8 (62.50%)
 ===========================================================================
 
 Target Margin of Error: +/- $0.05
+  [90% CL]: Required Total N = 2274 (Need 2266 more trades)
   [95% CL]: Required Total N = 3229 (Need 3221 more trades)
-  [98% CL]: Required Total N = 4549 (Need 4541 more trades)
   [99% CL]: Required Total N = 5577 (Need 5569 more trades)
 
 Target Margin of Error: +/- $0.02
+  [90% CL]: Required Total N = 14213 (Need 14205 more trades)
   [95% CL]: Required Total N = 20180 (Need 20172 more trades)
-  [98% CL]: Required Total N = 28430 (Need 28422 more trades)
   [99% CL]: Required Total N = 34854 (Need 34846 more trades)
 
 Target Margin of Error: +/- $0.01
+  [90% CL]: Required Total N = 56850 (Need 56842 more trades)
   [95% CL]: Required Total N = 80719 (Need 80711 more trades)
-  [98% CL]: Required Total N = 113718 (Need 113710 more trades)
   [99% CL]: Required Total N = 139416 (Need 139408 more trades)
 ===========================================================================
 """
@@ -115,21 +115,21 @@ Sample Mean PnL:              $2.1000
 Standard Deviation:           $0.0000
 
 Confidence Intervals for Expected PnL:
+  [90% CL]: [$2.1000, $2.1000] | Margin of Error: +/- $0.0000
   [95% CL]: [$2.1000, $2.1000] | Margin of Error: +/- $0.0000
-  [98% CL]: [$2.1000, $2.1000] | Margin of Error: +/- $0.0000
   [99% CL]: [$2.1000, $2.1000] | Margin of Error: +/- $0.0000
 
 ===========================================================================
  2. PROPORTIONS: STOP LOSS RATE & MERGE RATE
 ===========================================================================
 Stop Loss Exits: 0/1 (0.00%)
+  [90% CL]: [0.00%, 73.01%] | Margin: +/- 36.51%
   [95% CL]: [0.00%, 79.35%] | Margin: +/- 39.67%
-  [98% CL]: [0.00%, 84.40%] | Margin: +/- 42.20%
   [99% CL]: [0.00%, 86.90%] | Margin: +/- 43.45%
 
 Merged Positions: 1/1 (100.00%)
+  [90% CL]: [26.99%, 100.00%] | Margin: +/- 36.51%
   [95% CL]: [20.65%, 100.00%] | Margin: +/- 39.67%
-  [98% CL]: [15.60%, 100.00%] | Margin: +/- 42.20%
   [99% CL]: [13.10%, 100.00%] | Margin: +/- 43.45%
 
 ===========================================================================
@@ -137,18 +137,18 @@ Merged Positions: 1/1 (100.00%)
 ===========================================================================
 
 Target Margin of Error: +/- $0.05
+  [90% CL]: Required Total N = 0 (Need 0 more trades)
   [95% CL]: Required Total N = 0 (Need 0 more trades)
-  [98% CL]: Required Total N = 0 (Need 0 more trades)
   [99% CL]: Required Total N = 0 (Need 0 more trades)
 
 Target Margin of Error: +/- $0.02
+  [90% CL]: Required Total N = 0 (Need 0 more trades)
   [95% CL]: Required Total N = 0 (Need 0 more trades)
-  [98% CL]: Required Total N = 0 (Need 0 more trades)
   [99% CL]: Required Total N = 0 (Need 0 more trades)
 
 Target Margin of Error: +/- $0.01
+  [90% CL]: Required Total N = 0 (Need 0 more trades)
   [95% CL]: Required Total N = 0 (Need 0 more trades)
-  [98% CL]: Required Total N = 0 (Need 0 more trades)
   [99% CL]: Required Total N = 0 (Need 0 more trades)
 ===========================================================================
 """
@@ -167,30 +167,30 @@ def test_run_analysis_fixture_values_at_all_levels():
         0.7875000000000001, 1.4495689014324225)
     assert audit.mean_confidence_interval(0.7875000000000001, 1.4495689014324225, 8, z["95%"]) == (
         -0.42456249999999995, 1.9995625000000001, 1.2120625)  # #541 t-switch was (-0.2170, 1.7920, 1.0045)
-    assert audit.mean_confidence_interval(0.7875000000000001, 1.4495689014324225, 8, z["98%"]) == (
-        -0.4047543749999998, 1.979754375, 1.1922543749999999)
+    assert audit.mean_confidence_interval(0.7875000000000001, 1.4495689014324225, 8, z["90%"]) == (
+        -0.18368749999999978, 1.7586875, 0.9711874999999999)
     assert audit.mean_confidence_interval(0.7875000000000001, 1.4495689014324225, 8, z["99%"]) == (
         -0.5326128749999997, 2.107612875, 1.3201128749999997)
     assert audit.proportion_confidence_interval(0, 8, z["95%"]) == (
         0.0, 0.3244066737643051, 0.16220333688215255)
-    assert audit.proportion_confidence_interval(0, 8, z["98%"]) == (
-        0.0, 0.4035149813454092, 0.2017574906727046)
+    assert audit.proportion_confidence_interval(0, 8, z["90%"]) == (
+        0.0, 0.2527227645646307, 0.12636138228231536)
     assert audit.proportion_confidence_interval(0, 8, z["99%"]) == (
         0.0, 0.45336149227258227, 0.22668074613629113)
     assert audit.proportion_confidence_interval(5, 8, z["95%"]) == (
         0.3057428968878372, 0.8631554346710865, 0.27870626889162464)
-    assert audit.proportion_confidence_interval(5, 8, z["98%"]) == (
-        0.2629230909726917, 0.8861981636909562, 0.3116375363591323)  # #541: shared-Wilson op order, 1-ulp realignment
+    assert audit.proportion_confidence_interval(5, 8, z["90%"]) == (
+        0.3479919536046764, 0.838827355254166, 0.2454177008247448)  # #541: shared-Wilson op order, 1-ulp realignment
     assert audit.proportion_confidence_interval(5, 8, z["99%"]) == (
         0.2374701607531901, 0.8991894661786644, 0.3308596527127371)
     std = 1.4495689014324225
     assert [(audit.required_sample_size_for_mean(std, t, z[cl]), cl)
-            for t in (0.05,) for cl in ("95%", "98%", "99%")] == [
-        (3229, "95%"), (4549, "98%"), (5577, "99%")]
+            for t in (0.05,) for cl in ("90%", "95%", "99%")] == [
+        (2274, "90%"), (3229, "95%"), (5577, "99%")]
     assert [audit.required_sample_size_for_mean(std, 0.02, z[cl])
-            for cl in ("95%", "98%", "99%")] == [20180, 28430, 34854]
+            for cl in ("90%", "95%", "99%")] == [14213, 20180, 34854]
     assert [audit.required_sample_size_for_mean(std, 0.01, z[cl])
-            for cl in ("95%", "98%", "99%")] == [80719, 113718, 139416]
+            for cl in ("90%", "95%", "99%")] == [56850, 80719, 139416]
 
 
 def test_run_analysis_empty_db_stdout_frozen(tmp_path, capsys):
