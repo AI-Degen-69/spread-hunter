@@ -6931,7 +6931,8 @@ def cockpit_page(subpath: str = ""):
     html_text = html_text.replace("http://127.0.0.1:8800", "/cockpit/")
     # Standalone-root links the template emits for :8800 would 404 on :8799.
     html_text = html_text.replace('href="/open-dash', 'href="/cockpit/open-dash')
-    html_text = html_text.replace('href="/799"', 'href="/cockpit/799"')
+    for key in sorted(cockpit_mod.SERVED_TOURNAMENT_KEYS):
+        html_text = html_text.replace(f'href="/{key}"', f'href="/cockpit/{key}"')
     return HTMLResponse(_with_shared_rail(html_text, "cockpit"))
 
 

@@ -362,21 +362,6 @@ def build_plan_arms(plan_path: Path) -> list[dict[str, Any]]:
     return arms
 
 
-def _arms_from_newest_plan(meta: dict[str, Any]) -> Optional[list[dict[str, Any]]]:
-    """The newest run's own arms when it is not the run this page describes.
-
-    A run of the page's own issue is merged over the static presets instead, so
-    a partial record still reads as the ten-arm table it was launched from.
-    """
-    newest = _newest_plan_record()
-    if newest is None:
-        return None
-    issue, _ = _plan_identity(newest)
-    if issue is None or issue == int(meta.get("issue_primary") or 0):
-        return None
-    return build_plan_arms(newest) or None
-
-
 def _resolve_plan_for_tourney_key(
     tourney_key: str,
     meta: dict[str, Any],
@@ -399,54 +384,21 @@ def _resolve_plan_for_tourney_key(
 def resolve_tournament_meta(
     tourney_key: str = CURRENT_SETUP_KEY,
 ) -> tuple[dict[str, Any], float]:
-    """The page's branding and planned length, following the newest run.
+    """The page's branding and planned length, from this key's own newest run.
 
-    A table that follows a newer run of another issue needs a header that says
-    so: "#487" over ten #799 arms is the same lie as ten #487 presets over a
-    #799 run. Planned minutes come from that record, so progress is measured
-    against the length the run was launched with, not a fixed 12 hours.
+    The key names one page per issue, and each page reads its own issue's
+    record: a #843 run launched into `data/tournaments/` must not repaint the
+    #799 page with another experiment's arms under a "#843" header. Planned
+    minutes come from that record, so progress is measured against the length
+    the run was launched with, not a fixed 12 hours.
     """
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
-    if tourney_key != CURRENT_SETUP_KEY:
-        plan = _resolve_plan_for_tourney_key(tourney_key, meta)
-        if plan is not None:
-            _, minutes = _plan_identity(plan)
-            if minutes:
-                return meta, minutes
-        return meta, DEFAULT_TOURNAMENT_MINUTES
-    newest = _newest_plan_record()
-    if newest is None:
-        return meta, DEFAULT_TOURNAMENT_MINUTES
-    issue, minutes = _plan_identity(newest)
-    target_minutes = minutes or DEFAULT_TOURNAMENT_MINUTES
-    if issue is None or issue == int(meta.get("issue_primary") or 0):
-        return meta, target_minutes
-    # A newest run whose arms cannot be read cannot own the header either: the
-    # arm table falls back to the older record, and a header naming the failed
-    # run would sit above another run's arms.
-    plan_arms = build_plan_arms(newest)
-    if not plan_arms:
-        return meta, DEFAULT_TOURNAMENT_MINUTES
-    arms_label = f"{len(plan_arms)} Arms"
-    run_label = (parse_tournament_run_dir_name(newest.parent) or {}).get("name")
-    run_label = (run_label or "run").replace("-", " ").title()
-    # The #487 preset table rides along inside its meta; leaving it there would
-    # ship those ten arms to the browser as this run's arms, under a #799 title.
-    branding = {key: value for key, value in meta.items() if key != "arms"}
-    return {
-        **branding,
-        "id": str(issue),
-        "title": f"Issue #{issue} Tournament \u2014 Live Run",
-        "subtitle": f"{target_minutes / 60.0:g}-Hour Multi-Arm Shadow Evaluation | {run_label} | {arms_label}",
-        "description": (
-            f"Following the newest tournament record on disk: issue #{issue}, {arms_label.lower()} "
-            "launched from its own arms file. Comparative reading happens after the planned run "
-            "length; the catalyst column is this run's own arms file, quoted as written."
-        ),
-        "issue_primary": issue,
-        "issue_secondary": issue,
-        "nav_label": f"#{issue} {run_label} ({arms_label})",
-    }, target_minutes
+    plan = _resolve_plan_for_tourney_key(tourney_key, meta)
+    if plan is not None:
+        _, minutes = _plan_identity(plan)
+        if minutes:
+            return meta, minutes
+    return meta, DEFAULT_TOURNAMENT_MINUTES
 
 
 def resolve_tournament_arms_with_status(
@@ -467,17 +419,8 @@ def resolve_tournament_arms_with_status(
     if tourney_key not in ("843", "799"):
         return default_arms, None
 
-    # The served page follows the newest run on disk, whatever issue launched it:
-    # an operator who starts a ten-arm #799 run must see ten #799 arms, not the
-    # #487 presets that happen to share the key. Only when an older run of this
-    # key is the newest thing on disk does the key's own record apply. Archive
-    # keys keep their own records -- #492 and #608 are frozen contracts, and the
-    # newest run on disk says nothing about what they evaluated.
-    if tourney_key == CURRENT_SETUP_KEY:
-        page_arms = _arms_from_newest_plan(meta)
-        if page_arms:
-            return page_arms, None
-
+    # Each page reads its own issue's record: the key in the URL is a page, and
+    # a #843 run on disk says nothing about the ten #799 arms this page lists.
     # One resolver for every key: `latest_tournament_record` ranks by parsed
     # (run number, stamp), so a named run (#487's `--stamp current_setup_10arm`)
     # no longer wins or loses on the accident of `c` sorting after a digit.
@@ -493,6 +436,12 @@ def resolve_tournament_arms_with_status(
             _WARNED_RECORD = message
         return default_arms, message
     _WARNED_RECORD = None
+    # A run that launched its own arm set (#843's six-arm continuation) is read
+    # as itself: merging it over the four static presets would hide two real arms
+    # and keep two rows pointing at a different run's stores.
+    static_names = {base["name"] for base in default_arms}
+    if any(a["name"] not in static_names for a in record_arms):
+        return build_plan_arms(latest_plan) or default_arms, None
     plan_arms: dict[str, Any] = {}
     for a in record_arms:
         plan_arms[a["name"]] = a
@@ -521,6 +470,21 @@ def resolve_tournament_arms(tourney_key: str = CURRENT_SETUP_KEY) -> list[dict[s
     record exists but could not be read.
     """
     return resolve_tournament_arms_with_status(tourney_key)[0]
+
+
+def nav_label_for(tourney_key: str) -> str:
+    """The switcher pill's text: the run this page serves, named as it launched.
+
+    A static "#843 Pair Test (4 Arms)" over a six-arm continuation run would name
+    an experiment the page is not showing.
+    """
+    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
+    plan = _resolve_plan_for_tourney_key(tourney_key, meta)
+    if plan is None:
+        return meta.get("nav_label") or f"#{tourney_key}"
+    run_label = (parse_tournament_run_dir_name(plan.parent) or {}).get("name")
+    run_label = (run_label or "run").replace("-", " ").title()
+    return f"#{tourney_key} {run_label} ({len(resolve_tournament_arms(tourney_key))} Arms)"
 
 
 def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> dict[str, Any]:
@@ -1210,6 +1174,21 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
             f'</tr>'
         )
     dm_tbody_content = "\n".join(dm_rows)
+    # One pill per served tournament, each naming the run its own page shows.
+    nav_pills = []
+    for key, icon in (("799", "🧪"), ("843", "🚦")):
+        badge = (
+            '<span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">'
+            "CURRENT SETUP</span>"
+            if key == CURRENT_SETUP_KEY else ""
+        )
+        active = "active" if tourney_key == key else ""
+        nav_pills.append(
+            f'<a href="/{key}" class="tourney-pill {active}">'
+            f"<span>{icon}</span>"
+            f"<span>{html.escape(nav_label_for(key))}</span>{badge}</a>"
+        )
+    nav_pills_html = "\n  ".join(nav_pills)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1499,15 +1478,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
      served; the active pill follows the page being viewed. -->
 <div class="tourney-nav">
   <span class="tourney-nav-label">Tournament Evaluation:</span>
-  <a href="/799" class="tourney-pill {'active' if tourney_key == '799' else ''}">
-    <span>🧪</span>
-    <span>#799 Presets (10 Arms)</span>
-    <span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">CURRENT SETUP</span>
-  </a>
-  <a href="/843" class="tourney-pill {'active' if tourney_key == '843' else ''}">
-    <span>🚦</span>
-    <span>#843 Pair Test (4 Arms)</span>
-  </a>
+  {nav_pills_html}
 </div>
 
 <header>
