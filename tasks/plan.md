@@ -144,7 +144,7 @@ switch to it, so planning artifacts are written here for carry-over.)
 - **Depends on:** Task 1 (needs the new config values).
   **Verifies by:** focused pytest on the five test files above.
 
-### Task 3 [Backend/Logic] — Bidirectional arm universe split (S)
+### Task 3 [Backend/Logic] — Bidirectional arm universe split (S) [x]
 - **Target files:** `core_brain/trader_loop.py` (`_market_specs`),
   `.env.example` docs, tests `tests/test_tournament_arms_i917.py`,
   `tests/test_shadow_tournament.py`, `tests/test_trader_loop.py`,

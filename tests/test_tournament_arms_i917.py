@@ -162,6 +162,133 @@ def test_market_specs_excludes_sports_and_live_when_env_set(monkeypatch):
     assert [s["cid"] for s in filtered_specs] == ["0xmacro1"]
 
 
+def _919_snapshot():
+    """Five-row universe: macro, prematch sports, live sports, live
+    political, and an ended live market."""
+    macro_gm = _sample_graduated_market(
+        "0xmacro1",
+        "Will the Fed cut interest rates in December?",
+        "fed-rate-cut-december",
+        event_live=False,
+    )
+    prematch_sports_gm = _sample_graduated_market(
+        "0xsports1",
+        "Lakers vs Celtics Winner",
+        "nba-lal-bos-2026-11-01",
+        event_live=False,
+        sports_market_type="moneyline",
+    )
+    live_sports_gm = _sample_graduated_market(
+        "0xlivesports",
+        "Chiefs vs 49ers Winner",
+        "nfl-kc-sf-2026-11-01",
+        event_live=True,
+        sports_market_type="moneyline",
+    )
+    live_political_gm = replace(
+        macro_gm,
+        cid="0xlivepol",
+        title="Live Political Debate Mention",
+        slug="debate-mention",
+        event_live=True,
+    )
+    ended_live_gm = replace(
+        live_political_gm,
+        cid="0xendedlive",
+        event_ended=True,
+    )
+    return GraduatedSnapshot(
+        rows=[macro_gm, prematch_sports_gm, live_sports_gm,
+              live_political_gm, ended_live_gm],
+        published_mtime_ns=919191919,
+        condition_ids=frozenset({
+            "0xmacro1", "0xsports1", "0xlivesports",
+            "0xlivepol", "0xendedlive",
+        }),
+    )
+
+
+def _919_clear_lane_switches(monkeypatch):
+    for var in ("BOT_MARKET_LIVE_ONLY_ON", "BOT_MARKET_EXCLUDE_LIVE_ON",
+                "BOT_MARKET_EXCLUDE_SPORTS_ON", "FILTER_EXCLUDE_SPORTS"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(
+        "core_brain.market_feed.load_graduated_snapshot",
+        lambda path=None: _919_snapshot(),
+    )
+
+
+def test_919_live_only_keeps_only_in_play_markets(monkeypatch):
+    _919_clear_lane_switches(monkeypatch)
+    monkeypatch.setenv("BOT_MARKET_LIVE_ONLY_ON", "1")
+    assert [s["cid"] for s in _market_specs()] == ["0xlivesports", "0xlivepol"]
+
+
+def test_919_exclude_live_keeps_only_non_live_markets(monkeypatch):
+    _919_clear_lane_switches(monkeypatch)
+    monkeypatch.setenv("BOT_MARKET_EXCLUDE_LIVE_ON", "true")
+    assert [s["cid"] for s in _market_specs()] == [
+        "0xmacro1", "0xsports1", "0xendedlive",
+    ]
+
+
+def test_919_no_switch_keeps_todays_mixed_set(monkeypatch):
+    _919_clear_lane_switches(monkeypatch)
+    assert [s["cid"] for s in _market_specs()] == [
+        "0xmacro1", "0xsports1", "0xlivesports",
+        "0xlivepol", "0xendedlive",
+    ]
+
+
+def test_919_lane_sets_partition_the_universe(monkeypatch):
+    _919_clear_lane_switches(monkeypatch)
+    monkeypatch.setenv("BOT_MARKET_LIVE_ONLY_ON", "yes")
+    live_only = {s["cid"] for s in _market_specs()}
+    monkeypatch.setenv("BOT_MARKET_LIVE_ONLY_ON", "0")
+    monkeypatch.setenv("BOT_MARKET_EXCLUDE_LIVE_ON", "on")
+    non_live_only = {s["cid"] for s in _market_specs()}
+    assert live_only == {"0xlivesports", "0xlivepol"}
+    assert non_live_only == {"0xmacro1", "0xsports1", "0xendedlive"}
+    assert live_only & non_live_only == set()
+    assert live_only | non_live_only == {
+        "0xmacro1", "0xsports1", "0xlivesports",
+        "0xlivepol", "0xendedlive",
+    }
+
+
+def test_919_conflicting_lane_switches_select_nothing(monkeypatch):
+    _919_clear_lane_switches(monkeypatch)
+    monkeypatch.setenv("BOT_MARKET_LIVE_ONLY_ON", "1")
+    monkeypatch.setenv("BOT_MARKET_EXCLUDE_LIVE_ON", "1")
+    assert _market_specs() == []
+
+
+def test_919_exclude_sports_combined_with_lane_switches(monkeypatch):
+    # Exclude-sports already removes every live market: with live-only the
+    # intersection is empty; with exclude-live it equals exclude-sports alone.
+    _919_clear_lane_switches(monkeypatch)
+    monkeypatch.setenv("BOT_MARKET_EXCLUDE_SPORTS_ON", "1")
+    assert [s["cid"] for s in _market_specs()] == ["0xmacro1"]
+
+    monkeypatch.setenv("BOT_MARKET_LIVE_ONLY_ON", "1")
+    assert _market_specs() == []
+
+    monkeypatch.delenv("BOT_MARKET_LIVE_ONLY_ON", raising=False)
+    monkeypatch.setenv("BOT_MARKET_EXCLUDE_LIVE_ON", "1")
+    assert [s["cid"] for s in _market_specs()] == ["0xmacro1"]
+
+
+def test_919_lane_filtering_runs_before_the_market_limit(monkeypatch):
+    _919_clear_lane_switches(monkeypatch)
+    monkeypatch.setenv("BOT_MARKET_LIVE_ONLY_ON", "1")
+    specs = _market_specs(max_markets=1)
+    assert [s["cid"] for s in specs] == ["0xlivesports"]
+    monkeypatch.setenv("BOT_MARKET_LIVE_ONLY_ON", "0")
+    monkeypatch.setenv("BOT_MARKET_EXCLUDE_LIVE_ON", "1")
+    specs = _market_specs(max_markets=2)
+    assert [s["cid"] for s in specs] == ["0xmacro1", "0xsports1"]
+
+
 def test_i917_arms_file_exists_and_schema():
     arms = _load_arms()
     assert len(arms) == 6, f"Expected 6 arms, got {len(arms)}"

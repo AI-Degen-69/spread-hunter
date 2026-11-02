@@ -2545,11 +2545,12 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
     if not gms:
         return []
 
+    def _lane_on(var: str) -> bool:
+        return os.environ.get(var, "").strip().lower() in ("1", "true", "yes", "on")
+
     exclude_sports = (
-        os.environ.get("BOT_MARKET_EXCLUDE_SPORTS_ON", "").strip().lower()
-        in ("1", "true", "yes", "on")
-        or os.environ.get("FILTER_EXCLUDE_SPORTS", "").strip().lower()
-        in ("1", "true", "yes", "on")
+        _lane_on("BOT_MARKET_EXCLUDE_SPORTS_ON")
+        or _lane_on("FILTER_EXCLUDE_SPORTS")
     )
     if exclude_sports:
         from scoring.selector import is_sports_or_esports
@@ -2563,6 +2564,23 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
                 sports_market_type=getattr(gm, "sports_market_type", "") or "",
             )
         ]
+
+    # Bidirectional live / non-live arm split (#919). One shared live rule
+    # for both switches — an in-play market has started and not ended — so
+    # the two categories cannot overlap by construction. Independent filters
+    # next to exclude-sports, before active-market prioritization and the
+    # max_markets slice: a conflicting combination selects nothing, the safe
+    # empty set, never a mixed fallback. No FILTER_* alias: lane selection
+    # is arm scope, not screener scope.
+    def _is_in_play(gm) -> bool:
+        return bool(getattr(gm, "event_live", False)) and not bool(
+            getattr(gm, "event_ended", False)
+        )
+
+    if _lane_on("BOT_MARKET_LIVE_ONLY_ON"):
+        gms = [gm for gm in gms if _is_in_play(gm)]
+    if _lane_on("BOT_MARKET_EXCLUDE_LIVE_ON"):
+        gms = [gm for gm in gms if not _is_in_play(gm)]
 
     if max_markets and registry is not None:
         try:

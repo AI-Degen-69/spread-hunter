@@ -1428,6 +1428,26 @@ def test_i799_arms_file_holds_ten_unique_arms():
     assert len(set(names)) == 10
 
 
+def test_919_live_only_arm_passes_validation_and_stays_arm_scoped(tmp_path):
+    """#919: a live-only arm validates, its switch reaches the worker env
+    and the saved record, and never the shared screener namespace."""
+    from scripts.shadow_tournament import build_tournament_plan
+
+    arms = [{"name": "live-only-probe", "env": {"BOT_MARKET_LIVE_ONLY_ON": "1"}}]
+    plan = build_tournament_plan(
+        issue=919, arms=arms, base_dir=tmp_path, check_ports=False
+    )
+    assert len(plan.arms) == 1
+    worker_env = plan.arms[0].env
+    assert worker_env["BOT_MARKET_LIVE_ONLY_ON"] == "1"
+    # Arm scope is BOT_*: no FILTER_* screener variable carries the lane.
+    assert not [k for k in worker_env if k.startswith("FILTER_") and "LIVE" in k]
+    # The saved record keeps the switch, so resume recovers the arm type.
+    saved = plan.to_dict()["arms"][0]
+    assert saved["env"]["BOT_MARKET_LIVE_ONLY_ON"] == "1"
+    assert saved["db_path"] != "orders.db"
+
+
 def test_i799_unnumbered_plan_keeps_stores_in_run_folder(tmp_path):
     from scripts.shadow_tournament import build_tournament_plan
 
