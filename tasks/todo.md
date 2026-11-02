@@ -1,5 +1,0 @@
-# Task Checklist — Issue #917 (`plan_github_issue_917`)
-
-- [x] **Task 1** (`[Backend/Logic]`, `M`, `Depends on: none`): Wire `BOT_RISK_STRANDED_COMPLETION_ON`, `BOT_RISK_STRANDED_MAX_WAIT_SEC`, and `BOT_QUOTE_BOOK_MAX_SPREAD_USD` in `core_brain/config.py:MakerConfig.from_env()` and per-arm sports/live exclusion (`BOT_MARKET_EXCLUDE_SPORTS_ON` / `FILTER_EXCLUDE_SPORTS`) in `core_brain/trader_loop.py:_market_specs`.
-- [x] **Task 2** (`[Backend/Logic]`, `M`, `Depends on: Task 1`): Create `configs/tournaments/i917-multistrat-defense_arms.json` with 6 orthogonal adverse-selection defense arms (`macro-non-sports`, `taker-snapper`, `fast-bailout-60s`, `wide-cushion-live`, `queue-gated-hybrid`, `control-baseline`) and verify plan/schema/env resolution in `tests/test_tournament_arms_i917.py`.
-- [x] **Task 3** (`[Docs]`, `S`, `Depends on: Task 2`): Create `docs/runs/2026-11-01-917-multistrat-defense.md` pre-registering the decision rule, sufficiency gates, 1440-minute horizon (with 360-minute checkpoint), and operator rehearsal commands.

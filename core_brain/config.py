@@ -48,7 +48,7 @@ class MakerConfig:
     # 0-1 scale; the env value is cents. The quoting engine refuses or skips a
     # quote outside the window and clamps the dynamic offset to it. It is NOT a
     # filter on which markets we quote -- `filter_common_spread_max_usd`
-    # (2.05c) is the wide-book rejection bar (see CONSTRAINTS.md). The two
+    # (2.05c) is the wide-book rejection bar. The two
     # shipped defaults are deliberate: 0.15 for the engine, 0.045 for the
     # picker, whose copy the ranker does not gate on; both loaders read the
     # same variable the same way.

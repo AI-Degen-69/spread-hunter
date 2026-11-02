@@ -188,7 +188,7 @@ silently swallowed `docs/reports/` -- two issue showcases sat there untracked.
 | `docs/297-`, `304-`, `310-`, `343-presentation-*.html` | Moved | `docs/pr-presentations/`, per the showcase contract above |
 | `project/` | Deleted | Empty leftover directory; sole tracked file was its own `.gitignore`, nothing imports from it |
 | `SHARED_TASK_NOTES.md` | Deleted | Backlog of already-implemented iterations, referenced nowhere |
-| `SPEC.md`, `CONSTRAINTS.md` | Deleted | Root files stay the live copies; the `docs/archive/` duplicates were removed |
+| `SPEC.md`, `CONSTRAINTS.md` | Deleted | Root files stay the live copies; the `docs/archive/` duplicates were removed (root copies pruned in #917) |
 | `metadata.json` | Kept at root | Host-owned: no repo reference found, so deleting could break tooling outside this repo |
 
 Enforced by `tests/test_docs_layout.py` (recursive list of every stray or misnamed `.html` under `docs/`, plus `project/` absence).
