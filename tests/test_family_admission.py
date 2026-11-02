@@ -28,7 +28,7 @@ class _GoodSession:
     def __init__(self):
         import time
         self._trades = [{"timestamp": time.time(), "price": 0.5,
-                         "size": 4000.0}]
+                         "size": 10000.0}]
 
     def get(self, url, params=None, timeout=None):
         if "trades" in url:

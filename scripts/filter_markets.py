@@ -1448,6 +1448,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
              min_trades: Optional[int] = None,
              max_last_trade_sec: Optional[float] = None,
              min_range_cents: Optional[float] = None,
+             min_activity_ratio: Optional[float] = None,
              velocity_gate_enabled: Optional[bool] = None,
              now_iso: Optional[str] = None) -> dict:
     """Movement notional score and capital for one market, from its live book.
@@ -1639,8 +1640,10 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     if is_live_row:
         ratio_rej, ratio_reason = False, ""
     else:
+        ratio_bar = (MIN_ACTIVITY_RATIO if min_activity_ratio is None
+                     else min_activity_ratio)
         ratio_rej, ratio_reason = activity_ratio_reject(
-            movement_usd, volume_24h, min_ratio=MIN_ACTIVITY_RATIO,
+            movement_usd, volume_24h, min_ratio=ratio_bar,
             window_sec=MOVEMENT_WINDOW_SEC)
     if ratio_rej:
         return _reject_row(source, ratio_reason, m, volume_24h,
@@ -2960,6 +2963,7 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
                min_trades: Optional[int] = None,
                max_last_trade_sec: Optional[float] = None,
                min_range_cents: Optional[float] = None,
+             min_activity_ratio: Optional[float] = None,
                velocity_gate_enabled: Optional[bool] = None) -> list[dict]:
     """Score candidate jobs across a worker pool, one session per worker.
 
@@ -2984,6 +2988,7 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
                                    min_trades=min_trades,
                                    max_last_trade_sec=max_last_trade_sec,
                                    min_range_cents=min_range_cents,
+                                   min_activity_ratio=min_activity_ratio,
                                    velocity_gate_enabled=velocity_gate_enabled),
                 jobs):
             if r:
@@ -2998,6 +3003,7 @@ def _score_universe(universe: list[dict], *, volume_bar: float,
                     min_trades: Optional[int] = None,
                     max_last_trade_sec: Optional[float] = None,
                     min_range_cents: Optional[float] = None,
+             min_activity_ratio: Optional[float] = None,
                     velocity_gate_enabled: Optional[bool] = None) -> tuple[list[dict], int]:
     """Score the unified universe and return (scored rows, attempted count).
 
@@ -3020,6 +3026,7 @@ def _score_universe(universe: list[dict], *, volume_bar: float,
                      min_trades=min_trades,
                      max_last_trade_sec=max_last_trade_sec,
                      min_range_cents=r_cents,
+                     min_activity_ratio=min_activity_ratio,
                      velocity_gate_enabled=v_enabled)
     return out, len(jobs)
 

@@ -294,8 +294,8 @@ def load() -> MakerConfig:
         try:
             ratio = float(aratio)
         except ValueError:
-            ratio = 0.0
-        if math.isfinite(ratio) and ratio >= 0:
+            ratio = None
+        if ratio is not None and math.isfinite(ratio) and ratio >= 0:
             kw["filter_live_activity_min_ratio"] = ratio
     vol_live = _env("FILTER_LIVE_VOL_MIN_24H_USD")
     if vol_live:

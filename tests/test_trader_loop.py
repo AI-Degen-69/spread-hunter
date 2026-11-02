@@ -1491,8 +1491,8 @@ class TestRefusedHold:
         # resting entry bids cancel; tight again -> quoting resumes.
         from core_brain.risk import book_health
 
-        state = {"book": {"best_bid": 0.47, "best_ask": 0.52,
-                           "bids": {0.47: 500}, "asks": {0.52: 500}}}
+        state = {"book": {"best_bid": 0.47, "best_ask": 0.53,
+                           "bids": {0.47: 500}, "asks": {0.53: 500}}}
 
         def decide(cfg, up, dn, inv, t_rem, wf):
             health = book_health(dict(state["book"]), cfg)
@@ -1521,8 +1521,8 @@ class TestRefusedHold:
         assert wide[0].status == "DECLINED"
         assert calls["cancelled"] == [["o-up", "o-dn"]]
 
-        state["book"] = {"best_bid": 0.47, "best_ask": 0.52,
-                          "bids": {0.47: 500}, "asks": {0.52: 500}}
+        state["book"] = {"best_bid": 0.47, "best_ask": 0.53,
+                          "bids": {0.47: 500}, "asks": {0.53: 500}}
         recovered = visit()
         assert recovered[0].status == "QUOTED"
         assert calls["cancelled"] == [["o-up", "o-dn"]]
