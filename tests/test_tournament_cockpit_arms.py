@@ -435,24 +435,27 @@ def test_nav_switcher_offers_799_and_843_with_the_active_pill() -> None:
         import re as _re
         nav = _re.search(r'<div class="tourney-nav">.*?</div>', html, _re.S).group(0)
         out = {}
-        for key in ("799", "843", "905", "917"):
+        for key in ("799", "843", "905", "917", "923"):
             m = _re.search(r'<a href="/' + key + r'" class="([^"]*)"', nav)
             out[key] = bool(m and "active" in m.group(1))
         return out
 
     html_799 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "799"})
     assert html_799.count("CURRENT SETUP</span>") == 1
-    assert html_799.count('class="tourney-pill') == 4
-    assert _active(html_799) == {"799": True, "843": False, "905": False, "917": False}
+    assert html_799.count('class="tourney-pill') == 5
+    assert _active(html_799) == {"799": True, "843": False, "905": False, "917": False, "923": False}
 
     html_843 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "843"})
-    assert _active(html_843) == {"799": False, "843": True, "905": False, "917": False}
+    assert _active(html_843) == {"799": False, "843": True, "905": False, "917": False, "923": False}
 
     html_905 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "905"})
-    assert _active(html_905) == {"799": False, "843": False, "905": True, "917": False}
+    assert _active(html_905) == {"799": False, "843": False, "905": True, "917": False, "923": False}
 
     html_917 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "917"})
-    assert _active(html_917) == {"799": False, "843": False, "905": False, "917": True}
+    assert _active(html_917) == {"799": False, "843": False, "905": False, "917": True, "923": False}
+
+    html_923 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "923"})
+    assert _active(html_923) == {"799": False, "843": False, "905": False, "917": False, "923": True}
 
 
 # --- Each page reads its own issue's run ------------------------------------

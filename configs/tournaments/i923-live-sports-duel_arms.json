@@ -1,0 +1,26 @@
+[
+  {
+    "name": "live-sports-only",
+    "label": "Live Sports Only",
+    "color": "#ff3d00",
+    "profile": "BOT_MARKET_LIVE_SPORTS_ONLY_ON, in-play sports/esports only",
+    "desc": "Quotes only markets that are both venue-declared in-play and classified sports/esports.",
+    "thesis": "If the edge lives in live sports flow, quarantining the lane to in-play sports and esports should lift pair completion versus the rest of the board.",
+    "hypothesis": "If the edge lives in live sports flow, quarantining the lane to in-play sports and esports should lift pair completion versus the rest of the board.",
+    "env": {
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1"
+    }
+  },
+  {
+    "name": "all-but-live-sports",
+    "label": "All But Live Sports",
+    "color": "#2979ff",
+    "profile": "BOT_MARKET_EXCLUDE_LIVE_SPORTS_ON, everything except in-play sports",
+    "desc": "Quotes everything except in-play sports/esports: prematch sports, live non-sports, and the full regular book.",
+    "thesis": "If adverse selection lives in live sports flow, excluding it while keeping the rest of the board should cut bail-out losses without starving volume.",
+    "hypothesis": "If adverse selection lives in live sports flow, excluding it while keeping the rest of the board should cut bail-out losses without starving volume.",
+    "env": {
+      "BOT_MARKET_EXCLUDE_LIVE_SPORTS_ON": "1"
+    }
+  }
+]
