@@ -230,6 +230,99 @@ def test_resting_price_never_goes_negative_or_zero():
         assert q < 1.0
 
 
+# --- #919: dormant filtration at the shipped 1.5% bar -----------------------
+
+class _BookTapeSession:
+    """Canned tape plus two-sided books, so evaluate can run end to end."""
+
+    def __init__(self, tape):
+        self.tape = tape
+
+    def get(self, url, params=None, timeout=None):
+        if "trades" in url:
+            payload = self.tape
+        else:
+            payload = {
+                "bids": [{"price": "0.49", "size": "5000"},
+                         {"price": "0.48", "size": "5000"}],
+                "asks": [{"price": "0.51", "size": "5000"},
+                         {"price": "0.52", "size": "5000"}],
+            }
+
+        class _Resp:
+            def json(self_inner):
+                return payload
+
+        return _Resp()
+
+
+def _tape_trade(ts, price=0.50, size=1000.0):
+    return {"timestamp": ts, "price": price, "size": size}
+
+
+def _screen_candidate(live=False, sports=False):
+    from datetime import datetime, timedelta, timezone
+    m = {
+        "condition_id": "0x919alaska" if not live else "0x919live",
+        "question": "Chiefs vs 49ers" if sports else "Alaska Senate Election Winner",
+        "market_slug": "chiefs-49ers-nfl" if sports else "alaska-senate-winner",
+        "tokens": [{"token_id": "1"}, {"token_id": "2"}],
+        "rewards": {"max_spread": 3.5, "min_size": 50},
+        "closed": False,
+        "accepting_orders": True,
+        "acceptingOrders": True,
+        "minimum_tick_size": 0.01,
+        "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
+    }
+    if live:
+        m["live_event"] = True
+    return m
+
+
+def test_919_ratio_gate_rejects_dormant_non_live_at_shipped_bar():
+    """#919: $1k recent on $250k 24h (0.4% < 1.5%) is dormant — refused."""
+    import time as _time
+    from scripts.filter_markets import evaluate
+    t_now = _time.time()
+    session = _BookTapeSession([
+        _tape_trade(t_now - 60), _tape_trade(t_now - 120),
+    ])
+    row = evaluate(session, 5.0, _screen_candidate(), volume_24h=250_000.0,
+                   source="spread")
+    assert row.get("eligible") is False
+    assert "low activity ratio" in row.get("reject_reason", "")
+
+
+def test_919_ratio_gate_admits_active_non_live_at_shipped_bar():
+    """#919: $4k recent on $250k 24h (1.6% >= 1.5%) is active — admitted."""
+    import time as _time
+    from scripts.filter_markets import evaluate
+    t_now = _time.time()
+    session = _BookTapeSession([
+        _tape_trade(t_now - 60, size=4000.0),
+        _tape_trade(t_now - 120, size=4000.0),
+    ])
+    row = evaluate(session, 5.0, _screen_candidate(), volume_24h=250_000.0,
+                   source="spread")
+    assert row.get("eligible") is True
+    assert "low activity ratio" not in row.get("reject_reason", "")
+
+
+def test_919_live_row_skips_the_ratio_gate():
+    """#919: the same dormant-level ratio on a live row is not refused."""
+    import time as _time
+    from scripts.filter_markets import evaluate
+    t_now = _time.time()
+    session = _BookTapeSession([
+        _tape_trade(t_now - 60), _tape_trade(t_now - 120),
+    ])
+    row = evaluate(session, 5.0, _screen_candidate(live=True, sports=True),
+                   volume_24h=250_000.0, source="spread",
+                   velocity_gate_enabled=True)
+    assert "low activity ratio" not in row.get("reject_reason", "")
+    assert row.get("eligible") is True
+
+
 def test_promoted_system_defaults():
     """The loose values are now the SHIPPED MakerConfig defaults (repo-wide).
 

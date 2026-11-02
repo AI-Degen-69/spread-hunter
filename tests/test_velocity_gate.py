@@ -173,7 +173,8 @@ def test_sub_cent_drift_is_still_refused_at_the_widened_bar():
 
 
 def test_evaluate_admits_a_normal_swing_at_production_bars():
-    # End to end with the production velocity bars: a tape swinging 2.5c on real notional is admitted
+    # End to end with the production velocity bars (#919): a tape swinging
+    # 6c on real notional (~$4.2k/30m, 1.7% of 24h) is admitted.
     import time as _time
 
     from scripts import filter_markets as fm
@@ -181,9 +182,9 @@ def test_evaluate_admits_a_normal_swing_at_production_bars():
     from datetime import datetime, timedelta, timezone
 
     t_now = _time.time()
-    # 3.0c swing between min (0.50) and max (0.53) with > $200 volume
+    # 6.0c swing between min (0.50) and max (0.56) with > $200 volume
     session = _TapeSession(
-        [_trade(t_now - 60 - 60 * i, 0.50 + 0.005 * (i % 7), 50.0)
+        [_trade(t_now - 60 - 60 * i, 0.50 + 0.01 * (i % 7), 800.0)
          for i in range(10)]
     )
     m = {
@@ -210,11 +211,13 @@ def test_evaluate_admits_a_normal_swing_at_production_bars():
 
 
 def test_shipped_production_bars_are_the_widened_ones():
-    # #416, #434 pins the production defaults: $200/30m movement, 2.0c/2h range swing, gate enabled.
+    # #416, #434, #919 pins the production defaults: $200/30m movement,
+    # 5.0c/2h range swing, 1.5% activity ratio, gate enabled.
     from scripts import filter_markets as fm
 
     assert fm.MIN_MOVEMENT_USD == 200.0
-    assert fm.MIN_RANGE_CENTS == 2.0
+    assert fm.MIN_RANGE_CENTS == 5.0
+    assert fm.MIN_ACTIVITY_RATIO == 0.015
     assert fm.VOLATILITY_WINDOW_SEC == 7200.0
     assert fm.VELOCITY_GATE_ENABLED is True
 
@@ -278,7 +281,7 @@ def test_volatility_config_defaults_and_env(monkeypatch):
     import scoring.config as sc
 
     cfg = sc.MakerConfig()
-    assert cfg.filter_live_move_min_range_cents == 2.0
+    assert cfg.filter_live_move_min_range_cents == 5.0
     assert cfg.filter_live_move_lookback_sec == 7200.0
     assert cfg.filter_live_gate_velocity_on is True
 
@@ -359,5 +362,128 @@ def test_evaluate_marks_and_exempts_live_sports():
     assert row.get("eligible") is True
     # Not rejected for flat market
     assert "flat market" not in row.get("reject_reason", "")
+
+
+def _non_sports_candidate(live: bool, end_days: int = 2) -> dict:
+    from datetime import datetime, timedelta, timezone
+    m = {
+        "condition_id": "0x919live" if live else "0x919regular",
+        "question": "Will BTC reach 100k?",
+        "market_slug": "btc-100k",
+        "tokens": [{"token_id": "1"}, {"token_id": "2"}],
+        "rewards": {"max_spread": 3.5, "min_size": 50},
+        "closed": False,
+        "accepting_orders": True,
+        "acceptingOrders": True,
+        "minimum_tick_size": 0.01,
+        "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=end_days)).isoformat(),
+    }
+    if live:
+        m["live_event"] = True
+    return m
+
+
+def _tape_session_with_trades(trades):
+    return _TapeSession(list(trades))
+
+
+def test_919_ghost_live_stale_tape_is_rejected():
+    # #919: a declared-live row whose last print is older than the 300s
+    # ceiling is a pre-game book, not in-play momentum.
+    import time as _time
+    t_now = _time.time()
+    session = _tape_session_with_trades([
+        _trade(t_now - 400, 0.50, 2000.0),
+        _trade(t_now - 420, 0.50, 2000.0),
+    ])
+    row = evaluate(
+        session, rate=10.0, m=_non_sports_candidate(live=True),
+        source="spread", volume_24h=250_000.0,
+        velocity_gate_enabled=True,
+    )
+    assert row.get("eligible") is False
+    assert "declared-live stale tape" in row.get("reject_reason", "")
+
+
+def test_919_fresh_live_tape_is_admitted():
+    # Same shape with a fresh print: admitted, no recency complaint.
+    import time as _time
+    t_now = _time.time()
+    session = _tape_session_with_trades([
+        _trade(t_now - 60, 0.50, 2000.0),
+        _trade(t_now - 120, 0.50, 2000.0),
+    ])
+    row = evaluate(
+        session, rate=10.0, m=_non_sports_candidate(live=True),
+        source="spread", volume_24h=250_000.0,
+        velocity_gate_enabled=True,
+    )
+    assert row.get("eligible") is True
+    assert "stale tape" not in row.get("reject_reason", "")
+
+
+def test_919_stale_non_live_tape_keeps_no_ceiling():
+    # The same stale tape on a non-live row: no ceiling applies, so the row
+    # is not refused for recency.
+    import time as _time
+    t_now = _time.time()
+    session = _tape_session_with_trades([
+        _trade(t_now - 400, 0.50, 2000.0),
+        _trade(t_now - 420, 0.50, 2000.0),
+    ])
+    row = evaluate(
+        session, rate=10.0, m=_non_sports_candidate(live=False),
+        source="spread", volume_24h=20_000.0,
+        velocity_gate_enabled=True,
+    )
+    assert "stale tape" not in row.get("reject_reason", "")
+
+
+def test_919_explicit_ceiling_wins_over_the_live_default():
+    # An explicit --max-last-trade-sec overrides the 300s live default.
+    import time as _time
+    t_now = _time.time()
+    stale = [
+        _trade(t_now - 400, 0.50, 2000.0),
+        _trade(t_now - 420, 0.50, 2000.0),
+    ]
+    loose = evaluate(
+        _tape_session_with_trades(stale), rate=10.0,
+        m=_non_sports_candidate(live=True), source="spread",
+        volume_24h=250_000.0, max_last_trade_sec=1000.0,
+        velocity_gate_enabled=True,
+    )
+    assert "stale tape" not in loose.get("reject_reason", "")
+    tight = evaluate(
+        _tape_session_with_trades(stale), rate=10.0,
+        m=_non_sports_candidate(live=False), source="spread",
+        volume_24h=20_000.0, max_last_trade_sec=300.0,
+        velocity_gate_enabled=True,
+    )
+    assert "stale tape" in tight.get("reject_reason", "")
+
+
+def test_919_live_row_with_unavailable_tape_still_fails_open():
+    # Tape fetch failure is not measured emptiness: the live row proceeds.
+    session = _FailingTapeSession()
+    row = evaluate(
+        session, rate=10.0, m=_non_sports_candidate(live=True),
+        source="spread", volume_24h=250_000.0,
+        velocity_gate_enabled=True,
+    )
+    assert "stale tape" not in row.get("reject_reason", "")
+    assert "no movement" not in row.get("reject_reason", "")
+
+
+class _FailingTapeSession(_TapeSession):
+    """Tape reads fail; books answer — the fail-open path for live rows."""
+
+    def __init__(self):
+        super().__init__([])
+
+    def get(self, url, params=None, timeout=None):
+        if "trades" in url:
+            raise OSError("tape unreachable")
+        return super().get(url, params=params, timeout=timeout)
 
 

@@ -258,7 +258,9 @@ def test_evaluate_refuses_a_flat_market_at_the_shipped_bar():
     assert "no movement" in row["reject_reason"]
 
 
-def test_evaluate_uses_the_injected_movement_bar():
+def test_evaluate_uses_the_injected_movement_bar(monkeypatch):
+    import scripts.filter_markets as fm
+    monkeypatch.setattr(fm, "MIN_ACTIVITY_RATIO", 0.0)
     session = _MarketSession([_trade(1.0, 0.23, 500.0)])
 
     row = evaluate(session, 5.0, _candidate(), volume_24h=250_000.0,
@@ -336,10 +338,13 @@ def test_a_near_dead_tape_is_still_refused_at_the_widened_bar():
     assert "no movement" in reason
 
 
-def test_evaluate_admits_a_normal_sports_swing_at_shipped_bars():
+def test_evaluate_admits_a_normal_sports_swing_at_shipped_bars(monkeypatch):
     # End to end at the shipped defaults: prices swinging 0.52-0.58 (6c)
-    # on ~$275/30m of prints is admitted, not refused for movement.
+    # on ~$275/30m of prints is admitted, not refused for movement. The
+    # activity-ratio gate is isolated here (#919 covers it separately).
     import time as _time
+    import scripts.filter_markets as fm
+    monkeypatch.setattr(fm, "MIN_ACTIVITY_RATIO", 0.0)
     t_now = _time.time()
     tape = [_trade(t_now - 60 - 60 * i, 0.52 + 0.01 * (i % 7), 50.0)
             for i in range(10)]
@@ -368,3 +373,57 @@ def test_non_finite_env_overrides_are_refused(monkeypatch):
     # movement bar widened to $200 by #416 for live-sports point swings).
     assert cfg.filter_live_vel_min_usd == 200.0
     assert cfg.filter_live_vel_lookback_sec == 1800.0
+
+
+# --- #919: in-play window -------------------------------------------------
+
+def _live_candidate() -> dict:
+    m = _candidate()
+    m["live_event"] = True
+    return m
+
+
+def test_919_live_row_measures_tape_over_the_inplay_window():
+    # A print 1000s old counts inside the 30m non-live window but falls
+    # outside the 15m in-play window: the live row reads it as no movement.
+    import time as _time
+    t_now = _time.time()
+    session = _MarketSession([_trade(t_now - 1000, 0.50, 1000.0)])
+
+    row = evaluate(session, 5.0, _live_candidate(), volume_24h=250_000.0,
+                   source="spread")
+
+    assert row is not None
+    assert row["eligible"] is False
+    assert "no movement" in row.get("reject_reason", "")
+    assert row["movement_window_sec"] == 900.0
+
+
+def test_919_non_live_row_keeps_the_30m_window(monkeypatch):
+    # Same 1000s-old print on a non-live row: inside 30m, one tape request.
+    import time as _time
+    import scripts.filter_markets as fm
+    monkeypatch.setattr(fm, "MIN_ACTIVITY_RATIO", 0.0)
+    t_now = _time.time()
+    session = _MarketSession([_trade(t_now - 1000, 0.50, 1000.0)])
+
+    row = evaluate(session, 5.0, _candidate(), volume_24h=250_000.0,
+                   source="spread")
+
+    assert row is not None
+    assert row["movement_window_sec"] == 1800.0
+    assert session.tape_calls == 1
+
+
+def test_919_live_row_exports_the_inplay_window_on_admission():
+    # A fresh print on a live row is measured and the 900s window exported.
+    import time as _time
+    t_now = _time.time()
+    session = _MarketSession([_trade(t_now - 60, 0.50, 4000.0)])
+
+    row = evaluate(session, 5.0, _live_candidate(), volume_24h=250_000.0,
+                   source="spread")
+
+    assert row is not None
+    assert row["movement_window_sec"] == 900.0
+    assert session.tape_calls == 1
