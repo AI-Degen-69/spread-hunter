@@ -137,7 +137,7 @@ def test_evaluate_produces_spread_metrics_without_reward_pool_math():
         "accepting_orders": True,
     }
 
-    res = fm.evaluate(FakeSession(), rate=0.0, m=cand, volume_24h=100_000.0,
+    res = fm.evaluate(FakeSession(), rate=0.0, m=cand, volume_24h=25_000.0,
                       source="spread", min_volume_usd=1000.0, min_depth_usd=100.0,
                       max_spread=0.08)
 

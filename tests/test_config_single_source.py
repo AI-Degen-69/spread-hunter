@@ -56,12 +56,14 @@ SCORING_DEFAULTS: dict[str, object] = {
     "filter_std_gate_queue_max_on": False,
     "filter_common_vol_min_top3_depth_usd_trial": None,
     "filter_std_vol_min_24h_usd_trial": None,
-    "filter_live_vol_min_24h_usd": 35_000.0,
+    "filter_live_vol_min_24h_usd": 5000.0,
     "filter_live_vel_lookback_sec": 1800.0,
     "filter_live_vel_min_usd": 200.0,
     "filter_live_gate_velocity_on": True,
-    "filter_live_activity_min_ratio": 0.0,
-    "filter_live_move_min_range_cents": 2.0,
+    "filter_live_activity_min_ratio": 0.015,
+    "filter_live_move_min_range_cents": 5.0,
+    "filter_live_inplay_vel_lookback_sec": 900.0,
+    "filter_live_last_trade_max_age_sec": 300.0,
     "filter_live_move_lookback_sec": 7200.0,
     "filter_std_spread_share_pct": 41.0 / 120.0,
     "filter_std_time_max_days_to_resolve": 30.0,
@@ -310,10 +312,10 @@ PICKER_BAR_REFUSED_INPUT = [
     ("FILTER_LIVE_VEL_MIN_USD", "filter_live_vel_min_usd", "nan", 200.0),
     ("FILTER_LIVE_VEL_LOOKBACK_SEC", "filter_live_vel_lookback_sec", "0", 1800.0),
     ("FILTER_LIVE_VEL_LOOKBACK_SEC", "filter_live_vel_lookback_sec", "abc", 1800.0),
-    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "-1", 2.0),
-    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "inf", 2.0),
+    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "-1", 5.0),
+    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "inf", 5.0),
     ("FILTER_LIVE_MOVE_LOOKBACK_SEC", "filter_live_move_lookback_sec", "0", 7200.0),
-    ("FILTER_LIVE_ACTIVITY_MIN_RATIO", "filter_live_activity_min_ratio", "-0.5", 0.0),
+    ("FILTER_LIVE_ACTIVITY_MIN_RATIO", "filter_live_activity_min_ratio", "-0.5", 0.015),
     ("FILTER_LIVE_GATE_VELOCITY_ON", "filter_live_gate_velocity_on", "no", False),
 ]
 
@@ -338,7 +340,7 @@ def test_the_eight_picker_bars_keep_their_shipped_defaults(monkeypatch):
 
     shipped = [getattr(loaded, canonical) for canonical in PICKER_BAR_OLD_NAMES.values()]
 
-    assert shipped == [200.0, 1800.0, True, 0.0, 2.0, 7200.0, 15.0, False]
+    assert shipped == [200.0, 1800.0, True, 0.015, 5.0, 7200.0, 15.0, False]
 
 
 # ============================================================================
@@ -350,10 +352,10 @@ SCREENER_CANONICAL_ENV = [
     ("FILTER_LIVE_VEL_MIN_USD", "HUNTER_MIN_MOVEMENT_USD", "filter_live_vel_min_usd", "888.0", 888.0, "777.0", 777.0, 200.0),
     ("FILTER_LIVE_VEL_LOOKBACK_SEC", "HUNTER_MOVEMENT_WINDOW_SEC", "filter_live_vel_lookback_sec", "600.0", 600.0, "900.0", 900.0, 1800.0),
     ("FILTER_LIVE_GATE_VELOCITY_ON", "HUNTER_VELOCITY_GATE", "filter_live_gate_velocity_on", "false", False, "true", True, True),
-    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "4.5", 4.5, "3.5", 3.5, 2.0),
+    ("FILTER_LIVE_MOVE_MIN_RANGE_CENTS", "HUNTER_MIN_RANGE_CENTS", "filter_live_move_min_range_cents", "4.5", 4.5, "3.5", 3.5, 5.0),
     ("FILTER_LIVE_MOVE_LOOKBACK_SEC", "HUNTER_VOLATILITY_WINDOW_SEC", "filter_live_move_lookback_sec", "5400.0", 5400.0, "3600.0", 3600.0, 7200.0),
-    ("FILTER_LIVE_ACTIVITY_MIN_RATIO", "HUNTER_MIN_ACTIVITY_RATIO", "filter_live_activity_min_ratio", "0.35", 0.35, "0.25", 0.25, 0.0),
-    ("FILTER_LIVE_VOL_MIN_24H_USD", None, "filter_live_vol_min_24h_usd", "50000.0", 50000.0, None, None, 35_000.0),
+    ("FILTER_LIVE_ACTIVITY_MIN_RATIO", "HUNTER_MIN_ACTIVITY_RATIO", "filter_live_activity_min_ratio", "0.35", 0.35, "0.25", 0.25, 0.015),
+    ("FILTER_LIVE_VOL_MIN_24H_USD", None, "filter_live_vol_min_24h_usd", "50000.0", 50000.0, None, None, 5000.0),
     ("FILTER_STD_VOL_MIN_24H_USD", "HUNTER_MIN_VOLUME_24H_USD", "filter_std_vol_min_24h_usd", "250000.0", 250000.0, "150000.0", 150000.0, 125_000.0),
     ("FILTER_COMMON_VOL_MIN_TOP3_DEPTH_USD_TRIAL", "HUNTER_DEPTH_TRIAL_USD", "filter_common_vol_min_top3_depth_usd_trial", "300.0", 300.0, "250.0", 250.0, None),
     ("FILTER_STD_VOL_MIN_24H_USD_TRIAL", "HUNTER_VOLUME_TRIAL_USD", "filter_std_vol_min_24h_usd_trial", "75000.0", 75000.0, "50000.0", 50000.0, None),
@@ -747,7 +749,7 @@ def test_invalid_live_volume_override_keeps_shipped_default(monkeypatch, bad_raw
     _clear_screener_canonical_env(monkeypatch)
     monkeypatch.setenv("FILTER_LIVE_VOL_MIN_24H_USD", bad_raw)
 
-    assert scoring_config.load().filter_live_vol_min_24h_usd == 35_000.0
+    assert scoring_config.load().filter_live_vol_min_24h_usd == 5000.0
 
 
 @pytest.mark.parametrize(
@@ -925,6 +927,80 @@ def test_orphan_min_age_bounds(monkeypatch):
         monkeypatch.setenv("BOT_RISK_ORPHAN_PROFIT_MIN_AGE_SEC", bad)
         with pytest.raises(ValueError):
             core_config.load()
+
+
+# ============================================================================
+# #919: live-screener calibration — $5k floor, 1.5% activity, 5c range,
+# 900s in-play window, 300s last-trade ceiling, core/scores parity
+# ============================================================================
+
+
+def test_919_live_defaults_on_both_classes():
+    """#919: calibrated live defaults, identical on core and scoring."""
+    for cfg in (CoreMakerConfig(), ScoringMakerConfig()):
+        assert cfg.filter_live_vol_min_24h_usd == 5000.0
+        assert cfg.filter_live_activity_min_ratio == 0.015
+        assert cfg.filter_live_move_min_range_cents == 5.0
+        assert cfg.filter_live_inplay_vel_lookback_sec == 900.0
+        assert cfg.filter_live_last_trade_max_age_sec == 300.0
+        # Untouched neighbours.
+        assert cfg.filter_live_vel_lookback_sec == 1800.0
+        assert cfg.bot_quote_book_max_spread_usd == 0.06
+
+
+@pytest.mark.parametrize("var", [
+    "FILTER_LIVE_VOL_MIN_24H_USD",
+    "FILTER_LIVE_INPLAY_VEL_LOOKBACK_SEC",
+    "FILTER_LIVE_LAST_TRADE_MAX_AGE_SEC",
+])
+@pytest.mark.parametrize("bad_raw", ["abc", "nan", "inf", "-1", ""])
+def test_919_core_refuses_bad_live_values_keeping_default(monkeypatch, var, bad_raw):
+    """#919: core from_env ignores non-numeric/non-finite/out-of-range live input."""
+    monkeypatch.setenv(var, bad_raw)
+    cfg = CoreMakerConfig.from_env()
+    assert cfg.filter_live_vol_min_24h_usd == 5000.0
+    assert cfg.filter_live_inplay_vel_lookback_sec == 900.0
+    assert cfg.filter_live_last_trade_max_age_sec == 300.0
+
+
+def test_919_core_and_scoring_agree_on_live_vol_floor(monkeypatch):
+    """#919: FILTER_LIVE_VOL_MIN_24H_USD lands identically in both loaders."""
+    monkeypatch.setenv("FILTER_LIVE_VOL_MIN_24H_USD", "5000")
+    assert CoreMakerConfig.from_env().filter_live_vol_min_24h_usd == 5000.0
+    assert scoring_config.load().filter_live_vol_min_24h_usd == 5000.0
+
+    monkeypatch.setenv("FILTER_LIVE_VOL_MIN_24H_USD", "12000.5")
+    assert CoreMakerConfig.from_env().filter_live_vol_min_24h_usd == 12000.5
+    assert scoring_config.load().filter_live_vol_min_24h_usd == 12000.5
+
+
+@pytest.mark.parametrize("var,field,raw,expected", [
+    ("FILTER_LIVE_INPLAY_VEL_LOOKBACK_SEC", "filter_live_inplay_vel_lookback_sec", "600.0", 600.0),
+    ("FILTER_LIVE_LAST_TRADE_MAX_AGE_SEC", "filter_live_last_trade_max_age_sec", "120.0", 120.0),
+    ("FILTER_LIVE_LAST_TRADE_MAX_AGE_SEC", "filter_live_last_trade_max_age_sec", "0", 0.0),
+])
+def test_919_new_live_env_overrides_reach_both_loaders(monkeypatch, var, field, raw, expected):
+    """#919: canonical overrides for the two new fields land on both loaders."""
+    monkeypatch.setenv(var, raw)
+    assert getattr(CoreMakerConfig.from_env(), field) == expected
+    assert getattr(scoring_config.load(), field) == expected
+
+
+@pytest.mark.parametrize("var,field,default", [
+    ("FILTER_LIVE_INPLAY_VEL_LOOKBACK_SEC", "filter_live_inplay_vel_lookback_sec", 900.0),
+    ("FILTER_LIVE_LAST_TRADE_MAX_AGE_SEC", "filter_live_last_trade_max_age_sec", 300.0),
+])
+@pytest.mark.parametrize("bad_raw", ["abc", "nan", "inf", "-5"])
+def test_919_scoring_refuses_bad_new_live_values(monkeypatch, var, field, default, bad_raw):
+    """#919: scoring load() keeps defaults on bad new-field input."""
+    monkeypatch.setenv(var, bad_raw)
+    assert getattr(scoring_config.load(), field) == default
+
+
+def test_919_scoring_refuses_zero_inplay_window(monkeypatch):
+    """#919: a zero in-play window is not a window — the 900s default stands."""
+    monkeypatch.setenv("FILTER_LIVE_INPLAY_VEL_LOOKBACK_SEC", "0")
+    assert scoring_config.load().filter_live_inplay_vel_lookback_sec == 900.0
 
 
 def test_orphan_min_profit_pct_bounds(monkeypatch):

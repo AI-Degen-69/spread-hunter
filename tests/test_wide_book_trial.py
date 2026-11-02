@@ -227,6 +227,32 @@ def test_trial_widens_a_venue_supplied_window_rather_than_replacing_it(
 # --- the gate it exists to move -----------------------------------------------
 
 
+def test_919_book_health_admits_a_book_exactly_at_the_6c_ceiling():
+    # #919: exactly 6c is the ceiling, not above it. Float subtraction lands
+    # a hair above 0.06 (0.53 - 0.47 == 0.06000000000000005), so the bar must
+    # tolerate representation noise below a billionth of a dollar.
+    from core_brain import risk
+
+    cfg = core_config.MakerConfig()
+    book = {"best_bid": 0.47, "best_ask": 0.53, "bids": {0.47: 5000.0}}
+
+    health = risk.book_health(book, cfg)
+
+    assert health.ok, health.reason
+
+
+def test_919_book_health_refuses_a_7c_book_at_the_shipped_ceiling():
+    from core_brain import risk
+
+    cfg = core_config.MakerConfig()
+    book = {"best_bid": 0.465, "best_ask": 0.535, "bids": {0.465: 5000.0}}
+
+    health = risk.book_health(book, cfg)
+
+    assert not health.ok
+    assert "book too wide" in health.reason
+
+
 def test_book_health_refuses_a_wide_book_at_the_shipped_ceiling():
     from core_brain import risk
 

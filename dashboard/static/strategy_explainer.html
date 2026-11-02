@@ -540,7 +540,7 @@
           <tbody>
             <tr>
               <td><code>filter_live_vol_min_24h_usd</code></td>
-              <td><code>$35,000.00</code></td>
+              <td><code>$5,000.00</code></td>
               <td><span class="badge-env">FILTER_LIVE_VOL_MIN_24H_USD</span></td>
               <td><strong>Live Event 24h Volume Floor</strong>: Filters out thin in-play matches to protect against dead-flat, untradable tape during ongoing matches.</td>
             </tr>
@@ -558,13 +558,13 @@
             </tr>
             <tr>
               <td><code>filter_live_activity_min_ratio</code></td>
-              <td><code>0.0% (off)</code></td>
+              <td><code>1.5%</code></td>
               <td><span class="badge-env">FILTER_LIVE_ACTIVITY_MIN_RATIO</span></td>
-              <td><strong>Activity Ratio Bar</strong>: Minimum recent volume turnover relative to total market size (disabled at 0.0%).</td>
+              <td><strong>Activity Ratio Bar</strong>: Minimum recent volume turnover relative to total market size; enforced on non-live markets only (0.0% disables it).</td>
             </tr>
             <tr>
               <td><code>filter_live_move_min_range_cents</code></td>
-              <td><code>2.0¢</code></td>
+              <td><code>5.0¢</code></td>
               <td><span class="badge-env">FILTER_LIVE_MOVE_MIN_RANGE_CENTS</span></td>
               <td><strong>Min Price Range Volatility</strong>: Rejects static, pinned markets lacking two-sided price discovery.</td>
             </tr>

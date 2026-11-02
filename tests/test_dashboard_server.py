@@ -3486,6 +3486,27 @@ def test_max_spread_from_mid_card_shows_configured_value_exactly(client, monkeyp
     assert card["default"] == "$0.15"
 
 
+def test_919_screener_cards_state_the_shipped_defaults(client):
+    """#919 moved three screener defaults; each card's Default column follows.
+
+    The Default column is a literal, so a config change left it claiming the
+    old bar ($35,000 / 0.0% off / 2.0c) while the Value column showed the new
+    one. Derive the expected text from the dataclass so the pin follows any
+    future change to the shipped default.
+    """
+    from core_brain.config import MakerConfig
+
+    data = client.get("/api/parameters").json()
+    cards = {p["key"]: p for p in data["parameters"]}
+
+    assert cards["filter_live_vol_min_24h_usd"]["default"] == (
+        f"${MakerConfig.filter_live_vol_min_24h_usd:,.2f}")
+    assert cards["filter_live_activity_min_ratio"]["default"] == (
+        f"{MakerConfig.filter_live_activity_min_ratio * 100:.1f}%")
+    assert cards["filter_live_move_min_range_cents"]["default"] == (
+        f"{MakerConfig.filter_live_move_min_range_cents:.1f}¢")
+
+
 def test_no_parameter_card_value_restates_the_default_in_another_unit(client):
     """#705 class guard: no card may append a hardcoded "unit restatement" suffix.
 

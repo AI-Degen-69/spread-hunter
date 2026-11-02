@@ -281,7 +281,7 @@ class _BoomOnBooksSession:
 
 def test_evaluate_refuses_a_flat_market_before_fetching_books():
     row = evaluate(_BoomOnBooksSession(), 5.0, _universe_candidate("0xflat"),
-                   volume_24h=250_000.0, source="spread")
+                   volume_24h=125_000.0, source="spread")
 
     assert row["eligible"] is False
     assert "no movement" in row["reject_reason"]
@@ -292,13 +292,13 @@ class _DeadBookSession:
     def get(self, url, params=None, timeout=None):
         if "trades" in url:
             return _Resp([{"timestamp": _time.time(), "price": 0.5,
-                           "size": 4000.0}])
+                           "size": 10000.0}])
         raise OSError("book endpoint down")
 
 
 def test_a_failed_book_fetch_returns_a_rejection_row_not_none():
     row = evaluate(_DeadBookSession(), 5.0, _universe_candidate("0xdead"),
-                   volume_24h=250_000.0, source="spread")
+                   volume_24h=125_000.0, source="spread")
 
     assert row is not None
     assert row["eligible"] is False
@@ -310,7 +310,7 @@ def test_an_eligible_row_carries_movement_and_book_stats():
     trades = [{"timestamp": _time.time(), "price": 0.5, "size": 4000.0}]
     row = evaluate(_FakeSession([], trades=trades), 5.0,
                    _universe_candidate("0xliq"),
-                   volume_24h=250_000.0, source="spread")
+                   volume_24h=125_000.0, source="spread")
 
     assert row["eligible"] is True
     assert row["source"] == "spread"
@@ -339,7 +339,7 @@ def test_spread_market_is_not_rejected_by_venue_reward_spread_limit():
     market["minimum_tick_size"] = 0.001
 
     row = evaluate(_ZeroScoreSession(), 5.0, market,
-                   volume_24h=250_000.0, source="spread", max_spread=0.06)
+                   volume_24h=125_000.0, source="spread", max_spread=0.06)
 
     assert row["eligible"] is True
     assert row["reject_reason"] == ""
@@ -387,7 +387,7 @@ class _PagingSession:
             }]})
         if "trades" in url:
             return _Resp([{"timestamp": _time.time(), "price": 0.5,
-                           "size": 4000.0}])
+                           "size": 10000.0}])
         return _Resp({"bids": [{"price": "0.48", "size": "5000"}],
                       "asks": [{"price": "0.52", "size": "5000"}]})
 
@@ -556,7 +556,7 @@ def test_eligible_row_persists_tags_and_market_type():
     m["venue_category"] = "Politics"
     trades = [{"timestamp": _time.time(), "price": 0.5, "size": 4000.0}]
     row = evaluate(_FakeSession([], trades=trades), 5.0, m,
-                   volume_24h=250_000.0, source="spread")
+                   volume_24h=125_000.0, source="spread")
 
     assert row["eligible"] is True
     assert row["tags"] == ["Politics", "Elections"]
@@ -572,7 +572,7 @@ def test_eligible_row_keeps_a_raw_market_type_key():
     m["marketType"] = "binary"
     trades = [{"timestamp": _time.time(), "price": 0.5, "size": 4000.0}]
     row = evaluate(_FakeSession([], trades=trades), 5.0, m,
-                   volume_24h=250_000.0, source="spread")
+                   volume_24h=125_000.0, source="spread")
 
     assert row["market_type"] == "binary"
 
@@ -612,7 +612,7 @@ def _live_sports_market(cid: str, end_iso: str) -> dict:
 
 
 _KICKOFF_PAST = "2026-09-29T00:15:00Z"
-_TRADES = [{"timestamp": _time.time(), "price": 0.5, "size": 4000.0}]
+_TRADES = [{"timestamp": _time.time(), "price": 0.5, "size": 10000.0}]
 
 
 def test_a_live_market_past_its_end_date_is_not_refused_as_resolved():
@@ -879,7 +879,7 @@ def test_a_country_labeled_candidate_reaches_the_downstream_gates():
 
     # Act
     row = evaluate(_FakeSession([], trades=trades), 5.0, m,
-                   volume_24h=250_000.0, source="spread")
+                   volume_24h=125_000.0, source="spread")
 
     # Assert
     assert row["eligible"] is True
@@ -944,7 +944,7 @@ def test_a_sports_matchup_with_bare_team_group_reaches_downstream_gates():
 
     # Act
     row = evaluate(_FakeSession([], trades=trades), 5.0, m,
-                   volume_24h=250_000.0, source="spread")
+                   volume_24h=125_000.0, source="spread")
 
     # Assert
     assert row["eligible"] is True
@@ -976,7 +976,7 @@ def test_evaluate_reports_the_group_value_on_a_submarket_refusal():
 
     # Act
     row = evaluate(_FakeSession([], trades=_TRADES), 5.0, m,
-                   volume_24h=250_000.0, source="spread")
+                   volume_24h=125_000.0, source="spread")
 
     # Assert
     assert row["eligible"] is False
@@ -1020,7 +1020,7 @@ def test_an_eligible_live_market_past_kickoff_reaches_the_books():
 
     # Act
     row = evaluate(_FakeSession([], trades=_TRADES), 5.0, m,
-                   volume_24h=250_000.0, source="spread")
+                   volume_24h=125_000.0, source="spread")
 
     # Assert
     assert row["eligible"] is True

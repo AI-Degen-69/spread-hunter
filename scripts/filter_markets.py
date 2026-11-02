@@ -108,6 +108,13 @@ MIN_RANGE_CENTS = _CFG.filter_live_move_min_range_cents
 VOLATILITY_WINDOW_SEC = _CFG.filter_live_move_lookback_sec
 VELOCITY_GATE_ENABLED = _CFG.filter_live_gate_velocity_on
 MIN_ACTIVITY_RATIO = _CFG.filter_live_activity_min_ratio
+# In-play tape window (#919). Declared-live rows measure movement over 15
+# minutes so fast-format games are not penalized; every other row keeps the
+# 30-minute window above. The range window stays 2h for all rows.
+INPLAY_WINDOW_SEC = _CFG.filter_live_inplay_vel_lookback_sec
+# Ghost-live recency ceiling (#919). A declared-live row with no trade inside
+# this window is a pre-game book, not in-play momentum. 0 disables the check.
+LIVE_LAST_TRADE_MAX_AGE_SEC = _CFG.filter_live_last_trade_max_age_sec
 
 GAMMA = "https://gamma-api.polymarket.com/markets"
 # The live set. `live=true` is a genuine server-side filter; `closed=false` is
@@ -495,7 +502,8 @@ def activity_ratio_reject(
 
     Fail-open on every unmeasured input (None movement, None/zero volume), the
     same convention `movement_reject` uses: a missing number must never empty
-    the universe. `min_ratio <= 0` disables the gate (shipped default).
+    the universe. `min_ratio <= 0` disables the gate; the shipped bar is
+    1.5% (#919), enforced on non-live rows only.
     """
     if not min_ratio or min_ratio <= 0:
         return False, ""
@@ -1440,6 +1448,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
              min_trades: Optional[int] = None,
              max_last_trade_sec: Optional[float] = None,
              min_range_cents: Optional[float] = None,
+             min_activity_ratio: Optional[float] = None,
              velocity_gate_enabled: Optional[bool] = None,
              now_iso: Optional[str] = None) -> dict:
     """Movement notional score and capital for one market, from its live book.
@@ -1578,8 +1587,15 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     # bad minute at the venue.
     movement_bar = (MIN_MOVEMENT_USD if min_movement_usd is None
                     else min_movement_usd)
+    # ONE live decision, made before the first exit (#919). The venue's
+    # declaration (`_live_event` on merged rows, `live_event` on raw rows)
+    # — never the display `lane`, which controls no admission. Live rows
+    # measure tape over the 15-minute in-play window; every other row keeps
+    # the 30-minute window.
+    is_live_row = bool(m.get("_live_event") or m.get("live_event"))
+    tape_window_sec = INPLAY_WINDOW_SEC if is_live_row else MOVEMENT_WINDOW_SEC
     tape_stats = tape_movement_and_range(
-        session, m.get("condition_id"), window_sec=MOVEMENT_WINDOW_SEC)
+        session, m.get("condition_id"), window_sec=tape_window_sec)
     movement_usd = tape_stats.get("movement_usd")
     range_cents = tape_stats.get("range_cents")
     vel_measured_at = tape_stats.get("measured_at")
@@ -1604,46 +1620,65 @@ def evaluate(session: requests.Session, rate: float, m: dict,
 
     flat, flat_reason = movement_reject(
         movement_usd, min_movement_usd=movement_bar,
-        window_sec=MOVEMENT_WINDOW_SEC)
+        window_sec=tape_window_sec)
     if flat:
         return _reject_row(source, flat_reason, m, volume_24h,
                            movement_usd=movement_usd,
-                           movement_window_sec=MOVEMENT_WINDOW_SEC,
+                           movement_window_sec=tape_window_sec,
                            range_cents=range_cents,
                            velocity_measured_at=vel_measured_at,
                            trade_count=trade_count,
                            volatility_exempt=is_volatility_exempt)
 
     # RELATIVE ACTIVITY RATIO GATE (loose baseline). Sits right after the
-    # absolute movement floor: a market must have BOTH enough recent notional
-    # AND enough of it relative to its total size. This is what separates an
-    # active live game from a flat high-volume politics book. Inert at the
-    # shipped 0.0 threshold; fail-open on any unmeasured input.
-    ratio_rej, ratio_reason = activity_ratio_reject(
-        movement_usd, volume_24h, min_ratio=MIN_ACTIVITY_RATIO,
-        window_sec=MOVEMENT_WINDOW_SEC)
+    # absolute movement floor: a NON-LIVE market must have BOTH enough recent
+    # notional AND enough of it relative to its total size. This is what
+    # separates an active market from a flat high-volume politics book.
+    # Declared-live rows skip it (#919): a 15-minute in-play measurement
+    # cannot match a 30m/24h ratio definition, and the recency gate below is
+    # the live staleness check instead. Fail-open on any unmeasured input.
+    if is_live_row:
+        ratio_rej, ratio_reason = False, ""
+    else:
+        ratio_bar = (MIN_ACTIVITY_RATIO if min_activity_ratio is None
+                     else min_activity_ratio)
+        ratio_rej, ratio_reason = activity_ratio_reject(
+            movement_usd, volume_24h, min_ratio=ratio_bar,
+            window_sec=MOVEMENT_WINDOW_SEC)
     if ratio_rej:
         return _reject_row(source, ratio_reason, m, volume_24h,
                            movement_usd=movement_usd,
-                           movement_window_sec=MOVEMENT_WINDOW_SEC,
+                           movement_window_sec=tape_window_sec,
                            range_cents=range_cents,
                            velocity_measured_at=vel_measured_at,
                            trade_count=trade_count,
                            volatility_exempt=is_volatility_exempt)
 
+    # GHOST-LIVE RECENCY (#919). An explicit per-call ceiling wins; otherwise
+    # declared-live rows use the configured 300s ceiling (0 disables it) and
+    # non-live rows keep no ceiling. Unavailable tape still fails open inside
+    # the helper: a failed fetch must not empty the universe.
+    if max_last_trade_sec is not None:
+        live_ceiling = max_last_trade_sec
+    elif is_live_row and LIVE_LAST_TRADE_MAX_AGE_SEC > 0:
+        live_ceiling = LIVE_LAST_TRADE_MAX_AGE_SEC
+    else:
+        live_ceiling = None
     vel_rejected, vel_reason = velocity_gate_reject(
         tape_stats,
         min_trades=min_trades if min_trades is not None else 0,
-        max_last_trade_sec=max_last_trade_sec,
+        max_last_trade_sec=live_ceiling,
         min_range_cents=min_range_cents if min_range_cents is not None else 0.0,
-        window_sec=MOVEMENT_WINDOW_SEC,
+        window_sec=tape_window_sec,
         enabled=bool(velocity_gate_enabled),
         range_exempt=is_volatility_exempt,
     )
     if vel_rejected:
+        if is_live_row and "stale tape" in vel_reason:
+            vel_reason = f"declared-live {vel_reason}"
         return _reject_row(source, vel_reason, m, volume_24h,
                            movement_usd=movement_usd,
-                           movement_window_sec=MOVEMENT_WINDOW_SEC,
+                           movement_window_sec=tape_window_sec,
                            range_cents=range_cents,
                            velocity_measured_at=vel_measured_at,
                            trade_count=trade_count,
@@ -1786,7 +1821,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         # Recorded on every scanned market, gated or not: the bar for
         # `filter_live_vel_min_usd` is meant to be chosen from this column.
         "movement_usd": movement_usd,
-        "movement_window_sec": MOVEMENT_WINDOW_SEC,
+        "movement_window_sec": tape_window_sec,
         "range_cents": range_cents,
         "velocity_measured_at": vel_measured_at,
         "trade_count": trade_count,
@@ -2928,6 +2963,7 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
                min_trades: Optional[int] = None,
                max_last_trade_sec: Optional[float] = None,
                min_range_cents: Optional[float] = None,
+             min_activity_ratio: Optional[float] = None,
                velocity_gate_enabled: Optional[bool] = None) -> list[dict]:
     """Score candidate jobs across a worker pool, one session per worker.
 
@@ -2952,6 +2988,7 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
                                    min_trades=min_trades,
                                    max_last_trade_sec=max_last_trade_sec,
                                    min_range_cents=min_range_cents,
+                                   min_activity_ratio=min_activity_ratio,
                                    velocity_gate_enabled=velocity_gate_enabled),
                 jobs):
             if r:
@@ -2966,6 +3003,7 @@ def _score_universe(universe: list[dict], *, volume_bar: float,
                     min_trades: Optional[int] = None,
                     max_last_trade_sec: Optional[float] = None,
                     min_range_cents: Optional[float] = None,
+             min_activity_ratio: Optional[float] = None,
                     velocity_gate_enabled: Optional[bool] = None) -> tuple[list[dict], int]:
     """Score the unified universe and return (scored rows, attempted count).
 
@@ -2988,6 +3026,7 @@ def _score_universe(universe: list[dict], *, volume_bar: float,
                      min_trades=min_trades,
                      max_last_trade_sec=max_last_trade_sec,
                      min_range_cents=r_cents,
+                     min_activity_ratio=min_activity_ratio,
                      velocity_gate_enabled=v_enabled)
     return out, len(jobs)
 

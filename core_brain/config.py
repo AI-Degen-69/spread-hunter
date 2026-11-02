@@ -63,7 +63,7 @@ class MakerConfig:
     # SCOPE 1: MARKET FILTERING (MARKET SCREENER)
     # =========================================================================
     # 1. Active / In-Play Markets (Live Sports & Esports)
-    filter_live_vol_min_24h_usd: float = 35_000.0
+    filter_live_vol_min_24h_usd: float = 5000.0
     # THE MOVEMENT GATE (#74, #416). 24h volume says a market traded SOMETIME;
     # it says nothing about whether anything is happening now. A shadow run sat
     # 4.3 hours on a market with 1,777 shares ahead at 0.23 and zero traded --
@@ -90,23 +90,32 @@ class MakerConfig:
     # `movement_reject` passes None, because a failed HTTP call must not empty
     # the universe on one bad minute.
     filter_live_vel_lookback_sec: float = 1800.0        # 30m lookback window
+    # In-play velocity window (#919). Live rows measure tape over 15 minutes so
+    # fast-format BO1 games (30-40 min total) and freshly started matches are
+    # not penalized; non-live rows keep the 30-minute window above.
+    # Operator-tunable via FILTER_LIVE_INPLAY_VEL_LOOKBACK_SEC.
+    filter_live_inplay_vel_lookback_sec: float = 900.0
+    # Ghost-live recency ceiling (#919). A declared-live row with no trade
+    # inside this window is a pre-game book, not in-play momentum.
+    # Operator-tunable via FILTER_LIVE_LAST_TRADE_MAX_AGE_SEC. 0 disables.
+    filter_live_last_trade_max_age_sec: float = 300.0
     filter_live_vel_min_usd: float = 200.0
-    # Volatility / range gate (#416, #434). 2.0c minimum swing over the
+    # Volatility / range gate (#416, #434, #919). 5.0c minimum swing over the
     # volatility window refuses flat markets while active live sports/eSports
     # are exempted and prioritized. That window is distinct from the 30-minute
     # movement window above -- 2h by default. Operator-tunable via
     # FILTER_LIVE_MOVE_MIN_RANGE_CENTS and FILTER_LIVE_MOVE_LOOKBACK_SEC.
     filter_live_move_lookback_sec: float = 7200.0       # 2h lookback window
-    filter_live_move_min_range_cents: float = 2.0
+    filter_live_move_min_range_cents: float = 5.0
     filter_live_gate_velocity_on: bool = True
     # RELATIVE ACTIVITY RATIO GATE (loose baseline). Absolute 24h volume is
     # misleading: a flat $1M politics market and an active $10k live sports game
     # both clear a volume floor, but only one is actually trading. This gate
     # measures RECENT tape against total size: movement_usd (last movement
-    # window) / volume_24h >= threshold. Loose initial threshold (0.0 = off by
-    # default) so the baseline run observes a wide pool before we tighten it.
+    # window) / volume_24h >= threshold. Shipped at 1.5% (#919) to refuse
+    # dormant non-live books; declared-live rows skip it in the screener.
     # Operator-tunable via FILTER_LIVE_ACTIVITY_MIN_RATIO. 0.0 disables the gate.
-    filter_live_activity_min_ratio: float = 0.0
+    filter_live_activity_min_ratio: float = 0.015
 
     # 2. Standard / Pre-Match & Long-Dated Markets
     filter_std_vol_min_24h_usd: float = 125_000.0
@@ -405,6 +414,38 @@ class MakerConfig:
             kw["filter_std_vol_min_24h_usd_trial"] = _bounded_float(
                 "FILTER_STD_VOL_MIN_24H_USD_TRIAL", vtri.strip(), 0.0, float("inf")
             )
+
+        # Live-screener calibration (#919). Same finite/range validation the
+        # scoring loader applies: garbage input keeps the shipped default.
+        live_vol = _env("FILTER_LIVE_VOL_MIN_24H_USD")
+        if live_vol:
+            try:
+                live_vol_parsed = float(live_vol)
+            except ValueError:
+                live_vol_parsed = None
+            if (live_vol_parsed is not None
+                    and math.isfinite(live_vol_parsed) and live_vol_parsed >= 0):
+                kw["filter_live_vol_min_24h_usd"] = live_vol_parsed
+
+        inplay_win = _env("FILTER_LIVE_INPLAY_VEL_LOOKBACK_SEC")
+        if inplay_win:
+            try:
+                inplay_win_parsed = float(inplay_win)
+            except ValueError:
+                inplay_win_parsed = None
+            if (inplay_win_parsed is not None
+                    and math.isfinite(inplay_win_parsed) and inplay_win_parsed > 0):
+                kw["filter_live_inplay_vel_lookback_sec"] = inplay_win_parsed
+
+        live_recency = _env("FILTER_LIVE_LAST_TRADE_MAX_AGE_SEC")
+        if live_recency:
+            try:
+                live_recency_parsed = float(live_recency)
+            except ValueError:
+                live_recency_parsed = None
+            if (live_recency_parsed is not None
+                    and math.isfinite(live_recency_parsed) and live_recency_parsed >= 0):
+                kw["filter_live_last_trade_max_age_sec"] = live_recency_parsed
 
         pr = _env("BOT_RISK_GATE_PAIRS_RULE_ON")
         if pr:

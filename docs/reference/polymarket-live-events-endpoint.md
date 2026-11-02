@@ -170,7 +170,7 @@ The live set is **merged into the universe**, not hunted for. In
   says nothing about when this market decides, so no gate may key off it.
   Every exit it returns (identity, movement, book, eligible, and the
   final/picked projections) carries the row's `lane`.
-- `tradable()` gates it on `filter_live_vol_min_24h_usd` ($35,000) instead of
+- `tradable()` gates it on `filter_live_vol_min_24h_usd` ($5,000) instead of
   the permanent floor.
 
 Nothing in the lane decision has admission power. `market_lane()` (in
