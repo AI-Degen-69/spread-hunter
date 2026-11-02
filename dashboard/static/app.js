@@ -11990,7 +11990,7 @@ function updateLaneBanner(lane, counts = {}, gates = {}) {
     banner.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px">
         <span class="lane-banner-badge regular">🏛️ REGULAR MARKETS LANE</span>
-        <span>Standard binary pipeline: <strong>$50,000</strong> volume floor · <strong>30-day</strong> horizon gate · Strict tape velocity (<strong>≥ $${Number(movementGate).toLocaleString()} / 30m</strong>) and range stability (<strong>≤ 35¢</strong>) · Baseline yield ranking.</span>
+        <span>Standard binary pipeline: <strong>$50,000</strong> volume floor · <strong>14-day</strong> horizon gate · Strict tape velocity (<strong>≥ $${Number(movementGate).toLocaleString()} / 30m</strong>) and range stability (<strong>≤ 35¢</strong>) · Baseline yield ranking.</span>
       </div>
       <div class="mono" style="font-size:11px;color:#38bdf8;white-space:nowrap">${counts.regular != null ? counts.regular : 0} active regular markets</div>
     `;
@@ -12009,8 +12009,8 @@ function getStageHero(key, funnel, lane) {
   const activeLane = lane || (typeof window !== 'undefined' && window.currentMarketLane) || 'regular';
   const volGate = (activeLane === 'live') ? 5000 : gateBar(funnel?.trial_volume_usd, gateBar(funnel?.volume_gate_usd, 125000));
   const depthGate = gateBar(funnel?.trial_depth_usd, gateBar(funnel?.depth_gate_usd, 500));
-  const spreadGate = gateBar(funnel?.trial_spread, gateBar(funnel?.spread_gate, 0.0205));
-  const horizonDays = gateBar(funnel?.horizon_gate_days, 30);
+  const spreadGate = gateBar(funnel?.trial_spread, gateBar(funnel?.spread_gate, 0.02));
+  const horizonDays = gateBar(funnel?.horizon_gate_days, 14);
   // The notional bar gates live rows too -- the live lane is exempt from the
   // range/velocity test, not from this -- so both lanes state the same bar.
   const movementGate = gateBar(funnel?.movement_gate_usd, 200);

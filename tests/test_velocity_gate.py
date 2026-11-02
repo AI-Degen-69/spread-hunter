@@ -333,10 +333,12 @@ def test_evaluate_marks_and_exempts_live_sports():
     from datetime import datetime, timedelta, timezone
 
     t_now = _time.time()
-    # 2 trades with identical price (flat swing: 0.0c), >$200 volume
+    # 2 trades with identical price (flat swing: 0.0c), $4k notional so the
+    # #923 live ratio gate (1.5% of $250k 24h) passes and the test keeps
+    # measuring the volatility exemption, not the ratio gate.
     session = _TapeSession([
-        _trade(t_now - 60, 0.50, 1000.0),
-        _trade(t_now - 120, 0.50, 1000.0),
+        _trade(t_now - 60, 0.50, 4000.0),
+        _trade(t_now - 120, 0.50, 4000.0),
     ])
     # Live sports market with documented live_event: True signal
     m_sports = {
@@ -389,12 +391,13 @@ def _tape_session_with_trades(trades):
 
 def test_919_ghost_live_stale_tape_is_rejected():
     # #919: a declared-live row whose last print is older than the 300s
-    # ceiling is a pre-game book, not in-play momentum.
+    # ceiling is a pre-game book, not in-play momentum. $4k notional clears
+    # the #923 live ratio gate so the refusal is the recency ceiling's.
     import time as _time
     t_now = _time.time()
     session = _tape_session_with_trades([
-        _trade(t_now - 400, 0.50, 2000.0),
-        _trade(t_now - 420, 0.50, 2000.0),
+        _trade(t_now - 400, 0.50, 4000.0),
+        _trade(t_now - 420, 0.50, 4000.0),
     ])
     row = evaluate(
         session, rate=10.0, m=_non_sports_candidate(live=True),
@@ -406,12 +409,13 @@ def test_919_ghost_live_stale_tape_is_rejected():
 
 
 def test_919_fresh_live_tape_is_admitted():
-    # Same shape with a fresh print: admitted, no recency complaint.
+    # Same shape with a fresh print: admitted, no recency complaint. $4k
+    # notional clears the #923 live ratio gate (1.6% of $250k >= 1.5%).
     import time as _time
     t_now = _time.time()
     session = _tape_session_with_trades([
-        _trade(t_now - 60, 0.50, 2000.0),
-        _trade(t_now - 120, 0.50, 2000.0),
+        _trade(t_now - 60, 0.50, 4000.0),
+        _trade(t_now - 120, 0.50, 4000.0),
     ])
     row = evaluate(
         session, rate=10.0, m=_non_sports_candidate(live=True),
@@ -444,8 +448,8 @@ def test_919_explicit_ceiling_wins_over_the_live_default():
     import time as _time
     t_now = _time.time()
     stale = [
-        _trade(t_now - 400, 0.50, 2000.0),
-        _trade(t_now - 420, 0.50, 2000.0),
+        _trade(t_now - 400, 0.50, 4000.0),
+        _trade(t_now - 420, 0.50, 4000.0),
     ]
     loose = evaluate(
         _tape_session_with_trades(stale), rate=10.0,

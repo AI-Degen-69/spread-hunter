@@ -308,13 +308,34 @@ def test_919_ratio_gate_admits_active_non_live_at_shipped_bar():
     assert "low activity ratio" not in row.get("reject_reason", "")
 
 
-def test_919_live_row_skips_the_ratio_gate():
-    """#919: the same dormant-level ratio on a live row is not refused."""
+def test_923_live_row_no_longer_skips_the_ratio_gate():
+    """#923: the same dormant-level ratio on a live row IS refused.
+
+    #919 skipped declared-live rows (a 15-minute in-play tape cannot match a
+    30m/24h ratio definition). The desk now quotes stricter: $1k recent on
+    $250k 24h (0.4% < 1.5%) is dormant on a live row too.
+    """
     import time as _time
     from scripts.filter_markets import evaluate
     t_now = _time.time()
     session = _BookTapeSession([
         _tape_trade(t_now - 60), _tape_trade(t_now - 120),
+    ])
+    row = evaluate(session, 5.0, _screen_candidate(live=True, sports=True),
+                   volume_24h=250_000.0, source="spread",
+                   velocity_gate_enabled=True)
+    assert row.get("eligible") is False
+    assert "low activity ratio" in row.get("reject_reason", "")
+
+
+def test_923_active_live_row_clears_the_ratio_gate():
+    """#923: a genuinely trading live row still passes at the same bar."""
+    import time as _time
+    from scripts.filter_markets import evaluate
+    t_now = _time.time()
+    session = _BookTapeSession([
+        _tape_trade(t_now - 60, size=4000.0),
+        _tape_trade(t_now - 120, size=4000.0),
     ])
     row = evaluate(session, 5.0, _screen_candidate(live=True, sports=True),
                    volume_24h=250_000.0, source="spread",

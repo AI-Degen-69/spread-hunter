@@ -48,7 +48,7 @@ class MakerConfig:
     # 0-1 scale; the env value is cents. The quoting engine refuses or skips a
     # quote outside the window and clamps the dynamic offset to it. It is NOT a
     # filter on which markets we quote -- `filter_common_spread_max_usd`
-    # (2.05c) is the wide-book rejection bar. The two
+    # (2.00c) is the wide-book rejection bar. The two
     # shipped defaults are deliberate: 0.15 for the engine, 0.045 for the
     # picker, whose copy the ranker does not gate on; both loaders read the
     # same variable the same way.
@@ -122,8 +122,13 @@ class MakerConfig:
     filter_std_vol_min_24h_usd_trial: float | None = None
     filter_common_vol_min_top3_depth_usd: float = 500.0
     filter_common_vol_min_top3_depth_usd_trial: float | None = None
-    filter_std_spread_share_pct: float = 41.0 / 120.0
-    filter_std_time_max_days_to_resolve: float = 30.0
+    # The picking bar is exactly one third of the 6c book window: 2.00c (#923).
+    # `41.0 / 120.0` (2.05c, #572) admitted books a hair wider than the 2c
+    # max the desk quotes; 1/3 lands the derived ceiling exactly on it.
+    filter_std_spread_share_pct: float = 1.0 / 3.0
+    # Cut 30 -> 14 days (#923): a two-week quoting horizon. Long-dated books
+    # tie up the pair past any observation window the run can actually use.
+    filter_std_time_max_days_to_resolve: float = 14.0
     filter_std_rank_sample_window_sec: float = 1800.0
     filter_std_rerank_interval_sec: float = 600.0
     # THE MAKER-QUEUE BAR (#652 moved this from `scoring/config.py`; the picker
@@ -304,7 +309,7 @@ class MakerConfig:
     def filter_common_spread_max_usd(self) -> float:
         """The picking bar: the live gate times the picking share (#572).
 
-        Read-only, and USD on the 0-1 price scale (`0.0205` is 2.05c), so the
+        Read-only, and USD on the 0-1 price scale (`0.02` is 2.00c), so the
         name states the unit its readers need -- the dashboard multiplies by
         100 to print it as cents. Same scale as `bot_quote_price_band_min_usd`
         (0.10). One derivation, so the rehearsal trial pass-through and the

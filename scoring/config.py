@@ -64,7 +64,7 @@ class MakerConfig(CoreMakerConfig):
     # 0-1 scale; the env value is cents. The quoting engine refuses or skips a
     # quote outside the window and clamps the dynamic offset to it. It is NOT a
     # filter on which markets we quote -- `filter_common_spread_max_usd`
-    # (2.05c) is the wide-book rejection bar. The two
+    # (2.00c) is the wide-book rejection bar. The two
     # shipped defaults are deliberate: 0.15 for the engine, 0.045 for the
     # picker, whose copy the ranker does not gate on; both loaders read the
     # same variable the same way.
@@ -203,7 +203,7 @@ def load() -> MakerConfig:
     # loads the engine config unguarded, so it fails instead of showing a made-up
     # number -- #709 owns turning that into a readable message.
     #
-    # NOT the book gate. `filter_common_spread_max_usd` (2.05c) is the bid-ask
+    # NOT the book gate. `filter_common_spread_max_usd` (2.00c) is the bid-ask
     # WIDTH wide books are refused on, derived from
     # `bot_quote_book_max_spread_usd * filter_std_spread_share_pct`. It must
     # never read this value: a distance-from-mid window and a bid-ask width are
