@@ -100,7 +100,7 @@ class MakerConfig:
     # Operator-tunable via FILTER_LIVE_LAST_TRADE_MAX_AGE_SEC. 0 disables.
     filter_live_last_trade_max_age_sec: float = 300.0
     filter_live_vel_min_usd: float = 200.0
-    # Volatility / range gate (#416, #434). 2.0c minimum swing over the
+    # Volatility / range gate (#416, #434, #919). 5.0c minimum swing over the
     # volatility window refuses flat markets while active live sports/eSports
     # are exempted and prioritized. That window is distinct from the 30-minute
     # movement window above -- 2h by default. Operator-tunable via
@@ -112,8 +112,8 @@ class MakerConfig:
     # misleading: a flat $1M politics market and an active $10k live sports game
     # both clear a volume floor, but only one is actually trading. This gate
     # measures RECENT tape against total size: movement_usd (last movement
-    # window) / volume_24h >= threshold. Loose initial threshold (0.0 = off by
-    # default) so the baseline run observes a wide pool before we tighten it.
+    # window) / volume_24h >= threshold. Shipped at 1.5% (#919) to refuse
+    # dormant non-live books; declared-live rows skip it in the screener.
     # Operator-tunable via FILTER_LIVE_ACTIVITY_MIN_RATIO. 0.0 disables the gate.
     filter_live_activity_min_ratio: float = 0.015
 

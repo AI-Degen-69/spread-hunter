@@ -11982,7 +11982,7 @@ function updateLaneBanner(lane, counts = {}, gates = {}) {
     banner.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px">
         <span class="lane-banner-badge live">⚡ LIVE SPORTS &amp; ESPORTS LANE</span>
-        <span>Dedicated in-play pipeline: <strong>$35,000</strong> volume floor · <strong>Volatility Exemption</strong> (in-play score swings allowed, velocity friction bypassed) · <strong>Live Priority Boost</strong> sorted to the top.</span>
+        <span>Dedicated in-play pipeline: <strong>$5,000</strong> volume floor · <strong>Volatility Exemption</strong> (in-play score swings allowed, velocity friction bypassed) · <strong>Live Priority Boost</strong> sorted to the top.</span>
       </div>
       <div class="mono" style="font-size:11px;color:#c084fc;white-space:nowrap">${counts.live != null ? counts.live : 0} active live markets</div>
     `;
@@ -11998,7 +11998,7 @@ function updateLaneBanner(lane, counts = {}, gates = {}) {
     banner.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px">
         <span class="lane-banner-badge all">🌐 ALL CANDIDATES</span>
-        <span>Unified screening universe: Dual-pipeline view displaying both Regular ($50k floor) and Live Sports ($35k floor + Volatility Exempt) fleets side-by-side.</span>
+        <span>Unified screening universe: Dual-pipeline view displaying both Regular ($50k floor) and Live Sports ($5k floor + Volatility Exempt) fleets side-by-side.</span>
       </div>
       <div class="mono" style="font-size:11px;color:var(--text-secondary);white-space:nowrap">${counts.total != null ? counts.total : 0} total quoting markets</div>
     `;
@@ -12007,7 +12007,7 @@ function updateLaneBanner(lane, counts = {}, gates = {}) {
 
 function getStageHero(key, funnel, lane) {
   const activeLane = lane || (typeof window !== 'undefined' && window.currentMarketLane) || 'regular';
-  const volGate = (activeLane === 'live') ? 35000 : gateBar(funnel?.trial_volume_usd, gateBar(funnel?.volume_gate_usd, 125000));
+  const volGate = (activeLane === 'live') ? 5000 : gateBar(funnel?.trial_volume_usd, gateBar(funnel?.volume_gate_usd, 125000));
   const depthGate = gateBar(funnel?.trial_depth_usd, gateBar(funnel?.depth_gate_usd, 500));
   const spreadGate = gateBar(funnel?.trial_spread, gateBar(funnel?.spread_gate, 0.0205));
   const horizonDays = gateBar(funnel?.horizon_gate_days, 30);
@@ -12030,13 +12030,13 @@ function getStageHero(key, funnel, lane) {
       return {
         param: activeLane === 'live' ? '⚡ IN-PLAY VOLATILITY' : 'TEST: RECENT TRADED NOTIONAL',
         value: activeLane === 'live'
-          ? `≥ $${Number(movementGate).toLocaleString()} / 30m · VOLATILITY EXEMPT`
+          ? `≥ $${Number(movementGate).toLocaleString()} / 15m · VOLATILITY EXEMPT`
           : `≥ $${Number(movementGate).toLocaleString()} / 30m · Strict Range (≤ 35¢)`,
       };
     case 'volume':
       return {
         param: 'TEST: 24H TRADING VOLUME',
-        value: activeLane === 'live' ? '≥ $35,000 / 24h (Live Floor)' : `≥ $${Number(volGate).toLocaleString()} / 24h (Standard Floor)`,
+        value: activeLane === 'live' ? '≥ $5,000 / 24h (Live Floor)' : `≥ $${Number(volGate).toLocaleString()} / 24h (Standard Floor)`,
       };
     case 'depth':
       return {

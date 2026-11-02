@@ -286,7 +286,7 @@ def load() -> MakerConfig:
         except ValueError:
             pass
     # RELATIVE ACTIVITY RATIO GATE (loose baseline). movement_usd / volume_24h.
-    # 0.0 (shipped default) disables it. Loose-baseline runs lower the absolute
+    # Shipped at 0.015 (#919); 0.0 disables it. Loose-baseline runs lower the absolute
     # volume floor AND turn this on, so relative recent activity -- not raw 24h
     # size -- is what admits a market.
     aratio = _env("FILTER_LIVE_ACTIVITY_MIN_RATIO")

@@ -502,7 +502,8 @@ def activity_ratio_reject(
 
     Fail-open on every unmeasured input (None movement, None/zero volume), the
     same convention `movement_reject` uses: a missing number must never empty
-    the universe. `min_ratio <= 0` disables the gate (shipped default).
+    the universe. `min_ratio <= 0` disables the gate; the shipped bar is
+    1.5% (#919), enforced on non-live rows only.
     """
     if not min_ratio or min_ratio <= 0:
         return False, ""
