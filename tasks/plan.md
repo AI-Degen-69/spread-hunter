@@ -162,7 +162,7 @@ switch to it, so planning artifacts are written here for carry-over.)
   union-equals-mixed checks, conflict-matrix checks, pre-limit filtering
   checks, and worker-env isolation checks.
 
-### Task 4 [Debug] — 6¢ spread-stop boundary + recovery lock-in (XS)
+### Task 4 [Debug] — 6¢ spread-stop boundary + recovery lock-in (XS) [x]
 - **Target files:** `core_brain/risk.py` (conditional),
   `tests/test_wide_book_trial.py`, `tests/test_trader_loop.py`.
 - **Build:** tests first — exact-6¢ pass (e.g. 0.47/0.53 bid/ask) + 7¢

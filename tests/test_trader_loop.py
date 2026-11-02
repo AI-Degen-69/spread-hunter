@@ -1485,6 +1485,48 @@ class TestRefusedHold:
         assert calls["cancelled"] == [["o-up", "o-dn"]]
         assert calls["submitted"] == []
 
+    def test_919_spread_stop_halts_and_resumes_quoting(self):
+        # #919: the 6c spread stop through the real `book_health` gate.
+        # Tight (5c) -> intents flow and nothing cancels; wide (7c) -> the
+        # resting entry bids cancel; tight again -> quoting resumes.
+        from core_brain.risk import book_health
+
+        state = {"book": {"best_bid": 0.47, "best_ask": 0.52,
+                           "bids": {0.47: 500}, "asks": {0.52: 500}}}
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            health = book_health(dict(state["book"]), cfg)
+            if not health.ok:
+                return [], f"UP/DOWN: {health.reason} -- waiting for liquidity"
+            return ([_intent(), _intent(side="DOWN", token="tok-dn",
+                                       price=0.40)], "")
+
+        calls = {"submitted": [], "cancelled": []}
+        seam = self._seam(decide, calls)
+
+        def visit():
+            return run(
+                seam, interval=0.0, once=True, live=True,
+                markets=[FakeMarket("0xabc")],
+                sleep_fn=lambda s: None,
+            )
+
+        tight = visit()
+        assert tight[0].status == "QUOTED"
+        assert calls["cancelled"] == []
+
+        state["book"] = {"best_bid": 0.47, "best_ask": 0.54,
+                          "bids": {0.47: 500}, "asks": {0.54: 500}}
+        wide = visit()
+        assert wide[0].status == "DECLINED"
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
+
+        state["book"] = {"best_bid": 0.47, "best_ask": 0.52,
+                          "bids": {0.47: 500}, "asks": {0.52: 500}}
+        recovered = visit()
+        assert recovered[0].status == "QUOTED"
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
+
     def test_refusal_cancels_on_the_first_cycle(self):
         calls = {"submitted": [], "cancelled": []}
         seam = self._seam(

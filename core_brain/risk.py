@@ -305,7 +305,10 @@ def book_health(book: dict, cfg) -> BookHealth:
     # the two are equal; keeping the normalised form means a future reordering
     # cannot silently reintroduce the negative-width hole.
     spread = hi - lo
-    if spread > cfg.bot_quote_book_max_spread_usd:
+    # #919: exactly at the ceiling is quotable. Float subtraction can land a
+    # hair above the bar (0.53 - 0.47 == 0.06000000000000005), so representation
+    # noise under a billionth of a dollar does not count as width.
+    if spread > cfg.bot_quote_book_max_spread_usd + 1e-9:
         return BookHealth(False,
                           f"book too wide {100*spread:.1f}c > "
                           f"{100*cfg.bot_quote_book_max_spread_usd:.1f}c",
