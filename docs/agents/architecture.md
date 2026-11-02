@@ -202,10 +202,10 @@ Local working state (`data/`, `runtime/`, `reports/`) is governed by `core_brain
 | Production registry | `data/orders.db*` | **Retained forever** | Hard-protected; refused by `assert_not_protected_store()` |
 | Price tape | `data/price_tape.db*` | **Retained** | Excluded from automated deletion |
 | Active protected runs | `*01_shadow*` | **Retained** | Protected by `user_protected_patterns` |
-| Rehearsal statistics | `data/stats_*.db*`, `*shadow*` | 14 days | Preserves newest store per family unconditionally |
-| Runtime state | `runtime/*`, `run/*` | 14 days | Stale logs/heartbeats pruned |
-| Statistics reports | `reports/*_statistics_report*` | 14 days | Pruned beyond 14 days |
-| Archive files | `data/archive/*` | 14 days | Pruned beyond 14 days |
+| Rehearsal statistics | `data/stats_*.db*`, `*shadow*` | 7 days | Preserves newest store per family unconditionally |
+| Runtime state | `runtime/*`, `run/*` | 7 days | Stale logs/heartbeats pruned |
+| Statistics reports | `reports/*_statistics_report*` | 7 days | Pruned beyond 7 days |
+| Archive files | `data/archive/*` | 7 days | Pruned beyond 7 days |
 | Orphan WAL/SHM | `data/*.db-wal`, `data/*.db-shm` | Immediate cleanup | Pruned when parent `.db` is missing |
 
 Audit and cleanup commands:

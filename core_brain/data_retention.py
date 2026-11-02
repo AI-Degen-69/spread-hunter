@@ -45,7 +45,7 @@ class AuditAction(str, Enum):
 class DataRetentionPolicy:
     """Configurable retention thresholds and protection rules."""
 
-    retention_days: int = 14
+    retention_days: int = 7
     protected_filenames: tuple[str, ...] = ("orders.db", "orders.db-wal", "orders.db-shm")
     excluded_filenames: tuple[str, ...] = ("price_tape.db", "price_tape.db-wal", "price_tape.db-shm")
     user_protected_patterns: tuple[str, ...] = ()
@@ -803,7 +803,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prune", action="store_true", help="Execute cleanup of eligible files")
     parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=True, help="Simulate prune without deleting (default)")
     parser.add_argument("--no-dry-run", dest="dry_run", action="store_false", help="Perform real irreversible deletion")
-    parser.add_argument("--days", type=int, default=14, help="Retention threshold in days (default: 14)")
+    parser.add_argument("--days", type=int, default=7, help="Retention threshold in days (default: 7)")
     parser.add_argument("--output-inventory", type=str, default="", help="Write inventory markdown to file path")
     parser.add_argument("--json", dest="json_output", action="store_true", help="Print audit results as JSON")
 

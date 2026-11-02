@@ -3015,7 +3015,7 @@ function Invoke-StorageAudit {
         $cNeutral = Get-ProfileColor -Name Neutral
 
         Write-Host "  Retention window : " -ForegroundColor $cNeutral -NoNewline
-        Write-Host "14 days" -ForegroundColor $cInfo -NoNewline
+        Write-Host "7 days" -ForegroundColor $cInfo -NoNewline
         Write-Host " | User protected patterns : " -ForegroundColor $cNeutral -NoNewline
         Write-Host "None" -ForegroundColor $cText
 

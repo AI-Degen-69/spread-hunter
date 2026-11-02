@@ -111,6 +111,42 @@ def test_retention_days_threshold(tmp_path: Path):
     assert old_item.action == AuditAction.DELETE
 
 
+def test_default_retention_window_is_seven_days(tmp_path: Path):
+    """The shipped window is 7 days: an 8-day-old file is prunable, a 6-day-old one is not."""
+    assert DataRetentionPolicy().retention_days == 7
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    fresh_file = data_dir / "stats_10-01_10-00_shadow-01.db"
+    fresh_file.write_text("fresh")
+    fresh_time = time.time() - (6 * 86400)
+    os.utime(fresh_file, (fresh_time, fresh_time))
+
+    stale_file = data_dir / "stats_10-02_10-00_shadow-02.db"
+    stale_file.write_text("stale")
+    stale_time = time.time() - (8 * 86400)
+    os.utime(stale_file, (stale_time, stale_time))
+
+    policy = DataRetentionPolicy(preserve_newest_per_family=False)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    fresh_item = next(it for it in items if it.path.name == fresh_file.name)
+    stale_item = next(it for it in items if it.path.name == stale_file.name)
+
+    assert fresh_item.action == AuditAction.KEEP
+    assert stale_item.action == AuditAction.DELETE
+
+
+def test_cli_reports_seven_day_window(capsys: pytest.CaptureFixture[str]):
+    """The CLI default must match the policy default, not drift away from it."""
+    from core_brain.data_retention import main
+
+    assert main(["--audit"]) == 0
+    assert "Retention Window: 7 days" in capsys.readouterr().out
+
+
+
 def test_preserve_newest_per_family_even_if_old(tmp_path: Path):
     """If all rehearsal files are >14 days old, the newest one is preserved when configured."""
     data_dir = tmp_path / "data"
