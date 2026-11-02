@@ -305,6 +305,24 @@ def load() -> MakerConfig:
                 kw["filter_live_vol_min_24h_usd"] = vl
         except ValueError:
             pass
+    # Live-screener calibration (#919): 15-minute in-play tape window and
+    # 5-minute ghost-live recency ceiling. No HUNTER_* aliases.
+    inplay_win = _env("FILTER_LIVE_INPLAY_VEL_LOOKBACK_SEC")
+    if inplay_win:
+        try:
+            window = float(inplay_win)
+            if math.isfinite(window) and window > 0:
+                kw["filter_live_inplay_vel_lookback_sec"] = window
+        except ValueError:
+            pass
+    live_recency = _env("FILTER_LIVE_LAST_TRADE_MAX_AGE_SEC")
+    if live_recency:
+        try:
+            ceiling = float(live_recency)
+            if math.isfinite(ceiling) and ceiling >= 0:
+                kw["filter_live_last_trade_max_age_sec"] = ceiling
+        except ValueError:
+            pass
     vol = _env("FILTER_STD_VOL_MIN_24H_USD")
     if vol:
         try:

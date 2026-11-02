@@ -112,7 +112,7 @@ def test_preset_off_scores_with_defaults(monkeypatch):
     cfg = scoring_config.load()
     assert cfg.bot_quote_book_max_spread_from_mid == PICKER_PROFILE["bot_quote_book_max_spread_from_mid"]
     assert cfg.filter_std_vol_min_24h_usd == 125_000.0
-    assert cfg.filter_live_activity_min_ratio == 0.0
+    assert cfg.filter_live_activity_min_ratio == 0.015
 
 
 def test_preset_on_loads_cleanly_and_keeps_picker_window(monkeypatch):
