@@ -475,7 +475,7 @@ class TestMakerConfigNamingStandardization:
         assert cfg.bot_quote_alloc_couple_pct == 0.02
         assert cfg.bot_quote_window_max_pct == 0.50
         assert cfg.bot_eval_stat_gate_bankroll_pct == 0.02
-        assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
+        assert cfg.filter_std_spread_share_pct == 1.0 / 3.0
 
     def test_read_aliases_scoring_config(self):
         from scoring.config import MakerConfig as ScoringMakerConfig
@@ -489,7 +489,7 @@ class TestMakerConfigNamingStandardization:
         assert cfg.bot_quote_book_min_depth_shares == 300.0
         assert cfg.bot_risk_hedge_emergency_pct == 0.75
         assert cfg.bot_quote_window_max_pct == 0.50
-        assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
+        assert cfg.filter_std_spread_share_pct == 1.0 / 3.0
 
     def test_alias_set_raises_attribute_error(self):
         from core_brain.config import MakerConfig
