@@ -1502,6 +1502,27 @@ def test_positions_renderers_wire_activity_pill():
     assert "stitch-pnl-total" not in painter
 
 
+def test_paint_live_marks_price_line_helper_is_defined():
+    """The live repaint's CURRENT PRICE helper exists and matches the render line.
+
+    The repaint calls `stitchLegPriceInner` to rewrite each rung in place. That
+    helper used to be referenced but never defined, so a live mark tick threw a
+    TypeError on the positions surface. The same inner HTML must feed both the
+    render and the repaint so the two can never print different copies.
+    """
+    app_js = _read_static("app.js")
+
+    painter = _js_function_body(app_js, "paintLiveMarks")
+    assert "stitchLegPriceInner(" in painter
+
+    # The helper the repaint calls must actually exist (regression: undefined ref).
+    assert "function stitchLegPriceInner(" in app_js
+
+    # Render wraps the identical inner HTML in the rung div with data-leg.
+    line = _js_function_body(app_js, "stitchLegPriceLine")
+    assert "stitchLegPriceInner(e)" in line
+
+
 def test_styles_css_reduced_motion_covers_breathing_pills():
     """The 1 Hz breathing dots stay opt-out for reduced-motion users (#656)."""
     css = _read_static("styles.css")

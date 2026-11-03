@@ -10048,7 +10048,7 @@ function dualLegLine({ side, size, price, cost, emptyLabel, counterpart, resting
     if (resting && Number(resting.size) > 0) {
       return `<div class="stitch-quote-rung">`
         + `<span class="stitch-leg-pill missing">${side}</span>`
-        + `<span class="stitch-quote-resting">${fmtShares(Number(resting.size))} @ ${fmtPrice(Number(resting.price))}</span>`
+        + `<span class="stitch-quote-resting">${fmtShares(Number(resting.size))} resting @ ${fmtPrice(Number(resting.price))}</span>`
         + `</div>`;
     }
     // Counterpart fate for an absent leg: a filled counterpart holds a
@@ -10566,17 +10566,19 @@ function stitchBothLegMarks(overlay) {
   ];
 }
 
-function stitchLegPriceLine(e) {
-  const dir = e.leg === 'YES' ? 'up' : 'down';
+function stitchLegPriceInner(e) {
   const missing = (e.mid === null || e.mid === undefined);
   const cls = missing ? 'stitch-cur-val-missing'
     : (e.leg === 'YES' ? 'stitch-quote-up' : 'stitch-quote-down');
   const val = missing ? '--' : fmtPrice(e.mid);
-  return `<div class="stitch-quote-rung stitch-cur-${dir}" data-leg="${e.leg}">`
-    + `<span class="stitch-cur-leg">${e.leg}</span>`
+  return `<span class="stitch-cur-leg">${e.leg}</span>`
     + `<span class="${cls}">${val}</span>`
     + `${e.live ? '<span class="stitch-cur-live" aria-hidden="true">●</span>' : '<span></span>'}`
-    + `</div>`;
+}
+
+function stitchLegPriceLine(e) {
+  const dir = e.leg === 'YES' ? 'up' : 'down';
+  return `<div class="stitch-quote-rung stitch-cur-${dir}" data-leg="${e.leg}">${stitchLegPriceInner(e)}</div>`;
 }
 
 /* One pair value, one parenthesised percentage, par-based mark. Shared by the
