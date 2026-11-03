@@ -51,8 +51,7 @@ def _cfg(**kw) -> MakerConfig:
     base = dict(bot_pos_objective="rewards", bot_quote_size_mode="shares", bot_quote_size_shares=120,
                 bot_quote_size_min_shares=50, bot_quote_spread_static_offset_cents=0.02,
                 bot_quote_price_band_min_usd=0.10, bot_quote_price_band_max_usd=0.90,
-                bot_pos_price_max_pair_cost_usd=0.99, bot_pos_price_max_complete_usd=1.00,
-                bot_pos_price_max_entry_usd=1.00)
+                bot_pos_price_max_pair_cost_usd=0.99, bot_pos_price_max_complete_usd=1.00)
     base.update(kw)
     return MakerConfig(**base)
 
@@ -543,14 +542,15 @@ def test_retired_reward_vocabulary_stays_out_of_quotes():
 
 
 class TestMaxEntryPriceCeiling:
-    def test_default_entry_ceiling_blocks_quotes_above_60c(self):
-        # Shipped default MakerConfig has bot_pos_price_max_entry_usd = 0.60
+    def test_default_entry_ceiling_blocks_quotes_above_60c_when_rider_on(self):
+        # In live sports / trailing rider mode, entry ceiling caps quotes at bot_pos_price_max_entry_usd
         cfg = MakerConfig(
             bot_pos_objective="spread_capture",
             bot_quote_size_mode="shares",
             bot_quote_size_shares=100,
             bot_quote_size_min_shares=50,
             bot_quote_spread_static_offset_cents=0.02,
+            bot_risk_trailing_rider_on=True,
             bot_pos_price_max_entry_usd=0.60,
         )
         # UP mid 0.20 (rests at 0.18 <= 0.60), DOWN mid 0.80 (rests at 0.77 > 0.60)
@@ -561,6 +561,22 @@ class TestMaxEntryPriceCeiling:
         assert intents == []
         assert "max entry 0.600" in why or "flat book: single UP quote refused" in why
 
+    def test_quotes_above_ceiling_allowed_when_rider_and_sports_off(self):
+        # General spread-hunter markets retain standard pair merge rules without ceiling
+        cfg = MakerConfig(
+            bot_pos_objective="spread_capture",
+            bot_quote_size_mode="shares",
+            bot_quote_size_shares=100,
+            bot_quote_size_min_shares=50,
+            bot_quote_spread_static_offset_cents=0.02,
+            bot_risk_trailing_rider_on=False,
+            bot_pos_price_max_entry_usd=0.60,
+        )
+        up = _book(0.20, UP)
+        down = _book(0.80, DOWN)
+        intents, why = decide_quotes(cfg, up, down, Inventory(), 1e9, None)
+        assert len(intents) == 2
+
     def test_quotes_below_entry_ceiling_are_placed(self):
         cfg = MakerConfig(
             bot_pos_objective="spread_capture",
@@ -568,6 +584,7 @@ class TestMaxEntryPriceCeiling:
             bot_quote_size_shares=100,
             bot_quote_size_min_shares=50,
             bot_quote_spread_static_offset_cents=0.02,
+            bot_risk_trailing_rider_on=True,
             bot_pos_price_max_entry_usd=0.60,
         )
         # Both legs mid 0.50 (rest at 0.48 <= 0.60)
@@ -585,6 +602,7 @@ class TestMaxEntryPriceCeiling:
             bot_quote_size_shares=100,
             bot_quote_size_min_shares=50,
             bot_quote_spread_static_offset_cents=0.02,
+            bot_risk_trailing_rider_on=True,
             bot_pos_price_max_entry_usd=0.80,
         )
         # UP mid 0.25 (0.23), DOWN mid 0.75 (0.73 <= 0.80)
