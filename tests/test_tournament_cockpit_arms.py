@@ -1425,7 +1425,47 @@ def test_finished_or_stale_heartbeat_does_not_claim_running_setup(tmp_path, monk
     hb_file.write_text(json.dumps({
         "pid": os.getpid(),
         "run_id": "shadow-929-t01",
-        "heartbeat_ts": time.time() - 120.0,
+        "heartbeat_ts": time.time() - 150.0,
         "finished": False,
     }), encoding="utf-8")
     assert cockpit.resolve_running_tourney_key() is None
+
+
+def test_dead_pid_heartbeat_is_ignored(tmp_path, monkeypatch):
+    """A fresh heartbeat whose recorded PID is not alive is skipped."""
+    import time
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    monkeypatch.setattr(cockpit, "_is_pid_alive", lambda pid: False)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    hb_file = runtime_dir / "shadow_run_shadow-929-t01.json"
+    hb_file.write_text(json.dumps({
+        "pid": 999999,
+        "run_id": "shadow-929-t01",
+        "heartbeat_ts": time.time(),
+        "finished": False,
+    }), encoding="utf-8")
+    assert cockpit.resolve_running_tourney_key() is None
+
+
+def test_running_arm_matched_via_plan_record(tmp_path, monkeypatch):
+    """An arm with no issue in its run_id is matched to its tournament issue via plan.json."""
+    import os
+    import time
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    # Plan for 929 naming arm-a
+    _record(tmp_path, "i929-tournament-1m_2026-11-03T17-15", [
+        {"name": "arm-a", "run_id": "arm-a", "db_path": "data/arma.db", "dash_port": 8801}
+    ])
+    # Active heartbeat for arm-a without issue in run_id
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    hb_file = runtime_dir / "shadow_run_arm-a.json"
+    hb_file.write_text(json.dumps({
+        "pid": os.getpid(),
+        "run_id": "arm-a",
+        "heartbeat_ts": time.time(),
+        "finished": False,
+        "db_path": "data/arma.db",
+    }), encoding="utf-8")
+    assert cockpit.resolve_running_tourney_key() == "929"

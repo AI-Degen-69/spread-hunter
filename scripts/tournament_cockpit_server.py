@@ -344,6 +344,9 @@ def _tournament_root() -> Path:
     return ROOT / "data" / "tournaments"
 
 
+HEARTBEAT_MAX_AGE_SEC = 120.0
+
+
 def _runtime_root() -> Path:
     """The runtime root, read through this module's ROOT so it is patchable."""
     return ROOT / "runtime"
@@ -418,7 +421,7 @@ def resolve_running_tourney_key() -> Optional[str]:
                 if not isinstance(hb, dict) or hb.get("finished", False):
                     continue
                 hb_ts = hb.get("heartbeat_ts")
-                if hb_ts is None or (now - float(hb_ts)) > 60.0:
+                if hb_ts is None or (now - float(hb_ts)) > HEARTBEAT_MAX_AGE_SEC:
                     continue
                 pid = hb.get("pid")
                 if pid and not _is_pid_alive(pid):
@@ -437,24 +440,25 @@ def resolve_running_tourney_key() -> Optional[str]:
     # 2. Check each tournament's plan in data/tournaments to see if its arms are running
     tourn_dir = _tournament_root()
     if tourn_dir.is_dir():
-        candidates: list[tuple[tuple[str, str], Path]] = []
+        candidates: list[tuple[tuple[str, str], Path, Optional[str]]] = []
         try:
             for candidate in tourn_dir.iterdir():
                 parsed = parse_tournament_run_dir_name(candidate)
                 plan_path = candidate / "plan.json"
                 if parsed is not None and plan_path.is_file():
-                    candidates.append(((parsed["stamp"], candidate.name), plan_path))
+                    folder_issue = str(parsed["issue"]) if parsed.get("issue") is not None else None
+                    candidates.append(((parsed["stamp"], candidate.name), plan_path, folder_issue))
         except OSError:
             candidates = []
         candidates.sort(key=lambda c: c[0], reverse=True)
 
-        for _, plan_path in candidates:
+        for _, plan_path, folder_issue in candidates:
             try:
                 with open(plan_path, "r", encoding="utf-8") as f:
                     plan = json.load(f)
                 if not isinstance(plan, dict):
                     continue
-                issue = plan.get("issue")
+                issue = plan.get("issue") or folder_issue
                 if not issue or str(issue) not in SERVED_TOURNAMENT_KEYS:
                     continue
                 arms = plan.get("arms", [])
@@ -469,7 +473,7 @@ def resolve_running_tourney_key() -> Optional[str]:
                                 hb = json.load(f)
                             if not hb.get("finished", False):
                                 hb_ts = hb.get("heartbeat_ts")
-                                if hb_ts and (now - float(hb_ts)) <= 60.0:
+                                if hb_ts and (now - float(hb_ts)) <= HEARTBEAT_MAX_AGE_SEC:
                                     pid = hb.get("pid")
                                     if not pid or _is_pid_alive(pid):
                                         return str(issue)
