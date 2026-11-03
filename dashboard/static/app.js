@@ -9039,7 +9039,11 @@ function paintLiveMarks() {
   const body = (typeof document.getElementById === 'function')
     ? document.getElementById('orders-trades-body') : null;
   if (!body || !paintable(tab1, body)) return;
-  const sort = (typeof otActiveSort === 'function') ? otActiveSort('positions') : null;
+  const rawSort = (typeof otActiveSort === 'function') ? otActiveSort('positions') : null;
+  const isProto = typeof document !== 'undefined' && document.body
+    && document.body.classList && typeof document.body.classList.contains === 'function'
+    && document.body.classList.contains('proto-body');
+  const sort = isProto ? stitchPositionsSort(rawSort) : rawSort;
   if (sort && (sort.col === 6 || sort.col === 7 || sort.col === 9)) {
     renderOrdersTrades(lastKpi, lastState);
     return;
@@ -9057,26 +9061,17 @@ function paintLiveMarks() {
     const age = (overlay.ageMs !== null) ? `Live mark, ${(overlay.ageMs / 1000).toFixed(1)}s old` : 'Live mark';
     for (const el of body.querySelectorAll('td[data-cell="value"]')) {
       if (el.getAttribute && el.getAttribute('data-cid') !== cid) continue;
-      const valEl = el.querySelector ? el.querySelector('.stitch-mark-val') : null;
-      if (valEl) {
-        valEl.textContent = mark === null ? '--' : fmtUSD(mark);
-      } else {
-        el.textContent = mark === null ? '--' : fmtUSD(mark);
-      }
+      el.textContent = mark === null ? '--' : fmtUSD(mark);
       if (el.classList) el.classList.add('live');
       el.title = age;
     }
     for (const el of body.querySelectorAll('td[data-cell="cur-price"]')) {
       if (el.getAttribute && el.getAttribute('data-cid') !== cid) continue;
-      const legs = stitchHeldLegMarks(m, overlay.mids);
-      const legLive = overlay.liveLegs || { up: false, dn: false };
-      for (const leg of legs) {
+      for (const leg of stitchBothLegMarks(overlay)) {
         const line = el.querySelector
           ? el.querySelector('[data-leg="' + leg.leg + '"]') : null;
         if (!line) continue;
-        const isLive = leg.leg === 'YES' ? !!legLive.up : !!legLive.dn;
-        line.innerHTML = leg.leg + ' ' + fmtPrice(leg.mid)
-          + (isLive ? ' <span class="stitch-cur-live">●</span>' : '');
+        line.innerHTML = stitchLegPriceInner(leg);
       }
       if (el.classList) el.classList.add('live');
       el.title = age;
@@ -9084,53 +9079,8 @@ function paintLiveMarks() {
     for (const el of body.querySelectorAll('td[data-cell="unrealized"]')) {
       if (el.getAttribute && el.getAttribute('data-cid') !== cid) continue;
       const pnlCell = el.querySelector ? el.querySelector('.stitch-pnl-cell') : null;
-      if (pnlCell && typeof pnlCell.querySelectorAll === 'function') {
-        // Stitch positions: one line per held leg plus the pair total.
-        const legs = stitchHeldLegMarks(m, overlay.mids);
-        const byLeg = {};
-        for (const leg of legs) byLeg[leg.leg] = leg;
-        for (const line of pnlCell.querySelectorAll('.stitch-leg-pnl')) {
-          const leg = line.getAttribute ? byLeg[line.getAttribute('data-leg')] : null;
-          if (!leg) continue;
-          const cls = leg.pnl > 0 ? 'pos' : (leg.pnl < 0 ? 'neg' : 'flat');
-          const valEl = line.querySelector('.stitch-leg-pnl-val');
-          const pctEl = line.querySelector('.stitch-leg-pnl-pct');
-          if (valEl) {
-            valEl.className = 'stitch-leg-pnl-val ' + cls;
-            valEl.innerHTML = leg.leg + ' ' + (leg.pnl === null ? '--' : signedUSD(leg.pnl));
-          }
-          if (pctEl) {
-            pctEl.className = 'stitch-leg-pnl-pct ' + cls;
-            pctEl.innerHTML = leg.pct === null
-              ? '' : '(' + (leg.pct >= 0 ? '+' : '') + leg.pct.toFixed(1) + '%)';
-          }
-        }
-        const totalEl = pnlCell.querySelector('.stitch-pnl-total');
-        if (totalEl) {
-          // Par-based pair total, the same valuation as MARK VALUE.
-          const total = mark === null ? null : mark - cost;
-          const totalPct = (total !== null && cost > 0) ? (total / cost) * 100 : null;
-          const totalCls = total > 0 ? 'pos' : (total < 0 ? 'neg' : 'flat');
-          totalEl.className = 'stitch-pnl-total ' + totalCls;
-          totalEl.innerHTML = 'Total '
-            + (total === null ? '--' : signedUSD(total))
-            + (totalPct === null
-              ? '' : ' (' + (totalPct >= 0 ? '+' : '') + totalPct.toFixed(1) + '%)');
-        }
-      } else if (pnlCell && !(pnlCell.querySelector && pnlCell.querySelector('.stitch-leg-pnl'))) {
-        // Legacy single-line stitch cell (no per-leg lines): rewrite in place.
-        const valEl = pnlCell.querySelector('.stitch-pnl-val');
-        const pctEl = pnlCell.querySelector('.stitch-pnl-pct');
-        const pnlCls = unrealized > 0 ? 'pos' : (unrealized < 0 ? 'neg' : 'flat');
-        const unrealizedPct = (cost > 0 && unrealized !== null) ? ((unrealized / cost) * 100) : null;
-        if (valEl) {
-          valEl.className = `stitch-pnl-val ${pnlCls}`;
-          valEl.innerHTML = unrealized === null ? '--' : signedUSD(unrealized);
-        }
-        if (pctEl) {
-          pctEl.className = `stitch-pnl-pct ${pnlCls}`;
-          pctEl.innerHTML = unrealizedPct !== null ? `(${unrealizedPct >= 0 ? '+' : ''}${unrealizedPct.toFixed(1)}%)` : '--';
-        }
+      if (pnlCell) {
+        pnlCell.innerHTML = stitchUnrealizedHtml(unrealized, cost);
       } else {
         el.innerHTML = signedUSD(unrealized);
       }
@@ -10084,23 +10034,21 @@ function otToggleSort(view, col) {
 // ONE shared per-leg line used by BOTH the Orders tab (dual-leg quote cells) and
 // the Positions tab (YES HELD / NO HELD cells). Single template, single set of CSS
 // classes, single spacing. A present leg renders: side badge + `<size> @ $<price>`
-// (green for YES, red for NO) + a muted `cost $X` subline. An absent leg renders the
+// (green for YES, red for NO) + a muted cost subline. An absent leg renders the
 // side badge plus a muted `emptyLabel` instead of numbers.
-//   sizeSuffix lets each tab keep its own unit wording (e.g. ' sh' on Positions).
-function dualLegLine({ side, size, price, cost, emptyLabel, sizeSuffix, counterpart, resting }) {
+//   costPrefix lets both Positions and Orders print `Cost: $X` (default `cost $X`).
+function dualLegLine({ side, size, price, cost, emptyLabel, counterpart, resting, costPrefix }) {
   const isYes = side === 'YES';
   const badgeCls = isYes ? 'yes' : 'no';
   const priceCls = isYes ? 'stitch-quote-up' : 'stitch-quote-down';
-  const suffix = sizeSuffix || '';
   const hasLeg = (size !== null && size !== undefined && Number(size) > 0);
   if (!hasLeg) {
     // A resting order on the missing side is the live fact: the leg is not
-    // merely absent, its hedge is working. This beats every other absent
-    // rung, including the filled/cancelled counterpart notes below.
+    // merely absent, its hedge is working. Grayed text, no "resting" wording.
     if (resting && Number(resting.size) > 0) {
       return `<div class="stitch-quote-rung">`
         + `<span class="stitch-leg-pill missing">${side}</span>`
-        + `<span style="color:#22d3ee;font-size:11px;">${fmtShares(Number(resting.size))} resting @ ${fmtPrice(Number(resting.price))} \u2014 hedge working</span>`
+        + `<span class="stitch-quote-resting">${fmtShares(Number(resting.size))} resting @ ${fmtPrice(Number(resting.price))}</span>`
         + `</div>`;
     }
     // Counterpart fate for an absent leg: a filled counterpart holds a
@@ -10126,8 +10074,8 @@ function dualLegLine({ side, size, price, cost, emptyLabel, sizeSuffix, counterp
   }
   return `<div class="stitch-quote-rung">`
     + `<span class="stitch-leg-pill ${badgeCls}">${side}</span>`
-    + `<span class="${priceCls}">${fmtShares(size)}${suffix} @ ${fmtPrice(price)}</span>`
-    + `<span class="stitch-quote-subcost">cost ${fmtUSD(cost)}</span>`
+    + `<span class="${priceCls}">${fmtShares(size)} @ ${fmtPrice(price)}</span>`
+    + `<span class="stitch-quote-subcost">${costPrefix || 'cost '}${fmtUSD(cost)}</span>`
     + `</div>`;
 }
 
@@ -10598,17 +10546,62 @@ function stitchActiveMarketsRows(kpi, state, sort, clockMs) {
   }).join('');
 }
 
+/* Stitch positions show six columns; the stored sort key can outlive a removed
+ * column. Only the surviving keys are honored — anything else reads as no sort. */
+const STITCH_POSITIONS_SORT_KEYS = new Set([0, 1, 2, 3, 7, 9]);
+function stitchPositionsSort(sort) {
+  return (sort && Number.isInteger(sort.col) && STITCH_POSITIONS_SORT_KEYS.has(sort.col))
+    ? sort : null;
+}
+
+/* Both sides of the book, YES first then NO. Render and repaint share this so
+ * an unheld-but-quoted side can never disappear from one path. A missing mid
+ * stays null — never inferred from the other side. */
+function stitchBothLegMarks(overlay) {
+  const mids = (overlay && overlay.mids) || {};
+  const liveLegs = (overlay && overlay.liveLegs) || {};
+  return [
+    { leg: 'YES', mid: mids.up ?? null, live: !!liveLegs.up },
+    { leg: 'NO', mid: mids.dn ?? null, live: !!liveLegs.dn },
+  ];
+}
+
+function stitchLegPriceInner(e) {
+  const missing = (e.mid === null || e.mid === undefined);
+  const cls = missing ? 'stitch-cur-val-missing'
+    : (e.leg === 'YES' ? 'stitch-quote-up' : 'stitch-quote-down');
+  const val = missing ? '--' : fmtPrice(e.mid);
+  return `<span class="stitch-cur-leg">${e.leg}</span>`
+    + `<span class="${cls}">${val}</span>`
+    + `${e.live ? '<span class="stitch-cur-live" aria-hidden="true">●</span>' : '<span></span>'}`
+}
+
+function stitchLegPriceLine(e) {
+  const dir = e.leg === 'YES' ? 'up' : 'down';
+  return `<div class="stitch-quote-rung stitch-cur-${dir}" data-leg="${e.leg}">${stitchLegPriceInner(e)}</div>`;
+}
+
+/* One pair value, one parenthesised percentage, par-based mark. Shared by the
+ * render and the live repaint so the two cannot print different copies. */
+function stitchUnrealizedHtml(unrealized, cost) {
+  const value = (unrealized === null || unrealized === undefined || Number.isNaN(Number(unrealized)))
+    ? null : Number(unrealized);
+  const base = Number(cost) || 0;
+  const pct = (value !== null && base > 0) ? (value / base) * 100 : null;
+  const cls = value === null ? 'flat' : value > 0 ? 'pos' : value < 0 ? 'neg' : 'flat';
+  const val = value === null ? '--' : signedUSD(value);
+  const pctText = pct === null ? '' : `(${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)`;
+  return `<span class="stitch-pnl-val ${cls}">${val}</span><span class="stitch-pnl-pct ${cls}">${pctText}</span>`;
+}
+
 function stitchPositionsHeadHtml(sort) {
-  const active = (sort && Number.isInteger(sort.col)) ? sort : null;
+  const active = stitchPositionsSort(sort);
   const cols = [
     { label: 'MARKET & CLASSIFICATION', sortIdx: 1, left: true },
     { label: 'CATEGORY', sortIdx: 2 },
     { label: 'HELD INVENTORY', sortIdx: 3 },
-    { label: 'TOTAL COST', sortIdx: 5 },
     { label: 'CURRENT PRICE', sortIdx: 9 },
-    { label: 'MARK VALUE', sortIdx: 6 },
-    { label: 'UNREALIZED P&L', sortIdx: 7 },
-    { label: 'HEDGE STATUS', sortIdx: 8 },
+    { label: 'UNREALISED P&L', sortIdx: 7 },
     { label: 'LAST UPDATED', sortIdx: 0 },
   ];
   const cells = cols.map((col) => {
@@ -10624,39 +10617,11 @@ function stitchPositionsHeadHtml(sort) {
   return `<tr>${cells}</tr>`;
 }
 
-/* Per-leg live marks for one held market: the YES line first, NO below -- the
- * same stacked structure as the YES/NO HELD cells, so each leg reads as its
- * own row inside the shared cell. Every held leg carries its current price
- * (the live mid when one is fresh, the quote mid otherwise) and its own
- * unrealized P&L against its average. A leg with no observed mid prices '--'
- * instead of inventing one. Shared by the render and the in-place live-marks
- * repaint so the two can never disagree on the math. */
-function stitchHeldLegMarks(m, mids) {
-  const legs = [];
-  const upSh = Number(m.up_sh) || 0;
-  const dnSh = Number(m.dn_sh) || 0;
-  if (upSh > 0) {
-    legs.push({ leg: 'YES', size: upSh, cost: Number(m.up_cost) || 0,
-                mid: (mids && mids.up !== undefined) ? mids.up : null });
-  }
-  if (dnSh > 0) {
-    legs.push({ leg: 'NO', size: dnSh, cost: Number(m.dn_cost) || 0,
-                mid: (mids && mids.dn !== undefined) ? mids.dn : null });
-  }
-  return legs.map((e) => {
-    const avg = e.size > 0 ? e.cost / e.size : null;
-    const pnl = (e.mid === null || e.mid === undefined || avg === null)
-      ? null : e.size * (e.mid - avg);
-    const pct = (pnl === null || !(e.cost > 0)) ? null : (pnl / e.cost) * 100;
-    return { leg: e.leg, size: e.size, cost: e.cost, mid: e.mid, avg, pnl, pct };
-  });
-}
-
 function stitchPositionsRows(kpi, state, sort) {
   const entries = heldMarketEntries(kpi, false);
 
   if (!entries.length) {
-    return `<tr><td colspan="9" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No legs have filled, so nothing is held.</td></tr>`;
+    return `<tr><td colspan="6" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No legs have filled, so nothing is held.</td></tr>`;
   }
 
   // Resting hedge per market: a held leg whose missing side still has an
@@ -10690,22 +10655,12 @@ function stitchPositionsRows(kpi, state, sort) {
     const dnSh = Number(m.dn_sh) || 0;
     const dnCost = Number(m.dn_cost) || 0;
     const dnAvg = dnSh > 0 ? (dnCost / dnSh) : null;
-    const totalSh = upSh + dnSh;
     const status = pairStatus(upSh, dnSh);
     const unrealized = mark === null ? null : (mark - cost);
-    const unrealizedPct = (cost > 0 && unrealized !== null) ? ((unrealized / cost) * 100) : null;
-    // Per-leg economics for the CURRENT PRICE and UNREALIZED cells: each held
-    // leg prices at its own current mid, YES first and NO below. The leg
-    // lines are the executable split; the pair TOTAL below them uses the
-    // same par-based valuation as MARK VALUE (mark - cost), because leg mids
-    // need not sum to $1.00 and a mid-based total can read profit while the
-    // pair is down. Sort key for CURRENT PRICE is a price, not a value:
-    // the YES mid first, else the NO mid, so share count never outranks it.
-    const legMarks = stitchHeldLegMarks(m, overlay.mids);
-    const legLive = overlay.liveLegs || { up: false, dn: false };
-    for (const e of legMarks) {
-      e.live = e.leg === 'YES' ? !!legLive.up : !!legLive.dn;
-    }
+    // CURRENT PRICE shows both sides, held or not: fresh live mid, quote mid,
+    // or -- when a side has never been quoted. Sort key for CURRENT PRICE is
+    // a price, not a value: the YES mid first, else the NO mid.
+    const bothLegs = stitchBothLegMarks(overlay);
     const curSort = (upSh > 0 ? overlay.mids.up : null)
       ?? (dnSh > 0 ? overlay.mids.dn : null) ?? null;
     const ts = latestFillTs(m);
@@ -10716,38 +10671,35 @@ function stitchPositionsRows(kpi, state, sort) {
     const restDn = dnSh > 0 ? null : _restingLeg(cid, 'DN');
     const hedgePending = status === 'unpaired' && Boolean(restUp || restDn);
     return {
-      cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost: cost, totalSh,
-      mark, unrealized, unrealizedPct, legMarks, curSort,
+      cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost: cost,
+      mark, unrealized, bothLegs, curSort,
       status, ts, restUp, restDn, hedgePending,
       live: overlay.live, liveAgeMs: overlay.ageMs,
     };
   });
 
-  const sorted = sort ? otSortGroups(rows, sort, (r, col) => {
+  const activeSort = stitchPositionsSort(sort);
+  const sorted = activeSort ? otSortGroups(rows, activeSort, (r, col) => {
     switch (col) {
       case 0: return otNum(r.ts);
       case 1: return String(r.m.title || r.m.name || r.m.slug || '');
       case 2: return marketCategory(r.m);
       case 3: return otNum(r.upSh);
-      case 4: return otNum(r.dnSh);
-      case 5: return otNum(r.totalCost);
-      case 6: return otNum(r.mark);
       case 7: return otNum(r.unrealized);
-      case 8: return r.status;
       case 9: return otNum(r.curSort);
       default: return null;
     }
   }) : rows;
 
-  if (!sort) {
+  if (!activeSort) {
     sorted.sort((a, b) => (b.totalCost - a.totalCost) || ((b.ts || 0) - (a.ts || 0)));
   }
 
   const nowMs = Date.now();
 
   return sorted.map(({
-    cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost, totalSh,
-    mark, unrealized, unrealizedPct, legMarks, curSort,
+    cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost,
+    mark, unrealized, bothLegs, curSort,
     status, ts, restUp, restDn, hedgePending, live, liveAgeMs
   }) => {
     const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
@@ -10758,38 +10710,14 @@ function stitchPositionsRows(kpi, state, sort) {
     const ageDisp = ageSec !== null ? fmtStopwatch(ageSec) : '--';
     const tsDisp = (ts && Number.isFinite(toMs(ts))) ? fmtTimestamp(ts) : '--';
 
-    // Status / Hedge badge. A lone held leg with its hedge still resting is
-    // SINGLE FILL (cyan, same family as the Orders tab pill), not UNPAIRED
-    // (red): the position is protected and waiting, not orphaned.
-    let statusBadge = '';
-    if (status === 'paired') {
-      const pc = (m.pair_cost !== null && m.pair_cost !== undefined) ? fmtPrice(m.pair_cost) : '';
-      statusBadge = `<span class="stitch-status-badge quoting"><span class="stitch-status-dot quoting"></span>PAIRED${pc ? ` (${pc})` : ''}</span>`;
-    } else if (status === 'partial') {
-      statusBadge = `<span class="stitch-status-badge resting"><span class="stitch-status-dot resting"></span>PARTIAL</span>`;
-    } else if (hedgePending) {
-      statusBadge = `<span class="stitch-status-badge resting" title="Position held — hedge resting"><span class="stitch-status-dot resting"></span>SINGLE FILL</span>`;
-    } else {
-      statusBadge = `<span class="stitch-status-badge idle" style="border-color:rgba(244,63,94,0.3);background:rgba(244,63,94,0.1);color:#fb7185;"><span class="stitch-status-dot idle" style="background:#fb7185;"></span>⚠️ UNPAIRED</span>`;
-    }
-    const hedgeRowCls = hedgePending ? ' is-hedge-pending' : '';
-
-    // PnL state per leg; the pair total carries the row's tone.
-    const totalCls = unrealized > 0 ? 'pos' : (unrealized < 0 ? 'neg' : 'flat');
-    const legPnlCls = (pnl) => (pnl > 0 ? 'pos' : (pnl < 0 ? 'neg' : 'flat'));
+    const hedgeRowCls = hedgePending ? ' is-hedge-pending'
+      : (status === 'unpaired' ? ' is-unpaired' : '');
 
     // Live tooltip
     const liveTitle = (live && liveAgeMs !== null) ? ` title="Live mark, ${(liveAgeMs / 1000).toFixed(1)}s old"` : '';
     const liveCls = live ? ' live' : '';
 
-    // Col 6 (new): CURRENT PRICE -- one line per held leg, YES first and NO
-    // below, mirroring the YES/NO HELD cells. Each leg prices at its own
-    // current mid so the row always answers "what is it worth right now".
-    // The live dot sits on exactly the legs with a fresh mark, never on a
-    // quote-mid fallback line.
-    const curPriceLines = legMarks.length ? legMarks.map((e) => `
-          <div class="stitch-cur-${e.leg === 'YES' ? 'up' : 'down'}" data-leg="${e.leg}">${e.leg} ${fmtPrice(e.mid)}${e.live ? ' <span class="stitch-cur-live">●</span>' : ''}</div>`).join('')
-      : `<span style="color:#64748b;font-size:11px;">--</span>`;
+    const curPriceLines = bothLegs.map(stitchLegPriceLine).join('');
 
     return `<tr class="stitch-ot-row${hedgeRowCls}" data-cid="${esc(cid)}">
       <!-- Col 0: MARKET & CLASSIFICATION (market anchors far left; the category lives in its own column) -->
@@ -10806,49 +10734,21 @@ function stitchPositionsRows(kpi, state, sort) {
 
       <!-- Col 2: HELD INVENTORY (dual-leg YES / NO block, shared with Orders) -->
       ${stitchDualLegCell(
-        dualLegLine({ side: 'YES', size: upSh, price: upAvg, cost: upCost, emptyLabel: 'No YES held', sizeSuffix: ' sh', resting: restUp }),
-        dualLegLine({ side: 'NO', size: dnSh, price: dnAvg, cost: dnCost, emptyLabel: 'No NO held', sizeSuffix: ' sh', resting: restDn }),
-        { cellClass: 'mono font-tabular' })}
+        dualLegLine({ side: 'YES', size: upSh, price: upAvg, cost: upCost, emptyLabel: 'No YES held', resting: restUp, costPrefix: 'Cost: ' }),
+        dualLegLine({ side: 'NO', size: dnSh, price: dnAvg, cost: dnCost, emptyLabel: 'No NO held', resting: restDn, costPrefix: 'Cost: ' }),
+        { cellClass: 'mono font-tabular stitch-dual-leg-cell' })}
 
-      <!-- Col 3: TOTAL COST -->
-      <td class="mono font-tabular">
-        <div class="stitch-pair-cost">${fmtUSD(totalCost)}</div>
-        <div class="stitch-mid-sub">${fmtShares(totalSh)} sh total</div>
-      </td>
-
-      <!-- Col 4: CURRENT PRICE, one line per held leg (merged from #497) -->
-      <td class="mono font-tabular${liveCls}"${liveTitle} data-cid="${esc(cid)}" data-cell="cur-price">
+      <!-- Col 3: CURRENT PRICE, YES first then NO -->
+      <td class="mono font-tabular stitch-dual-leg-cell${liveCls}"${liveTitle} data-cid="${esc(cid)}" data-cell="cur-price">
         ${curPriceLines}
       </td>
 
-      <!-- Col 5: MARK VALUE -->
-      <td class="mono font-tabular"${liveTitle} data-cid="${esc(cid)}" data-cell="value">
-        <div class="stitch-mark-val">${mark === null ? '--' : fmtUSD(mark)}</div>
-        ${live ? `<div class="stitch-mid-sub" style="color:#34d399;">● live mark</div>` : ''}
-      </td>
-
-      <!-- Col 6: UNREALIZED P&L, one line per held leg plus the total -->
+      <!-- Col 4: UNREALISED P&L, one pair value -->
       <td class="mono font-tabular" data-cid="${esc(cid)}" data-cell="unrealized">
-        <div class="stitch-pnl-cell">
-          ${legMarks.map((e) => `
-          <div class="stitch-leg-pnl" data-leg="${e.leg}">
-            <span class="stitch-leg-pnl-val ${legPnlCls(e.pnl)}">${e.leg} ${e.pnl === null ? '--' : signedUSD(e.pnl)}</span>
-            <span class="stitch-leg-pnl-pct ${legPnlCls(e.pnl)}">${e.pct === null ? '' : `(${e.pct >= 0 ? '+' : ''}${e.pct.toFixed(1)}%)`}</span>
-          </div>`).join('')}
-          ${legMarks.length > 1 ? `
-          <div class="stitch-pnl-total ${totalCls}">
-            <span class="stitch-pnl-val">Total ${unrealized === null ? '--' : signedUSD(unrealized)}</span>
-            <span class="stitch-pnl-pct">${unrealizedPct === null ? '' : `(${unrealizedPct >= 0 ? '+' : ''}${unrealizedPct.toFixed(1)}%)`}</span>
-          </div>` : ''}
-        </div>
+        <div class="stitch-pnl-cell">${stitchUnrealizedHtml(unrealized, totalCost)}</div>
       </td>
 
-      <!-- Col 7: HEDGE STATUS -->
-      <td>
-        ${statusBadge}
-      </td>
-
-      <!-- Col 8: LAST UPDATED / AGE (last cell, flush right) -->
+      <!-- Col 5: LAST UPDATED / AGE (last cell, flush right) -->
       <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
         <div class="stitch-age-stopwatch">${ageDisp}</div>
         <div class="stitch-age-meta">${tsDisp}</div>
@@ -13055,7 +12955,7 @@ if (typeof module !== 'undefined' && module.exports) {
     renderStitchClosedLedgerRows, stitchLedgerChildRow, stitchLedgerLegs,
     stitchClosedTradesRows, stitchClosedTradesHeadHtml,
     stitchOpenOrdersRows, stitchOpenOrdersHeadHtml,
-    stitchPositionsRows, stitchPositionsHeadHtml, stitchHeldLegMarks,
+    stitchPositionsRows, stitchPositionsHeadHtml, stitchBothLegMarks,
     stitchActiveMarketsRows, stitchActiveMarketsHeadHtml,
     marketCategory, categoryPill, categoryIconTone,
     showToast, dismissResetModal, openStartRunModal, closeStartRunModal, startRunModalState,

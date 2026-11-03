@@ -11,6 +11,7 @@ import json
 import re
 import shutil
 import subprocess
+from html import unescape
 from pathlib import Path
 
 import pytest
@@ -54,10 +55,10 @@ const app = mod.exports;
 def _kpi(up_sh=10.0, up_cost=8.0, up_mid=0.76, dn_sh=0.0, dn_cost=0.0, dn_mid=None,
          quotes_count=0):
     quotes = []
-    if up_sh > 0:
+    if up_mid is not None:
         quotes.append({"side": "UP", "price": 0.80, "mid": up_mid,
                        "token_id": "tok-up", "ts": 1700000000000})
-    if dn_sh > 0:
+    if dn_mid is not None:
         quotes.append({"side": "DOWN", "price": 0.14, "mid": dn_mid,
                        "token_id": "tok-dn", "ts": 1700000000000})
     return {
@@ -82,10 +83,23 @@ def _kpi(up_sh=10.0, up_cost=8.0, up_mid=0.76, dn_sh=0.0, dn_cost=0.0, dn_mid=No
 
 
 @requires_node
-def test_positions_head_has_current_price():
+def test_positions_head_is_six_columns_in_issue_order():
     res = json.loads(_eval_js(
         "console.log(JSON.stringify({head: app.stitchPositionsHeadHtml(null)}));"))
-    assert "CURRENT PRICE" in res["head"]
+    head = res["head"]
+    labels = [unescape(x) for x in re.findall(r"<span class=\"ot-sort-label\">([^<]+)</span>", head)]
+    assert labels == [
+        "MARKET & CLASSIFICATION",
+        "CATEGORY",
+        "HELD INVENTORY",
+        "CURRENT PRICE",
+        "UNREALISED P&L",
+        "LAST UPDATED",
+    ]
+    assert head.count("<th") == 6
+    assert "TOTAL COST" not in head
+    assert "MARK VALUE" not in head
+    assert "HEDGE STATUS" not in head
 
 
 @requires_node
@@ -100,23 +114,24 @@ def test_positions_head_has_sortable_category_column_after_market():
     between = head[market:category]
     assert between.count("data-ot-sort") == 2
     assert between.count("<th") == 1
-    assert head.count("<th") == 9
 
 
 @requires_node
 def test_single_leg_row_shows_its_own_current_price_and_pnl():
-    # 10 UP @ $0.80 avg against a $0.76 mid: a loss, priced live.
+    # 10 UP @ $0.80 avg against a $0.76 mid: a loss, priced live. The NO side
+    # is unheld but quoted, so both prices render.
     res = json.loads(_eval_js(f"""
-    const kpi = {json.dumps(_kpi())};
+    const kpi = {json.dumps(_kpi(dn_mid=0.24))};
     console.log(JSON.stringify({{
         html: app.stitchPositionsRows(kpi, {{orders: []}}, null)
     }}));
     """))
     html = res["html"]
     assert 'data-cell="cur-price"' in html
-    assert "YES $0.76<" in html or "YES $0.76 " in html
-    assert "NO $0.24" not in html  # unheld leg prints no line
-    assert ">YES <span" in html
+    assert 'data-leg="YES"' in html and 'data-leg="NO"' in html
+    assert "$0.76" in html and "$0.24" in html
+    assert "Cost: $8.00" in html
+    assert "sh total" not in html
     assert "-$0.40" in html
     assert "(-5.0%)" in html
 
@@ -130,18 +145,21 @@ def test_paired_row_stacks_no_below_yes_with_a_total():
     }}));
     """))
     html = res["html"]
-    yes_at = html.index("YES $0.76")
-    no_at = html.index("NO $0.24")
+    yes_at = html.index('data-leg="YES"')
+    no_at = html.index('data-leg="NO"')
     assert yes_at < no_at  # NO below YES in the same cell
-    assert "Total" in html
+    assert "Total" not in html
+    assert "stitch-leg-pnl" not in html
+    assert "stitch-pnl-total" not in html
+    assert html.count("Cost: $") == 2
 
 
 @requires_node
-def test_live_overlay_moves_the_per_leg_lines():
+def test_live_overlay_moves_the_pair_pnl():
     # Quote mid says $0.84 (the frozen case); a fresh venue mark at $0.77
     # must win on the next render.
     res = json.loads(_eval_js(f"""
-    const kpi = {json.dumps(_kpi(up_mid=0.84, quotes_count=2))};
+    const kpi = {json.dumps(_kpi(up_mid=0.84, dn_mid=0.16, quotes_count=2))};
     const nowMs = Date.now();
     app.applyLiveMarks(
         {{marks: [{{token_id: 'tok-up', bid: 0.76, ask: 0.78, mid: 0.77,
@@ -151,14 +169,11 @@ def test_live_overlay_moves_the_per_leg_lines():
     }}));
     """))
     html = res["html"]
-    assert "YES $0.77" in html
+    assert "$0.77" in html
     assert "-$0.30" in html
-    assert "live mark" in html
-    # #785: no activity pill in the Market cell — HEDGE STATUS alone is the
-    # position state.
+    assert "stitch-status-badge" not in html
     assert "quoting-breathing" not in html
     assert "resting-breathing" not in html
-    assert "stitch-status-badge" in html
 
 
 @requires_node
@@ -195,10 +210,10 @@ def test_paired_total_uses_par_valuation_like_mark_value():
     }}));
     """))
     html = res["html"]
-    assert "+$1.50" in html  # YES leg line stays mid-based
-    assert "+$0.50" in html  # NO leg line stays mid-based
-    total_at = html.index("Total")
-    assert "-$1.00" in html[total_at:]
+    assert "+$1.50" not in html  # no per-leg YES line
+    assert "+$0.50" not in html  # no per-leg NO line
+    assert "-$1.00" in html
+    assert "Total" not in html
 
 
 def _two_market_kpi(mid_a, mid_b):
@@ -289,7 +304,7 @@ def test_stitch_positions_resting_order_shows_no_activity_pill(status):
     assert "resting-breathing" not in html
     assert "quoting-breathing" not in html
     assert ">RESTING</span>" not in html
-    assert "stitch-status-badge" in html
+    assert "stitch-status-badge" not in html
 
 
 @requires_node
@@ -305,7 +320,7 @@ def test_stitch_positions_resting_and_quoting_show_no_activity_pill():
     html = res["html"]
     assert "resting-breathing" not in html
     assert "quoting-breathing" not in html
-    assert "stitch-status-badge" in html
+    assert "stitch-status-badge" not in html
 
 
 @requires_node
@@ -323,7 +338,7 @@ def test_stitch_positions_quoting_only_shows_no_activity_pill():
     assert "quoting-breathing" not in html
     assert "resting-breathing" not in html
     assert ">QUOTING</span>" not in html
-    assert "stitch-status-badge" in html
+    assert "stitch-status-badge" not in html
 
 
 @requires_node
@@ -340,7 +355,7 @@ def test_stitch_positions_idle_market_keeps_standard_tags():
     assert "resting-breathing" not in html
     assert "quoting-breathing" not in html
     assert "pill stopped" not in html
-    assert "stitch-status-badge" in html
+    assert "stitch-status-badge" not in html
 
 
 @requires_node
@@ -377,8 +392,8 @@ def test_stitch_positions_finished_market_has_no_activity_pill():
 
 @requires_node
 def test_stitch_positions_sorted_render_has_no_activity_pill():
-    # #785: sorting must not reintroduce the removed activity pill; each
-    # market keeps its HEDGE STATUS badge.
+    # #785: sorting must not reintroduce the removed activity pill; the row
+    # tint carries the lone-leg hedge signal.
     kpi = _two_market_kpi(0.40, 0.80)
     kpi["by_market"]["0xabc"]["quotes_count"] = 2
     kpi["by_market"]["0xdef"]["quotes_count"] = 1
@@ -398,7 +413,7 @@ def test_stitch_positions_sorted_render_has_no_activity_pill():
     assert "resting-breathing" not in html
     assert "quoting-breathing" not in html
     for body in by_cid.values():
-        assert "stitch-status-badge" in body
+        assert "stitch-status-badge" not in body
 
 
 # ── hedge-aware held inventory: a missing leg with a resting order ──────────
@@ -406,7 +421,7 @@ def test_stitch_positions_sorted_render_has_no_activity_pill():
 
 def _lakers_kpi():
     # Lakers shape: 5 NO @ $0.45 held, nothing held on YES, both tokens named.
-    kpi = _kpi(up_sh=0.0, up_cost=0.0, dn_sh=5.0, dn_cost=2.25, dn_mid=0.51)
+    kpi = _kpi(up_sh=0.0, up_cost=0.0, up_mid=None, dn_sh=5.0, dn_cost=2.25, dn_mid=0.51)
     m = kpi["by_market"]["0xabc"]
     m["title"] = "Lakers vs Clippers"
     m["quotes"].append({"side": "UP", "price": 0.46, "mid": 0.52,
@@ -425,10 +440,10 @@ def _resting_up(price=0.46, size=5.0, status="open", remaining=None):
 
 
 @requires_node
-def test_held_no_with_resting_yes_shows_hedge_working_not_no_held():
+def test_held_no_with_resting_yes_shows_resting_rung_not_no_held():
     # The Lakers case: 5 NO held + 5 YES resting @ $0.46. The YES rung names
-    # the hedge instead of "No YES held", and the row reads SINGLE FILL
-    # (cyan), never the red UNPAIRED orphan pill.
+    # the hedge instead of "No YES held", and the row carries the
+    # hedge-pending tint rather than a badge.
     # original 8 vs remaining 5: the rung must read the remainder. If the
     # renderer used original_size, this would print "8 resting" and fail.
     res = json.loads(_eval_js(f"""
@@ -440,18 +455,25 @@ def test_held_no_with_resting_yes_shows_hedge_working_not_no_held():
     """))
     html = res["html"]
     assert "5 resting @ $0.46" in html
-    assert "8 resting" not in html
-    assert "hedge working" in html
+    assert "8 resting @ $0.46" not in html
+    assert "resting @" in html
+    assert "hedge working" not in html
     assert "No YES held" not in html
-    assert "SINGLE FILL" in html
+    assert "SINGLE FILL" not in html
     assert "UNPAIRED" not in html
+    assert "stitch-status-badge" not in html
     assert "is-hedge-pending" in html
+    assert "stitch-dual-leg-cell" in html
+    assert "stitch-quote-resting" in html
+    assert "Cost: $2.25" in html
+    assert "sh total" not in html
+    assert 'data-leg="YES"' in html and 'data-leg="NO"' in html
 
 
 @requires_node
 def test_held_no_without_resting_yes_stays_unpaired():
     # The Kansas case: a lone held leg with no hedge resting keeps the honest
-    # red pill and the plain "No YES held" rung.
+    # plain "No YES held" rung and the unpaired row tint — still no badge.
     res = json.loads(_eval_js(f"""
     const kpi = {json.dumps(_lakers_kpi())};
     console.log(JSON.stringify({{
@@ -461,5 +483,121 @@ def test_held_no_without_resting_yes_stays_unpaired():
     html = res["html"]
     assert "No YES held" in html
     assert "hedge working" not in html
-    assert "UNPAIRED" in html
+    assert "stitch-status-badge" not in html
+    assert "UNPAIRED" not in html
     assert "SINGLE FILL" not in html
+    assert "is-unpaired" in html
+    assert "is-hedge-pending" not in html
+
+
+@requires_node
+@pytest.mark.parametrize("removed_key", [4, 5, 6, 8])
+def test_positions_removed_sort_keys_fall_back_to_default(removed_key):
+    # A leftover sort key for a removed column must not reach the rows, the
+    # header, or aria-sort; the default order is total cost desc, then latest fill.
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_two_market_kpi(0.40, 0.80))};
+    const html = app.stitchPositionsRows(kpi, {{orders: []}}, {{col: {removed_key}, dir: 'desc'}});
+    const head = app.stitchPositionsHeadHtml({{col: {removed_key}, dir: 'desc'}});
+    console.log(JSON.stringify({{html, head}}));
+    """))
+    assert "aria-sort" not in res["head"]
+    # Default order: 0xabc (100 sh, $40 cost) outranks 0xdef (10 sh, $8 cost).
+    assert res["html"].index("0xabc") < res["html"].index("0xdef")
+
+
+@requires_node
+def test_positions_removed_sort_key_still_applies_the_fill_tie_break():
+    # Equal total cost falls through to latest fill. A leftover removed sort key
+    # yields no comparator, so the default order must still apply -- otherwise
+    # the rows keep input order and the two markets tie on cost stay unsorted.
+    kpi = {"by_market": {
+        "0xold": {
+            "condition_id": "0xold", "title": "Older fill", "slug": "older",
+            "category": "E-Sports", "up_sh": 10.0, "up_cost": 8.0,
+            "dn_sh": 0.0, "dn_cost": 0.0, "total_cost": 8.0, "total_sh": 10.0,
+            "quotes": [], "fills": [{"venue_ts": 1700000000000}],
+        },
+        "0xnew": {
+            "condition_id": "0xnew", "title": "Newer fill", "slug": "newer",
+            "category": "E-Sports", "up_sh": 10.0, "up_cost": 8.0,
+            "dn_sh": 0.0, "dn_cost": 0.0, "total_cost": 8.0, "total_sh": 10.0,
+            "quotes": [], "fills": [{"venue_ts": 1700000009000}],
+        },
+    }}
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(kpi)};
+    const html = app.stitchPositionsRows(kpi, {{orders: []}}, {{col: 8, dir: 'desc'}});
+    console.log(JSON.stringify({{html}}));
+    """))
+    html = res["html"]
+    assert html.index("0xnew") < html.index("0xold")
+
+
+@requires_node
+def test_positions_unquoted_side_prints_dash_without_dot():
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_kpi(up_sh=10.0, up_cost=8.0, up_mid=0.76, dn_mid=None))};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(kpi, {{orders: []}}, null)
+    }}));
+    """))
+    html = res["html"]
+    no_line = html[html.index('data-leg="NO"'):html.index("</div>", html.index('data-leg="NO"')) + 1]
+    assert "--" in no_line
+    assert "stitch-cur-val-missing" in no_line
+    assert "stitch-cur-live" not in no_line
+
+
+@requires_node
+def test_positions_zero_cost_basis_omits_percentage():
+    res = json.loads(_eval_js(f"""
+    const kpi = {{ by_market: {{ "0xabc": {{
+        condition_id: "0xabc", title: "Free shares", slug: "free-shares",
+        category: "E-Sports", up_sh: 10.0, up_cost: 0.0, dn_sh: 0.0, dn_cost: 0.0,
+        total_cost: 0.0, total_sh: 10.0, realized_pnl: 0.0, quotes_count: 1,
+        quotes: [{{side: "UP", price: 0.5, mid: 0.76, token_id: "tok-up", ts: 1700000000000}}]
+    }} }} }};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(kpi, {{orders: []}}, null)
+    }}));
+    """))
+    html = res["html"]
+    assert "+$7.60" in html
+    assert "%" not in html.split('data-cell="unrealized"')[1].split("</td>")[0]
+
+
+@requires_node
+def test_positions_flat_and_positive_pnl_classes():
+    flat = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_kpi(up_sh=10.0, up_cost=8.0, up_mid=0.80, dn_mid=0.20))};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(kpi, {{orders: []}}, null)
+    }}));
+    """))["html"]
+    assert 'class="stitch-pnl-val flat"' in flat or "stitch-pnl-val flat" in flat
+    positive = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_kpi(up_sh=10.0, up_cost=8.0, up_mid=0.90, dn_mid=0.10))};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(kpi, {{orders: []}}, null)
+    }}));
+    """))["html"]
+    assert "pos" in positive.split('data-cell="unrealized"')[1].split("</td>")[0]
+
+
+@requires_node
+def test_positions_unrealized_pnl_sorts_by_key_7():
+    # A fresh mark moves 0xabc's P&L above 0xdef's: key 7 must reorder the rows.
+    base_a = _kpi(up_sh=10.0, up_cost=8.0, up_mid=0.50)["by_market"]["0xabc"]
+    base_b = {**base_a, "condition_id": "0xdef", "title": "Other market",
+              "slug": "other", "total_cost": 8.0, "up_cost": 8.0,
+              "quotes": [{"side": "UP", "price": 0.80, "mid": 0.95,
+                          "token_id": "tok-up-b", "ts": 1700000000000}]}
+    kpi = {"by_market": {"0xabc": base_a, "0xdef": base_b}}
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(kpi)};
+    const html = app.stitchPositionsRows(kpi, {{orders: []}}, {{col: 7, dir: 'desc'}});
+    console.log(JSON.stringify({{html}}));
+    """))
+    html = res["html"]
+    assert html.index("0xdef") < html.index("0xabc")

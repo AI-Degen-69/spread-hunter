@@ -1481,17 +1481,46 @@ def test_positions_renderers_wire_activity_pill():
     """Neither OPEN POSITIONS table wears the RESTING/QUOTING pill (#785)."""
     app_js = _read_static("app.js")
 
-    # The shared helper stays for reference, but neither positions renderer
-    # may call it: HEDGE STATUS alone is the position state.
     assert "function marketActivityPill(" in app_js
 
-    for name in ("positionsRows", "stitchPositionsRows"):
-        body = _js_function_body(app_js, name)
-        assert "marketActivityPill(" not in body, name
-        assert "resting-breathing" not in body, name
-        assert "quoting-breathing" not in body, name
-        # The hedge badge still carries the position state.
-        assert "stitch-status-badge" in body or "pairSummary" in body or "statusBadge" in body, name
+    classic = _js_function_body(app_js, "positionsRows")
+    assert "marketActivityPill(" not in classic
+    assert "resting-breathing" not in classic
+    assert "quoting-breathing" not in classic
+    assert "stitch-status-badge" in classic or "pairSummary" in classic or "statusBadge" in classic
+
+    stitch = _js_function_body(app_js, "stitchPositionsRows")
+    assert "marketActivityPill(" not in stitch
+    assert "resting-breathing" not in stitch
+    assert "quoting-breathing" not in stitch
+    assert "stitch-status-badge" not in stitch
+    assert "statusBadge" not in stitch
+
+    painter = _js_function_body(app_js, "paintLiveMarks")
+    assert "stitch-mark-val" not in painter
+    assert "stitch-leg-pnl" not in painter
+    assert "stitch-pnl-total" not in painter
+
+
+def test_paint_live_marks_price_line_helper_is_defined():
+    """The live repaint's CURRENT PRICE helper exists and matches the render line.
+
+    The repaint calls `stitchLegPriceInner` to rewrite each rung in place. That
+    helper used to be referenced but never defined, so a live mark tick threw a
+    TypeError on the positions surface. The same inner HTML must feed both the
+    render and the repaint so the two can never print different copies.
+    """
+    app_js = _read_static("app.js")
+
+    painter = _js_function_body(app_js, "paintLiveMarks")
+    assert "stitchLegPriceInner(" in painter
+
+    # The helper the repaint calls must actually exist (regression: undefined ref).
+    assert "function stitchLegPriceInner(" in app_js
+
+    # Render wraps the identical inner HTML in the rung div with data-leg.
+    line = _js_function_body(app_js, "stitchLegPriceLine")
+    assert "stitchLegPriceInner(e)" in line
 
 
 def test_styles_css_reduced_motion_covers_breathing_pills():
