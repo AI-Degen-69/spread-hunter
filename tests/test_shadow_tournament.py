@@ -796,7 +796,7 @@ def test_retired_arms_files_are_gone():
     kept = sorted(p.name for p in cfg.glob("*_arms.json"))
     assert kept == ["i799-tournament-test_arms.json", "i843-pair-test_arms.json",
                     "i905-top5-rematch_arms.json", "i917-multistrat-defense_arms.json",
-                    "i923-live-sports-duel_arms.json"]
+                    "i923-live-sports-duel_arms.json", "i929-momentum-reversion_arms.json"]
 
 
 def test_no_arm_is_pointed_at_the_production_registry(tmp_path):

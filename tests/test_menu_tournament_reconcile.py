@@ -56,18 +56,18 @@ $fnDef = $fnDef.Substring(0, $fnDef.IndexOf('function Invoke-TournamentReconcile
 Invoke-Expression $fnDef
 
 $configs = Get-TournamentConfigs
-if ($configs.Count -ne 5) {
-    Write-Error ("Expected 5 configs, got " + $configs.Count)
+if ($configs.Count -ne 6) {
+    Write-Error ("Expected 6 configs, got " + $configs.Count)
     exit 1
 }
 $issues = ($configs | ForEach-Object { $_.Issue }) -join ','
-if ($issues -ne '799,843,905,917,923') {
-    Write-Error ("Expected issues 799,843,905,917,923, got " + $issues)
+if ($issues -ne '799,843,905,917,923,929') {
+    Write-Error ("Expected issues 799,843,905,917,923,929, got " + $issues)
     exit 1
 }
 $armCounts = ($configs | ForEach-Object { $_.ArmCount }) -join ','
-if ($armCounts -ne '10,4,5,6,2') {
-    Write-Error ("Expected arm counts 10,4,5,6,2, got " + $armCounts)
+if ($armCounts -ne '10,4,5,6,2,6') {
+    Write-Error ("Expected arm counts 10,4,5,6,2,6, got " + $armCounts)
     exit 1
 }
 Write-Host 'DISCOVERY_SUCCESS'
