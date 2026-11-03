@@ -1012,6 +1012,13 @@
   transition: background-color 0.15s ease;
 }
 
+/* Visible horizontal row borders — the base `--border-subtle` (8% white)
+ * disappears against the hedge-pending/unpaired row tints, so rows blur
+ * together. A slate line that reads on both neutral and tinted rows. */
+.proto-body .stitch-ot-row > td {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.30);
+}
+
 .proto-body .stitch-ot-row:hover {
   background: #121927 !important;
 }
