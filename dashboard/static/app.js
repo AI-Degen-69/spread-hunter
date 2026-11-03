@@ -10365,9 +10365,9 @@ function stitchOpenOrdersRows(kpi, state, sort) {
 
       <!-- Col 4: Dual-Leg Quotes (YES / NO) -->
       ${stitchDualLegCell(
-        dualLegLine({ side: 'YES', size: upOrder ? upSize : null, price: upPrice, cost: upCost, emptyLabel: '[Awaiting YES Quote]', counterpart: upOrder ? null : upFilled ? { state: 'filled', order: upFilled } : upCancelled ? { state: 'cancelled' } : null, costPrefix: 'Cost: ' }),
-        dualLegLine({ side: 'NO', size: dnOrder ? dnSize : null, price: dnPrice, cost: dnCost, emptyLabel: '[Awaiting NO Quote]', counterpart: dnOrder ? null : dnFilled ? { state: 'filled', order: dnFilled } : dnCancelled ? { state: 'cancelled' } : null, costPrefix: 'Cost: ' }),
-        { cellClass: 'stitch-dual-leg-cell' })}
+        dualLegLine({ side: 'YES', size: upOrder ? upSize : null, price: upPrice, cost: upCost, emptyLabel: '[Awaiting YES Quote]', counterpart: upOrder ? null : upFilled ? { state: 'filled', order: upFilled } : upCancelled ? { state: 'cancelled' } : null }),
+        dualLegLine({ side: 'NO', size: dnOrder ? dnSize : null, price: dnPrice, cost: dnCost, emptyLabel: '[Awaiting NO Quote]', counterpart: dnOrder ? null : dnFilled ? { state: 'filled', order: dnFilled } : dnCancelled ? { state: 'cancelled' } : null }),
+        {})}
 
       <!-- Col 5: PAIR COST -->
       <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
@@ -10691,7 +10691,7 @@ function stitchPositionsRows(kpi, state, sort) {
     }
   }) : rows;
 
-  if (!sort) {
+  if (!activeSort) {
     sorted.sort((a, b) => (b.totalCost - a.totalCost) || ((b.ts || 0) - (a.ts || 0)));
   }
 

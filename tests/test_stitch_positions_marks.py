@@ -507,6 +507,34 @@ def test_positions_removed_sort_keys_fall_back_to_default(removed_key):
 
 
 @requires_node
+def test_positions_removed_sort_key_still_applies_the_fill_tie_break():
+    # Equal total cost falls through to latest fill. A leftover removed sort key
+    # yields no comparator, so the default order must still apply -- otherwise
+    # the rows keep input order and the two markets tie on cost stay unsorted.
+    kpi = {"by_market": {
+        "0xold": {
+            "condition_id": "0xold", "title": "Older fill", "slug": "older",
+            "category": "E-Sports", "up_sh": 10.0, "up_cost": 8.0,
+            "dn_sh": 0.0, "dn_cost": 0.0, "total_cost": 8.0, "total_sh": 10.0,
+            "quotes": [], "fills": [{"venue_ts": 1700000000000}],
+        },
+        "0xnew": {
+            "condition_id": "0xnew", "title": "Newer fill", "slug": "newer",
+            "category": "E-Sports", "up_sh": 10.0, "up_cost": 8.0,
+            "dn_sh": 0.0, "dn_cost": 0.0, "total_cost": 8.0, "total_sh": 10.0,
+            "quotes": [], "fills": [{"venue_ts": 1700000009000}],
+        },
+    }}
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(kpi)};
+    const html = app.stitchPositionsRows(kpi, {{orders: []}}, {{col: 8, dir: 'desc'}});
+    console.log(JSON.stringify({{html}}));
+    """))
+    html = res["html"]
+    assert html.index("0xnew") < html.index("0xold")
+
+
+@requires_node
 def test_positions_unquoted_side_prints_dash_without_dot():
     res = json.loads(_eval_js(f"""
     const kpi = {json.dumps(_kpi(up_sh=10.0, up_cost=8.0, up_mid=0.76, dn_mid=None))};
