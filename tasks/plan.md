@@ -86,7 +86,7 @@ Task 4 (Shadow Run Verification & Standalone Rehearsal)
 
 ## 6. Implementation Tasks
 
-### Task 1: Configuration Knobs & Quote Price Ceiling
+### Task 1: Configuration Knobs & Quote Price Ceiling [x]
 - **Task ID:** TASK-1
 - **Size:** S (2 files)
 - **Domain Tag:** `[Backend/Logic]`

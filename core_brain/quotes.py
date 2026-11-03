@@ -468,6 +468,11 @@ def _decide_quotes_from_mid(
             blocked.append(f"{side}: price {price:.3f} off-scale")
             continue
 
+        max_entry = getattr(cfg, "bot_pos_price_max_entry_usd", None)
+        if max_entry is not None and price > max_entry + 1e-9:
+            blocked.append(f"{side}: price {price:.3f} > max entry {max_entry:.3f}")
+            continue
+
         # THE COMPLETABLE-COST GATE, on the FINAL price rather than the
         # `provisional` one `hard_block` reads twenty lines above. They are not
         # the same number: `provisional` is mid - reward_offset, and `price`
