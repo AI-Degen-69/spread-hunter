@@ -2250,7 +2250,7 @@ def _seed_lifecycle_pair(
     return active_orders
 
 
-def _lifecycle_visit_seam(tmp_path, pairs, *, up_bid=0.45, decide):
+def _lifecycle_visit_seam(tmp_path, pairs, *, up_bid=0.45, decide, **cfg_kw):
     from core_brain.order_registry import inventory_from_registry
     from core_brain.trader_loop import VenueSeam
 
@@ -2286,6 +2286,7 @@ def _lifecycle_visit_seam(tmp_path, pairs, *, up_bid=0.45, decide):
         bot_pos_price_max_pair_cost_usd=0.99,
         bot_risk_exposure_max_naked_usd=100.0,
         bot_quote_spread_static_offset_cents=0.02,
+        **cfg_kw,
     )
     seam = VenueSeam(
         client=object(),
@@ -2420,6 +2421,66 @@ class TestSingleLegLifecycleVisit:
             "pair-already-escalated-up",
         ]
         assert captured["submit"] == []
+
+    def test_trailing_rider_cancels_opposite_order_in_trader_loop(self, tmp_path):
+        seam, registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-rider", {"up_filled": 100.0})],
+            up_bid=0.55,
+            decide=lambda *args, **kwargs: ([], "unfunded"),
+            bot_risk_trailing_rider_on=True,
+            bot_risk_trailing_rider_delta_usd=0.02,
+        )
+        captured = {}
+        plan_fn = _capture_lifecycle_plan(captured)
+        result = _visit_one(
+            seam,
+            {"cid": "0xabc"},
+            live=False,
+            emit_fn=lambda **event: None,
+            plan_fn=plan_fn,
+        )
+        assert registry.get_lifecycle_state("pair-rider").state == "TRAILING_RIDER"
+        assert "pair-rider-down" in [row["id"] for row in captured["cancel"]]
+
+    def test_trailing_rider_exit_is_terminal_and_cancels_pair(self, tmp_path):
+        seam, registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-rider-exit", {"up_filled": 100.0})],
+            up_bid=0.50,
+            decide=lambda *args, **kwargs: pytest.fail("exit must skip quote decision"),
+            bot_risk_trailing_rider_on=True,
+            bot_risk_trailing_rider_delta_usd=0.02,
+        )
+        from core_brain.single_leg_lifecycle import LegState, LifecycleDecision, persist_decision, SingleLegPosition
+        pos = SingleLegPosition(
+            pair_id="pair-rider-exit", condition_id="0xabc",
+            up_token_id="tok-up", down_token_id="tok-dn",
+            up_size=100.0, down_size=0.0,
+            up_avg_price=0.48, down_avg_price=0.0,
+            up_best_bid=0.55, down_best_bid=0.50,
+            base_offset=0.02,
+        )
+        persist_decision(registry, pos, LifecycleDecision(
+            state=LegState.TRAILING_RIDER, action="trailing_rider",
+            peak_bid=0.55, held_token_id="tok-up", held_average_price=0.48,
+            naked_size=100.0, opposite_token_id="tok-dn",
+            reason="pre-seed peak",
+        ))
+
+        captured = {}
+        plan_fn = _capture_lifecycle_plan(captured)
+        result = _visit_one(
+            seam,
+            {"cid": "0xabc"},
+            live=False,
+            emit_fn=lambda **event: None,
+            plan_fn=plan_fn,
+        )
+        assert captured["submit"] == []
+        assert {row["id"] for row in captured["cancel"]} == {
+            "pair-rider-exit-up", "pair-rider-exit-down",
+        }
 
     def test_hard_stop_is_terminal_and_never_submits_a_buy(self, tmp_path):
         # The trigger is entry-relative since #619: the seam's fill price is

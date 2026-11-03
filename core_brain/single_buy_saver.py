@@ -2541,25 +2541,53 @@ def _manage_single_leg_positions_locked(
                 LegState(previous_record.state)
                 if previous_record is not None else None
             )
+            previous_peak_bid = None
+            if previous_record is not None and previous_record.evidence_json:
+                try:
+                    ev = json.loads(previous_record.evidence_json)
+                    val = ev.get("peak_bid")
+                    if val is not None and math.isfinite(float(val)):
+                        previous_peak_bid = float(val)
+                except Exception:
+                    pass
+
+            trailing_rider_on = bool(getattr(cfg, "bot_risk_trailing_rider_on", False))
+            trailing_rider_delta = float(getattr(cfg, "bot_risk_trailing_rider_delta_usd", 0.02))
+
             decision = transition(
                 position, previous_state, bot_pos_price_max_pair_cost_usd=bot_pos_price_max_pair_cost_usd,
                 settlement_due=False, tick_size=grid_tick,
                 bot_risk_stop_mode=bot_risk_stop_mode, bot_risk_stop_adverse_drop_usd=bot_risk_stop_adverse_drop_usd,
                 bot_risk_stop_max_drawdown_pct=bot_risk_stop_max_drawdown_pct,
                 bot_risk_circuit_max_drawdown_pct=bot_risk_circuit_max_drawdown_pct,
+                bot_risk_trailing_rider_on=trailing_rider_on,
+                bot_risk_trailing_rider_delta_usd=trailing_rider_delta,
+                previous_peak_bid=previous_peak_bid,
             )
-            if decision.action == "hard_stop":
-                # The poll's hard stop is its own to persist: it survives
+            if decision.action == "trailing_rider":
+                if decision.state != previous_state or decision.peak_bid != previous_peak_bid:
+                    persist_decision(
+                        registry, position, decision, previous_state,
+                    )
+                # Cancel resting opposite leg limit orders to uncap the upside
+                opposite_token = decision.opposite_token_id
+                if opposite_token and opposite_token in pair.get("legs", {}):
+                    opposite_working = _working_orders(pair["legs"][opposite_token])
+                    if opposite_working:
+                        _cancel_orders(client, opposite_working, "trailing rider opposite leg")
+
+            if decision.action in ("hard_stop", "trailing_rider_exit"):
+                # The poll's stop is its own to persist: it survives
                 # restart and is observable, and only the poll executes it.
                 persist_decision(
                     registry, position, decision, previous_state,
                 )
-            if decision.action == "hard_stop":
+            if decision.action in ("hard_stop", "trailing_rider_exit"):
                 try:
                     result = exit_single_buy(
                         client, registry, pair_id, bot_pos_price_max_pair_cost_usd,
                         live=live, venue_positions=venue_positions,
-                        reason="lifecycle_hard_stop", force=True,
+                        reason=("trailing_rider_exit" if decision.action == "trailing_rider_exit" else "lifecycle_hard_stop"), force=True,
                         trigger_bid=held_bid,
                     )
                 except Exception as exc:
@@ -2579,7 +2607,7 @@ def _manage_single_leg_positions_locked(
                         pass
                     raise
                 result.update(
-                    route="hard_stop", lifecycle_state=decision.state.value,
+                    route=decision.action, lifecycle_state=decision.state.value,
                     reason=decision.reason,
                 )
                 if result.get("action") == "exited":

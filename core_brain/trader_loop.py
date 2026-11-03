@@ -1752,6 +1752,8 @@ def _lifecycle_quote_context(
             bot_risk_stop_max_drawdown_pct=float(cfg.bot_risk_stop_max_drawdown_pct),
             bot_risk_circuit_max_drawdown_pct=float(cfg.bot_risk_circuit_max_drawdown_pct),
             tick_size=float(cfg.bot_quote_grid_tick_size_usd),
+            bot_risk_trailing_rider_on=bool(getattr(cfg, "bot_risk_trailing_rider_on", False)),
+            bot_risk_trailing_rider_delta_usd=float(getattr(cfg, "bot_risk_trailing_rider_delta_usd", 0.02)),
         )
         decisions.append((pair_id, position, decision))
 
@@ -1809,11 +1811,17 @@ def _lifecycle_quote_context(
                         continue
                     replace_order_ids.add(order_id)
                 cancel_order_ids.add(order_id)
+        elif decision.action == "trailing_rider":
+            for order in active_pair_orders:
+                order_id = str(order.get("id") or order.get("order_id") or "")
+                if not order_id:
+                    continue
+                cancel_order_ids.add(order_id)
 
     hard_stops = [
         (pair_id, _position, decision)
         for pair_id, _position, decision in decisions
-        if decision.action == "hard_stop"
+        if decision.action in ("hard_stop", "trailing_rider_exit")
     ]
     if hard_stops:
         reason = "; ".join(

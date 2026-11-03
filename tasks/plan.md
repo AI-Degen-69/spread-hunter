@@ -127,7 +127,7 @@ Task 4 (Shadow Run Verification & Standalone Rehearsal)
 ### Checkpoint 1 (Tasks 1-2 Complete)
 - Verify config parsing, quote ceiling filtering, and pure lifecycle state transitions in isolation.
 
-### Task 3: Execution Engine Wiring & Opposite Leg Cancellation
+### Task 3: Execution Engine Wiring & Opposite Leg Cancellation [x]
 - **Task ID:** TASK-3
 - **Size:** M (3 files)
 - **Domain Tag:** `[Backend/Logic]`
