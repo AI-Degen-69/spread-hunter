@@ -217,6 +217,7 @@ class MakerConfig:
     bot_pos_skew_max_offset_cents: float = 0.015
     bot_pos_skew_min_reward_offset_cents: float = 0.005
     bot_pos_price_max_complete_usd: float = 1.00
+    bot_pos_price_max_entry_usd: float = 0.60
     bot_pos_gate_complete_cost_on: bool = True
     bot_pos_merge_max_loss_per_share_usd: float = 0.01
     bot_pos_merge_velocity_hold_days: float = 30.0
@@ -286,6 +287,8 @@ class MakerConfig:
     bot_risk_markout_catastrophic_threshold: float = -0.020
     bot_risk_stranded_completion_on: bool = False
     bot_risk_stranded_max_wait_sec: float = 300.0
+    bot_risk_trailing_rider_on: bool = False
+    bot_risk_trailing_rider_delta_usd: float = 0.02
 
     # 4. Evaluation, Latency, Markets
     bot_eval_stat_gate_deltas: tuple[float, ...] = (0.01, 0.02, 0.04)
@@ -466,6 +469,11 @@ class MakerConfig:
             kw["bot_pos_price_max_complete_usd"] = _bounded_float(
                 "BOT_POS_PRICE_MAX_COMPLETE_USD", ccap, 0.0, 1.0)
 
+        ecap = _env("BOT_POS_PRICE_MAX_ENTRY_USD")
+        if ecap:
+            kw["bot_pos_price_max_entry_usd"] = _bounded_float(
+                "BOT_POS_PRICE_MAX_ENTRY_USD", ecap, 0.0, 1.0)
+
         dead_band = _renamed_env(
             "BOT_ORDER_REQUOTE_DEAD_BAND_USD", "BOT_ORDER_REQUOTE_DEAD_BAND_CENTS")
         if dead_band is not None:
@@ -639,6 +647,17 @@ class MakerConfig:
         if str_wait:
             kw["bot_risk_stranded_max_wait_sec"] = _bounded_float(
                 "BOT_RISK_STRANDED_MAX_WAIT_SEC", str_wait, 0.0, 86400.0)
+
+        tro = _env("BOT_RISK_TRAILING_RIDER_ON")
+        if tro:
+            kw["bot_risk_trailing_rider_on"] = (
+                tro.strip().lower() in ("1", "true", "yes", "on")
+            )
+
+        trd = _env("BOT_RISK_TRAILING_RIDER_DELTA_USD")
+        if trd:
+            kw["bot_risk_trailing_rider_delta_usd"] = _bounded_float(
+                "BOT_RISK_TRAILING_RIDER_DELTA_USD", trd, 0.0, 1.0)
 
         exit_win = _env("BOT_RISK_PAIRS_EXIT_WINDOW_SEC") or _env("BOT_POS_HOLD_MAX_SEC")
         if exit_win:

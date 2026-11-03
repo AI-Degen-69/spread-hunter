@@ -747,3 +747,142 @@ def test_transition_unchanged_for_hard_stop():
         bot_risk_stop_mode="ABSOLUTE_DROP", bot_risk_stop_adverse_drop_usd=0.05,
     )
     assert decision.action == "hard_stop"
+
+
+# --- Trailing Peak Momentum Rider tests (#926) -----------------------------
+
+def test_trailing_rider_inactive_when_off():
+    # When off, upward move remains in PATIENT_WAIT
+    pos = _position(up_size=10.0, down_size=0.0, up_avg=0.28, up_bid=0.45)
+    decision = transition(
+        pos, None, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_trailing_rider_on=False,
+    )
+    assert decision.state is LegState.PATIENT_WAIT
+    assert decision.action == "wait"
+
+
+def test_trailing_rider_activates_on_upward_single_leg():
+    # Single leg entered at 0.28, current bid 0.35 (> 0.28)
+    pos = _position(up_size=10.0, down_size=0.0, up_avg=0.28, up_bid=0.35)
+    decision = transition(
+        pos, None, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=0.02,
+    )
+    assert decision.state is LegState.TRAILING_RIDER
+    assert decision.action == "trailing_rider"
+    assert decision.peak_bid == 0.35
+    assert decision.held_token_id == "token-up"
+
+
+def test_trailing_rider_tracks_rising_peak():
+    # Previous peak was 0.35, current bid reaches 0.50
+    pos = _position(up_size=10.0, down_size=0.0, up_avg=0.28, up_bid=0.50)
+    decision = transition(
+        pos, LegState.TRAILING_RIDER, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=0.02,
+        previous_peak_bid=0.35,
+    )
+    assert decision.state is LegState.TRAILING_RIDER
+    assert decision.action == "trailing_rider"
+    assert decision.peak_bid == 0.50
+
+
+def test_trailing_rider_holds_on_minor_pullback():
+    # Peak at 0.50, bid pulls back 1c to 0.49 (delta is 0.02)
+    pos = _position(up_size=10.0, down_size=0.0, up_avg=0.28, up_bid=0.49)
+    decision = transition(
+        pos, LegState.TRAILING_RIDER, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=0.02,
+        previous_peak_bid=0.50,
+    )
+    assert decision.state is LegState.TRAILING_RIDER
+    assert decision.action == "trailing_rider"
+    assert decision.peak_bid == 0.50
+
+
+def test_trailing_rider_exits_when_delta_breached():
+    # Peak at 0.50, bid drops 2c to 0.48 (delta is 0.02) -> immediate taker exit
+    pos = _position(up_size=10.0, down_size=0.0, up_avg=0.28, up_bid=0.48)
+    decision = transition(
+        pos, LegState.TRAILING_RIDER, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=0.02,
+        previous_peak_bid=0.50,
+    )
+    assert decision.state is LegState.TRAILING_RIDER
+    assert decision.action == "trailing_rider_exit"
+    assert decision.peak_bid == 0.50
+    assert "trailing_rider_exit" in decision.action
+
+
+def test_trailing_rider_down_leg_mirrors_up():
+    # DOWN leg filled at 0.30, current down_bid 0.45
+    pos = _position(up_size=0.0, down_size=10.0, up_avg=0.0, down_avg=0.30, up_bid=0.55, down_bid=0.45)
+    decision = transition(
+        pos, None, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=0.02,
+    )
+    assert decision.state is LegState.TRAILING_RIDER
+    assert decision.action == "trailing_rider"
+    assert decision.held_token_id == "token-down"
+    assert decision.peak_bid == 0.45
+
+
+def test_trailing_rider_refuses_invalid_delta():
+    pos = _position(up_size=10.0, down_size=0.0, up_avg=0.28, up_bid=0.35)
+    decision = transition(
+        pos, None, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=-0.01,
+    )
+    assert decision.action == "refused"
+    assert "delta" in decision.reason
+
+
+def test_evaluate_persists_advancing_peak_watermark(tmp_path):
+    # Test that peak advances are persisted to SQLite evidence_json
+    reg = OrderRegistry(tmp_path / "test_rider.db")
+    pos = _position(up_size=10.0, down_size=0.0, up_avg=0.28, up_bid=0.40)
+    
+    # First evaluate: enters TRAILING_RIDER with peak 0.40
+    d1 = evaluate(
+        pos, reg, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=0.02,
+    )
+    assert d1.state is LegState.TRAILING_RIDER
+    assert d1.peak_bid == 0.40
+    
+    saved = reg.get_lifecycle_state("pair-1")
+    assert saved is not None
+    assert saved.state == "TRAILING_RIDER"
+    import json
+    assert json.loads(saved.evidence_json)["peak_bid"] == 0.40
+
+    # Second evaluate: bid rises to 0.48, peak updates to 0.48 and MUST be persisted
+    pos2 = _position(up_size=10.0, down_size=0.0, up_avg=0.28, up_bid=0.48)
+    d2 = evaluate(
+        pos2, reg, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=0.02,
+    )
+    assert d2.state is LegState.TRAILING_RIDER
+    assert d2.peak_bid == 0.48
+    
+    saved2 = reg.get_lifecycle_state("pair-1")
+    assert json.loads(saved2.evidence_json)["peak_bid"] == 0.48
+
+    # Third evaluate: bid drops to 0.46 (pullback 0.02) -> triggers exit
+    pos3 = _position(up_size=10.0, down_size=0.0, up_avg=0.28, up_bid=0.46)
+    d3 = evaluate(
+        pos3, reg, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=0.02,
+    )
+    assert d3.action == "trailing_rider_exit"
+    assert d3.peak_bid == 0.48

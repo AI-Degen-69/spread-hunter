@@ -2943,3 +2943,55 @@ class TestShadowReadsTheLiveBook:
         assert stream.stopped is True
         assert not [t for t in threading.enumerate()
                     if "market-stream" in str(t.name)]
+
+
+class TestShadowTrailingRiderCLI:
+    def test_parse_args_trailing_rider_flags(self):
+        from core_brain.shadow_run import _parse_args
+        a_default = _parse_args(["--db", "data/test.db"])
+        assert a_default.trailing_rider is None
+        assert a_default.trailing_rider_delta is None
+        assert a_default.max_entry_price is None
+
+        a_on = _parse_args([
+            "--db", "data/test.db",
+            "--trailing-rider",
+            "--trailing-rider-delta", "0.03",
+            "--max-entry-price", "0.55",
+        ])
+        assert a_on.trailing_rider is True
+        assert a_on.trailing_rider_delta == 0.03
+        assert a_on.max_entry_price == 0.55
+
+        a_off = _parse_args(["--db", "data/test.db", "--no-trailing-rider"])
+        assert a_off.trailing_rider is False
+
+    def test_main_sets_env_from_flags(self, monkeypatch, tmp_path):
+        import os
+        import core_brain.shadow_run as sr
+        seen_env = {}
+
+        class Result:
+            results: list = []
+            intents: list = []
+            skipped_stages: tuple = ()
+
+        def fake_run_shadow(**kwargs):
+            seen_env["BOT_RISK_TRAILING_RIDER_ON"] = os.environ.get("BOT_RISK_TRAILING_RIDER_ON")
+            seen_env["BOT_RISK_TRAILING_RIDER_DELTA_USD"] = os.environ.get("BOT_RISK_TRAILING_RIDER_DELTA_USD")
+            seen_env["BOT_POS_PRICE_MAX_ENTRY_USD"] = os.environ.get("BOT_POS_PRICE_MAX_ENTRY_USD")
+            return Result()
+
+        monkeypatch.setattr(sr, "run_shadow", fake_run_shadow)
+        sr.main([
+            "--minutes", "0",
+            "--db", str(tmp_path / "shadow.db"),
+            "--no-stream",
+            "--trailing-rider",
+            "--trailing-rider-delta", "0.025",
+            "--max-entry-price", "0.58",
+        ])
+
+        assert seen_env["BOT_RISK_TRAILING_RIDER_ON"] == "1"
+        assert seen_env["BOT_RISK_TRAILING_RIDER_DELTA_USD"] == "0.025"
+        assert seen_env["BOT_POS_PRICE_MAX_ENTRY_USD"] == "0.58"

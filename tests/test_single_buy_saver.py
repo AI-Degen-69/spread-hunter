@@ -3705,3 +3705,61 @@ def test_manager_orphan_profit_refill_resets_age(registry: OrderRegistry):
     assert len(results_aged) == 1
     assert results_aged[0]["action"] == "exited"
     assert results_aged[0]["route"] == "orphan_profit_exit"
+
+
+def test_manager_trailing_rider_cancels_opposite_leg_and_tracks_peak(registry: OrderRegistry):
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.28, now_ms=int(base_s * 1000))
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=0.02,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    # Market bid on held UP leg is 0.40 (> entry 0.28)
+    client = FakeClient(best_bid=0.40, bid_depth=10.0)
+
+    results = lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+
+    # State in registry should be TRAILING_RIDER with peak_bid 0.40
+    saved = registry.get_lifecycle_state(pair_id)
+    assert saved is not None
+    assert saved.state == "TRAILING_RIDER"
+    import json
+    ev = json.loads(saved.evidence_json)
+    assert ev["peak_bid"] == 0.40
+
+    # Opposite resting order was cancelled
+    assert "cancel:venue-light" in client.calls
+
+
+def test_manager_trailing_rider_exit_triggers_market_exit(registry: OrderRegistry):
+    base_s = time.time()
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.28, now_ms=int(base_s * 1000))
+    cfg = MakerConfig(
+        bot_risk_gate_pairs_rule_on=True,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=0.02,
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+    )
+    # 1. Ride to peak 0.50
+    client = FakeClient(best_bid=0.50, bid_depth=10.0)
+    lp.manage_single_leg_positions(
+        client, registry, cfg, live=True, now=base_s,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+    saved = registry.get_lifecycle_state(pair_id)
+    assert saved.state == "TRAILING_RIDER"
+
+    # 2. Bid drops to 0.48 (2c drop from 0.50 peak) -> exits
+    client2 = FakeClient(best_bid=0.48, bid_depth=10.0)
+    results = lp.manage_single_leg_positions(
+        client2, registry, cfg, live=True, now=base_s + 1.0,
+        venue_positions={TOK_UP: 10.0, TOK_DN: 0.0},
+    )
+    assert len(results) == 1
+    assert results[0]["action"] == "exited"
+    assert results[0]["route"] == "trailing_rider_exit"

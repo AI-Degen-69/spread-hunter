@@ -1661,16 +1661,23 @@ def _lifecycle_quote_context(
     cancel_order_ids: set[str] = set()
     escalated_order_already_resting = False
 
-    def refusal_context(reason: str, pair_ids: list[str],
-                        state: str | None = None) -> LifecycleQuoteContext:
+    def refusal_context(
+        reason: str,
+        pair_ids: list[str],
+        state: str | None = None,
+        cancel_order_ids: frozenset | None = None,
+    ) -> LifecycleQuoteContext:
         emit_fn(
             service="decide", cycle=cycle, phase="quoting",
             action="single_leg_refusal", market_slug=title, reason=reason,
             extra={"condition_id": str(market.condition_id),
                    "pair_ids": pair_ids},
         )
-        return LifecycleQuoteContext(refusal_reason=reason,
-                                     lifecycle_state=state)
+        return LifecycleQuoteContext(
+            refusal_reason=reason,
+            lifecycle_state=state,
+            cancel_order_ids=cancel_order_ids or frozenset(),
+        )
 
     def preserve_refusal_context(
         reason: str, pair_ids: list[str],
@@ -1752,6 +1759,8 @@ def _lifecycle_quote_context(
             bot_risk_stop_max_drawdown_pct=float(cfg.bot_risk_stop_max_drawdown_pct),
             bot_risk_circuit_max_drawdown_pct=float(cfg.bot_risk_circuit_max_drawdown_pct),
             tick_size=float(cfg.bot_quote_grid_tick_size_usd),
+            bot_risk_trailing_rider_on=bool(getattr(cfg, "bot_risk_trailing_rider_on", False)),
+            bot_risk_trailing_rider_delta_usd=float(getattr(cfg, "bot_risk_trailing_rider_delta_usd", 0.02)),
         )
         decisions.append((pair_id, position, decision))
 
@@ -1809,11 +1818,32 @@ def _lifecycle_quote_context(
                         continue
                     replace_order_ids.add(order_id)
                 cancel_order_ids.add(order_id)
+        elif decision.action == "trailing_rider":
+            for order in active_pair_orders:
+                order_id = str(order.get("id") or order.get("order_id") or "")
+                if not order_id:
+                    continue
+                cancel_order_ids.add(order_id)
+
+    trailing_riders = [
+        (pair_id, _position, decision)
+        for pair_id, _position, decision in decisions
+        if decision.action == "trailing_rider"
+    ]
+    if trailing_riders:
+        reason = "; ".join(
+            f"trailing rider active for pair {pair_id}: {decision.reason}"
+            for pair_id, _position, decision in trailing_riders
+        )
+        return refusal_context(
+            reason, [pair_id for pair_id, _position, _ in trailing_riders],
+            state=trailing_riders[0][2].state.value,
+            cancel_order_ids=frozenset(cancel_order_ids))
 
     hard_stops = [
         (pair_id, _position, decision)
         for pair_id, _position, decision in decisions
-        if decision.action == "hard_stop"
+        if decision.action in ("hard_stop", "trailing_rider_exit")
     ]
     if hard_stops:
         reason = "; ".join(

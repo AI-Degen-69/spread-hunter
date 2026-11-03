@@ -41,6 +41,7 @@ class LegState(str, Enum):
     ESCALATED_HEDGE = "ESCALATED_HEDGE"
     HARD_STOP = "HARD_STOP"
     PAIR_LOCKED = "PAIR_LOCKED"
+    TRAILING_RIDER = "TRAILING_RIDER"
 
 
 class ExposureState(str, Enum):
@@ -193,6 +194,7 @@ class LifecycleDecision:
     opposite_token_id: str | None = None
     opposite_limit_price: float | None = None
     reason: str = ""
+    peak_bid: float | None = None
 
 
 @dataclass(frozen=True)
@@ -485,6 +487,9 @@ def transition(
     bot_risk_circuit_max_drawdown_pct: float = 75.0,
     escalation_multiple: float = 2.0,
     tick_size: float = 0.01,
+    bot_risk_trailing_rider_on: bool = False,
+    bot_risk_trailing_rider_delta_usd: float = 0.02,
+    previous_peak_bid: float | None = None,
 ) -> LifecycleDecision:
     """Evaluate one pair without performing venue or registry operations."""
     cap_value = float(bot_pos_price_max_pair_cost_usd)
@@ -587,6 +592,34 @@ def transition(
             **details,
         )
 
+    if bot_risk_trailing_rider_on:
+        if not math.isfinite(bot_risk_trailing_rider_delta_usd) or bot_risk_trailing_rider_delta_usd <= 0:
+            return _refused(previous_state, "trailing rider delta must be finite and positive")
+        if held_bid is not None and (held_bid > held_average or previous_state is LegState.TRAILING_RIDER):
+            peak = max(previous_peak_bid or held_average, held_bid)
+            trailing_stop_threshold = Decimal(str(peak)) - Decimal(str(bot_risk_trailing_rider_delta_usd))
+            if Decimal(str(held_bid)) <= trailing_stop_threshold:
+                return LifecycleDecision(
+                    state=LegState.TRAILING_RIDER,
+                    action="trailing_rider_exit",
+                    reason=(
+                        f"held bid {held_bid:.4f} <= peak {peak:.4f} - "
+                        f"delta {bot_risk_trailing_rider_delta_usd:.4f}"
+                    ),
+                    peak_bid=peak,
+                    **details,
+                )
+            return LifecycleDecision(
+                state=LegState.TRAILING_RIDER,
+                action="trailing_rider",
+                reason=(
+                    f"trailing rider active: held bid {held_bid:.4f} "
+                    f"tracking peak {peak:.4f} (> entry {held_average:.4f})"
+                ),
+                peak_bid=peak,
+                **details,
+            )
+
     if settlement_due:
         state = (
             LegState.ESCALATED_HEDGE
@@ -680,6 +713,7 @@ def persist_decision(
         "up_average_price": position.up_avg_price,
         "down_average_price": position.down_avg_price,
         "base_offset": position.base_offset,
+        "peak_bid": decision.peak_bid,
         "reason": decision.reason,
     }
     registry.save_lifecycle_state(
@@ -707,10 +741,13 @@ def evaluate(
     bot_risk_stop_max_drawdown_pct: float = 10.0,
     bot_risk_circuit_max_drawdown_pct: float = 75.0,
     tick_size: float = 0.01,
+    bot_risk_trailing_rider_on: bool = False,
+    bot_risk_trailing_rider_delta_usd: float = 0.02,
 ) -> LifecycleDecision:
     """Load sticky state, decide for one pair, and persist state changes."""
     previous_record = registry.get_lifecycle_state(position.pair_id)
     previous_state = None
+    previous_peak_bid = None
     if previous_record is not None:
         if previous_record.condition_id != position.condition_id:
             raise ValueError(
@@ -718,6 +755,14 @@ def evaluate(
                 f"{previous_record.condition_id!r}, not {position.condition_id!r}"
             )
         previous_state = LegState(previous_record.state)
+        if previous_record.evidence_json:
+            try:
+                ev = json.loads(previous_record.evidence_json)
+                val = ev.get("peak_bid")
+                if val is not None and math.isfinite(float(val)):
+                    previous_peak_bid = float(val)
+            except Exception:
+                pass
 
     decision = transition(
         position,
@@ -729,8 +774,11 @@ def evaluate(
         bot_risk_stop_max_drawdown_pct=bot_risk_stop_max_drawdown_pct,
         bot_risk_circuit_max_drawdown_pct=bot_risk_circuit_max_drawdown_pct,
         tick_size=tick_size,
+        bot_risk_trailing_rider_on=bot_risk_trailing_rider_on,
+        bot_risk_trailing_rider_delta_usd=bot_risk_trailing_rider_delta_usd,
+        previous_peak_bid=previous_peak_bid,
     )
-    if decision.action == "refused" or decision.state is previous_state:
+    if decision.action == "refused" or (decision.state is previous_state and decision.peak_bid == previous_peak_bid):
         return decision
 
     persist_decision(registry, position, decision, previous_state)

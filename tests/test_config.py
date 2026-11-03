@@ -351,3 +351,20 @@ def test_the_45c_champion_stop_survives_the_rename(monkeypatch, name):
     for entry in (0.50, 0.512, 0.53, 0.618, 0.33):
         assert stop_trigger(entry, "ABSOLUTE_DROP", loaded, 10.0, 75.0) == \
             stop_trigger(entry, "ABSOLUTE_DROP", 0.045, 10.0, 75.0)
+
+
+def test_issue_926_trailing_rider_and_entry_ceiling_defaults():
+    cfg = core_config.load()
+    assert cfg.bot_risk_trailing_rider_on is False
+    assert cfg.bot_risk_trailing_rider_delta_usd == 0.02
+    assert cfg.bot_pos_price_max_entry_usd == 0.60
+
+
+def test_issue_926_trailing_rider_and_entry_ceiling_env(monkeypatch):
+    monkeypatch.setenv("BOT_RISK_TRAILING_RIDER_ON", "true")
+    monkeypatch.setenv("BOT_RISK_TRAILING_RIDER_DELTA_USD", "0.035")
+    monkeypatch.setenv("BOT_POS_PRICE_MAX_ENTRY_USD", "0.55")
+    cfg = core_config.load()
+    assert cfg.bot_risk_trailing_rider_on is True
+    assert cfg.bot_risk_trailing_rider_delta_usd == 0.035
+    assert cfg.bot_pos_price_max_entry_usd == 0.55
