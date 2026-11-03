@@ -2575,6 +2575,7 @@ def _manage_single_leg_positions_locked(
                     opposite_working = _working_orders(pair["legs"][opposite_token])
                     if opposite_working:
                         _cancel_orders(client, opposite_working, "trailing rider opposite leg")
+                continue
 
             if decision.action in ("hard_stop", "trailing_rider_exit"):
                 # The poll's stop is its own to persist: it survives

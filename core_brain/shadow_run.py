@@ -2161,6 +2161,11 @@ def main(
 
     a = _parse_args(argv)
 
+    orig_env = {
+        "BOT_RISK_TRAILING_RIDER_ON": os.environ.get("BOT_RISK_TRAILING_RIDER_ON"),
+        "BOT_RISK_TRAILING_RIDER_DELTA_USD": os.environ.get("BOT_RISK_TRAILING_RIDER_DELTA_USD"),
+        "BOT_POS_PRICE_MAX_ENTRY_USD": os.environ.get("BOT_POS_PRICE_MAX_ENTRY_USD"),
+    }
     if a.trailing_rider is not None:
         os.environ["BOT_RISK_TRAILING_RIDER_ON"] = "1" if a.trailing_rider else "0"
     if a.trailing_rider_delta is not None:
@@ -2285,6 +2290,11 @@ def main(
         # lingering connection for a caller that embeds `main`. It runs on
         # the error paths too: `run_shadow` can raise before its loop
         # starts, and the production-registry guard is exactly that case.
+        for k, v in orig_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         if shadow_stream is not None:
             try:
                 shadow_stream.stop()

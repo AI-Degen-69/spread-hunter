@@ -2986,6 +2986,7 @@ class TestShadowTrailingRiderCLI:
         sr.main([
             "--minutes", "0",
             "--db", str(tmp_path / "shadow.db"),
+            "--no-stream",
             "--trailing-rider",
             "--trailing-rider-delta", "0.025",
             "--max-entry-price", "0.58",
