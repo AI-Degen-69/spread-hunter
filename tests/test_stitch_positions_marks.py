@@ -128,10 +128,8 @@ def test_single_leg_row_shows_its_own_current_price_and_pnl():
     """))
     html = res["html"]
     assert 'data-cell="cur-price"' in html
-    assert "YES $0.76" in html
-    assert "NO $0.24" in html
     assert 'data-leg="YES"' in html and 'data-leg="NO"' in html
-    assert 'data-leg="YES"' in html and 'data-leg="NO"' in html
+    assert "$0.76" in html and "$0.24" in html
     assert "Cost: $8.00" in html
     assert "sh total" not in html
     assert "-$0.40" in html
@@ -147,8 +145,8 @@ def test_paired_row_stacks_no_below_yes_with_a_total():
     }}));
     """))
     html = res["html"]
-    yes_at = html.index("YES $0.76")
-    no_at = html.index("NO $0.24")
+    yes_at = html.index('data-leg="YES"')
+    no_at = html.index('data-leg="NO"')
     assert yes_at < no_at  # NO below YES in the same cell
     assert "Total" not in html
     assert "stitch-leg-pnl" not in html
@@ -171,7 +169,7 @@ def test_live_overlay_moves_the_pair_pnl():
     }}));
     """))
     html = res["html"]
-    assert "YES $0.77" in html
+    assert "$0.77" in html
     assert "-$0.30" in html
     assert "stitch-status-badge" not in html
     assert "quoting-breathing" not in html
@@ -456,15 +454,17 @@ def test_held_no_with_resting_yes_shows_resting_rung_not_no_held():
     }}));
     """))
     html = res["html"]
-    assert "5 resting @ $0.46" in html
-    assert "8 resting" not in html
+    assert "5 @ $0.46" in html
+    assert "8 @ $0.46" not in html
+    assert "resting @" not in html
     assert "hedge working" not in html
     assert "No YES held" not in html
     assert "SINGLE FILL" not in html
     assert "UNPAIRED" not in html
     assert "stitch-status-badge" not in html
     assert "is-hedge-pending" in html
-    assert "stitch-positions-held" in html
+    assert "stitch-dual-leg-cell" in html
+    assert "stitch-quote-resting" in html
     assert "Cost: $2.25" in html
     assert "sh total" not in html
     assert 'data-leg="YES"' in html and 'data-leg="NO"' in html
@@ -516,7 +516,8 @@ def test_positions_unquoted_side_prints_dash_without_dot():
     """))
     html = res["html"]
     no_line = html[html.index('data-leg="NO"'):html.index("</div>", html.index('data-leg="NO"')) + 1]
-    assert "NO --" in no_line
+    assert "--" in no_line
+    assert "stitch-cur-val-missing" in no_line
     assert "stitch-cur-live" not in no_line
 
 

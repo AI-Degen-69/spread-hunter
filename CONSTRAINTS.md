@@ -16,7 +16,7 @@ Branch: i925/trim-open-positions-table | Issue: #925
 - Keep existing sort keys; do not renumber them. Reject removed keys with a stitch-only allowlist.
 - Remove `.proto-body .stitch-mark-val` only after a final `app.js` grep shows no users; keep `.stitch-pair-cost`, `.stitch-mid-sub`, `.stitch-status-badge`, `.stitch-status-dot`, `.stitch-pnl-*`.
 - Keep the `is-hedge-pending` row tint and the row-tint-only signal for a lone held leg with a resting hedge; extend the same row-tint treatment to `is-unpaired` without adding a column or making color the only signal.
-- HELD INVENTORY alignment and `Cost: $XX.XX` are positions-only (`stitch-positions-held` / positions-only option on `dualLegLine`); Orders keeps its existing layout and copy.
+- HELD INVENTORY and Orders Dual-Leg Quotes share the same dual-leg theme (`.stitch-dual-leg-cell` grid, `Cost: $XX.XX`); Orders no longer keeps a separate layout.
 - Current price remains live mid when fresh, otherwise quote mid; it is not switched to ask without a separate issue/decision.
 - Keep `positionMarkValue` unchanged; the unrealised number remains par-based.
 - CodeRabbit's plan is input, not authority. Its undefined "Assumption 5" was resolved locally: missing value => `--`, empty percentage, `flat`.

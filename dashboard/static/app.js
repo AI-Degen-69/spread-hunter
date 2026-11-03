@@ -10034,24 +10034,21 @@ function otToggleSort(view, col) {
 // ONE shared per-leg line used by BOTH the Orders tab (dual-leg quote cells) and
 // the Positions tab (YES HELD / NO HELD cells). Single template, single set of CSS
 // classes, single spacing. A present leg renders: side badge + `<size> @ $<price>`
-// (green for YES, red for NO) + a muted `cost $X` subline. An absent leg renders the
+// (green for YES, red for NO) + a muted cost subline. An absent leg renders the
 // side badge plus a muted `emptyLabel` instead of numbers.
-//   sizeSuffix lets each tab keep its own unit wording (e.g. ' sh' on Positions).
-//   costPrefix lets Positions print `Cost: $X`; Orders keeps the default.
-function dualLegLine({ side, size, price, cost, emptyLabel, sizeSuffix, counterpart, resting, costPrefix }) {
+//   costPrefix lets both Positions and Orders print `Cost: $X` (default `cost $X`).
+function dualLegLine({ side, size, price, cost, emptyLabel, counterpart, resting, costPrefix }) {
   const isYes = side === 'YES';
   const badgeCls = isYes ? 'yes' : 'no';
   const priceCls = isYes ? 'stitch-quote-up' : 'stitch-quote-down';
-  const suffix = sizeSuffix || '';
   const hasLeg = (size !== null && size !== undefined && Number(size) > 0);
   if (!hasLeg) {
     // A resting order on the missing side is the live fact: the leg is not
-    // merely absent, its hedge is working. This beats every other absent
-    // rung, including the filled/cancelled counterpart notes below.
+    // merely absent, its hedge is working. Grayed text, no "resting" wording.
     if (resting && Number(resting.size) > 0) {
       return `<div class="stitch-quote-rung">`
         + `<span class="stitch-leg-pill missing">${side}</span>`
-        + `<span style="color:#22d3ee;font-size:11px;">${fmtShares(Number(resting.size))} resting @ ${fmtPrice(Number(resting.price))}</span>`
+        + `<span class="stitch-quote-resting">${fmtShares(Number(resting.size))} @ ${fmtPrice(Number(resting.price))}</span>`
         + `</div>`;
     }
     // Counterpart fate for an absent leg: a filled counterpart holds a
@@ -10077,7 +10074,7 @@ function dualLegLine({ side, size, price, cost, emptyLabel, sizeSuffix, counterp
   }
   return `<div class="stitch-quote-rung">`
     + `<span class="stitch-leg-pill ${badgeCls}">${side}</span>`
-    + `<span class="${priceCls}">${fmtShares(size)}${suffix} @ ${fmtPrice(price)}</span>`
+    + `<span class="${priceCls}">${fmtShares(size)} @ ${fmtPrice(price)}</span>`
     + `<span class="stitch-quote-subcost">${costPrefix || 'cost '}${fmtUSD(cost)}</span>`
     + `</div>`;
 }
@@ -10368,9 +10365,9 @@ function stitchOpenOrdersRows(kpi, state, sort) {
 
       <!-- Col 4: Dual-Leg Quotes (YES / NO) -->
       ${stitchDualLegCell(
-        dualLegLine({ side: 'YES', size: upOrder ? upSize : null, price: upPrice, cost: upCost, emptyLabel: '[Awaiting YES Quote]', counterpart: upOrder ? null : upFilled ? { state: 'filled', order: upFilled } : upCancelled ? { state: 'cancelled' } : null }),
-        dualLegLine({ side: 'NO', size: dnOrder ? dnSize : null, price: dnPrice, cost: dnCost, emptyLabel: '[Awaiting NO Quote]', counterpart: dnOrder ? null : dnFilled ? { state: 'filled', order: dnFilled } : dnCancelled ? { state: 'cancelled' } : null }),
-        {})}
+        dualLegLine({ side: 'YES', size: upOrder ? upSize : null, price: upPrice, cost: upCost, emptyLabel: '[Awaiting YES Quote]', counterpart: upOrder ? null : upFilled ? { state: 'filled', order: upFilled } : upCancelled ? { state: 'cancelled' } : null, costPrefix: 'Cost: ' }),
+        dualLegLine({ side: 'NO', size: dnOrder ? dnSize : null, price: dnPrice, cost: dnCost, emptyLabel: '[Awaiting NO Quote]', counterpart: dnOrder ? null : dnFilled ? { state: 'filled', order: dnFilled } : dnCancelled ? { state: 'cancelled' } : null, costPrefix: 'Cost: ' }),
+        { cellClass: 'stitch-dual-leg-cell' })}
 
       <!-- Col 5: PAIR COST -->
       <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
@@ -10569,16 +10566,17 @@ function stitchBothLegMarks(overlay) {
   ];
 }
 
-function stitchLegPriceInner(e) {
-  const body = (e.mid === null || e.mid === undefined)
-    ? `${e.leg} --`
-    : `${e.leg} ${fmtPrice(e.mid)}`;
-  return `${body}${e.live ? ' <span class="stitch-cur-live">●</span>' : ''}`;
-}
-
 function stitchLegPriceLine(e) {
   const dir = e.leg === 'YES' ? 'up' : 'down';
-  return `<div class="stitch-cur-${dir}" data-leg="${e.leg}">${stitchLegPriceInner(e)}</div>`;
+  const missing = (e.mid === null || e.mid === undefined);
+  const cls = missing ? 'stitch-cur-val-missing'
+    : (e.leg === 'YES' ? 'stitch-quote-up' : 'stitch-quote-down');
+  const val = missing ? '--' : fmtPrice(e.mid);
+  return `<div class="stitch-quote-rung stitch-cur-${dir}" data-leg="${e.leg}">`
+    + `<span class="stitch-cur-leg">${e.leg}</span>`
+    + `<span class="${cls}">${val}</span>`
+    + `${e.live ? '<span class="stitch-cur-live" aria-hidden="true">●</span>' : '<span></span>'}`
+    + `</div>`;
 }
 
 /* One pair value, one parenthesised percentage, par-based mark. Shared by the
@@ -10734,12 +10732,12 @@ function stitchPositionsRows(kpi, state, sort) {
 
       <!-- Col 2: HELD INVENTORY (dual-leg YES / NO block, shared with Orders) -->
       ${stitchDualLegCell(
-        dualLegLine({ side: 'YES', size: upSh, price: upAvg, cost: upCost, emptyLabel: 'No YES held', sizeSuffix: ' sh', resting: restUp, costPrefix: 'Cost: ' }),
-        dualLegLine({ side: 'NO', size: dnSh, price: dnAvg, cost: dnCost, emptyLabel: 'No NO held', sizeSuffix: ' sh', resting: restDn, costPrefix: 'Cost: ' }),
-        { cellClass: 'mono font-tabular stitch-positions-held' })}
+        dualLegLine({ side: 'YES', size: upSh, price: upAvg, cost: upCost, emptyLabel: 'No YES held', resting: restUp, costPrefix: 'Cost: ' }),
+        dualLegLine({ side: 'NO', size: dnSh, price: dnAvg, cost: dnCost, emptyLabel: 'No NO held', resting: restDn, costPrefix: 'Cost: ' }),
+        { cellClass: 'mono font-tabular stitch-dual-leg-cell' })}
 
       <!-- Col 3: CURRENT PRICE, YES first then NO -->
-      <td class="mono font-tabular${liveCls}"${liveTitle} data-cid="${esc(cid)}" data-cell="cur-price">
+      <td class="mono font-tabular stitch-dual-leg-cell${liveCls}"${liveTitle} data-cid="${esc(cid)}" data-cell="cur-price">
         ${curPriceLines}
       </td>
 
