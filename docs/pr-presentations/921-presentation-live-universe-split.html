@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>השוק החי קיבל מגרש משלו — עדכון 921</title>
+<style>
+:root{--accent:#f4b860;--accent-d:#B45309;--bg:#14100b;--ink:#f5efe4;--card:#221b12;--line:#4a3a24}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,Heebo,Arial,sans-serif;line-height:1.7}
+.wrap{max-width:960px;margin:0 auto;padding:24px 18px 60px}
+.badge{display:inline-block;background:var(--accent);color:#241500;font-weight:700;border-radius:999px;padding:2px 14px;font-size:14px}
+h1{font-size:30px;margin:10px 0 4px}
+.sub{color:#d8c9ae;font-size:17px;margin:0 0 18px}
+.meta{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 16px;font-size:15px;margin-bottom:22px}
+.meta a{color:var(--accent)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:700px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+.card h2{margin:0 0 8px;font-size:19px}
+.card p{margin:6px 0;font-size:15px}
+.tabs{display:flex;gap:8px;margin:20px 0 0}
+.tabs button{flex:1;font-size:17px;font-weight:700;padding:12px;border-radius:12px 12px 0 0;border:1px solid var(--line);border-bottom:none;background:#1c150d;color:#cbb98f;cursor:pointer}
+.tabs button.active{background:var(--card);color:var(--accent);border-color:var(--accent)}
+.panel{background:var(--card);border:1px solid var(--accent);border-radius:0 0 14px 14px;padding:18px;display:none}
+.panel.active{display:block}
+.panel table{width:100%;border-collapse:collapse;font-size:15px}
+.panel td{border-bottom:1px dashed var(--line);padding:7px 4px}
+.panel td:first-child{color:var(--accent);font-weight:700;white-space:nowrap}
+code,[dir="ltr"]{font-family:Consolas,monospace;font-size:.92em}
+.note{margin-top:18px;font-size:14px;color:#d8c9ae}
+h3.sec{color:var(--accent);margin:26px 0 8px;font-size:19px}
+ol.steps{margin:6px 0;padding-inline-start:22px;font-size:15px}
+ol.steps li{margin-bottom:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<span class="badge">שינוי חי &#8226; 921</span>
+<h1>למשחק החי יש עכשיו מגרש משלו</h1>
+<p class="sub">לפני: שוקים חיים ושוקים רגילים נמדדו באותו סרגל — שוקים חיים טובים נפסלו, ושוקים ״חיים״ מתים חדרו פנימה. עכשיו: כל עולם נשפט לפי החוקים שלו, והזרועות יכולות לבחור צד.</p>
+<div class="meta">בעיה <span dir="ltr">#919</span> &#8226; שינוי <a href="https://github.com/AI-Degen-69/spread-hunter/pull/921">PR 921</a> &#8226; מוזג ופעיל</div>
+
+<div class="grid">
+<div class="card"><h2>😴 הבעיה לפני</h2>
+<p>סף אחיד של 35 אלף דולר מחק שוקים חיים אמיתיים (כמו ספורט אלקטרוני עם ~13 אלף דולר), ובאותו זמן שוקים שסומנו ״חיים״ אבל לא נסחרו בהם כבר דקות — חדרו פנימה כרוחות רפאים.</p></div>
+<div class="card"><h2>⚖️ מה השתנה</h2>
+<p>שני מסלולי קבלה נפרדים: מסלול חי מהיר וסלחן, ומסלול רגיל קפדן שדורש תנועה אמיתית. זרוע יכולה לבחור: רק חי, רק לא־חי, או תערובת.</p></div>
+</div>
+
+<h3 class="sec">לחצו על צד — אלה החוקים שלו:</h3>
+<div class="tabs" role="tablist">
+<button id="tab-live" class="active" onclick="pick('live')">🔴 עולם חי — תוך־כדי משחק</button>
+<button id="tab-calm" onclick="pick('calm')">🔵 עולם רגיל — מאקרו / לפני משחק</button>
+</div>
+<div class="panel active" id="panel-live">
+<table>
+<tr><td>רף מחזור 24 שעות</td><td>מ־<span dir="ltr">$35k</span> ירד ל־<span dir="ltr">$5k</span> — שוק חי אמיתי לא נפסל יותר</td></tr>
+<tr><td>חלון תנועה</td><td>15 דקות (<span dir="ltr">900s</span>) במקום 30 — קצב של משחק חי</td></tr>
+<tr><td>טריות עסקה אחרונה</td><td>חייב עסקה ב־5 הדקות האחרונות (<span dir="ltr">300s</span>) — רוחות רפאים בחוץ</td></tr>
+<tr><td>מבחן יחס פעילות</td><td>לא חל על חי — במשחק חי לא מודדים ״אחוז תנועה״</td></tr>
+</table>
+</div>
+<div class="panel" id="panel-calm">
+<table>
+<tr><td>רף מחזור 24 שעות</td><td><span dir="ltr">$125k</span> — ספרים קטנים וישנוניים לא נכנסים</td></tr>
+<tr><td>חלון תנועה</td><td>30 דקות (<span dir="ltr">1800s</span>) — קצב רגיל</td></tr>
+<tr><td>יחס פעילות</td><td>לפחות <span dir="ltr">1.5%</span> — ספר שטוח עם מחזור גבוה נפסל</td></tr>
+<tr><td>טווח תנודה</td><td>לפחות <span dir="ltr">5.0¢</span> — חייבת להיות תזוזה אמיתית</td></tr>
+</table>
+</div>
+
+<h3 class="sec">זרועות בוחרות צד</h3>
+<div class="card"><p>שני מתגים חדשים מחלקים את הזרועות למגרשים: <code><span dir="ltr">BOT_MARKET_LIVE_ONLY_ON</span></code> — רק שוקים חיים; <code><span dir="ltr">BOT_MARKET_EXCLUDE_LIVE_ON</span></code> — רק שוקים לא־חיים. בלי המתגים — תערובת כרגיל. שני המתגים יחד — לא נבחר דבר.</p></div>
+
+<h3 class="sec">👁️ לבדוק בעצמכם באפליקציה החיה</h3>
+<ol class="steps">
+<li><b>פתחו:</b> הריצו <code><span dir="ltr">python -m core_brain.shadow_run --minutes 5 --db data/NN_shadow_i919.db</span></code> (החליפו <span dir="ltr">NN</span> בראשי התיבות שלכם).</li>
+<li><b>פעולה:</b> הביטו ברשימת המועמדים שהתקבלו מול הנדחים בלוג.</li>
+<li><b>תוצאה:</b> שוקים חיים אמיתיים (ספורט/אי־ספורט, ~13 אלף דולר) מתקבלים; שורות ״חיות״ שהעסקה האחרונה בהן עתיקה מ־300 שניות — נדחות; ספרים שטוחים עם יחס פעילות מתחת 1.5% — נדחים.</li>
+<li><b>מסך נוסף:</b> הריצו <code><span dir="ltr">python -m dashboard.server</span></code>, פתחו <code><span dir="ltr">http://127.0.0.1:8799</span></code> ובדקו שכרטיסי הפרמטרים מציגים את ערכי ברירת המחדל החדשים.</li>
+</ol>
+<p class="note">הדגמה זו היא מוק־אפ להרגשה מהירה. הבדיקה האמיתית היא בצעדים למעלה, באפליקציה החיה עצמה.</p>
+</div>
+<script>
+function pick(which){
+var live = which === 'live';
+document.getElementById('tab-live').classList.toggle('active', live);
+document.getElementById('tab-calm').classList.toggle('active', !live);
+document.getElementById('panel-live').classList.toggle('active', live);
+document.getElementById('panel-calm').classList.toggle('active', !live);
+}
+</script>
+</body>
+</html>
