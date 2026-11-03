@@ -103,7 +103,7 @@ Task 4 (Shadow Run Verification & Standalone Rehearsal)
 - **Depends on:** None
 - **Verification Method:** `python -m pytest -q tests/test_config.py tests/test_quotes.py`
 
-### Task 2: Trailing Peak Rider Pure State Transitions & Watermark Persistence
+### Task 2: Trailing Peak Rider Pure State Transitions & Watermark Persistence [x]
 - **Task ID:** TASK-2
 - **Size:** M (2 files)
 - **Domain Tag:** `[Backend/Logic]`
