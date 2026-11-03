@@ -454,9 +454,9 @@ def test_held_no_with_resting_yes_shows_resting_rung_not_no_held():
     }}));
     """))
     html = res["html"]
-    assert "5 resting @ $0.46" in html
-    assert "8 resting @ $0.46" not in html
-    assert "resting @" in html
+    assert "5 @ $0.46" in html
+    assert "8 @ $0.46" not in html
+    assert "5 resting" not in html
     assert "hedge working" not in html
     assert "No YES held" not in html
     assert "SINGLE FILL" not in html

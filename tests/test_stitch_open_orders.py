@@ -146,7 +146,8 @@ def test_stitch_orders_unpaired_row_shows_resting_leg_and_missing_counterpart():
     row = html.split('data-pair="pair-u1"')[1]
     assert "Alcaraz vs Sinner" in row
     assert "10 @ $0.25" in html
-    assert "cost $2.50" in html
+    assert "Cost: $2.50" in html
+    assert "stitch-dual-leg-cell" in html
     assert "[Awaiting NO Quote]" in html
     assert "MISSING PAIR" in html
     # The unpaired pill carries the explanation in its hover title.
