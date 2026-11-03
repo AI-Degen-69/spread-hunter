@@ -1017,12 +1017,12 @@
 }
 
 .proto-body .stitch-ot-row.is-unpaired {
-  background: rgba(120, 53, 15, 0.05);
+  background: rgba(251, 191, 36, 0.08);
 }
 
 /* Hedge-pending: one leg filled, one still resting — position held, no risk */
 .proto-body .stitch-ot-row.is-hedge-pending {
-  background: rgba(14, 116, 144, 0.06);
+  background: rgba(14, 116, 144, 0.12);
 }
 
 .proto-body .stitch-market-dot.is-hedge-pending {
@@ -1038,6 +1038,29 @@
 .proto-body .stitch-category-cell {
   white-space: nowrap;
   vertical-align: middle;
+}
+
+/* Positions-only dual-leg grid: YES and NO rungs start on the same vertical
+ * line; held-leg cost parks muted at the right edge. Orders keeps flex/row. */
+.proto-body .stitch-positions-held .stitch-quote-rung {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: center;
+}
+
+.proto-body .stitch-positions-held .stitch-leg-pill {
+  width: 26px;
+  text-align: center;
+}
+
+.proto-body .stitch-positions-held .stitch-quote-subcost {
+  justify-self: end;
+  margin-left: 0;
+  min-width: 68px;
+  text-align: right;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
 }
 
 .proto-body .stitch-market-dot {
@@ -1572,13 +1595,6 @@
 
 .proto-body .stitch-pnl-pct.flat {
   color: #64748b;
-}
-
-.proto-body .stitch-mark-val {
-  color: #f8fafc;
-  font-weight: 700;
-  font-size: 12.5px;
-  font-family: 'JetBrains Mono', monospace;
 }
 
 

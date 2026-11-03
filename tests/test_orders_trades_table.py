@@ -884,12 +884,12 @@ def _held_resting_order(status: str = "open") -> dict:
 @requires_node
 def test_positions_held_market_shows_no_activity_pill():
     # Arrange — the held market has quotes logged and nothing resting on it.
-    # #785: a held position's state is its HEDGE STATUS badge (PAIRED /
-    # PARTIAL / UNPAIRED); the Active-Markets RESTING/QUOTING vocabulary must
-    # not leak into the Open Positions Market cell.
+    # #785: a held position's state is its row tint (hedge-pending / unpaired);
+    # the Active-Markets RESTING/QUOTING vocabulary must not leak into the
+    # Open Positions Market cell.
     rendered = _render("positions", _kpi(), _state())
 
-    # Assert — no activity pill anywhere; the hedge badge carries the state.
+    # Assert — no activity pill anywhere; the row tint carries the state.
     block = _held_block(rendered)
     assert CID_HELD in block
     assert "quoting-breathing" not in rendered["html"]
@@ -902,7 +902,7 @@ def test_positions_held_market_shows_no_activity_pill():
 @requires_node
 def test_positions_held_market_with_resting_order_shows_no_activity_pill():
     # Arrange — an order is still resting on the held market.
-    # #785: even then the position row shows no RESTING pill — HEDGE STATUS
+    # #785: even then the position row shows no RESTING pill — the row tint
     # alone is the position state.
     state = _state()
     state["orders"].append(_held_resting_order())
