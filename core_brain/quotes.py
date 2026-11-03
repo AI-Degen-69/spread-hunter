@@ -25,6 +25,7 @@ is a legacy field; see AGENTS.md.
 from __future__ import annotations
 
 import inspect
+import os
 import math
 import time
 from dataclasses import dataclass, replace
@@ -466,6 +467,14 @@ def _decide_quotes_from_mid(
 
         if price <= 0.0 or price >= 1.0:
             blocked.append(f"{side}: price {price:.3f} off-scale")
+            continue
+
+        rider_on = getattr(cfg, "bot_risk_trailing_rider_on", False)
+        live_sports_on = os.environ.get("BOT_MARKET_LIVE_SPORTS_ONLY_ON", "").strip().lower() in ("1", "true", "yes", "on")
+        explicit_env_max = bool(os.environ.get("BOT_POS_PRICE_MAX_ENTRY_USD"))
+        max_entry = getattr(cfg, "bot_pos_price_max_entry_usd", None)
+        if (rider_on or live_sports_on or explicit_env_max) and max_entry is not None and price > max_entry + 1e-9:
+            blocked.append(f"{side}: price {price:.3f} > max entry {max_entry:.3f}")
             continue
 
         # THE COMPLETABLE-COST GATE, on the FINAL price rather than the

@@ -2120,6 +2120,14 @@ def _parse_args(argv: Optional[list[str]] = None):
                     help="stop rehearsal early when total merged pairs reaches this count")
     ap.add_argument("--finish-line-reliable", "--target-reliable", action="store_true", default=False,
                     help="stop rehearsal early as soon as all reliability action thresholds are satisfied")
+    ap.add_argument("--trailing-rider", dest="trailing_rider", action="store_true", default=None,
+                    help="enable single-leg trailing peak momentum rider (ENV: BOT_RISK_TRAILING_RIDER_ON)")
+    ap.add_argument("--no-trailing-rider", dest="trailing_rider", action="store_false",
+                    help="disable single-leg trailing peak momentum rider")
+    ap.add_argument("--trailing-rider-delta", type=float, default=None,
+                    help="trailing rider delta in USD (default: 0.02)")
+    ap.add_argument("--max-entry-price", type=float, default=None,
+                    help="maximum entry price in USD (default: 0.60)")
     a = ap.parse_args(argv)
     # Same ceiling as the Trader loop, enforced at the same boundary: the
     # run body never sees a cadence above 1s.
@@ -2152,6 +2160,18 @@ def main(
     )
 
     a = _parse_args(argv)
+
+    orig_env = {
+        "BOT_RISK_TRAILING_RIDER_ON": os.environ.get("BOT_RISK_TRAILING_RIDER_ON"),
+        "BOT_RISK_TRAILING_RIDER_DELTA_USD": os.environ.get("BOT_RISK_TRAILING_RIDER_DELTA_USD"),
+        "BOT_POS_PRICE_MAX_ENTRY_USD": os.environ.get("BOT_POS_PRICE_MAX_ENTRY_USD"),
+    }
+    if a.trailing_rider is not None:
+        os.environ["BOT_RISK_TRAILING_RIDER_ON"] = "1" if a.trailing_rider else "0"
+    if a.trailing_rider_delta is not None:
+        os.environ["BOT_RISK_TRAILING_RIDER_DELTA_USD"] = str(a.trailing_rider_delta)
+    if a.max_entry_price is not None:
+        os.environ["BOT_POS_PRICE_MAX_ENTRY_USD"] = str(a.max_entry_price)
 
     # The code THIS process is holding, read once. It goes on the banner and
     # into every heartbeat write, so a run that has outlived its code says so
@@ -2270,6 +2290,11 @@ def main(
         # lingering connection for a caller that embeds `main`. It runs on
         # the error paths too: `run_shadow` can raise before its loop
         # starts, and the production-registry guard is exactly that case.
+        for k, v in orig_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         if shadow_stream is not None:
             try:
                 shadow_stream.stop()
