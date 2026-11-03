@@ -62,6 +62,7 @@ I799_ARMS_FILE = ROOT / "configs" / "tournaments" / "i799-tournament-test_arms.j
 I905_ARMS_FILE = ROOT / "configs" / "tournaments" / "i905-top5-rematch_arms.json"
 I917_ARMS_FILE = ROOT / "configs" / "tournaments" / "i917-multistrat-defense_arms.json"
 I923_ARMS_FILE = ROOT / "configs" / "tournaments" / "i923-live-sports-duel_arms.json"
+I929_ARMS_FILE = ROOT / "configs" / "tournaments" / "i929-momentum-reversion_arms.json"
 
 
 def _load_arms_from_file(file_path: Path, issue_num: int, start_port: int = 8801) -> list[dict[str, Any]]:
@@ -99,6 +100,7 @@ ARMS_CONFIG_799 = _load_arms_from_file(I799_ARMS_FILE, 799, 8801)
 ARMS_CONFIG_905 = _load_arms_from_file(I905_ARMS_FILE, 905, 8801)
 ARMS_CONFIG_917 = _load_arms_from_file(I917_ARMS_FILE, 917, 8801)
 ARMS_CONFIG_923 = _load_arms_from_file(I923_ARMS_FILE, 923, 8801)
+ARMS_CONFIG_929 = _load_arms_from_file(I929_ARMS_FILE, 929, 8801)
 
 # Legacy alias kept for older imports. The cockpit now serves #799 by
 # default; this constant no longer selects a page.
@@ -134,6 +136,11 @@ DECISION_GATE_ARM_MAP = {
         "volume_arm_pattern": "live-sports-only",   # Narrower lane; may choke fills
         "baseline_arm_names": ["all-but-live-sports"],  # Rest of the board
         "balanced_only_arm_names": [],  # No balanced role: falls back to baseline
+    },
+    "929": {
+        "volume_arm_pattern": "live-rider-2c-cap60",
+        "baseline_arm_names": ["live-control-classic"],
+        "balanced_only_arm_names": [],
     },
 }
 
@@ -189,6 +196,16 @@ TOURNAMENTS = {
         "issue_secondary": 923,
         "nav_label": "#923 Live-Sports Duel (2 Arms)",
     },
+    "929": {
+        "id": "929",
+        "title": "Issue #929 Momentum Reversion Tournament",
+        "subtitle": "6-Arm Shadow Tournament | Calibrated 30% Drawdown Stop & Trailing Peak Rider",
+        "description": "Pre-registered 6-arm shadow tournament evaluating single-leg momentum riding (1c, 2c deltas), maker entry price ceilings (0.50, 0.60), and a calibrated 30% adverse drawdown stop on live sports flow.",
+        "arms": ARMS_CONFIG_929,
+        "issue_primary": 929,
+        "issue_secondary": 929,
+        "nav_label": "#929 Momentum Reversion (6 Arms)",
+    },
 }
 
 
@@ -214,7 +231,20 @@ PAGE_PATHS: dict[str, str] = {
     "/923": "923",
     "/923.html": "923",
     "/cockpit_923": "923",
+    "/929": "929",
+    "/929.html": "929",
+    "/cockpit_929": "929",
 }
+
+TOURNAMENT_ICONS: dict[str, str] = {
+    "799": "🧪",
+    "843": "🚦",
+    "905": "🏆",
+    "917": "🛡️",
+    "923": "⚡",
+    "929": "🏹",
+}
+TOURNAMENT_PILL_KEYS: tuple[str, ...] = ("799", "843", "905", "917", "923", "929")
 # The keys the JSON API may serve: the served pages' own tournaments, derived so
 # a new page cannot forget to widen this.
 SERVED_TOURNAMENT_KEYS = frozenset(PAGE_PATHS.values())
@@ -229,14 +259,7 @@ def tourney_key_for_path(path: str) -> Optional[str]:
     """
     clean = path.split("?")[0].rstrip("/")
     if clean in ("", "/index.html"):
-        newest = _newest_plan_record()
-        if newest is not None:
-            parsed = parse_tournament_run_dir_name(newest.parent)
-            if parsed and parsed.get("issue"):
-                issue_str = str(parsed["issue"])
-                if issue_str in SERVED_TOURNAMENT_KEYS:
-                    return issue_str
-        return CURRENT_SETUP_KEY
+        return resolve_current_setup_key()
     return PAGE_PATHS.get(clean)
 
 
@@ -319,6 +342,162 @@ _PLAN_ARM_COLORS = (
 def _tournament_root() -> Path:
     """The run-folder root, read through this module's ROOT so it is patchable."""
     return ROOT / "data" / "tournaments"
+
+
+def _runtime_root() -> Path:
+    """The runtime root, read through this module's ROOT so it is patchable."""
+    return ROOT / "runtime"
+
+
+def _is_pid_alive(pid: int | None) -> bool:
+    """Check if process with pid is currently running."""
+    if not pid or pid <= 0:
+        return False
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            handle = kernel32.OpenProcess(0x1000, False, int(pid))
+            if not handle:
+                return False
+            try:
+                exit_code = wintypes.DWORD()
+                if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return exit_code.value == 259
+                return False
+            finally:
+                kernel32.CloseHandle(handle)
+        else:
+            try:
+                os.kill(int(pid), 0)
+                return True
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                return True
+    except Exception:
+        return False
+
+
+def _extract_issue_from_text(text: str) -> Optional[str]:
+    """Extract tournament issue number from run_id or db_path or folder name."""
+    if not text:
+        return None
+    m = re.search(r"(?:shadow[-_]|(?:^|[\\/])i?)(?P<issue>\d+)(?:[-_]|\.db)", str(text))
+    if m:
+        return m.group("issue")
+    return None
+
+
+def resolve_running_tourney_key() -> Optional[str]:
+    """Return the tournament key of any currently running tournament arms, or None.
+
+    Scans runtime heartbeat files and active tournament arm plans to detect
+    processes currently executing tournament shadow runs.
+    """
+    now = time.time()
+    runtime_dir = _runtime_root()
+
+    # 1. Direct scan of runtime heartbeat files
+    if runtime_dir.is_dir():
+        try:
+            hb_files = sorted(
+                runtime_dir.glob("shadow_run_*.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            hb_files = []
+
+        for hb_path in hb_files:
+            try:
+                with open(hb_path, "r", encoding="utf-8") as f:
+                    hb = json.load(f)
+                if not isinstance(hb, dict) or hb.get("finished", False):
+                    continue
+                hb_ts = hb.get("heartbeat_ts")
+                if hb_ts is None or (now - float(hb_ts)) > 60.0:
+                    continue
+                pid = hb.get("pid")
+                if pid and not _is_pid_alive(pid):
+                    continue
+
+                run_id = hb.get("run_id", "")
+                issue = _extract_issue_from_text(run_id)
+                if not issue:
+                    db_path = hb.get("db_path", "")
+                    issue = _extract_issue_from_text(db_path)
+                if issue and issue in SERVED_TOURNAMENT_KEYS:
+                    return str(issue)
+            except Exception:
+                continue
+
+    # 2. Check each tournament's plan in data/tournaments to see if its arms are running
+    tourn_dir = _tournament_root()
+    if tourn_dir.is_dir():
+        candidates: list[tuple[tuple[str, str], Path]] = []
+        try:
+            for candidate in tourn_dir.iterdir():
+                parsed = parse_tournament_run_dir_name(candidate)
+                plan_path = candidate / "plan.json"
+                if parsed is not None and plan_path.is_file():
+                    candidates.append(((parsed["stamp"], candidate.name), plan_path))
+        except OSError:
+            candidates = []
+        candidates.sort(key=lambda c: c[0], reverse=True)
+
+        for _, plan_path in candidates:
+            try:
+                with open(plan_path, "r", encoding="utf-8") as f:
+                    plan = json.load(f)
+                if not isinstance(plan, dict):
+                    continue
+                issue = plan.get("issue")
+                if not issue or str(issue) not in SERVED_TOURNAMENT_KEYS:
+                    continue
+                arms = plan.get("arms", [])
+                for arm in arms:
+                    run_id = arm.get("run_id")
+                    if not run_id:
+                        continue
+                    hb_path = runtime_dir / f"shadow_run_{run_id}.json"
+                    if hb_path.is_file():
+                        try:
+                            with open(hb_path, "r", encoding="utf-8") as f:
+                                hb = json.load(f)
+                            if not hb.get("finished", False):
+                                hb_ts = hb.get("heartbeat_ts")
+                                if hb_ts and (now - float(hb_ts)) <= 60.0:
+                                    pid = hb.get("pid")
+                                    if not pid or _is_pid_alive(pid):
+                                        return str(issue)
+                        except Exception:
+                            pass
+            except Exception:
+                continue
+    return None
+
+
+def resolve_current_setup_key() -> str:
+    """Return the tournament key for the current setup.
+
+    Prefers any currently running tournament. If nothing is currently running,
+    follows the most recently launched plan record on disk. Falls back to
+    CURRENT_SETUP_KEY (799) if no record exists.
+    """
+    running = resolve_running_tourney_key()
+    if running and running in SERVED_TOURNAMENT_KEYS:
+        return running
+    newest = _newest_plan_record()
+    if newest is not None:
+        parsed = parse_tournament_run_dir_name(newest.parent)
+        if parsed and parsed.get("issue"):
+            issue_str = str(parsed["issue"])
+            if issue_str in SERVED_TOURNAMENT_KEYS:
+                return issue_str
+    return CURRENT_SETUP_KEY
 
 
 def _newest_plan_record() -> Optional[Path]:
@@ -466,7 +645,7 @@ def _resolve_plan_for_tourney_key(
     otherwise merge last week's r1 db/port into today's rows.
     """
     latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
-    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905", "917", "923"):
+    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905", "917", "923", "929"):
         newest = _newest_plan_record()
         newest_issue = _plan_identity(newest)[0] if newest is not None else None
         if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
@@ -531,7 +710,7 @@ def resolve_tournament_arms_with_status(
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
     # Unknown keys fall back to the static table; live keys resolve their plan file.
-    if tourney_key not in ("843", "799", "905", "917", "923"):
+    if tourney_key not in ("843", "799", "905", "917", "923", "929"):
         return default_arms, None
 
     # Each page reads its own issue's record: the key in the URL is a page, and
@@ -1708,6 +1887,7 @@ def collect_all_stats(tourney_key: str = CURRENT_SETUP_KEY) -> dict[str, Any]:
 
     return {
         "tourney_key": tourney_key,
+        "current_setup_key": resolve_current_setup_key(),
         "tourney_meta": meta,
         # None unless a record exists and could not be read: the page shows this
         # so a broken record never passes for "the run has not started".
@@ -1878,18 +2058,25 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
             f'</tr>'
         )
     dm_tbody_content = "\n".join(dm_rows)
+    current_setup = str(initial_data.get("current_setup_key") or resolve_current_setup_key())
     # One pill per served tournament, each naming the run its own page shows.
     nav_pills = []
-    for key, icon in (("799", "🧪"), ("843", "🚦"), ("905", "🏆"), ("917", "🛡️"), ("923", "⚡")):
+    pill_keys = list(TOURNAMENT_PILL_KEYS)
+    for k in TOURNAMENTS:
+        if k not in pill_keys:
+            pill_keys.append(k)
+
+    for key in pill_keys:
+        icon = TOURNAMENT_ICONS.get(key, "🎯")
         badge = (
             '<span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;" '
-            f'title="The live rehearsal this cockpit follows (tournament #{CURRENT_SETUP_KEY})">'
+            f'title="The live rehearsal this cockpit follows (tournament #{current_setup})">'
             "CURRENT SETUP</span>"
-            if key == CURRENT_SETUP_KEY else ""
+            if key == current_setup else ""
         )
         active = "active" if tourney_key == key else ""
         nav_pills.append(
-            f'<a href="/{key}" class="tourney-pill {active}">'
+            f'<a href="/{key}" class="tourney-pill {active}" data-tourney="{key}">'
             f"<span>{icon}</span>"
             f"<span>{html.escape(nav_label_for(key))}</span>{badge}</a>"
         )
@@ -2257,7 +2444,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('overview', this)">🏆 Leaderboard &amp; Overview</button>
   <button class="tab-btn" onclick="switchTab('decision-gates', this)">🚦 Decision Gates &amp; Rehearsal Status</button>
-  {'<button class="tab-btn" onclick="switchTab(\'hybrid-config\', this)">⚙️ HYBRID Configuration Blueprint</button>' if tourney_key not in ("905", "917", "923") else ''}
+  {'<button class="tab-btn" onclick="switchTab(\'hybrid-config\', this)">⚙️ HYBRID Configuration Blueprint</button>' if tourney_key not in ("905", "917", "923", "929") else ''}
   <button class="tab-btn" onclick="switchTab('pnl-chart', this)">📈 Cumulative PnL Curves</button>
   <button class="tab-btn" onclick="switchTab('risk-stats', this)">⚖️ Risk &amp; Volatility (EV, &sigma;, MDD)</button>
   <button class="tab-btn" onclick="switchTab('execution', this)">🎯 Merge vs Fallout Quality</button>
@@ -2374,7 +2561,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 </div>
 
 <!-- TAB: HYBRID CONFIGURATION BLUEPRINT -->
-<div id="tab-hybrid-config" class="tab-pane" style="{'display: none !important;' if tourney_key in ('905', '917', '923') else ''}">
+<div id="tab-hybrid-config" class="tab-pane" style="{'display: none !important;' if tourney_key in ('905', '917', '923', '929') else ''}">
   <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.12), rgba(0, 176, 255, 0.12)); border: 1px solid rgba(0, 230, 118, 0.4); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
       <div>
@@ -2789,6 +2976,24 @@ function annotationCellHtml(arm) {{
           ${{rationale ? `<div style="font-size: 10px; color: #b0bec5; line-height: 1.2; margin-top: 1px;">${{escHtml(rationale)}}</div>` : ''}}
         </div>
       `;
+}}
+
+function updateCurrentSetupBadge(currentKey) {{
+  document.querySelectorAll('.tourney-pill').forEach(pill => {{
+    const isCurrent = pill.getAttribute('data-tourney') === String(currentKey);
+    const existingBadge = pill.querySelector('.badge-green');
+    if (isCurrent && !existingBadge) {{
+      const span = document.createElement('span');
+      span.className = 'badge badge-green';
+      span.style.fontSize = '9px';
+      span.style.padding = '1px 5px';
+      span.title = 'The live rehearsal this cockpit follows (tournament #' + currentKey + ')';
+      span.textContent = 'CURRENT SETUP';
+      pill.appendChild(span);
+    }} else if (!isCurrent && existingBadge && existingBadge.textContent.includes('CURRENT SETUP')) {{
+      existingBadge.remove();
+    }}
+  }});
 }}
 
 function renderAll() {{
@@ -3230,6 +3435,9 @@ function fetchLiveStats() {{
       if (statusEl) {{
         statusEl.textContent = 'Updated ' + lastUpdateTime;
         statusEl.style.color = 'var(--text-muted)';
+      }}
+      if (data && data.current_setup_key) {{
+        updateCurrentSetupBadge(data.current_setup_key);
       }}
       renderAll();
     }})

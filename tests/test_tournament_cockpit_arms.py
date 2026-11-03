@@ -426,36 +426,39 @@ def test_tournament_metadata_carries_no_never_rendered_badge():
 
 
 def test_nav_switcher_offers_799_and_843_with_the_active_pill() -> None:
-    """The top nav flips between the #799, #843 and #905 cockpits in one click.
+    """The top nav flips between the served cockpits in one click.
 
-    The #799 pill is the live setup and carries the single CURRENT SETUP badge;
+    The pill matching the active/running setup carries the CURRENT SETUP badge;
     whichever page is being viewed is the highlighted one.
     """
     def _active(html: str) -> dict[str, bool]:
         import re as _re
         nav = _re.search(r'<div class="tourney-nav">.*?</div>', html, _re.S).group(0)
         out = {}
-        for key in ("799", "843", "905", "917", "923"):
+        for key in ("799", "843", "905", "917", "923", "929"):
             m = _re.search(r'<a href="/' + key + r'" class="([^"]*)"', nav)
             out[key] = bool(m and "active" in m.group(1))
         return out
 
     html_799 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "799"})
     assert html_799.count("CURRENT SETUP</span>") == 1
-    assert html_799.count('class="tourney-pill') == 5
-    assert _active(html_799) == {"799": True, "843": False, "905": False, "917": False, "923": False}
+    assert html_799.count('class="tourney-pill') == 6
+    assert _active(html_799) == {"799": True, "843": False, "905": False, "917": False, "923": False, "929": False}
 
     html_843 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "843"})
-    assert _active(html_843) == {"799": False, "843": True, "905": False, "917": False, "923": False}
+    assert _active(html_843) == {"799": False, "843": True, "905": False, "917": False, "923": False, "929": False}
 
     html_905 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "905"})
-    assert _active(html_905) == {"799": False, "843": False, "905": True, "917": False, "923": False}
+    assert _active(html_905) == {"799": False, "843": False, "905": True, "917": False, "923": False, "929": False}
 
     html_917 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "917"})
-    assert _active(html_917) == {"799": False, "843": False, "905": False, "917": True, "923": False}
+    assert _active(html_917) == {"799": False, "843": False, "905": False, "917": True, "923": False, "929": False}
 
     html_923 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "923"})
-    assert _active(html_923) == {"799": False, "843": False, "905": False, "917": False, "923": True}
+    assert _active(html_923) == {"799": False, "843": False, "905": False, "917": False, "923": True, "929": False}
+
+    html_929 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "929"})
+    assert _active(html_929) == {"799": False, "843": False, "905": False, "917": False, "923": False, "929": True}
 
 
 # --- Each page reads its own issue's run ------------------------------------
@@ -1331,3 +1334,98 @@ def test_923_cockpit_hides_the_hybrid_blueprint():
     html_923 = cockpit.generate_cockpit_html({"arms": cockpit.ARMS_CONFIG_923, "tourney_key": "923"})
     assert "switchTab('hybrid-config'" not in html_923
     assert 'id="tab-hybrid-config" class="tab-pane" style="display: none !important;"' in html_923
+
+
+def test_929_cockpit_hides_the_hybrid_blueprint():
+    # The HYBRID blueprint is #799's production recipe: like 905, 917 and 923,
+    # the 929 momentum reversion page must not offer it.
+    html_929 = cockpit.generate_cockpit_html({"arms": cockpit.ARMS_CONFIG_929, "tourney_key": "929"})
+    assert "switchTab('hybrid-config'" not in html_929
+    assert 'id="tab-hybrid-config" class="tab-pane" style="display: none !important;"' in html_929
+
+
+def test_dynamic_current_setup_label_defaults_to_799(tmp_path, monkeypatch):
+    """When no tournament is running or recorded, #799 gets CURRENT SETUP."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    assert cockpit.resolve_current_setup_key() == "799"
+    html = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "799"})
+    assert '<a href="/799" class="tourney-pill active" data-tourney="799"><span>🧪</span><span>#799 Presets (10 Arms)</span><span class="badge badge-green"' in html
+    assert '<a href="/929" class="tourney-pill " data-tourney="929"><span>🏹</span><span>#929 Momentum Reversion (6 Arms)</span></a>' in html
+
+
+def test_dynamic_current_setup_label_follows_newest_plan_on_disk(tmp_path, monkeypatch):
+    """When issue 929 is launched on disk, 929 gets the CURRENT SETUP label."""
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    _record(tmp_path, "i929-tournament-1m_2026-11-03T17-15", [
+        {"name": "live-control-classic", "db_path": "data/c.db", "run_id": "r1", "dash_port": 8801}
+    ])
+    assert cockpit.resolve_current_setup_key() == "929"
+
+    # Viewing page 929
+    html_929 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "929"})
+    assert 'CURRENT SETUP</span>' in html_929
+    assert '<a href="/929" class="tourney-pill active" data-tourney="929"><span>🏹</span><span>#929 Tournament 1M (6 Arms)</span><span class="badge badge-green"' in html_929
+    assert '<a href="/799" class="tourney-pill " data-tourney="799"><span>🧪</span><span>#799 Presets (10 Arms)</span></a>' in html_929
+
+    # Viewing page 799 while 929 is the current setup: badge stays on 929!
+    html_799 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "799"})
+    assert '<a href="/929" class="tourney-pill " data-tourney="929"><span>🏹</span><span>#929 Tournament 1M (6 Arms)</span><span class="badge badge-green"' in html_799
+    assert '<a href="/799" class="tourney-pill active" data-tourney="799"><span>🧪</span><span>#799 Presets (10 Arms)</span></a>' in html_799
+
+
+def test_dynamic_current_setup_label_follows_actively_running_heartbeat(tmp_path, monkeypatch):
+    """When arm heartbeats for 929 are actively pulsing, 929 gets CURRENT SETUP."""
+    import os
+    import time
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    # Older 799 record on disk
+    _record(tmp_path, "i799-tournament-test_2026-10-18T09-05", [])
+
+    # Active 929 arm running right now
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    hb_file = runtime_dir / "shadow_run_shadow-929-t01-live-control-classic-2026-11-03T17-15.json"
+    hb_data = {
+        "pid": os.getpid(),
+        "run_id": "shadow-929-t01-live-control-classic-2026-11-03T17-15",
+        "heartbeat_ts": time.time(),
+        "finished": False,
+        "db_path": str(tmp_path / "data" / "tournaments" / "i929-tournament-1m_2026-11-03T17-15" / "live-control-classic.db")
+    }
+    hb_file.write_text(json.dumps(hb_data), encoding="utf-8")
+
+    assert cockpit.resolve_running_tourney_key() == "929"
+    assert cockpit.resolve_current_setup_key() == "929"
+
+    # Nav pill check: 929 carries CURRENT SETUP, 799 does not
+    html = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "799"})
+    assert '<a href="/929" class="tourney-pill " data-tourney="929"><span>🏹</span><span>#929 Momentum Reversion (6 Arms)</span><span class="badge badge-green"' in html
+    assert '<a href="/799" class="tourney-pill active" data-tourney="799"><span>🧪</span><span>#799 Tournament Test (10 Arms)</span></a>' in html
+
+
+def test_finished_or_stale_heartbeat_does_not_claim_running_setup(tmp_path, monkeypatch):
+    """Finished or stale heartbeats do not count as actively running."""
+    import os
+    import time
+    monkeypatch.setattr(cockpit, "ROOT", tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Finished heartbeat
+    hb_file = runtime_dir / "shadow_run_shadow-929-t01-live-control-classic.json"
+    hb_file.write_text(json.dumps({
+        "pid": os.getpid(),
+        "run_id": "shadow-929-t01",
+        "heartbeat_ts": time.time(),
+        "finished": True,
+    }), encoding="utf-8")
+    assert cockpit.resolve_running_tourney_key() is None
+
+    # 2. Stale heartbeat (older than 60s)
+    hb_file.write_text(json.dumps({
+        "pid": os.getpid(),
+        "run_id": "shadow-929-t01",
+        "heartbeat_ts": time.time() - 120.0,
+        "finished": False,
+    }), encoding="utf-8")
+    assert cockpit.resolve_running_tourney_key() is None

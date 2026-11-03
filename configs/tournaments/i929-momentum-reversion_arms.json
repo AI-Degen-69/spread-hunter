@@ -1,0 +1,109 @@
+[
+  {
+    "name": "live-control-classic",
+    "label": "Control (Classic 30m)",
+    "color": "#ff3d00",
+    "profile": "classic pair-merge, 30m wait, 75% emergency floor, no cap, no rider",
+    "desc": "Tournament #925 baseline: 30m stranded wait, pair-merge only, no entry cap, no trailing rider, 75% emergency floor.",
+    "thesis": "Baseline measuring performance when unhedged legs must wait for pair-merge or aged-out rescue.",
+    "hypothesis": "Suffers from buying heavy favorites (>0.60) and capping winning single legs at 1-2c merge spread.",
+    "env": {
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1",
+      "BOT_RISK_STRANDED_MAX_WAIT_SEC": "1800.0",
+      "BOT_RISK_STRANDED_COMPLETION_ON": "0",
+      "BOT_RISK_STOP_MODE": "NONE",
+      "BOT_RISK_TRAILING_RIDER_ON": "0",
+      "BOT_POS_PRICE_MAX_ENTRY_USD": "1.00"
+    }
+  },
+  {
+    "name": "live-cap60-revert30m",
+    "label": "Ceiling 60c (No Rider)",
+    "color": "#ff9100",
+    "profile": "0.60 entry ceiling, classic pair-merge, 30m wait, no rider",
+    "desc": "Enforces 0.60 entry ceiling to prevent favorite blowouts, classic pair-merge structure, 75% emergency floor.",
+    "thesis": "Tests whether eliminating >0.60 entries alone eliminates blowout drawdowns without changing exit logic.",
+    "hypothesis": "Cuts blowout losses (e.g. -$4.59 on 0.68 entries) while retaining stable pair-merge spreads.",
+    "env": {
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1",
+      "BOT_RISK_STRANDED_MAX_WAIT_SEC": "1800.0",
+      "BOT_RISK_STRANDED_COMPLETION_ON": "0",
+      "BOT_RISK_STOP_MODE": "NONE",
+      "BOT_RISK_TRAILING_RIDER_ON": "0",
+      "BOT_POS_PRICE_MAX_ENTRY_USD": "0.60"
+    }
+  },
+  {
+    "name": "live-rider-2c-cap60",
+    "label": "Rider 2c + 75% Emergency",
+    "color": "#00e676",
+    "profile": "2c trailing rider, 0.60 entry ceiling, 30m wait, 75% floor",
+    "desc": "Primary recommendation: 2c trailing peak stop, cancels resting hedge on uptick, 0.60 entry ceiling, 75% circuit floor.",
+    "thesis": "When single leg moves in favor, uncapping the leg with a 2c trailing stop captures huge momentum swings.",
+    "hypothesis": "Turns historical net loss (-$14.14) into positive net PnL (+$24.38) and cuts drawdown by 90%.",
+    "env": {
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1",
+      "BOT_RISK_STRANDED_MAX_WAIT_SEC": "1800.0",
+      "BOT_RISK_STRANDED_COMPLETION_ON": "0",
+      "BOT_RISK_STOP_MODE": "NONE",
+      "BOT_RISK_TRAILING_RIDER_ON": "1",
+      "BOT_RISK_TRAILING_RIDER_DELTA_USD": "0.02",
+      "BOT_POS_PRICE_MAX_ENTRY_USD": "0.60"
+    }
+  },
+  {
+    "name": "live-rider-30pct-stop",
+    "label": "Rider 2c + 30% Hard Stop",
+    "color": "#e040fb",
+    "profile": "2c trailing rider, 0.60 ceiling, 30% drawdown stop, 30m wait",
+    "desc": "Calibrated pre-timeout stop: cuts losses at 30% drawdown before timeout and before 75% floor, with 2c trailing rider.",
+    "thesis": "Data proves trades exceeding 30% drawdown have an 88.5% doom rate; stopping at 30% saves capital without clipping healthy reversions.",
+    "hypothesis": "Prevents deep 50-75% bleedouts on doomed teams, cutting average loss per loser from 50c to ~15c.",
+    "env": {
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1",
+      "BOT_RISK_STRANDED_MAX_WAIT_SEC": "1800.0",
+      "BOT_RISK_STRANDED_COMPLETION_ON": "0",
+      "BOT_RISK_STOP_MODE": "PERCENTAGE_DROP",
+      "BOT_RISK_STOP_MAX_DRAWDOWN_PCT": "30.0",
+      "BOT_RISK_TRAILING_RIDER_ON": "1",
+      "BOT_RISK_TRAILING_RIDER_DELTA_USD": "0.02",
+      "BOT_POS_PRICE_MAX_ENTRY_USD": "0.60"
+    }
+  },
+  {
+    "name": "live-rider-1c-cap60",
+    "label": "Tight Rider 1c + Cap 60c",
+    "color": "#00b0ff",
+    "profile": "1c trailing rider, 0.60 ceiling, 30m wait, 75% floor",
+    "desc": "Aggressive profit-lock: 1c trailing peak stop to bank rapid momentum spikes with minimal giveback.",
+    "thesis": "Live sports book fluctuations reverse quickly; a tight 1c trailing stop locks in peak gains faster.",
+    "hypothesis": "Higher win-rate and faster capital recycling, though may exit early on small retracements.",
+    "env": {
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1",
+      "BOT_RISK_STRANDED_MAX_WAIT_SEC": "1800.0",
+      "BOT_RISK_STRANDED_COMPLETION_ON": "0",
+      "BOT_RISK_STOP_MODE": "NONE",
+      "BOT_RISK_TRAILING_RIDER_ON": "1",
+      "BOT_RISK_TRAILING_RIDER_DELTA_USD": "0.01",
+      "BOT_POS_PRICE_MAX_ENTRY_USD": "0.60"
+    }
+  },
+  {
+    "name": "live-rider-underdog-50c",
+    "label": "Pure Underdog Rider 50c",
+    "color": "#ffea00",
+    "profile": "2c trailing rider, 0.50 underdog entry ceiling, 30m wait",
+    "desc": "Strict underdog bias: max 0.50 entry price, 2c trailing rider. Only enters when odds are <= 50%.",
+    "thesis": "Underdogs possess the highest asymmetric upside (e.g. 21c buying Delaney riding to 88c+).",
+    "hypothesis": "Maximum ROI per dollar risked; complete immunity to favorite collapse traps.",
+    "env": {
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1",
+      "BOT_RISK_STRANDED_MAX_WAIT_SEC": "1800.0",
+      "BOT_RISK_STRANDED_COMPLETION_ON": "0",
+      "BOT_RISK_STOP_MODE": "NONE",
+      "BOT_RISK_TRAILING_RIDER_ON": "1",
+      "BOT_RISK_TRAILING_RIDER_DELTA_USD": "0.02",
+      "BOT_POS_PRICE_MAX_ENTRY_USD": "0.50"
+    }
+  }
+]
