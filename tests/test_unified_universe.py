@@ -1179,7 +1179,7 @@ def test_evaluate_missing_end_date_falls_through_to_tradable():
 
 
 def test_screening_spread_gate_boundary():
-    assert fm.MAX_BOOK_SPREAD == 0.0205
+    assert fm.MAX_BOOK_SPREAD == 0.02
 
     class _CustomBookSession(_FakeSession):
         def __init__(self, bids, asks):
@@ -1202,7 +1202,7 @@ def test_screening_spread_gate_boundary():
     session_wide = _CustomBookSession([{"price": "0.485", "size": "5000"}], [{"price": "0.515", "size": "5000"}])
     row_wide = evaluate(session_wide, 5.0, m, volume_24h=250_000.0, source="spread")
     assert row_wide["eligible"] is False
-    assert "spread 0.0300 > 0.0205" in row_wide["reject_reason"]
+    assert "spread 0.0300 > 0.0200" in row_wide["reject_reason"]
 
 
 def test_screening_mid_price_band_boundary():

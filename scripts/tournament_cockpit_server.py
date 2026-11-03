@@ -61,6 +61,7 @@ I843_ARMS_FILE = ROOT / "configs" / "tournaments" / "i843-pair-test_arms.json"
 I799_ARMS_FILE = ROOT / "configs" / "tournaments" / "i799-tournament-test_arms.json"
 I905_ARMS_FILE = ROOT / "configs" / "tournaments" / "i905-top5-rematch_arms.json"
 I917_ARMS_FILE = ROOT / "configs" / "tournaments" / "i917-multistrat-defense_arms.json"
+I923_ARMS_FILE = ROOT / "configs" / "tournaments" / "i923-live-sports-duel_arms.json"
 
 
 def _load_arms_from_file(file_path: Path, issue_num: int, start_port: int = 8801) -> list[dict[str, Any]]:
@@ -97,6 +98,7 @@ ARMS_CONFIG_843 = _load_arms_from_file(I843_ARMS_FILE, 843, 8801)
 ARMS_CONFIG_799 = _load_arms_from_file(I799_ARMS_FILE, 799, 8801)
 ARMS_CONFIG_905 = _load_arms_from_file(I905_ARMS_FILE, 905, 8801)
 ARMS_CONFIG_917 = _load_arms_from_file(I917_ARMS_FILE, 917, 8801)
+ARMS_CONFIG_923 = _load_arms_from_file(I923_ARMS_FILE, 923, 8801)
 
 # Legacy alias kept for older imports. The cockpit now serves #799 by
 # default; this constant no longer selects a page.
@@ -127,6 +129,11 @@ DECISION_GATE_ARM_MAP = {
         "volume_arm_pattern": "queue-gated-hybrid",   # Arm whose knob may choke fills
         "baseline_arm_names": ["control-baseline"],  # Pure control/baseline
         "balanced_only_arm_names": ["macro-non-sports"],
+    },
+    "923": {
+        "volume_arm_pattern": "live-sports-only",   # Narrower lane; may choke fills
+        "baseline_arm_names": ["all-but-live-sports"],  # Rest of the board
+        "balanced_only_arm_names": [],  # No balanced role: falls back to baseline
     },
 }
 
@@ -172,6 +179,16 @@ TOURNAMENTS = {
         "issue_secondary": 917,
         "nav_label": "#917 Multi-Strat Defense (6 Arms)",
     },
+    "923": {
+        "id": "923",
+        "title": "Issue #923 Live-Sports Duel",
+        "subtitle": "2-Arm Live Shadow Duel | Live Sports Only vs All But Live Sports",
+        "description": "Pre-registered 2-arm head-to-head shadow duel over the market-regime split: one arm quotes only venue-declared in-play sports/esports events, the other quotes everything except them.",
+        "arms": ARMS_CONFIG_923,
+        "issue_primary": 923,
+        "issue_secondary": 923,
+        "nav_label": "#923 Live-Sports Duel (2 Arms)",
+    },
 }
 
 
@@ -194,6 +211,9 @@ PAGE_PATHS: dict[str, str] = {
     "/917": "917",
     "/917.html": "917",
     "/cockpit_917": "917",
+    "/923": "923",
+    "/923.html": "923",
+    "/cockpit_923": "923",
 }
 # The keys the JSON API may serve: the served pages' own tournaments, derived so
 # a new page cannot forget to widen this.
@@ -446,7 +466,7 @@ def _resolve_plan_for_tourney_key(
     otherwise merge last week's r1 db/port into today's rows.
     """
     latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
-    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905", "917"):
+    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905", "917", "923"):
         newest = _newest_plan_record()
         newest_issue = _plan_identity(newest)[0] if newest is not None else None
         if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
@@ -511,7 +531,7 @@ def resolve_tournament_arms_with_status(
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
     # Unknown keys fall back to the static table; live keys resolve their plan file.
-    if tourney_key not in ("843", "799", "905", "917"):
+    if tourney_key not in ("843", "799", "905", "917", "923"):
         return default_arms, None
 
     # Each page reads its own issue's record: the key in the URL is a page, and
@@ -1577,10 +1597,25 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
 
     # Run-level volume check: does the volume arm's knob choke fills vs the
     # reference role? Informational for the run, never a verdict on an arm.
+    # Numbered runs store suffixed names (`all-but-live-sports-1`): strip
+    # the round suffix before matching roles, or every numbered run reads
+    # NO_DATA even with trades on both arms (#924 review).
     vol_arm = next((a for a in arms_data if arm_map["volume_arm_pattern"] in a.get("name", "")), None)
-    ref_arm = next((a for a in arms_data if a.get("name") in arm_map["balanced_only_arm_names"]), None)
+    ref_arm = next(
+        (
+            a for a in arms_data
+            if _strip_round_suffix(a.get("name", "")) in arm_map["balanced_only_arm_names"]
+        ),
+        None,
+    )
     if ref_arm is None:
-        ref_arm = next((a for a in arms_data if a.get("name") in arm_map["baseline_arm_names"]), None)
+        ref_arm = next(
+            (
+                a for a in arms_data
+                if _strip_round_suffix(a.get("name", "")) in arm_map["baseline_arm_names"]
+            ),
+            None,
+        )
     vol_n = vol_arm.get("trades_count", 0) if vol_arm else 0
     ref_n = ref_arm.get("trades_count", 0) if ref_arm else 0
     if vol_arm is None or ref_arm is None or vol_n == 0 or ref_n == 0:
@@ -1845,7 +1880,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     dm_tbody_content = "\n".join(dm_rows)
     # One pill per served tournament, each naming the run its own page shows.
     nav_pills = []
-    for key, icon in (("799", "🧪"), ("843", "🚦"), ("905", "🏆"), ("917", "🛡️")):
+    for key, icon in (("799", "🧪"), ("843", "🚦"), ("905", "🏆"), ("917", "🛡️"), ("923", "⚡")):
         badge = (
             '<span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;" '
             f'title="The live rehearsal this cockpit follows (tournament #{CURRENT_SETUP_KEY})">'
@@ -2222,7 +2257,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('overview', this)">🏆 Leaderboard &amp; Overview</button>
   <button class="tab-btn" onclick="switchTab('decision-gates', this)">🚦 Decision Gates &amp; Rehearsal Status</button>
-  {'<button class="tab-btn" onclick="switchTab(\'hybrid-config\', this)">⚙️ HYBRID Configuration Blueprint</button>' if tourney_key not in ("905", "917") else ''}
+  {'<button class="tab-btn" onclick="switchTab(\'hybrid-config\', this)">⚙️ HYBRID Configuration Blueprint</button>' if tourney_key not in ("905", "917", "923") else ''}
   <button class="tab-btn" onclick="switchTab('pnl-chart', this)">📈 Cumulative PnL Curves</button>
   <button class="tab-btn" onclick="switchTab('risk-stats', this)">⚖️ Risk &amp; Volatility (EV, &sigma;, MDD)</button>
   <button class="tab-btn" onclick="switchTab('execution', this)">🎯 Merge vs Fallout Quality</button>
@@ -2339,7 +2374,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 </div>
 
 <!-- TAB: HYBRID CONFIGURATION BLUEPRINT -->
-<div id="tab-hybrid-config" class="tab-pane" style="{'display: none !important;' if tourney_key in ('905', '917') else ''}">
+<div id="tab-hybrid-config" class="tab-pane" style="{'display: none !important;' if tourney_key in ('905', '917', '923') else ''}">
   <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.12), rgba(0, 176, 255, 0.12)); border: 1px solid rgba(0, 230, 118, 0.4); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
       <div>

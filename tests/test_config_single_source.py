@@ -65,8 +65,8 @@ SCORING_DEFAULTS: dict[str, object] = {
     "filter_live_inplay_vel_lookback_sec": 900.0,
     "filter_live_last_trade_max_age_sec": 300.0,
     "filter_live_move_lookback_sec": 7200.0,
-    "filter_std_spread_share_pct": 41.0 / 120.0,
-    "filter_std_time_max_days_to_resolve": 30.0,
+    "filter_std_spread_share_pct": 1.0 / 3.0,
+    "filter_std_time_max_days_to_resolve": 14.0,
     "filter_std_rank_sample_window_sec": 1800.0,
     "filter_std_rerank_interval_sec": 600.0,
     "bot_risk_scarcity_marginal_multiple": 2.0,
@@ -166,8 +166,8 @@ def test_derived_values_unchanged():
         assert cfg.bot_risk_hedge_emergency_pct == 0.8
         assert cfg.bot_latency_net_oneway_ms == 3.93
         assert cfg.bot_quote_window_max_pct == 0.40
-        assert cfg.filter_std_spread_share_pct == 41.0 / 120.0
-        assert cfg.filter_common_spread_max_usd == 0.0205
+        assert cfg.filter_std_spread_share_pct == 1.0 / 3.0
+        assert cfg.filter_common_spread_max_usd == 0.02
 
 
 def test_db_path_unchanged_under_every_env_state(monkeypatch):

@@ -311,15 +311,15 @@ def test_spread_edge_precedes_thin_depth_failure():
     assert _cause(result["reject_reason"]) == "YES spread"
 
 
-def test_the_shipped_two_point_zero_five_cent_bar_rejects_a_fifty_fifty_three_book():
+def test_the_shipped_two_cent_bar_rejects_a_fifty_fifty_three_book():
     """#690: the issue's own example, on the bar the ranker actually ships.
 
     0.50 / 0.53 is three cents wide. The ceiling is `filter_common_spread_max_usd`
-    (2.05c), derived from `max_book_spread * select_spread_pct` -- NOT
+    (2.00c), derived from `max_book_spread * select_spread_pct` -- NOT
     `max_spread_from_mid`, which measures distance from mid and is never read here.
     No `max_spread` argument is passed: that is the shipped bar, not an override.
     """
-    assert fm.MAX_BOOK_SPREAD == 0.0205
+    assert fm.MAX_BOOK_SPREAD == 0.02
 
     now_ts = time.time()
     now_iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
@@ -338,7 +338,7 @@ def test_the_shipped_two_point_zero_five_cent_bar_rejects_a_fifty_fifty_three_bo
     )
 
     assert result["eligible"] is False
-    assert result["reject_reason"] == "YES: spread 0.0300 > 0.0205"
+    assert result["reject_reason"] == "YES: spread 0.0300 > 0.0200"
     assert _cause(result["reject_reason"]) == "YES spread"
 
 
@@ -355,8 +355,8 @@ def test_a_wide_quote_window_never_widens_the_book_gate(monkeypatch):
 
     cfg = scoring_config.load()
     assert cfg.bot_quote_book_max_spread_from_mid == 0.50
-    assert cfg.filter_common_spread_max_usd == 0.0205
-    assert fm.MAX_BOOK_SPREAD == fm._CFG.filter_common_spread_max_usd == 0.0205
+    assert cfg.filter_common_spread_max_usd == 0.02
+    assert fm.MAX_BOOK_SPREAD == fm._CFG.filter_common_spread_max_usd == 0.02
 
     now_ts = time.time()
     now_iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
@@ -375,7 +375,7 @@ def test_a_wide_quote_window_never_widens_the_book_gate(monkeypatch):
     )
 
     assert result["eligible"] is False
-    assert result["reject_reason"] == "YES: spread 0.0300 > 0.0205"
+    assert result["reject_reason"] == "YES: spread 0.0300 > 0.0200"
 
 
 # ==============================================================================

@@ -269,8 +269,8 @@ def test_price_band_and_book_spread_state_their_unit_and_keep_their_values():
     """#883: three `_cents` names held dollars, and the derived bar inherited one.
 
     The rename is the whole change, so the values are the assertion that nothing
-    moved: 10c / 90c for the band, a 6c book spread, and the 41/120 picking bar
-    at 2.05c.
+    moved: 10c / 90c for the band, a 6c book spread, and the 1/3 picking bar
+    at 2.00c (#923).
     """
     import dataclasses
 
@@ -278,7 +278,7 @@ def test_price_band_and_book_spread_state_their_unit_and_keep_their_values():
     assert cfg.bot_quote_price_band_min_usd == 0.10
     assert cfg.bot_quote_price_band_max_usd == 0.90
     assert cfg.bot_quote_book_max_spread_usd == 0.06
-    assert cfg.filter_common_spread_max_usd == 0.0205
+    assert cfg.filter_common_spread_max_usd == 0.02
     assert cfg.filter_common_spread_max_usd == round(
         cfg.bot_quote_book_max_spread_usd * cfg.filter_std_spread_share_pct, 6)
 

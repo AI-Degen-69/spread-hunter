@@ -84,7 +84,7 @@ def test_wide_book_trial_falls_back_to_shipped_for_display(monkeypatch, caplog):
     assert cfg.bot_quote_book_max_spread_usd == MakerConfig.bot_quote_book_max_spread_usd
     # The picking bar degrades with the gate (#572): the page shows the shipped
     # contract, never a trial value the process it describes cannot act on.
-    assert cfg.filter_common_spread_max_usd == MakerConfig().filter_common_spread_max_usd == 0.0205
+    assert cfg.filter_common_spread_max_usd == MakerConfig().filter_common_spread_max_usd == 0.02
     assert "BOT_QUOTE_WIDE_BOOK_TRIAL ignored" in caplog.text
 
 

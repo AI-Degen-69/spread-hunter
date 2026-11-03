@@ -150,7 +150,7 @@ def test_load_leaves_the_ceilings_alone_when_unset(mod, monkeypatch):
 
     assert cfg.bot_quote_wide_book_trial is None
     assert cfg.bot_quote_book_max_spread_usd == 0.06
-    assert cfg.filter_common_spread_max_usd == 0.0205
+    assert cfg.filter_common_spread_max_usd == 0.02
     # Both copies of the field are the same thing: the quote window, the
     # largest distance from the book midpoint our resting quote may sit at.
     # The two shipped defaults are deliberate -- 0.15 for the engine, 0.045

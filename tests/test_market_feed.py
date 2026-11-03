@@ -148,6 +148,24 @@ def test_load_graduated_markets_not_a_list(tmp_path):
         load_graduated_markets(path=bad_type)
 
 
+def test_graduated_feed_carries_series_title(tmp_path):
+    """The venue series title survives the feed load (#924 review).
+
+    A live row whose only sports signal is its series title must still
+    classify as a live sport in the trader's duel arms; dropping the
+    field here would misplace it into the all-but arm.
+    """
+    feed = tmp_path / "markets.json"
+    feed.write_text(json.dumps([{**SAMPLE_ROW, "series_title": "NHL 2026"}]),
+                     encoding="utf-8")
+    (gm,) = load_graduated_markets(path=feed)
+    assert gm.series_title == "NHL 2026"
+    bare = tmp_path / "bare.json"
+    bare.write_text(json.dumps([SAMPLE_ROW]), encoding="utf-8")
+    (gm_bare,) = load_graduated_markets(path=bare)
+    assert gm_bare.series_title == ""
+
+
 def test_get_market_by_cid():
     """Look up market by full CID and prefix."""
     markets = _real_feed_or_skip()

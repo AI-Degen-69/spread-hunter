@@ -99,7 +99,7 @@ MIN_MOVEMENT_USD = _CFG.filter_live_vel_min_usd
 TRADES_API = "https://data-api.polymarket.com/trades"
 # The book gate: a bid-ask WIDTH, derived from
 # `bot_quote_book_max_spread_usd * filter_std_spread_share_pct`
-# (`filter_common_spread_max_usd`, 2.05c, #572). NOT
+# (`filter_common_spread_max_usd`, 2.00c, #572 tightened to the 2c max #923). NOT
 # `bot_quote_book_max_spread_from_mid`, which is the
 # distance from mid we allow a resting quote to sit at -- a different
 # measurement, read only by the quoting code and never by this ranker (#690).
@@ -503,7 +503,11 @@ def activity_ratio_reject(
     Fail-open on every unmeasured input (None movement, None/zero volume), the
     same convention `movement_reject` uses: a missing number must never empty
     the universe. `min_ratio <= 0` disables the gate; the shipped bar is
-    1.5% (#919), enforced on non-live rows only.
+    1.5% (#919). Since #923 the gate enforces on every row including
+    declared-live ones; a live row's 15-minute numerator against a 24h
+    denominator reads stricter than the 30-minute non-live one, which is
+    the point. Pass the row's actual tape window so the reason names the
+    window that was measured.
     """
     if not min_ratio or min_ratio <= 0:
         return False, ""
@@ -790,8 +794,8 @@ def gamma_universe(session: requests.Session,
 
     The end-date range is likewise no longer a discovery parameter: long-dated
     markets are fetched, then refused auditably by the horizon gate in
-    `evaluate`, so the funnel shows how much of the population the 30-day
-    horizon actually removes.
+    `evaluate`, so the funnel shows how much of the population the 14-day
+    horizon actually removes (#923: 30 -> 14 days).
 
     Cost control: the listing is volume-sorted and the ranker gates on
     `filter_std_vol_min_24h_usd`, so paginating to exhaustion would fetch
@@ -1631,20 +1635,21 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                            volatility_exempt=is_volatility_exempt)
 
     # RELATIVE ACTIVITY RATIO GATE (loose baseline). Sits right after the
-    # absolute movement floor: a NON-LIVE market must have BOTH enough recent
+    # absolute movement floor: EVERY row must have BOTH enough recent
     # notional AND enough of it relative to its total size. This is what
-    # separates an active market from a flat high-volume politics book.
-    # Declared-live rows skip it (#919): a 15-minute in-play measurement
-    # cannot match a 30m/24h ratio definition, and the recency gate below is
-    # the live staleness check instead. Fail-open on any unmeasured input.
-    if is_live_row:
-        ratio_rej, ratio_reason = False, ""
-    else:
-        ratio_bar = (MIN_ACTIVITY_RATIO if min_activity_ratio is None
-                     else min_activity_ratio)
-        ratio_rej, ratio_reason = activity_ratio_reject(
-            movement_usd, volume_24h, min_ratio=ratio_bar,
-            window_sec=MOVEMENT_WINDOW_SEC)
+    # separates an active market from a flat high-volume politics book -- a
+    # $200 print inside a $2M book is 0.01%, far under the bar. #919 skipped
+    # declared-live rows (a 15-minute in-play measurement cannot match a
+    # 30m/24h ratio definition); #923 un-skips them on the operator's call to
+    # quote stricter and favor actually-moving markets. The 15-minute live
+    # numerator against a 24h denominator reads stricter than the 30-minute
+    # non-live one -- that asymmetry is the point: a live row must be
+    # visibly trading NOW. Fail-open on any unmeasured input.
+    ratio_bar = (MIN_ACTIVITY_RATIO if min_activity_ratio is None
+                 else min_activity_ratio)
+    ratio_rej, ratio_reason = activity_ratio_reject(
+        movement_usd, volume_24h, min_ratio=ratio_bar,
+        window_sec=tape_window_sec)
     if ratio_rej:
         return _reject_row(source, ratio_reason, m, volume_24h,
                            movement_usd=movement_usd,

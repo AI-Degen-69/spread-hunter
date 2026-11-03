@@ -2577,10 +2577,32 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
             getattr(gm, "event_ended", False)
         )
 
+    def _is_live_sport(gm) -> bool:
+        # Arm scope (#923): the conjunction of in-play AND sports/esports,
+        # using the same sports classifier and metadata the exclude-sports
+        # filter reads, so the two duel arms cannot disagree on what a
+        # sports market is. `series_title` rides along (#924 review): a
+        # live row whose only sports signal is its series title must land
+        # in the live-sports arm, not the all-but arm.
+        if not _is_in_play(gm):
+            return False
+        from scoring.selector import is_sports_or_esports
+        return bool(is_sports_or_esports(
+            title=getattr(gm, "title", "") or "",
+            slug=getattr(gm, "slug", "") or "",
+            series_title=getattr(gm, "series_title", "") or "",
+            event_title=getattr(gm, "event_title", "") or "",
+            sports_market_type=getattr(gm, "sports_market_type", "") or "",
+        ))
+
     if _lane_on("BOT_MARKET_LIVE_ONLY_ON"):
         gms = [gm for gm in gms if _is_in_play(gm)]
     if _lane_on("BOT_MARKET_EXCLUDE_LIVE_ON"):
         gms = [gm for gm in gms if not _is_in_play(gm)]
+    if _lane_on("BOT_MARKET_LIVE_SPORTS_ONLY_ON"):
+        gms = [gm for gm in gms if _is_live_sport(gm)]
+    if _lane_on("BOT_MARKET_EXCLUDE_LIVE_SPORTS_ON"):
+        gms = [gm for gm in gms if not _is_live_sport(gm)]
 
     if max_markets and registry is not None:
         try:

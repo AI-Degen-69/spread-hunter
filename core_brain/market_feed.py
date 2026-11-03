@@ -89,6 +89,7 @@ class GraduatedMarket:
     event_id: str = ""
     event_slug: str = ""
     event_title: str = ""
+    series_title: str = ""
     range_cents: Optional[float] = None
     velocity_measured_at: Optional[float] = None
     # Venue event evidence, carried from the ranker's eligible row so the
@@ -269,6 +270,7 @@ def _graduated_rows(data: list, target: Path) -> list[GraduatedMarket]:
                 event_id=str(row.get("event_id", "")),
                 event_slug=str(row.get("event_slug", "")),
                 event_title=str(row.get("event_title", "")),
+                series_title=str(row.get("series_title", "")),
                 range_cents=(
                     float(row["range_cents"])
                     if row.get("range_cents") is not None

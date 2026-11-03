@@ -429,7 +429,7 @@ class TestEndToEndHarness:
         assert snapshot["bot_quote_bank_baseline_usd"] == 100.0
         # Derived property (#572): asdict() drops it, so the snapshot must add it back.
         assert snapshot["filter_common_spread_max_usd"] == round(
-            snapshot["bot_quote_book_max_spread_usd"] * snapshot["filter_std_spread_share_pct"], 6) == 0.0205
+            snapshot["bot_quote_book_max_spread_usd"] * snapshot["filter_std_spread_share_pct"], 6) == 0.02
 
     def test_underpowered_run_exits_inconclusive_without_go_verdict(self, tmp_path, caplog):
         """Acceptance Criteria: run with target-closes 999 exits INCONCLUSIVE with underpowered reason."""

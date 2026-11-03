@@ -3695,7 +3695,7 @@ def test_kpi_funnel_keeps_the_full_spread_rejection_reason(client, monkeypatch, 
     """
     from core_brain.kpi import _funnel_from_pipeline
 
-    reason = "YES: spread 0.0300 > 0.0205"
+    reason = "YES: spread 0.0300 > 0.0200"
     snap = {
         "ts": time.time(),
         "counts": {"spread_universe": 12, "eligible": 0},

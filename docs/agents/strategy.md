@@ -27,15 +27,18 @@ and never blended into the merge spread.
 
 Describe this bot as a **pair-assembly arbitrage** that earns the merge spread.
 
-## The universe: liquid markets inside a 30-day horizon
+## The universe: liquid markets inside a 14-day horizon
 
 The **Market Filter** (`scripts/filter_markets.py`, run continuously by
 `scripts/filter_loop.py`) funnels the venue — 24h volume, top-3 bid depth on both sides,
 book spread, horizon — and writes the survivors to `runtime/markets.json`. The **Trader**
 (`core_brain/trader_loop.py`) quotes **only** that list, via `core_brain/market_feed.py`.
 
-- Horizon cap is **30 days** (`config.select_max_days_to_resolve`), which admits liquid
+- Horizon cap is **14 days** (`filter_std_time_max_days_to_resolve`, cut 30 → 14 in #923), which admits liquid
   sports, esports, macro and political markets.
+- Venue-declared live rows are exempt from the cap: a game already in play
+  resolves on the field, not on the calendar, so a live row with a distant
+  end date still passes this gate.
 - **The filter defines the universe, not a category list.** Anything that clears the
   funnel is fair game. In the measured run the survivors happened to be mostly tennis,
   baseball and esports, but that is an observation about one period's book quality, not
