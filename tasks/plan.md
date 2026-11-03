@@ -149,7 +149,7 @@ Task 4 (Shadow Run Verification & Standalone Rehearsal)
 - **Depends on:** TASK-2
 - **Verification Method:** `python -m pytest -q tests/test_single_buy_saver.py tests/test_trader_loop.py`
 
-### Task 4: Shadow Run Support & Verification Rehearsal
+### Task 4: Shadow Run Support & Verification Rehearsal [x]
 - **Task ID:** TASK-4
 - **Size:** S (2 files)
 - **Domain Tag:** `[Backend/Logic]`
