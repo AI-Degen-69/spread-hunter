@@ -112,6 +112,7 @@ def test_each_arm_gets_own_verdict_from_own_gates():
 
 
 def test_arm_without_rows_reads_unmeasured():
+
     """An arm that never attached sufficiency rows is unmeasured, not zero.
 
     Hand-built arm dicts carry no `sufficiency_rows`; the gate must not
@@ -137,6 +138,38 @@ def test_arm_without_rows_reads_unmeasured():
     assert "Not Yet Measurable" in verdict["gates"]["power"]["text"]
     assert verdict["verdict"] == "PROVISIONAL: RISK SHAPE HOLDS"
     assert "not yet measurable" in verdict["desc"]
+
+
+def test_numbered_run_names_resolve_their_roles():
+    """Numbered runs store suffixed arm names; the volume check must still
+    find its reference role (#924 review).
+
+    Without round-suffix normalization `all-but-live-sports-1` never
+    equals the `all-but-live-sports` baseline role, so a #923 run with
+    trades on both arms reported NO_DATA.
+    """
+    arms = [
+        {
+            "name": "live-sports-only-1",
+            "status": "ok",
+            "trades_count": 100,
+            "total_pnl": 10.0,
+            "sharpe_ratio": 2.8,
+            "profit_factor": 2.6,
+            "max_drawdown": 1.5,
+        },
+        {
+            "name": "all-but-live-sports-1",
+            "status": "ok",
+            "trades_count": 100,
+            "total_pnl": 10.0,
+            "sharpe_ratio": 2.8,
+            "profit_factor": 2.6,
+            "max_drawdown": 1.5,
+        },
+    ]
+    res = cockpit.compute_decision_gates(arms, "923")
+    assert res["volume_check"]["status"] == "HEALTHY"
 
 
 def test_sufficiency_95_summary_verdicts():

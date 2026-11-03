@@ -36,6 +36,9 @@ book spread, horizon — and writes the survivors to `runtime/markets.json`. The
 
 - Horizon cap is **14 days** (`filter_std_time_max_days_to_resolve`, cut 30 → 14 in #923), which admits liquid
   sports, esports, macro and political markets.
+- Venue-declared live rows are exempt from the cap: a game already in play
+  resolves on the field, not on the calendar, so a live row with a distant
+  end date still passes this gate.
 - **The filter defines the universe, not a category list.** Anything that clears the
   funnel is fair game. In the measured run the survivors happened to be mostly tennis,
   baseball and esports, but that is an observation about one period's book quality, not

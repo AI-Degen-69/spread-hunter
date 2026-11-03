@@ -207,6 +207,12 @@ def test_book_allowed_default_spread_gate_boundary():
     assert ok, reason
     assert spread == pytest.approx(0.02)
 
+    # 0.4896 / 0.5100 has spread 0.0204: admitted under the old 0.0205
+    # ceiling, refused under the tightened 2.00c bar (#923, #924 review).
+    ok, reason, _, _ = book_allowed({0.4896: 20_000.0}, {0.51: 20_000.0})
+    assert not ok
+    assert "spread 0.0204 > 0.0200" in reason
+
     # 0.4894 / 0.5100 has spread 0.0206 > 0.02; must be refused
     ok, reason, _, _ = book_allowed({0.4894: 20_000.0}, {0.51: 20_000.0})
     assert not ok

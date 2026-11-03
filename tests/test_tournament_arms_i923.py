@@ -57,6 +57,7 @@ def _sample_graduated_market(
     event_live: bool = False,
     sports_market_type: str = "",
     event_title: str = "",
+    series_title: str = "",
 ) -> GraduatedMarket:
     return GraduatedMarket(
         cid=cid,
@@ -79,12 +80,14 @@ def _sample_graduated_market(
         range_cents=4.0,
         velocity_measured_at=1700000000.0,
         event_title=event_title or title,
+        series_title=series_title,
     )
 
 
 def _923_snapshot() -> GraduatedSnapshot:
     """Five-row universe: macro, prematch sports, live sports, live
-    political, and an ended live sports market."""
+    political, an ended live sports market, and a live row whose only
+    sports signal is its series title (#924 review)."""
     macro_gm = _sample_graduated_market(
         "0xmacro1",
         "Will the Fed cut interest rates in December?",
@@ -117,13 +120,26 @@ def _923_snapshot() -> GraduatedSnapshot:
         cid="0xendedlivesports",
         event_ended=True,
     )
+    # No sports signal in the title, slug, event title, or market type:
+    # only the carried series title says this is a hockey game. Without
+    # it the row would land in the all-but arm of the duel.
+    live_series_sports_gm = _sample_graduated_market(
+        "0xliveseriessports",
+        "Which team scores next?",
+        "which-team-scores-next-7d2c",
+        event_live=True,
+        event_title="Overtime Special",
+        series_title="NHL 2026",
+    )
     return GraduatedSnapshot(
         rows=[macro_gm, prematch_sports_gm, live_sports_gm,
-              live_political_gm, ended_live_sports_gm],
+              live_political_gm, ended_live_sports_gm,
+              live_series_sports_gm],
         published_mtime_ns=923923923,
         condition_ids=frozenset({
             "0xmacro1", "0xsports1", "0xlivesports",
             "0xlivepol", "0xendedlivesports",
+            "0xliveseriessports",
         }),
     )
 
@@ -143,7 +159,9 @@ def _923_clear_lane_switches(monkeypatch):
 def test_923_live_sports_only_keeps_only_in_play_sports(monkeypatch):
     _923_clear_lane_switches(monkeypatch)
     monkeypatch.setenv("BOT_MARKET_LIVE_SPORTS_ONLY_ON", "1")
-    assert [s["cid"] for s in _market_specs()] == ["0xlivesports"]
+    assert [s["cid"] for s in _market_specs()] == [
+        "0xlivesports", "0xliveseriessports",
+    ]
 
 
 def test_923_exclude_live_sports_keeps_everything_else(monkeypatch):
@@ -154,6 +172,20 @@ def test_923_exclude_live_sports_keeps_everything_else(monkeypatch):
     ]
 
 
+def test_923_series_title_only_row_lands_in_the_live_sports_arm(monkeypatch):
+    # The row's only sports signal is its series title: without carrying
+    # `series_title` into the graduated feed it would fall into the
+    # all-but arm and the duel would disagree on a live hockey game.
+    _923_clear_lane_switches(monkeypatch)
+    monkeypatch.setenv("BOT_MARKET_LIVE_SPORTS_ONLY_ON", "1")
+    only = {s["cid"] for s in _market_specs()}
+    assert "0xliveseriessports" in only
+    monkeypatch.setenv("BOT_MARKET_LIVE_SPORTS_ONLY_ON", "0")
+    monkeypatch.setenv("BOT_MARKET_EXCLUDE_LIVE_SPORTS_ON", "on")
+    rest = {s["cid"] for s in _market_specs()}
+    assert "0xliveseriessports" not in rest
+
+
 def test_923_duel_arms_partition_the_universe(monkeypatch):
     _923_clear_lane_switches(monkeypatch)
     monkeypatch.setenv("BOT_MARKET_LIVE_SPORTS_ONLY_ON", "1")
@@ -161,11 +193,12 @@ def test_923_duel_arms_partition_the_universe(monkeypatch):
     monkeypatch.setenv("BOT_MARKET_LIVE_SPORTS_ONLY_ON", "0")
     monkeypatch.setenv("BOT_MARKET_EXCLUDE_LIVE_SPORTS_ON", "on")
     rest = {s["cid"] for s in _market_specs()}
-    assert only == {"0xlivesports"}
+    assert only == {"0xlivesports", "0xliveseriessports"}
     assert only & rest == set()
     assert only | rest == {
         "0xmacro1", "0xsports1", "0xlivesports",
         "0xlivepol", "0xendedlivesports",
+        "0xliveseriessports",
     }
 
 

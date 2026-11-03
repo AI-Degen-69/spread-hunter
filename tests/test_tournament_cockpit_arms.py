@@ -1323,3 +1323,11 @@ def test_905_cockpit_hides_stale_worst_catalysts_and_blueprint():
     assert "switchTab('hybrid-config'" not in html_905
     # The tab-pane is hidden
     assert 'id="tab-hybrid-config" class="tab-pane" style="display: none !important;"' in html_905
+
+
+def test_923_cockpit_hides_the_hybrid_blueprint():
+    # The HYBRID blueprint is #799's production recipe: like 905 and 917,
+    # the 923 duel page must not offer it (#924 review).
+    html_923 = cockpit.generate_cockpit_html({"arms": cockpit.ARMS_CONFIG_923, "tourney_key": "923"})
+    assert "switchTab('hybrid-config'" not in html_923
+    assert 'id="tab-hybrid-config" class="tab-pane" style="display: none !important;"' in html_923

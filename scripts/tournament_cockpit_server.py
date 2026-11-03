@@ -466,7 +466,7 @@ def _resolve_plan_for_tourney_key(
     otherwise merge last week's r1 db/port into today's rows.
     """
     latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
-    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905", "917"):
+    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905", "917", "923"):
         newest = _newest_plan_record()
         newest_issue = _plan_identity(newest)[0] if newest is not None else None
         if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
@@ -1597,10 +1597,25 @@ def compute_decision_gates(arms_data: list[dict[str, Any]], tourney_key: str = "
 
     # Run-level volume check: does the volume arm's knob choke fills vs the
     # reference role? Informational for the run, never a verdict on an arm.
+    # Numbered runs store suffixed names (`all-but-live-sports-1`): strip
+    # the round suffix before matching roles, or every numbered run reads
+    # NO_DATA even with trades on both arms (#924 review).
     vol_arm = next((a for a in arms_data if arm_map["volume_arm_pattern"] in a.get("name", "")), None)
-    ref_arm = next((a for a in arms_data if a.get("name") in arm_map["balanced_only_arm_names"]), None)
+    ref_arm = next(
+        (
+            a for a in arms_data
+            if _strip_round_suffix(a.get("name", "")) in arm_map["balanced_only_arm_names"]
+        ),
+        None,
+    )
     if ref_arm is None:
-        ref_arm = next((a for a in arms_data if a.get("name") in arm_map["baseline_arm_names"]), None)
+        ref_arm = next(
+            (
+                a for a in arms_data
+                if _strip_round_suffix(a.get("name", "")) in arm_map["baseline_arm_names"]
+            ),
+            None,
+        )
     vol_n = vol_arm.get("trades_count", 0) if vol_arm else 0
     ref_n = ref_arm.get("trades_count", 0) if ref_arm else 0
     if vol_arm is None or ref_arm is None or vol_n == 0 or ref_n == 0:
@@ -2242,7 +2257,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('overview', this)">🏆 Leaderboard &amp; Overview</button>
   <button class="tab-btn" onclick="switchTab('decision-gates', this)">🚦 Decision Gates &amp; Rehearsal Status</button>
-  {'<button class="tab-btn" onclick="switchTab(\'hybrid-config\', this)">⚙️ HYBRID Configuration Blueprint</button>' if tourney_key not in ("905", "917") else ''}
+  {'<button class="tab-btn" onclick="switchTab(\'hybrid-config\', this)">⚙️ HYBRID Configuration Blueprint</button>' if tourney_key not in ("905", "917", "923") else ''}
   <button class="tab-btn" onclick="switchTab('pnl-chart', this)">📈 Cumulative PnL Curves</button>
   <button class="tab-btn" onclick="switchTab('risk-stats', this)">⚖️ Risk &amp; Volatility (EV, &sigma;, MDD)</button>
   <button class="tab-btn" onclick="switchTab('execution', this)">🎯 Merge vs Fallout Quality</button>
@@ -2359,7 +2374,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 </div>
 
 <!-- TAB: HYBRID CONFIGURATION BLUEPRINT -->
-<div id="tab-hybrid-config" class="tab-pane" style="{'display: none !important;' if tourney_key in ('905', '917') else ''}">
+<div id="tab-hybrid-config" class="tab-pane" style="{'display: none !important;' if tourney_key in ('905', '917', '923') else ''}">
   <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.12), rgba(0, 176, 255, 0.12)); border: 1px solid rgba(0, 230, 118, 0.4); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
       <div>

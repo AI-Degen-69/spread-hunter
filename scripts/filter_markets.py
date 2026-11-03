@@ -503,7 +503,11 @@ def activity_ratio_reject(
     Fail-open on every unmeasured input (None movement, None/zero volume), the
     same convention `movement_reject` uses: a missing number must never empty
     the universe. `min_ratio <= 0` disables the gate; the shipped bar is
-    1.5% (#919), enforced on non-live rows only.
+    1.5% (#919). Since #923 the gate enforces on every row including
+    declared-live ones; a live row's 15-minute numerator against a 24h
+    denominator reads stricter than the 30-minute non-live one, which is
+    the point. Pass the row's actual tape window so the reason names the
+    window that was measured.
     """
     if not min_ratio or min_ratio <= 0:
         return False, ""
@@ -1645,7 +1649,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                  else min_activity_ratio)
     ratio_rej, ratio_reason = activity_ratio_reject(
         movement_usd, volume_24h, min_ratio=ratio_bar,
-        window_sec=MOVEMENT_WINDOW_SEC)
+        window_sec=tape_window_sec)
     if ratio_rej:
         return _reject_row(source, ratio_reason, m, volume_24h,
                            movement_usd=movement_usd,
