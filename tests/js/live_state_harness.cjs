@@ -579,22 +579,29 @@ function dbModeVerdicts() {
 }
 
 function runSwitcherVerdicts() {
+  const labelled = {
+    tournament: { issue: 371, index: 1, arm: 'aggressive', stamp: '20261005-031500' },
+    arm_label: 'Control (2c Rider + 30% Stop)',
+    dash_port: 8801,
+    pid: 4242,
+    db_path: 'data/371_tournament_01_aggressive_20261005-031500.db',
+  };
+  const unlabelled = {
+    tournament: { issue: 371, index: 2, arm: 'conservative', stamp: '20261005-031500' },
+    pid: 4243,
+    db_path: 'data/371_tournament_02_conservative_20261005-031500.db',
+  };
+  const plain = {
+    db_path: 'data/01_shadow_touchpair.db',
+    pid: 1111,
+  };
   return {
-    tournamentWithPort: app.runSwitcherLabel({
-      tournament: { issue: 371, index: 1, arm: 'aggressive', stamp: '20261005-031500' },
-      dash_port: 8801,
-      pid: 4242,
-      db_path: 'data/371_tournament_01_aggressive_20261005-031500.db',
-    }),
-    tournamentNoPort: app.runSwitcherLabel({
-      tournament: { issue: 371, index: 2, arm: 'conservative', stamp: '20261005-031500' },
-      pid: 4243,
-      db_path: 'data/371_tournament_02_conservative_20261005-031500.db',
-    }),
-    standardShadow: app.runSwitcherLabel({
-      db_path: 'data/01_shadow_touchpair.db',
-      pid: 1111,
-    }),
+    tournamentWithPort: app.runSwitcherLabel(labelled),
+    tournamentNoPort: app.runSwitcherLabel(unlabelled),
+    standardShadow: app.runSwitcherLabel(plain),
+    titleLabelled: app.runSwitcherTitle(labelled),
+    titleUnlabelled: app.runSwitcherTitle(unlabelled),
+    titlePlain: app.runSwitcherTitle(plain),
   };
 }
 
@@ -975,10 +982,13 @@ async function runSwitcherRenderVerdicts() {
       },
       {
         run_id: 'trial-02',
-        db_path: 'data/02_shadow_other.db',
+        db_path: 'data/929_tournament_01_aggressive_20261005-031500.db',
         running: true,
         is_active_db: false,
         heartbeat_age_sec: 9,
+        tournament: { issue: 929, index: 1, arm: 'aggressive', stamp: '20261005-031500' },
+        arm_label: 'Control (2c Rider + 30% Stop)',
+        book_source_mix: { stream: 100, rest: 5 },
       },
     ],
   };
@@ -990,12 +1000,18 @@ async function runSwitcherRenderVerdicts() {
   } catch (e) {
     error = String(e && e.message ? e.message : e);
   }
+  const html = sw.innerHTML;
   return {
     error,
-    html: sw.innerHTML,
-    hasLiveRow: /LIVE PRODUCTION STACK/.test(sw.innerHTML),
-    hasThisPage: /THIS PAGE/.test(sw.innerHTML),
-    shadowRows: (sw.innerHTML.match(/data-run-id="trial-/g) || []).length,
+    html,
+    hasLiveRow: /LIVE PRODUCTION STACK/.test(html),
+    hasThisPage: /THIS PAGE/.test(html),
+    shadowRows: (html.match(/data-run-id="trial-/g) || []).length,
+    hasArmLabel: /Control \(2c Rider/.test(html),
+    hasIdxTag: /#01/.test(html),
+    hasKpiStrip: /db-run-kpi-strip/.test(html),
+    kpiPlaceholders: (html.match(/class="arm-kpi">—<\/span>/g) || []).length,
+    hasBookMix: /books:/.test(html),
   };
 }
 

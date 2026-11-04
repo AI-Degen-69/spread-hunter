@@ -2939,11 +2939,20 @@ function runSwitcherLabel(run) {
   if (!run) return '';
   const t = run.tournament;
   if (t && t.arm) {
-    const idxStr = String(t.index ?? 1).padStart(2, '0');
-    const pidPart = run.pid ? ` (pid ${run.pid})` : '';
-    return `#${idxStr} ${t.arm}${pidPart}`;
+    return run.arm_label || t.arm;
   }
   return (run.db_path || '').split(/[\\/]/).pop() || '';
+}
+
+function runSwitcherTitle(run) {
+  if (!run) return '';
+  const parts = [];
+  const t = run.tournament;
+  if (t && t.arm) parts.push(t.arm);
+  if (run.pid) parts.push(`pid ${run.pid}`);
+  const file = (run.db_path || '').split(/[\\/]/).pop() || '';
+  if (file) parts.push(file);
+  return parts.join(' · ');
 }
 
 /* The demo row in the store switcher: load the bogus registry the demo
@@ -3088,6 +3097,7 @@ async function renderRunSwitcher() {
       </div>`);
   }
   // Add shadow runs
+  let _tournIdx = 0;
   const shadowRows = runs.map(r => {
     const isThis = verdict.activeRunId === r.run_id;
     const state = r.running === true ? 'RUNNING' : (r.finished ? 'FINISHED' : 'ENDED');
@@ -3106,6 +3116,19 @@ async function renderRunSwitcher() {
     const mixHtml = mix.text
       ? `\n        <div class="db-run-mix" title="${esc(mix.title)}">${esc(mix.text)}</div>`
       : '';
+    // Tournament rows get redesigned layout: human label, #NN tag, KPI strip.
+    const t = r.tournament;
+    if (t && t.arm) {
+      const idx = _tournIdx++;
+      const idxStr = '#' + String(t.index ?? 1).padStart(2, '0');
+      const title = runSwitcherTitle(r);
+      const kpiStrip = `<div class="db-run-kpi-strip" id="db-run-kpis-${idx}"><span class="arm-kpi">—</span><span class="arm-kpi">—</span><span class="arm-kpi">—</span><span class="arm-kpi">—</span></div>`;
+      return `<div class="db-run-row${isThis ? ' current' : ''}" id="db-run-row-${idx}" data-run-id="${esc(r.run_id || '')}" title="${esc(title)}">
+        <span class="pill state-${runState}"><span class="pill-label">${esc(label)}</span> <span class="db-run-idx">${idxStr}</span> <span class="pill-value">${state}</span>${age ? ` <span class="pill-detail">${age}</span>` : ''}</span>${portLink}
+        ${btn}${mixHtml}
+        ${kpiStrip}
+      </div>`;
+    }
     return `<div class="db-run-row${isThis ? ' current' : ''}" data-run-id="${esc(r.run_id || '')}">
         <span class="pill state-${runState}"><span class="pill-label">${esc(label)}</span> <span class="pill-value">${state}</span>${age ? ` <span class="pill-detail">${age}</span>` : ''}</span>${portLink}
         ${btn}${mixHtml}
@@ -13008,7 +13031,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderRunSwitcher, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, renderProfileBadge, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, runSwitcherTitle, dbModeVerdict, renderRunSwitcher, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, renderProfileBadge, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent, streamProcessTag, streamEventTag, streamSeverityClass, translateConsoleLine,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,

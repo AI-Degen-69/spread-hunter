@@ -796,12 +796,19 @@ def test_a_held_snapshot_ages_against_the_scan_interval():
 @requires_node
 def test_run_switcher_label_formatting():
     res = _harness("runswitcher")
-    assert res["tournamentWithPort"] == "#01 aggressive (pid 4242)"
-    assert ":" not in res["tournamentWithPort"], (
-        "tournament arm labels must not include redundant port numbers (#867)"
-    )
-    assert res["tournamentNoPort"] == "#02 conservative (pid 4243)"
+    # Labelled tournament arm shows human label, not slug (#933)
+    assert res["tournamentWithPort"] == "Control (2c Rider + 30% Stop)"
+    # Unlabelled tournament arm falls back to slug
+    assert res["tournamentNoPort"] == "conservative"
+    # Plain shadow shows filename
     assert res["standardShadow"] == "01_shadow_touchpair.db"
+    # No pid or colon in any label
+    for key in ("tournamentWithPort", "tournamentNoPort", "standardShadow"):
+        assert "(pid" not in res[key], f"{key} still has pid"
+        assert ":" not in res[key], f"{key} has colon"
+    # Title for labelled arm contains slug and pid
+    assert "aggressive" in res["titleLabelled"]
+    assert "pid 4242" in res["titleLabelled"]
 
 
 @requires_node
@@ -813,4 +820,10 @@ def test_run_switcher_renders_with_shadow_runs_present():
     assert res["error"] is None, f"renderRunSwitcher threw: {res['error']}"
     assert res["hasLiveRow"] is True, "live production stack row is missing"
     assert res["shadowRows"] == 2, res["html"]
+    # Tournament row shows human label, index tag, KPI placeholders, book mix (#933)
+    assert res["hasArmLabel"] is True, "arm label missing from tournament row"
+    assert res["hasIdxTag"] is True, "#NN index tag missing"
+    assert res["hasKpiStrip"] is True, "KPI strip missing"
+    assert res["kpiPlaceholders"] == 4, f"expected 4 placeholder chips, got {res['kpiPlaceholders']}"
+    assert res["hasBookMix"] is True, "book mix line missing"
 
