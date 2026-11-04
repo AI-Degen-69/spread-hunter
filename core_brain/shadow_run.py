@@ -462,6 +462,7 @@ def write_shadow_heartbeat(
     shutdown_reason: str = "",
     book_sources: Optional[dict] = None,
     profile: Optional[dict] = None,
+    starting_bankroll_usd: Optional[float] = None,
     path: Optional[Path] = None,
     max_markets: Optional[int] = None,
 ) -> Optional[Path]:
@@ -521,6 +522,10 @@ def write_shadow_heartbeat(
         payload["profile"] = dict(profile)
     if max_markets is not None:
         payload["max_markets"] = int(max_markets)
+    # The fixed bankroll this rehearsal runs under, so the dashboard shows the
+    # arm's real starting capital instead of the display config's default.
+    if starting_bankroll_usd is not None:
+        payload["starting_bankroll_usd"] = float(starting_bankroll_usd)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".tmp")
@@ -1786,7 +1791,8 @@ def run_shadow(
     heartbeat_kwargs = dict(db_path=db_path, run_id=run_id, minutes=minutes,
                             interval=interval, started_at=started_at,
                             dash_port=dash_port, code_revision=code_revision,
-                            profile=active_profile, max_markets=max_markets)
+                            profile=active_profile, max_markets=max_markets,
+                            starting_bankroll_usd=cfg.bot_quote_bank_baseline_usd)
 
     def _heartbeat(cycle: int, *, finished: bool = False,
                    shutdown_reason: str = "") -> None:

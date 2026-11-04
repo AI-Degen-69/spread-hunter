@@ -1429,6 +1429,19 @@ def build_sensitivity(
     }
 
 
+def _heartbeat_bankroll(run_id):
+    """Starting bankroll a shadow run recorded in its heartbeat, else None."""
+    if not run_id or run_id == "all":
+        return None
+    try:
+        from core_brain.shadow_run import shadow_heartbeat_path
+        data = json.loads(shadow_heartbeat_path(run_id=run_id).read_text(encoding="utf-8"))
+        val = float(data.get("starting_bankroll_usd"))
+        return val if math.isfinite(val) and val > 0 else None
+    except Exception:
+        return None
+
+
 def report(db_path: Path | str | None = None, run_id: Optional[str] = None,
            live_account: bool = False) -> dict[str, Any]:
     """
@@ -2100,7 +2113,9 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None,
                 _all_pairs, key=lambda vt: vt[1])
 
     if starting_capital is None:
-        starting_capital = _CFG.bot_quote_bank_baseline_usd
+        starting_capital = (
+            _heartbeat_bankroll(active_run_id) or _CFG.bot_quote_bank_baseline_usd
+        )
 
     sorted_closes = sorted(
         [c for c in closes if c.get("ts") is not None], key=lambda c: float(c["ts"])
