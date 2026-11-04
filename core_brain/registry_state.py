@@ -211,6 +211,7 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
             "acquired_ts": None,
             "age_sec": None,
         },
+        "lockouts": {},
     }
 
     if not path.exists():
@@ -380,6 +381,32 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
             filled_committed += sz_mat * px
 
         orders_list.append(o)
+
+    lockouts: dict[str, dict[str, Any]] = {}
+    if "lifecycle_requalification" in tables:
+        try:
+            from core_brain.config import DEFAULT_HARD_STOP_LOCKOUT_SEC
+            lr_rows = cur.execute("""
+                SELECT condition_id, status, generation, reset_ts_ms, reason
+                FROM lifecycle_requalification
+                WHERE status = 'awaiting'
+            """).fetchall()
+            lockout_sec = DEFAULT_HARD_STOP_LOCKOUT_SEC
+            for lr in lr_rows:
+                cid = str(lr[0] or "").lower()
+                reset_ms = int(lr[3] or 0)
+                expires_ms = reset_ms + int(lockout_sec * 1000)
+                lockouts[cid] = {
+                    "condition_id": cid,
+                    "status": str(lr[1] or ""),
+                    "generation": int(lr[2] or 0),
+                    "reset_ts_ms": reset_ms,
+                    "lockout_sec": lockout_sec,
+                    "expires_at_ms": expires_ms,
+                    "reason": str(lr[4] or ""),
+                }
+        except Exception:
+            pass
 
     # Poll staleness
     seconds_since_poll = round((now_ms - max_poll_ms) / 1000.0, 1) if max_poll_ms > 0 else None
@@ -599,4 +626,5 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
         "idle": idle,
         "at_stake": at_stake,
         "reconcile_lock": rec_lock_info,
+        "lockouts": lockouts,
     }

@@ -66,13 +66,15 @@ def _fixture_now_ms(kpi: dict | None) -> float:
 
 def _render(view: str, kpi: dict | None = None, state: dict | None = None,
             *, sort: dict | None = None, expand: list[str] | None = None,
-            surface: str = "classic", now: float | None = None) -> dict:
+            surface: str = "classic", now: float | None = None,
+            max_markets: int | None = None) -> dict:
     # `sort` is keyword-only on purpose: as a positional third argument it lands
     # in `state`, the render comes back unsorted, and the sort assertion passes
     # against output the sort never touched.
     payload = {"view": view, "kpi": kpi or {}, "state": state or {}, "sort": sort,
                "expand": expand or [], "surface": surface,
-               "nowMs": _fixture_now_ms(kpi) if now is None else now}
+               "nowMs": _fixture_now_ms(kpi) if now is None else now,
+               "maxMarkets": max_markets}
     out = subprocess.run([shutil.which("node"), str(HARNESS), json.dumps(payload)],
                          capture_output=True, text=True, check=True, encoding="utf-8")
     return json.loads(out.stdout)
@@ -3113,3 +3115,106 @@ def test_non_live_market_with_negative_days_to_resolve_stays_active_via_resting_
     active = _render("active-markets", kpi, state, surface="stitch")
     assert active["counts"]["active-markets"] == 1
     assert cid in _cids(active)
+
+
+@requires_node
+def test_active_markets_renders_graduated_markets_as_idle_when_not_quoted():
+    # Graduated markets from filter (funnel.graduated) appear in Active Markets even without quotes.
+    kpi = {
+        "funnel": {
+            "graduated": [
+                {
+                    "condition_id": "0xgrad1",
+                    "title": "Graduated Market 1",
+                    "category": "Soccer",
+                    "volume": 50000.0,
+                    "days_to_resolve": 3.5,
+                },
+                {
+                    "condition_id": "0xgrad2",
+                    "title": "Graduated Market 2",
+                    "category": "Tennis",
+                    "volume": 25000.0,
+                    "days_to_resolve": 1.2,
+                },
+            ]
+        },
+        "by_market": {},
+    }
+    state = {"orders": []}
+
+    # Classic surface
+    rendered_classic = _render("active-markets", kpi, state, surface="classic")
+    assert rendered_classic["counts"]["active-markets"] == 2
+    assert "Graduated Market 1" in rendered_classic["html"]
+    assert "Graduated Market 2" in rendered_classic["html"]
+    assert "IDLE" in rendered_classic["html"]
+
+    # Stitch surface
+    rendered_stitch = _render("active-markets", kpi, state, surface="stitch")
+    assert rendered_stitch["counts"]["active-markets"] == 2
+    assert "Graduated Market 1" in rendered_stitch["html"]
+    assert "stitch-status-badge idle" in rendered_stitch["html"]
+
+
+@requires_node
+def test_active_markets_respects_max_markets_parameter():
+    kpi = {
+        "funnel": {
+            "graduated": [
+                {"condition_id": f"0xmkt{i}", "title": f"Market {i}", "category": "Sports"}
+                for i in range(10)
+            ]
+        },
+        "by_market": {},
+    }
+    state = {"orders": []}
+
+    rendered = _render("active-markets", kpi, state, max_markets=3, surface="stitch")
+    assert rendered["counts"]["active-markets"] == 3
+    assert rendered["rows"] == 3
+    cids = _cids(rendered)
+    assert cids == ["0xmkt0", "0xmkt1", "0xmkt2"]
+
+
+@requires_node
+def test_active_markets_renders_timed_out_status_dimmed_row_and_countdown():
+    now_ms = 1_700_000_000_000.0
+    expires_at_ms = now_ms + (14 * 60 + 5) * 1000  # 14m 05s remaining
+    kpi = {
+        "funnel": {
+            "graduated": [
+                {"condition_id": "0xactive", "title": "Active Normal Market", "category": "Sports"},
+                {"condition_id": "0xtimedout", "title": "Timed Out Market", "category": "Soccer"},
+            ]
+        },
+        "by_market": {
+            "0xactive": {"quotes_count": 2},
+        },
+    }
+    state = {
+        "orders": [],
+        "lockouts": {
+            "0xtimedout": {
+                "condition_id": "0xtimedout",
+                "reset_ts_ms": now_ms - 60_000,
+                "lockout_sec": 900.0,
+                "expires_at_ms": expires_at_ms,
+                "reason": "Locked out after stop-loss exit",
+                "status": "awaiting",
+            }
+        },
+    }
+
+    # Stitch surface
+    rendered = _render("active-markets", kpi, state, now=now_ms, surface="stitch")
+    html = rendered["html"]
+    assert "stitch-status-badge timed-out" in html
+    assert "TIMED OUT (14m 05s)" in html
+    assert "stitch-row-dimmed" in html
+    row_timed = [r for r in html.split("<tr") if 'data-cid="0xtimedout"' in r][0]
+    assert "stitch-row-dimmed" in row_timed
+
+    # Unsorted order puts timed-out market at the bottom
+    cids = _cids(rendered)
+    assert cids == ["0xactive", "0xtimedout"]

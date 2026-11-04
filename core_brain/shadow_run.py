@@ -463,6 +463,7 @@ def write_shadow_heartbeat(
     book_sources: Optional[dict] = None,
     profile: Optional[dict] = None,
     path: Optional[Path] = None,
+    max_markets: Optional[int] = None,
 ) -> Optional[Path]:
     """Publish (or refresh) the rehearsal's heartbeat file.
 
@@ -518,6 +519,8 @@ def write_shadow_heartbeat(
     # the reader reports as unknown rather than a wrong name.
     if profile is not None:
         payload["profile"] = dict(profile)
+    if max_markets is not None:
+        payload["max_markets"] = int(max_markets)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".tmp")
@@ -1333,6 +1336,7 @@ def run_shadow(
     finish_line_trades: Optional[int] = None,
     finish_line_merges: Optional[int] = None,
     finish_line_reliable: bool = False,
+    max_markets: Optional[int] = None,
 ) -> ShadowResult:
     """One shadow session: rotate until `minutes` elapse, record, spend nothing.
 
@@ -1782,7 +1786,7 @@ def run_shadow(
     heartbeat_kwargs = dict(db_path=db_path, run_id=run_id, minutes=minutes,
                             interval=interval, started_at=started_at,
                             dash_port=dash_port, code_revision=code_revision,
-                            profile=active_profile)
+                            profile=active_profile, max_markets=max_markets)
 
     def _heartbeat(cycle: int, *, finished: bool = False,
                    shutdown_reason: str = "") -> None:
@@ -2283,6 +2287,7 @@ def main(
             finish_line_trades=a.finish_line_trades,
             finish_line_merges=a.finish_line_merges,
             finish_line_reliable=a.finish_line_reliable,
+            max_markets=a.max_markets,
         )
     finally:
         # The socket is a daemon thread and would die with the process
