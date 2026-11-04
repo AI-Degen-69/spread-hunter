@@ -1124,6 +1124,7 @@ def list_shadow_runs(active_db_path: str | None = None,
     here and never read into this page's numbers.
     """
     now = time.time() if now is None else now
+    arm_labels = {a["name"]: a["label"] for a in _tournament_arms_configs()}
     runs: list[dict] = []
     for path in _shadow_heartbeat_candidates():
         try:
@@ -1138,6 +1139,9 @@ def list_shadow_runs(active_db_path: str | None = None,
             continue
         run["is_active_db"] = _same_path(run.get("db_path"), active_db_path)
         run["source_file"] = path.name
+        t = run.get("tournament")
+        if t and t.get("arm") in arm_labels:
+            run["arm_label"] = arm_labels[t["arm"]]
         runs.append(run)
 
     # Live first, then freshest: the switcher exists to answer "what is running",
