@@ -3478,7 +3478,7 @@ function rowNumericValue(r) {{
   const s = fmt.trim().toLowerCase();
   if (s.endsWith('s') || s.endsWith('m')) {{
     let total = 0.0;
-    const parts = s.split(/\s+/);
+    const parts = s.split(/\\s+/);
     let ok = true;
     for (const p of parts) {{
       if (p.endsWith('h')) total += parseFloat(p.slice(0, -1)) * 3600.0;
