@@ -138,8 +138,8 @@ DECISION_GATE_ARM_MAP = {
         "balanced_only_arm_names": [],  # No balanced role: falls back to baseline
     },
     "929": {
-        "volume_arm_pattern": "live-rider-2c-cap60",
-        "baseline_arm_names": ["live-control-classic"],
+        "volume_arm_pattern": "live-rider-5c-stop20pct",
+        "baseline_arm_names": ["live-rider-2c-stop30pct"],
         "balanced_only_arm_names": [],
     },
 }
@@ -3478,7 +3478,7 @@ function rowNumericValue(r) {{
   const s = fmt.trim().toLowerCase();
   if (s.endsWith('s') || s.endsWith('m')) {{
     let total = 0.0;
-    const parts = s.split(/\s+/);
+    const parts = s.split(/\\s+/);
     let ok = true;
     for (const p of parts) {{
       if (p.endsWith('h')) total += parseFloat(p.slice(0, -1)) * 3600.0;

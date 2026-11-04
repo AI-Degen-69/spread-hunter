@@ -67,20 +67,20 @@ def _get_top_markets() -> int:
         if _ORIGINAL_ENV_TOP is not None and str(_ORIGINAL_ENV_TOP).strip() != "":
             raw_top = str(_ORIGINAL_ENV_TOP).strip()
         else:
-            raw_top = str(file_vals.get("SH_TOP_MARKETS", "2") or "2").strip()
+            raw_top = str(file_vals.get("SH_TOP_MARKETS", "5") or "5").strip()
         val = int(raw_top)
-        return val if val > 0 else 2
+        return val if val > 0 else 5
     except Exception:
         # Fallback: honour process env, else default.
         try:
             if _ORIGINAL_ENV_TOP is not None and str(_ORIGINAL_ENV_TOP).strip() != "":
                 raw_top = str(_ORIGINAL_ENV_TOP).strip()
             else:
-                raw_top = "2"
+                raw_top = "5"
             val = int(raw_top)
-            return val if val > 0 else 2
+            return val if val > 0 else 5
         except Exception:
-            return 2
+            return 5
 
 raw_interval = os.environ.get("SH_FILTER_INTERVAL_SEC", "600").strip()
 try:
@@ -162,7 +162,7 @@ def _loop_paths(out_dir=None) -> tuple[Path, Path]:
     return base / "rerank.log", base / "cycle_events.jsonl"
 
 
-def _rank_cmd(top: int = 2, out_dir=None,
+def _rank_cmd(top: int = 5, out_dir=None,
               trial_depth: float | None = None,
               paired_depth_control_usd: float | None = None,
               paired_admission: bool = False) -> list[str]:
