@@ -14,7 +14,7 @@
       --border-bright: #354a70;
       --text-main: #e2e8f0;
       --text-muted: #889bb5;
-      --text-dim: #5c6f8c;
+      --text-dim: #8fa0ba;
       --accent-cyan: #00e5ff;
       --accent-green: #00e676;
       --accent-purple: #e040fb;
@@ -368,7 +368,7 @@
       <div class="stat-card orange">
         <div class="stat-label">Trailing Noise Lock</div>
         <div class="stat-value">100% Floor</div>
-        <div class="stat-desc">Rider exits now require peak ≥ entry + Δ. No exits below cost basis.</div>
+        <div class="stat-desc">Rider exits now require peak ≥ entry + Δ. Decision threshold clamped ≥ entry.</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Active Arms in Test</div>
@@ -442,7 +442,7 @@
             <ul>
               <li>Sub-delta noise ticks (51¢–54¢) do NOT arm the exit.</li>
               <li>Threshold is mathematically clamped at or above entry.</li>
-              <li>Trailing rider <strong>ONLY exits in profit</strong> (locking in +5¢, +10¢, +25¢).</li>
+              <li>Trailing rider threshold <strong>only arms at or above entry cost</strong> (locking in runner gains).</li>
               <li>Adverse drops below entry are handled exclusively by the hard stop.</li>
             </ul>
           </div>
@@ -564,7 +564,7 @@
               <td><span class="code-pill">0.05</span> (5¢)</td>
               <td><span class="code-pill">15%</span></td>
               <td>
-                <strong>Aggressive Truncation:</strong> Quickest stop in the fleet (-15% = ~$0.35 loss). Captures asymmetric payoff if 5¢ runners hit +20% to +40%.
+                <strong>Aggressive Truncation:</strong> Quickest stop in the fleet (-15% = ~$0.09 loss at 0.60 ceiling). Captures asymmetric payoff if 5¢ runners hit +20% to +40%.
               </td>
             </tr>
             <tr>
@@ -601,7 +601,7 @@
       <h2><span class="num">03</span> What We Expect in the Fresh Run</h2>
 
       <div class="change-block">
-        <h3 style="font-size: 1.15rem; color: #ffffff; margin-bottom: 0.75rem;">1. Complete Eradication of -100% Losses</h3>
+        <h3 style="font-size: 1.15rem; color: #ffffff; margin-bottom: 0.75rem;">1. Eradication of Stranded Wipeouts via Dynamic Opposite Token Resolution</h3>
         <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1rem;">
           In the previous run, Underdog arms suffered 5 losses that dropped all the way to $0.00 at game settlement, booking -$9.72 in unneeded damage.
         </p>

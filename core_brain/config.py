@@ -662,7 +662,7 @@ class MakerConfig:
         rts = _env("BOT_QUOTE_REQUIRE_TWO_SIDED_WHEN_FLAT_ON")
         if rts:
             kw["bot_quote_require_two_sided_when_flat_on"] = (
-                rts.strip().lower() in ("1", "true", "yes", "on")
+                rts.strip().lower() not in ("0", "false", "off", "no")
             )
 
         exit_win = _env("BOT_RISK_PAIRS_EXIT_WINDOW_SEC") or _env("BOT_POS_HOLD_MAX_SEC")
