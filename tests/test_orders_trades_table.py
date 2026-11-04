@@ -3218,3 +3218,12 @@ def test_active_markets_renders_timed_out_status_dimmed_row_and_countdown():
     # Unsorted order puts timed-out market at the bottom
     cids = _cids(rendered)
     assert cids == ["0xactive", "0xtimedout"]
+
+    # Classic surface: the same market, the same lockout, the same dimming.
+    classic = _render("active-markets", kpi, state, now=now_ms)
+    classic_html = classic["html"]
+    assert "pill timed-out" in classic_html
+    assert "TIMED OUT (14m 05s)" in classic_html
+    row_timed = [r for r in classic_html.split("<tr") if 'data-cid="0xtimedout"' in r][0]
+    assert "ot-row-dimmed" in row_timed
+    assert _cids(classic) == ["0xactive", "0xtimedout"]

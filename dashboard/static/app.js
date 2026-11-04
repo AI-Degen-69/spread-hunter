@@ -9596,6 +9596,43 @@ function marketActivityPill(m, orders) {
   return marketStatusPill(m, restingHere);
 }
 
+/* The lockout mark for one market, normalized once for both Active Markets
+ * renderers: a hard-stop exit parks the market awaiting re-qualification and the
+ * page counts that window down. Keyed lowercased, with the raw key kept as the
+ * fallback the single-market readers already use. */
+function resolveMarketLockout(state, cid, nowMs) {
+  const lockouts = (state && state.lockouts) || null;
+  const lockout = lockouts
+    ? (lockouts[String(cid || '').toLowerCase()] || lockouts[cid] || null)
+    : null;
+  const isTimedOut = Boolean(lockout && lockout.expires_at_ms
+    && (lockout.expires_at_ms > nowMs));
+  return {
+    lockout,
+    isTimedOut,
+    timeoutRemainingMs: isTimedOut ? (lockout.expires_at_ms - nowMs) : 0,
+  };
+}
+
+/* Status-column rank shared by both Active Markets tables: timed-out rows sort
+ * last on ascending, resting first, then markets with quote activity, then idle. */
+function activeMarketStatusRank(row) {
+  if (row.isTimedOut) return 3;
+  if (row.restingHere) return 0;
+  if ((row.m.quotes_count || 0) > 0) return 1;
+  return 2;
+}
+
+/* Default Active Markets order, identical on both surfaces: live rows above
+ * timed-out ones, then the busiest first, then by title. */
+function compareActiveMarketsDefault(a, b) {
+  const aTimed = a.isTimedOut ? 1 : 0;
+  const bTimed = b.isTimedOut ? 1 : 0;
+  if (aTimed !== bTimed) return aTimed - bTimed;
+  return (b.m.quotes_count || 0) - (a.m.quotes_count || 0)
+    || String(a.m.title || '').localeCompare(String(b.m.title || ''));
+}
+
 function activeMarketsRows(kpi, state, sort, nowMs, maxMarkets) {
   const effectiveNow = (nowMs === undefined || nowMs === null) ? Date.now() : Number(nowMs);
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
@@ -9608,10 +9645,7 @@ function activeMarketsRows(kpi, state, sort, nowMs, maxMarkets) {
     const upQuote = legs.up ? legs.up.price : null;
     const dnQuote = legs.dn ? legs.dn.price : null;
 
-    const cidLower = String(cid || '').toLowerCase();
-    const lockout = (state && state.lockouts && (state.lockouts[cidLower] || state.lockouts[cid])) || null;
-    const isTimedOut = Boolean(lockout && lockout.expires_at_ms && (lockout.expires_at_ms > effectiveNow));
-    const timeoutRemainingMs = isTimedOut ? (lockout.expires_at_ms - effectiveNow) : 0;
+    const { lockout, isTimedOut, timeoutRemainingMs } = resolveMarketLockout(state, cid, effectiveNow);
     const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
     const ts = latestQuoteTs(m);
 
@@ -9653,25 +9687,12 @@ function activeMarketsRows(kpi, state, sort, nowMs, maxMarkets) {
       case 7: return otNum(r.volume24h);
       case 8: return otNum(r.top3Depth);
       case 9: return otNum(r.horizon);
-      case 10: {
-        if (r.isTimedOut) return 3;
-        if (r.restingHere) return 0;
-        if ((r.m.quotes_count || 0) > 0) return 1;
-        return 2;
-      }
+      case 10: return activeMarketStatusRank(r);
       default: return null;
     }
   }) : rows;
 
-  if (!sort) {
-    sorted.sort((a, b) => {
-      const aTimed = a.isTimedOut ? 1 : 0;
-      const bTimed = b.isTimedOut ? 1 : 0;
-      if (aTimed !== bTimed) return aTimed - bTimed;
-      return (b.m.quotes_count || 0) - (a.m.quotes_count || 0)
-        || String(a.m.title || '').localeCompare(String(b.m.title || ''));
-    });
-  }
+  if (!sort) sorted.sort(compareActiveMarketsDefault);
 
   return sorted.map(({ cid, m, upQuote, dnQuote, midPrice, volume30m, volume24h, top3Depth, horizon, restingHere, isTimedOut, timeoutRemainingMs, lockout, ts }) => {
     const rowCls = isTimedOut ? ' class="ot-row-dimmed"' : '';
@@ -10544,10 +10565,7 @@ function stitchActiveMarketsRows(kpi, state, sort, clockMs, maxMarkets) {
     const upBid = upMkt ? upMkt.bid : null;
     const dnBid = dnMkt ? dnMkt.bid : null;
 
-    const cidLower = String(cid || '').toLowerCase();
-    const lockout = (state && state.lockouts && (state.lockouts[cidLower] || state.lockouts[cid])) || null;
-    const isTimedOut = Boolean(lockout && lockout.expires_at_ms && (lockout.expires_at_ms > nowMs));
-    const timeoutRemainingMs = isTimedOut ? (lockout.expires_at_ms - nowMs) : 0;
+    const { lockout, isTimedOut, timeoutRemainingMs } = resolveMarketLockout(state, cid, nowMs);
     const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
     const ts = latestQuoteTs(m);
     return { cid, m, upPrice, dnPrice, upBid, dnBid, restingHere, isTimedOut, timeoutRemainingMs, lockout, ts };
@@ -10562,25 +10580,12 @@ function stitchActiveMarketsRows(kpi, state, sort, clockMs, maxMarkets) {
       case 4: return otNum(r.dnPrice);
       case 7: return otNum(r.m.volume_24h);
       case 8: return otNum(r.m.days_to_resolve);
-      case 9: {
-        if (r.isTimedOut) return 3;
-        if (r.restingHere) return 0;
-        if ((r.m.quotes_count || 0) > 0) return 1;
-        return 2;
-      }
+      case 9: return activeMarketStatusRank(r);
       default: return null;
     }
   }) : rows;
 
-  if (!sort) {
-    sorted.sort((a, b) => {
-      const aTimed = a.isTimedOut ? 1 : 0;
-      const bTimed = b.isTimedOut ? 1 : 0;
-      if (aTimed !== bTimed) return aTimed - bTimed;
-      return (b.m.quotes_count || 0) - (a.m.quotes_count || 0)
-        || String(a.m.title || '').localeCompare(String(b.m.title || ''));
-    });
-  }
+  if (!sort) sorted.sort(compareActiveMarketsDefault);
 
   return sorted.map(({ cid, m, upPrice, dnPrice, upBid, dnBid, restingHere, isTimedOut, timeoutRemainingMs, lockout, ts }) => {
     const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');

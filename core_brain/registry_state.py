@@ -27,6 +27,7 @@ from typing import Any
 
 from core_brain.close_methods import MERGE_METHODS as MERGE_CLOSE_METHODS
 from core_brain.market_meta import resolve_market_meta
+from core_brain.order_registry import HARD_STOP_MARK_PREFIX
 
 # The repo root, one level up from core_brain/. Same tree-boundary rule as the
 # order manager: `core_brain` must resolve inside this repo and nowhere else.
@@ -52,6 +53,27 @@ STALE_THRESHOLD_SEC = 30.0
 CANCELLED_ORDERS_PER_MARKET = 5
 
 _CANCELLED_STATUSES = frozenset({"cancelled", "canceled"})
+
+
+def _hard_stop_lockout_sec() -> float:
+    """The hard-stop entry lockout the trader enforces, in seconds.
+
+    Same source of truth as `trader_loop._hard_stop_lockout_sec`: the run's
+    configured `bot_risk_hard_stop_entry_lockout_sec`, where a non-positive
+    value means the window is off. Falls back to the default when the config
+    cannot be loaded, so the dashboard never loses the rows over it.
+    """
+    try:
+        from core_brain.config import DEFAULT_HARD_STOP_LOCKOUT_SEC, load
+    except Exception:
+        return 0.0
+    try:
+        raw = getattr(load(for_display=True),
+                      "bot_risk_hard_stop_entry_lockout_sec", None)
+        sec = float(DEFAULT_HARD_STOP_LOCKOUT_SEC if raw is None else raw)
+    except Exception:
+        return DEFAULT_HARD_STOP_LOCKOUT_SEC
+    return sec if sec > 0 else 0.0
 
 
 def _order_recency(order: dict) -> int:
@@ -337,13 +359,17 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
         lockouts: dict[str, dict[str, Any]] = {}
         if "lifecycle_requalification" in tables:
             try:
-                from core_brain.config import DEFAULT_HARD_STOP_LOCKOUT_SEC
-                lockout_sec = DEFAULT_HARD_STOP_LOCKOUT_SEC
+                lockout_sec = _hard_stop_lockout_sec()
                 for lr in cur.execute("""
                         SELECT condition_id, status, generation, reset_ts_ms, reason
                         FROM lifecycle_requalification
                         WHERE status = 'awaiting'
                     """).fetchall():
+                    reason = str(lr["reason"] or "")
+                    # Only a hard-stop block carries the lockout window; a merge
+                    # or lifecycle reset clears on publication alone (#796).
+                    if not reason.startswith(HARD_STOP_MARK_PREFIX):
+                        continue
                     cid = str(lr["condition_id"] or "").lower()
                     reset_ms = int(lr["reset_ts_ms"] or 0)
                     lockouts[cid] = {
@@ -353,7 +379,7 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
                         "reset_ts_ms": reset_ms,
                         "lockout_sec": lockout_sec,
                         "expires_at_ms": reset_ms + int(lockout_sec * 1000),
-                        "reason": str(lr["reason"] or ""),
+                        "reason": reason,
                     }
             except sqlite3.Error:
                 lockouts = {}
