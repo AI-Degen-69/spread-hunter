@@ -14,6 +14,7 @@ import time
 
 import pytest
 
+from core_brain.config import DEFAULT_HARD_STOP_LOCKOUT_SEC
 from core_brain.order_registry import SCHEMA
 from core_brain.registry_state import summarize_state
 
@@ -464,3 +465,76 @@ def test_summarize_state_resolves_market_identity_once_per_condition(
 
     assert len(state["pairs"]) == 3
     assert calls == ["cond-1"], f"identity resolved {len(calls)}x, expected once"
+
+
+def test_awaiting_requalification_lockout_reaches_the_state_payload(temp_db):
+    """A locked-out market reports its requalification window, even with no orders.
+
+    The dashboard renders the TIMED OUT countdown from `state.lockouts`, and a
+    stop-loss exit leaves the market awaiting re-qualification precisely when no
+    orders rest on it -- so the empty-orders early return must carry the block.
+    """
+    now_ms = int(time.time() * 1000)
+    con = sqlite3.connect(str(temp_db))
+    con.execute(
+        "INSERT INTO lifecycle_requalification (condition_id, status, generation,"
+        " reset_ts_ms, reason, updated_ts_ms) VALUES (?, ?, ?, ?, ?, ?)",
+        ("0xlocked", "awaiting", 2, now_ms - 60_000,
+         "hard_stop_exited price crossed the stop", now_ms),
+    )
+    con.commit()
+    con.close()
+
+    state = summarize_state(temp_db)
+
+    lockout = state["lockouts"]["0xlocked"]
+    assert lockout["status"] == "awaiting"
+    assert lockout["generation"] == 2
+    assert lockout["reset_ts_ms"] == now_ms - 60_000
+    assert lockout["lockout_sec"] == DEFAULT_HARD_STOP_LOCKOUT_SEC
+    assert lockout["expires_at_ms"] == (now_ms - 60_000) + int(DEFAULT_HARD_STOP_LOCKOUT_SEC * 1000)
+    assert lockout["reason"] == "hard_stop_exited price crossed the stop"
+
+
+def test_the_lockout_window_follows_the_configured_duration(temp_db, monkeypatch):
+    """The expiry the page counts down matches the window the trader enforces.
+
+    A run that shortens `BOT_RISK_HARD_STOP_ENTRY_LOCKOUT_SEC` releases the
+    block early; a payload pinned to the 900s default would keep showing the
+    market as timed out long after it became quotable again.
+    """
+    monkeypatch.setenv("BOT_RISK_HARD_STOP_ENTRY_LOCKOUT_SEC", "120")
+    now_ms = int(time.time() * 1000)
+    con = sqlite3.connect(str(temp_db))
+    con.execute(
+        "INSERT INTO lifecycle_requalification (condition_id, status, generation,"
+        " reset_ts_ms, reason, updated_ts_ms) VALUES (?, ?, ?, ?, ?, ?)",
+        ("0xconfigured", "awaiting", 1, now_ms, "hard_stop_exited", now_ms),
+    )
+    con.commit()
+    con.close()
+
+    lockout = summarize_state(temp_db)["lockouts"]["0xconfigured"]
+
+    assert lockout["lockout_sec"] == 120.0
+    assert lockout["expires_at_ms"] == now_ms + 120_000
+
+
+def test_a_publication_only_reset_is_not_a_timed_out_market(temp_db):
+    """Only a hard-stop block carries the lockout window (#796).
+
+    A lifecycle or merge reset clears on the next publication alone, so
+    rendering it as TIMED OUT would invent a countdown the trader never
+    applies.
+    """
+    now_ms = int(time.time() * 1000)
+    con = sqlite3.connect(str(temp_db))
+    con.execute(
+        "INSERT INTO lifecycle_requalification (condition_id, status, generation,"
+        " reset_ts_ms, reason, updated_ts_ms) VALUES (?, ?, ?, ?, ?, ?)",
+        ("0xreset", "awaiting", 1, now_ms, "reset: unpaired leg merged", now_ms),
+    )
+    con.commit()
+    con.close()
+
+    assert "0xreset" not in summarize_state(temp_db)["lockouts"]

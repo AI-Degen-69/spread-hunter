@@ -1578,6 +1578,25 @@
   background-color: #64748b;
 }
 
+.proto-body .stitch-status-badge.timed-out {
+  background: rgba(120, 53, 15, 0.45);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+.proto-body .stitch-status-dot.timed-out {
+  background-color: #fbbf24;
+}
+
+.proto-body tr.stitch-ot-row.stitch-row-dimmed {
+  opacity: 0.45;
+  transition: opacity 0.2s ease;
+}
+
+.proto-body tr.stitch-ot-row.stitch-row-dimmed:hover {
+  opacity: 0.9;
+}
+
 /* Stitch Open Positions Table Styles */
 .proto-body .stitch-pnl-cell {
   display: flex;

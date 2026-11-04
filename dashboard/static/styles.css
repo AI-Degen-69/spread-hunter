@@ -646,6 +646,10 @@ header {
 .pill.error { background: var(--red-bg); color: #fca5a5; border: 1px solid var(--red-border); }
 .pill.reconnecting { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
 .pill.finished { background: rgba(100,116,139,0.10); color: #94a3b8; border: 1px solid rgba(148,163,184,0.18); }
+/* TIMED OUT: the market took a hard-stop exit and is parked awaiting requalification */
+.pill.timed-out { background: rgba(245,158,11,0.20); color: #fbbf24; border: 1px solid rgba(245,158,11,0.40); }
+tr.ot-row-dimmed { opacity: 0.45; transition: opacity 0.2s ease; }
+tr.ot-row-dimmed:hover { opacity: 0.9; }
 /* RESTING is the active resting-on-book state: bright green with 1 Hz blink */
 .pill.resting-breathing,
 .pill.quoting-breathing.resting {

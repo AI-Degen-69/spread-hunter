@@ -8722,7 +8722,7 @@ const OT_STORAGE_KEY = 'sh-orders-trades-view';
 let currentOrdersTradesView = 'active-markets';
 
 const OT_NOTES = {
-  'active-markets': 'Markets that graduated the Market Filter and are being quoted.',
+  'active-markets': 'Markets that graduated the Market Filter and are eligible or being quoted.',
   'open-orders': 'Orders resting on the book. Nothing is held yet, so there is no PnL.',
   'positions': 'Filled legs the account is holding on markets that have not settled.',
   'closed-trades': 'Settled trades that booked a profit or loss.',
@@ -9488,11 +9488,90 @@ function signedUSD(v) {
  *   IDLE    — no quote activity. Reserved; must not appear in this tab, since
  *             everything listed here graduated the filter and is being quoted.
  */
-function marketStatusPill(m, restingHere) {
+function formatTimeoutCountdown(ms) {
+  const totalSec = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}m ${String(s).padStart(2, '0')}s`;
+}
+
+function resolveActiveMarketEntries(kpi, state, nowMs, maxMarkets) {
+  const ordersByMarket = groupOrdersByMarket(state && state.orders);
+  const byMarket = (kpi && kpi.by_market) || {};
+  const graduatedList = (kpi && kpi.funnel && Array.isArray(kpi.funnel.graduated))
+    ? kpi.funnel.graduated
+    : [];
+
+  const marketMap = new Map();
+  const cap = (typeof maxMarkets === 'number' && maxMarkets > 0) ? maxMarkets : null;
+
+  if (graduatedList.length > 0) {
+    const filteredGraduated = cap ? graduatedList.slice(0, cap) : graduatedList;
+
+    for (const g of filteredGraduated) {
+      const cid = g.condition_id || g.cid;
+      if (!cid) continue;
+      const existing = byMarket[cid] || {};
+      marketMap.set(cid, {
+        ...g,
+        ...existing,
+        condition_id: cid,
+        title: g.title || existing.title || g.slug || existing.slug || cid,
+        slug: g.slug || existing.slug,
+        url: g.url || existing.url,
+        volume_24h: g.volume ?? existing.volume_24h ?? null,
+        days_to_resolve: g.days_to_resolve ?? existing.days_to_resolve ?? null,
+        category: g.category || existing.category || g.venue_category || existing.venue_category || '',
+        quotes_count: existing.quotes_count || 0,
+        quotes: existing.quotes || [],
+        graduated: true,
+      });
+    }
+
+    for (const [cid, orders] of Object.entries(ordersByMarket)) {
+      if (orders && orders.some(o => isRestingOrder(o))) {
+        if (!marketMap.has(cid)) {
+          const existing = byMarket[cid] || {};
+          marketMap.set(cid, {
+            ...existing,
+            condition_id: cid,
+            title: existing.title || orders[0]?.market_title || cid,
+            slug: existing.slug,
+            url: existing.url,
+            volume_24h: existing.volume_24h ?? null,
+            days_to_resolve: existing.days_to_resolve ?? null,
+            category: existing.category || '',
+            quotes_count: existing.quotes_count || 0,
+            quotes: existing.quotes || [],
+            graduated: false,
+          });
+        }
+      }
+    }
+  } else {
+    for (const [cid, m] of Object.entries(byMarket)) {
+      if (isQuotedMarket(m, ordersByMarket[cid], nowMs)
+        && ((m.quotes_count || 0) > 0 || (ordersByMarket[cid] || []).some(o => isRestingOrder(o)))) {
+        marketMap.set(cid, m);
+      }
+    }
+    if (cap && marketMap.size > cap) {
+      return Array.from(marketMap.entries()).slice(0, cap);
+    }
+  }
+
+  return Array.from(marketMap.entries());
+}
+
+function marketStatusPill(m, restingHere, isTimedOut, timeoutRemainingMs, reason) {
+  if (isTimedOut) {
+    const cd = formatTimeoutCountdown(timeoutRemainingMs || 0);
+    return `<span class="pill timed-out" title="${esc(reason || 'Locked out after stop-loss exit')}">TIMED OUT (${cd})</span>`;
+  }
   const quoting = Number(m && m.quotes_count) > 0;
   if (restingHere) return '<span class="pill resting-breathing" title="Orders are resting on the book">RESTING</span>';
   if (quoting) return '<span class="pill quoting-breathing" title="The engine is actively quoting this market (no orders resting on the book right now)">QUOTING</span>';
-  return '<span class="pill stopped" title="No quote activity observed">IDLE</span>';
+  return '<span class="pill stopped" title="Accepted by market filter; awaiting quotes">IDLE</span>';
 }
 
 /* The activity pill for a HELD market (issue #656).
@@ -9517,25 +9596,56 @@ function marketActivityPill(m, orders) {
   return marketStatusPill(m, restingHere);
 }
 
-function activeMarketsRows(kpi, state, sort, nowMs) {
+/* The lockout mark for one market, normalized once for both Active Markets
+ * renderers: a hard-stop exit parks the market awaiting re-qualification and the
+ * page counts that window down. Keyed lowercased, with the raw key kept as the
+ * fallback the single-market readers already use. */
+function resolveMarketLockout(state, cid, nowMs) {
+  const lockouts = (state && state.lockouts) || null;
+  const lockout = lockouts
+    ? (lockouts[String(cid || '').toLowerCase()] || lockouts[cid] || null)
+    : null;
+  const isTimedOut = Boolean(lockout && lockout.expires_at_ms
+    && (lockout.expires_at_ms > nowMs));
+  return {
+    lockout,
+    isTimedOut,
+    timeoutRemainingMs: isTimedOut ? (lockout.expires_at_ms - nowMs) : 0,
+  };
+}
+
+/* Status-column rank shared by both Active Markets tables: timed-out rows sort
+ * last on ascending, resting first, then markets with quote activity, then idle. */
+function activeMarketStatusRank(row) {
+  if (row.isTimedOut) return 3;
+  if (row.restingHere) return 0;
+  if ((row.m.quotes_count || 0) > 0) return 1;
+  return 2;
+}
+
+/* Default Active Markets order, identical on both surfaces: live rows above
+ * timed-out ones, then the busiest first, then by title. */
+function compareActiveMarketsDefault(a, b) {
+  const aTimed = a.isTimedOut ? 1 : 0;
+  const bTimed = b.isTimedOut ? 1 : 0;
+  if (aTimed !== bTimed) return aTimed - bTimed;
+  return (b.m.quotes_count || 0) - (a.m.quotes_count || 0)
+    || String(a.m.title || '').localeCompare(String(b.m.title || ''));
+}
+
+function activeMarketsRows(kpi, state, sort, nowMs, maxMarkets) {
+  const effectiveNow = (nowMs === undefined || nowMs === null) ? Date.now() : Number(nowMs);
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
-  const entries = Object.entries((kpi && kpi.by_market) || {})
-    // Everything listed here is being worked, so IDLE cannot appear: a market
-    // with no quote activity and only a filled/cancelled order has nothing
-    // active to show (issue #272; CodeRabbit round on this PR).
-    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid], nowMs)
-      && ((m.quotes_count || 0) > 0
-        || (ordersByMarket[cid] || []).some(o => isRestingOrder(o))));
+  const entries = resolveActiveMarketEntries(kpi, state, effectiveNow, maxMarkets);
 
   if (!entries.length) return otEmptyRow('active-markets', 'No markets are being quoted.');
 
-  // One row per market, so a market IS the sort unit here — the only question
-  // is which of its own values the column stands for. Each accessor reads the
-  // same derived number the cell below it renders.
   const rows = entries.map(([cid, m]) => {
     const legs = latestLegQuotes(m);
     const upQuote = legs.up ? legs.up.price : null;
     const dnQuote = legs.dn ? legs.dn.price : null;
+
+    const { lockout, isTimedOut, timeoutRemainingMs } = resolveMarketLockout(state, cid, effectiveNow);
     const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
     const ts = latestQuoteTs(m);
 
@@ -9549,7 +9659,7 @@ function activeMarketsRows(kpi, state, sort, nowMs) {
     const volume30m = (Number(m.movement_window_sec) === 1800 || m.movement_window_sec === undefined)
       ? (m.movement_usd ?? m.volume_30m ?? null)
       : (m.volume_30m ?? null);
-    const volume24h = m.volume_24h ?? null;
+    const volume24h = m.volume_24h ?? m.volume ?? null;
     const yesDepth = otNum(m.yes_depth_usd);
     const noDepth = otNum(m.no_depth_usd);
     const top3Depth = otNum(m.top3_bid_depth)
@@ -9561,7 +9671,7 @@ function activeMarketsRows(kpi, state, sort, nowMs) {
     return {
       cid, m, upQuote, dnQuote, midPrice,
       volume30m, volume24h, top3Depth, horizon,
-      restingHere, ts,
+      restingHere, isTimedOut, timeoutRemainingMs, lockout, ts,
     };
   });
 
@@ -9577,17 +9687,16 @@ function activeMarketsRows(kpi, state, sort, nowMs) {
       case 7: return otNum(r.volume24h);
       case 8: return otNum(r.top3Depth);
       case 9: return otNum(r.horizon);
-      case 10: return r.restingHere ? 'RESTING' : ((r.m.quotes_count || 0) > 0 ? 'QUOTING' : 'IDLE');
+      case 10: return activeMarketStatusRank(r);
       default: return null;
     }
   }) : rows;
 
-  if (!sort) {
-    sorted.sort((a, b) => (b.m.quotes_count || 0) - (a.m.quotes_count || 0)
-      || String(a.m.title || '').localeCompare(String(b.m.title || '')));
-  }
+  if (!sort) sorted.sort(compareActiveMarketsDefault);
 
-  return sorted.map(({ cid, m, upQuote, dnQuote, midPrice, volume30m, volume24h, top3Depth, horizon, restingHere, ts }) => `<tr data-cid="${esc(cid)}">
+  return sorted.map(({ cid, m, upQuote, dnQuote, midPrice, volume30m, volume24h, top3Depth, horizon, restingHere, isTimedOut, timeoutRemainingMs, lockout, ts }) => {
+    const rowCls = isTimedOut ? ' class="ot-row-dimmed"' : '';
+    return `<tr${rowCls} data-cid="${esc(cid)}">
       ${timestampCell(ts)}
       <td class="ot-market">${marketCell(m, cid)}</td>
       <td class="mono">${esc(marketCategory(m))}</td>
@@ -9598,8 +9707,9 @@ function activeMarketsRows(kpi, state, sort, nowMs) {
       <td class="mono">${fmtCompactUSD(volume24h)}</td>
       <td class="mono">${fmtCompactUSD(top3Depth)}</td>
       <td class="mono">${(horizon === null || horizon === undefined) ? '--' : `${Number(horizon).toFixed(1)}d`}</td>
-      <td>${marketStatusPill(m, restingHere)}</td>
-    </tr>`).join('');
+      <td>${marketStatusPill(m, restingHere, isTimedOut, timeoutRemainingMs, lockout?.reason)}</td>
+    </tr>`;
+  }).join('');
 }
 
 /* Group the resting book by the pair each order belongs to.
@@ -9985,11 +10095,11 @@ function positionsRows(kpi, state, sort) {
   }).join('');
 }
 
-function ordersTradesCounts(kpi, state, nowMs) {
+function ordersTradesCounts(kpi, state, nowMs, maxMarkets) {
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
   const markets = Object.entries((kpi && kpi.by_market) || {});
   return {
-    'active-markets': markets.filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid], nowMs)).length,
+    'active-markets': resolveActiveMarketEntries(kpi, state, nowMs, maxMarkets).length,
     'open-orders': ((state && state.orders) || []).filter(isRestingOrder).length,
     'positions': markets.filter(([, m]) => (Number(m.total_sh) || 0) > 0
                                             && !isFinishedMarket(m)).length,
@@ -9997,11 +10107,11 @@ function ordersTradesCounts(kpi, state, nowMs) {
   };
 }
 
-function ordersTradesRows(view, kpi, state, sort, nowMs) {
+function ordersTradesRows(view, kpi, state, sort, nowMs, maxMarkets) {
   if (view === 'open-orders') return openOrdersRows(kpi, state, sort);
   if (view === 'positions') return positionsRows(kpi, state, sort);
   if (view === 'closed-trades') return closedTradesRows(kpi, state, sort);
-  return activeMarketsRows(kpi, state, sort, nowMs);
+  return activeMarketsRows(kpi, state, sort, nowMs, maxMarkets);
 }
 
 /* Per-view sort state, in memory. Each view keeps its own column and direction:
@@ -10432,19 +10542,14 @@ function stitchActiveMarketsHeadHtml(sort) {
   return `<tr>${cells}</tr>`;
 }
 
-function stitchActiveMarketsRows(kpi, state, sort, clockMs) {
+function stitchActiveMarketsRows(kpi, state, sort, clockMs, maxMarkets) {
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
-  const entries = Object.entries((kpi && kpi.by_market) || {})
-    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid], clockMs)
-      && ((m.quotes_count || 0) > 0
-        || (ordersByMarket[cid] || []).some(o => isRestingOrder(o))));
+  const nowMs = (clockMs === undefined || clockMs === null) ? Date.now() : Number(clockMs);
+  const entries = resolveActiveMarketEntries(kpi, state, nowMs, maxMarkets);
 
   if (!entries.length) {
     return `<tr><td colspan="7" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No markets are being quoted.</td></tr>`;
   }
-
-  // One clock for the gate, the live-mark freshness check and the age column.
-  const nowMs = (clockMs === undefined || clockMs === null) ? Date.now() : Number(clockMs);
 
   const rows = entries.map(([cid, m]) => {
     const legs = latestLegQuotes(m);
@@ -10459,9 +10564,11 @@ function stitchActiveMarketsRows(kpi, state, sort, clockMs) {
     const dnPrice = dnMkt ? dnMkt.ask : (legs.dn ? legs.dn.mid : null);
     const upBid = upMkt ? upMkt.bid : null;
     const dnBid = dnMkt ? dnMkt.bid : null;
+
+    const { lockout, isTimedOut, timeoutRemainingMs } = resolveMarketLockout(state, cid, nowMs);
     const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
     const ts = latestQuoteTs(m);
-    return { cid, m, upPrice, dnPrice, upBid, dnBid, restingHere, ts };
+    return { cid, m, upPrice, dnPrice, upBid, dnBid, restingHere, isTimedOut, timeoutRemainingMs, lockout, ts };
   });
 
   const sorted = sort ? otSortGroups(rows, sort, (r, col) => {
@@ -10473,17 +10580,14 @@ function stitchActiveMarketsRows(kpi, state, sort, clockMs) {
       case 4: return otNum(r.dnPrice);
       case 7: return otNum(r.m.volume_24h);
       case 8: return otNum(r.m.days_to_resolve);
-      case 9: return r.restingHere ? 'RESTING' : ((r.m.quotes_count || 0) > 0 ? 'QUOTING' : 'IDLE');
+      case 9: return activeMarketStatusRank(r);
       default: return null;
     }
   }) : rows;
 
-  if (!sort) {
-    sorted.sort((a, b) => (b.m.quotes_count || 0) - (a.m.quotes_count || 0)
-      || String(a.m.title || '').localeCompare(String(b.m.title || '')));
-  }
+  if (!sort) sorted.sort(compareActiveMarketsDefault);
 
-  return sorted.map(({ cid, m, upPrice, dnPrice, upBid, dnBid, restingHere, ts }) => {
+  return sorted.map(({ cid, m, upPrice, dnPrice, upBid, dnBid, restingHere, isTimedOut, timeoutRemainingMs, lockout, ts }) => {
     const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
     const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
 
@@ -10494,7 +10598,10 @@ function stitchActiveMarketsRows(kpi, state, sort, clockMs) {
 
     // Status pill
     let statusBadge = '';
-    if (restingHere) {
+    if (isTimedOut) {
+      const cd = formatTimeoutCountdown(timeoutRemainingMs || 0);
+      statusBadge = `<span class="stitch-status-badge timed-out" title="${esc(lockout?.reason || 'Locked out after stop-loss exit')}"><span class="stitch-status-dot timed-out"></span>TIMED OUT (${cd})</span>`;
+    } else if (restingHere) {
       statusBadge = `<span class="stitch-status-badge resting"><span class="stitch-status-dot resting"></span>RESTING</span>`;
     } else if ((m.quotes_count || 0) > 0) {
       statusBadge = `<span class="stitch-status-badge quoting"><span class="stitch-status-dot quoting"></span>QUOTING</span>`;
@@ -10502,7 +10609,9 @@ function stitchActiveMarketsRows(kpi, state, sort, clockMs) {
       statusBadge = `<span class="stitch-status-badge idle"><span class="stitch-status-dot idle"></span>IDLE</span>`;
     }
 
-    return `<tr class="stitch-ot-row" data-cid="${esc(cid)}">
+    const rowCls = isTimedOut ? 'stitch-ot-row stitch-row-dimmed' : 'stitch-ot-row';
+
+    return `<tr class="${rowCls}" data-cid="${esc(cid)}">
       <!-- Col 1: MARKET (market anchors far left; the category lives in its own column) -->
       <td class="stitch-market-cell">
         <div class="stitch-market-title">
@@ -11265,12 +11374,16 @@ function renderOrdersTrades(kpi, state) {
   // One clock for the whole paint, so the table, its count and the staleness
   // gate can never disagree about the same tick.
   const nowMs = Date.now();
+  const maxMarkets = (typeof lastStatus?.shadow_run?.max_markets === 'number')
+    ? lastStatus.shadow_run.max_markets
+    : ((typeof kpi?.max_markets === 'number') ? kpi.max_markets : null);
+
   if (isStitchTerminal && view === 'open-orders') {
     head.innerHTML = stitchOpenOrdersHeadHtml(sort);
     body.innerHTML = stitchOpenOrdersRows(kpi, state, sort);
   } else if (isStitchTerminal && view === 'active-markets') {
     head.innerHTML = stitchActiveMarketsHeadHtml(sort);
-    body.innerHTML = stitchActiveMarketsRows(kpi, state, sort, nowMs);
+    body.innerHTML = stitchActiveMarketsRows(kpi, state, sort, nowMs, maxMarkets);
   } else if (isStitchTerminal && view === 'positions') {
     head.innerHTML = stitchPositionsHeadHtml(sort);
     body.innerHTML = stitchPositionsRows(kpi, state, sort);
@@ -11279,7 +11392,7 @@ function renderOrdersTrades(kpi, state) {
     body.innerHTML = stitchClosedTradesRows(kpi, state, sort);
   } else {
     head.innerHTML = otHeadHtml(view, sort);
-    body.innerHTML = ordersTradesRows(view, kpi, state, sort, nowMs);
+    body.innerHTML = ordersTradesRows(view, kpi, state, sort, nowMs, maxMarkets);
   }
 
   // Preserve search query filtering across poll ticks
@@ -11307,7 +11420,7 @@ function renderOrdersTrades(kpi, state) {
   const note = document.getElementById('orders-trades-note');
   if (note) note.textContent = OT_NOTES[view];
 
-  const counts = ordersTradesCounts(kpi, state, nowMs);
+  const counts = ordersTradesCounts(kpi, state, nowMs, maxMarkets);
   // `ordersTradesCounts` returns a number for every view, so an unknown key
   // here is a typo in the markup, not an unmeasured value: show it as blank
   // rather than dressing it up as a real count of zero.
@@ -12957,6 +13070,7 @@ if (typeof module !== 'undefined' && module.exports) {
     stitchOpenOrdersRows, stitchOpenOrdersHeadHtml,
     stitchPositionsRows, stitchPositionsHeadHtml, stitchBothLegMarks,
     stitchActiveMarketsRows, stitchActiveMarketsHeadHtml,
+    resolveActiveMarketEntries, formatTimeoutCountdown,
     marketCategory, categoryPill, categoryIconTone,
     showToast, dismissResetModal, openStartRunModal, closeStartRunModal, startRunModalState,
     noteShadowStartLaunched, clearPendingShadowStart,

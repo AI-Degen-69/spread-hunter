@@ -113,6 +113,41 @@ def test_write_shadow_heartbeat_omits_dash_port_when_none(tmp_path: Path):
     assert "dash_port" not in data
 
 
+def test_write_shadow_heartbeat_includes_max_markets(tmp_path: Path):
+    """The Active Markets cap is read off the heartbeat, so it must be an int."""
+    hb_file = tmp_path / "shadow_run_test_markets.json"
+    written = write_shadow_heartbeat(
+        db_path=tmp_path / "test.db",
+        run_id="shadow-test-03",
+        minutes=5.0,
+        interval=5.0,
+        started_at=1000.0,
+        max_markets=5,
+        path=hb_file,
+    )
+    assert written is not None
+    data = json.loads(hb_file.read_text(encoding="utf-8"))
+    assert data["max_markets"] == 5
+    assert isinstance(data["max_markets"], int)
+
+
+def test_write_shadow_heartbeat_omits_max_markets_when_none(tmp_path: Path):
+    """No cap passed means no cap claimed: the key must be absent, not null."""
+    hb_file = tmp_path / "shadow_run_test_markets_none.json"
+    written = write_shadow_heartbeat(
+        db_path=tmp_path / "test.db",
+        run_id="shadow-test-04",
+        minutes=5.0,
+        interval=5.0,
+        started_at=1000.0,
+        max_markets=None,
+        path=hb_file,
+    )
+    assert written is not None
+    data = json.loads(hb_file.read_text(encoding="utf-8"))
+    assert "max_markets" not in data
+
+
 def test_build_tournament_plan_defaults(tmp_path: Path):
     from scripts.shadow_tournament import build_tournament_plan
 

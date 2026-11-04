@@ -66,10 +66,11 @@ for (const cid of (input.expand || [])) app.expandedMarkets.add(cid);
 // The render clock. The page passes `Date.now()`; a test passes its own so a
 // quote-age assertion is deterministic instead of racing the wall clock.
 const nowMs = input.nowMs;
+const maxMarkets = input.maxMarkets;
 
 const STITCH_ROWS = {
   'open-orders': () => app.stitchOpenOrdersRows(kpi, state, sort),
-  'active-markets': () => app.stitchActiveMarketsRows(kpi, state, sort, nowMs),
+  'active-markets': () => app.stitchActiveMarketsRows(kpi, state, sort, nowMs, maxMarkets),
   'positions': () => app.stitchPositionsRows(kpi, state, sort),
   'closed-trades': () => app.stitchClosedTradesRows(kpi, state, sort),
 };
@@ -83,7 +84,7 @@ const STITCH_HEAD = {
 
 const html = surface === 'stitch'
   ? STITCH_ROWS[view]()
-  : app.ordersTradesRows(view, kpi, state, sort, nowMs);
+  : app.ordersTradesRows(view, kpi, state, sort, nowMs, maxMarkets);
 
 // `toggle` drives the click path itself, not just the resulting sort: the issue
 // is about a header you click, so the sequence a click produces is part of the
@@ -106,7 +107,7 @@ if (toggle) {
     stitchHead: surface === 'stitch' ? STITCH_HEAD[view]() : null,
     html,
     rows: (html.match(/<tr /g) || []).length,
-    counts: app.ordersTradesCounts(kpi, state, nowMs),
+    counts: app.ordersTradesCounts(kpi, state, nowMs, maxMarkets),
     views: app.OT_VIEWS,
   }));
 }
