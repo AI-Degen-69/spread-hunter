@@ -659,6 +659,12 @@ class MakerConfig:
             kw["bot_risk_trailing_rider_delta_usd"] = _bounded_float(
                 "BOT_RISK_TRAILING_RIDER_DELTA_USD", trd, 0.0, 1.0)
 
+        rts = _env("BOT_QUOTE_REQUIRE_TWO_SIDED_WHEN_FLAT_ON")
+        if rts:
+            kw["bot_quote_require_two_sided_when_flat_on"] = (
+                rts.strip().lower() in ("1", "true", "yes", "on")
+            )
+
         exit_win = _env("BOT_RISK_PAIRS_EXIT_WINDOW_SEC") or _env("BOT_POS_HOLD_MAX_SEC")
         if exit_win:
             win_var = (

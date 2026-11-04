@@ -2994,6 +2994,29 @@ def test_793_recorded_opposite_resolves_instead_of_refusing(
         results[0].get("error") or results[0].get("reason") or "")
 
 
+def test_lone_maker_unquoted_opposite_resolves_and_executes_stop_loss(
+    registry: OrderRegistry,
+):
+    """Lone maker: when only one side is quoted, lone-maker mode allows stop loss to fire."""
+    from core_brain.config import MakerConfig
+    from core_brain.single_buy_saver import manage_single_leg_positions
+
+    pair_id = _one_sided_pair_without_down_quote(registry)
+    # Entry at 0.60, bid drops to 0.40 -> breaches -20% stop loss
+    client = FakeClient(best_ask=0.70, best_bid=0.40)
+    cfg = MakerConfig(
+        bot_pos_price_max_pair_cost_usd=MAX_PAIR_COST,
+        bot_quote_require_two_sided_when_flat_on=False,
+        bot_risk_stop_mode="PERCENTAGE_DROP",
+        bot_risk_stop_max_drawdown_pct=20.0,
+    )
+    results = manage_single_leg_positions(
+        client, registry, cfg, live=False, now=1010.0)
+    assert len(results) == 1
+    assert results[0].get("action") != "error", results
+    assert results[0].get("route") == "hard_stop" or results[0].get("action") in ("would_exit", "exited")
+
+
 def test_793_unrecorded_opposite_still_refuses_once_then_collapses(
     registry: OrderRegistry,
 ):

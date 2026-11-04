@@ -598,7 +598,11 @@ def transition(
         if held_bid is not None and (held_bid > held_average or previous_state is LegState.TRAILING_RIDER):
             peak = max(previous_peak_bid or held_average, held_bid)
             trailing_stop_threshold = Decimal(str(peak)) - Decimal(str(bot_risk_trailing_rider_delta_usd))
-            if Decimal(str(held_bid)) <= trailing_stop_threshold:
+            min_peak_for_trailing_exit = Decimal(str(held_average)) + Decimal(str(bot_risk_trailing_rider_delta_usd))
+            # Trailing rider exit only triggers once peak has achieved at least the trailing delta
+            # above entry, preventing minor sub-delta noise blips from locking in premature losses.
+            # Adverse pullbacks below entry are strictly governed by the calibrated hard stop.
+            if Decimal(str(peak)) >= min_peak_for_trailing_exit and Decimal(str(held_bid)) <= trailing_stop_threshold:
                 return LifecycleDecision(
                     state=LegState.TRAILING_RIDER,
                     action="trailing_rider_exit",

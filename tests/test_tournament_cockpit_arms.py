@@ -1357,7 +1357,8 @@ def test_dynamic_current_setup_label_follows_newest_plan_on_disk(tmp_path, monke
     """When issue 929 is launched on disk, 929 gets the CURRENT SETUP label."""
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     _record(tmp_path, "i929-tournament-1m_2026-11-03T17-15", [
-        {"name": "live-control-classic", "db_path": "data/c.db", "run_id": "r1", "dash_port": 8801}
+        {"name": f"arm-{i}", "db_path": f"data/{i}.db", "run_id": f"r{i}", "dash_port": 8800 + i}
+        for i in range(1, 7)
     ])
     assert cockpit.resolve_current_setup_key() == "929"
 

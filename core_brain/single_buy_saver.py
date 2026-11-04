@@ -2457,6 +2457,13 @@ def _manage_single_leg_positions_locked(
             side_tokens = _resolve_side_tokens_with_lifecycle(
                 registry, pair_id, side_tokens, pair["condition_id"])
             if set(side_tokens) != {"UP", "DOWN"}:
+                lone_maker_on = not getattr(cfg, "bot_quote_require_two_sided_when_flat_on", True)
+                if lone_maker_on and len(side_tokens) == 1:
+                    known_side = next(iter(side_tokens))
+                    missing_side = "DOWN" if known_side == "UP" else "UP"
+                    side_tokens = dict(side_tokens)
+                    side_tokens[missing_side] = f"unquoted_opposite_{pair['condition_id']}_{missing_side}"
+            if set(side_tokens) != {"UP", "DOWN"}:
                 held_tok = pair["heavy"]["token_id"]
                 stranded_size = float(pair["naked"])
                 detail = (

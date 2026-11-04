@@ -819,6 +819,21 @@ def test_trailing_rider_exits_when_delta_breached():
     assert "trailing_rider_exit" in decision.action
 
 
+def test_trailing_rider_does_not_exit_below_entry_on_sub_delta_noise():
+    # Entry at 0.50, delta is 0.05. Peak only ticked up to 0.51 (sub-delta noise blip).
+    # Bid pulls back to 0.46 (which matches 0.51 - 0.05 = 0.46).
+    # Because peak (0.51) never achieved entry + delta (0.55), trailing rider does NOT exit at a loss.
+    pos = _position(up_size=10.0, down_size=0.0, up_avg=0.50, up_bid=0.46)
+    decision = transition(
+        pos, LegState.TRAILING_RIDER, bot_pos_price_max_pair_cost_usd=0.99,
+        bot_risk_trailing_rider_on=True,
+        bot_risk_trailing_rider_delta_usd=0.05,
+        previous_peak_bid=0.51,
+    )
+    assert decision.state is LegState.TRAILING_RIDER
+    assert decision.action == "trailing_rider"
+
+
 def test_trailing_rider_down_leg_mirrors_up():
     # DOWN leg filled at 0.30, current down_bid 0.45
     pos = _position(up_size=0.0, down_size=10.0, up_avg=0.0, down_avg=0.30, up_bid=0.55, down_bid=0.45)

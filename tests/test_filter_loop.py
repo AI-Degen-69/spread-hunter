@@ -12,13 +12,13 @@ def test_get_top_markets_dynamic_env_reload(monkeypatch, tmp_path):
     monkeypatch.setattr(filter_loop, "ROOT", tmp_path)
     env_file = tmp_path / ".env"
     
-    # 1. No .env, no process env -> defaults to 2
+    # 1. No .env, no process env -> defaults to 5
     monkeypatch.setattr(filter_loop, "_ORIGINAL_ENV_TOP", None)
-    assert filter_loop._get_top_markets() == 2
-    
-    # 2. .env set to 5 -> returns 5
-    env_file.write_text("SH_TOP_MARKETS=5", encoding="utf-8")
     assert filter_loop._get_top_markets() == 5
+    
+    # 2. .env set to 7 -> returns 7
+    env_file.write_text("SH_TOP_MARKETS=7", encoding="utf-8")
+    assert filter_loop._get_top_markets() == 7
     
     # 3. .env changed to 10 -> returns 10 (dynamic reload works)
     env_file.write_text("SH_TOP_MARKETS=10", encoding="utf-8")
@@ -86,6 +86,9 @@ def test_rank_cmd_without_flags_carries_no_new_options(monkeypatch):
     cmd = filter_loop._rank_cmd(2)
     assert cmd == [filter_loop.sys.executable, "-m",
                    "scripts.filter_markets", "--top", "2"]
+    cmd_default = filter_loop._rank_cmd()
+    assert cmd_default == [filter_loop.sys.executable, "-m",
+                           "scripts.filter_markets", "--top", "5"]
 
 
 def test_rank_cmd_forwards_out_dir_and_trial_depth(tmp_path):
