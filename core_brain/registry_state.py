@@ -331,6 +331,33 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
                     rec_lock_info["acquired_ts"] = acq
                     rec_lock_info["age_sec"] = max(0.0, round((now_ms - acq) / 1000.0, 1))
 
+        # Markets parked awaiting re-qualification after a hard-stop exit. The
+        # dashboard derives its TIMED OUT countdown from these rows, so they are
+        # read here, while the connection is still open.
+        lockouts: dict[str, dict[str, Any]] = {}
+        if "lifecycle_requalification" in tables:
+            try:
+                from core_brain.config import DEFAULT_HARD_STOP_LOCKOUT_SEC
+                lockout_sec = DEFAULT_HARD_STOP_LOCKOUT_SEC
+                for lr in cur.execute("""
+                        SELECT condition_id, status, generation, reset_ts_ms, reason
+                        FROM lifecycle_requalification
+                        WHERE status = 'awaiting'
+                    """).fetchall():
+                    cid = str(lr["condition_id"] or "").lower()
+                    reset_ms = int(lr["reset_ts_ms"] or 0)
+                    lockouts[cid] = {
+                        "condition_id": cid,
+                        "status": str(lr["status"] or ""),
+                        "generation": int(lr["generation"] or 0),
+                        "reset_ts_ms": reset_ms,
+                        "lockout_sec": lockout_sec,
+                        "expires_at_ms": reset_ms + int(lockout_sec * 1000),
+                        "reason": str(lr["reason"] or ""),
+                    }
+            except sqlite3.Error:
+                lockouts = {}
+
         con.close()
     except Exception as e:
         empty_payload["message"] = f"Error reading database: {e}"
@@ -338,6 +365,7 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
 
     if not orders_rows:
         empty_payload["reconcile_lock"] = rec_lock_info
+        empty_payload["lockouts"] = lockouts
         return empty_payload
 
     max_poll_ms = 0
@@ -381,32 +409,6 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
             filled_committed += sz_mat * px
 
         orders_list.append(o)
-
-    lockouts: dict[str, dict[str, Any]] = {}
-    if "lifecycle_requalification" in tables:
-        try:
-            from core_brain.config import DEFAULT_HARD_STOP_LOCKOUT_SEC
-            lr_rows = cur.execute("""
-                SELECT condition_id, status, generation, reset_ts_ms, reason
-                FROM lifecycle_requalification
-                WHERE status = 'awaiting'
-            """).fetchall()
-            lockout_sec = DEFAULT_HARD_STOP_LOCKOUT_SEC
-            for lr in lr_rows:
-                cid = str(lr[0] or "").lower()
-                reset_ms = int(lr[3] or 0)
-                expires_ms = reset_ms + int(lockout_sec * 1000)
-                lockouts[cid] = {
-                    "condition_id": cid,
-                    "status": str(lr[1] or ""),
-                    "generation": int(lr[2] or 0),
-                    "reset_ts_ms": reset_ms,
-                    "lockout_sec": lockout_sec,
-                    "expires_at_ms": expires_ms,
-                    "reason": str(lr[4] or ""),
-                }
-        except Exception:
-            pass
 
     # Poll staleness
     seconds_since_poll = round((now_ms - max_poll_ms) / 1000.0, 1) if max_poll_ms > 0 else None

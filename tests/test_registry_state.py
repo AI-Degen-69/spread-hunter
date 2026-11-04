@@ -464,3 +464,31 @@ def test_summarize_state_resolves_market_identity_once_per_condition(
 
     assert len(state["pairs"]) == 3
     assert calls == ["cond-1"], f"identity resolved {len(calls)}x, expected once"
+
+
+def test_awaiting_requalification_lockout_reaches_the_state_payload(temp_db):
+    """A locked-out market reports its requalification window, even with no orders.
+
+    The dashboard renders the TIMED OUT countdown from `state.lockouts`, and a
+    stop-loss exit leaves the market awaiting re-qualification precisely when no
+    orders rest on it -- so the empty-orders early return must carry the block.
+    """
+    now_ms = int(time.time() * 1000)
+    con = sqlite3.connect(str(temp_db))
+    con.execute(
+        "INSERT INTO lifecycle_requalification (condition_id, status, generation,"
+        " reset_ts_ms, reason, updated_ts_ms) VALUES (?, ?, ?, ?, ?, ?)",
+        ("0xlocked", "awaiting", 2, now_ms - 60_000,
+         "Locked out after stop-loss exit", now_ms),
+    )
+    con.commit()
+    con.close()
+
+    state = summarize_state(temp_db)
+
+    lockout = state["lockouts"]["0xlocked"]
+    assert lockout["status"] == "awaiting"
+    assert lockout["generation"] == 2
+    assert lockout["reset_ts_ms"] == now_ms - 60_000
+    assert lockout["expires_at_ms"] == (now_ms - 60_000) + int(lockout["lockout_sec"] * 1000)
+    assert lockout["reason"] == "Locked out after stop-loss exit"
