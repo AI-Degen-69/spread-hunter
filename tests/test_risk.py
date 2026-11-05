@@ -57,3 +57,82 @@ def test_book_health_checks_min_book_depth_shares():
     bh_ok = book_health(healthy_book, cfg)
     assert bh_ok.ok
     assert bh_ok.reason == ""
+
+from core_brain.risk import size_for
+
+_FLAT = Inventory(up_shares=0, down_shares=0, up_cost=0.0, down_cost=0.0)
+
+
+def _kelly_cfg(**kw):
+    base = dict(bot_quote_size_mode="kelly", bot_quote_bank_baseline_usd=1000.0,
+                bot_kelly_n_closes=44, bot_kelly_pct=0.4,
+                bot_quote_kelly_pct=0.5, bot_quote_kelly_min_closes=30)
+    base.update(kw)
+    return MakerConfig(**base)
+
+
+def test_kelly_positive_sizes_from_kelly_not_couple_pct():
+    # dollars mode would give max(1000*0.01, 10)=10 -> int(10/0.92)=10 shares.
+    cfg = _kelly_cfg()
+    assert size_for(cfg, _FLAT, "UP", 0.46, pair_price=0.92) == int(200.0 / 0.92)
+
+
+def test_kelly_non_positive_quotes_nothing():
+    assert size_for(_kelly_cfg(bot_kelly_pct=0.0), _FLAT, "UP", 0.46, pair_price=0.92) == 0
+    assert size_for(_kelly_cfg(bot_kelly_pct=-0.25), _FLAT, "UP", 0.46, pair_price=0.92) == 0
+
+
+def test_kelly_below_min_closes_falls_back_to_dollars_byte_for_byte():
+    for price in (0.35, 0.46, 0.5, 0.7):
+        kelly = _kelly_cfg(bot_kelly_n_closes=10)
+        dollars = MakerConfig(bot_quote_size_mode="dollars", bot_quote_bank_baseline_usd=1000.0)
+        assert size_for(kelly, _FLAT, "UP", price, pair_price=0.92) == \
+            size_for(dollars, _FLAT, "UP", price, pair_price=0.92)
+
+
+def test_kelly_missing_stats_fall_back_to_dollars_byte_for_byte():
+    kelly = _kelly_cfg(bot_kelly_n_closes=0, bot_kelly_pct=None)
+    dollars = MakerConfig(bot_quote_size_mode="dollars", bot_quote_bank_baseline_usd=1000.0)
+    for price in (0.35, 0.46, 0.7):
+        assert size_for(kelly, _FLAT, "DOWN", price, pair_price=0.92) == \
+            size_for(dollars, _FLAT, "DOWN", price, pair_price=0.92)
+
+
+def test_kelly_implied_fraction_capped_never_levers():
+    # f* = 3.0 caps to 1.0 before the 0.5 multiplier: alloc = 1000 * 1.0 * 0.5 = 500
+    cfg = _kelly_cfg(bot_kelly_pct=3.0)
+    assert size_for(cfg, _FLAT, "UP", 0.46, pair_price=0.92) == int(500.0 / 0.92)
+
+
+def test_kelly_tiny_edge_cannot_clear_venue_floor():
+    cfg = _kelly_cfg(bot_quote_bank_baseline_usd=100.0, bot_kelly_pct=0.05)
+    assert size_for(cfg, _FLAT, "UP", 0.46, pair_price=0.92) == 0
+
+
+def test_kelly_max_shares_clamp_still_applies():
+    cfg = _kelly_cfg(bot_quote_size_max_shares=100.0)
+    assert size_for(cfg, _FLAT, "UP", 0.46, pair_price=0.92) == 100
+
+
+def test_kelly_rides_inside_the_naked_taper():
+    # 50 naked UP at 0.50, naked budget 100 -> u=0.5 -> taper x0.25.
+    # base = int(200/0.92) = 217; remainder cap 50/0.46 = 108 shares, no bind.
+    inv = Inventory(up_shares=100, down_shares=0, up_cost=50.0, down_cost=0.0)
+    cfg = _kelly_cfg(bot_risk_exposure_max_naked_usd=100.0, bot_pos_gate_strict_pairs_on=False)
+    base = int(200.0 / 0.92)
+    assert size_for(cfg, inv, "UP", 0.46, pair_price=0.92) == int(base * 0.25)
+
+
+def test_kelly_light_side_not_tapered():
+    inv = Inventory(up_shares=100, down_shares=0, up_cost=50.0, down_cost=0.0)
+    cfg = _kelly_cfg(bot_risk_exposure_max_naked_usd=100.0, bot_pos_gate_strict_pairs_on=False)
+    assert size_for(cfg, inv, "DOWN", 0.46, pair_price=0.92) == int(200.0 / 0.92)
+
+
+def test_kelly_mode_unset_means_zero_change():
+    # Kelly fields set but mode is dollars -> identical to dollars without them.
+    plain = MakerConfig(bot_quote_size_mode="dollars", bot_quote_bank_baseline_usd=1000.0)
+    loaded = _kelly_cfg(bot_quote_size_mode="dollars")
+    for price in (0.35, 0.46, 0.7):
+        assert size_for(loaded, _FLAT, "UP", price, pair_price=0.92) == \
+            size_for(plain, _FLAT, "UP", price, pair_price=0.92)

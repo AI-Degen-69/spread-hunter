@@ -360,12 +360,12 @@ def load() -> MakerConfig:
                 f"BOT_QUOTE_SIZE_MODE must be one of dollars, kelly, shares, got: {qsm}"
             )
         kw["bot_quote_size_mode"] = mode
-    kf = _env("BOT_QUOTE_KELLY_FRACTION")
+    kf = _env("BOT_QUOTE_KELLY_PCT")
     if kf:
-        val = _bounded_float("BOT_QUOTE_KELLY_FRACTION", kf, 0.0, 1.0)
+        val = _bounded_float("BOT_QUOTE_KELLY_PCT", kf, 0.0, 1.0)
         if val <= 0.0:
-            raise ValueError(f"BOT_QUOTE_KELLY_FRACTION must be > 0, got: {kf}")
-        kw["bot_quote_kelly_fraction"] = val
+            raise ValueError(f"BOT_QUOTE_KELLY_PCT must be > 0, got: {kf}")
+        kw["bot_quote_kelly_pct"] = val
     km = _env("BOT_QUOTE_KELLY_MIN_CLOSES")
     if km:
         try:

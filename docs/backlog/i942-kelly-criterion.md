@@ -109,7 +109,7 @@ governs.
 
 ## The Kelly fraction setting
 
-- **Half Kelly**: `bot_quote_kelly_fraction = 0.5`, operator-tunable, **hard-
+- **Half Kelly**: `bot_quote_kelly_pct = 0.5`, operator-tunable, **hard-
   capped at 1.0** (a setting above 1.0 clamps to 1.0; it never levers). Full
   Kelly implied by the model is capped at f* = 1.0 before the multiplier.
 - **Full Kelly (multiplier 1.0) is for shadow/rehearsal runs only** — an

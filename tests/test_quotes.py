@@ -611,3 +611,51 @@ class TestMaxEntryPriceCeiling:
         intents, why = decide_quotes(cfg, up, down, Inventory(), 1e9, None)
         assert len(intents) == 2
         assert [i.price for i in intents] == [0.22, 0.72]
+
+
+def _kelly_posts(**kw):
+    base = dict(bot_quote_size_mode="kelly", bot_quote_bank_baseline_usd=5000.0,
+                bot_kelly_n_closes=12, bot_kelly_pct=0.4,
+                bot_quote_kelly_pct=0.5, bot_quote_kelly_min_closes=30,
+                bot_quote_size_min_shares=10)
+    base.update(kw)
+    return _cfg(**base)
+
+
+def test_quotes_kelly_insufficient_sample_posts_dollars_sizes_with_marker():
+    books_up, books_dn = _book(0.46, UP), _book(0.46, DOWN)
+    kelly_cfg = _kelly_posts(bot_quote_size_min_shares=10)
+    dollars_cfg = _cfg(bot_quote_size_mode="dollars", bot_quote_bank_baseline_usd=5000.0,
+                       bot_quote_size_min_shares=10)
+    k_intents, _ = decide_quotes(kelly_cfg, books_up, books_dn, Inventory(), 1e9, None)
+    d_intents, _ = decide_quotes(dollars_cfg, books_up, books_dn, Inventory(), 1e9, None)
+    assert [i.size for i in k_intents] == [i.size for i in d_intents]
+    assert k_intents, "expected the fallback to post quotes"
+    for i in k_intents:
+        assert "kelly fallback: insufficient sample (12 closes)" in i.reason
+
+
+def test_quotes_kelly_no_edge_quotes_nothing_with_reason():
+    books_up, books_dn = _book(0.46, UP), _book(0.46, DOWN)
+    cfg = _kelly_posts(bot_kelly_n_closes=100, bot_kelly_pct=-0.1,
+                       bot_quote_size_min_shares=10)
+    intents, why = decide_quotes(cfg, books_up, books_dn, Inventory(), 1e9, None)
+    assert intents == []
+    assert "kelly: no edge" in why
+
+
+def test_quotes_kelly_insufficient_sample_zero_size_reason():
+    books_up, books_dn = _book(0.46, UP), _book(0.46, DOWN)
+    cfg = _kelly_posts(bot_quote_bank_baseline_usd=100.0, bot_quote_size_min_shares=50)
+    intents, why = decide_quotes(cfg, books_up, books_dn, Inventory(), 1e9, None)
+    assert intents == []
+    assert "kelly fallback: insufficient sample (12 closes)" in why
+
+
+def test_quotes_kelly_tiny_edge_names_the_floor_it_cannot_clear():
+    books_up, books_dn = _book(0.46, UP), _book(0.46, DOWN)
+    cfg = _kelly_posts(bot_quote_bank_baseline_usd=100.0, bot_kelly_n_closes=100,
+                       bot_kelly_pct=0.02, bot_quote_size_min_shares=50)
+    intents, why = decide_quotes(cfg, books_up, books_dn, Inventory(), 1e9, None)
+    assert intents == []
+    assert "kelly allocation" in why

@@ -3110,12 +3110,42 @@ def _fleet_state(registry, cfg, baseline_includes_realized: bool = False) -> dic
 
     dynamic_caps = derive_dynamic_caps(cfg, portfolio_usd)
 
+    # #942: measured Kelly inputs for the opt-in "kelly" sizing mode. Read
+    # only in kelly mode; a failed read degrades to the dollars fallback,
+    # never to a crashed rotation. The wallet-sync closes are the venue's
+    # account history, not this bot's record -- excluded like the KPI slice.
+    kelly_state: dict = {}
+    if getattr(cfg, "bot_quote_size_mode", "shares") == "kelly":
+        try:
+            from core_brain.order_registry import VENUE_SYNC_RUN_ID
+            from core_brain.kpi import compute_trade_analytics
+            closes = registry.get_all_closes() if registry is not None else []
+            bot_closes = [
+                c for c in (closes or [])
+                if c.get("run_id") != VENUE_SYNC_RUN_ID
+            ]
+            ta = compute_trade_analytics(
+                closes=bot_closes,
+                starting_capital=float(dynamic_caps["bot_quote_bank_baseline_usd"]),
+                equity_series=[],
+                float_marks=[],
+            )
+            kelly_state = {
+                "bot_kelly_n_closes": int(ta.get("n_closes") or 0),
+                "bot_kelly_pct": ta.get("kelly_fraction"),
+            }
+        except Exception:
+            log.warning("kelly stats unavailable; sizing falls back to dollars",
+                        exc_info=True)
+            kelly_state = {"bot_kelly_n_closes": 0, "bot_kelly_pct": None}
+
     return {
         "bot_risk_exposure_fleet_naked_usd": registry_naked_usd(registry),
         "bot_risk_exposure_committed_usd": registry_committed_usd(registry),
         "bot_risk_circuit_fleet_posture": bot_risk_circuit_fleet_posture(
             fleet_stats(registry, cfg.bot_risk_markout_fleet_min_sample), cfg),
         **dynamic_caps,
+        **kelly_state,
     }
 
 

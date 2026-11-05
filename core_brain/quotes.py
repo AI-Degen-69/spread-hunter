@@ -238,6 +238,21 @@ def pair_cost_over_cap(prices: list[float], cap: float) -> bool:
             > Decimal(str(cap)))
 
 
+def _kelly_fallback_note(cfg) -> str:
+    """Reason marker when kelly mode fell back to dollars sizing (#942).
+
+    Sizes stay byte-identical to dollars mode; the posted reason carries the
+    marker so the fallback is visible in the audit trail.
+    """
+    if getattr(cfg, "bot_quote_size_mode", "shares") != "kelly":
+        return ""
+    n = int(getattr(cfg, "bot_kelly_n_closes", 0) or 0)
+    min_n = int(getattr(cfg, "bot_quote_kelly_min_closes", 30) or 30)
+    if n < min_n or getattr(cfg, "bot_kelly_pct", None) is None:
+        return f"; kelly fallback: insufficient sample ({n} closes)"
+    return ""
+
+
 def _decide_quotes_from_mid(
     cfg: MakerConfig,
     up_book: dict,
@@ -529,6 +544,28 @@ def _decide_quotes_from_mid(
                 size = 0
         if size <= 0:
             if ladder <= 0:
+                if getattr(cfg, "bot_quote_size_mode", "shares") == "kelly":
+                    # Kelly zero-size reasons (#942). NULL stays NULL: an
+                    # unmeasurable sample is a fallback, not an edge of zero.
+                    _n = int(getattr(cfg, "bot_kelly_n_closes", 0) or 0)
+                    _min_n = int(getattr(cfg, "bot_quote_kelly_min_closes", 30) or 30)
+                    _kf = getattr(cfg, "bot_kelly_pct", None)
+                    if _n < _min_n or _kf is None:
+                        blocked.append(
+                            f"{side}: kelly fallback: insufficient sample ({_n} closes)")
+                    elif _kf <= 0.0:
+                        blocked.append(
+                            f"{side}: kelly: no edge (f*={_kf:.3f}, n={_n} closes)")
+                    else:
+                        _alloc = (cfg.bot_quote_bank_baseline_usd
+                                  * min(_kf, 1.0) * cfg.bot_quote_kelly_pct)
+                        eff_pair = calc_pair_price if (calc_pair_price is not None and calc_pair_price > 0) else (2.0 * price if price > 0 else 1.0)
+                        _affordable = int(_alloc / eff_pair) if eff_pair > 0 else 0
+                        blocked.append(
+                            f"{side}: kelly allocation ${_alloc:.2f} at pair price "
+                            f"{eff_pair:.3f} buys {_affordable}sh, below the venue "
+                            f"minimum of {cfg.bot_quote_size_min_shares}sh")
+                    continue
                 couple_alloc = (config.couple_allocation_usd(cfg)
                                 if getattr(cfg, "bot_quote_size_mode", "shares") == "dollars"
                                 else 0.0)
@@ -563,7 +600,7 @@ def _decide_quotes_from_mid(
             side=side, token_id=book.get("token_id"), price=price, size=size,
             mid=mid, edge_vs_mid=mid - price,
             reason=(f"quote {100*s:.1f}c under mid {mid:.3f}"
-                    f"{waived}{dyn_note}"),
+                    f"{waived}{dyn_note}{_kelly_fallback_note(cfg)}"),
         ))
 
     if not out:
