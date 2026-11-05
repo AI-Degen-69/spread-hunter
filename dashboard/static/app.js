@@ -5572,10 +5572,155 @@ function portfolioEquity(kpi, status) {
   };
 }
 
+/* ── Running-arm card (#934) ── */
+// Shows what the engine is configured to do: the running tournament arm's
+// label, one-line profile, and env overrides. The arm definition comes from
+// GET /api/profile/arm-detail, which computes KPIs from the arm's store —
+// not free — so it is fetched once per arm change, never on every poll.
+// Failures keep the previous content with a readable note, never a blank.
+let runningArmCache = new Map(); // arm name -> successful arm-detail payload
+let runningArmRequested = '';    // arm name of the last fetch attempt
+let runningArmSeq = 0;           // stale-response guard, card-only
+let runningArmShown = null;      // last painted payload (label/profile/env)
+let runningArmNote = '';         // note text the card last showed
+let runningArmAction = '';       // arm name the card actions read
+
+function setRunningArmNote(text) {
+  runningArmNote = text;
+  const el = document.getElementById('running-arm-note');
+  if (el) el.textContent = text;
+}
+
+function paintRunningArmPayload(data) {
+  const elLabel = document.getElementById('running-arm-label');
+  const elProfile = document.getElementById('running-arm-profile');
+  const elEnv = document.getElementById('running-arm-env');
+  if (!elLabel || !elEnv) return;
+  elLabel.textContent = data.label || data.name || '';
+  const prof = data.profile || '';
+  if (elProfile) {
+    elProfile.textContent = prof;
+    elProfile.hidden = !prof;
+  }
+  const env = (data.env && typeof data.env === 'object') ? data.env : null;
+  const keys = env ? Object.keys(env) : [];
+  if (keys.length) {
+    elEnv.innerHTML = keys.map((k) => `<li><code>${esc(k)}</code> = <code>${esc(env[k])}</code></li>`).join('');
+    setRunningArmNote('');
+  } else {
+    elEnv.innerHTML = '';
+    setRunningArmNote('No overrides \u2014 this arm runs the shipped baseline.');
+  }
+  runningArmShown = data;
+}
+
+function runningArmGoToParams() {
+  const arm = runningArmAction;
+  if (!arm) return;
+  const select = document.getElementById('param-arm-select');
+  if (select && select.options) {
+    let match = null;
+    for (const opt of select.options) {
+      const val = opt.value || '';
+      if (val.slice(val.lastIndexOf('|') + 1) === arm) { match = opt; break; }
+    }
+    if (match) {
+      select.value = match.value;
+      select.dispatchEvent(new Event('change'));
+    } else {
+      setRunningArmNote('This arm is not in the parameters catalog.');
+    }
+  }
+  const navBtn = (typeof document.querySelector === 'function')
+    ? document.querySelector('.proto-nav-btn[data-page="strategy"]')
+    : null;
+  if (navBtn) navBtn.click();
+  const panel = document.getElementById('params-panel');
+  if (panel && panel.scrollIntoView) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderRunningArmCard(status) {
+  const elTag = document.getElementById('running-arm-state');
+  const elLabel = document.getElementById('running-arm-label');
+  const elProfile = document.getElementById('running-arm-profile');
+  const elEnv = document.getElementById('running-arm-env');
+  const elDetails = document.getElementById('running-arm-details-btn');
+  const elParams = document.getElementById('running-arm-params-btn');
+  if (!elTag || !elLabel || !elEnv || !elDetails || !elParams) return;
+  // Wired once, before any early return: an unwired button is a dead button.
+  if (!elDetails.dataset.wired) {
+    elDetails.dataset.wired = 'true';
+    elDetails.addEventListener('click', () => {
+      if (runningArmAction) openArmDetailModal(runningArmAction);
+    });
+  }
+  if (!elParams.dataset.wired) {
+    elParams.dataset.wired = 'true';
+    elParams.addEventListener('click', runningArmGoToParams);
+  }
+  // A failed status fetch carries no profile: keep everything on screen.
+  if (status === null || status === undefined) return;
+  const profile = status.active_profile || null;
+  const name = (profile && typeof profile.name === 'string' && profile.name) ? profile.name : '';
+  if (!name) {
+    runningArmAction = '';
+    elTag.textContent = 'NO RUN';
+    elLabel.textContent = 'No run profile recorded.';
+    if (elProfile) { elProfile.textContent = ''; elProfile.hidden = true; }
+    elEnv.innerHTML = '';
+    setRunningArmNote('');
+    elDetails.disabled = true;
+    elParams.disabled = true;
+    return;
+  }
+  elTag.textContent = profile.running === true ? 'RUNNING' : 'STOPPED';
+  const arm = (typeof profile.tournament_arm === 'string' && profile.tournament_arm) ? profile.tournament_arm : '';
+  if (!arm) {
+    runningArmAction = '';
+    elLabel.textContent = name;
+    if (elProfile) { elProfile.textContent = ''; elProfile.hidden = true; }
+    elEnv.innerHTML = '';
+    setRunningArmNote('No tournament arm is recorded for this run.');
+    elDetails.disabled = true;
+    elParams.disabled = true;
+    return;
+  }
+  runningArmAction = arm;
+  elDetails.disabled = false;
+  elParams.disabled = false;
+  const cached = runningArmCache.get(arm);
+  if (cached) {
+    paintRunningArmPayload(cached);
+    return;
+  }
+  // Uncached: keep the previous rows while the new arm loads. The very first
+  // paint has nothing to keep, so it shows the arm name instead.
+  if (!runningArmShown) {
+    elLabel.textContent = arm;
+    if (elProfile) { elProfile.textContent = ''; elProfile.hidden = true; }
+  }
+  setRunningArmNote(runningArmShown ? `Loading the definition for \`${arm}\`…` : 'Loading arm definition…');
+  if (runningArmRequested === arm) return; // fetch already in flight
+  runningArmRequested = arm;
+  const seq = ++runningArmSeq;
+  safeJsonFetch('/api/profile/arm-detail?name=' + encodeURIComponent(arm)).then((data) => {
+    if (seq !== runningArmSeq) return; // a newer arm already won
+    if (runningArmAction !== arm) return; // the card moved on
+    if (!data || data.ok !== true) {
+      if (!runningArmShown) elLabel.textContent = arm;
+      const message = (data && data.message) || 'request failed';
+      setRunningArmNote(`Could not load the definition for \`${arm}\`: \`${message}\`. Showing the last loaded content.`);
+      return;
+    }
+    runningArmCache.set(arm, data);
+    if (runningArmAction !== arm) return;
+    paintRunningArmPayload(data);
+  });
+}
+
 function renderBrokerPortfolioOverview(kpi, status, state) {
   if (!kpi) return;
   const p = kpi.portfolio || {};
-  const ta = kpi.trade_analytics || {};
   const { startingCap, realizedPnL, realizedMeasured, totalVal, venueVal } =
     portfolioEquity(kpi, status);
   const pnlPct = startingCap ? (realizedPnL / startingCap) * 100 : 0;
@@ -5645,30 +5790,12 @@ function renderBrokerPortfolioOverview(kpi, status, state) {
   const restingPct = _pctOf(restingVal);
   const committedPct = _pctOf(committedVal);
   const cashPct = _pctOf(cashVal);
-  const activePairs = (kpi.funnel?.graduated || []).length;
-  const n = ta.n_closes ?? (ta.closes_count || 0);
-  const winRate = ta.win_rate != null && n > 0 ? (ta.win_rate * 100).toFixed(1) : '0.0';
-  // A count the payload did not carry is unknown, not zero.
-  const wins = ta.wins == null ? null : ta.wins;
-  const losses = ta.losses == null ? null : ta.losses;
-  const expectancy = ta.expectancy_usd != null && n > 0 ? fmtUSD(ta.expectancy_usd) : '$0.000';
-  const profitFactor = ta.profit_factor != null && n > 0 ? `${ta.profit_factor.toFixed(2)}x` : '0.00x';
-  const sharpe = ta.sharpe_ratio != null && n > 0 ? ta.sharpe_ratio.toFixed(2) : '0.00';
-
   const elCash = document.getElementById('broker-kpi-cash');
   const elCashPct = document.getElementById('broker-kpi-cash-pct');
   const elCommitted = document.getElementById('broker-kpi-committed');
   const elCommittedPct = document.getElementById('broker-kpi-committed-pct');
   const elResting = document.getElementById('broker-kpi-resting');
   const elRestingPct = document.getElementById('broker-kpi-resting-pct');
-  const elPairs = document.getElementById('broker-kpi-pairs');
-  const elSpread = document.getElementById('broker-kpi-spread');
-  const elExpectancy = document.getElementById('broker-kpi-expectancy');
-  const elWinrate = document.getElementById('broker-kpi-winrate');
-  const elWins = document.getElementById('broker-kpi-wins');
-  const elPf = document.getElementById('broker-kpi-pf');
-  const elSharpe = document.getElementById('broker-kpi-sharpe');
-
   if (elCash) elCash.textContent = fmtUSD(cashVal);
   // Cash keeps its Liquid-USDC unit; an unmeasured remainder is '--', and a
   // percent of an unknown is unknown — never '0.0% Liquid USDC'.
@@ -5679,41 +5806,13 @@ function renderBrokerPortfolioOverview(kpi, status, state) {
   if (elCommittedPct) elCommittedPct.textContent = committedPct === null ? '--' : `${committedPct}% of Equity`;
   if (elResting) elResting.textContent = fmtUSD(restingVal);
   if (elRestingPct) elRestingPct.textContent = restingPct === null ? '--' : `${restingPct}% of Equity`;
-  // `graduated` counts MARKETS the Market Filter quoted, not pairs held --
-  // "3 Pairs" once sat above an OPEN POSITIONS table showing one Unpaired
-  // position, and nothing about a graduated market is hedged yet.
-  if (elPairs) elPairs.textContent = `${activePairs} Markets`;
-  if (elSpread) {
-    // Same rule as the hero pill: an unread realized figure is not $0.00.
-    elSpread.textContent = realizedMeasured ? fmtSignedUSD(realizedPnL) : '--';
-    elSpread.className = `broker-kpi-val mono ${realizedMeasured ? signClass(realizedPnL) : ''}`;
-  }
-  if (elExpectancy) elExpectancy.textContent = `Avg ${expectancy} / close`;
-  if (elWinrate) elWinrate.textContent = `${winRate}%`;
-  if (elWins) {
-    // `losses` is every close that is not a win, zeroes included -- which is
-    // exactly what the word Losses says. "Flat" claimed nothing happened.
-    elWins.textContent = `${wins == null ? '--' : wins} Wins / `
-      + `${losses == null ? '--' : losses} Losses`;
-  }
-  if (elPf) elPf.innerHTML = `${profitFactor} <span style="font-size:10px;color:var(--text-muted);font-weight:500">· SR ${sharpe}</span>`;
-  if (elSharpe) elSharpe.textContent = `Sharpe: ${sharpe}`;
-
-  // Bento progress bars & edge indicator
+  // Bento progress bars
   const elCashBar = document.getElementById('bento-cash-bar');
   if (elCashBar) elCashBar.style.width = cashPct === null ? '' : `${Math.min(100, Math.max(0, parseFloat(cashPct) || 0))}%`;
   const elCommittedBar = document.getElementById('bento-committed-bar');
   if (elCommittedBar) elCommittedBar.style.width = committedPct === null ? '' : `${Math.min(100, Math.max(0, parseFloat(committedPct) || 0))}%`;
   const elRestingBar = document.getElementById('bento-resting-bar');
   if (elRestingBar) elRestingBar.style.width = restingPct === null ? '' : `${Math.min(100, Math.max(0, parseFloat(restingPct) || 0))}%`;
-  const elWinrateBar = document.getElementById('bento-winrate-bar');
-  if (elWinrateBar) elWinrateBar.style.width = `${Math.min(100, Math.max(0, parseFloat(winRate) || 0))}%`;
-  const elEdgeTag = document.getElementById('bento-edge-tag');
-  if (elEdgeTag) {
-    const wr = parseFloat(winRate) || 0;
-    elEdgeTag.textContent = wr >= 70 ? 'High Edge' : (wr >= 50 ? 'Positive Edge' : 'Neutral');
-  }
-
   // Render Line Chart
   renderBrokerPortfolioChart(kpi, currentBrokerTimeframe);
 }
@@ -8424,6 +8523,9 @@ function paintAnalysisV2(kpi) {
  * behind the Reports grid — froze the card at its pre-data standby on every
  * other page. They are their own paint now, gated by their own target. */
 function renderPortfolioOverview(kpi, status, state) {
+  // The running-arm card needs only status: it paints even when KPI data is
+  // missing, so the operator still sees what the engine is set to do.
+  renderRunningArmCard(status);
   // Same contract as renderKPIs: a payload without a portfolio is malformed
   // for this paint, and computed-from-nothing standby figures must not
   // overwrite whatever the card last showed.
@@ -13084,7 +13186,7 @@ if (typeof module !== 'undefined' && module.exports) {
     buildQuoteSummaries, noteTickerQuoteState, buildTradeRows, buildAlertRows,
     TICKER_FIELD_WIDTH, renderTickerSegments, tickerProseSegs, tickerQuoteSegments,
     shortMarketId,
-    setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
+    setTickerFilter, setTickerShowDetails, setTickerTab, connectLogStream, tickerTabCounts, groupOrdersByMarket, renderBrokerPortfolioOverview, renderRunningArmCard, renderPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,
     renderPnlCiReadout, resolveCiView, PNL_CI_METRICS,
