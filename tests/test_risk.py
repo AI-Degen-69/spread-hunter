@@ -90,6 +90,15 @@ def test_kelly_below_min_closes_falls_back_to_dollars_byte_for_byte():
             size_for(dollars, _FLAT, "UP", price, pair_price=0.92)
 
 
+def test_kelly_non_finite_falls_back_to_dollars_instead_of_raising():
+    # A NaN f* passes "f_star <= 0.0" and "min(f_star, 1.0)", then int(nan)
+    # raises. Unusable input must degrade to dollars, never crash a rotation.
+    kelly = _kelly_cfg(bot_kelly_pct=float("nan"))
+    dollars = MakerConfig(bot_quote_size_mode="dollars", bot_quote_bank_baseline_usd=1000.0)
+    assert size_for(kelly, _FLAT, "UP", 0.46, pair_price=0.92) == \
+        size_for(dollars, _FLAT, "UP", 0.46, pair_price=0.92)
+
+
 def test_kelly_missing_stats_fall_back_to_dollars_byte_for_byte():
     kelly = _kelly_cfg(bot_kelly_n_closes=0, bot_kelly_pct=None)
     dollars = MakerConfig(bot_quote_size_mode="dollars", bot_quote_bank_baseline_usd=1000.0)

@@ -1043,7 +1043,7 @@ def test_942_kelly_env_rejects_bad_values(monkeypatch):
         monkeypatch.setenv("BOT_QUOTE_KELLY_PCT", bad)
         with pytest.raises(ValueError):
             core_config.load()
-    for bad in ("0", "-3", "2.5", "nan", "abc"):
+    for bad in ("0", "-3", "2.5", "nan", "inf", "-inf", "1e400", "abc"):
         monkeypatch.setenv("BOT_QUOTE_KELLY_MIN_CLOSES", bad)
         with pytest.raises(ValueError):
             core_config.load()
