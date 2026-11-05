@@ -2902,7 +2902,10 @@ function renderRunElsewhereBanner(status) {
     + 'Click the DB badge to switch and watch it.';
 }
 
+let _runSwitcherSeq = 0;  // stale-response guard for lazy KPI loads (#933)
+
 function closeRunSwitcher() {
+  _runSwitcherSeq++;
   const sw = document.getElementById('db-run-switcher');
   const badge = document.getElementById('db-mode-badge');
   if (sw) sw.style.display = 'none';
@@ -3061,7 +3064,45 @@ function bookMixNote(mix) {
   };
 }
 
+function runSwitcherKpiChips(rowDbPath, detail) {
+  const placeholder = [
+    '<span class="arm-kpi">—</span>',
+    '<span class="arm-kpi">—</span>',
+    '<span class="arm-kpi">—</span>',
+    '<span class="arm-kpi">—</span>',
+  ].join('');
+  if (!detail || !detail.ok || !detail.kpis || !detail.kpis.run_profitability) {
+    return { chips: placeholder, note: '' };
+  }
+  if (detail.store !== rowDbPath) {
+    return { chips: placeholder, note: 'This run\'s store has no KPI read yet' };
+  }
+  const kpi = detail.kpis.run_profitability;
+  function fmtSigned(v) {
+    if (v === null || v === undefined || !Number.isFinite(Number(v))) {
+      return '<span class="arm-kpi">—</span>';
+    }
+    const n = Number(v);
+    const cls = signClass(n);
+    const sign = n > 0 ? '+' : '';
+    const formatted = `${sign}${n.toFixed(2)}`;
+    return cls
+      ? `<span class="arm-kpi ${cls}">${formatted}</span>`
+      : `<span class="arm-kpi">${formatted}</span>`;
+  }
+  const pnl = fmtSigned(kpi.realized_pnl);
+  const exp = fmtSigned(kpi.expectancy_usd);
+  const wr = (kpi.win_rate !== null && kpi.win_rate !== undefined && Number.isFinite(Number(kpi.win_rate)))
+    ? `<span class="arm-kpi">${(Number(kpi.win_rate) * 100).toFixed(1)}%</span>`
+    : '<span class="arm-kpi">—</span>';
+  const pairs = (kpi.closes_count !== null && kpi.closes_count !== undefined)
+    ? `<span class="arm-kpi">${kpi.closes_count}</span>`
+    : '<span class="arm-kpi">—</span>';
+  return { chips: pnl + exp + wr + pairs, note: '' };
+}
+
 async function renderRunSwitcher() {
+  _runSwitcherSeq++;
   const sw = document.getElementById('db-run-switcher');
   const badge = document.getElementById('db-mode-badge');
   if (!sw) return;
@@ -3138,6 +3179,45 @@ async function renderRunSwitcher() {
   sw.innerHTML = `<div class="db-run-head">Which run is this page reading?</div>` + demoRow + allRows.join('');
   sw.style.display = 'block';
   if (badge) badge.setAttribute('aria-expanded', 'true');
+  // Lazy KPI load: fire one arm-detail request per unique tournament arm.
+  // Do not await — the panel renders immediately with — placeholders.
+  const _seqAtRender = _runSwitcherSeq;
+  const _uniqueArms = new Map(); // arm name -> [{rowIdx, dbPath}]
+  runs.forEach((r, pos) => {
+    const t = r.tournament;
+    if (!t || !t.arm) return;
+    // pos in `runs` matches `_tournIdx` order since we iterate the same array
+    if (!_uniqueArms.has(t.arm)) _uniqueArms.set(t.arm, []);
+    _uniqueArms.get(t.arm).push({ rowIdx: pos, dbPath: r.db_path });
+  });
+  // Recompute tournament index (same logic as shadowRows map)
+  let _kpiTournIdx = 0;
+  const _armRows = []; // { arm, entries: [{tournIdx, dbPath}] }
+  runs.forEach(r => {
+    const t = r.tournament;
+    if (t && t.arm) {
+      const idx = _kpiTournIdx++;
+      let entry = _armRows.find(e => e.arm === t.arm);
+      if (!entry) { entry = { arm: t.arm, entries: [] }; _armRows.push(entry); }
+      entry.entries.push({ tournIdx: idx, dbPath: r.db_path });
+    }
+  });
+  _armRows.forEach(({ arm, entries }) => {
+    fetch(`/api/profile/arm-detail?name=${encodeURIComponent(arm)}`)
+      .then(res => res.json())
+      .then(detail => {
+        if (_runSwitcherSeq !== _seqAtRender) return; // stale
+        entries.forEach(({ tournIdx, dbPath }) => {
+          const strip = document.getElementById(`db-run-kpis-${tournIdx}`);
+          const row = document.getElementById(`db-run-row-${tournIdx}`);
+          if (!strip) return;
+          const { chips, note } = runSwitcherKpiChips(dbPath, detail);
+          strip.innerHTML = chips;
+          if (note && row) row.title = (row.title ? row.title + ' · ' : '') + note;
+        });
+      })
+      .catch(() => {}); // keep — placeholders on failure
+  });
   wireDemoSwitcher(sw);
   placeRunSwitcher(sw, badge);
   sw.querySelectorAll('.db-run-switch').forEach(b => {
@@ -13031,7 +13111,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, runSwitcherTitle, dbModeVerdict, renderRunSwitcher, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, renderProfileBadge, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, runSwitcherTitle, runSwitcherKpiChips, dbModeVerdict, renderRunSwitcher, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderStopSlippage, renderQueueRealism, renderRobustness, renderCapitalRisk, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, renderProfileBadge, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent, streamProcessTag, streamEventTag, streamSeverityClass, translateConsoleLine,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState, updateShadowRunPicker,

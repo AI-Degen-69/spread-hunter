@@ -827,3 +827,50 @@ def test_run_switcher_renders_with_shadow_runs_present():
     assert res["kpiPlaceholders"] == 4, f"expected 4 placeholder chips, got {res['kpiPlaceholders']}"
     assert res["hasBookMix"] is True, "book mix line missing"
 
+
+
+@requires_node
+def test_run_switcher_kpi_chip_formatting():
+    """#933: runSwitcherKpiChips formats KPI values correctly."""
+    res = _harness("runswitcherchips")
+    matched = res["matched"]
+    # Positive PnL: +2.40 with class positive
+    assert "+2.40" in matched["chips"]
+    assert "positive" in matched["chips"]
+    # Negative expectancy: -0.50 with class negative
+    assert "-0.50" in matched["chips"]
+    assert "negative" in matched["chips"]
+    # Zero PnL: 0.00 neutral (no sign class)
+    zero = res["zeroPnl"]
+    assert "0.00" in zero["chips"]
+    assert "positive" not in zero["chips"]
+    assert "negative" not in zero["chips"]
+    # Null expectancy: em dash placeholder
+    assert "\u2014" in zero["chips"]
+    # Win rate: 62.5% neutral, closes_count: 8 neutral
+    assert "62.5%" in matched["chips"]
+    assert ">8<" in matched["chips"]
+    assert "positive" not in matched["chips"].split("62.5%")[1]  # win rate not signed
+    # Store mismatch: four placeholders + note
+    mismatch = res["mismatch"]
+    assert mismatch["chips"].count("\u2014") == 4
+    assert mismatch["note"] == "This run's store has no KPI read yet"
+    # Failed ok: four placeholders, no note
+    for key in ("failedOk", "nullDetail", "noKpis"):
+        assert res[key]["chips"].count("\u2014") == 4
+        assert res[key]["note"] == ""
+
+
+@requires_node
+def test_run_switcher_kpis_load_without_blocking():
+    """#933: KPI chips load lazily after render; stale responses are dropped."""
+    res = _harness("runswitcherlazy")
+    # Panel renders with placeholders while fetch is held
+    assert res["hasPlaceholdersWhileHeld"] is True, "placeholder strip missing while fetch held"
+    # After release with matching store, chips paint
+    assert "+2.40" in res["chipAfterRelease"], f"chips not painted: {res['chipAfterRelease']}"
+    # Store mismatch: placeholders remain, tooltip note added
+    assert "\u2014" in res["chipMismatch"], "mismatch should keep placeholders"
+    assert "no KPI read yet" in res["titleMismatch"], f"mismatch title: {res['titleMismatch']}"
+    # After close, stale response does not paint (innerHTML unchanged)
+    assert res["htmlBeforeC"] == res["htmlAfterC"], "stale response painted after close"
