@@ -209,7 +209,7 @@ ol.rulelist li::before{content:counter(step);position:absolute;left:10px;top:8px
 
 <section class="panel" aria-labelledby="s6">
   <h2 id="s6">6 — What you’ll see, and the path to bigger size</h2>
-  <p><strong>Where it lives:</strong> <code>core_brain/config.py</code> (default 0.25), overridable via <code>BOT_QUOTE_KELLY_PCT</code> in <code>.env</code> (documented in <code>.env.example</code>). Sizing math: <code>alloc = bankroll × min(f*, 1.0) × 0.25</code>, floored at the venue minimum, tapered by the naked-budget rule, capped by the existing dynamic caps.</p>
+  <p><strong>Where it lives:</strong> <code>core_brain/config.py</code> (default 0.25), overridable via <code>BOT_QUOTE_KELLY_PCT</code> in <code>.env</code> (documented in <code>.env.example</code>). Sizing math: <code>alloc = bankroll × min(f*, 1.0) × 0.25</code>, zeroed below the venue minimum (never floored up to it), tapered by the naked-budget rule, capped by the existing dynamic caps.</p>
   <p><strong>On orders:</strong> posted quotes in fallback mode carry the marker <code>; kelly fallback: insufficient sample (n closes)</code>; refused quotes say <code>kelly: no edge (f*=…, n=… closes)</code> or name the venue-floor shortfall.</p>
 
   <div class="tl" aria-label="Path from quarter Kelly to half Kelly">
