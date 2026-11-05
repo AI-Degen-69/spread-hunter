@@ -89,7 +89,7 @@ def test_dropdown_meta_never_echoes_state():
 def test_switcher_rows_use_pill_grammar():
     js = _js()
     # Each slice ends at the template literal's closing backtick, not a byte count.
-    run_seg = _slice(js, "const runState", ("</div>`;",))
+    run_seg = _slice(js, "const runState", ("allRows.push(...shadowRows)",))
     assert 'class="pill state-' in run_seg, "switcher run row missing .pill shell"
     assert 'class="pill-label"' in run_seg, "switcher run row missing .pill-label"
     assert 'class="pill-value"' in run_seg, "switcher run row missing .pill-value"

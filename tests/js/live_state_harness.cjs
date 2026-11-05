@@ -133,7 +133,10 @@ global.localStorage = {
   removeItem: (k) => store.delete(k),
 };
 global.CONTROL_TOKEN = 'harness-token';
-global.fetch = () => Promise.reject(new Error('offline harness'));
+// Swappable fetch delegate: scenarios override `fetchImpl` per-test (#933).
+// Default still rejects so existing offline scenarios are unaffected.
+let fetchImpl = () => Promise.reject(new Error('offline harness'));
+global.fetch = (...args) => fetchImpl(...args);
 // connectSSE() runs at load; a stub that never opens keeps the harness offline.
 global.EventSource = class {
   constructor() { this.readyState = 0; }
@@ -579,22 +582,29 @@ function dbModeVerdicts() {
 }
 
 function runSwitcherVerdicts() {
+  const labelled = {
+    tournament: { issue: 371, index: 1, arm: 'aggressive', stamp: '20261005-031500' },
+    arm_label: 'Control (2c Rider + 30% Stop)',
+    dash_port: 8801,
+    pid: 4242,
+    db_path: 'data/371_tournament_01_aggressive_20261005-031500.db',
+  };
+  const unlabelled = {
+    tournament: { issue: 371, index: 2, arm: 'conservative', stamp: '20261005-031500' },
+    pid: 4243,
+    db_path: 'data/371_tournament_02_conservative_20261005-031500.db',
+  };
+  const plain = {
+    db_path: 'data/01_shadow_touchpair.db',
+    pid: 1111,
+  };
   return {
-    tournamentWithPort: app.runSwitcherLabel({
-      tournament: { issue: 371, index: 1, arm: 'aggressive', stamp: '20261005-031500' },
-      dash_port: 8801,
-      pid: 4242,
-      db_path: 'data/371_tournament_01_aggressive_20261005-031500.db',
-    }),
-    tournamentNoPort: app.runSwitcherLabel({
-      tournament: { issue: 371, index: 2, arm: 'conservative', stamp: '20261005-031500' },
-      pid: 4243,
-      db_path: 'data/371_tournament_02_conservative_20261005-031500.db',
-    }),
-    standardShadow: app.runSwitcherLabel({
-      db_path: 'data/01_shadow_touchpair.db',
-      pid: 1111,
-    }),
+    tournamentWithPort: app.runSwitcherLabel(labelled),
+    tournamentNoPort: app.runSwitcherLabel(unlabelled),
+    standardShadow: app.runSwitcherLabel(plain),
+    titleLabelled: app.runSwitcherTitle(labelled),
+    titleUnlabelled: app.runSwitcherTitle(unlabelled),
+    titlePlain: app.runSwitcherTitle(plain),
   };
 }
 
@@ -975,10 +985,13 @@ async function runSwitcherRenderVerdicts() {
       },
       {
         run_id: 'trial-02',
-        db_path: 'data/02_shadow_other.db',
+        db_path: 'data/929_tournament_01_aggressive_20261005-031500.db',
         running: true,
         is_active_db: false,
         heartbeat_age_sec: 9,
+        tournament: { issue: 929, index: 1, arm: 'aggressive', stamp: '20261005-031500' },
+        arm_label: 'Control (2c Rider + 30% Stop)',
+        book_source_mix: { stream: 100, rest: 5 },
       },
     ],
   };
@@ -990,12 +1003,138 @@ async function runSwitcherRenderVerdicts() {
   } catch (e) {
     error = String(e && e.message ? e.message : e);
   }
+  const html = sw.innerHTML;
   return {
     error,
-    html: sw.innerHTML,
-    hasLiveRow: /LIVE PRODUCTION STACK/.test(sw.innerHTML),
-    hasThisPage: /THIS PAGE/.test(sw.innerHTML),
-    shadowRows: (sw.innerHTML.match(/data-run-id="trial-/g) || []).length,
+    html,
+    hasLiveRow: /LIVE PRODUCTION STACK/.test(html),
+    hasThisPage: /THIS PAGE/.test(html),
+    shadowRows: (html.match(/data-run-id="trial-/g) || []).length,
+    hasArmLabel: /Control \(2c Rider/.test(html),
+    hasIdxTag: /#01/.test(html),
+    hasKpiStrip: /db-run-kpi-strip/.test(html),
+    kpiPlaceholders: (html.match(/class="arm-kpi" title="[^"]*">—<\/span>/g) || []).length,
+    hasBookMix: /books:/.test(html),
+  };
+}
+
+async function runSwitcherChipsVerdicts() {
+  // Helper: call runSwitcherKpiChips with a canned arm-detail response
+  function chips(rowDbPath, detail) {
+    return app.runSwitcherKpiChips(rowDbPath, detail);
+  }
+  const store = 'data/929_tournament_01_aggressive.db';
+  const matched = {
+    ok: true, store,
+    kpis: { run_profitability: {
+      realized_pnl: 2.4, expectancy_usd: -0.5,
+      win_rate: 0.625, closes_count: 8,
+    }},
+  };
+  const zeroPnl = {
+    ok: true, store,
+    kpis: { run_profitability: {
+      realized_pnl: 0, expectancy_usd: null,
+      win_rate: 0.625, closes_count: 8,
+    }},
+  };
+  const mismatch = { ok: true, store: 'data/other.db',
+    kpis: { run_profitability: { realized_pnl: 9, expectancy_usd: 1, win_rate: 1, closes_count: 5 } } };
+  const failedOk = { ok: false, store, kpis: null };
+  return {
+    matched: chips(store, matched),
+    zeroPnl: chips(store, zeroPnl),
+    mismatch: chips(store, mismatch),
+    failedOk: chips(store, failedOk),
+    nullDetail: chips(store, null),
+    noKpis: chips(store, { ok: true, store, kpis: null }),
+  };
+}
+
+async function runSwitcherLazyVerdicts() {
+  // Set up DOM elements
+  const sw = new FakeEl('div');
+  sw.id = 'db-run-switcher';
+  elements.set('db-run-switcher', sw);
+  const badge = new FakeEl('span');
+  badge.id = 'db-mode-badge';
+  elements.set('db-mode-badge', badge);
+
+  const store = 'data/929_tournament_01_aggressive_20261005.db';
+  const otherStore = 'data/929_tournament_02_conservative_20261005.db';
+  const status = {
+    db_is_production: false,
+    db_path: 'data/01_shadow_touchpair.db',
+    services: { filter: { running: true }, query: { running: true }, decide: { running: true } },
+    shadow_runs: [
+      {
+        run_id: 'tourn-01',
+        db_path: store,
+        running: true, is_active_db: false, heartbeat_age_sec: 2,
+        tournament: { issue: 929, index: 1, arm: 'aggressive', stamp: '20261005' },
+        arm_label: 'Control',
+      },
+    ],
+  };
+
+  // ── Case A: render finishes with placeholders while fetch is held ──
+  let releaseA;
+  const heldA = new Promise(r => { releaseA = r; });
+  fetchImpl = async () => { await heldA; return { ok: true, status: 200,
+    json: async () => ({ ok: true, store,
+      kpis: { run_profitability: { realized_pnl: 2.4, expectancy_usd: -0.5, win_rate: 0.625, closes_count: 8 } } }) }; };
+  app.renderDbMode(status);
+  await app.renderRunSwitcher();
+  const htmlWhileHeld = sw.innerHTML;
+  const hasPlaceholdersWhileHeld = /db-run-kpi-strip/.test(htmlWhileHeld);
+
+  // Release matching store → chips paint
+  releaseA();
+  await new Promise(r => setTimeout(r, 0));
+  const strip0After = document.getElementById('db-run-kpis-0');
+  const chipAfterRelease = strip0After ? strip0After.innerHTML : '';
+
+  // ── Case B: mismatch store → placeholders + note ──
+  let releaseB;
+  const heldB = new Promise(r => { releaseB = r; });
+  fetchImpl = async () => { await heldB; return { ok: true, status: 200,
+    json: async () => ({ ok: true, store: otherStore,
+      kpis: { run_profitability: { realized_pnl: 9, expectancy_usd: 1, win_rate: 0.9, closes_count: 50 } } }) }; };
+  app.renderDbMode(status);
+  await app.renderRunSwitcher();
+  releaseB();
+  await new Promise(r => setTimeout(r, 0));
+  const strip0Mismatch = document.getElementById('db-run-kpis-0');
+  const chipMismatch = strip0Mismatch ? strip0Mismatch.innerHTML : '';
+  const row0Mismatch = document.getElementById('db-run-row-0');
+  const titleMismatch = row0Mismatch ? row0Mismatch.title : '';
+
+  // ── Case C: close before release → no paint ──
+  let releaseC;
+  const heldC = new Promise(r => { releaseC = r; });
+  fetchImpl = async () => { await heldC; return { ok: true, status: 200,
+    json: async () => ({ ok: true, store,
+      kpis: { run_profitability: { realized_pnl: 99, expectancy_usd: 99, win_rate: 0.99, closes_count: 999 } } }) }; };
+  app.renderDbMode(status);
+  await app.renderRunSwitcher();
+  app.closeRunSwitcher(); // increments seq → response is now stale
+  const strip0BeforeC = document.getElementById('db-run-kpis-0');
+  const htmlBeforeC = strip0BeforeC ? strip0BeforeC.innerHTML : '';
+  releaseC();
+  await new Promise(r => setTimeout(r, 0));
+  const strip0AfterC = document.getElementById('db-run-kpis-0');
+  const htmlAfterC = strip0AfterC ? strip0AfterC.innerHTML : '';
+
+  // Reset fetch
+  fetchImpl = () => Promise.reject(new Error('offline harness'));
+
+  return {
+    hasPlaceholdersWhileHeld,
+    chipAfterRelease,
+    chipMismatch,
+    titleMismatch,
+    htmlBeforeC,
+    htmlAfterC,
   };
 }
 
@@ -1006,6 +1145,8 @@ else if (script === 'runelsewhere') out = runElsewhereVerdicts();
 else if (script === 'stagedtitle') out = stagedTitleVerdicts();
 else if (script === 'runswitcher') out = runSwitcherVerdicts();
 else if (script === 'runswitcherrender') out = 'PENDING_ASYNC';
+else if (script === 'runswitcherchips') out = 'PENDING_ASYNC';
+else if (script === 'runswitcherlazy') out = 'PENDING_ASYNC';
 else if (script === 'trialbanner') out = trialBannerVerdicts();
 else if (script === 'marketscan') out = marketScanVerdicts();
 else if (script === 'telemetrycount') out = telemetryCountVerdicts();
@@ -1036,6 +1177,14 @@ else out = {
 
 if (script === 'runswitcherrender') {
   runSwitcherRenderVerdicts()
+    .then((res) => process.stdout.write(JSON.stringify(res)))
+    .catch((e) => process.stdout.write(JSON.stringify({ error: String(e) })));
+} else if (script === 'runswitcherchips') {
+  runSwitcherChipsVerdicts()
+    .then((res) => process.stdout.write(JSON.stringify(res)))
+    .catch((e) => process.stdout.write(JSON.stringify({ error: String(e) })));
+} else if (script === 'runswitcherlazy') {
+  runSwitcherLazyVerdicts()
     .then((res) => process.stdout.write(JSON.stringify(res)))
     .catch((e) => process.stdout.write(JSON.stringify({ error: String(e) })));
 } else {

@@ -574,6 +574,23 @@ header {
   line-height: 1.4;
 }
 
+/* Tournament run KPI strip (#933): four metric chips beneath the label row. */
+.db-run-idx {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: 2px;
+}
+.db-run-kpi-strip {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  font: 400 11px/1 'JetBrains Mono', monospace;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.db-run-kpi-strip .arm-kpi.positive { color: var(--signal); }
+.db-run-kpi-strip .arm-kpi.negative { color: var(--loss); }
+
 /* The SERVICES pill dropdown (terminal-redesign pattern): the summary pill in
    the top bar doubles as the trigger; a child of <header>, NOT of .top-meta,
    so the scrollport of .top-meta can never clip the open panel. */

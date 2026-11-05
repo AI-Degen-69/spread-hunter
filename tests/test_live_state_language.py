@@ -796,12 +796,19 @@ def test_a_held_snapshot_ages_against_the_scan_interval():
 @requires_node
 def test_run_switcher_label_formatting():
     res = _harness("runswitcher")
-    assert res["tournamentWithPort"] == "#01 aggressive (pid 4242)"
-    assert ":" not in res["tournamentWithPort"], (
-        "tournament arm labels must not include redundant port numbers (#867)"
-    )
-    assert res["tournamentNoPort"] == "#02 conservative (pid 4243)"
+    # Labelled tournament arm shows human label, not slug (#933)
+    assert res["tournamentWithPort"] == "Control (2c Rider + 30% Stop)"
+    # Unlabelled tournament arm falls back to slug
+    assert res["tournamentNoPort"] == "conservative"
+    # Plain shadow shows filename
     assert res["standardShadow"] == "01_shadow_touchpair.db"
+    # No pid or colon in any label
+    for key in ("tournamentWithPort", "tournamentNoPort", "standardShadow"):
+        assert "(pid" not in res[key], f"{key} still has pid"
+        assert ":" not in res[key], f"{key} has colon"
+    # Title for labelled arm contains slug and pid
+    assert "aggressive" in res["titleLabelled"]
+    assert "pid 4242" in res["titleLabelled"]
 
 
 @requires_node
@@ -813,4 +820,57 @@ def test_run_switcher_renders_with_shadow_runs_present():
     assert res["error"] is None, f"renderRunSwitcher threw: {res['error']}"
     assert res["hasLiveRow"] is True, "live production stack row is missing"
     assert res["shadowRows"] == 2, res["html"]
+    # Tournament row shows human label, index tag, KPI placeholders, book mix (#933)
+    assert res["hasArmLabel"] is True, "arm label missing from tournament row"
+    assert res["hasIdxTag"] is True, "#NN index tag missing"
+    assert res["hasKpiStrip"] is True, "KPI strip missing"
+    assert res["kpiPlaceholders"] == 4, f"expected 4 placeholder chips, got {res['kpiPlaceholders']}"
+    assert res["hasBookMix"] is True, "book mix line missing"
 
+
+
+@requires_node
+def test_run_switcher_kpi_chip_formatting():
+    """#933: runSwitcherKpiChips formats KPI values correctly."""
+    res = _harness("runswitcherchips")
+    matched = res["matched"]
+    # Positive PnL: +2.40 with class positive
+    assert "+2.40" in matched["chips"]
+    assert "positive" in matched["chips"]
+    # Negative expectancy: -0.50 with class negative
+    assert "-0.50" in matched["chips"]
+    assert "negative" in matched["chips"]
+    # Zero PnL: 0.00 neutral (no sign class)
+    zero = res["zeroPnl"]
+    assert "0.00" in zero["chips"]
+    assert "positive" not in zero["chips"]
+    assert "negative" not in zero["chips"]
+    # Null expectancy: em dash placeholder
+    assert "\u2014" in zero["chips"]
+    # Win rate: 62.5% neutral, closes_count: 8 neutral
+    assert "62.5%" in matched["chips"]
+    assert ">8<" in matched["chips"]
+    assert "positive" not in matched["chips"].split("62.5%")[1]  # win rate not signed
+    # Store mismatch: four placeholders + note
+    mismatch = res["mismatch"]
+    assert mismatch["chips"].count("\u2014") == 4
+    assert mismatch["note"] == "This run's store has no KPI read yet."  # noqa: E501
+    # Failed ok: four placeholders, no note
+    for key in ("failedOk", "nullDetail", "noKpis"):
+        assert res[key]["chips"].count("\u2014") == 4
+        assert res[key]["note"] == ""
+
+
+@requires_node
+def test_run_switcher_kpis_load_without_blocking():
+    """#933: KPI chips load lazily after render; stale responses are dropped."""
+    res = _harness("runswitcherlazy")
+    # Panel renders with placeholders while fetch is held
+    assert res["hasPlaceholdersWhileHeld"] is True, "placeholder strip missing while fetch held"
+    # After release with matching store, chips paint
+    assert "+2.40" in res["chipAfterRelease"], f"chips not painted: {res['chipAfterRelease']}"
+    # Store mismatch: placeholders remain, tooltip note added
+    assert "\u2014" in res["chipMismatch"], "mismatch should keep placeholders"
+    assert "no KPI read yet" in res["titleMismatch"], f"mismatch title: {res['titleMismatch']}"
+    # After close, stale response does not paint (innerHTML unchanged)
+    assert res["htmlBeforeC"] == res["htmlAfterC"], "stale response painted after close"

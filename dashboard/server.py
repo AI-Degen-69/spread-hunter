@@ -1124,6 +1124,7 @@ def list_shadow_runs(active_db_path: str | None = None,
     here and never read into this page's numbers.
     """
     now = time.time() if now is None else now
+    arm_labels = {a["name"]: a["label"] for a in _tournament_arms_configs()}
     runs: list[dict] = []
     for path in _shadow_heartbeat_candidates():
         try:
@@ -1138,6 +1139,9 @@ def list_shadow_runs(active_db_path: str | None = None,
             continue
         run["is_active_db"] = _same_path(run.get("db_path"), active_db_path)
         run["source_file"] = path.name
+        t = run.get("tournament")
+        if t and t.get("arm") in arm_labels:
+            run["arm_label"] = arm_labels[t["arm"]]
         runs.append(run)
 
     # Live first, then freshest: the switcher exists to answer "what is running",
@@ -3451,14 +3455,13 @@ def api_profile_arm_detail(request: Request, name: str | None = None):
     # If the arm has a store, fetch KPIs from it
     if entry.get("has_store") and entry.get("store"):
         try:
-            # Temporarily switch to the arm's store to compute KPIs
-            from dashboard.server import set_db_override, get_system_status
+            # kpi_mod.report reads only the explicit db_path (OrderRegistry),
+            # so no global _ACTIVE_DB_OVERRIDE swap is needed. Swapping it here
+            # raced concurrent arm-detail requests: two overlapping calls could
+            # leave the dashboard pointed at an arm store afterwards.
             import core_brain.kpi as kpi_mod
-            prev_override = resolve_db_path(_ACTIVE_DB_OVERRIDE)
-            try:
-                set_db_override(Path(entry["store"]))
-                kpi_data = kpi_mod.report(db_path=entry["store"])
-                detail["kpis"] = {
+            kpi_data = kpi_mod.report(db_path=entry["store"])
+            detail["kpis"] = {
                     "run_profitability": kpi_data.get("run_profitability"),
                     "portfolio": kpi_data.get("portfolio"),
                     "markets_quoted": kpi_data.get("markets_quoted"),
@@ -3473,8 +3476,6 @@ def api_profile_arm_detail(request: Request, name: str | None = None):
                     "median_queue_ahead": kpi_data.get("median_queue_ahead"),
                     "days": kpi_data.get("days"),
                 }
-            finally:
-                set_db_override(prev_override)
         except Exception as e:
             detail["kpis_error"] = f"Could not compute KPIs: {e}"
     return JSONResponse(detail)

@@ -186,15 +186,21 @@ def test_status_carries_the_run_list(client, tmp_path, monkeypatch):
     runtime = _wire_runtime(tmp_path, monkeypatch)
     here = _make_db(tmp_path, "01_shadow.db")
     there = _make_db(tmp_path, "NN_shadow_other_333_mine.db")
+    tourn = _make_db(tmp_path, "929_tournament_01_live-rider-2c-stop30pct_20261005-031500.db")
     _hb(runtime, "shadow_run_shadow-01.json", here, "shadow-01", age=4800.0)
     _hb(runtime, "shadow_run_other-live.json", there, "other-live", age=2.0)
+    _hb(runtime, "shadow_run_tourn.json", tourn, "tourn-01", age=3.0)
+    monkeypatch.setattr(srv, "_tournament_arms_configs", _fake_arm_configs)
+    monkeypatch.setattr(srv, "_snapshots", {})
     set_db_override(here)
 
     payload = client.get("/api/system/status").json()
 
     runs = payload.get("shadow_runs")
     assert isinstance(runs, list), "the status endpoint must name the other runs"
-    assert {r["run_id"] for r in runs} == {"shadow-01", "other-live"}
+    assert {r["run_id"] for r in runs} >= {"shadow-01", "other-live", "tourn-01"}
+    tourn_run = next(r for r in runs if r["run_id"] == "tourn-01")
+    assert tourn_run["arm_label"] == "Control (2c Rider + 30% Stop)"
 
 
 # ── POST /api/system/db: the run switcher ─────────────────────────────────
@@ -310,4 +316,56 @@ def test_switching_to_temp_db_is_refused(client):
     body = res.json()
     assert body["ok"] is False
     assert "temporary or test directories are out of scope" in body["message"]
-
+
+
+
+# ── arm_label on tournament runs (#933) ───────────────────────────────────
+
+def _fake_arm_configs():
+    """Minimal configs matching the real i929 arms file structure."""
+    return [
+        {"kind": "arm", "name": "live-rider-2c-stop30pct",
+         "label": "Control (2c Rider + 30% Stop)",
+         "profile": "", "env": {},
+         "source": "i929-momentum-reversion_arms.json",
+         "issue": 929, "tournament": "momentum-reversion"},
+    ]
+
+
+def test_tournament_run_carries_arm_label(tmp_path, monkeypatch):
+    runtime = _wire_runtime(tmp_path, monkeypatch)
+    db = _make_db(tmp_path, "929_tournament_01_live-rider-2c-stop30pct_20261005-031500.db")
+    _hb(runtime, "shadow_run_arm01.json", db, "arm01")
+    monkeypatch.setattr(srv, "_tournament_arms_configs", _fake_arm_configs)
+    monkeypatch.setattr(srv, "_snapshots", {})
+
+    runs = srv.list_shadow_runs(str(db), now=_clock())
+    by_id = {r["run_id"]: r for r in runs}
+    assert "arm01" in by_id
+    assert by_id["arm01"]["arm_label"] == "Control (2c Rider + 30% Stop)"
+
+
+def test_unknown_tournament_arm_has_no_label(tmp_path, monkeypatch):
+    runtime = _wire_runtime(tmp_path, monkeypatch)
+    db = _make_db(tmp_path, "929_tournament_02_mystery-arm_20261005-031500.db")
+    _hb(runtime, "shadow_run_mystery.json", db, "mystery")
+    monkeypatch.setattr(srv, "_tournament_arms_configs", _fake_arm_configs)
+    monkeypatch.setattr(srv, "_snapshots", {})
+
+    runs = srv.list_shadow_runs(str(db), now=_clock())
+    by_id = {r["run_id"]: r for r in runs}
+    assert "mystery" in by_id
+    assert "arm_label" not in by_id["mystery"]
+
+
+def test_plain_shadow_run_has_no_label(tmp_path, monkeypatch):
+    runtime = _wire_runtime(tmp_path, monkeypatch)
+    db = _make_db(tmp_path, "01_shadow_touchpair.db")
+    _hb(runtime, "shadow_run_plain.json", db, "plain")
+    monkeypatch.setattr(srv, "_tournament_arms_configs", _fake_arm_configs)
+    monkeypatch.setattr(srv, "_snapshots", {})
+
+    runs = srv.list_shadow_runs(str(db), now=_clock())
+    by_id = {r["run_id"]: r for r in runs}
+    assert "plain" in by_id
+    assert "arm_label" not in by_id["plain"]
