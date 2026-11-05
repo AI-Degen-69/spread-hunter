@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Kelly Conclusion — Quarter Kelly, Earned With Evidence</title>
+<style>
+:root{
+  --bg:#0b0e14; --panel:#131826; --line:#26314a; --txt:#eef2fb; --mut:#9aa7c2;
+  --grn:#00e676; --amb:#ffb300; --red:#ff5252; --blu:#40c4ff; --pur:#e040fb;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 18px 60px}
+.hero{background:linear-gradient(135deg,rgba(255,179,0,.14),rgba(0,230,118,.12));border:1px solid #6b5510;border-radius:14px;padding:22px}
+.hero h1{margin:.2em 0 .3em;font-size:25px;line-height:1.25}
+.eyebrow{font-size:12px;letter-spacing:.08em;color:var(--amb);font-weight:700}
+.sub{color:var(--mut);max-width:75ch}
+.verdict{display:flex;gap:10px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--grn);border-radius:12px;padding:14px 16px;margin-top:16px;font-size:16px}
+.verdict b{color:var(--grn)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;margin-top:18px}
+.panel h2{margin:0 0 10px;font-size:18px}
+.panel h3{margin:14px 0 6px;font-size:14px;color:var(--blu);text-transform:uppercase;letter-spacing:.06em;font-size:12px}
+p{max-width:78ch}
+code{background:#090c12;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12.5px}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:6px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em}
+.num{font-variant-numeric:tabular-nums}
+.badge{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;padding:2px 10px;margin:2px 4px 2px 0;white-space:nowrap}
+.g{background:rgba(0,230,118,.15);color:var(--grn);border:1px solid rgba(0,230,118,.4)}
+.a{background:rgba(255,179,0,.14);color:var(--amb);border:1px solid rgba(255,179,0,.4)}
+.r{background:rgba(255,82,82,.13);color:var(--red);border:1px solid rgba(255,82,82,.4)}
+.b{background:rgba(64,196,255,.13);color:var(--blu);border:1px solid rgba(64,196,255,.4)}
+.callout{border-left:4px solid var(--amb);background:rgba(255,179,0,.08);padding:12px 14px;border-radius:0 10px 10px 0;margin:12px 0;max-width:78ch}
+.callout.red{border-color:var(--red);background:rgba(255,82,82,.08)}
+.callout.green{border-color:var(--grn);background:rgba(0,230,118,.08)}
+.callout.blue{border-color:var(--blu);background:rgba(64,196,255,.08)}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:10px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+@media(max-width:900px){.grid3{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}}
+.card{background:#0e1320;border:1px solid var(--line);border-radius:12px;padding:14px}
+.card h4{margin:0 0 6px;font-size:13px;color:var(--blu);letter-spacing:.05em;text-transform:uppercase;font-size:11px}
+.formula{font:14px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;background:#090c12;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;overflow-x:auto;white-space:nowrap}
+svg text{fill:var(--mut);font:11px ui-monospace,SFMono-Regular,Consolas,monospace}
+.bars{display:grid;gap:12px;margin-top:10px}
+.bar-row{display:grid;grid-template-columns:150px 1fr 128px;gap:10px;align-items:center;font-size:13px}
+.track{background:#0a0e17;border:1px solid var(--line);border-radius:8px;height:22px;overflow:hidden}
+.fill{height:100%;border-radius:7px}
+.f-red{background:linear-gradient(90deg,#ff5252,#ff8a80)}
+.f-amb{background:linear-gradient(90deg,#ffb300,#ffd54f)}
+.f-grn{background:linear-gradient(90deg,#00e676,#69f0ae)}
+.note{color:var(--mut);font-size:13px}
+.tl{position:relative;margin:10px 0 0 8px;padding-left:24px;border-left:2px solid var(--line)}
+.tl div{margin:0 0 14px;position:relative}
+.tl div::before{content:"";position:absolute;left:-31px;top:5px;width:12px;height:12px;border-radius:50%;background:var(--blu)}
+.tl div.done::before{background:var(--grn)}
+.tl b{color:var(--txt)}
+ok{color:var(--grn)} warn{color:var(--amb)}
+.sr{position:absolute;left:-9999px}
+footer{color:var(--mut);font-size:12.5px;margin-top:20px;border-top:1px solid var(--line);padding-top:12px}
+ol.rulelist{counter-reset:step;list-style:none;padding-left:0}
+ol.rulelist li{counter-increment:step;position:relative;padding:8px 12px 8px 44px;border:1px solid var(--line);border-radius:10px;margin:8px 0;background:#0e1320;max-width:88ch}
+ol.rulelist li::before{content:counter(step);position:absolute;left:10px;top:8px;width:24px;height:24px;border-radius:50%;background:var(--amb);color:#211800;font-weight:800;display:flex;align-items:center;justify-content:center;font-size:13px}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">SPREAD HUNTER · ISSUE #942 · DECISION RECAP</div>
+  <h1>The conclusion: quarter Kelly — and it must be earned, not granted</h1>
+  <p class="sub">Why the bot now sizes orders with a quarter of the Kelly fraction instead of half, what the research actually says, and the exact conditions under which it gets bigger.</p>
+  <div class="verdict" role="note" aria-label="The verdict">
+    <div aria-hidden="true" style="font-size:26px;line-height:1">⚖️</div>
+    <div><b>Verdict.</b> The bot ships with <code>bot_quote_kelly_pct = 0.25</code> (quarter Kelly) as the opt-in sizing dial; half Kelly is a setting you <em>earn</em> at ≥ 30 live closes with the edge holding. Below that: sizing is byte-identical to today’s dollars mode and the order says so. No edge ⇒ no orders. The existing caps stay binding.</div>
+  </div>
+</header>
+
+<section class="panel" aria-labelledby="s1">
+  <h2 id="s1">1 — The physics in one line</h2>
+  <p>Your bankroll doesn’t <em>add</em> from bet to bet — it <strong>multiplies</strong>, and multiplication is brutally asymmetric: a win and a loss of equal size do not cancel, they compound into a hole.</p>
+  <div class="grid2">
+    <div class="card">
+      <h4>The 60% coin, 100 flips, $1,000</h4>
+      <p style="margin:.2em 0"><strong>Bet it all every flip:</strong> the <em>average</em> outcome reads ≈ <strong>$83 billion</strong> — propped up by the single absurd universe where you never lose (odds ≈ 1 in 15&nbsp;billion&nbsp;trillion). In every universe you’d actually live in, the first tails wipes you out.</p>
+      <p class="note">Arithmetic mean ≠ typical outcome. Kelly optimizes the log (typical, compounding) outcome, not the average.</p>
+    </div>
+    <div class="card">
+      <h4>Win one, lose one — the "breakeven" that isn’t</h4>
+      <p style="margin:.2em 0">Bet <strong>half your stack</strong>, win, then lose: <code>1.5 × 0.5 = 0.75</code> — <strong>a quarter of everything is gone</strong>.</p>
+      <p style="margin:.2em 0">Same pair at <strong>20%</strong> of stack: <code>1.2 × 0.8 = 0.96</code> — close to even, and your edge can carry you forward.</p>
+      <p class="note">Losses punch harder than equal wins. A single zero kills everything after it.</p>
+    </div>
+  </div>
+  <div class="callout red"><strong>The trap:</strong> bet too much and this winning game grinds you to nothing; bet too little and your edge does nothing for you. The whole question is <em>where between timid and reckless the exact number sits</em> — that number is the Kelly fraction.</div>
+</section>
+
+<section class="panel" aria-labelledby="s2">
+  <h2 id="s2">2 — The growth curve: peak at f*, cliff past 2f*</h2>
+  <p>Expected log-growth per bet for a 60/40 even-money coin, as a function of bet size. Illustrative shape — the live bot’s <code>f*</code> comes from its own measured closes, and only the direction of the slope matters here.</p>
+
+  <svg viewBox="0 0 800 280" width="100%" role="img" aria-label="Log-growth curve versus bet fraction. It peaks at 20% (f*), crosses zero at 40% (double Kelly), and reaches minus 3.4 percent per bet at 50%. Quarter Kelly at 5% retains most of the slope; half Kelly at 10% keeps about three quarters of peak growth.">
+    <!-- gridlines -->
+    <line x1="46" y1="87.7" x2="782" y2="87.7" stroke="#26314a" stroke-dasharray="4 4"/>
+    <line x1="46" y1="61.7" x2="782" y2="61.7" stroke="#1a2236"/>
+    <line x1="46" y1="35.6" x2="782" y2="35.6" stroke="#1a2236"/>
+    <line x1="46" y1="139.8" x2="782" y2="139.8" stroke="#1a2236"/>
+    <line x1="46" y1="191.9" x2="782" y2="191.9" stroke="#1a2236"/>
+    <!-- zero axis label -->
+    <text x="14" y="91">0%</text>
+    <text x="8" y="65">+1%</text>
+    <text x="8" y="39">+2%</text>
+    <text x="10" y="143">−2%</text>
+    <text x="10" y="195">−4%</text>
+    <!-- curve -->
+    <polyline fill="none" stroke="#40c4ff" stroke-width="2.5" stroke-linejoin="round"
+      points="46.0,87.7 59.4,82.6 72.8,77.8 86.1,73.3 99.5,69.0 112.9,64.9 126.3,61.1 139.7,57.6 153.1,54.3 166.4,51.3 179.8,48.5 193.2,46.0 206.6,43.8 220.0,41.8 233.3,40.1 246.7,38.6 260.1,37.4 273.5,36.5 286.9,35.8 300.3,35.4 313.6,35.3 327.0,35.4 340.4,35.8 353.8,36.5 367.2,37.5 380.5,38.7 393.9,40.3 407.3,42.1 420.7,44.2 434.1,46.6 447.5,49.3 460.8,52.3 474.2,55.6 487.6,59.3 501.0,63.2 514.4,67.5 527.7,72.2 541.1,77.1 554.5,82.4 567.9,88.1 581.3,94.1 594.7,100.5 608.0,107.2 621.4,114.4 634.8,122.0 648.2,129.9 661.6,138.3 674.9,147.1 688.3,156.3 701.7,166.0 715.1,176.2 728.5,186.9 741.9,198.1 755.2,209.7 768.6,222.0 782.0,234.8"/>
+    <!-- quarter marker -->
+    <circle cx="112.9" cy="64.9" r="4.5" fill="#00e676"/>
+    <text x="88" y="52" fill="#00e676">¼ Kelly · 5%</text>
+    <!-- half marker -->
+    <circle cx="179.8" cy="48.5" r="4.5" fill="#ffb300"/>
+    <text x="150" y="36" fill="#ffb300">½ Kelly · 10%</text>
+    <!-- full marker -->
+    <circle cx="313.6" cy="35.3" r="5" fill="#ff5252"/>
+    <text x="282" y="22" fill="#ff5252">FULL Kelly · 20%</text>
+    <!-- 2x marker -->
+    <circle cx="581.3" cy="94.1" r="4.5" fill="#ff5252"/>
+    <text x="545" y="112" fill="#ff5252">2× Kelly · growth ≈ 0</text>
+    <!-- 50% marker -->
+    <circle cx="715.1" cy="176.2" r="4.5" fill="#ff5252"/>
+    <text x="660" y="206" fill="#ff5252">50% · −3.4%/bet</text>
+    <!-- x axis -->
+    <text x="46" y="262">0%</text><text x="168" y="262">10%</text><text x="300" y="262">20%</text><text x="560" y="262">40%</text><text x="700" y="262">50%</text>
+    <text x="368" y="262" style="fill:#eef2fb;font-weight:700"></text>
+  </svg>
+  <p class="note">Curve: g(f) = 0.6·ln(1+f) + 0.4·ln(1−f), computed for this chart — not hand-drawn. Left of the peak the slope is gentle; right of it the cliff drops fast. Half Kelly buys ~¾ of peak growth for half the exposure; past double Kelly the same winning coin is a losing game.</p>
+</section>
+
+<section class="panel" aria-labelledby="s3">
+  <h2 id="s3">3 — The three pillars of the evidence</h2>
+
+  <div class="grid3">
+    <div class="card">
+      <h4>① Thorp — the asymmetry</h4>
+      <p style="margin:.3em 0">Over-betting is always worse than under-betting. Half Kelly protects against negative growth at the cost of ≤ 25% lost growth; past ~2f* geometric growth goes negative.</p>
+      <p class="note">Kelly (1956); Thorp, <em>The Kelly criterion in blackjack, sports betting, and the stock market</em>; MacLean/Thorp/Ziemba (2010).</p>
+    </div>
+    <div class="card">
+      <h4>② Crane — you must be able to tell luck from edge</h4>
+      <p style="margin:.3em 0">On a real 10% edge over 1,000 rounds, how likely is a 50% drawdown? That’s the event that makes you question the edge — and whether it’s informative decides everything.</p>
+      <div class="bars" role="list" aria-label="Probability of a 50 percent drawdown in 1000 rounds">
+        <div class="bar-row" role="listitem"><span>Full Kelly</span><div class="track"><div class="fill f-red" style="width:92%"></div></div><span class="num">46% · LR 2.1</span></div>
+        <div class="bar-row" role="listitem"><span>Half Kelly</span><div class="track"><div class="fill f-amb" style="width:22%"></div></div><span class="num">11% · LR 7.4</span></div>
+        <div class="bar-row" role="listitem"><span><strong>Quarter Kelly</strong></span><div class="track"><div class="fill f-grn" style="width:2%"></div></div><span class="num"><strong>0.8% · LR 75</strong></span></div>
+      </div>
+      <p class="note">LR = likelihood ratio that the drawdown means “no edge”. Full Kelly: you’ll can’t act on it (2.1× — ambiguous). Quarter Kelly: LR = 75 — near-conclusive. Sizing smaller doesn’t pander to fear; it makes the evidence <em>actionable</em>. “In practice, we never know everything we need to know.”</p>
+    </div>
+    <div class="card">
+      <h4>③ Poluri — earn your Kelly</h4>
+      <p style="margin:.3em 0">Optimal fraction of Kelly ≈ <strong>S / (S+1)</strong>, where the evidence score <strong>S = N·k²</strong> (N = closed trades, k = standardized edge).</p>
+      <div class="formula">fraction ≈ S/(S+1),&nbsp;&nbsp;S = N·k²<br>half Kelly justified at ≈ 0.7/k² trades</div>
+      <p class="note">Poluri, <em>How Many Trades Before You Trust Kelly?</em> (SSRN 7549165, 2026). Half Kelly is earned by data, not chosen by taste — with a thin sample, even half is mathematically unjustified.</p>
+    </div>
+  </div>
+
+  <div class="callout blue"><strong>The consensus, not a clique:</strong> Wikipedia’s Kelly article notes practice favors fractional Kelly for drawdown reasons; Downey’s simulations find fractional Kelly “overdetermined” — no single justification you can dismiss; Crane shows the decision value (LR 75); Poluri gives the dose-response curve (S/(S+1)); the video your operator linked says the same thing in intuition form — <em>“betting half of a guess is how you stay on the safe slope of being wrong.”</em></div>
+</section>
+
+<section class="panel" aria-labelledby="s4">
+  <h2 id="s4">4 — Why this bot, specifically, lands on quarter</h2>
+  <p>Fractional Kelly isn’t generic prudence; it’s priced off <em>this bot’s</em> evidence ledger, which on live money is close to empty:</p>
+  <table>
+    <thead><tr><th>Evidence source</th><th>What it shows</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Paper run</strong></td><td class="num">476 merge closes · +$1,172.35 · avg pair cost 0.960</td><td><span class="badge g">real economics, wrong fills</span> paper doesn’t suffer real adverse selection — it flatters the edge</td></tr>
+      <tr><td><strong>Live registry</strong></td><td class="num">a handful of bot closes</td><td><span class="badge r">not enough to size from</span></td></tr>
+      <tr><td><strong>venue_sync rows</strong></td><td class="num">72 account-wide rows · fake 67.1% win rate · +$112.93</td><td><span class="badge r">excluded from Kelly by design</span> wallet history ≠ bot’s record</td></tr>
+    </tbody>
+  </table>
+
+  <h3>The video’s three trust conditions, scored</h3>
+  <table>
+    <thead><tr><th>Condition</th><th>This bot</th><th>Score</th></tr></thead>
+    <tbody>
+      <tr><td>Bet repeats under the same rules</td><td>Same strategy, many markets — but each market has its own book, pair-cost drift, selection effects. Softer than roulette.</td><td><span class="badge a">mostly</span></td></tr>
+      <tr><td>Honest number on the edge</td><td><strong>Paper: yes. Live: no.</strong> — a handful of live closes vs 72 venue_sync rows; the bot hasn’t earned half Kelly on live data.</td><td><span class="badge r">the weak link</span></td></tr>
+      <tr><td>Winnings stay in the game to compound</td><td>Yes — merges return USDC straight back into the bankroll the next order sizes against.</td><td><span class="badge g">yes</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout"><strong>The video says “half of a guess.” Ours is softer than a guess</strong> — a paper-measured edge with almost no live validation, amplified by Kelly exactly when it’s most wrong. Quarter Kelly is the video’s own logic, applied honestly: shading toward the safe slope of being wrong — and you earn your way up with measured live closes.</div>
+</section>
+
+<section class="panel" aria-labelledby="s5">
+  <h2 id="s5">5 — The decision, exactly</h2>
+  <ol class="rulelist">
+    <li><strong>Quarter Kelly is the shipped default.</strong> <code>bot_quote_kelly_pct = 0.25</code>, hard cap 1.0 — a setting above 1 clamps to 1, it never levers.</li>
+    <li><strong>Below 30 bot-owned closes, sizing is byte-identical to today.</strong> <code>bot_quote_kelly_min_closes = 30</code>; the posted order carries <code>; kelly fallback: insufficient sample (n closes)</code> so the audit trail shows which world you were in.</li>
+    <li><strong>Measured f* ≤ 0 ⇒ quote nothing.</strong> The no-edge case returns size 0 with the reason in the quote diagnostics — the fraction multiplier can never rescue a non-edge (Crane: fractional Kelly only <em>delays</em> ruin if there’s no edge).</li>
+    <li><strong>Half Kelly is earned, not defaulted.</strong> At n ≥ 30 live closes with the edge holding, the operator may promote the knob to 0.5. Re-check every +25 closes.</li>
+    <li><strong>Full Kelly (1.0) is shadow/rehearsal only</strong> — an operator rule, not a code gate (config can’t see live vs shadow). Live caps at ≤ 0.25.</li>
+    <li><strong>Kelly rides inside the existing caps, never past them</strong> — 6% naked / 25% order / 90% total / pair-cost cap / venue floor / (1−u)² taper all unchanged.</li>
+    <li><strong>Opt-in only.</strong> <code>BOT_QUOTE_SIZE_MODE=kelly</code>; the shipped default stays <code>dollars</code> until you flip it hands-on. Nothing changes live until you say so.</li>
+  </ol>
+</section>
+
+<section class="panel" aria-labelledby="s6">
+  <h2 id="s6">6 — What you’ll see, and the path to bigger size</h2>
+  <p><strong>Where it lives:</strong> <code>core_brain/config.py</code> (default 0.25), overridable via <code>BOT_QUOTE_KELLY_PCT</code> in <code>.env</code> (documented in <code>.env.example</code>). Sizing math: <code>alloc = bankroll × min(f*, 1.0) × 0.25</code>, zeroed below the venue minimum (never floored up to it), tapered by the naked-budget rule, capped by the existing dynamic caps.</p>
+  <p><strong>On orders:</strong> posted quotes in fallback mode carry the marker <code>; kelly fallback: insufficient sample (n closes)</code>; refused quotes say <code>kelly: no edge (f*=…, n=… closes)</code> or name the venue-floor shortfall.</p>
+
+  <div class="tl" aria-label="Path from quarter Kelly to half Kelly">
+    <div class="done"><b>Now</b> — Quarter Kelly ships. Mode off by default; your risk gates and sizes are untouched until you opt in.</div>
+    <div><b>n ≥ 30 live closes</b> — Kelly engages (no more dollars fallback). Check the measured f* on the dashboard; if it’s negative, the bot already refuses to bet.</div>
+    <div><b>Every +25 closes</b> — re-derive the fraction from live data only. Decay ⇒ the sizing self-silences by design.</div>
+    <div><b>Promote to 0.5 (half Kelly)</b> — only if the edge held across those closes and drawdown tracked the projection. Not before — not from paper, not from hope.</div>
+    <div><b>Falsifier</b> — n ≥ 100 live closes, f* > 0, realized drawdown ≪ quarter-Kelly projection → the operator may argue for 0.5. Otherwise the default stays 0.25 indefinitely.</div>
+  </div>
+
+  <div class="callout green"><strong>The cost of this decision:</strong> slower compounding while the edge is unproven — deliberately. The cost of the other decision is a ruined bankroll that never got the chance to learn whether it had an edge. Growth doesn’t go to whoever wins the most flips; it goes to whoever is still there to flip again.</div>
+</section>
+
+<footer>
+  <p><strong>Sources.</strong> Kelly (1956) · Thorp, <em>The Kelly criterion in blackjack…</em> · MacLean/Thorp/Ziemba (2010) · Wikipedia “Kelly criterion” (2026-11-05) · Crane, <em>Prediction Markets Newsletter</em> (2023-03-10) · Downey, <em>Why fractional Kelly?</em> (2023) · Poluri, SSRN 7549165 (2026) · The Synthetic Mind, <em>The Math Behind Optimal Bet Sizing | Kelly Criterion</em> (2026-08-05, youtube.com/watch?v=u0E92XePpps).</p>
+  <p><strong>Repo records.</strong> Research note &amp; decision log: <code>docs/backlog/i942-kelly-criterion.md</code> · SPEC: <code>SPEC.md</code> · Hard boundaries: <code>CONSTRAINTS.md</code> · Issue: <a href="https://github.com/AI-Degen-69/spread-hunter/issues/942" style="color:var(--blu)">#942</a> · Commits: <code>780c189</code> (quarter-Kelly default), <code>ddf1f70</code> (video folded in).</p>
+</footer>
+
+</div>
+</body>
+</html>

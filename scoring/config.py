@@ -350,6 +350,36 @@ def load() -> MakerConfig:
             raise ValueError(f"Bankroll override must be finite and strictly positive, got: {val}")
         kw["bot_quote_bank_baseline_usd"] = val
         kw["bot_risk_exposure_max_committed_usd"] = val
+    # #942: Kelly sizing, mirrored from core's loader (#674 rule: the canonical
+    # execution variables behave identically on both paths).
+    qsm = _env("BOT_QUOTE_SIZE_MODE")
+    if qsm:
+        mode = qsm.strip().lower()
+        if mode not in ("shares", "dollars", "kelly"):
+            raise ValueError(
+                f"BOT_QUOTE_SIZE_MODE must be one of dollars, kelly, shares, got: {qsm}"
+            )
+        kw["bot_quote_size_mode"] = mode
+    kf = _env("BOT_QUOTE_KELLY_PCT")
+    if kf:
+        val = _bounded_float("BOT_QUOTE_KELLY_PCT", kf, 0.0, 1.0)
+        if val <= 0.0:
+            raise ValueError(f"BOT_QUOTE_KELLY_PCT must be > 0, got: {kf}")
+        kw["bot_quote_kelly_pct"] = val
+    km = _env("BOT_QUOTE_KELLY_MIN_CLOSES")
+    if km:
+        try:
+            num = float(km)
+            n = int(num)
+        except (ValueError, OverflowError):
+            raise ValueError(
+                f"BOT_QUOTE_KELLY_MIN_CLOSES must be an integer >= 1, got: {km}"
+            ) from None
+        if not math.isfinite(num) or num != n or n < 1:
+            raise ValueError(
+                f"BOT_QUOTE_KELLY_MIN_CLOSES must be an integer >= 1, got: {km}"
+            )
+        kw["bot_quote_kelly_min_closes"] = n
     return MakerConfig(**kw)
 
 # hook probe

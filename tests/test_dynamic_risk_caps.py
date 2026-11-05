@@ -322,3 +322,77 @@ def test_derive_dynamic_caps_small_portfolio_enforces_hard_block():
     assert "naked" in block
 
 
+
+
+def test_fleet_state_merges_kelly_stats_in_kelly_mode():
+    """Kelly mode merges measured stats, excluding venue_sync wallet history."""
+    cfg = MakerConfig(bot_quote_size_mode="kelly", bot_quote_kelly_min_closes=2)
+    mock_reg = MagicMock()
+    mock_reg.get_latest_account_mark.return_value = {
+        "account_value_usd": 90.0,
+        "collateral_usd": 70.0,
+        "positions_value_usd": 20.0,
+    }
+    mock_reg.get_all_closes.return_value = [
+        {"run_id": "run-1", "realized_pnl": 2.0, "cost_basis": 10.0, "ts": 1.0},
+        {"run_id": "run-1", "realized_pnl": -1.0, "cost_basis": 10.0, "ts": 2.0},
+        # Wallet-sync history is not the bot's record; excluded like the KPI slice.
+        {"run_id": "venue_sync", "realized_pnl": 999.0, "cost_basis": 10.0, "ts": 3.0},
+        # Unmeasured: neither a win nor a loss, and must not count toward the
+        # sample -- it would dilute win_rate and pass the gate on fewer outcomes.
+        {"run_id": "run-1", "realized_pnl": None, "cost_basis": 10.0, "ts": 4.0},
+    ]
+    state = _fleet_state(mock_reg, cfg)
+    assert state["bot_kelly_n_closes"] == 2
+    # win_rate 0.5, payoff 2.0 -> f* = 0.5 - 0.5/2.0 = 0.25
+    assert state["bot_kelly_pct"] == pytest.approx(0.25)
+
+
+def test_fleet_state_kelly_mode_all_wins_yields_null_kelly():
+    """An all-win record has no payoff to measure; Kelly stays NULL, never 0."""
+    cfg = MakerConfig(bot_quote_size_mode="kelly", bot_quote_kelly_min_closes=2)
+    mock_reg = MagicMock()
+    mock_reg.get_latest_account_mark.return_value = {
+        "account_value_usd": 90.0,
+        "collateral_usd": 70.0,
+        "positions_value_usd": 20.0,
+    }
+    mock_reg.get_all_closes.return_value = [
+        {"run_id": "run-1", "realized_pnl": 2.0, "cost_basis": 10.0, "ts": 1.0},
+        {"run_id": "run-1", "realized_pnl": 3.0, "cost_basis": 10.0, "ts": 2.0},
+    ]
+    state = _fleet_state(mock_reg, cfg)
+    assert state["bot_kelly_n_closes"] == 2
+    assert state["bot_kelly_pct"] is None
+
+
+def test_fleet_state_kelly_stats_failure_falls_back_cleanly():
+    """A broken closes read never kills the rotation; Kelly just stays unmeasured."""
+    cfg = MakerConfig(bot_quote_size_mode="kelly")
+    mock_reg = MagicMock()
+    mock_reg.get_latest_account_mark.return_value = {
+        "account_value_usd": 90.0,
+        "collateral_usd": 70.0,
+        "positions_value_usd": 20.0,
+    }
+    mock_reg.get_all_closes.side_effect = RuntimeError("db gone")
+    state = _fleet_state(mock_reg, cfg)
+    assert state["bot_kelly_n_closes"] == 0
+    assert state["bot_kelly_pct"] is None
+
+
+def test_fleet_state_dollars_mode_reads_no_closes():
+    """Flag off => zero extra work and zero merged keys."""
+    cfg = MakerConfig(bot_quote_size_mode="dollars")
+    mock_reg = MagicMock()
+    mock_reg.get_latest_account_mark.return_value = {
+        "account_value_usd": 90.0,
+        "collateral_usd": 70.0,
+        "positions_value_usd": 20.0,
+    }
+    mock_reg.get_all_closes.return_value = [
+        {"run_id": "run-1", "realized_pnl": 1.0, "cost_basis": 10.0, "ts": 1.0},
+    ]
+    state = _fleet_state(mock_reg, cfg)
+    mock_reg.get_all_closes.assert_not_called()
+    assert "bot_kelly_n_closes" not in state

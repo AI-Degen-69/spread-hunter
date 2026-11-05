@@ -529,6 +529,32 @@ def _decide_quotes_from_mid(
                 size = 0
         if size <= 0:
             if ladder <= 0:
+                if getattr(cfg, "bot_quote_size_mode", "shares") == "kelly":
+                    # Kelly zero-size reasons (#942). NULL stays NULL: an
+                    # unmeasurable sample is a fallback, not an edge of zero.
+                    _n = int(getattr(cfg, "bot_kelly_n_closes", 0) or 0)
+                    _kf = getattr(cfg, "bot_kelly_pct", None)
+                    if _n < cfg.bot_quote_kelly_min_closes:
+                        blocked.append(
+                            f"{side}: kelly fallback: insufficient sample ({_n} closes)")
+                    elif not risk.kelly_usable(cfg):
+                        # Finite check (#942): a NaN f* would reach int() below.
+                        blocked.append(
+                            f"{side}: kelly fallback: unusable inputs "
+                            f"(f*={_kf}, n={_n} closes)")
+                    elif _kf <= 0.0:
+                        blocked.append(
+                            f"{side}: kelly: no edge (f*={_kf:.3f}, n={_n} closes)")
+                    else:
+                        _alloc = (cfg.bot_quote_bank_baseline_usd
+                                  * min(_kf, 1.0) * cfg.bot_quote_kelly_pct)
+                        eff_pair = calc_pair_price if (calc_pair_price is not None and calc_pair_price > 0) else (2.0 * price if price > 0 else 1.0)
+                        _affordable = int(_alloc / eff_pair) if eff_pair > 0 else 0
+                        blocked.append(
+                            f"{side}: kelly allocation ${_alloc:.2f} at pair price "
+                            f"{eff_pair:.3f} buys {_affordable}sh, below the venue "
+                            f"minimum of {cfg.bot_quote_size_min_shares}sh")
+                    continue
                 couple_alloc = (config.couple_allocation_usd(cfg)
                                 if getattr(cfg, "bot_quote_size_mode", "shares") == "dollars"
                                 else 0.0)
@@ -563,7 +589,7 @@ def _decide_quotes_from_mid(
             side=side, token_id=book.get("token_id"), price=price, size=size,
             mid=mid, edge_vs_mid=mid - price,
             reason=(f"quote {100*s:.1f}c under mid {mid:.3f}"
-                    f"{waived}{dyn_note}"),
+                    f"{waived}{dyn_note}{risk.kelly_fallback_note(cfg)}"),
         ))
 
     if not out:

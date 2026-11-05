@@ -84,6 +84,82 @@ def risk_utilization(cfg, inv, side: str) -> float:
     return max(0.0, min(1.0, naked_usd(inv, side) / budget))
 
 
+def _pair_price(inv, side: str, price: float, pair_price: float | None) -> float:
+    """Effective pair cost for sizing one leg, from explicit or held context."""
+    if pair_price is not None and pair_price > 0:
+        return pair_price
+    opp_avg = inv.avg("DOWN" if side == "UP" else "UP") if inv is not None else 0.0
+    if opp_avg > 0:
+        return price + opp_avg
+    return min(1.0, 2.0 * price if price <= 0.5 else 1.0)
+
+
+def _dollars_base(cfg, inv, side: str, price: float, pair_price: float | None) -> int | None:
+    # Sized in couple shares from the Owner's allocation rule:
+    # N = floor(couple_allocation / (up_price + down_price))
+    if price <= 0:
+        return None
+    eff_pair = _pair_price(inv, side, price, pair_price)
+    if eff_pair <= 0:
+        return None
+    couple_alloc = config.couple_allocation_usd(cfg)
+    raw_n = int(couple_alloc / eff_pair)
+    if raw_n < cfg.bot_quote_size_min_shares:
+        return None
+    return max(raw_n, cfg.bot_quote_size_min_shares)
+
+
+def kelly_usable(cfg) -> bool:
+    """True when the merged Kelly inputs are finite and the sample is big enough.
+
+    The single predicate every Kelly call site trusts: size_for's mode
+    switch, the posted-order fallback marker, and the diagnostics. A
+    non-finite measured value is unusable, never a number.
+    """
+    n = getattr(cfg, "bot_kelly_n_closes", 0) or 0
+    f_star = getattr(cfg, "bot_kelly_pct", None)
+    return (isinstance(f_star, (int, float)) and math.isfinite(f_star)
+            and n >= cfg.bot_quote_kelly_min_closes)
+
+
+def kelly_fallback_note(cfg) -> str:
+    """Reason marker when kelly mode fell back to dollars sizing (#942).
+
+    Sizes stay byte-identical to dollars mode; the posted reason carries the
+    marker so the fallback is visible in the audit trail.
+    """
+    if getattr(cfg, "bot_quote_size_mode", "shares") != "kelly":
+        return ""
+    if kelly_usable(cfg):
+        return ""
+    n = int(getattr(cfg, "bot_kelly_n_closes", 0) or 0)
+    return f"; kelly fallback: insufficient sample ({n} closes)"
+
+
+def _kelly_base(cfg, inv, side: str, price: float, pair_price: float | None) -> int | None:
+    """Kelly fraction of bankroll as this leg's couple budget, or None.
+
+    None covers both honest zeros: the sample is unusable (caller falls back
+    to dollars) and the measured edge is gone (caller quotes nothing).
+    The diagnostics tell them apart; the size is 0 either way.
+    """
+    if price <= 0:
+        return None
+    eff_pair = _pair_price(inv, side, price, pair_price)
+    if eff_pair <= 0:
+        return None
+    f_star = getattr(cfg, "bot_kelly_pct", None)
+    if f_star is None or f_star <= 0.0:
+        return None
+    # A model demanding leverage is an over-estimate, not an instruction.
+    f_used = min(f_star, 1.0)
+    alloc = cfg.bot_quote_bank_baseline_usd * f_used * cfg.bot_quote_kelly_pct
+    raw_n = int(alloc / eff_pair)
+    if raw_n < cfg.bot_quote_size_min_shares:
+        return None
+    return raw_n
+
+
 def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None) -> int:
     """How many shares to rest on `side`, given what is already at risk.
 
@@ -123,26 +199,30 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
     if cfg.bot_quote_size_shares <= 0:
         return 0
 
-    if getattr(cfg, "bot_quote_size_mode", "shares") == "dollars":
-        # Sized in couple shares from the Owner's allocation rule:
-        # N = floor(couple_allocation / (up_price + down_price))
-        # N = max(N, venue_min_size)
-        if price <= 0:
+    mode = getattr(cfg, "bot_quote_size_mode", "shares")
+    if mode == "kelly" and not kelly_usable(cfg):
+        # Byte-identical to dollars mode; the quote reason records the
+        # fallback (see quotes.py diagnostics).
+        mode = "dollars"
+
+    if mode == "dollars":
+        base = _dollars_base(cfg, inv, side, price, pair_price)
+        if base is None:
             return 0
-        opp_avg = inv.avg("DOWN" if side == "UP" else "UP") if inv is not None else 0.0
-        if pair_price is not None and pair_price > 0:
-            eff_pair = pair_price
-        elif opp_avg > 0:
-            eff_pair = price + opp_avg
-        else:
-            eff_pair = min(1.0, 2.0 * price if price <= 0.5 else 1.0)
-        if eff_pair <= 0:
-            return 0
-        couple_alloc = config.couple_allocation_usd(cfg)
-        raw_n = int(couple_alloc / eff_pair)
-        if raw_n < cfg.bot_quote_size_min_shares:
-            return 0
-        base = max(raw_n, cfg.bot_quote_size_min_shares)
+    elif mode == "kelly":
+        # Kelly with usable stats; no $10 floor - an edge too small to clear
+        # the venue floor buys nothing, it is not propped up.
+        base = _kelly_base(cfg, inv, side, price, pair_price)
+        if base is None:
+            # No edge stops NEW exposure. The buy that flattens an unmatched
+            # leg is not exposure, it is the repair: it sizes by the dollars
+            # rule and is capped at the deficit below (strict pairs).
+            naked = naked_side(inv)
+            if naked is None or naked == side:
+                return 0
+            base = _dollars_base(cfg, inv, side, price, pair_price)
+            if base is None:
+                return 0
     else:
         base = max(cfg.bot_quote_size_shares, cfg.bot_quote_size_min_shares)
 

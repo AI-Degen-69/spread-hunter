@@ -421,6 +421,9 @@ EXECUTION_CANONICAL_ENV = [
     ("BOT_LATENCY_CANCEL_VENUE_ACK_MS", ("HUNTER_CANCEL_VENUE_ACK_MS",), "bot_latency_cancel_venue_ack_ms", "210.0", 210.0, "190.0", 190.0, 150.0, False, False),
     ("BOT_LATENCY_POST_VENUE_ACCEPT_MS", ("HUNTER_POST_VENUE_ACCEPT_MS",), "bot_latency_post_venue_accept_ms", "95.0", 95.0, "85.0", 85.0, 81.0, False, False),
     ("BOT_QUOTE_BANK_BASELINE_USD", ("SPREAD_HUNTER_BANKROLL", "HUNTER_BANKROLL"), "bot_quote_bank_baseline_usd", "2500.0", 2500.0, "1500.0", 1500.0, 1000.0, False, False),
+    ("BOT_QUOTE_SIZE_MODE", (), "bot_quote_size_mode", "kelly", "kelly", None, None, "dollars", False, False),
+    ("BOT_QUOTE_KELLY_PCT", (), "bot_quote_kelly_pct", "0.25", 0.25, None, None, 0.25, False, False),
+    ("BOT_QUOTE_KELLY_MIN_CLOSES", (), "bot_quote_kelly_min_closes", "50", 50, None, None, 30, False, False),
 ]
 
 
@@ -438,6 +441,7 @@ def _clear_execution_env(monkeypatch):
         "BOT_LATENCY_CANCEL_VENUE_ACK_MS", "HUNTER_CANCEL_VENUE_ACK_MS",
         "BOT_LATENCY_POST_VENUE_ACCEPT_MS", "HUNTER_POST_VENUE_ACCEPT_MS",
         "BOT_QUOTE_BANK_BASELINE_USD", "SPREAD_HUNTER_BANKROLL", "HUNTER_BANKROLL",
+        "BOT_QUOTE_SIZE_MODE", "BOT_QUOTE_KELLY_PCT", "BOT_QUOTE_KELLY_MIN_CLOSES",
     ]
     for v in all_vars:
         monkeypatch.delenv(v, raising=False)
@@ -1016,3 +1020,52 @@ def test_orphan_min_profit_pct_bounds(monkeypatch):
         monkeypatch.setenv("BOT_RISK_ORPHAN_MIN_PROFIT_PCT", bad)
         with pytest.raises(ValueError):
             core_config.load()
+
+# ============================================================================
+# #942: Kelly sizing surface - defaults pinned on both classes, byte for byte
+# ============================================================================
+
+def test_942_kelly_defaults_pinned_on_both_classes():
+    """The Kelly surface ships identical on core and scoring, before any override."""
+    for cfg in (CoreMakerConfig(), ScoringMakerConfig()):
+        assert cfg.bot_quote_size_mode == "dollars"
+        assert cfg.bot_quote_kelly_pct == 0.25
+        assert cfg.bot_quote_kelly_min_closes == 30
+        # Merge-only fields: default to "no stats measured", never to a number.
+        assert cfg.bot_kelly_n_closes == 0
+        assert cfg.bot_kelly_pct is None
+
+
+def test_942_kelly_env_rejects_bad_values(monkeypatch):
+    """Execution knobs fail fast: garbage never silently becomes a sizing number."""
+    _clear_execution_env(monkeypatch)
+    for bad in ("-0.1", "0", "1.01", "nan", "inf", "abc"):
+        monkeypatch.setenv("BOT_QUOTE_KELLY_PCT", bad)
+        with pytest.raises(ValueError, match="BOT_QUOTE_KELLY_PCT"):
+            core_config.load()
+    # The pct loop leaves a bad value behind; without this the min-closes loop
+    # below would pass on that same rejection and prove nothing.
+    monkeypatch.delenv("BOT_QUOTE_KELLY_PCT", raising=False)
+    for bad in ("0", "-3", "2.5", "nan", "inf", "-inf", "1e400", "abc"):
+        monkeypatch.setenv("BOT_QUOTE_KELLY_MIN_CLOSES", bad)
+        with pytest.raises(ValueError, match="BOT_QUOTE_KELLY_MIN_CLOSES"):
+            core_config.load()
+    monkeypatch.delenv("BOT_QUOTE_KELLY_MIN_CLOSES", raising=False)
+    # "KELLY" is not here: the loader strips and lowercases, so it is valid.
+    for bad in ("full", "1", ""):
+        if bad == "":
+            continue  # blank keeps the shipped default, not an error
+        monkeypatch.setenv("BOT_QUOTE_SIZE_MODE", bad)
+        with pytest.raises(ValueError, match="BOT_QUOTE_SIZE_MODE"):
+            core_config.load()
+
+
+def test_942_kelly_env_accepts_edges(monkeypatch):
+    _clear_execution_env(monkeypatch)
+    monkeypatch.setenv("BOT_QUOTE_KELLY_PCT", "1.0")
+    monkeypatch.setenv("BOT_QUOTE_KELLY_MIN_CLOSES", "1")
+    monkeypatch.setenv("BOT_QUOTE_SIZE_MODE", "KELLY")
+    cfg = core_config.load()
+    assert cfg.bot_quote_kelly_pct == 1.0
+    assert cfg.bot_quote_kelly_min_closes == 1
+    assert cfg.bot_quote_size_mode == "kelly"
