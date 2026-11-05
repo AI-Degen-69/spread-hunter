@@ -925,40 +925,6 @@ function profilePickerVerdicts() {
   return { html, htmlPresetActive, empty };
 }
 
-function runElsewhereVerdicts() {
-  const el = global.document.getElementById('run-elsewhere-banner');
-  const read = () => ({
-    shown: el.classList.contains('show'),
-    text: el.querySelector('.run-elsewhere-text').textContent,
-  });
-  app.renderRunElsewhereBanner({
-    db_is_production: true, db_path: 'C:/d/orders.db',
-    shadow_runs: [], services: {},
-  });
-  const idle = read();
-  app.renderRunElsewhereBanner({
-    db_is_production: false, db_path: 'C:/d/01_shadow_x.db',
-    shadow_runs: [{ run_id: 'shadow-01-queue-clear-5m',
-                    db_path: 'C:/d/02_shadow_y.db', running: true,
-                    is_active_db: false, tournament: { arm: 'queue-clear-5m' } }],
-    services: {},
-  });
-  const rehearsalElsewhere = read();
-  app.renderRunElsewhereBanner({
-    db_is_production: false, db_path: 'C:/d/01_shadow_x.db',
-    shadow_runs: [],
-    services: { filter: { running: true }, query: { running: true },
-                decide: { running: true } },
-  });
-  const liveElsewhere = read();
-  app.renderRunElsewhereBanner({
-    db_is_production: true, db_path: 'C:/d/orders.db',
-    shadow_runs: [], services: {},
-  });
-  const cleared = read();
-  return { idle, rehearsalElsewhere, liveElsewhere, cleared };
-}
-
 /* Drive renderRunSwitcher end-to-end with shadow runs present. CodeRabbit on
  * #904: the shadow-row callback read a `activeRunId` that the live-stack
  * rewrite had deleted, so opening the DB badge threw ReferenceError and the
@@ -1141,7 +1107,6 @@ async function runSwitcherLazyVerdicts() {
 let out;
 if (script === 'dbmode') out = dbModeVerdicts();
 else if (script === 'profile') out = profileVerdicts();else if (script === 'profilepicker') out = profilePickerVerdicts();
-else if (script === 'runelsewhere') out = runElsewhereVerdicts();
 else if (script === 'stagedtitle') out = stagedTitleVerdicts();
 else if (script === 'runswitcher') out = runSwitcherVerdicts();
 else if (script === 'runswitcherrender') out = 'PENDING_ASYNC';

@@ -1210,27 +1210,6 @@ td { font-size: 13px; }
 .backend-stale-banner.show { display: flex; }
 .backend-stale-banner .stale-age { margin-left: auto; color: var(--text-secondary); font-size: 11px; }
 
-/* ── Background-run notice ──
- * A run is writing a store this page is not reading: browsing stays free, but
- * the numbers on screen are not that run's. Blue, not amber -- a run elsewhere
- * is information, not a fault. Same box as the stale banner so the two stack. */
-.run-elsewhere-banner {
-  display: none;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-  padding: 10px 14px;
-  border: 1px solid rgba(56, 189, 248, 0.35);
-  background: rgba(8, 47, 73, 0.75);
-  border-radius: 8px;
-  color: #7dd3fc;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-variant-numeric: tabular-nums;
-  font-size: 12px;
-  font-weight: 600;
-}
-.run-elsewhere-banner.show { display: flex; }
-
 /* Two buttons in the picker's action column (View + Start). */
 .db-run-actions { display: flex; gap: 4px; justify-content: flex-end; }
 

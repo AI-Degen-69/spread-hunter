@@ -2868,40 +2868,6 @@ function dbModeVerdict(status) {
 
 let lastStatusForRuns = null;
 
-/* A run is going somewhere this page is not looking: say so, in the chrome,
- * on every poll. Browsing other stores is allowed and stays allowed -- the
- * banner is what keeps "these numbers are not that run's" from being a guess. */
-function renderRunElsewhereBanner(status) {
-  const el = document.getElementById('run-elsewhere-banner');
-  if (!el) return;
-  const text = el.querySelector('.run-elsewhere-text');
-  if (!text) return;
-  const here = String(status?.db_path || '').split(/[\\/]/).pop();
-  const bits = [];
-  for (const r of (status?.shadow_runs || [])) {
-    if (!r || r.running !== true || r.is_active_db === true) continue;
-    const file = String(r.db_path || '').split(/[\\/]/).pop() || 'a store';
-    const arm = r.tournament && r.tournament.arm ? ` (arm ${r.tournament.arm})` : '';
-    bits.push(`${r.run_id || file}${arm} → ${file}`);
-  }
-  // The live stack only ever writes the production registry, so seeing its
-  // three services alive while this page reads anything else means exactly
-  // the case the banner exists for.
-  const svcs = status?.services || {};
-  if (status?.db_is_production !== true
-      && svcs.filter?.running && svcs.query?.running && svcs.decide?.running) {
-    bits.push('the live stack → data/orders.db');
-  }
-  if (!bits.length) {
-    el.classList.remove('show');
-    return;
-  }
-  el.classList.add('show');
-  text.textContent = `RUNNING IN BACKGROUND — ${bits.join('; ')}. This page is `
-    + `reading ${here || 'another store'}, so its numbers are not that run's. `
-    + 'Click the DB badge to switch and watch it.';
-}
-
 let _runSwitcherSeq = 0;  // stale-response guard for lazy KPI loads (#933)
 
 function closeRunSwitcher() {
@@ -3829,7 +3795,6 @@ function renderDbMode(status) {
   renderCodeVersion(status);
   renderProfileBadge(status);
   lastStatusForRuns = status;
-  renderRunElsewhereBanner(status);
   const el = document.getElementById('db-mode-badge');
   if (!el) return;
 
@@ -13153,7 +13118,6 @@ if (typeof module !== 'undefined' && module.exports) {
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState, resolveHeldRead,
     engineReasonText, engineProvenanceText, renderScanStatePill,
     renderMarketScanPill, renderPillHtml, renderDbMode, renderProfileBadge, profileOptionsHtml, startButtonTitle, renderServiceHeader,
-    renderRunElsewhereBanner,
     getMasterToggleClasses,
     aggregateServiceState,
     placePanel, closeServicesDropdown, closeRunSwitcher, bindServicesDropdown, repositionHeaderPanels,
