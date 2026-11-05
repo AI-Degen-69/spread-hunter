@@ -151,6 +151,11 @@ DECISION_GATE_ARM_MAP = {
         "baseline_arm_names": ["loose-baseline"],    # Shipped baseline + 6c deadband
         "balanced_only_arm_names": ["balanced-mid"], # Balanced preset + 6c deadband
     },
+    "940": {
+        "volume_arm_pattern": "queue-clear-5m",       # Tightened 3m->2m gate; may choke fills
+        "baseline_arm_names": ["loose-baseline"],    # Shipped baseline + 4c deadband
+        "balanced_only_arm_names": ["balanced-mid"], # Balanced preset + 5c ceiling + 6c deadband
+    },
 }
 
 

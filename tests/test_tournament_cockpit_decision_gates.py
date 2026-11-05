@@ -316,7 +316,7 @@ def test_rejected_arm_does_not_sink_others():
 
 
 def test_gate_map_names_volume_roles_not_a_test_arm():
-    for key in ("843", "799", "905"):
+    for key in ("843", "799", "905", "940"):
         arm_map = cockpit.DECISION_GATE_ARM_MAP[key]
         assert "test_arm_pattern" not in arm_map
         assert "volume_arm_pattern" in arm_map

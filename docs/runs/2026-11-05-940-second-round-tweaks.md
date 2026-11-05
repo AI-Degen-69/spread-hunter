@@ -36,8 +36,11 @@ magnitude than the #938 worst on a comparable sample (≥30 closes).
 | patient-stop-9c | 6c stop factory, exits 75.0% (36/48) | `BOT_RISK_STOP_ADVERSE_DROP_USD=0.070` |
 | queue-clear-5m | tails reach -$4.70, exits 48.9% (22/45) | `BOT_ORDER_QUEUE_MAX_CLEAR_MIN=2` |
 
-Launch (operator, only after #938 finishes — same arm ports 8801–8810):
-menu tournament reconcile with `-Tourney 940`, or
+Launch (operator, only after #938 finishes — one tournament owns the stack at a time):
 `python -m scripts.shadow_tournament --issue 940 --arms-file configs/tournaments/i940-second-round-tweaks_arms.json --minutes 1440`.
+That direct command is the zero-trade path: it builds a fresh plan with empty stores.
+The menu tournament reconcile with `-Tourney 940` creates a plan only when no
+discoverable #940 plan exists; otherwise it resumes the latest plan and reuses
+its stores, so use it only to resume, never for a zero-trade launch.
 Cockpit page: `http://127.0.0.1:8799/cockpit/940` (dashboard restart required
 to pick up the new page registration).
