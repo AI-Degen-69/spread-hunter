@@ -140,6 +140,41 @@ not full), the sample floor, the cap at no-leverage, and the rule that Kelly
 rides
 *inside* the existing caps and taper — never past them.
 
+## The video's framework applied to this bot (2026-11-05)
+
+*The Synthetic Mind, "The Math Behind Optimal Bet Sizing | Kelly Criterion"
+(uploaded 2026-08-05, 8:23, auto-captioned) — added after the operator linked
+it for this issue.*
+
+The video (a) derives the formula as edge/odds, (b) shows the growth curve
+peaks at f* and goes negative past 2f* ("double the Kelly bet ⇒ growth ≈ 0;
++50% bet ⇒ −3.4% per flip" — the hot-estimate cliff), (c) notes even full
+Kelly gives a 50% chance of losing half your stack at some point, (d) gives
+the "half of a guess" rationale for shading down, and (e) sets three
+conditions for when Kelly deserves trust at all — an honest number on the
+edge; the bet repeats under the same rules; winnings stay in the game to
+compound.
+
+Applied to the spread hunter:
+
+1. **Repeats under the same rules** — yes in the broad sense (repeated
+   binary pair-assembly rounds), but "same rules" is softer than roulette:
+   each market has its own book, pair-cost drift and selection effects. Not a
+   free pass.
+2. **Honest number on the edge** — on paper, yes (~476 merges, +$1,172, avg
+   pair cost 0.960); on live money, no — a handful of live closes amid 72
+   `venue_sync` rows. The weakest of the three conditions, and the one the
+   video's "hot estimate ⇒ over-Kelly cliff" warning targets.
+3. **Compounds in the game** — yes: merges return USDC to the same bankroll.
+
+Verdict: the video endorses shading down for estimation error exactly as the
+other sources do; it does not license half Kelly for this bot today. It
+confirms the direction (quarter Kelly) and the discipline (earn the increase
+on measured live closes). Its "when to reach for Kelly" checklist also
+suggests the day-of-use gate: if no side of this market shows a measurable
+edge (f* ≤ 0), the formula has nothing to size — which is the no-edge ⇒ 0
+rule already wired.
+
 ## Sizing decision — 2026-11-05 (operator call: quarter Kelly)
 
 The operator's position: *"since we don't know the edge and never will know
@@ -220,6 +255,11 @@ safe side."* The 2026-11-05 follow-up research supports it for this bot.
 - Poluri, N. (2026-10-01), *How Many Trades Before You Trust Kelly? Fractional
   Kelly Sizing Under Parameter Uncertainty*, SSRN abstract_id=7549165 (optimal
   fraction ≈ S/(S+1), S = N·k²).
+- The Synthetic Mind (2026-08-05), *The Math Behind Optimal Bet Sizing | Kelly
+  Criterion* (8:23), youtube.com/watch?v=u0E92XePpps — edge/odds derivation,
+  over-bet cliff (growth ≈ 0 at 2f*), full-Kelly 50% drawdown odds, and the
+  three trust conditions (honest edge number; repeated same-rules bets;
+  winnings compound in-game).
 - Codebase evidence: `core_brain/kpi.py` (`compute_trade_analytics`,
   `kelly_fraction` / `half_kelly`, VENUE_SYNC_RUN_ID slice), `core_brain/risk.py`
   (`size_for` ladder), `core_brain/trader_loop.py` (`_fleet_state` dynamic-caps
