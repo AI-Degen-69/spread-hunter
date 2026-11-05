@@ -175,9 +175,11 @@ class MakerConfig:
     bot_quote_size_max_shares: float | None = None
     bot_quote_alloc_couple_pct: float = 0.01
     bot_quote_alloc_couple_min_usd: float = 10.0
-    # #942: Kelly sizing (opt-in via bot_quote_size_mode="kelly"). The last two
-    # are merge-only, written by the fleet state each cycle; never from env.
-    bot_quote_kelly_pct: float = 0.5
+    # #942: Kelly sizing (opt-in via bot_quote_size_mode="kelly"). Quarter
+    # Kelly is the shipped default (operator decision 2026-11-05, see
+    # docs/backlog/i942-kelly-criterion.md). The last two are merge-only,
+    # written by the fleet state each cycle; never from env.
+    bot_quote_kelly_pct: float = 0.25
     bot_quote_kelly_min_closes: int = 30
     bot_kelly_n_closes: int = 0
     bot_kelly_pct: float | None = None

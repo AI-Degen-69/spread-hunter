@@ -422,7 +422,7 @@ EXECUTION_CANONICAL_ENV = [
     ("BOT_LATENCY_POST_VENUE_ACCEPT_MS", ("HUNTER_POST_VENUE_ACCEPT_MS",), "bot_latency_post_venue_accept_ms", "95.0", 95.0, "85.0", 85.0, 81.0, False, False),
     ("BOT_QUOTE_BANK_BASELINE_USD", ("SPREAD_HUNTER_BANKROLL", "HUNTER_BANKROLL"), "bot_quote_bank_baseline_usd", "2500.0", 2500.0, "1500.0", 1500.0, 1000.0, False, False),
     ("BOT_QUOTE_SIZE_MODE", (), "bot_quote_size_mode", "kelly", "kelly", None, None, "dollars", False, False),
-    ("BOT_QUOTE_KELLY_PCT", (), "bot_quote_kelly_pct", "0.25", 0.25, None, None, 0.5, False, False),
+    ("BOT_QUOTE_KELLY_PCT", (), "bot_quote_kelly_pct", "0.25", 0.25, None, None, 0.25, False, False),
     ("BOT_QUOTE_KELLY_MIN_CLOSES", (), "bot_quote_kelly_min_closes", "50", 50, None, None, 30, False, False),
 ]
 
@@ -1029,7 +1029,7 @@ def test_942_kelly_defaults_pinned_on_both_classes():
     """The Kelly surface ships identical on core and scoring, before any override."""
     for cfg in (CoreMakerConfig(), ScoringMakerConfig()):
         assert cfg.bot_quote_size_mode == "dollars"
-        assert cfg.bot_quote_kelly_pct == 0.5
+        assert cfg.bot_quote_kelly_pct == 0.25
         assert cfg.bot_quote_kelly_min_closes == 30
         # Merge-only fields: default to "no stats measured", never to a number.
         assert cfg.bot_kelly_n_closes == 0
