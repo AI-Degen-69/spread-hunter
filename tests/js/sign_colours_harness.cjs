@@ -104,7 +104,7 @@ if ('payload_version' in input) {
 console.warn = realWarn;
 
 const pill = element('broker-hero-pnl');
-const spread = element('broker-kpi-spread');
+// #934 retired the Realized Spread tile with the telemetry card.
 const quant = element('quant-grid').innerHTML;
 const mcSvg = element('monte-carlo-svg-container').innerHTML;
 
@@ -138,8 +138,6 @@ process.stdout.write(JSON.stringify({
   pnl_pct: element('broker-pnl-pct').textContent,
   pnl_pill_class: pill.className,
   pnl_arrow: pill.polyline ? pill.polyline.getAttribute('points') : null,
-  spread_text: spread.textContent,
-  spread_class: spread.className,
   quant_expectancy: quantClass('Mathematical Expectancy'),
   quant_sharpe: quantClass('Sharpe &amp; Sortino Ratio'),
   quant_profit_factor: quantClass('Profit Factor &amp; Payoff'),

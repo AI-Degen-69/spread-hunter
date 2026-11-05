@@ -109,9 +109,8 @@ process.stdout.write(JSON.stringify({
   wallet: element('broker-venue-wallet').textContent,
   wallet_note: element('broker-venue-wallet-note').textContent,
   // The KPI strip's dynamic tiles, so the focused test can assert the words
-  // each tile prints beside its number.
-  pairs: element('broker-kpi-pairs').textContent,
-  wins: element('broker-kpi-wins').textContent,
+  // each tile prints beside its number. #934 retired the Markets Quoted and
+  // Wins/Losses tiles with the telemetry card.
   committed: element('broker-kpi-committed').textContent,
   committed_pct: element('broker-kpi-committed-pct').textContent,
   committed_bar_width: element('bento-committed-bar').style.width,

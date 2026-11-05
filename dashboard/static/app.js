@@ -5582,11 +5582,9 @@ let runningArmCache = new Map(); // arm name -> successful arm-detail payload
 let runningArmRequested = '';    // arm name of the last fetch attempt
 let runningArmSeq = 0;           // stale-response guard, card-only
 let runningArmShown = null;      // last painted payload (label/profile/env)
-let runningArmNote = '';         // note text the card last showed
 let runningArmAction = '';       // arm name the card actions read
 
 function setRunningArmNote(text) {
-  runningArmNote = text;
   const el = document.getElementById('running-arm-note');
   if (el) el.textContent = text;
 }
