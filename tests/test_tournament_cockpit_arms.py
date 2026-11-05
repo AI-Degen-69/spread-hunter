@@ -78,6 +78,36 @@ def test_i799_each_arm_prose_matches_the_spec_file():
             assert arms[name][field] == entry.get(field, ""), (name, field)
 
 
+def test_i799_spec_file_has_no_duplicate_object_keys():
+    """JSON silently keeps the last duplicate key, so the cockpit would read
+    one value while an editor changed another. The pre-env catalyst copies
+    were that trap: `json.loads` (and the cockpit loader) only sees the
+    post-env copy."""
+    pairs = json.JSONDecoder(object_pairs_hook=lambda pairs: pairs).decode(
+        I799_ARMS_SPEC.read_text(encoding="utf-8")
+    )
+    duplicates: list[str] = []
+
+    def walk(node, path: str) -> None:
+        if isinstance(node, list) and node and all(
+            isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
+            for item in node
+        ):
+            seen: set[str] = set()
+            for key, value in node:
+                if key in seen:
+                    duplicates.append(f"{path}.{key}")
+                else:
+                    seen.add(key)
+                walk(value, f"{path}.{key}" if path != "$" else f"$.{key}")
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                walk(value, f"{path}[{index}]")
+
+    walk(pairs, "$")
+    assert not duplicates, f"duplicate keys in {I799_ARMS_SPEC.name}: {duplicates}"
+
+
 def test_i799_resolves_the_named_plan_record(tmp_path, monkeypatch):
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     _record(tmp_path, "i799-tournament-test_2026-10-17T18-48", [
@@ -435,30 +465,33 @@ def test_nav_switcher_offers_799_and_843_with_the_active_pill() -> None:
         import re as _re
         nav = _re.search(r'<div class="tourney-nav">.*?</div>', html, _re.S).group(0)
         out = {}
-        for key in ("799", "843", "905", "917", "923", "929"):
+        for key in ("799", "843", "905", "917", "923", "929", "938"):
             m = _re.search(r'<a href="/' + key + r'" class="([^"]*)"', nav)
             out[key] = bool(m and "active" in m.group(1))
         return out
 
     html_799 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "799"})
     assert html_799.count("CURRENT SETUP</span>") == 1
-    assert html_799.count('class="tourney-pill') == 6
-    assert _active(html_799) == {"799": True, "843": False, "905": False, "917": False, "923": False, "929": False}
+    assert html_799.count('class="tourney-pill') == 7
+    assert _active(html_799) == {"799": True, "843": False, "905": False, "917": False, "923": False, "929": False, "938": False}
 
     html_843 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "843"})
-    assert _active(html_843) == {"799": False, "843": True, "905": False, "917": False, "923": False, "929": False}
+    assert _active(html_843) == {"799": False, "843": True, "905": False, "917": False, "923": False, "929": False, "938": False}
 
     html_905 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "905"})
-    assert _active(html_905) == {"799": False, "843": False, "905": True, "917": False, "923": False, "929": False}
+    assert _active(html_905) == {"799": False, "843": False, "905": True, "917": False, "923": False, "929": False, "938": False}
 
     html_917 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "917"})
-    assert _active(html_917) == {"799": False, "843": False, "905": False, "917": True, "923": False, "929": False}
+    assert _active(html_917) == {"799": False, "843": False, "905": False, "917": True, "923": False, "929": False, "938": False}
 
     html_923 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "923"})
-    assert _active(html_923) == {"799": False, "843": False, "905": False, "917": False, "923": True, "929": False}
+    assert _active(html_923) == {"799": False, "843": False, "905": False, "917": False, "923": True, "929": False, "938": False}
 
     html_929 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "929"})
-    assert _active(html_929) == {"799": False, "843": False, "905": False, "917": False, "923": False, "929": True}
+    assert _active(html_929) == {"799": False, "843": False, "905": False, "917": False, "923": False, "929": True, "938": False}
+
+    html_938 = cockpit.generate_cockpit_html({"arms": [], "tourney_key": "938"})
+    assert _active(html_938) == {"799": False, "843": False, "905": False, "917": False, "923": False, "929": False, "938": True}
 
 
 # --- Each page reads its own issue's run ------------------------------------

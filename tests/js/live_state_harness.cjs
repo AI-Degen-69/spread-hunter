@@ -312,8 +312,8 @@ function enginePillVerdicts() {
   elements.set('scan-engine-state', stateEl);
   elements.set('scan-engine-elsewhere', elsewhereEl);
 
-  const render = (scanState) => {
-    app.renderScanStatePill(scanState);
+  const render = (scanState, opts) => {
+    app.renderScanStatePill(scanState, opts);
     return {
       pillClass: pillEl.className,
       pillTitle: pillEl.title,
@@ -372,6 +372,40 @@ function enginePillVerdicts() {
     ],
   };
 
+  const shadowRunningLiveElsewhereState = {
+    scan_state: 'SCANNING',
+    seconds_since_heartbeat: 2.5,
+    heartbeat_source: {
+      kind: 'shadow',
+      run_id: 'trial-01',
+      db_path: 'data/trial_01.db',
+      file: 'runtime/shadow_run_trial-01.json',
+      pid: 1234,
+    },
+    stall_reason: null,
+    other_live_runs: [],
+  };
+
+  const shadowRunningShadowElsewhere = {
+    scan_state: 'SCANNING',
+    seconds_since_heartbeat: 2.5,
+    heartbeat_source: {
+      kind: 'shadow',
+      run_id: 'trial-01',
+      db_path: 'data/trial_01.db',
+      file: 'runtime/shadow_run_trial-01.json',
+      pid: 1234,
+    },
+    stall_reason: null,
+    other_live_runs: [
+      {
+        run_id: 'other-live',
+        db_path: 'data/NN_shadow.db',
+        heartbeat_file: 'runtime/shadow_run_other-live.json',
+      },
+    ],
+  };
+
   return {
     reasons: {
       finished: app.engineReasonText('finished'),
@@ -395,6 +429,15 @@ function enginePillVerdicts() {
       shadowFresh: render(shadowFresh),
       shadowFinished: render(shadowFinished),
       shadowDeadOtherLive: render(shadowDeadOtherLive),
+      shadowRunningLiveElsewhere: render(shadowRunningLiveElsewhereState, {
+        liveElsewhere: [{
+          runId: 'live-stack',
+          dbPath: 'data/orders.db',
+          isLiveStack: true,
+          complete: true,
+        }],
+      }),
+      shadowRunningShadowElsewhere: render(shadowRunningShadowElsewhere),
     },
   };
 }
@@ -925,40 +968,6 @@ function profilePickerVerdicts() {
   return { html, htmlPresetActive, empty };
 }
 
-function runElsewhereVerdicts() {
-  const el = global.document.getElementById('run-elsewhere-banner');
-  const read = () => ({
-    shown: el.classList.contains('show'),
-    text: el.querySelector('.run-elsewhere-text').textContent,
-  });
-  app.renderRunElsewhereBanner({
-    db_is_production: true, db_path: 'C:/d/orders.db',
-    shadow_runs: [], services: {},
-  });
-  const idle = read();
-  app.renderRunElsewhereBanner({
-    db_is_production: false, db_path: 'C:/d/01_shadow_x.db',
-    shadow_runs: [{ run_id: 'shadow-01-queue-clear-5m',
-                    db_path: 'C:/d/02_shadow_y.db', running: true,
-                    is_active_db: false, tournament: { arm: 'queue-clear-5m' } }],
-    services: {},
-  });
-  const rehearsalElsewhere = read();
-  app.renderRunElsewhereBanner({
-    db_is_production: false, db_path: 'C:/d/01_shadow_x.db',
-    shadow_runs: [],
-    services: { filter: { running: true }, query: { running: true },
-                decide: { running: true } },
-  });
-  const liveElsewhere = read();
-  app.renderRunElsewhereBanner({
-    db_is_production: true, db_path: 'C:/d/orders.db',
-    shadow_runs: [], services: {},
-  });
-  const cleared = read();
-  return { idle, rehearsalElsewhere, liveElsewhere, cleared };
-}
-
 /* Drive renderRunSwitcher end-to-end with shadow runs present. CodeRabbit on
  * #904: the shadow-row callback read a `activeRunId` that the live-stack
  * rewrite had deleted, so opening the DB badge threw ReferenceError and the
@@ -1141,7 +1150,6 @@ async function runSwitcherLazyVerdicts() {
 let out;
 if (script === 'dbmode') out = dbModeVerdicts();
 else if (script === 'profile') out = profileVerdicts();else if (script === 'profilepicker') out = profilePickerVerdicts();
-else if (script === 'runelsewhere') out = runElsewhereVerdicts();
 else if (script === 'stagedtitle') out = stagedTitleVerdicts();
 else if (script === 'runswitcher') out = runSwitcherVerdicts();
 else if (script === 'runswitcherrender') out = 'PENDING_ASYNC';

@@ -63,6 +63,7 @@ I905_ARMS_FILE = ROOT / "configs" / "tournaments" / "i905-top5-rematch_arms.json
 I917_ARMS_FILE = ROOT / "configs" / "tournaments" / "i917-multistrat-defense_arms.json"
 I923_ARMS_FILE = ROOT / "configs" / "tournaments" / "i923-live-sports-duel_arms.json"
 I929_ARMS_FILE = ROOT / "configs" / "tournaments" / "i929-momentum-reversion_arms.json"
+I938_ARMS_FILE = ROOT / "configs" / "tournaments" / "i938-tweak-rematch_arms.json"
 
 
 def _load_arms_from_file(file_path: Path, issue_num: int, start_port: int = 8801) -> list[dict[str, Any]]:
@@ -101,6 +102,7 @@ ARMS_CONFIG_905 = _load_arms_from_file(I905_ARMS_FILE, 905, 8801)
 ARMS_CONFIG_917 = _load_arms_from_file(I917_ARMS_FILE, 917, 8801)
 ARMS_CONFIG_923 = _load_arms_from_file(I923_ARMS_FILE, 923, 8801)
 ARMS_CONFIG_929 = _load_arms_from_file(I929_ARMS_FILE, 929, 8801)
+ARMS_CONFIG_938 = _load_arms_from_file(I938_ARMS_FILE, 938, 8801)
 
 # Legacy alias kept for older imports. The cockpit now serves #799 by
 # default; this constant no longer selects a page.
@@ -141,6 +143,11 @@ DECISION_GATE_ARM_MAP = {
         "volume_arm_pattern": "live-rider-5c-stop20pct",
         "baseline_arm_names": ["live-rider-2c-stop30pct"],
         "balanced_only_arm_names": [],
+    },
+    "938": {
+        "volume_arm_pattern": "queue-clear-5m",       # Tightened 5m->3m gate; may choke fills
+        "baseline_arm_names": ["loose-baseline"],    # Shipped baseline + 6c deadband
+        "balanced_only_arm_names": ["balanced-mid"], # Balanced preset + 6c deadband
     },
 }
 
@@ -206,6 +213,16 @@ TOURNAMENTS = {
         "issue_secondary": 929,
         "nav_label": "#929 Momentum Reversion (6 Arms)",
     },
+    "938": {
+        "id": "938",
+        "title": "Issue #938 Tweak Rematch Tournament",
+        "subtitle": "10-Arm Shadow Tournament | All Ten #799 Arms With Concluded Tweaks Applied",
+        "description": "Pre-registered 10-arm shadow rematch: every #799 arm rerun with its concluded worst-catalyst tweak applied, testing whether the tweaks fix the orphan-exit bleed of the 2026-11-05 live run.",
+        "arms": ARMS_CONFIG_938,
+        "issue_primary": 938,
+        "issue_secondary": 938,
+        "nav_label": "#938 Tweak Rematch (10 Arms)",
+    },
 }
 
 
@@ -234,6 +251,9 @@ PAGE_PATHS: dict[str, str] = {
     "/929": "929",
     "/929.html": "929",
     "/cockpit_929": "929",
+    "/938": "938",
+    "/938.html": "938",
+    "/cockpit_938": "938",
 }
 
 TOURNAMENT_ICONS: dict[str, str] = {
@@ -243,8 +263,9 @@ TOURNAMENT_ICONS: dict[str, str] = {
     "917": "🛡️",
     "923": "⚡",
     "929": "🏹",
+    "938": "🔬",
 }
-TOURNAMENT_PILL_KEYS: tuple[str, ...] = ("799", "843", "905", "917", "923", "929")
+TOURNAMENT_PILL_KEYS: tuple[str, ...] = ("799", "843", "905", "917", "923", "929", "938")
 # The keys the JSON API may serve: the served pages' own tournaments, derived so
 # a new page cannot forget to widen this.
 SERVED_TOURNAMENT_KEYS = frozenset(PAGE_PATHS.values())
@@ -649,7 +670,7 @@ def _resolve_plan_for_tourney_key(
     otherwise merge last week's r1 db/port into today's rows.
     """
     latest_plan = latest_tournament_record(tourney_key, ROOT / "data" / "tournaments")
-    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905", "917", "923", "929"):
+    if tourney_key in (CURRENT_SETUP_KEY, "843", "799", "905", "917", "923", "929", "938"):
         newest = _newest_plan_record()
         newest_issue = _plan_identity(newest)[0] if newest is not None else None
         if newest is not None and newest_issue == int(meta.get("issue_primary") or 0):
@@ -714,7 +735,7 @@ def resolve_tournament_arms_with_status(
     meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS[CURRENT_SETUP_KEY])
     default_arms = meta["arms"]
     # Unknown keys fall back to the static table; live keys resolve their plan file.
-    if tourney_key not in ("843", "799", "905", "917", "923", "929"):
+    if tourney_key not in ("843", "799", "905", "917", "923", "929", "938"):
         return default_arms, None
 
     # Each page reads its own issue's record: the key in the URL is a page, and
@@ -2448,7 +2469,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('overview', this)">🏆 Leaderboard &amp; Overview</button>
   <button class="tab-btn" onclick="switchTab('decision-gates', this)">🚦 Decision Gates &amp; Rehearsal Status</button>
-  {'<button class="tab-btn" onclick="switchTab(\'hybrid-config\', this)">⚙️ HYBRID Configuration Blueprint</button>' if tourney_key not in ("905", "917", "923", "929") else ''}
+  {'<button class="tab-btn" onclick="switchTab(\'hybrid-config\', this)">⚙️ HYBRID Configuration Blueprint</button>' if tourney_key not in ("905", "917", "923", "929", "938") else ''}
   <button class="tab-btn" onclick="switchTab('pnl-chart', this)">📈 Cumulative PnL Curves</button>
   <button class="tab-btn" onclick="switchTab('risk-stats', this)">⚖️ Risk &amp; Volatility (EV, &sigma;, MDD)</button>
   <button class="tab-btn" onclick="switchTab('execution', this)">🎯 Merge vs Fallout Quality</button>
@@ -2565,7 +2586,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 </div>
 
 <!-- TAB: HYBRID CONFIGURATION BLUEPRINT -->
-<div id="tab-hybrid-config" class="tab-pane" style="{'display: none !important;' if tourney_key in ('905', '917', '923', '929') else ''}">
+<div id="tab-hybrid-config" class="tab-pane" style="{'display: none !important;' if tourney_key in ('905', '917', '923', '929', '938') else ''}">
   <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.12), rgba(0, 176, 255, 0.12)); border: 1px solid rgba(0, 230, 118, 0.4); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
       <div>
