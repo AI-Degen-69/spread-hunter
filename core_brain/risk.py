@@ -214,7 +214,15 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
         # the venue floor buys nothing, it is not propped up.
         base = _kelly_base(cfg, inv, side, price, pair_price)
         if base is None:
-            return 0
+            # No edge stops NEW exposure. The buy that flattens an unmatched
+            # leg is not exposure, it is the repair: it sizes by the dollars
+            # rule and is capped at the deficit below (strict pairs).
+            naked = naked_side(inv)
+            if naked is None or naked == side:
+                return 0
+            base = _dollars_base(cfg, inv, side, price, pair_price)
+            if base is None:
+                return 0
     else:
         base = max(cfg.bot_quote_size_shares, cfg.bot_quote_size_min_shares)
 

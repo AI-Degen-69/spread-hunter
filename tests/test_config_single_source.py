@@ -1041,17 +1041,22 @@ def test_942_kelly_env_rejects_bad_values(monkeypatch):
     _clear_execution_env(monkeypatch)
     for bad in ("-0.1", "0", "1.01", "nan", "inf", "abc"):
         monkeypatch.setenv("BOT_QUOTE_KELLY_PCT", bad)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="BOT_QUOTE_KELLY_PCT"):
             core_config.load()
+    # The pct loop leaves a bad value behind; without this the min-closes loop
+    # below would pass on that same rejection and prove nothing.
+    monkeypatch.delenv("BOT_QUOTE_KELLY_PCT", raising=False)
     for bad in ("0", "-3", "2.5", "nan", "inf", "-inf", "1e400", "abc"):
         monkeypatch.setenv("BOT_QUOTE_KELLY_MIN_CLOSES", bad)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="BOT_QUOTE_KELLY_MIN_CLOSES"):
             core_config.load()
-    for bad in ("KELLY", "full", "1", ""):
+    monkeypatch.delenv("BOT_QUOTE_KELLY_MIN_CLOSES", raising=False)
+    # "KELLY" is not here: the loader strips and lowercases, so it is valid.
+    for bad in ("full", "1", ""):
         if bad == "":
             continue  # blank keeps the shipped default, not an error
         monkeypatch.setenv("BOT_QUOTE_SIZE_MODE", bad)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="BOT_QUOTE_SIZE_MODE"):
             core_config.load()
 
 

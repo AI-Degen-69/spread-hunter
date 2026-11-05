@@ -90,6 +90,19 @@ def test_kelly_below_min_closes_falls_back_to_dollars_byte_for_byte():
             size_for(dollars, _FLAT, "UP", price, pair_price=0.92)
 
 
+def test_kelly_no_edge_still_sizes_the_balancing_buy():
+    # No edge stops new exposure; leaving the light side of an unmatched leg
+    # at zero would strand a single filled buy -- the failure the pair rule
+    # exists to prevent. The repair sizes by the dollars rule, capped at the
+    # deficit.
+    inv = Inventory(up_shares=100, down_shares=0, up_cost=46.0, down_cost=0.0)
+    cfg = _kelly_cfg(bot_kelly_pct=0.0, bot_pos_gate_strict_pairs_on=True)
+    dollars = MakerConfig(bot_quote_size_mode="dollars", bot_quote_bank_baseline_usd=1000.0)
+    light = size_for(cfg, inv, "DOWN", 0.46, pair_price=0.92)
+    assert light == size_for(dollars, inv, "DOWN", 0.46, pair_price=0.92) > 0
+    assert size_for(cfg, inv, "UP", 0.46, pair_price=0.92) == 0
+
+
 def test_kelly_non_finite_falls_back_to_dollars_instead_of_raising():
     # A NaN f* passes "f_star <= 0.0" and "min(f_star, 1.0)", then int(nan)
     # raises. Unusable input must degrade to dollars, never crash a rotation.

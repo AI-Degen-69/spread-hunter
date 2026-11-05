@@ -3121,9 +3121,13 @@ def _fleet_state(registry, cfg, baseline_includes_realized: bool = False) -> dic
             from core_brain.order_registry import VENUE_SYNC_RUN_ID
             from core_brain.kpi import compute_trade_analytics
             closes = registry.get_all_closes() if registry is not None else []
+            # Unmeasured closes are neither wins nor losses, but `n_closes`
+            # counts every row: 28 of them would dilute win_rate to a quarter
+            # of its real value and pass a 30-close gate on two outcomes.
             bot_closes = [
                 c for c in (closes or [])
                 if c.get("run_id") != VENUE_SYNC_RUN_ID
+                and c.get("realized_pnl") is not None
             ]
             ta = compute_trade_analytics(
                 closes=bot_closes,

@@ -338,6 +338,9 @@ def test_fleet_state_merges_kelly_stats_in_kelly_mode():
         {"run_id": "run-1", "realized_pnl": -1.0, "cost_basis": 10.0, "ts": 2.0},
         # Wallet-sync history is not the bot's record; excluded like the KPI slice.
         {"run_id": "venue_sync", "realized_pnl": 999.0, "cost_basis": 10.0, "ts": 3.0},
+        # Unmeasured: neither a win nor a loss, and must not count toward the
+        # sample -- it would dilute win_rate and pass the gate on fewer outcomes.
+        {"run_id": "run-1", "realized_pnl": None, "cost_basis": 10.0, "ts": 4.0},
     ]
     state = _fleet_state(mock_reg, cfg)
     assert state["bot_kelly_n_closes"] == 2
