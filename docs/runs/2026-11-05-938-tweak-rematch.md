@@ -16,7 +16,10 @@ magnitude than the #799 worst on a comparable sample (≥30 closes). The tweak
 keys are unchanged from the #799 conclusions; only the values move.
 
 Whole config comes from `configs/tournaments/i938-tweak-rematch_arms.json`,
-envs applied:
+envs applied. Universe note (operator request 2026-11-05): every arm also
+carries `BOT_MARKET_LIVE_SPORTS_ONLY_ON=1`, so all ten quote only
+venue-declared in-play sports/esports. The #799 comparison is tweak +
+restricted universe, not tweak alone — #799 quoted the mixed funnel.
 
 | Arm | #799 catalyst (live run 2026-11-05) | Applied tweak for #938 |
 |---|---|---|

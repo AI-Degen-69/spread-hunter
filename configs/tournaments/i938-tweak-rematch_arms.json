@@ -7,7 +7,8 @@
     "desc": "Control. The shipped loose baseline with nothing changed; every other arm is read against it.",
     "thesis": "The shipped defaults are the reference: any arm must beat this to earn a change.",
     "env": {
-      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06"
+      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06",
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1"
     },
     "worst_catalyst": "Shipped 3c default, no env knob: orphan exits 64.9% (24/37)",
     "worst_catalyst_desc": "From #799 live run 2026-11-05: 24 exits on 37 closes (-$6.86), worst -$1.12 min 4.3 atp-heide-prado. Applied BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06 for #938.",
@@ -24,7 +25,8 @@
     "worst_catalyst": "BOT_QUOTE_TOURNAMENT_PRESET=aggressive: orphan exits 61.9% (26/42)",
     "worst_catalyst_desc": "From #799 live run 2026-11-05: 26 exits on 42 closes (-$7.00), worst -$1.62 min 69.1 nba-phi-det. Applied BOT_QUOTE_TOURNAMENT_PRESET=balanced for #938.",
     "env": {
-      "BOT_QUOTE_TOURNAMENT_PRESET": "balanced"
+      "BOT_QUOTE_TOURNAMENT_PRESET": "balanced",
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1"
     },
     "hypothesized_tweak": "BOT_QUOTE_TOURNAMENT_PRESET=balanced",
     "tweak_rationale": "Hypothesis: the 0.50x 2-4c band reaches leg two where 0.25x starved it; if orphans persist, width is not the mechanism."
@@ -40,7 +42,8 @@
     "worst_catalyst_desc": "From #799 live run 2026-11-05: 21 exits on 36 closes (-$3.92, best total), worst -$1.62 min 69.0 nba-phi-det. Applied BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06 for #938.",
     "env": {
       "BOT_QUOTE_TOURNAMENT_PRESET": "balanced",
-      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06"
+      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06",
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1"
     },
     "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06",
     "tweak_rationale": "Hypothesis: holding the resting quote through the run turns the minute-69 exit into a merge."
@@ -57,7 +60,8 @@
     "env": {
       "BOT_QUOTE_TOURNAMENT_PRESET": "conservative",
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.050"
+      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.050",
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1"
     },
     "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.050",
     "tweak_rationale": "Hypothesis: a 5c stop cuts the tail the 8c leash sized up."
@@ -74,7 +78,8 @@
     "env": {
       "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
       "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "6",
-      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06"
+      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06",
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1"
     },
     "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06",
     "tweak_rationale": "Hypothesis: a 6c hold turns the minute-4 orphan into a fill with no stop change."
@@ -89,7 +94,8 @@
     "worst_catalyst": "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0: single -$7.70 orphan (min 56.2)",
     "worst_catalyst_desc": "From #799 live run 2026-11-05: 1 close on fpd-pun-sca, $8.30 to $0.60 (10 shares @ $0.06), 72% of the arm's -$10.63. Applied BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1 for #938.",
     "env": {
-      "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1"
+      "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1",
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1"
     },
     "hypothesized_tweak": "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1",
     "tweak_rationale": "Hypothesis: a tracking offset never builds the $8.30 orphan; a new worst single above ~$2 means the orphan is structural, not static."
@@ -105,7 +111,8 @@
     "worst_catalyst_desc": "From #799 live run 2026-11-05: 22 exits on 38 closes (-$4.46), worst -$1.17 min 67.8 nba-phi-det. Applied BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06 for #938.",
     "env": {
       "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0",
-      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06"
+      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06",
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1"
     },
     "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06",
     "tweak_rationale": "Hypothesis: 6c still suppresses micro-churn but re-prices before a stale quote fills."
@@ -121,7 +128,8 @@
     "worst_catalyst_desc": "From #799 live run 2026-11-05: 37 exits against 2 merges (-$9.32), worst -$1.49 min 80.5 nhl-ott-buf. Applied BOT_RISK_STOP_ADVERSE_DROP_USD=0.045 for #938.",
     "env": {
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.045"
+      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.045",
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1"
     },
     "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.045",
     "tweak_rationale": "Hypothesis: 4.5c fires on real moves, not noise; merge count should rise from 2."
@@ -137,7 +145,8 @@
     "worst_catalyst_desc": "From #799 live run 2026-11-05: 22 exits on 36 closes (-$8.16), worst -$1.20 min 57.6 fpd-pun-sca. Applied BOT_RISK_STOP_ADVERSE_DROP_USD=0.060 for #938.",
     "env": {
       "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
-      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.060"
+      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.060",
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1"
     },
     "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.060",
     "tweak_rationale": "Hypothesis: 6c keeps the stop a circuit breaker instead of decoration."
@@ -153,7 +162,8 @@
     "worst_catalyst_desc": "From #799 live run 2026-11-05: 24 exits on 42 closes (-$5.79), worst -$1.20 min 4.2 atp-heide-prado. Applied BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3 for #938.",
     "env": {
       "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
-      "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "3"
+      "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "3",
+      "BOT_MARKET_LIVE_SPORTS_ONLY_ON": "1"
     },
     "hypothesized_tweak": "BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3",
     "tweak_rationale": "Hypothesis: a 3-minute window excludes uncertain books; quote count falls but quality per quote rises."

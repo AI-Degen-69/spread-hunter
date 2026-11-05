@@ -89,6 +89,26 @@ def test_i938_arms_carry_the_concluded_tweaks():
             )
 
 
+def test_i938_all_arms_quote_live_sports_only(tmp_path: Path):
+    arms = _load_arms()
+    for arm in arms:
+        assert arm["env"].get("BOT_MARKET_LIVE_SPORTS_ONLY_ON") == "1", (
+            f"Arm {arm['name']} must quote live sports/esports only"
+        )
+    plan = build_tournament_plan(
+        issue=938,
+        arms=arms,
+        minutes=1440.0,
+        base_dir=tmp_path,
+        stamp="2026-11-05T10-00",
+        check_ports=False,
+    )
+    for arm_plan in plan.arms:
+        assert arm_plan.env.get("BOT_MARKET_LIVE_SPORTS_ONLY_ON") == "1", (
+            f"Plan arm {arm_plan.name} lost the live-sports lane switch"
+        )
+
+
 def test_i938_arms_no_retired_keys():
     arms = _load_arms()
     for arm in arms:
