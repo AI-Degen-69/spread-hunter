@@ -1,58 +1,52 @@
-# SPEC - #942 Size order positions with the Kelly criterion
+# SPEC - #934 Show the running arm's parameters in the dashboard's telemetry card
 
 ## Goal
 
-Make order sizing at quote time derive from the Kelly criterion (the bankroll fraction
-that maximizes long-run log growth) instead of the fixed couple-allocation heuristic
-(1% of baseline bankroll, floored at $10), which is decoupled from measured edge. The
-work is: research the criterion properly, capture it in a committed note, then wire it
-into the quoting path as an opt-in sizing mode.
+Repurpose the dashboard bento card at `dashboard/static/index.html:419-479` from
+`EXECUTION TELEMETRY` (four performance tiles) into `RUNNING ARM`: the running
+arm's human label, its one-line profile, and one `KEY = value` row per `env`
+override from the arm definition — so the operator sees what the engine is
+configured to do without scrolling to the parameters panel.
 
 ## Acceptance criteria
 
-- [x] Research note committed under `docs/backlog/` (`i942-kelly-criterion.md`) naming the
-  formula family, sources, the chosen framing (a/b/c) with the rejected framings and
-  why, and the Kelly fraction setting — before any sizing code.
-- [x] A Kelly sizing mode exists in the quoting path (`bot_quote_size_mode="kelly"`):
-  order size derives from a Kelly fraction of the configured bankroll basis, zero when
-  that allocation buys less than the venue minimum `bot_quote_size_min_shares` (no floor
-  bump), clamped by the unchanged dynamic caps and the (1−u)² naked-budget taper.
-- [x] No-edge markets quote nothing: measured Kelly ≤ 0 ⇒ size 0, with the reason
-  surfaced in the quote diagnostics.
-- [x] Insufficient-sample fallback: below the configured close minimum, behavior is
-  byte-identical to `bot_quote_size_mode="dollars"` and the quote reason says so
-  (`kelly fallback: insufficient sample (n closes)`).
-- [x] Flag off: mode not selected ⇒ zero change in every sizing output (covered by test).
-- [x] `python -m pytest -q tests/test_risk.py tests/test_quotes.py` exits 0 on an idle
-  stack (on a live tournament expect the environmental `db-wal` teardown errors noted in
-  the issue; a clean exit requires an idle stack).
+- [ ] The bento card at the telemetry slot is titled `RUNNING ARM`, shows the
+  running arm's label and profile line, and lists each `env` override from the
+  arm definition as `KEY = value`.
+- [ ] An arm with no `env` overrides renders the shipped-baseline sentence
+  instead of an empty list; a run with no `tournament_arm` renders the
+  engine-recorded profile name and says no arm is recorded, without fabricating
+  parameters.
+- [ ] `⋯` opens the existing arm-detail modal for that arm, and
+  `Full parameters` selects it in `#param-arm-select` and brings
+  `#params-panel` into view.
+- [ ] The arm definition is fetched once per change of running arm, not on
+  every status poll, and a failed fetch leaves the card's previous content in
+  place with a readable note instead of blanking it.
+- [ ] The retired tiles leave no dangling lookups: no code writes to
+  `broker-kpi-winrate`, `broker-kpi-pf`, `broker-kpi-spread`,
+  `broker-kpi-expectancy`, `broker-kpi-wins`, `broker-kpi-sharpe` or
+  `broker-kpi-pairs`.
+- [ ] `python -m pytest -q tests/test_dashboard_server.py -k "milestone8_html or running_arm"`
+  passes on a quiet tree.
 
 ## Edge cases
 
-- Kelly inputs missing (not merged — rehearsal/replay/tests construct cfg directly) ⇒
-  dollars-mode fallback, never a crash, never a fabricated number.
-- n closes ≥ minimum but payoff_ratio NULL (no loss yet, or no wins) ⇒ Kelly
-  unmeasurable ⇒ dollars-mode fallback with the reason recorded.
-- Implied full Kelly > 1 ⇒ capped at 1 before the fractional multiplier applies; never
-  lever up.
-- Kelly ≤ 0 ⇒ size 0 with the no-edge reason; the `(1−u)²` taper and dynamic caps still
-  apply on top of any positive Kelly size, unchanged in shape.
-- `VENUE_SYNC_RUN_ID` closes are excluded from the Kelly sample under every filter —
-  the wallet's sync history is not the bot's trading record.
-- `bot_quote_size_shares <= 0` still defunds every mode (defunded means silent).
-- Strict-pairs light-side rule unchanged: the flattening side is never Kelly- or
-  taper-cut below the deficit it must buy.
+- `status` null/undefined (failed status fetch) ⇒ renderer returns without
+  writing; previous card content stays.
+- Empty-string `tournament_arm` / `name` ⇒ treated as missing.
+- `active_profile` present, `running !== true` ⇒ tag `STOPPED` (shadow profile
+  preferred even after its run stopped); no profile ⇒ tag `NO RUN`.
+- New arm loading while old payload shown ⇒ keep old rows, note names the new
+  arm; late response for a stale arm ⇒ ignored (sequence guard).
+- `env` empty/missing ⇒ baseline sentence, not an empty list.
+- Arm name not in the parameters catalog ⇒ card note says so, select
+  unchanged, Strategy navigation still happens.
+- `arm-detail` resolves names only: a same-named arm from another tournament
+  may display (no backend change to fix this here).
 
 ## Out of scope
 
-- Rewriting the `risk_utilization` taper or the (1−u)² shape (naked-budget defense).
-- Loosening, replacing or bypassing any existing cap (`bot_risk_exposure_max_*`,
-  `bot_pos_price_max_pair_cost_usd`, venue floor). Kelly allocates inside them.
-- A per-market resolution-probability model (directional `f* = (p−P)/(1−P)`). If the
-  research note selects that framing instead of the measured-stats framing, the issue
-  must be re-scoped in a comment before Station II plans.
-- Dashboard risk surfaces (#934 is a separate lane); a read-only "Kelly fraction: …"
-  line only if it falls out for free.
-- The `_cents` field renames (#936 owns those; no name overlap — see plan).
-- A config gate for "full Kelly only in shadow" — not enforceable from inside config;
-  recorded as an operator rule in the research note, capped at 1.0 in code.
+- Parameters panel logic/catalog, arm-detail modal layout, prototype
+  (`prototype.js`/`prototype.css`), neon page, Reports tiles, `renderKPIs`,
+  arm performance code, any backend route or schema change.
