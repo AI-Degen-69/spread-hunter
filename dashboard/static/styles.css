@@ -4135,6 +4135,7 @@ th[aria-sort] .ot-sort-btn {
 .arm-detail-kpis { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font: 400 12px/1.5 'JetBrains Mono', monospace; }
 .arm-detail-kpis dt { color: var(--text-muted); }
 .arm-detail-kpis dd { margin: 0; color: var(--text-primary); }
+#running-arm-env code { min-width: 0; overflow-wrap: anywhere; }
 .arm-detail-note { color: var(--text-muted) !important; font-style: italic; }
 .arm-detail-error { color: var(--loss); padding: 16px; text-align: center; }
 .arm-detail-loading { color: var(--text-muted); padding: 16px; text-align: center; }
