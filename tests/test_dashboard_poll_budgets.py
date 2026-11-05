@@ -151,7 +151,11 @@ def test_kpi_feed_read_budget_across_many_condition_ids(tmp_path, monkeypatch):
 
     def counting_read(self, *args, **kwargs):
         nonlocal read_count
-        read_count += 1
+        # Only feed files count toward the budget; KPI also probes the
+        # per-run heartbeat via the shared pathlib.Path, which must not
+        # inflate the feed-read count.
+        if self.name in ("markets.json", "market_universe.json"):
+            read_count += 1
         return real_read(self, *args, **kwargs)
 
     monkeypatch.setattr(mm.Path, "read_text", counting_read)
