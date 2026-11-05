@@ -113,7 +113,7 @@ def test_a_loss_is_red_everywhere_it_is_shown():
 
     # Assert
     assert "negative" in rendered["pnl_pill_class"]
-    assert "negative" in rendered["spread_class"]
+    # #934 retired the Realized Spread tile with the telemetry card.
     assert rendered["quant_expectancy"] == "negative"
     assert rendered["quant_sharpe"] == "negative"
 
@@ -152,7 +152,7 @@ def test_the_minus_goes_in_front_of_the_dollar():
 
     # Assert — `$-2.40` reads as an odd currency; `-$2.40` reads as a loss.
     assert rendered["pnl_text"] == "-$2.40"
-    assert rendered["spread_text"] == "-$2.40"
+    # #934 retired the Realized Spread tile with the telemetry card.
     assert _render(realized=2.40)["pnl_text"] == "+$2.40"
 
 
@@ -160,7 +160,7 @@ def test_the_minus_goes_in_front_of_the_dollar():
 def test_a_gain_still_reads_as_a_gain():
     rendered = _render(realized=2.40, expectancy=0.34, sharpe=1.2)
     assert "positive" in rendered["pnl_pill_class"]
-    assert "positive" in rendered["spread_class"]
+    # #934 retired the Realized Spread tile with the telemetry card.
     assert rendered["quant_expectancy"] == "positive"
     assert rendered["quant_sharpe"] == "positive"
 

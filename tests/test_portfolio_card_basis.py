@@ -87,49 +87,16 @@ def _strip_markup() -> str:
 
 def _kpi_strip(fn):
     """Marker for the strip's dynamic-value tests. The harness asserts below
-    read `pairs`, `wins` and `committed_pct` out of the rendered elements, so
-    each of these tests needs node -- which the module-level pytestmark
-    already guards. Kept as a name so the group reads as one block."""
+    read `committed_pct` out of the rendered elements, so each of these tests
+    needs node -- which the module-level pytestmark already guards. Kept as a
+    name so the group reads as one block."""
     return fn
 
 
 # ── The KPI strip names what its numbers count ────────────────────────────
 
-@_kpi_strip
-def test_the_pairs_tile_counts_markets_not_pairs():
-    # Arrange -- the tile fills itself from `kpi.funnel.graduated`, which is
-    # the markets the Market Filter graduated, not pairs held. "3 Pairs ·
-    # 100% Directional Neutral" beside an OPEN POSITIONS table showing one
-    # Unpaired position was the card contradicting the table under it.
-    card = _render(_shadow_portfolio(),
-                   funnel={"graduated": [{"cid": "a"}, {"cid": "b"}, {"cid": "c"}]})
-
-    # Act / Assert
-    assert card["pairs"] == "3 Markets"
-
-
-def test_the_pairs_tile_label_says_markets_and_who_graduated_them():
-    # Arrange -- the label is static markup; the value is dynamic. The
-    # assertion reads only the tiles' markup: comments beside them are
-    # allowed to record the words a label retired.
-    strip = _strip_markup()
-
-    # Act / Assert
-    assert "Markets Quoted" in strip
-    assert "Hedged Pairs" not in strip
-
-
-@_kpi_strip
-def test_the_wins_line_names_losses_what_they_are():
-    # Arrange -- every close that is not a win lands in `losses`, including a
-    # close that booked exactly zero. "1 Wins / 1 Flat" on a day with one win
-    # and one -$2.60 loss read the loss as "nothing happened".
-    card = _render(_shadow_portfolio(), trade_analytics={"wins": 1, "losses": 1})
-
-    # Act / Assert
-    assert card["wins"] == "1 Wins / 1 Losses"
-    assert "Flat" not in card["wins"]
-
+# #934 retired the Markets Quoted and Wins/Losses tiles with the telemetry
+# card: the three tests that pinned them lived here and are deleted.
 
 def test_the_committed_tile_describes_held_inventory_not_resting_bids():
     # Arrange -- the number is the venue's `initialValue` sum over OPEN

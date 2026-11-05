@@ -416,58 +416,20 @@
         </section>
 
         <!-- Bento Card 3: Execution Telemetry & Performance Metrics (Right: 3 cols) -->
-        <section class="bento-col bento-col-telemetry" data-purpose="execution-telemetry-card">
+        <section class="bento-col bento-col-telemetry" data-purpose="running-arm-card">
           <div class="bento-card-header">
-            <span class="bento-card-title">EXECUTION TELEMETRY</span>
-            <span class="bento-tag-engine">POLY-ENGINE</span>
+            <span class="bento-card-title">RUNNING ARM</span>
+            <span class="bento-tag-engine" id="running-arm-state">--</span>
           </div>
 
           <div class="bento-telemetry-stack">
-            <!-- Win Rate -->
-            <div class="broker-kpi-tile bento-subcard">
-              <div class="bento-subcard-header">
-                <span class="broker-kpi-label">Win Rate</span>
-                <span class="broker-kpi-val mono" id="broker-kpi-winrate">0.0%</span>
-              </div>
-              <div class="bento-progress-track">
-                <div class="bento-progress-fill bento-emerald-gradient-fill" id="bento-winrate-bar" style="width:0%"></div>
-              </div>
-              <div class="bento-subcard-footer">
-                <span class="broker-kpi-sub mono" id="broker-kpi-wins">0 Wins / 0 Losses</span>
-                <span class="bento-tag-edge" id="bento-edge-tag">Edge</span>
-              </div>
-            </div>
-
-            <!-- Profit Factor -->
-            <div class="broker-kpi-tile bento-subcard">
-              <div class="bento-subcard-header">
-                <span class="broker-kpi-label">Profit Factor</span>
-                <span class="broker-kpi-val mono text-primary" id="broker-kpi-pf">0.00x</span>
-              </div>
-              <div class="bento-subcard-footer">
-                <span class="broker-kpi-sub mono" id="broker-kpi-sharpe">Sharpe: 0.00</span>
-              </div>
-            </div>
-
-            <!-- Realized Spread -->
-            <div class="broker-kpi-tile bento-subcard bento-compact-row">
-              <div>
-                <div class="broker-kpi-label">Realized Spread</div>
-                <div class="broker-kpi-sub mono" id="broker-kpi-expectancy">Avg $0.000 / close</div>
-              </div>
-              <div class="broker-kpi-val mono" id="broker-kpi-spread">+$0.00</div>
-            </div>
-
-            <!-- Quoted Markets -->
-            <div class="broker-kpi-tile bento-subcard bento-compact-row">
-              <div>
-                <!-- The value is `kpi.funnel.graduated`: markets the Market Filter
-                     quoted, not pairs held. "Hedged Pairs" claimed a hedge nothing
-                     had measured. -->
-                <div class="broker-kpi-label">Markets Quoted</div>
-                <div class="broker-kpi-sub mono">by the Market Filter</div>
-              </div>
-              <div class="broker-kpi-val mono text-signal" id="broker-kpi-pairs">0 Markets</div>
+            <div class="broker-kpi-val mono" id="running-arm-label">--</div>
+            <div class="broker-kpi-sub mono" id="running-arm-profile"></div>
+            <ul class="arm-detail-env" id="running-arm-env"></ul>
+            <div class="broker-kpi-sub mono" id="running-arm-note"></div>
+            <div class="arm-detail-actions">
+              <button type="button" class="arm-detail-btn" id="running-arm-details-btn" title="Show arm details">&#8943;</button>
+              <button type="button" class="arm-detail-btn" id="running-arm-params-btn">Full parameters</button>
             </div>
           </div>
         </section>

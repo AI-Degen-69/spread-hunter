@@ -417,6 +417,170 @@ def test_milestone8_html_contains_required_sections():
     assert "info-bubble" in _read_static("app.js")  # generated dynamically by JS
 
 
+# ── #934: RUNNING ARM card ─────────────────────────────────────────────
+
+_RUNNING_ARM_HARNESS = Path(__file__).resolve().parent / "js" / "running_arm_harness.cjs"
+
+requires_node = pytest.mark.skipif(shutil.which("node") is None,
+                                   reason="node is not installed on this host")
+
+
+def _running_arm_harness(scenario: str) -> dict:
+    out = subprocess.run([shutil.which("node"), str(_RUNNING_ARM_HARNESS), scenario],
+                         capture_output=True, text=True, check=True, encoding="utf-8")
+    return json.loads(out.stdout)
+
+
+def test_milestone8_html_contains_running_arm_card():
+    """#934: the telemetry slot is the RUNNING ARM card and the retired tile
+    ids are gone from both the markup and the renderer."""
+    html = _read_static("index.html")
+    js = _read_static("app.js")
+    for rid in ("running-arm-state", "running-arm-label", "running-arm-profile",
+                "running-arm-env", "running-arm-note",
+                "running-arm-details-btn", "running-arm-params-btn"):
+        assert rid in html
+    assert "RUNNING ARM" in html
+    assert 'data-purpose="running-arm-card"' in html
+    assert 'id="broker-kpi-strip"' in html
+    assert 'data-purpose="execution-telemetry-card"' not in html
+    for rid in ("broker-kpi-winrate", "broker-kpi-pf", "broker-kpi-spread",
+                "broker-kpi-expectancy", "broker-kpi-wins",
+                "broker-kpi-sharpe", "broker-kpi-pairs"):
+        assert rid not in html
+        assert rid not in js
+
+
+@requires_node
+def test_running_arm_card_shows_label_profile_and_overrides():
+    card = _running_arm_harness("label-profile-overrides")
+    assert card["tag"] == "RUNNING"
+    assert card["label"] == "armA label"
+    assert card["profile"] == "armA profile"
+    assert "<code>A</code> = <code>1</code>" in card["env"]
+    assert "<code>B</code> = <code>2</code>" in card["env"]
+    assert card["details_disabled"] is False
+    assert card["params_disabled"] is False
+
+
+@requires_node
+def test_running_arm_card_says_baseline_when_env_is_empty():
+    card = _running_arm_harness("baseline-when-env-empty")
+    assert card["tag"] == "STOPPED"
+    assert card["env"] == ""
+    assert card["note"] == "No overrides \u2014 this arm runs the shipped baseline."
+
+
+@requires_node
+def test_running_arm_card_falls_back_to_profile_name_without_arm():
+    card = _running_arm_harness("fallback-profile-name-without-arm")
+    assert card["label"] == "prof-1"
+    assert card["note"] == "No tournament arm is recorded for this run."
+    assert card["arm_detail_fetches"] == 0
+    assert card["details_disabled"] is True
+    assert card["params_disabled"] is True
+
+
+@requires_node
+def test_running_arm_card_without_profile_shows_no_run():
+    card = _running_arm_harness("without-profile-shows-no-run")
+    assert card["label"] == "No run profile recorded."
+    assert card["tag"] == "NO RUN"
+    assert card["details_disabled"] is True
+    assert card["params_disabled"] is True
+
+
+@requires_node
+def test_running_arm_card_paints_without_kpi_portfolio():
+    card = _running_arm_harness("paints-without-kpi-portfolio")
+    assert card["label"] == "armA label"
+
+
+@requires_node
+def test_running_arm_fetches_once_per_arm_change():
+    result = _running_arm_harness("fetches-once-per-arm-change")
+    assert result["armA"] == 1
+    assert result["armB"] == 1
+    # Cache reuse: coming back to armA paints from cache, no second fetch.
+    assert result["label"] == "armA label"
+
+
+@requires_node
+def test_running_arm_failed_fetch_keeps_previous_content():
+    card = _running_arm_harness("failed-fetch-keeps-previous")
+    assert card["label"] == "armA label"
+    assert "<code>A</code> = <code>1</code>" in card["env"]
+    assert card["note"] == ("Could not load the definition for `armB`: `boom`. "
+                             "Showing the last loaded content.")
+
+
+@requires_node
+def test_running_arm_newer_arm_wins_over_late_response():
+    card = _running_arm_harness("newer-arm-wins-over-late-response")
+    assert card["label"] == "armB label"
+
+
+@requires_node
+def test_running_arm_null_status_keeps_previous_content():
+    result = _running_arm_harness("null-status-keeps-previous")
+    assert result["after"] == result["before"]
+
+
+@requires_node
+def test_running_arm_env_values_are_escaped():
+    card = _running_arm_harness("env-values-are-escaped")
+    assert "&lt;script&gt;" in card["env"]
+    assert "<script>" not in card["env"]
+
+
+@requires_node
+def test_running_arm_details_action_opens_arm_detail_modal():
+    result = _running_arm_harness("details-action-opens-arm-detail-modal")
+    assert result["after"] == result["before"] + 1
+    assert result["modal_display"] == "flex"
+    assert "armA label" in result["modal_content"]
+
+
+@requires_node
+def test_running_arm_failed_fetch_note_persists_across_polls():
+    card = _running_arm_harness("failed-fetch-note-persists-across-polls")
+    assert card["note"] == ("Could not load the definition for `armB`: `boom`. "
+                             "Showing the last loaded content.")
+    assert card["armB"] == 1
+
+
+@requires_node
+def test_running_arm_stale_label_after_no_arm_uses_placeholder():
+    card = _running_arm_harness("stale-label-after-no-arm-uses-placeholder")
+    assert card["label"] == "armC"
+    assert card["note"] == "Loading arm definition…"
+
+
+@requires_node
+def test_running_arm_catalog_miss_note_persists_across_polls():
+    card = _running_arm_harness("catalog-miss-note-persists-across-polls")
+    assert card["note"] == "This arm is not in the parameters catalog."
+    assert card["label"] == "armA label"
+
+
+@requires_node
+def test_running_arm_full_parameters_selects_arm_and_scrolls():
+    result = _running_arm_harness("full-parameters-selects-arm-and-scrolls")
+    assert result["select_value"] == "p1|armA"
+    assert result["param_fetch"] == ["/api/parameters?arm=armA&plan=p1"]
+    assert result["strategy_clicked"] is True
+    assert result["panel_scrolled"] is True
+
+
+@requires_node
+def test_running_arm_full_parameters_notes_missing_catalog_entry():
+    result = _running_arm_harness("full-parameters-notes-missing-catalog-entry")
+    assert result["select_value"] == "p1|other"
+    assert result["note"] == "This arm is not in the parameters catalog."
+    assert result["strategy_clicked"] is True
+    assert result["panel_scrolled"] is True
+
+
 def test_level1_trade_analytics_tiles_are_present():
     """The new win-rate/expectancy, distribution, Sharpe, and drawdown tiles exist."""
     app_js = _read_static("app.js")
