@@ -1013,7 +1013,7 @@ async function runSwitcherRenderVerdicts() {
     hasArmLabel: /Control \(2c Rider/.test(html),
     hasIdxTag: /#01/.test(html),
     hasKpiStrip: /db-run-kpi-strip/.test(html),
-    kpiPlaceholders: (html.match(/class="arm-kpi">—<\/span>/g) || []).length,
+    kpiPlaceholders: (html.match(/class="arm-kpi" title="[^"]*">—<\/span>/g) || []).length,
     hasBookMix: /books:/.test(html),
   };
 }

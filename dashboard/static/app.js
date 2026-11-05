@@ -3065,39 +3065,40 @@ function bookMixNote(mix) {
 }
 
 function runSwitcherKpiChips(rowDbPath, detail) {
-  const placeholder = [
-    '<span class="arm-kpi">—</span>',
-    '<span class="arm-kpi">—</span>',
-    '<span class="arm-kpi">—</span>',
-    '<span class="arm-kpi">—</span>',
-  ].join('');
+  // Each chip carries its metric as a title: without one the four bare numbers
+  // are unreadable (which is PnL, which is win rate?). The placeholder build
+  // lives here so the row markup below and the mismatch path share it.
+  const KPI_LABELS = ['Realized PnL', 'Expectancy', 'Win rate', 'Completed pairs'];
+  const placeholder = KPI_LABELS
+    .map(label => `<span class="arm-kpi" title="${label}">—</span>`)
+    .join('');
   if (!detail || !detail.ok || !detail.kpis || !detail.kpis.run_profitability) {
     return { chips: placeholder, note: '' };
   }
   if (detail.store !== rowDbPath) {
-    return { chips: placeholder, note: 'This run\'s store has no KPI read yet' };
+    return { chips: placeholder, note: 'This run\'s store has no KPI read yet.' };
   }
   const kpi = detail.kpis.run_profitability;
-  function fmtSigned(v) {
+  function fmtSigned(v, label) {
     if (v === null || v === undefined || !Number.isFinite(Number(v))) {
-      return '<span class="arm-kpi">—</span>';
+      return `<span class="arm-kpi" title="${label}">—</span>`;
     }
     const n = Number(v);
     const cls = signClass(n);
     const sign = n > 0 ? '+' : '';
     const formatted = `${sign}${n.toFixed(2)}`;
     return cls
-      ? `<span class="arm-kpi ${cls}">${formatted}</span>`
-      : `<span class="arm-kpi">${formatted}</span>`;
+      ? `<span class="arm-kpi ${cls}" title="${label}">${formatted}</span>`
+      : `<span class="arm-kpi" title="${label}">${formatted}</span>`;
   }
-  const pnl = fmtSigned(kpi.realized_pnl);
-  const exp = fmtSigned(kpi.expectancy_usd);
+  const pnl = fmtSigned(kpi.realized_pnl, KPI_LABELS[0]);
+  const exp = fmtSigned(kpi.expectancy_usd, KPI_LABELS[1]);
   const wr = (kpi.win_rate !== null && kpi.win_rate !== undefined && Number.isFinite(Number(kpi.win_rate)))
-    ? `<span class="arm-kpi">${(Number(kpi.win_rate) * 100).toFixed(1)}%</span>`
-    : '<span class="arm-kpi">—</span>';
+    ? `<span class="arm-kpi" title="${KPI_LABELS[2]}">${(Number(kpi.win_rate) * 100).toFixed(1)}%</span>`
+    : `<span class="arm-kpi" title="${KPI_LABELS[2]}">—</span>`;
   const pairs = (kpi.closes_count !== null && kpi.closes_count !== undefined)
-    ? `<span class="arm-kpi">${kpi.closes_count}</span>`
-    : '<span class="arm-kpi">—</span>';
+    ? `<span class="arm-kpi" title="${KPI_LABELS[3]}">${kpi.closes_count}</span>`
+    : `<span class="arm-kpi" title="${KPI_LABELS[3]}">—</span>`;
   return { chips: pnl + exp + wr + pairs, note: '' };
 }
 
@@ -3163,7 +3164,7 @@ async function renderRunSwitcher() {
       const idx = _tournIdx++;
       const idxStr = '#' + String(t.index ?? 1).padStart(2, '0');
       const title = runSwitcherTitle(r);
-      const kpiStrip = `<div class="db-run-kpi-strip" id="db-run-kpis-${idx}"><span class="arm-kpi">—</span><span class="arm-kpi">—</span><span class="arm-kpi">—</span><span class="arm-kpi">—</span></div>`;
+      const kpiStrip = `<div class="db-run-kpi-strip" id="db-run-kpis-${idx}">${runSwitcherKpiChips(null, null).chips}</div>`;
       return `<div class="db-run-row${isThis ? ' current' : ''}" id="db-run-row-${idx}" data-run-id="${esc(r.run_id || '')}" title="${esc(title)}">
         <span class="pill state-${runState}"><span class="pill-label">${esc(label)}</span> <span class="db-run-idx">${idxStr}</span> <span class="pill-value">${state}</span>${age ? ` <span class="pill-detail">${age}</span>` : ''}</span>${portLink}
         ${btn}${mixHtml}
@@ -3194,22 +3195,24 @@ async function renderRunSwitcher() {
       entry.entries.push({ tournIdx: idx, dbPath: r.db_path });
     }
   });
-  _armRows.forEach(({ arm, entries }) => {
-    fetch(`/api/profile/arm-detail?name=${encodeURIComponent(arm)}`)
-      .then(res => res.json())
-      .then(detail => {
+    (async () => {
+      for (const { arm, entries } of _armRows) {
         if (_runSwitcherSeq !== _seqAtRender) return; // stale
-        entries.forEach(({ tournIdx, dbPath }) => {
-          const strip = document.getElementById(`db-run-kpis-${tournIdx}`);
-          const row = document.getElementById(`db-run-row-${tournIdx}`);
-          if (!strip) return;
-          const { chips, note } = runSwitcherKpiChips(dbPath, detail);
-          strip.innerHTML = chips;
-          if (note && row) row.title = (row.title ? row.title + ' · ' : '') + note;
-        });
-      })
-      .catch(() => {}); // keep — placeholders on failure
-  });
+        try {
+          const res = await fetch(`/api/profile/arm-detail?name=${encodeURIComponent(arm)}`);
+          const detail = await res.json();
+          if (_runSwitcherSeq !== _seqAtRender) return; // stale
+          entries.forEach(({ tournIdx, dbPath }) => {
+            const strip = document.getElementById(`db-run-kpis-${tournIdx}`);
+            const row = document.getElementById(`db-run-row-${tournIdx}`);
+            if (!strip) return;
+            const { chips, note } = runSwitcherKpiChips(dbPath, detail);
+            strip.innerHTML = chips;
+            if (note && row) row.title = (row.title ? row.title + ' · ' : '') + note;
+          });
+        } catch { /* keep placeholders on failure */ }
+      }
+    })(); // sequential fills: one arm at a time, stale-checked per hop
   wireDemoSwitcher(sw);
   placeRunSwitcher(sw, badge);
   sw.querySelectorAll('.db-run-switch').forEach(b => {

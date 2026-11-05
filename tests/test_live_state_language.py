@@ -854,7 +854,7 @@ def test_run_switcher_kpi_chip_formatting():
     # Store mismatch: four placeholders + note
     mismatch = res["mismatch"]
     assert mismatch["chips"].count("\u2014") == 4
-    assert mismatch["note"] == "This run's store has no KPI read yet"
+    assert mismatch["note"] == "This run's store has no KPI read yet."  # noqa: E501
     # Failed ok: four placeholders, no note
     for key in ("failedOk", "nullDetail", "noKpis"):
         assert res[key]["chips"].count("\u2014") == 4
