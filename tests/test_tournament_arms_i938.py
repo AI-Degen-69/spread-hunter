@@ -80,6 +80,17 @@ def test_i938_arms_file_exists_and_schema():
         assert arm["tweak_rationale"].startswith("Hypothesis:"), arm["name"]
 
 
+def test_i938_cockpit_prose_matches_the_configured_tweaks():
+    prose = {arm["name"]: arm["desc"] for arm in _load_arms()}
+
+    assert "6c" in prose["loose-baseline"]
+    assert "nothing changed" not in prose["loose-baseline"]
+    assert "balanced" in prose["tight-touch"].lower()
+    assert "tightest dynamic offset" not in prose["tight-touch"]
+    assert "6c" in prose["low-churn-deadband"]
+    assert "widest" not in prose["low-churn-deadband"].lower()
+
+
 def test_i938_arms_carry_the_concluded_tweaks():
     arms = {a["name"]: a for a in _load_arms()}
     for name, tweak in EXPECTED_TWEAK_ENV.items():

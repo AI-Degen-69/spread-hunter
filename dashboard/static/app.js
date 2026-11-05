@@ -12257,7 +12257,9 @@ function renderScanStatePill(scanState, opts) {
       }
     }
 
-    // Elsewhere notice: show only when liveElsewhere is not empty AND engine is not RUNNING on this store.
+    // Elsewhere notice: a live stack elsewhere stays visible even when this
+    // store's engine is running; real-money execution must never hide behind
+    // a healthy rehearsal. Shadow-only runs keep the old behavior.
     // Accepts opts.liveElsewhere (camelCase, from dbModeVerdict) or the legacy
     // scanState.other_live_runs (snake_case, rehearsal heartbeats only).
     const rawRuns = (opts && opts.liveElsewhere) || scanState.other_live_runs || [];
@@ -12267,8 +12269,9 @@ function renderScanStatePill(scanState, opts) {
       isLiveStack: r.isLiveStack || false,
       complete: r.complete !== false,
     }));
+    const liveStackElsewhere = otherRuns.some(r => r.isLiveStack);
     if (elsewhereTag) {
-      if (otherRuns.length > 0 && state !== 'running') {
+      if (otherRuns.length > 0 && (state !== 'running' || liveStackElsewhere)) {
         elsewhereTag.style.display = '';
         // Separate live stack from shadow runs for clarity. A partial live
         // execution (Decide alone) is named as such, not as a full stack.

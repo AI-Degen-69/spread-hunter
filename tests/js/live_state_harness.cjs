@@ -312,8 +312,8 @@ function enginePillVerdicts() {
   elements.set('scan-engine-state', stateEl);
   elements.set('scan-engine-elsewhere', elsewhereEl);
 
-  const render = (scanState) => {
-    app.renderScanStatePill(scanState);
+  const render = (scanState, opts) => {
+    app.renderScanStatePill(scanState, opts);
     return {
       pillClass: pillEl.className,
       pillTitle: pillEl.title,
@@ -372,6 +372,40 @@ function enginePillVerdicts() {
     ],
   };
 
+  const shadowRunningLiveElsewhereState = {
+    scan_state: 'SCANNING',
+    seconds_since_heartbeat: 2.5,
+    heartbeat_source: {
+      kind: 'shadow',
+      run_id: 'trial-01',
+      db_path: 'data/trial_01.db',
+      file: 'runtime/shadow_run_trial-01.json',
+      pid: 1234,
+    },
+    stall_reason: null,
+    other_live_runs: [],
+  };
+
+  const shadowRunningShadowElsewhere = {
+    scan_state: 'SCANNING',
+    seconds_since_heartbeat: 2.5,
+    heartbeat_source: {
+      kind: 'shadow',
+      run_id: 'trial-01',
+      db_path: 'data/trial_01.db',
+      file: 'runtime/shadow_run_trial-01.json',
+      pid: 1234,
+    },
+    stall_reason: null,
+    other_live_runs: [
+      {
+        run_id: 'other-live',
+        db_path: 'data/NN_shadow.db',
+        heartbeat_file: 'runtime/shadow_run_other-live.json',
+      },
+    ],
+  };
+
   return {
     reasons: {
       finished: app.engineReasonText('finished'),
@@ -395,6 +429,15 @@ function enginePillVerdicts() {
       shadowFresh: render(shadowFresh),
       shadowFinished: render(shadowFinished),
       shadowDeadOtherLive: render(shadowDeadOtherLive),
+      shadowRunningLiveElsewhere: render(shadowRunningLiveElsewhereState, {
+        liveElsewhere: [{
+          runId: 'live-stack',
+          dbPath: 'data/orders.db',
+          isLiveStack: true,
+          complete: true,
+        }],
+      }),
+      shadowRunningShadowElsewhere: render(shadowRunningShadowElsewhere),
     },
   };
 }

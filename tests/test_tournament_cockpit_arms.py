@@ -78,6 +78,36 @@ def test_i799_each_arm_prose_matches_the_spec_file():
             assert arms[name][field] == entry.get(field, ""), (name, field)
 
 
+def test_i799_spec_file_has_no_duplicate_object_keys():
+    """JSON silently keeps the last duplicate key, so the cockpit would read
+    one value while an editor changed another. The pre-env catalyst copies
+    were that trap: `json.loads` (and the cockpit loader) only sees the
+    post-env copy."""
+    pairs = json.JSONDecoder(object_pairs_hook=lambda pairs: pairs).decode(
+        I799_ARMS_SPEC.read_text(encoding="utf-8")
+    )
+    duplicates: list[str] = []
+
+    def walk(node, path: str) -> None:
+        if isinstance(node, list) and node and all(
+            isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
+            for item in node
+        ):
+            seen: set[str] = set()
+            for key, value in node:
+                if key in seen:
+                    duplicates.append(f"{path}.{key}")
+                else:
+                    seen.add(key)
+                walk(value, f"{path}.{key}" if path != "$" else f"$.{key}")
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                walk(value, f"{path}[{index}]")
+
+    walk(pairs, "$")
+    assert not duplicates, f"duplicate keys in {I799_ARMS_SPEC.name}: {duplicates}"
+
+
 def test_i799_resolves_the_named_plan_record(tmp_path, monkeypatch):
     monkeypatch.setattr(cockpit, "ROOT", tmp_path)
     _record(tmp_path, "i799-tournament-test_2026-10-17T18-48", [
