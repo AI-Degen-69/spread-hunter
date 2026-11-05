@@ -3182,14 +3182,6 @@ async function renderRunSwitcher() {
   // Lazy KPI load: fire one arm-detail request per unique tournament arm.
   // Do not await — the panel renders immediately with — placeholders.
   const _seqAtRender = _runSwitcherSeq;
-  const _uniqueArms = new Map(); // arm name -> [{rowIdx, dbPath}]
-  runs.forEach((r, pos) => {
-    const t = r.tournament;
-    if (!t || !t.arm) return;
-    // pos in `runs` matches `_tournIdx` order since we iterate the same array
-    if (!_uniqueArms.has(t.arm)) _uniqueArms.set(t.arm, []);
-    _uniqueArms.get(t.arm).push({ rowIdx: pos, dbPath: r.db_path });
-  });
   // Recompute tournament index (same logic as shadowRows map)
   let _kpiTournIdx = 0;
   const _armRows = []; // { arm, entries: [{tournIdx, dbPath}] }
