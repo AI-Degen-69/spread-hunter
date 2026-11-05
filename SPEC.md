@@ -1,38 +1,58 @@
-# SPEC — #925 Trim the open positions table
+# SPEC - #942 Size order positions with the Kelly criterion
 
 ## Goal
 
-Make the stitch OPEN POSITIONS table answer three questions per row without duplicated columns: what is held, what both sides are worth right now, and whether the pair is up or down.
+Make order sizing at quote time derive from the Kelly criterion (the bankroll fraction
+that maximizes long-run log growth) instead of the fixed couple-allocation heuristic
+(1% of baseline bankroll, floored at $10), which is decoupled from measured edge. The
+work is: research the criterion properly, capture it in a committed note, then wire it
+into the quoting path as an opt-in sizing mode.
 
 ## Acceptance criteria
 
-- [ ] OPEN POSITIONS renders exactly six columns in this order: MARKET & CLASSIFICATION, CATEGORY, HELD INVENTORY, CURRENT PRICE, UNREALISED P&L, LAST UPDATED.
-- [ ] TOTAL COST, MARK VALUE and HEDGE STATUS are gone from the stitch header and rows.
-- [ ] The `N sh total` subline is gone with TOTAL COST; no share total is printed anywhere on the row.
-- [ ] A resting hedge leg in HELD INVENTORY reads `<size> resting @ $<price>` with no hedge-working wording.
-- [ ] HELD INVENTORY aligns YES and NO rungs on one positions-only grid: fixed-width side pill, flexible leg text, right-aligned muted `Cost: $XX.XX` for held legs; missing/resting rungs keep the same rhythm and show no cost; Orders keeps its current layout and copy.
-- [ ] Row background is tinted by status: cyan for hedge-pending, warm amber for unpaired/naked, neutral for paired; color is not the only signal.
-- [ ] CURRENT PRICE always shows two lines, YES first then NO; each line shows its own current price (fresh live mid, otherwise quote mid, otherwise `--`) and its own live dot only for a fresh mark, whether or not that side is held.
-- [ ] UNREALISED P&L is one signed dollar value plus one percentage in parentheses for the pair, coloured positive / negative / flat. Per-leg P&L lines and the `Total` label are gone; the number still comes from the par-based mark.
-- [ ] The live repaint updates the same two price lines and the same single value/percentage pair in place, with no MARK VALUE lookup left behind and no per-leg P&L branch it can no longer find.
-- [ ] Sorting still works for the remaining columns; removed columns cannot be sorted by from the header or through a leftover sort key.
-- [ ] The empty state `colspan` matches the new column count.
-- [ ] Classic `positionsRows`, `OT_COLUMNS`, Orders, Active Markets and Closed Trades are unchanged.
+- [ ] Research note committed under `docs/backlog/` (`i942-kelly-criterion.md`) naming the
+  formula family, sources, the chosen framing (a/b/c) with the rejected framings and
+  why, and the Kelly fraction setting — before any sizing code.
+- [ ] A Kelly sizing mode exists in the quoting path (`bot_quote_size_mode="kelly"`):
+  order size derives from a Kelly fraction of the configured bankroll basis, floored at
+  `bot_quote_size_min_shares`, clamped by the unchanged dynamic caps and the (1−u)²
+  naked-budget taper.
+- [ ] No-edge markets quote nothing: measured Kelly ≤ 0 ⇒ size 0, with the reason
+  surfaced in the quote diagnostics.
+- [ ] Insufficient-sample fallback: below the configured close minimum, behavior is
+  byte-identical to `bot_quote_size_mode="dollars"` and the quote reason says so
+  (`kelly fallback: insufficient sample (n closes)`).
+- [ ] Flag off: mode not selected ⇒ zero change in every sizing output (covered by test).
+- [ ] `python -m pytest -q tests/test_risk.py tests/test_quotes.py` exits 0 on an idle
+  stack (on a live tournament expect the environmental `db-wal` teardown errors noted in
+  the issue; a clean exit requires an idle stack).
 
 ## Edge cases
 
-- A side with no quote prints `--`; do not infer a price from the other side.
-- A fresh live mark wins over the quote mid for that side only; the other side keeps its own fallback.
-- Zero total cost basis prints no percentage; the dollar value still prints if the par mark is computable.
-- Missing par mark prints `--`, an empty percentage and the flat tone.
-- A full pair is valued at $1.00 per share regardless of whether leg mids sum above or below $1.00.
-- A lone held leg with its hedge resting remains tinted `is-hedge-pending`; the tint is the remaining signal.
-- Leftover sort keys for removed columns fall back to the default order and show no `aria-sort`.
+- Kelly inputs missing (not merged — rehearsal/replay/tests construct cfg directly) ⇒
+  dollars-mode fallback, never a crash, never a fabricated number.
+- n closes ≥ minimum but payoff_ratio NULL (no loss yet, or no wins) ⇒ Kelly
+  unmeasurable ⇒ dollars-mode fallback with the reason recorded.
+- Implied full Kelly > 1 ⇒ capped at 1 before the fractional multiplier applies; never
+  lever up.
+- Kelly ≤ 0 ⇒ size 0 with the no-edge reason; the `(1−u)²` taper and dynamic caps still
+  apply on top of any positive Kelly size, unchanged in shape.
+- `VENUE_SYNC_RUN_ID` closes are excluded from the Kelly sample under every filter —
+  the wallet's sync history is not the bot's trading record.
+- `bot_quote_size_shares <= 0` still defunds every mode (defunded means silent).
+- Strict-pairs light-side rule unchanged: the flattening side is never Kelly- or
+  taper-cut below the deficit it must buy.
 
 ## Out of scope
 
-- The classic (non-`proto-body`) `positionsRows` table and `OT_COLUMNS`.
-- Orders, Active Markets, Closed Trades, and the classic header machinery; the positions-only rung grid/cost copy must not change the Orders table.
-- `positionMarkValue` and the par-based valuation itself.
-- New columns, tooltips, hover cards, drill-downs, or layout redesign beyond removing the three columns.
-- `.stitch-status-*` badge CSS and the `is-hedge-pending` row tint.
+- Rewriting the `risk_utilization` taper or the (1−u)² shape (naked-budget defense).
+- Loosening, replacing or bypassing any existing cap (`bot_risk_exposure_max_*`,
+  `bot_pos_price_max_pair_cost_usd`, venue floor). Kelly allocates inside them.
+- A per-market resolution-probability model (directional `f* = (p−P)/(1−P)`). If the
+  research note selects that framing instead of the measured-stats framing, the issue
+  must be re-scoped in a comment before Station II plans.
+- Dashboard risk surfaces (#934 is a separate lane); a read-only "Kelly fraction: …"
+  line only if it falls out for free.
+- The `_cents` field renames (#936 owns those; no name overlap — see plan).
+- A config gate for "full Kelly only in shadow" — not enforceable from inside config;
+  recorded as an operator rule in the research note, capped at 1.0 in code.
