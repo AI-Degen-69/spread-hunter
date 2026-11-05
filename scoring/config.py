@@ -371,7 +371,7 @@ def load() -> MakerConfig:
         try:
             num = float(km)
             n = int(num)
-        except ValueError:
+        except (ValueError, OverflowError):
             raise ValueError(
                 f"BOT_QUOTE_KELLY_MIN_CLOSES must be an integer >= 1, got: {km}"
             ) from None

@@ -672,7 +672,8 @@ def run(
                     try:
                         seam.base_cfg = replace(seam.base_cfg, **seam.fleet_state_fn(seam.registry))
                     except Exception as e:
-                        log.warning("fleet state failed: %s: %s", type(e).__name__, e)
+                        log.warning("fleet state failed: %s: %s", type(e).__name__, e,
+                                    exc_info=True)
 
                 try:
                     seam.reconcile_fn(seam.client, seam.registry, seam.maker_address)

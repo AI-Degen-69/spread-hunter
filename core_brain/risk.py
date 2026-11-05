@@ -109,10 +109,31 @@ def _dollars_base(cfg, inv, side: str, price: float, pair_price: float | None) -
     return max(raw_n, cfg.bot_quote_size_min_shares)
 
 
-def _kelly_usable(cfg) -> bool:
+def kelly_usable(cfg) -> bool:
+    """True when the merged Kelly inputs are finite and the sample is big enough.
+
+    The single predicate every Kelly call site trusts: size_for's mode
+    switch, the posted-order fallback marker, and the diagnostics. A
+    non-finite measured value is unusable, never a number.
+    """
     n = getattr(cfg, "bot_kelly_n_closes", 0) or 0
-    return (n >= cfg.bot_quote_kelly_min_closes
-            and getattr(cfg, "bot_kelly_pct", None) is not None)
+    f_star = getattr(cfg, "bot_kelly_pct", None)
+    return (isinstance(f_star, (int, float)) and math.isfinite(f_star)
+            and n >= cfg.bot_quote_kelly_min_closes)
+
+
+def kelly_fallback_note(cfg) -> str:
+    """Reason marker when kelly mode fell back to dollars sizing (#942).
+
+    Sizes stay byte-identical to dollars mode; the posted reason carries the
+    marker so the fallback is visible in the audit trail.
+    """
+    if getattr(cfg, "bot_quote_size_mode", "shares") != "kelly":
+        return ""
+    if kelly_usable(cfg):
+        return ""
+    n = int(getattr(cfg, "bot_kelly_n_closes", 0) or 0)
+    return f"; kelly fallback: insufficient sample ({n} closes)"
 
 
 def _kelly_base(cfg, inv, side: str, price: float, pair_price: float | None) -> int | None:
@@ -179,7 +200,7 @@ def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None)
         return 0
 
     mode = getattr(cfg, "bot_quote_size_mode", "shares")
-    if mode == "kelly" and not _kelly_usable(cfg):
+    if mode == "kelly" and not kelly_usable(cfg):
         # Byte-identical to dollars mode; the quote reason records the
         # fallback (see quotes.py diagnostics).
         mode = "dollars"

@@ -238,21 +238,6 @@ def pair_cost_over_cap(prices: list[float], cap: float) -> bool:
             > Decimal(str(cap)))
 
 
-def _kelly_fallback_note(cfg) -> str:
-    """Reason marker when kelly mode fell back to dollars sizing (#942).
-
-    Sizes stay byte-identical to dollars mode; the posted reason carries the
-    marker so the fallback is visible in the audit trail.
-    """
-    if getattr(cfg, "bot_quote_size_mode", "shares") != "kelly":
-        return ""
-    n = int(getattr(cfg, "bot_kelly_n_closes", 0) or 0)
-    min_n = int(getattr(cfg, "bot_quote_kelly_min_closes", 30) or 30)
-    if n < min_n or getattr(cfg, "bot_kelly_pct", None) is None:
-        return f"; kelly fallback: insufficient sample ({n} closes)"
-    return ""
-
-
 def _decide_quotes_from_mid(
     cfg: MakerConfig,
     up_book: dict,
@@ -548,11 +533,15 @@ def _decide_quotes_from_mid(
                     # Kelly zero-size reasons (#942). NULL stays NULL: an
                     # unmeasurable sample is a fallback, not an edge of zero.
                     _n = int(getattr(cfg, "bot_kelly_n_closes", 0) or 0)
-                    _min_n = int(getattr(cfg, "bot_quote_kelly_min_closes", 30) or 30)
                     _kf = getattr(cfg, "bot_kelly_pct", None)
-                    if _n < _min_n or _kf is None:
+                    if _n < cfg.bot_quote_kelly_min_closes:
                         blocked.append(
                             f"{side}: kelly fallback: insufficient sample ({_n} closes)")
+                    elif not risk.kelly_usable(cfg):
+                        # Finite check (#942): a NaN f* would reach int() below.
+                        blocked.append(
+                            f"{side}: kelly fallback: unusable inputs "
+                            f"(f*={_kf}, n={_n} closes)")
                     elif _kf <= 0.0:
                         blocked.append(
                             f"{side}: kelly: no edge (f*={_kf:.3f}, n={_n} closes)")
@@ -600,7 +589,7 @@ def _decide_quotes_from_mid(
             side=side, token_id=book.get("token_id"), price=price, size=size,
             mid=mid, edge_vs_mid=mid - price,
             reason=(f"quote {100*s:.1f}c under mid {mid:.3f}"
-                    f"{waived}{dyn_note}{_kelly_fallback_note(cfg)}"),
+                    f"{waived}{dyn_note}{risk.kelly_fallback_note(cfg)}"),
         ))
 
     if not out:

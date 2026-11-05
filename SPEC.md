@@ -10,20 +10,20 @@ into the quoting path as an opt-in sizing mode.
 
 ## Acceptance criteria
 
-- [ ] Research note committed under `docs/backlog/` (`i942-kelly-criterion.md`) naming the
+- [x] Research note committed under `docs/backlog/` (`i942-kelly-criterion.md`) naming the
   formula family, sources, the chosen framing (a/b/c) with the rejected framings and
   why, and the Kelly fraction setting — before any sizing code.
-- [ ] A Kelly sizing mode exists in the quoting path (`bot_quote_size_mode="kelly"`):
-  order size derives from a Kelly fraction of the configured bankroll basis, floored at
-  `bot_quote_size_min_shares`, clamped by the unchanged dynamic caps and the (1−u)²
-  naked-budget taper.
-- [ ] No-edge markets quote nothing: measured Kelly ≤ 0 ⇒ size 0, with the reason
+- [x] A Kelly sizing mode exists in the quoting path (`bot_quote_size_mode="kelly"`):
+  order size derives from a Kelly fraction of the configured bankroll basis, zero when
+  that allocation buys less than the venue minimum `bot_quote_size_min_shares` (no floor
+  bump), clamped by the unchanged dynamic caps and the (1−u)² naked-budget taper.
+- [x] No-edge markets quote nothing: measured Kelly ≤ 0 ⇒ size 0, with the reason
   surfaced in the quote diagnostics.
-- [ ] Insufficient-sample fallback: below the configured close minimum, behavior is
+- [x] Insufficient-sample fallback: below the configured close minimum, behavior is
   byte-identical to `bot_quote_size_mode="dollars"` and the quote reason says so
   (`kelly fallback: insufficient sample (n closes)`).
-- [ ] Flag off: mode not selected ⇒ zero change in every sizing output (covered by test).
-- [ ] `python -m pytest -q tests/test_risk.py tests/test_quotes.py` exits 0 on an idle
+- [x] Flag off: mode not selected ⇒ zero change in every sizing output (covered by test).
+- [x] `python -m pytest -q tests/test_risk.py tests/test_quotes.py` exits 0 on an idle
   stack (on a live tournament expect the environmental `db-wal` teardown errors noted in
   the issue; a clean exit requires an idle stack).
 
