@@ -1,0 +1,161 @@
+[
+  {
+    "name": "loose-baseline",
+    "label": "Loose Baseline",
+    "color": "#00e676",
+    "profile": "shipped baseline + 6c requote deadband (tweak applied)",
+    "desc": "Control. The shipped loose baseline with nothing changed; every other arm is read against it.",
+    "thesis": "The shipped defaults are the reference: any arm must beat this to earn a change.",
+    "env": {
+      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06"
+    },
+    "worst_catalyst": "Shipped 3c default, no env knob: orphan exits 64.9% (24/37)",
+    "worst_catalyst_desc": "From #799 live run 2026-11-05: 24 exits on 37 closes (-$6.86), worst -$1.12 min 4.3 atp-heide-prado. Applied BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06 for #938.",
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06",
+    "tweak_rationale": "Hypothesis: holding queue through the opening print turns those 24 exits into fills; if exits persist, the deadband is not the mechanism."
+  },
+  {
+    "name": "tight-touch",
+    "label": "Tight Touch",
+    "color": "#00b0ff",
+    "profile": "balanced preset 0.50x 2-4c (tweak applied: was aggressive 0.25x)",
+    "desc": "Quotes hug the mid with the tightest dynamic offset the presets ship.",
+    "thesis": "A 2-4c band reaches leg two where the 0.25x offset starved it.",
+    "worst_catalyst": "BOT_QUOTE_TOURNAMENT_PRESET=aggressive: orphan exits 61.9% (26/42)",
+    "worst_catalyst_desc": "From #799 live run 2026-11-05: 26 exits on 42 closes (-$7.00), worst -$1.62 min 69.1 nba-phi-det. Applied BOT_QUOTE_TOURNAMENT_PRESET=balanced for #938.",
+    "env": {
+      "BOT_QUOTE_TOURNAMENT_PRESET": "balanced"
+    },
+    "hypothesized_tweak": "BOT_QUOTE_TOURNAMENT_PRESET=balanced",
+    "tweak_rationale": "Hypothesis: the 0.50x 2-4c band reaches leg two where 0.25x starved it; if orphans persist, width is not the mechanism."
+  },
+  {
+    "name": "balanced-mid",
+    "label": "Balanced Mid",
+    "color": "#e040fb",
+    "profile": "balanced preset 0.50x 2-4c + 6c deadband (tweak applied)",
+    "desc": "The middle preset: proportional volatility tracking without the aggressive clamp.",
+    "thesis": "A 2-4c band trades some edge for reach, which should merge more pairs than the wide arms.",
+    "worst_catalyst": "BOT_QUOTE_TOURNAMENT_PRESET=balanced: orphan exits 58.3% (21/36)",
+    "worst_catalyst_desc": "From #799 live run 2026-11-05: 21 exits on 36 closes (-$3.92, best total), worst -$1.62 min 69.0 nba-phi-det. Applied BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06 for #938.",
+    "env": {
+      "BOT_QUOTE_TOURNAMENT_PRESET": "balanced",
+      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06"
+    },
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06",
+    "tweak_rationale": "Hypothesis: holding the resting quote through the run turns the minute-69 exit into a merge."
+  },
+  {
+    "name": "wide-shield",
+    "label": "Wide Shield",
+    "color": "#ffd600",
+    "profile": "conservative preset 0.75x / 2-5c + 5c absolute stop (tweak applied: was 8c)",
+    "desc": "Widest preset offset with a loose loss stop, sized to survive volatile books.",
+    "thesis": "In volatility the cushion matters more than the fill: wide offset plus a 5c stop cuts the tail without firing on spread noise.",
+    "worst_catalyst": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.080: orphan exits 64.7% (22/34)",
+    "worst_catalyst_desc": "From #799 live run 2026-11-05: 22 exits on 34 closes (-$6.10), worst -$1.00 min 24.1 atp-heide-prado. Applied BOT_RISK_STOP_ADVERSE_DROP_USD=0.050 for #938.",
+    "env": {
+      "BOT_QUOTE_TOURNAMENT_PRESET": "conservative",
+      "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.050"
+    },
+    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.050",
+    "tweak_rationale": "Hypothesis: a 5c stop cuts the tail the 8c leash sized up."
+  },
+  {
+    "name": "prudent-hybrid",
+    "label": "Prudent Hybrid",
+    "color": "#ff6d00",
+    "profile": "prudent preset 0.60x 2-6c + 6c deadband (tweak applied)",
+    "desc": "The hybrid preset between conservative and balanced, with the preset's 4c clamp lifted to 6c so it is not the same arm as balanced.",
+    "thesis": "A 0.60x multiplier is the compromise: enough cushion for swings, close enough to fill.",
+    "worst_catalyst": "BOT_QUOTE_TOURNAMENT_PRESET=prudent: orphan exits 59.5% (25/42)",
+    "worst_catalyst_desc": "From #799 live run 2026-11-05: 25 exits on 42 closes (-$5.26), worst -$1.12 min 4.3 atp-heide-prado. Applied BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06 for #938.",
+    "env": {
+      "BOT_QUOTE_TOURNAMENT_PRESET": "prudent",
+      "BOT_QUOTE_SPREAD_OFFSET_MAX_CENTS": "6",
+      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06"
+    },
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06",
+    "tweak_rationale": "Hypothesis: a 6c hold turns the minute-4 orphan into a fill with no stop change."
+  },
+  {
+    "name": "static-floor-2c",
+    "label": "Dynamic Offset On",
+    "color": "#69f0ae",
+    "profile": "dynamic offset ON (tweak applied: was fixed 2c floor)",
+    "desc": "Volatility tracking switched on; quotes widen with the book instead of resting a flat 2c under the mid.",
+    "thesis": "A tracking offset prices volatile books wider, so no $8.30 orphan forms on a $0.06 market.",
+    "worst_catalyst": "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=0: single -$7.70 orphan (min 56.2)",
+    "worst_catalyst_desc": "From #799 live run 2026-11-05: 1 close on fpd-pun-sca, $8.30 to $0.60 (10 shares @ $0.06), 72% of the arm's -$10.63. Applied BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1 for #938.",
+    "env": {
+      "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "1"
+    },
+    "hypothesized_tweak": "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON=1",
+    "tweak_rationale": "Hypothesis: a tracking offset never builds the $8.30 orphan; a new worst single above ~$2 means the orphan is structural, not static."
+  },
+  {
+    "name": "low-churn-deadband",
+    "label": "Low Churn Deadband",
+    "color": "#ff5252",
+    "profile": "static 2c + 6c requote dead band (tweak applied: was 10c)",
+    "desc": "Static offset with the widest dead band config allows: almost no requoting.",
+    "thesis": "Churn is the cost: holding a resting quote through small moves keeps queue position and cuts cancel/repost fees.",
+    "worst_catalyst": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.10: orphan exits 57.9% (22/38)",
+    "worst_catalyst_desc": "From #799 live run 2026-11-05: 22 exits on 38 closes (-$4.46), worst -$1.17 min 67.8 nba-phi-det. Applied BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06 for #938.",
+    "env": {
+      "BOT_QUOTE_GATE_DYNAMIC_OFFSET_ON": "0",
+      "BOT_ORDER_REQUOTE_DEAD_BAND_USD": "0.06"
+    },
+    "hypothesized_tweak": "BOT_ORDER_REQUOTE_DEAD_BAND_USD=0.06",
+    "tweak_rationale": "Hypothesis: 6c still suppresses micro-churn but re-prices before a stale quote fills."
+  },
+  {
+    "name": "hair-trigger-2c",
+    "label": "Hair Trigger 4.5c",
+    "color": "#ff4081",
+    "profile": "4.5c absolute stop on a naked leg (tweak applied: was 2c)",
+    "desc": "Single-leg stop armed at 4.5c: later than the earliest exit the shipped risk modes allow.",
+    "thesis": "A naked leg is an unchosen bet; 4.5c fires on a genuine adverse move instead of spread noise.",
+    "worst_catalyst": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.020: exit rate 94.9% (37/39)",
+    "worst_catalyst_desc": "From #799 live run 2026-11-05: 37 exits against 2 merges (-$9.32), worst -$1.49 min 80.5 nhl-ott-buf. Applied BOT_RISK_STOP_ADVERSE_DROP_USD=0.045 for #938.",
+    "env": {
+      "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.045"
+    },
+    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.045",
+    "tweak_rationale": "Hypothesis: 4.5c fires on real moves, not noise; merge count should rise from 2."
+  },
+  {
+    "name": "patient-stop-9c",
+    "label": "Patient Stop 6c",
+    "color": "#b388ff",
+    "profile": "6c absolute stop on a naked leg (tweak applied: was 9c)",
+    "desc": "Single-leg stop armed at 6c: a circuit breaker rather than decoration.",
+    "thesis": "Most 2-5c drops are noise a hedge can still recover; a 6c stop only cuts legs that truly broke.",
+    "worst_catalyst": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.090: orphan exits 61.1% (22/36)",
+    "worst_catalyst_desc": "From #799 live run 2026-11-05: 22 exits on 36 closes (-$8.16), worst -$1.20 min 57.6 fpd-pun-sca. Applied BOT_RISK_STOP_ADVERSE_DROP_USD=0.060 for #938.",
+    "env": {
+      "BOT_RISK_STOP_MODE": "ABSOLUTE_DROP",
+      "BOT_RISK_STOP_ADVERSE_DROP_USD": "0.060"
+    },
+    "hypothesized_tweak": "BOT_RISK_STOP_ADVERSE_DROP_USD=0.060",
+    "tweak_rationale": "Hypothesis: 6c keeps the stop a circuit breaker instead of decoration."
+  },
+  {
+    "name": "queue-clear-5m",
+    "label": "Queue Clear 3m",
+    "color": "#18ffff",
+    "profile": "queue-clear gate on, 3-minute max clear (tweak applied: was 5m)",
+    "desc": "Only quotes books whose queue is likely to clear inside three minutes.",
+    "thesis": "A quote stuck behind a slow queue is dead capital; refusing those books should lift fill quality per order.",
+    "worst_catalyst": "BOT_ORDER_QUEUE_MAX_CLEAR_MIN=5: orphan exits 57.1% (24/42)",
+    "worst_catalyst_desc": "From #799 live run 2026-11-05: 24 exits on 42 closes (-$5.79), worst -$1.20 min 4.2 atp-heide-prado. Applied BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3 for #938.",
+    "env": {
+      "BOT_ORDER_GATE_QUEUE_CLEAR_ON": "1",
+      "BOT_ORDER_QUEUE_MAX_CLEAR_MIN": "3"
+    },
+    "hypothesized_tweak": "BOT_ORDER_QUEUE_MAX_CLEAR_MIN=3",
+    "tweak_rationale": "Hypothesis: a 3-minute window excludes uncertain books; quote count falls but quality per quote rises."
+  }
+]
