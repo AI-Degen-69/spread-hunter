@@ -498,8 +498,11 @@ def test_running_arm_card_paints_without_kpi_portfolio():
 
 @requires_node
 def test_running_arm_fetches_once_per_arm_change():
-    counts = _running_arm_harness("fetches-once-per-arm-change")
-    assert counts == {"armA": 1, "armB": 1}
+    result = _running_arm_harness("fetches-once-per-arm-change")
+    assert result["armA"] == 1
+    assert result["armB"] == 1
+    # Cache reuse: coming back to armA paints from cache, no second fetch.
+    assert result["label"] == "armA label"
 
 
 @requires_node
@@ -532,8 +535,32 @@ def test_running_arm_env_values_are_escaped():
 
 @requires_node
 def test_running_arm_details_action_opens_arm_detail_modal():
-    counts = _running_arm_harness("details-action-opens-arm-detail-modal")
-    assert counts["after"] == counts["before"] + 1
+    result = _running_arm_harness("details-action-opens-arm-detail-modal")
+    assert result["after"] == result["before"] + 1
+    assert result["modal_display"] == "flex"
+    assert "armA label" in result["modal_content"]
+
+
+@requires_node
+def test_running_arm_failed_fetch_note_persists_across_polls():
+    card = _running_arm_harness("failed-fetch-note-persists-across-polls")
+    assert card["note"] == ("Could not load the definition for `armB`: `boom`. "
+                             "Showing the last loaded content.")
+    assert card["armB"] == 1
+
+
+@requires_node
+def test_running_arm_stale_label_after_no_arm_uses_placeholder():
+    card = _running_arm_harness("stale-label-after-no-arm-uses-placeholder")
+    assert card["label"] == "armC"
+    assert card["note"] == "Loading arm definition…"
+
+
+@requires_node
+def test_running_arm_catalog_miss_note_persists_across_polls():
+    card = _running_arm_harness("catalog-miss-note-persists-across-polls")
+    assert card["note"] == "This arm is not in the parameters catalog."
+    assert card["label"] == "armA label"
 
 
 @requires_node

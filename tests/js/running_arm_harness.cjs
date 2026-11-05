@@ -170,10 +170,15 @@ async function main() {
       app.renderRunningArmCard(sA);
       app.renderRunningArmCard(sA);
       await flush();
-      armDetail = () => Promise.resolve({ ok: true, json: async () => payload('armB') });
+      armDetail = (url) => Promise.resolve({
+        ok: true, json: async () => payload(url.includes('armB') ? 'armB' : 'armA'),
+      });
       app.renderRunningArmCard(statusFor('armB'));
       await flush();
-      return { armA: armFetches('armA'), armB: armFetches('armB') };
+      // Cache reuse: returning to armA must not fetch it again (#947).
+      app.renderRunningArmCard(sA);
+      await flush();
+      return { armA: armFetches('armA'), armB: armFetches('armB'), label: element('running-arm-label').textContent };
     }
     case 'failed-fetch-keeps-previous': {
       armDetail = (url) => (url.includes('armB')
@@ -222,7 +227,12 @@ async function main() {
       const before = armFetches('armA');
       element('running-arm-details-btn').click();
       await flush();
-      return { before, after: armFetches('armA') };
+      return {
+        before,
+        after: armFetches('armA'),
+        modal_display: element('arm-detail-modal').style.display,
+        modal_content: element('arm-detail-modal .arm-detail-content').innerHTML,
+      };
     }
     case 'full-parameters-selects-arm-and-scrolls': {
       armDetail = () => Promise.resolve({ ok: true, json: async () => payload('armA') });
@@ -240,6 +250,48 @@ async function main() {
         panel_scrolled: element('params-panel').scrolled,
         note: element('running-arm-note').textContent,
       };
+    }
+    case 'failed-fetch-note-persists-across-polls': {
+      armDetail = (url) => (url.includes('armB')
+        ? Promise.resolve({ ok: true, json: async () => ({ ok: false, message: 'boom' }) })
+        : Promise.resolve({ ok: true, json: async () => payload('armA') }));
+      app.renderRunningArmCard(statusFor('armA'));
+      await flush();
+      const sB = statusFor('armB');
+      app.renderRunningArmCard(sB);
+      await flush();
+      // The next poll: no new request, so the failure note must survive (#947).
+      app.renderRunningArmCard(sB);
+      await flush();
+      return { ...card(), armB: armFetches('armB') };
+    }
+    case 'stale-label-after-no-arm-uses-placeholder': {
+      armDetail = (url) => {
+        if (url.includes('armC')) return new Promise(() => {});
+        return Promise.resolve({ ok: true, json: async () => payload('armA') });
+      };
+      app.renderRunningArmCard(statusFor('armA'));
+      await flush();
+      app.renderRunningArmCard(statusFor(undefined, { running: false }));
+      // A new uncached arm after a cleared card is a first paint (#947).
+      app.renderRunningArmCard(statusFor('armC'));
+      await flush();
+      return { ...card() };
+    }
+    case 'catalog-miss-note-persists-across-polls': {
+      armDetail = () => Promise.resolve({ ok: true, json: async () => payload('armA') });
+      const select = element('param-arm-select');
+      select.options = [{ value: 'p1|other' }];
+      select.value = 'p1|other';
+      const sA = statusFor('armA');
+      app.renderRunningArmCard(sA);
+      await flush();
+      element('running-arm-params-btn').click();
+      await flush();
+      // The next poll repaints from cache: the miss note must survive (#947).
+      app.renderRunningArmCard(sA);
+      await flush();
+      return { ...card() };
     }
     case 'full-parameters-notes-missing-catalog-entry': {
       armDetail = () => Promise.resolve({ ok: true, json: async () => payload('armZ') });

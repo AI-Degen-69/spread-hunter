@@ -867,8 +867,11 @@ function renderCachedSections() {
     if (currentKpi) renderOrdersTrades(currentKpi, lastState);
   }
   // Tab 2: PERFORMANCE & ANALYTICS (portfolio overview + decision gates)
-  if (paintable(tab2, document.getElementById('broker-hero-equity')) && currentKpi) {
-    renderPortfolioOverview(currentKpi, lastStatus, lastState);
+  if (paintable(tab2, document.getElementById('broker-hero-equity'))) {
+    // The arm card needs only status: it paints even when KPI data is
+    // missing, so a failed /api/kpi never freezes it at standby (#947).
+    if (lastStatus) renderRunningArmCard(lastStatus);
+    if (currentKpi) renderPortfolioOverview(currentKpi, lastStatus, lastState);
   }
   // A dropped deferred frame leaves the decision gates at their placeholder
   // while the tiles beside them keep painting (#540). Repaint the surface
@@ -5583,10 +5586,23 @@ let runningArmRequested = '';    // arm name of the last fetch attempt
 let runningArmSeq = 0;           // stale-response guard, card-only
 let runningArmShown = null;      // last painted payload (label/profile/env)
 let runningArmAction = '';       // arm name the card actions read
+let runningArmStickyArm = '';    // arm an operator-facing sticky note belongs to
+let runningArmStickyNote = '';   // sticky note a repaint must not wipe (#947)
 
 function setRunningArmNote(text) {
   const el = document.getElementById('running-arm-note');
   if (el) el.textContent = text;
+}
+
+function clearRunningArmSticky() {
+  runningArmStickyArm = '';
+  runningArmStickyNote = '';
+}
+
+function applyRunningArmSticky(arm) {
+  if (arm && arm === runningArmStickyArm && runningArmStickyNote) {
+    setRunningArmNote(runningArmStickyNote);
+  }
 }
 
 function paintRunningArmPayload(data) {
@@ -5610,6 +5626,7 @@ function paintRunningArmPayload(data) {
     setRunningArmNote('No overrides \u2014 this arm runs the shipped baseline.');
   }
   runningArmShown = data;
+  applyRunningArmSticky(data.name || '');
 }
 
 function runningArmGoToParams() {
@@ -5623,10 +5640,13 @@ function runningArmGoToParams() {
       if (val.slice(val.lastIndexOf('|') + 1) === arm) { match = opt; break; }
     }
     if (match) {
+      clearRunningArmSticky();
       select.value = match.value;
       select.dispatchEvent(new Event('change'));
     } else {
-      setRunningArmNote('This arm is not in the parameters catalog.');
+      runningArmStickyArm = arm;
+      runningArmStickyNote = 'This arm is not in the parameters catalog.';
+      setRunningArmNote(runningArmStickyNote);
     }
   }
   const navBtn = (typeof document.querySelector === 'function')
@@ -5662,6 +5682,8 @@ function renderRunningArmCard(status) {
   const name = (profile && typeof profile.name === 'string' && profile.name) ? profile.name : '';
   if (!name) {
     runningArmAction = '';
+    runningArmShown = null;
+    clearRunningArmSticky();
     elTag.textContent = 'NO RUN';
     elLabel.textContent = 'No run profile recorded.';
     if (elProfile) { elProfile.textContent = ''; elProfile.hidden = true; }
@@ -5675,6 +5697,8 @@ function renderRunningArmCard(status) {
   const arm = (typeof profile.tournament_arm === 'string' && profile.tournament_arm) ? profile.tournament_arm : '';
   if (!arm) {
     runningArmAction = '';
+    runningArmShown = null;
+    clearRunningArmSticky();
     elLabel.textContent = name;
     if (elProfile) { elProfile.textContent = ''; elProfile.hidden = true; }
     elEnv.innerHTML = '';
@@ -5686,6 +5710,7 @@ function renderRunningArmCard(status) {
   runningArmAction = arm;
   elDetails.disabled = false;
   elParams.disabled = false;
+  if (arm !== runningArmStickyArm) clearRunningArmSticky();
   const cached = runningArmCache.get(arm);
   if (cached) {
     paintRunningArmPayload(cached);
@@ -5697,7 +5722,13 @@ function renderRunningArmCard(status) {
     elLabel.textContent = arm;
     if (elProfile) { elProfile.textContent = ''; elProfile.hidden = true; }
   }
-  setRunningArmNote(runningArmShown ? `Loading the definition for \`${arm}\`…` : 'Loading arm definition…');
+  // An in-flight or failed-then-idle arm keeps its note: without this guard
+  // every poll rewrites the failure note with loading text that never
+  // resolves, because the guard below stops a second request (#947).
+  if (runningArmRequested !== arm) {
+    setRunningArmNote(runningArmShown ? `Loading the definition for \`${arm}\`…` : 'Loading arm definition…');
+  }
+  applyRunningArmSticky(arm);
   if (runningArmRequested === arm) return; // fetch already in flight
   runningArmRequested = arm;
   const seq = ++runningArmSeq;
@@ -5708,6 +5739,7 @@ function renderRunningArmCard(status) {
       if (!runningArmShown) elLabel.textContent = arm;
       const message = (data && data.message) || 'request failed';
       setRunningArmNote(`Could not load the definition for \`${arm}\`: \`${message}\`. Showing the last loaded content.`);
+      applyRunningArmSticky(arm);
       return;
     }
     runningArmCache.set(arm, data);
@@ -13115,8 +13147,11 @@ async function pollStatus() {
     // Portfolio overview + run pill (Tab 2 → rail Dashboard page) get their
     // own gate: the card lives on page-home since #140, and painting it only
     // behind the Reports grid froze it at standby on every other page (#268).
-    if (paintable(tab2, document.getElementById('broker-hero-equity')) && currentKpi) {
-      renderPortfolioOverview(currentKpi, status, lastState);
+    if (paintable(tab2, document.getElementById('broker-hero-equity'))) {
+      // The arm card needs only status: it paints even when KPI data is
+      // missing, so a failed /api/kpi never freezes it at standby (#947).
+      if (status) renderRunningArmCard(status);
+      if (currentKpi) renderPortfolioOverview(currentKpi, status, lastState);
     }
 
     // Decision gates (Tab 2 → rail Strategy page): the one reading #749 left
