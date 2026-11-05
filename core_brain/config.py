@@ -175,6 +175,12 @@ class MakerConfig:
     bot_quote_size_max_shares: float | None = None
     bot_quote_alloc_couple_pct: float = 0.01
     bot_quote_alloc_couple_min_usd: float = 10.0
+    # #942: Kelly sizing (opt-in via bot_quote_size_mode="kelly"). The last two
+    # are merge-only, written by the fleet state each cycle; never from env.
+    bot_quote_kelly_fraction: float = 0.5
+    bot_quote_kelly_min_closes: int = 30
+    bot_kelly_n_closes: int = 0
+    bot_kelly_fraction: float | None = None
     bot_quote_waive_attenuation_below_floor_on: bool = True
     bot_quote_require_two_sided_when_flat_on: bool = True
     # USD on the 0-1 price scale -- the band is 10c to 90c, not 0.10c to 0.90c.
@@ -363,6 +369,35 @@ class MakerConfig:
             tk = _env("BOT_QUOTE_GRID_TICK_SIZE_USD")
             if tk:
                 kw["bot_quote_grid_tick_size_usd"] = float(tk)
+
+        qsm = _env("BOT_QUOTE_SIZE_MODE")
+        if qsm:
+            mode = qsm.strip().lower()
+            if mode not in ("shares", "dollars", "kelly"):
+                raise ValueError(
+                    f"BOT_QUOTE_SIZE_MODE must be one of dollars, kelly, shares, got: {qsm}"
+                )
+            kw["bot_quote_size_mode"] = mode
+        kf = _env("BOT_QUOTE_KELLY_FRACTION")
+        if kf:
+            val = _bounded_float("BOT_QUOTE_KELLY_FRACTION", kf, 0.0, 1.0)
+            if val <= 0.0:
+                raise ValueError(f"BOT_QUOTE_KELLY_FRACTION must be > 0, got: {kf}")
+            kw["bot_quote_kelly_fraction"] = val
+        km = _env("BOT_QUOTE_KELLY_MIN_CLOSES")
+        if km:
+            try:
+                num = float(km)
+                n = int(num)
+            except ValueError:
+                raise ValueError(
+                    f"BOT_QUOTE_KELLY_MIN_CLOSES must be an integer >= 1, got: {km}"
+                ) from None
+            if not math.isfinite(num) or num != n or n < 1:
+                raise ValueError(
+                    f"BOT_QUOTE_KELLY_MIN_CLOSES must be an integer >= 1, got: {km}"
+                )
+            kw["bot_quote_kelly_min_closes"] = n
 
         raw_sp_general = _env("BOT_QUOTE_BOOK_MAX_SPREAD_FROM_MID")
         sp_general = raw_sp_general or ""
